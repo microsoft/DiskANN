@@ -6,8 +6,8 @@
 use half::f16;
 
 use crate::{
-    Emulated, SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
-    SIMDSumTree, SIMDVector, constant::Const, helpers,
+    AsSIMD, Emulated, SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+    SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
@@ -38,26 +38,36 @@ macros::aarch64_define_fma!(f32x4, vfmaq_f32);
 impl SIMDMinMax for f32x4 {
     #[inline(always)]
     fn min_simd(self, rhs: Self) -> Self {
-        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
-        Self(unsafe { vminnmq_f32(self.0, rhs.0) })
+        self.min_simd_standard(rhs)
     }
 
     #[inline(always)]
     fn min_simd_standard(self, rhs: Self) -> Self {
-        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
-        Self(unsafe { vminnmq_f32(self.0, rhs.0) })
+        if cfg!(miri) {
+            self.emulated()
+                .min_simd_standard(rhs.emulated())
+                .as_simd(self.arch())
+        } else {
+            // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
+            Self(unsafe { vminnmq_f32(self.0, rhs.0) })
+        }
     }
 
     #[inline(always)]
     fn max_simd(self, rhs: Self) -> Self {
-        // SAFETY: `vmaxnmq_f32` requires "neon", implied by the `Neon` architecture.
-        Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
+        self.max_simd_standard(rhs)
     }
 
     #[inline(always)]
     fn max_simd_standard(self, rhs: Self) -> Self {
-        // SAFETY: `vmaxnmq_f32` requires "neon", implied by the `Neon` architecture.
-        Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
+        if cfg!(miri) {
+            self.emulated()
+                .max_simd_standard(rhs.emulated())
+                .as_simd(self.arch())
+        } else {
+            // SAFETY: `vmaxnmq_f32` requires "neon", implied by the `Neon` architecture.
+            Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
+        }
     }
 }
 
