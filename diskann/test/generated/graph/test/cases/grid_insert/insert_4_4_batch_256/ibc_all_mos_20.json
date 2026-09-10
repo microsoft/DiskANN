@@ -1,35 +1,35 @@
 {
   "file": "diskann/src/graph/test/cases/grid_insert.rs",
-  "test": "graph/test/cases/grid_insert/insert_4_4_batch_256/ibc_none_750",
+  "test": "graph/test/cases/grid_insert/insert_4_4_batch_256/ibc_all_mos_20",
   "payload": {
     "context_metrics": {
-      "clones": 7,
-      "spawns": 6
+      "clones": 5,
+      "spawns": 5
     },
-    "description": "After inserting 256 points (batch (all-at-once), ibc=none) into a 4D grid of size 4.",
+    "description": "After inserting 256 points (batch (all-at-once), ibc=all) into a 4D grid of size 4.",
     "grid_dims": 4,
     "grid_size": 4,
     "insert_metrics": {
-      "append_neighbors": 96,
+      "append_neighbors": 81,
       "get_neighbors": 513,
-      "get_vector": 66305,
-      "set_neighbors": 272,
+      "get_vector": 512,
+      "set_neighbors": 256,
       "set_vector": 256
     },
     "num_inserted": 256,
     "searches": [
       {
         "beam_width": 1,
-        "comparisons": 37,
-        "description": "After inserting 256 points (batch (all-at-once), ibc=none) into a 4D grid of size 4. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
+        "comparisons": 78,
+        "description": "After inserting 256 points (batch (all-at-once), ibc=all) into a 4D grid of size 4. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
         "grid_dims": 4,
         "grid_size": 4,
-        "hops": 13,
+        "hops": 22,
         "metrics": {
-          "append_neighbors": 96,
-          "get_neighbors": 526,
-          "get_vector": 66342,
-          "set_neighbors": 272,
+          "append_neighbors": 81,
+          "get_neighbors": 535,
+          "get_vector": 590,
+          "set_neighbors": 256,
           "set_vector": 256
         },
         "num_results": 10,
@@ -45,6 +45,10 @@
             4.0
           ],
           [
+            4,
+            7.0
+          ],
+          [
             1,
             7.0
           ],
@@ -53,19 +57,11 @@
             7.0
           ],
           [
-            4,
-            7.0
-          ],
-          [
             16,
             7.0
           ],
           [
-            68,
-            10.0
-          ],
-          [
-            65,
+            17,
             10.0
           ],
           [
@@ -73,27 +69,31 @@
             10.0
           ],
           [
+            65,
+            10.0
+          ],
+          [
             80,
             10.0
           ],
           [
-            17,
+            68,
             10.0
           ]
         ]
       },
       {
         "beam_width": 1,
-        "comparisons": 32,
-        "description": "After inserting 256 points (batch (all-at-once), ibc=none) into a 4D grid of size 4. Search with query of all `size`. The start point should appear as it is not filtered by default.",
+        "comparisons": 30,
+        "description": "After inserting 256 points (batch (all-at-once), ibc=all) into a 4D grid of size 4. Search with query of all `size`. The start point should appear as it is not filtered by default.",
         "grid_dims": 4,
         "grid_size": 4,
         "hops": 11,
         "metrics": {
-          "append_neighbors": 96,
-          "get_neighbors": 537,
-          "get_vector": 66374,
-          "set_neighbors": 272,
+          "append_neighbors": 81,
+          "get_neighbors": 546,
+          "get_vector": 620,
+          "set_neighbors": 256,
           "set_vector": 256
         },
         "num_results": 10,
@@ -129,19 +129,19 @@
             10.0
           ],
           [
-            175,
-            10.0
-          ],
-          [
             238,
             10.0
           ],
           [
-            235,
+            175,
             10.0
           ],
           [
-            187,
+            250,
+            10.0
+          ],
+          [
+            235,
             10.0
           ]
         ]

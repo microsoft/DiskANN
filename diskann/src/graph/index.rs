@@ -560,8 +560,7 @@ where
             // candidates.
             let working_set_capacity = self
                 .max_occlusion_size()
-                .saturating_add(self.config.intra_batch_candidates().get(batch.len()))
-                .saturating_add(1);
+                .saturating_add(self.config.intra_batch_candidates().get(batch.len()));
 
             let mut accessor = match strategy.seeded_prune_accessor(
                 self.provider(),
@@ -2496,16 +2495,16 @@ where
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
     {
         async move {
-            println!("internal id = {:?}, record = {:?}", internal_id, record);
+            let record_sorted =
+                SortedNeighbors::new(&mut record.visited, self.max_occlusion_size());
 
             let (view, computer) = accessor
                 .fill(internal::chain(
                     std::iter::once(internal_id),
-                    internal::chain(extras.clone(), record.ids()),
+                    internal::chain(extras.clone(), record_sorted.ids()),
                 ))
                 .await?;
 
-            let mut extras_fetched = 0;
             if extras.len() != 0 {
                 let this_vector = view
                     .get(internal_id)
@@ -2513,7 +2512,6 @@ where
 
                 for id in extras {
                     if let Some(element) = view.get(id) {
-                        extras_fetched += 1;
                         record.push(Neighbor::new(
                             id,
                             computer
@@ -2523,15 +2521,11 @@ where
                 }
             }
 
-            println!("extras fetched = {}", extras_fetched);
-
             let mut context = prune::Context {
                 pool: SortedNeighbors::new(&mut record.visited, self.max_occlusion_size()),
                 states: &mut scratch.states,
                 neighbors: &mut scratch.neighbors,
             };
-
-            println!("pool = {:?}", context.pool);
 
             self.occlude_list::<A::View<'_>, _, _>(
                 &computer,

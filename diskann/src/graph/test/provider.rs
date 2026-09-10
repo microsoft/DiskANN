@@ -419,18 +419,15 @@ impl Provider {
         }
 
         while let Some(node) = dfs.pop() {
-            match self.terms.get(&node) {
-                Some(term) => {
-                    for neighbor in term.neighbors.iter() {
-                        if mark_visited(*neighbor)? {
-                            dfs.push(*neighbor);
-                        }
-                    }
-                }
-                None => {
-                    return Err(message!(
-                        "node {node} is reachable in the graph but is not in the provider"
-                    ));
+            #[expect(clippy::expect_used, reason = "this access was previously validated")]
+            let term = self
+                .terms
+                .get(&node)
+                .expect("node already validated by `mark_visited`");
+
+            for neighbor in term.neighbors.iter() {
+                if mark_visited(*neighbor)? {
+                    dfs.push(*neighbor);
                 }
             }
         }
@@ -439,11 +436,12 @@ impl Provider {
             .into_iter()
             .filter_map(|(id, seen)| (!seen).then_some(id))
             .collect();
+
         if unvisited.is_empty() {
             Ok(())
         } else {
             Err(message!(
-                "nodes ids {:?} are unreachable from the start points!",
+                "node ids {:?} are unreachable from the start points!",
                 unvisited
             ))
         }
@@ -1822,6 +1820,53 @@ mod tests {
             "got {}",
             message
         );
+    }
+
+    #[test]
+    fn test_is_connected() {
+        let config = Config::new(Metric::L2, 4, [StartPoint::new(0, vec![1.0, 0.0])]).unwrap();
+        let start_points = [(0, AdjacencyList::from_iter_unique(std::iter::once(1)))];
+
+        // Connected graph
+        {
+            let points = [
+                (
+                    1,
+                    vec![0.5, 0.5],
+                    AdjacencyList::from_iter_unique(std::iter::once(2)),
+                ),
+                (
+                    2,
+                    vec![-1.0, 1.0],
+                    AdjacencyList::from_iter_unique(std::iter::once(0)),
+                ),
+            ];
+            let provider =
+                Provider::new_from(config.clone(), start_points.clone(), points).unwrap();
+
+            provider.is_connected().unwrap();
+        }
+
+        // Unconnected graph
+        {
+            let points = [
+                (
+                    1,
+                    vec![0.5, 0.5],
+                    AdjacencyList::from_iter_unique(std::iter::once(0)),
+                ),
+                (
+                    2,
+                    vec![-1.0, 1.0],
+                    AdjacencyList::from_iter_unique(std::iter::once(1)),
+                ),
+            ];
+            let provider = Provider::new_from(config, start_points, points).unwrap();
+
+            let err = provider.is_connected().unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("node ids [2] are unreachable"), "msg = {msg}");
+        }
     }
 
     #[test]

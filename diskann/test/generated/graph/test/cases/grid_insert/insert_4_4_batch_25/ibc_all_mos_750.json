@@ -1,6 +1,6 @@
 {
   "file": "diskann/src/graph/test/cases/grid_insert.rs",
-  "test": "graph/test/cases/grid_insert/insert_4_4_batch_25/ibc_all_750",
+  "test": "graph/test/cases/grid_insert/insert_4_4_batch_25/ibc_all_mos_750",
   "payload": {
     "context_metrics": {
       "clones": 55,
@@ -10,26 +10,26 @@
     "grid_dims": 4,
     "grid_size": 4,
     "insert_metrics": {
-      "append_neighbors": 360,
-      "get_neighbors": 20399,
+      "append_neighbors": 354,
+      "get_neighbors": 20396,
       "get_vector": 46522,
-      "set_neighbors": 293,
+      "set_neighbors": 295,
       "set_vector": 256
     },
     "num_inserted": 256,
     "searches": [
       {
         "beam_width": 1,
-        "comparisons": 73,
+        "comparisons": 74,
         "description": "After inserting 256 points (batch (chunks of 25), ibc=all) into a 4D grid of size 4. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
         "grid_dims": 4,
         "grid_size": 4,
         "hops": 19,
         "metrics": {
-          "append_neighbors": 360,
-          "get_neighbors": 20418,
-          "get_vector": 46595,
-          "set_neighbors": 293,
+          "append_neighbors": 354,
+          "get_neighbors": 20415,
+          "get_vector": 46596,
+          "set_neighbors": 295,
           "set_vector": 256
         },
         "num_results": 10,
@@ -53,16 +53,12 @@
             7.0
           ],
           [
-            16,
-            7.0
-          ],
-          [
             64,
             7.0
           ],
           [
-            65,
-            10.0
+            16,
+            7.0
           ],
           [
             5,
@@ -70,6 +66,10 @@
           ],
           [
             17,
+            10.0
+          ],
+          [
+            65,
             10.0
           ],
           [
@@ -90,10 +90,10 @@
         "grid_size": 4,
         "hops": 11,
         "metrics": {
-          "append_neighbors": 360,
-          "get_neighbors": 20429,
-          "get_vector": 46625,
-          "set_neighbors": 293,
+          "append_neighbors": 354,
+          "get_neighbors": 20426,
+          "get_vector": 46626,
+          "set_neighbors": 295,
           "set_vector": 256
         },
         "num_results": 10,

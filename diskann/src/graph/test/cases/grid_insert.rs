@@ -334,7 +334,7 @@ fn baseline_name(
         IntraBatchCandidates::All => "ibc_all".to_string(),
     };
     format!(
-        "insert_{}_{}_{}/{}_{}",
+        "insert_{}_{}_{}/{}_mos_{}",
         grid.dim(),
         size,
         batch_tag,
