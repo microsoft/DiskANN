@@ -14,10 +14,10 @@ use crate::{
 
 /// The layout for [`Strided`].
 ///
-/// This struct ensures that the [`Self::cstride`] is greater than [`Self::ncols`] and that
-/// the linear length of the representation does not overflow `usize::MAX`.
+/// This struct ensures that the [`Self::cstride`] is greater than or equal to[`Self::ncols`]
+/// and that the linear length of the representation does not overflow `usize::MAX`.
 ///
-/// The linear length of [`Strided]` is given by the forumula
+/// The linear length of [`Strided`] is given by the forumula
 /// ```text
 /// self.nrows.saturating_sub(1) * self.cstride + self.nrows.min(1) * self.ncols
 /// ```
@@ -126,18 +126,18 @@ impl fmt::Display for LayoutErrorInner {
 ///
 /// ```text
 ///            |<------ cstride ----->|
-///            |<-- ncols -->|
-///            +-------------+
-/// slice 0 -> | a0 a1 a2 a3 | a4 a5 a6     ^
-/// slice 1 -> | b0 b1 b2 b3 | b4 b5 b6     |
-/// slice 2 -> | c0 c1 c2 c3 | c4 c5 c6   nrows
-/// slice 3 -> | d0 d1 d2 d3 | d4 d5 d6     |
-/// slice 4 -> | e0 e1 e2 e3 | e4 e5 e6     |
-/// slicf 5 -> | f0 f1 f2 f3 | f4 f5 f6     v
-///            +-------------+
-///                  ^
-///                  |
-///               Strided
+///                     |<-- ncols -->|
+///                     +-------------+
+/// slice 0 -> a0 a1 a2 | a3 a4 a5 a6 |    ^
+/// slice 1 -> b0 b1 b2 | b3 b4 b4 b5 |    |
+/// slice 2 -> c0 c1 c2 | c3 c4 c5 c6 |  nrows
+/// slice 3 -> d0 d1 d2 | d3 d4 d5 d6 |    |
+/// slice 4 -> e0 e1 e2 | e3 e4 e5 e6 |    |
+/// slice 5 -> f0 f1 f2 | f3 f4 f5 f6 |    v
+///                     +-------------+
+///                           ^
+///                           |
+///                        Strided
 /// ```
 ///
 /// This abstraction is useful when performing PQ related operations such as training or
