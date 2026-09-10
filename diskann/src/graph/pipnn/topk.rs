@@ -116,14 +116,14 @@ pub(super) struct TopK<const K: usize> {
 impl<const K: usize> TopK<K> {
     /// Configure the result capacity; a fixed K must match it.
     pub(super) fn new(k: usize) -> Self {
-        assert!(
+        debug_assert!(
             K == RUNTIME_WIDTH || K == k,
             "top-k width must match its capacity"
         );
         Self { k }
     }
 
-    // Keep the const width visible inside the target-feature boundary.
+    // Keep initialization and row addressing specialized across the architecture boundary.
     #[inline(always)]
     fn capacity(&self) -> usize {
         if K == RUNTIME_WIDTH { self.k } else { K }
@@ -135,11 +135,6 @@ impl<const K: usize> TopK<K> {
         mut output: MutMatrixView<'_, Candidate>,
         thresholds: &mut Vec<f32>,
     ) {
-        debug_assert_eq!(
-            output.ncols(),
-            self.k,
-            "top-k output width must match its capacity"
-        );
         output.as_mut_slice().fill(Candidate::default());
         thresholds.resize(output.nrows(), f32::INFINITY);
         thresholds.fill(f32::INFINITY);
@@ -157,22 +152,15 @@ impl<const K: usize> TopK<K> {
         arch.run2(
             #[inline(always)]
             move |distances: &[f32], output: &mut [Candidate]| {
-                let k = self.capacity();
-                debug_assert_eq!(
-                    output.len(),
-                    k,
-                    "top-k output width must match its capacity"
-                );
-                if k == 0 {
+                let output = &mut output[..self.capacity()];
+                if output.is_empty() {
                     return;
                 }
-                // Preserve the specialized capacity through the inlined insertion.
-                let output = &mut output[..k];
                 output.fill(Candidate::default());
                 distance_blocks(arch, distances).fold(
                     f32::INFINITY,
                     #[inline(always)]
-                    |limit, block| block.update_one(output, limit),
+                    |limit, block| block.update_one::<K>(output, limit),
                 );
             },
             distances,
@@ -210,11 +198,6 @@ impl<const K: usize> TopK<K> {
                     distances.len() <= point_idx,
                     "candidate indexes must exclude the updated point"
                 );
-                debug_assert_eq!(
-                    output.nrows(),
-                    thresholds.len(),
-                    "top-k candidates and thresholds must match"
-                );
                 // Keep this point's result and local limit independent of reciprocal updates.
                 let (others, remaining) = output.as_mut_slice().split_at_mut(point_idx * k);
                 let nearest = &mut remaining[..k];
@@ -222,8 +205,8 @@ impl<const K: usize> TopK<K> {
                     thresholds[point_idx],
                     #[inline(always)]
                     |limit, block| {
-                        let limit = block.update_one(nearest, limit);
-                        block.update_many(others, thresholds, point_idx as u32, k);
+                        let limit = block.update_one::<K>(nearest, limit);
+                        block.update_many::<K>(others, thresholds, point_idx as u32, k);
                         limit
                     },
                 );
@@ -281,7 +264,7 @@ fn distance_blocks<A: PiPNNSIMDSchema>(
 impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
     /// Offer the block's candidates, preserving and returning the updated limit.
     #[inline(always)]
-    fn update_one(self, nearest: &mut [Candidate], mut max_distance: f32) -> f32 {
+    fn update_one<const K: usize>(self, nearest: &mut [Candidate], mut max_distance: f32) -> f32 {
         match self {
             Self::Scalar {
                 candidate_idx,
@@ -289,7 +272,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
             } => {
                 if distance < max_distance {
                     max_distance =
-                        insert_sorted(nearest, Candidate::new(candidate_idx as u32, distance));
+                        insert_sorted::<K>(nearest, Candidate::new(candidate_idx as u32, distance));
                 }
             }
             Self::Simd {
@@ -302,7 +285,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                 if max_distance == f32::INFINITY {
                     for (lane, &distance) in distances.iter().enumerate() {
                         if distance < max_distance {
-                            max_distance = insert_sorted(
+                            max_distance = insert_sorted::<K>(
                                 nearest,
                                 Candidate::new((first_candidate + lane) as u32, distance),
                             );
@@ -317,7 +300,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                         eligible &= eligible - 1;
                         // Earlier insertions in this block can lower the limit.
                         if distances[lane] < max_distance {
-                            max_distance = insert_sorted(
+                            max_distance = insert_sorted::<K>(
                                 nearest,
                                 Candidate::new((first_candidate + lane) as u32, distances[lane]),
                             );
@@ -331,7 +314,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
 
     /// Offer one point to each result set identified by this block's candidate IDs.
     #[inline(always)]
-    fn update_many(
+    fn update_many<const K: usize>(
         self,
         candidates: &mut [Candidate],
         thresholds: &mut [f32],
@@ -345,7 +328,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
             } => {
                 let limit = &mut thresholds[candidate_idx];
                 if distance < *limit {
-                    *limit = insert_sorted(
+                    *limit = insert_sorted::<K>(
                         &mut candidates[candidate_idx * k..][..k],
                         Candidate::new(point_idx, distance),
                     );
@@ -364,7 +347,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                     let lane = eligible.trailing_zeros() as usize;
                     eligible &= eligible - 1;
                     // Each lane updates a different result; its limit is current.
-                    limits[lane] = insert_sorted(
+                    limits[lane] = insert_sorted::<K>(
                         &mut candidates[(first_candidate + lane) * k..][..k],
                         Candidate::new(point_idx, distances[lane]),
                     );
@@ -376,9 +359,14 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
 
 /// Insert an eligible candidate in nearest-first order and return the new distance limit.
 /// The caller must check the candidate against the current limit before insertion.
+/// Fixed K exposes the insertion capacity to loop unrolling; runtime K uses the slice length.
 #[inline(always)]
-fn insert_sorted(nearest: &mut [Candidate], candidate: Candidate) -> f32 {
-    let last = nearest.len() - 1;
+fn insert_sorted<const K: usize>(nearest: &mut [Candidate], candidate: Candidate) -> f32 {
+    let last = if K == RUNTIME_WIDTH {
+        nearest.len() - 1
+    } else {
+        K - 1
+    };
     let mut slot = last;
     while slot > 0 && candidate.distance < nearest[slot - 1].distance {
         nearest[slot] = nearest[slot - 1];
