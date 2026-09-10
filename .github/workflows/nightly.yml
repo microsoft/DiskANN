@@ -135,3 +135,16 @@ jobs:
         run: cargo +nightly miri nextest run --locked --package diskann-quantization
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+
+      - name: PiPNN numerical pointer boundaries
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+        run: |
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::leaf_metric
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::partition_metric
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::leaf_kernel::tests::rank_leaf_distances_tests
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::partition_kernel::tests::rank_leader_distances_tests

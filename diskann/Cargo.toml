@@ -30,12 +30,14 @@ diskann-wide = { workspace = true }
 
 # Optional Dependencies
 dashmap = { workspace = true, optional = true }
+diskann-linalg = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures-util = { workspace = true, default-features = false  }
 pin-project.workspace = true
 rand.workspace = true
 relative-path = "2.0.1"
+rstest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "sync"] }
@@ -55,6 +57,9 @@ panic = "warn"
 
 [features]
 default = ["tracing"]
+
+# Enable PiPNN numerical kernels.
+pipnn = ["dep:diskann-linalg"]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]
