@@ -1099,11 +1099,10 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
             .callbacks
             .delete_iid(&context.term(Term::Attributes), id);
 
-        // TODO: inplace_delete needs access to neighbors. Delete these once that bug is fixed.
-        // See https://github.com/microsoft/DiskANN/issues/1153.
-        // ok &= self
-        //     .callbacks
-        //     .delete_iid(&context.term(Term::Neighbors), id);
+        // Neighbors may not exist if graph insertion did not complete.
+        let _: bool = self
+            .callbacks
+            .delete_iid(&context.term(Term::Neighbors), id);
 
         ok &= self.callbacks.delete_iid(&context.term(Term::Vector), id);
 
@@ -2048,7 +2047,7 @@ mod tests {
             config::{self, defaults::GRAPH_SLACK_FACTOR},
             search,
         },
-        provider::{Delete, SetElement},
+        provider::{DataProvider, Delete, SetElement},
     };
     use diskann_providers::index::wrapped_async::DiskANNIndex;
     use diskann_vector::distance::Metric;
@@ -2079,11 +2078,25 @@ mod tests {
 
         let id = GarnetId::from(bytemuck::bytes_of(&0));
 
-        let res = provider.set_element(&ctx, &id, &[0f32, 0f32]).await;
-        assert!(res.is_ok());
+        provider
+            .set_element(&ctx, &id, &[0f32, 0f32])
+            .await
+            .unwrap();
+        let iid = provider.to_internal_id(&ctx, &id).unwrap();
+        let iid_bytes = bytemuck::bytes_of(&iid);
 
-        let res = provider.delete(&ctx, &id).await;
-        assert!(res.is_ok());
+        // Setting an element does not create its graph adjacency list.
+        assert!(
+            store
+                .get(ctx.term(Term::Neighbors).get(), iid_bytes)
+                .is_none()
+        );
+        provider.delete(&ctx, &id).await.unwrap();
+
+        for term in [Term::Vector, Term::Neighbors, Term::ExtMap] {
+            assert!(store.get(ctx.term(term).get(), iid_bytes).is_none());
+        }
+        assert!(store.get(ctx.term(Term::IntMap).get(), &id).is_none());
     }
 
     fn create_2d_f32_index(

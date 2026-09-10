@@ -12,7 +12,7 @@ use std::{
     sync::Arc,
 };
 
-use dashmap::{DashMap, mapref::entry::Entry};
+use dashmap::{DashMap, DashSet, mapref::entry::Entry};
 use diskann_utils::views::Matrix;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
@@ -97,6 +97,7 @@ pub struct Config {
     max_degree: NonZeroUsize,
     dim: NonZeroUsize,
     metric: Metric,
+    hard_deletes: bool,
 }
 
 impl Config {
@@ -157,7 +158,15 @@ impl Config {
             max_degree,
             dim,
             metric,
+            hard_deletes: false,
         })
+    }
+
+    /// Remove vectors and adjacency lists immediately, keeping only deletion status.
+    #[cfg(test)]
+    pub(crate) fn with_hard_deletes(mut self) -> Self {
+        self.hard_deletes = true;
+        self
     }
 }
 
@@ -186,7 +195,7 @@ convert_error!(ConfigError);
 /// * All calls to [`provider::NeighborAccessorMut::set_neighbors`] do not contain duplicates.
 /// * All calls to [`provider::NeighborAccessorMut::append_vector`] do not contain duplicates
 ///   and are disjoint with the current adjacency list.
-/// * Vectors can be marked as deleted, but their data remains accessible.
+/// * By default, vectors can be marked as deleted, but their data remains accessible.
 /// * Vectors that are deleted but not [`provider::Delete::release`]d cannot be overwritten.
 /// * Attempting to retrieve and ID that is not present is an error.
 /// * All attempts to mutate the graph via [`provider::NeighborAccessorMut`] must be preceeded
@@ -196,9 +205,11 @@ convert_error!(ConfigError);
 #[derive(Debug)]
 pub struct Provider {
     terms: DashMap<u32, Term>,
+    hard_deleted: DashSet<u32>,
     config: Config,
 
     // Counters
+    pub(crate) delete_calls: Counter,
     pub(crate) get_vector: Counter,
     pub(crate) set_vector: Counter,
     pub(crate) get_neighbors: Counter,
@@ -213,7 +224,9 @@ impl Provider {
     pub fn new(config: Config) -> Self {
         let this = Self {
             terms: DashMap::new(),
+            hard_deleted: DashSet::new(),
             config,
+            delete_calls: Counter::new(),
             get_vector: Counter::new(),
             set_vector: Counter::new(),
             get_neighbors: Counter::new(),
@@ -388,14 +401,14 @@ impl Provider {
         Ok(())
     }
 
-    /// Return `true` if `id` is present in the provider but marked as deleted.
+    /// Return whether the ID has been deleted, including hard-deleted IDs.
     ///
-    /// If `id` is present but not marked deleted, returns `false`.
-    ///
-    /// An error is returned if `id` is not present in the provider.
+    /// An error is returned for unknown or released IDs.
     fn is_deleted(&self, id: u32) -> Result<bool, InvalidId> {
         if let Some(term) = self.terms.get(&id) {
             Ok(term.is_deleted())
+        } else if self.hard_deleted.contains(&id) {
+            Ok(true)
         } else {
             Err(InvalidId::Internal(id))
         }
@@ -698,13 +711,19 @@ impl provider::Delete for Provider {
         _context: &Self::Context,
         gid: &Self::ExternalId,
     ) -> Result<(), Self::Error> {
+        self.delete_calls.increment();
         if self.is_start_point(*gid) {
             return Err(InvalidId::IsStartPoint(*gid));
         }
 
         match self.terms.entry(*gid) {
             Entry::Occupied(mut occupied) => {
-                occupied.get_mut().mark_deleted();
+                if self.config.hard_deletes {
+                    self.hard_deleted.insert(*gid);
+                    occupied.remove();
+                } else {
+                    occupied.get_mut().mark_deleted();
+                }
                 Ok(())
             }
             Entry::Vacant(_) => Err(InvalidId::External(*gid)),

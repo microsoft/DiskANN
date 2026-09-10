@@ -1172,13 +1172,17 @@ where
         id: DP::InternalId,
         l_value: usize,
         k_value: usize,
-        v: S::DeleteElementGuard,
+        ids_to_delete: &HashSet<DP::InternalId>,
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         S: InplaceDeleteStrategy<DP> + Sync,
         DP: Delete,
     {
         async move {
+            let v = strategy
+                .get_delete_element(&self.data_provider, context, id)
+                .await
+                .into_ann_result()?;
             let search_strategy = strategy.search_strategy();
             let mut search_accessor = search_strategy
                 .search_accessor(&self.data_provider, context, v.reborrow())
@@ -1197,14 +1201,17 @@ where
 
             let mut output = vec![Neighbor::<DP::InternalId>::default(); l_value];
 
-            // NOTE: We rely on `post_process` to remove deleted items from the results
-            // placed into the output.
+            // The batch is still live during preparation, so exclude it explicitly.
+            // The post-processor removes items deleted by earlier operations.
             let num_results = strategy
                 .search_post_processor()
                 .post_process(
                     &mut search_accessor,
                     v.reborrow(),
-                    scratch.best.iter(),
+                    scratch
+                        .best
+                        .iter()
+                        .filter(|neighbor| !ids_to_delete.contains(neighbor.id())),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
                 )
                 .await
@@ -1356,32 +1363,37 @@ where
             let max_minibatch_par = self.config.max_minibatch_par();
             let chunk_iter = async_tools::arc_chunks(ids, max_minibatch_par);
             for chunk in chunk_iter {
-                // Convert external ids in chunk to internal ids. We do this first as `inplace_delete_inner` may actually
-                // delete the mapping.
+                // Capture the mappings before deletion and prepare each internal ID once.
                 let mut ids_to_delete = HashSet::with_capacity(chunk.len());
+                let mut delete_targets = Vec::with_capacity(chunk.len());
                 for i in 0..chunk.len() {
                     let vector_id = self
                         .data_provider
                         .to_internal_id(context, chunk.get(i))
                         .escalate("id translation for `inplace_delete` must succeed")?;
-                    ids_to_delete.insert(vector_id);
+                    if ids_to_delete.insert(vector_id) {
+                        delete_targets.push((i, vector_id));
+                    }
                 }
+                let ids_to_delete = Arc::new(ids_to_delete);
 
                 // compute edge updates for each inplace delete, running in parallel
-                let handles: Vec<_> = (0..chunk.len())
-                    .map(|i| {
+                let handles: Vec<_> = delete_targets
+                    .iter()
+                    .map(|&(_, vector_id)| {
                         let self_clone = Arc::clone(self);
-                        let chunk_clone = chunk.clone();
                         let context_clone = context.clone();
                         let strategy_clone = strategy.clone();
+                        let ids_to_delete_clone = ids_to_delete.clone();
                         let future = async move {
                             self_clone
                                 .inplace_delete_inner(
                                     &strategy_clone,
                                     &context_clone,
-                                    chunk_clone.get(i),
+                                    vector_id,
                                     num_to_replace,
                                     &inplace_delete_method,
+                                    &ids_to_delete_clone,
                                 )
                                 .await
                         };
@@ -1401,34 +1413,66 @@ where
                     edge_collection.push(res);
                 }
 
-                // check for errors and collect ids to modify in one hashset
+                let mut prepared_edges = Vec::with_capacity(delete_targets.len());
+                for output in edge_collection {
+                    // Every preparation task has finished, so an error leaves the batch live.
+                    prepared_edges.push(output??);
+                }
+
                 let mut ids_to_modify = HashSet::<DP::InternalId>::with_capacity(
                     self.pruned_degree() * 2 * chunk.len(),
                 );
-                let mut edge_hashmaps = Vec::with_capacity(chunk.len());
+                let mut edge_hashmaps = Vec::with_capacity(delete_targets.len());
+                let mut deleted_ids = HashSet::with_capacity(delete_targets.len());
+                let mut delete_error = None;
 
-                for output in edge_collection {
-                    match output {
-                        Ok(Ok(edges)) => {
-                            for neighbor in edges.keys() {
-                                ids_to_modify.insert(*neighbor);
+                let prune_strategy = strategy.prune_strategy();
+                let mut accessor = prune_strategy
+                    .prune_accessor(&self.data_provider, context, 0)
+                    .into_ann_result()?;
+                for (&(i, vector_id), edges) in delete_targets.iter().zip(prepared_edges) {
+                    let deleted = if delete_error.is_none() {
+                        match self
+                            .delete_with_empty_adjacency(
+                                context,
+                                chunk.get(i),
+                                vector_id,
+                                &mut accessor.neighbors(),
+                            )
+                            .await
+                        {
+                            Ok(()) => true,
+                            Err(error) => {
+                                delete_error = Some(error);
+                                false
                             }
+                        }
+                    } else {
+                        false
+                    };
+                    let status = if deleted {
+                        Some(ElementStatus::Deleted)
+                    } else {
+                        self.data_provider
+                            .status_by_internal_id(context, vector_id)
+                            .await
+                            .ok()
+                    };
+                    match status {
+                        Some(ElementStatus::Deleted) => {
+                            deleted_ids.insert(vector_id);
+                            ids_to_modify.extend(edges.keys().copied());
                             edge_hashmaps.push(edges);
                         }
-                        Ok(Err(ann_error)) => {
-                            tracked_error!(
-                                "inplace_delete returned error in multi_inplace_delete: {}",
-                                ann_error
-                            );
+                        Some(ElementStatus::Valid) => {
+                            // Preparation excluded this target, but it may now survive a
+                            // partial batch. Remove its edges to completed deletions too.
+                            ids_to_modify.insert(vector_id);
                         }
-                        Err(err) => {
-                            tracked_error!(
-                                "Tokio spawned task has a join error in multi_inplace_delete: {}",
-                                err
-                            );
-                        }
+                        None => {}
                     }
                 }
+                let ids_to_delete = Arc::new(deleted_ids);
 
                 // next, insert and prune, adding the option to remove all the deleted neighbors
                 // at each prune. this runs in parallel and respects the max_minibatch_par
@@ -1438,7 +1482,6 @@ where
                     .min(max_minibatch_par);
 
                 let edges_to_add = Arc::new(Mutex::new(ids_to_modify.into_iter()));
-                let ids_to_delete = Arc::new(ids_to_delete);
                 let edge_hashmaps = Arc::new(edge_hashmaps);
 
                 let mut tasks = JoinSet::new();
@@ -1494,24 +1537,28 @@ where
                     });
                 }
 
-                // Wait for all tasks to complete.
+                // Join every repair before returning an error, leaving no tasks in flight.
+                let mut repair_error = None;
                 while let Some(result) = tasks.join_next().await {
-                    if let Err(_e) = result {
-                        tracked_error!("Tokio task JoinError in multi_inplace_delete");
-                    } else if let Ok(Err(e)) = result {
-                        tracked_error!("Error in add_edge_and_prune: {}", e);
+                    let result = result
+                        .map_err(|error| {
+                            ANNError::new(error).context("joining inplace-delete repair task")
+                        })
+                        .and_then(|result| result);
+                    if let Err(error) = result {
+                        repair_error.get_or_insert(error);
                     }
                 }
-
-                // finally, drop each deleted neighbor's edges, this can run sequentially
-                let prune_strategy = strategy.prune_strategy();
-                let mut accessor = prune_strategy
-                    .prune_accessor(&self.data_provider, context, 0)
-                    .into_ann_result()?;
-
-                for vector_id in ids_to_delete.iter() {
-                    self.drop_adj_list(&mut accessor.neighbors(), *vector_id)
-                        .await?;
+                if let Some(error) = delete_error {
+                    return Err(match repair_error {
+                        Some(repair_error) => error.context(format!(
+                            "repairing completed deletions also failed: {repair_error}"
+                        )),
+                        None => error,
+                    });
+                }
+                if let Some(error) = repair_error {
+                    return Err(error);
                 }
             }
 
@@ -1542,23 +1589,26 @@ where
                 .to_internal_id(context, id)
                 .escalate("id translation for `inplace_delete` must succeed")?;
 
+            let mut delete_set = HashSet::with_capacity(1);
+            delete_set.insert(vector_id);
             let edges_to_add = self
                 .inplace_delete_inner(
                     &strategy,
                     context,
-                    id,
+                    vector_id,
                     num_to_replace,
                     &inplace_delete_method,
+                    &delete_set,
                 )
                 .await?;
-
-            let mut delete_set = HashSet::with_capacity(1);
-            delete_set.insert(vector_id);
             let prune_strategy = strategy.prune_strategy();
 
             let mut accessor = prune_strategy
                 .prune_accessor(self.provider(), context, self.max_occlusion_size())
                 .into_ann_result()?;
+
+            self.delete_with_empty_adjacency(context, id, vector_id, &mut accessor.neighbors())
+                .await?;
 
             let mut prune_scratch = prune::Scratch::new();
 
@@ -1573,70 +1623,88 @@ where
                 .await?
             }
 
-            self.drop_adj_list(&mut accessor.neighbors(), vector_id)
-                .await?;
-
             Ok(())
         }
     }
 
-    /// To assist with multi_delete, this function computes the edge updates for an
-    /// inplace delete, but returns them instead of immediately adding them to the index
+    /// Clear adjacency while the target is still accessible, restoring it if deletion fails.
+    /// No target data is accessed after a successful provider deletion.
+    fn delete_with_empty_adjacency<NA>(
+        &self,
+        context: &DP::Context,
+        id: &DP::ExternalId,
+        vector_id: DP::InternalId,
+        accessor: &mut NA,
+    ) -> impl SendFuture<ANNResult<()>>
+    where
+        DP: Delete,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
+    {
+        async move {
+            let mut neighbors = AdjacencyList::new();
+            accessor.get_neighbors(vector_id, &mut neighbors).await?;
+            self.drop_adj_list(accessor, vector_id).await?;
+
+            if let Err(error) = self
+                .data_provider
+                .delete(context, id)
+                .await
+                .escalate("`inplace_delete` requires a successful delete")
+            {
+                // A failed delete can still release the ID; do not recreate its adjacency.
+                if self
+                    .data_provider
+                    .status_by_internal_id(context, vector_id)
+                    .await
+                    .is_ok_and(|status| status.is_valid())
+                    && let Err(restore_error) = accessor.set_neighbors(vector_id, &neighbors).await
+                {
+                    return Err(error.context(format!(
+                        "restoring adjacency after failed deletion also failed: {restore_error}"
+                    )));
+                }
+                return Err(error);
+            }
+            Ok(())
+        }
+    }
+
+    /// Compute repair edges while all targets are still accessible. The caller must wait
+    /// for every preparation in a batch before deleting any target.
     fn inplace_delete_inner<'a, S>(
         &'a self,
         strategy: &'a S,
         context: &'a DP::Context,
-        id: &'a DP::ExternalId,
+        vector_id: DP::InternalId,
         num_to_replace: usize,
         inplace_delete_method: &'a InplaceDeleteMethod,
+        ids_to_delete: &'a HashSet<DP::InternalId>,
     ) -> impl SendFuture<ANNResult<HashMap<DP::InternalId, Vec<DP::InternalId>>>>
     where
         S: InplaceDeleteStrategy<DP> + Sync,
         DP: Delete,
     {
         async move {
-            let vector_id = self
-                .data_provider
-                .to_internal_id(context, id)
-                .escalate("id translation for `inplace_delete` must succeed")?;
-
-            // For VisitedAndTopK, we must capture the delete element *before* erasing
-            // the vector data, since it uses the deleted vector as a search query.
-            // This is necessary in hard-delete providers.
-            let delete_element = match inplace_delete_method {
-                InplaceDeleteMethod::VisitedAndTopK { .. } => Some(
-                    strategy
-                        .get_delete_element(&self.data_provider, context, vector_id)
-                        .await
-                        .into_ann_result()?,
-                ),
-                _ => None,
-            };
-
-            self.data_provider
-                .delete(context, id)
-                .await
-                .escalate("`inplace_delete` requires a successful delete")?;
-
             let prune_strategy = strategy.prune_strategy();
             let mut accessor = prune_strategy
                 .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
             let InplaceDeleteWorkList {
-                replace_candidates,
-                in_neighbors,
+                mut replace_candidates,
+                mut in_neighbors,
             } = match inplace_delete_method {
                 InplaceDeleteMethod::VisitedAndTopK {
                     k_value: k,
                     l_value: l,
                 } => {
-                    // delete_element is always Some for VisitedAndTopK (set above).
-                    let Some(v) = delete_element else {
-                        unreachable!("delete_element is set for VisitedAndTopK");
-                    };
                     self.get_candidates_using_visited_and_topk(
-                        strategy, context, vector_id, *l, *k, v,
+                        strategy,
+                        context,
+                        vector_id,
+                        *l,
+                        *k,
+                        ids_to_delete,
                     )
                     .await?
                 }
@@ -1658,11 +1726,16 @@ where
 
             // fetch the filtered adjacency list of `p`.
             let PartitionedNeighbors {
-                undeleted: adjacency_list,
+                undeleted: mut adjacency_list,
                 ..
             } = self
                 .get_undeleted_neighbors(context, &mut accessor.neighbors(), vector_id)
                 .await?;
+
+            // Filter before ranking so other batch targets cannot consume replacement slots.
+            replace_candidates.retain(|id| !ids_to_delete.contains(id));
+            in_neighbors.retain(|id| !ids_to_delete.contains(id));
+            adjacency_list.retain(|id| !ids_to_delete.contains(id));
 
             // This is the total union of elements that we consider for neighbors.
             // It's possible there is some repitition, but implementations of `Fill` should

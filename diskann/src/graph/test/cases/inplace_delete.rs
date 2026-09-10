@@ -17,6 +17,7 @@ use crate::{
 
 use super::helpers::{
     generate_2d_square_adjacency_list, setup_2d_square, setup_2d_square_using_synthetics_grid,
+    setup_2d_square_with_config,
 };
 
 fn inplace_delete_setup() -> Arc<DiskANNIndex<test_provider::Provider>> {
@@ -174,6 +175,221 @@ async fn multi_inplace_delete_visited_and_topk() {
         l_value: 10,
     })
     .await;
+}
+
+fn delete_methods(k_value: usize) -> [InplaceDeleteMethod; 3] {
+    [
+        InplaceDeleteMethod::OneHop,
+        InplaceDeleteMethod::TwoHopAndOneHop,
+        InplaceDeleteMethod::VisitedAndTopK {
+            k_value,
+            l_value: 10,
+        },
+    ]
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inplace_delete_with_hard_deletes() {
+    for method in delete_methods(4) {
+        let index = setup_2d_square_with_config(
+            generate_2d_square_adjacency_list(),
+            4,
+            1,
+            test_provider::Config::with_hard_deletes,
+        );
+        let ctx = test_provider::Context::new();
+
+        index
+            .inplace_delete(test_provider::Strategy::new(), &ctx, &3, 3, method)
+            .await
+            .unwrap_or_else(|err| panic!("hard delete failed for {method:?}: {err}"));
+
+        assert!(!index.provider().all_internal_ids().contains(&3));
+        validate_graph_rebuild_for_simple_graph_after_3_delete(&mut index.provider().neighbors())
+            .await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_with_hard_deletes() {
+    for method in delete_methods(4) {
+        let index = setup_2d_square_with_config(
+            generate_2d_square_adjacency_list(),
+            4,
+            2,
+            test_provider::Config::with_hard_deletes,
+        );
+        let ctx = test_provider::Context::new();
+
+        index
+            .multi_inplace_delete(
+                test_provider::Strategy::new(),
+                &ctx,
+                Arc::new([2, 3]),
+                3,
+                method,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("hard delete failed for {method:?}: {err}"));
+
+        let remaining = index.provider().all_internal_ids();
+        assert!(!remaining.contains(&2));
+        assert!(!remaining.contains(&3));
+        validate_graph_after_2_and_3_delete(&mut index.provider().neighbors()).await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rejected_inplace_delete_preserves_graph() {
+    for method in delete_methods(4) {
+        let index = setup_2d_square_with_config(
+            generate_2d_square_adjacency_list(),
+            4,
+            1,
+            test_provider::Config::with_hard_deletes,
+        );
+        let ctx = test_provider::Context::new();
+        let before = index.provider().dump_neighbors(true);
+
+        let error = index
+            .inplace_delete(test_provider::Strategy::new(), &ctx, &4, 3, method)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("cannot delete start point 4"));
+        assert_eq!(index.provider().dump_neighbors(true), before, "{method:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_deduplicates_ids() {
+    for method in delete_methods(4) {
+        let index = setup_2d_square_with_config(
+            generate_2d_square_adjacency_list(),
+            4,
+            4,
+            test_provider::Config::with_hard_deletes,
+        );
+        let ctx = test_provider::Context::new();
+
+        index
+            .multi_inplace_delete(
+                test_provider::Strategy::new(),
+                &ctx,
+                Arc::new([2, 3, 2, 3]),
+                3,
+                method,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("duplicate deletes failed for {method:?}: {err}"));
+
+        assert_eq!(index.provider().delete_calls.value(), 2, "{method:?}");
+        validate_graph_after_2_and_3_delete(&mut index.provider().neighbors()).await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_prefers_live_replacements() {
+    for method in delete_methods(2) {
+        let provider_config = test_provider::Config::new(
+            Metric::L2,
+            4,
+            test_provider::StartPoint::new(4, vec![20.0]),
+        )
+        .unwrap()
+        .with_hard_deletes();
+        let provider = test_provider::Provider::new_from(
+            provider_config,
+            [(4, AdjacencyList::from_iter_untrusted([3, 1]))],
+            [
+                (0, vec![0.0], AdjacencyList::from_iter_untrusted([3])),
+                (1, vec![10.0], AdjacencyList::from_iter_untrusted([4])),
+                (2, vec![0.1], AdjacencyList::from_iter_untrusted([1])),
+                (
+                    3,
+                    vec![0.2],
+                    AdjacencyList::from_iter_untrusted([0, 2, 1, 4]),
+                ),
+            ],
+        )
+        .unwrap();
+        let config = graph::config::Builder::new_with(
+            4,
+            graph::config::MaxDegree::same(),
+            10,
+            Metric::L2.into(),
+            |builder| {
+                builder.max_minibatch_par(2);
+            },
+        )
+        .build()
+        .unwrap();
+        let index = Arc::new(DiskANNIndex::new(config, provider, None));
+        let ctx = test_provider::Context::new();
+
+        // Vertex 2 is closer than every live replacement for vertex 0, but it is
+        // also being deleted. It must not consume a top-k or replacement slot.
+        index
+            .multi_inplace_delete(
+                test_provider::Strategy::new(),
+                &ctx,
+                Arc::new([3, 2]),
+                1,
+                method,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("replacement selection failed for {method:?}: {err}"));
+
+        index.provider().is_consistent().unwrap();
+        let mut list = AdjacencyList::new();
+        index
+            .provider()
+            .neighbors()
+            .get_neighbors(0, &mut list)
+            .await
+            .unwrap();
+        assert!(
+            list.contains(1),
+            "vertex 0 needs live replacement 1 for {method:?}"
+        );
+        assert!(!list.contains(2));
+        assert!(!list.contains(3));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_prunes_after_hard_deletes() {
+    for method in delete_methods(4) {
+        let index = setup_2d_square_with_config(
+            generate_2d_square_adjacency_list(),
+            1,
+            2,
+            test_provider::Config::with_hard_deletes,
+        );
+        let ctx = test_provider::Context::new();
+
+        index
+            .multi_inplace_delete(
+                test_provider::Strategy::new(),
+                &ctx,
+                Arc::new([2, 3]),
+                1,
+                method,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("pruning failed for {method:?}: {err}"));
+
+        index.provider().is_consistent().unwrap();
+        let mut list = AdjacencyList::new();
+        index
+            .provider()
+            .neighbors()
+            .get_neighbors(4, &mut list)
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1, "start point must be pruned for {method:?}");
+        assert!(list.contains(0) || list.contains(1));
+    }
 }
 
 async fn validate_graph_rebuild_for_simple_graph_after_3_delete<N>(neighbors: &mut N)
@@ -390,4 +606,37 @@ async fn multi_inplace_delete_wider_topology() {
         reachable, 7,
         "6 surviving data nodes + start should be reachable"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_repairs_completed_deletions_after_rejection() {
+    for method in delete_methods(4) {
+        let index = setup_2d_square_with_config(
+            generate_2d_square_adjacency_list(),
+            4,
+            2,
+            test_provider::Config::with_hard_deletes,
+        );
+        let ctx = test_provider::Context::new();
+
+        // Vertex 3 is deleted successfully before the start point rejects deletion.
+        let error = index
+            .multi_inplace_delete(
+                test_provider::Strategy::new(),
+                &ctx,
+                Arc::new([3, 4]),
+                3,
+                method,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("cannot delete start point 4"));
+        let remaining = index.provider().all_internal_ids();
+        assert!(!remaining.contains(&3));
+        assert!(remaining.contains(&4));
+        index.provider().is_consistent().unwrap();
+        validate_graph_rebuild_for_simple_graph_after_3_delete(&mut index.provider().neighbors())
+            .await;
+    }
 }

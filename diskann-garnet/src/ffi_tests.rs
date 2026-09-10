@@ -176,6 +176,51 @@ mod tests {
     }
 
     #[test]
+    fn remove_reclaims_data_and_preserves_graph() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+
+        for (id, vector) in [(10, [1.0, 0.0]), (20, [0.0, 1.0]), (30, [1.0, 1.0])] {
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, id, &vector),
+                InsertResult::Success
+            );
+        }
+
+        let id = 20u32;
+        let id_bytes = bytemuck::bytes_of(&id);
+        let iid_bytes = store
+            .get(ctx.term(Term::IntMap).get(), id_bytes)
+            .expect("missing internal ID mapping");
+        assert!(
+            store
+                .get(ctx.term(Term::Neighbors).get(), &iid_bytes)
+                .is_some()
+        );
+
+        // SAFETY: The index and ID buffers remain valid throughout the call.
+        assert!(unsafe { remove(ctx.get(), index_ptr, id_bytes.as_ptr(), id_bytes.len()) });
+
+        for term in [Term::Vector, Term::Neighbors, Term::ExtMap] {
+            assert!(store.get(ctx.term(term).get(), &iid_bytes).is_none());
+        }
+        assert!(store.get(ctx.term(Term::IntMap).get(), id_bytes).is_none());
+
+        let (ids, _) = do_search(&ctx, index_ptr, &[0.0, 1.0], 3, None);
+        assert_eq!(ids, [30, 10]);
+
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, id, &[2.0, 0.0]),
+            InsertResult::Success
+        );
+        let (ids, _) = do_search(&ctx, index_ptr, &[2.0, 0.0], 3, None);
+        assert_eq!(ids, [20, 10, 30]);
+
+        // SAFETY: This is the only call dropping the index.
+        unsafe { drop_index(ctx.get(), index_ptr) };
+    }
+
+    #[test]
     fn update_vector_attributes() {
         let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);

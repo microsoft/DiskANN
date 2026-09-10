@@ -158,10 +158,10 @@ pub trait DataProvider: Sized + Send + Sync + 'static {
 pub trait Delete: DataProvider {
     /// Delete an item by external ID.
     ///
-    /// Note that internal vector IDs may still be reachable. In the context of a graph
-    /// index, this is equivalent to a "soft" delete where the deleted ID should no longer
-    /// be returned as the result of search methods, but may still be accessed by its
-    /// private ID during graph node expansion.
+    /// Implementations may immediately remove all data associated with the item, including
+    /// its adjacency list. Callers must read any data they need before deleting the item.
+    /// Internal IDs may still be reachable through incoming graph edges, so accessors must
+    /// handle references to deleted items.
     fn delete(
         &self,
         context: &Self::Context,

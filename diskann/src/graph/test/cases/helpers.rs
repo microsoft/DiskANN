@@ -29,6 +29,15 @@ pub(super) fn setup_2d_square(
     adjacency_lists: Vec<AdjacencyList<u32>>,
     pruned_degree: usize,
 ) -> Arc<DiskANNIndex<Provider>> {
+    setup_2d_square_with_config(adjacency_lists, pruned_degree, 1, |config| config)
+}
+
+pub(super) fn setup_2d_square_with_config(
+    adjacency_lists: Vec<AdjacencyList<u32>>,
+    pruned_degree: usize,
+    max_minibatch_par: usize,
+    configure: impl FnOnce(test_provider::Config) -> test_provider::Config,
+) -> Arc<DiskANNIndex<Provider>> {
     let vectors = Grid::Two.data(2);
     let num_points = vectors.nrows();
     let dim = vectors.ncols();
@@ -67,14 +76,21 @@ pub(super) fn setup_2d_square(
         .enumerate()
         .map(|(id, (row, adj))| (id as u32, row.to_vec(), adj));
 
-    let provider =
-        Provider::new_from(provider_config, iter::once((start_id, start_adj)), points).unwrap();
+    let provider = Provider::new_from(
+        configure(provider_config),
+        iter::once((start_id, start_adj)),
+        points,
+    )
+    .unwrap();
 
-    let index_config = graph::config::Builder::new(
+    let index_config = graph::config::Builder::new_with(
         pruned_degree,
         graph::config::MaxDegree::same(),
         10,
         Metric::L2.into(),
+        |builder| {
+            builder.max_minibatch_par(max_minibatch_par);
+        },
     )
     .build()
     .unwrap();
