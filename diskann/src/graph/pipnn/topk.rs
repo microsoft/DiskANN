@@ -82,6 +82,7 @@ pub(super) use with_topk;
 /// the buffers it updates. Candidate IDs are slice positions, not dataset IDs.
 /// Callers supply each candidate at most once per result; equal distances need
 /// no fixed tie order. The construction macro specializes the width per batch.
+/// Selection and dual updates run inside their own architecture scope.
 pub(super) struct TopK<const K: usize> {
     k: usize,
 }
@@ -94,6 +95,12 @@ impl<const K: usize> TopK<K> {
             "top-k width must match its capacity"
         );
         Self { k }
+    }
+
+    // Keep the const width visible inside the target-feature boundary.
+    #[inline(always)]
+    fn capacity(&self) -> usize {
+        if K == RUNTIME_WIDTH { self.k } else { K }
     }
 
     /// Clear results and prepare reusable thresholds before a sequence of dual updates.
@@ -121,19 +128,29 @@ impl<const K: usize> TopK<K> {
         distances: &[f32],
         output: &mut [Candidate],
     ) {
-        debug_assert_eq!(
-            output.len(),
-            self.k,
-            "top-k output width must match its capacity"
-        );
-        if self.k == 0 {
-            return;
-        }
-        output.fill(Candidate::default());
-        distance_blocks(arch, distances).fold(
-            f32::INFINITY,
+        arch.run2(
             #[inline(always)]
-            |limit, block| block.update_one(output, limit),
+            move |distances: &[f32], output: &mut [Candidate]| {
+                let k = self.capacity();
+                debug_assert_eq!(
+                    output.len(),
+                    k,
+                    "top-k output width must match its capacity"
+                );
+                if k == 0 {
+                    return;
+                }
+                // Preserve the specialized capacity through the inlined insertion.
+                let output = &mut output[..k];
+                output.fill(Candidate::default());
+                distance_blocks(arch, distances).fold(
+                    f32::INFINITY,
+                    #[inline(always)]
+                    |limit, block| block.update_one(output, limit),
+                );
+            },
+            distances,
+            output,
         );
     }
 
@@ -146,40 +163,50 @@ impl<const K: usize> TopK<K> {
         arch: A,
         point_idx: usize,
         distances: &[f32],
-        mut output: MutMatrixView<'_, Candidate>,
+        output: MutMatrixView<'_, Candidate>,
         thresholds: &mut [f32],
     ) {
-        let k = self.k;
-        debug_assert_eq!(
-            output.ncols(),
-            k,
-            "top-k output width must match its capacity"
-        );
-        if k == 0 {
-            return;
-        }
-        debug_assert!(
-            distances.len() <= point_idx,
-            "candidate indexes must exclude the updated point"
-        );
-        debug_assert_eq!(
-            output.nrows(),
-            thresholds.len(),
-            "top-k candidates and thresholds must match"
-        );
-        // Keep this point's result and local limit independent of reciprocal updates.
-        let (others, remaining) = output.as_mut_slice().split_at_mut(point_idx * k);
-        let nearest = &mut remaining[..k];
-        let limit = distance_blocks(arch, distances).fold(
-            thresholds[point_idx],
+        arch.run3(
             #[inline(always)]
-            |limit, block| {
-                let limit = block.update_one(nearest, limit);
-                block.update_many(others, thresholds, point_idx as u32, k);
-                limit
+            move |distances: &[f32],
+                  mut output: MutMatrixView<'_, Candidate>,
+                  thresholds: &mut [f32]| {
+                let k = self.capacity();
+                debug_assert_eq!(
+                    output.ncols(),
+                    k,
+                    "top-k output width must match its capacity"
+                );
+                if k == 0 {
+                    return;
+                }
+                debug_assert!(
+                    distances.len() <= point_idx,
+                    "candidate indexes must exclude the updated point"
+                );
+                debug_assert_eq!(
+                    output.nrows(),
+                    thresholds.len(),
+                    "top-k candidates and thresholds must match"
+                );
+                // Keep this point's result and local limit independent of reciprocal updates.
+                let (others, remaining) = output.as_mut_slice().split_at_mut(point_idx * k);
+                let nearest = &mut remaining[..k];
+                let limit = distance_blocks(arch, distances).fold(
+                    thresholds[point_idx],
+                    #[inline(always)]
+                    |limit, block| {
+                        let limit = block.update_one(nearest, limit);
+                        block.update_many(others, thresholds, point_idx as u32, k);
+                        limit
+                    },
+                );
+                thresholds[point_idx] = limit;
             },
+            distances,
+            output,
+            thresholds,
         );
-        thresholds[point_idx] = limit;
     }
 }
 

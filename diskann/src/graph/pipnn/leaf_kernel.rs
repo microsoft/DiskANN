@@ -96,19 +96,17 @@ fn rank_leaf_distances<A: PiPNNSIMDSchema>(
     mut output: MutMatrixView<'_, Candidate>,
     worst: &mut Vec<f32>,
 ) {
-    arch.run(move || {
-        with_topk!(output.ncols(), |topk| {
-            topk.initialize(output.as_mut_view(), worst);
-            for point_idx in 1..distances.nrows() {
-                topk.update_dual_topk(
-                    arch,
-                    point_idx,
-                    &distances.row(point_idx)[..point_idx],
-                    output.as_mut_view(),
-                    worst.as_mut_slice(),
-                );
-            }
-        });
+    with_topk!(output.ncols(), |topk| {
+        topk.initialize(output.as_mut_view(), worst);
+        for point_idx in 1..distances.nrows() {
+            topk.update_dual_topk(
+                arch,
+                point_idx,
+                &distances.row(point_idx)[..point_idx],
+                output.as_mut_view(),
+                worst.as_mut_slice(),
+            );
+        }
     });
 }
 
