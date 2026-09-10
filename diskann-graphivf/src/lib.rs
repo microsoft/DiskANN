@@ -67,7 +67,7 @@ pub use online::{
 };
 pub use params::{
     AssignMethod, BuildParams, CentroidRouting, CentroidSearch, EmptyClusterPolicy, GraphParams,
-    Metric, OnlineCentroidRouting, OnlineParams, SearchParams, DEFAULT_CENTROID_SEARCH_ALPHA,
-    MIN_CENTROID_SEARCH_L,
+    Metric, OnlineCentroidRouting, OnlineParams, OnlineUpperLevelParams, SearchParams,
+    UpperLevelClustering, DEFAULT_CENTROID_SEARCH_ALPHA, MIN_CENTROID_SEARCH_L,
 };
 pub use profile::{BuildProfile, SearchProfile};

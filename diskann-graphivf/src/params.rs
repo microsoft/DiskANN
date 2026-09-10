@@ -341,6 +341,21 @@ pub enum EmptyClusterPolicy {
     ReseedFarthest,
 }
 
+/// Optional second-level clustering used only to order bottom-level posting
+/// lists on disk.
+///
+/// Bottom-level centroids and point assignments are not changed. Their
+/// centroids are clustered under squared L2, then bottom-level lists belonging
+/// to the same upper-level cluster are written contiguously. Search still
+/// routes directly to the original bottom-level centroids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UpperLevelClustering {
+    /// Number of upper-level clusters.
+    pub num_clusters: usize,
+    /// Number of Lloyd iterations over the bottom-level centroids.
+    pub kmeans_iters: usize,
+}
+
 /// Parameters controlling an index build.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BuildParams {
@@ -364,6 +379,10 @@ pub struct BuildParams {
     pub assign_method: AssignMethod,
     /// Policy for clusters that become empty during k-means refinement.
     pub empty_clusters: EmptyClusterPolicy,
+    /// Optional clustering of bottom-level centroids used to group posting
+    /// lists physically on disk. It does not change query routing or recall.
+    #[serde(default)]
+    pub upper_level_clustering: Option<UpperLevelClustering>,
     /// L2-normalize every centroid onto the unit sphere after each Lloyd's
     /// update. Useful for unit-normalized corpora where the raw cluster mean
     /// (which shrinks inward) is a worse angular representative than its
@@ -397,6 +416,20 @@ impl BuildParams {
         }
         if self.num_threads == 0 {
             return Err(E::invalid("num_threads must be non-zero"));
+        }
+        if let Some(upper) = self.upper_level_clustering {
+            if upper.num_clusters == 0 {
+                return Err(E::invalid("upper-level num_clusters must be non-zero"));
+            }
+            if upper.num_clusters > self.num_clusters {
+                return Err(E::invalid(format!(
+                    "upper-level num_clusters ({}) cannot exceed bottom-level num_clusters ({})",
+                    upper.num_clusters, self.num_clusters
+                )));
+            }
+            if upper.kmeans_iters == 0 {
+                return Err(E::invalid("upper-level kmeans_iters must be non-zero"));
+            }
         }
         self.routing.validate()?;
         Ok(())
@@ -480,6 +513,40 @@ pub struct OnlineParams {
     pub num_threads: usize,
     /// RNG seed for split seeding (reproducibility).
     pub seed: u64,
+    /// Optional second level maintained incrementally over the live bottom
+    /// centroids. Static builds use [`UpperLevelClustering`] instead; choosing
+    /// an online bottom build therefore also chooses the online upper
+    /// algorithm.
+    pub upper_level: Option<OnlineUpperLevelParams>,
+}
+
+/// Parameters for an upper level maintained by the same incremental
+/// split/reassign/dissolve algorithm as [`OnlineClusterer`](crate::OnlineClusterer).
+///
+/// Bottom centroids are the upper clusterer's points. Routing mode, metric,
+/// normalization, worker count, and seed are inherited from the bottom level.
+#[derive(Debug, Clone, Copy)]
+pub struct OnlineUpperLevelParams {
+    /// Optional cap on live upper clusters.
+    pub max_clusters: Option<usize>,
+    /// Total upper-centroid id slots, including retired ids.
+    pub centroid_capacity: usize,
+    /// Split an upper cluster after its member bottom centroids collectively
+    /// represent more than this many corpus points. This weighted threshold
+    /// lets physical upper groups target a posting-list byte size.
+    pub split_threshold: usize,
+    /// Number of upper neighbors considered during split reassignment/dissolve.
+    pub reassign_neighbors: usize,
+    /// Lloyd iterations for each upper-level 2-means split.
+    pub two_means_iters: usize,
+    /// Dissolve an upper cluster below this size; zero disables dissolves.
+    pub merge_threshold: usize,
+    /// Minimum number of live upper clusters.
+    pub min_clusters: usize,
+    /// Initial upper centroids fitted over the initial bottom centroids.
+    pub warmup_centroids: usize,
+    /// Lloyd iterations used to initialize the upper centroids.
+    pub warmup_iters: usize,
 }
 
 impl Default for OnlineParams {
@@ -502,6 +569,7 @@ impl Default for OnlineParams {
             normalize_centroids: false,
             num_threads: 1,
             seed: 0,
+            upper_level: None,
         }
     }
 }
@@ -626,6 +694,7 @@ mod tests {
             seed: 0,
             assign_method: AssignMethod::Exact,
             empty_clusters: EmptyClusterPolicy::PreserveOld,
+            upper_level_clustering: None,
             normalize_centroids: false,
         }
     }

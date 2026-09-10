@@ -113,6 +113,33 @@ is pure overhead charged to every query.
 A `Load` job needs only `data_type` and the index prefix — the same `data_type` the index
 was built with, since it selects the backend that decodes the lists.
 
+### Optional two-level physical layout
+
+Static builds accept an optional layout-only Lloyd clustering over the finished
+bottom-level centroids:
+
+```json
+"upper_level_clustering": {
+  "num_clusters": 512,
+  "kmeans_iters": 5
+}
+```
+
+This runs squared-L2 k-means over the bottom-level centroid matrix and writes
+bottom posting lists in upper-cluster order. Lists assigned to one upper centroid
+are therefore contiguous. The original bottom centroids, centroid ids, graph,
+point assignments, and query routing are not modified; search still goes directly
+from the query to bottom-level centroids. Centroid-indexed physical offsets in the
+metadata map those ids to their reordered lists. This isolates physical locality
+as the experimental variable when simulating large I/O blocks.
+
+For an online build, `OnlineParams::upper_level` instead configures a nested
+`OnlineClusterer`. Live bottom centroid ids are its points, and bottom splits and
+retirements are synchronized as upper inserts and deletes. Flush groups lists by
+the maintained upper assignments; it does not run batch k-means. The online upper
+level inherits routing mode, normalization, threads, and a deterministically derived
+seed from the bottom level. Omit the option for the original flat centroid-id order.
+
 ---
 
 ## 3. Online index (primary)

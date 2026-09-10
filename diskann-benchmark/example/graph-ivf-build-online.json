@@ -18,6 +18,14 @@
                     "warmup_points": 64,
                     "warmup_iters": 15,
                     "two_means_iters": 12,
+                    "upper_level_clustering": {
+                        "split_threshold": 2,
+                        "warmup_centroids": 2,
+                        "warmup_iters": 5,
+                        "two_means_iters": 5,
+                        "reassign_neighbors": 2,
+                        "capacity_mult": 3
+                    },
                     "reassign_neighbors": 8,
                     "capacity_mult": 3,
                     "normalize": false,

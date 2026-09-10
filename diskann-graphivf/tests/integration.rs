@@ -8,7 +8,7 @@
 
 use diskann_graphivf::{
     AssignMethod, BuildParams, CentroidRouting, CentroidSearch, EmptyClusterPolicy, GraphIvfIndex,
-    GraphParams, Half, Metric, SearchParams, VectorRepr,
+    GraphParams, Half, Metric, SearchParams, UpperLevelClustering, VectorRepr,
 };
 use diskann_utils::views::Matrix;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -94,7 +94,56 @@ fn build_params(metric: Metric) -> BuildParams {
         seed: 42,
         assign_method: AssignMethod::Exact,
         empty_clusters: EmptyClusterPolicy::PreserveOld,
+        upper_level_clustering: None,
         normalize_centroids: false,
+    }
+}
+
+#[test]
+fn upper_level_clustering_changes_only_physical_list_layout() {
+    let mut rng = StdRng::seed_from_u64(123);
+    let data = make_corpus(&mut rng);
+    let matrix =
+        Matrix::try_from(data.clone().into_boxed_slice(), NUM_POINTS, DIM).expect("matrix shape");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let flat_prefix = dir.path().join("flat");
+    let grouped_prefix = dir.path().join("grouped");
+
+    let flat_params = build_params(Metric::L2);
+    GraphIvfIndex::<f32>::build(matrix.as_view(), &flat_params, &flat_prefix).expect("flat build");
+    let grouped_params = BuildParams {
+        upper_level_clustering: Some(UpperLevelClustering {
+            num_clusters: 8,
+            kmeans_iters: 5,
+        }),
+        ..flat_params
+    };
+    GraphIvfIndex::<f32>::build(matrix.as_view(), &grouped_params, &grouped_prefix)
+        .expect("grouped build");
+
+    assert_eq!(
+        std::fs::read(flat_prefix.with_extension("graphivf_centroids.fbin")).unwrap(),
+        std::fs::read(grouped_prefix.with_extension("graphivf_centroids.fbin")).unwrap(),
+    );
+    assert_eq!(
+        std::fs::read(flat_prefix.with_extension("graphivf_graph")).unwrap(),
+        std::fs::read(grouped_prefix.with_extension("graphivf_graph")).unwrap(),
+    );
+    assert_ne!(
+        std::fs::read(flat_prefix.with_extension("graphivf_lists")).unwrap(),
+        std::fs::read(grouped_prefix.with_extension("graphivf_lists")).unwrap(),
+    );
+
+    let flat = GraphIvfIndex::<f32>::load(&flat_prefix, 2, CentroidSearch::Graph).unwrap();
+    let grouped = GraphIvfIndex::<f32>::load(&grouped_prefix, 2, CentroidSearch::Graph).unwrap();
+    let mut flat_searcher = flat.searcher().unwrap();
+    let mut grouped_searcher = grouped.searcher().unwrap();
+    let search = SearchParams::new(12);
+    for query in matrix.as_slice().chunks(DIM).take(16) {
+        assert_eq!(
+            flat_searcher.search(query, 20, &search).unwrap(),
+            grouped_searcher.search(query, 20, &search).unwrap(),
+        );
     }
 }
 

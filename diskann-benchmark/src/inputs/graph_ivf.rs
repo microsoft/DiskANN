@@ -225,6 +225,10 @@ pub(crate) struct GraphIvfStaticBuild {
     /// Policy for clusters that become empty during k-means refinement.
     #[serde(default)]
     pub(crate) empty_clusters: EmptyClusterConfig,
+    /// Optional clustering over the finished bottom-level centroids, used only
+    /// to group similar posting lists contiguously on disk.
+    #[serde(default)]
+    pub(crate) upper_level_clustering: Option<UpperLevelClusteringConfig>,
     /// Path prefix to save the index under (without the `.graphivf_*` suffix).
     pub(crate) save_path: String,
 }
@@ -299,11 +303,54 @@ pub(crate) struct GraphIvfOnlineBuild {
     pub(crate) num_threads: usize,
     /// RNG seed for warmup sampling and split seeding (for reproducibility).
     pub(crate) seed: u64,
+    /// Optional incremental clustering over live bottom centroids, maintained
+    /// as those centroids split and retire.
+    #[serde(default)]
+    pub(crate) upper_level_clustering: Option<OnlineUpperLevelClusteringConfig>,
     /// Path prefix to save the index under (without the `.graphivf_*` suffix).
     pub(crate) save_path: String,
     /// Optional path for the per-split telemetry CSV. Omit to skip writing it.
     #[serde(default)]
     pub(crate) telemetry_csv: Option<String>,
+}
+
+/// Configuration for the layout-only second clustering level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UpperLevelClusteringConfig {
+    pub(crate) num_clusters: usize,
+    pub(crate) kmeans_iters: usize,
+}
+
+/// Incremental upper-level controls for an online bottom build. Routing,
+/// normalization, threads, and seed are inherited from the bottom level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OnlineUpperLevelClusteringConfig {
+    /// Maximum underlying corpus-point population represented by one upper
+    /// cluster before it splits. Convert a byte target using the stored posting
+    /// record width (point id plus encoded vector row).
+    pub(crate) split_threshold: usize,
+    #[serde(default = "default_upper_warmup_centroids")]
+    pub(crate) warmup_centroids: usize,
+    #[serde(default = "default_warmup_iters")]
+    pub(crate) warmup_iters: usize,
+    #[serde(default = "default_two_means_iters")]
+    pub(crate) two_means_iters: usize,
+    #[serde(default = "default_reassign_neighbors")]
+    pub(crate) reassign_neighbors: usize,
+    #[serde(default)]
+    pub(crate) merge_threshold: usize,
+    #[serde(default = "default_min_clusters")]
+    pub(crate) min_clusters: usize,
+    #[serde(default)]
+    pub(crate) max_clusters: Option<usize>,
+    #[serde(default = "default_capacity_mult")]
+    pub(crate) capacity_mult: usize,
+}
+
+const fn default_upper_warmup_centroids() -> usize {
+    4
 }
 
 const fn default_warmup_centroids() -> usize {
@@ -729,6 +776,7 @@ impl GraphIvfStaticBuild {
         if self.num_threads == 0 {
             anyhow::bail!("num_threads must be positive");
         }
+        validate_upper_level(self.upper_level_clustering, Some(self.num_clusters))?;
 
         validate_save_path(&self.save_path, checker)?;
 
@@ -767,6 +815,26 @@ impl GraphIvfOnlineBuild {
         }
         if self.min_clusters == 0 {
             anyhow::bail!("min_clusters must be positive");
+        }
+        if let Some(upper) = self.upper_level_clustering {
+            if upper.split_threshold < 2 {
+                anyhow::bail!("upper-level split_threshold must be >= 2");
+            }
+            if upper.warmup_centroids == 0 || upper.warmup_centroids > self.warmup_centroids {
+                anyhow::bail!(
+                    "upper-level warmup_centroids must be in 1..={}",
+                    self.warmup_centroids
+                );
+            }
+            if upper.two_means_iters == 0 || upper.reassign_neighbors == 0 {
+                anyhow::bail!("upper-level iteration and reassignment counts must be positive");
+            }
+            if upper.capacity_mult == 0 || upper.min_clusters == 0 {
+                anyhow::bail!("upper-level capacity_mult and min_clusters must be positive");
+            }
+            if upper.merge_threshold > 0 && 2 * upper.merge_threshold > upper.split_threshold {
+                anyhow::bail!("upper-level require 2 * merge_threshold <= split_threshold");
+            }
         }
         // Without hysteresis a cluster that just split is already small enough
         // to be merged back, so a single delete could undo the split.
@@ -880,6 +948,29 @@ impl GraphIvfOnlineRunbook {
     }
 }
 
+fn validate_upper_level(
+    upper: Option<UpperLevelClusteringConfig>,
+    bottom_limit: Option<usize>,
+) -> anyhow::Result<()> {
+    if let Some(upper) = upper {
+        if upper.num_clusters == 0 {
+            anyhow::bail!("upper-level num_clusters must be positive");
+        }
+        if upper.kmeans_iters == 0 {
+            anyhow::bail!("upper-level kmeans_iters must be positive");
+        }
+        if let Some(limit) = bottom_limit {
+            if upper.num_clusters > limit {
+                anyhow::bail!(
+                    "upper-level num_clusters ({}) cannot exceed bottom-level cluster limit ({limit})",
+                    upper.num_clusters
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 impl GraphIvfRunbookConfig {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.runbook_path
@@ -969,6 +1060,7 @@ impl Example for GraphIvfOperation {
             seed: 0,
             assign_method: AssignMethodConfig::Exact,
             empty_clusters: EmptyClusterConfig::PreserveOld,
+            upper_level_clustering: None,
             save_path: "sample_graphivf_index".to_string(),
         };
 
@@ -1035,6 +1127,12 @@ impl fmt::Display for GraphIvfStaticBuild {
         write_field!(f, "Num Clusters", self.num_clusters)?;
         write_field!(f, "Sample Size", self.sample_size)?;
         write_field!(f, "KMeans Iters", self.kmeans_iters)?;
+        if let Some(upper) = self.upper_level_clustering {
+            write_field!(f, "Upper Clusters", upper.num_clusters)?;
+            write_field!(f, "Upper KMeans Iters", upper.kmeans_iters)?;
+        } else {
+            write_field!(f, "Upper Clustering", "disabled")?;
+        }
         match self.routing {
             StaticRoutingConfig::Graph {
                 assign_l,
@@ -1105,6 +1203,25 @@ impl fmt::Display for GraphIvfOnlineBuild {
         }
         write_field!(f, "Build Threads", self.num_threads)?;
         write_field!(f, "Seed", self.seed)?;
+        if let Some(upper) = self.upper_level_clustering {
+            write_field!(f, "Upper Split Threshold", upper.split_threshold)?;
+            write_field!(f, "Upper Warmup Centroids", upper.warmup_centroids)?;
+            write_field!(f, "Upper Warmup Iters", upper.warmup_iters)?;
+            write_field!(f, "Upper Two-Means Iters", upper.two_means_iters)?;
+            write_field!(f, "Upper Reassign Neighbors", upper.reassign_neighbors)?;
+            write_field!(f, "Upper Merge Threshold", upper.merge_threshold)?;
+            write_field!(f, "Upper Min Clusters", upper.min_clusters)?;
+            write_field!(
+                f,
+                "Upper Max Clusters",
+                upper
+                    .max_clusters
+                    .map_or_else(|| "uncapped".to_owned(), |value| value.to_string())
+            )?;
+            write_field!(f, "Upper Capacity Mult", upper.capacity_mult)?;
+        } else {
+            write_field!(f, "Upper Clustering", "disabled")?;
+        }
         write_field!(f, "Save Path", self.save_path)?;
         if let Some(csv) = &self.telemetry_csv {
             write_field!(f, "Telemetry CSV", csv)?;
@@ -1214,6 +1331,27 @@ mod tests {
         .unwrap()
     }
 
+    fn static_json(dir: &Path, extra: &str) -> serde_json::Value {
+        let save_path = dir.join("index").to_string_lossy().replace('\\', "/");
+        serde_json::from_str(&format!(
+            r#"{{
+                "graph-ivf-source": "Static",
+                "data_type": "float32",
+                "data": "corpus.bin",
+                "distance": "squared_l2",
+                "dim": 384,
+                "num_clusters": 16,
+                "sample_size": 100,
+                "kmeans_iters": 5,
+                "num_threads": 8,
+                "seed": 0,
+                "save_path": "{save_path}"
+                {extra}
+            }}"#
+        ))
+        .unwrap()
+    }
+
     fn parse_online(value: serde_json::Value) -> Result<GraphIvfSource, serde_json::Error> {
         serde_json::from_value(value)
     }
@@ -1254,7 +1392,77 @@ mod tests {
         assert_eq!(online.capacity_mult, 3);
         assert!(!online.normalize);
         assert_eq!(online.max_clusters, None, "omitted means uncapped");
+        assert_eq!(online.upper_level_clustering, None);
         assert_eq!(online.telemetry_csv, None);
+    }
+
+    #[test]
+    fn upper_level_clustering_parses_and_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        let online_upper = r#", "upper_level_clustering": {"split_threshold": 8, "warmup_centroids": 4, "warmup_iters": 3, "two_means_iters": 4, "reassign_neighbors": 2, "capacity_mult": 2}"#;
+
+        let online = validated(dir.path(), online_upper).unwrap();
+        assert_eq!(
+            online.upper_level_clustering,
+            Some(OnlineUpperLevelClusteringConfig {
+                split_threshold: 8,
+                warmup_centroids: 4,
+                warmup_iters: 3,
+                two_means_iters: 4,
+                reassign_neighbors: 2,
+                merge_threshold: 0,
+                min_clusters: 1,
+                max_clusters: None,
+                capacity_mult: 2,
+            })
+        );
+
+        let static_upper = r#", "upper_level_clustering": {"num_clusters": 8, "kmeans_iters": 4}"#;
+        touch_corpus(dir.path());
+        let mut source: GraphIvfSource =
+            serde_json::from_value(static_json(dir.path(), static_upper)).unwrap();
+        let GraphIvfSource::Static(build) = &mut source else {
+            panic!("expected static source");
+        };
+        build.validate(&mut checker(dir.path())).unwrap();
+        assert_eq!(
+            build.upper_level_clustering,
+            Some(UpperLevelClusteringConfig {
+                num_clusters: 8,
+                kmeans_iters: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn upper_level_clustering_rejects_invalid_sizes_and_iterations() {
+        let dir = tempfile::tempdir().unwrap();
+        for (upper, needle) in [
+            (r#"{"split_threshold": 1}"#, "split_threshold must be >= 2"),
+            (
+                r#"{"split_threshold": 8, "two_means_iters": 0}"#,
+                "iteration and reassignment counts must be positive",
+            ),
+        ] {
+            let err = validated(
+                dir.path(),
+                &format!(r#", "upper_level_clustering": {upper}"#),
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains(needle), "got: {err}");
+        }
+
+        touch_corpus(dir.path());
+        let mut source: GraphIvfSource = serde_json::from_value(static_json(
+            dir.path(),
+            r#", "upper_level_clustering": {"num_clusters": 17, "kmeans_iters": 4}"#,
+        ))
+        .unwrap();
+        let GraphIvfSource::Static(build) = &mut source else {
+            panic!("expected static source");
+        };
+        let err = build.validate(&mut checker(dir.path())).unwrap_err();
+        assert!(err.to_string().contains("cannot exceed"), "got: {err}");
     }
 
     #[test]
@@ -1631,8 +1839,7 @@ mod tests {
             [0.01, 0.25, 1.0]
         );
         assert_eq!(parsed.centroid_search_alpha, 2.0);
-
-        // Omitting the multiplier falls back to the library default.
+        // Omitting the multiplier falls back to its default.
         let object = value.as_object_mut().unwrap();
         object.remove("centroid_search_alpha");
         let parsed: GraphIvfSearchPhase = serde_json::from_value(value.clone()).unwrap();
@@ -1640,7 +1847,6 @@ mod tests {
             parsed.centroid_search_alpha,
             default_centroid_search_alpha()
         );
-
         let object = value.as_object_mut().unwrap();
         let fractions = object.remove("cluster_fractions").unwrap();
         object.insert("nlist".to_string(), fractions);

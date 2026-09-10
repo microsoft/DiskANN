@@ -76,7 +76,6 @@ impl CentroidRegistry {
     }
 
     /// Total number of id slots (live + retired + free).
-    #[cfg(test)]
     pub(super) fn capacity(&self) -> usize {
         self.capacity
     }

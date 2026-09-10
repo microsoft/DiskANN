@@ -234,6 +234,10 @@ pub(super) struct GraphIvfRunbookStats {
     total_reassigned: u64,
     /// Points that changed cluster because of a merge.
     total_merge_reassigned: u64,
+    /// Bottom centroids that changed upper cluster because of an upper split.
+    upper_total_reassigned: u64,
+    /// Bottom centroids that changed upper cluster because of an upper merge.
+    upper_total_merge_reassigned: u64,
     stages: Vec<GraphIvfStageStats>,
 }
 
@@ -280,6 +284,11 @@ impl fmt::Display for GraphIvfRunbookStats {
             self.total_reassigned,
             self.total_merges,
             self.total_merge_reassigned
+        )?;
+        writeln!(
+            f,
+            "  upper moved:    {} by splits / {} by merges",
+            self.upper_total_reassigned, self.upper_total_merge_reassigned
         )?;
         for stage in &self.stages {
             write!(
@@ -412,6 +421,10 @@ where
     let flush: MicroSeconds = flush_start.elapsed().into();
 
     let telemetry = clusterer.telemetry();
+    let (upper_total_reassigned, upper_total_merge_reassigned) =
+        clusterer.upper_level_telemetry().map_or((0, 0), |upper| {
+            (upper.total_reassigned, upper.total_merge_reassigned)
+        });
     if let Some(csv) = &params.build.telemetry_csv {
         let path = Path::new(csv);
         telemetry
@@ -449,6 +462,8 @@ where
         total_merges: telemetry.total_merges,
         total_reassigned: telemetry.total_reassigned,
         total_merge_reassigned: telemetry.total_merge_reassigned,
+        upper_total_reassigned,
+        upper_total_merge_reassigned,
         stages,
     })
 }
@@ -906,6 +921,7 @@ mod tests {
                     },
                     num_threads: 2,
                     seed: 0,
+                    upper_level_clustering: None,
                     save_path: self.save_path.clone(),
                     telemetry_csv: None,
                 },
