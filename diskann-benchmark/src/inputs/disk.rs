@@ -147,23 +147,6 @@ impl DiskSearchMode {
         }
     }
 
-    pub(crate) fn adaptive_l(&self) -> anyhow::Result<Option<diskann::graph::search::AdaptiveL>> {
-        let Self::GraphInlineFilter { adaptive_l, .. } = self else {
-            return Ok(None);
-        };
-
-        adaptive_l
-            .as_ref()
-            .map(|adaptive_l| {
-                diskann::graph::search::AdaptiveL::new(
-                    adaptive_l.sample_count.into(),
-                    adaptive_l.scale_factor,
-                )
-                .map_err(Into::into)
-            })
-            .transpose()
-    }
-
     pub(crate) fn strategy(&self) -> DiskSearchStrategy {
         match self {
             Self::Flat {

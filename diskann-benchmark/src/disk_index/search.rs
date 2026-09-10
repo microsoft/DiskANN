@@ -215,6 +215,20 @@ impl DiskSearchResult {
     }
 }
 
+fn build_adaptive_l(mode: &DiskSearchMode) -> anyhow::Result<Option<graph::search::AdaptiveL>> {
+    let DiskSearchMode::GraphInlineFilter { adaptive_l, .. } = mode else {
+        return Ok(None);
+    };
+
+    adaptive_l
+        .as_ref()
+        .map(|adaptive_l| {
+            graph::search::AdaptiveL::new(adaptive_l.sample_count.into(), adaptive_l.scale_factor)
+                .map_err(Into::into)
+        })
+        .transpose()
+}
+
 /// Construct the backend [`SearchMode`] from the JSON-configured strategy,
 /// the per-query vector filter, and the pre-validated adaptive-L settings.
 fn build_search_mode<'a>(
@@ -341,7 +355,7 @@ where
 
     logger.log_checkpoint("index_loaded");
 
-    let adaptive_l = search_params.search_mode.adaptive_l()?;
+    let adaptive_l = build_adaptive_l(&search_params.search_mode)?;
     let pool = create_thread_pool(search_params.num_threads)?;
     let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
     let has_any_search_failed = AtomicBool::new(false);
