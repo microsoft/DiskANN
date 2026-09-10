@@ -44,6 +44,8 @@ impl Default for Candidate {
 pub(super) const RUNTIME_WIDTH: usize = 0;
 
 /// Select the width specialization once for a batch.
+/// Specialize small capacities 1..=10; larger capacities use the runtime path.
+/// Typical partition K is 10 or 3, and leaf K is 3 or 2.
 /// The width is evaluated once. The body has ordinary block control flow.
 macro_rules! with_topk {
     ($width:expr, |$topk:ident| $body:block) => {{
@@ -59,6 +61,30 @@ macro_rules! with_topk {
             }
             3 => {
                 let $topk = $crate::graph::pipnn::topk::TopK::<3>::new(width);
+                $body
+            }
+            4 => {
+                let $topk = $crate::graph::pipnn::topk::TopK::<4>::new(width);
+                $body
+            }
+            5 => {
+                let $topk = $crate::graph::pipnn::topk::TopK::<5>::new(width);
+                $body
+            }
+            6 => {
+                let $topk = $crate::graph::pipnn::topk::TopK::<6>::new(width);
+                $body
+            }
+            7 => {
+                let $topk = $crate::graph::pipnn::topk::TopK::<7>::new(width);
+                $body
+            }
+            8 => {
+                let $topk = $crate::graph::pipnn::topk::TopK::<8>::new(width);
+                $body
+            }
+            9 => {
+                let $topk = $crate::graph::pipnn::topk::TopK::<9>::new(width);
                 $body
             }
             10 => {
@@ -480,6 +506,11 @@ mod tests {
         #[case::two_lanes_minus_one(31, 1)]
         #[case::two_complete_lanes(32, 4)]
         #[case::two_lanes_and_tail(33, 17)]
+        #[case::capacity_five(33, 5)]
+        #[case::capacity_six(33, 6)]
+        #[case::capacity_seven(33, 7)]
+        #[case::capacity_eight(33, 8)]
+        #[case::capacity_nine(33, 9)]
         fn dispatched_selection_matches_independent_sort(
             #[case] count: usize,
             #[case] width: usize,
@@ -780,62 +811,61 @@ mod tests {
             distances[16] = 1.0;
 
             let mut rows = MutMatrixView::try_from(&mut output[..], 18, 4).unwrap();
-            with_topk!(4, |topk| {
-                for point in 1..17 {
-                    if point == 15 {
-                        previous[..4].copy_from_slice(&[-1.0, 3.0, 5.0, 7.0]);
-                    }
-                    arch::dispatch1_no_features(
-                        UpdatePair,
-                        (
-                            &topk,
-                            point,
-                            &previous[..point],
-                            rows.as_mut_view(),
-                            &mut thresholds[..],
-                        ),
-                    );
-                    previous.fill(f32::INFINITY);
+            let topk = TopK::<RUNTIME_WIDTH>::new(4);
+            for point in 1..17 {
+                if point == 15 {
+                    previous[..4].copy_from_slice(&[-1.0, 3.0, 5.0, 7.0]);
                 }
                 arch::dispatch1_no_features(
                     UpdatePair,
                     (
                         &topk,
-                        17,
-                        &distances[..],
+                        point,
+                        &previous[..point],
                         rows.as_mut_view(),
                         &mut thresholds[..],
                     ),
                 );
+                previous.fill(f32::INFINITY);
+            }
+            arch::dispatch1_no_features(
+                UpdatePair,
+                (
+                    &topk,
+                    17,
+                    &distances[..],
+                    rows.as_mut_view(),
+                    &mut thresholds[..],
+                ),
+            );
 
-                assert_eq!(
-                    rows.row(17),
-                    [
-                        Candidate::new(16, 1.0),
-                        Candidate::new(15, 2.0),
-                        Candidate::new(2, 3.0),
-                        Candidate::new(0, 4.0)
-                    ]
-                );
-                assert_eq!(
-                    rows.row(15),
-                    [
-                        Candidate::new(0, -1.0),
-                        Candidate::new(17, 2.0),
-                        Candidate::new(1, 3.0),
-                        Candidate::new(2, 5.0)
-                    ]
-                );
-                assert_eq!(
-                    rows.row(16),
-                    [
-                        Candidate::new(17, 1.0),
-                        Candidate::default(),
-                        Candidate::default(),
-                        Candidate::default()
-                    ]
-                );
-            });
+            assert_eq!(
+                rows.row(17),
+                [
+                    Candidate::new(16, 1.0),
+                    Candidate::new(15, 2.0),
+                    Candidate::new(2, 3.0),
+                    Candidate::new(0, 4.0)
+                ]
+            );
+            assert_eq!(
+                rows.row(15),
+                [
+                    Candidate::new(0, -1.0),
+                    Candidate::new(17, 2.0),
+                    Candidate::new(1, 3.0),
+                    Candidate::new(2, 5.0)
+                ]
+            );
+            assert_eq!(
+                rows.row(16),
+                [
+                    Candidate::new(17, 1.0),
+                    Candidate::default(),
+                    Candidate::default(),
+                    Candidate::default()
+                ]
+            );
         }
 
         #[rstest]
