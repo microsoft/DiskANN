@@ -38,14 +38,17 @@ pub mod distance;
 pub mod norm;
 
 cfg_if::cfg_if! {
-    if #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] {
+    // x86-64 guarantees SSE2; `_mm_prefetch` needs only SSE.
+    if #[cfg(target_arch = "x86_64")] {
         const CACHE_LINE_SIZE: usize = 64;
 
         #[inline(always)]
         unsafe fn prefetch_exactly<const N: usize>(ptr: *const i8) {
             use std::arch::x86_64::*;
             for i in 0..N {
-                _mm_prefetch(ptr.add(i * CACHE_LINE_SIZE), _MM_HINT_T0);
+                // SAFETY: the caller guarantees that all `N` computed addresses are
+                // inside the allocation.
+                unsafe { _mm_prefetch(ptr.add(i * CACHE_LINE_SIZE), _MM_HINT_T0) };
             }
         }
 
@@ -56,7 +59,8 @@ cfg_if::cfg_if! {
                 if CACHE_LINE_SIZE * i >= bytes {
                     break;
                 }
-                _mm_prefetch(ptr.add(i * CACHE_LINE_SIZE), _MM_HINT_T0);
+                // SAFETY: the loop uses only offsets below `bytes`.
+                unsafe { _mm_prefetch(ptr.add(i * CACHE_LINE_SIZE), _MM_HINT_T0) };
             }
         }
 
@@ -66,11 +70,28 @@ cfg_if::cfg_if! {
         pub fn prefetch_hint_max<const MAX_CACHE_LINES: usize, T>(vec: &[T]) {
             let vecsize = std::mem::size_of_val(vec);
             if vecsize >= MAX_CACHE_LINES * 64 {
-                // SAFETY: Pointer is in-bounds and use of the intrinsic is cfg gated.
+                // SAFETY: the slice contains every address passed to prefetch.
                 unsafe { prefetch_exactly::<MAX_CACHE_LINES>(vec.as_ptr().cast()) }
             } else {
-                // SAFETY: Pointer is in-bounds and use of the intrinsic is cfg gated.
+                // SAFETY: the slice covers `vecsize` bytes.
                 unsafe { prefetch_at_most::<MAX_CACHE_LINES>(vec.as_ptr().cast(), vecsize) }
+            }
+        }
+
+        /// Prefetch a raw byte range without creating a slice.
+        ///
+        /// # Safety
+        ///
+        /// `ptr` must identify an allocation of at least `bytes` bytes. The allocation
+        /// must remain live for this call. The function creates no Rust reference.
+        /// The caller controls concurrent mutation of the range.
+        #[inline]
+        pub unsafe fn prefetch_hint_all_raw(ptr: *const u8, bytes: usize) {
+            use std::arch::x86_64::*;
+
+            for offset in (0..bytes).step_by(CACHE_LINE_SIZE) {
+                // SAFETY: the caller guarantees the byte range, and `offset < bytes`.
+                unsafe { _mm_prefetch(ptr.add(offset).cast(), _MM_HINT_T0) };
             }
         }
 
@@ -78,20 +99,19 @@ cfg_if::cfg_if! {
         /// The entire vector will be prefetched.
         #[inline]
         pub fn prefetch_hint_all<T>(vec: &[T]) {
-            use std::arch::x86_64::*;
-
-            let vecsize = std::mem::size_of_val(vec);
-            let num_prefetch_blocks = vecsize.div_ceil(64);
-            let vec_ptr = vec.as_ptr() as *const i8;
-            for d in 0..num_prefetch_blocks {
-                // SAFETY: Pointer is in-bounds and use of the intrinsic is gated by the
-                // `cfg`-guard on this function.
-                unsafe {
-                    std::arch::x86_64::_mm_prefetch(vec_ptr.add(d * CACHE_LINE_SIZE), _MM_HINT_T0);
-                }
-            }        }
+            // SAFETY: the slice remains live and covers exactly `size_of_val(vec)` bytes.
+            unsafe { prefetch_hint_all_raw(vec.as_ptr().cast(), std::mem::size_of_val(vec)) }
+        }
     } else {
         pub fn prefetch_hint_max<const MAX_CACHE_LINES: usize, T>(_vec: &[T]) {}
+
+        /// Accept a raw prefetch range and do nothing.
+        ///
+        /// # Safety
+        ///
+        /// The pointer contract is the same as the x86-64 implementation.
+        pub unsafe fn prefetch_hint_all_raw(_ptr: *const u8, _bytes: usize) {}
+
         pub fn prefetch_hint_all<T>(_vec: &[T]) {}
     }
 }

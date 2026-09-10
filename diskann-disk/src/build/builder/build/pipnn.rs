@@ -11,7 +11,7 @@
 //!
 //! PiPNN and Vamana use the same disk graph format.
 
-use diskann::graph::pipnn::{PiPNNBuildContext, PiPNNConfig};
+use diskann::graph::pipnn::PiPNNBuildContext;
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::{
     storage::{save_adjacency_graph, StorageReadProvider, StorageWriteProvider},
@@ -20,13 +20,13 @@ use diskann_providers::{
 use diskann_utils::io::{read_bin, Metadata};
 
 use super::{u32_try_from, DiskIndexBuilder};
-use crate::data_model::GraphDataType;
+use crate::{data_model::GraphDataType, PiPNNParameters};
 
 /// Build PiPNN adjacency and persist it through the canonical disk graph writer.
 pub(super) fn build_graph<Data, StorageProvider>(
     builder: &DiskIndexBuilder<'_, Data, StorageProvider>,
     pool: RayonThreadPoolRef<'_>,
-    config: PiPNNConfig,
+    parameters: &PiPNNParameters,
 ) -> ANNResult<()>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -55,12 +55,15 @@ where
     // supplied Rayon pool.
     let data =
         read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
-    let context = PiPNNBuildContext::new(
-        config,
+    let mut context = PiPNNBuildContext::new(
+        parameters.into(),
         &builder.index_configuration.config,
         builder.index_configuration.dist_metric,
         pool.as_rayon(),
     )?;
+    if let Some(hash_prune) = &parameters.hash_prune {
+        context = context.with_hash_prune(hash_prune.into())?;
+    }
     let adjacency = diskann::graph::pipnn::build_graph(data.as_view(), &context)?;
 
     // The disk header requires a start point. Use the same sampled medoid policy
@@ -116,6 +119,7 @@ mod tests {
             fanout: vec![10, 3],
             k: 2,
             replicas: 1,
+            hash_prune: Some(crate::HashPruneParameters::default()),
         }
     }
 
@@ -199,7 +203,7 @@ mod tests {
         let builder = builder(&storage, 3, 8, 1.0, 1.2, parameters.clone());
         let pool = create_thread_pool(1).unwrap();
 
-        let error = super::build_graph(&builder, pool.as_ref(), (&parameters).into()).unwrap_err();
+        let error = super::build_graph(&builder, pool.as_ref(), &parameters).unwrap_err();
         assert!(format!("{error:?}").contains("configured point count 3"));
         assert!(!storage.exists(&builder.index_writer.get_mem_index_file()));
     }
@@ -213,7 +217,7 @@ mod tests {
         let builder = builder(&storage, points, dimensions, 1.0, 1.2, parameters.clone());
         let pool = create_thread_pool(1).unwrap();
 
-        super::build_graph(&builder, pool.as_ref(), (&parameters).into()).unwrap();
+        super::build_graph(&builder, pool.as_ref(), &parameters).unwrap();
 
         let mut header = [0_u8; 24];
         std::io::Read::read_exact(
@@ -273,5 +277,35 @@ mod tests {
         };
 
         assert!(format!("{error:?}").contains("c_max must be greater than zero"));
+    }
+
+    #[test]
+    fn builder_rejects_hash_prune_capacity_before_quantizer_artifacts() {
+        let storage = VirtualStorageProvider::new_memory();
+        let parameters = PiPNNParameters {
+            hash_prune: Some(crate::HashPruneParameters {
+                num_hash_planes: 12,
+                l_max: 16,
+                final_prune: true,
+            }),
+            ..PiPNNParameters::default()
+        };
+        let params = DiskIndexBuildParameters::new_pipnn(
+            MemoryBudget::try_from_gb(1.0).unwrap(),
+            NumPQChunks::new_with(1, 1).unwrap(),
+            parameters,
+        );
+        let config = IndexConfiguration::new(Metric::L2, 1, 1, ONE, 1, graph_config(32, 1.2));
+        let writer =
+            DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
+
+        let error = match DiskIndexBuilder::<AdHoc<f32>, _>::new(&storage, params, config, writer) {
+            Ok(_) => panic!("HashPrune capacity below graph degree must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(format!("{error:?}").contains("must be at least the graph degree (32)"));
+        assert!(!storage.exists("/index_pq_pivots.bin"));
+        assert!(!storage.exists("/index_pq_compressed.bin"));
     }
 }

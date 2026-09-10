@@ -142,12 +142,15 @@ where
 
     let started = std::time::Instant::now();
     let adjacency = {
-        let context = diskann::graph::pipnn::PiPNNBuildContext::new(
+        let mut context = diskann::graph::pipnn::PiPNNBuildContext::new(
             parameters.into(),
             &graph,
             metric,
             &pool,
         )?;
+        if let Some(hash_prune) = &parameters.hash_prune {
+            context = context.with_hash_prune(hash_prune.into())?;
+        }
         diskann::graph::pipnn::build_graph(data.as_view(), &context)?
     };
     let start_points = input
