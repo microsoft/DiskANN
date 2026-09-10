@@ -262,7 +262,6 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standa
     for BuildAndErase<E>
 {
     fn run(self, arch: V4, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        // V4 dispatches to V3 (no V4-specific kernel).
         let prepared = BlockTransposed::<f32, 32>::from_matrix_view(query.as_matrix_view());
         self.0.erase(Prepared {
             arch,
@@ -562,6 +561,9 @@ mod tests {
     /// kernel layer; exhaustive panel/remainder coverage is pinned in
     /// `kernels::tiled_reduce::tests`.
     const TEST_CASES: &[(usize, usize, usize)] = &[
+        (0, 1, 1),   // Empty query
+        (1, 0, 1),   // Empty docs
+        (1, 1, 0),   // Empty dim
         (1, 1, 4),   // Degenerate
         (5, 3, 5),   // Prime k; nq > 1 and nd > 1 exercise per-row writeback
         (17, 4, 64), // A-panel remainder crossing both Scalar and V3 panel widths

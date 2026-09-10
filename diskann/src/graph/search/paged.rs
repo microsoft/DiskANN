@@ -42,6 +42,19 @@ where
     DP: DataProvider,
     A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
+    /// Return the contained [`SearchAccessor`].
+    ///
+    /// This method is intended to enable per-page metric reporting from the accessor.
+    pub fn accessor(&mut self) -> &mut A {
+        &mut self.accessor
+    }
+}
+
+impl<'a, DP, A> PagedSearch<'a, DP, A>
+where
+    DP: DataProvider,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
+{
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
     /// Results across pages are non-overlapping but not guaranteed to be monotonic with

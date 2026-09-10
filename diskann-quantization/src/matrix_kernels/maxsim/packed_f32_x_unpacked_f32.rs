@@ -107,8 +107,8 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         k: DimK,
         cache: Cache,
     ) -> Self {
-        bounds::check_eq!(a.k(), k, "contraction dimensions to not agree");
-        bounds::check_eq!(b.k(), k, "contraction dimensions to not agree");
+        bounds::check_eq!(a.k(), k, "contraction dimensions do not agree");
+        bounds::check_eq!(b.k(), k, "contraction dimensions do not agree");
         bounds::check_eq!(
             bounds::Bound::new(a.blocks().get()),
             c.len().div_ceil(MR),
@@ -140,12 +140,12 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         k: DimK,
         params: Params,
     ) -> Self {
-        bounds::check_eq!(a.k(), k, "constraction dimensions to not agree");
-        bounds::check_eq!(b.k(), k, "constraction dimensions to not agree");
+        bounds::check_eq!(a.k(), k, "contraction dimensions do not agree");
+        bounds::check_eq!(b.k(), k, "contraction dimensions do not agree");
         bounds::check_eq!(
             bounds::Bound::new(a.blocks().get()),
             c.len().div_ceil(MR),
-            "output length must occupiy exactly the packed A blocks",
+            "output length must occupy exactly the packed A blocks",
         );
 
         Self {

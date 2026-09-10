@@ -152,7 +152,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
             //
             // Since `i < self.blocks()`:
             //
-            // * The pointer offset if valid.
+            // * The pointer offset is valid.
             // * The truncation is valid.
             // * The size of the resulting slice is equal to `SZ * this_blocks * self.k`.
             let sub = unsafe {
@@ -191,7 +191,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
             //
             // Since `b < self.blocks()`:
             //
-            // * The pointer offset if valid.
+            // * The pointer offset is valid.
             // * The truncation is valid.
             // * The size of the resulting slice is equal to `SZ * self.k`.
             let panel =

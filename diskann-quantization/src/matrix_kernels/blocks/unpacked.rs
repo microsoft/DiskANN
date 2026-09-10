@@ -182,7 +182,7 @@ impl<'a, T> View<'a, T> {
             //
             // Since `r < self.extent()`:
             //
-            // * The pointer offset if valid.
+            // * The pointer offset is valid.
             // * The truncation is valid.
             // * The size of the resulting slice is equal to `EXTENT * k`.
             let sub = unsafe {

@@ -6,8 +6,8 @@
 use half::f16;
 
 use crate::{
-    Emulated, SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
-    SIMDSumTree, SIMDVector, constant::Const, helpers,
+    AsSIMD, Emulated, SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+    SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
@@ -44,7 +44,6 @@ impl SIMDMinMax for f32x4 {
     #[inline(always)]
     fn min_simd_standard(self, rhs: Self) -> Self {
         if cfg!(miri) {
-            use crate::AsSIMD;
             self.emulated()
                 .min_simd_standard(rhs.emulated())
                 .as_simd(self.arch())
@@ -62,7 +61,6 @@ impl SIMDMinMax for f32x4 {
     #[inline(always)]
     fn max_simd_standard(self, rhs: Self) -> Self {
         if cfg!(miri) {
-            use crate::AsSIMD;
             self.emulated()
                 .max_simd_standard(rhs.emulated())
                 .as_simd(self.arch())

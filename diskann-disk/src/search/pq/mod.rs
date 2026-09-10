@@ -11,4 +11,3 @@ pub use pq_scratch::PQScratch;
 pub(crate) use crate::storage::quant::pq::PQData;
 
 mod quantizer_preprocess;
-pub use quantizer_preprocess::quantizer_preprocess;

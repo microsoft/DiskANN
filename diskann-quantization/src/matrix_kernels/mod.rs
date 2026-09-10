@@ -23,7 +23,7 @@
 //! with internal dimensions as follows:
 //!
 //! * `M`: The number of rows of `A` and `C`.
-//! * `N`: The number of oclumns of `B` and `C`.
+//! * `N`: The number of columns of `B` and `C`.
 //! * `K`: Contraction dimension. Columns of `A` and rows of `B`.
 //! * `MR`: Packing parameter for `A`. This is the number of rows processed in a micro-kernel.
 //! * `NR`: Packing parameter for `B`. This is the number of columns processed in a micro-kernel.

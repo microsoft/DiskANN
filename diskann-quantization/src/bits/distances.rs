@@ -65,7 +65,7 @@
 //! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 | Neon      |
 //! |---------------|---------------|-----------|-----------|---------------|-----------|-----------|
 //! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Uses V3   | Optimized |
-//! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Yes       | Fallback  |
+//! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Yes       | Optimized |
 //! | `USlice<3>`   | `USlice<3>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Optimized |
 //! | `USlice<5>`   | `USlice<5>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
@@ -1678,6 +1678,118 @@ where
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl
+    Target2<
+        diskann_wide::arch::aarch64::Neon,
+        MathematicalResult<u32>,
+        USlice<'_, 2>,
+        USlice<'_, 2>,
+    > for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::aarch64::Neon,
+        x: USlice<'_, 2>,
+        y: USlice<'_, 2>,
+    ) -> MathematicalResult<u32> {
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(u8s = <diskann_wide::arch::aarch64::Neon>::u8x16);
+        diskann_wide::alias!(u32s = <diskann_wide::arch::aarch64::Neon>::u32x4);
+
+        let px_u8: *const u8 = x.as_ptr().cast();
+        let py_u8: *const u8 = y.as_ptr().cast();
+
+        let mut i = 0;
+        let mut s: u32 = 0;
+
+        // number of bytes over the underlying slice
+        let bytes = len / 4;
+        if i < bytes {
+            let mut s0 = u32s::default(arch);
+            let mut s1 = u32s::default(arch);
+            let mut s2 = u32s::default(arch);
+            let mut s3 = u32s::default(arch);
+            let mask = u8s::splat(arch, 0x03);
+            while i + 16 <= bytes {
+                // SAFETY: `i + 16 <= bytes` guarantees 16 bytes are readable.
+                let x_vec = unsafe { u8s::load_simd(arch, px_u8.add(i)) };
+                // SAFETY: `y` has the same validated length as `x`.
+                let y_vec = unsafe { u8s::load_simd(arch, py_u8.add(i)) };
+
+                let first_x: u8s = x_vec & mask;
+                let first_y: u8s = y_vec & mask;
+                s0 = s0.dot_simd(first_x, first_y);
+
+                let second_x: u8s = (x_vec >> 2) & mask;
+                let second_y: u8s = (y_vec >> 2) & mask;
+                s1 = s1.dot_simd(second_x, second_y);
+
+                let third_x: u8s = (x_vec >> 4) & mask;
+                let third_y: u8s = (y_vec >> 4) & mask;
+                s2 = s2.dot_simd(third_x, third_y);
+
+                let fourth_x: u8s = (x_vec >> 6) & mask;
+                let fourth_y: u8s = (y_vec >> 6) & mask;
+                s3 = s3.dot_simd(fourth_x, fourth_y);
+                i += 16;
+            }
+
+            let remaining_bytes = bytes - i;
+            if remaining_bytes > 0 {
+                // SAFETY: Predicated load reads exactly `remaining_bytes`.
+                let x_vec = unsafe { u8s::load_simd_first(arch, px_u8.add(i), remaining_bytes) };
+                // SAFETY: `y` has the same validated length as `x`.
+                let y_vec = unsafe { u8s::load_simd_first(arch, py_u8.add(i), remaining_bytes) };
+
+                let first_x: u8s = x_vec & mask;
+                let first_y: u8s = y_vec & mask;
+                s0 = s0.dot_simd(first_x, first_y);
+
+                let second_x: u8s = (x_vec >> 2) & mask;
+                let second_y: u8s = (y_vec >> 2) & mask;
+                s1 = s1.dot_simd(second_x, second_y);
+
+                let third_x: u8s = (x_vec >> 4) & mask;
+                let third_y: u8s = (y_vec >> 4) & mask;
+                s2 = s2.dot_simd(third_x, third_y);
+
+                let fourth_x: u8s = (x_vec >> 6) & mask;
+                let fourth_y: u8s = (y_vec >> 6) & mask;
+                s3 = s3.dot_simd(fourth_x, fourth_y);
+                i += remaining_bytes;
+            }
+
+            s = ((s0 + s1) + (s2 + s3)).sum_tree();
+        }
+
+        // Convert bytes to quantized vector indexes.
+        i *= 4;
+
+        // Deal with the remainder the slow way (at most 3 elements).
+        debug_assert!(len - i <= 3);
+        if i != len {
+            #[inline(never)]
+            fn fallback(x: USlice<'_, 2>, y: USlice<'_, 2>, from: usize) -> u32 {
+                let mut s: i32 = 0;
+                for i in from..x.len() {
+                    // SAFETY: `i` is guaranteed to be less than `x.len()`.
+                    let ix = unsafe { x.get_unchecked(i) } as i32;
+                    // SAFETY: `i` is guaranteed to be less than `y.len()`.
+                    let iy = unsafe { y.get_unchecked(i) } as i32;
+                    s += ix * iy;
+                }
+                s as u32
+            }
+            s += fallback(x, y, i);
+        }
+
+        Ok(MV::new(s))
+    }
+}
+
 /// An implementation for inner products that uses scalar indexing for the implementation.
 macro_rules! impl_fallback_ip {
     (($N:literal, $M:literal)) => {
@@ -2209,7 +2321,6 @@ retarget!(
     6,
     5,
     3,
-    2,
     (8, 4),
     (8, 2),
     (8, 1)
@@ -3033,7 +3144,7 @@ mod tests {
             // Need a higher miri-amount due to the larget block size
             (Key::new(2, X86_64_V3), Bounds::new(512, 300)),
             (Key::new(2, X86_64_V4), Bounds::new(768, 600)), // main loop processes 256 items
-            (Key::new(2, Neon), Bounds::new(64, 64)),
+            (Key::new(2, Neon), Bounds::new(256, 256)),
             (Key::new(3, Scalar), Bounds::new(64, 64)),
             (Key::new(3, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(3, X86_64_V4), Bounds::new(256, 96)),
