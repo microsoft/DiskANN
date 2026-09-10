@@ -811,169 +811,59 @@ fn underflow_retires_the_cluster_and_scatters_it_onto_survivors() {
 }
 
 #[test]
-fn graph_merge_target_excludes_batch_victims() {
+fn merge_plan_excludes_all_batch_victims_from_local_candidates() {
     let (points, initial) = four_groups(5);
     let mut c = OnlineClusterer::new(points, initial, merge_params(8, 10_000, 3)).unwrap();
     c.insert_batch(&(0..20u32).collect::<Vec<_>>()).unwrap();
 
-    let victims = std::collections::HashSet::from([0, 1]);
-    let mut scratch = MergeSearchScratch::default();
-    let target = c
-        .find_merge_target(
-            c.centroids.get(0).unwrap(),
-            2,
-            MergeTargetContext {
-                excluded: &victims,
-                deleted_counts: &std::collections::HashMap::new(),
-                planned_targets: &std::collections::HashMap::new(),
-                max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
-            },
-            &mut scratch,
-        )
-        .unwrap()
-        .unwrap();
+    let victims = [0, 1];
+    let deleted = std::collections::HashSet::from([0, 1, 2, 5, 6, 7]);
+    let plan = c.prepare_merge(&victims, &deleted).unwrap();
 
-    assert!(!victims.contains(&target.id));
-    assert_eq!(target.source, MergeTargetSource::Graph);
+    assert_eq!(plan.victims.len(), 2);
+    for victim in plan.victims {
+        assert_eq!(victim.members.len(), 2);
+        assert_eq!(victim.candidates.len(), 2);
+        assert!(victim.candidates.iter().all(|cid| !victims.contains(cid)));
+    }
 }
 
 #[test]
-fn graph_merge_target_widens_to_a_farther_capacity_safe_survivor() {
-    let points = mat(vec![0.0; 20], 20, 1);
-    let initial = mat(vec![0.0, 1.0, 2.0, 100.0], 4, 1);
-    let mut p = merge_params(8, 5, 2);
+fn merge_scatter_uses_saved_local_candidates_instead_of_global_routing() {
+    let points = mat(vec![0.0, 0.1, 0.2, 1.0, 100.0, 100.1], 6, 1);
+    let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
+    let mut p = merge_params(8, 4, 2);
+    p.routing = OnlineCentroidRouting::Exact;
     p.reassign_neighbors = 1;
     let mut c = OnlineClusterer::new(points, initial, p).unwrap();
-
-    for pid in 0..5 {
-        c.partition.attach_new(pid, 1);
-    }
-    for pid in 5..10 {
-        c.partition.attach_new(pid, 2);
-    }
-    c.partition.attach_new(10, 3);
-
-    let victims = std::collections::HashSet::from([0]);
-    let mut scratch = MergeSearchScratch::default();
-    let target = c
-        .find_merge_target(
-            c.centroids.get(0).unwrap(),
-            1,
-            MergeTargetContext {
-                excluded: &victims,
-                deleted_counts: &std::collections::HashMap::new(),
-                planned_targets: &std::collections::HashMap::new(),
-                max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
-            },
-            &mut scratch,
-        )
-        .unwrap()
+    c.insert_batch(&(0..6).collect::<Vec<_>>()).unwrap();
+    let plan = c
+        .prepare_merge(&[0], &std::collections::HashSet::new())
         .unwrap();
+    assert_eq!(plan.victims[0].candidates, [1]);
 
-    assert_eq!(target.id, 3, "the only posting with projected capacity");
-    assert_eq!(target.source, MergeTargetSource::Graph);
-}
-
-#[test]
-fn graph_merge_target_uses_exact_fallback_after_the_bounded_search() {
-    let points = mat(vec![0.0; 20], 20, 1);
-    let initial = mat(vec![0.0, 1.0, 2.0, 100.0], 4, 1);
-    let mut p = merge_params(8, 5, 2);
-    p.reassign_neighbors = 1;
-    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
-
-    for pid in 0..5 {
-        c.partition.attach_new(pid, 1);
+    // Once a plan exists, members use its candidate set, even if another live
+    // centroid would win globally. This pins the local-scatter kernel itself.
+    let plan = MergePlan {
+        victims: vec![MergeVictimPlan {
+            id: 0,
+            members: c.partition.members(0).to_vec(),
+            candidates: vec![2],
+            search_us: 0,
+        }],
+        started: Instant::now(),
+    };
+    c.begin_commit();
+    let result = c.commit_merge(plan);
+    c.finish_commit(&result);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    for pid in 0..3 {
+        assert_eq!(c.partition.assignment(pid), 2);
     }
-    for pid in 5..10 {
-        c.partition.attach_new(pid, 2);
-    }
-    c.partition.attach_new(10, 3);
-
-    let victims = std::collections::HashSet::from([0]);
-    let mut scratch = MergeSearchScratch::default();
-    let target = c
-        .find_merge_target(
-            c.centroids.get(0).unwrap(),
-            1,
-            MergeTargetContext {
-                excluded: &victims,
-                deleted_counts: &std::collections::HashMap::new(),
-                planned_targets: &std::collections::HashMap::new(),
-                max_graph_survivors: 2,
-            },
-            &mut scratch,
-        )
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(target.id, 3, "the only posting with projected capacity");
-    assert_eq!(target.source, MergeTargetSource::ExactFallback);
-}
-
-#[test]
-fn exact_merge_target_uses_the_nearest_capacity_safe_survivor() {
-    let (points, initial) = four_groups(5);
-    let mut p = merge_params(8, 6, 3);
-    p.routing = OnlineCentroidRouting::Exact;
-    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
-    for pid in 5..10 {
-        c.partition.attach_new(pid, 1);
-    }
-
-    let victims = std::collections::HashSet::from([0]);
-    let mut scratch = MergeSearchScratch::default();
-    let target = c
-        .find_merge_target(
-            c.centroids.get(0).unwrap(),
-            2,
-            MergeTargetContext {
-                excluded: &victims,
-                deleted_counts: &std::collections::HashMap::new(),
-                planned_targets: &std::collections::HashMap::new(),
-                max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
-            },
-            &mut scratch,
-        )
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(target.id, 2, "cluster 1 lacks capacity, so cluster 2 wins");
-    assert_eq!(target.source, MergeTargetSource::ExactFallback);
-}
-
-#[test]
-fn merge_target_respects_capacity_reserved_by_earlier_victims() {
-    let (points, initial) = four_groups(5);
-    let mut p = merge_params(8, 6, 3);
-    p.routing = OnlineCentroidRouting::Exact;
-    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
-    for pid in 5..8 {
-        c.partition.attach_new(pid, 1);
-    }
-
-    let victims = std::collections::HashSet::from([0]);
-    let planned_targets = std::collections::HashMap::from([(1, 2)]);
-    let mut scratch = MergeSearchScratch::default();
-    let target = c
-        .find_merge_target(
-            c.centroids.get(0).unwrap(),
-            2,
-            MergeTargetContext {
-                excluded: &victims,
-                deleted_counts: &std::collections::HashMap::new(),
-                planned_targets: &planned_targets,
-                max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
-            },
-            &mut scratch,
-        )
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(
-        target.id, 2,
-        "the nearer target is full after the earlier reservation"
-    );
+    assert_eq!(c.telemetry().merges[0].num_neighbors, 1);
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert_live_invariants(&c, &(0..6).collect::<Vec<_>>());
 }
 
 #[test]
@@ -1468,7 +1358,7 @@ fn co_split_routes_candidates_across_all_new_children() {
 }
 
 #[test]
-fn merge_capacity_accounts_for_deletes_in_the_same_batch() {
+fn merge_scatter_omits_points_deleted_in_the_same_batch() {
     let points = mat((0..15).map(|x| x as f32).collect(), 15, 1);
     let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
     let mut p = merge_params(8, 6, 3);
@@ -1492,7 +1382,7 @@ fn merge_capacity_accounts_for_deletes_in_the_same_batch() {
 }
 
 #[test]
-fn underfull_victims_can_merge_with_each_other_when_other_survivors_are_full() {
+fn local_merges_retire_all_admitted_victims_even_when_survivors_are_full() {
     let points = mat(vec![0.0, 0.1, 1.0, 1.1, 100.0, 100.1, 100.2, 100.3], 8, 1);
     let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
     let mut p = merge_params(8, 4, 2);
@@ -1512,30 +1402,115 @@ fn underfull_victims_can_merge_with_each_other_when_other_survivors_are_full() {
 
     c.delete_batch(&[0, 2]).unwrap();
 
-    assert_eq!(c.telemetry().total_merges, 1);
-    assert_eq!(c.num_clusters(), 2);
+    assert_eq!(c.telemetry().total_merges, 2);
+    assert_eq!(c.num_clusters(), 1);
     assert_live_invariants(&c, &[1, 3, 4, 5, 6, 7]);
-    assert!(c.cluster_sizes().into_iter().all(|size| size <= 4));
+    assert_eq!(c.cluster_sizes(), vec![6]);
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert!(!c.is_poisoned());
 }
 
-#[test]
-fn merge_preserves_capacity_when_npa_prefers_a_full_posting() {
-    let points = mat(vec![0.0, 0.1, 1.0, 1.1, 1.2, 1.3, 100.0], 7, 1);
+/// A successful local merge leaves cluster 1 overfull while cluster 2 has room.
+fn merged_overflow(capacity: usize) -> OnlineClusterer {
+    let points = mat(
+        vec![
+            0.0, 0.1, 1.0, 1.1, 1.2, 1.3, 100.0, 100.1, 1.4, 100.2, 100.3, 100.4,
+        ],
+        12,
+        1,
+    );
     let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
     let mut p = merge_params(8, 4, 2);
     p.max_clusters = None;
     p.routing = OnlineCentroidRouting::Exact;
-    p.centroid_capacity = 3;
+    p.centroid_capacity = capacity;
     let mut c = OnlineClusterer::new(points, initial, p).unwrap();
-    c.partition.attach_new(0, 0);
-    c.partition.attach_new(1, 0);
-    for pid in 2..6 {
-        c.partition.attach_new(pid, 1);
-    }
-    c.partition.attach_new(6, 2);
+    c.insert_batch(&(0..7).collect::<Vec<_>>()).unwrap();
 
-    assert!(c.delete_batch(&[0]).is_err());
+    let result = c.delete_batch(&[0]);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    assert_eq!(c.partition.list_len(1), 5);
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert_eq!(c.telemetry().total_merges, 1);
+    assert_live_invariants(&c, &(1..7).collect::<Vec<_>>());
+    c
+}
+
+#[test]
+fn local_merge_overflow_succeeds_without_centroid_id_budget() {
+    let c = merged_overflow(3);
+    assert_eq!(c.centroids.alloc_budget(), 0);
+    assert_eq!(c.num_clusters(), 2);
+}
+
+#[test]
+fn unrelated_insert_leaves_deferred_merge_overflow_usable() {
+    let mut c = merged_overflow(3);
+
+    let result = c.insert_batch(&[7]);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    assert_eq!(c.partition.assignment(7), 2);
+    assert_eq!(c.partition.list_len(1), 5);
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert_live_invariants(&c, &(1..8).collect::<Vec<_>>());
+    assert!(c.searcher().is_ok());
+}
+
+#[test]
+fn insert_into_deferred_merge_overflow_runs_lire_split_cascade() {
+    let mut c = merged_overflow(32);
+
+    let result = c.insert_batch(&[8]);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    assert!(c.telemetry().total_splits > 0);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 4));
+    assert_live_invariants(&c, &[1, 2, 3, 4, 5, 6, 8]);
+}
+
+#[test]
+fn any_started_insert_cascade_also_repairs_unrelated_merge_overflow() {
+    let mut c = merged_overflow(64);
+
+    // This insert initially overflows cluster 2, not the deferred cluster 1.
+    let result = c.insert_batch(&[7, 9, 10, 11]);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    assert!(c.telemetry().total_splits >= 2);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 4));
+    assert_live_invariants(&c, &[1, 2, 3, 4, 5, 6, 7, 9, 10, 11]);
+}
+
+#[test]
+fn insert_into_deferred_merge_overflow_still_reports_exhausted_budget() {
+    let mut c = merged_overflow(3);
+
+    let result = c.insert_batch(&[8]);
+    assert!(result.is_err());
     assert!(c.is_poisoned());
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert_live_invariants(&c, &[1, 2, 3, 4, 5, 6, 8]);
+    assert!(c.searcher().is_err());
+}
+
+#[test]
+fn failed_insert_does_not_restore_a_previously_merged_then_deleted_point() {
+    let mut c = merged_overflow(3);
+    assert!(c.scratch.points.is_empty());
+
+    // Point 1 was scattered by the successful merge, then explicitly deleted.
+    // The next insert cannot split because the centroid id budget is exhausted.
+    c.delete_batch(&[1]).unwrap();
+    assert_eq!(c.partition.assignment(1), UNASSIGNED);
+    assert_eq!(c.telemetry().total_merges, 1);
+
+    let result = c.insert_batch(&[8]);
+    assert!(result.is_err());
+    assert!(c.is_poisoned());
+    assert_eq!(c.partition.assignment(1), UNASSIGNED);
+    assert_live_invariants(&c, &[2, 3, 4, 5, 6, 8]);
 }
 
 #[test]

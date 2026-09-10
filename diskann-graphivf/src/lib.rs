@@ -21,7 +21,8 @@
 //!   corpus point to its nearest centroid, then stream the lists to disk.
 //! * **Online** ([`OnlineClusterer`]): accept insert and delete batches, route
 //!   inserts through the centroid graph and maintain overfull/underfull postings
-//!   with SPFresh-style LIRE split, merge, and NPA-filtered reassignment. The
+//!   with SPFresh-style LIRE splits, NPA-filtered split reassignment, and
+//!   local-scatter merges. The
 //!   live cluster count emerges from the stream. See `ONLINE.md` for the
 //!   algorithm.
 //!

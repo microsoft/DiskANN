@@ -27,9 +27,8 @@ pub struct SplitEvent {
     /// sent to the final global NPA check, attributed once within the batch.
     pub npa_candidates: usize,
     /// Total completed inserts plus deletes at the update-batch boundary that
-    /// triggered this split. Unlike `insert_index`, this also advances for
-    /// delete-triggered cascade splits and therefore identifies the maintenance
-    /// batch unambiguously.
+    /// triggered this split. It includes earlier deletes as well as inserts and
+    /// identifies the insert-driven maintenance batch.
     pub operation_index: u64,
     /// Points that actually changed cluster during reassignment.
     pub num_reassigned: usize,
@@ -51,9 +50,9 @@ pub struct SplitEvent {
     pub total_us: u64,
 }
 
-/// One LIRE merge event recorded during a delete.
+/// One local-scatter merge event recorded during a delete.
 ///
-/// A merge retires one underfull centroid and globally routes only that
+/// A merge retires one underfull centroid and locally reassigns only that
 /// centroid's remaining members. A batched delete emits one event per
 /// retirement; all events from the batch share `op_index` and `live_after`.
 #[derive(Debug, Clone, Copy)]
@@ -64,7 +63,7 @@ pub struct MergeEvent {
     pub victim: u32,
     /// Points the victim still held when it was merged.
     pub victim_size: usize,
-    /// Landing-site count; LIRE records one capacity-compatible merge target.
+    /// Number of surviving centroid candidates used for local reassignment.
     pub num_neighbors: usize,
     /// Points that actually changed cluster.
     pub num_reassigned: usize,

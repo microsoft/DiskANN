@@ -435,11 +435,13 @@ pub struct OnlineParams {
     /// live-cluster count. Splitting stops when the slots are exhausted,
     /// whatever [`max_clusters`](Self::max_clusters) says.
     pub centroid_capacity: usize,
-    /// A cluster is split once it holds strictly more than this many points.
-    /// Must be `>= 2`.
+    /// Insert-driven splits start above this many points. A local-scatter merge
+    /// can leave a posting overfull until an insert reaches it or starts a split
+    /// cascade. Must be `>= 2`.
     pub split_threshold: usize,
     /// Number of nearby postings scanned by LIRE's necessary-condition filters
-    /// when a cluster splits. Must be `>= 1`.
+    /// when a cluster splits, and survivor candidates for local merge scatter.
+    /// Must be `>= 1`.
     ///
     /// A candidate *count*, so it applies whichever routing mode is in use.
     pub reassign_neighbors: usize,
@@ -449,9 +451,10 @@ pub struct OnlineParams {
     /// disables merging entirely: deletes still remove points, but the
     /// partition only ever gains clusters.
     ///
-    /// Retiring merges the posting into a capacity-compatible survivor, then
-    /// globally routes its members for final NPA compliance. No centroid is
-    /// fitted and no id is consumed, so merges are free against the
+    /// Retiring scatters the posting over preselected nearby survivors using
+    /// local exact assignment. Deletes do not trigger splits even if a survivor
+    /// overflows. No centroid is fitted and no id is consumed, so merges are
+    /// free against the
     /// [`centroid_capacity`](Self::centroid_capacity) budget.
     ///
     /// Must leave a hysteresis gap below

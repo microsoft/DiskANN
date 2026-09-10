@@ -36,12 +36,12 @@ partition state, [`search.rs`](src/online/search.rs) implements live queries,
 - **Search = route then scan.** A query navigates the centroid graph to its
   `nlist` nearest centroids, reads those lists from disk, and exhaustively scores
   the query against their members.
-- **Online build = stream, route, LIRE split/merge.** Points stream in and out:
+- **Online build = stream, route, LIRE split, local merge.** Points stream in and out:
   each insert is routed to its nearest centroid and appended; each delete removes
   the point from its list. When a cluster overflows `split_threshold` it is
   **split** and its neighbourhood locally **reassigned**. When one falls below
    `merge_threshold` it is **merged** — retired from the centroid graph and its
-   members globally rerouted for NPA. The centroid count grows with splits and
+   members locally scattered onto preselected survivors. The centroid count grows with splits and
    contracts with merges; it is not fixed up front.
 
 ```mermaid
@@ -225,24 +225,32 @@ partition. For a single streamed point `pid`:
    the affected region. An error after commit starts poisons the clusterer; see
    [State ownership and failure semantics](#3d-state-ownership-and-failure-semantics).
 
-This is the semantics of `batch_size: 1`. Inserts trigger split-reassign; deletes
-can trigger LIRE merges whose final NPA routes may cascade into splits. Larger
+This is the semantics of `batch_size: 1`. Inserts trigger LIRE split-reassign;
+deletes can trigger local-scatter merges but never split. Larger
 batches plan all initial splits together — see
 [Batched inserts](#3b-batched-inserts).
 
 
 ### 3. LIRE split and reassignment
 
-Online maintenance follows SPFresh's Lightweight Incremental RE-balancing
-(LIRE) protocol. One admitted parent `c` becomes two capacity-bounded children;
+The insert-driven split path follows SPFresh's Lightweight Incremental
+RE-balancing (LIRE) protocol. One admitted parent `c` becomes two children with
+capacity-constrained training assignments;
 the two necessary conditions from SPFresh §3.3 select only vectors that can
 possibly violate nearest-partition assignment (NPA), and a final global centroid
 route removes the false positives.
 
+The necessary-condition proof assumes an old globally nearest assignment.
+Graph routing is approximate, split filtering only visits the selected local
+region, and local-scatter merges can leave a point outside its global nearest
+posting. Consequently these checks do not promise exact global NPA for every
+point; they retain the configured routing and strict-distance placement rules.
+
 The algorithmic reference is SPFresh §3.2–§3.4
 ([SOSP'23 paper](https://arxiv.org/abs/2410.14452)). This in-memory Graph-IVF
-adaptation implements balanced split, both necessary conditions, final NPA
-checks, merge, and cascade convergence. It does not implement SPFresh's
+adaptation retains balanced split, both necessary conditions, final routing
+checks, and insert-driven split cascades. The merge path instead uses the
+Control local-scatter operator described below. It does not implement SPFresh's
 asynchronous Local Rebuilder, version map, replicas, or SSD Block Controller.
 
 **Prepare, without changing live state:**
@@ -352,32 +360,37 @@ balanced fits run per parent and LIRE globally routes only filtered vectors.
    list size without removing anything. Clusters projected below
    `merge_threshold` are considered emptiest-first, subject to the
    `min_clusters` floor. `merge_threshold = 0` (the default) disables merges.
-3. **Prepare LIRE merges.** Snapshot each admitted victim's remaining members.
-   In graph mode, search a bounded, progressively widened set of surviving
-   centroids, exactly rerank that set, and select the nearest posting whose
-   current plus already-planned merge load remains at or below
-   `split_threshold`. If the bounded candidates have no compatible target, use
-   one packed exact pass without a full sort; exact routing starts with that
-   pass. Skip a victim when no compatible target exists. Neighbor posting
-   vectors require no check: deleting a centroid cannot invalidate a vector
-   already assigned to another live centroid.
+3. **Prepare local merge candidates.** Snapshot each admitted victim's remaining
+   members. Query around its centroid for up to `reassign_neighbors` surviving
+   centroids, excluding every victim in the batch. If graph search returns too
+   few survivors, score and sort the live non-victim centroids exactly. The
+   selected set is fixed before mutation; there is no capacity reservation or
+   post-retirement per-member global route.
 4. **Commit removal and merges.** Filter each touched list once, resetting the
    deleted points to `UNASSIGNED`. Then retire the whole victim batch from the
-   centroid graph and table. Detach each victim's remaining members and route
-   them against the post-retirement global centroid set for the final NPA check.
+   centroid graph and table. Detach each victim's remaining members and use a
+   tiled GEMM to assign them to the nearest centroid in its saved candidate set.
+   Neighbor members stay in place.
 
-Capacity-compatible target selection happens **before** retirement, but final
-NPA routing happens **after** every victim is retired. Batch-wide victim
-exclusion prevents one victim from selecting another victim as its merge target.
+Candidate selection happens **before** retirement, and local scatter happens
+**after** every victim is retired. Batch-wide exclusion prevents points from
+landing on another victim. Assignment is exact within the saved candidate set,
+not a guarantee of globally nearest-centroid placement.
 
 A merge is a net **−1** to the live-cluster count, fits no new centroid, and
 consumes **no centroid id** — merges are free against the id budget
 (see [§4](#4-id-budget--termination)).
 
-**The cascade rule:** insert-driven and merge-reassignment overflows both run
-split-reassign to threshold equilibrium. LIRE's convergence argument applies:
-each split retires one centroid and publishes two, so live-centroid count grows
-by one and remains bounded by the finite vector/id budgets.
+**The deferred-overflow contract:** deletes never split, so local scatter may
+leave surviving postings above `split_threshold`. An insert reaching one of
+those postings selects it for a Treatment split. Once any insert starts a split,
+the existing LIRE cascade scans all live postings and must restore the global
+threshold before an uncapped operation returns successfully. An insert that
+does not split checks only its own destinations and leaves unrelated deferred
+overflow untouched. Resource exhaustion still fails an uncapped insert that
+cannot repair its destinations or finish a started cascade; explicit
+`max_clusters` continues to permit overfull postings. Search and flush may
+therefore observe deferred merge overflow.
 
 The `min_clusters` floor prevents the partition from collapsing entirely: merges
 are admitted emptiest-first until the live count would fall below `min_clusters`.
@@ -580,9 +593,9 @@ The library exposes two stable, deliberately separate CSV writers:
   changed cluster, resulting live count, balanced-fit/reassignment/total
   latencies, logical postings updated, local region points, Equation 1/2
   candidates, and an operation index. New fields are appended after the stable
-  legacy prefix. `operation_index` counts completed inserts plus deletes, so it
-  also identifies split cascades triggered by a delete/merge batch.
-- **Merge CSV** — one row per LIRE merge, written by `write_merges_csv`. Fields:
+  legacy prefix. `operation_index` counts completed inserts plus deletes and
+  identifies the insert batch that triggered the split cascade.
+- **Merge CSV** — one row per local merge, written by `write_merges_csv`. Fields:
    operation index, retired cluster and its size, survivor count, points moved,
    live count after the batch retirement, and search/reassignment/attributed
    latencies.
