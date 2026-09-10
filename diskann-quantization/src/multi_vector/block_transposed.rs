@@ -81,7 +81,7 @@ use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
 use diskann_utils::{
     Reborrow, ReborrowMut,
-    strided::StridedView,
+    strided::Strided,
     views::{MatrixView, MutMatrixView},
 };
 
@@ -1142,7 +1142,7 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
         })
     }
 
-    /// Construct a block-transposed matrix by copying data from a [`StridedView`].
+    /// Construct a block-transposed matrix by copying data from a [`Strided`].
     ///
     /// Each source element at `(row, col)` is placed at the correct offset in the
     /// block-transposed layout. Padding positions (both partial-block rows and
@@ -1151,9 +1151,9 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
     ///
     /// The loop iterates in physical (block-transposed) order — block, column-group,
     /// row-within-block, pack-lane — so that writes to the backing allocation are
-    /// sequential. Source reads stride across rows of the [`StridedView`], which is
+    /// sequential. Source reads stride across rows of the [`Strided`], which is
     /// acceptable because read-side prefetch is more effective than write-side.
-    pub fn from_strided(v: StridedView<'_, T>) -> Self {
+    pub fn from_strided(v: Strided<'_, T>) -> Self {
         let nrows = v.nrows();
         let ncols = v.ncols();
         let mut mat = Self::new(nrows, ncols);
@@ -1175,7 +1175,7 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
                     let row = row_base + rib;
                     if row < nrows {
                         // SAFETY: row < nrows is checked by the enclosing `if` condition.
-                        let src_row = unsafe { v.get_row_unchecked(row) };
+                        let src_row = unsafe { v.row_unchecked(row) };
                         for p in 0..PACK {
                             let col = col_base + p;
                             if col < ncols {
@@ -2136,8 +2136,6 @@ mod tests {
 
     #[test]
     fn test_from_strided_nonunit_stride() {
-        use diskann_utils::strided::StridedView;
-
         const GROUP: usize = 4;
         const PACK: usize = 2;
         let nrows = 5;
@@ -2152,7 +2150,7 @@ mod tests {
             }
         }
 
-        let strided = StridedView::try_shrink_from(&flat, nrows, ncols, cstride)
+        let strided = Strided::try_from_data(&flat, nrows, ncols, cstride)
             .expect("should construct strided view");
         let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(strided);
 

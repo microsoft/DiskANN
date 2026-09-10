@@ -24,6 +24,8 @@ pub mod views;
 mod lazystring;
 pub use lazystring::LazyString;
 
+mod internal;
+
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub fn workspace_root() -> std::path::PathBuf {
