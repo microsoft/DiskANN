@@ -28,7 +28,7 @@
           "recall_at": 10,
           "num_threads": 1,
           "search_mode": {
-            "mode": "graph",
+            "mode": "graph-diverse",
             "post_processor": {
               "type": "determinant-diversity",
               "power": 2.0,

@@ -19,7 +19,7 @@ use diskann_disk::{
             disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
-        search_mode::SearchMode,
+        search_mode::{SearchMode, SearchPredicate},
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, QueryStatistics},
@@ -33,26 +33,81 @@ use diskann_providers::{
 };
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
 use diskann_utils::views::Matrix;
+use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchMode, DiskSearchPhase},
+    inputs::disk::{DiskIndexLoad, DiskSearchMode, DiskSearchPhase, DiskSearchStrategy},
     inputs::post_processor::TopkPostProcessor,
     utils::{datafiles, SimilarityMeasure},
 };
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Debug)]
 pub(super) struct DiskSearchStats {
     pub(super) num_threads: usize,
     pub(super) beam_width: usize,
     pub(super) recall_at: u32,
-    pub(crate) is_flat_search: bool,
+    pub(crate) search_strategy: DiskSearchStrategy,
     pub(crate) distance: SimilarityMeasure,
-    pub(crate) uses_vector_filters: bool,
     pub(super) num_nodes_to_cache: Option<usize>,
     pub(super) search_results_per_l: Vec<DiskSearchResult>,
     span_metrics: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct RawDiskSearchStats {
+    num_threads: usize,
+    beam_width: usize,
+    recall_at: u32,
+    #[serde(default)]
+    search_strategy: Option<DiskSearchStrategy>,
+    #[serde(default)]
+    is_flat_search: Option<bool>,
+    distance: SimilarityMeasure,
+    #[serde(default)]
+    uses_vector_filters: Option<bool>,
+    num_nodes_to_cache: Option<usize>,
+    search_results_per_l: Vec<DiskSearchResult>,
+    span_metrics: serde_json::Value,
+}
+
+impl<'de> Deserialize<'de> for DiskSearchStats {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawDiskSearchStats::deserialize(deserializer)?;
+        let search_strategy = if let Some(strategy) = raw.search_strategy {
+            strategy
+        } else if let Some(is_flat) = raw.is_flat_search {
+            let uses_vector_filters = raw.uses_vector_filters.unwrap_or(false);
+            if is_flat {
+                DiskSearchStrategy::Flat {
+                    uses_vector_filters,
+                }
+            } else {
+                DiskSearchStrategy::Graph {
+                    uses_vector_filters,
+                }
+            }
+        } else {
+            return Err(serde::de::Error::custom(
+                "missing search_strategy or legacy is_flat_search",
+            ));
+        };
+
+        Ok(Self {
+            num_threads: raw.num_threads,
+            beam_width: raw.beam_width,
+            recall_at: raw.recall_at,
+            search_strategy,
+            distance: raw.distance,
+            num_nodes_to_cache: raw.num_nodes_to_cache,
+            search_results_per_l: raw.search_results_per_l,
+            span_metrics: raw.span_metrics,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -160,56 +215,43 @@ impl DiskSearchResult {
     }
 }
 
-/// Construct the disk [`SearchMode`] from the JSON-driven [`DiskSearchMode`]
-/// config plus the per-query filter and post-processor supplied at search time.
+/// Construct the backend [`SearchMode`] from the JSON-configured strategy,
+/// the per-query vector filter, and the pre-validated adaptive-L settings.
 fn build_search_mode<'a>(
-    mode: &'a DiskSearchMode,
+    mode: &DiskSearchMode,
     vector_filter: Option<&'a HashSet<u32>>,
-) -> SearchMode<'a> {
-    match mode {
-        DiskSearchMode::Flat { .. } => match vector_filter {
-            None => SearchMode::flat(),
-            Some(vector_filter) => {
-                SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
-            }
-        },
-        DiskSearchMode::Graph {
-            adaptive_l,
-            post_processor,
-            ..
-        } => {
-            let adaptive_l = adaptive_l.as_ref().map(|adaptive_l| {
-                graph::search::AdaptiveL::new(
-                    adaptive_l.sample_count.into(),
-                    adaptive_l.scale_factor,
-                )
-                .expect("validated adaptive L must construct")
-            });
+    adaptive_l: Option<&graph::search::AdaptiveL>,
+) -> anyhow::Result<SearchMode<'a>> {
+    if adaptive_l.is_some() && !matches!(mode, DiskSearchMode::GraphInlineFilter { .. }) {
+        anyhow::bail!("adaptive-L is only valid for inline-filter search");
+    }
 
-            match (post_processor, adaptive_l, vector_filter) {
-                (Some(TopkPostProcessor::DeterminantDiversity(params)), _, None) => {
-                    SearchMode::diverse_graph(*params)
-                }
-                (Some(TopkPostProcessor::DeterminantDiversity(params)), _, Some(vector_filter)) => {
-                    SearchMode::diverse_graph_filtered(
-                        move |vid: &u32| vector_filter.contains(vid),
-                        *params,
-                    )
-                }
-                (None, Some(adaptive_l), None) => {
-                    SearchMode::inline_filter(|_| true, Some(adaptive_l))
-                }
-                (None, Some(adaptive_l), Some(vector_filter)) => SearchMode::inline_filter(
-                    move |vid: &u32| vector_filter.contains(vid),
-                    Some(adaptive_l),
-                ),
-                (None, None, None) => SearchMode::graph(),
-                (None, None, Some(vector_filter)) => {
-                    SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
-                }
+    let filter = vector_filter.map(|vector_filter| {
+        Box::new(move |vid: &u32| vector_filter.contains(vid)) as SearchPredicate<'a>
+    });
+
+    let mode = match mode {
+        DiskSearchMode::Flat { .. } => SearchMode::FlatScan { filter },
+        DiskSearchMode::Graph { .. } => SearchMode::Graph { filter },
+        DiskSearchMode::GraphInlineFilter { .. } => {
+            let vector_filter = vector_filter.ok_or_else(|| {
+                anyhow::anyhow!("inline-filter search requires a vector filter for every query")
+            })?;
+            SearchMode::inline_filter(
+                move |vid: &u32| vector_filter.contains(vid),
+                adaptive_l.cloned(),
+            )
+        }
+        DiskSearchMode::GraphDiverse { post_processor, .. } => {
+            let TopkPostProcessor::DeterminantDiversity(params) = post_processor;
+            SearchMode::DiverseGraph {
+                filter,
+                params: *params,
             }
         }
-    }
+    };
+
+    Ok(mode)
 }
 
 pub(super) fn search_disk_index<T, StorageType>(
@@ -230,6 +272,9 @@ where
         global::set_tracer_provider(provider.clone());
         Some((collector, provider))
     };
+    defer! {
+        global::set_tracer_provider(previous_tracer_provider);
+    }
 
     // Use PerfLogger for consistent checkpoint logging
     let mut logger = PerfLogger::new("search_disk_index", true);
@@ -296,6 +341,7 @@ where
 
     logger.log_checkpoint("index_loaded");
 
+    let adaptive_l = search_params.search_mode.adaptive_l()?;
     let pool = create_thread_pool(search_params.num_threads)?;
     let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
     let has_any_search_failed = AtomicBool::new(false);
@@ -325,14 +371,17 @@ where
             .zip(statistics_vec.par_iter_mut())
             .zip(result_counts.par_iter_mut());
 
-        zipped.for_each_in_pool(
+        zipped.try_for_each_in_pool(
             pool.as_ref(),
             |(((((query_index, q), id_chunk), dist_chunk), stats), rc)| {
                 let vector_filter = vector_filters
                     .as_ref()
                     .and_then(|filters| filters.get(query_index));
-                let mode: SearchMode<'_> =
-                    build_search_mode(&search_params.search_mode, vector_filter);
+                let mode = build_search_mode(
+                    &search_params.search_mode,
+                    vector_filter,
+                    adaptive_l.as_ref(),
+                )?;
 
                 match searcher.search(
                     q,
@@ -366,8 +415,10 @@ where
                         has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
                     }
                 }
+
+                Ok::<(), anyhow::Error>(())
             },
-        );
+        )?;
         let total_time = start.elapsed();
 
         if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
@@ -399,15 +450,12 @@ where
         serde_json::json!({ "span_data": [] })
     };
 
-    global::set_tracer_provider(previous_tracer_provider);
-
     Ok(DiskSearchStats {
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
-        is_flat_search: matches!(search_params.search_mode, DiskSearchMode::Flat { .. }),
+        search_strategy: search_params.search_mode.strategy(),
         distance: search_params.distance,
-        uses_vector_filters: search_params.search_mode.vector_filters_file().is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
         search_results_per_l,
         span_metrics,
@@ -489,9 +537,8 @@ impl fmt::Display for DiskSearchStats {
         writeln!(f, "Threads,          : {}", self.num_threads)?;
         writeln!(f, "Beam width,       : {}", self.beam_width)?;
         writeln!(f, "Recall at,        : {}", self.recall_at)?;
-        writeln!(f, "Flat search,      : {}", self.is_flat_search)?;
+        writeln!(f, "Search strategy,  : {}", self.search_strategy)?;
         writeln!(f, "Distance,         : {}", self.distance)?;
-        writeln!(f, "Vector filters,   : {}", self.uses_vector_filters)?;
         writeln!(
             f,
             "Nodes to cache,   : {}",
@@ -536,5 +583,75 @@ impl fmt::Display for DiskSearchStats {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_search_stats_deserialize_to_strategy() {
+        let stats: DiskSearchStats = serde_json::from_value(serde_json::json!({
+            "num_threads": 1,
+            "beam_width": 4,
+            "recall_at": 10,
+            "is_flat_search": false,
+            "distance": "squared_l2",
+            "num_nodes_to_cache": null,
+            "search_results_per_l": [],
+            "span_metrics": {}
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            stats.search_strategy,
+            DiskSearchStrategy::Graph {
+                uses_vector_filters: false
+            }
+        ));
+    }
+
+    #[test]
+    fn new_search_stats_serialize_only_complete_strategy() {
+        let stats: DiskSearchStats = serde_json::from_value(serde_json::json!({
+            "num_threads": 1,
+            "beam_width": 4,
+            "recall_at": 10,
+            "search_strategy": {
+                "mode": "graph-inline-filter",
+                "adaptive_l": {
+                    "sample_count": 10,
+                    "scale_factor": 16.0
+                }
+            },
+            "is_flat_search": false,
+            "uses_vector_filters": true,
+            "distance": "squared_l2",
+            "num_nodes_to_cache": null,
+            "search_results_per_l": [],
+            "span_metrics": {}
+        }))
+        .unwrap();
+
+        let value = serde_json::to_value(stats).unwrap();
+        assert_eq!(value["search_strategy"]["mode"], "graph-inline-filter");
+        assert_eq!(value["search_strategy"]["adaptive_l"]["sample_count"], 10);
+        assert!(value.get("is_flat_search").is_none());
+        assert!(value.get("uses_vector_filters").is_none());
+    }
+
+    #[test]
+    fn inline_search_mode_requires_query_filter() {
+        let mode: DiskSearchMode = serde_json::from_value(serde_json::json!({
+            "mode": "graph-inline-filter",
+            "vector_filters_file": "filters.bin"
+        }))
+        .unwrap();
+
+        let error = build_search_mode(&mode, None, None)
+            .err()
+            .expect("inline-filter mode must reject a missing query filter");
+        assert!(error.to_string().contains("requires a vector filter"));
     }
 }

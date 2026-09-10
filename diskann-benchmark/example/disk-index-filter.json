@@ -28,8 +28,12 @@
           "recall_at": 10,
           "num_threads": 1,
           "search_mode": {
-            "mode": "graph",
-            "vector_filters_file": "disk_index_10pts_idx_uint32_range_res_r_100000.bin"
+            "mode": "graph-inline-filter",
+            "vector_filters_file": "disk_index_10pts_idx_uint32_range_res_r_100000.bin",
+            "adaptive_l": {
+              "sample_count": 10,
+              "scale_factor": 16.0
+            }
           },
           "distance": "squared_l2"
         }
