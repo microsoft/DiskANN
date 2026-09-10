@@ -24,6 +24,10 @@ pub enum MaxSimIsa {
     X86_64_V3,
     /// x86_64 AVX-512.
     X86_64_V4,
+    /// Experimental staged-pipeline kernel (x86_64 AVX2+FMA). Coexists with
+    /// [`Self::X86_64_V3`] for A/B benchmarking; produces the same results via a
+    /// different (kernel → postprocess → reducer) micro-kernel structure.
+    X86_64_V3_Staged,
     /// AArch64 Neon.
     Neon,
     /// Non-SIMD reference fallback. Slow; serves as a correctness baseline.
@@ -41,8 +45,10 @@ impl MaxSimIsa {
             Self::X86_64_V3 => diskann_wide::arch::x86_64::V3::new_checked().is_some(),
             #[cfg(target_arch = "x86_64")]
             Self::X86_64_V4 => diskann_wide::arch::x86_64::V4::new_checked().is_some(),
+            #[cfg(target_arch = "x86_64")]
+            Self::X86_64_V3_Staged => diskann_wide::arch::x86_64::V3::new_checked().is_some(),
             #[cfg(not(target_arch = "x86_64"))]
-            Self::X86_64_V3 | Self::X86_64_V4 => false,
+            Self::X86_64_V3 | Self::X86_64_V4 | Self::X86_64_V3_Staged => false,
             #[cfg(target_arch = "aarch64")]
             Self::Neon => diskann_wide::arch::aarch64::Neon::new_checked().is_some(),
             #[cfg(not(target_arch = "aarch64"))]
@@ -58,6 +64,7 @@ impl std::fmt::Display for MaxSimIsa {
             Self::Scalar => "scalar",
             Self::X86_64_V3 => "x86-64-v3",
             Self::X86_64_V4 => "x86-64-v4",
+            Self::X86_64_V3_Staged => "x86-64-v3-staged",
             Self::Neon => "neon",
             Self::Reference => "reference",
         };
