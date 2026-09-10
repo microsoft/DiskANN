@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Online graph-IVF clustering with split, dissolve, and reassignment.
+//! Online graph-IVF clustering with LIRE splits and local-scatter merges.
 //!
 //! [`OnlineClusterer`] builds the IVF partition incrementally instead of in a
 //! single batch Lloyd pass. Points are routed to their nearest centroid via a
@@ -16,17 +16,15 @@
 //! validate and route the batch, select overflows from projected sizes, prepare
 //! every split against unchanged state, then commit the inserts and reassign
 //! each split region. A batch large enough to be worth the dispatch routes
-//! across the thread pool; reassignment is always a GEMM.
+//! across the thread pool; LIRE globally routes only possible NPA violations.
 //!
 //! Points can also be removed with
 //! [`delete_batch`](OnlineClusterer::delete_batch): select underflows from
-//! projected post-delete sizes and prepare survivor candidates first, then drop
-//! the deleted points and retire the selected clusters. Retiring *dissolves* a
-//! cluster — it leaves the centroid graph and its remaining members are
-//! scattered onto preselected survivors by the same GEMM the split path uses —
-//! so a split is `+1` live cluster and a merge is `-1`. Splits are insert-driven
-//! and merges are delete-driven, and neither triggers the other, so the two
-//! cannot cascade.
+//! projected post-delete sizes and prepare local survivor candidates first,
+//! then drop the deleted points and retire the selected clusters. Victim members
+//! are scattered onto those candidates by a GEMM. Deletes never split: any
+//! resulting overflow is deferred until an insert reaches it or starts a LIRE
+//! split cascade. An unrelated insert that does not split leaves it untouched.
 //!
 //! Ordinary fallible work is completed before mutation. Structural changes go
 //! through a private registry that owns both the centroid table and graph, and
@@ -54,7 +52,7 @@ use diskann_disk::utils::compute_closest_centers;
 use diskann_providers::utils::{create_thread_pool, ParallelIteratorInPool, RayonThreadPool};
 use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::distance::Metric as VectorMetric;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
 use tokio::runtime::Runtime;
 
@@ -62,13 +60,14 @@ use crate::{
     centroids::{self, AdjacencyCensus},
     cluster::{self, sq_l2},
     index::{with_suffix, CENTROIDS_SUFFIX, GRAPH_SUFFIX, LISTS_SUFFIX, META_SUFFIX},
-    params::{EmptyClusterPolicy, OnlineCentroidRouting, OnlineParams},
+    params::{OnlineCentroidRouting, OnlineParams},
     storage::{self, Layout},
     GraphIvfError, Result,
 };
 
 use diskann::{utils::VectorRepr, ANNError};
 
+mod lire;
 mod search;
 mod seed;
 mod state;
@@ -89,15 +88,12 @@ const UNASSIGNED: u32 = storage::NOT_INDEXED;
 /// Points routed per parallel work unit in [`OnlineClusterer::insert_batch`].
 const ROUTE_CHUNK: usize = 256;
 
-/// Maximum points gathered into one contiguous tile for a GEMM reassignment
-/// call. Reassigning a whole split region at once would need `|P| * dim` floats
-/// (gigabytes for a large `reassign_neighbors`), so points are streamed through
-/// a tile that bounds the scratch to `REASSIGN_TILE * dim` floats.
+/// Maximum points gathered into a contiguous tile for local GEMM reassignment.
 const REASSIGN_TILE: usize = 4096;
 
 /// Route one point to its nearest live centroid via the centroid graph.
 ///
-/// The centroid graph is mutated in place as clusters split and dissolve:
+/// The centroid graph is mutated in place as clusters split and merge:
 /// retired slots are recycled, and the in-edges repaired around a departing
 /// centroid can leave a region thinly connected. A narrow beam can then
 /// occasionally exhaust its frontier without reaching a live centroid, so the
@@ -156,6 +152,9 @@ struct SplitParentPlan {
     members: Vec<u32>,
     neighbors: Vec<u32>,
     children: [Box<[f32]>; 2],
+    assignments: Vec<u8>,
+    reassign_candidates: Vec<u32>,
+    region_points: usize,
     two_means_us: u64,
 }
 
@@ -177,8 +176,8 @@ struct MergePlan {
     started: Instant,
 }
 
-/// An incremental graph-IVF clusterer with insert-driven splits, delete-driven
-/// dissolves, and live in-memory search.
+/// An incremental graph-IVF clusterer with LIRE splits, local-scatter merges and
+/// live in-memory search.
 pub struct OnlineClusterer {
     /// The full corpus, preloaded; row `pid` is point `pid`.
     points: Matrix<f32>,
@@ -275,7 +274,7 @@ impl OnlineClusterer {
         }
         params.routing.validate()?;
         // Merging needs a hysteresis gap below the split threshold. Without
-        // one, a dissolve spills onto a neighbor, overflowing it; the split
+        // one, a merge spills onto a neighbor, overflowing it; the split
         // that follows produces two half-size children, either of which may
         // land back under the merge line.
         if params.merges_enabled() && 2 * params.merge_threshold > params.split_threshold {
@@ -420,12 +419,9 @@ impl OnlineClusterer {
     ///    read-only with respect to the centroid graph and a batch large enough
     ///    to be worth the dispatch runs across the whole thread pool.
     /// 2. **Split each overflow.** Every routed-to cluster that now overflows is
-    ///    bisected on its own by a local 2-means over its members, including the
-    ///    points this batch routed to it. Parents are independent of one
-    ///    another, so a cluster splits identically however many others
-    ///    overflowed in the same batch.
-    /// 3. **Reassign per split region.** Each split parent's neighborhood is
-    ///    then reassigned in turn, as a GEMM.
+    ///    bisected by a capacity-constrained binary fit.
+    /// 3. **LIRE reassign.** Necessary conditions filter possible NPA violations,
+    ///    which are globally routed; resulting overflows cascade to equilibrium.
     ///
     /// Routes are computed against the pre-batch partition, so a point that
     /// lands in a cluster which then splits is routed slightly stale; phase 3
@@ -479,12 +475,13 @@ impl OnlineClusterer {
         let split = if parents.is_empty() {
             None
         } else {
-            let parent_set: std::collections::HashSet<u32> = parents.iter().copied().collect();
             let mut incoming = std::collections::HashMap::<u32, Vec<u32>>::new();
             for (&pid, &cid) in pids.iter().zip(&routes) {
-                if parent_set.contains(&cid) {
-                    incoming.entry(cid).or_default().push(pid);
-                }
+                // Split-neighbor Equation 2 must see points routed to every
+                // posting in this batch, not only points routed to a parent.
+                // None are attached until commit, so they are otherwise absent
+                // from `partition.members(neighbor)`.
+                incoming.entry(cid).or_default().push(pid);
             }
             Some(self.prepare_split(&parents, &incoming)?)
         };
@@ -513,9 +510,38 @@ impl OnlineClusterer {
         self.telemetry.total_inserts += pids.len() as u64;
 
         match split {
-            Some(plan) => self.commit_split(plan),
-            None => Ok(()),
+            Some(plan) => {
+                self.commit_split(plan)?;
+                self.ensure_split_equilibrium()
+            }
+            None => self.ensure_split_threshold(routes.iter().copied()),
         }
+    }
+
+    /// A completed insert-driven cascade must restore the global threshold.
+    fn ensure_split_equilibrium(&self) -> Result<()> {
+        self.ensure_split_threshold(self.centroids.live_ids())
+    }
+
+    /// Without a split, validate only this insert's destinations: a previous
+    /// local-scatter merge is allowed to leave unrelated postings overfull.
+    /// Resource exhaustion must still fail an uncapped insert that leaves one
+    /// of its own destinations overfull. An explicit cluster cap permits it.
+    fn ensure_split_threshold(&self, mut clusters: impl Iterator<Item = u32>) -> Result<()> {
+        if self.params.max_clusters.is_some() {
+            return Ok(());
+        }
+        if let Some(blocked) =
+            clusters.find(|&cid| self.partition.list_len(cid) > self.params.split_threshold)
+        {
+            return Err(GraphIvfError::invalid(format!(
+                "centroid id budget exhausted before split equilibrium; \
+                 posting {blocked} has {} points above threshold {}",
+                self.partition.list_len(blocked),
+                self.params.split_threshold
+            )));
+        }
+        Ok(())
     }
 
     /// Select overflowing routed-to clusters using their projected post-insert
@@ -573,11 +599,10 @@ impl OnlineClusterer {
     /// there is no tombstone to keep or consolidation pass to run. A deleted
     /// point's id becomes free and may be inserted again later.
     ///
-    /// Deleting never splits. A survivor that absorbs a dissolved cluster's
-    /// members can land above `split_threshold`, but it is left for the next
-    /// insert routed to it: keeping splits insert-driven and merges
-    /// delete-driven makes split/merge cascades structurally impossible rather
-    /// than merely bounded.
+    /// Deletes never split. Local scatter can overflow a survivor; that overflow
+    /// is deferred until an insert reaches it or starts a LIRE split cascade.
+    /// An insert with no split checks only its own destinations, so an unrelated
+    /// deferred overflow does not poison an otherwise successful insertion.
     ///
     /// # Errors
     ///
@@ -615,6 +640,7 @@ impl OnlineClusterer {
         // their fallible candidate searches before removing a single point.
         let merge = if self.params.merges_enabled() {
             let mut victims = Vec::new();
+            let mut deleted_counts = std::collections::HashMap::<u32, usize>::new();
             let mut start = 0;
             while start < by_cluster.len() {
                 let cid = by_cluster[start].0;
@@ -622,7 +648,9 @@ impl OnlineClusterer {
                     .iter()
                     .position(|&(candidate, _)| candidate != cid)
                     .map_or(by_cluster.len(), |offset| start + offset);
-                if self.partition.list_len(cid) - (end - start) < self.params.merge_threshold {
+                let deleted = end - start;
+                deleted_counts.insert(cid, deleted);
+                if self.partition.list_len(cid) - deleted < self.params.merge_threshold {
                     victims.push(cid);
                 }
                 start = end;
@@ -633,10 +661,7 @@ impl OnlineClusterer {
                 .len()
                 .min(self.centroids.live_count().saturating_sub(floor));
             victims.sort_unstable_by_key(|&cid| {
-                let deleted = by_cluster
-                    .iter()
-                    .filter(|&&(candidate, _)| candidate == cid)
-                    .count();
+                let deleted = deleted_counts.get(&cid).copied().unwrap_or(0);
                 (self.partition.list_len(cid) - deleted, cid)
             });
             victims.truncate(admitted);
@@ -785,10 +810,9 @@ impl OnlineClusterer {
     /// Prepare every parent's split without changing centroid or partition
     /// state.
     ///
-    /// Each parent is bisected on its own by a local 2-means over its members,
-    /// exactly as a batch of one would be. Parents that overflow in the same
-    /// batch do not see one another, so a split is planned identically however
-    /// many others fired alongside it.
+    /// Each parent is bisected on its own by a capacity-constrained binary fit.
+    /// LIRE's two necessary conditions filter the parent-plus-neighbor region
+    /// before any structural update.
     ///
     /// `parents` must be sorted, live, hold at least two members each, and fit
     /// the id budget and cluster cap — [`insert_batch`](Self::insert_batch)
@@ -814,15 +838,73 @@ impl OnlineClusterer {
             if let Some(inserted) = incoming.get(&c) {
                 members.extend_from_slice(inserted);
             }
+            let old_centroid = self
+                .centroids
+                .get(c)
+                .expect("split parent is live")
+                .to_vec()
+                .into_boxed_slice();
             let neighbors = self.region_neighbors(c, s)?;
 
             let kmeans_start = Instant::now();
-            let children = self.two_means(&members, &mut rng_after)?;
+            let balanced = lire::balanced_two_means(
+                &self.points,
+                &members,
+                &mut rng_after,
+                self.params.two_means_iters,
+                self.params.split_threshold,
+                self.params.normalize_centroids,
+            )?;
+            let mut reassign_candidates = Vec::new();
+            for &pid in &members {
+                if lire::old_posting_may_move_elsewhere(
+                    self.points.row(pid as usize),
+                    &old_centroid,
+                    &balanced.children,
+                ) {
+                    reassign_candidates.push(pid);
+                }
+            }
+            for &neighbor in &neighbors {
+                for &pid in self.partition.members(neighbor) {
+                    if lire::neighbor_may_move_to_child(
+                        self.points.row(pid as usize),
+                        &old_centroid,
+                        &balanced.children,
+                    ) {
+                        reassign_candidates.push(pid);
+                    }
+                }
+                if let Some(inserted) = incoming.get(&neighbor) {
+                    for &pid in inserted {
+                        if lire::neighbor_may_move_to_child(
+                            self.points.row(pid as usize),
+                            &old_centroid,
+                            &balanced.children,
+                        ) {
+                            reassign_candidates.push(pid);
+                        }
+                    }
+                }
+            }
+            reassign_candidates.sort_unstable();
+            reassign_candidates.dedup();
+            let region_points = members.len()
+                + neighbors
+                    .iter()
+                    .map(|&neighbor| {
+                        self.partition.list_len(neighbor)
+                            + incoming.get(&neighbor).map_or(0, Vec::len)
+                    })
+                    .sum::<usize>();
             parent_plans.push(SplitParentPlan {
                 id: c,
                 members,
                 neighbors,
-                children,
+                children: balanced.children,
+                assignments: balanced.assignments,
+                reassign_candidates,
+                region_points,
                 two_means_us: kmeans_start.elapsed().as_micros() as u64,
             });
         }
@@ -834,54 +916,53 @@ impl OnlineClusterer {
         })
     }
 
-    /// Bisect `members` into two centroids, seeded with two distinct members
-    /// drawn from `rng`.
-    fn two_means(&self, members: &[u32], rng: &mut StdRng) -> Result<[Box<[f32]>; 2]> {
-        let dim = self.dim;
-        let m = members.len();
-        debug_assert!(m >= 2);
-
-        let mut buf = vec![0.0f32; m * dim];
-        for (i, &pid) in members.iter().enumerate() {
-            buf[i * dim..(i + 1) * dim].copy_from_slice(self.points.row(pid as usize));
-        }
-        let data = Matrix::try_from(buf.into_boxed_slice(), m, dim)
-            .map_err(|_| GraphIvfError::invalid("split sub-matrix shape mismatch"))?;
-
-        let a = rng.random_range(0..m);
-        let mut b = rng.random_range(0..m);
-        if b == a {
-            b = (a + 1) % m;
-        }
-        let mut seed = vec![0.0f32; 2 * dim];
-        seed[..dim].copy_from_slice(data.row(a));
-        seed[dim..].copy_from_slice(data.row(b));
-        let mut children = Matrix::try_from(seed.into_boxed_slice(), 2, dim)
-            .map_err(|_| GraphIvfError::invalid("split seed shape mismatch"))?;
-
-        let mut assigner = cluster::ExactAssigner::default();
-        cluster::lloyd(
-            data.as_view(),
-            &mut children,
-            &mut assigner,
-            self.params.two_means_iters.max(1),
-            EmptyClusterPolicy::PreserveOld,
-            self.params.normalize_centroids,
-            &self.pool,
-        )?;
-
-        Ok([
-            children.row(0).to_vec().into_boxed_slice(),
-            children.row(1).to_vec().into_boxed_slice(),
-        ])
-    }
-
     /// Publish a prepared split and reassign each affected region.
     ///
     /// The caller has already marked the clusterer poisoned. All preparation
     /// that can run against the old graph and partition is complete, but graph
-    /// publication and GEMM assignment remain fallible and irreversible.
+    /// publication and final NPA routing remain fallible and irreversible.
     fn commit_split(&mut self, plan: SplitPlan) -> Result<()> {
+        let event_start = self.telemetry.splits.len();
+        let mut clusters_updated = std::collections::HashSet::new();
+        let mut pending = Some(plan);
+        while let Some(plan) = pending {
+            if let Err(error) = self.commit_split_once(plan, &mut clusters_updated) {
+                self.finish_split_batch_telemetry(event_start, &clusters_updated);
+                return Err(error);
+            }
+            let parents = self.select_live_split_parents();
+            pending = if parents.is_empty() {
+                None
+            } else {
+                Some(self.prepare_split(&parents, &std::collections::HashMap::new())?)
+            };
+        }
+        self.finish_split_batch_telemetry(event_start, &clusters_updated);
+        Ok(())
+    }
+
+    fn finish_split_batch_telemetry(
+        &mut self,
+        event_start: usize,
+        clusters_updated: &std::collections::HashSet<u32>,
+    ) {
+        let count = clusters_updated
+            .iter()
+            .filter(|&&cluster| self.centroids.is_live(cluster))
+            .count();
+        for event in &mut self.telemetry.splits[event_start..] {
+            event.clusters_updated = count;
+        }
+    }
+
+    /// Publish one LIRE split round, apply the paper's final NPA check to the
+    /// necessary-condition candidates, and move only points whose assignment
+    /// changes.
+    fn commit_split_once(
+        &mut self,
+        plan: SplitPlan,
+        clusters_updated: &mut std::collections::HashSet<u32>,
+    ) -> Result<()> {
         let parent_ids: Vec<u32> = plan.parents.iter().map(|parent| parent.id).collect();
         let children: Vec<Box<[f32]>> = plan
             .parents
@@ -892,96 +973,195 @@ impl OnlineClusterer {
             .centroids
             .apply_split(&self.runtime, &parent_ids, children)?;
         let live_after = self.centroids.live_count();
-        let mut events = Vec::with_capacity(plan.parents.len());
-        let mut total_reassigned = 0u64;
 
-        // Liveness no longer moves — `apply_split` retired every parent and
-        // created every child — so the batch's whole working set is known
-        // before the first region runs, and regions that share a neighbor
-        // collapse onto one entry.
-        let mut updated = std::collections::HashSet::new();
-        for (parent, born) in plan.parents.iter().zip(child_ids.chunks_exact(2)) {
-            updated.extend(
-                parent
-                    .neighbors
-                    .iter()
-                    .copied()
-                    .filter(|&c| self.centroids.is_live(c)),
-            );
-            updated.extend(born.iter().copied());
+        // A child from an earlier cascade round may itself be a parent now. It
+        // is no longer a live posting when this batch finishes, so remove it
+        // before recording the children born in this round.
+        for &parent in &parent_ids {
+            clusters_updated.remove(&parent);
         }
-        let clusters_updated = updated.len();
+        clusters_updated.extend(child_ids.iter().copied());
 
-        // Reassign each split region in turn. The candidates are the parent's
-        // own two children plus the neighbors picked before the mutation, less
-        // any neighbor that was itself a parent of this batch and has since
-        // been retired — that region is covered by its own turn.
-        for (parent, born) in plan.parents.iter().zip(child_ids.chunks_exact(2)) {
-            let cluster_size = parent.members.len();
-
-            self.scratch.candidates.clear();
-            self.scratch.candidates.extend(
-                parent
-                    .neighbors
-                    .iter()
-                    .copied()
-                    .filter(|&c| self.centroids.is_live(c)),
-            );
-            let num_neighbors = self.scratch.candidates.len();
-            self.scratch.candidates.extend_from_slice(born);
-
-            // Candidate points: the parent's own members plus everything its
-            // surviving neighbors hold. The children's lists are still empty —
-            // no other region can have placed a point on them — so the k-means
-            // assignment is not applied separately; reassignment places every
-            // member against the neighbors too, which strictly refines it.
-            self.scratch.points.clear();
-            self.partition
-                .detach_members_into(parent.id, &mut self.scratch.points);
-            debug_assert!(self.scratch.points[..cluster_size]
-                .iter()
-                .map(|point| point.id)
-                .eq(parent.members.iter().copied()));
-            for i in 0..num_neighbors {
-                let cid = self.scratch.candidates[i];
-                self.partition
-                    .detach_members_into(cid, &mut self.scratch.points);
+        let mut candidate_pids: Vec<u32> = plan
+            .parents
+            .iter()
+            .flat_map(|parent| parent.reassign_candidates.iter().copied())
+            .collect();
+        candidate_pids.sort_unstable();
+        candidate_pids.dedup();
+        let mut unowned_candidates: std::collections::HashSet<u32> =
+            candidate_pids.iter().copied().collect();
+        let mut attributed_candidates = vec![0usize; plan.parents.len()];
+        for (index, parent) in plan.parents.iter().enumerate() {
+            for &pid in &parent.reassign_candidates {
+                attributed_candidates[index] += usize::from(unowned_candidates.remove(&pid));
             }
+        }
+        debug_assert!(unowned_candidates.is_empty());
+        let reassign_start = Instant::now();
+        let mut candidate_routes = vec![0u32; candidate_pids.len()];
+        self.route_batch(&candidate_pids, &mut candidate_routes)?;
+        let routed: std::collections::HashMap<u32, u32> = candidate_pids
+            .iter()
+            .copied()
+            .zip(candidate_routes)
+            .collect();
 
-            let reassign_start = Instant::now();
-            let num_reassigned = match self.reassign_scratch_points() {
-                Ok(count) => count,
-                Err(error) => {
-                    self.telemetry.total_splits += events.len() as u64;
-                    self.telemetry.total_reassigned += total_reassigned;
-                    self.telemetry.splits.extend(events);
-                    self.telemetry.split_us += plan.started.elapsed().as_micros() as u64;
-                    return Err(error);
+        let mut destinations = std::collections::HashMap::<u32, u32>::new();
+        for (parent_index, parent) in plan.parents.iter().enumerate() {
+            for (member_index, &pid) in parent.members.iter().enumerate() {
+                let point = self.points.row(pid as usize);
+                let distances = [
+                    cluster::sq_l2(point, &parent.children[0]),
+                    cluster::sq_l2(point, &parent.children[1]),
+                ];
+                // Preserve NPA by choosing the strictly nearer child. The
+                // constrained training assignment is needed for exact distance
+                // ties; otherwise identical points all choose child zero and
+                // immediately overflow it again.
+                let fitted = parent.assignments[member_index] as usize;
+                let local_child = match distances[0].total_cmp(&distances[1]) {
+                    std::cmp::Ordering::Less => 0,
+                    std::cmp::Ordering::Greater => 1,
+                    std::cmp::Ordering::Equal => fitted,
+                };
+                let local_target = child_ids[2 * parent_index + local_child];
+                let local_distance = distances[local_child];
+                let target = routed.get(&pid).copied().map_or(local_target, |global| {
+                    let global_distance = self
+                        .centroids
+                        .get(global)
+                        .map(|centroid| cluster::sq_l2(point, centroid))
+                        .unwrap_or(f32::INFINITY);
+                    if global_distance < local_distance {
+                        global
+                    } else {
+                        local_target
+                    }
+                });
+                destinations.insert(pid, target);
+            }
+        }
+        for (&pid, &target) in &routed {
+            destinations.entry(pid).or_insert_with(|| {
+                let source = self.partition.assignment(pid);
+                let Some(source_centroid) = self.centroids.get(source) else {
+                    // Every retired-parent member was inserted above. This is
+                    // defensive for a partially prepared plan.
+                    return target;
+                };
+                let point = self.points.row(pid as usize);
+                let source_distance = cluster::sq_l2(point, source_centroid);
+                let target_distance = self
+                    .centroids
+                    .get(target)
+                    .map(|centroid| cluster::sq_l2(point, centroid))
+                    .unwrap_or(f32::INFINITY);
+                if target_distance < source_distance {
+                    target
+                } else {
+                    source
                 }
-            };
-            let reassign_us = reassign_start.elapsed().as_micros() as u64;
-
-            total_reassigned += num_reassigned as u64;
-            events.push(SplitEvent {
-                insert_index: self.telemetry.total_inserts,
-                cluster: parent.id,
-                cluster_size,
-                num_neighbors,
-                num_reassigned,
-                live_after,
-                clusters_updated,
-                two_means_us: parent.two_means_us,
-                reassign_us,
-                total_us: parent.two_means_us + reassign_us,
             });
         }
+        let mut destinations: Vec<(u32, u32)> = destinations.into_iter().collect();
+        destinations.sort_unstable_by_key(|&(pid, _)| pid);
+        for &(pid, target) in &destinations {
+            let source = self.partition.assignment(pid);
+            if source == target {
+                continue;
+            }
+            if self.centroids.is_live(source) {
+                clusters_updated.insert(source);
+            }
+            clusters_updated.insert(target);
+        }
+
+        let moved: std::collections::HashSet<u32> = destinations
+            .iter()
+            .filter_map(|&(pid, target)| (self.partition.assignment(pid) != target).then_some(pid))
+            .collect();
+        let num_reassigned = self.partition.relocate(&destinations);
+        debug_assert_eq!(num_reassigned, moved.len());
+        let reassign_us = reassign_start.elapsed().as_micros() as u64;
+
+        let mut attributed = vec![0usize; plan.parents.len()];
+        let mut remaining = moved;
+        for (index, parent) in plan.parents.iter().enumerate() {
+            for &pid in &parent.members {
+                attributed[index] += usize::from(remaining.remove(&pid));
+            }
+        }
+        for (index, parent) in plan.parents.iter().enumerate() {
+            for &pid in &parent.reassign_candidates {
+                attributed[index] += usize::from(remaining.remove(&pid));
+            }
+        }
+        debug_assert!(remaining.is_empty());
+        let work_units: Vec<usize> = plan
+            .parents
+            .iter()
+            .zip(&attributed_candidates)
+            .map(|(parent, candidates)| parent.members.len() + candidates)
+            .collect();
+        let total_work = work_units.iter().sum::<usize>().max(1);
+
+        let events = plan
+            .parents
+            .iter()
+            .zip(attributed)
+            .zip(attributed_candidates)
+            .zip(work_units)
+            .map(|(((parent, num_reassigned), npa_candidates), work)| {
+                let reassign_us = reassign_us * work as u64 / total_work as u64;
+                SplitEvent {
+                    insert_index: self.telemetry.total_inserts,
+                    cluster: parent.id,
+                    cluster_size: parent.members.len(),
+                    num_neighbors: parent.neighbors.len(),
+                    region_points: parent.region_points,
+                    npa_candidates,
+                    operation_index: self.telemetry.total_inserts + self.telemetry.total_deletes,
+                    num_reassigned,
+                    live_after,
+                    clusters_updated: 0,
+                    two_means_us: parent.two_means_us,
+                    reassign_us,
+                    total_us: parent.two_means_us + reassign_us,
+                }
+            })
+            .collect::<Vec<_>>();
 
         self.rng = plan.rng_after;
         self.telemetry.total_splits += events.len() as u64;
-        self.telemetry.total_reassigned += total_reassigned;
+        self.telemetry.total_reassigned += num_reassigned as u64;
         self.telemetry.splits.extend(events);
         self.telemetry.split_us += plan.started.elapsed().as_micros() as u64;
         Ok(())
+    }
+
+    /// Admit every currently overfull live posting that fits the remaining id
+    /// and live-cluster budgets. LIRE repeats this after reassignment until no
+    /// cascading overflow remains.
+    fn select_live_split_parents(&self) -> Vec<u32> {
+        let mut parents: Vec<u32> = self
+            .centroids
+            .live_ids()
+            .filter(|&cid| self.partition.list_len(cid) > self.params.split_threshold)
+            .collect();
+        parents.sort_unstable_by(|&a, &b| {
+            self.partition
+                .list_len(b)
+                .cmp(&self.partition.list_len(a))
+                .then(a.cmp(&b))
+        });
+        let mut admitted = parents.len().min(self.centroids.alloc_budget() / 2);
+        if let Some(max_clusters) = self.params.max_clusters {
+            admitted = admitted.min(max_clusters.saturating_sub(self.centroids.live_count()));
+        }
+        parents.truncate(admitted);
+        parents.sort_unstable();
+        parents
     }
 
     /// Snapshot every merge victim before any structural mutation.
@@ -990,10 +1170,11 @@ impl OnlineClusterer {
     /// has to re-examine the neighbors' points because
     /// it *fits* new centroids, and a point that was nearest its own centroid
     /// may now be nearer a child. A merge fits nothing, and removing a centroid
-    /// cannot change a surviving point's nearest-among-survivors — so the
-    /// neighbors' members are provably already where they belong, and only the
-    /// victim's own points are re-placed. That is the whole operator: no
-    /// k-means and no new centroid.
+    /// cannot invalidate an already nearest surviving owner. This argument
+    /// assumes the old assignment was globally nearest; graph routing and a
+    /// limited local candidate set do not guarantee that premise. The local
+    /// merge operator leaves neighbor members in place and re-places only the
+    /// victim's own points: no k-means and no new centroid.
     ///
     /// Because nothing is fitted, a merge consumes no centroid id. Deletes are
     /// therefore free against the
@@ -1198,6 +1379,10 @@ impl OnlineClusterer {
             }
         }
 
+        // Only failed assignments may remain recovery candidates. Keeping
+        // completed points here could resurrect one after a later delete if
+        // an unrelated insertion then fails and invokes recovery.
+        points.clear();
         Ok(num_reassigned)
     }
 

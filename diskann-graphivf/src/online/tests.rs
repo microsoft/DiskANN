@@ -156,6 +156,49 @@ fn assert_live_invariants(c: &OnlineClusterer, live: &[u32]) {
     }
 }
 
+/// Every live point is assigned to its globally nearest live centroid.
+fn assert_npa(c: &OnlineClusterer, live: &[u32]) {
+    for &pid in live {
+        let assigned = c.partition.assignment(pid);
+        let assigned_distance = sqd(
+            c.points.row(pid as usize),
+            c.centroids
+                .get(assigned)
+                .expect("assigned centroid is live"),
+        );
+        let best = c
+            .centroids
+            .iter_live()
+            .map(|(_, centroid)| sqd(c.points.row(pid as usize), centroid))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            assigned_distance <= best + 1e-5,
+            "point {pid} violates NPA: assigned={assigned_distance} best={best}"
+        );
+    }
+}
+
+#[test]
+fn lire_split_reaches_npa_and_threshold_equilibrium() {
+    let mut rng = StdRng::seed_from_u64(71);
+    let (n, dim) = (400usize, 4usize);
+    let values = (0..n * dim)
+        .map(|_| rng.random_range(-10.0f32..10.0))
+        .collect();
+    let points = mat(values, n, dim);
+    let mut p = params(128, 24);
+    p.max_clusters = None;
+    p.centroid_capacity = 4 * n;
+    p.routing = OnlineCentroidRouting::Exact;
+    let initial = mat(points.row(0).to_vec(), 1, dim);
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
+
+    assert_invariants(&c, n);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 24));
+    assert_npa(&c, &(0..n as u32).collect::<Vec<_>>());
+}
+
 #[test]
 fn no_split_matches_nearest_centroid() {
     // High threshold => no splits; pure online assignment with fixed
@@ -422,21 +465,20 @@ fn batched_inserts_preserve_invariants_and_split() {
         prev = e.insert_index;
     }
 
-    // `clusters_updated` is one number per batch, deduplicated across its
-    // regions: at least as large as the widest single region, never larger
-    // than their sum, and never larger than the live cluster count.
+    // `clusters_updated` is one number per insert batch, deduplicated across
+    // all LIRE cascade rounds. It counts only live postings actually rewritten,
+    // so a neighbor whose candidates all stay put is not included.
     let t = c.telemetry();
     let mut multi_region_batches = 0;
     for batch in t.splits.chunk_by(|a, b| a.insert_index == b.insert_index) {
         let updated = batch[0].clusters_updated;
-        let widths = batch.iter().map(|e| e.num_neighbors + 2);
-        let sum: usize = widths.clone().sum();
         assert!(batch.iter().all(|e| e.clusters_updated == updated));
-        assert!(updated >= widths.max().unwrap() && updated <= sum);
-        assert!(updated <= batch[0].live_after);
-        if batch.len() == 1 {
-            assert_eq!(updated, sum, "one region has nothing to deduplicate");
-        } else {
+        assert!(updated >= 2, "the final split round has two live children");
+        assert!(
+            updated <= batch.last().unwrap().live_after,
+            "batch telemetry is finalized after all cascade rounds"
+        );
+        if batch.len() > 1 {
             multi_region_batches += 1;
         }
     }
@@ -506,7 +548,8 @@ fn telemetry_records_splits_and_reassignments() {
         assert!(e.insert_index >= 1 && e.insert_index <= n as u64);
         prev = e.insert_index;
         assert!(e.cluster_size >= 2);
-        assert!(e.num_reassigned >= e.cluster_size); // all of C always moves
+        assert!(e.npa_candidates <= e.region_points);
+        assert!(e.num_reassigned <= e.region_points);
         reassigned_sum += e.num_reassigned as u64;
     }
     assert_eq!(reassigned_sum, t.total_reassigned);
@@ -528,7 +571,11 @@ fn telemetry_records_splits_and_reassignments() {
     t.write_csv(&csv).unwrap();
     let text = std::fs::read_to_string(&csv).unwrap();
     let lines: Vec<&str> = text.lines().collect();
-    assert!(lines[0].starts_with("insert_index,cluster,cluster_size"));
+    assert_eq!(
+        lines[0],
+        "insert_index,cluster,cluster_size,num_neighbors,num_reassigned,\
+         live_after,two_means_us,reassign_us,total_us,clusters_updated,region_points,npa_candidates,operation_index"
+    );
     assert_eq!(lines.len(), 1 + t.splits.len());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -760,6 +807,63 @@ fn underflow_retires_the_cluster_and_scatters_it_onto_survivors() {
         e.num_reassigned, 2,
         "only the victim's own members are re-placed"
     );
+    assert_npa(&c, &live);
+}
+
+#[test]
+fn merge_plan_excludes_all_batch_victims_from_local_candidates() {
+    let (points, initial) = four_groups(5);
+    let mut c = OnlineClusterer::new(points, initial, merge_params(8, 10_000, 3)).unwrap();
+    c.insert_batch(&(0..20u32).collect::<Vec<_>>()).unwrap();
+
+    let victims = [0, 1];
+    let deleted = std::collections::HashSet::from([0, 1, 2, 5, 6, 7]);
+    let plan = c.prepare_merge(&victims, &deleted).unwrap();
+
+    assert_eq!(plan.victims.len(), 2);
+    for victim in plan.victims {
+        assert_eq!(victim.members.len(), 2);
+        assert_eq!(victim.candidates.len(), 2);
+        assert!(victim.candidates.iter().all(|cid| !victims.contains(cid)));
+    }
+}
+
+#[test]
+fn merge_scatter_uses_saved_local_candidates_instead_of_global_routing() {
+    let points = mat(vec![0.0, 0.1, 0.2, 1.0, 100.0, 100.1], 6, 1);
+    let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
+    let mut p = merge_params(8, 4, 2);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.reassign_neighbors = 1;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..6).collect::<Vec<_>>()).unwrap();
+    let plan = c
+        .prepare_merge(&[0], &std::collections::HashSet::new())
+        .unwrap();
+    assert_eq!(plan.victims[0].candidates, [1]);
+
+    // Once a plan exists, members use its candidate set, even if another live
+    // centroid would win globally. This pins the local-scatter kernel itself.
+    let plan = MergePlan {
+        victims: vec![MergeVictimPlan {
+            id: 0,
+            members: c.partition.members(0).to_vec(),
+            candidates: vec![2],
+            search_us: 0,
+        }],
+        started: Instant::now(),
+    };
+    c.begin_commit();
+    let result = c.commit_merge(plan);
+    c.finish_commit(&result);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    for pid in 0..3 {
+        assert_eq!(c.partition.assignment(pid), 2);
+    }
+    assert_eq!(c.telemetry().merges[0].num_neighbors, 1);
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert_live_invariants(&c, &(0..6).collect::<Vec<_>>());
 }
 
 #[test]
@@ -868,12 +972,17 @@ fn churn_keeps_the_centroid_graph_and_registry_in_sync() {
     c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
     assert_graph_matches_registry(&c);
 
-    // Recycle a sixth of the corpus at a time. Deleting a contiguous id range
-    // starves whole regions at once, which is the case that retires spatially
-    // adjacent centroids together; reinserting the same ids then splits those
-    // regions back apart and reuses the slots just freed.
-    for round in 0..6u32 {
-        let victims: Vec<u32> = (round * 100..round * 100 + 100).collect();
+    // Recycle one whole current posting at a time. Selecting from current
+    // membership guarantees a merge even when a new split policy changes how
+    // contiguous pid ranges are distributed.
+    for _ in 0..6 {
+        let victim = c
+            .centroids
+            .live_ids()
+            .max_by_key(|&cid| c.partition.list_len(cid))
+            .unwrap();
+        let victims = c.partition.members(victim).to_vec();
+        assert!(!victims.is_empty());
         c.delete_batch(&victims).unwrap();
         assert_graph_matches_registry(&c);
         c.insert_batch(&victims).unwrap();
@@ -1192,4 +1301,228 @@ fn warmup_rejects_bad_config() {
         iters: 5,
     };
     assert!(OnlineClusterer::with_seed(points, seed, params(8, 10)).is_err());
+}
+
+#[test]
+fn balanced_split_commit_preserves_capacity_on_identical_points() {
+    let points = mat(vec![0.0; 9], 9, 1);
+    let initial = mat(vec![0.0], 1, 1);
+    let mut p = params(32, 4);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.max_clusters = None;
+    p.centroid_capacity = 64;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    c.insert_batch(&(0..9).collect::<Vec<_>>()).unwrap();
+
+    assert_invariants(&c, 9);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 4));
+}
+
+#[test]
+fn split_rechecks_points_routed_to_a_neighbor_in_the_same_batch() {
+    let points = mat(vec![0.0, 0.0, 4.8, 4.8, 0.0, 5.2], 6, 1);
+    let initial = mat(vec![0.0, 10.0], 2, 1);
+    let mut p = params(10, 4);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.reassign_neighbors = 8;
+    p.centroid_capacity = 32;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..4).collect::<Vec<_>>()).unwrap();
+
+    c.insert_batch(&[4, 5]).unwrap();
+
+    assert_live_invariants(&c, &(0..6).collect::<Vec<_>>());
+    assert_npa(&c, &(0..6).collect::<Vec<_>>());
+}
+
+#[test]
+fn co_split_routes_candidates_across_all_new_children() {
+    let points = mat(
+        vec![0.0, 0.0, 4.8, 4.8, 10.0, 10.0, 20.0, 20.0, 0.0, 5.2],
+        10,
+        1,
+    );
+    let initial = mat(vec![0.0, 10.0], 2, 1);
+    let mut p = params(10, 4);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.reassign_neighbors = 8;
+    p.centroid_capacity = 32;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..8).collect::<Vec<_>>()).unwrap();
+
+    c.insert_batch(&[8, 9]).unwrap();
+
+    assert_live_invariants(&c, &(0..10).collect::<Vec<_>>());
+    assert_npa(&c, &(0..10).collect::<Vec<_>>());
+}
+
+#[test]
+fn merge_scatter_omits_points_deleted_in_the_same_batch() {
+    let points = mat((0..15).map(|x| x as f32).collect(), 15, 1);
+    let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
+    let mut p = merge_params(8, 6, 3);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.centroid_capacity = 16;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 0..3 {
+        c.partition.attach_new(pid, 0);
+    }
+    for pid in 3..9 {
+        c.partition.attach_new(pid, 1);
+    }
+    for pid in 9..15 {
+        c.partition.attach_new(pid, 2);
+    }
+
+    c.delete_batch(&[0, 3, 4]).unwrap();
+
+    assert_eq!(c.telemetry().total_merges, 1);
+    assert_eq!(c.num_clusters(), 2);
+}
+
+#[test]
+fn local_merges_retire_all_admitted_victims_even_when_survivors_are_full() {
+    let points = mat(vec![0.0, 0.1, 1.0, 1.1, 100.0, 100.1, 100.2, 100.3], 8, 1);
+    let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
+    let mut p = merge_params(8, 4, 2);
+    p.max_clusters = None;
+    p.routing = OnlineCentroidRouting::Exact;
+    p.centroid_capacity = 16;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 0..2 {
+        c.partition.attach_new(pid, 0);
+    }
+    for pid in 2..4 {
+        c.partition.attach_new(pid, 1);
+    }
+    for pid in 4..8 {
+        c.partition.attach_new(pid, 2);
+    }
+
+    c.delete_batch(&[0, 2]).unwrap();
+
+    assert_eq!(c.telemetry().total_merges, 2);
+    assert_eq!(c.num_clusters(), 1);
+    assert_live_invariants(&c, &[1, 3, 4, 5, 6, 7]);
+    assert_eq!(c.cluster_sizes(), vec![6]);
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert!(!c.is_poisoned());
+}
+
+/// A successful local merge leaves cluster 1 overfull while cluster 2 has room.
+fn merged_overflow(capacity: usize) -> OnlineClusterer {
+    let points = mat(
+        vec![
+            0.0, 0.1, 1.0, 1.1, 1.2, 1.3, 100.0, 100.1, 1.4, 100.2, 100.3, 100.4,
+        ],
+        12,
+        1,
+    );
+    let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
+    let mut p = merge_params(8, 4, 2);
+    p.max_clusters = None;
+    p.routing = OnlineCentroidRouting::Exact;
+    p.centroid_capacity = capacity;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..7).collect::<Vec<_>>()).unwrap();
+
+    let result = c.delete_batch(&[0]);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    assert_eq!(c.partition.list_len(1), 5);
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert_eq!(c.telemetry().total_merges, 1);
+    assert_live_invariants(&c, &(1..7).collect::<Vec<_>>());
+    c
+}
+
+#[test]
+fn local_merge_overflow_succeeds_without_centroid_id_budget() {
+    let c = merged_overflow(3);
+    assert_eq!(c.centroids.alloc_budget(), 0);
+    assert_eq!(c.num_clusters(), 2);
+}
+
+#[test]
+fn unrelated_insert_leaves_deferred_merge_overflow_usable() {
+    let mut c = merged_overflow(3);
+
+    let result = c.insert_batch(&[7]);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    assert_eq!(c.partition.assignment(7), 2);
+    assert_eq!(c.partition.list_len(1), 5);
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert_live_invariants(&c, &(1..8).collect::<Vec<_>>());
+    assert!(c.searcher().is_ok());
+}
+
+#[test]
+fn insert_into_deferred_merge_overflow_runs_lire_split_cascade() {
+    let mut c = merged_overflow(32);
+
+    let result = c.insert_batch(&[8]);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    assert!(c.telemetry().total_splits > 0);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 4));
+    assert_live_invariants(&c, &[1, 2, 3, 4, 5, 6, 8]);
+}
+
+#[test]
+fn any_started_insert_cascade_also_repairs_unrelated_merge_overflow() {
+    let mut c = merged_overflow(64);
+
+    // This insert initially overflows cluster 2, not the deferred cluster 1.
+    let result = c.insert_batch(&[7, 9, 10, 11]);
+    assert!(result.is_ok());
+    assert!(!c.is_poisoned());
+    assert!(c.telemetry().total_splits >= 2);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 4));
+    assert_live_invariants(&c, &[1, 2, 3, 4, 5, 6, 7, 9, 10, 11]);
+}
+
+#[test]
+fn insert_into_deferred_merge_overflow_still_reports_exhausted_budget() {
+    let mut c = merged_overflow(3);
+
+    let result = c.insert_batch(&[8]);
+    assert!(result.is_err());
+    assert!(c.is_poisoned());
+    assert_eq!(c.telemetry().total_splits, 0);
+    assert_live_invariants(&c, &[1, 2, 3, 4, 5, 6, 8]);
+    assert!(c.searcher().is_err());
+}
+
+#[test]
+fn failed_insert_does_not_restore_a_previously_merged_then_deleted_point() {
+    let mut c = merged_overflow(3);
+    assert!(c.scratch.points.is_empty());
+
+    // Point 1 was scattered by the successful merge, then explicitly deleted.
+    // The next insert cannot split because the centroid id budget is exhausted.
+    c.delete_batch(&[1]).unwrap();
+    assert_eq!(c.partition.assignment(1), UNASSIGNED);
+    assert_eq!(c.telemetry().total_merges, 1);
+
+    let result = c.insert_batch(&[8]);
+    assert!(result.is_err());
+    assert!(c.is_poisoned());
+    assert_eq!(c.partition.assignment(1), UNASSIGNED);
+    assert_live_invariants(&c, &[2, 3, 4, 5, 6, 8]);
+}
+
+#[test]
+fn id_budget_exhaustion_is_reported_instead_of_leaving_overflow() {
+    let points = mat((0..6).map(|x| x as f32).collect(), 6, 1);
+    let initial = mat(vec![0.0], 1, 1);
+    let mut p = params(10, 2);
+    p.max_clusters = None;
+    p.routing = OnlineCentroidRouting::Exact;
+    p.centroid_capacity = 1;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    assert!(c.insert_batch(&(0..6).collect::<Vec<_>>()).is_err());
+    assert!(c.is_poisoned());
 }

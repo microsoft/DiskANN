@@ -378,4 +378,32 @@ impl IvfPartition {
             });
         }
     }
+
+    /// Move selected currently assigned points to new centroids in one pass per
+    /// touched source list. Entries whose target equals their current centroid
+    /// are ignored.
+    pub(super) fn relocate(&mut self, destinations: &[(u32, u32)]) -> usize {
+        let mut moves = Vec::with_capacity(destinations.len());
+        let mut touched = Vec::new();
+        for &(pid, target) in destinations {
+            let source = self.assignment(pid);
+            if source == target {
+                continue;
+            }
+            debug_assert_ne!(source, UNASSIGNED);
+            moves.push((pid, source, target));
+            touched.push(source);
+            self.assignments[pid as usize] = UNASSIGNED;
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        for source in touched {
+            let assignments = &self.assignments;
+            self.lists[source as usize].retain(|&pid| assignments[pid as usize] != UNASSIGNED);
+        }
+        for &(pid, _, target) in &moves {
+            self.attach_new(pid, target);
+        }
+        moves.len()
+    }
 }

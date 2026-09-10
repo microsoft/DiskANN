@@ -195,18 +195,23 @@ impl<'a> OnlineSearcher<'a> {
                 params.nlist
             )));
         }
-        // Comparing against a distance rather than an id set counts a tie as
-        // correct instead of penalizing whichever tie-break the graph took.
+        // Compare ids first, then admit alternative tie-breaks with a tolerance.
+        // The exact scan and scalar distance use different accumulation paths,
+        // so a strict cutoff can classify an exact boundary result as a miss.
         let cutoff = self.cdist[params.nlist - 1];
+        let tolerance = 32.0 * f32::EPSILON * cutoff.abs().max(1.0);
+        let exact_ids: std::collections::HashSet<u32> =
+            self.cids[..params.nlist].iter().copied().collect();
 
         let found = self.select_centroids(query, params)?;
         let matched = self.cids[..found]
             .iter()
             .filter(|&&cid| {
-                clusterer
-                    .centroids
-                    .get(cid)
-                    .is_some_and(|c| sq_l2(query, c) <= cutoff)
+                exact_ids.contains(&cid)
+                    || clusterer
+                        .centroids
+                        .get(cid)
+                        .is_some_and(|centroid| sq_l2(query, centroid) <= cutoff + tolerance)
             })
             .count();
 

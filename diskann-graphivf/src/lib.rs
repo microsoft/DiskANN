@@ -20,8 +20,9 @@
 //!   obtain a fixed number of centroids, build a graph over them, assign every
 //!   corpus point to its nearest centroid, then stream the lists to disk.
 //! * **Online** ([`OnlineClusterer`]): accept insert and delete batches, route
-//!   inserts through the centroid graph, split overfull clusters with local
-//!   reassignment, and dissolve underfull clusters onto nearby survivors. The
+//!   inserts through the centroid graph and maintain overfull/underfull postings
+//!   with SPFresh-style LIRE splits, NPA-filtered split reassignment, and
+//!   local-scatter merges. The
 //!   live cluster count emerges from the stream. See `ONLINE.md` for the
 //!   algorithm.
 //!

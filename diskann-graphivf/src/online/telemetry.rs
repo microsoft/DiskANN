@@ -21,16 +21,26 @@ pub struct SplitEvent {
     pub cluster_size: usize,
     /// Live neighbor clusters drawn into reassignment, excluding the children.
     pub num_neighbors: usize,
+    /// Points in the parent posting plus the nearby postings examined by LIRE.
+    pub region_points: usize,
+    /// Deduplicated points surviving LIRE's two necessary-condition filters and
+    /// sent to the final global NPA check, attributed once within the batch.
+    pub npa_candidates: usize,
+    /// Total completed inserts plus deletes at the update-batch boundary that
+    /// triggered this split. It includes earlier deletes as well as inserts and
+    /// identifies the insert-driven maintenance batch.
+    pub operation_index: u64,
     /// Points that actually changed cluster during reassignment.
     pub num_reassigned: usize,
     /// Live centroid count immediately after the batch's splits.
     pub live_after: usize,
-    /// Distinct clusters the batch's reassignment passes rewrote: every split's
-    /// two children plus its surviving neighbors, deduplicated across the
-    /// batch. Retired parents are excluded. Shared by all events from one
+    /// Distinct live postings rewritten across every cascade round in the
+    /// insert batch: born children plus live sources and destinations of actual
+    /// relocations. Retired parents are excluded. Shared by all events from one
     /// batch, so summing it over a batch's rows over-counts.
     pub clusters_updated: usize,
-    /// Wall-clock of this parent's 2-means, microseconds.
+    /// Wall-clock of this parent's balanced fit and condition filtering,
+    /// microseconds.
     pub two_means_us: u64,
     /// Wall-clock of this parent's reassignment pass, microseconds.
     pub reassign_us: u64,
@@ -40,20 +50,20 @@ pub struct SplitEvent {
     pub total_us: u64,
 }
 
-/// One cluster-dissolve event recorded during a delete.
+/// One local-scatter merge event recorded during a delete.
 ///
-/// A merge retires one underfull centroid and scatters only that centroid's
-/// remaining members onto survivors. A batched delete emits one event per
+/// A merge retires one underfull centroid and locally reassigns only that
+/// centroid's remaining members. A batched delete emits one event per
 /// retirement; all events from the batch share `op_index` and `live_after`.
 #[derive(Debug, Clone, Copy)]
 pub struct MergeEvent {
     /// Total operations (inserts plus deletes) completed when this merge fired.
     pub op_index: u64,
-    /// The underfull centroid that was dissolved and retired.
+    /// The underfull centroid that was merged and retired.
     pub victim: u32,
-    /// Points the victim still held when it was dissolved.
+    /// Points the victim still held when it was merged.
     pub victim_size: usize,
-    /// Surviving clusters offered as landing sites.
+    /// Number of surviving centroid candidates used for local reassignment.
     pub num_neighbors: usize,
     /// Points that actually changed cluster.
     pub num_reassigned: usize,
@@ -112,12 +122,12 @@ impl BuildTelemetry {
         let mut out = String::with_capacity(64 + self.splits.len() * 48);
         out.push_str(
             "insert_index,cluster,cluster_size,num_neighbors,num_reassigned,\
-             live_after,two_means_us,reassign_us,total_us,clusters_updated\n",
+             live_after,two_means_us,reassign_us,total_us,clusters_updated,region_points,npa_candidates,operation_index\n",
         );
         for event in &self.splits {
             let _ = writeln!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 event.insert_index,
                 event.cluster,
                 event.cluster_size,
@@ -128,6 +138,9 @@ impl BuildTelemetry {
                 event.reassign_us,
                 event.total_us,
                 event.clusters_updated,
+                event.region_points,
+                event.npa_candidates,
+                event.operation_index,
             );
         }
         std::fs::write(path, out)
