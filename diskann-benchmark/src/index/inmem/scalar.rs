@@ -100,7 +100,7 @@ mod imp {
     /// types.
     ///
     /// The kinds of quantized and full-precision searches are kept in-sync.
-    pub(crate) struct ScalarQuantized<const NBITS: usize, T>
+    pub(super) struct ScalarQuantized<const NBITS: usize, T>
     where
         T: VectorRepr,
     {
@@ -114,14 +114,14 @@ mod imp {
     where
         T: VectorRepr,
     {
-        pub(crate) fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self {
                 quant_search: plugins::Plugins::new(),
                 full_search: plugins::Plugins::new(),
             }
         }
 
-        pub(crate) fn search<P>(mut self, plugin: P) -> Self
+        pub(super) fn search<P>(mut self, plugin: P) -> Self
         where
             P: plugins::Plugin<SQProvider<NBITS, T>, SearchPhase, Strategy<common::Quantized>>
                 + plugins::Plugin<SQProvider<NBITS, T>, SearchPhase, Strategy<common::FullPrecision>>
@@ -143,16 +143,16 @@ mod imp {
                 fn try_match(&self, input: &IndexSQOperation, context: &MatchContext) -> Score {
                     let mut score = context.success(0);
 
-                    match input.index_operation.source {
+                    match input.index_operation().source() {
                         IndexSource::Load(_) => {}
-                        IndexSource::Build(ref build) => {
+                        IndexSource::Build(build) => {
                             if build.multi_insert().is_some() {
                                 score.fail(1, &"Scalar Quantization does not support multi-insert");
                             }
                         }
                     }
 
-                    let data_type = *input.index_operation.source.data_type();
+                    let data_type = *input.index_operation().source().data_type();
                     if !<$T>::is_match(data_type) {
                         score.fail(
                             1,
@@ -164,24 +164,24 @@ mod imp {
                         )
                     }
 
-                    if !self.quant_search.is_match(&input.index_operation.search_phase) {
+                    if !self.quant_search.is_match(input.index_operation().search_phase()) {
                         score.fail(
                             1,
                             &format_args!(
                                 "Unsupported search phase: \"{}\" - expected one of {}",
-                                input.index_operation.search_phase.kind(),
+                                input.index_operation().search_phase().kind(),
                                 self.quant_search.format_kinds(),
                             )
                         )
                     }
 
-                    if input.num_bits != $N {
+                    if input.num_bits() != $N {
                         score.fail(
-                            10 + ($N as usize).abs_diff(input.num_bits) as u32,
+                            10 + ($N as usize).abs_diff(input.num_bits()) as u32,
                             &format_args!(
                                 "Expected {} bits, instead got {}",
                                 $N,
-                                input.num_bits,
+                                input.num_bits(),
                             )
                         )
                     }
@@ -216,14 +216,14 @@ mod imp {
                     mut output: &mut dyn Output,
                 ) -> anyhow::Result<QuantBuildResult> {
                     assert_eq!(
-                        input.num_bits,
+                        input.num_bits(),
                         $N,
                         "INTERNAL ERROR: this should not have passed the match check"
                     );
 
                     writeln!(output, "{}", input)?;
 
-                    let (index, build_stats, quant_training_time) = match &input.index_operation.source {
+                    let (index, build_stats, quant_training_time) = match input.index_operation().source() {
                         IndexSource::Load(load) => {
                             let index_config: &IndexConfiguration = &load.to_config()?;
 
@@ -240,7 +240,7 @@ mod imp {
 
                         let start = std::time::Instant::now();
                         let quantizer = diskann_quantization::scalar::train::ScalarQuantizationParameters::new(
-                            diskann_quantization::num::Positive::new(input.standard_deviations).context(
+                            diskann_quantization::num::Positive::new(input.standard_deviations()).context(
                                 "please file a bug report, this should not have made it past the\
                                     front end",
                             )?,
@@ -282,16 +282,16 @@ mod imp {
                     // Save construction stats before running queries.
                     checkpoint.checkpoint(&build_stats)?;
 
-                    let search = if input.use_fp_for_search {
+                    let search = if input.use_fp_for_search() {
                         self.full_search.run(
                             index,
-                            &input.index_operation.search_phase,
+                            input.index_operation().search_phase(),
                             &Strategy::new(common::FullPrecision),
                         )?
                     } else {
                         self.quant_search.run(
                             index,
-                            &input.index_operation.search_phase,
+                            input.index_operation().search_phase(),
                             &Strategy::new(common::Quantized),
                         )?
                     };

@@ -269,9 +269,9 @@ First, set up the runbook and ground truth for the desired workload. Refer to th
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/graph-index-dynamic.json --output-file dynamic-output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/graph-index-stream.json --output-file stream-output.json
 ```
-Note in the example json that the benchmark is registered under `graph-index-dynamic-run`,
+Note in the example json that the benchmark is registered under `graph-index-stream-run`,
 instead of `graph-index-build` etc..
 
 A streaming run happens in several phases.

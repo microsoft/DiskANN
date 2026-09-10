@@ -4,7 +4,7 @@
   ],
   "jobs": [
     {
-      "type": "graph-index-build-bftree-full-precision",
+      "type": "graph-index-bftree",
       "content": {
         "build": {
           "data_type": "float32",
@@ -36,6 +36,9 @@
               "recall_k": 10
             }
           ]
+        },
+        "quantization": {
+          "kind": "none"
         },
         "vector_store_config": {
           "cb_size_byte": 67108864,
