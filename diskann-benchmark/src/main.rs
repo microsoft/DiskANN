@@ -240,6 +240,114 @@ mod tests {
         }
     }
 
+    /// Redirect disk-index build artifacts into a temporary directory.
+    ///
+    /// Only existing `save_path` fields are replaced. Jobs without a `save_path`
+    /// are left unchanged.
+    fn redirect_save_paths(raw: &mut serde_json::Value, directory: &std::path::Path) {
+        let Some(jobs) = raw.get_mut("jobs").and_then(Value::as_array_mut) else {
+            return;
+        };
+
+        for (index, job) in jobs.iter_mut().enumerate() {
+            let Some(save_path) = job
+                .get_mut("content")
+                .and_then(|content| content.get_mut("source"))
+                .and_then(Value::as_object_mut)
+                .and_then(|source| source.get_mut("save_path"))
+            else {
+                continue;
+            };
+
+            *save_path = Value::String(
+                directory
+                    .join(format!("disk_index_job_{index}"))
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+
+    /// Unit-test only the in-memory JSON rewrite; no index is built or loaded.
+    #[test]
+    fn redirect_save_paths_updates_builds_without_modifying_loads() {
+        let mut raw = serde_json::json!({
+            "jobs": [
+                {
+                    "content": {
+                        "source": {
+                            "disk-index-source": "Build",
+                            "save_path": "build-only-index"
+                        }
+                    }
+                },
+                {
+                    "content": {
+                        "source": {
+                            "disk-index-source": "Load",
+                            "load_path": "existing-index"
+                        }
+                    }
+                },
+                {
+                    "content": {
+                        "source": {
+                            "disk-index-source": "Build",
+                            "save_path": "unrelated-build"
+                        }
+                    }
+                },
+                {
+                    "content": {
+                        "source": {
+                            "disk-index-source": "Load",
+                            "load_path": "unrelated-load"
+                        }
+                    }
+                }
+            ]
+        });
+        let directory = std::path::Path::new("temporary-output");
+
+        redirect_save_paths(&mut raw, directory);
+
+        assert_eq!(
+            raw["jobs"][0]["content"]["source"]["save_path"],
+            directory
+                .join("disk_index_job_0")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(
+            raw["jobs"][1]["content"]["source"]["load_path"],
+            "existing-index"
+        );
+        assert_eq!(
+            raw["jobs"][2]["content"]["source"]["save_path"],
+            directory
+                .join("disk_index_job_2")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(
+            raw["jobs"][3]["content"]["source"]["load_path"],
+            "unrelated-load"
+        );
+        for index in [1, 3] {
+            assert!(raw["jobs"][index]["content"]["source"]
+                .get("save_path")
+                .is_none());
+        }
+    }
+
+    /// Unit-test that `redirect_save_paths` safely ignores malformed JSON input.
+    #[test]
+    fn redirect_save_paths_ignores_malformed_input() {
+        for mut raw in [serde_json::json!(null), serde_json::json!({ "jobs": null })] {
+            redirect_save_paths(&mut raw, std::path::Path::new("temporary-output"));
+        }
+    }
+
     // Retrieve the number of jobs in the raw input JSON.
     //
     // The format is
@@ -266,13 +374,18 @@ mod tests {
         }
     }
 
-    fn run_integration_test(mut raw: serde_json::Value) {
+    fn run_integration_test(raw: serde_json::Value) {
+        run_integration_test_with_results(raw);
+    }
+
+    fn run_integration_test_with_results(mut raw: serde_json::Value) -> Vec<Value> {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
         // let mut raw = serde_json::from_str(json_string).unwrap();
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
+        redirect_save_paths(&mut raw, tempdir.path());
 
         let input_path = tempdir.path().join("input.json");
         save_to_file(&input_path, &raw);
@@ -301,6 +414,7 @@ mod tests {
 
         let results: Vec<Value> = load_from_file(&output_path);
         assert_eq!(results.len(), num_jobs(&raw));
+        results
     }
 
     ////////////////////////////////
@@ -719,34 +833,20 @@ mod tests {
     }
 
     /// Filtered disk search end-to-end: drives the disk-index backend through
-    /// `disk-index-filter.json`
+    /// `disk-index-filter.json`.
     #[test]
     #[cfg(feature = "disk-index")]
     fn disk_index_filter_integration() {
-        let mut raw = value_from_file(&example_directory().join("disk-index-filter.json"));
-        prefix_search_directories(&mut raw, &root_directory());
+        let raw = value_from_file(&example_directory().join("disk-index-filter.json"));
+        let results = run_integration_test_with_results(raw);
 
-        let tempdir = tempfile::tempdir().unwrap();
-        let input_path = tempdir.path().join("disk-index-filter.json");
-        save_to_file(&input_path, &raw);
-        let output_path = tempdir.path().join("output.json");
-
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-        let result = cli.run(&mut output);
-        let output_str = String::from_utf8(output.into_inner()).unwrap();
-        println!("output = {}", output_str);
-        result.expect("disk-index-filter run failed");
-
-        assert!(output_path.exists());
-        let results: Vec<Value> = load_from_file(&output_path);
-        assert_eq!(results.len(), num_jobs(&raw));
+        let strategy = &results[0]["results"]["search"]["search_strategy"];
+        assert_eq!(strategy["mode"], "graph-inline-filter");
+        assert_eq!(strategy["adaptive_l"]["sample_count"], 10);
+        assert_eq!(
+            results[1]["results"]["search"]["search_strategy"]["mode"],
+            "flat"
+        );
     }
 
     #[test]
