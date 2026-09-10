@@ -2401,7 +2401,7 @@ impl
             let ix = unsafe { x.get_unchecked(i) } as u32;
             // SAFETY: `i` is guaranteed to be less than `y.len()`.
             let iy = unsafe { y.get_unchecked(i) } as u32;
-            s += (ix * iy) as u32;
+            s += ix * iy;
         }
 
         Ok(MV::new(s))
@@ -2476,6 +2476,7 @@ impl
                 // SAFETY: `4 * (i + 8) <= 4 * y_bytes == x.bytes()` guarantees the 16-byte
                 // loads at `4 * i` and `4 * i + 16` are in bounds.
                 let x_vec1 = unsafe { u8s_16::load_simd(arch, px_u8.add(4 * i)) };
+                // SAFETY: same bound as above; this is the second 16-byte chunk in the same valid 32-byte block.
                 let x_vec2 = unsafe { u8s_16::load_simd(arch, px_u8.add(4 * i + 16)) };
 
                 // compute dot product for lower 4 bits, result is stored as 32x4
@@ -2503,6 +2504,7 @@ impl
                 let x_first = remaining_x_bytes.min(16);
                 let x_second = remaining_x_bytes.saturating_sub(16);
 
+                // SAFETY: `x_first <= remaining_x_bytes` and `px_u8.add(4 * i)` points at the tail start.
                 let x_vec1 = unsafe { u8s_16::load_simd_first(arch, px_u8.add(i * 4), x_first) };
                 s0 = s0.dot_simd(x_vec1, y_vec1);
 
@@ -2645,8 +2647,11 @@ impl
                 // SAFETY: `8 * (i + 8) <= 8 * y_bytes == x.bytes()` guarantees four 16-byte
                 // loads at offsets `8 * i + {0,16,32,48}` are in bounds.
                 let x_vec1 = unsafe { u8s_16::load_simd(arch, px_u8.add(8 * i)) };
+                // SAFETY: same bound as above; this is the second 16-byte chunk in the same valid 64-byte block.
                 let x_vec2 = unsafe { u8s_16::load_simd(arch, px_u8.add(8 * i + 16)) };
+                // SAFETY: same bound as above; this is the third 16-byte chunk in the same valid 64-byte block.
                 let x_vec3 = unsafe { u8s_16::load_simd(arch, px_u8.add(8 * i + 32)) };
+                // SAFETY: same bound as above; this is the fourth 16-byte chunk in the same valid 64-byte block.
                 let x_vec4 = unsafe { u8s_16::load_simd(arch, px_u8.add(8 * i + 48)) };
 
                 // compute dot product for first 16 logical elements
@@ -2682,6 +2687,7 @@ impl
                 let x_third = remaining_x_bytes.saturating_sub(32).min(16);
                 let x_fourth = remaining_x_bytes.saturating_sub(48).min(16);
 
+                // SAFETY: `x_first <= remaining_x_bytes` and `px_u8.add(8 * i)` points at the tail start.
                 let x_vec1 = unsafe { u8s_16::load_simd_first(arch, px_u8.add(i * 8), x_first) };
                 s0 = s0.dot_simd(x_vec1, y_vec1);
 
