@@ -554,11 +554,20 @@ where
     {
         async move {
             let mut output = Vec::new();
+
+            // Estimate the worst-case upper-bound for the capacity of the `PruneAccessor`'s
+            // working set as the combination of the batch plux `max_occlusion_size`
+            // candidates.
+            let working_set_capacity = self
+                .max_occlusion_size()
+                .saturating_add(self.config.intra_batch_candidates().get(batch.len()))
+                .saturating_add(1);
+
             let mut accessor = match strategy.seeded_prune_accessor(
                 self.provider(),
                 context,
                 seed,
-                self.max_occlusion_size(),
+                working_set_capacity,
             ) {
                 Ok(accessor) => accessor,
                 Err(err) => return Err((output, err)),
@@ -2487,16 +2496,16 @@ where
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
     {
         async move {
+            println!("internal id = {:?}, record = {:?}", internal_id, record);
+
             let (view, computer) = accessor
-                .fill(
-                    internal::chain(
-                        std::iter::once(internal_id),
-                        internal::chain(extras.clone(), record.ids()),
-                    )
-                    .take(self.max_occlusion_size()),
-                )
+                .fill(internal::chain(
+                    std::iter::once(internal_id),
+                    internal::chain(extras.clone(), record.ids()),
+                ))
                 .await?;
 
+            let mut extras_fetched = 0;
             if extras.len() != 0 {
                 let this_vector = view
                     .get(internal_id)
@@ -2504,6 +2513,7 @@ where
 
                 for id in extras {
                     if let Some(element) = view.get(id) {
+                        extras_fetched += 1;
                         record.push(Neighbor::new(
                             id,
                             computer
@@ -2513,11 +2523,15 @@ where
                 }
             }
 
+            println!("extras fetched = {}", extras_fetched);
+
             let mut context = prune::Context {
                 pool: SortedNeighbors::new(&mut record.visited, self.max_occlusion_size()),
                 states: &mut scratch.states,
                 neighbors: &mut scratch.neighbors,
             };
+
+            println!("pool = {:?}", context.pool);
 
             self.occlude_list::<A::View<'_>, _, _>(
                 &computer,

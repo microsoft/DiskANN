@@ -1,6 +1,6 @@
 {
   "file": "diskann/src/graph/test/cases/grid_insert.rs",
-  "test": "graph/test/cases/grid_insert/insert_3_5_single/ibc_none",
+  "test": "graph/test/cases/grid_insert/insert_3_5_single/ibc_none_750",
   "payload": {
     "context_metrics": {
       "clones": 0,

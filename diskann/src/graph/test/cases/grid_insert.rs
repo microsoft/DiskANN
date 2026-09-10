@@ -66,13 +66,25 @@ fn empty_provider(grid: Grid, size: usize) -> test_provider::Provider {
     test_provider::Provider::new(config)
 }
 
+#[derive(Debug, Clone)]
+struct BuildIndex {
+    intra_batch_candidates: IntraBatchCandidates,
+    max_minibatch_par: usize,
+    max_occlusion_size: usize,
+}
+
 /// Build a [`DiskANNIndex`] around the given provider.
 fn build_index(
     provider: test_provider::Provider,
-    intra_batch_candidates: IntraBatchCandidates,
-    max_minibatch_par: usize,
+    params: BuildIndex,
 ) -> Arc<DiskANNIndex<test_provider::Provider>> {
     let provider_degree = provider.max_degree();
+
+    let BuildIndex {
+        intra_batch_candidates,
+        max_minibatch_par,
+        max_occlusion_size,
+    } = params;
 
     // We need to be a little careful with our `target_degree` handling. When the grid
     // dimension is 1, we set the `max_degree` equal to 2. Setting the `target_degree`
@@ -92,7 +104,8 @@ fn build_index(
         (Metric::L2).into(),
         |b| {
             b.intra_batch_candidates(intra_batch_candidates)
-                .max_minibatch_par(max_minibatch_par);
+                .max_minibatch_par(max_minibatch_par)
+                .max_occlusion_size(max_occlusion_size);
         },
     )
     .build()
@@ -309,6 +322,7 @@ fn baseline_name(
     size: usize,
     batchsize: Option<NonZeroUsize>,
     ibc: IntraBatchCandidates,
+    max_occlusion_size: usize,
 ) -> String {
     let batch_tag = match batchsize {
         None => "single".to_string(),
@@ -319,7 +333,14 @@ fn baseline_name(
         IntraBatchCandidates::Max(n) => format!("ibc_max_{}", n),
         IntraBatchCandidates::All => "ibc_all".to_string(),
     };
-    format!("insert_{}_{}_{}/{}", grid.dim(), size, batch_tag, ibc_tag)
+    format!(
+        "insert_{}_{}_{}/{}_{}",
+        grid.dim(),
+        size,
+        batch_tag,
+        ibc_tag,
+        max_occlusion_size
+    )
 }
 
 /// Parameters for a single test run.
@@ -331,6 +352,8 @@ struct TestParams {
     intra_batch_candidates: IntraBatchCandidates,
     /// Maximum parallelism for multi_insert. Use 1 for single insert, > 1 for batch.
     max_minibatch_par: usize,
+    /// The maximum occlusion size.
+    max_occlusion_size: usize,
 }
 
 /// Core test function: build an index, insert data, search, and compare against baseline.
@@ -343,21 +366,25 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
         batchsize,
         intra_batch_candidates,
         max_minibatch_par,
+        max_occlusion_size,
     } = params;
+
+    let build_index_params = BuildIndex {
+        intra_batch_candidates,
+        max_minibatch_par,
+        max_occlusion_size,
+    };
 
     let num_points = grid.num_points(size);
     let grid_data = grid.data(size);
-    let index = build_index(
-        empty_provider(grid, size),
-        intra_batch_candidates,
-        max_minibatch_par,
-    );
+    let index = build_index(empty_provider(grid, size), build_index_params.clone());
 
     // Build the index.
     let insert_context = run_build(&index, grid_data.as_view(), batchsize, false, &rt);
 
     let insert_metrics = index.provider().metrics();
     index.provider().is_consistent().unwrap();
+    index.provider().is_connected().unwrap();
 
     let graph_state = maybe_dump_graph(&index);
 
@@ -390,18 +417,20 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
         graph_state,
     };
 
-    let name = parent.push(baseline_name(grid, size, batchsize, intra_batch_candidates));
+    let name = parent.push(baseline_name(
+        grid,
+        size,
+        batchsize,
+        intra_batch_candidates,
+        max_occlusion_size,
+    ));
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
 
     // Now that we have checked the baseline - ensure that if we rebuild with
     // `working_set_reuse` enabled that the graph remains the same and the number of
     // `get_vector` calls decreases.
-    let reuse_index = build_index(
-        empty_provider(grid, size),
-        intra_batch_candidates,
-        max_minibatch_par,
-    );
+    let reuse_index = build_index(empty_provider(grid, size), build_index_params);
 
     // Build the index - enabling `working_set_reuse`.
     let _ = run_build(&reuse_index, grid_data.as_view(), batchsize, true, &rt);
@@ -433,11 +462,13 @@ fn _assert_thread_invariant(
     let rt_st = current_thread_runtime();
     let grid_data = grid.data(size);
 
-    let index_st = build_index(
-        empty_provider(grid, size),
+    let build_index_params = BuildIndex {
         intra_batch_candidates,
         max_minibatch_par,
-    );
+        max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
+    };
+
+    let index_st = build_index(empty_provider(grid, size), build_index_params.clone());
     run_build(
         &index_st,
         grid_data.as_view(),
@@ -453,11 +484,7 @@ fn _assert_thread_invariant(
         .build()
         .expect("multi-thread runtime should build");
 
-    let index_mt = build_index(
-        empty_provider(grid, size),
-        intra_batch_candidates,
-        max_minibatch_par,
-    );
+    let index_mt = build_index(empty_provider(grid, size), build_index_params);
     run_build(
         &index_mt,
         grid_data.as_view(),
@@ -490,6 +517,7 @@ fn single_1d_100() {
             batchsize: None,
             intra_batch_candidates: IntraBatchCandidates::None,
             max_minibatch_par: 1,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -504,6 +532,7 @@ fn single_3d_5() {
             batchsize: None,
             intra_batch_candidates: IntraBatchCandidates::None,
             max_minibatch_par: 1,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -518,6 +547,7 @@ fn single_4d_4() {
             batchsize: None,
             intra_batch_candidates: IntraBatchCandidates::None,
             max_minibatch_par: 1,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -541,6 +571,7 @@ fn batch_all_ibc_none_1d_100() {
             batchsize: Some(all_at_once(grid, size)),
             intra_batch_candidates: IntraBatchCandidates::None,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -556,6 +587,7 @@ fn batch_all_ibc_none_3d_5() {
             batchsize: Some(all_at_once(grid, size)),
             intra_batch_candidates: IntraBatchCandidates::None,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -571,6 +603,7 @@ fn batch_all_ibc_none_4d_4() {
             batchsize: Some(all_at_once(grid, size)),
             intra_batch_candidates: IntraBatchCandidates::None,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -590,6 +623,7 @@ fn batch_all_ibc_4_3d_5() {
             batchsize: Some(all_at_once(grid, size)),
             intra_batch_candidates: IntraBatchCandidates::new(4),
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -605,6 +639,7 @@ fn batch_all_ibc_4_4d_4() {
             batchsize: Some(all_at_once(grid, size)),
             intra_batch_candidates: IntraBatchCandidates::new(4),
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -624,6 +659,7 @@ fn batch_all_ibc_all_1d_100() {
             batchsize: Some(all_at_once(grid, size)),
             intra_batch_candidates: IntraBatchCandidates::All,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -639,6 +675,7 @@ fn batch_all_ibc_all_3d_5() {
             batchsize: Some(all_at_once(grid, size)),
             intra_batch_candidates: IntraBatchCandidates::All,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -654,6 +691,30 @@ fn batch_all_ibc_all_4d_4() {
             batchsize: Some(all_at_once(grid, size)),
             intra_batch_candidates: IntraBatchCandidates::All,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
+        },
+        root().path(),
+    );
+}
+
+/// This tests the specific scenario where:
+///
+/// * Intra-batch candidates is set to "All".
+/// * The batch size exceeds the max-occlusion size.
+///
+/// We want to ensure that the intra-batch candidates don't exclude the results from
+/// search.
+#[test]
+fn batch_all_ibc_small_occlusion_size_handled() {
+    let (grid, size) = (Grid::Four, 4);
+    _grid_build_and_search(
+        TestParams {
+            grid,
+            size,
+            batchsize: Some(all_at_once(grid, size)),
+            intra_batch_candidates: IntraBatchCandidates::All,
+            max_minibatch_par: 2,
+            max_occlusion_size: 20,
         },
         root().path(),
     );
@@ -672,6 +733,7 @@ fn batch_25_ibc_none_3d_5() {
             batchsize: NonZeroUsize::new(25),
             intra_batch_candidates: IntraBatchCandidates::None,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -686,6 +748,7 @@ fn batch_25_ibc_none_4d_4() {
             batchsize: NonZeroUsize::new(25),
             intra_batch_candidates: IntraBatchCandidates::None,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -704,6 +767,7 @@ fn batch_25_ibc_all_3d_5() {
             batchsize: NonZeroUsize::new(25),
             intra_batch_candidates: IntraBatchCandidates::All,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );
@@ -718,6 +782,7 @@ fn batch_25_ibc_all_4d_4() {
             batchsize: NonZeroUsize::new(25),
             intra_batch_candidates: IntraBatchCandidates::All,
             max_minibatch_par: 2,
+            max_occlusion_size: graph::config::defaults::MAX_OCCLUSION_SIZE.get().into(),
         },
         root().path(),
     );

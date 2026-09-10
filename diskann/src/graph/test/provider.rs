@@ -388,6 +388,67 @@ impl Provider {
         Ok(())
     }
 
+    /// Return whether or not all points are reachable from the start points.
+    pub fn is_connected(&self) -> ANNResult<()> {
+        let mut all: HashMap<u32, bool> = self
+            .terms
+            .iter()
+            .map(|ref_multi| (*ref_multi.key(), false))
+            .collect();
+
+        let mut mark_visited = |node: u32| -> ANNResult<bool> {
+            if let Some(seen) = all.get_mut(&node) {
+                if *seen {
+                    Ok(false)
+                } else {
+                    *seen = true;
+                    Ok(true)
+                }
+            } else {
+                Err(message!(
+                    "node {node} is reachable in the graph but is not in the provider"
+                ))
+            }
+        };
+
+        let mut dfs = Vec::new();
+        for node in self.start_point_ids() {
+            if mark_visited(node)? {
+                dfs.push(node)
+            }
+        }
+
+        while let Some(node) = dfs.pop() {
+            match self.terms.get(&node) {
+                Some(term) => {
+                    for neighbor in term.neighbors.iter() {
+                        if mark_visited(*neighbor)? {
+                            dfs.push(*neighbor);
+                        }
+                    }
+                }
+                None => {
+                    return Err(message!(
+                        "node {node} is reachable in the graph but is not in the provider"
+                    ));
+                }
+            }
+        }
+
+        let unvisited: Vec<_> = all
+            .into_iter()
+            .filter_map(|(id, seen)| (!seen).then_some(id))
+            .collect();
+        if unvisited.is_empty() {
+            Ok(())
+        } else {
+            Err(message!(
+                "nodes ids {:?} are unreachable from the start points!",
+                unvisited
+            ))
+        }
+    }
+
     /// Return `true` if `id` is present in the provider but marked as deleted.
     ///
     /// If `id` is present but not marked deleted, returns `false`.
