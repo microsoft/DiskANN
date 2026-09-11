@@ -127,7 +127,7 @@ type USlice<'a, const N: usize, Perm = Dense> = BitSlice<'a, N, Unsigned, Perm>;
 ///
 /// * [`diskann_wide::arch::x86_64::V3`] -> [`diskann_wide::arch::Scalar`]
 /// * [`diskann_wide::arch::x86_64::V4`] -> [`diskann_wide::arch::x86_64::V3`]
-/// * [`diskann_wide::arch::aarch64::Neon`] -> [`diskann_wide::arch::Scalar`]
+/// * `diskann_wide::arch::aarch64::Neon` -> [`diskann_wide::arch::Scalar`]
 macro_rules! retarget {
     ($arch:path, $op:ty, ($N:literal, $M:literal)) => {
         impl Target2<

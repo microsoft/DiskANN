@@ -5,7 +5,7 @@
 //!
 //! Reuses the f32 micro-kernel family with tile-level f16→f32 conversion
 //! via [`ConvertTo`](super::layouts::ConvertTo). No f16-specific micro-kernel
-//! code is needed — the [`F32Kernel`](super::f32::F32Kernel) does all the
+//! code is needed — the [`F32Kernel`] does all the
 //! SIMD work after conversion.
 //!
 //! Conversion from f16 to f32 is performed at tile granularity via

@@ -6,7 +6,7 @@
 use crate::attribute::AttributeType;
 use std::fmt;
 
-/// Why have a [`ASTIdExpr`] when we already have an [`ASTExpr`] enum? Turns
+/// Why have an [`ASTIdExpr`] when we already have a [`crate::ASTExpr`] enum? Turns
 /// out that for a subset of filter queries that do not have relational
 /// operators, we can get some performance gains if we encode attributes
 /// as integers which converts the cost of a field name + value comparison

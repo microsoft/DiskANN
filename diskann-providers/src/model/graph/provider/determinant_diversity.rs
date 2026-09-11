@@ -22,7 +22,7 @@
 //! scaled rows x_i = alpha_i * v_i, we approximately maximize
 //! det(X_S * X_S^T + eta * I) over subsets S of size k via greedy pivoted
 //! Gram-Schmidt: at each step we pick the row with the largest residual norm
-//! and deflate the rest against it. See [`greedy_orthogonal_select`] for the
+//! and deflate the rest against it. See `greedy_orthogonal_select` for the
 //! full derivation.
 //!
 //! # Parameters
@@ -37,7 +37,7 @@
 //!
 //! # Variants
 //!
-//! The public entry point is [`determinant_diversity`].
+//! The public entry point is [`determinant_diversity()`].
 //! It applies either the unregularized (`eta == 0`) or ridge-regularized (`eta > 0`)
 //! formulation internally.
 //!

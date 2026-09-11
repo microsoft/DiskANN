@@ -345,7 +345,7 @@ pub trait GetFullPrecision {
     fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<Self::Repr>;
 }
 
-/// A [`SearchPostProcess`]or that:
+/// A [`glue::SearchPostProcess`] implementation that:
 ///
 /// 1. Filters out deleted ids from being returned.
 /// 2. Reranks a candidate stream using full-precision distances.

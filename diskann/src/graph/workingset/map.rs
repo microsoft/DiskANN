@@ -753,7 +753,7 @@ where
     }
 }
 
-/// Zero-copy seed overlay backed by a [`glue::Batch`](glue::Batch).
+/// Zero-copy seed overlay backed by a [`glue::Batch`].
 ///
 /// Stores the batch behind an `Arc` and an index map from keys to batch positions.
 /// Lookups convert batch elements to `P::Element` via `Into`, which is by-value and

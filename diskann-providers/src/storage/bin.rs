@@ -119,7 +119,7 @@ pub(crate) trait GetAdjacencyList {
 //////////////////
 
 /// Load data from a `.bin` formatted file at path `path` and use that data to initialize
-/// a `SetData` compatible object `S.
+/// a `SetData` compatible object `S`.
 ///
 /// The number of points and dimension of each vector will be determined from the file
 /// metadata and passed to the closure `create` as `(num_points, dim)`.
@@ -221,7 +221,7 @@ where
 ///////////////////
 
 /// Load data from a canonical graph formatted file at path `path` and use that data to
-/// initialize a `SetAdjacencyList` compatible object `S.
+/// initialize a `SetAdjacencyList` compatible object `S`.
 ///
 /// The number of points and maximum degree of the stored graph will be determined from the
 /// file and passed to the closure `create` as `(num_points, max_degree, num_start_points)`.

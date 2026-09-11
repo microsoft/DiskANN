@@ -18,7 +18,7 @@ use crate::{
 /// by mapping attributes to unique ids, so that at search time
 /// we end up comparing numbers instead of "field-name + value"
 /// combinations. At insertion time, this is managed by the
-/// [`RoaringAttributeStore`] struct which stores a map of the
+/// [`super::roaring_attribute_store::RoaringAttributeStore`] struct which stores a map of the
 /// attribute->id pairs. At search time, this struct converts
 /// the attributes specified in the filter expression into
 /// the same set of u64s.

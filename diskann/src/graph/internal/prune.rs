@@ -278,7 +278,7 @@ where
     }
 }
 
-/// Failure condition for [`DiskANNIndex::robust_prune_list`].
+/// Failure condition for [`crate::graph::DiskANNIndex::robust_prune_list`].
 ///
 /// It's currently possible for retrieval of the id being pruned to fail due to a transient
 /// error. We do not always want to escalate this as a hard error, and thus provide an

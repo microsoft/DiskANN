@@ -31,8 +31,11 @@ pub fn get_number_of_processors() -> Option<u64> {
 /// Retrieves the peak resident set size of the current process.
 ///
 /// This function returns the VmHWM field from the /proc/self/status file, which represents the maximum amount of memory that the process has used at any point in time. The resident set size is the portion of a process's memory that is held in RAM.
-/// The VmHWM value might be inaccurate, according to https://manpages.ubuntu.com/manpages/jammy/man5/proc.5.html.
-/// If there are accuracy concerns, consider switching to /proc/[pid]/smaps or /proc/[pid]/smaps_rollup instead, which are much slower but provide accurate, detailed information.
+/// The VmHWM value might be inaccurate, according to
+/// <https://manpages.ubuntu.com/manpages/jammy/man5/proc.5.html>.
+/// If there are accuracy concerns, consider switching to `/proc/[pid]/smaps` or
+/// `/proc/[pid]/smaps_rollup` instead, which are much slower but provide accurate, detailed
+/// information.
 ///
 /// # Arguments
 ///
