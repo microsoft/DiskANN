@@ -231,7 +231,11 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: "doc --workspace --no-deps"
-        run: cargo doc --locked --workspace --no-deps --features linalg,flatbuffers,experimental_diversity_search
+        run: cargo doc --locked --workspace --no-deps  --features linalg,flatbuffers,experimental_diversity_search,integration-test
+        env:
+          RUSTDOCFLAGS: -D rustdoc::all
+      - name: "diskann-inmem private docs"
+        run: cargo doc --locked --package diskann-inmem --no-deps --all-features --document-private-items
         env:
           RUSTDOCFLAGS: -D rustdoc::all
 
