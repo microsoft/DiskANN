@@ -707,10 +707,6 @@ where
     type SearchAccessorError = ANNError;
     type PruneStrategy = Self;
 
-    fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
-    }
-
     fn insert_search_accessor(
         &'a self,
         provider: &'a Provider<R, M>,
@@ -723,6 +719,10 @@ where
             provider,
             provider.local_counters(),
         )
+    }
+
+    fn prune_strategy(&self) -> Self::PruneStrategy {
+        *self
     }
 }
 

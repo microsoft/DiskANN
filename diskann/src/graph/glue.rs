@@ -924,9 +924,6 @@ where
     /// The pruning strategy associated with the insertion strategy.
     type PruneStrategy: PruneStrategy<Provider>;
 
-    /// Return the prune strategy used for insertion.
-    fn prune_strategy(&self) -> Self::PruneStrategy;
-
     /// This API is invoked during inserts to create the associated [`SearchAccessor`].
     fn insert_search_accessor(
         &'a self,
@@ -934,6 +931,9 @@ where
         context: &'a Provider::Context,
         vector: T,
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
+
+    /// Return the prune strategy used for insertion.
+    fn prune_strategy(&self) -> Self::PruneStrategy;
 }
 
 /// A strategy for pruning elements from the data provider.
