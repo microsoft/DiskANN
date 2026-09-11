@@ -634,6 +634,7 @@ dependencies = [
  "diskann-vector",
  "diskann-wide",
  "half",
+ "hashbrown 0.16.1",
  "parking_lot",
  "rand",
  "serde",
