@@ -66,7 +66,11 @@ where
         }
 
         let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
-            scores.fill(0.0);
+            scores.fill(if doc.num_vectors() == 0 {
+                f32::MAX
+            } else {
+                0.0
+            });
             return Ok(());
         };
 
@@ -129,7 +133,11 @@ where
         }
 
         let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
-            scores.fill(0.0);
+            scores.fill(if doc.num_vectors() == 0 {
+                f32::MAX
+            } else {
+                0.0
+            });
             return Ok(());
         };
 
@@ -564,6 +572,7 @@ mod tests {
         (0, 1, 1),   // Empty query
         (1, 0, 1),   // Empty docs
         (1, 1, 0),   // Empty dim
+        (1, 0, 0),   // Empty docs and dim
         (1, 1, 4),   // Degenerate
         (5, 3, 5),   // Prime k; nq > 1 and nd > 1 exercise per-row writeback
         (17, 4, 64), // A-panel remainder crossing both Scalar and V3 panel widths

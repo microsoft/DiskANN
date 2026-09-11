@@ -64,8 +64,8 @@ impl FallbackKernel {
     /// Core kernel for computing per-query-vector max similarities (min negated inner-product).
     ///
     /// For each `query` vector, computes the maximum similarity (negated inner product)
-    /// to any document vector, then calls `f(index, score)` with the result. If
-    /// there are no vectors in the `doc`, the kernel returns immediately.
+    /// to any document vector, then calls `f(index, score)` with the result.
+    /// If there are no vectors in the `doc`, the score is `f32::MAX`.
     ///
     /// The callback can be used to aggregate or set scores as needed - as is the
     /// case with [`MaxSim`] and [`Chamfer`].
@@ -84,11 +84,6 @@ impl FallbackKernel {
         F: FnMut(usize, f32),
         InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
-        // Early exit if no doc vectors - callback should never be invoked
-        if doc.num_vectors() == 0 {
-            return;
-        }
-
         for (i, q_vec) in query.rows().enumerate() {
             // `InnerProduct::evaluate` returns negated inner product
             let mut min_dist = f32::MAX;
@@ -401,7 +396,7 @@ mod tests {
 
             let result = Chamfer::evaluate(QueryMatRef::from(doc), query.deref().reborrow());
 
-            assert_eq!(result, 0.0);
+            assert_eq!(result, f32::INFINITY);
         }
 
         #[test]
