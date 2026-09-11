@@ -93,9 +93,9 @@
 //! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 | Neon      |
 //! |---------------|---------------|-----------|-----------|---------------|-----------|-----------|
 //! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Uses V3   | Optimized |
-//! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Optimized |
 //! | `USlice<3>`   | `USlice<3>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
-//! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Optimized |
 //! | `USlice<5>`   | `USlice<5>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `USlice<6>`   | `USlice<6>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `USlice<7>`   | `USlice<7>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
@@ -115,9 +115,7 @@ use diskann_wide::{
 };
 
 #[cfg(target_arch = "aarch64")]
-use diskann_wide::{
-    SIMDAbsDiff, SIMDDotProduct, SIMDSumTree, SIMDVector,
-};
+use diskann_wide::{SIMDAbsDiff, SIMDDotProduct, SIMDSumTree, SIMDVector};
 
 use super::{Binary, BitSlice, BitTranspose, Dense, Representation, Unsigned};
 use crate::distances::{Hamming, InnerProduct, MV, MathematicalResult, SquaredL2, check_lengths};
@@ -750,11 +748,12 @@ impl
             let mut s1 = u32s::default(arch);
             let mask = u8s::splat(arch, 0x0f);
             while i + 16 <= bytes {
-                // Load 128-bits into 8x16 register
-                // both operations are safe since we verified that
+                // SAFETY: both operations are safe since we verified that
                 // both pointers (of equal length) have >= 16 bytes available
                 // from the offset `i`
                 let x_vec = unsafe { u8s::load_simd(arch, px_u8.add(i)) };
+                // SAFETY: y_vec meets the same condition as x_vec
+                // due to equal length and same offset
                 let y_vec = unsafe { u8s::load_simd(arch, py_u8.add(i)) };
 
                 // compute abs diff then dot product for lower 4 bits, result is stored as 32x4
@@ -776,7 +775,11 @@ impl
             let remaining_bytes = len / 2 - i;
 
             if remaining_bytes > 0 {
+                // SAFETY: `remaining_bytes` is in `1..16`, and at least that many bytes
+                // are readable from offset `i`. `load_simd_first` reads only those bytes
+                // and zero-fills the remaining lanes.
                 let x_vec = unsafe { u8s::load_simd_first(arch, px_u8.add(i), remaining_bytes) };
+                // SAFETY: the same condition that holds for `x_vec` holds for `y_vec`
                 let y_vec = unsafe { u8s::load_simd_first(arch, py_u8.add(i), remaining_bytes) };
 
                 // compute abs diff then dot product for lower 4 bits, result is stored as 32x4
@@ -793,7 +796,7 @@ impl
 
                 i += remaining_bytes;
             }
-            s = (s0 + s1).sum_tree() as u32;
+            s = (s0 + s1).sum_tree();
         }
 
         // Convert bytes to nibble indexes.
@@ -851,11 +854,12 @@ impl
             let mut s3 = u32s::default(arch);
             let mask = u8s::splat(arch, 0x03);
             while i + 16 <= bytes {
-                // Load 128-bits into 8x16 register
-                // both operations are safe since we verified that
-                // both pointers (of equal length) have >= 16 blocks available
+                // SAFETY: both operations are safe since we verified that
+                // both pointers (of equal length) have >= 16 bytes available
                 // from the offset `i`
                 let x_vec = unsafe { u8s::load_simd(arch, px_u8.add(i)) };
+                // SAFETY: y_vec meets the same condition as x_vec
+                // due to equal length and same offset
                 let y_vec = unsafe { u8s::load_simd(arch, py_u8.add(i)) };
 
                 // compute abs diff then dot product for lower 2 bits, result is stored as 32x4
@@ -888,7 +892,11 @@ impl
             let remaining_bytes = len / 4 - i;
 
             if remaining_bytes > 0 {
+                // SAFETY: `remaining_bytes` is in `1..16`, and at least that many bytes
+                // are readable from offset `i`. `load_simd_first` reads only those bytes
+                // and zero-fills the remaining lanes.
                 let x_vec = unsafe { u8s::load_simd_first(arch, px_u8.add(i), remaining_bytes) };
+                // SAFETY: the same condition that holds for `x_vec` holds for `y_vec`
                 let y_vec = unsafe { u8s::load_simd_first(arch, py_u8.add(i), remaining_bytes) };
 
                 // compute abs diff then dot product for lower 2 bits, result is stored as 32x4
@@ -916,7 +924,7 @@ impl
                 s3 = s3.dot_simd(d, d);
                 i += remaining_bytes;
             }
-            s = ((s0 + s1) + (s2 + s3)).sum_tree() as u32;
+            s = ((s0 + s1) + (s2 + s3)).sum_tree();
         }
 
         // Convert bytes to quantized vector indexes
@@ -1188,14 +1196,7 @@ retarget!(diskann_wide::arch::x86_64::V4, SquaredL2, 7, 6, 5, 3, 2);
 
 dispatch_pure!(SquaredL2, 1, 2, 3, 4, 5, 6, 7, 8);
 #[cfg(target_arch = "aarch64")]
-retarget!(
-    diskann_wide::arch::aarch64::Neon,
-    SquaredL2,
-    7,
-    6,
-    5,
-    3,
-);
+retarget!(diskann_wide::arch::aarch64::Neon, SquaredL2, 7, 6, 5, 3,);
 
 ///////////////////
 // Inner Product //

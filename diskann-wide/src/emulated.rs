@@ -202,7 +202,7 @@ where
     }
 }
 
-/// Absolute difference.
+/// MulAdd
 impl<T, const N: usize, A> SIMDMulAdd for Emulated<T, N, A>
 where
     T: ReferenceScalarOps,
@@ -251,16 +251,14 @@ where
     }
 }
 
-/// MulAdd
+/// AbsDiff
 impl<T, const N: usize, A> SIMDAbsDiff for Emulated<T, N, A>
 where
     T: ReferenceAbsDiff,
 {
     #[inline(always)]
     fn abs_diff_simd(self, rhs: Self) -> Self {
-        Self::from_arch_fn(self.1, |i| {
-            self.0[i].expected_abs_diff_(rhs.0[i])
-        })
+        Self::from_arch_fn(self.1, |i| self.0[i].expected_abs_diff_(rhs.0[i]))
     }
 }
 
