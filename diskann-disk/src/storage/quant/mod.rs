@@ -7,8 +7,8 @@ mod generator;
 pub use generator::QuantDataGenerator;
 
 pub(crate) mod pq;
-pub use pq::pq_generation::{PQGeneration, PQGenerationContext};
+pub use pq::pq_generation::{PQCompressor, PQGeneration, PQGenerationContext};
 pub use pq::PQData;
 
 mod compressor;
-pub use compressor::QuantCompressor;
+pub use compressor::{PreparedCompressor, QuantCompressor};
