@@ -2,23 +2,25 @@
   "file": "diskann/src/graph/test/cases/inline.rs",
   "test": "graph/test/cases/inline/inline_adaptive_l_linear",
   "payload": {
-    "comparisons": 56,
+    "comparisons": 57,
     "grid_size": 100,
-    "hops": 56,
+    "hops": 57,
     "k": 5,
     "l": 5,
     "matching_points": 4,
     "query": [
       50.0
     ],
-    "result_count": 3,
+    "result_count": 4,
     "result_distances": [
       36.0,
+      49.0,
       1764.0,
       2025.0
     ],
     "result_ids": [
       44,
+      43,
       92,
       95
     ]

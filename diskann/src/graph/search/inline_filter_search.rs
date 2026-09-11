@@ -177,7 +177,7 @@ where
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
-    let l_search = search_params.l_value().get();
+    let original_l_search = search_params.l_value().get();
 
     // Matched results tracked separately — scratch.best contains all nodes
     // for greedy navigation, matched_results contains only filter-matching nodes.
@@ -201,7 +201,7 @@ where
 
     let mut sample_visited: usize = 0;
     let mut sample_matched: usize = 0;
-    let mut l_adjusted = false;
+    let mut next_adaptive_l_sample = adaptive_l.as_ref().map(|value| value.sample_count);
 
     loop {
         // Check termination conditions
@@ -253,21 +253,22 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // Adaptive L: after enough samples, estimate specificity and scale L.
+        // Adaptive L: estimate specificity at N samples, then at 2N, 4N, and so on.
         if let Some(adaptive_l) = adaptive_l.as_ref()
-            && !l_adjusted
-            && sample_visited >= adaptive_l.sample_count
+            && let Some(next_sample) = next_adaptive_l_sample
+            && sample_visited >= next_sample
         {
-            l_adjusted = true;
             let new_l = compute_adaptive_l(
-                l_search,
+                original_l_search,
                 sample_visited,
                 sample_matched,
                 adaptive_l.scale_factor,
             );
-            if new_l > l_search {
+            if new_l > scratch.best.capacity() {
                 scratch.resize(new_l);
             }
+
+            next_adaptive_l_sample = advance_adaptive_l_sample(next_sample);
         }
     }
 
@@ -280,6 +281,10 @@ where
     })
 }
 
+fn advance_adaptive_l_sample(current_sample: usize) -> Option<usize> {
+    current_sample.checked_mul(2)
+}
+
 /// Compute adaptive L based on observed specificity.
 ///
 /// Piecewise scaling:
@@ -288,16 +293,19 @@ where
 ///   specificity < 10%   → log-scale: 2^(-log10(specificity))
 ///     specificity = 0.01 (1%)    → 4× L
 ///     specificity = 0.001 (0.1%) → 8× L
-///   0 matches in sample → `max_multiplier`× L (maximum expansion)
+///   0 matches in sample → estimate specificity as `1 / visited`
 ///
 /// Clamped to [1×, max_multiplier] range.
 fn compute_adaptive_l(base_l: usize, visited: usize, matched: usize, max_multiplier: f64) -> usize {
-    if matched == 0 || visited == 0 {
-        // No matches at all — use maximum multiplier
+    if visited == 0 {
         return (base_l as f64 * max_multiplier) as usize;
     }
 
-    let specificity = matched as f64 / visited as f64;
+    let specificity = if matched == 0 {
+        1.0 / visited as f64
+    } else {
+        matched as f64 / visited as f64
+    };
     let multiplier = if specificity >= 0.5 {
         // ≥50% specificity: no scaling needed
         1.0
@@ -323,6 +331,13 @@ fn compute_adaptive_l(base_l: usize, visited: usize, matched: usize, max_multipl
 mod tests {
     use super::*;
 
+    fn assert_logarithmic_result(actual: usize, expected: usize) {
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "logarithmic result {actual} is not within +/-1 of {expected}",
+        );
+    }
+
     #[test]
     fn test_adaptive_l_validation() {
         // Valid
@@ -343,6 +358,21 @@ mod tests {
     }
 
     #[test]
+    fn test_adaptive_l_sample_thresholds_double() {
+        let sample_count = 100;
+
+        let second_sample = advance_adaptive_l_sample(sample_count).unwrap();
+        let third_sample = advance_adaptive_l_sample(second_sample).unwrap();
+        let fourth_sample = advance_adaptive_l_sample(third_sample).unwrap();
+
+        assert_eq!(
+            [sample_count, second_sample, third_sample, fourth_sample],
+            [100, 200, 400, 800]
+        );
+        assert_eq!(advance_adaptive_l_sample(usize::MAX), None);
+    }
+
+    #[test]
     fn test_compute_adaptive_l_piecewise_regions() {
         let base_l = 100;
         let max_multiplier = 16.0;
@@ -356,16 +386,17 @@ mod tests {
         assert_eq!(compute_adaptive_l(base_l, 1000, 499, max_multiplier), 200);
 
         // <10% specificity => log scaling (0.01 => 4x, 0.001 => 8x)
-        assert_eq!(compute_adaptive_l(base_l, 1000, 10, max_multiplier), 400);
-        assert_eq!(compute_adaptive_l(base_l, 1000, 1, max_multiplier), 800);
+        assert_logarithmic_result(compute_adaptive_l(base_l, 1000, 10, max_multiplier), 400);
+        assert_logarithmic_result(compute_adaptive_l(base_l, 1000, 1, max_multiplier), 800);
     }
 
     #[test]
-    fn test_compute_adaptive_l_zero_samples_or_matches() {
+    fn test_compute_adaptive_l_zero_matches_uses_inverse_visited() {
         let base_l = 100;
         let max_multiplier = 16.0;
 
-        assert_eq!(compute_adaptive_l(base_l, 1000, 0, max_multiplier), 1600);
+        assert_logarithmic_result(compute_adaptive_l(base_l, 100, 0, max_multiplier), 400);
+        assert_logarithmic_result(compute_adaptive_l(base_l, 1000, 0, max_multiplier), 800);
         assert_eq!(compute_adaptive_l(base_l, 0, 0, max_multiplier), 1600);
     }
 
