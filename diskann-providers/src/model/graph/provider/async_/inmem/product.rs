@@ -443,9 +443,21 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
+    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
+    type SearchAccessorError = ANNError;
+
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a FullPrecisionProvider<T, DefaultQuant, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
     }
 }
 
@@ -602,9 +614,20 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
+    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx>;
+    type SearchAccessorError = ANNError;
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
     }
 }
 

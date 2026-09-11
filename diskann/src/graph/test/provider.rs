@@ -1320,6 +1320,8 @@ impl glue::PruneStrategy<Provider> for Strategy {
 }
 
 impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
+    type SearchAccessor = Accessor<'a>;
+    type SearchAccessorError = DimMismatch;
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {

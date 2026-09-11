@@ -984,9 +984,40 @@ where
     L: layers::Insert,
     M: Id,
 {
+    type SearchAccessor = SearchAccessor<'a>;
+    type SearchAccessorError = ANNError;
     type PruneStrategy = Self;
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a Provider<L, M>,
+        _context: &'a Context,
+        query: L::Query<'a>,
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        let reader = provider.store.reader()?;
+        let expand_beam = <L as layers::Search>::query_distance(
+            &provider.layer,
+            query,
+            ExpandBeamVisitor {
+                bytes: provider.store.bytes(),
+                prefetch_lookahead: provider.config.prefetch_lookahead.map_or(0, |x| x.get()),
+            },
+        )?;
+
+        let accessor = SearchAccessor {
+            reader,
+            ids: AdjacencyList::new(),
+            expand_beam,
+            buffer: vec![(0, 0.0); provider.max_degree()],
+            provider,
+            start_points: provider.store.frozen(),
+            counters: provider.local_counters(),
+        };
+        Ok(accessor)
     }
 }
 

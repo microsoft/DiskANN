@@ -710,12 +710,25 @@ where
             DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
             &'a [T],
             SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>,
+            SearchAccessorError = ANNError,
         >,
 {
+    type SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>;
+    type SearchAccessorError = ANNError;
+
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
     }
 }
 
