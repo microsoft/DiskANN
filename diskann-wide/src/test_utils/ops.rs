@@ -462,6 +462,37 @@ macro_rules! test_fma {
     };
 }
 
+macro_rules! test_abs_diff {
+    ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<abs_diff_ $wide:lower $(_$($ps )x+)?>]() {
+                use $crate::{SIMDVector, SIMDAbsDiff};
+                type T = $wide $(< $($ps),+>)?;
+                type Scalar = <T as SIMDVector>::Scalar;
+
+                if let Some(arch) = $arch {
+                    let f = move |a: &[Scalar], b: &[Scalar]| {
+                        let got = <T>::from_array(arch, a.try_into().unwrap()).abs_diff_simd(
+                            <T>::from_array(arch, b.try_into().unwrap())
+                        ).to_array();
+                        test_utils::test_binary_op(
+                            &a,
+                            &b,
+                            &got,
+                            &|l: Scalar, r: Scalar| { l.expected_abs_diff_(r) },
+                            "absolute difference",
+                        )
+                    };
+
+                    let n = T::LANES;
+                    $crate::test_utils::driver::drive_binary(&f, (n, n), $seed);
+                }
+            }
+        }
+    };
+}
+
 macro_rules! test_lossless_convert {
     (
         $from:ident $(< $($fs:tt),+ >)? => $to:ident $(< $($ts:tt),+ >)?,
@@ -1142,6 +1173,7 @@ pub(crate) use test_bitops;
 pub(crate) use test_cast;
 pub(crate) use test_cmp;
 pub(crate) use test_fma;
+pub(crate) use test_abs_diff;
 pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;

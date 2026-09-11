@@ -115,7 +115,9 @@ use diskann_wide::{
 };
 
 #[cfg(target_arch = "aarch64")]
-use diskann_wide::{SIMDDotProduct, SIMDSumTree, SIMDVector};
+use diskann_wide::{
+    SIMDAbsDiff, SIMDDotProduct, SIMDSumTree, SIMDVector,
+};
 
 use super::{Binary, BitSlice, BitTranspose, Dense, Representation, Unsigned};
 use crate::distances::{Hamming, InnerProduct, MV, MathematicalResult, SquaredL2, check_lengths};
@@ -725,7 +727,6 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
         y: USlice<'_, 4>,
     ) -> MathematicalResult<u32> {
         // returns number of quantized vectors
-        use std::arch::aarch64::vabdq_u8;
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(u8s = <diskann_wide::arch::aarch64::Neon>::u8x16);
@@ -754,19 +755,13 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
                 // compute abs diff then dot product for lower 4 bits, result is stored as 32x4
                 let lower_x: u8s = x_vec & mask;
                 let lower_y: u8s = y_vec & mask;
-                let d = u8s::from_underlying (
-                    arch,
-                    unsafe {  vabdq_u8(lower_x.to_underlying(), lower_y.to_underlying()) }
-                );
+                let d = lower_x.abs_diff_simd(lower_y);
                 s0 = s0.dot_simd(d, d);
 
                 // compute abs diff then dot product for upper 4 bits, result is stored as 32x4
                 let upper_x: u8s = (x_vec >> 4) & mask;
                 let upper_y: u8s = (y_vec >> 4) & mask;
-                let d = u8s::from_underlying (
-                    arch,
-                    unsafe {  vabdq_u8(upper_x.to_underlying(), upper_y.to_underlying()) }
-                );
+                let d = upper_x.abs_diff_simd(upper_y);
                 s1 = s1.dot_simd(d, d);
 
                 // repeat for next 16 bytes block
@@ -782,19 +777,13 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
                 // compute abs diff then dot product for lower 4 bits, result is stored as 32x4
                 let lower_x: u8s = x_vec & mask;
                 let lower_y: u8s = y_vec & mask;
-                let d = u8s::from_underlying (
-                        arch,
-                        unsafe {  vabdq_u8(lower_x.to_underlying(), lower_y.to_underlying()) }
-                );
+                let d = lower_x.abs_diff_simd(lower_y);
                 s0 = s0.dot_simd(d, d);
 
                 // compute abs diff then dot product for upper 4 bits, result is stored as 32x4
                 let upper_x: u8s = (x_vec >> 4) & mask;
                 let upper_y: u8s = (y_vec >> 4) & mask;
-                let d = u8s::from_underlying (
-                        arch,
-                        unsafe {  vabdq_u8(upper_x.to_underlying(), upper_y.to_underlying()) }
-                );
+                let d = upper_x.abs_diff_simd(upper_y);
                 s1 = s1.dot_simd(d, d);
 
                 i+= remaining_bytes;

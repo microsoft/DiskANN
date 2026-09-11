@@ -342,6 +342,25 @@ macro_rules! aarch64_define_fma {
     };
 }
 
+/// Utility macro for defining the absolute difference operator
+///
+/// SAFETY: It is the invoker's responsibility to ensure that the intrinsic is safe to call
+macro_rules! aarch64_define_absdiff {
+    // Maps the implementation to an intrinsic.
+    ($type:ty, $intrinsic:expr) => {
+        impl SIMDAbsDiff for $type {
+            #[inline(always)]
+            fn abs_diff_simd(self, rhs: Self) -> $type {
+                // SAFETY: The invoker of this macro must pass the `target_feature`
+                // requirement of the intrinsic.
+                //
+                // That way, if the intrinsic is not available, we get a compile-time error.
+                Self(unsafe { $intrinsic(self.0, rhs.0) })
+            }
+        }
+    };
+}
+
 /// # Notes on vector shifts.
 ///
 /// Neon only has the `vector`x`vector` left shift function. However, it takes signed
@@ -565,6 +584,7 @@ macro_rules! aarch64_splitjoin {
 pub(crate) use aarch64_define_bitops;
 pub(crate) use aarch64_define_cmp;
 pub(crate) use aarch64_define_fma;
+pub(crate) use aarch64_define_absdiff;
 pub(crate) use aarch64_define_loadstore;
 pub(crate) use aarch64_define_register;
 pub(crate) use aarch64_define_splat;

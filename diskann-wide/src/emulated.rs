@@ -10,11 +10,14 @@ use super::{
     arch::{self, emulated::Scalar},
     bitmask::BitMask,
     constant::Const,
-    reference::{ReferenceAbs, ReferenceCast, ReferenceIntegerOps, ReferenceScalarOps, TreeReduce},
+    reference::{
+        ReferenceAbs, ReferenceAbsDiff, ReferenceCast, ReferenceIntegerOps, ReferenceScalarOps,
+        TreeReduce,
+    },
     traits::{
-        ArrayType, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd,
-        SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSelect, SIMDSumTree,
-        SIMDVector,
+        ArrayType, SIMDAbs, SIMDAbsDiff, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax,
+        SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSelect,
+        SIMDSumTree, SIMDVector,
     },
 };
 
@@ -199,7 +202,7 @@ where
     }
 }
 
-/// MulAdd
+/// Absolute difference.
 impl<T, const N: usize, A> SIMDMulAdd for Emulated<T, N, A>
 where
     T: ReferenceScalarOps,
@@ -245,6 +248,19 @@ where
     #[inline(always)]
     fn popcount_simd(self) -> Self {
         Self::from_arch_fn(self.1, |i| self.0[i].expected_popcount_())
+    }
+}
+
+/// MulAdd
+impl<T, const N: usize, A> SIMDAbsDiff for Emulated<T, N, A>
+where
+    T: ReferenceAbsDiff,
+{
+    #[inline(always)]
+    fn abs_diff_simd(self, rhs: Self) -> Self {
+        Self::from_arch_fn(self.1, |i| {
+            self.0[i].expected_abs_diff_(rhs.0[i])
+        })
     }
 }
 
@@ -1077,6 +1093,25 @@ mod test_emulated {
     test_utils::ops::test_sumtree!(Emulated<u64, 2>, 0xe1dc2d07ae014508, SC);
     test_utils::ops::test_sumtree!(Emulated<u64, 4>, 0x529c27f62ea171ec, SC);
     test_utils::ops::test_sumtree!(Emulated<u64, 8>, 0x7f6ba325baf079b3, SC);
+
+    // absolute difference
+
+    test_utils::ops::test_abs_diff!(Emulated<u8, 1>, 0x7f2c9a41d8e5b603, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u8, 2>, 0x3b81f6ce209ad477, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u8, 4>, 0xc4e9075b12fa8d61, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u8, 8>, 0x91bd3c7ea6405f28, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u8, 16>, 0x2a6fdd9138c407be, SC);
+
+    test_utils::ops::test_abs_diff!(Emulated<u16, 1>, 0xe58c1047b9fa263d, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u16, 4>, 0x6d03a8f5c271be94, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u16, 16>, 0xb72e49d80c35fa16, SC);
+
+    test_utils::ops::test_abs_diff!(Emulated<u32, 4>, 0x4c8a13ef76d2905b, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u32, 8>, 0xd1097be42fa86c33, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u32, 16>, 0x85f31ca96e407bd2, SC);
+
+    test_utils::ops::test_abs_diff!(Emulated<u64, 2>, 0xa73d06e1c9548f2b, SC);
+    test_utils::ops::test_abs_diff!(Emulated<u64, 4>, 0x19be74c52fa803d6, SC);
 
     /////////////////
     // conversions //
