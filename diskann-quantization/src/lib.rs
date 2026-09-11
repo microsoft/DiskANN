@@ -177,6 +177,9 @@ pub(crate) mod flatbuffers;
 // common algorithms
 pub mod algorithms;
 
+// matrix kernels
+mod matrix_kernels;
+
 // quantization
 pub mod binary;
 pub mod minmax;

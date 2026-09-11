@@ -51,6 +51,50 @@ pub(in crate::arch::aarch64) unsafe fn u16x4(_: Neon, ptr: *const u16, first: us
     unsafe { vcreate_u16(load_first_of_8_bytes(ptr.cast::<u8>(), 2 * first)) }
 }
 
+/// Load the first `first` elements from `ptr` into a `int16x4_t` register.
+///
+/// # Safety
+///
+/// The caller must ensure `[ptr, ptr + first)` is readable. The presence of `Neon`
+/// enables the use of "neon" intrinsics.
+#[inline(always)]
+pub(in crate::arch::aarch64) unsafe fn i16x4(_: Neon, ptr: *const i16, first: usize) -> int16x4_t {
+    // SAFETY: Pointer access inherited from caller. `Neon` enables "neon" intrinsics.
+    unsafe { vcreate_s16(load_first_of_8_bytes(ptr.cast::<u8>(), 2 * first)) }
+}
+
+/// Load the first `first` elements from `ptr` into a `uint32x2_t` register.
+///
+/// # Safety
+///
+/// The caller must ensure `[ptr, ptr + first)` is readable. The presence of `Neon`
+/// enables the use of "neon" intrinsics.
+#[inline(always)]
+pub(in crate::arch::aarch64) unsafe fn u32x2(
+    arch: Neon,
+    ptr: *const u32,
+    first: usize,
+) -> uint32x2_t {
+    // SAFETY: Pointer access inherited from caller. `Neon` enables "neon" intrinsics.
+    unsafe { load_first_32x2(arch, ptr, first) }
+}
+
+/// Load the first `first` elements from `ptr` into a `int32x2_t` register.
+///
+/// # Safety
+///
+/// The caller must ensure `[ptr, ptr + first)` is readable. The presence of `Neon`
+/// enables the use of "neon" intrinsics.
+#[inline(always)]
+pub(in crate::arch::aarch64) unsafe fn i32x2(
+    arch: Neon,
+    ptr: *const i32,
+    first: usize,
+) -> int32x2_t {
+    // SAFETY: Pointer access inherited from caller. `Neon` enables "neon" intrinsics.
+    unsafe { vreinterpret_s32_u32(load_first_32x2(arch, ptr.cast::<u32>(), first)) }
+}
+
 /// Load the first `first` elements from `ptr` into a `float32x2_t` register.
 ///
 /// # Safety
@@ -359,7 +403,7 @@ unsafe fn load_first_32x4(_: Neon, ptr: *const u32, first: usize) -> uint32x4_t 
             vld1q_u32(ptr)
         } else if first == 3 {
             let lo = vld1_u32(ptr);
-            let hi = vld1_lane_u32(ptr.add(2), vcreate_u32(0), 0);
+            let hi = vset_lane_u32(ptr.add(2).read_unaligned(), vcreate_u32(0), 0);
             vcombine_u32(lo, hi)
         } else if first == 2 {
             vcombine_u32(vld1_u32(ptr), vcreate_u32(0))

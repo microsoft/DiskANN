@@ -14,7 +14,7 @@ use diskann_benchmark_runner::utils::fmt::KeyValue;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use diskann_inmem::{Context, Provider, Strategy, integration, layers};
+use diskann_inmem::{Context, Provider, Strategy, integration, repr};
 
 use crate::support::{
     check::{CheckMatch, Match, check_all_fields},
@@ -186,9 +186,9 @@ impl CheckMatch for Counters {
 // Impls //
 ///////////
 
-impl<T> Index for DiskANNIndex<Provider<layers::Full<T>, u64>>
+impl<T> Index for DiskANNIndex<Provider<repr::Full<T>, u64>>
 where
-    T: layers::FullPrecision + FromSlice + AsDataType,
+    T: repr::FullPrecision + FromSlice + AsDataType,
 {
     fn search<'a>(
         &'a self,

@@ -15,10 +15,13 @@ use diskann_benchmark_runner::{
 };
 use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
-use half::f16;
 use serde::{Deserialize, Serialize};
 
-use diskann_inmem::{Provider, layers};
+use diskann_inmem::{
+    Provider,
+    num::{Capacity, MaxDegree},
+    repr::Full,
+};
 
 use crate::{
     index::{Counters, Index},
@@ -106,7 +109,7 @@ mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub(super) enum Layer {
+    pub(super) enum Representation {
         FullPrecision { data_type: DataType },
     }
 
@@ -134,7 +137,7 @@ mod dto {
     #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct Test {
         pub(super) data: Data,
-        pub(super) layer: Layer,
+        pub(super) representation: Representation,
         pub(super) build: Build,
         pub(super) search: Search,
     }
@@ -227,20 +230,20 @@ struct Bundle {
 }
 
 #[derive(Debug)]
-enum Layer {
+enum Representation {
     FullPrecision { data_type: DataType },
 }
 
-impl Layer {
-    fn from_raw(raw: dto::Layer) -> Self {
+impl Representation {
+    fn from_raw(raw: dto::Representation) -> Self {
         match raw {
-            dto::Layer::FullPrecision { data_type } => Self::FullPrecision { data_type },
+            dto::Representation::FullPrecision { data_type } => Self::FullPrecision { data_type },
         }
     }
 
-    fn as_raw(&self) -> dto::Layer {
+    fn as_raw(&self) -> dto::Representation {
         match self {
-            Self::FullPrecision { data_type } => dto::Layer::FullPrecision {
+            Self::FullPrecision { data_type } => dto::Representation::FullPrecision {
                 data_type: *data_type,
             },
         }
@@ -323,7 +326,7 @@ impl Search {
 #[derive(Debug)]
 struct Test {
     data: Data,
-    layer: Layer,
+    representation: Representation,
     build: Build,
     search: Search,
 }
@@ -331,13 +334,13 @@ struct Test {
 impl Test {
     fn from_raw(raw: dto::Test, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
         let data = Data::from_raw(raw.data, checker)?;
-        let layer = Layer::from_raw(raw.layer);
+        let representation = Representation::from_raw(raw.representation);
         let build = Build::from_raw(raw.build, data.metric)?;
         let search = Search::from_raw(raw.search)?;
 
         Ok(Self {
             data,
-            layer,
+            representation,
             build,
             search,
         })
@@ -346,7 +349,7 @@ impl Test {
     fn as_raw(&self) -> anyhow::Result<dto::Test> {
         Ok(dto::Test {
             data: self.data.as_raw()?,
-            layer: self.layer.as_raw(),
+            representation: self.representation.as_raw(),
             build: self.build.as_raw(),
             search: self.search.as_raw(),
         })
@@ -357,8 +360,8 @@ impl Test {
         capacity: usize,
         start_points: DatasetView<'_>,
     ) -> anyhow::Result<Arc<dyn Index>> {
-        match self.layer {
-            Layer::FullPrecision { data_type } => {
+        match self.representation {
+            Representation::FullPrecision { data_type } => {
                 if start_points.data_type() != data_type {
                     anyhow::bail!(
                         "mismatched data types for start point - expected {}, got {}",
@@ -367,30 +370,45 @@ impl Test {
                     );
                 }
 
-                let dim = start_points.ncols();
                 let metric = self.data.metric;
-                let config = diskann_inmem::provider::Config::new(
-                    capacity,
-                    self.build.config.max_degree().get(),
-                );
-
+                let max_degree = self.build.config.max_degree().get();
                 let index_config = self.build.config.clone();
 
                 let index = match start_points {
                     DatasetView::F32(v) => finish(
-                        Provider::new(layers::Full::<f32>::new(dim, metric), config, v.row_iter())?,
+                        Provider::new(Full::config(
+                            Capacity::new(capacity),
+                            MaxDegree::new(max_degree),
+                            metric,
+                            v.to_owned(),
+                        )?)?,
                         index_config,
                     ),
                     DatasetView::F16(v) => finish(
-                        Provider::new(layers::Full::<f16>::new(dim, metric), config, v.row_iter())?,
+                        Provider::new(Full::config(
+                            Capacity::new(capacity),
+                            MaxDegree::new(max_degree),
+                            metric,
+                            v.to_owned(),
+                        )?)?,
                         index_config,
                     ),
                     DatasetView::U8(v) => finish(
-                        Provider::new(layers::Full::<u8>::new(dim, metric), config, v.row_iter())?,
+                        Provider::new(Full::config(
+                            Capacity::new(capacity),
+                            MaxDegree::new(max_degree),
+                            metric,
+                            v.to_owned(),
+                        )?)?,
                         index_config,
                     ),
                     DatasetView::I8(v) => finish(
-                        Provider::new(layers::Full::<i8>::new(dim, metric), config, v.row_iter())?,
+                        Provider::new(Full::config(
+                            Capacity::new(capacity),
+                            MaxDegree::new(max_degree),
+                            metric,
+                            v.to_owned(),
+                        )?)?,
                         index_config,
                     ),
                 };
@@ -439,7 +457,7 @@ impl diskann_benchmark_runner::Input for Test {
                 data_type: DataType::F32,
                 preprocess: vec![],
             },
-            layer: dto::Layer::FullPrecision {
+            representation: dto::Representation::FullPrecision {
                 data_type: DataType::F32,
             },
             build: dto::Build {
@@ -483,8 +501,8 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     type Output = BuildAndSearch;
 
     fn try_match(&self, input: &Test, context: &MatchContext) -> Score {
-        // Future-proof against additional enums in `input.layer`.
-        let Layer::FullPrecision { .. } = input.layer;
+        // Future-proof against additional enums in `input.representation`.
+        let Representation::FullPrecision { .. } = input.representation;
         context.success(0)
     }
 
@@ -498,8 +516,8 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
-        // Future-proof against additional enums in `input.layer`.
-        let Layer::FullPrecision { data_type } = input.layer;
+        // Future-proof against additional enums in `input.representation`.
+        let Representation::FullPrecision { data_type } = input.representation;
 
         // Load the data and perform any necessary data conversions.
         let Bundle {

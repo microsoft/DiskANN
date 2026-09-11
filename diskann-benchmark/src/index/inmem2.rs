@@ -29,7 +29,8 @@ use diskann_benchmark_runner::{
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
 use diskann_inmem::{
-    layers::{Full, FullPrecision},
+    num::{Capacity, MaxDegree},
+    repr::{Full, FullPrecision},
     Provider, Strategy,
 };
 use diskann_utils::views::{Matrix, MatrixView};
@@ -47,6 +48,8 @@ use crate::{
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", Build::<f32>::new())?;
+    registry.register("inmem2-u8", Build::<u8>::new())?;
+
     // registry.register("inmem2-f16", Build::<f16>::new())?;
     registry.register("inmem2-f32-stream", StreamingBenchmark::<f32>::new())?;
     Ok(())
@@ -420,7 +423,7 @@ impl<T> Build<T> {
 
 impl<T> Benchmark for Build<T>
 where
-    T: diskann_inmem::layers::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
+    T: diskann_inmem::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = StaticBuild;
     type Output = ();
@@ -472,11 +475,14 @@ where
 
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-        let layer = Full::<T>::new(dim, input.data.distance);
-        let config =
-            diskann_inmem::provider::Config::new(num_points, input.build.config.max_degree().get());
-        let provider = Provider::<_, u32>::new(layer, config, start.row_iter())?;
+        let config = Full::config(
+            Capacity::new(num_points),
+            MaxDegree::new(input.build.config.max_degree().get()),
+            input.data.distance,
+            start,
+        )?;
 
+        let provider = Provider::<_, u32>::new(config)?;
         let index = Arc::new(DiskANNIndex::new(
             input.build.config.clone(),
             provider,
@@ -837,17 +843,18 @@ where
         let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
             &input.search.queries,
         ))?);
-        let dim = dataset.ncols();
 
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(dataset.as_view())?;
         let index_config = input.build.config.clone();
-        let layer = Full::<T>::new(dim, input.data.distance);
+        let config = Full::config(
+            Capacity::new(max_points),
+            MaxDegree::new(index_config.max_degree().get()),
+            input.data.distance,
+            start,
+        )?;
 
-        let config =
-            diskann_inmem::provider::Config::new(max_points, index_config.max_degree().get());
-        let provider = Provider::<_, u32>::new(layer, config, start.row_iter())?;
-
+        let provider = Provider::<_, u32>::new(config)?;
         let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
 
         let num_threads = input.build.num_threads;
