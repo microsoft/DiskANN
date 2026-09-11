@@ -637,6 +637,32 @@ where
             ncols: self.ncols,
         }
     }
+
+    /// Transpose the elements in `self`.
+    pub fn transpose(&self) -> Matrix<T::Elem>
+    where
+        T::Elem: Clone,
+    {
+        let mut row = 0;
+        let mut col = 0;
+
+        let f = Init(|| {
+            // SAFETY: `row` and `cols` are always less than `self.nrows()` and `self.ncols()`
+            // respectively.
+            let v = unsafe { self.get_unchecked(row, col) }.clone();
+            row += 1;
+            if row == self.nrows() {
+                row = 0;
+                col += 1;
+                if col == self.ncols() {
+                    col = 0;
+                }
+            }
+            v
+        });
+
+        Matrix::new(f, self.ncols(), self.nrows())
+    }
 }
 
 /// Represents an owning, 2-dimensional view of a contiguous block of memory,
@@ -1721,6 +1747,39 @@ mod tests {
         assert_eq!(m[(1, 0)], 3);
         assert_eq!(m[(1, 1)], 4);
         assert_eq!(m[(1, 2)], 5);
+    }
+
+    #[test]
+    fn test_transpose() {
+        {
+            let v = Matrix::new(0, 0, 0);
+            let t = v.transpose();
+            assert_eq!(t.nrows(), 0);
+            assert_eq!(t.ncols(), 0);
+        }
+
+        {
+            let v = Matrix::new(0, 0, 10);
+            let t = v.transpose();
+            assert_eq!(t.nrows(), 10);
+            assert_eq!(t.ncols(), 0);
+        }
+
+        {
+            let v = Matrix::new(0, 10, 0);
+            let t = v.transpose();
+            assert_eq!(t.nrows(), 0);
+            assert_eq!(t.ncols(), 10);
+        }
+
+        {
+            let v = Matrix::<usize>::try_from(Box::new([1, 2, 3, 4, 5, 6]), 2, 3).unwrap();
+            let t = v.transpose();
+
+            assert_eq!(t.row(0), &[1, 4]);
+            assert_eq!(t.row(1), &[2, 5]);
+            assert_eq!(t.row(2), &[3, 6]);
+        }
     }
 
     #[test]
