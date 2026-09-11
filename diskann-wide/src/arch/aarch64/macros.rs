@@ -581,10 +581,10 @@ macro_rules! aarch64_splitjoin {
     };
 }
 
+pub(crate) use aarch64_define_absdiff;
 pub(crate) use aarch64_define_bitops;
 pub(crate) use aarch64_define_cmp;
 pub(crate) use aarch64_define_fma;
-pub(crate) use aarch64_define_absdiff;
 pub(crate) use aarch64_define_loadstore;
 pub(crate) use aarch64_define_register;
 pub(crate) use aarch64_define_splat;

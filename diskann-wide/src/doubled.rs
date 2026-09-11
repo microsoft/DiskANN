@@ -4,8 +4,8 @@
  */
 
 use crate::{
-    LoHi, SIMDAbs, SIMDAbsDiff, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
-    SIMDSelect, SIMDSumTree, SIMDVector, SplitJoin,
+    LoHi, SIMDAbs, SIMDAbsDiff, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq,
+    SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector, SplitJoin,
 };
 
 #[derive(Debug, Clone, Copy)]

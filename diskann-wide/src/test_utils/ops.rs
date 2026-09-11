@@ -1168,12 +1168,12 @@ macro_rules! test_zipunzip {
 ///////////////////
 
 pub(crate) use test_abs;
+pub(crate) use test_abs_diff;
 pub(crate) use test_add;
 pub(crate) use test_bitops;
 pub(crate) use test_cast;
 pub(crate) use test_cmp;
 pub(crate) use test_fma;
-pub(crate) use test_abs_diff;
 pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;

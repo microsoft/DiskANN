@@ -17,7 +17,7 @@ use super::{
     Neon, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask8x16,
-    u8x8
+    u8x8,
 };
 
 // AArch64 intrinsics
@@ -103,7 +103,10 @@ impl ZipUnzip for u8x16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, reference::ReferenceAbsDiff, test_utils};
+    use crate::{
+        arch::aarch64::test_neon, reference::ReferenceAbsDiff, reference::ReferenceScalarOps,
+        test_utils,
+    };
 
     #[test]
     fn miri_test_load() {
