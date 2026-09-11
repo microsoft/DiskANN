@@ -93,26 +93,18 @@ mod cosine_distance_tests {
 
     #[test]
     fn minimum_normal_norm_uses_normalized_similarity() {
-        let source_norm = f32::MIN_POSITIVE.sqrt();
-        let expected_similarity = 0.5;
-        let dot = expected_similarity * source_norm;
-
-        assert_eq!(
-            cosine_distance(dot, source_norm, 1.0),
-            1.0 - expected_similarity
-        );
+        let norm = f32::MIN_POSITIVE.sqrt();
+        assert_eq!(cosine_distance(0.5 * norm, norm, 1.0), 0.5);
     }
 
     #[rstest]
-    #[case::above_one(1.0)]
-    #[case::below_negative_one(-1.0)]
-    fn finite_similarity_outside_the_cosine_range_is_clamped(#[case] bounded_similarity: f32) {
-        let norm = 2.0;
-        let norm_product = norm * norm;
-        let rounding_excess = f32::EPSILON * norm_product;
-        let dot = bounded_similarity * (norm_product + rounding_excess);
-
-        assert_eq!(cosine_distance(dot, norm, norm), 1.0 - bounded_similarity);
+    #[case::above_one(1.0 + f32::EPSILON, 0.0)]
+    #[case::below_negative_one(-1.0 - f32::EPSILON, 2.0)]
+    fn finite_similarity_outside_the_cosine_range_is_clamped(
+        #[case] similarity: f32,
+        #[case] expected: f32,
+    ) {
+        assert_eq!(cosine_distance(similarity, 1.0, 1.0), expected);
     }
 
     #[rstest]
