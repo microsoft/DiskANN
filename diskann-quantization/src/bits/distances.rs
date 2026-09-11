@@ -714,8 +714,13 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
 }
 
 #[cfg(target_arch = "aarch64")]
-impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<'_, 4>, USlice<'_, 4>>
-    for SquaredL2
+impl
+    Target2<
+        diskann_wide::arch::aarch64::Neon,
+        MathematicalResult<u32>,
+        USlice<'_, 4>,
+        USlice<'_, 4>,
+    > for SquaredL2
 {
     #[inline(always)]
     fn run(
@@ -738,7 +743,7 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
         let mut s: u32 = 0;
 
         // number of bytes over the underlying slice
-        let bytes = len/2;
+        let bytes = len / 2;
         if i < bytes {
             let mut s0 = u32s::default(arch);
             let mut s1 = u32s::default(arch);
@@ -770,10 +775,10 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
                 s1 = s1.dot_simd(d, d);
 
                 // repeat for next 16 bytes block
-                i+=16;
+                i += 16;
             }
 
-            let remaining_bytes = len/2 - i;
+            let remaining_bytes = len / 2 - i;
 
             if remaining_bytes > 0 {
                 let x_vec = unsafe { u8s::load_simd_first(arch, px_u8.add(i), remaining_bytes) };
@@ -797,7 +802,7 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
                 );
                 s1 = s1.dot_simd(d, d);
 
-                i+= remaining_bytes;
+                i += remaining_bytes;
             }
             s = (s0 + s1).sum_tree() as u32;
         }
@@ -809,7 +814,7 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
         debug_assert!(len - i <= 1);
         if i != len {
             // SAFETY: `i` is guaranteed to be less than `x.len()`.
-           let ix = unsafe { x.get_unchecked(i) } as i32;
+            let ix = unsafe { x.get_unchecked(i) } as i32;
             // SAFETY: `i` is guaranteed to be less than `y.len()`.
             let iy = unsafe { y.get_unchecked(i) } as i32;
             let d = ix - iy;
@@ -821,8 +826,13 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
 }
 
 #[cfg(target_arch = "aarch64")]
-impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<'_, 2>, USlice<'_, 2>>
-    for SquaredL2
+impl
+    Target2<
+        diskann_wide::arch::aarch64::Neon,
+        MathematicalResult<u32>,
+        USlice<'_, 2>,
+        USlice<'_, 2>,
+    > for SquaredL2
 {
     #[inline(always)]
     fn run(
@@ -845,7 +855,7 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
         let mut s: u32 = 0;
 
         // number of bytes over the underlying slice
-        let bytes = len/4;
+        let bytes = len / 4;
         if i < bytes {
             let mut s0 = u32s::default(arch);
             let mut s1 = u32s::default(arch);
@@ -896,10 +906,10 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
                 );
                 s3 = s3.dot_simd(d, d);
                 // repeat for next block
-                i+=16;
+                i += 16;
             }
 
-            let remaining_bytes = len/4 - i;
+            let remaining_bytes = len / 4 - i;
 
             if remaining_bytes > 0 {
                 let x_vec = unsafe { u8s::load_simd_first(arch, px_u8.add(i), remaining_bytes) };
@@ -940,7 +950,7 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<
                     unsafe {  vabdq_u8(fourth_x.to_underlying(), fourth_y.to_underlying()) }
                 );
                 s3 = s3.dot_simd(d, d);
-                i+= remaining_bytes;
+                i += remaining_bytes;
             }
             s = ((s0 + s1) + (s2 + s3)).sum_tree() as u32;
         }

@@ -1137,6 +1137,7 @@ macro_rules! test_zipunzip {
 ///////////////////
 
 pub(crate) use test_abs;
+pub(crate) use test_abs_diff;
 pub(crate) use test_add;
 pub(crate) use test_bitops;
 pub(crate) use test_cast;
