@@ -103,7 +103,7 @@ impl ZipUnzip for u8x16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, test_utils};
+    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, reference::ReferenceAbsDiff, test_utils};
 
     #[test]
     fn miri_test_load() {
