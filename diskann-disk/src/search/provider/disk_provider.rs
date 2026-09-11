@@ -46,7 +46,6 @@ use diskann_utils::{
 
 use crate::search::pq::{PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
-use tokio::runtime::Runtime;
 use tracing::debug;
 
 use crate::{
@@ -1014,7 +1013,6 @@ pub struct DiskIndexSearcher<
     ProviderFactory: VertexProviderFactory<Data>,
 {
     index: DiskANNIndex<DiskProvider<Data>>,
-    runtime: Runtime,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: ProviderFactory,
@@ -1081,20 +1079,13 @@ where
     /// * `disk_index_reader` - The disk index reader.
     /// * `vertex_provider_factory` - The vertex provider factory.
     /// * `metric` - Distance metric used for vector similarity calculations.
-    /// * `runtime` - Tokio runtime handle for executing async operations.
     pub fn new(
         num_threads: usize,
         search_io_limit: usize,
         disk_index_reader: &DiskIndexReader,
         vertex_provider_factory: ProviderFactory,
         metric: Metric,
-        runtime: Option<Runtime>,
     ) -> ANNResult<Self> {
-        let runtime = match runtime {
-            Some(rt) => rt,
-            None => tokio::runtime::Builder::new_current_thread().build()?,
-        };
-
         let graph_header = vertex_provider_factory.get_header()?;
         let metadata = graph_header.metadata();
         let max_degree = graph_header.max_degree::<Data::VectorDataType>()? as u32;
@@ -1132,7 +1123,6 @@ where
         let index = DiskANNIndex::new(config, disk_provider, NonZeroUsize::new(num_threads));
         Ok(Self {
             index,
-            runtime,
             vertex_provider_factory,
             scratch_pool,
         })
@@ -1238,146 +1228,128 @@ where
 
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
-    pub fn search(
-        &self,
-        query: &[Data::VectorDataType],
+    pub fn search<'a>(
+        &'a self,
+        query: &'a [Data::VectorDataType],
         return_list_size: u32,
         search_list_size: u32,
         beam_width: Option<usize>,
-        mode: SearchMode<'_>,
-    ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
-        let mut query_stats = QueryStatistics::default();
-        let mut indices = vec![0u32; return_list_size as usize];
-        let mut distances = vec![0f32; return_list_size as usize];
-        let mut associated_data =
-            vec![Data::AssociatedDataType::default(); return_list_size as usize];
+        mode: SearchMode<'a>,
+    ) -> impl SendFuture<ANNResult<SearchResult<Data::AssociatedDataType>>> + 'a {
+        async move {
+            let mut query_stats = QueryStatistics::default();
+            let mut indices = vec![0u32; return_list_size as usize];
+            let mut distances = vec![0f32; return_list_size as usize];
+            let mut associated_data =
+                vec![Data::AssociatedDataType::default(); return_list_size as usize];
 
-        if search_list_size < return_list_size {
-            return Err(diskann_error!(
-                ErrorKind::IndexError,
-                "search list size must be at least as large as the number of results requested",
-            ));
+            if search_list_size < return_list_size {
+                return Err(diskann_error!(
+                    ErrorKind::IndexError,
+                    "search list size must be at least as large as the number of results requested",
+                ));
+            }
+
+            let stats = self
+                .search_internal(
+                    query,
+                    return_list_size as usize,
+                    search_list_size,
+                    beam_width,
+                    &mut query_stats,
+                    &mut indices,
+                    &mut distances,
+                    &mut associated_data,
+                    None,
+                    &mode,
+                )
+                .await?;
+
+            let mut search_result = SearchResult {
+                results: Vec::with_capacity(return_list_size as usize),
+                stats,
+            };
+
+            for ((vertex_id, distance), associated_data) in
+                indices.into_iter().zip(distances).zip(associated_data)
+            {
+                search_result.results.push(SearchResultItem {
+                    vertex_id,
+                    distance,
+                    data: associated_data,
+                });
+            }
+
+            Ok(search_result)
         }
-
-        let stats = self.search_internal(
-            query,
-            return_list_size as usize,
-            search_list_size,
-            beam_width,
-            &mut query_stats,
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-            &mode,
-        )?;
-
-        let mut search_result = SearchResult {
-            results: Vec::with_capacity(return_list_size as usize),
-            stats,
-        };
-
-        for ((vertex_id, distance), associated_data) in
-            indices.into_iter().zip(distances).zip(associated_data)
-        {
-            search_result.results.push(SearchResultItem {
-                vertex_id,
-                distance,
-                data: associated_data,
-            });
-        }
-
-        Ok(search_result)
     }
 
     /// Perform a search on the disk index and return each result with its native indexed vector.
     ///
     /// Unlike [`Self::search`], this returns only valid results, so the result list length equals
     /// `stats.result_count`.
-    pub fn search_with_indexed_vectors(
-        &self,
-        query: &[Data::VectorDataType],
+    pub fn search_with_indexed_vectors<'a>(
+        &'a self,
+        query: &'a [Data::VectorDataType],
         return_list_size: u32,
         search_list_size: u32,
         beam_width: Option<usize>,
-        mode: SearchMode<'_>,
-    ) -> ANNResult<SearchResultWithVectors<Data::AssociatedDataType, Data::VectorDataType>> {
-        let result_count = return_list_size as usize;
-        let mut query_stats = QueryStatistics::default();
-        let mut indices = vec![0u32; result_count];
-        let mut distances = vec![0f32; result_count];
-        let mut associated_data = vec![Data::AssociatedDataType::default(); result_count];
-        let mut indexed_vectors = std::iter::repeat_with(|| None)
-            .take(result_count)
-            .collect::<Vec<_>>();
+        mode: SearchMode<'a>,
+    ) -> impl SendFuture<
+        ANNResult<SearchResultWithVectors<Data::AssociatedDataType, Data::VectorDataType>>,
+    > + 'a {
+        async move {
+            let result_count = return_list_size as usize;
+            let mut query_stats = QueryStatistics::default();
+            let mut indices = vec![0u32; result_count];
+            let mut distances = vec![0f32; result_count];
+            let mut associated_data = vec![Data::AssociatedDataType::default(); result_count];
+            let mut indexed_vectors = std::iter::repeat_with(|| None)
+                .take(result_count)
+                .collect::<Vec<_>>();
 
-        let stats = self.search_internal_impl(
-            query,
-            result_count,
-            search_list_size,
-            beam_width,
-            &mut query_stats,
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-            Some(&mut indexed_vectors),
-            &mode,
-        )?;
+            let stats = self
+                .search_internal(
+                    query,
+                    result_count,
+                    search_list_size,
+                    beam_width,
+                    &mut query_stats,
+                    &mut indices,
+                    &mut distances,
+                    &mut associated_data,
+                    Some(&mut indexed_vectors),
+                    &mode,
+                )
+                .await?;
 
-        let results = indices
-            .into_iter()
-            .zip(distances)
-            .zip(associated_data)
-            .zip(indexed_vectors)
-            .take(stats.result_count as usize)
-            .map(|(((vertex_id, distance), data), indexed_vector)| {
-                Ok(SearchResultItemWithIndexedVector {
-                    vertex_id,
-                    data,
-                    distance,
-                    indexed_vector: indexed_vector.ok_or_else(|| {
-                        diskann_error!(
-                            ErrorKind::IndexError,
-                            "missing indexed vector for vertex {vertex_id}"
-                        )
-                    })?,
+            let results = indices
+                .into_iter()
+                .zip(distances)
+                .zip(associated_data)
+                .zip(indexed_vectors)
+                .take(stats.result_count as usize)
+                .map(|(((vertex_id, distance), data), indexed_vector)| {
+                    Ok(SearchResultItemWithIndexedVector {
+                        vertex_id,
+                        data,
+                        distance,
+                        indexed_vector: indexed_vector.ok_or_else(|| {
+                            diskann_error!(
+                                ErrorKind::IndexError,
+                                "missing indexed vector for vertex {vertex_id}"
+                            )
+                        })?,
+                    })
                 })
-            })
-            .collect::<ANNResult<Vec<_>>>()?;
+                .collect::<ANNResult<Vec<_>>>()?;
 
-        Ok(SearchResultWithVectors { results, stats })
-    }
-
-    /// Perform a raw search on the disk index.
-    /// This is a lower-level API that allows more control over the search parameters and output buffers.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn search_internal(
-        &self,
-        query: &[Data::VectorDataType],
-        k_value: usize,
-        search_list_size: u32,
-        beam_width: Option<usize>,
-        query_stats: &mut QueryStatistics,
-        indices: &mut [u32],
-        distances: &mut [f32],
-        associated_data: &mut [Data::AssociatedDataType],
-        mode: &SearchMode<'_>,
-    ) -> ANNResult<SearchResultStats> {
-        self.search_internal_impl(
-            query,
-            k_value,
-            search_list_size,
-            beam_width,
-            query_stats,
-            indices,
-            distances,
-            associated_data,
-            None,
-            mode,
-        )
+            Ok(SearchResultWithVectors { results, stats })
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn search_internal_impl(
+    async fn search_internal(
         &self,
         query: &[Data::VectorDataType],
         k_value: usize,
@@ -1427,13 +1399,14 @@ where
                     PostprocessStrategy::AcceptAll,
                     cache_indexed_vectors,
                 );
-                self.runtime.block_on(self.flat_search(
+                self.flat_search(
                     &strategy,
                     query,
                     filter.as_deref(),
                     l,
                     &mut result_output_buffer,
-                ))?
+                )
+                .await?
             }
             SearchMode::Graph { filter } => {
                 let strategy = self.search_strategy(
@@ -1445,13 +1418,15 @@ where
                 );
                 let knn_search = Knn::new(l, beam_width)
                     .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
-                self.runtime.block_on(self.index.search(
-                    knn_search,
-                    &strategy,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                self.index
+                    .search(
+                        knn_search,
+                        &strategy,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    )
+                    .await?
             }
             SearchMode::InlineFilter { filter, adaptive_l } => {
                 // Strategy is passed by value into `filter_search` so that the
@@ -1463,14 +1438,15 @@ where
                     cache_indexed_vectors,
                 );
                 let knn_search = Knn::new(l, beam_width)?;
-                self.runtime.block_on(self.filter_search(
+                self.filter_search(
                     strategy,
                     query,
                     knn_search,
                     filter.as_ref(),
                     adaptive_l.clone(),
                     &mut result_output_buffer,
-                ))?
+                )
+                .await?
             }
             SearchMode::DiverseGraph { filter, params } => {
                 // Strategy installs the filter so `RerankAndFilter` would also
@@ -1485,14 +1461,16 @@ where
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(postprocess_config, *params),
                 );
-                self.runtime.block_on(self.index.search_with(
-                    knn_search,
-                    &strategy,
-                    processor,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                self.index
+                    .search_with(
+                        knn_search,
+                        &strategy,
+                        processor,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    )
+                    .await?
             }
         };
         query_stats.total_comparisons = stats.cmps;
@@ -1794,11 +1772,6 @@ mod disk_provider_tests {
     {
         assert!(params.io_limit > 0);
 
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(params.max_thread_num)
-            .build()
-            .unwrap();
-
         let disk_index_reader = DiskIndexReader::new(
             params.pq_pivot_file_path.to_string(),
             params.pq_compressed_file_path.to_string(),
@@ -1822,7 +1795,6 @@ mod disk_provider_tests {
             &disk_index_reader,
             vertex_provider_factory,
             Metric::L2,
-            Some(runtime),
         )
         .unwrap()
     }
@@ -1938,26 +1910,20 @@ mod disk_provider_tests {
             .map(|path| load_source_data(params.storage_provider, path));
 
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         queries
             .par_row_iter()
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
-                let mut query_stats = QueryStatistics::default();
-                let mut indices = vec![0u32; 10];
-                let mut distances = vec![0f32; 10];
-                let mut associated_data = vec![(); 10];
-
-                let result = params.index_search_engine.search_internal(
+                let result = runtime.block_on(params.index_search_engine.search(
                     query,
-                    params.k,
+                    params.k as u32,
                     params.l as u32,
                     None, // beam_width
-                    &mut query_stats,
-                    &mut indices,
-                    &mut distances,
-                    &mut associated_data,
-                    &SearchMode::graph(),
-                );
+                    SearchMode::graph(),
+                ));
 
                 // Calculate the range of the truth_result for this query
                 let truth_slice = &truth_result[i * params.k..(i + 1) * params.k];
@@ -1966,34 +1932,45 @@ mod disk_provider_tests {
 
                 let result_unwrapped = result.unwrap();
                 assert!(
-                    result_unwrapped.query_statistics.total_io_operations > 0,
+                    result_unwrapped.stats.query_statistics.total_io_operations > 0,
                     "Expected IO operations to be greater than 0"
                 );
                 assert!(
-                    result_unwrapped.query_statistics.total_vertices_loaded > 0,
+                    result_unwrapped
+                        .stats
+                        .query_statistics
+                        .total_vertices_loaded
+                        > 0,
                     "Expected vertices loaded to be greater than 0"
                 );
 
-                let indexed = params
-                    .index_search_engine
-                    .search_with_indexed_vectors(
+                let indexed = runtime
+                    .block_on(params.index_search_engine.search_with_indexed_vectors(
                         query,
                         params.k as u32,
                         params.l as u32,
                         None,
                         SearchMode::graph(),
-                    )
+                    ))
                     .unwrap();
                 assert_indexed_results_match(
                     &indexed,
-                    result_unwrapped.result_count,
-                    result_unwrapped.query_statistics.total_io_operations,
-                    indices.iter().copied().zip(distances.iter().copied()),
+                    result_unwrapped.stats.result_count,
+                    result_unwrapped.stats.query_statistics.total_io_operations,
+                    result_unwrapped
+                        .results
+                        .iter()
+                        .map(|item| (item.vertex_id, item.distance)),
                     source.as_ref(),
                     query.len(),
                 );
 
                 // Compare res with truth_slice using assert_eq!
+                let indices: Vec<_> = result_unwrapped
+                    .results
+                    .iter()
+                    .map(|item| item.vertex_id)
+                    .collect();
                 assert_eq!(
                     indices, truth_slice,
                     "Results DO NOT match with the truth result for query {}",
@@ -2016,11 +1993,14 @@ mod disk_provider_tests {
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         queries
             .par_row_iter()
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
-                let result = params
+                let result = runtime.block_on(params
                     .index_search_engine
                     .search(
                         query,
@@ -2028,7 +2008,7 @@ mod disk_provider_tests {
                         params.l as u32,
                         beam_width,
                         SearchMode::graph(),
-                    )
+                    ))
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
                 let associated_data: Vec<u32> =
@@ -2052,8 +2032,8 @@ mod disk_provider_tests {
             });
     }
 
-    #[test]
-    fn test_disk_search_invalid_input() {
+    #[tokio::test]
+    async fn test_disk_search_invalid_input() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let ctx = &DefaultContext;
 
@@ -2122,24 +2102,27 @@ mod disk_provider_tests {
         let mut associated_data = vec![0u32; 10];
 
         // Set L: {} to a value of at least K:
-        let result = search_engine.search_internal(
-            &query,
-            10,
-            10 - 1,
-            None,
-            &mut query_stats,
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-            &SearchMode::graph(),
-        );
+        let result = search_engine
+            .search_internal(
+                &query,
+                10,
+                10 - 1,
+                None,
+                &mut query_stats,
+                &mut indices,
+                &mut distances,
+                &mut associated_data,
+                None,
+                &SearchMode::graph(),
+            )
+            .await;
 
         assert!(result.is_err());
         assert_eq!(error_kind(&result.unwrap_err()), ErrorKind::IndexError);
     }
 
-    #[test]
-    fn test_search_rejects_search_list_size_less_than_return_list_size() {
+    #[tokio::test]
+    async fn test_search_rejects_search_list_size_less_than_return_list_size() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
@@ -2158,33 +2141,38 @@ mod disk_provider_tests {
         let return_list_size = 10u32;
         let search_list_size = return_list_size - 1;
 
-        let result = search_engine.search(
-            &query,
-            return_list_size,
-            search_list_size,
-            None,
-            SearchMode::graph(),
-        );
+        let result = search_engine
+            .search(
+                &query,
+                return_list_size,
+                search_list_size,
+                None,
+                SearchMode::graph(),
+            )
+            .await;
 
         match result {
             Err(_) => {}
             Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
         }
 
-        match search_engine.search_with_indexed_vectors(
-            &query,
-            return_list_size,
-            search_list_size,
-            None,
-            SearchMode::graph(),
-        ) {
+        match search_engine
+            .search_with_indexed_vectors(
+                &query,
+                return_list_size,
+                search_list_size,
+                None,
+                SearchMode::graph(),
+            )
+            .await
+        {
             Err(error) => assert_eq!(error_kind(&error), ErrorKind::IndexError),
             Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
         }
     }
 
-    #[test]
-    fn test_disk_search_beam_search() {
+    #[tokio::test]
+    async fn test_disk_search_beam_search() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
@@ -2215,14 +2203,15 @@ mod disk_provider_tests {
         let recorded_search =
             diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
-            .runtime
-            .block_on(search_engine.index.search(
+            .index
+            .search(
                 recorded_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
                 &mut result_output_buffer,
-            ))
+            )
+            .await
             .unwrap();
 
         let ids = search_record
@@ -2238,13 +2227,15 @@ mod disk_provider_tests {
         assert_eq!(ids, &EXPECTED_NODES);
 
         let search_list_size = 10;
-        let result = search_engine.search(
-            &query_vector,
-            k as u32,
-            search_list_size,
-            Some(4),
-            SearchMode::graph(),
-        );
+        let result = search_engine
+            .search(
+                &query_vector,
+                k as u32,
+                search_list_size,
+                Some(4),
+                SearchMode::graph(),
+            )
+            .await;
         assert!(result.is_ok(), "Expected search to succeed");
         let search_result = result.unwrap();
         assert_eq!(
@@ -2259,8 +2250,8 @@ mod disk_provider_tests {
         );
     }
 
-    #[test]
-    fn test_disk_search_determinant_diversity() {
+    #[tokio::test]
+    async fn test_disk_search_determinant_diversity() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -2288,6 +2279,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::graph(),
             )
+            .await
             .unwrap();
         let baseline_ids: std::collections::HashSet<u32> =
             baseline.results.iter().map(|r| r.vertex_id).collect();
@@ -2306,6 +2298,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::diverse_graph(params),
             )
+            .await
             .unwrap();
         let indexed = search_engine
             .search_with_indexed_vectors(
@@ -2315,6 +2308,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::diverse_graph(params),
             )
+            .await
             .unwrap();
         let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
         assert_indexed_search_results_match(&result, &indexed, &source);
@@ -2356,6 +2350,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::diverse_graph(pure_params),
             )
+            .await
             .unwrap();
         let pure_ids: Vec<u32> = pure_result.results.iter().map(|r| r.vertex_id).collect();
         for id in &pure_ids {
@@ -2377,6 +2372,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::diverse_graph_filtered(move |id: &u32| *id != excluded, params),
             )
+            .await
             .unwrap();
         let filtered_ids: Vec<u32> = filtered.results.iter().map(|r| r.vertex_id).collect();
         assert!(
@@ -2386,8 +2382,8 @@ mod disk_provider_tests {
     }
 
     #[cfg(feature = "experimental_diversity_search")]
-    #[test]
-    fn test_disk_search_diversity_search() {
+    #[tokio::test]
+    async fn test_disk_search_diversity_search() {
         use diskann::graph::search::DiverseSearchParams;
         use diskann::neighbor::AttributeValueProvider;
         use std::collections::HashMap;
@@ -2471,14 +2467,15 @@ mod disk_provider_tests {
         let diverse_search =
             diskann::graph::search::Diverse::new(search_params, diverse_params).unwrap();
         let stats = search_engine
-            .runtime
-            .block_on(search_engine.index.search(
+            .index
+            .search(
                 diverse_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
                 &mut result_output_buffer,
-            ))
+            )
+            .await
             .unwrap();
 
         // Verify that search was performed and returned some results
@@ -2511,14 +2508,15 @@ mod disk_provider_tests {
         let diverse_search2 =
             diskann::graph::search::Diverse::new(search_params2, diverse_params).unwrap();
         let stats = search_engine
-            .runtime
-            .block_on(search_engine.index.search(
+            .index
+            .search(
                 diverse_search2,
                 &strategy2,
                 &DefaultContext,
                 query_vector.as_slice(),
                 &mut result_output_buffer2,
-            ))
+            )
+            .await
             .unwrap();
 
         // Verify results
@@ -2663,7 +2661,8 @@ mod disk_provider_tests {
         vec![256709.69, 256712.5, 256760.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         false,
     )]
-    fn test_search_with_vector_filter(
+    #[tokio::test]
+    async fn test_search_with_vector_filter(
         #[case] vector_filter: fn(&u32) -> bool,
         #[case] is_flat_search: bool,
         #[case] expected_result_count: u32,
@@ -2699,12 +2698,8 @@ mod disk_provider_tests {
             &storage_provider,
         );
         let query = vec![0.1f32; 128];
-        let mut query_stats = QueryStatistics::default();
-        let mut indices = vec![0u32; 10];
-        let mut distances = vec![0f32; 10];
-        let mut associated_data = vec![(); 10];
 
-        // Build the same `SearchMode` twice. `vector_filter` is a `fn` pointer
+        // Reconstruct `SearchMode` for each search. `vector_filter` is a `fn` pointer
         // (Copy), so each call reconstructs a fresh mode with the same filter.
         let make_mode = || -> SearchMode<'static> {
             if is_flat_search {
@@ -2714,37 +2709,15 @@ mod disk_provider_tests {
             }
         };
 
-        let result = search_engine.search_internal(
-            &query,
-            10,
-            10,
-            None, // beam_width
-            &mut query_stats,
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-            &make_mode(),
-        );
-
-        assert!(result.is_ok(), "Expected search to succeed");
-        assert_eq!(
-            result.unwrap().result_count,
-            expected_result_count,
-            "Expected result count to match"
-        );
-        assert_eq!(indices, expected_indices, "Expected indices to match");
-        assert!(
-            check_distances(&distances, &expected_distances),
-            "Expected distances to match"
-        );
-
-        let result_with_filter = search_engine.search(
-            &query,
-            10,
-            10,
-            None, // beam_width
-            make_mode(),
-        );
+        let result_with_filter = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None, // beam_width
+                make_mode(),
+            )
+            .await;
 
         assert!(result_with_filter.is_ok(), "Expected search to succeed");
         let result_with_filter_unwrapped = result_with_filter.unwrap();
@@ -2774,14 +2747,15 @@ mod disk_provider_tests {
         if check_indexed_vectors {
             let indexed = search_engine
                 .search_with_indexed_vectors(&query, 10, 10, None, make_mode())
+                .await
                 .unwrap();
             let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
             assert_indexed_search_results_match(&result_with_filter_unwrapped, &indexed, &source);
         }
     }
 
-    #[test]
-    fn unfiltered_flat_scan_matches_baseline() {
+    #[tokio::test]
+    async fn unfiltered_flat_scan_matches_baseline() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -2797,6 +2771,7 @@ mod disk_provider_tests {
 
         let result = search_engine
             .search(&[0.1; 128], 10, 10, None, SearchMode::flat())
+            .await
             .unwrap();
 
         let expected = [
@@ -2835,8 +2810,8 @@ mod disk_provider_tests {
         assert_eq!(result.stats.result_count, 10);
     }
 
-    #[test]
-    fn flat_filter_runs_once_per_point() {
+    #[tokio::test]
+    async fn flat_filter_runs_once_per_point() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -2862,6 +2837,7 @@ mod disk_provider_tests {
                     id % 64 == 0
                 }),
             )
+            .await
             .unwrap();
 
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 256);
@@ -2870,8 +2846,8 @@ mod disk_provider_tests {
         assert!(result.results.iter().all(|item| item.vertex_id % 64 == 0));
     }
 
-    #[test]
-    fn graph_and_flat_queries_isolate_pooled_query_state() {
+    #[tokio::test]
+    async fn graph_and_flat_queries_isolate_pooled_query_state() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -2887,15 +2863,19 @@ mod disk_provider_tests {
 
         let graph_before = search_engine
             .search(&[0.1; 128], 10, 10, None, SearchMode::graph())
+            .await
             .unwrap();
         let flat_before = search_engine
             .search(&[0.9; 128], 10, 10, None, SearchMode::flat())
+            .await
             .unwrap();
         let graph_after = search_engine
             .search(&[0.1; 128], 10, 10, None, SearchMode::graph())
+            .await
             .unwrap();
         let flat_after = search_engine
             .search(&[0.9; 128], 10, 10, None, SearchMode::flat())
+            .await
             .unwrap();
 
         let assert_same = |before: &SearchResult<()>, after: &SearchResult<()>| {
@@ -2926,8 +2906,8 @@ mod disk_provider_tests {
     //    recall@k (would need filter-selective ground truth) — just that the
     //    inline path runs end-to-end and produces filter-conforming output.
 
-    #[test]
-    fn test_adaptive_l_with_no_filter_matches_plain_knn() {
+    #[tokio::test]
+    async fn test_adaptive_l_with_no_filter_matches_plain_knn() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -2944,6 +2924,7 @@ mod disk_provider_tests {
 
         let plain = search_engine
             .search(&query, 10, 10, None, SearchMode::graph())
+            .await
             .expect("plain Knn must succeed");
 
         let inline_no_filter = search_engine
@@ -2957,6 +2938,7 @@ mod disk_provider_tests {
                     Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
                 ),
             )
+            .await
             .expect("inline filter with accept-all predicate must succeed");
 
         let plain_ids: Vec<u32> = plain.results.iter().map(|r| r.vertex_id).collect();
@@ -2976,8 +2958,8 @@ mod disk_provider_tests {
         );
     }
 
-    #[test]
-    fn test_adaptive_l_with_selective_predicate_returns_only_matches() {
+    #[tokio::test]
+    async fn test_adaptive_l_with_selective_predicate_returns_only_matches() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -3006,6 +2988,7 @@ mod disk_provider_tests {
                     Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
                 ),
             )
+            .await
             .expect("inline filter search with AdaptiveL must succeed");
         let indexed = search_engine
             .search_with_indexed_vectors(
@@ -3018,6 +3001,7 @@ mod disk_provider_tests {
                     Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
                 ),
             )
+            .await
             .expect("indexed-vector inline filter search with AdaptiveL must succeed");
         let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
         assert_indexed_search_results_match(&result, &indexed, &source);
@@ -3044,8 +3028,8 @@ mod disk_provider_tests {
         );
     }
 
-    #[test]
-    fn test_beam_search_respects_io_limit() {
+    #[tokio::test]
+    async fn test_beam_search_respects_io_limit() {
         let io_limit = 11; // Set a small IO limit for testing
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
@@ -3080,14 +3064,15 @@ mod disk_provider_tests {
         let recorded_search =
             diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
-            .runtime
-            .block_on(search_engine.index.search(
+            .index
+            .search(
                 recorded_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
                 &mut result_output_buffer,
-            ))
+            )
+            .await
             .unwrap();
         let visited_ids = search_record
             .visited

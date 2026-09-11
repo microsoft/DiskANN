@@ -572,7 +572,6 @@ pub(crate) mod disk_index_builder_tests {
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
         storage::disk_index_reader::DiskIndexReader,
-        utils::QueryStatistics,
     };
     const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
     pub const TEST_DATA_FILE: &str = "/sift/siftsmall_learn_256pts.fbin";
@@ -982,7 +981,6 @@ pub(crate) mod disk_index_builder_tests {
             &index_reader,
             vertex_provider_factory,
             params.metric,
-            None,
         )?;
 
         let data =
@@ -996,29 +994,25 @@ pub(crate) mod disk_index_builder_tests {
         // that our simple graph search matches.
         //
         // Because this dataset is small, we can expect exact equality.
+        let runtime = tokio::runtime::Builder::new_current_thread().build()?;
         for (q, query_data) in data.row_iter().enumerate() {
             let gt =
                 diskann_providers::test_utils::groundtruth(data.as_view(), query_data, |a, b| {
                     distance.evaluate_similarity(a, b)
                 });
 
-            let mut query_stats = QueryStatistics::default();
-
-            let mut indices = vec![0u32; top_k];
-            let mut distances = vec![0f32; top_k];
-            let mut associated_data = vec![(); top_k];
-
-            _ = search_engine.search_internal(
+            let result = runtime.block_on(search_engine.search(
                 query_data,
-                top_k,
+                u32::try_from(top_k)?,
                 search_l,
                 None, // beam_width
-                &mut query_stats,
-                &mut indices,
-                &mut distances,
-                &mut associated_data,
-                &crate::search::search_mode::SearchMode::graph(),
-            );
+                crate::search::search_mode::SearchMode::graph(),
+            ))?;
+            let (indices, distances): (Vec<_>, Vec<_>) = result
+                .results
+                .iter()
+                .map(|item| (item.vertex_id, item.distance))
+                .unzip();
 
             diskann_providers::test_utils::assert_top_k_exactly_match(
                 q, &gt, &indices, &distances, top_k,
