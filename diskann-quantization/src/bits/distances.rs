@@ -713,6 +713,113 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<u32>, USlice<'_, 4>, USlice<'_, 4>>
+    for SquaredL2
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::aarch64::Neon,
+        x: USlice<'_, 4>,
+        y: USlice<'_, 4>,
+    ) -> MathematicalResult<u32> {
+        // returns number of quantized vectors
+        use std::arch::aarch64::vabdq_u8;
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(u8s = <diskann_wide::arch::aarch64::Neon>::u8x16);
+        diskann_wide::alias!(u32s = <diskann_wide::arch::aarch64::Neon>::u32x4);
+
+        let px_u8: *const u8 = x.as_ptr().cast();
+        let py_u8: *const u8 = y.as_ptr().cast();
+
+        let mut i = 0;
+        let mut s: u32 = 0;
+
+        // number of bytes over the underlying slice
+        let bytes = len/2;
+        if i < bytes {
+            let mut s0 = u32s::default(arch);
+            let mut s1 = u32s::default(arch);
+            let mask = u8s::splat(arch, 0x0f);
+            while i + 16 <= bytes {
+                // Load 128-bits into 8x16 register
+                // both operations are safe since we verified that
+                // both pointers (of equal length) have >= 16 bytes available
+                // from the offset `i`
+                let x_vec = unsafe { u8s::load_simd(arch, px_u8.add(i)) };
+                let y_vec = unsafe { u8s::load_simd(arch, py_u8.add(i)) };
+
+                // compute abs diff then dot product for lower 4 bits, result is stored as 32x4
+                let lower_x: u8s = x_vec & mask;
+                let lower_y: u8s = y_vec & mask;
+                let d = u8s::from_underlying (
+                    arch,
+                    unsafe {  vabdq_u8(lower_x.to_underlying(), lower_y.to_underlying()) }
+                );
+                s0 = s0.dot_simd(d, d);
+
+                // compute abs diff then dot product for upper 4 bits, result is stored as 32x4
+                let upper_x: u8s = (x_vec >> 4) & mask;
+                let upper_y: u8s = (y_vec >> 4) & mask;
+                let d = u8s::from_underlying (
+                    arch,
+                    unsafe {  vabdq_u8(upper_x.to_underlying(), upper_y.to_underlying()) }
+                );
+                s1 = s1.dot_simd(d, d);
+
+                // repeat for next 16 bytes block
+                i+=16;
+            }
+
+            let remaining_bytes = len/2 - i;
+
+            if remaining_bytes > 0 {
+                let x_vec = unsafe { u8s::load_simd_first(arch, px_u8.add(i), remaining_bytes) };
+                let y_vec = unsafe { u8s::load_simd_first(arch, py_u8.add(i), remaining_bytes) };
+
+                // compute abs diff then dot product for lower 4 bits, result is stored as 32x4
+                let lower_x: u8s = x_vec & mask;
+                let lower_y: u8s = y_vec & mask;
+                let d = u8s::from_underlying (
+                        arch,
+                        unsafe {  vabdq_u8(lower_x.to_underlying(), lower_y.to_underlying()) }
+                );
+                s0 = s0.dot_simd(d, d);
+
+                // compute abs diff then dot product for upper 4 bits, result is stored as 32x4
+                let upper_x: u8s = (x_vec >> 4) & mask;
+                let upper_y: u8s = (y_vec >> 4) & mask;
+                let d = u8s::from_underlying (
+                        arch,
+                        unsafe {  vabdq_u8(upper_x.to_underlying(), upper_y.to_underlying()) }
+                );
+                s1 = s1.dot_simd(d, d);
+
+                i+= remaining_bytes;
+            }
+            s = (s0 + s1).sum_tree() as u32;
+        }
+
+        // Convert bytes to nibble indexes.
+        i *= 2;
+
+        // Deal with the remainder the slow way (at most 1 element).
+        debug_assert!(len - i <= 1);
+        if i != len {
+            // SAFETY: `i` is guaranteed to be less than `x.len()`.
+           let ix = unsafe { x.get_unchecked(i) } as i32;
+            // SAFETY: `i` is guaranteed to be less than `y.len()`.
+            let iy = unsafe { y.get_unchecked(i) } as i32;
+            let d = ix - iy;
+            s += (d * d) as u32;
+        }
+
+        Ok(MV::new(s))
+    }
+}
+
 /// Compute the squared L2 distance between `x` and `y`.
 ///
 /// Returns an error if the arguments have different lengths.
@@ -962,7 +1069,6 @@ retarget!(
     7,
     6,
     5,
-    4,
     3,
     2
 );
