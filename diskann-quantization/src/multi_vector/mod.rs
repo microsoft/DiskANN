@@ -55,6 +55,7 @@ pub mod block_transposed;
 pub mod distance;
 pub(crate) mod matrix;
 
+pub use crate::minmax::build_minmax_max_sim;
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
 pub use distance::{
     BoxErase, Chamfer, Erase, MaxSim, MaxSimElement, MaxSimError, MaxSimIsa, MaxSimKernel,
