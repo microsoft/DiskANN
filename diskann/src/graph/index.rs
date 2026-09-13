@@ -2495,34 +2495,57 @@ where
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
     {
         async move {
-            let record_sorted =
-                SortedNeighbors::new(&mut record.visited, self.max_occlusion_size());
+            // The following bit of code is a little tricky.
+            //
+            // We ensure that `record` is sorted and truncated to `max_occlusion_size` before
+            // passing to `PruneAccessor::fill`. The prune-accessor should have enough
+            // capacity for both `max_occlusion_size` elements from `record` and all the
+            // contents of `extra`.
+            //
+            // If `extra` is non-empty, then we need to add all items in `extra` to `record`
+            // and resort.
+            //
+            // However, if `extra` is empty, we avoid doing a re-sort and instead use the
+            // original `SortedNeighbors`.
+            let (view, computer, pool) = {
+                let sorted_record =
+                    SortedNeighbors::new(&mut record.visited, self.max_occlusion_size());
 
-            let (view, computer) = accessor
-                .fill(internal::chain(
-                    std::iter::once(internal_id),
-                    internal::chain(extras.clone(), record_sorted.ids()),
-                ))
-                .await?;
+                let (view, computer) = accessor
+                    .fill(internal::chain(
+                        std::iter::once(internal_id),
+                        internal::chain(extras.clone(), sorted_record.ids()),
+                    ))
+                    .await?;
 
-            if extras.len() != 0 {
-                let this_vector = view
-                    .get(internal_id)
-                    .ok_or_else(|| prune::ListError::failed_retrieval(internal_id))?;
+                // Resort only if new items get added.
+                let sorted_record = if extras.len() == 0 {
+                    sorted_record
+                } else {
+                    let this_vector = view
+                        .get(internal_id)
+                        .ok_or_else(|| prune::ListError::failed_retrieval(internal_id))?;
 
-                for id in extras {
-                    if let Some(element) = view.get(id) {
-                        record.push(Neighbor::new(
-                            id,
-                            computer
-                                .evaluate_similarity(this_vector.reborrow(), element.reborrow()),
-                        ))
+                    for id in extras {
+                        if let Some(element) = view.get(id) {
+                            record.push(Neighbor::new(
+                                id,
+                                computer.evaluate_similarity(
+                                    this_vector.reborrow(),
+                                    element.reborrow(),
+                                ),
+                            ))
+                        }
                     }
-                }
-            }
+
+                    SortedNeighbors::new(&mut record.visited, self.max_occlusion_size())
+                };
+
+                (view, computer, sorted_record)
+            };
 
             let mut context = prune::Context {
-                pool: SortedNeighbors::new(&mut record.visited, self.max_occlusion_size()),
+                pool,
                 states: &mut scratch.states,
                 neighbors: &mut scratch.neighbors,
             };
