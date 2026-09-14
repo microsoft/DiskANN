@@ -413,11 +413,18 @@ fn max_results_respected_and_second_round_triggered() {
     assert_no_duplicates(&results);
 }
 
+/// The next two tests use a 5 by 5 grid indexed from zero where the start point and
+/// query are [5,5,5]. The closest point to the query is thus [4,4,4] with
+/// a squared distance of 3.0 from the query. Setting the radius to 3 will then
+/// include just the start point and the closest point [4,4,4] in the in-range
+/// results at the end of the first round of search. Thus, a second round can
+/// only be triggered if the initial slack is .5 or less
+
 #[test]
 fn initial_slack_low_triggers_second_round() {
-    let _description = "Test that low initial_slack triggers second round. \
-    With initial_slack=0.5 and starting_l=4, the threshold is 2, so any \
-    outer_range_len >= 2 will trigger the second round.";
+    let description = "Grid setup where radius of 3.0 includes exactly two points \
+    in the in-range results at the end of the second round of search. Thus, initial \
+    slack of .5 or lower should trigger a second round.";
 
     let rt = current_thread_runtime();
     let mut test_root = root();
@@ -426,7 +433,7 @@ fn initial_slack_low_triggers_second_round() {
 
     let grid_size = 5;
     let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 50.0;
+    let radius = 3.0;
     let starting_l = 4;
     let low_slack = 0.5;
 
@@ -447,7 +454,7 @@ fn initial_slack_low_triggers_second_round() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
-        description: "Low initial_slack triggers second round search.".to_string(),
+        description: description.to_string(),
         grid_dims: Grid::Three.dim(),
         grid_size,
         query: query.clone(),
@@ -476,9 +483,9 @@ fn initial_slack_low_triggers_second_round() {
 
 #[test]
 fn initial_slack_high_avoids_second_round() {
-    let _description = "Test that high initial_slack avoids second round. \
-    With initial_slack=1.0 and starting_l=4, the threshold is 4, making it \
-    harder to trigger the second round.";
+    let description = "Grid setup where radius of 3.0 includes exactly two points \
+    in the in-range results at the end of the second round of search. Thus, initial \
+    slack of .51 or higher should avoid triggering a second round.";
 
     let rt = current_thread_runtime();
     let mut test_root = root();
@@ -487,9 +494,9 @@ fn initial_slack_high_avoids_second_round() {
 
     let grid_size = 5;
     let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 50.0;
+    let radius = 3.0;
     let starting_l = 4;
-    let high_slack = 1.0;
+    let high_slack = 0.51;
 
     let range_search = Range::builder(starting_l, radius)
         .initial_slack(high_slack)
@@ -508,7 +515,7 @@ fn initial_slack_high_avoids_second_round() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
-        description: "High initial_slack avoids second round search.".to_string(),
+        description: description.to_string(),
         grid_dims: Grid::Three.dim(),
         grid_size,
         query: query.clone(),
@@ -530,125 +537,89 @@ fn initial_slack_high_avoids_second_round() {
 }
 
 #[test]
-fn range_slack_low_constrains_frontier() {
-    let _description = "Test that low range_slack constrains frontier expansion. \
-    With range_slack=1.0, the frontier only expands to nodes within radius, \
-    resulting in fewer total results found.";
+fn higher_range_slack_finds_more_results() {
+    use crate::graph::AdjacencyList;
 
-    let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
-    let name = path.push("range_slack_low_constrains_frontier");
+    let mut path = path.push("higher_range_slack_finds_more_results");
 
-    let grid_size = 5;
-    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 30.0;
-    let starting_l = 4;
-    let initial_slack = 0.5;
-    let low_range_slack = 1.0;
-
-    let range_search = Range::builder(starting_l, radius)
-        .initial_slack(initial_slack)
-        .range_slack(low_range_slack)
-        .build()
-        .unwrap();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
-
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
-        .unwrap();
-
-    let baseline = RangeSearchBaseline {
-        description: "Low range_slack constrains frontier expansion.".to_string(),
-        grid_dims: Grid::Three.dim(),
-        grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: results.iter().map(|n| n.as_tuple()).collect(),
-        comparisons: stats.cmps as usize,
-        hops: stats.hops as usize,
-        result_count: results.len(),
-        range_search_second_round: stats.range_search_second_round,
-    };
-
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
-    assert!(
-        stats.range_search_second_round,
-        "low initial_slack should trigger second round"
+    // Use grid coordinates, but connect them as start -> 0 <-> 1 <-> 3 <-> 2.
+    // With query [0, 0], squared distances for IDs 0, 1, 2, 3 are 0, 1, 1, 2.
+    // ID 2 is in range, but can only be reached through out-of-range ID 3.
+    let index = super::helpers::setup_2d_square(
+        vec![
+            AdjacencyList::from_iter_untrusted([1]),
+            AdjacencyList::from_iter_untrusted([0, 3]),
+            AdjacencyList::from_iter_untrusted([3]),
+            AdjacencyList::from_iter_untrusted([1, 2]),
+            AdjacencyList::from_iter_untrusted([0]),
+        ],
+        2,
     );
-
-    assert_range_invariants(&results, radius, None);
-    assert_no_duplicates(&results);
-}
-
-#[test]
-fn range_slack_high_expands_frontier() {
-    let _description = "Test that high range_slack expands frontier exploration. \
-    With range_slack=1.3, the frontier expands to nodes up to radius * 1.3, \
-    potentially finding more results than lower range_slack.";
-
     let rt = current_thread_runtime();
-    let mut test_root = root();
-    let mut path = test_root.path();
-    let name = path.push("range_slack_high_expands_frontier");
+    let query = [0.0, 0.0];
+    let radius = 1.0;
+    // Keep the initial search too small to expand ID 3. The start point at
+    // [0.5, 0.5] is in range and counts toward the second-round threshold.
+    let starting_l = 2;
 
-    let grid_size = 5;
-    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 30.0;
-    let starting_l = 4;
-    let initial_slack = 0.5;
-    let high_range_slack = 1.3;
+    let mut search = |case: &str, range_slack| {
+        let name = path.push(case);
+        let range = Range::builder(starting_l, radius)
+            .range_slack(range_slack)
+            .build()
+            .unwrap();
+        let mut results: Vec<Neighbor<u32>> = Vec::new();
+        let stats = rt
+            .block_on(index.search(
+                range,
+                &test_provider::Strategy::new(),
+                &test_provider::Context::new(),
+                query.as_slice(),
+                &mut results,
+            ))
+            .unwrap();
 
-    let range_search = Range::builder(starting_l, radius)
-        .initial_slack(initial_slack)
-        .range_slack(high_range_slack)
-        .build()
-        .unwrap();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
+        let baseline = RangeSearchBaseline {
+            description: format!(
+                "Range slack comparison on a 2 by 2 grid connected as \
+                start -> 0 <-> 1 <-> 3 <-> 2. With range_slack={range_slack}, \
+                slack 1.0 finds IDs 0 and 1, while slack 2.0 also finds ID 2 \
+                by expanding out-of-range ID 3 without returning it."
+            ),
+            grid_dims: Grid::Two.dim(),
+            grid_size: 2,
+            query: query.to_vec(),
+            radius,
+            inner_radius: None,
+            starting_l,
+            results: results.iter().map(|n| n.as_tuple()).collect(),
+            comparisons: stats.cmps as usize,
+            hops: stats.hops as usize,
+            result_count: results.len(),
+            range_search_second_round: stats.range_search_second_round,
+        };
 
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
-        .unwrap();
+        let expected = get_or_save_test_results(&name, &baseline);
+        assert_eq_verbose!(expected, baseline);
 
-    let baseline = RangeSearchBaseline {
-        description: "High range_slack expands frontier exploration.".to_string(),
-        grid_dims: Grid::Three.dim(),
-        grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: results.iter().map(|n| n.as_tuple()).collect(),
-        comparisons: stats.cmps as usize,
-        hops: stats.hops as usize,
-        result_count: results.len(),
-        range_search_second_round: stats.range_search_second_round,
+        assert!(
+            stats.range_search_second_round,
+            "range_slack={range_slack} should exercise second-round expansion"
+        );
+        assert_range_invariants(&results, radius, None);
+        assert_no_duplicates(&results);
+        let mut results: Vec<_> = results.iter().map(|n| n.as_tuple()).collect();
+        results.sort_unstable_by_key(|n| n.0);
+        results
     };
 
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
+    let low_slack_results = search("low_range_slack", 1.0);
+    let high_slack_results = search("high_range_slack", 2.0);
 
     assert!(
-        stats.range_search_second_round,
-        "low initial_slack should trigger second round"
+        high_slack_results.len() > low_slack_results.len(),
+        "higher range slack should find more in-range results"
     );
-
-    assert_range_invariants(&results, radius, None);
-    assert_no_duplicates(&results);
 }
