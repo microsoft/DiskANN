@@ -74,6 +74,11 @@ impl<'a> RayonThreadPoolRef<'a> {
     {
         self.0.install(op)
     }
+
+    /// Return a reference to the underlying Rayon pool.
+    pub fn as_rayon(self) -> &'a rayon::ThreadPool {
+        self.0
+    }
 }
 
 // Allow use of disallowed methods within this trait to provide custom
