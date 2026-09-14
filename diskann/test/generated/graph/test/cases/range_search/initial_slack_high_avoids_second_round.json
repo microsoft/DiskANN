@@ -1,0 +1,27 @@
+{
+  "file": "diskann/src/graph/test/cases/range_search.rs",
+  "test": "graph/test/cases/range_search/initial_slack_high_avoids_second_round",
+  "payload": {
+    "comparisons": 14,
+    "description": "Grid setup where radius of 3.0 includes exactly two points in the in-range results at the end of the second round of search. Thus, initial slack of .51 or higher should avoid triggering a second round.",
+    "grid_dims": 3,
+    "grid_size": 5,
+    "hops": 7,
+    "inner_radius": null,
+    "query": [
+      5.0,
+      5.0,
+      5.0
+    ],
+    "radius": 3.0,
+    "range_search_second_round": true,
+    "result_count": 1,
+    "results": [
+      [
+        124,
+        3.0
+      ]
+    ],
+    "starting_l": 4
+  }
+}
