@@ -704,6 +704,21 @@ where
     M: Id,
 {
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a Provider<R, M>,
+        _context: &'a Context,
+        vector: R::Query<'a>,
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        <R as repr::Insert>::insert_search_accessor(
+            &provider.representation,
+            vector,
+            provider,
+            provider.local_counters(),
+        )
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }

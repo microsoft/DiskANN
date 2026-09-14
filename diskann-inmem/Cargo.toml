@@ -20,6 +20,9 @@ half = { workspace = true }
 hashbrown = { workspace = true }
 thiserror = { workspace = true }
 
+# Optional
+diskann-quantization = { workspace = true, optional = true, default-features = false }
+
 # Integration Test Dependencies
 diskann-benchmark-runner = { workspace = true, optional = true, features = ["ux-tools"] }
 serde = { workspace = true, features = ["derive"], optional = true }
@@ -45,10 +48,18 @@ tempfile = { workspace = true }
 [[bin]]
 name = "integration-test"
 path = "integration/main.rs"
-required-features = ["integration-test"]
+required-features = [
+    "integration-test",
+    "quantization",
+]
 
 [features]
 default = []
+
+# Enable spherical-quantization
+quantization = [
+    "dep:diskann-quantization",
+]
 
 # Enable stress test module
 integration-test = [

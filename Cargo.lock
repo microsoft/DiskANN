@@ -630,6 +630,7 @@ dependencies = [
  "diskann",
  "diskann-benchmark-core",
  "diskann-benchmark-runner",
+ "diskann-quantization",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",

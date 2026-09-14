@@ -17,8 +17,21 @@ use crate::{
     num::{Capacity, IdLimit, MaxDegree},
 };
 
+//---------//
+// Modules //
+//---------//
+
+mod internal;
+
 pub mod full;
 pub use full::{Full, FullPrecision};
+
+#[cfg(feature = "quantization")]
+pub mod spherical;
+
+//----------------//
+// Representation //
+//----------------//
 
 /// Deferred creation of [`Representation`]s.
 ///
