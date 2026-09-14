@@ -36,6 +36,10 @@ pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<(
             imp::ScalarQuantized::<4, f32>::new().search(Topk),
         )?;
         benchmarks.register(
+            "graph-index-sq-2-bit-f32",
+            imp::ScalarQuantized::<2, f32>::new().search(Topk),
+        )?;
+        benchmarks.register(
             "graph-index-sq-1-bit-f32",
             imp::ScalarQuantized::<1, f32>::new().search(Topk),
         )?;
@@ -313,5 +317,6 @@ mod imp {
     // impl and materially affects compile time.
     impl_sq_build!(8, f32);
     impl_sq_build!(4, f32);
+    impl_sq_build!(2, f32);
     impl_sq_build!(1, f32);
 }
