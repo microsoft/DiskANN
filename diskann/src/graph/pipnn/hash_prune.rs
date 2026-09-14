@@ -9,9 +9,10 @@
 //! projection on hyperplane `j` is at least the source's projection. The hash
 //! groups edges with similar residual directions.
 //!
-//! A source reservoir keeps at most one neighbor for each relative hash. A closer
-//! edge replaces the edge for that direction. A full reservoir accepts only an
-//! edge below its farthest total key.
+//! A source reservoir keeps at most one neighbor for each relative hash. Only a
+//! strictly smaller bf16 distance replaces that direction or the farthest entry
+//! of a full reservoir. Equal distances keep the existing candidate, so ties can
+//! depend on insertion order.
 //!
 //! Each source owns one lock. The lock protects its reservoir metadata and its
 //! rows in the hash, distance, and neighbor arrays. `l_max` sets the logical
@@ -440,34 +441,26 @@ unsafe fn update_farthest(state: &mut ReservoirState, rows: ReservoirRows) {
         state.farthest_idx = 0;
         return;
     }
-    // The total key is `(distance, residual hash, neighbor ID)`. The residual
-    // hash resolves equal bf16 distances. The ID resolves the remaining ties.
     let mut max_idx: u8 = 0;
     // SAFETY: `state.len > 0` and all active slots are initialized.
-    let mut max_key = unsafe { (*rows.distances, *rows.hashes, *rows.neighbors) };
+    let mut max_distance = unsafe { *rows.distances };
     for i in 1..state.len as usize {
         // SAFETY: `i < state.len <= rows.row_stride`, and all active entries are
         // initialized.
-        let key = unsafe {
-            (
-                *rows.distances.add(i),
-                *rows.hashes.add(i),
-                *rows.neighbors.add(i),
-            )
-        };
-        if key > max_key {
-            max_key = key;
+        let distance = unsafe { *rows.distances.add(i) };
+        if distance > max_distance {
+            max_distance = distance;
             max_idx = i as u8;
         }
     }
-    state.farthest_dist = max_key.0;
+    state.farthest_dist = max_distance;
     state.farthest_idx = max_idx;
 }
 
 /// Insert one edge into a locked reservoir.
 ///
-/// The function replaces a matching hash only when the new edge has a smaller
-/// total key. A full reservoir accepts only a key below its farthest key.
+/// Only a strictly smaller bf16 distance replaces a matching hash or the
+/// farthest entry of a full reservoir. Equal distances keep the existing entry.
 ///
 /// # Safety
 ///
@@ -486,19 +479,8 @@ unsafe fn insert_reservoir_edge(
 ) -> bool {
     let dist_key = ordered_distance_key(distance);
 
-    if state.len >= l_max {
-        let farthest = state.farthest_idx as usize;
-        // SAFETY: a full reservoir has `farthest < state.len` initialized slots.
-        let farthest_key = unsafe {
-            (
-                state.farthest_dist,
-                *rows.hashes.add(farthest),
-                *rows.neighbors.add(farthest),
-            )
-        };
-        if (dist_key, hash, neighbor) >= farthest_key {
-            return false;
-        }
+    if state.len >= l_max && dist_key >= state.farthest_dist {
+        return false;
     }
 
     if let Some(idx) = find_hash.call(FindHashArgs {
@@ -508,8 +490,8 @@ unsafe fn insert_reservoir_edge(
         target: hash,
     }) {
         // SAFETY: `idx < state.len <= rows.row_stride`.
-        let current_key = unsafe { (*rows.distances.add(idx), *rows.neighbors.add(idx)) };
-        if (dist_key, neighbor) < current_key {
+        let current_distance = unsafe { *rows.distances.add(idx) };
+        if dist_key < current_distance {
             let was_farthest = idx == state.farthest_idx as usize;
             // SAFETY: `idx < state.len <= rows.row_stride`. The entry is
             // initialized, and the caller holds the source lock.
@@ -529,20 +511,6 @@ unsafe fn insert_reservoir_edge(
 
     if state.len < l_max {
         let new_idx = state.len as usize;
-        let becomes_farthest = if state.len == 0 {
-            true
-        } else {
-            let farthest = state.farthest_idx as usize;
-            // SAFETY: `farthest < state.len` identifies an initialized slot.
-            let farthest_key = unsafe {
-                (
-                    state.farthest_dist,
-                    *rows.hashes.add(farthest),
-                    *rows.neighbors.add(farthest),
-                )
-            };
-            (dist_key, hash, neighbor) > farthest_key
-        };
         // SAFETY: `new_idx < l_max <= rows.row_stride`; the caller holds the lock.
         unsafe {
             *rows.hashes.add(new_idx) = hash;
@@ -550,15 +518,14 @@ unsafe fn insert_reservoir_edge(
             *rows.neighbors.add(new_idx) = neighbor;
         }
         state.len += 1;
-        if becomes_farthest {
+        if dist_key > state.farthest_dist {
             state.farthest_dist = dist_key;
             state.farthest_idx = new_idx as u8;
         }
         return true;
     }
 
-    // The full-reservoir early rejection above proved that the incoming
-    // `(distance, residual hash, ID)` key is better than the cached farthest key.
+    // The early rejection proved that the incoming distance is strictly smaller.
     let idx = state.farthest_idx as usize;
     // SAFETY: `idx < state.len <= rows.row_stride`; the caller holds the lock.
     unsafe {
@@ -941,6 +908,7 @@ impl HashPrune {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn build_hash_prune<T: VectorRepr>(
         data: &[T],
@@ -1394,63 +1362,57 @@ mod tests {
     }
 
     #[test]
-    fn equal_distances_are_ordered_by_neighbor_id() {
-        // Given
-        let expected_candidate_count = 3;
-        let expected_neighbor_id_order = [(1, 1.0), (2, 1.0), (3, 1.0)];
-        let mut reservoir = TestReservoir::new(5);
-        reservoir.insert(0, 1, 1.0);
-        reservoir.insert(1, 2, 1.0);
-        reservoir.insert(2, 3, 1.0);
+    fn appending_an_equal_distance_keeps_the_cached_farthest_slot() {
+        // Given: the first slot remains farthest when the second distance ties.
+        // Different hashes and IDs must not break that tie.
+        let mut reservoir = TestReservoir::new(2);
+        reservoir.insert(1, 30, 1.0);
+        reservoir.insert(9, 10, 1.0);
 
-        // When
-        let actual_neighbors = reservoir.neighbors();
+        // When: a closer edge replaces the first slot, leaving the second intact.
+        reservoir.insert(2, 20, 0.5);
 
         // Then
-        assert_eq!(reservoir.len(), expected_candidate_count);
-        assert_eq!(actual_neighbors, expected_neighbor_id_order);
+        assert_eq!(reservoir.neighbors(), [(20, 0.5), (10, 1.0)]);
+    }
+
+    #[rstest]
+    #[case::full(1)]
+    #[case::room_available(2)]
+    fn same_hash_bf16_tie_keeps_the_existing_candidate(#[case] capacity: usize) {
+        // Given: 1 + 2^-8 and 1 both truncate to bf16 1.0.
+        let mut reservoir = TestReservoir::new(capacity);
+        reservoir.insert(7, 20, 1.0 + 1.0 / 256.0);
+
+        // When: a smaller ID and unrounded distance still cannot win a bf16 tie.
+        let inserted = reservoir.insert(7, 10, 1.0);
+
+        // Then
+        assert!(!inserted);
+        assert_eq!(reservoir.neighbors(), [(20, 1.0)]);
     }
 
     #[test]
-    fn same_hash_bf16_ties_are_history_independent() {
-        for order in [[0, 1], [1, 0]] {
-            let candidates = [(7, 20, 1.0), (7, 10, 1.0)];
-            let mut reservoir = TestReservoir::new(2);
-            for index in order {
-                let (hash, neighbor, distance) = candidates[index];
-                reservoir.insert(hash, neighbor, distance);
-            }
-            assert_eq!(reservoir.neighbors(), [(10, 1.0)], "order={order:?}");
-        }
-    }
+    fn full_reservoir_rejects_a_new_hash_tied_with_the_farthest_distance() {
+        // Given: 1 + 2^-8 truncates to bf16 1.0, above the other distance 0.5.
+        let mut reservoir = TestReservoir::new(2);
+        reservoir.insert(5, 30, 1.0 + 1.0 / 256.0);
+        reservoir.insert(6, 40, 0.5);
 
-    #[test]
-    fn full_reservoir_bf16_ties_are_history_independent() {
-        let permutations = [
-            [0, 1, 2],
-            [0, 2, 1],
-            [1, 0, 2],
-            [1, 2, 0],
-            [2, 0, 1],
-            [2, 1, 0],
-        ];
-        let candidates = [(1, 30, 1.0), (2, 10, 1.0), (3, 20, 1.0)];
-        for order in permutations {
-            let mut reservoir = TestReservoir::new(2);
-            for index in order {
-                let (hash, neighbor, distance) = candidates[index];
-                reservoir.insert(hash, neighbor, distance);
-            }
-            let mut actual = reservoir.neighbors();
-            actual.sort_unstable_by_key(|&(neighbor, _)| neighbor);
-            assert_eq!(actual, [(10, 1.0), (30, 1.0)], "order={order:?}");
-        }
+        // When: the incoming hash and ID are smaller, but its stored distance ties.
+        let inserted = reservoir.insert(1, 10, 1.0);
+
+        // Then
+        assert!(!inserted);
+        assert_eq!(reservoir.neighbors(), [(40, 0.5), (30, 1.0)]);
     }
 
     // Concurrency and consuming extraction.
 
     #[test]
-    fn parallel_insertion_matches_serial_neighbor_lists() {
+    fn parallel_unequal_distance_insertions_match_serial_neighbor_lists() {
+        // Given: all sketches share a hash. At the shared source 25, distances
+        // 1 and 2 make the nearer edge win regardless of which worker locks first.
         let data = vec![0.0f32; 100 * 4];
         let parallel = build_hash_prune(&data, 100, 4, 4, 10).unwrap();
         let serial = build_hash_prune(&data, 100, 4, 4, 10).unwrap();
@@ -1461,14 +1423,14 @@ mod tests {
                 scope.spawn(move || {
                     for source in sources {
                         add_edge(parallel, source, source + 1, 1.0);
-                        add_edge(parallel, source + 1, source, 1.0);
+                        add_edge(parallel, source + 1, source, 2.0);
                     }
                 });
             }
         });
         for source in 0..50 {
             add_edge(&serial, source, source + 1, 1.0);
-            add_edge(&serial, source + 1, source, 1.0);
+            add_edge(&serial, source + 1, source, 2.0);
         }
 
         assert_eq!(parallel.into_nearest_lists(5), serial.into_nearest_lists(5));
@@ -1536,6 +1498,38 @@ mod tests {
 
         // Then
         assert_eq!(reservoir.neighbors(), expected_neighbors);
+    }
+
+    #[test]
+    fn replacing_the_farthest_hash_refreshes_the_distance_threshold() {
+        // Given: hash 1 is farthest, then its closer replacement makes hash 2 farthest.
+        let mut reservoir = TestReservoir::new(2);
+        reservoir.insert(1, 10, 3.0);
+        reservoir.insert(2, 20, 2.0);
+        reservoir.insert(1, 30, 1.0);
+
+        // When: 2.5 must not pass the refreshed threshold of 2.0.
+        let inserted = reservoir.insert(3, 40, 2.5);
+
+        // Then
+        assert!(!inserted);
+        assert_eq!(reservoir.neighbors(), [(30, 1.0), (20, 2.0)]);
+    }
+
+    #[test]
+    fn farthest_rescan_keeps_the_first_slot_among_equal_distances() {
+        // Given: after replacing the distance 2 entry, slots 1 and 2 tie at 1.
+        let mut reservoir = TestReservoir::new(3);
+        reservoir.insert(1, 10, 2.0);
+        reservoir.insert(2, 20, 1.0);
+        reservoir.insert(9, 30, 1.0);
+        reservoir.insert(3, 40, 0.5);
+
+        // When: the next closer edge evicts slot 1, not the larger hash/ID in slot 2.
+        reservoir.insert(4, 50, 0.25);
+
+        // Then
+        assert_eq!(reservoir.neighbors(), [(50, 0.25), (40, 0.5), (30, 1.0)]);
     }
 
     #[test]
