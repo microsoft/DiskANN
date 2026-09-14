@@ -21,6 +21,11 @@ use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 pub(super) trait LeafMetric: Send + Sync + 'static {
     /// Compute ranking distances for all unordered point pairs.
     ///
+    /// Values preserve nearest-first order, but need not equal metric distances.
+    /// L2 returns squared distances. Normalized cosine and inner product return
+    /// `-dot`, omitting the constant in normalized cosine's `1 - dot`.
+    /// Cosine returns `1 - similarity`.
+    ///
     /// `storage` has `points.nrows() * points.nrows()` elements.
     fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()>;
 }
@@ -81,12 +86,10 @@ impl LeafMetric for Cosine {
     }
 }
 
-impl LeafMetric for CosineNormalized {
+impl LeafMetric for InnerProduct {
     fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
-        let point_count = points.nrows();
-        // The constant in `1 - dot` does not change nearest-first order.
         diskann_linalg::sgemm_aat_lower(
-            point_count,
+            points.nrows(),
             points.ncols(),
             -1.0,
             points.as_slice(),
@@ -97,15 +100,14 @@ impl LeafMetric for CosineNormalized {
     }
 }
 
-impl LeafMetric for InnerProduct {
+impl LeafMetric for CosineNormalized {
     fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
-        // Both metrics rank with `-dot`. Their graph-pruning policies stay separate.
-        CosineNormalized::compute_distances(points, storage)
+        // The constant in `1 - dot` does not change nearest-first order.
+        InnerProduct::compute_distances(points, storage)
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test matrices have fixed valid shapes")]
 mod tests {
     use super::*;
     use rstest::rstest;
@@ -222,7 +224,6 @@ mod tests {
         #[rstest]
         #[case::l2(compute_pair_ranking::<L2>)]
         #[case::cosine(compute_pair_ranking::<Cosine>)]
-        #[case::normalized_cosine(compute_pair_ranking::<CosineNormalized>)]
         #[case::inner_product(compute_pair_ranking::<InnerProduct>)]
         fn nan_coordinate_produces_nan_ranking(
             #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
