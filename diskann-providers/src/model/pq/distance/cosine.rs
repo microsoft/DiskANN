@@ -6,7 +6,7 @@
 use diskann::ANNResult;
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::model::pq::fixed_chunk_pq_table::FixedChunkPQTable;
+use crate::model::pq::{distance::Shared, fixed_chunk_pq_table::FixedChunkPQTable};
 
 ////////////
 // Cosine //
@@ -19,18 +19,18 @@ pub struct DirectCosine<'a> {
     query: Vec<f32>,
 
     /// The parent table for the pivots and other meta-data regarding the PQ Schema.
-    parent: &'a FixedChunkPQTable,
+    parent: Shared<'a, FixedChunkPQTable>,
 }
 
 impl<'a> DirectCosine<'a> {
     /// Caller must ensure `query.len() == parent.get_dim()` (validated by `QueryComputer::new`).
-    pub(crate) fn new(parent: &'a FixedChunkPQTable, query: &[f32]) -> ANNResult<Self> {
+    pub(crate) fn new(parent: Shared<'a, FixedChunkPQTable>, query: &[f32]) -> ANNResult<Self> {
         let mut object = Self::new_unpopulated(parent);
         object.populate(query)?;
         Ok(object)
     }
 
-    fn new_unpopulated(parent: &'a FixedChunkPQTable) -> Self {
+    fn new_unpopulated(parent: Shared<'a, FixedChunkPQTable>) -> Self {
         Self {
             query: vec![0.0f32; parent.get_dim()],
             parent,
@@ -102,7 +102,7 @@ mod tests {
                     // DirectCosine
                     test_utils::test_cosine_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
-                            DirectCosine::new(table, query).unwrap()
+                            DirectCosine::new(Shared::Ref(table), query).unwrap()
                         },
                         &table,
                         num_trials,
@@ -127,7 +127,7 @@ mod tests {
 
         let table = test_utils::seed_pivot_table(config);
         let query = vec![0.0; config.dim];
-        let computer = DirectCosine::new(&table, &query).unwrap();
+        let computer = DirectCosine::new(Shared::Ref(&table), &query).unwrap();
 
         let code = vec![0, 0, 0, 0];
         computer.evaluate_similarity(&code);
@@ -145,7 +145,7 @@ mod tests {
 
         let table = test_utils::seed_pivot_table(config);
         let query = vec![0.0; config.dim];
-        let computer = DirectCosine::new(&table, &query).unwrap();
+        let computer = DirectCosine::new(Shared::Ref(&table), &query).unwrap();
 
         // Entry `4` is out-of-bounds.
         let code = vec![0, 4, 0];

@@ -373,7 +373,7 @@ mod imp {
             query: &[f32],
         ) -> anyhow::Result<Self::Computer<'a>> {
             Ok(diskann_providers::model::pq::distance::QueryComputer::new(
-                &store.quantizer,
+                (&store.quantizer).into(),
                 self.measure.into(),
                 query,
                 None,
