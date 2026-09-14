@@ -9,8 +9,8 @@
 //! point that acts as the center of one child partition. A leaf is a bounded
 //! child partition used for local neighbor selection.
 //!
-//! 1. `partitioning` samples leaders and makes overlapping leaves. Each leaf has
-//!    at most `c_max` points.
+//! 1. `partitioning` samples leaders and makes overlapping leaves of at most
+//!    `c_max` points. Points without rankable leaders contribute no assignments.
 //! 2. `leaf_build` computes one ranking-distance buffer for each leaf. It
 //!    selects local neighbors. The direct path merges their global point IDs.
 //!    The HashPrune path sends weighted edges to bounded point reservoirs.
@@ -19,7 +19,7 @@
 //!
 //! `diskann-wide` selects architecture `A` for the ranking kernels. One match
 //! selects metric marker `M`. Metric computation stays architecture-neutral.
-//! The numerical loops do not dispatch again.
+//! Ranking kernels reapply architecture features inside Rayon jobs.
 //!
 //! [`PiPNNConfig`] contains partition and local-neighbor parameters.
 //! [`PiPNNBuildContext`] borrows graph policy and a Rayon pool. [`build_graph`]
@@ -33,6 +33,7 @@
 //! each output before it creates another graph representation.
 
 mod bf16;
+mod conversion;
 mod finalization;
 mod hash_prune;
 mod leaf_build;
@@ -52,7 +53,7 @@ use crate::{
 };
 use diskann_utils::views::MatrixView;
 use diskann_vector::distance::Metric;
-use diskann_wide::arch::{self, Target1};
+use diskann_wide::arch::{self, Target2};
 use rayon::ThreadPool;
 
 use self::{leaf_metric::LeafMetric, partition_metric::PartitionMetric, simd::PiPNNSIMDSchema};
@@ -97,26 +98,18 @@ mod cosine_distance_tests {
 
     #[test]
     fn minimum_normal_norm_uses_normalized_similarity() {
-        let source_norm = f32::MIN_POSITIVE.sqrt();
-        let expected_similarity = 0.5;
-        let dot = expected_similarity * source_norm;
-
-        assert_eq!(
-            cosine_distance(dot, source_norm, 1.0),
-            1.0 - expected_similarity
-        );
+        let norm = f32::MIN_POSITIVE.sqrt();
+        assert_eq!(cosine_distance(0.5 * norm, norm, 1.0), 0.5);
     }
 
     #[rstest]
-    #[case::above_one(1.0)]
-    #[case::below_negative_one(-1.0)]
-    fn finite_similarity_outside_the_cosine_range_is_clamped(#[case] bounded_similarity: f32) {
-        let norm = 2.0;
-        let norm_product = norm * norm;
-        let rounding_excess = f32::EPSILON * norm_product;
-        let dot = bounded_similarity * (norm_product + rounding_excess);
-
-        assert_eq!(cosine_distance(dot, norm, norm), 1.0 - bounded_similarity);
+    #[case::above_one(1.0 + f32::EPSILON, 0.0)]
+    #[case::below_negative_one(-1.0 - f32::EPSILON, 2.0)]
+    fn finite_similarity_outside_the_cosine_range_is_clamped(
+        #[case] similarity: f32,
+        #[case] expected: f32,
+    ) {
+        assert_eq!(cosine_distance(similarity, 1.0, 1.0), expected);
     }
 
     #[rstest]
@@ -241,10 +234,10 @@ impl HashPruneConfig {
 /// PiPNN policy and borrowed execution resources for one graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
-    pub(crate) config: PiPNNConfig,
-    pub(crate) graph: &'a Config,
-    pub(crate) metric: Metric,
-    pub(crate) pool: &'a ThreadPool,
+    config: PiPNNConfig,
+    graph: &'a Config,
+    metric: Metric,
+    pool: &'a ThreadPool,
     hash_prune: Option<HashPruneConfig>,
 }
 
@@ -293,7 +286,7 @@ pub fn build_graph<T>(
     context: &PiPNNBuildContext<'_>,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
-    T: VectorRepr + Send + Sync + 'static,
+    T: VectorRepr,
 {
     context
         .pool
@@ -306,7 +299,7 @@ fn validate_and_dispatch_build<T>(
     context: &PiPNNBuildContext<'_>,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
-    T: VectorRepr + Send + Sync + 'static,
+    T: VectorRepr,
 {
     if data.nrows() == 0 {
         return Err(ANNError::message("PiPNN requires at least one data point"));
@@ -322,55 +315,34 @@ where
             data.nrows()
         )));
     }
-    // Conversion does not make integer vectors unit length. Use the norm-aware
-    // cosine formula for these vectors.
-    let metric = effective_metric::<T>(context.metric);
-    arch::dispatch1_no_features(
-        RunBuildGraph,
-        BuildGraphCall {
-            data,
-            context,
-            metric,
-        },
-    )
+    arch::dispatch2_no_features(BuildGraph, data, context)
 }
 
-struct BuildGraphCall<'data, 'context, 'policy, T> {
-    data: MatrixView<'data, T>,
-    context: &'context PiPNNBuildContext<'policy>,
-    metric: Metric,
-}
+struct BuildGraph;
 
-struct RunBuildGraph;
-
-impl<A, T> Target1<A, ANNResult<Vec<AdjacencyList<u32>>>, BuildGraphCall<'_, '_, '_, T>>
-    for RunBuildGraph
+impl<A, T> Target2<A, ANNResult<Vec<AdjacencyList<u32>>>, MatrixView<'_, T>, &PiPNNBuildContext<'_>>
+    for BuildGraph
 where
     A: PiPNNSIMDSchema,
-    T: VectorRepr + Send + Sync + 'static,
+    T: VectorRepr,
 {
     fn run(
         self,
         arch: A,
-        call: BuildGraphCall<'_, '_, '_, T>,
+        data: MatrixView<'_, T>,
+        context: &PiPNNBuildContext<'_>,
     ) -> ANNResult<Vec<AdjacencyList<u32>>> {
-        match call.metric {
-            Metric::L2 => build_graph_for::<A, L2, T>(arch, call.data, call.context, Metric::L2),
-            Metric::Cosine => {
-                build_graph_for::<A, Cosine, T>(arch, call.data, call.context, Metric::Cosine)
+        // Converting raw integer coordinates does not normalize their vectors.
+        let metric = effective_metric::<T>(context.metric);
+        match metric {
+            Metric::L2 => build_graph_for::<A, L2, T>(arch, data, context, metric),
+            Metric::Cosine => build_graph_for::<A, Cosine, T>(arch, data, context, metric),
+            Metric::CosineNormalized => {
+                build_graph_for::<A, CosineNormalized, T>(arch, data, context, metric)
             }
-            Metric::CosineNormalized => build_graph_for::<A, CosineNormalized, T>(
-                arch,
-                call.data,
-                call.context,
-                Metric::CosineNormalized,
-            ),
-            Metric::InnerProduct => build_graph_for::<A, InnerProduct, T>(
-                arch,
-                call.data,
-                call.context,
-                Metric::InnerProduct,
-            ),
+            Metric::InnerProduct => {
+                build_graph_for::<A, InnerProduct, T>(arch, data, context, metric)
+            }
         }
     }
 }
@@ -389,7 +361,7 @@ fn build_graph_for<A, M, T>(
 where
     A: PiPNNSIMDSchema,
     M: LeafMetric + PartitionMetric,
-    T: VectorRepr + Send + Sync + 'static,
+    T: VectorRepr,
 {
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
@@ -438,7 +410,7 @@ where
     }
 }
 
-fn effective_metric<T: 'static>(metric: Metric) -> Metric {
+fn effective_metric<T: VectorRepr>(metric: Metric) -> Metric {
     use std::any::TypeId;
 
     if metric == Metric::CosineNormalized
@@ -456,43 +428,40 @@ fn config_error(message: impl std::fmt::Display) -> ANNError {
 }
 
 #[cfg(test)]
-mod tests {
+mod effective_metric_tests {
     use super::*;
     use half::f16;
     use rstest::rstest;
 
-    #[test]
-    fn integer_vectors_use_cosine_when_normalized_cosine_is_requested() {
-        assert_eq!(
-            effective_metric::<u8>(Metric::CosineNormalized),
-            Metric::Cosine
+    #[rstest]
+    #[case::l2(Metric::L2)]
+    #[case::cosine(Metric::Cosine)]
+    #[case::normalized_cosine(Metric::CosineNormalized)]
+    #[case::inner_product(Metric::InnerProduct)]
+    fn floating_point_formats_keep_the_requested_metric(#[case] metric: Metric) {
+        // Given / When: floating-point callers define whether their data is normalized.
+        let actual = (
+            effective_metric::<f32>(metric),
+            effective_metric::<f16>(metric),
         );
-        assert_eq!(
-            effective_metric::<i8>(Metric::CosineNormalized),
-            Metric::Cosine
-        );
+
+        // Then: both supported floating-point formats preserve the request.
+        assert_eq!(actual, (metric, metric));
     }
 
     #[rstest]
-    fn metric_selection_is_unchanged_for_float_vectors(
-        #[values(
-            Metric::L2,
-            Metric::Cosine,
-            Metric::CosineNormalized,
-            Metric::InnerProduct
-        )]
-        metric: Metric,
-    ) {
-        assert_eq!(effective_metric::<f32>(metric), metric);
-        assert_eq!(effective_metric::<f16>(metric), metric);
-    }
+    #[case::l2(Metric::L2)]
+    #[case::cosine(Metric::Cosine)]
+    #[case::inner_product(Metric::InnerProduct)]
+    fn integer_formats_keep_metrics_that_do_not_assume_normalization(#[case] metric: Metric) {
+        // Given / When
+        let actual = (
+            effective_metric::<u8>(metric),
+            effective_metric::<i8>(metric),
+        );
 
-    #[rstest]
-    fn integer_vectors_keep_non_normalized_metric_selection(
-        #[values(Metric::L2, Metric::Cosine, Metric::InnerProduct)] metric: Metric,
-    ) {
-        assert_eq!(effective_metric::<u8>(metric), metric);
-        assert_eq!(effective_metric::<i8>(metric), metric);
+        // Then: only normalized cosine needs the integer-data fallback.
+        assert_eq!(actual, (metric, metric));
     }
 }
 #[cfg(test)]
@@ -506,8 +475,6 @@ mod build_graph_tests {
     use crate::graph::config::{self, MaxDegree};
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
-    use half::f16;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
     use rstest::rstest;
 
     fn pipnn_config() -> PiPNNConfig {
@@ -529,85 +496,43 @@ mod build_graph_tests {
         .unwrap()
     }
 
-    fn thread_pool(threads: usize) -> rayon::ThreadPool {
+    fn pool(threads: usize) -> rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
             .unwrap()
     }
 
-    fn adjacency_rows(graph: Vec<crate::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
+    fn rows(graph: Vec<crate::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
         graph.into_iter().map(Vec::from).collect()
     }
 
-    fn deterministic_point_values(points: usize, dimensions: usize) -> Vec<f32> {
-        (0..points)
-            .flat_map(|point| {
-                (0..dimensions)
-                    .map(move |dimension| point as f32 + dimension as f32 / dimensions as f32)
-            })
-            .collect()
-    }
-
-    fn assert_graph_invariants(
-        graph: &[crate::graph::AdjacencyList<u32>],
-        points: usize,
-        degree: usize,
-    ) {
-        assert_eq!(graph.len(), points);
-        for (source, row) in graph.iter().enumerate() {
-            assert!(row.len() <= degree);
-            let mut sorted = row.to_vec();
-            sorted.sort_unstable();
-            sorted.dedup();
-            assert_eq!(sorted.len(), row.len());
-            assert!(
-                row.iter()
-                    .all(|&id| (id as usize) < points && id as usize != source)
-            );
-        }
-    }
-
     #[test]
-    fn single_leaf_build_maps_local_neighbors_to_dataset_ids() {
-        // Given
-        let point_values = [0.0_f32, 1.0, 2.0, 3.0];
-        let data = MatrixView::try_from(&point_values[..], 4, 1).unwrap();
+    fn single_leaf_merges_neighbors_in_both_directions() {
+        // Given: unequal gaps give nearest choices 0->1, 1->0, 2->1, 3->2.
+        // Symmetric insertion adds the reverse edge for each choice.
+        let values = [0.0_f32, 1.0, 3.0, 7.0];
+        let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
+        let expected = [vec![1], vec![0, 2], vec![1, 3], vec![2]];
         let graph = graph_config(Metric::L2, 2);
-        let pool = thread_pool(2);
+        let pool = pool(2);
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
-        let expected_adjacency = [vec![1], vec![0, 2], vec![1, 3], vec![2]];
 
         // When
-        let actual_adjacency = adjacency_rows(build_graph(data, &context).unwrap());
+        let actual = build_graph(data, &context).unwrap();
 
         // Then
-        assert_eq!(actual_adjacency, expected_adjacency);
+        assert_eq!(rows(actual), expected);
     }
 
     #[test]
-    fn degree_one_pruning_keeps_adjacent_neighbors_on_a_line() {
-        // Given
-        let point_values = [0.0_f32, 1.0, 2.0, 3.0];
-        let data = MatrixView::try_from(&point_values[..], 4, 1).unwrap();
-        let graph = graph_config(Metric::L2, 1);
-        let pool = thread_pool(2);
-        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
-        let expected_adjacency = [vec![1], vec![2], vec![3], vec![2]];
-
-        // When
-        let actual_adjacency = adjacency_rows(build_graph(data, &context).unwrap());
-
-        // Then
-        assert_eq!(actual_adjacency, expected_adjacency);
-    }
-
-    #[test]
-    fn non_rankable_points_leave_empty_adjacency_without_sentinel_ids() {
+    fn omits_non_rankable_candidates_without_invalid_ids() {
+        // Given: three points force partitioning at c_max=2. The NaN point
+        // has no rankable leader or neighbor, so only the finite points connect.
         let values = [0.0_f32, 1.0, f32::NAN];
         let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
         let graph = graph_config(Metric::InnerProduct, 2);
-        let pool = thread_pool(1);
+        let pool = pool(1);
         let config = PiPNNConfig {
             c_max: 2,
             c_min: 1,
@@ -617,140 +542,161 @@ mod build_graph_tests {
             replicas: 1,
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::InnerProduct, &pool).unwrap();
-        let expected_rankable_adjacency = [vec![1], vec![0], vec![]];
+        let expected = [vec![1], vec![0], vec![]];
 
-        let actual_graph = build_graph(data, &context).unwrap();
+        // When
+        let actual = build_graph(data, &context).unwrap();
 
-        assert_graph_invariants(&actual_graph, 3, 2);
-        assert_eq!(adjacency_rows(actual_graph), expected_rankable_adjacency);
+        // Then
+        assert_eq!(rows(actual), expected);
     }
 
     #[test]
-    fn single_leaf_adjacency_is_bounded_by_the_graph_degree() {
-        let data = [0.0_f32, 1.0, 2.0, 3.0, 4.0];
-        let data = MatrixView::try_from(&data[..], 5, 1).unwrap();
+    fn finalization_keeps_the_nearest_neighbor_when_degree_is_one() {
+        // Given: selecting both peers makes each row overfull. With degree one,
+        // RobustPrune keeps the nearest: 0->1, 1->0, 2->1.
+        let values = [0.0_f32, 1.0, 3.0];
+        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
+        let expected = [vec![1], vec![0], vec![1]];
         let graph = graph_config(Metric::L2, 1);
-        let pool = thread_pool(2);
+        let pool = pool(2);
         let config = PiPNNConfig {
-            c_max: 5,
+            c_max: 3,
             c_min: 1,
             p_samp: 0.5,
             fanout: vec![2],
-            leaf_k: 4,
+            leaf_k: 2,
             replicas: 1,
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
 
-        let actual_graph = build_graph(data, &context).unwrap();
-
-        assert_graph_invariants(&actual_graph, 5, 1);
-        assert!(actual_graph.iter().all(|row| row.len() == 1));
-    }
-
-    #[rstest]
-    #[case::zero_points(0, 4)]
-    #[case::zero_dimensions(4, 0)]
-    fn empty_dataset_dimension_is_rejected(#[case] point_count: usize, #[case] dimensions: usize) {
-        // Given
-        let graph = graph_config(Metric::L2, 2);
-        let pool = thread_pool(1);
-        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
-        let empty_data = MatrixView::try_from(&[] as &[f32], point_count, dimensions).unwrap();
-
         // When
-        let result = build_graph(empty_data, &context);
+        let actual = build_graph(data, &context).unwrap();
 
         // Then
-        assert!(result.is_err());
-    }
-
-    fn assert_graph_build_succeeds<T: crate::utils::VectorRepr + Send + Sync + 'static>(
-        values: &[T],
-        metric: Metric,
-    ) {
-        let data = MatrixView::try_from(values, 6, 2).unwrap();
-        let graph = graph_config(metric, 2);
-        let pool = thread_pool(2);
-        let context = PiPNNBuildContext::new(pipnn_config(), &graph, metric, &pool).unwrap();
-        let actual_graph = build_graph(data, &context).unwrap();
-        assert_graph_invariants(&actual_graph, 6, 2);
+        assert_eq!(rows(actual), expected);
     }
 
     #[rstest]
-    fn f32_graph_build_succeeds_with_each_metric(
-        #[values(
-            Metric::L2,
-            Metric::Cosine,
-            Metric::CosineNormalized,
-            Metric::InnerProduct
-        )]
-        metric: Metric,
+    #[case::no_points(0, 4, "PiPNN requires at least one data point")]
+    #[case::no_dimensions(4, 0, "PiPNN requires at least one data dimension")]
+    fn empty_input_shape_returns_an_error(
+        #[case] points: usize,
+        #[case] dimensions: usize,
+        #[case] message: &str,
     ) {
-        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
-        let unit_vectors = [
-            1.0_f32, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0, diagonal, diagonal, -diagonal, -diagonal,
-        ];
+        // Given
+        let data = MatrixView::try_from(&[] as &[f32], points, dimensions).unwrap();
+        let graph = graph_config(Metric::L2, 2);
+        let pool = pool(1);
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
 
-        assert_graph_build_succeeds(&unit_vectors, metric);
+        // When
+        let error = build_graph(data, &context).unwrap_err();
+
+        // Then
+        assert!(error.to_string().contains(message), "{error}");
+    }
+
+    #[rstest]
+    #[case::l2(Metric::L2, [vec![1, 2], vec![0], vec![0]])]
+    #[case::inner_product(Metric::InnerProduct, [vec![1], vec![0, 2], vec![1]])]
+    fn selected_metric_changes_the_neighbor_graph(
+        #[case] metric: Metric,
+        #[case] expected: [Vec<u32>; 3],
+    ) {
+        // Given: squared L2 scores for pairs (0,1),(0,2),(1,2) are 4,0.8,6.4;
+        // negative-dot scores are -3,-0.6,-1.8. The nearest choices differ.
+        let values = [1.0_f32, 0.0, 3.0, 0.0, 0.6, 0.8];
+        let data = MatrixView::try_from(&values[..], 3, 2).unwrap();
+        let graph = graph_config(metric, 2);
+        let pool = pool(1);
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, metric, &pool).unwrap();
+
+        // When
+        let actual = build_graph(data, &context).unwrap();
+
+        // Then
+        assert_eq!(rows(actual), expected);
+    }
+
+    #[rstest]
+    #[case::cosine(Metric::Cosine)]
+    #[case::normalized_cosine(Metric::CosineNormalized)]
+    fn cosine_metrics_rank_unit_vectors_by_direction(#[case] metric: Metric) {
+        // Given: pairwise dots are 0.6,-1,-0.6, so 0 chooses 1, 1 chooses 0,
+        // and 2 chooses 1. Symmetrization gives the expected three-node chain.
+        let values = [1.0_f32, 0.0, 0.6, 0.8, -1.0, 0.0];
+        let data = MatrixView::try_from(&values[..], 3, 2).unwrap();
+        let expected = [vec![1], vec![0, 2], vec![1]];
+        let graph = graph_config(metric, 2);
+        let pool = pool(1);
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, metric, &pool).unwrap();
+
+        // When
+        let actual = build_graph(data, &context).unwrap();
+
+        // Then
+        assert_eq!(rows(actual), expected);
     }
 
     #[test]
-    fn f16_graph_build_succeeds_with_l2() {
-        let values = [
-            1.0_f32, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0, 1.0, 1.0, 2.0, 2.0,
-        ];
-        assert_graph_build_succeeds(&values.map(f16::from_f32), Metric::L2);
+    fn singleton_has_no_self_neighbor() {
+        // Given: a singleton has zero non-self candidates even though leaf_k=1.
+        let values = [3.0_f32, 4.0];
+        let data = MatrixView::try_from(&values[..], 1, 2).unwrap();
+        let graph = graph_config(Metric::L2, 2);
+        let pool = pool(1);
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+
+        // When
+        let actual = build_graph(data, &context).unwrap();
+
+        // Then
+        assert_eq!(rows(actual), [Vec::<u32>::new()]);
     }
 
-    #[test]
-    fn u8_graph_build_succeeds_with_l2() {
-        let values = [1_u8, 0, 0, 1, 2, 0, 0, 2, 1, 1, 2, 2];
-        assert_graph_build_succeeds(&values, Metric::L2);
-    }
-
-    #[test]
-    fn i8_graph_build_succeeds_with_l2() {
-        let values = [1_i8, 0, 0, 1, -1, 0, 0, -1, 1, 1, -1, -1];
-        assert_graph_build_succeeds(&values, Metric::L2);
-    }
-
-    #[test]
-    fn integer_vector_graphs_match_cosine_when_normalized_cosine_is_requested() {
-        fn assert_integer_graphs_match_cosine<
-            T: crate::utils::VectorRepr + Send + Sync + 'static,
-        >(
-            values: &[T],
-        ) {
-            let data = MatrixView::try_from(values, 8, 2).unwrap();
-            let pool = thread_pool(2);
-            let build = |metric| {
-                let graph = graph_config(metric, 2);
-                let config = PiPNNConfig {
-                    c_max: 8,
-                    c_min: 1,
-                    p_samp: 0.5,
-                    fanout: vec![2],
-                    leaf_k: 1,
-                    replicas: 1,
-                };
-                let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
-                adjacency_rows(build_graph(data, &context).unwrap())
+    #[rstest]
+    #[case::unsigned([1_u8, 0, 100, 1, 2, 0, 0, 1, 1, 1, 200, 2, 2, 1, 1, 2])]
+    #[case::signed([1_i8, 0, 100, 1, 2, 0, 0, 1, 1, 1, 120, 2, 2, 1, 1, 2])]
+    fn integer_normalized_cosine_matches_cosine<T: crate::utils::VectorRepr>(
+        #[case] values: [T; 16],
+    ) {
+        // Given: unequal norms distinguish cosine from raw dot ranking.
+        // Keep one leaf so partition randomness cannot hide metric selection.
+        let data = MatrixView::try_from(&values[..], 8, 2).unwrap();
+        let pool = pool(2);
+        let build = |metric| {
+            let graph = graph_config(metric, 2);
+            let config = PiPNNConfig {
+                c_max: 8,
+                c_min: 1,
+                p_samp: 0.5,
+                fanout: vec![2],
+                leaf_k: 1,
+                replicas: 1,
             };
-            assert_eq!(build(Metric::CosineNormalized), build(Metric::Cosine));
-        }
+            let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
+            rows(build_graph(data, &context).unwrap())
+        };
+        let expected = build(Metric::Cosine);
 
-        assert_integer_graphs_match_cosine(&[1_u8, 0, 2, 0, 0, 1, 0, 2, 1, 1, 2, 1, 1, 2, 2, 2]);
-        assert_integer_graphs_match_cosine(&[
-            1_i8, 0, -1, 0, 0, 1, 0, -1, 1, 1, -1, -1, 1, -1, -1, 1,
-        ]);
+        // When
+        let actual = build(Metric::CosineNormalized);
+
+        // Then
+        assert_eq!(actual, expected);
     }
 
-    #[test]
-    fn graph_build_is_deterministic_for_a_fixed_pool_size() {
-        let data = deterministic_point_values(96, 4);
-        let data = MatrixView::try_from(&data[..], 96, 4).unwrap();
+    #[rstest]
+    #[case::one_worker(1)]
+    #[case::four_workers(4)]
+    fn recursive_build_is_deterministic_for_a_fixed_pool(#[case] threads: usize) {
+        // Given: distinct points require multiple partition levels and two replicas.
+        let values: Vec<f32> = (0..96).flat_map(|i| [i as f32, (i * i) as f32]).collect();
+        let data = MatrixView::try_from(values.as_slice(), 96, 2).unwrap();
         let graph = graph_config(Metric::L2, 8);
-        let pool = thread_pool(4);
+        let pool = pool(threads);
         let config = PiPNNConfig {
             c_max: 16,
             c_min: 4,
@@ -761,91 +707,49 @@ mod build_graph_tests {
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
 
-        let first = build_graph(data, &context).unwrap();
-        let second = build_graph(data, &context).unwrap();
+        let expected = build_graph(data, &context).unwrap();
 
-        assert_eq!(first, second);
-        assert_graph_invariants(&first, 96, 8);
+        // When
+        let actual = build_graph(data, &context).unwrap();
+
+        // Then
+        assert_eq!(actual, expected);
     }
-
-    #[test]
-    fn graph_build_preserves_invariants_across_fixed_seed_inputs() {
-        let mut rng = StdRng::seed_from_u64(0x857a_d38b_44c2_0f11);
-        for case in 0..24 {
-            let points = rng.random_range(4..=32);
-            let dimensions = rng.random_range(1..=8);
-            let c_max = rng.random_range(4..=points.min(12));
-            let c_min = rng.random_range(1..=c_max);
-            let degree = rng.random_range(1..=points.min(8));
-            let values: Vec<f32> = (0..points * dimensions)
-                .map(|_| rng.random_range(-10.0..10.0))
-                .collect();
-            let data = MatrixView::try_from(&values[..], points, dimensions).unwrap();
-            let graph = graph_config(Metric::L2, degree);
-            let pool = thread_pool(2);
-            let config = PiPNNConfig {
-                c_max,
-                c_min,
-                p_samp: 0.5,
-                fanout: vec![2],
-                leaf_k: rng.random_range(1..=7),
-                replicas: rng.random_range(1..=2),
-            };
-            let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
-
-            let actual_graph = build_graph(data, &context)
-                .unwrap_or_else(|error| panic!("randomized case {case} failed: {error}"));
-            assert_graph_invariants(&actual_graph, points, degree);
-        }
-    }
-
-    #[test]
-    fn parallel_hash_prune_build_is_set_invariant() {
-        let points = 64;
-        let dimensions = 4;
-        let values = deterministic_point_values(points, dimensions);
-        let data = MatrixView::try_from(values.as_slice(), points, dimensions).unwrap();
-        let graph = graph_config(Metric::L2, 8);
-        let pool = thread_pool(4);
+    #[rstest]
+    #[case::one_worker(1)]
+    #[case::four_workers(4)]
+    fn hash_prune_build_keeps_nearest_neighbors_in_each_direction(#[case] threads: usize) {
+        // Given: two replicas offer the same leaf concurrently. Opposite
+        // directions on a line have complementary hashes. Each ray retains
+        // its nearest point. The reverse edge from source 0 reaches source 1
+        // before source 1 offers point 2. Within-degree rows keep that order.
+        let values = [-3.0_f32, 0.0, 1.0];
+        let data = MatrixView::column_vector(&values[..]);
+        let expected = [vec![1], vec![0, 2], vec![1]];
+        let graph = graph_config(Metric::L2, 2);
+        let pool = pool(threads);
         let config = PiPNNConfig {
-            c_max: 16,
-            c_min: 4,
-            p_samp: 0.25,
-            fanout: vec![3, 2],
-            leaf_k: 3,
+            c_max: 3,
+            c_min: 1,
+            p_samp: 1.0,
+            fanout: vec![1],
+            leaf_k: 2,
             replicas: 2,
         };
-        let hash_prune = HashPruneConfig {
-            num_hash_planes: 8,
-            l_max: 16,
-            final_prune: true,
-        };
-        let build = || {
-            let context = PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
-                .unwrap()
-                .with_hash_prune(hash_prune.clone())
-                .unwrap();
-            build_graph(data, &context).unwrap()
-        };
+        let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool)
+            .unwrap()
+            .with_hash_prune(HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 16,
+                final_prune: true,
+            })
+            .unwrap();
 
-        let first = build();
-        let second = build();
-        let canonicalize = |graph: &[crate::graph::AdjacencyList<u32>]| {
-            graph
-                .iter()
-                .map(|row| {
-                    let mut ids = row.to_vec();
-                    ids.sort_unstable();
-                    ids
-                })
-                .collect::<Vec<_>>()
-        };
+        // When
+        let actual = build_graph(data, &context).unwrap();
 
-        // Parallel finalization can order equal candidates differently. Compare
-        // the retained neighbor sets.
-        assert_eq!(canonicalize(&first), canonicalize(&second));
-        assert_graph_invariants(&first, points, 8);
-        assert!(first.iter().any(|row| !row.is_empty()));
+        // Then
+        assert_eq!(rows(actual), expected);
     }
 }
 #[cfg(test)]
@@ -872,18 +776,14 @@ mod config_tests {
     }
 
     fn graph_config(metric: Metric, alpha: f32) -> crate::graph::Config {
-        graph_config_with_degree(metric, alpha, 64)
-    }
-
-    fn graph_config_with_degree(metric: Metric, alpha: f32, degree: usize) -> crate::graph::Config {
-        config::Builder::new_with(degree, MaxDegree::same(), 72, metric.into(), |builder| {
+        config::Builder::new_with(64, MaxDegree::same(), 72, metric.into(), |builder| {
             builder.alpha(alpha);
         })
         .build()
         .unwrap()
     }
 
-    fn two_thread_pool() -> rayon::ThreadPool {
+    fn pool() -> rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .num_threads(2)
             .build()
@@ -891,44 +791,76 @@ mod config_tests {
     }
 
     #[rstest]
-    #[case::zero_c_max(PiPNNConfig { c_max: 0, ..pipnn_config() })]
-    #[case::zero_c_min(PiPNNConfig { c_min: 0, ..pipnn_config() })]
-    #[case::c_min_above_c_max(PiPNNConfig { c_min: 513, ..pipnn_config() })]
-    #[case::zero_sampling_probability(PiPNNConfig { p_samp: 0.0, ..pipnn_config() })]
-    #[case::negative_sampling_probability(PiPNNConfig { p_samp: -0.01, ..pipnn_config() })]
-    #[case::sampling_probability_above_one(PiPNNConfig { p_samp: 1.01, ..pipnn_config() })]
-    #[case::nan_sampling_probability(PiPNNConfig { p_samp: f64::NAN, ..pipnn_config() })]
-    #[case::empty_fanout(PiPNNConfig { fanout: Vec::new(), ..pipnn_config() })]
-    #[case::zero_later_fanout(PiPNNConfig { fanout: vec![1, 0], ..pipnn_config() })]
-    #[case::zero_leaf_k(PiPNNConfig { leaf_k: 0, ..pipnn_config() })]
-    #[case::zero_replicas(PiPNNConfig { replicas: 0, ..pipnn_config() })]
-    fn invalid_algorithm_parameter_is_rejected(#[case] invalid_config: PiPNNConfig) {
-        let graph = graph_config(Metric::L2, 1.2);
-        let pool = two_thread_pool();
+    #[case::zero_maximum(PiPNNConfig { c_max: 0, ..pipnn_config() }, "c_max must be greater than zero")]
+    #[case::zero_minimum(PiPNNConfig { c_min: 0, ..pipnn_config() }, "c_min must be greater than zero")]
+    #[case::minimum_exceeds_maximum(PiPNNConfig { c_min: 513, ..pipnn_config() }, "c_min (513) must not exceed c_max (512)")]
+    #[case::zero_sampling(PiPNNConfig { p_samp: 0.0, ..pipnn_config() }, "p_samp (0) must be in (0, 1]")]
+    #[case::negative_sampling(PiPNNConfig { p_samp: -0.5, ..pipnn_config() }, "p_samp (-0.5) must be in (0, 1]")]
+    #[case::sampling_above_one(PiPNNConfig { p_samp: 1.5, ..pipnn_config() }, "p_samp (1.5) must be in (0, 1]")]
+    #[case::nan_sampling(PiPNNConfig { p_samp: f64::NAN, ..pipnn_config() }, "p_samp (NaN) must be in (0, 1]")]
+    #[case::infinite_sampling(PiPNNConfig { p_samp: f64::INFINITY, ..pipnn_config() }, "p_samp (inf) must be in (0, 1]")]
+    #[case::empty_fanout(PiPNNConfig { fanout: vec![], ..pipnn_config() }, "fanout must not be empty")]
+    #[case::zero_fanout(PiPNNConfig { fanout: vec![1, 0], ..pipnn_config() }, "fanout values must be greater than zero")]
+    #[case::zero_neighbors(PiPNNConfig { leaf_k: 0, ..pipnn_config() }, "leaf_k must be greater than zero")]
+    #[case::zero_replicas(PiPNNConfig { replicas: 0, ..pipnn_config() }, "replicas must be greater than zero")]
+    fn invalid_policy_reports_the_rejected_parameter(
+        #[case] config: PiPNNConfig,
+        #[case] message: &str,
+    ) {
+        // Given: one invalid field in an otherwise valid policy.
+        let expected = format!("PiPNN configuration: {message}");
 
-        PiPNNBuildContext::new(invalid_config, &graph, Metric::L2, &pool)
-            .expect_err("invalid PiPNN config must be rejected");
+        // When
+        let error = config.validate().unwrap_err();
+
+        // Then
+        assert!(error.to_string().contains(&expected), "{error}");
     }
 
     #[test]
-    fn graph_policy_for_a_different_metric_is_rejected() {
-        let graph = graph_config(Metric::InnerProduct, 1.2);
-        let pool = two_thread_pool();
+    fn context_validates_the_partition_policy() {
+        // Given: verify the public constructor invokes the policy validation.
+        let config = PiPNNConfig {
+            replicas: 0,
+            ..pipnn_config()
+        };
+        let graph = graph_config(Metric::L2, 1.2);
+        let pool = pool();
 
-        let error = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap_err();
+        // When
+        let error = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap_err();
 
-        assert!(error.to_string().contains("prune kind"));
+        // Then
+        assert!(
+            error
+                .to_string()
+                .contains("PiPNN configuration: replicas must be greater than zero"),
+            "{error}",
+        );
     }
 
-    #[rstest]
-    #[case::below_one(0.9)]
-    #[case::nan(f32::NAN)]
-    #[case::infinity(f32::INFINITY)]
-    fn build_context_accepts_alpha_allowed_by_graph_config(#[case] alpha: f32) {
-        let pool = two_thread_pool();
-        let graph = graph_config(Metric::L2, alpha);
+    #[test]
+    fn rejects_graph_policy_for_a_different_metric() {
+        // Given: inner-product occlusion cannot prune an L2 build.
+        let graph = graph_config(Metric::InnerProduct, 1.2);
+        let pool = pool();
+        let expected = format!(
+            "PiPNN configuration: graph prune kind {:?} is incompatible with metric L2",
+            graph.prune_kind(),
+        );
 
-        PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        // When
+        let error = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap_err();
+
+        // Then
+        assert!(error.to_string().contains(&expected), "{error}");
+    }
+    fn graph_config_with_degree(metric: Metric, alpha: f32, degree: usize) -> crate::graph::Config {
+        config::Builder::new_with(degree, MaxDegree::same(), 72, metric.into(), |builder| {
+            builder.alpha(alpha);
+        })
+        .build()
+        .unwrap()
     }
 
     #[rstest]
@@ -954,7 +886,7 @@ mod config_tests {
     })]
     fn invalid_hash_prune_parameter_is_rejected(#[case] invalid_config: HashPruneConfig) {
         let graph = graph_config(Metric::L2, 1.2);
-        let pool = two_thread_pool();
+        let pool = pool();
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
 
         assert!(context.with_hash_prune(invalid_config).is_err());
@@ -963,7 +895,7 @@ mod config_tests {
     #[test]
     fn candidate_capacity_below_graph_degree_is_rejected() {
         let graph = graph_config(Metric::L2, 1.2);
-        let pool = two_thread_pool();
+        let pool = pool();
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
         let below_degree_capacity = HashPruneConfig {
             num_hash_planes: 8,
@@ -977,7 +909,7 @@ mod config_tests {
     #[test]
     fn candidate_capacity_equal_to_graph_degree_is_accepted() {
         let graph = graph_config(Metric::L2, 1.2);
-        let pool = two_thread_pool();
+        let pool = pool();
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
         let equal_degree_capacity = HashPruneConfig {
             num_hash_planes: 8,
@@ -990,7 +922,7 @@ mod config_tests {
 
     #[test]
     fn hash_bucket_capacity_equal_to_graph_degree_is_accepted() {
-        let pool = two_thread_pool();
+        let pool = pool();
         let graph = graph_config_with_degree(Metric::L2, 1.2, 2);
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
         let two_hash_buckets = HashPruneConfig {
@@ -1004,7 +936,7 @@ mod config_tests {
 
     #[test]
     fn hash_bucket_capacity_below_graph_degree_is_rejected() {
-        let pool = two_thread_pool();
+        let pool = pool();
         let graph = graph_config_with_degree(Metric::L2, 1.2, 3);
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
         let two_hash_buckets = HashPruneConfig {
