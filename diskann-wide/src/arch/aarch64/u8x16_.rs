@@ -4,7 +4,7 @@
  */
 
 use crate::{
-    Emulated,
+    Emulated, LoHi, SplitJoin, ZipUnzip,
     constant::Const,
     helpers,
     traits::{SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDVector},
@@ -62,6 +62,37 @@ macros::aarch64_define_bitops!(
     (u8, i8, vmovq_n_s8),
 );
 
+impl ZipUnzip for u8x16 {
+    #[inline(always)]
+    fn zip(halves: LoHi<<Self as SplitJoin>::Halved>) -> Self {
+        use crate::SIMDVector;
+        // SAFETY: Caller asserts that these intrinsics match the element types.
+        unsafe {
+            let lo_raw = halves.lo.to_underlying();
+            let hi_raw = halves.hi.to_underlying();
+            <Self as SplitJoin>::join(LoHi::new(
+                u8x8::from_underlying(halves.lo.arch(), vzip1_u8(lo_raw, hi_raw)),
+                u8x8::from_underlying(halves.lo.arch(), vzip2_u8(lo_raw, hi_raw)),
+            ))
+        }
+    }
+
+    #[inline(always)]
+    fn unzip(self) -> LoHi<<Self as SplitJoin>::Halved> {
+        use crate::SIMDVector;
+        // SAFETY: Caller asserts that these intrinsics match the element types.
+        unsafe {
+            let halves = self.split();
+            let lo_raw = halves.lo.to_underlying();
+            let hi_raw = halves.hi.to_underlying();
+            LoHi::new(
+                u8x8::from_underlying(self.arch(), vuzp1_u8(lo_raw, hi_raw)),
+                u8x8::from_underlying(self.arch(), vuzp2_u8(lo_raw, hi_raw)),
+            )
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -99,6 +130,7 @@ mod tests {
     test_utils::ops::test_mul!(u8x16, 0x0f4caa80eceaa523, test_neon());
     test_utils::ops::test_fma!(u8x16, 0xb8f702ba85375041, test_neon());
     test_utils::ops::test_splitjoin!(u8x16 => u8x8, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(u8x16 => u8x8, 0x041c0a3d046e0211, test_neon());
 
     test_utils::ops::test_cmp!(u8x16, 0x941757bd5cc641a1, test_neon());
 
