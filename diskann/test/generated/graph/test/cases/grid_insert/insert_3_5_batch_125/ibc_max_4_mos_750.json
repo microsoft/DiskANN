@@ -1,18 +1,18 @@
 {
   "file": "diskann/src/graph/test/cases/grid_insert.rs",
-  "test": "graph/test/cases/grid_insert/insert_3_5_batch_125/ibc_all",
+  "test": "graph/test/cases/grid_insert/insert_3_5_batch_125/ibc_max_4_mos_750",
   "payload": {
     "context_metrics": {
-      "clones": 5,
-      "spawns": 5
+      "clones": 7,
+      "spawns": 6
     },
-    "description": "After inserting 125 points (batch (all-at-once), ibc=all) into a 3D grid of size 5.",
+    "description": "After inserting 125 points (batch (all-at-once), ibc=max(4)) into a 3D grid of size 5.",
     "grid_dims": 3,
     "grid_size": 5,
     "insert_metrics": {
-      "append_neighbors": 81,
+      "append_neighbors": 74,
       "get_neighbors": 251,
-      "get_vector": 250,
+      "get_vector": 15945,
       "set_neighbors": 125,
       "set_vector": 125
     },
@@ -21,14 +21,14 @@
       {
         "beam_width": 1,
         "comparisons": 28,
-        "description": "After inserting 125 points (batch (all-at-once), ibc=all) into a 3D grid of size 5. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
+        "description": "After inserting 125 points (batch (all-at-once), ibc=max(4)) into a 3D grid of size 5. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
         "grid_dims": 3,
         "grid_size": 5,
         "hops": 13,
         "metrics": {
-          "append_neighbors": 81,
+          "append_neighbors": 74,
           "get_neighbors": 264,
-          "get_vector": 278,
+          "get_vector": 15973,
           "set_neighbors": 125,
           "set_vector": 125
         },
@@ -48,11 +48,11 @@
             6.0
           ],
           [
-            1,
+            5,
             6.0
           ],
           [
-            5,
+            1,
             6.0
           ],
           [
@@ -60,19 +60,19 @@
             9.0
           ],
           [
-            26,
-            9.0
-          ],
-          [
             30,
             9.0
           ],
           [
-            10,
-            11.0
+            26,
+            9.0
           ],
           [
             2,
+            11.0
+          ],
+          [
+            10,
             11.0
           ],
           [
@@ -84,14 +84,14 @@
       {
         "beam_width": 1,
         "comparisons": 22,
-        "description": "After inserting 125 points (batch (all-at-once), ibc=all) into a 3D grid of size 5. Search with query of all `size`. The start point should appear as it is not filtered by default.",
+        "description": "After inserting 125 points (batch (all-at-once), ibc=max(4)) into a 3D grid of size 5. Search with query of all `size`. The start point should appear as it is not filtered by default.",
         "grid_dims": 3,
         "grid_size": 5,
         "hops": 11,
         "metrics": {
-          "append_neighbors": 81,
+          "append_neighbors": 74,
           "get_neighbors": 275,
-          "get_vector": 300,
+          "get_vector": 15995,
           "set_neighbors": 125,
           "set_vector": 125
         },
@@ -107,16 +107,20 @@
             3.0
           ],
           [
-            123,
-            6.0
-          ],
-          [
             119,
             6.0
           ],
           [
             99,
             6.0
+          ],
+          [
+            123,
+            6.0
+          ],
+          [
+            98,
+            9.0
           ],
           [
             94,
@@ -127,8 +131,8 @@
             9.0
           ],
           [
-            98,
-            9.0
+            122,
+            11.0
           ],
           [
             74,
@@ -136,10 +140,6 @@
           ],
           [
             114,
-            11.0
-          ],
-          [
-            122,
             11.0
           ]
         ]
