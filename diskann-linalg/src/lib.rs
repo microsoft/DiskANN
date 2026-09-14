@@ -725,27 +725,14 @@ mod sgemm_aat_lower_tests {
 
     #[test]
     fn replace_writes_the_scaled_lower_triangle_and_preserves_the_upper_triangle() {
-        // Given
-        let first_row = [1.0_f32, 2.0];
-        let second_row = [3.0_f32, 4.0];
-        let row_count = 2;
-        let dimension_count = first_row.len();
-        let matrix = [first_row[0], first_row[1], second_row[0], second_row[1]];
-        let scale = -1.0_f32;
-        let first_self_dot = first_row[0].mul_add(first_row[0], first_row[1] * first_row[1]);
-        let cross_dot = first_row[0].mul_add(second_row[0], first_row[1] * second_row[1]);
-        let second_self_dot = second_row[0].mul_add(second_row[0], second_row[1] * second_row[1]);
+        // Given: rows [1, 2, 3] and [4, 5, 6] have Gram entries 14, 32, and 77.
+        let matrix = [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let upper_triangle_sentinel = -123.0_f32;
-        let expected = [
-            scale * first_self_dot,
-            upper_triangle_sentinel,
-            scale * cross_dot,
-            scale * second_self_dot,
-        ];
+        let expected = [-14.0, upper_triangle_sentinel, -32.0, -77.0];
         let mut actual = [upper_triangle_sentinel; 4];
 
         // When
-        sgemm_aat_lower(row_count, dimension_count, scale, &matrix, &mut actual).unwrap();
+        sgemm_aat_lower(2, 3, -1.0, &matrix, &mut actual).unwrap();
 
         // Then
         assert_eq!(actual, expected);
@@ -753,35 +740,15 @@ mod sgemm_aat_lower_tests {
 
     #[test]
     fn add_accumulates_the_scaled_lower_triangle_and_preserves_the_upper_triangle() {
-        // Given
-        let first_row = [1.0_f32, 2.0];
-        let second_row = [3.0_f32, 4.0];
-        let row_count = 2;
-        let dimension_count = first_row.len();
-        let matrix = [first_row[0], first_row[1], second_row[0], second_row[1]];
-        let scale = -2.0_f32;
-        let first_self_dot = first_row[0].mul_add(first_row[0], first_row[1] * first_row[1]);
-        let cross_dot = first_row[0].mul_add(second_row[0], first_row[1] * second_row[1]);
-        let second_self_dot = second_row[0].mul_add(second_row[0], second_row[1] * second_row[1]);
-        let initial_first = 10.0_f32;
-        let initial_cross = 20.0_f32;
-        let initial_second = 30.0_f32;
+        // Given: adding -2 times the Gram entries (14, 32, 77) to (10, 20, 30)
+        // produces (-18, -44, -124), while the upper triangle remains unchanged.
+        let matrix = [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let upper_triangle_sentinel = -123.0_f32;
-        let expected = [
-            scale.mul_add(first_self_dot, initial_first),
-            upper_triangle_sentinel,
-            scale.mul_add(cross_dot, initial_cross),
-            scale.mul_add(second_self_dot, initial_second),
-        ];
-        let mut actual = [
-            initial_first,
-            upper_triangle_sentinel,
-            initial_cross,
-            initial_second,
-        ];
+        let expected = [-18.0, upper_triangle_sentinel, -44.0, -124.0];
+        let mut actual = [10.0, upper_triangle_sentinel, 20.0, 30.0];
 
         // When
-        sgemm_aat_lower_add(row_count, dimension_count, scale, &matrix, &mut actual).unwrap();
+        sgemm_aat_lower_add(2, 3, -2.0, &matrix, &mut actual).unwrap();
 
         // Then
         assert_eq!(actual, expected);
