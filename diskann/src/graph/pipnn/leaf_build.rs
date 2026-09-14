@@ -182,19 +182,13 @@ where
     let point_value_count = point_ids.len() * data.ncols();
     let point_values = &mut buffers.point_values[..point_value_count];
 
-    for (&point, point_output) in point_ids
-        .iter()
-        .zip(point_values.chunks_exact_mut(data.ncols()))
-    {
-        let source_values = data.row(point as usize);
-        super::conversion::as_f32_into(source_values, point_output).map_err(|source| {
-            LeafBuildError::Conversion {
-                leaf,
-                point,
-                source: source.into(),
-            }
-        })?;
-    }
+    super::conversion::gather_as_f32(data, point_ids, point_values).map_err(
+        |(point, source)| LeafBuildError::Conversion {
+            leaf,
+            point,
+            source: source.into(),
+        },
+    )?;
 
     let points = MatrixView::try_from(&*point_values, point_ids.len(), data.ncols())
         .expect("point buffer prefix has the checked leaf shape");

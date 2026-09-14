@@ -8,83 +8,79 @@
 use std::any::TypeId;
 
 use crate::utils::VectorRepr;
+use diskann_utils::views::MatrixView;
 use diskann_vector::conversion::SliceCast;
-use diskann_wide::arch;
+use diskann_wide::{
+    Architecture,
+    arch::{self, Target2, Target3},
+};
 use half::f16;
 
-/// Preserve VectorRepr conversion errors while accelerating FP16 slices.
-#[inline]
-pub(super) fn as_f32_into<T: VectorRepr>(source: &[T], output: &mut [f32]) -> Result<(), T::Error> {
-    if TypeId::of::<T>() == TypeId::of::<f16>() && source.len() == output.len() {
-        // VectorRepr's default conversion uses the compile-time architecture.
-        // Dispatch one whole slice so portable builds can use F16C or NEON too.
-        let source: &[f16] = bytemuck::cast_slice(source);
-        arch::dispatch2(SliceCast::<f32, f16>::new(), output, source);
-        Ok(())
+/// Gather rows into packed f32 storage, dispatching once for the whole FP16 batch.
+pub(super) fn gather_as_f32<T: VectorRepr>(
+    data: MatrixView<'_, T>,
+    ids: &[u32],
+    output: &mut [f32],
+) -> Result<(), (u32, T::Error)> {
+    if TypeId::of::<T>() == TypeId::of::<f16>() {
+        arch::dispatch3(GatherFp16, data, ids, output);
     } else {
-        T::as_f32_into(source, output)
+        for (&id, destination) in ids.iter().zip(output.chunks_exact_mut(data.ncols())) {
+            T::as_f32_into(data.row(id as usize), destination).map_err(|error| (id, error))?;
+        }
+    }
+    Ok(())
+}
+
+struct GatherFp16;
+
+impl<A, T> Target3<A, (), MatrixView<'_, T>, &[u32], &mut [f32]> for GatherFp16
+where
+    A: Architecture,
+    T: VectorRepr,
+    for<'a, 'b> SliceCast<f32, f16>: Target2<A, (), &'a mut [f32], &'b [f16]>,
+{
+    #[inline(always)]
+    fn run(self, arch: A, data: MatrixView<'_, T>, ids: &[u32], output: &mut [f32]) {
+        for (&id, destination) in ids.iter().zip(output.chunks_exact_mut(data.ncols())) {
+            let source = bytemuck::cast_slice(data.row(id as usize));
+            SliceCast::<f32, f16>::new().run(arch, destination, source);
+        }
     }
 }
 
 #[cfg(test)]
-mod as_f32_into_tests {
+mod gather_as_f32_tests {
     use super::*;
-    use rstest::rstest;
 
     #[test]
-    fn fp16_bits_are_preserved_through_a_vector_and_tail() {
-        // Given: 13 values leave a tail for both four- and eight-lane converters.
-        // Normal values gain 112 in exponent bias and shift the fraction by 13;
-        // the smallest FP16 subnormal becomes 2^-24. NaN keeps its payload.
-        let half_bits = [
-            0x0000, 0x8000, 0x0001, 0x03ff, 0x0400, 0x3c00, 0xbc00, 0x3555, 0x7bff, 0x7c00, 0xfc00,
-            0x7e01, 0x8400,
+    fn fp16_gather_preserves_bits_and_requested_row_order_with_a_tail() {
+        // Given: repeated, noncontiguous rows of nine elements exercise tails
+        // and the row stride while overwriting stale destination values.
+        let points = [
+            [-4.0_f32, -3.5, -2.0, -1.5, -0.0, 0.5, 1.0, 2.5, 3.0],
+            [1.0, 2.5, 3.0, 0.5, -1.0, 4.0, -2.5, 0.0, -3.5],
+            [8.0, 2.0, -7.0, 0.25, 0.75, 3.5, -4.5, 0.0, -2.0],
         ];
-        let expected = [
-            0x00000000, 0x80000000, 0x33800000, 0x387fc000, 0x38800000, 0x3f800000, 0xbf800000,
-            0x3eaaa000, 0x477fe000, 0x7f800000, 0xff800000, 0x7fc02000, 0xb8800000,
-        ];
-        let source = half_bits.map(f16::from_bits);
-        let mut output = [123.0_f32; 13];
+        let half_points = points.map(|row| row.map(f16::from_f32_const));
+        let data = MatrixView::try_from(half_points.as_flattened(), 3, 9).unwrap();
+        let ids = [2, 0, 2];
+        // All coordinates are exactly representable in FP16, including -0.0.
+        let expected = [points[2], points[0], points[2]];
+        let mut actual = [123.0_f32; 27];
 
         // When
-        as_f32_into(&source, &mut output).unwrap();
+        gather_as_f32(data, &ids, &mut actual).unwrap();
 
         // Then
-        assert_eq!(output.map(f32::to_bits), expected);
-    }
-
-    #[rstest]
-    #[case::short_output(7)]
-    #[case::long_output(9)]
-    fn mismatched_fp16_lengths_return_the_vector_repr_error(#[case] output_len: usize) {
-        // Given
-        let source = [f16::ONE; 8];
-        let mut output = vec![0.0_f32; output_len];
-        let expected = f16::as_f32_into(&source, &mut output).unwrap_err();
-
-        // When
-        let actual = as_f32_into(&source, &mut output).unwrap_err();
-
-        // Then
-        assert_eq!(actual, expected);
-    }
-
-    #[rstest]
-    #[case::f32([-2.5_f32, 1.25], [-2.5, 1.25])]
-    #[case::i8([-2_i8, 127], [-2.0, 127.0])]
-    #[case::u8([0_u8, 255], [0.0, 255.0])]
-    fn other_representations_keep_their_conversion<T: VectorRepr>(
-        #[case] source: [T; 2],
-        #[case] expected: [f32; 2],
-    ) {
-        // Given
-        let mut output = [f32::NAN; 2];
-
-        // When
-        as_f32_into(&source, &mut output).unwrap();
-
-        // Then
-        assert_eq!(output, expected);
+        assert_eq!(
+            actual.map(f32::to_bits).as_slice(),
+            expected
+                .as_flattened()
+                .iter()
+                .copied()
+                .map(f32::to_bits)
+                .collect::<Vec<_>>()
+        );
     }
 }

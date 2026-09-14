@@ -383,11 +383,7 @@ fn gather_vectors<T>(data: MatrixView<'_, T>, indices: &[u32], output: &mut [f32
 where
     T: VectorRepr,
 {
-    for (&index, vector_output) in indices.iter().zip(output.chunks_exact_mut(data.ncols())) {
-        super::conversion::as_f32_into(data.row(index as usize), vector_output)
-            .map_err(Into::<ANNError>::into)?;
-    }
-    Ok(())
+    super::conversion::gather_as_f32(data, indices, output).map_err(|(_, error)| error.into())
 }
 
 /// Group assigned point IDs by child partition.
