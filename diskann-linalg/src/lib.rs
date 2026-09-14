@@ -82,6 +82,30 @@ impl fmt::Display for SgemmError {
 
 impl std::error::Error for SgemmError {}
 
+fn check_matrix(
+    matrix_name: MatrixName,
+    actual_len: usize,
+    rows: usize,
+    cols: usize,
+) -> Result<(), SgemmError> {
+    let expected_len = rows
+        .checked_mul(cols)
+        .ok_or(SgemmError::DimensionOverflow {
+            matrix_name,
+            rows,
+            cols,
+        })?;
+    if actual_len != expected_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name,
+            expected_rows: rows,
+            expected_cols: cols,
+            actual_len,
+        });
+    }
+    Ok(())
+}
+
 // Make the reference implementation available for internal testing.
 #[cfg(test)]
 mod reference;
@@ -156,54 +180,58 @@ pub fn sgemm(
     beta: Option<f32>,
     c: &mut [f32],
 ) -> Result<(), SgemmError> {
-    // Check size requirements with overflow protection.
-    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::A,
-        rows: m,
-        cols: k,
-    })?;
-
-    if a.len() != expected_a_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::A,
-            expected_rows: m,
-            expected_cols: k,
-            actual_len: a.len(),
-        });
-    }
-
-    let expected_b_len = k.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::B,
-        rows: k,
-        cols: n,
-    })?;
-
-    if b.len() != expected_b_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::B,
-            expected_rows: k,
-            expected_cols: n,
-            actual_len: b.len(),
-        });
-    }
-
-    let expected_c_len = m.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::C,
-        rows: m,
-        cols: n,
-    })?;
-
-    if c.len() != expected_c_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::C,
-            expected_rows: m,
-            expected_cols: n,
-            actual_len: c.len(),
-        });
-    }
+    check_matrix(MatrixName::A, a.len(), m, k)?;
+    check_matrix(MatrixName::B, b.len(), k, n)?;
+    check_matrix(MatrixName::C, c.len(), m, n)?;
 
     // Invoke the actual implementation.
     sgemm_impl(atranspose, btranspose, m, n, k, alpha, a, b, beta, c);
+    Ok(())
+}
+
+/// Replace the lower triangle of `C` with $\alpha A A^\mathsf{T}$.
+///
+/// `A` is a dense row-major $m \times k$ matrix. The function does not change
+/// the upper triangle of `C`. Use this operation when `C` has no prior term.
+///
+/// # Errors
+///
+/// Returns an error if a size product overflows. It also returns an error if a
+/// slice length does not match its declared matrix shape.
+pub fn sgemm_aat_lower(
+    m: usize,
+    k: usize,
+    alpha: f32,
+    a: &[f32],
+    c: &mut [f32],
+) -> Result<(), SgemmError> {
+    check_matrix(MatrixName::A, a.len(), m, k)?;
+    check_matrix(MatrixName::C, c.len(), m, m)?;
+
+    faer::sgemm_aat_lower_impl(m, k, alpha, a, c);
+    Ok(())
+}
+
+/// Add the lower triangle of $\alpha A A^\mathsf{T}$ to `C`.
+///
+/// `A` is a dense row-major $m \times k$ matrix. The function changes only the
+/// lower triangle of `C`. Use this operation when `C` contains an initial term.
+///
+/// # Errors
+///
+/// Returns an error if a size product overflows. It also returns an error if a
+/// slice length does not match its declared matrix shape.
+pub fn sgemm_aat_lower_add(
+    m: usize,
+    k: usize,
+    alpha: f32,
+    a: &[f32],
+    c: &mut [f32],
+) -> Result<(), SgemmError> {
+    check_matrix(MatrixName::A, a.len(), m, k)?;
+    check_matrix(MatrixName::C, c.len(), m, m)?;
+
+    faer::sgemm_aat_lower_add_impl(m, k, alpha, a, c);
     Ok(())
 }
 
@@ -688,5 +716,123 @@ mod tests {
                 test_distance_preserving_matrix_impl(dim, &mut rng);
             }
         }
+    }
+}
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test matrices have fixed valid shapes")]
+mod sgemm_aat_lower_tests {
+    use super::{sgemm_aat_lower, sgemm_aat_lower_add, MatrixName, SgemmError};
+
+    #[test]
+    fn replace_writes_the_scaled_lower_triangle_and_preserves_the_upper_triangle() {
+        // Given: rows [1, 2, 3] and [4, 5, 6] have Gram entries 14, 32, and 77.
+        let matrix = [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let upper_triangle_sentinel = -123.0_f32;
+        let expected = [-14.0, upper_triangle_sentinel, -32.0, -77.0];
+        let mut actual = [upper_triangle_sentinel; 4];
+
+        // When
+        sgemm_aat_lower(2, 3, -1.0, &matrix, &mut actual).unwrap();
+
+        // Then
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn add_accumulates_the_scaled_lower_triangle_and_preserves_the_upper_triangle() {
+        // Given: adding -2 times the Gram entries (14, 32, 77) to (10, 20, 30)
+        // produces (-18, -44, -124), while the upper triangle remains unchanged.
+        let matrix = [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let upper_triangle_sentinel = -123.0_f32;
+        let expected = [-18.0, upper_triangle_sentinel, -44.0, -124.0];
+        let mut actual = [10.0, upper_triangle_sentinel, 20.0, 30.0];
+
+        // When
+        sgemm_aat_lower_add(2, 3, -2.0, &matrix, &mut actual).unwrap();
+
+        // Then
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn invalid_input_length_returns_the_a_matrix_error() {
+        // Given
+        let row_count = 2;
+        let dimension_count = 2;
+        let invalid_input = [0.0_f32; 3];
+        let mut output = [0.0_f32; 4];
+        let expected = SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::A,
+            expected_rows: row_count,
+            expected_cols: dimension_count,
+            actual_len: invalid_input.len(),
+        };
+
+        // When
+        let actual = sgemm_aat_lower(row_count, dimension_count, 1.0, &invalid_input, &mut output)
+            .unwrap_err();
+
+        // Then
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn invalid_output_length_returns_the_c_matrix_error() {
+        // Given
+        let row_count = 2;
+        let dimension_count = 2;
+        let input = [0.0_f32; 4];
+        let mut invalid_output = [0.0_f32; 3];
+        let expected = SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::C,
+            expected_rows: row_count,
+            expected_cols: row_count,
+            actual_len: invalid_output.len(),
+        };
+
+        // When
+        let actual =
+            sgemm_aat_lower_add(row_count, dimension_count, 1.0, &input, &mut invalid_output)
+                .unwrap_err();
+
+        // Then
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn input_size_overflow_returns_the_a_matrix_error() {
+        // Given
+        let row_count = usize::MAX;
+        let dimension_count = 2;
+        let expected = SgemmError::DimensionOverflow {
+            matrix_name: MatrixName::A,
+            rows: row_count,
+            cols: dimension_count,
+        };
+
+        // When
+        let actual = sgemm_aat_lower(row_count, dimension_count, 1.0, &[], &mut []).unwrap_err();
+
+        // Then
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn output_size_overflow_returns_the_c_matrix_error() {
+        // Given
+        let row_count = usize::MAX;
+        let dimension_count = 0;
+        let expected = SgemmError::DimensionOverflow {
+            matrix_name: MatrixName::C,
+            rows: row_count,
+            cols: row_count,
+        };
+
+        // When
+        let actual =
+            sgemm_aat_lower_add(row_count, dimension_count, 1.0, &[], &mut []).unwrap_err();
+
+        // Then
+        assert_eq!(actual, expected);
     }
 }
