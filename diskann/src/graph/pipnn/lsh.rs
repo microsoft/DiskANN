@@ -110,7 +110,7 @@ fn fill_sketch_row<T: VectorRepr>(
 ) -> ANNResult<()> {
     let dimensions = data.ncols();
     buffer.resize(dimensions, 0.0);
-    T::as_f32_into(data.row(point), &mut buffer[..dimensions])
+    super::conversion::as_f32_into(data.row(point), &mut buffer[..dimensions])
         .map_err(Into::<ANNError>::into)
         .map_err(|error| error.context(format!("converting LSH point {point}")))?;
     for (plane_index, destination) in sketch_row.iter_mut().enumerate() {
