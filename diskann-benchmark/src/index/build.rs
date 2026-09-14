@@ -130,6 +130,7 @@ where
     T: diskann::graph::SampleableForStart + diskann::utils::VectorRepr,
 {
     use anyhow::Context;
+    use rayon::prelude::*;
 
     let npoints = data.nrows();
     let dimensions = data.ncols();
@@ -192,16 +193,32 @@ where
     let install_started = std::time::Instant::now();
     // Install vectors before edges. A returned index must contain a vector for
     // every graph ID.
-    for (id, vector) in data.row_iter().enumerate() {
-        let id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
-        index.data_provider.base_vectors.set_element(&id, vector)?;
-    }
-    for (id, neighbors) in adjacency.into_iter().enumerate() {
-        index
-            .provider()
-            .neighbors()
-            .set_neighbors_sync(id, &neighbors)?;
-    }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the supplied pool owns both terminal operations"
+    )]
+    pool.install(|| -> anyhow::Result<()> {
+        (0..npoints)
+            .into_par_iter()
+            .try_for_each(|id| -> anyhow::Result<()> {
+                let point_id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
+                index
+                    .data_provider
+                    .base_vectors
+                    .set_element(&point_id, data.row(id))?;
+                Ok(())
+            })?;
+        adjacency
+            .into_par_iter()
+            .enumerate()
+            .try_for_each(|(id, neighbors)| {
+                index
+                    .provider()
+                    .neighbors()
+                    .set_neighbors_sync(id, &neighbors)
+            })?;
+        Ok(())
+    })?;
     index.provider().set_start_points(start_points.row_iter())?;
     let start_ids = index.provider().starting_points()?;
     anyhow::ensure!(
@@ -422,27 +439,36 @@ mod pipnn_tests {
     use super::*;
     use diskann::graph::AdjacencyList;
 
-    #[test]
-    fn dedicated_pipeline_respects_the_requested_start_strategy() {
+    fn assert_vectors_edges_and_start_points_are_installed(threads: usize) {
+        // Given: coordinates i² have increasing gaps, so k=1 selects the previous
+        // point for every i>0; point 0 selects 1. Reverse edges form a chain.
+        // Seventeen rows cross the provider's sixteen-ID write-lock group.
+        let coordinates: [f32; 17] = std::array::from_fn(|id| (id * id) as f32);
+        let expected_neighbors: [Vec<u32>; 17] = std::array::from_fn(|id| {
+            (0..coordinates.len())
+                .filter(|&other| id.abs_diff(other) == 1)
+                .map(|other| other as u32)
+                .collect()
+        });
         let input: IndexBuild = serde_json::from_value(serde_json::json!({
             "data_type": "float32",
             "data": "unused.fbin",
             "distance": "squared_l2",
-            "max_degree": 4,
+            "max_degree": 2,
             "l_build": 8,
             "start_point_strategy": "first_vector",
             "alpha": 1.2,
             "backedge_ratio": 1.0,
-            "num_threads": 2,
+            "num_threads": threads,
             "multi_insert": null,
             "save_path": null,
             "build_algorithm": {
                 "algorithm": "PiPNN",
-                "c_max": 8,
-                "c_min": 2,
+                "c_max": 17,
+                "c_min": 1,
                 "p_samp": 0.5,
                 "fanout": [2],
-                "k": 2,
+                "k": 1,
                 "replicas": 1
             }
         }))
@@ -450,38 +476,57 @@ mod pipnn_tests {
         let diskann_disk::BuildAlgorithm::PiPNN(parameters) = input.build_algorithm() else {
             panic!("expected PiPNN parameters");
         };
-        let mut data = Matrix::new(0.0_f32, 16, 2);
-        for (index, row) in data.row_iter_mut().enumerate() {
-            row.copy_from_slice(&[index as f32, (index % 3) as f32]);
-        }
+        let mut data = Matrix::new(0.0_f32, coordinates.len(), 1);
+        data.as_mut_slice().copy_from_slice(&coordinates);
 
+        // When
         let (index, stats) = pipnn_build(Arc::new(data), &input, parameters).unwrap();
-        assert_eq!(stats.vectors_inserted, 16);
+
+        // Then: every real row contains its own vector and adjacency.
+        assert_eq!(stats.vectors_inserted, coordinates.len());
         assert!(stats.insert_latencies.is_none());
+        for (id, (&coordinate, expected)) in coordinates.iter().zip(&expected_neighbors).enumerate()
+        {
+            // SAFETY: id is a real dataset row; installation finished before return.
+            let vector = unsafe { index.data_provider.base_vectors.get_vector_sync(id) };
+            assert_eq!(vector, &[coordinate], "vector id={id}, threads={threads}");
+            let mut neighbors = AdjacencyList::new();
+            index
+                .provider()
+                .neighbors()
+                .get_neighbors_sync(id, &mut neighbors)
+                .unwrap();
+            assert_eq!(
+                &*neighbors, expected,
+                "adjacency id={id}, threads={threads}"
+            );
+        }
         let starts = index.provider().starting_points().unwrap();
         assert_eq!(starts.len(), 1);
-        // SAFETY: `starting_points` returns installed frozen IDs. Therefore,
-        // `starts[0] < base_vectors.total()`. The completed build has no vector
-        // writer, so the returned shared slice has no mutable alias.
+        // SAFETY: starting_points returns installed frozen IDs and no writer remains.
         let start = unsafe {
             index
                 .data_provider
                 .base_vectors
                 .get_vector_sync(starts[0] as usize)
         };
-        assert_eq!(start, [0.0, 0.0]);
-        let mut neighbors = AdjacencyList::new();
+        assert_eq!(start, &[coordinates[0]]);
+        let mut start_neighbors = AdjacencyList::new();
         index
             .provider()
             .neighbors()
-            .get_neighbors_sync(starts[0] as usize, &mut neighbors)
+            .get_neighbors_sync(starts[0] as usize, &mut start_neighbors)
             .unwrap();
-        let mut source_neighbors = AdjacencyList::new();
-        index
-            .provider()
-            .neighbors()
-            .get_neighbors_sync(0, &mut source_neighbors)
-            .unwrap();
-        assert_eq!(neighbors, source_neighbors);
+        assert_eq!(&*start_neighbors, &expected_neighbors[0]);
+    }
+
+    #[test]
+    fn one_thread_installs_vectors_edges_and_requested_start_point() {
+        assert_vectors_edges_and_start_points_are_installed(1);
+    }
+
+    #[test]
+    fn four_threads_install_vectors_edges_and_requested_start_point() {
+        assert_vectors_edges_and_start_points_are_installed(4);
     }
 }
