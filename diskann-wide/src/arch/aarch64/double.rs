@@ -84,11 +84,35 @@ doubled::double_scalar_shift!(Doubled<Doubled<i32x4>>);
 //////////////
 
 super::macros::aarch64_zipunzip!(Doubled<i8x16>, vzip1q_s8, vzip2q_s8, vuzp1q_s8, vuzp2q_s8);
-super::macros::aarch64_zipunzip!(Doubled<i16x8>, vzip1q_s16, vzip2q_s16, vuzp1q_s16, vuzp2q_s16);
-super::macros::aarch64_zipunzip!(Doubled<i32x4>, vzip1q_s32, vzip2q_s32, vuzp1q_s32, vuzp2q_s32);
+super::macros::aarch64_zipunzip!(
+    Doubled<i16x8>,
+    vzip1q_s16,
+    vzip2q_s16,
+    vuzp1q_s16,
+    vuzp2q_s16
+);
+super::macros::aarch64_zipunzip!(
+    Doubled<i32x4>,
+    vzip1q_s32,
+    vzip2q_s32,
+    vuzp1q_s32,
+    vuzp2q_s32
+);
 super::macros::aarch64_zipunzip!(Doubled<u8x16>, vzip1q_u8, vzip2q_u8, vuzp1q_u8, vuzp2q_u8);
-super::macros::aarch64_zipunzip!(Doubled<u32x4>, vzip1q_u32, vzip2q_u32, vuzp1q_u32, vuzp2q_u32);
-super::macros::aarch64_zipunzip!(Doubled<f16x8>, vzip1q_u16, vzip2q_u16, vuzp1q_u16, vuzp2q_u16);
+super::macros::aarch64_zipunzip!(
+    Doubled<u32x4>,
+    vzip1q_u32,
+    vzip2q_u32,
+    vuzp1q_u32,
+    vuzp2q_u32
+);
+super::macros::aarch64_zipunzip!(
+    Doubled<f16x8>,
+    vzip1q_u16,
+    vzip2q_u16,
+    vuzp1q_u16,
+    vuzp2q_u16
+);
 
 //-------------//
 // Conversions //

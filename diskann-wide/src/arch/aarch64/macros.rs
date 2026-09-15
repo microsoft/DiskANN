@@ -572,7 +572,7 @@ pub(crate) use aarch64_splitjoin;
 
 /// Implement [`ZipUnzip`] for a [`Doubled`] type using Neon zip/unzip intrinsics.
 ///
-/// ## Pa256, rameters
+/// ## Parameters
 ///
 /// * `$half`   — the native 128-bit Neon type (e.g. `i8x16`)
 /// * `$zip1`   — `vzip1q_*` intrinsic (interleave lower halves)
@@ -607,8 +607,8 @@ macro_rules! aarch64_zipunzip {
                 unsafe {
                     let arch = self.arch();
 
-                    let $crate::LoHi { lo, hi } = <Self as $crate::SplitJoin>::split(self)
-                        .map(SIMDVector::to_underlying);
+                    let $crate::LoHi { lo, hi } =
+                        <Self as $crate::SplitJoin>::split(self).map(SIMDVector::to_underlying);
 
                     $crate::LoHi::new($uzp1(lo, hi), $uzp2(lo, hi))
                         .map(|raw| SIMDVector::from_underlying(arch, raw))

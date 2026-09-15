@@ -29,9 +29,7 @@ use std::arch::aarch64::*;
 
 macros::aarch64_define_register!(f16x8, uint16x8_t, mask16x8, f16, 8, Neon);
 macros::aarch64_splitjoin!(f16x8, f16x4, vget_low_u16, vget_high_u16, vcombine_u16);
-macros::aarch64_zipunzip!(
-    f16x8, f16x4, vzip1_u16, vzip2_u16, vuzp1_u16, vuzp2_u16
-);
+macros::aarch64_zipunzip!(f16x8, f16x4, vzip1_u16, vzip2_u16, vuzp1_u16, vuzp2_u16);
 
 impl AArchSplat for f16x8 {
     #[inline(always)]

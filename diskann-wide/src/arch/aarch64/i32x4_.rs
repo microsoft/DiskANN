@@ -27,9 +27,7 @@ macros::aarch64_define_register!(i32x4, int32x4_t, mask32x4, i32, 4, Neon);
 macros::aarch64_define_splat!(i32x4, vmovq_n_s32);
 macros::aarch64_define_loadstore!(i32x4, vld1q_s32, internal::load_first::i32x4, vst1q_s32, 4);
 macros::aarch64_splitjoin!(i32x4, i32x2, vget_low_s32, vget_high_s32, vcombine_s32);
-macros::aarch64_zipunzip!(
-    i32x4, i32x2, vzip1_s32, vzip2_s32, vuzp1_s32, vuzp2_s32
-);
+macros::aarch64_zipunzip!(i32x4, i32x2, vzip1_s32, vzip2_s32, vuzp1_s32, vuzp2_s32);
 
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Add, add, vaddq_s32, "neon");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Sub, sub, vsubq_s32, "neon");
