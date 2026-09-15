@@ -174,6 +174,31 @@ impl_expected_ops_for_integers!(i64);
 impl_expected_ops_for_floats!(f32);
 impl_expected_ops_for_floats!(f64);
 
+///////////////////////////////////
+// Reference Absolute Difference //
+///////////////////////////////////
+
+pub(crate) trait ReferenceAbsDiff: Copy {
+    fn expected_abs_diff_(self, rhs: Self) -> Self;
+}
+
+/// absolute difference for unsigned integers
+macro_rules! impl_abs_diff_for_unsigned_integers {
+    ($type:ty) => {
+        impl ReferenceAbsDiff for $type {
+            #[inline(always)]
+            fn expected_abs_diff_(self, rhs: Self) -> Self {
+                self.abs_diff(rhs)
+            }
+        }
+    };
+}
+
+impl_abs_diff_for_unsigned_integers!(u8);
+impl_abs_diff_for_unsigned_integers!(u16);
+impl_abs_diff_for_unsigned_integers!(u32);
+impl_abs_diff_for_unsigned_integers!(u64);
+
 ///////////////////
 // Reference Abs //
 ///////////////////
