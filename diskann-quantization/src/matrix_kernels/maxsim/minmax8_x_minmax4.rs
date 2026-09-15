@@ -6,7 +6,8 @@
 //! A is block-transposed in four-byte, even/odd contraction groups. Each B cache
 //! tile is unpacked once into the same groups, then reused across all A sub-views.
 //! Only the original dimension participates in compensation; padded groups are zero.
-//! The driver borrows all inputs and owns only the B conversion scratch buffers.
+//! The driver borrows all inputs. B conversion uses bounded stack scratch for small
+//! tiles and heap scratch otherwise.
 //! Every eight dimensions become `[0, 2, 4, 6]`, then `[1, 3, 5, 7]`, for both operands.
 
 use diskann_wide::{Architecture, SIMDMinMax, SIMDVector, arch::Scalar};
@@ -105,9 +106,10 @@ pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
     k: DimK,
     b_stride: DimK,
     params: Params,
-    b_values: Vec<Group>,
-    b_meta: Vec<MinMaxCompensation>,
 }
+
+const STACK_GROUPS: usize = 1024;
+const STACK_ROWS: usize = 32;
 
 impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
     /// # Safety
@@ -125,12 +127,19 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         cache: Cache,
     ) -> Self {
         let k = DimK::new(value_or_one(groups(dim.value().get())));
-        let params = Params::new(
+        let mut params = Params::new(
             cache,
             a.block_stride(k).bytes(),
             Elements::<Group>::new(k.value().get()).bytes(),
             NR,
         );
+        // Prefer stack-sized tiles when a complete NR panel fits. Larger
+        // dimensions retain the cache-based tile size and heap scratch.
+        if let Some(rows) =
+            std::num::NonZeroUsize::new((STACK_GROUPS / k.value().get()).min(STACK_ROWS) / NR * NR)
+        {
+            params.b_cols_in_l1 = params.b_cols_in_l1.min(rows);
+        }
         // SAFETY: Inherited from caller.
         unsafe { Self::new_inner(arch, a, a_meta, b, c, dim, params) }
     }
@@ -151,7 +160,6 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         bounds::check_eq!(b.k(), b_stride);
         bounds::check_eq!(Bound::new(a_meta.len()), a.blocks());
         bounds::check_eq!(Bound::new(c.len().div_ceil(MR)), a.blocks());
-        let b_rows = params.b_cols_in_l1.min(b.extent()).get();
         Self {
             arch,
             a,
@@ -162,8 +170,6 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
             k,
             b_stride,
             params,
-            b_values: vec![[0; 4]; b_rows * k.value().get()],
-            b_meta: vec![MinMaxCompensation::default(); b_rows],
         }
     }
 }
@@ -216,6 +222,31 @@ where
     for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
 {
     fn drive(&mut self) {
+        // Keep small tiles off the heap without imposing a limit on the dimension
+        // or document count. The buffers occupy 4 KiB plus 32 metadata records.
+        let rows = self.params.b_cols_in_l1.min(self.b.extent()).get();
+        let count = rows * self.k.value().get();
+        if count <= STACK_GROUPS && rows <= STACK_ROWS {
+            let mut values = [[0; 4]; STACK_GROUPS];
+            let mut meta = [MinMaxCompensation::default(); STACK_ROWS];
+            self.drive_with_scratch(&mut values[..count], &mut meta[..rows]);
+        } else {
+            let mut values = vec![[0; 4]; count];
+            let mut meta = vec![MinMaxCompensation::default(); rows];
+            self.drive_with_scratch(&mut values, &mut meta);
+        }
+    }
+}
+
+impl<A, const MR: usize, const NR: usize> Driver<'_, A, MR, NR> {
+    fn drive_with_scratch(&mut self, b_values: &mut [Group], b_meta: &mut [MinMaxCompensation])
+    where
+        A: Architecture + util::LoadStore<f32, MR>,
+        for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
+    {
+        let rows = self.params.b_cols_in_l1.min(self.b.extent()).get();
+        bounds::check_eq!(Bound::new(b_values.len()), rows * self.k.value().get());
+        bounds::check_eq!(Bound::new(b_meta.len()), rows);
         self.arch.run(
             #[inline]
             || {
@@ -225,8 +256,8 @@ where
                 let a_meta = Slice::new(self.a_meta);
                 let on_b = |b: unpacked::View<'_, u8>, _| {
                     let b_rows = b.extent();
-                    let values = &mut self.b_values[..b_rows.get() * self.k.value().get()];
-                    let meta = &mut self.b_meta[..b_rows.get()];
+                    let values = &mut b_values[..b_rows.get() * self.k.value().get()];
+                    let meta = &mut b_meta[..b_rows.get()];
                     // SAFETY: Sub-views preserve the canonical row format and dimension.
                     unsafe { unpack_b(b, values, meta, self.dim) };
                     // SAFETY: Conversion fills exactly `b_rows * k` groups.
@@ -846,6 +877,49 @@ mod tests {
         DimK::new(NonZeroUsize::new(value).unwrap())
     }
 
+    fn check_scratch_tile_limits<const MR: usize, const NR: usize>() {
+        for dim in [1, 128, 250, 256, 512, 513, 680, 681, 1025] {
+            let k = dimension(groups(dim));
+            let a = BlockTransposed::<Group, MR>::new(MR, k.value().get());
+            let b = documents(33, dim);
+            let meta = [QueryCompensation::<MR>::default()];
+            let mut scores = [0.0; MR];
+            let expected = Params::new(
+                Cache::detect(),
+                Elements::<Group>::new(MR * k.value().get()).bytes(),
+                Elements::<Group>::new(k.value().get()).bytes(),
+                NR,
+            );
+            // SAFETY: Matching views and metadata describe one complete query block.
+            let driver = unsafe {
+                Driver::<_, MR, NR>::new(
+                    Scalar::new(),
+                    packed::View::from_block_transposed(a.as_view()).unwrap(),
+                    &meta,
+                    unpacked::View::from_matrix_view(b.as_view()).unwrap(),
+                    &mut scores,
+                    dimension(dim),
+                    Cache::detect(),
+                )
+            };
+            let rows = driver.params.b_cols_in_l1.get();
+            assert!(rows.is_multiple_of(NR));
+            assert!(rows <= expected.b_cols_in_l1.get());
+            if k.value().get() * NR <= STACK_GROUPS && NR <= STACK_ROWS {
+                assert!(rows * k.value().get() <= STACK_GROUPS);
+                assert!(rows <= STACK_ROWS);
+            } else {
+                assert_eq!(rows, expected.b_cols_in_l1.get());
+            }
+        }
+    }
+
+    #[test]
+    fn scratch_tile_limits() {
+        check_scratch_tile_limits::<8, 6>();
+        check_scratch_tile_limits::<16, 8>();
+    }
+
     fn documents(rows: usize, dim: usize) -> Matrix<u8> {
         let stride = Data::<4>::canonical_bytes(dim);
         let mut bytes = Matrix::new(0_u8, rows, stride);
@@ -1056,11 +1130,19 @@ mod tests {
                     c.b_cols_per_tile,
                 )
             })
-            .chain(
-                (1..=NR).flat_map(|n| (1..=17).map(move |dim| (MR + 1, n + NR, dim, 1, NR + 1))),
-            );
+            .chain((1..=NR).flat_map(|n| (1..=17).map(move |dim| (MR + 1, n + NR, dim, 1, NR + 1))))
+            .chain([
+                (MR + 1, 32, 1, 1, 32),
+                (MR + 1, 33, 1, 1, 33),
+                (MR + 1, 16, 256, 1, 16),
+                (MR + 1, 17, 256, 1, 17),
+                (MR + 1, 16, 257, 1, 16),
+            ]);
         for (rows, cols, dim, a_blocks, b_cols) in cases {
-            if cfg!(miri) && !(rows <= MR + 1 && cols <= NR + 1 && matches!(dim, 1 | 9)) {
+            if cfg!(miri)
+                && !(rows <= MR + 1 && cols <= NR + 1 && matches!(dim, 1 | 9)
+                    || dim == 1 && matches!(cols, 32 | 33))
+            {
                 continue;
             }
             let k = groups(dim);
