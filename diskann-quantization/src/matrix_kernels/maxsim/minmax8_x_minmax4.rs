@@ -349,6 +349,24 @@ impl<'a, A, const N: usize, const MR: usize, const NR: usize, B: BSource<N>>
             valid_rows,
         }
     }
+
+    #[inline(always)]
+    fn visitor(&mut self) -> Visitor<'_, A, N, MR, B>
+    where
+        A: Copy,
+    {
+        Visitor {
+            arch: self.arch,
+            a: self.a,
+            query: self.query,
+            c: &mut self.c,
+            k: self.k,
+            dim: self.dim,
+            b_stride: self.b_stride,
+            valid_rows: self.valid_rows,
+            source: self.b,
+        }
+    }
 }
 
 struct Visitor<'a, A, const N: usize, const MR: usize, B> {
@@ -394,25 +412,20 @@ macro_rules! panel_kernel {
         {
             #[inline(always)]
             fn panel_kernel(&mut self) {
-                let visitor = Visitor {
-                    arch: self.arch, a: self.a, query: self.query, c: &mut self.c,
-                    k: self.k, dim: self.dim, b_stride: self.b_stride,
-                    valid_rows: self.valid_rows,
-                    source: self.b,
-                };
-                let b = self.b.view();
+                let source = self.b;
+                let b = source.view();
                 // SAFETY: The constructor checks B's row stride.
-                let remainder = unsafe { b.visit_panels::<$nr>(self.b_stride, visitor) };
+                let remainder = unsafe {
+                    b.visit_panels::<$nr>(self.b_stride, self.visitor())
+                };
                 if let Some(remainder) = remainder {
                     $(
                         if let Some(panel) = remainder.try_as_panel::<$tail>() {
-                            let mut visitor = Visitor {
-                                arch: self.arch, a: self.a, query: self.query, c: &mut self.c,
-                                k: self.k, dim: self.dim, b_stride: self.b_stride,
-                                valid_rows: self.valid_rows,
-                                source: self.b,
-                            };
-                            unpacked::PanelVisitor::visit(&mut visitor, panel, remainder.start());
+                            unpacked::PanelVisitor::visit(
+                                &mut self.visitor(),
+                                panel,
+                                remainder.start(),
+                            );
                         }
                     )+
                 }
@@ -425,42 +438,6 @@ macro_rules! panel_kernel {
 struct BPanel<'a, const NR: usize, T = u8> {
     values: [Slice<'a, T>; NR],
     meta: [MinMaxCompensation; NR],
-}
-
-impl<'a, const NR: usize> BPanel<'a, NR> {
-    /// # Safety
-    ///
-    /// `panel` contains NR canonical MinMax4 rows of dimension `dim`.
-    unsafe fn new(panel: unpacked::Panel<'a, u8, NR>, stride: DimK, dim: DimK) -> Self {
-        bounds::check_eq!(panel.k(), stride);
-        let dim = dim.value().get();
-        let packed_len = dim.div_ceil(2);
-        let base = panel.as_ptr();
-        let row_stride = panel.stride(stride);
-        let rows: [(Slice<'a, u8>, MinMaxCompensation); NR] = core::array::from_fn(|row| {
-            // SAFETY: `panel` contains NR complete canonical rows.
-            let bytes = unsafe {
-                base.add(row_stride * row)
-                    .truncate(row_stride)
-                    .as_std_slice(stride.value().get())
-            };
-            // SAFETY: The driver validated the canonical row stride and dimension.
-            let data = unsafe { DataRef::<4>::from_canonical_unchecked(bytes, dim) };
-            let vector = data.vector();
-            // SAFETY: The vector owns exactly `ceil(dim / 2)` packed bytes.
-            let values = unsafe {
-                Slice::from_raw(
-                    std::ptr::NonNull::new_unchecked(vector.as_ptr().cast_mut()),
-                    Bound::new(packed_len),
-                )
-            };
-            (values, data.meta())
-        });
-        Self {
-            values: rows.map(|(values, _)| values),
-            meta: rows.map(|(_, meta)| meta),
-        }
-    }
 }
 
 trait BSource<const N: usize>: Copy {
@@ -496,8 +473,34 @@ impl<const N: usize> BSource<N> for unpacked::View<'_, u8> {
         stride: DimK,
         dim: DimK,
     ) -> BPanel<'a, NR> {
-        // SAFETY: Inherited from the source contract.
-        unsafe { BPanel::new(*panel, stride, dim) }
+        bounds::check_eq!(panel.k(), stride);
+        let dim = dim.value().get();
+        let packed_len = dim.div_ceil(2);
+        let base = panel.as_ptr();
+        let row_stride = panel.stride(stride);
+        let rows: [(Slice<'a, u8>, MinMaxCompensation); NR] = core::array::from_fn(|row| {
+            // SAFETY: `panel` contains NR complete canonical rows.
+            let bytes = unsafe {
+                base.add(row_stride * row)
+                    .truncate(row_stride)
+                    .as_std_slice(stride.value().get())
+            };
+            // SAFETY: The driver validated the canonical row stride and dimension.
+            let data = unsafe { DataRef::<4>::from_canonical_unchecked(bytes, dim) };
+            let vector = data.vector();
+            // SAFETY: The vector owns exactly `ceil(dim / 2)` packed bytes.
+            let values = unsafe {
+                Slice::from_raw(
+                    std::ptr::NonNull::new_unchecked(vector.as_ptr().cast_mut()),
+                    Bound::new(packed_len),
+                )
+            };
+            (values, data.meta())
+        });
+        BPanel {
+            values: rows.map(|(values, _)| values),
+            meta: rows.map(|(_, meta)| meta),
+        }
     }
 }
 
