@@ -4,14 +4,14 @@
  */
 
 use diskann::ANNError;
-use diskann_utils::{strided, views};
+use diskann_utils::strided;
 
 use crate::utils::Bridge;
 
-impl<T: views::DenseData> From<Bridge<strided::TryFromError<T>>> for ANNError {
+impl From<Bridge<strided::TryFromError>> for ANNError {
     #[track_caller]
-    fn from(value: Bridge<strided::TryFromError<T>>) -> Self {
-        ANNError::new(value.into_inner().as_static())
+    fn from(value: Bridge<strided::TryFromError>) -> Self {
+        ANNError::new(value.into_inner())
     }
 }
 
@@ -32,7 +32,7 @@ mod tests {
         let x = vec![u8::default(); nrows * ncols];
 
         // Provided the incorrect dimensions.
-        let err = strided::StridedView::try_from(&x, nrows, ncols + 1, ncols + 1)
+        let err = strided::Strided::try_from_data(&x, nrows, ncols + 1, ncols + 1)
             .bridge_err()
             .unwrap_err();
         let message = format!("{}", err);
