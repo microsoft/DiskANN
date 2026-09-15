@@ -572,7 +572,7 @@ pub(crate) use aarch64_splitjoin;
 
 /// Implement [`ZipUnzip`] for a [`Doubled`] type using Neon zip/unzip intrinsics.
 ///
-/// ## Parameters
+/// ## Pa256, rameters
 ///
 /// * `$half`   — the native 128-bit Neon type (e.g. `i8x16`)
 /// * `$zip1`   — `vzip1q_*` intrinsic (interleave lower halves)
@@ -584,7 +584,39 @@ pub(crate) use aarch64_splitjoin;
 ///
 /// The caller must ensure the provided intrinsics match the element type of `$half`.
 macro_rules! aarch64_zipunzip {
-    ($half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
+    (128, $full:path, $half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
+        impl $crate::ZipUnzip for $full {
+            #[inline(always)]
+            fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {
+                use $crate::SIMDVector;
+                // SAFETY: Caller asserts that these intrinsics match the element type.
+                unsafe {
+                    let arch = halves.lo.arch();
+                    let $crate::LoHi { lo, hi } = halves.map(SIMDVector::to_underlying);
+
+                    $crate::LoHi::new($zip1(lo, hi), $zip2(lo, hi))
+                        .map(|raw| SIMDVector::from_underlying(arch, raw))
+                        .join()
+                }
+            }
+
+            #[inline(always)]
+            fn unzip(self) -> $crate::LoHi<<Self as $crate::SplitJoin>::Halved> {
+                use $crate::SIMDVector;
+                // SAFETY: Caller asserts that these intrinsics match the element type.
+                unsafe {
+                    let arch = self.arch();
+
+                    let $crate::LoHi { lo, hi } = <Self as $crate::SplitJoin>::split(self)
+                        .map(SIMDVector::to_underlying);
+
+                    $crate::LoHi::new($uzp1(lo, hi), $uzp2(lo, hi))
+                        .map(|raw| SIMDVector::from_underlying(arch, raw))
+                }
+            }
+        }
+    };
+    (256, $half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
         impl $crate::ZipUnzip for $crate::doubled::Doubled<$half> {
             #[inline(always)]
             fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {

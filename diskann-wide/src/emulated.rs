@@ -553,10 +553,10 @@ macro_rules! impl_sumtree {
 }
 
 impl_sumtree!(f32, 1, 2, 4, 8, 16);
-impl_sumtree!(i32, 4, 8, 16);
-impl_sumtree!(u32, 4, 8, 16);
-impl_sumtree!(i64, 2, 4, 8);
-impl_sumtree!(u64, 2, 4, 8);
+impl_sumtree!(i32, 1, 2, 4, 8, 16);
+impl_sumtree!(u32, 1, 2, 4, 8, 16);
+impl_sumtree!(i64, 1, 2, 4, 8);
+impl_sumtree!(u64, 1, 2, 4, 8);
 
 ////////////////
 // Conversion //

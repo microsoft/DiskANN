@@ -26,6 +26,10 @@ use std::arch::{aarch64::*, asm};
 macros::aarch64_define_register!(i32x4, int32x4_t, mask32x4, i32, 4, Neon);
 macros::aarch64_define_splat!(i32x4, vmovq_n_s32);
 macros::aarch64_define_loadstore!(i32x4, vld1q_s32, internal::load_first::i32x4, vst1q_s32, 4);
+// macros::aarch64_splitjoin!(i32x4, i32x2, vget_low_u32, vget_high_u32, vcombine_u32);
+// macros::aarch64_zipunzip!(
+//     128, i32x4, i32x2, vzip1_u32, vzip2_u32, vuzp1_u32, vuzp2_u32
+// );
 
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Add, add, vaddq_s32, "neon");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Sub, sub, vsubq_s32, "neon");

@@ -29,6 +29,9 @@ use std::arch::aarch64::*;
 
 macros::aarch64_define_register!(f16x8, uint16x8_t, mask16x8, f16, 8, Neon);
 macros::aarch64_splitjoin!(f16x8, f16x4, vget_low_u16, vget_high_u16, vcombine_u16);
+macros::aarch64_zipunzip!(
+    128, f16x8, f16x4, vzip1_u16, vzip2_u16, vuzp1_u16, vuzp2_u16
+);
 
 impl AArchSplat for f16x8 {
     #[inline(always)]
@@ -141,6 +144,7 @@ mod tests {
     }
 
     test_utils::ops::test_splitjoin!(f16x8 => f16x4, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(f16x8 => f16x4, 0x79cea63cd554f934, test_neon());
 
     // Conversions
     test_utils::ops::test_cast!(f16x8 => f32x8, 0x37314659b022466a, test_neon());

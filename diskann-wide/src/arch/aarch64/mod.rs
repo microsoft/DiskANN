@@ -53,6 +53,9 @@ pub use i8x16_::i8x16;
 pub mod i16x8_;
 pub use i16x8_::i16x8;
 
+pub mod i32x2_;
+pub use i32x2_::i32x2;
+
 pub mod i32x4_;
 pub use i32x4_::i32x4;
 

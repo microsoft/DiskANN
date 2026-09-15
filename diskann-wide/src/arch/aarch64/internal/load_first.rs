@@ -135,6 +135,22 @@ pub(in crate::arch::aarch64) unsafe fn i16x8(
     unsafe { vreinterpretq_s16_u16(u16x8(arch, ptr.cast::<u16>(), first)) }
 }
 
+/// Load the first `first` elements from `ptr` into a `uint32x2_t` register.
+///
+/// # Safety
+///
+/// The caller must ensure `[ptr, ptr + first)` is readable. The presence of `Neon`
+/// enables the use of "neon" intrinsics.
+#[inline(always)]
+pub(in crate::arch::aarch64) unsafe fn u32x2(
+    arch: Neon,
+    ptr: *const u32,
+    first: usize,
+) -> uint32x2_t {
+    // SAFETY: Pointer access inherited from caller. `Neon` enables "neon" intrinsics.
+    unsafe { load_first_32x2(arch, ptr, first) }
+}
+
 /// Load the first `first` elements from `ptr` into a `uint32x4_t` register.
 ///
 /// # Safety
@@ -149,6 +165,22 @@ pub(in crate::arch::aarch64) unsafe fn u32x4(
 ) -> uint32x4_t {
     // SAFETY: Pointer access inherited from caller. `Neon` enables "neon" intrinsics.
     unsafe { load_first_32x4(arch, ptr, first) }
+}
+
+/// Load the first `first` elements from `ptr` into a `int32x2_t` register.
+///
+/// # Safety
+///
+/// The caller must ensure `[ptr, ptr + first)` is readable. The presence of `Neon`
+/// enables the use of "neon" intrinsics.
+#[inline(always)]
+pub(in crate::arch::aarch64) unsafe fn i32x2(
+    arch: Neon,
+    ptr: *const i32,
+    first: usize,
+) -> int32x2_t {
+    // SAFETY: Pointer access inherited from caller. `Neon` enables "neon" intrinsics.
+    unsafe { vreinterpret_s32_u32(u32x2(arch, ptr.cast::<u32>(), first)) }
 }
 
 /// Load the first `first` elements from `ptr` into an `int32x4_t` register.
