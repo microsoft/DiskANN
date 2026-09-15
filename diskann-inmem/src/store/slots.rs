@@ -76,7 +76,7 @@
 
 use std::fmt::Debug;
 
-use crate::num::IdLimit;
+use crate::{num::IdLimit, tag};
 
 use super::Lifecycle;
 
@@ -89,7 +89,7 @@ pub(crate) trait SlotsConfig: Debug {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Build the associated [`Slots`] from self with the [`IdLimit`].
-    fn build(self, id_limit: IdLimit) -> Result<Self::Slots, Self::Error>;
+    unsafe fn build(self, tags: &tag::Authoritative) -> Result<Self::Slots, Self::Error>;
 }
 
 /// A lifecycle backend for [`super::Store`]'s EBR scheme.

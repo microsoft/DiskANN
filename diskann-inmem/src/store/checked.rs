@@ -80,7 +80,7 @@ use std::{
 use diskann::utils::IntoUsize;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::{epoch, num::IdLimit, store::Store};
+use crate::{epoch, num::IdLimit, store::Store, tag};
 
 use super::{Lifecycle, slots};
 
@@ -299,8 +299,11 @@ impl slots::SlotsConfig for Config {
     type Slots = Checked;
     type Error = diskann::error::Infallible;
 
-    fn build(self, id_limit: IdLimit) -> Result<Checked, diskann::error::Infallible> {
-        Ok(Checked::new(id_limit))
+    unsafe fn build(
+        self,
+        tags: &tag::Authoritative,
+    ) -> Result<Checked, diskann::error::Infallible> {
+        Ok(Checked::new(tags.id_limit()))
     }
 }
 

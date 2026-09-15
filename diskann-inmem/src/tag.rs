@@ -14,9 +14,12 @@
 //! Note that the type system does not enforce the tag protocol — only the documented
 //! transitions on [`Tag`] are sound, and it is the caller's responsibility to follow them.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 
-use crate::num::Bytes;
+use crate::num::{Bytes, IdLimit};
 
 /// A tag for controlling concurrent access to data.
 ///
@@ -227,6 +230,69 @@ impl AtomicTag {
     /// See: [`AtomicU8::store`].
     pub(crate) fn store(&self, val: Tag, ordering: Ordering) {
         self.0.store(val.value(), ordering)
+    }
+}
+
+//-------------//
+// Shared tags //
+//-------------//
+
+#[derive(Debug)]
+pub(crate) struct Authoritative {
+    tags: Arc<[AtomicTag]>,
+}
+
+impl Authoritative {
+    /// Construct a new atomic [`Tags`] authoritative tag source.
+    pub(crate) fn new(id_limit: IdLimit) -> Self {
+        Self {
+            tags: std::iter::repeat_n(Tag::AVAILABLE, id_limit.as_usize())
+                .map(AtomicTag::new)
+                .collect(),
+        }
+    }
+
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        IdLimit::new(self.len() as u32)
+    }
+
+    pub(crate) fn read_only(&self) -> ReadOnly {
+        ReadOnly::new(self.tags.clone())
+    }
+}
+
+impl std::ops::Deref for Authoritative {
+    type Target = [AtomicTag];
+    fn deref(&self) -> &[AtomicTag] {
+        &self.tags
+    }
+}
+
+/// A read-only handle to [`Tags`].
+#[derive(Debug, Clone)]
+pub(crate) struct ReadOnly {
+    tags: Arc<[AtomicTag]>,
+}
+
+impl ReadOnly {
+    fn new(tags: Arc<[AtomicTag]>) -> Self {
+        Self { tags }
+    }
+
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        IdLimit::new(self.len() as u32)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.tags.len()
+    }
+
+    #[must_use]
+    pub(crate) fn readable(&self, i: usize) -> bool {
+        self.tags
+            .get(i)
+            .map(|tag| tag.load(Ordering::Acquire).can_read())
+            .unwrap_or(false)
     }
 }
 

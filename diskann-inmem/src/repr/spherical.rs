@@ -16,8 +16,10 @@ use half::f16;
 
 use crate::{
     counters::LocalCounters,
+    epoch,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
-    prefetch, repr,
+    prefetch,
+    repr::{self, internal::Calf},
     store::{
         self, Store,
         cons::{self, Cons},
@@ -130,7 +132,7 @@ impl repr::RepresentationConfig for Config {
 #[derive(Debug)]
 enum Reranker {
     None,
-    Float16(Distance<f16, f16>),
+    Float16(Distance<f32, f16>),
 }
 
 fn convert_metric(metric: SupportedMetric) -> diskann_vector::distance::Metric {
@@ -148,22 +150,35 @@ impl Reranker {
         match rerank {
             Rerank::None => Self::None,
             Rerank::Float16 => {
-                Self::Float16(f16::distance_comparer(convert_metric(metric), Some(dim)))
+                Self::Float16(f32::distance_comparer(convert_metric(metric), Some(dim)))
             }
         }
     }
 
-    // fn reranker<'a>(
-    //     &'a self,
-    //     query: &'a [f32],
-    //     guard: &epoch::Guard<'a>,
-    //     store: &'a store::Simple,
-    // ) -> Option<Box<dyn repr::PostProcess + '_> {
-    //     match self {
-    //         Self::None => None,
-    //         Self::
-    //     }
-    // }
+    fn post_process<'a>(
+        &'a self,
+        query: &'a [f32],
+        guard: &epoch::Guard<'a>,
+        simple: &'a store::simple::Simple,
+    ) -> Option<Box<dyn repr::PostProcess + '_>> {
+        match self {
+            Self::None => None,
+            Self::Float16(distance) => {
+                let distance =
+                    repr::internal::simple::Temporary::new(Calf::Borrowed(query), *distance);
+
+                let reader = unsafe { simple.reader_unchecked(guard.share()) };
+                let post_process = repr::internal::simple::Reranker::new(reader, distance);
+
+                Some(Box::new(post_process))
+            }
+        }
+    }
+
+    fn store(&self, v: &[f32], buf: &mut [u8]) {
+        use diskann_vector::conversion::CastFromSlice;
+        bytemuck::cast_slice_mut::<u8, f16>(buf).cast_from_slice(v);
+    }
 }
 
 pub struct Spherical {
@@ -196,36 +211,32 @@ impl Spherical {
 
         let store = Store::new(layout, store, slots).unwrap();
 
-        // Initialize start points.
-        for (i, row) in std::iter::zip(store.frozen(), start_points.row_iter()) {
-            #[expect(
-                clippy::expect_used,
-                reason = "failing this is an internal, unrecoverable bug"
-            )]
-            let mut slot = store
-                .slot(i)
-                .expect("internal store should leave frozen-points available for writing");
-
-            quantizer
-                .compress(
-                    row,
-                    iface::OpaqueMut::new(slot.data().head().as_mut_slice()),
-                    ScopedAllocator::global(),
-                )
-                .unwrap();
-
-            slot.freeze();
-        }
-
         let reranker = Reranker::new(rerank, quantizer.metric(), full_dim);
 
-        Self {
+        let this = Self {
             store,
             quantizer,
             full_dim,
             lookahead,
             reranker,
+        };
+
+        // Initialize start points.
+        for (i, row) in std::iter::zip(this.store.frozen(), start_points.row_iter()) {
+            #[expect(
+                clippy::expect_used,
+                reason = "failing this is an internal, unrecoverable bug"
+            )]
+            let mut slot = this
+                .store
+                .slot(i)
+                .expect("internal store should leave frozen-points available for writing");
+
+            this.set(row, slot.data());
+            slot.freeze();
         }
+
+        this
     }
 
     pub fn config(
@@ -236,6 +247,25 @@ impl Spherical {
         rerank: Rerank,
     ) -> Config {
         Config::new(quantizer, capacity, max_degree, start_points, rerank)
+    }
+
+    fn set(
+        &self,
+        v: &[f32],
+        slot: &mut cons::Exclusive<intrusive::Exclusive<'_>, Option<simple::Exclusive<'_>>>,
+    ) {
+        self.quantizer
+            .compress(
+                v,
+                iface::OpaqueMut::new(slot.head().as_mut_slice()),
+                ScopedAllocator::global(),
+            )
+            .map_err(ANNError::new)
+            .unwrap();
+
+        if let Some(tail) = slot.tail() {
+            self.reranker.store(v, tail.as_mut_slice())
+        }
     }
 }
 
@@ -274,14 +304,7 @@ impl repr::Set<&[f32]> for Spherical {
             .acquire()
             .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
 
-        self.quantizer
-            .compress(
-                v,
-                iface::OpaqueMut::new(slot.data().head().as_mut_slice()),
-                ScopedAllocator::global(),
-            )
-            .map_err(ANNError::new)?;
-
+        self.set(v, slot.data());
         Ok(Guard::new(slot))
     }
 }
@@ -323,7 +346,7 @@ impl repr::Search for Spherical {
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        let query = self
+        let query_distance = self
             .quantizer
             .fused_query_computer(
                 query,
@@ -338,9 +361,14 @@ impl repr::Search for Spherical {
             .store
             .guard(|slots, guard| unsafe { slots.head().reader_unchecked(guard) })?;
 
+        let reranker = match self.store.slots().tail().slots() {
+            Some(simple) => self.reranker.post_process(query, reader.guard(), simple),
+            None => None,
+        };
+
         let expand_beam = repr::internal::intrusive::ExpandBeam::new(
             reader,
-            query,
+            query_distance,
             prefetch::Loop::new(),
             self.lookahead,
         )
@@ -349,7 +377,7 @@ impl repr::Search for Spherical {
         Ok(crate::provider::SearchAccessor::new(
             self.store.neighbors(),
             expand_beam,
-            None,
+            reranker,
             provider,
             self.store.frozen(),
             counters,

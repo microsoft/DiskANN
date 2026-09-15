@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::IntoUsize, neighbor::Neighbor};
+use diskann::{ANNError, ANNResult, error::IntoANNResult, neighbor::Neighbor, utils::IntoUsize};
 
 use crate::{
     num::IdLimit,

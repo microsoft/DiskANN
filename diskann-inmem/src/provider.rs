@@ -659,7 +659,10 @@ where
             let mut count = 0;
             let mut push = |neighbor: Neighbor<u32>| -> bool {
                 if let Some(ext) = provider.mapping.to_external(*neighbor.id()) {
-                    if output.push(Neighbor::new(ext, *neighbor.distance())).is_available() {
+                    if output
+                        .push(Neighbor::new(ext, *neighbor.distance()))
+                        .is_available()
+                    {
                         count += 1;
                         true
                     } else {

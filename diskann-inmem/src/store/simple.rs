@@ -1,4 +1,7 @@
-use std::sync::atomic::Ordering;
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 use diskann::utils::IntoUsize;
 use thiserror::Error;
@@ -8,7 +11,7 @@ use crate::{
     epoch,
     num::{Align, Bytes, IdLimit},
     store::{Lifecycle, slots},
-    tag::AtomicTag,
+    tag,
 };
 
 #[derive(Debug, Clone)]
@@ -20,18 +23,17 @@ impl Config {
     pub(crate) fn new(bytes: Bytes) -> Self {
         Self { bytes }
     }
-
-    pub(crate) fn build(self, id_limit: IdLimit) -> Result<Simple, diskann::error::Infallible> {
-        let Self { bytes } = self;
-        Ok(Simple::new(id_limit, bytes))
-    }
 }
 
 impl slots::SlotsConfig for Config {
     type Slots = Simple;
     type Error = diskann::error::Infallible;
-    fn build(self, id_limit: IdLimit) -> Result<Simple, diskann::error::Infallible> {
-        <Config>::build(self, id_limit)
+    unsafe fn build(
+        self,
+        tags: &tag::Authoritative,
+    ) -> Result<Simple, diskann::error::Infallible> {
+        let Self { bytes } = self;
+        Ok(unsafe { Simple::new(bytes, tags.read_only()) })
     }
 }
 
@@ -39,6 +41,7 @@ impl slots::SlotsConfig for Config {
 pub(crate) struct Simple {
     buffer: Buffer,
     bytes: Bytes,
+    tags: tag::ReadOnly,
 }
 
 impl Simple {
@@ -46,11 +49,15 @@ impl Simple {
         Config::new(bytes)
     }
 
-    pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Self {
+    unsafe fn new(bytes: Bytes, tags: tag::ReadOnly) -> Self {
         let bytes = bytes.checked_next_multiple_of(Bytes::CACHELINE).unwrap();
-        let buffer = Buffer::new(id_limit.as_usize(), bytes, Align::_128).unwrap();
+        let buffer = Buffer::new(tags.id_limit().as_usize(), bytes, Align::_128).unwrap();
 
-        Self { buffer, bytes }
+        Self {
+            buffer,
+            bytes,
+            tags,
+        }
     }
 
     /// Return the [`IdLimit`] for this store.
@@ -63,17 +70,11 @@ impl Simple {
         self.bytes
     }
 
-    pub(crate) unsafe fn reader_unchecked<'a>(
-        &'a self,
-        tags: &'a [AtomicTag],
-        guard: epoch::Guard<'a>,
-    ) -> Reader<'a> {
-        assert_eq!(tags.len(), self.buffer.len());
-
+    pub(crate) unsafe fn reader_unchecked<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
         Reader {
             buffer: &self.buffer,
             bytes: self.bytes,
-            tags,
+            tags: &self.tags,
             _guard: guard,
         }
     }
@@ -190,7 +191,7 @@ impl slots::Slots for Simple {
 pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
     bytes: Bytes,
-    tags: &'a [AtomicTag],
+    tags: &'a tag::ReadOnly,
     _guard: epoch::Guard<'a>,
 }
 
@@ -236,12 +237,7 @@ impl<'a> Reader<'a> {
     pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
         debug_assert!(self.is_in_bounds(i));
 
-        if unsafe {
-            self.tags
-                .get_unchecked(i)
-                .load(Ordering::Acquire)
-                .can_read()
-        } {
+        if self.tags.readable(i) {
             Some(unsafe {
                 self.buffer
                     .get_unchecked(i)

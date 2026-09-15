@@ -37,7 +37,7 @@ mod internal_docs {
 
 use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize};
 
-use diskann::{ANNError, ANNResult, utils::IntoUsize, neighbor::Neighbor};
+use diskann::{ANNError, ANNResult, neighbor::Neighbor, utils::IntoUsize};
 use diskann_utils::views::Matrix;
 use diskann_vector::{
     UnalignedSlice,

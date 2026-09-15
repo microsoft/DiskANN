@@ -63,7 +63,6 @@ mod internal_docs {
 }
 
 use std::{
-    iter::repeat_n,
     mem::ManuallyDrop,
     num::{NonZeroU32, NonZeroUsize},
     sync::atomic::Ordering,
@@ -78,7 +77,7 @@ use crate::{
     freelist::{self, Freelist},
     neighbors::{Neighbors, NeighborsError},
     num::{Capacity, IdLimit, MaxDegree},
-    tag::{AtomicTag, Tag},
+    tag::{self, AtomicTag, Tag},
 };
 
 pub(crate) mod slots;
@@ -218,7 +217,7 @@ pub(crate) struct Store<T> {
     unfrozen: Capacity,
 
     // The authoritative source of truth for the state of each slot.
-    tags: Vec<AtomicTag>,
+    tags: tag::Authoritative,
 
     // Acceleration of finding free slot IDs.
     freelist: Freelist,
@@ -287,7 +286,9 @@ where
             .try_into()
             .map_err(|_| StoreError::too_many_neighbors(max_degree))?;
 
-        let slots = slots::SlotsConfig::build(slots, id_limit).map_err(StoreError::slots)?;
+        let tags = tag::Authoritative::new(id_limit);
+        let slots =
+            unsafe { slots::SlotsConfig::build(slots, &tags) }.map_err(StoreError::slots)?;
 
         let slots_id_limit = slots.id_limit();
         if slots_id_limit != id_limit {
@@ -297,9 +298,7 @@ where
         let me = Self {
             slots,
             unfrozen: capacity,
-            tags: repeat_n(Tag::AVAILABLE, id_limit.as_usize())
-                .map(AtomicTag::new)
-                .collect(),
+            tags,
 
             // NOTE: The `Freelist` is initialized to `entries` and not `total` because
             // we do not want it to release frozen IDs.
@@ -790,8 +789,11 @@ mod tests {
         type Slots = Checked;
         type Error = diskann::error::Infallible;
 
-        fn build(self, id_limit: IdLimit) -> Result<Checked, diskann::error::Infallible> {
-            let faulty = id_limit.value().checked_sub(1).unwrap_or(1);
+        unsafe fn build(
+            self,
+            tags: &tag::Authoritative,
+        ) -> Result<Checked, diskann::error::Infallible> {
+            let faulty = tags.id_limit().value().checked_sub(1).unwrap_or(1);
             Ok(Checked::new(IdLimit::new(faulty)))
         }
     }

@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::{
     num::IdLimit,
     store::{Lifecycle, slots},
+    tag,
 };
 
 #[derive(Debug)]
@@ -30,9 +31,9 @@ where
     type Slots = Cons<H::Slots, T::Slots>;
     type Error = ConsError<H::Error, T::Error>;
 
-    fn build(self, id_limit: IdLimit) -> Result<Self::Slots, Self::Error> {
-        let head = self.head.build(id_limit).map_err(ConsError::Head)?;
-        let tail = self.tail.build(id_limit).map_err(ConsError::Tail)?;
+    unsafe fn build(self, tags: &tag::Authoritative) -> Result<Self::Slots, Self::Error> {
+        let head = unsafe { self.head.build(tags) }.map_err(ConsError::Head)?;
+        let tail = unsafe { self.tail.build(tags) }.map_err(ConsError::Tail)?;
         Ok(Cons::new(head, tail))
     }
 }

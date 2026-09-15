@@ -3,13 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use std::marker::PhantomData;
-
-use thiserror::Error;
-
 use crate::{
     num::IdLimit,
     store::{Lifecycle, slots},
+    tag,
 };
 
 impl<T> slots::SlotsConfig for Option<T>
@@ -19,9 +16,12 @@ where
     type Slots = Optional<T::Slots>;
     type Error = T::Error;
 
-    fn build(self, id_limit: IdLimit) -> Result<Self::Slots, Self::Error> {
-        let slots = self.map(|config| config.build(id_limit)).transpose()?;
-        Ok(Optional { slots, id_limit })
+    unsafe fn build(self, tags: &tag::Authoritative) -> Result<Self::Slots, Self::Error> {
+        let slots = self.map(|config| unsafe { config.build(tags) }).transpose()?;
+        Ok(Optional {
+            slots,
+            id_limit: tags.id_limit(),
+        })
     }
 }
 

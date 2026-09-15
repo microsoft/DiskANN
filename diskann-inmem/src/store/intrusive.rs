@@ -46,7 +46,7 @@ use crate::{
     epoch,
     num::{Align, Bytes, IdLimit},
     store::{Lifecycle, Store, slots},
-    tag::{AtomicTag, Tag},
+    tag::{self, AtomicTag, Tag},
 };
 
 /// A [`slots::SlotsConfig`] for [`Intrusive`].
@@ -72,8 +72,8 @@ impl Config {
 impl slots::SlotsConfig for Config {
     type Slots = Intrusive;
     type Error = IntrusiveError;
-    fn build(self, id_limit: IdLimit) -> Result<Intrusive, IntrusiveError> {
-        <Config>::build(self, id_limit)
+    unsafe fn build(self, tags: &tag::Authoritative) -> Result<Intrusive, IntrusiveError> {
+        <Config>::build(self, tags.id_limit())
     }
 }
 
@@ -144,7 +144,7 @@ impl Intrusive {
         Reader {
             buffer: &self.buffer,
             unpadded: self.unpadded,
-            _guard: guard,
+            guard,
         }
     }
 
@@ -249,7 +249,7 @@ impl slots::Slots for Intrusive {
 pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
     unpadded: Bytes,
-    _guard: epoch::Guard<'a>,
+    guard: epoch::Guard<'a>,
 }
 
 impl<'a> Reader<'a> {
@@ -350,7 +350,7 @@ impl<'a> Reader<'a> {
             .can_read();
 
         if can_read {
-            // SAFETY: We've passed the `can_read` check - `_guard` will ensure the read
+            // SAFETY: We've passed the `can_read` check - `guard` will ensure the read
             // slice is valid and race-free.
             Some(unsafe { data.as_slice() })
         } else {
@@ -382,6 +382,11 @@ impl<'a> Reader<'a> {
     /// Return the number of bytes plus the atomic tag.
     pub(crate) fn bytes_plus_tag(&self) -> Bytes {
         self.unpadded
+    }
+
+    /// Return a reference to the contained [`epoch::Guard`].
+    pub(crate) fn guard(&self) -> &epoch::Guard<'a> {
+        &self.guard
     }
 }
 
