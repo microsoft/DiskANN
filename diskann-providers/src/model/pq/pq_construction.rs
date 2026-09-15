@@ -67,6 +67,10 @@ where
 /// file pq_pivots_path as a s num_centers*dim floating point binary file
 /// PQ pivot table layout: {pivot offsets data: METADATA_SIZE}{pivot vector:[dim; num_centroid]}{centroid vector:[dim; 1]}{chunk offsets:[chunk_num+1; 1]}
 ///
+/// Preserves the legacy reuse behavior: an existing pivot file with matching dimensions and
+/// center count is reused, without checking its chunk count. Use [`generate_pq_pivots_fresh`]
+/// when the caller requires a newly trained codebook.
+///
 /// Argument `legacy_center_data` will center the provided data by the dataset mean.
 /// This is to supply backwards compatibility with some `diskann-disk` tests that used this
 /// feature and require exact reproducibility in some tests.
@@ -94,6 +98,38 @@ where
             return Ok(());
         }
     }
+
+    generate_pq_pivots_fresh(
+        parameters,
+        legacy_center_data,
+        train_data,
+        pq_storage,
+        storage_provider,
+        random_provider,
+        pool,
+    )
+}
+
+/// Train and save a new PQ codebook, replacing any existing pivot file after training succeeds.
+/// Training and input-shape errors leave any existing file unchanged.
+///
+/// Uses the same training algorithm and file format as [`generate_pq_pivots`].
+/// `legacy_center_data` must only be enabled for L2 distance; it centers the training data
+/// by its mean to preserve legacy results.
+pub fn generate_pq_pivots_fresh<Storage, Random>(
+    parameters: GeneratePivotArguments,
+    legacy_center_data: bool,
+    train_data: &mut [f32],
+    pq_storage: &PQStorage,
+    storage_provider: &Storage,
+    random_provider: RandomProvider<Random>,
+    pool: RayonThreadPoolRef<'_>,
+) -> ANNResult<()>
+where
+    Storage: StorageWriteProvider,
+    Random: Rng,
+{
+    MatrixView::try_from(&*train_data, parameters.num_train(), parameters.dim()).bridge_err()?;
 
     let centroid = if legacy_center_data {
         let mut centroid: Vec<f32> = vec![0.0; parameters.dim()];
@@ -495,7 +531,10 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: VectorRepr + Sync>(
 
 #[cfg(test)]
 mod pq_test {
-    use std::{f32, io::Write};
+    use std::{
+        f32,
+        io::{Read, Write},
+    };
 
     use crate::storage::VirtualStorageProvider;
     use approx::assert_relative_eq;
@@ -644,41 +683,158 @@ mod pq_test {
         assert_eq!(full_pivot_data.len(), 16);
     }
 
-    #[test]
-    fn read_pivot_metadata_existing_test() {
-        // no real data except pivot data.
-        const DATA_FILE: &str = "/test/test/fake.bin";
-        const PQ_PIVOT_PATH: &str = "/sift/siftsmall_learn_pq_pivots.bin";
-        const PQ_COMPRESSED_PATH: &str = "/test/test/fake.bin";
-
-        let mut train_data = vec![0.0; 10 * 5];
-        let num_train = 10;
-        let dim = 128;
-        let num_centers = 256;
-        let num_pq_chunks = dim - 1;
-        let max_k_means_reps = 10;
-        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
-        let pq_storage = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
-        let pool = create_thread_pool_for_test();
-        let result = generate_pq_pivots(
-            GeneratePivotArguments::new(
-                num_train,
-                dim,
-                num_centers,
-                num_pq_chunks,
-                max_k_means_reps,
+    #[rstest]
+    fn generate_pq_pivots_reuses_existing_codebook(
+        #[values(false, true)] legacy_center_data: bool,
+        #[values(1, 2)] existing_chunks: usize,
+    ) {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/legacy_pivots.bin";
+        let pq_storage = PQStorage::new(pivot_path, "/unused.bin", None);
+        let existing_offsets: &[usize] = if existing_chunks == 1 {
+            &[0, 2]
+        } else {
+            &[0, 1, 2]
+        };
+        pq_storage
+            .write_pivot_data(
+                &[-100.0; 4],
+                None,
+                existing_offsets,
+                2,
+                2,
+                &storage_provider,
             )
-            .unwrap(),
-            true,
-            &mut train_data,
+            .unwrap();
+        let mut previous_pivots = Vec::new();
+        storage_provider
+            .open_reader(pivot_path)
+            .unwrap()
+            .read_to_end(&mut previous_pivots)
+            .unwrap();
+
+        // Legacy callers can reuse matching metadata without providing training data.
+        let mut invalid_data = [1.0; 7];
+        let pool = create_thread_pool_for_test();
+        generate_pq_pivots(
+            GeneratePivotArguments::new(4, 2, 2, 2, 5).unwrap(),
+            legacy_center_data,
+            &mut invalid_data,
+            &pq_storage,
+            &storage_provider,
+            crate::utils::create_rnd_provider_from_seed_in_tests(42),
+            pool.as_ref(),
+        )
+        .unwrap();
+
+        assert_eq!(invalid_data, [1.0; 7]);
+        let mut reused_pivots = Vec::new();
+        storage_provider
+            .open_reader(pivot_path)
+            .unwrap()
+            .read_to_end(&mut reused_pivots)
+            .unwrap();
+        assert_eq!(reused_pivots, previous_pivots);
+    }
+
+    #[rstest]
+    fn generate_pq_pivots_fresh_replaces_existing_codebook(
+        #[values(false, true)] legacy_center_data: bool,
+        #[values(1, 2)] existing_chunks: usize,
+    ) {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/existing_pivots.bin";
+        let reference_path = "/fresh_pivots.bin";
+        let pq_storage = PQStorage::new(pivot_path, "/unused.bin", None);
+        let reference_storage = PQStorage::new(reference_path, "/unused.bin", None);
+        // Matching metadata must not reuse a stale codebook, regardless of its chunk count.
+        let existing_offsets: &[usize] = if existing_chunks == 1 {
+            &[0, 2]
+        } else {
+            &[0, 1, 2]
+        };
+        pq_storage
+            .write_pivot_data(
+                &[-100.0; 4],
+                None,
+                existing_offsets,
+                2,
+                2,
+                &storage_provider,
+            )
+            .unwrap();
+        let read_pivots = |path| {
+            let mut bytes = Vec::new();
+            storage_provider
+                .open_reader(path)
+                .unwrap()
+                .read_to_end(&mut bytes)
+                .unwrap();
+            bytes
+        };
+        let previous_pivots = read_pivots(pivot_path);
+        let training_data = [1.0, 2.0, 2.0, 1.0, 9.0, 10.0, 10.0, 9.0];
+        let pool = create_thread_pool_for_test();
+        for storage in [&reference_storage, &pq_storage] {
+            let mut train_data = training_data;
+            generate_pq_pivots_fresh(
+                GeneratePivotArguments::new(4, 2, 2, 2, 5).unwrap(),
+                legacy_center_data,
+                &mut train_data,
+                storage,
+                &storage_provider,
+                crate::utils::create_rnd_provider_from_seed_in_tests(42),
+                pool.as_ref(),
+            )
+            .unwrap();
+        }
+
+        let generated_pivots = read_pivots(pivot_path);
+        assert_ne!(generated_pivots, previous_pivots);
+        assert_eq!(generated_pivots, read_pivots(reference_path));
+        assert_eq!(
+            pq_storage.load_pivots(&storage_provider).unwrap().nchunks(),
+            2
+        );
+    }
+
+    #[rstest]
+    fn generate_pq_pivots_fresh_invalid_data_preserves_existing_codebook(
+        #[values(false, true)] legacy_center_data: bool,
+    ) {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/preserved_pivots.bin";
+        let pq_storage = PQStorage::new(pivot_path, "/unused.bin", None);
+        pq_storage
+            .write_pivot_data(&[-100.0; 4], None, &[0, 2], 2, 2, &storage_provider)
+            .unwrap();
+        let mut previous_pivots = Vec::new();
+        storage_provider
+            .open_reader(pivot_path)
+            .unwrap()
+            .read_to_end(&mut previous_pivots)
+            .unwrap();
+        let mut invalid_data = [1.0; 7];
+        let pool = create_thread_pool_for_test();
+        let result = generate_pq_pivots_fresh(
+            GeneratePivotArguments::new(4, 2, 2, 2, 5).unwrap(),
+            legacy_center_data,
+            &mut invalid_data,
             &pq_storage,
             &storage_provider,
             crate::utils::create_rnd_provider_from_seed_in_tests(42),
             pool.as_ref(),
         );
 
-        // still succeed without training data
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert_eq!(invalid_data, [1.0; 7]);
+        let mut preserved_pivots = Vec::new();
+        storage_provider
+            .open_reader(pivot_path)
+            .unwrap()
+            .read_to_end(&mut preserved_pivots)
+            .unwrap();
+        assert_eq!(preserved_pivots, previous_pivots);
     }
 
     #[test]
