@@ -584,7 +584,7 @@ pub(crate) use aarch64_splitjoin;
 ///
 /// The caller must ensure the provided intrinsics match the element type of `$half`.
 macro_rules! aarch64_zipunzip {
-    (128, $full:path, $half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
+    ($full:path, $half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
         impl $crate::ZipUnzip for $full {
             #[inline(always)]
             fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {
@@ -616,7 +616,7 @@ macro_rules! aarch64_zipunzip {
             }
         }
     };
-    (256, $half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
+    (Doubled<$half:path>, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
         impl $crate::ZipUnzip for $crate::doubled::Doubled<$half> {
             #[inline(always)]
             fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {

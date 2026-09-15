@@ -15,7 +15,9 @@ pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     ///
-    /// [`MaxSimError::InvalidBufferLength`] if `scores.len() != self.nrows()`.
+    /// * [`MaxSimError::InvalidBufferLength`] if `scores.len() != self.nrows()`.
+    /// * [`MaxSimError::UnequalDim`] if `doc.vector_dim()` does not match the internal
+    ///   vector dim.
     fn compute_max_sim(
         &self,
         doc: MatRef<'_, Standard<T>>,

@@ -10,7 +10,7 @@ use crate::{
 
 // AArch64 masks
 use super::{
-    Neon, f32x4, i8x8, i8x16, i16x8, internal,
+    Neon, f32x4, i8x8, i8x16, i16x8, i32x2, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x4,
     u8x8, u8x16,
@@ -26,10 +26,10 @@ use std::arch::{aarch64::*, asm};
 macros::aarch64_define_register!(i32x4, int32x4_t, mask32x4, i32, 4, Neon);
 macros::aarch64_define_splat!(i32x4, vmovq_n_s32);
 macros::aarch64_define_loadstore!(i32x4, vld1q_s32, internal::load_first::i32x4, vst1q_s32, 4);
-// macros::aarch64_splitjoin!(i32x4, i32x2, vget_low_u32, vget_high_u32, vcombine_u32);
-// macros::aarch64_zipunzip!(
-//     128, i32x4, i32x2, vzip1_u32, vzip2_u32, vuzp1_u32, vuzp2_u32
-// );
+macros::aarch64_splitjoin!(i32x4, i32x2, vget_low_s32, vget_high_s32, vcombine_s32);
+macros::aarch64_zipunzip!(
+    i32x4, i32x2, vzip1_s32, vzip2_s32, vuzp1_s32, vuzp2_s32
+);
 
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Add, add, vaddq_s32, "neon");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Sub, sub, vsubq_s32, "neon");
@@ -223,6 +223,8 @@ mod tests {
     test_utils::ops::test_mul!(i32x4, 0x0f4caa80eceaa523, test_neon());
     test_utils::ops::test_fma!(i32x4, 0xb8f702ba85375041, test_neon());
     test_utils::ops::test_abs!(i32x4, 0xb8f702ba85375041, test_neon());
+    test_utils::ops::test_splitjoin!(i32x4 => i32x2, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(i32x4 => i32x2, 0xb8f702ba85375041, test_neon());
 
     test_utils::ops::test_cmp!(i32x4, 0x941757bd5cc641a1, test_neon());
 

@@ -4,20 +4,19 @@
  */
 
 use crate::{
-    Emulated, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq,
-    SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
+    Emulated, SIMDAbs, SIMDCast, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
+    SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
 use super::{
-    Neon, f32x4, i8x8, i8x16, i16x8, internal,
+    Neon, f32x2, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x2,
-    u8x8, u8x16,
 };
 
 // AArch64 intrinsics
-use std::arch::{aarch64::*, asm};
+use std::arch::aarch64::*;
 
 ///////////////////
 // 32-bit signed //
@@ -79,6 +78,16 @@ impl SIMDSelect<i32x2> for mask32x2 {
     }
 }
 
+//-------------//
+// Conversions //
+//-------------//
+
+helpers::unsafe_map_cast!(
+    i32x2 => (f32, f32x2),
+    vcvt_f32_s32,
+    "neon"
+);
+
 ///////////
 // Tests //
 ///////////
@@ -124,5 +133,8 @@ mod tests {
     test_utils::ops::test_select!(i32x2, 0xd62d8de09f82ed4e, test_neon());
 
     // Reductions
-    test_utils::ops::test_sumtree!(i32x4, 0xb9ac82ab23a855da, test_neon());
+    test_utils::ops::test_sumtree!(i32x2, 0xb9ac82ab23a855da, test_neon());
+
+    // Conversions
+    test_utils::ops::test_cast!(i32x2 => f32x2, 0xba8fe343fc9dbeff, test_neon());
 }
