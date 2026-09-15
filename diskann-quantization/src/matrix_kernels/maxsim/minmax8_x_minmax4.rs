@@ -3,18 +3,17 @@
 
 //! MinMax8 by MinMax4 MaxSim over the existing packed/unpacked panel views.
 //!
-//! A is block-transposed in four-byte, even/odd contraction groups. Each B cache
-//! tile is unpacked once into the same groups, then reused across all A sub-views.
+//! A is block-transposed in architecture-specific contraction groups. B remains in its
+//! canonical packed MinMax4 layout; each micro-kernel expands only its current group.
 //! Only the original dimension participates in compensation; padded groups are zero.
-//! The driver borrows all inputs. B conversion uses bounded stack scratch for small
-//! tiles and heap scratch otherwise.
-//! Every eight dimensions become `[0, 2, 4, 6]`, then `[1, 3, 5, 7]`, for both operands.
+//! The driver borrows all inputs and no document scratch allocation is required.
+//! Scalar, V3, and Neon use four-byte even/odd groups. V4 uses contiguous eight-byte
+//! groups so one broadcast feeds two adjacent VNNI lanes per query row.
 
 use diskann_wide::{Architecture, SIMDMinMax, SIMDVector, arch::Scalar};
 
 use crate::{
     matrix_kernels::{
-        Cache,
         blocks::{packed, unpacked},
         bounds::{self, Bound},
         driver,
@@ -25,55 +24,109 @@ use crate::{
     minmax::{Data, DataRef, MinMaxCompensation},
 };
 
-use super::packed_f32_x_unpacked_f32::Params;
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Grouped<const N: usize>(pub(crate) [u8; N]);
 
-pub(crate) type Group = [u8; 4];
-
-pub(crate) fn groups(dim: usize) -> usize {
-    dim.div_ceil(8) * 2
+impl<const N: usize> Default for Grouped<N> {
+    fn default() -> Self {
+        Self([0; N])
+    }
 }
 
-/// Split up to eight bytes into even and odd dimension groups.
-///
-/// # Panics
-///
-/// Panics if `values.len() > 8`.
-pub(crate) fn split_u8(values: &[u8]) -> [Group; 2] {
-    assert!(values.len() <= 8);
-    let mut output = [[0; 4]; 2];
-    for (i, &value) in values.iter().enumerate() {
-        output[i % 2][i / 2] = value;
+impl<const N: usize> Grouped<N> {
+    pub(crate) fn count(dim: usize) -> usize {
+        const { assert!(N == 4 || N == 8) };
+        dim.div_ceil(8) * (8 / N)
     }
-    output
+
+    pub(crate) fn from_query(values: &[u8], group: usize) -> Self {
+        assert!(group < Self::count(values.len()));
+        Self(core::array::from_fn(|lane| {
+            let dim = if N == 4 {
+                group / 2 * 8 + 2 * lane + group % 2
+            } else {
+                group * 8 + lane
+            };
+            values.get(dim).copied().unwrap_or(0)
+        }))
+    }
+
+    /// Expand one group from a canonical packed MinMax4 row.
+    ///
+    /// # Safety
+    ///
+    /// `values` contains exactly `dim.div_ceil(2)` bytes and
+    /// `group < Self::count(dim)`.
+    #[inline(always)]
+    unsafe fn from_packed(values: Slice<'_, u8>, group: usize, dim: usize) -> Self {
+        bounds::check_eq!(values.len(), dim.div_ceil(2));
+        bounds::check_lt!(Bound::new(group), Self::count(dim));
+
+        let groups_per_block = 8 / N;
+        let block = group / groups_per_block;
+        let within_block = group % groups_per_block;
+        let byte_start = block * 4;
+        let dimensions = (dim - block * 8).min(8);
+        let byte_count = dimensions.div_ceil(2);
+        // SAFETY: `group` is within the number of eight-dimensional blocks.
+        let packed = unsafe {
+            values
+                .add(Elements::new(byte_start))
+                .truncate(Elements::new(byte_count))
+        };
+
+        if dimensions == 8 {
+            // SAFETY: A complete block tracks exactly four bytes.
+            let source = u32::from_le(unsafe { packed.as_ptr().cast::<u32>().read_unaligned() });
+            if N == 4 {
+                let expanded = if within_block == 0 {
+                    (source & 0x0f0f_0f0f).to_le_bytes()
+                } else {
+                    ((source >> 4) & 0x0f0f_0f0f).to_le_bytes()
+                };
+                return Self(core::array::from_fn(|lane| expanded[lane]));
+            }
+
+            #[cfg(all(target_arch = "x86_64", not(miri)))]
+            {
+                use std::arch::x86_64::_pdep_u64;
+
+                // SAFETY: Grouped<8> is only used by V4, which provides BMI2.
+                let expanded =
+                    unsafe { _pdep_u64(u64::from(source), 0x0f0f_0f0f_0f0f_0f0f) }.to_le_bytes();
+                return Self(core::array::from_fn(|lane| expanded[lane]));
+            }
+        }
+
+        // SAFETY: `packed` tracks exactly the bytes in the final partial block.
+        let packed = unsafe { packed.as_std_slice(byte_count) };
+        Self(core::array::from_fn(|lane| {
+            let dimension = if N == 4 {
+                2 * lane + within_block
+            } else {
+                lane
+            };
+            if dimension >= dimensions {
+                0
+            } else {
+                (packed[dimension / 2] >> (4 * (dimension % 2))) & 15
+            }
+        }))
+    }
 }
 
-/// Unpack a densely stored unsigned four-bit row into even/odd contraction groups.
-///
-/// # Panics
-///
-/// Panics unless `from.len() == dim.div_ceil(2)` and `to.len() == groups(dim)`.
-fn unpack_u4(from: &[u8], to: &mut [Group], dim: usize) {
-    assert_eq!(from.len(), dim.div_ceil(2));
-    assert_eq!(to.len(), groups(dim));
+impl<const N: usize> std::ops::Deref for Grouped<N> {
+    type Target = [u8; N];
 
-    let mut chunks = from.chunks_exact(4);
-    for (input, output) in chunks.by_ref().zip(to.chunks_exact_mut(2)) {
-        let packed = u32::from_le_bytes([input[0], input[1], input[2], input[3]]);
-        output[0] = (packed & 0x0f0f_0f0f).to_le_bytes();
-        output[1] = ((packed >> 4) & 0x0f0f_0f0f).to_le_bytes();
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
-    let tail = chunks.remainder();
-    if !tail.is_empty() {
-        let mut bytes = [0; 4];
-        bytes[..tail.len()].copy_from_slice(tail);
-        let packed = u32::from_le_bytes(bytes);
-        let last = to.len() - 2;
-        to[last] = (packed & 0x0f0f_0f0f).to_le_bytes();
-        to[last + 1] = ((packed >> 4) & 0x0f0f_0f0f).to_le_bytes();
-    }
-    if !dim.is_multiple_of(2) {
-        // The high nibble of the last byte is padding, not a logical dimension.
-        to[groups(dim) - 1][(dim % 8) / 2] = 0;
+}
+
+impl<const N: usize> std::ops::DerefMut for Grouped<N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -95,66 +148,46 @@ impl<const MR: usize> Default for QueryCompensation<MR> {
     }
 }
 
-/// `k` counts four-byte contraction groups, not original dimensions.
-pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
+/// `k` counts contraction groups, not original dimensions.
+pub(crate) struct Driver<'a, A, const N: usize, const MR: usize, const NR: usize> {
     arch: A,
-    a: packed::View<'a, Group, MR>,
+    a: packed::View<'a, Grouped<N>, MR>,
     a_meta: &'a [QueryCompensation<MR>],
     b: unpacked::View<'a, u8>,
     c: &'a mut [f32],
     dim: DimK,
     k: DimK,
     b_stride: DimK,
-    params: Params,
 }
 
-const STACK_GROUPS: usize = 1024;
-const STACK_ROWS: usize = 32;
-
-impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
+impl<'a, A, const N: usize, const MR: usize, const NR: usize> Driver<'a, A, N, MR, NR> {
     /// # Safety
     ///
-    /// * A uses the even/odd packing for `dim`, including zero padding.
+    /// * A uses the `Grouped<N>` packing for `dim`, including zero padding.
     /// * `a_meta.len() == a.blocks()` and `c.len().div_ceil(MR) == a.blocks()`.
     /// * B contains canonical MinMax4 rows of dimension `dim`.
     pub(crate) unsafe fn new(
         arch: A,
-        a: packed::View<'a, Group, MR>,
+        a: packed::View<'a, Grouped<N>, MR>,
         a_meta: &'a [QueryCompensation<MR>],
         b: unpacked::View<'a, u8>,
         c: &'a mut [f32],
         dim: DimK,
-        cache: Cache,
     ) -> Self {
-        let k = DimK::new(value_or_one(groups(dim.value().get())));
-        let mut params = Params::new(
-            cache,
-            a.block_stride(k).bytes(),
-            Elements::<Group>::new(k.value().get()).bytes(),
-            NR,
-        );
-        // Prefer stack-sized tiles when a complete NR panel fits. Larger
-        // dimensions retain the cache-based tile size and heap scratch.
-        if let Some(rows) =
-            std::num::NonZeroUsize::new((STACK_GROUPS / k.value().get()).min(STACK_ROWS) / NR * NR)
-        {
-            params.b_cols_in_l1 = params.b_cols_in_l1.min(rows);
-        }
         // SAFETY: Inherited from caller.
-        unsafe { Self::new_inner(arch, a, a_meta, b, c, dim, params) }
+        unsafe { Self::new_inner(arch, a, a_meta, b, c, dim) }
     }
 
     #[allow(clippy::too_many_arguments)]
     unsafe fn new_inner(
         arch: A,
-        a: packed::View<'a, Group, MR>,
+        a: packed::View<'a, Grouped<N>, MR>,
         a_meta: &'a [QueryCompensation<MR>],
         b: unpacked::View<'a, u8>,
         c: &'a mut [f32],
         dim: DimK,
-        params: Params,
     ) -> Self {
-        let k = DimK::new(value_or_one(groups(dim.value().get())));
+        let k = DimK::new(value_or_one(Grouped::<N>::count(dim.value().get())));
         let b_stride = DimK::new(value_or_one(Data::<4>::canonical_bytes(dim.value().get())));
         bounds::check_eq!(a.k(), k);
         bounds::check_eq!(b.k(), b_stride);
@@ -169,84 +202,16 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
             dim,
             k,
             b_stride,
-            params,
         }
     }
 }
 
-/// Convert a cache tile, retaining exact source and destination bounds.
-///
-/// # Safety
-///
-/// * B contains canonical MinMax4 rows of dimension `dim`.
-/// * `values.len() == b.extent() * groups(dim)`.
-/// * `meta.len() == b.extent()`.
-#[inline]
-unsafe fn unpack_b(
-    b: unpacked::View<'_, u8>,
-    values: &mut [Group],
-    meta: &mut [MinMaxCompensation],
-    dim: DimK,
-) {
-    let dim = dim.value().get();
-    let stride = DimK::new(value_or_one(Data::<4>::canonical_bytes(dim)));
-    bounds::check_eq!(b.k(), stride);
-    bounds::check_eq!(Bound::new(values.len()), b.extent().get() * groups(dim));
-    bounds::check_eq!(Bound::new(meta.len()), b.extent());
-    let groups = groups(dim);
-    let mut values = MutSlice::new(values);
-    let mut meta = MutSlice::new(meta);
-    let on_row = |row: unpacked::Panel<'_, u8, 1>, start: usize| {
-        // SAFETY: Each visited row has exactly the canonical stride. Both destination
-        // spans have one matching entry (or `groups` entries) per B row.
-        unsafe {
-            let row = row.as_ptr().as_std_slice(stride.value().get());
-            let row = DataRef::<4>::from_canonical_unchecked(row, dim);
-            *meta.subslice(start, Bound::new(1)).as_array::<1>() = [row.meta()];
-            let mut output = values.subslice(start * groups, Bound::new(groups));
-            unpack_u4(
-                row.vector().as_slice(),
-                output.as_std_mut_slice(groups),
-                dim,
-            );
-        }
-    };
-    // SAFETY: B's tracked row length equals the canonical stride.
-    let remainder = unsafe { b.visit_panels::<1>(stride, on_row) };
-    debug_assert!(remainder.is_none());
-}
-
-impl<A, const MR: usize, const NR: usize> driver::Drive for Driver<'_, A, MR, NR>
+impl<A, const N: usize, const MR: usize, const NR: usize> driver::Drive for Driver<'_, A, N, MR, NR>
 where
-    A: Architecture + util::LoadStore<f32, MR>,
-    for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
+    A: Architecture + util::LoadStore<f32, MR> + ExtraWide<N, MR>,
+    for<'a> PanelKernel<'a, A, N, MR, NR>: driver::PanelKernel,
 {
     fn drive(&mut self) {
-        // Keep small tiles off the heap without imposing a limit on the dimension
-        // or document count. The buffers occupy 4 KiB plus 32 metadata records.
-        let rows = self.params.b_cols_in_l1.min(self.b.extent()).get();
-        let count = rows * self.k.value().get();
-        if count <= STACK_GROUPS && rows <= STACK_ROWS {
-            let mut values = [[0; 4]; STACK_GROUPS];
-            let mut meta = [MinMaxCompensation::default(); STACK_ROWS];
-            self.drive_with_scratch(&mut values[..count], &mut meta[..rows]);
-        } else {
-            let mut values = vec![[0; 4]; count];
-            let mut meta = vec![MinMaxCompensation::default(); rows];
-            self.drive_with_scratch(&mut values, &mut meta);
-        }
-    }
-}
-
-impl<A, const MR: usize, const NR: usize> Driver<'_, A, MR, NR> {
-    fn drive_with_scratch(&mut self, b_values: &mut [Group], b_meta: &mut [MinMaxCompensation])
-    where
-        A: Architecture + util::LoadStore<f32, MR>,
-        for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
-    {
-        let rows = self.params.b_cols_in_l1.min(self.b.extent()).get();
-        bounds::check_eq!(Bound::new(b_values.len()), rows * self.k.value().get());
-        bounds::check_eq!(Bound::new(b_meta.len()), rows);
         self.arch.run(
             #[inline]
             || {
@@ -254,134 +219,113 @@ impl<A, const MR: usize, const NR: usize> Driver<'_, A, MR, NR> {
                 let output_rows = self.c.len();
                 let mut c = MutSlice::new(self.c);
                 let a_meta = Slice::new(self.a_meta);
-                let on_b = |b: unpacked::View<'_, u8>, _| {
-                    let b_rows = b.extent();
-                    let values = &mut b_values[..b_rows.get() * self.k.value().get()];
-                    let meta = &mut b_meta[..b_rows.get()];
-                    // SAFETY: Sub-views preserve the canonical row format and dimension.
-                    unsafe { unpack_b(b, values, meta, self.dim) };
-                    // SAFETY: Conversion fills exactly `b_rows * k` groups.
-                    let b = unsafe { unpacked::View::new(Slice::new(values), b_rows, self.k) };
-                    let b_meta = Slice::new(meta);
-                    let on_a = |a: packed::View<'_, Group, MR>, block_base: usize| {
-                        let on_panel = |a: packed::Panel<'_, Group, MR>, block_offset: usize| {
-                            let block = block_base + block_offset;
-                            let valid_rows = (output_rows - block * MR).min(MR);
-                            // SAFETY: The output occupies exactly the packed A blocks.
-                            let mut region =
-                                unsafe { c.subslice(block * MR, Bound::new(valid_rows)) };
-                            // SAFETY: The region was truncated to `valid_rows` above.
-                            let output = unsafe { region.as_std_mut_slice(valid_rows) };
-                            let scores = util::LoadStore::<f32, MR>::load(self.arch, output);
-                            // SAFETY: Every packed A block has exactly one metadata entry.
-                            let query =
-                                unsafe { a_meta.add(Elements::new(block)).as_unit().as_ref() };
-                            // SAFETY: Visitors preserve `k` and metadata/output spans.
-                            let mut panel = unsafe {
-                                PanelKernel::new(
-                                    self.arch, a, query, b, b_meta, scores, self.k, self.dim,
-                                    valid_rows,
-                                )
-                            };
-                            driver::PanelKernel::panel_kernel(&mut panel);
-                            util::LoadStore::<f32, MR>::store(self.arch, panel.c, output);
-                        };
-                        // SAFETY: A sub-views retain the parent's contraction dimension.
-                        unsafe { a.visit_panels(self.k, on_panel) };
+                let on_panel = |a: packed::Panel<'_, Grouped<N>, MR>, block: usize| {
+                    let valid_rows = (output_rows - block * MR).min(MR);
+                    // SAFETY: The output occupies exactly the packed A blocks.
+                    let mut region = unsafe { c.subslice(block * MR, Bound::new(valid_rows)) };
+                    // SAFETY: The region was truncated to `valid_rows` above.
+                    let output = unsafe { region.as_std_mut_slice(valid_rows) };
+                    let scores = util::LoadStore::<f32, MR>::load(self.arch, output);
+                    // SAFETY: Every packed A block has exactly one metadata entry.
+                    let query = unsafe { a_meta.add(Elements::new(block)).as_unit().as_ref() };
+                    // SAFETY: The driver validates all shared dimensions.
+                    let mut panel = unsafe {
+                        PanelKernel::new(
+                            self.arch,
+                            a,
+                            query,
+                            self.b,
+                            scores,
+                            self.k,
+                            self.dim,
+                            self.b_stride,
+                            valid_rows,
+                        )
                     };
-                    // SAFETY: A was validated against `k` on construction.
-                    unsafe {
-                        self.a
-                            .visit_sub_views(self.params.a_panels_in_l2, self.k, on_a)
-                    };
+                    driver::PanelKernel::panel_kernel(&mut panel);
+                    util::LoadStore::<f32, MR>::store(self.arch, panel.c, output);
                 };
-                // SAFETY: B was validated against the canonical row stride on construction.
+                // SAFETY: A was validated against `k` on construction.
                 unsafe {
-                    self.b
-                        .visit_sub_views(self.params.b_cols_in_l1, self.b_stride, on_b)
-                };
+                    self.a.visit_panels(self.k, on_panel);
+                }
             },
         );
     }
 }
 
-struct PanelKernel<'a, A, const MR: usize, const NR: usize> {
+struct PanelKernel<'a, A, const N: usize, const MR: usize, const NR: usize> {
     arch: A,
-    a: packed::Panel<'a, Group, MR>,
+    a: packed::Panel<'a, Grouped<N>, MR>,
     query: &'a QueryCompensation<MR>,
-    b: unpacked::View<'a, Group>,
-    b_meta: Slice<'a, MinMaxCompensation>,
+    b: unpacked::View<'a, u8>,
     c: [f32; MR],
     k: DimK,
     dim: DimK,
+    b_stride: DimK,
     valid_rows: usize,
 }
 
-impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
+impl<'a, A, const N: usize, const MR: usize, const NR: usize> PanelKernel<'a, A, N, MR, NR> {
     /// # Safety
     ///
-    /// A and B share `k` and the even/odd packing for `dim`. Metadata describes
-    /// exactly their rows. Only `valid_rows` query rows are logically present.
+    /// A has `k` grouped columns and B contains canonical MinMax4 rows for `dim`.
+    /// Only `valid_rows` query rows are logically present.
     #[allow(clippy::too_many_arguments)]
     unsafe fn new(
         arch: A,
-        a: packed::Panel<'a, Group, MR>,
+        a: packed::Panel<'a, Grouped<N>, MR>,
         query: &'a QueryCompensation<MR>,
-        b: unpacked::View<'a, Group>,
-        b_meta: Slice<'a, MinMaxCompensation>,
+        b: unpacked::View<'a, u8>,
         c: [f32; MR],
         k: DimK,
         dim: DimK,
+        b_stride: DimK,
         valid_rows: usize,
     ) -> Self {
         bounds::check_eq!(a.k(), k);
-        bounds::check_eq!(b.k(), k);
-        bounds::check_eq!(b_meta.len(), b.extent());
-        bounds::check_eq!(Bound::new(groups(dim.value().get())), k);
+        bounds::check_eq!(b.k(), b_stride);
+        bounds::check_eq!(Bound::new(Grouped::<N>::count(dim.value().get())), k);
         bounds::check_le!(Bound::new(valid_rows), MR);
         Self {
             arch,
             a,
             query,
             b,
-            b_meta,
             c,
             k,
             dim,
+            b_stride,
             valid_rows,
         }
     }
 }
 
-struct Visitor<'a, A, const MR: usize> {
+struct Visitor<'a, A, const N: usize, const MR: usize> {
     arch: A,
-    a: packed::Panel<'a, Group, MR>,
+    a: packed::Panel<'a, Grouped<N>, MR>,
     query: &'a QueryCompensation<MR>,
-    b_meta: Slice<'a, MinMaxCompensation>,
     c: &'a mut [f32; MR],
     k: DimK,
     dim: DimK,
+    b_stride: DimK,
     valid_rows: usize,
 }
 
-impl<A, const MR: usize, const NR: usize> unpacked::PanelVisitor<Group, NR> for Visitor<'_, A, MR>
+impl<A, const N: usize, const MR: usize, const NR: usize> unpacked::PanelVisitor<u8, NR>
+    for Visitor<'_, A, N, MR>
 where
-    A: Architecture + ExtraWide<MR>,
+    A: Architecture + ExtraWide<N, MR>,
 {
     #[inline(always)]
-    fn visit(&mut self, b: unpacked::Panel<'_, Group, NR>, start: usize) {
-        // SAFETY: The visitor receives a complete panel; metadata follows the same rows.
-        let meta = unsafe {
-            self.b_meta
-                .add(Elements::new(start))
-                .truncate(Elements::new(NR))
-        };
+    fn visit(&mut self, b: unpacked::Panel<'_, u8, NR>, _: usize) {
+        // SAFETY: The visitor receives complete canonical rows of the common dimension.
+        let b = unsafe { BPanel::new(b, self.b_stride, self.dim) };
         let mut micro = MicroKernel {
             arch: self.arch,
             a: self.a,
             query: self.query,
             b,
-            b_meta: meta,
             c: self.c,
             k: self.k,
             dim: self.dim,
@@ -392,22 +336,24 @@ where
 }
 
 macro_rules! panel_kernel {
-    ($arch:ty, $mr:literal, $nr:literal, [$($tail:literal),+]) => {
-        impl driver::PanelKernel for PanelKernel<'_, $arch, $mr, $nr> {
+    ($arch:ty, $n:literal, $mr:literal, $nr:literal, [$($tail:literal),+]) => {
+        impl driver::PanelKernel for PanelKernel<'_, $arch, $n, $mr, $nr> {
             #[inline(always)]
             fn panel_kernel(&mut self) {
                 let visitor = Visitor {
-                    arch: self.arch, a: self.a, query: self.query, b_meta: self.b_meta,
-                    c: &mut self.c, k: self.k, dim: self.dim, valid_rows: self.valid_rows,
+                    arch: self.arch, a: self.a, query: self.query, c: &mut self.c,
+                    k: self.k, dim: self.dim, b_stride: self.b_stride,
+                    valid_rows: self.valid_rows,
                 };
-                // SAFETY: The constructor checks B's contraction dimension and metadata.
-                let remainder = unsafe { self.b.visit_panels::<$nr>(self.k, visitor) };
+                // SAFETY: The constructor checks B's canonical row stride.
+                let remainder = unsafe { self.b.visit_panels::<$nr>(self.b_stride, visitor) };
                 if let Some(remainder) = remainder {
                     $(
                         if let Some(panel) = remainder.try_as_panel::<$tail>() {
                             let mut visitor = Visitor {
-                                arch: self.arch, a: self.a, query: self.query, b_meta: self.b_meta,
-                                c: &mut self.c, k: self.k, dim: self.dim, valid_rows: self.valid_rows,
+                                arch: self.arch, a: self.a, query: self.query, c: &mut self.c,
+                                k: self.k, dim: self.dim, b_stride: self.b_stride,
+                                valid_rows: self.valid_rows,
                             };
                             unpacked::PanelVisitor::visit(&mut visitor, panel, remainder.start());
                         }
@@ -418,21 +364,63 @@ macro_rules! panel_kernel {
     };
 }
 
-struct MicroKernel<'a, A, const MR: usize, const NR: usize> {
+#[derive(Clone, Copy)]
+struct BPanel<'a, const NR: usize> {
+    values: [Slice<'a, u8>; NR],
+    meta: [MinMaxCompensation; NR],
+}
+
+impl<'a, const NR: usize> BPanel<'a, NR> {
+    /// # Safety
+    ///
+    /// `panel` contains NR canonical MinMax4 rows of dimension `dim`.
+    unsafe fn new(panel: unpacked::Panel<'a, u8, NR>, stride: DimK, dim: DimK) -> Self {
+        bounds::check_eq!(panel.k(), stride);
+        let dim = dim.value().get();
+        let packed_len = dim.div_ceil(2);
+        let base = panel.as_ptr();
+        let row_stride = panel.stride(stride);
+        let rows: [(Slice<'a, u8>, MinMaxCompensation); NR] = core::array::from_fn(|row| {
+            // SAFETY: `panel` contains NR complete canonical rows.
+            let bytes = unsafe {
+                base.add(row_stride * row)
+                    .truncate(row_stride)
+                    .as_std_slice(stride.value().get())
+            };
+            // SAFETY: The driver validated the canonical row stride and dimension.
+            let data = unsafe { DataRef::<4>::from_canonical_unchecked(bytes, dim) };
+            let vector = data.vector();
+            // SAFETY: The vector owns exactly `ceil(dim / 2)` packed bytes.
+            let values = unsafe {
+                Slice::from_raw(
+                    std::ptr::NonNull::new_unchecked(vector.as_ptr().cast_mut()),
+                    Bound::new(packed_len),
+                )
+            };
+            (values, data.meta())
+        });
+        Self {
+            values: rows.map(|(values, _)| values),
+            meta: rows.map(|(_, meta)| meta),
+        }
+    }
+}
+
+struct MicroKernel<'a, A, const N: usize, const MR: usize, const NR: usize> {
     arch: A,
-    a: packed::Panel<'a, Group, MR>,
+    a: packed::Panel<'a, Grouped<N>, MR>,
     query: &'a QueryCompensation<MR>,
-    b: unpacked::Panel<'a, Group, NR>,
-    b_meta: Slice<'a, MinMaxCompensation>,
+    b: BPanel<'a, NR>,
     c: &'a mut [f32; MR],
     k: DimK,
     dim: DimK,
     valid_rows: usize,
 }
 
-impl<A, const MR: usize, const NR: usize> driver::MicroKernel for MicroKernel<'_, A, MR, NR>
+impl<A, const N: usize, const MR: usize, const NR: usize> driver::MicroKernel
+    for MicroKernel<'_, A, N, MR, NR>
 where
-    A: Architecture + ExtraWide<MR>,
+    A: Architecture + ExtraWide<N, MR>,
 {
     #[inline(always)]
     fn micro_kernel(&mut self) {
@@ -440,15 +428,16 @@ where
             #[inline]
             || {
                 bounds::check_eq!(self.a.k(), self.k);
-                bounds::check_eq!(self.b.k(), self.k);
-                bounds::check_eq!(self.b_meta.len(), NR);
                 // SAFETY: The panel constructor establishes the common contraction
                 // dimension and the number of valid query rows.
-                let acc = unsafe { self.arch.contract(self.a, self.b, self.k, self.valid_rows) };
+                let acc = unsafe {
+                    self.arch
+                        .contract(self.a, &self.b, self.k, self.dim, self.valid_rows)
+                };
                 // SAFETY: The metadata span contains exactly NR entries.
                 unsafe {
                     self.arch
-                        .reduce(acc, self.query, self.b_meta, self.dim, self.c)
+                        .reduce(acc, self.query, Slice::new(&self.b.meta), self.dim, self.c)
                 };
             },
         );
@@ -456,7 +445,7 @@ where
 }
 
 /// Register layout and instruction selection are private to each implementation.
-trait ExtraWide<const MR: usize>: Copy {
+trait ExtraWide<const N: usize, const MR: usize>: Copy {
     type Query: Copy;
     type Splat: Copy;
     type Accumulator: Copy;
@@ -464,9 +453,22 @@ trait ExtraWide<const MR: usize>: Copy {
     /// # Safety
     ///
     /// `values` contains exactly MR groups and `valid_rows <= MR`.
-    unsafe fn load(self, values: Slice<'_, Group>, valid_rows: usize) -> Self::Query;
+    unsafe fn load(self, values: Slice<'_, Grouped<N>>, valid_rows: usize) -> Self::Query;
     fn zero(self) -> Self::Accumulator;
-    fn splat(self, value: Group) -> Self::Splat;
+    fn splat(self, value: Grouped<N>) -> Self::Splat;
+
+    /// Expand one packed document group into the backend's broadcast representation.
+    ///
+    /// # Safety
+    ///
+    /// `values` contains exactly `dim.div_ceil(2)` packed MinMax4 bytes and
+    /// `group < Grouped::<N>::count(dim)`.
+    #[inline(always)]
+    unsafe fn unpack(self, values: Slice<'_, u8>, group: usize, dim: usize) -> Self::Splat {
+        // SAFETY: Inherited from the trait contract.
+        self.splat(unsafe { Grouped::<N>::from_packed(values, group, dim) })
+    }
+
     fn dot(self, a: Self::Query, b: Self::Splat, acc: Self::Accumulator) -> Self::Accumulator;
 
     /// # Safety
@@ -475,18 +477,17 @@ trait ExtraWide<const MR: usize>: Copy {
     #[inline(always)]
     unsafe fn contract<const NR: usize>(
         self,
-        a: packed::Panel<'_, Group, MR>,
-        b: unpacked::Panel<'_, Group, NR>,
+        a: packed::Panel<'_, Grouped<N>, MR>,
+        b: &BPanel<'_, NR>,
         k: DimK,
+        dim: DimK,
         valid_rows: usize,
     ) -> [Self::Accumulator; NR] {
         bounds::check_eq!(a.k(), k);
-        bounds::check_eq!(b.k(), k);
+        bounds::check_eq!(Bound::new(Grouped::<N>::count(dim.value().get())), k);
         bounds::check_le!(Bound::new(valid_rows), MR);
         let mut acc = [self.zero(); NR];
         let ap = a.as_ptr();
-        let bp = b.as_ptr();
-        let stride = b.stride(k);
         for i in 0..k.value().get() {
             // SAFETY: A has k complete MR-element groups.
             let a = unsafe {
@@ -496,9 +497,9 @@ trait ExtraWide<const MR: usize>: Copy {
                 )
             };
             for (j, acc) in acc.iter_mut().enumerate() {
-                // SAFETY: i < k, j < NR, and B has exactly NR * k groups.
-                let group = unsafe { *bp.add(stride * j + Elements::new(i)).as_unit().as_ref() };
-                *acc = self.dot(a, self.splat(group), *acc);
+                // SAFETY: The B panel contains one complete packed row per accumulator.
+                let b = unsafe { self.unpack(b.values[j], i, dim.value().get()) };
+                *acc = self.dot(a, b, *acc);
             }
         }
         acc
@@ -517,13 +518,13 @@ trait ExtraWide<const MR: usize>: Copy {
     );
 }
 
-impl ExtraWide<8> for Scalar {
+impl ExtraWide<4, 8> for Scalar {
     type Query = [[u32; 8]; 4];
     type Splat = [u32; 4];
     type Accumulator = [u32; 8];
 
     #[inline(always)]
-    unsafe fn load(self, values: Slice<'_, Group>, _: usize) -> Self::Query {
+    unsafe fn load(self, values: Slice<'_, Grouped<4>>, _: usize) -> Self::Query {
         // SAFETY: The trait contract requires exactly eight initialized groups.
         let values = unsafe { values.as_std_slice(8) };
         core::array::from_fn(|d| core::array::from_fn(|row| u32::from(values[row][d])))
@@ -533,7 +534,7 @@ impl ExtraWide<8> for Scalar {
         [0; 8]
     }
     #[inline(always)]
-    fn splat(self, value: Group) -> Self::Splat {
+    fn splat(self, value: Grouped<4>) -> Self::Splat {
         value.map(u32::from)
     }
     #[inline(always)]
@@ -566,7 +567,7 @@ impl ExtraWide<8> for Scalar {
     }
 }
 
-panel_kernel!(Scalar, 8, 6, [1, 2, 3, 4, 5]);
+panel_kernel!(Scalar, 4, 8, 6, [1, 2, 3, 4, 5]);
 
 // Kept separate from contraction so metadata and floating point constraints do not
 // leak through ExtraWide's opaque register types.
@@ -631,7 +632,7 @@ mod x86_64 {
         arch::x86_64::{V3, V4},
     };
 
-    impl ExtraWide<16> for V3 {
+    impl ExtraWide<4, 16> for V3 {
         type Query = (
             <V3 as Architecture>::u8x32,
             Option<<V3 as Architecture>::u8x32>,
@@ -640,7 +641,7 @@ mod x86_64 {
         type Accumulator = [<V3 as Architecture>::i32x8; 2];
 
         #[inline(always)]
-        unsafe fn load(self, values: Slice<'_, Group>, rows: usize) -> Self::Query {
+        unsafe fn load(self, values: Slice<'_, Grouped<4>>, rows: usize) -> Self::Query {
             bounds::check_eq!(values.len(), 16);
             // SAFETY: Each half contains eight groups, or 32 bytes.
             unsafe {
@@ -664,11 +665,11 @@ mod x86_64 {
             [SIMDVector::default(self); 2]
         }
         #[inline(always)]
-        fn splat(self, value: Group) -> Self::Splat {
+        fn splat(self, value: Grouped<4>) -> Self::Splat {
             diskann_wide::alias!(u32s = <V3>::u32x8);
             Self::Splat::from_underlying(
                 self,
-                u32s::splat(self, u32::from_le_bytes(value)).to_underlying(),
+                u32s::splat(self, u32::from_le_bytes(*value)).to_underlying(),
             )
         }
         #[inline(always)]
@@ -711,28 +712,66 @@ mod x86_64 {
         }
     }
 
-    impl ExtraWide<16> for V4 {
-        type Query = <V4 as Architecture>::u8x64;
+    impl ExtraWide<8, 16> for V4 {
+        type Query = (
+            <V4 as Architecture>::u8x64,
+            Option<<V4 as Architecture>::u8x64>,
+        );
         type Splat = <V4 as Architecture>::i8x64;
-        type Accumulator = <V4 as Architecture>::i32x16;
+        type Accumulator = [<V4 as Architecture>::i32x16; 2];
 
         #[inline(always)]
-        unsafe fn load(self, values: Slice<'_, Group>, _: usize) -> Self::Query {
+        unsafe fn load(self, values: Slice<'_, Grouped<8>>, rows: usize) -> Self::Query {
             bounds::check_eq!(values.len(), 16);
-            // SAFETY: Sixteen groups contain exactly 64 bytes.
-            unsafe { SIMDVector::load_simd(self, values.as_ptr().cast()) }
+            // SAFETY: Each half contains eight groups, or 64 bytes.
+            unsafe {
+                let lo =
+                    SIMDVector::load_simd(self, values.truncate(Elements::new(8)).as_ptr().cast());
+                let hi = (rows > 8).then(|| {
+                    SIMDVector::load_simd(
+                        self,
+                        values
+                            .add(Elements::new(8))
+                            .truncate(Elements::new(8))
+                            .as_ptr()
+                            .cast(),
+                    )
+                });
+                (lo, hi)
+            }
         }
         #[inline(always)]
         fn zero(self) -> Self::Accumulator {
-            SIMDVector::default(self)
+            [SIMDVector::default(self); 2]
         }
         #[inline(always)]
-        fn splat(self, value: Group) -> Self::Splat {
-            Self::Splat::from_array(self, core::array::from_fn(|i| value[i % 4] as i8))
+        fn splat(self, value: Grouped<8>) -> Self::Splat {
+            #[cfg(miri)]
+            {
+                Self::Splat::from_array(self, core::array::from_fn(|lane| value[lane % 8] as i8))
+            }
+
+            #[cfg(not(miri))]
+            {
+                diskann_wide::alias!(u64s = <V4>::u64x8);
+                Self::Splat::from_underlying(
+                    self,
+                    u64s::splat(self, u64::from_le_bytes(*value)).to_underlying(),
+                )
+            }
         }
         #[inline(always)]
-        fn dot(self, a: Self::Query, b: Self::Splat, acc: Self::Accumulator) -> Self::Accumulator {
-            acc.dot_simd(a, b)
+        fn dot(
+            self,
+            a: Self::Query,
+            b: Self::Splat,
+            mut acc: Self::Accumulator,
+        ) -> Self::Accumulator {
+            acc[0] = acc[0].dot_simd(a.0, b);
+            if let Some(hi) = a.1 {
+                acc[1] = acc[1].dot_simd(hi, b);
+            }
+            acc
         }
         #[inline(always)]
         unsafe fn reduce<const NR: usize>(
@@ -743,16 +782,41 @@ mod x86_64 {
             dim: DimK,
             scores: &mut [f32; 16],
         ) {
-            diskann_wide::alias!(floats = <V4>::f32x16);
-            let convert = |acc: Self::Accumulator, _: usize| {
-                floats::from_array(self, acc.to_array().map(|x| x as u32 as f32))
+            diskann_wide::alias!(floats = <V4>::f32x8);
+            let convert = |acc: Self::Accumulator, part: usize| {
+                #[cfg(miri)]
+                {
+                    let values = acc[part].to_array();
+                    floats::from_array(
+                        self,
+                        core::array::from_fn(|i| {
+                            values[2 * i].wrapping_add(values[2 * i + 1]) as u32 as f32
+                        }),
+                    )
+                }
+
+                #[cfg(not(miri))]
+                {
+                    use std::arch::x86_64::{
+                        _mm512_add_epi32, _mm512_cvtepi64_epi32, _mm512_srli_epi64,
+                    };
+                    diskann_wide::alias!(i32s = <V4>::i32x8);
+
+                    let value = acc[part].to_underlying();
+                    // SAFETY: V4 provides AVX-512F and AVX-512DQ.
+                    let pairs = unsafe { _mm512_add_epi32(value, _mm512_srli_epi64::<32>(value)) };
+                    // SAFETY: V4 provides AVX-512F and AVX-512DQ.
+                    let reduced =
+                        i32s::from_underlying(self, unsafe { _mm512_cvtepi64_epi32(pairs) });
+                    floats::from_array(self, reduced.to_array().map(|x| x as u32 as f32))
+                }
             };
-            compensate!(self, floats, 16, 1, acc, convert, query, docs, dim, scores);
+            compensate!(self, floats, 8, 2, acc, convert, query, docs, dim, scores);
         }
     }
 
-    panel_kernel!(V3, 16, 8, [1, 2, 3, 4, 5, 6, 7]);
-    panel_kernel!(V4, 16, 8, [1, 2, 3, 4, 5, 6, 7]);
+    panel_kernel!(V3, 4, 16, 8, [1, 2, 3, 4, 5, 6, 7]);
+    panel_kernel!(V4, 8, 16, 8, [1, 2, 3, 4, 5, 6, 7]);
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -760,7 +824,7 @@ mod aarch64 {
     use super::*;
     use diskann_wide::{SIMDDotProduct, arch::aarch64::Neon};
 
-    impl ExtraWide<8> for Neon {
+    impl ExtraWide<4, 8> for Neon {
         type Query = (
             <Neon as Architecture>::u8x16,
             Option<<Neon as Architecture>::u8x16>,
@@ -769,7 +833,7 @@ mod aarch64 {
         type Accumulator = [<Neon as Architecture>::u32x4; 2];
 
         #[inline(always)]
-        unsafe fn load(self, values: Slice<'_, Group>, rows: usize) -> Self::Query {
+        unsafe fn load(self, values: Slice<'_, Grouped<4>>, rows: usize) -> Self::Query {
             bounds::check_eq!(values.len(), 8);
             // SAFETY: Each half contains four groups, or 16 bytes.
             unsafe {
@@ -793,7 +857,7 @@ mod aarch64 {
             [SIMDVector::default(self); 2]
         }
         #[inline(always)]
-        fn splat(self, value: Group) -> Self::Splat {
+        fn splat(self, value: Grouped<4>) -> Self::Splat {
             Self::Splat::from_array(self, core::array::from_fn(|i| value[i % 4]))
         }
         #[inline(always)]
@@ -826,7 +890,7 @@ mod aarch64 {
         }
     }
 
-    panel_kernel!(Neon, 8, 8, [1, 2, 3, 4, 5, 6, 7]);
+    panel_kernel!(Neon, 4, 8, 8, [1, 2, 3, 4, 5, 6, 7]);
 }
 
 #[cfg(test)]
@@ -839,85 +903,20 @@ mod tests {
 
     #[test]
     fn even_odd_groups() {
-        for dim in 0..=8 {
+        for dim in 1..=8 {
             let values: Vec<_> = (0..dim as u8).map(|i| i + 1).collect();
-            let got = split_u8(&values);
-            for (parity, group) in got.iter().enumerate() {
-                for (i, value) in group.iter().enumerate() {
-                    assert_eq!(*value, values.get(2 * i + parity).copied().unwrap_or(0));
+            for group in 0..Grouped::<4>::count(dim) {
+                let got = Grouped::<4>::from_query(&values, group);
+                let parity = group % 2;
+                for i in 0..4 {
+                    assert_eq!(got[i], values.get(2 * i + parity).copied().unwrap_or(0));
                 }
             }
         }
     }
 
-    #[test]
-    #[should_panic]
-    fn rejects_oversized_byte_group() {
-        split_u8(&[0; 9]);
-    }
-
-    #[test]
-    fn unpack_empty_row() {
-        unpack_u4(&[], &mut [], 0);
-    }
-
-    #[test]
-    #[should_panic]
-    fn unpack_rejects_incorrect_source_length() {
-        unpack_u4(&[0; 2], &mut [[0; 4]; 2], 1);
-    }
-
-    #[test]
-    #[should_panic]
-    fn unpack_rejects_incorrect_destination_length() {
-        unpack_u4(&[0; 4], &mut [[0; 4]; 1], 8);
-    }
-
     fn dimension(value: usize) -> DimK {
         DimK::new(NonZeroUsize::new(value).unwrap())
-    }
-
-    fn check_scratch_tile_limits<const MR: usize, const NR: usize>() {
-        for dim in [1, 128, 250, 256, 512, 513, 680, 681, 1025] {
-            let k = dimension(groups(dim));
-            let a = BlockTransposed::<Group, MR>::new(MR, k.value().get());
-            let b = documents(33, dim);
-            let meta = [QueryCompensation::<MR>::default()];
-            let mut scores = [0.0; MR];
-            let expected = Params::new(
-                Cache::detect(),
-                Elements::<Group>::new(MR * k.value().get()).bytes(),
-                Elements::<Group>::new(k.value().get()).bytes(),
-                NR,
-            );
-            // SAFETY: Matching views and metadata describe one complete query block.
-            let driver = unsafe {
-                Driver::<_, MR, NR>::new(
-                    Scalar::new(),
-                    packed::View::from_block_transposed(a.as_view()).unwrap(),
-                    &meta,
-                    unpacked::View::from_matrix_view(b.as_view()).unwrap(),
-                    &mut scores,
-                    dimension(dim),
-                    Cache::detect(),
-                )
-            };
-            let rows = driver.params.b_cols_in_l1.get();
-            assert!(rows.is_multiple_of(NR));
-            assert!(rows <= expected.b_cols_in_l1.get());
-            if k.value().get() * NR <= STACK_GROUPS && NR <= STACK_ROWS {
-                assert!(rows * k.value().get() <= STACK_GROUPS);
-                assert!(rows <= STACK_ROWS);
-            } else {
-                assert_eq!(rows, expected.b_cols_in_l1.get());
-            }
-        }
-    }
-
-    #[test]
-    fn scratch_tile_limits() {
-        check_scratch_tile_limits::<8, 6>();
-        check_scratch_tile_limits::<16, 8>();
     }
 
     fn documents(rows: usize, dim: usize) -> Matrix<u8> {
@@ -942,121 +941,10 @@ mod tests {
     }
 
     #[test]
-    fn unpack_all_nibbles_and_tails() {
-        for dim in 1_usize..=41 {
-            let a: Vec<u8> = (0..dim).map(|i| (i * 17 + 3) as u8).collect();
-            let a_grouped: Vec<Group> = (0..groups(dim))
-                .map(|group| {
-                    core::array::from_fn(|lane| {
-                        let d = group / 2 * 8 + 2 * lane + group % 2;
-                        a.get(d).copied().unwrap_or(0)
-                    })
-                })
-                .collect();
-            for byte in 0..=u8::MAX {
-                let packed: Vec<_> = (0..dim.div_ceil(2))
-                    .map(|i| byte.wrapping_add((i * 17) as u8))
-                    .collect();
-                let stride = Data::<4>::canonical_bytes(dim);
-                let mut bytes = Matrix::new(byte, 1, stride);
-                let metadata = MinMaxCompensation {
-                    a: 0.5,
-                    b: -2.0,
-                    n: 7.0,
-                    dim: dim as u32,
-                    ..Default::default()
-                };
-                {
-                    let mut row =
-                        DataMutRef::<4>::from_canonical_front_mut(bytes.as_mut_slice(), dim)
-                            .unwrap();
-                    row.set_meta(metadata);
-                    for d in 0..dim {
-                        row.vector_mut()
-                            .set(d, i64::from((packed[d / 2] >> (4 * (d % 2))) & 15))
-                            .unwrap();
-                    }
-                }
-                let groups = groups(dim);
-                let mut output = vec![[255; 4]; groups + 2];
-                let mut meta = [MinMaxCompensation::default()];
-                // SAFETY: One canonical row has matching group and metadata destinations.
-                unsafe {
-                    unpack_b(
-                        unpacked::View::from_matrix_view(bytes.as_view()).unwrap(),
-                        &mut output[1..groups + 1],
-                        &mut meta,
-                        dimension(dim),
-                    )
-                };
-                assert_eq!(meta[0], metadata);
-                assert_eq!(output[0], [255; 4]);
-                assert_eq!(output[groups + 1], [255; 4]);
-                let output = &output[1..groups + 1];
-                for (group, values) in output.iter().enumerate() {
-                    for (i, &value) in values.iter().enumerate() {
-                        let d = group / 2 * 8 + 2 * i + group % 2;
-                        let expected = if d < dim {
-                            (packed[d / 2] >> (4 * (d % 2))) & 15
-                        } else {
-                            0
-                        };
-                        assert_eq!(value, expected, "dim={dim}, byte={byte}, d={d}");
-                    }
-                }
-                let got: u32 = a_grouped
-                    .iter()
-                    .flatten()
-                    .zip(output.iter().flatten())
-                    .map(|(&a, &b)| u32::from(a) * u32::from(b))
-                    .sum();
-                let expected: u32 = a
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &a)| u32::from(a) * u32::from((packed[i / 2] >> (4 * (i % 2))) & 15))
-                    .sum();
-                assert_eq!(got, expected, "permuted dot: dim={dim}, byte={byte}");
-            }
-        }
-    }
-
-    #[test]
-    fn document_conversion() {
-        for rows in [1, 3, 8, 9] {
-            for dim in 1_usize..=33 {
-                let groups = groups(dim);
-                let bytes = documents(rows, dim);
-                let b = unpacked::View::from_matrix_view(bytes.as_view()).unwrap();
-                let mut values = vec![[255; 4]; rows * groups];
-                let mut meta = vec![MinMaxCompensation::default(); rows];
-                // SAFETY: Test fixture contains canonical rows of the given dimension.
-                unsafe { unpack_b(b, &mut values, &mut meta, dimension(dim)) };
-                for row in 0..rows {
-                    let source = DataRef::<4>::from_canonical_front(bytes.row(row), dim).unwrap();
-                    assert_eq!(meta[row], source.meta());
-                    for (group, values) in values[row * groups..][..groups].iter().enumerate() {
-                        for (lane, &value) in values.iter().enumerate() {
-                            let d = group / 2 * 8 + 2 * lane + group % 2;
-                            assert_eq!(
-                                value,
-                                if d < dim {
-                                    ((row * 7 + d * 3 + 1) % 16) as u8
-                                } else {
-                                    0
-                                }
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn invalid_driver_bounds_are_detected() {
         use crate::matrix_kernels::test_util::panic_message_for;
 
-        let values = BlockTransposed::<Group, 8>::new(8, 4);
+        let values = BlockTransposed::<Grouped<4>, 8>::new(8, 4);
         let docs = documents(2, 9);
         for (dim, metadata_rows, output_rows) in [(8, 1, 8), (9, 0, 8), (9, 1, 0), (9, 1, 9)] {
             let _ = panic_message_for(|| {
@@ -1065,99 +953,52 @@ mod tests {
                 // SAFETY: In test builds new_inner checks every supplied size relationship
                 // before creating or dereferencing any derived spans.
                 let _ = unsafe {
-                    Driver::<_, 8, 6>::new_inner(
+                    Driver::<_, 4, 8, 6>::new_inner(
                         Scalar::new(),
                         packed::View::from_block_transposed(values.as_view()).unwrap(),
                         &metadata,
                         unpacked::View::from_matrix_view(docs.as_view()).unwrap(),
                         &mut scores,
                         dimension(dim),
-                        Params {
-                            a_panels_in_l2: NonZeroUsize::MIN,
-                            b_cols_in_l1: NonZeroUsize::MIN,
-                        },
-                    )
-                };
-            });
-        }
-        let _ = panic_message_for(|| {
-            let docs = documents(2, 3);
-            // SAFETY: The canonical row-length mismatch is checked before any data access.
-            unsafe {
-                unpack_b(
-                    unpacked::View::from_matrix_view(docs.as_view()).unwrap(),
-                    &mut [[0; 4]; 8],
-                    &mut [MinMaxCompensation::default(); 2],
-                    dimension(9),
-                )
-            };
-        });
-    }
-
-    #[test]
-    fn invalid_conversion_output_bounds_are_detected() {
-        use crate::matrix_kernels::test_util::panic_message_for;
-
-        let docs = documents(2, 9);
-        for (values, metas) in [(7, 2), (9, 2), (8, 1), (8, 3)] {
-            let _ = panic_message_for(|| {
-                // SAFETY: Test builds check destination sizes before any access.
-                unsafe {
-                    unpack_b(
-                        unpacked::View::from_matrix_view(docs.as_view()).unwrap(),
-                        &mut vec![[0; 4]; values],
-                        &mut vec![MinMaxCompensation::default(); metas],
-                        dimension(9),
                     )
                 };
             });
         }
     }
 
-    fn check_driver<A, const MR: usize, const NR: usize>(arch: A)
+    fn check_driver<A, const N: usize, const MR: usize, const NR: usize>(arch: A)
     where
-        A: Architecture,
-        for<'a> Driver<'a, A, MR, NR>: driver::Drive,
+        A: Architecture + ExtraWide<N, MR> + util::LoadStore<f32, MR>,
+        for<'a> Driver<'a, A, N, MR, NR>: driver::Drive,
     {
         let cases = super::super::test::packed_x_unpacked_test_dims(MR, NR)
             .into_iter()
-            .map(|c| {
-                (
-                    c.total_a_rows,
-                    c.total_b_cols,
-                    c.k,
-                    c.a_panels_per_tile,
-                    c.b_cols_per_tile,
-                )
-            })
-            .chain((1..=NR).flat_map(|n| (1..=17).map(move |dim| (MR + 1, n + NR, dim, 1, NR + 1))))
+            .map(|c| (c.total_a_rows, c.total_b_cols, c.k))
+            .chain((1..=NR).flat_map(|n| (1..=17).map(move |dim| (MR + 1, n + NR, dim))))
             .chain([
-                (MR + 1, 32, 1, 1, 32),
-                (MR + 1, 33, 1, 1, 33),
-                (MR + 1, 16, 256, 1, 16),
-                (MR + 1, 17, 256, 1, 17),
-                (MR + 1, 16, 257, 1, 16),
+                (MR + 1, 32, 1),
+                (MR + 1, 33, 1),
+                (MR + 1, 16, 256),
+                (MR + 1, 17, 256),
+                (MR + 1, 16, 257),
             ]);
-        for (rows, cols, dim, a_blocks, b_cols) in cases {
+        for (rows, cols, dim) in cases {
             if cfg!(miri)
                 && !(rows <= MR + 1 && cols <= NR + 1 && matches!(dim, 1 | 9)
                     || dim == 1 && matches!(cols, 32 | 33))
             {
                 continue;
             }
-            let k = groups(dim);
-            let mut grouped = Matrix::new([0_u8; 4], rows, k);
+            let k = Grouped::<N>::count(dim);
+            let mut grouped = Matrix::new(Grouped::<N>::default(), rows, k);
             let mut query = vec![QueryCompensation::<MR>::default(); rows.div_ceil(MR)];
             for row in 0..rows {
+                let values: Vec<_> = (0..dim)
+                    .map(|d| ((row * 17 + d * 3 + 1) % 256) as u8)
+                    .collect();
                 for group in 0..k {
-                    grouped.as_mut_slice()[row * k + group] = core::array::from_fn(|lane| {
-                        let d = group / 2 * 8 + 2 * lane + group % 2;
-                        if d < dim {
-                            ((row * 17 + d * 3 + 1) % 256) as u8
-                        } else {
-                            0
-                        }
-                    });
+                    grouped.as_mut_slice()[row * k + group] =
+                        Grouped::<N>::from_query(&values, group);
                 }
                 let q = &mut query[row / MR];
                 q.scale[row % MR] = (row % 3 + 1) as f32 * 0.5;
@@ -1193,46 +1034,43 @@ mod tests {
             let mut scores = vec![12345.0; rows + 2];
             // SAFETY: The fixture supplies matching packed groups, metadata and output size.
             let mut driver = unsafe {
-                Driver::<_, MR, NR>::new_inner(
+                Driver::<_, N, MR, NR>::new_inner(
                     arch,
                     packed::View::from_block_transposed(a.as_view()).unwrap(),
                     &query,
                     unpacked::View::from_matrix_view(b.as_view()).unwrap(),
                     &mut scores[1..rows + 1],
                     dimension(dim),
-                    Params {
-                        a_panels_in_l2: NonZeroUsize::new(a_blocks).unwrap(),
-                        b_cols_in_l1: NonZeroUsize::new(b_cols).unwrap(),
-                    },
                 )
             };
             driver::Drive::drive(&mut driver);
             driver::Drive::drive(&mut driver);
             assert_eq!(scores[0], 12345.0);
             assert_eq!(scores[rows + 1], 12345.0);
-            assert_eq!(
-                &scores[1..rows + 1],
-                expected,
-                "({rows},{cols},{dim},{a_blocks},{b_cols})"
-            );
+            assert_eq!(&scores[1..rows + 1], expected, "({rows},{cols},{dim})");
         }
     }
 
-    fn check_registers<A, const MR: usize>(arch: A)
+    fn check_registers<A, const N: usize, const MR: usize>(arch: A)
     where
-        A: Architecture + ExtraWide<MR>,
+        A: Architecture + ExtraWide<N, MR>,
     {
         arch.run_inline(|| {
             for rows in 1..=MR {
-                for b in [[0; 4], [15; 4], [1, 7, 3, 15]] {
-                    let values: [Group; MR] = core::array::from_fn(|i| {
-                        core::array::from_fn(|j| {
+                for pattern in 0..3 {
+                    let b = Grouped(core::array::from_fn(|lane| match pattern {
+                        0 => 0,
+                        1 => 15,
+                        _ => [1, 7, 3, 15, 2, 9, 4, 12][lane],
+                    }));
+                    let values: [Grouped<N>; MR] = core::array::from_fn(|i| {
+                        Grouped(core::array::from_fn(|j| {
                             if i.is_multiple_of(2) {
                                 255
                             } else {
                                 (i * 11 + j * 13) as u8
                             }
-                        })
+                        }))
                     });
                     // SAFETY: The span has exactly MR groups and rows <= MR.
                     let a = unsafe { arch.load(Slice::new(&values), rows) };
@@ -1252,26 +1090,41 @@ mod tests {
                         ..Default::default()
                     };
                     let mut scores = [f32::MAX; MR];
+                    let group_dim = N;
                     // SAFETY: One accumulator has exactly one metadata entry.
                     unsafe {
-                        arch.reduce([acc], &query, Slice::new(&[doc]), dimension(4), &mut scores)
+                        arch.reduce(
+                            [acc],
+                            &query,
+                            Slice::new(&[doc]),
+                            dimension(group_dim),
+                            &mut scores,
+                        )
                     };
                     for i in 0..rows {
                         let raw: u32 = values[i]
                             .iter()
-                            .zip(b)
-                            .map(|(&a, b)| u32::from(a) * u32::from(b))
+                            .zip(b.iter())
+                            .map(|(&a, &b)| u32::from(a) * u32::from(b))
                             .sum::<u32>()
                             * 3;
-                        let expected =
-                            -(0.5 * 0.25 * raw as f32 + 7.0 * 3.0 + 11.0 * -2.0 + -2.0 * 3.0 * 4.0);
+                        let expected = -(0.5 * 0.25 * raw as f32
+                            + 7.0 * 3.0
+                            + 11.0 * -2.0
+                            + -2.0 * 3.0 * group_dim as f32);
                         assert_eq!(scores[i], expected);
                     }
                     let previous = scores;
                     let nan = MinMaxCompensation { a: f32::NAN, ..doc };
                     // SAFETY: One accumulator has exactly one metadata entry.
                     unsafe {
-                        arch.reduce([acc], &query, Slice::new(&[nan]), dimension(4), &mut scores)
+                        arch.reduce(
+                            [acc],
+                            &query,
+                            Slice::new(&[nan]),
+                            dimension(group_dim),
+                            &mut scores,
+                        )
                     };
                     assert_eq!(
                         scores, previous,
@@ -1284,16 +1137,16 @@ mod tests {
 
     #[test]
     fn scalar_driver_and_registers() {
-        check_driver::<_, 8, 6>(Scalar::new());
-        check_registers::<_, 8>(Scalar::new());
+        check_driver::<_, 4, 8, 6>(Scalar::new());
+        check_registers::<_, 4, 8>(Scalar::new());
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn v3_driver_and_registers() {
         if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-            check_driver::<_, 16, 8>(arch);
-            check_registers::<_, 16>(arch);
+            check_driver::<_, 4, 16, 8>(arch);
+            check_registers::<_, 4, 16>(arch);
         }
     }
 
@@ -1301,8 +1154,8 @@ mod tests {
     #[test]
     fn v4_driver_and_registers() {
         if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked_miri() {
-            check_driver::<_, 16, 8>(arch);
-            check_registers::<_, 16>(arch);
+            check_driver::<_, 8, 16, 8>(arch);
+            check_registers::<_, 8, 16>(arch);
         }
     }
 
@@ -1310,8 +1163,8 @@ mod tests {
     #[test]
     fn neon_driver_and_registers() {
         if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
-            check_driver::<_, 8, 8>(arch);
-            check_registers::<_, 8>(arch);
+            check_driver::<_, 4, 8, 8>(arch);
+            check_registers::<_, 4, 8>(arch);
         }
     }
 }

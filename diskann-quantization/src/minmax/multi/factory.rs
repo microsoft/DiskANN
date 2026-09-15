@@ -16,27 +16,25 @@ use diskann_wide::arch::x86_64::{V3, V4};
 use super::MinMaxMeta;
 use super::kernel::{MinMaxErase, MinMaxMaxSimKernel};
 use crate::matrix_kernels as mk;
-use crate::matrix_kernels::maxsim::minmax8_x_minmax4::{
-    Driver, Group, QueryCompensation, groups, split_u8,
-};
+use crate::matrix_kernels::maxsim::minmax8_x_minmax4::{Driver, Grouped, QueryCompensation};
 use crate::multi_vector::{BlockTransposed, MatRef, MaxSimError, MaxSimIsa, NotSupported};
 
 #[derive(Debug)]
-struct Prepared<A, const MR: usize, const NR: usize> {
+struct Prepared<A, const N: usize, const MR: usize, const NR: usize> {
     arch: A,
-    prepared: BlockTransposed<Group, MR>,
+    prepared: BlockTransposed<Grouped<N>, MR>,
     compensation: Vec<QueryCompensation<MR>>,
     dim: usize,
 }
 
-impl<A, const MR: usize, const NR: usize> Prepared<A, MR, NR> {
+impl<A, const N: usize, const MR: usize, const NR: usize> Prepared<A, N, MR, NR> {
     #[expect(
         clippy::expect_used,
         reason = "output is allocated with the input row count"
     )]
     fn new(arch: A, query: MatRef<'_, MinMaxMeta<8>>) -> Self {
         let dim = query.repr().intrinsic_dim();
-        let mut prepared = BlockTransposed::new(query.num_vectors(), groups(dim));
+        let mut prepared = BlockTransposed::new(query.num_vectors(), Grouped::<N>::count(dim));
         let mut compensation = vec![QueryCompensation::default(); query.num_vectors().div_ceil(MR)];
         for (i, row) in query.rows().enumerate() {
             let meta = row.meta();
@@ -45,14 +43,10 @@ impl<A, const MR: usize, const NR: usize> Prepared<A, MR, NR> {
             block.bias[i % MR] = meta.b;
             block.scaled_sum[i % MR] = meta.n;
             let mut output = prepared.get_row_mut(i).expect("matching query row count");
-            for (j, group) in row
-                .vector()
-                .as_slice()
-                .chunks(8)
-                .flat_map(split_u8)
-                .enumerate()
-            {
-                output.set(j, group);
+            let vector = row.vector();
+            let values = vector.as_slice();
+            for group in 0..Grouped::<N>::count(dim) {
+                output.set(group, Grouped::<N>::from_query(values, group));
             }
         }
         Self {
@@ -64,10 +58,11 @@ impl<A, const MR: usize, const NR: usize> Prepared<A, MR, NR> {
     }
 }
 
-impl<A, const MR: usize, const NR: usize> MinMaxMaxSimKernel<8, 4> for Prepared<A, MR, NR>
+impl<A, const N: usize, const MR: usize, const NR: usize> MinMaxMaxSimKernel<8, 4>
+    for Prepared<A, N, MR, NR>
 where
     A: Architecture,
-    for<'a> Driver<'a, A, MR, NR>: mk::Drive,
+    for<'a> Driver<'a, A, N, MR, NR>: mk::Drive,
 {
     fn nrows(&self) -> usize {
         self.prepared.nrows()
@@ -100,19 +95,9 @@ where
         else {
             return Ok(());
         };
-        // SAFETY: The constructor provides the even/odd layout and one metadata entry
-        // per block. Shape checks establish the document and output dimensions.
-        let mut driver = unsafe {
-            Driver::new(
-                self.arch,
-                a,
-                &self.compensation,
-                b,
-                scores,
-                dim,
-                mk::Cache::detect(),
-            )
-        };
+        // SAFETY: The constructor provides the selected grouped layout and one metadata
+        // entry per block. Shape checks establish the document and output dimensions.
+        let mut driver = unsafe { Driver::new(self.arch, a, &self.compensation, b, scores, dim) };
         mk::Drive::drive(&mut driver);
         Ok(())
     }
@@ -140,31 +125,31 @@ fn canonical_rows(doc: MatRef<'_, MinMaxMeta<4>>) -> Option<mk::blocks::unpacked
 struct BuildAndErase<E>(E);
 
 macro_rules! impl_builder {
-    ($arch:ty, $mr:literal, $nr:literal) => {
+    ($arch:ty, $n:literal, $mr:literal, $nr:literal) => {
         impl<E> diskann_wide::arch::Target1<$arch, E::Output, MatRef<'_, MinMaxMeta<8>>>
             for BuildAndErase<E>
         where
             E: MinMaxErase<8, 4>,
         {
             fn run(self, arch: $arch, query: MatRef<'_, MinMaxMeta<8>>) -> E::Output {
-                self.0.erase(Prepared::<_, $mr, $nr>::new(arch, query))
+                self.0.erase(Prepared::<_, $n, $mr, $nr>::new(arch, query))
             }
         }
     };
 }
 
-impl_builder!(Scalar, 8, 6);
+impl_builder!(Scalar, 4, 8, 6);
 #[cfg(target_arch = "aarch64")]
-impl_builder!(Neon, 8, 8);
+impl_builder!(Neon, 4, 8, 8);
 #[cfg(target_arch = "x86_64")]
-impl_builder!(V3, 16, 8);
+impl_builder!(V3, 4, 16, 8);
 #[cfg(target_arch = "x86_64")]
-impl_builder!(V4, 16, 8);
+impl_builder!(V4, 8, 16, 8);
 
 /// Build a tiled MinMax8-query by MinMax4-document MaxSim kernel.
 ///
-/// Owns an even/odd-grouped copy of the query. Each computation borrows that copy
-/// and unpacks bounded document tiles into scratch memory for reuse across query panels.
+/// Owns an architecture-packed copy of the query. Document rows remain in canonical
+/// MinMax4 form and are expanded one contraction group at a time in the micro-kernel.
 ///
 /// # Errors
 ///
@@ -245,7 +230,7 @@ mod tests {
         MaxSimIsa::Auto,
     ];
 
-    fn check_packing<const MR: usize>() {
+    fn check_packing<const N: usize, const MR: usize>() {
         for rows in [0, 1, MR - 1, MR, MR + 1, 2 * MR + 1] {
             for dim in 0..=17 {
                 let mut query = Mat::new(MinMaxMeta::<8>::new(rows, dim), Defaulted).unwrap();
@@ -263,26 +248,23 @@ mod tests {
                             .unwrap();
                     }
                 }
-                let packed = Prepared::<_, MR, 6>::new(Scalar::new(), query.as_view());
+                let packed = Prepared::<_, N, MR, 6>::new(Scalar::new(), query.as_view());
                 assert_eq!(packed.prepared.nrows(), rows);
-                assert_eq!(packed.prepared.ncols(), groups(dim));
+                assert_eq!(packed.prepared.ncols(), Grouped::<N>::count(dim));
                 assert_eq!(packed.dim, dim);
                 assert_eq!(packed.compensation.len(), rows.div_ceil(MR));
                 for (index, group) in packed.prepared.as_slice().iter().enumerate() {
-                    let k = groups(dim);
+                    let k = Grouped::<N>::count(dim);
                     let row = index / (MR * k) * MR + index % MR;
                     let g = index / MR % k;
-                    for (i, &value) in group.iter().enumerate() {
-                        let d = g / 2 * 8 + 2 * i + g % 2;
-                        assert_eq!(
-                            value,
-                            if row < rows && d < dim {
-                                ((row * 17 + d + 1) % 256) as u8
-                            } else {
-                                0
-                            }
-                        );
-                    }
+                    let expected = if row < rows {
+                        let values: Vec<_> =
+                            (0..dim).map(|d| ((row * 17 + d + 1) % 256) as u8).collect();
+                        Grouped::<N>::from_query(&values, g)
+                    } else {
+                        Grouped::<N>::default()
+                    };
+                    assert_eq!(*group, expected);
                 }
                 for (block, meta) in packed.compensation.iter().enumerate() {
                     for lane in 0..MR {
@@ -309,8 +291,10 @@ mod tests {
 
     #[test]
     fn query_packing_and_compensation() {
-        check_packing::<8>();
-        check_packing::<16>();
+        check_packing::<4, 8>();
+        check_packing::<4, 16>();
+        #[cfg(target_arch = "x86_64")]
+        check_packing::<8, 16>();
     }
 
     fn compress<const BITS: usize>(
