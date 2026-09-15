@@ -30,10 +30,7 @@
 //! * Lack of save/load support: The index is currently ephemeral, but there are plans to
 //!   address this gap.
 
-use std::{
-    hash::Hash,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::hash::Hash;
 
 use diskann::{
     ANNError, ANNResult,
@@ -44,17 +41,14 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider,
-    utils::IntoUsize,
 };
-use diskann_utils::views::Matrix;
-use thiserror::Error;
 
 use crate::{
     counters::{Counters, LocalCounters},
     ids::IdMap,
-    layers::{self, QueryDistance},
-    num::Bytes,
-    store::{self, Store},
+    neighbors::Neighbors,
+    num::{IdLimit, MaxDegree},
+    repr,
 };
 
 /// Aggregate trait for the external ID type of [`Provider`].
@@ -64,80 +58,30 @@ impl<T> Id for T where T: Send + Sync + Hash + Eq + Clone + 'static {}
 
 /// An in-memory data-provider for DiskANN's graph indexing algorithms.
 ///
-/// The first type parameter `L` is a [`layers::Layer`] for describing the kind of data
+/// The first type parameter `R` is a [`repr::Representation`] for describing the kind of data
 /// stored within the provider. The second parameter `M` is the associated data for items
 /// inserted into the provider.
 #[derive(Debug)]
-pub struct Provider<L, M = u32>
+pub struct Provider<R, M = u32>
 where
     M: Id,
 {
-    // The raw binary store
-    store: Store,
-    // Data representation.
-    layer: L,
+    // Data representation and storage.
+    representation: R,
     // ID translation.
     mapping: IdMap<M>,
-    // Construction `Config`.
-    config: Config,
-
     // `Counters` is only non-trivial under the `integration-test` feature flag. Otherwise,
     // all counter related operations are no-ops.
     counters: Counters,
 }
 
-impl<L, M> Provider<L, M>
+impl<R, M> Provider<R, M>
 where
     M: Id,
 {
-    /// Construct a new [`Provider`].
-    ///
-    /// The list of `start_points` must be must be compatible with `layer`.
-    pub fn new<I, T>(layer: L, config: Config, start_points: I) -> Result<Self, ProviderError>
-    where
-        I: IntoIterator<Item = T>,
-        L: layers::Set<T>,
-    {
-        let start_points: Vec<_> = start_points.into_iter().collect();
-        let bytes = layers::Layer::bytes(&layer);
-        let mut data = Matrix::new(0u8, start_points.len(), bytes.value());
-
-        for (row, point) in std::iter::zip(data.row_iter_mut(), start_points) {
-            layers::Set::set(&layer, point, row)?;
-        }
-
-        let mut store_config = store::Config::new(config.capacity(), bytes, config.max_degree());
-
-        if let Some(slots) = config.epoch_guard_slots {
-            store_config.epoch_guard_slots(slots);
-        }
-
-        if let Some(capacity) = config.freelist_recycle_capacity {
-            store_config.freelist_recycle_capacity(capacity);
-        }
-
-        let store = Store::new(store_config, data.as_view())
-            .map_err(|err| ProviderError::CreatingStore(Box::new(err)))?;
-
-        let mapping = IdMap::new(config.capacity());
-
-        Ok(Self {
-            store,
-            layer,
-            mapping,
-            config,
-            counters: Counters::new(),
-        })
-    }
-
     /// A local set of counters that update the provider-wide counters in bulk.
     fn local_counters(&self) -> LocalCounters<'_> {
         self.counters.local()
-    }
-
-    /// Return the maximum number of neighbors that can be stored in the provider's graph.
-    pub fn max_degree(&self) -> usize {
-        self.store.max_degree()
     }
 
     /// Return a snapshot of the current event counters.
@@ -147,72 +91,29 @@ where
     }
 }
 
-#[derive(Debug, Error)]
-pub enum ProviderError {
-    #[error("error when trying to set start points")]
-    SettingStartPoints(#[from] ANNError),
-    #[error("could not create data store")]
-    CreatingStore(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
+impl<R, M> Provider<R, M>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    /// Construct a new [`Provider`].
+    pub fn new<C>(config: C) -> ANNResult<Self>
+    where
+        C: repr::RepresentationConfig<Representation = R>,
+    {
+        let representation = <_ as repr::RepresentationConfig>::build(config)?;
+        let mapping = IdMap::new(representation.capacity());
 
-/// Configuration for [`Provider`].
-#[derive(Debug)]
-pub struct Config {
-    capacity: usize,
-    max_degree: usize,
-    prefetch_lookahead: Option<NonZeroUsize>,
-    epoch_guard_slots: Option<NonZeroUsize>,
-    freelist_recycle_capacity: Option<NonZeroU32>,
-}
-
-impl Config {
-    const DEFAULT_PREFETCH_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(8).unwrap();
-
-    /// Construct a new [`Config`].
-    ///
-    /// * `capacity`: The number of dynamic entries in the resulting provider.
-    /// * `max_degree`: The maximum degree of any adjacency list in the graph.
-    pub fn new(capacity: usize, max_degree: usize) -> Self {
-        Self {
-            capacity,
-            max_degree,
-            prefetch_lookahead: Some(Self::DEFAULT_PREFETCH_LOOKAHEAD),
-            epoch_guard_slots: None,
-            freelist_recycle_capacity: None,
-        }
+        Ok(Self {
+            representation,
+            mapping,
+            counters: Counters::new(),
+        })
     }
 
-    /// Return the number of dynamic entries in the resulting provider.
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    /// Return the maximum degree of any adjacency list.
-    pub fn max_degree(&self) -> usize {
-        self.max_degree
-    }
-
-    /// Configure the prefetch lookahead.
-    ///
-    /// This is used during beam expansion to prefetch data into CPU caches.
-    pub fn set_prefetch_lookahead(&mut self, prefetch_lookahead: Option<NonZeroUsize>) {
-        self.prefetch_lookahead = prefetch_lookahead;
-    }
-
-    /// Configure the number of epoch guard slots.
-    ///
-    /// Increasing this number will increase the number of threads that can work concurrently
-    /// on the index at the cost of longer scan times for epoch advancement.
-    pub fn set_epoch_guard_slots(&mut self, slots: Option<NonZeroUsize>) {
-        self.epoch_guard_slots = slots;
-    }
-
-    /// Configure the capacity of the freelist recycle queue.
-    ///
-    /// Increasing the capacity of the queue will allow more recycled IDs to be retrieved
-    /// without triggering a scan, but will cost more memory.
-    pub fn set_freelist_recycle_capacity(&mut self, capacity: Option<NonZeroU32>) {
-        self.freelist_recycle_capacity = capacity;
+    /// Return the maximum number of neighbors that can be stored in the provider's graph.
+    pub fn max_degree(&self) -> MaxDegree {
+        self.representation.max_degree()
     }
 }
 
@@ -266,9 +167,9 @@ where
 //
 // `diskann` has plans to move deletion checks behind an accessor trait, which will help
 // with this situation.
-impl<L, M> diskann::provider::Delete for Provider<L, M>
+impl<R, M> diskann::provider::Delete for Provider<R, M>
 where
-    L: Send + Sync + 'static,
+    R: repr::Representation,
     M: Id,
 {
     async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
@@ -283,14 +184,14 @@ where
             Some(e) => e,
         };
 
-        match self.store.retire(entry.internal().into_usize()) {
-            Ok(()) => {
-                // Successfully retired the internal slot. We can safely release the ID mapping.
-                entry.delete();
-                Ok(())
-            }
-            Err(err) => Err(ANNError::new(err)),
-        }
+        // An early return here will cause `entry` to be dropped, which will *not* cause
+        // the delete to commit.
+        <R as repr::Representation>::retire(&self.representation, entry.internal())?;
+
+        // Successfully retired the internal slot. We can safely release the ID mapping.
+        entry.delete();
+
+        Ok(())
     }
 
     async fn release(&self, _context: &Context, _id: Self::InternalId) -> ANNResult<()> {
@@ -302,9 +203,7 @@ where
         _context: &Context,
         id: u32,
     ) -> ANNResult<diskann::provider::ElementStatus> {
-        // Not that this check is approximate. A full check requires materialization of
-        // a `reader`.
-        match self.store.can_read_approximate(id.into_usize()) {
+        match <R as repr::Representation>::is_readable(&self.representation, id) {
             Some(true) => Ok(diskann::provider::ElementStatus::Valid),
             Some(false) => Ok(diskann::provider::ElementStatus::Deleted),
             None => Err(ANNError::message("accessed invalid internal ID")),
@@ -331,9 +230,9 @@ where
     std::future::ready(f())
 }
 
-impl<T, L, M> diskann::provider::SetElement<T> for Provider<L, M>
+impl<T, R, M> diskann::provider::SetElement<T> for Provider<R, M>
 where
-    L: layers::Set<T>,
+    R: repr::Set<T>,
     M: Id,
 {
     type SetError = ANNError;
@@ -345,19 +244,18 @@ where
         element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
         let work = move || {
-            let mut slot = self
-                .store
-                .acquire()
-                .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
-
             // TODO: Proper cleanup via `Guard` or some other mechanism on the event of
             // insert failure after `set_element` returns.
-            <L as layers::Set<T>>::set(&self.layer, element, slot.as_mut_slice())?;
-            self.mapping.insert(id.clone(), slot.slot())?;
+            //
+            // The internal `Guard` is sufficient for local rollback, but not after
+            // `set_element` returns.
+            let guard = <R as repr::Set<T>>::set(&self.representation, element)?;
+            let internal = <_ as repr::Guard>::id(&guard);
+            self.mapping.insert(id.clone(), internal)?;
 
             // Now that insert has succeeded - publish the slot. This method cannot fail, so
             // we do not need to worry about potentially unwinding the ID mapping.
-            let id = slot.publish();
+            <_ as repr::Guard>::publish(guard);
 
             // This is a rather expensive update.
             //
@@ -365,7 +263,7 @@ where
             // is not expected to be enabled for general use.
             self.local_counters().set_vector(1);
 
-            Ok(diskann::provider::NoopGuard::new(id))
+            Ok(diskann::provider::NoopGuard::new(internal))
         };
 
         ready(work)
@@ -383,15 +281,38 @@ where
 /// kernel once and reuse it to balance compile times and performance.
 #[derive(Debug)]
 pub struct SearchAccessor<'a> {
-    reader: store::Reader<'a>,
+    neighbors: &'a Neighbors,
     ids: AdjacencyList<u32>,
-    expand_beam: Box<dyn ExpandBeam + 'a>,
+    expand_beam: Box<dyn repr::ExpandBeam + 'a>,
+    id_limit: IdLimit,
     buffer: Vec<(u32, f32)>,
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
     start_points: std::ops::Range<u32>,
     counters: LocalCounters<'a>,
+}
+
+impl<'a> SearchAccessor<'a> {
+    pub(crate) fn new(
+        neighbors: &'a Neighbors,
+        expand_beam: Box<dyn repr::ExpandBeam + 'a>,
+        provider: &'a (dyn std::any::Any + Send + Sync),
+        start_points: std::ops::Range<u32>,
+        counters: LocalCounters<'a>,
+    ) -> Self {
+        let id_limit = expand_beam.id_limit();
+        Self {
+            neighbors,
+            ids: AdjacencyList::with_capacity(neighbors.max_degree().value()),
+            expand_beam,
+            id_limit,
+            buffer: vec![Default::default(); neighbors.max_degree().value()],
+            provider,
+            start_points,
+            counters,
+        }
+    }
 }
 
 impl diskann::provider::HasId for SearchAccessor<'_> {
@@ -414,13 +335,12 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     {
         let work = move || {
             for p in self.start_points.clone() {
-                match self.reader.read(p.into_usize()) {
-                    Some(point) => {
+                match self.expand_beam.evaluate(p)? {
+                    Some(distance) => {
                         // Counters are no-ops without `integration-test`.
                         self.counters.get_vector(1);
                         self.counters.query_distance(1);
-
-                        f(p, self.expand_beam.evaluate(point)?);
+                        f(p, distance);
                     }
                     None => {
                         return Err(ANNError::message("could not retrieve start point"));
@@ -446,22 +366,25 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     {
         let work = move || -> ANNResult<()> {
             for i in ids {
-                self.reader.neighbors().get(i, &mut self.ids)?;
+                self.neighbors.get(i, &mut self.ids)?;
                 self.counters.get_neighbors(1);
 
                 // Filter out unvisited IDs and ensure that all the IDs we are about
                 self.ids
-                    .retain(|i| pred.eval_mut(i) && self.reader.is_in_bounds(i.into_usize()));
+                    .retain(|i| pred.eval_mut(i) && self.id_limit.is_in_bounds(*i));
 
                 // This should always hold, but let's double check.
                 assert!(self.buffer.len() >= self.ids.len());
 
-                // SAFETY: We've verified that each entry in `self.ids` is in-bounds and the
-                // `self.buffer` is long enough to hold all the IDs.
-                let processed = unsafe {
-                    self.expand_beam
-                        .expand_beam(&self.ids, &self.reader, &mut self.buffer)
-                }?;
+                // SAFETY:
+                //
+                // 1. We've verified that each entry in `self.ids` is in-bounds using
+                //   the `IdLimit` derived from this `ExpandBeam` object (enforced in the
+                //   constructor).
+                //
+                // 2. `self.buffer` is long enough to hold all the IDs.
+                let processed =
+                    unsafe { self.expand_beam.expand_beam(&self.ids, &mut self.buffer) }?;
 
                 self.counters.get_vector(processed as u64);
                 self.counters.query_distance(processed as u64);
@@ -479,216 +402,6 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     }
 }
 
-trait ExpandBeam: Send + Sync + std::fmt::Debug {
-    /// Evaluate a raw distance function.
-    fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
-
-    /// Compute the distance between the query and each neighbor in `list`.
-    ///
-    /// # Safety
-    ///
-    /// * All items in `list` must in-bounds with respect to `reader`.
-    /// * `buffer.len() >= list.len()`.
-    unsafe fn expand_beam(
-        &self,
-        list: &[u32],
-        reader: &store::Reader<'_>,
-        buffer: &mut [(u32, f32)],
-    ) -> ANNResult<usize>;
-}
-
-#[derive(Debug)]
-struct ExpandBeamImpl<T, const BYTES: usize> {
-    inner: T,
-    prefetch_lookahead: usize,
-}
-
-impl<T, const BYTES: usize> ExpandBeamImpl<T, BYTES> {
-    fn new(inner: T, prefetch_lookahead: usize) -> Self {
-        Self {
-            inner,
-            prefetch_lookahead,
-        }
-    }
-}
-
-impl<T, const BYTES: usize> ExpandBeam for ExpandBeamImpl<T, BYTES>
-where
-    T: layers::QueryDistance,
-{
-    fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
-        self.inner.evaluate(x)
-    }
-
-    unsafe fn expand_beam(
-        &self,
-        list: &[u32],
-        reader: &store::Reader<'_>,
-        buffer: &mut [(u32, f32)],
-    ) -> ANNResult<usize> {
-        // SAFETY: Inherited from caller.
-        unsafe {
-            expand_beam_inner::<T, BYTES>(
-                &self.inner,
-                list,
-                self.prefetch_lookahead,
-                reader,
-                buffer,
-            )
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ExpandBeamVisitor {
-    bytes: Bytes,
-    prefetch_lookahead: usize,
-}
-
-impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
-    type Output = Box<dyn ExpandBeam + 'a>;
-
-    fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
-    where
-        T: QueryDistance + 'a,
-    {
-        // This is critical to ensure we emit the correct number of prefetches.
-        assert!(Bytes::new(BYTES + store::TAG_SIZE.value()) <= self.bytes);
-        Box::new(ExpandBeamImpl::<_, BYTES>::new(
-            distance,
-            self.prefetch_lookahead,
-        ))
-    }
-
-    fn visit<T>(self, distance: T) -> Self::Output
-    where
-        T: QueryDistance + 'a,
-    {
-        Box::new(ExpandBeamImpl::<_, 0>::new(
-            distance,
-            self.prefetch_lookahead,
-        ))
-    }
-}
-
-/// Prefetch `len` bytes beginning at `ptr`.
-///
-/// The last cache line prefetched first, followed by the rest in ascending order.
-///
-/// # Safety
-///
-/// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
-unsafe fn prefetch(ptr: *const u8, len: usize) {
-    use std::arch::x86_64::*;
-
-    // Fetch the last cache line (the one with the tag) first.
-    let stride = Bytes::CACHELINE.value();
-    let ptr = ptr.cast::<i8>();
-    let lines = len.div_ceil(stride);
-    if lines == 0 {
-        return;
-    }
-
-    // SAFETY: Inherited from caller.
-    unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
-    for i in 0..(lines - 1) {
-        // SAFETY: Inherited from caller.
-        unsafe {
-            _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
-        }
-    }
-}
-
-/// Prefetch `len` bytes beginning at `ptr`.
-///
-/// The last cache line prefetched first, followed by the rest in ascending order.
-///
-/// # Safety
-///
-/// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
-
-/// # Safety
-///
-/// * All items in `list` must in-bounds with respect to `reader`.
-/// * The number of bytes associated with `N` cache lines must "make sense".
-/// * `buffer.len() >= list.len()`.
-#[inline]
-unsafe fn expand_beam_inner<T, const BYTES: usize>(
-    distance: &T,
-    list: &[u32],
-    lookahead: usize,
-    reader: &store::Reader<'_>,
-    buffer: &mut [(u32, f32)],
-) -> ANNResult<usize>
-where
-    T: layers::QueryDistance,
-{
-    debug_assert!(
-        BYTES + store::TAG_SIZE.value() <= reader.bytes().value(),
-        "we really rely on this: {}, bytes = {}",
-        BYTES + store::TAG_SIZE.value(),
-        reader.bytes()
-    );
-
-    debug_assert!(buffer.len() >= list.len());
-
-    let bytes = if BYTES == 0 {
-        reader.bytes().value()
-    } else {
-        BYTES + store::TAG_SIZE.value()
-    };
-
-    let len = list.len();
-    let lookahead = lookahead.min(len);
-
-    for j in 0..lookahead {
-        // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
-        // as the validity of the prefetch bounds.
-        unsafe {
-            prefetch(
-                reader
-                    .read_raw_unchecked(list.get_unchecked(j).into_usize())
-                    .as_ptr()
-                    .cast(),
-                bytes,
-            )
-        }
-    }
-
-    // Disable prefetching if the lookahead is 0.
-    let mut j = if lookahead == 0 { len } else { lookahead };
-    let mut processed = 0;
-    for &i in list.iter() {
-        if j != len {
-            // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
-            // well as the validity of the prefetch bounds.
-            unsafe {
-                prefetch(
-                    reader
-                        .read_raw_unchecked(list.get_unchecked(j).into_usize())
-                        .as_ptr()
-                        .cast(),
-                    bytes,
-                )
-            }
-            j += 1;
-        }
-
-        // SAFETY: Caller asserts that `i` is in-bounds.
-        if let Some(data) = unsafe { reader.read_in_bounds(i.into_usize()) } {
-            // SAFETY: Inherited from caller.
-            *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance.evaluate(data)?);
-            processed += 1;
-        }
-    }
-
-    Ok(processed)
-}
-
 ////////////
 // Insert //
 ////////////
@@ -698,33 +411,57 @@ where
 /// This type implements zero-copy access to the data within its parent provider during prunes.
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
-    reader: store::Reader<'a>,
-    distance: &'a dyn layers::Distance,
+    prune: Box<dyn repr::Prune + 'a>,
+    keys: hashbrown::HashMap<u32, Option<repr::PruneKey>>,
+    neighbors: &'a Neighbors,
     counters: LocalCounters<'a>,
+}
+
+impl<'a> PruneAccessor<'a> {
+    pub(crate) fn new(
+        prune: Box<dyn repr::Prune + 'a>,
+        neighbors: &'a Neighbors,
+        counters: LocalCounters<'a>,
+    ) -> Self {
+        Self {
+            prune,
+            keys: hashbrown::HashMap::new(),
+            neighbors,
+            counters,
+        }
+    }
 }
 
 /// The distance computer for [`PruneAccessor`].
 #[derive(Debug)]
 pub struct Distance<'a> {
-    distance: &'a dyn layers::Distance,
+    prune: &'a dyn repr::Prune,
     counters: LocalCounters<'a>,
 }
 
 impl<'a> Distance<'a> {
-    fn new(distance: &'a dyn layers::Distance, counters: LocalCounters<'a>) -> Self {
-        Self { distance, counters }
+    fn new(prune: &'a dyn repr::Prune, counters: LocalCounters<'a>) -> Self {
+        Self { prune, counters }
     }
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "prune does not allow fallible distance functions yet"
-)]
-impl diskann_vector::DistanceFunction<&[u8], &[u8], f32> for Distance<'_> {
+/// An opaque element-ref for [`PruneAccessor`].
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct ElementRef(repr::PruneKey);
+
+impl<'a> diskann_utils::Reborrow<'a> for ElementRef {
+    type Target = ElementRef;
+    fn reborrow(&'a self) -> Self {
+        *self
+    }
+}
+
+impl diskann_vector::DistanceFunction<ElementRef, ElementRef, f32> for Distance<'_> {
     #[inline]
-    fn evaluate_similarity(&self, x: &[u8], y: &[u8]) -> f32 {
+    fn evaluate_similarity(&self, x: ElementRef, y: ElementRef) -> f32 {
         self.counters.distance_ref(1);
-        self.distance.evaluate(x, y).unwrap()
+        self.prune.evaluate(x.0, y.0)
     }
 }
 
@@ -738,7 +475,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     where
         Self: 'a;
 
-    type ElementRef<'a> = &'a [u8];
+    type ElementRef<'a> = ElementRef;
 
     type View<'a>
         = &'a Self
@@ -756,12 +493,17 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
 
     async fn fill<'a, Itr>(
         &'a mut self,
-        _itr: Itr,
+        itr: Itr,
     ) -> ANNResult<(Self::View<'a>, Self::Distance<'a>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {
-        Ok((self, Distance::new(self.distance, self.counters.fork())))
+        self.keys.clear();
+        self.keys.extend(itr.map(|i| (i, None)));
+        let count: usize = self.prune.prepare(self.keys.iter_mut())?;
+        self.counters.get_vector(count as u64);
+
+        Ok((self, Distance::new(&*self.prune, self.counters.fork())))
     }
 }
 
@@ -773,7 +515,7 @@ impl provider::NeighborAccessor for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || {
             self.counters.get_neighbors(1);
-            Ok(self.reader.neighbors().get(id, neighbors)?)
+            Ok(self.neighbors.get(id, neighbors)?)
         };
         ready(work)
     }
@@ -787,7 +529,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || {
             self.counters.set_neighbors(1);
-            Ok(self.reader.neighbors().set(id, neighbors)?)
+            Ok(self.neighbors.set(id, neighbors)?)
         };
         ready(work)
     }
@@ -799,7 +541,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || -> ANNResult<()> {
             self.counters.append_vector(1);
-            let lock = self.reader.neighbors().lock(id)?;
+            let lock = self.neighbors.lock(id)?;
 
             // Due to race conditions between calls to `get_neighbors` and `append_vector`
             // in `diskann` - it's possible that the state of the adjacency list has changed
@@ -823,19 +565,14 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
 }
 
 impl workingset::View<u32> for &PruneAccessor<'_> {
-    type ElementRef<'a> = &'a [u8];
+    type ElementRef<'a> = ElementRef;
     type Element<'a>
-        = &'a [u8]
+        = ElementRef
     where
         Self: 'a;
-    fn get(&self, id: u32) -> Option<&[u8]> {
-        match self.reader.read(id.into_usize()) {
-            Some(data) => {
-                self.counters.get_vector_ref(1);
-                Some(data)
-            }
-            None => None,
-        }
+
+    fn get(&self, id: u32) -> Option<ElementRef> {
+        self.keys.get(&id)?.map(ElementRef)
     }
 }
 
@@ -846,9 +583,9 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct Strategy;
 
-impl<'a, L, M> glue::SearchStrategy<'a, Provider<L, M>, L::Query<'a>> for Strategy
+impl<'a, R, M> glue::SearchStrategy<'a, Provider<R, M>, R::Query<'a>> for Strategy
 where
-    L: layers::Search,
+    R: repr::Search,
     M: Id,
 {
     type SearchAccessor = SearchAccessor<'a>;
@@ -856,57 +593,43 @@ where
 
     fn search_accessor(
         &'a self,
-        provider: &'a Provider<L, M>,
+        provider: &'a Provider<R, M>,
         _context: &'a Context,
-        query: L::Query<'a>,
+        query: R::Query<'a>,
     ) -> ANNResult<SearchAccessor<'a>> {
-        let reader = provider.store.reader()?;
-        let expand_beam = <L as layers::Search>::query_distance(
-            &provider.layer,
+        <R as repr::Search>::search_accessor(
+            &provider.representation,
             query,
-            ExpandBeamVisitor {
-                bytes: provider.store.bytes(),
-                prefetch_lookahead: provider.config.prefetch_lookahead.map_or(0, |x| x.get()),
-            },
-        )?;
-
-        let accessor = SearchAccessor {
-            reader,
-            ids: AdjacencyList::new(),
-            expand_beam,
-            buffer: vec![(0, 0.0); provider.max_degree()],
             provider,
-            start_points: provider.store.frozen(),
-            counters: provider.local_counters(),
-        };
-        Ok(accessor)
+            provider.local_counters(),
+        )
     }
 }
 
 // This is a utility for helping inspect the generated code for `ExpandBeam`.
 //
 pub fn test_function<'a>(
-    x: &'a Provider<layers::Full<f32>>,
+    x: &'a Provider<repr::Full<u8>>,
     strategy: &'a Strategy,
     context: &'a Context,
-    query: &'a [f32],
+    query: &'a [u8],
 ) -> ANNResult<SearchAccessor<'a>> {
     glue::SearchStrategy::search_accessor(strategy, x, context, query)
 }
 
 /// Perform ID translation during post-processing.
 #[derive(Debug, Clone, Copy)]
-pub struct Translate<L, M>(std::marker::PhantomData<(L, M)>);
+pub struct Translate<R, M>(std::marker::PhantomData<(R, M)>);
 
-impl<L, M> Default for Translate<L, M> {
+impl<R, M> Default for Translate<R, M> {
     fn default() -> Self {
         Self(std::marker::PhantomData)
     }
 }
 
-impl<'a, L, M> glue::SearchPostProcess<SearchAccessor<'a>, L::Query<'a>, M> for Translate<L, M>
+impl<'a, R, M> glue::SearchPostProcess<SearchAccessor<'a>, R::Query<'a>, M> for Translate<R, M>
 where
-    L: layers::Search,
+    R: repr::Search,
     M: Id,
 {
     type Error = ANNError;
@@ -914,7 +637,7 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut SearchAccessor<'_>,
-        _query: L::Query<'a>,
+        _query: R::Query<'a>,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -924,7 +647,7 @@ where
     {
         let work = move || {
             // By construction - the downcast should succeed. Otherwise, this is a program bug.
-            let provider = match accessor.provider.downcast_ref::<Provider<L, M>>() {
+            let provider = match accessor.provider.downcast_ref::<Provider<R, M>>() {
                 Some(provider) => provider,
                 None => return Err(ANNError::message("bad any cast")),
             };
@@ -949,17 +672,17 @@ where
     }
 }
 
-impl<'a, L, M> glue::DefaultPostProcessor<'a, Provider<L, M>, L::Query<'a>, M> for Strategy
+impl<'a, R, M> glue::DefaultPostProcessor<'a, Provider<R, M>, R::Query<'a>, M> for Strategy
 where
-    L: layers::Search,
+    R: repr::Search,
     M: Id,
 {
-    diskann::default_post_processor!(Translate<L, M>);
+    diskann::default_post_processor!(Translate<R, M>);
 }
 
-impl<L, M> glue::PruneStrategy<Provider<L, M>> for Strategy
+impl<R, M> glue::PruneStrategy<Provider<R, M>> for Strategy
 where
-    L: layers::Layer + layers::AsDistance,
+    R: repr::Insert,
     M: Id,
 {
     type PruneAccessor<'a> = PruneAccessor<'a>;
@@ -967,21 +690,17 @@ where
 
     fn prune_accessor<'a>(
         &self,
-        provider: &'a Provider<L, M>,
+        provider: &'a Provider<R, M>,
         _context: &'a Context,
         _capacity: usize,
     ) -> ANNResult<PruneAccessor<'a>> {
-        Ok(PruneAccessor {
-            reader: provider.store.reader()?,
-            distance: <L as layers::AsDistance>::as_distance(&provider.layer),
-            counters: provider.local_counters(),
-        })
+        <R as repr::Insert>::prune_accessor(&provider.representation, provider.local_counters())
     }
 }
 
-impl<'a, L, M> glue::InsertStrategy<'a, Provider<L, M>, L::Query<'a>> for Strategy
+impl<'a, R, M> glue::InsertStrategy<'a, Provider<R, M>, R::Query<'a>> for Strategy
 where
-    L: layers::Insert,
+    R: repr::Insert,
     M: Id,
 {
     type PruneStrategy = Self;
@@ -990,10 +709,10 @@ where
     }
 }
 
-impl<T, M> glue::InplaceDeleteStrategy<Provider<layers::Full<T>, M>> for Strategy
+impl<T, M> glue::InplaceDeleteStrategy<Provider<repr::Full<T>, M>> for Strategy
 where
     M: Id,
-    T: layers::FullPrecision,
+    T: repr::FullPrecision,
 {
     type DeleteElement<'a> = &'a [T];
     type DeleteElementGuard = Box<[T]>;
@@ -1018,26 +737,12 @@ where
 
     fn get_delete_element<'a>(
         &'a self,
-        provider: &'a Provider<layers::Full<T>, M>,
+        provider: &'a Provider<repr::Full<T>, M>,
         _context: &'a Context,
         id: u32,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
     {
-        let work = move || {
-            let reader = provider.store.reader()?;
-            let data = match reader.read(id.into_usize()) {
-                Some(data) => data,
-                None => {
-                    return Err(ANNError::message("item could not be read"));
-                }
-            };
-
-            let mut buf: Box<[_]> =
-                std::iter::repeat_n(T::zeroed(), provider.layer.dim()).collect();
-
-            bytemuck::must_cast_slice_mut::<T, u8>(&mut buf).copy_from_slice(data);
-            Ok(buf)
-        };
+        let work = move || provider.representation.get(id);
         ready(work)
     }
 }
@@ -1055,9 +760,10 @@ mod tests {
         neighbor::Neighbor,
         provider::{DataProvider, Delete},
     };
+    use diskann_utils::views::Matrix;
     use diskann_vector::distance::Metric;
 
-    use crate::layers::Full;
+    use crate::num::Capacity;
 
     /// The true tests live in the integration tests for this repo.
     ///
@@ -1085,17 +791,24 @@ mod tests {
         let start = grid.start_point(size);
         let degree = 6;
 
-        let full = Full::<f32>::new(grid.dim().into(), Metric::L2);
+        let config = repr::full::Config::new(
+            Capacity::new(grid.num_points(size)),
+            MaxDegree::new(degree),
+            Metric::L2,
+            Matrix::row_vector(start.into()),
+        )
+        .unwrap();
 
-        let config = Config::new(grid.num_points(size), degree);
+        // let full = Full::<f32>::new(grid.dim().into(), Metric::L2);
 
-        let provider =
-            Provider::<_, u64>::new(full, config, std::iter::once(start.as_slice())).unwrap();
-        assert_eq!(provider.max_degree(), degree);
+        // let config = Config::new(grid.num_points(size), degree);
+
+        let provider = Provider::<_, u64>::new(config).unwrap();
+        assert_eq!(provider.max_degree(), MaxDegree::new(degree));
 
         let config = diskann::graph::config::Builder::new(
             2 * (grid.dim() as usize),
-            diskann::graph::config::MaxDegree::new(provider.max_degree()),
+            diskann::graph::config::MaxDegree::new(provider.max_degree().value()),
             10,
             (Metric::L2).into(),
         )
