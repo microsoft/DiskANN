@@ -16,103 +16,155 @@ use diskann_wide::arch::x86_64::{V3, V4};
 use super::MinMaxMeta;
 use super::kernel::{MinMaxErase, MinMaxMaxSimKernel};
 use crate::matrix_kernels as mk;
-use crate::matrix_kernels::maxsim::minmax8_x_minmax4::{APacking, Driver, PackedMinMax8};
-use crate::multi_vector::{MatRef, MaxSimError, MaxSimIsa, NotSupported};
+use crate::matrix_kernels::maxsim::minmax8_x_minmax4::{
+    Driver, Group, QueryCompensation, groups, split_u8,
+};
+use crate::multi_vector::{BlockTransposed, MatRef, MaxSimError, MaxSimIsa, NotSupported};
 
 #[derive(Debug)]
 struct Prepared<A, const MR: usize, const NR: usize> {
     arch: A,
-    prepared: PackedMinMax8<MR>,
+    prepared: BlockTransposed<Group, MR>,
+    compensation: Vec<QueryCompensation<MR>>,
+    dim: usize,
 }
 
-impl<A, const MR: usize, const NR: usize> Prepared<A, MR, NR>
+impl<A, const MR: usize, const NR: usize> Prepared<A, MR, NR> {
+    #[expect(
+        clippy::expect_used,
+        reason = "output is allocated with the input row count"
+    )]
+    fn new(arch: A, query: MatRef<'_, MinMaxMeta<8>>) -> Self {
+        let dim = query.repr().intrinsic_dim();
+        let mut prepared = BlockTransposed::new(query.num_vectors(), groups(dim));
+        let mut compensation = vec![QueryCompensation::default(); query.num_vectors().div_ceil(MR)];
+        for (i, row) in query.rows().enumerate() {
+            let meta = row.meta();
+            let block = &mut compensation[i / MR];
+            block.scale[i % MR] = meta.a;
+            block.bias[i % MR] = meta.b;
+            block.scaled_sum[i % MR] = meta.n;
+            let mut output = prepared.get_row_mut(i).expect("matching query row count");
+            for (j, group) in row
+                .vector()
+                .as_slice()
+                .chunks(8)
+                .flat_map(split_u8)
+                .enumerate()
+            {
+                output.set(j, group);
+            }
+        }
+        Self {
+            arch,
+            prepared,
+            compensation,
+            dim,
+        }
+    }
+}
+
+impl<A, const MR: usize, const NR: usize> MinMaxMaxSimKernel<8, 4> for Prepared<A, MR, NR>
 where
     A: Architecture,
     for<'a> Driver<'a, A, MR, NR>: mk::Drive,
 {
-    fn run(&self, doc: MatRef<'_, MinMaxMeta<4>>, scores: &mut [f32]) -> Result<(), MaxSimError> {
-        if scores.len() != self.prepared.nrows() {
-            return Err(MaxSimError::InvalidBufferLength(
-                scores.len(),
-                self.prepared.nrows(),
-            ));
+    fn nrows(&self) -> usize {
+        self.prepared.nrows()
+    }
+
+    fn compute_max_sim(
+        &self,
+        doc: MatRef<'_, MinMaxMeta<4>>,
+        scores: &mut [f32],
+    ) -> Result<(), MaxSimError> {
+        if scores.len() != self.nrows() {
+            return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
         }
-        if doc.repr().intrinsic_dim() != self.prepared.dim() {
+        if doc.repr().intrinsic_dim() != self.dim {
             return Err(MaxSimError::UnequalDim(
                 doc.repr().intrinsic_dim(),
-                self.prepared.dim(),
+                self.dim,
             ));
         }
-        if doc.num_vectors() == 0 {
+        let Some(b) = canonical_rows(doc) else {
             scores.fill(f32::MAX);
             return Ok(());
-        }
+        };
 
-        let Some(k) = NonZeroUsize::new(self.prepared.dim()).map(mk::DimK::new) else {
+        let Some(dim) = NonZeroUsize::new(self.dim).map(mk::DimK::new) else {
             scores.fill(0.0);
             return Ok(());
         };
-        // SAFETY: The dimension and output length checks establish the driver's invariants.
-        let mut driver = unsafe { Driver::new(self.arch, &self.prepared, doc, scores, k) };
+        let Some(a) = mk::blocks::packed::View::from_block_transposed(self.prepared.as_view())
+        else {
+            return Ok(());
+        };
+        // SAFETY: The constructor provides the even/odd layout and one metadata entry
+        // per block. Shape checks establish the document and output dimensions.
+        let mut driver = unsafe {
+            Driver::new(
+                self.arch,
+                a,
+                &self.compensation,
+                b,
+                scores,
+                dim,
+                mk::Cache::detect(),
+            )
+        };
         mk::Drive::drive(&mut driver);
         Ok(())
     }
 }
 
-macro_rules! impl_kernel {
-    ($arch:ty, $mr:literal, $nr:literal) => {
-        impl MinMaxMaxSimKernel<8, 4> for Prepared<$arch, $mr, $nr> {
-            fn nrows(&self) -> usize {
-                self.prepared.nrows()
-            }
-
-            fn compute_max_sim(
-                &self,
-                doc: MatRef<'_, MinMaxMeta<4>>,
-                scores: &mut [f32],
-            ) -> Result<(), MaxSimError> {
-                self.run(doc, scores)
-            }
-        }
-    };
+#[expect(
+    clippy::expect_used,
+    reason = "canonical metadata ensures a positive stride and exact byte length"
+)]
+fn canonical_rows(doc: MatRef<'_, MinMaxMeta<4>>) -> Option<mk::blocks::unpacked::View<'_, u8>> {
+    let rows = NonZeroUsize::new(doc.num_vectors())?;
+    let stride = mk::DimK::new(
+        NonZeroUsize::new(doc.repr().ncols()).expect("canonical rows include metadata"),
+    );
+    // SAFETY: MinMaxMeta stores exactly `num_vectors * ncols` canonical bytes and
+    // the returned view cannot outlive the input MatRef.
+    let bytes =
+        unsafe { std::slice::from_raw_parts(doc.as_raw_ptr(), rows.get() * stride.value().get()) };
+    let matrix =
+        diskann_utils::views::MatrixView::try_from(bytes, rows.get(), stride.value().get())
+            .expect("canonical matrix has exactly rows * stride bytes");
+    mk::blocks::unpacked::View::from_matrix_view(matrix)
 }
-
-impl_kernel!(Scalar, 8, 6);
-#[cfg(target_arch = "aarch64")]
-impl_kernel!(Neon, 8, 8);
-#[cfg(target_arch = "x86_64")]
-impl_kernel!(V3, 16, 8);
-#[cfg(target_arch = "x86_64")]
-impl_kernel!(V4, 16, 8);
 
 struct BuildAndErase<E>(E);
 
 macro_rules! impl_builder {
-    ($arch:ty, $mr:literal, $nr:literal, $packing:expr) => {
+    ($arch:ty, $mr:literal, $nr:literal) => {
         impl<E> diskann_wide::arch::Target1<$arch, E::Output, MatRef<'_, MinMaxMeta<8>>>
             for BuildAndErase<E>
         where
             E: MinMaxErase<8, 4>,
         {
             fn run(self, arch: $arch, query: MatRef<'_, MinMaxMeta<8>>) -> E::Output {
-                self.0.erase(Prepared::<_, $mr, $nr> {
-                    arch,
-                    prepared: PackedMinMax8::new(query, $packing),
-                })
+                self.0.erase(Prepared::<_, $mr, $nr>::new(arch, query))
             }
         }
     };
 }
 
-impl_builder!(Scalar, 8, 6, APacking::RowMajor);
+impl_builder!(Scalar, 8, 6);
 #[cfg(target_arch = "aarch64")]
-impl_builder!(Neon, 8, 8, APacking::Grouped4);
+impl_builder!(Neon, 8, 8);
 #[cfg(target_arch = "x86_64")]
-impl_builder!(V3, 16, 8, APacking::Grouped4);
+impl_builder!(V3, 16, 8);
 #[cfg(target_arch = "x86_64")]
-impl_builder!(V4, 16, 8, APacking::Grouped8);
+impl_builder!(V4, 16, 8);
 
 /// Build a tiled MinMax8-query by MinMax4-document MaxSim kernel.
+///
+/// Owns an even/odd-grouped copy of the query. Each computation borrows that copy
+/// and unpacks bounded document tiles into scratch memory for reuse across query panels.
 ///
 /// # Errors
 ///
@@ -181,7 +233,7 @@ mod tests {
     use crate::CompressInto;
     use crate::algorithms::{Transform, transforms::NullTransform};
     use crate::bits::{Representation, Unsigned};
-    use crate::minmax::MinMaxQuantizer;
+    use crate::minmax::{MinMaxCompensation, MinMaxQuantizer};
     use crate::multi_vector::{BoxErase, Defaulted, Mat, MaxSim, QueryMatRef, Standard};
     use crate::num::Positive;
 
@@ -192,6 +244,74 @@ mod tests {
         MaxSimIsa::Neon,
         MaxSimIsa::Auto,
     ];
+
+    fn check_packing<const MR: usize>() {
+        for rows in [0, 1, MR - 1, MR, MR + 1, 2 * MR + 1] {
+            for dim in 0..=17 {
+                let mut query = Mat::new(MinMaxMeta::<8>::new(rows, dim), Defaulted).unwrap();
+                for (i, mut row) in query.reborrow_mut().rows_mut().enumerate() {
+                    row.set_meta(MinMaxCompensation {
+                        a: i as f32 + 1.0,
+                        b: -(i as f32) - 2.0,
+                        n: i as f32 + 3.0,
+                        dim: dim as u32,
+                        ..Default::default()
+                    });
+                    for d in 0..dim {
+                        row.vector_mut()
+                            .set(d, ((i * 17 + d + 1) % 256) as i64)
+                            .unwrap();
+                    }
+                }
+                let packed = Prepared::<_, MR, 6>::new(Scalar::new(), query.as_view());
+                assert_eq!(packed.prepared.nrows(), rows);
+                assert_eq!(packed.prepared.ncols(), groups(dim));
+                assert_eq!(packed.dim, dim);
+                assert_eq!(packed.compensation.len(), rows.div_ceil(MR));
+                for (index, group) in packed.prepared.as_slice().iter().enumerate() {
+                    let k = groups(dim);
+                    let row = index / (MR * k) * MR + index % MR;
+                    let g = index / MR % k;
+                    for (i, &value) in group.iter().enumerate() {
+                        let d = g / 2 * 8 + 2 * i + g % 2;
+                        assert_eq!(
+                            value,
+                            if row < rows && d < dim {
+                                ((row * 17 + d + 1) % 256) as u8
+                            } else {
+                                0
+                            }
+                        );
+                    }
+                }
+                for (block, meta) in packed.compensation.iter().enumerate() {
+                    for lane in 0..MR {
+                        let row = block * MR + lane;
+                        for (value, offset, sign) in [
+                            (meta.scale[lane], 1.0, 1.0),
+                            (meta.bias[lane], 2.0, -1.0),
+                            (meta.scaled_sum[lane], 3.0, 1.0),
+                        ] {
+                            assert_eq!(
+                                value,
+                                if row < rows {
+                                    sign * (row as f32 + offset)
+                                } else {
+                                    0.0
+                                }
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn query_packing_and_compensation() {
+        check_packing::<8>();
+        check_packing::<16>();
+    }
 
     fn compress<const BITS: usize>(
         values: &[f32],
@@ -253,6 +373,10 @@ mod tests {
             (9, 7, 17),
             (15, 9, 18),
             (17, 13, 64),
+            (16, 16, 250),
+            (33, 65, 128),
+            (64, 128, 256),
+            (33, 129, 513),
         ]
         .into_iter()
         .chain((1..=16).flat_map(|doc_rows| (1..=17).map(move |dim| (17, doc_rows, dim))))

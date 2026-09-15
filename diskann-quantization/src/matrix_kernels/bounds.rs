@@ -118,10 +118,6 @@ impl Check {
         Self(inner::Check::lt())
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "this completes the comparison API")
-    )]
     pub(super) const fn le() -> Self {
         Self(inner::Check::le())
     }
@@ -186,10 +182,6 @@ macro_rules! check_lt {
     };
 }
 
-#[cfg_attr(
-    not(test),
-    expect(unused_macros, reason = "this completes the comparison API")
-)]
 macro_rules! check_le {
     ($lhs:expr, $rhs:expr $(,)?) => {
         $crate::matrix_kernels::bounds::__assert!(le, $lhs, $rhs)
