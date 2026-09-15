@@ -24,7 +24,7 @@ use crate::{
     common::IgnoreLockPoison,
     model::{
         distance::common::distance_table_pool,
-        pq::{self, FixedChunkPQTable},
+        pq::{self, FixedChunkPQTable, distance::Shared},
     },
     storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith, bin},
     utils::{BridgeErr, PQPathNames},
@@ -104,7 +104,7 @@ impl FastMemoryQuantVectorProviderAsync {
         T: VectorRepr,
     {
         QueryComputer::new(
-            &self.pq_chunk_table,
+            Shared::Ref(&self.pq_chunk_table),
             self.metric,
             &T::as_f32(query).into_ann_result()?,
             Some(self.vec_pool.clone()),
@@ -113,7 +113,7 @@ impl FastMemoryQuantVectorProviderAsync {
 
     /// Create a distance computer for the underlying schema.
     pub fn distance_computer(&self) -> DistanceComputer<'_> {
-        DistanceComputer::new(&self.pq_chunk_table, self.metric)
+        DistanceComputer::new(Shared::Ref(&self.pq_chunk_table), self.metric)
     }
 
     /// Return an "immutable" slice over the PQ data at index `i`.

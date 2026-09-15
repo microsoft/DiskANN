@@ -45,7 +45,6 @@ mod factory;
 mod fallback;
 mod isa;
 mod kernel;
-mod kernels;
 mod max_sim;
 mod projected_eigen;
 

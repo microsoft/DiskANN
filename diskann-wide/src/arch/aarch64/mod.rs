@@ -34,8 +34,14 @@ pub use u8x8_::u8x8;
 pub mod u8x16_;
 pub use u8x16_::u8x16;
 
+pub mod u16x4_;
+pub use u16x4_::u16x4;
+
 pub mod u16x8_;
 pub use u16x8_::u16x8;
+
+pub mod u32x2_;
+pub use u32x2_::u32x2;
 
 pub mod u32x4_;
 pub use u32x4_::u32x4;
@@ -50,8 +56,14 @@ pub use i8x8_::i8x8;
 pub mod i8x16_;
 pub use i8x16_::i8x16;
 
+pub mod i16x4_;
+pub use i16x4_::i16x4;
+
 pub mod i16x8_;
 pub use i16x8_::i16x8;
+
+pub mod i32x2_;
+pub use i32x2_::i32x2;
 
 pub mod i32x4_;
 pub use i32x4_::i32x4;

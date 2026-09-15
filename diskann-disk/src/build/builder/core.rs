@@ -17,6 +17,7 @@ use diskann_providers::{
         READ_WRITE_BLOCK_SIZE,
     },
 };
+use diskann_quantization::spherical::DataRef;
 use diskann_utils::io::read_bin;
 use rand::seq::SliceRandom;
 use tracing::info;
@@ -27,7 +28,7 @@ use crate::{
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
     utils::partition_with_ram_budget,
-    DiskIndexBuildParameters, QuantizationType,
+    DiskIndexBuildParameters, QuantizationType, SphericalBits,
 };
 
 /// Overhead factor for RAM estimation during index build (10% buffer).
@@ -55,6 +56,9 @@ fn estimate_build_index_ram_usage(
         // `+ std::mem::size_of::<f32>()` for f32 compensation metadata for the scalar quantizer.
         QuantizationType::SQ { nbits, .. } => {
             (nbits as u64 * dim).div_ceil(8) + std::mem::size_of::<f32>() as u64
+        }
+        QuantizationType::Spherical(SphericalBits::One) => {
+            DataRef::<1>::canonical_bytes(dim as usize) as u64
         }
     };
 
@@ -1167,6 +1171,7 @@ mod ram_estimation_tests {
     #[case(QuantizationType::FP)]
     #[case(QuantizationType::PQ { num_chunks: 15 })]
     #[case(QuantizationType::SQ { nbits: 1, standard_deviation: None })]
+    #[case(QuantizationType::Spherical(SphericalBits::One))]
     fn test_estimate_build_index_ram_usage(#[case] build_quantization_type: QuantizationType) {
         let num_points = 1000;
         let dim = 128;
@@ -1178,6 +1183,9 @@ mod ram_estimation_tests {
             QuantizationType::PQ { num_chunks } => num_chunks as u64,
             QuantizationType::SQ { nbits, .. } => {
                 (nbits as u64 * dim).div_ceil(8) + std::mem::size_of::<f32>() as u64
+            }
+            QuantizationType::Spherical(SphericalBits::One) => {
+                DataRef::<1>::canonical_bytes(dim as usize) as u64
             }
         };
         let mut expected_ram_usage = (num_points as f64)
