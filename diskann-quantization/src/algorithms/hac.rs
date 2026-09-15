@@ -490,7 +490,6 @@ mod tests {
         assert_eq!(spherical_ward(data, 1).unwrap().row(0), &[1.0]);
     }
 
-
     #[test]
     fn near_antipodal_merge_rejects_non_normal_squared_norm() {
         for residual in [1e-20, f32::MIN_POSITIVE, f32::from_bits(1)] {
@@ -510,7 +509,7 @@ mod tests {
         let data = MatrixView::try_from(input.as_slice(), 2, 2).unwrap();
         assert_eq!(spherical_ward(data, 1).unwrap().row(0), &[0.0, 1.0]);
     }
-    
+
     #[test]
     fn cached_minima_match_full_recomputation_at_every_cut() {
         let dims: &[usize] = if cfg!(miri) {
