@@ -55,6 +55,14 @@ impl<H, T> Cons<H, T> {
     fn new(head: H, tail: T) -> Self {
         Self { head, tail }
     }
+
+    pub(crate) fn head(&self) -> &H {
+        &self.head
+    }
+
+    pub(crate) fn tail(&self) -> &T {
+        &self.tail
+    }
 }
 
 impl<H, T> slots::Slots for Cons<H, T>

@@ -37,7 +37,7 @@ mod internal_docs {
 
 use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize};
 
-use diskann::{ANNError, ANNResult, utils::IntoUsize};
+use diskann::{ANNError, ANNResult, utils::IntoUsize, neighbor::Neighbor};
 use diskann_utils::views::Matrix;
 use diskann_vector::{
     UnalignedSlice,
@@ -58,7 +58,7 @@ use crate::{
     epoch,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
     prefetch::{self, Prefetch},
-    repr,
+    repr::{self, internal::Calf},
     store::{
         self, Store,
         intrusive::{self, Intrusive},
@@ -441,27 +441,10 @@ where
 // Expand Beam (Search) //
 //----------------------//
 
-// A baby [`std::borrow::Cow`].
-#[derive(Debug)]
-enum Calf<'a, T> {
-    Borrowed(&'a [T]),
-    Owned(Box<[T]>),
-}
-
-impl<T> std::ops::Deref for Calf<'_, T> {
-    type Target = [T];
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Borrowed(slice) => slice,
-            Self::Owned(boxed) => boxed,
-        }
-    }
-}
-
 /// A temporary precursor for [`ExpandBeam`] to simplify macros.
 #[derive(Debug)]
 struct IntoExpandBeam<'a, T, U> {
-    query: Calf<'a, T>,
+    query: Calf<'a, [T]>,
     reader: store::intrusive::Reader<'a>,
     lookahead: Option<NonZeroUsize>,
     _data: PhantomData<U>,
@@ -470,7 +453,7 @@ struct IntoExpandBeam<'a, T, U> {
 impl<'a, T, U> IntoExpandBeam<'a, T, U> {
     /// Construct a new [`IntoExpandBeam`], validating the query dimension and acquiring a
     /// reader for `full`.
-    fn new(full: &'a Full<U>, query: Calf<'a, T>) -> ANNResult<Self> {
+    fn new(full: &'a Full<U>, query: Calf<'a, [T]>) -> ANNResult<Self> {
         full.check_dim(query.len())?;
         let reader = full.reader()?;
         let lookahead = full.lookahead;
@@ -530,7 +513,7 @@ where
 #[derive(Debug)]
 struct ExpandBeam<'a, P, T, U, D> {
     // The original query.
-    query: Calf<'a, T>,
+    query: Calf<'a, [T]>,
     // A reader into a representation's store.
     reader: store::intrusive::Reader<'a>,
     // The prefetch lookahead.
@@ -631,7 +614,7 @@ where
         self.reader.id_limit()
     }
 
-    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize> {
+    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [Neighbor<u32>]) -> ANNResult<usize> {
         debug_assert!(buffer.len() >= list.len());
 
         let len = list.len();
@@ -678,7 +661,7 @@ where
                 let distance = unsafe { self.run_unchecked(data) };
 
                 // SAFETY: Inherited from caller.
-                *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance);
+                *unsafe { buffer.get_unchecked_mut(processed) } = Neighbor::new(i, distance);
                 processed += 1;
             }
         }
@@ -978,6 +961,7 @@ macro_rules! impl_full_precision {
                 Ok(crate::provider::SearchAccessor::new(
                     representation.store.neighbors(),
                     expand_beam,
+                    None,
                     provider,
                     representation.store.frozen(),
                     counters,
@@ -1217,7 +1201,7 @@ mod tests {
 
             assert_eq!(<_ as repr::ExpandBeam>::id_limit(&expand), id_limit);
 
-            let mut buf = Vec::<(u32, f32)>::new();
+            let mut buf = Vec::<Neighbor<u32>>::new();
             let mut list = Vec::<u32>::new();
 
             // Use triangular indexing from `0..id_limit` with `points` serving as the
@@ -1278,7 +1262,10 @@ mod tests {
                     })
                     .collect();
 
-                assert_eq!(&buf[..read], &*expected);
+                for i in 0..read {
+                    assert_eq!(*buf[i].id(), expected[i].0, "i = {i}");
+                    assert_eq!(*buf[i].distance(), expected[i].1, "i = {i}");
+                }
             }
 
             assert!(

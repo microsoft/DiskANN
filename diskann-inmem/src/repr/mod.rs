@@ -9,7 +9,7 @@
 
 use std::num::NonZeroU16;
 
-use diskann::ANNResult;
+use diskann::{ANNResult, neighbor::Neighbor};
 use thiserror::Error;
 
 use crate::{
@@ -185,7 +185,11 @@ pub(crate) unsafe trait ExpandBeam: Send + Sync + std::fmt::Debug {
     ///
     /// * All items in `list` must be in bounds with respect to [`Self::id_limit`].
     /// * `buffer.len() >= list.len()`.
-    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize>;
+    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [Neighbor<u32>]) -> ANNResult<usize>;
+}
+
+pub(crate) trait PostProcess: Send + Sync + std::fmt::Debug {
+    fn post_process(&mut self, buffer: &mut Vec<Neighbor<u32>>) -> ANNResult<()>;
 }
 
 /// Trait-object-based implementation for [`diskann::graph::glue::PruneAccessor`].

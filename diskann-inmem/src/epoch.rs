@@ -250,7 +250,7 @@ impl Registry {
 
                 return Ok(Guard {
                     slot: guard_slot,
-                    retire: &self.retiring[queue(epoch)],
+                    registry: self,
                     #[cfg(test)]
                     epoch,
                     #[cfg(test)]
@@ -399,7 +399,7 @@ impl Registry {
 #[derive(Debug)]
 pub(crate) struct Guard<'a> {
     slot: &'a GuardSlot,
-    retire: &'a SegQueue<u32>,
+    registry: &'a Registry,
 
     #[cfg(test)]
     pub(super) epoch: u64,
@@ -416,7 +416,7 @@ impl<'a> Guard<'a> {
     /// reader could observe it.
     #[inline]
     pub(crate) fn retire(&self, i: u32) {
-        self.retire.push(i)
+        self.queue().push(i)
     }
 
     #[inline]
@@ -429,12 +429,20 @@ impl<'a> Guard<'a> {
 
         Guard {
             slot: self.slot,
-            retire: self.retire,
+            registry: self.registry,
             #[cfg(test)]
             epoch: self.epoch,
             #[cfg(test)]
             slot_index: self.slot_index,
         }
+    }
+
+    fn epoch(&self) -> u64 {
+        self.slot.epoch.load(Ordering::Relaxed)
+    }
+
+    fn queue(&self) -> &SegQueue<u32> {
+        &self.registry.retiring[queue(self.epoch())]
     }
 }
 

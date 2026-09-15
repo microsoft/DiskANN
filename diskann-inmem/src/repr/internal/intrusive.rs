@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::IntoUsize};
+use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::IntoUsize, neighbor::Neighbor};
 
 use crate::{
     num::IdLimit,
@@ -79,7 +79,7 @@ where
         self.reader.id_limit()
     }
 
-    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize> {
+    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [Neighbor<u32>]) -> ANNResult<usize> {
         debug_assert!(buffer.len() >= list.len());
 
         let len = list.len();
@@ -124,7 +124,7 @@ where
                 let distance = self.distance.eval(data).into_ann_result()?;
 
                 // SAFETY: Inherited from caller.
-                *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance);
+                *unsafe { buffer.get_unchecked_mut(processed) } = Neighbor::new(i, distance);
                 processed += 1;
             }
         }

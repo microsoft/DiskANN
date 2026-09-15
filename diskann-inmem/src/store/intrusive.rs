@@ -137,11 +137,15 @@ impl Intrusive {
 
     /// Return a [`Reader`] over [`Self`] inside `store`.
     pub(crate) fn reader(store: &Store<Self>) -> Result<Reader<'_>, epoch::Unavailable> {
-        store.guard(|this, guard: epoch::Guard<'_>| Reader {
-            buffer: &this.buffer,
-            unpadded: this.unpadded,
+        store.guard(|this, guard: epoch::Guard<'_>| unsafe { Self::reader_unchecked(this, guard) })
+    }
+
+    pub(crate) unsafe fn reader_unchecked<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+        Reader {
+            buffer: &self.buffer,
+            unpadded: self.unpadded,
             _guard: guard,
-        })
+        }
     }
 
     /// Return the data at position `i` without bound-checking.

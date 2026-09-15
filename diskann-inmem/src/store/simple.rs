@@ -236,8 +236,18 @@ impl<'a> Reader<'a> {
     pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
         debug_assert!(self.is_in_bounds(i));
 
-        if unsafe { self.tags.get_unchecked(i).load(Ordering::Acquire).can_read() } {
-            Some(unsafe { self.buffer.get_unchecked(i).truncate_unchecked(self.bytes).as_slice() })
+        if unsafe {
+            self.tags
+                .get_unchecked(i)
+                .load(Ordering::Acquire)
+                .can_read()
+        } {
+            Some(unsafe {
+                self.buffer
+                    .get_unchecked(i)
+                    .truncate_unchecked(self.bytes)
+                    .as_slice()
+            })
         } else {
             None
         }

@@ -6,6 +6,34 @@
 use thiserror::Error;
 
 pub(super) mod intrusive;
+pub(super) mod simple;
+
+//////////
+// Calf //
+//////////
+
+// A baby [`std::borrow::Cow`].
+#[derive(Debug)]
+pub(super) enum Calf<'a, T>
+where
+    T: ?Sized,
+{
+    Borrowed(&'a T),
+    Owned(Box<T>),
+}
+
+impl<T> std::ops::Deref for Calf<'_, T>
+where
+    T: ?Sized,
+{
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(slice) => slice,
+            Self::Owned(boxed) => boxed,
+        }
+    }
+}
 
 ///////////////
 // Distances //

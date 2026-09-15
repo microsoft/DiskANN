@@ -8,9 +8,11 @@ use std::num::NonZeroUsize;
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
 use diskann_quantization::{
     alloc::{Allocator, GlobalAllocator, Poly, ScopedAllocator},
-    spherical::iface,
+    spherical::{SupportedMetric, iface},
 };
 use diskann_utils::views::Matrix;
+use diskann_vector::distance::{Distance, DistanceProvider};
+use half::f16;
 
 use crate::{
     counters::LocalCounters,
@@ -18,7 +20,10 @@ use crate::{
     prefetch, repr,
     store::{
         self, Store,
+        cons::{self, Cons},
         intrusive::{self, Intrusive},
+        optional::Optional,
+        simple::{self, Simple},
     },
 };
 
@@ -26,12 +31,36 @@ use crate::{
 // Stuff //
 ///////////
 
+/// Choose how data is going to be reranked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Rerank {
+    None,
+    Float16,
+}
+
+impl Rerank {
+    fn bytes(&self, dim: usize) -> Option<Bytes> {
+        match self {
+            Self::None => Some(Bytes::new(0)),
+            Self::Float16 => dim.checked_mul(2).map(Bytes::new),
+        }
+    }
+
+    fn config(self, dim: usize) -> Option<simple::Config> {
+        match self {
+            Self::None => None,
+            Self::Float16 => Some(Simple::config(self.bytes(dim).unwrap())),
+        }
+    }
+}
+
 pub struct Config {
     quantizer: Poly<dyn iface::Quantizer>,
     start_points: Matrix<f32>,
     layout: store::Layout,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
+    rerank: Rerank,
 }
 
 const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(16).unwrap();
@@ -48,6 +77,7 @@ impl Config {
         capacity: Capacity,
         max_degree: MaxDegree,
         start_points: Matrix<f32>,
+        rerank: Rerank,
     ) -> Self {
         assert_eq!(start_points.ncols(), quantizer.full_dim());
 
@@ -59,6 +89,7 @@ impl Config {
             layout: store::Layout::new(capacity, max_degree, num_start_points),
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
+            rerank,
         }
     }
 
@@ -96,13 +127,53 @@ impl repr::RepresentationConfig for Config {
     }
 }
 
+#[derive(Debug)]
+enum Reranker {
+    None,
+    Float16(Distance<f16, f16>),
+}
+
+fn convert_metric(metric: SupportedMetric) -> diskann_vector::distance::Metric {
+    use diskann_vector::distance::Metric;
+
+    match metric {
+        SupportedMetric::SquaredL2 => Metric::L2,
+        SupportedMetric::InnerProduct => Metric::InnerProduct,
+        SupportedMetric::Cosine => Metric::Cosine,
+    }
+}
+
+impl Reranker {
+    fn new(rerank: Rerank, metric: SupportedMetric, dim: usize) -> Self {
+        match rerank {
+            Rerank::None => Self::None,
+            Rerank::Float16 => {
+                Self::Float16(f16::distance_comparer(convert_metric(metric), Some(dim)))
+            }
+        }
+    }
+
+    // fn reranker<'a>(
+    //     &'a self,
+    //     query: &'a [f32],
+    //     guard: &epoch::Guard<'a>,
+    //     store: &'a store::Simple,
+    // ) -> Option<Box<dyn repr::PostProcess + '_> {
+    //     match self {
+    //         Self::None => None,
+    //         Self::
+    //     }
+    // }
+}
+
 pub struct Spherical {
-    store: Store<Intrusive>,
+    store: Store<Cons<Intrusive, Optional<Simple>>>,
     quantizer: Poly<dyn iface::Quantizer>,
     // These values come directly from `quantizer`, but are hoisted out to avoid a
     // trait-object function call when accessing.
     full_dim: usize,
     lookahead: Option<NonZeroUsize>,
+    reranker: Reranker,
 }
 
 impl Spherical {
@@ -113,10 +184,17 @@ impl Spherical {
             layout,
             store,
             lookahead,
+            rerank,
         } = config;
 
-        let intrusive = Intrusive::config(Bytes::new(quantizer.bytes()));
-        let store = Store::new(layout, store, intrusive).unwrap();
+        let full_dim = quantizer.full_dim();
+
+        let slots = cons::Config::new(
+            Intrusive::config(Bytes::new(quantizer.bytes())),
+            rerank.config(full_dim),
+        );
+
+        let store = Store::new(layout, store, slots).unwrap();
 
         // Initialize start points.
         for (i, row) in std::iter::zip(store.frozen(), start_points.row_iter()) {
@@ -131,7 +209,7 @@ impl Spherical {
             quantizer
                 .compress(
                     row,
-                    iface::OpaqueMut::new(slot.data().as_mut_slice()),
+                    iface::OpaqueMut::new(slot.data().head().as_mut_slice()),
                     ScopedAllocator::global(),
                 )
                 .unwrap();
@@ -139,13 +217,14 @@ impl Spherical {
             slot.freeze();
         }
 
-        let full_dim = quantizer.full_dim();
+        let reranker = Reranker::new(rerank, quantizer.metric(), full_dim);
 
         Self {
             store,
             quantizer,
             full_dim,
             lookahead,
+            reranker,
         }
     }
 
@@ -154,8 +233,9 @@ impl Spherical {
         capacity: Capacity,
         max_degree: MaxDegree,
         start_points: Matrix<f32>,
+        rerank: Rerank,
     ) -> Config {
-        Config::new(quantizer, capacity, max_degree, start_points)
+        Config::new(quantizer, capacity, max_degree, start_points, rerank)
     }
 }
 
@@ -197,7 +277,7 @@ impl repr::Set<&[f32]> for Spherical {
         self.quantizer
             .compress(
                 v,
-                iface::OpaqueMut::new(slot.data().as_mut_slice()),
+                iface::OpaqueMut::new(slot.data().head().as_mut_slice()),
                 ScopedAllocator::global(),
             )
             .map_err(ANNError::new)?;
@@ -208,11 +288,19 @@ impl repr::Set<&[f32]> for Spherical {
 
 #[derive(Debug)]
 pub struct Guard<'a> {
-    slot: store::Exclusive<'a, intrusive::Exclusive<'a>>,
+    slot: store::Exclusive<
+        'a,
+        cons::Exclusive<intrusive::Exclusive<'a>, Option<simple::Exclusive<'a>>>,
+    >,
 }
 
 impl<'a> Guard<'a> {
-    fn new(slot: store::Exclusive<'a, intrusive::Exclusive<'a>>) -> Self {
+    fn new(
+        slot: store::Exclusive<
+            'a,
+            cons::Exclusive<intrusive::Exclusive<'a>, Option<simple::Exclusive<'a>>>,
+        >,
+    ) -> Self {
         Self { slot }
     }
 }
@@ -246,7 +334,9 @@ impl repr::Search for Spherical {
             )
             .map_err(ANNError::new)?;
 
-        let reader = Intrusive::reader(&self.store)?;
+        let reader = self
+            .store
+            .guard(|slots, guard| unsafe { slots.head().reader_unchecked(guard) })?;
 
         let expand_beam = repr::internal::intrusive::ExpandBeam::new(
             reader,
@@ -259,6 +349,7 @@ impl repr::Search for Spherical {
         Ok(crate::provider::SearchAccessor::new(
             self.store.neighbors(),
             expand_beam,
+            None,
             provider,
             self.store.frozen(),
             counters,
@@ -284,7 +375,10 @@ impl repr::Insert for Spherical {
             )
             .map_err(ANNError::new)?;
 
-        let reader = Intrusive::reader(&self.store)?;
+        let reader = self
+            .store
+            .guard(|slots, guard| unsafe { slots.head().reader_unchecked(guard) })?;
+
         let expand_beam = repr::internal::intrusive::ExpandBeam::new(
             reader,
             query,
@@ -296,6 +390,7 @@ impl repr::Insert for Spherical {
         Ok(crate::provider::SearchAccessor::new(
             self.store.neighbors(),
             expand_beam,
+            None,
             provider,
             self.store.frozen(),
             counters,
@@ -307,7 +402,10 @@ impl repr::Insert for Spherical {
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
         let distance = DebugWrapper(self.quantizer.distance_computer_ref());
-        let reader = Intrusive::reader(&self.store)?;
+        let reader = self
+            .store
+            .guard(|slots, guard| unsafe { slots.head().reader_unchecked(guard) })?;
+
         let prune = repr::internal::intrusive::Prune::new(reader, distance);
 
         Ok(crate::provider::PruneAccessor::new(

@@ -285,7 +285,10 @@ pub struct SearchAccessor<'a> {
     ids: AdjacencyList<u32>,
     expand_beam: Box<dyn repr::ExpandBeam + 'a>,
     id_limit: IdLimit,
-    buffer: Vec<(u32, f32)>,
+    buffer: Vec<Neighbor<u32>>,
+
+    // Post-process
+    post_process: Option<Box<dyn repr::PostProcess + 'a>>,
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
@@ -297,6 +300,7 @@ impl<'a> SearchAccessor<'a> {
     pub(crate) fn new(
         neighbors: &'a Neighbors,
         expand_beam: Box<dyn repr::ExpandBeam + 'a>,
+        post_process: Option<Box<dyn repr::PostProcess + 'a>>,
         provider: &'a (dyn std::any::Any + Send + Sync),
         start_points: std::ops::Range<u32>,
         counters: LocalCounters<'a>,
@@ -308,6 +312,7 @@ impl<'a> SearchAccessor<'a> {
             expand_beam,
             id_limit,
             buffer: vec![Default::default(); neighbors.max_degree().value()],
+            post_process,
             provider,
             start_points,
             counters,
@@ -392,7 +397,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                 self.buffer
                     .iter()
                     .take(processed)
-                    .for_each(|(id, dist)| on_neighbors(*id, *dist));
+                    .for_each(|neighbor| on_neighbors(*neighbor.id(), *neighbor.distance()));
             }
 
             Ok(())
@@ -652,18 +657,38 @@ where
             };
 
             let mut count = 0;
-            for c in candidates {
-                if let Some(ext) = provider.mapping.to_external(*c.id()) {
-                    if output
-                        .push(Neighbor::new(ext, *c.distance()))
-                        .is_available()
-                    {
+            let mut push = |neighbor: Neighbor<u32>| -> bool {
+                if let Some(ext) = provider.mapping.to_external(*neighbor.id()) {
+                    if output.push(Neighbor::new(ext, *neighbor.distance())).is_available() {
                         count += 1;
+                        true
                     } else {
+                        false
+                    }
+                } else {
+                    true
+                }
+            };
+
+            // If there is a registered post-process step, run that first.
+            if let Some(post_process) = &mut accessor.post_process {
+                accessor.buffer.clear();
+                Extend::extend(&mut accessor.buffer, candidates);
+                post_process.post_process(&mut accessor.buffer)?;
+
+                for neighbor in accessor.buffer.iter() {
+                    if !push(*neighbor) {
+                        break;
+                    }
+                }
+            } else {
+                for neighbor in candidates {
+                    if !push(neighbor) {
                         break;
                     }
                 }
             }
+
             Ok(count)
         };
 
