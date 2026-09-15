@@ -81,9 +81,13 @@ use crate::{
     tag::{AtomicTag, Tag},
 };
 
-pub(crate) mod intrusive;
-// pub(crate) mod simple;
 pub(crate) mod slots;
+
+pub(crate) mod cons;
+pub(crate) mod optional;
+
+pub(crate) mod intrusive;
+pub(crate) mod simple;
 
 #[cfg(any(test, feature = "integration-test"))]
 pub(crate) mod checked;

@@ -4,11 +4,11 @@ use diskann::utils::IntoUsize;
 use thiserror::Error;
 
 use crate::{
-    buffer::{Buffer, BufferError, RawSlice},
+    buffer::{Buffer, RawSlice},
     epoch,
     num::{Align, Bytes, IdLimit},
-    store::{Lifecycle, Store, slots},
-    tag::{AtomicTag, Tag},
+    store::{Lifecycle, slots},
+    tag::AtomicTag,
 };
 
 #[derive(Debug, Clone)]
@@ -63,10 +63,18 @@ impl Simple {
         self.bytes
     }
 
-    pub(crate) fn raw_reader(&self) -> RawReader<'_> {
-        RawReader {
+    pub(crate) unsafe fn reader_unchecked<'a>(
+        &'a self,
+        tags: &'a [AtomicTag],
+        guard: epoch::Guard<'a>,
+    ) -> Reader<'a> {
+        assert_eq!(tags.len(), self.buffer.len());
+
+        Reader {
             buffer: &self.buffer,
             bytes: self.bytes,
+            tags,
+            _guard: guard,
         }
     }
 
@@ -140,107 +148,18 @@ impl slots::Slots for Simple {
     unsafe fn retire(&self, i: u32, _: Lifecycle) {}
 }
 
-#[derive(Debug)]
-pub(crate) struct RawReader<'a> {
-    buffer: &'a Buffer,
-    bytes: Bytes,
-}
-
-impl RawReader<'_> {
-    /// Return `true` if the index `i` is in-bounds.
-    #[inline]
-    #[must_use = "this function has no side-effects"]
-    pub(crate) fn is_in_bounds(&self, i: usize) -> bool {
-        i < self.buffer.len()
-    }
-
-    /// Read the data as position `i` if it is guaranteed to be race-free without bounds
-    /// checking.
-    ///
-    /// # Safety
-    ///
-    /// The index `i` must satisfy [`Self::is_in_bounds`].
-    #[inline]
-    pub(crate) unsafe fn read_in_bounds<'a>(&'a self, i: usize, _guard: &'a epoch::Guard<'_>) -> &'a [u8] {
-        debug_assert!(self.is_in_bounds(i));
-
-        unsafe { self.buffer.get_unchecked(i).truncate_unchecked(self.bytes).as_slice() }
-    }
-}
-
-// /// A reader into an [`Intrusive`] store.
 // #[derive(Debug)]
-// pub(crate) struct Reader<'a> {
+// pub(crate) struct RawReader<'a> {
 //     buffer: &'a Buffer,
-//     unpadded: Bytes,
-//     _guard: epoch::Guard<'a>,
+//     bytes: Bytes,
 // }
 //
-// impl<'a> Reader<'a> {
-//     /// Attempt to read the value at index `i`. This can fail for any of the
-//     /// following reasons:
-//     ///
-//     /// 1. Index `i` is out-of-bounds.
-//     /// 2. The read cannot be guaranteed to be race-free.
-//     #[inline]
-//     pub(crate) fn read(&self, i: usize) -> Option<&[u8]> {
-//         if self.is_in_bounds(i) {
-//             // SAFETY: `i` is in-bounds.
-//             unsafe { self.read_in_bounds(i) }
-//         } else {
-//             None
-//         }
-//     }
-//
+// impl RawReader<'_> {
 //     /// Return `true` if the index `i` is in-bounds.
 //     #[inline]
 //     #[must_use = "this function has no side-effects"]
 //     pub(crate) fn is_in_bounds(&self, i: usize) -> bool {
 //         i < self.buffer.len()
-//     }
-//
-//     /// Return the [`IdLimit`] for this collection.
-//     #[inline]
-//     #[must_use = "this function has no side-effects"]
-//     pub(crate) fn id_limit(&self) -> IdLimit {
-//         // Like `Intrusive::id_limit`, the numeric cast is safe because by construction,
-//         // the underlying buffer is limited to `u32::MAX`.
-//         IdLimit::new(self.buffer.len() as u32)
-//     }
-//
-//     /// Return `true` if it is safe to read the data at position `i`.
-//     ///
-//     /// This guarantee only holds while `self` is alive. Construction of a new [`Reader`]
-//     /// requires a separate check.
-//     #[cfg_attr(
-//         not(test),
-//         expect(
-//             dead_code,
-//             reason = "this is non-trivial method that is likely to be used in the future"
-//         )
-//     )]
-//     pub(crate) fn can_read(&self, i: usize) -> Option<bool> {
-//         if !self.is_in_bounds(i) {
-//             return None;
-//         }
-//
-//         // SAFETY: We've checked that `i` is in-bounds.
-//         //
-//         // Further, we guarantee that `self.unpadded >= AtomicTag::SIZE`, so the pointer
-//         // arithmetic is in-bounds.
-//         let tag_ptr = unsafe {
-//             self.buffer
-//                 .get_unchecked(i)
-//                 .as_mut_ptr()
-//                 .add(self.unpadded.unchecked_sub(AtomicTag::SIZE).value())
-//         };
-//
-//         // SAFETY: We only access tag pointers atomically.
-//         let can_read = unsafe { AtomicTag::from_ptr(tag_ptr.cast()) }
-//             .load(Ordering::Acquire)
-//             .can_read();
-//
-//         Some(can_read)
 //     }
 //
 //     /// Read the data as position `i` if it is guaranteed to be race-free without bounds
@@ -250,64 +169,106 @@ impl RawReader<'_> {
 //     ///
 //     /// The index `i` must satisfy [`Self::is_in_bounds`].
 //     #[inline]
-//     pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
+//     pub(crate) unsafe fn read_in_bounds<'a>(
+//         &'a self,
+//         i: usize,
+//         _guard: &'a epoch::Guard<'_>,
+//     ) -> &'a [u8] {
 //         debug_assert!(self.is_in_bounds(i));
 //
-//         // SAFETY:
-//         //
-//         // * The caller asserts `i` is in-bounds.
-//         // * We maintain the internal invariant that `self.unpadded <= self.buffer.stride()`.
-//         // * Further, we maintain that `self.unpadded >= AtomicTag::SIZE`.
-//         let (data, tag_ptr) = unsafe {
+//         unsafe {
 //             self.buffer
 //                 .get_unchecked(i)
-//                 .truncate_unchecked(self.unpadded)
-//                 .split_unchecked(self.unpadded.unchecked_sub(AtomicTag::SIZE))
-//         };
-//
-//         // NOTE: Must be `Acquire` to correctly synchronize with writes.
-//         //
-//         // SAFETY: We are careful in this module to ensure that inline tags are only accessed
-//         // atomically.
-//         let can_read = unsafe { AtomicTag::from_ptr(tag_ptr.as_mut_ptr().cast()) }
-//             .load(Ordering::Acquire)
-//             .can_read();
-//
-//         if can_read {
-//             // SAFETY: We've passed the `can_read` check - `_guard` will ensure the read
-//             // slice is valid and race-free.
-//             Some(unsafe { data.as_slice() })
-//         } else {
-//             None
+//                 .truncate_unchecked(self.bytes)
+//                 .as_slice()
 //         }
 //     }
-//
-//     /// Return the raw data slice for index `i` without any race guarantees.
-//     ///
-//     /// This includes both the data **and** the intrusive tag.
-//     ///
-//     /// # Safety
-//     ///
-//     /// The index `i` must satisfy [`Self::is_in_bounds`].
-//     ///
-//     /// The returned [`RawSlice`] may only be used for prefetching. Callers must never
-//     /// materialize it as a proper slice or reference.
-//     #[inline]
-//     pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> RawSlice<'_> {
-//         // SAFETY: Inherited from caller: `i` is in bounds.
-//         unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
-//     }
-//
-//     /// Return the number of bytes for each entry.
-//     pub(crate) fn bytes(&self) -> Bytes {
-//         self.bytes_plus_tag().unchecked_sub(AtomicTag::SIZE)
-//     }
-//
-//     /// Return the number of bytes plus the atomic tag.
-//     pub(crate) fn bytes_plus_tag(&self) -> Bytes {
-//         self.unpadded
-//     }
 // }
+
+/// A reader into an [`Intrusive`] store.
+#[derive(Debug)]
+pub(crate) struct Reader<'a> {
+    buffer: &'a Buffer,
+    bytes: Bytes,
+    tags: &'a [AtomicTag],
+    _guard: epoch::Guard<'a>,
+}
+
+impl<'a> Reader<'a> {
+    /// Attempt to read the value at index `i`. This can fail for any of the
+    /// following reasons:
+    ///
+    /// 1. Index `i` is out-of-bounds.
+    /// 2. The read cannot be guaranteed to be race-free.
+    #[inline]
+    pub(crate) fn read(&self, i: usize) -> Option<&[u8]> {
+        if self.is_in_bounds(i) {
+            // SAFETY: `i` is in-bounds.
+            unsafe { self.read_in_bounds(i) }
+        } else {
+            None
+        }
+    }
+
+    /// Return `true` if the index `i` is in-bounds.
+    #[inline]
+    #[must_use = "this function has no side-effects"]
+    pub(crate) fn is_in_bounds(&self, i: usize) -> bool {
+        i < self.buffer.len()
+    }
+
+    /// Return the [`IdLimit`] for this collection.
+    #[inline]
+    #[must_use = "this function has no side-effects"]
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        // Like `Intrusive::id_limit`, the numeric cast is safe because by construction,
+        // the underlying buffer is limited to `u32::MAX`.
+        IdLimit::new(self.buffer.len() as u32)
+    }
+
+    /// Read the data as position `i` if it is guaranteed to be race-free without bounds
+    /// checking.
+    ///
+    /// # Safety
+    ///
+    /// The index `i` must satisfy [`Self::is_in_bounds`].
+    #[inline]
+    pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
+        debug_assert!(self.is_in_bounds(i));
+
+        if unsafe { self.tags.get_unchecked(i).load(Ordering::Acquire).can_read() } {
+            Some(unsafe { self.buffer.get_unchecked(i).truncate_unchecked(self.bytes).as_slice() })
+        } else {
+            None
+        }
+    }
+
+    // /// Return the raw data slice for index `i` without any race guarantees.
+    // ///
+    // /// This includes both the data **and** the intrusive tag.
+    // ///
+    // /// # Safety
+    // ///
+    // /// The index `i` must satisfy [`Self::is_in_bounds`].
+    // ///
+    // /// The returned [`RawSlice`] may only be used for prefetching. Callers must never
+    // /// materialize it as a proper slice or reference.
+    // #[inline]
+    // pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> RawSlice<'_> {
+    //     // SAFETY: Inherited from caller: `i` is in bounds.
+    //     unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
+    // }
+
+    // /// Return the number of bytes for each entry.
+    // pub(crate) fn bytes(&self) -> Bytes {
+    //     self.bytes_plus_tag().unchecked_sub(AtomicTag::SIZE)
+    // }
+
+    // /// Return the number of bytes plus the atomic tag.
+    // pub(crate) fn bytes_plus_tag(&self) -> Bytes {
+    //     self.unpadded
+    // }
+}
 
 /// A [`slots::Exclusive`] for [`Intrusive`].
 #[derive(Debug)]

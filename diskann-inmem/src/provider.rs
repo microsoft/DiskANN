@@ -607,7 +607,6 @@ where
 }
 
 // This is a utility for helping inspect the generated code for `ExpandBeam`.
-//
 pub fn test_function<'a>(
     x: &'a Provider<repr::Full<u8>>,
     strategy: &'a Strategy,

@@ -57,14 +57,47 @@ use parking_lot::{Mutex, MutexGuard};
 
 const DEFAULT_GUARD_SLOTS: NonZeroUsize = NonZeroUsize::new(256).unwrap();
 
+/// Like [`std::sync::Arc`], we limit the number of [`epoch::Guard`] clones to `isize::MAX`.
+///
+/// This is to give a `fetch_add` to increase reference counts some head room to detect
+/// overflow.
+///
+/// We abort if we overflow this reference count, which can only happen if a thread is
+/// creating shared referenes and [`std::mem::forget`]ting them. In the words of the standard
+/// library, we don't care to support such degenerate programs.
+const MAX_REFCOUNT: usize = (isize::MAX) as usize;
+
+#[derive(Debug)]
+struct GuardSlot {
+    /// The epoch guard registered at this slot.
+    ///
+    /// A value of `0` means unused.
+    epoch: AtomicU64,
+
+    /// The number of guards sharing this slot. This is used to implement intrusive
+    /// reference counting for [`epoch::Guard`].
+    references: AtomicUsize,
+}
+
+impl Default for GuardSlot {
+    fn default() -> Self {
+        GuardSlot {
+            epoch: AtomicU64::new(0),
+            references: AtomicUsize::new(0),
+        }
+    }
+}
+
 /// A registry of epoch-based [`Guard`]s. See the [module-level docs](self).
 #[derive(Debug)]
 pub(crate) struct Registry {
     // A record of the active guards.
     //
+    // Acquisition state depends on [`GuardSlot::epoch`]:
+    //
     // * 0 = "available".
-    // * Anything less = "guarded".
-    guards: Box<[AtomicU64]>,
+    // * Anything else = "guarded".
+    guards: Box<[GuardSlot]>,
 
     // A hint for the next available registration slot.
     hint: AtomicUsize,
@@ -131,7 +164,7 @@ impl Registry {
     /// This is the number of [`Guard`]s that can be registered concurrently.
     pub(crate) fn with_capacity(capacity: NonZeroUsize) -> Self {
         Self {
-            guards: std::iter::repeat_with(|| AtomicU64::new(0))
+            guards: std::iter::repeat_with(Default::default)
                 .take(capacity.get())
                 .collect(),
             hint: AtomicUsize::new(0),
@@ -175,8 +208,9 @@ impl Registry {
 
             let guard_slot = &self.guards[slot];
             delay.pre_cas();
-            if guard_slot.load(Ordering::Relaxed) == 0
+            if guard_slot.epoch.load(Ordering::Relaxed) == 0
                 && guard_slot
+                    .epoch
                     .compare_exchange(0, epoch, Ordering::Relaxed, Ordering::Relaxed)
                     .is_ok()
             {
@@ -201,7 +235,17 @@ impl Registry {
                 }
 
                 if reset {
-                    guard_slot.store(epoch, Ordering::Relaxed);
+                    guard_slot.epoch.store(epoch, Ordering::Relaxed);
+                }
+
+                if cfg!(any(test, feature = "integration-test")) {
+                    let old = guard_slot.references.swap(1, Ordering::Relaxed);
+                    assert_eq!(
+                        old, 0,
+                        "unclaimed guard slots should have zero reference count"
+                    );
+                } else {
+                    guard_slot.references.store(1, Ordering::Relaxed);
                 }
 
                 return Ok(Guard {
@@ -260,7 +304,7 @@ impl Registry {
         let mut min = current;
 
         for s in self.guards.iter() {
-            let guarded = s.load(Ordering::Relaxed);
+            let guarded = s.epoch.load(Ordering::Relaxed);
             if guarded != 0 {
                 min = min.min(guarded);
             }
@@ -336,7 +380,7 @@ impl Registry {
     #[cfg(test)]
     fn assert_no_workers(&self) {
         for s in self.guards.iter() {
-            assert_eq!(s.load(Ordering::Relaxed), 0);
+            assert_eq!(s.epoch.load(Ordering::Relaxed), 0);
         }
     }
 
@@ -354,7 +398,7 @@ impl Registry {
 /// Obtained via [`Registry::guard`].
 #[derive(Debug)]
 pub(crate) struct Guard<'a> {
-    slot: &'a AtomicU64,
+    slot: &'a GuardSlot,
     retire: &'a SegQueue<u32>,
 
     #[cfg(test)]
@@ -364,7 +408,7 @@ pub(crate) struct Guard<'a> {
     slot_index: usize,
 }
 
-impl Guard<'_> {
+impl<'a> Guard<'a> {
     /// Retire the id `i` at this guard's epoch.
     ///
     /// `i` is a caller-defined id (typically an index into external storage). It will be
@@ -374,11 +418,40 @@ impl Guard<'_> {
     pub(crate) fn retire(&self, i: u32) {
         self.retire.push(i)
     }
+
+    #[inline]
+    pub(crate) fn share(&self) -> Guard<'a> {
+        let ref_count = self.slot.references.fetch_add(1, Ordering::Relaxed);
+
+        if ref_count > MAX_REFCOUNT {
+            std::process::abort();
+        }
+
+        Guard {
+            slot: self.slot,
+            retire: self.retire,
+            #[cfg(test)]
+            epoch: self.epoch,
+            #[cfg(test)]
+            slot_index: self.slot_index,
+        }
+    }
 }
 
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
-        self.slot.store(0, Ordering::Release);
+        // Decrement the reference count. If this is the last clone, then we can release our
+        // registration on the guard slot.
+        //
+        // For the ordering, we use `Ordering::Release` so all preceeding stores (and uses
+        // of data protected by the guard) are ordered before this release.
+        //
+        // This pairs with the acquire fence to ensure that all releases are made prior
+        // to resetting the epoch.
+        if self.slot.references.fetch_sub(1, Ordering::Release) == 1 {
+            std::sync::atomic::fence(Ordering::Acquire);
+            self.slot.epoch.store(0, Ordering::Release);
+        }
     }
 }
 
