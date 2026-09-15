@@ -86,16 +86,15 @@ pub fn fourbit_neon_ip_query_data(
     DistanceComputer::new(reify, GlobalAllocator)
 }
 
-/// Instantiate the Neon SquardL2 implementation for
+/// Instantiate the Neon SquaredL2 implementation for
 /// `USlice<'_, 2> × USlice<'_, 2>` in the data-to-data path.
 #[inline(never)]
 pub fn twobit_neon_l2_data_data(
     arch: Neon,
-    shift: &[f32],
     dim: usize,
 ) -> Result<DistanceComputer, AllocatorError> {
     let reify = Reify::<_, _, AsData<2>, AsData<2>>::new(
-        vectors::CompensatedSquaredL2::new(shift, dim),
+        vectors::CompensatedSquaredL2::new(dim),
         dim,
         arch,
     );
@@ -110,11 +109,10 @@ pub fn twobit_neon_l2_data_data(
 #[inline(never)]
 pub fn twobit_neon_l2_query_data(
     arch: Neon,
-    shift: &[f32],
     dim: usize,
 ) -> Result<DistanceComputer, AllocatorError> {
     let reify = Reify::<_, _, AsQuery<2>, AsData<2>>::new(
-        vectors::CompensatedSquaredL2::new(shift, dim),
+        vectors::CompensatedSquaredL2::new(dim),
         dim,
         arch,
     );
@@ -127,11 +125,10 @@ pub fn twobit_neon_l2_query_data(
 #[inline(never)]
 pub fn fourbit_neon_l2_data_data(
     arch: Neon,
-    shift: &[f32],
     dim: usize,
 ) -> Result<DistanceComputer, AllocatorError> {
     let reify = Reify::<_, _, AsData<4>, AsData<4>>::new(
-        vectors::CompensatedSquaredL2::new(shift, dim),
+        vectors::CompensatedSquaredL2::new(dim),
         dim,
         arch,
     );
@@ -146,11 +143,10 @@ pub fn fourbit_neon_l2_data_data(
 #[inline(never)]
 pub fn fourbit_neon_l2_query_data(
     arch: Neon,
-    shift: &[f32],
     dim: usize,
 ) -> Result<DistanceComputer, AllocatorError> {
     let reify = Reify::<_, _, AsQuery<4>, AsData<4>>::new(
-        vectors::CompensatedSquaredL2::new(shift, dim),
+        vectors::CompensatedSquaredL2::new(dim),
         dim,
         arch,
     );
