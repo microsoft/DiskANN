@@ -331,7 +331,7 @@ where
     fn centroid_squared_distance(
         &self,
         centroid: &[f32],
-    ) -> Result<f64, quantizer::CentroidDistanceError>;
+    ) -> Result<f32, quantizer::CentroidDistanceError>;
 
     /// Clone the backing object.
     fn try_clone_into(&self, allocator: A) -> Result<Poly<dyn Quantizer<A>, A>, AllocatorError>;
@@ -1760,7 +1760,7 @@ where
     fn centroid_squared_distance(
         &self,
         centroid: &[f32],
-    ) -> Result<f64, quantizer::CentroidDistanceError> {
+    ) -> Result<f32, quantizer::CentroidDistanceError> {
         self.quantizer.centroid_squared_distance(centroid)
     }
 
@@ -1988,7 +1988,7 @@ macro_rules! plan {
             fn centroid_squared_distance(
                 &self,
                 centroid: &[f32],
-            ) -> Result<f64, quantizer::CentroidDistanceError> {
+            ) -> Result<f32, quantizer::CentroidDistanceError> {
                 self.quantizer.centroid_squared_distance(centroid)
             }
 
