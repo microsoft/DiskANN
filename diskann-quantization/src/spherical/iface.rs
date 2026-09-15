@@ -327,6 +327,12 @@ where
     /// Return the metric this plan was created with.
     fn metric(&self) -> SupportedMetric;
 
+    /// Compute the squared L2 distance from `centroid` to the training centroid.
+    fn centroid_squared_distance(
+        &self,
+        centroid: &[f32],
+    ) -> Result<f32, quantizer::CentroidDistanceError>;
+
     /// Clone the backing object.
     fn try_clone_into(&self, allocator: A) -> Result<Poly<dyn Quantizer<A>, A>, AllocatorError>;
 
@@ -1751,6 +1757,13 @@ where
         self.quantizer.metric()
     }
 
+    fn centroid_squared_distance(
+        &self,
+        centroid: &[f32],
+    ) -> Result<f32, quantizer::CentroidDistanceError> {
+        self.quantizer.centroid_squared_distance(centroid)
+    }
+
     fn try_clone_into(&self, allocator: B) -> Result<Poly<dyn Quantizer<B>, B>, AllocatorError> {
         let clone = (*self).try_clone()?;
         poly!({ Quantizer<B> }, clone, allocator)
@@ -1970,6 +1983,13 @@ macro_rules! plan {
 
             fn metric(&self) -> SupportedMetric {
                 self.quantizer.metric()
+            }
+
+            fn centroid_squared_distance(
+                &self,
+                centroid: &[f32],
+            ) -> Result<f32, quantizer::CentroidDistanceError> {
+                self.quantizer.centroid_squared_distance(centroid)
             }
 
             fn try_clone_into(&self, allocator: B) -> Result<Poly<dyn Quantizer<B>, B>, AllocatorError> {
