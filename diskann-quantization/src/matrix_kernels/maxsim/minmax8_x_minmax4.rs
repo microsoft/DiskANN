@@ -362,9 +362,9 @@ impl<'a, A, const N: usize, const MR: usize, const NR: usize, B: BSource<N>>
             c: &mut self.c,
             k: self.k,
             dim: self.dim,
+            source: self.b,
             b_stride: self.b_stride,
             valid_rows: self.valid_rows,
-            source: self.b,
         }
     }
 }
@@ -376,9 +376,9 @@ struct Visitor<'a, A, const N: usize, const MR: usize, B> {
     c: &'a mut [f32; MR],
     k: DimK,
     dim: DimK,
+    source: B,
     b_stride: DimK,
     valid_rows: usize,
-    source: B,
 }
 
 impl<A, const N: usize, const MR: usize, const NR: usize, B> unpacked::PanelVisitor<B::Value, NR>
