@@ -20,53 +20,47 @@ use tracing::info;
 
 use crate::{
     error::{diskann_error, ErrorKind},
-    storage::quant::compressor::{PreparedCompressor, QuantCompressor},
+    storage::quant::compressor::QuantCompressor,
 };
 
 /// [`QuantDataGenerator`] orchestrates the process of reading vector data, applying quantization,
 /// and writing compressed results to storage in batches.
-pub struct QuantDataGenerator<'a, T, Q>
+pub struct QuantDataGenerator<T, Q>
 where
     T: Copy + VectorRepr,
-    Q: QuantCompressor<'a, T>,
+    Q: QuantCompressor<T>,
 {
     pub quantizer: Q,
     pub data_path: String,
     pub compressed_data_path: String,
-    phantom: PhantomData<&'a T>,
+    phantom: PhantomData<T>,
 }
 
-impl<'a, T, Q> QuantDataGenerator<'a, T, Q>
+impl<T, Q> QuantDataGenerator<T, Q>
 where
     T: Copy + VectorRepr,
-    Q: QuantCompressor<'a, T>,
+    Q: QuantCompressor<T>,
 {
+    /// Construct the quantizer, which may train and write its codebook.
     pub fn new(
         data_path: String,
         compressed_data_path: String,
-        quantizer_context: &'a Q::CompressorContext,
-    ) -> Self {
-        Self {
+        quantizer_context: &Q::CompressorContext,
+    ) -> ANNResult<Self> {
+        let quantizer = Q::new(quantizer_context)?;
+        Ok(Self {
             data_path,
             compressed_data_path,
-            quantizer: Q::new(quantizer_context),
+            quantizer,
             phantom: PhantomData,
-        }
+        })
     }
 
     /// This method reads the source data file, processes vectors in batches, compresses them
     /// using the provided quantizer, and writes the results to the compressed data file.
-    //
-    /// The implementation is adapted from generate_quantized_data_internal in pq_construction.rs
-    //
-    /// # Processing Flow
-    /// 1. Prepares the quantizer (training or loading a codebook as needed).
-    /// 2. Opens the source data file and validates its metadata.
-    /// 3. Deletes any existing output.
-    /// 4. Creates or opens output compressed file and writes metadata header - [num_points as i32, compressed_vector_size as i32]
-    /// 5. Processes data in bounded blocks.
-    /// 6. Compresses each block in small batch sizes in parallel to (potentially) take advantage of batch compression with quantizer
-    /// 7. Writes compressed blocks to the output file.
+    ///
+    /// Each call replaces the compressed output, using the already constructed quantizer
+    /// for every block.
     pub fn generate_data<Storage>(
         &self,
         storage_provider: &Storage, // Provider for reading source data and writing compressed results
@@ -78,22 +72,10 @@ where
     {
         let timer = Instant::now();
 
-        let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
+        let metadata =
+            validate_data_generation_input(storage_provider, &self.data_path, max_block_size)?;
         let (num_points, dim) = metadata.into_dims();
-        if max_block_size == 0 {
-            return Err(diskann_error!(
-                ErrorKind::PQError,
-                "Data compression chunk vector count must be greater than zero",
-            ));
-        }
-        if num_points == 0 {
-            return Err(diskann_error!(
-                ErrorKind::PQError,
-                "Cannot generate compressed data for an empty dataset",
-            ));
-        }
 
-        let compressor = self.quantizer.prepare()?;
         let compressed_path = self.compressed_data_path.as_str();
 
         if storage_provider.exists(compressed_path) {
@@ -106,10 +88,10 @@ where
         data_reader.seek(SeekFrom::Start((std::mem::size_of::<i32>() * 2) as u64))?;
 
         let mut compressed_data_writer = storage_provider.create_for_write(compressed_path)?;
-        Metadata::new(num_points, compressor.compressed_bytes())?
+        Metadata::new(num_points, self.quantizer.compressed_bytes())?
             .write(&mut compressed_data_writer)?;
 
-        let compressed_size = compressor.compressed_bytes();
+        let compressed_size = self.quantizer.compressed_bytes();
         let block_size = std::cmp::min(num_points, max_block_size);
         let num_blocks = num_points / block_size + !num_points.is_multiple_of(block_size) as usize;
 
@@ -164,7 +146,7 @@ where
             base_block
                 .par_window_iter(BATCH_SIZE)
                 .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
-                .try_for_each_in_pool(pool, |(src, dst)| compressor.compress(src, dst))?;
+                .try_for_each_in_pool(pool, |(src, dst)| self.quantizer.compress(src, dst))?;
 
             let write_offset = start_index * compressed_size + std::mem::size_of::<i32>() * 2;
             compressed_data_writer.seek(SeekFrom::Start(write_offset as u64))?;
@@ -184,6 +166,28 @@ where
 
         Ok(())
     }
+}
+
+/// Validate the dataset and block size before disk builds train their search quantizer.
+pub(crate) fn validate_data_generation_input(
+    storage_provider: &impl StorageReadProvider,
+    data_path: &str,
+    max_block_size: usize,
+) -> ANNResult<Metadata> {
+    if max_block_size == 0 {
+        return Err(diskann_error!(
+            ErrorKind::PQError,
+            "Data compression chunk vector count must be greater than zero",
+        ));
+    }
+    let metadata = load_metadata_from_file(storage_provider, data_path)?;
+    if metadata.npoints() == 0 {
+        return Err(diskann_error!(
+            ErrorKind::PQError,
+            "Cannot generate compressed data for an empty dataset",
+        ));
+    }
+    Ok(metadata)
 }
 
 //////////////////
@@ -217,20 +221,13 @@ mod generator_tests {
             }
         }
     }
-    impl<'a> QuantCompressor<'a, f32> for DummyCompressor {
+    impl QuantCompressor<f32> for DummyCompressor {
         type CompressorContext = u32;
-        type Prepared = DummyCompressor;
 
-        fn new(context: &'a Self::CompressorContext) -> Self {
-            Self::new(*context)
+        fn new(context: &Self::CompressorContext) -> ANNResult<Self> {
+            Ok(Self::new(*context))
         }
 
-        fn prepare(&self) -> ANNResult<Self::Prepared> {
-            Ok(Self::new(self.output_dim))
-        }
-    }
-
-    impl PreparedCompressor for DummyCompressor {
         fn compress(
             &self,
             _vector: views::MatrixView<f32>,
@@ -284,16 +281,20 @@ mod generator_tests {
         Ok((storage_provider, data_path, compressed_path))
     }
 
-    fn create_and_call_generator<'a, F: vfs::FileSystem>(
+    fn create_and_call_generator<F: vfs::FileSystem>(
         compressed_path: String,
         storage_provider: &VirtualStorageProvider<F>,
         data_path: String,
-        output_dim: &'a u32,
+        output_dim: u32,
         max_block_size: usize,
-    ) -> (QuantDataGenerator<'a, f32, DummyCompressor>, ANNResult<()>) {
+    ) -> (QuantDataGenerator<f32, DummyCompressor>, ANNResult<()>) {
         let pool: diskann_providers::utils::RayonThreadPool = create_thread_pool_for_test();
-        let generator =
-            QuantDataGenerator::<f32, DummyCompressor>::new(data_path, compressed_path, output_dim);
+        let generator = QuantDataGenerator::<f32, DummyCompressor>::new(
+            data_path,
+            compressed_path,
+            &output_dim,
+        )
+        .unwrap();
         let result = generator.generate_data(storage_provider, pool.as_ref(), max_block_size);
         (generator, result)
     }
@@ -312,7 +313,7 @@ mod generator_tests {
             compressed_path.clone(),
             &storage_provider,
             data_path,
-            &output_dim,
+            output_dim,
             10_000,
         );
 
@@ -354,7 +355,7 @@ mod generator_tests {
             compressed_path.clone(),
             &storage_provider,
             data_path,
-            &4,
+            4,
             10_000,
         );
         assert!(result.is_err());
@@ -367,7 +368,7 @@ mod generator_tests {
         let (storage_provider, data_path, compressed_path) = generate_data_files(1, 8)?;
 
         let (_, result) =
-            create_and_call_generator(compressed_path.clone(), &storage_provider, data_path, &4, 0);
+            create_and_call_generator(compressed_path.clone(), &storage_provider, data_path, 4, 0);
 
         assert!(result.is_err());
         assert!(!storage_provider.exists(&compressed_path));
