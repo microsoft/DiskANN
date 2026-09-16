@@ -22,13 +22,17 @@ use crate::{
     provider::DataProvider,
     utils::VectorId,
 };
+
 /// Error type for [`Knn`] parameter validation.
+/// Because no scaling of results can occur with match rate
+/// > 10%, at least 10 samples must be seen before adaptive L 
+/// can be applied.
 #[derive(Debug, Error)]
 pub enum AdaptiveLSearchError {
     #[error("adaptive L scale factor must be >= 1.0")]
     ScaleFactorLessThanOne,
-    #[error("sample count cannot be zero")]
-    SampleCountZero,
+    #[error("sample count must be >= 10")]
+    SampleCountLessThanTen,
 }
 
 convert_error!(AdaptiveLSearchError);
@@ -46,8 +50,8 @@ impl AdaptiveL {
         if scale_factor < 1.0 {
             return Err(AdaptiveLSearchError::ScaleFactorLessThanOne);
         }
-        if sample_count == 0 {
-            return Err(AdaptiveLSearchError::SampleCountZero);
+        if sample_count < 10 {
+            return Err(AdaptiveLSearchError::SampleCountLessThanTen);
         }
         Ok(Self {
             sample_count,
@@ -255,7 +259,7 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // Estimate specificity at N samples. If none match, retry at 2N, 4N,
+        // Estimate specificity at N samples. If none match, retry at 2N, 4N, 8N,
         // and so on; otherwise, keep the current adaptive L for the search.
         if let Some(adaptive_l) = adaptive_l.as_ref()
             && let Some(next_sample) = next_adaptive_l_sample
@@ -267,7 +271,7 @@ where
                 sample_matched,
                 adaptive_l.scale_factor,
             );
-            if new_l > scratch.best.capacity() {
+            if new_l > scratch.best.search_l() {
                 scratch.resize(new_l);
             }
 
@@ -357,10 +361,10 @@ mod tests {
             Err(AdaptiveLSearchError::ScaleFactorLessThanOne)
         ));
 
-        // Invalid: sample count = 0
+        // Invalid: sample count < 10
         assert!(matches!(
-            AdaptiveL::new(0, 1.5),
-            Err(AdaptiveLSearchError::SampleCountZero)
+            AdaptiveL::new(9, 1.5),
+            Err(AdaptiveLSearchError::SampleCountLessThanTen)
         ));
     }
 

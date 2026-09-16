@@ -176,7 +176,7 @@ impl Setup1D {
             filter: (40..100).collect(),
             k: 5,
             l: 5,
-            adaptive_l: AdaptiveL::new(5, 16.0).unwrap(),
+            adaptive_l: AdaptiveL::new(10, 16.0).unwrap(),
             points: 100,
             query: [50.0],
             expected_fixed: vec![50, 51, 49, 52, 48],
@@ -188,8 +188,8 @@ impl Setup1D {
     ///
     /// With a sample count of 10, the two seeded IDs will result in a 20% hit-rate.
     ///
-    /// This boosts `l` to 10. Since the sample contains matches, adaptive L is not
-    /// recomputed at subsequent sample thresholds.
+    /// This will boost `l` to 10. The additional point 44 requires this larger `l` to hit.
+    /// We do not expect `43` to be hit.
     fn linear() -> Self {
         Self {
             filter: Filter::from_iter([43u32, 44, 92, 95]),
@@ -218,18 +218,20 @@ impl Setup1D {
         }
     }
 
-    /// No matching items are found during the initial sample window. With 2x sample
-    /// thresholds, adaptive L grows incrementally and reaches the nearest match.
+    /// No matching items are found until the sample size doubles six times,
+    /// after which one matching result is found and the resulting match 
+    /// rate is higher than the max multiplier, so the max multiplier
+    /// is used.
     fn max() -> Self {
         Self {
-            filter: Filter::from_iter([10, 20, 30, 50]),
+            filter: Filter::from_iter([100, 200, 300, 500]),
             k: 3,
-            l: 5,
-            adaptive_l: AdaptiveL::new(5, 16.0).unwrap(),
-            points: 100,
-            query: [50.0],
-            expected_fixed: vec![50],
-            expected_adaptive: vec![50],
+            l: 100,
+            adaptive_l: AdaptiveL::new(10, 6.5).unwrap(),
+            points: 1000,
+            query: [500.0],
+            expected_fixed: vec![500],
+            expected_adaptive: vec![500, 300, 200],
         }
     }
 
@@ -436,20 +438,18 @@ fn inline_search_returns_only_final_level_matches() {
     }
 }
 
-/// `l=2` retains both root branches long enough for adaptive L to grow; fixed L
-/// still exhausts its frontier before reaching the labeled final level.
 #[test]
-fn inline_search_three_level_no_adaptive_l_with_l2_finds_no_matches() {
+fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
-    let name = path.push("inline_search_three_level_no_adaptive_l_with_l2_finds_no_matches");
+    let name = path.push("inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches");
 
     let index = build_three_level_index();
 
     let filter = LevelLabelProvider::new();
     let k = 1;
-    let l = 2;
+    let l = 1;
     let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), None);
 
     let mut ids = vec![0u32; k];
@@ -485,22 +485,22 @@ fn inline_search_three_level_no_adaptive_l_with_l2_finds_no_matches() {
 
     assert_eq!(
         stats.result_count, 0,
-        "with l_search=2 and no adaptive L, search should not reach final-level matches"
+        "with l_search=1 and no adaptive L, search should not reach final-level matches"
     );
 }
 
 #[test]
-fn inline_search_three_level_adaptive_l_with_l2_finds_matches() {
+fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
-    let name = path.push("inline_search_three_level_adaptive_l_with_l2_finds_matches");
+    let name = path.push("inline_search_three_level_adaptive_l_with_l1_finds_matches");
 
     let index = build_three_level_index();
 
     let filter = LevelLabelProvider::new();
-    let l = 2;
-    let adaptive_l = AdaptiveL::new(1, 16.0).unwrap();
+    let l = 7;
+    let adaptive_l = AdaptiveL::new(10, 16.0).unwrap();
     let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), Some(adaptive_l));
 
     let k = 1;
@@ -532,13 +532,15 @@ fn inline_search_three_level_adaptive_l_with_l2_finds_matches() {
         hops: stats.hops as usize,
     };
 
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
     assert!(
         stats.result_count > 0,
         "adaptive L should expand search enough to find final-level matches"
     );
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+   
 
     let results = ids[..stats.result_count as usize].iter().copied();
     for id in results {
