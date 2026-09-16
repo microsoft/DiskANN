@@ -315,7 +315,7 @@ macro_rules! x86_splitjoin {
     };
 }
 
-/// Implement [`ZipUnzip`] for a 256-bit vector type (`$type`) whose halved
+/// Implement [`crate::ZipUnzip`] for a 256-bit vector type (`$type`) whose halved
 /// type is a 128-bit vector, using `vpshufb` + `vpermd` for the flat paths
 /// and delegating `zip`/`unzip` through `join`/`split`.
 ///
@@ -378,7 +378,7 @@ macro_rules! x86_zipunzip {
     };
 }
 
-/// Implement [`ZipUnzip`] for a 256-bit vector type (`$type`) with 32-bit
+/// Implement [`crate::ZipUnzip`] for a 256-bit vector type (`$type`) with 32-bit
 /// elements, using a single cross-lane `vpermd` for the flat variants.
 ///
 /// Both `zip_flat` and `unzip_flat` compile to one `_mm256_permutevar8x32_epi32`.
@@ -423,7 +423,7 @@ macro_rules! x86_zipunzip_perm32 {
     };
 }
 
-/// Implement [`ZipUnzip`] for a 256-bit vector type using a single cross-lane
+/// Implement [`crate::ZipUnzip`] for a 256-bit vector type using a single cross-lane
 /// permute instruction.
 ///
 /// The caller provides the permute intrinsic (`$perm`) and index constructor

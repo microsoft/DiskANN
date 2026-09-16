@@ -979,7 +979,7 @@ impl ComputeKernel for InnerProductMathematical {
 /// `from` and all pivots.
 ///
 /// Example types implementing this trait include:
-/// * [`SwuaredL2`]: Compute the squared l2 distance between `from` and all pivots.
+/// * [`SquaredL2`]: Compute the squared l2 distance between `from` and all pivots.
 /// * [`InnerProduct`]: Compute the inner product (as a [`diskann_vector::SimilarityScore`])
 ///   between `from` and all pivots.
 pub trait ProcessInto {

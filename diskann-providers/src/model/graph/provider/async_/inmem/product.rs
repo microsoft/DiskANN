@@ -232,11 +232,6 @@ where
 ///////////////////
 
 /// An accessor that retrieves the quantized portion of the [`DefaultProvider`].
-///
-/// This type implements the following traits:
-///
-/// * [`Accessor`] for the `DefaultProvider`.
-/// * [`BuildQueryComputer`].
 pub struct QuantAccessor<'a, V, D, Ctx> {
     provider: &'a DefaultProvider<V, DefaultQuant, D, Ctx>,
     computer: pq::distance::QueryComputer<'a>,

@@ -433,13 +433,11 @@ where
         }
     }
 
-    /// Invoke `DP::set_element` for each vector in `vectors`. For each vector `v, returns:
-    ///
-    /// 1. The [`SetElement::Guard`] associated with the insertion.
-    /// 2. The raw data of the vector.
+    /// Invoke [`SetElement::set_element`] for each element in the batch range, returning
+    /// the [`DataProvider::Guard`] associated with each insertion.
     ///
     /// These results are aggregated into a vector, with an error being returned should any
-    /// call to [`DP::set_element`] fail.
+    /// call to [`SetElement::set_element`] fail.
     ///
     /// This is the leaf task for the batch [`Self::set_elements`] method.
     async fn set_chunk<B>(
@@ -467,18 +465,13 @@ where
         Ok(output)
     }
 
-    /// Parallelise the invocation of applying [`DP::set_element`] to all vectors `v` in
-    /// `vectors` using up to `ntasks` tasks.
+    /// Parallelise the invocation of applying [`SetElement::set_element`] to all elements
+    /// in `batch` using up to `ntasks` tasks.
     ///
-    /// Return a pair consisting of the [`DP::set_element`] guards for each vector `v` in
-    /// vectors and an [`Arc`] slice of the translated vectors. This function bails if any
-    /// invocation of [`DP::set_element`] fails.
+    /// Return the [`DataProvider::Guard`] for each inserted element. This function bails
+    /// if any invocation of [`SetElement::set_element`] fails.
     ///
-    /// The ordering of the guards will be consistent with the ordering of the translated
-    /// vectors, though this need not necessarily be the order of the input vectors.
-    ///
-    /// The data backing each translated vector will be the same as that in `vectors`. That
-    /// is, the backing data is *moved* internally, not copied.
+    /// The ordering of the guards is consistent with the ordering of the batch.
     fn set_elements<B>(
         self: &Arc<Self>,
         context: &DP::Context,
@@ -2546,8 +2539,7 @@ where
     ///
     /// Clobbers the following scratch fields:
     ///
-    /// * [`prune::Context::occlude_factor`]
-    /// * [`prune::Context::last_checked`]
+    /// * [`prune::Context::states`]
     ///
     /// ## Note
     ///

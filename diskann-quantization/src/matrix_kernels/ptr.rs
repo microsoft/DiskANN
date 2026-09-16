@@ -68,7 +68,7 @@ impl<'a, T> Slice<'a, T> {
     ///
     /// # Safety
     ///
-    /// This function has the same safety reqauirements as [`std::ptr::as_ref_unchecked`].
+    /// This function has the same safety requirements as [`NonNull::as_ref`].
     /// Additionally, this function will panic if the true length of `self` is not equal
     /// to 1.
     pub(super) unsafe fn as_ref(self) -> &'a T {
@@ -78,13 +78,13 @@ impl<'a, T> Slice<'a, T> {
         unsafe { self.ptr.as_ref() }
     }
 
-    /// Add an unsigned `offset` to `self.
+    /// Add an unsigned `offset` to `self`.
     ///
     /// When debug assertions are enabled, invalid `offsets` will panic.
     ///
     /// # Safety
     ///
-    /// This function has the same safety requirements as [`std::ptr::add`].
+    /// This function has the same safety requirements as [`NonNull::add`].
     pub(super) unsafe fn add(self, offset: Elements<T>) -> Slice<'a, T> {
         let offset = offset.value();
 

@@ -1124,8 +1124,8 @@ macro_rules! hide {
         /// compatible.
         ///
         /// The caller must ensure that winking into existence an instance of `A` is
-        /// a safe operation. For [`Architectures`], this means that the requirements
-        /// of `A::new()` are upheld.
+        /// a safe operation. For [`Architecture`] implementations, this means that the
+        /// requirements of `A::new()` are upheld.
         ///
         /// Put plainly:
         ///

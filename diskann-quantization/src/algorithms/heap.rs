@@ -127,7 +127,7 @@ impl<'a, T: Ord + Copy> SliceHeap<'a, T> {
     }
 
     /// The implementation of this function is largely copied from `sift_down_range` in
-    /// https://doc.rust-lang.org/src/alloc/collections/binary_heap/mod.rs.html#776.
+    /// <https://doc.rust-lang.org/src/alloc/collections/binary_heap/mod.rs.html#776>.
     ///
     /// Since we've constrainted `T: Copy`, we don't need to worry about the `Hole` helper
     /// data structures.

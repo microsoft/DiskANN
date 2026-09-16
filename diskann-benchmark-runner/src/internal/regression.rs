@@ -531,7 +531,7 @@ pub(crate) struct Job<'a> {
     /// The executor for the actual check we wish to run.
     regression: registry::RegressionBenchmark<'a>,
 
-    /// The [`crate::benchmark::Regression::Tolerance`] associated with `regression`.
+    /// The [`crate::benchmark::Regression::Tolerances`] associated with `regression`.
     tolerance: Rc<Any>,
 
     /// The [`crate::Benchmark::Input`] associated with `benchmark`.
