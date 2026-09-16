@@ -154,16 +154,17 @@ where
         self.pre_scale
     }
 
-    /// Compute the squared L2 distance from `centroid` to the training centroid.
+    /// Compute the effective squared L2 distance of `centroid` relative to the
+    /// quantizer's internal shift.
     ///
-    /// The result is expressed in the input vector's units. For cosine quantizers,
-    /// the candidate's norm replaces the otherwise irrelevant pre-scaling term,
-    /// matching the normalization applied during vector preprocessing.
+    /// Metric-specific adjustments are applied consistently with vector compression,
+    /// so this generally differs from the direct squared L2 distance between
+    /// `centroid` and [`Self::shift`].
     ///
     /// # Errors
     ///
-    /// Returns an error when `centroid` has the wrong dimension or the distance
-    /// computation produces a non-finite value.
+    /// Returns an error if `centroid.len()` is not equal to [`Self::input_dim`] or
+    /// the computed distance is non-finite.
     pub fn centroid_squared_distance(
         &self,
         centroid: &[f32],
