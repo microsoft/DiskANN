@@ -762,6 +762,8 @@ impl
                 let lower_y: u8s = y_vec & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(lower_x.to_underlying(), lower_y.to_underlying()) }
                 );
                 s0 = s0.dot_simd(d, d);
@@ -771,6 +773,8 @@ impl
                 let upper_y: u8s = (y_vec >> 4) & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(upper_x.to_underlying(), upper_y.to_underlying()) }
                 );
                 s1 = s1.dot_simd(d, d);
@@ -794,6 +798,8 @@ impl
                 let lower_y: u8s = y_vec & mask;
                 let d = u8s::from_underlying (
                         arch,
+                        // SAFETY: the caller assumes target supports neon
+                        // instruction required by `vabdq_u8`.
                         unsafe {  vabdq_u8(lower_x.to_underlying(), lower_y.to_underlying()) }
                 );
                 s0 = s0.dot_simd(d, d);
@@ -803,6 +809,8 @@ impl
                 let upper_y: u8s = (y_vec >> 4) & mask;
                 let d = u8s::from_underlying (
                         arch,
+                        // SAFETY: the caller assumes target supports neon
+                        // instruction required by `vabdq_u8`.
                         unsafe {  vabdq_u8(upper_x.to_underlying(), upper_y.to_underlying()) }
                 );
                 s1 = s1.dot_simd(d, d);
@@ -881,6 +889,8 @@ impl
                 let first_y: u8s = y_vec & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(first_x.to_underlying(), first_y.to_underlying()) }
                 );
                 s0 = s0.dot_simd(d, d);
@@ -890,6 +900,8 @@ impl
                 let second_y: u8s = (y_vec >> 2) & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(second_x.to_underlying(), second_y.to_underlying()) }
                 );
                 s1 = s1.dot_simd(d, d);
@@ -899,6 +911,8 @@ impl
                 let third_y: u8s = (y_vec >> 4) & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(third_x.to_underlying(), third_y.to_underlying()) }
                 );
                 s2 = s2.dot_simd(d, d);
@@ -908,6 +922,8 @@ impl
                 let fourth_y: u8s = (y_vec >> 6) & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(fourth_x.to_underlying(), fourth_y.to_underlying()) }
                 );
                 s3 = s3.dot_simd(d, d);
@@ -930,6 +946,8 @@ impl
                 let first_y: u8s = y_vec & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(first_x.to_underlying(), first_y.to_underlying()) }
                 );
                 s0 = s0.dot_simd(d, d);
@@ -939,6 +957,8 @@ impl
                 let second_y: u8s = (y_vec >> 2) & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(second_x.to_underlying(), second_y.to_underlying()) }
                 );
                 s1 = s1.dot_simd(d, d);
@@ -948,6 +968,8 @@ impl
                 let third_y: u8s = (y_vec >> 4) & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(third_x.to_underlying(), third_y.to_underlying()) }
                 );
                 s2 = s2.dot_simd(d, d);
@@ -957,6 +979,8 @@ impl
                 let fourth_y: u8s = (y_vec >> 6) & mask;
                 let d = u8s::from_underlying (
                     arch,
+                    // SAFETY: the caller assumes target supports neon
+                    // instruction required by `vabdq_u8`.
                     unsafe {  vabdq_u8(fourth_x.to_underlying(), fourth_y.to_underlying()) }
                 );
                 s3 = s3.dot_simd(d, d);

@@ -562,7 +562,6 @@ macro_rules! aarch64_splitjoin {
     };
 }
 
-pub(crate) use aarch64_define_absdiff;
 pub(crate) use aarch64_define_bitops;
 pub(crate) use aarch64_define_cmp;
 pub(crate) use aarch64_define_fma;
