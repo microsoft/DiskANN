@@ -97,7 +97,17 @@ where
         };
         // SAFETY: The constructor provides the selected grouped layout and one metadata
         // entry per block. Shape checks establish the document and output dimensions.
-        let mut driver = unsafe { Driver::new(self.arch, a, &self.compensation, b, scores, dim) };
+        let mut driver = unsafe {
+            Driver::new(
+                self.arch,
+                a,
+                &self.compensation,
+                b,
+                scores,
+                dim,
+                mk::Cache::detect(),
+            )
+        };
         mk::Drive::drive(&mut driver);
         Ok(())
     }
@@ -148,8 +158,9 @@ impl_builder!(V4, 8, 16, 8);
 
 /// Build a tiled MinMax8-query by MinMax4-document MaxSim kernel.
 ///
-/// Owns an architecture-packed copy of the query. Document rows remain in canonical
-/// MinMax4 form and are expanded one contraction group at a time in the micro-kernel.
+/// Owns an architecture-packed copy of the query. Canonical MinMax4 documents are borrowed.
+/// Each document tile is decoded once into temporary scratch and reused across all query
+/// cache tiles and panels. Tile sizes use the same byte-based cache model as the f32 kernels.
 ///
 /// # Errors
 ///
