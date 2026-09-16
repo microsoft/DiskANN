@@ -2,6 +2,9 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+use std::io::{BufWriter, Read, Seek, Write};
+
+use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::utils::{gen_random_slice, RayonThreadPoolRef, READ_WRITE_BLOCK_SIZE};
@@ -13,7 +16,7 @@ use tracing::info;
 use crate::{
     disk_index_build_parameter::BYTES_IN_GB,
     error::{diskann_error, ErrorKind},
-    storage::{CachedReader, CachedWriter, DiskIndexWriter},
+    storage::DiskIndexWriter,
 };
 
 /// Block size for reading/processing large files and matrices in blocks
@@ -247,13 +250,10 @@ where
     T: VectorRepr,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    let mut dataset_reader = CachedReader::<StorageProvider>::new(
-        dataset_file,
-        READ_WRITE_BLOCK_SIZE,
-        storage_provider,
-    )?;
-    let num_points = dataset_reader.read_u32()?;
-    let base_dim = dataset_reader.read_u32()?;
+    let mut dataset_reader =
+        crate::storage::open_buf_reader(storage_provider, dataset_file, READ_WRITE_BLOCK_SIZE)?;
+    let num_points = dataset_reader.read_u32::<LittleEndian>()?;
+    let base_dim = dataset_reader.read_u32::<LittleEndian>()?;
     if base_dim != dim as u32 {
         return Err(diskann_error!(
             ErrorKind::IndexError,
@@ -269,20 +269,19 @@ where
         .collect::<Vec<String>>();
 
     // 8KB cache for small ID map files - matches default BufWriter size
-    const WRITE_ID_CACHE_SIZE: u64 = 8 * 1024;
+    const WRITE_ID_CACHE_SIZE: usize = 8 * 1024;
     let mut shard_idmap_cached_writers = Vec::new();
     for name in &shard_idmaps_names {
         let writer = storage_provider.create_for_write(name)?;
-        let cached_writer =
-            CachedWriter::<StorageProvider>::new(name, WRITE_ID_CACHE_SIZE, writer)?;
+        let cached_writer = BufWriter::with_capacity(WRITE_ID_CACHE_SIZE, writer);
         shard_idmap_cached_writers.push(cached_writer);
     }
 
     let dummy_size: u32 = 0;
     let const_one: u32 = 1;
     for writer in shard_idmap_cached_writers.iter_mut() {
-        writer.write(&dummy_size.to_le_bytes())?;
-        writer.write(&const_one.to_le_bytes())?;
+        writer.write_all(&dummy_size.to_le_bytes())?;
+        writer.write_all(&const_one.to_le_bytes())?;
     }
 
     let block_size = if num_points <= BLOCK_SIZE_LARGE_FILE {
@@ -302,7 +301,8 @@ where
         let end_id = std::cmp::min((block + 1) * block_size, num_points) as usize;
         let cur_blk_size = end_id - start_id;
 
-        dataset_reader.read(&mut block_data_t[..cur_blk_size * dim * std::mem::size_of::<T>()])?;
+        dataset_reader
+            .read_exact(&mut block_data_t[..cur_blk_size * dim * std::mem::size_of::<T>()])?;
 
         // convert data from type T to f32
         let cur_vector_t: &[T] =
@@ -332,7 +332,8 @@ where
             for p1 in 0..k_base {
                 let shard_id = block_closest_centers[p * k_base + p1] as usize;
                 let original_point_map_id = (start_id + p) as u32;
-                shard_idmap_cached_writers[shard_id].write(&original_point_map_id.to_le_bytes())?;
+                shard_idmap_cached_writers[shard_id]
+                    .write_all(&original_point_map_id.to_le_bytes())?;
                 shard_counts[shard_id] += 1;
             }
         }
@@ -344,8 +345,8 @@ where
         let cur_shard_count = shard_counts[i] as u32;
         info!(" shard_{} with npts : {} ", i, cur_shard_count);
         total_count += cur_shard_count;
-        shard_idmap_cached_writers[i].reset()?;
-        shard_idmap_cached_writers[i].write(&cur_shard_count.to_le_bytes())?;
+        shard_idmap_cached_writers[i].rewind()?;
+        shard_idmap_cached_writers[i].write_all(&cur_shard_count.to_le_bytes())?;
         shard_idmap_cached_writers[i].flush()?;
     }
 
@@ -424,7 +425,7 @@ mod partition_test {
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::utils::create_thread_pool_for_test;
     use diskann_utils::test_data_root;
-    use vfs::{MemoryFS, OverlayFS};
+    use vfs::OverlayFS;
 
     use super::*;
 
@@ -467,19 +468,16 @@ mod partition_test {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         {
             let writer = storage_provider.create_for_write(dataset_path).unwrap();
-            let mut dataset_writer = CachedWriter::<VirtualStorageProvider<MemoryFS>>::new(
-                dataset_path,
-                READ_WRITE_BLOCK_SIZE,
-                writer,
-            )
-            .unwrap();
-            dataset_writer.write(&num_points.to_le_bytes()).unwrap();
-            dataset_writer.write(&dim.to_le_bytes()).unwrap();
+            let mut dataset_writer = BufWriter::with_capacity(READ_WRITE_BLOCK_SIZE, writer);
+            dataset_writer.write_all(&num_points.to_le_bytes()).unwrap();
+            dataset_writer
+                .write_all(&(dim as u32).to_le_bytes())
+                .unwrap();
             for i in 0..num_points {
                 for j in 0..dim {
                     let val = (i * dim as u32 + j as u32) as f32;
                     data_float.push(val);
-                    dataset_writer.write(&val.to_le_bytes()).unwrap();
+                    dataset_writer.write_all(&val.to_le_bytes()).unwrap();
                 }
             }
         }
