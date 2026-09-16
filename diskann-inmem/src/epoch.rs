@@ -149,8 +149,7 @@ struct Inner {
 impl Inner {
     #[must_use = "this function has no side-effects and is used to justify unsafe code"]
     fn guard_belongs(&self, guard: &Guard<'_>) -> bool {
-        let slot: *const GuardSlot = guard.slot;
-        self.guards.as_ptr_range().contains(&slot)
+        std::ptr::eq(self, guard.registry)
     }
 }
 
@@ -437,6 +436,7 @@ impl RegistryHandle {
 }
 
 #[cold]
+#[expect(clippy::panic, reason = "internals should not provide invalid guards")]
 fn guard_does_not_belong(_handle: &RegistryHandle, _guard: &Guard<'_>) -> ! {
     panic!("invalid epoch guard");
 }

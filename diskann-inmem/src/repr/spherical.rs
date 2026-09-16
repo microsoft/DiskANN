@@ -254,39 +254,95 @@ impl Spherical {
         self.quantizer
             .compress(
                 v,
-                iface::OpaqueMut::new(slot.head().as_mut_slice()),
+                iface::OpaqueMut::new(slot.first().as_mut_slice()),
                 ScopedAllocator::global(),
             )
             .map_err(ANNError::new)
             .unwrap();
 
-        if let Some(tail) = slot.tail() {
+        if let Some(tail) = slot.second() {
             self.reranker.store(v, tail.as_mut_slice())
         }
     }
+
+    fn create_accessor<'a>(
+        &'a self,
+        query: &'a [f32],
+        provider: &'a (dyn std::any::Any + Send + Sync),
+        counters: LocalCounters<'a>,
+        args: AccessorArgs,
+    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+        let AccessorArgs {
+            layout,
+            allow_rescale,
+            rerank_if_enabled,
+        } = args;
+
+        // Create the query computer.
+        //
+        // We do this first because this is one of the most likely things to fail since it
+        // operates on largely untrusted data. If it does fail, we save the work of acquiring
+        // epoch guards etc.
+        let query_computer = self
+            .quantizer
+            .fused_query_computer(
+                query,
+                layout,
+                allow_rescale,
+                GlobalAllocator,
+                ScopedAllocator::global(),
+            )
+            .map_err(ANNError::new)?;
+
+        // Computer is good - time to make `ExpandBeam` and `PostProcess` (if requested).
+        let (expand_beam, post_process) = self.store.guard(|cons, guard| {
+            // TODO: Tailor prefetching to the number of cachelines.
+            //
+            // Inlining distance functions will require work in `diskann-quantization`, so
+            // we can at least optimize prefetching.
+            let expand_beam = repr::internal::intrusive::ExpandBeam::new(
+                cons.first().reader(guard),
+                query_computer,
+                prefetch::Loop::new(),
+                self.lookahead,
+            );
+
+            let post_process = rerank_if_enabled
+                .then(|| {
+                    cons.second().slots().and_then(|simple| {
+                        self.reranker
+                            .post_process(query, expand_beam.guard(), simple)
+                    })
+                })
+                .flatten();
+
+            (expand_beam, post_process)
+        })?;
+
+        Ok(crate::provider::SearchAccessor::new(
+            self.store.neighbors(),
+            expand_beam.boxed(),
+            post_process,
+            provider,
+            self.store.frozen(),
+            counters,
+        ))
+    }
 }
 
-impl repr::Representation for Spherical {
-    fn max_degree(&self) -> MaxDegree {
-        self.store.neighbors().max_degree()
-    }
-
-    fn retire(&self, i: u32) -> ANNResult<()> {
-        Ok(self.store.retire(i.into_usize())?)
-    }
-
-    fn is_readable(&self, i: u32) -> Option<bool> {
-        self.store.can_read_approximate(i.into_usize())
-    }
-
-    fn id_limit(&self) -> IdLimit {
-        self.store.id_limit()
-    }
-
-    fn capacity(&self) -> Capacity {
-        self.store.capacity()
-    }
+#[derive(Debug)]
+struct AccessorArgs {
+    layout: iface::QueryLayout,
+    allow_rescale: bool,
+    rerank_if_enabled: bool,
 }
+
+repr::internal::macros::representation!(Spherical);
+
+repr::internal::macros::set_guard!(
+    /// A [`repr::Guard`] for [`Spherical`].
+    for<'a> cons::Exclusive<intrusive::Exclusive<'a>, Option<simple::Exclusive<'a>>>
+);
 
 impl repr::Set<&[f32]> for Spherical {
     type Guard<'a> = Guard<'a>;
@@ -306,34 +362,6 @@ impl repr::Set<&[f32]> for Spherical {
     }
 }
 
-#[derive(Debug)]
-pub struct Guard<'a> {
-    slot: store::Exclusive<
-        'a,
-        cons::Exclusive<intrusive::Exclusive<'a>, Option<simple::Exclusive<'a>>>,
-    >,
-}
-
-impl<'a> Guard<'a> {
-    fn new(
-        slot: store::Exclusive<
-            'a,
-            cons::Exclusive<intrusive::Exclusive<'a>, Option<simple::Exclusive<'a>>>,
-        >,
-    ) -> Self {
-        Self { slot }
-    }
-}
-
-impl repr::Guard for Guard<'_> {
-    fn publish(self) {
-        self.slot.publish();
-    }
-    fn id(&self) -> u32 {
-        self.slot.slot()
-    }
-}
-
 impl repr::Search for Spherical {
     type Query<'a> = &'a [f32];
 
@@ -343,42 +371,16 @@ impl repr::Search for Spherical {
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        let query_distance = self
-            .quantizer
-            .fused_query_computer(
-                query,
-                iface::QueryLayout::FullPrecision,
-                true,
-                GlobalAllocator,
-                ScopedAllocator::global(),
-            )
-            .map_err(ANNError::new)?;
-
-        let reader = self
-            .store
-            .guard(|slots, guard| slots.head().reader(guard))?;
-
-        let reranker = match self.store.slots().tail().slots() {
-            Some(simple) => self.reranker.post_process(query, reader.guard(), simple),
-            None => None,
-        };
-
-        let expand_beam = repr::internal::intrusive::ExpandBeam::new(
-            reader,
-            query_distance,
-            prefetch::Loop::new(),
-            self.lookahead,
-        )
-        .boxed();
-
-        Ok(crate::provider::SearchAccessor::new(
-            self.store.neighbors(),
-            expand_beam,
-            reranker,
+        self.create_accessor(
+            query,
             provider,
-            self.store.frozen(),
             counters,
-        ))
+            AccessorArgs {
+                layout: iface::QueryLayout::FullPrecision,
+                allow_rescale: true,
+                rerank_if_enabled: true,
+            },
+        )
     }
 }
 
@@ -389,37 +391,16 @@ impl repr::Insert for Spherical {
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        let query = self
-            .quantizer
-            .fused_query_computer(
-                query,
-                iface::QueryLayout::SameAsData,
-                false,
-                GlobalAllocator,
-                ScopedAllocator::global(),
-            )
-            .map_err(ANNError::new)?;
-
-        let reader = self
-            .store
-            .guard(|slots, guard| slots.head().reader(guard))?;
-
-        let expand_beam = repr::internal::intrusive::ExpandBeam::new(
-            reader,
+        self.create_accessor(
             query,
-            prefetch::Loop::new(),
-            self.lookahead,
-        )
-        .boxed();
-
-        Ok(crate::provider::SearchAccessor::new(
-            self.store.neighbors(),
-            expand_beam,
-            None,
             provider,
-            self.store.frozen(),
             counters,
-        ))
+            AccessorArgs {
+                layout: iface::QueryLayout::SameAsData,
+                allow_rescale: false,
+                rerank_if_enabled: false,
+            },
+        )
     }
 
     fn prune_accessor<'a>(
@@ -429,7 +410,7 @@ impl repr::Insert for Spherical {
         let distance = DebugWrapper(self.quantizer.distance_computer_ref());
         let reader = self
             .store
-            .guard(|slots, guard| slots.head().reader(guard))?;
+            .guard(|slots, guard| slots.first().reader(guard))?;
 
         let prune = repr::internal::intrusive::Prune::new(reader, distance);
 

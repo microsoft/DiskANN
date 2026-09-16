@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! A [`slots::Slots`] that combines two other [`slots::Slots`].
+
 use thiserror::Error;
 
 use crate::{
@@ -12,134 +14,171 @@ use crate::{
     tag,
 };
 
+/// A [`slots::SlotsConfig`] for [`Cons`].
 #[derive(Debug)]
-pub(crate) struct Config<H, T> {
-    head: H,
-    tail: T,
+pub(crate) struct Config<F, S> {
+    first: F,
+    second: S,
 }
 
-impl<H, T> Config<H, T> {
-    pub(crate) fn new(head: H, tail: T) -> Self {
-        Self { head, tail }
+impl<F, S> Config<F, S> {
+    /// Create a new [`Config`] containing the `first` and `second` configs.
+    pub(crate) fn new(first: F, second: S) -> Self {
+        Self { first, second }
     }
 }
 
-impl<H, T> slots::SlotsConfig for Config<H, T>
+impl<F, S> slots::SlotsConfig for Config<F, S>
 where
-    H: slots::SlotsConfig,
-    T: slots::SlotsConfig,
+    F: slots::SlotsConfig,
+    S: slots::SlotsConfig,
 {
-    type Slots = Cons<H::Slots, T::Slots>;
-    type Error = ConsError<H::Error, T::Error>;
+    type Slots = Cons<F::Slots, S::Slots>;
+    type Error = ConsError<F::Error, S::Error>;
 
     unsafe fn build(
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
     ) -> Result<Self::Slots, Self::Error> {
-        let head = unsafe { self.head.build(handle.clone(), tags) }.map_err(ConsError::Head)?;
-        let tail = unsafe { self.tail.build(handle, tags) }.map_err(ConsError::Tail)?;
-        Ok(Cons::new(head, tail))
+        // SAFETY: Inherited from caller.
+        let first = unsafe { self.first.build(handle.clone(), tags) }.map_err(ConsError::First)?;
+        // SAFETY: Inherited from caller.
+        let second = unsafe { self.second.build(handle, tags) }.map_err(ConsError::Second)?;
+
+        let first_limit = slots::Slots::id_limit(&first);
+        let second_limit = slots::Slots::id_limit(&second);
+        if first_limit != second_limit {
+            return Err(ConsError::MismatchLimits {
+                first: first_limit,
+                second: second_limit,
+            });
+        }
+
+        Ok(Cons::new(first, second))
     }
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum ConsError<H, T> {
-    #[error("couldn't construct head slots")]
-    Head(#[source] H),
-    #[error("couldn't construct tail slots")]
-    Tail(#[source] T),
+pub(crate) enum ConsError<F, S> {
+    #[error("couldn't construct first slots")]
+    First(#[source] F),
+    #[error("couldn't construct second slots")]
+    Second(#[source] S),
+    #[error(
+        "id-limit for first ({}) not equal to the id-limit for second ({})",
+        first,
+        second
+    )]
+    MismatchLimits { first: IdLimit, second: IdLimit },
 }
 
+/// A [`slots::Slots`] that combines two other [`slots::Slots`].
+///
+/// Lifecycle operations will first be applied to `first`, then to `second`.
 #[derive(Debug)]
-pub(crate) struct Cons<H, T> {
-    head: H,
-    tail: T,
+pub(crate) struct Cons<F, S> {
+    first: F,
+    second: S,
 }
 
-impl<H, T> Cons<H, T> {
-    fn new(head: H, tail: T) -> Self {
-        Self { head, tail }
+impl<F, S> Cons<F, S> {
+    fn new(first: F, second: S) -> Self {
+        Self { first, second }
     }
 
-    pub(crate) fn head(&self) -> &H {
-        &self.head
+    /// Return the first entry in `self`.
+    pub(crate) fn first(&self) -> &F {
+        &self.first
     }
 
-    pub(crate) fn tail(&self) -> &T {
-        &self.tail
+    /// Return the second entry in `self`.
+    pub(crate) fn second(&self) -> &S {
+        &self.second
     }
 }
 
-impl<H, T> slots::Slots for Cons<H, T>
+impl<F, S> slots::Slots for Cons<F, S>
 where
-    H: slots::Slots,
-    T: slots::Slots,
+    F: slots::Slots,
+    S: slots::Slots,
 {
-    type Exclusive<'a> = Exclusive<H::Exclusive<'a>, T::Exclusive<'a>>;
+    type Exclusive<'a> = Exclusive<F::Exclusive<'a>, S::Exclusive<'a>>;
 
     fn id_limit(&self) -> IdLimit {
-        self.head.id_limit()
+        self.first.id_limit()
     }
 
     unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Exclusive<'_> {
-        Exclusive::new(unsafe { self.head.acquire(i, Lifecycle::new()) }, unsafe {
-            self.tail.acquire(i, Lifecycle::new())
-        })
+        // SAFETY: Inherited from caller.
+        unsafe {
+            Exclusive::new(
+                self.first.acquire(i, Lifecycle::new()),
+                self.second.acquire(i, Lifecycle::new()),
+            )
+        }
     }
 
     unsafe fn retire(&self, i: u32, _: Lifecycle) {
+        // SAFETY: Inherited from caller.
         unsafe {
-            self.head.retire(i, Lifecycle::new());
-            self.tail.retire(i, Lifecycle::new());
+            self.first.retire(i, Lifecycle::new());
+            self.second.retire(i, Lifecycle::new());
         }
     }
 
     unsafe fn reclaim(&self, i: u32, _: Lifecycle) {
+        // SAFETY: Inherited from caller.
         unsafe {
-            self.head.reclaim(i, Lifecycle::new());
-            self.tail.reclaim(i, Lifecycle::new());
+            self.first.reclaim(i, Lifecycle::new());
+            self.second.reclaim(i, Lifecycle::new());
         }
     }
 }
 
+/// A [`slots::Exclusive`] for [`Cons`].
+///
+/// The exclusive for [`Cons::first`] is available via [`Exclusive::first`]. Similarly,
+/// [`Cons::second`]'s is available via [`Exclusive::second`].
 #[derive(Debug)]
-pub(crate) struct Exclusive<H, T> {
-    head: H,
-    tail: T,
+pub(crate) struct Exclusive<F, S> {
+    first: F,
+    second: S,
 }
 
-impl<H, T> Exclusive<H, T> {
-    fn new(head: H, tail: T) -> Self {
-        Self { head, tail }
+impl<F, S> Exclusive<F, S> {
+    fn new(first: F, second: S) -> Self {
+        Self { first, second }
     }
 
-    pub(crate) fn head(&mut self) -> &mut H {
-        &mut self.head
+    /// Return the [`slots::Exclusive`] for the first entry in `self`.
+    pub(crate) fn first(&mut self) -> &mut F {
+        &mut self.first
     }
 
-    pub(crate) fn tail(&mut self) -> &mut T {
-        &mut self.tail
+    /// Return the [`slots::Exclusive`] for the second entry in `self`.
+    pub(crate) fn second(&mut self) -> &mut S {
+        &mut self.second
     }
 }
 
-impl<H, T> slots::Exclusive for Exclusive<H, T>
+impl<F, S> slots::Exclusive for Exclusive<F, S>
 where
-    H: slots::Exclusive,
-    T: slots::Exclusive,
+    F: slots::Exclusive,
+    S: slots::Exclusive,
 {
     fn publish(self, _: Lifecycle) {
-        self.head.publish(Lifecycle::new());
-        self.tail.publish(Lifecycle::new());
+        self.first.publish(Lifecycle::new());
+        self.second.publish(Lifecycle::new());
     }
 
     fn freeze(self, _: Lifecycle) {
-        self.head.freeze(Lifecycle::new());
-        self.tail.freeze(Lifecycle::new());
+        self.first.freeze(Lifecycle::new());
+        self.second.freeze(Lifecycle::new());
     }
 
     fn abort(self, _: Lifecycle) {
-        self.head.abort(Lifecycle::new());
-        self.tail.abort(Lifecycle::new());
+        self.first.abort(Lifecycle::new());
+        self.second.abort(Lifecycle::new());
     }
 }

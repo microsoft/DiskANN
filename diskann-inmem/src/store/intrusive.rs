@@ -45,7 +45,7 @@ use crate::{
     buffer::{Buffer, BufferError, RawSlice},
     epoch,
     num::{Align, Bytes, IdLimit},
-    store::{Lifecycle, Store, slots},
+    store::{Lifecycle, slots},
     tag::{self, AtomicTag, Tag},
 };
 
@@ -451,7 +451,7 @@ mod tests {
 
     use crate::{
         num::{Capacity, MaxDegree},
-        store,
+        store::{self, Store},
     };
 
     // Build a store with `entries` writable slots of `entry_bytes` each, backed by `frozen`

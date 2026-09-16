@@ -37,7 +37,7 @@ mod internal_docs {
 
 use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize};
 
-use diskann::{ANNError, ANNResult, neighbor::Neighbor, utils::IntoUsize};
+use diskann::{ANNError, ANNResult, utils::IntoUsize};
 use diskann_utils::views::Matrix;
 use diskann_vector::{
     UnalignedSlice,
@@ -66,10 +66,21 @@ use crate::{
     tag::AtomicTag,
 };
 
+/// Construct an [`UnalignedSlice`] over `bytes`.
+///
+/// In release builds, this method truncates `bytes.len()` to a multiple of `size_of::<T>()`.
+///
+/// Debug builds assert that the length is in fact a multiple.
 fn unaligned_from_bytes<T>(bytes: &[u8]) -> UnalignedSlice<'_, T>
 where
     T: bytemuck::Pod,
 {
+    debug_assert!(bytes.len().is_multiple_of(std::mem::size_of::<T>()));
+
+    // SAFETY: The slice `bytes` attests that the memory spanned by
+    // `[ptr, ptr.add(size_of::<T>() * (len / size_of::<T>())))` is valid.
+    //
+    // Since `T: Pod`, all bit patterns are valid, so unaligned loads yield well-defined values.
     unsafe {
         UnalignedSlice::new(
             bytes.as_ptr().cast::<T>(),
@@ -353,30 +364,14 @@ where
     }
 }
 
-impl<T> repr::Representation for Full<T>
-where
-    T: FullPrecision,
-{
-    fn max_degree(&self) -> MaxDegree {
-        self.store.neighbors().max_degree()
-    }
+repr::internal::macros::representation!(
+    { T } Full<T> where T: FullPrecision
+);
 
-    fn retire(&self, i: u32) -> ANNResult<()> {
-        Ok(self.store.retire(i.into_usize())?)
-    }
-
-    fn is_readable(&self, i: u32) -> Option<bool> {
-        self.store.can_read_approximate(i.into_usize())
-    }
-
-    fn id_limit(&self) -> IdLimit {
-        self.store.id_limit()
-    }
-
-    fn capacity(&self) -> Capacity {
-        self.store.capacity()
-    }
-}
+repr::internal::macros::set_guard!(
+    /// A [`repr::Guard`] for [`Full`].
+    for<'a> intrusive::Exclusive<'a>
+);
 
 impl<T> repr::Set<&[T]> for Full<T>
 where
@@ -397,27 +392,6 @@ where
             .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
 
         Ok(Guard::new(slot))
-    }
-}
-
-/// A [`repr::Guard`] for [`Full`].
-#[derive(Debug)]
-pub struct Guard<'a> {
-    slot: store::Exclusive<'a, intrusive::Exclusive<'a>>,
-}
-
-impl<'a> Guard<'a> {
-    fn new(slot: store::Exclusive<'a, intrusive::Exclusive<'a>>) -> Self {
-        Self { slot }
-    }
-}
-
-impl repr::Guard for Guard<'_> {
-    fn publish(self) {
-        self.slot.publish();
-    }
-    fn id(&self) -> u32 {
-        self.slot.slot()
     }
 }
 
@@ -855,6 +829,7 @@ mod tests {
 
     use std::fmt::Display;
 
+    use diskann::neighbor::Neighbor;
     use diskann_utils::lazy_format;
     use hashbrown::{HashMap, HashSet};
     use rand::{Rng, SeedableRng, rngs::StdRng};

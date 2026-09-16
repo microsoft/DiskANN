@@ -80,7 +80,7 @@ use std::{
 use diskann::utils::IntoUsize;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::{epoch, num::IdLimit, store::Store, tag};
+use crate::{epoch, num::IdLimit, tag};
 
 use super::{Lifecycle, slots};
 

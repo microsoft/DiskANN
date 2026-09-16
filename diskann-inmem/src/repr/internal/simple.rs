@@ -4,16 +4,16 @@
  */
 
 use diskann::{ANNError, ANNResult, neighbor::Neighbor, utils::IntoUsize};
-use diskann_vector::{UnalignedSlice, distance::Distance};
 
 use crate::{repr, store};
 
-use super::{Calf, RawQueryDistance};
+use super::RawQueryDistance;
 
 //////////////
 // Reranker //
 //////////////
 
+/// A reranker for data stored in a [`store::simple::Simple`].
 #[derive(Debug)]
 pub(in crate::repr) struct Reranker<'a, D> {
     reader: store::simple::Reader<'a>,

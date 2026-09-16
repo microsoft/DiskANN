@@ -8,6 +8,8 @@ use thiserror::Error;
 pub(super) mod intrusive;
 pub(super) mod simple;
 
+pub(super) mod macros;
+
 //////////
 // Calf //
 //////////
