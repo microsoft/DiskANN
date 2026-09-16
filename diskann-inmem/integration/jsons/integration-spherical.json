@@ -22,8 +22,9 @@
           "preprocess": []
         },
         "representation": {
-          "full-precision": {
-            "data_type": "f32"
+          "spherical": {
+            "bits": "one",
+            "rerank": "none"
           }
         },
         "search": {
@@ -65,8 +66,9 @@
           "preprocess": []
         },
         "representation": {
-          "full-precision": {
-            "data_type": "f16"
+          "spherical": {
+            "bits": "one",
+            "rerank": "f16"
           }
         },
         "search": {
@@ -108,8 +110,9 @@
           "preprocess": []
         },
         "representation": {
-          "full-precision": {
-            "data_type": "u8"
+          "spherical": {
+            "bits": "two",
+            "rerank": "none"
           }
         },
         "search": {
@@ -148,14 +151,12 @@
           "groundtruth": "groundtruth.bin",
           "metric": "l2",
           "queries": "yfcc_query_100.fbin",
-          "preprocess": [
-            "halve",
-            "floor"
-          ]
+          "preprocess": []
         },
         "representation": {
-          "full-precision": {
-            "data_type": "i8"
+          "spherical": {
+            "bits": "four",
+            "rerank": "none"
           }
         },
         "search": {

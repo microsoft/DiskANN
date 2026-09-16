@@ -242,11 +242,21 @@ mod tests {
 
     #[test]
     #[cfg(not(miri))]
-    fn graph_index() {
+    fn graph_index_full() {
         run_regression_example(
             "integration.json",
             "checks.json",
             "integration-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn graph_index_spherical() {
+        run_regression_example(
+            "integration-spherical.json",
+            "checks.json",
+            "integration-spherical-baseline.json",
         );
     }
 }

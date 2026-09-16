@@ -71,11 +71,11 @@ where
 
     unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Option<T::Exclusive<'_>> {
         debug_assert!(self.id_limit.is_in_bounds(i));
-        match &self.slots {
+
+        self.slots.as_ref().map(|slots| {
             // SAFETY: Inherited from caller.
-            Some(slots) => Some(unsafe { slots.acquire(i, Lifecycle::new()) }),
-            None => None,
-        }
+            unsafe { slots.acquire(i, Lifecycle::new()) }
+        })
     }
 
     unsafe fn retire(&self, i: u32, _: Lifecycle) {

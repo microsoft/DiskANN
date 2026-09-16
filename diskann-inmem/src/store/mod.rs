@@ -289,6 +289,7 @@ where
         let registry = Registry::with_capacity(epoch_guard_slots);
         let tags = tag::Authoritative::new(id_limit);
 
+        // SAFETY: `registry.handle()` and `tags` belong to store containing the returned `slots`.
         let slots = unsafe { slots::SlotsConfig::build(slots, registry.handle(), &tags) }
             .map_err(StoreError::slots)?;
 

@@ -5,14 +5,15 @@
 
 use std::num::NonZeroUsize;
 
-use diskann::{ANNError, ANNResult, utils::IntoUsize};
+use diskann::{ANNError, ANNResult, error::ErrorContext, utils::IntoUsize};
 use diskann_quantization::{
     alloc::{Allocator, GlobalAllocator, Poly, ScopedAllocator},
     spherical::{SupportedMetric, iface},
 };
-use diskann_utils::views::Matrix;
+use diskann_utils::{lazy_format, views::Matrix};
 use diskann_vector::distance::{Distance, DistanceProvider};
 use half::f16;
+use thiserror::Error;
 
 use crate::{
     counters::LocalCounters,
@@ -37,21 +38,28 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Rerank {
     None,
-    Float16,
+    F16,
 }
 
 impl Rerank {
-    fn bytes(&self, dim: usize) -> Option<Bytes> {
+    #[expect(
+        clippy::expect_used,
+        reason = "the arithmetic should not overflow for the feasible `dim` values"
+    )]
+    fn bytes(&self, dim: usize) -> Bytes {
         match self {
-            Self::None => Some(Bytes::new(0)),
-            Self::Float16 => dim.checked_mul(2).map(Bytes::new),
+            Self::None => Bytes::new(0),
+            Self::F16 => Bytes::new(
+                dim.checked_mul(2)
+                    .expect("f16 is smaller than the f32 in the quantizer"),
+            ),
         }
     }
 
     fn config(self, dim: usize) -> Option<simple::Config> {
         match self {
             Self::None => None,
-            Self::Float16 => Some(Simple::config(self.bytes(dim).unwrap())),
+            Self::F16 => Some(Simple::config(self.bytes(dim))),
         }
     }
 }
@@ -80,19 +88,28 @@ impl Config {
         max_degree: MaxDegree,
         start_points: Matrix<f32>,
         rerank: Rerank,
-    ) -> Self {
-        assert_eq!(start_points.ncols(), quantizer.full_dim());
+    ) -> Result<Self, ConfigError> {
+        let quantizer_dim = quantizer.full_dim();
+        if quantizer_dim != start_points.ncols() {
+            return Err(ConfigError::dim_mismatch(
+                quantizer_dim,
+                start_points.ncols(),
+            ));
+        }
 
-        let num_start_points: u32 = start_points.nrows().try_into().unwrap();
+        let num_start_points: u32 = start_points
+            .nrows()
+            .try_into()
+            .map_err(|_| ConfigError::too_many_start_points(start_points.nrows()))?;
 
-        Self {
+        Ok(Self {
             quantizer,
             start_points,
             layout: store::Layout::new(capacity, max_degree, num_start_points),
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
             rerank,
-        }
+        })
     }
 
     /// Override the [`store::Config`] for tailoring concurrency details.
@@ -111,14 +128,49 @@ impl Config {
         self
     }
 
-    // /// Return the vector dimension of this configuration and the resulting [`Full`].
-    // pub fn dim(&self) -> usize {
-    //     self.start_points.ncols()
-    // }
-
     pub fn build(self) -> ANNResult<Spherical> {
-        Ok(Spherical::new(self))
+        Spherical::new(self)
     }
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct ConfigError {
+    inner: ConfigErrorInner,
+}
+
+diskann::convert_error!(ConfigError);
+
+impl ConfigError {
+    fn dim_mismatch(quantizer: usize, start_points: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::DimMismatch {
+                quantizer,
+                start_points,
+            },
+        }
+    }
+
+    fn too_many_start_points(num_start_points: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::TooManyStartPoints { num_start_points },
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+enum ConfigErrorInner {
+    #[error(
+        "quantizer configured for dimension {} but given start points have dimension {}",
+        start_points,
+        quantizer
+    )]
+    DimMismatch {
+        quantizer: usize,
+        start_points: usize,
+    },
+    #[error("{} start points exceeds u32::MAX", num_start_points)]
+    TooManyStartPoints { num_start_points: usize },
 }
 
 impl repr::RepresentationConfig for Config {
@@ -132,7 +184,7 @@ impl repr::RepresentationConfig for Config {
 #[derive(Debug)]
 enum Reranker {
     None,
-    Float16(Distance<f32, f16>),
+    F16(Distance<f32, f16>),
 }
 
 fn convert_metric(metric: SupportedMetric) -> diskann_vector::distance::Metric {
@@ -149,9 +201,7 @@ impl Reranker {
     fn new(rerank: Rerank, metric: SupportedMetric, dim: usize) -> Self {
         match rerank {
             Rerank::None => Self::None,
-            Rerank::Float16 => {
-                Self::Float16(f32::distance_comparer(convert_metric(metric), Some(dim)))
-            }
+            Rerank::F16 => Self::F16(f32::distance_comparer(convert_metric(metric), Some(dim))),
         }
     }
 
@@ -160,13 +210,15 @@ impl Reranker {
         query: &'a [f32],
         guard: &epoch::Guard<'a>,
         simple: &'a store::simple::Simple,
-    ) -> Option<Box<dyn repr::PostProcess + '_>> {
+        counters: &LocalCounters<'a>,
+    ) -> Option<Box<dyn repr::PostProcess + 'a>> {
         match self {
             Self::None => None,
-            Self::Float16(distance) => {
+            Self::F16(distance) => {
                 let distance = repr::full::QueryDistance::new(Calf::Borrowed(query), *distance);
                 let reader = simple.reader(guard.share());
-                let post_process = repr::internal::simple::Reranker::new(reader, distance);
+                let post_process =
+                    repr::internal::simple::Reranker::new(reader, distance, counters.fork());
                 Some(Box::new(post_process))
             }
         }
@@ -189,7 +241,7 @@ pub struct Spherical {
 }
 
 impl Spherical {
-    fn new(config: Config) -> Self {
+    fn new(config: Config) -> ANNResult<Self> {
         let Config {
             quantizer,
             start_points,
@@ -206,7 +258,7 @@ impl Spherical {
             rerank.config(full_dim),
         );
 
-        let store = Store::new(layout, store, slots).unwrap();
+        let store = Store::new(layout, store, slots)?;
 
         let reranker = Reranker::new(rerank, quantizer.metric(), full_dim);
 
@@ -219,6 +271,7 @@ impl Spherical {
         };
 
         // Initialize start points.
+        let num_start_points = start_points.nrows();
         for (i, row) in std::iter::zip(this.store.frozen(), start_points.row_iter()) {
             #[expect(
                 clippy::expect_used,
@@ -229,11 +282,14 @@ impl Spherical {
                 .slot(i)
                 .expect("internal store should leave frozen-points available for writing");
 
-            this.set(row, slot.data());
+            this.set(row, slot.data()).with_context(|| {
+                lazy_format!(move, "on start point {} of {}", i + 1, num_start_points)
+            })?;
+
             slot.freeze();
         }
 
-        this
+        Ok(this)
     }
 
     pub fn config(
@@ -242,7 +298,7 @@ impl Spherical {
         max_degree: MaxDegree,
         start_points: Matrix<f32>,
         rerank: Rerank,
-    ) -> Config {
+    ) -> Result<Config, ConfigError> {
         Config::new(quantizer, capacity, max_degree, start_points, rerank)
     }
 
@@ -250,19 +306,20 @@ impl Spherical {
         &self,
         v: &[f32],
         slot: &mut cons::Exclusive<intrusive::Exclusive<'_>, Option<simple::Exclusive<'_>>>,
-    ) {
+    ) -> ANNResult<()> {
         self.quantizer
             .compress(
                 v,
                 iface::OpaqueMut::new(slot.first().as_mut_slice()),
                 ScopedAllocator::global(),
             )
-            .map_err(ANNError::new)
-            .unwrap();
+            .map_err(ANNError::new)?;
 
-        if let Some(tail) = slot.second() {
-            self.reranker.store(v, tail.as_mut_slice())
+        if let Some(second) = slot.second() {
+            self.reranker.store(v, second.as_mut_slice());
         }
+
+        Ok(())
     }
 
     fn create_accessor<'a>(
@@ -311,7 +368,7 @@ impl Spherical {
                 .then(|| {
                     cons.second().slots().and_then(|simple| {
                         self.reranker
-                            .post_process(query, expand_beam.guard(), simple)
+                            .post_process(query, expand_beam.guard(), simple, &counters)
                     })
                 })
                 .flatten();
@@ -349,7 +406,15 @@ impl repr::Set<&[f32]> for Spherical {
 
     fn set(&self, v: &[f32]) -> ANNResult<Guard<'_>> {
         if v.len() != self.full_dim {
-            panic!("nope");
+            let vlen = v.len();
+            let full_dim = self.full_dim;
+
+            return Err(ANNError::message(lazy_format!(
+                move,
+                "vector dim {} does not match quantizer dim {}",
+                vlen,
+                full_dim
+            )));
         }
 
         let mut slot = self
@@ -357,7 +422,7 @@ impl repr::Set<&[f32]> for Spherical {
             .acquire()
             .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
 
-        self.set(v, slot.data());
+        self.set(v, slot.data())?;
         Ok(Guard::new(slot))
     }
 }

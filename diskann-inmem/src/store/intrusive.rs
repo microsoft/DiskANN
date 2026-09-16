@@ -73,6 +73,8 @@ impl slots::SlotsConfig for Config {
         tags: &tag::Authoritative,
     ) -> Result<Intrusive, IntrusiveError> {
         let Self { bytes } = self;
+
+        // SAFETY: Inherited from caller.
         unsafe { Intrusive::new(bytes, handle, tags.id_limit()) }
     }
 }

@@ -176,6 +176,7 @@ impl slots::Slots for Simple {
         <Simple>::id_limit(self)
     }
 
+    #[expect(clippy::panic, reason = "indices must be in-bounds")]
     unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Exclusive<'_> {
         let Some(data) = self.data(i.into_usize()) else {
             panic!("index {i} is out-of-bounds");
@@ -231,6 +232,15 @@ impl<'a> Reader<'a> {
         debug_assert!(self.is_in_bounds(i));
 
         if self.tags.readable(i) {
+            // SAFETY: The caller attests that `i` is in-bounds and we have checked that this
+            // entry has a readable tag.
+            //
+            // Therefore, it is safe to:
+            //
+            // * Retrieve the data at position `i` since it is in-bounds.
+            // * Truncate to `self.bytes` (by construction, this is less than `buffer.bytes()`.
+            // * Turn the result into a slice - `self._guard` protects the immutability of the
+            //   slice.
             Some(unsafe {
                 self.buffer
                     .get_unchecked(i)
