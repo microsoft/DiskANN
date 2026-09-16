@@ -25,8 +25,8 @@ use crate::{
 
 /// Error type for [`Knn`] parameter validation.
 /// Because no scaling of results can occur with match rate
-/// > 10%, at least 10 samples must be seen before adaptive L 
-/// can be applied.
+/// greater than 10%, at least 10 samples must be seen before 
+/// adaptive L can be applied.
 #[derive(Debug, Error)]
 pub enum AdaptiveLSearchError {
     #[error("adaptive L scale factor must be >= 1.0")]

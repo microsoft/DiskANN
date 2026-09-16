@@ -219,7 +219,7 @@ impl Setup1D {
     }
 
     /// No matching items are found until the sample size doubles six times,
-    /// after which one matching result is found and the resulting match 
+    /// after which one matching result is found and the resulting match
     /// rate is higher than the max multiplier, so the max multiplier
     /// is used.
     fn max() -> Self {
@@ -539,8 +539,6 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
-
-   
 
     let results = ids[..stats.result_count as usize].iter().copied();
     for id in results {
