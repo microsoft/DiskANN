@@ -4,6 +4,7 @@
  */
 
 use crate::{
+    epoch,
     num::IdLimit,
     store::{Lifecycle, slots},
     tag,
@@ -16,8 +17,14 @@ where
     type Slots = Optional<T::Slots>;
     type Error = T::Error;
 
-    unsafe fn build(self, tags: &tag::Authoritative) -> Result<Self::Slots, Self::Error> {
-        let slots = self.map(|config| unsafe { config.build(tags) }).transpose()?;
+    unsafe fn build(
+        self,
+        handle: epoch::RegistryHandle,
+        tags: &tag::Authoritative,
+    ) -> Result<Self::Slots, Self::Error> {
+        let slots = self
+            .map(|config| unsafe { config.build(handle, tags) })
+            .transpose()?;
         Ok(Optional {
             slots,
             id_limit: tags.id_limit(),

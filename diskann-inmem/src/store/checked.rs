@@ -301,9 +301,10 @@ impl slots::SlotsConfig for Config {
 
     unsafe fn build(
         self,
+        handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
     ) -> Result<Checked, diskann::error::Infallible> {
-        Ok(Checked::new(tags.id_limit()))
+        Ok(Checked::new(handle, tags.id_limit()))
     }
 }
 
@@ -311,15 +312,17 @@ impl slots::SlotsConfig for Config {
 #[derive(Debug)]
 pub(crate) struct Checked {
     entries: Vec<Entry>,
+    handle: epoch::RegistryHandle,
 }
 
 impl Checked {
     /// Create a new [`Checked`] with `id_limit` slots.
-    pub(crate) fn new(id_limit: IdLimit) -> Self {
+    pub(crate) fn new(handle: epoch::RegistryHandle, id_limit: IdLimit) -> Self {
         Self {
             entries: std::iter::repeat_with(Entry::default)
                 .take(id_limit.as_usize())
                 .collect(),
+            handle,
         }
     }
 
@@ -334,11 +337,16 @@ impl Checked {
     }
 
     /// Return an epoch-protected [`Reader`] into [`Self`].
-    pub(crate) fn reader(store: &Store<Self>) -> Result<Reader<'_>, epoch::Unavailable> {
-        store.guard(|this, guard: epoch::Guard<'_>| Reader {
-            parent: this,
+    ///
+    /// # Panics
+    ///
+    /// Panics if `guard` does not belong to `self`'s [`epoch::Registry`].
+    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+        self.handle.assert_guard_belongs(&guard);
+        Reader {
+            parent: self,
             _guard: guard,
-        })
+        }
     }
 }
 

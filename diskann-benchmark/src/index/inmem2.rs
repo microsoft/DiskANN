@@ -836,6 +836,7 @@ impl Benchmark for SphericalBuild {
             Capacity::new(num_points),
             MaxDegree::new(input.build.config.max_degree().get()),
             start,
+            repr::spherical::Rerank::Float16,
         );
 
         let provider = Provider::<_, u32>::new(config)?;

@@ -286,9 +286,11 @@ where
             .try_into()
             .map_err(|_| StoreError::too_many_neighbors(max_degree))?;
 
+        let registry = Registry::with_capacity(epoch_guard_slots);
         let tags = tag::Authoritative::new(id_limit);
-        let slots =
-            unsafe { slots::SlotsConfig::build(slots, &tags) }.map_err(StoreError::slots)?;
+
+        let slots = unsafe { slots::SlotsConfig::build(slots, registry.handle(), &tags) }
+            .map_err(StoreError::slots)?;
 
         let slots_id_limit = slots.id_limit();
         if slots_id_limit != id_limit {
@@ -303,7 +305,7 @@ where
             // NOTE: The `Freelist` is initialized to `entries` and not `total` because
             // we do not want it to release frozen IDs.
             freelist: Freelist::new(entries, freelist_recycle_capacity),
-            registry: Registry::with_capacity(epoch_guard_slots),
+            registry,
             neighbors: Neighbors::new(id_limit, max_degree)?,
         };
 
@@ -791,10 +793,11 @@ mod tests {
 
         unsafe fn build(
             self,
+            handle: epoch::RegistryHandle,
             tags: &tag::Authoritative,
         ) -> Result<Checked, diskann::error::Infallible> {
             let faulty = tags.id_limit().value().checked_sub(1).unwrap_or(1);
-            Ok(Checked::new(IdLimit::new(faulty)))
+            Ok(Checked::new(handle, IdLimit::new(faulty)))
         }
     }
 
@@ -818,7 +821,7 @@ mod tests {
     }
 
     fn reader(store: &Store<Checked>) -> checked::Reader<'_> {
-        Checked::reader(store).unwrap()
+        store.guard(|checked, guard| checked.reader(guard)).unwrap()
     }
 
     //------------------------//

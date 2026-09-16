@@ -61,19 +61,19 @@ impl Config {
     pub(crate) fn new(bytes: Bytes) -> Self {
         Self { bytes }
     }
-
-    /// Build an [`Intrusive`] store holding `id_limit` slots.
-    pub(crate) fn build(self, id_limit: IdLimit) -> Result<Intrusive, IntrusiveError> {
-        let Self { bytes } = self;
-        Intrusive::new(id_limit, bytes)
-    }
 }
 
 impl slots::SlotsConfig for Config {
     type Slots = Intrusive;
     type Error = IntrusiveError;
-    unsafe fn build(self, tags: &tag::Authoritative) -> Result<Intrusive, IntrusiveError> {
-        <Config>::build(self, tags.id_limit())
+
+    unsafe fn build(
+        self,
+        handle: epoch::RegistryHandle,
+        tags: &tag::Authoritative,
+    ) -> Result<Intrusive, IntrusiveError> {
+        let Self { bytes } = self;
+        unsafe { Intrusive::new(bytes, handle, tags.id_limit()) }
     }
 }
 
@@ -86,6 +86,9 @@ pub(crate) struct Intrusive {
     // The unpadded size of each row in `buffer`. This includes both the data **and** the
     // 1-byte tag. Tags are located at byte `unpadded - 1`.
     unpadded: Bytes,
+
+    // A handle to the [`epoch::Registry`] managing this store.
+    handle: epoch::RegistryHandle,
 }
 
 impl Intrusive {
@@ -102,7 +105,11 @@ impl Intrusive {
     ///
     /// Returns an error if the internal buffer allocation exceeds `isize::MAX` or
     /// computation of the padded, intrusive bytes exceeds `usize::MAX`.
-    pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Result<Self, IntrusiveError> {
+    pub(crate) unsafe fn new(
+        bytes: Bytes,
+        handle: epoch::RegistryHandle,
+        id_limit: IdLimit,
+    ) -> Result<Self, IntrusiveError> {
         let Some(unpadded) = bytes.checked_add(AtomicTag::SIZE) else {
             return Err(IntrusiveError::bytes_overflowed());
         };
@@ -115,7 +122,11 @@ impl Intrusive {
             Err(err) => return Err(IntrusiveError::buffer_error(err)),
         };
 
-        Ok(Self { buffer, unpadded })
+        Ok(Self {
+            buffer,
+            unpadded,
+            handle,
+        })
     }
 
     /// Return the [`IdLimit`] for this store.
@@ -135,12 +146,13 @@ impl Intrusive {
         self.unpadded
     }
 
-    /// Return a [`Reader`] over [`Self`] inside `store`.
-    pub(crate) fn reader(store: &Store<Self>) -> Result<Reader<'_>, epoch::Unavailable> {
-        store.guard(|this, guard: epoch::Guard<'_>| unsafe { Self::reader_unchecked(this, guard) })
-    }
-
-    pub(crate) unsafe fn reader_unchecked<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+    /// Return a [`Reader`] over [`Self`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `guard` does not belong to `self`'s [`epoch::Registry`].
+    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+        self.handle.assert_guard_belongs(&guard);
         Reader {
             buffer: &self.buffer,
             unpadded: self.unpadded,
@@ -482,7 +494,7 @@ mod tests {
         // Writable slots are [0, 4); frozen points occupy [4, 6).
         assert_eq!(s.frozen(), 4..6);
 
-        let reader = Intrusive::reader(&s).unwrap();
+        let reader = s.guard(|intrusive, guard| intrusive.reader(guard)).unwrap();
         for i in 0..4 {
             assert!(!s.can_read_approximate(i).unwrap());
             assert!(!reader.can_read(i).unwrap());
@@ -510,7 +522,9 @@ mod tests {
     fn acquire_write_publish_read_roundtrip() {
         let s = store(4, 8, 1).unwrap();
 
-        let reader = Intrusive::reader(&s).expect("reader guard available");
+        let reader = s
+            .guard(|intrusive, guard| intrusive.reader(guard))
+            .expect("reader guard available");
 
         let idx = {
             let mut slot = s.acquire().expect("a fresh store has free slots");
@@ -534,7 +548,9 @@ mod tests {
     fn unpublished_slots_are_immediately_available() {
         let s = store(4, 8, 1).unwrap();
 
-        let reader = Intrusive::reader(&s).expect("reader guard available");
+        let reader = s
+            .guard(|intrusive, guard| intrusive.reader(guard))
+            .expect("reader guard available");
 
         let idx = {
             let mut slot = s.acquire().expect("a fresh store has free slots");
@@ -608,7 +624,10 @@ mod tests {
         assert!(s.retire(idx).is_ok());
 
         // A reader opened after retirement must not observe the retired slot.
-        let reader = Intrusive::reader(&s).unwrap();
+        let reader = s
+            .guard(|intrusive, guard| intrusive.reader(guard))
+            .expect("reader guard available");
+
         assert_eq!(reader.read(idx), None);
         assert_eq!(reader.can_read(idx), Some(false));
 

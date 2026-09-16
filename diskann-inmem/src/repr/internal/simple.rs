@@ -6,44 +6,9 @@
 use diskann::{ANNError, ANNResult, neighbor::Neighbor, utils::IntoUsize};
 use diskann_vector::{UnalignedSlice, distance::Distance};
 
-use crate::{
-    repr, store,
-};
+use crate::{repr, store};
 
 use super::{Calf, RawQueryDistance};
-
-// TODO: Temporary Definition. Unify with `Full`.
-#[derive(Debug)]
-pub(in crate::repr) struct Temporary<'a, T, U>
-where
-    T: 'static,
-    U: 'static,
-{
-    query: Calf<'a, [T]>,
-    distance: Distance<T, U>,
-}
-
-impl<'a, T, U> Temporary<'a, T, U> {
-    pub(in crate::repr) fn new(query: Calf<'a, [T]>, distance: Distance<T, U>) -> Self {
-        Self { query, distance }
-    }
-}
-
-impl<T, U> RawQueryDistance for Temporary<'_, T, U>
-where
-    T: std::fmt::Debug + Send + Sync + 'static,
-    U: std::fmt::Debug + Send + Sync + 'static,
-{
-    type Error = diskann::error::Infallible;
-
-    fn eval(&self, x: &[u8]) -> Result<f32, Self::Error> {
-        Ok(self
-            .distance
-            .call_unaligned(UnalignedSlice::from(&*self.query), unsafe {
-                UnalignedSlice::new(x.as_ptr().cast::<U>(), x.len() / std::mem::size_of::<U>())
-            }))
-    }
-}
 
 //////////////
 // Reranker //

@@ -48,7 +48,10 @@
 
 use std::{
     num::NonZeroUsize,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
 };
 
 use crossbeam_queue::SegQueue;
@@ -91,6 +94,11 @@ impl Default for GuardSlot {
 /// A registry of epoch-based [`Guard`]s. See the [module-level docs](self).
 #[derive(Debug)]
 pub(crate) struct Registry {
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+struct Inner {
     // A record of the active guards.
     //
     // Acquisition state depends on [`GuardSlot::epoch`]:
@@ -138,6 +146,14 @@ pub(crate) struct Registry {
     retiring: Box<[SegQueue<u32>; 4]>,
 }
 
+impl Inner {
+    #[must_use = "this function has no side-effects and is used to justify unsafe code"]
+    fn guard_belongs(&self, guard: &Guard<'_>) -> bool {
+        let slot: *const GuardSlot = guard.slot;
+        self.guards.as_ptr_range().contains(&slot)
+    }
+}
+
 // Return the queue index for the `epoch`.
 fn queue(epoch: u64) -> usize {
     epoch.into_usize() % 4
@@ -163,7 +179,7 @@ impl Registry {
     ///
     /// This is the number of [`Guard`]s that can be registered concurrently.
     pub(crate) fn with_capacity(capacity: NonZeroUsize) -> Self {
-        Self {
+        let inner = Inner {
             guards: std::iter::repeat_with(Default::default)
                 .take(capacity.get())
                 .collect(),
@@ -171,6 +187,22 @@ impl Registry {
             epoch: AtomicU64::new(1),
             retiring: Box::new(core::array::from_fn(|_| SegQueue::new())),
             drain: Mutex::new(()),
+        };
+
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Create a read-only handle to the registry.
+    ///
+    /// The [`RegistryHandle`] can be used to validate whether or not [`Guard`]s
+    /// belong to this [`Registry`] or not.
+    ///
+    /// Unsafe code may rely on these checks.
+    pub(crate) fn handle(&self) -> RegistryHandle {
+        RegistryHandle {
+            inner: self.inner.clone(),
         }
     }
 
@@ -178,7 +210,7 @@ impl Registry {
     ///
     /// This has [`Ordering::Acquire`] semantics.
     pub(crate) fn epoch(&self) -> u64 {
-        self.epoch.load(Ordering::Acquire)
+        self.inner.epoch.load(Ordering::Acquire)
     }
 
     /// Register the caller with `self`.
@@ -200,13 +232,13 @@ impl Registry {
     {
         // GUARD CHECK
         let mut epoch = self.epoch();
-        let hint = self.hint.fetch_add(1, Ordering::Relaxed);
+        let hint = self.inner.hint.fetch_add(1, Ordering::Relaxed);
         delay.post_guard_check();
-        let nguards = self.guards.len();
+        let nguards = self.inner.guards.len();
         for i in 0..nguards {
             let slot = hint.wrapping_add(i) % nguards;
 
-            let guard_slot = &self.guards[slot];
+            let guard_slot = &self.inner.guards[slot];
             delay.pre_cas();
             if guard_slot.epoch.load(Ordering::Relaxed) == 0
                 && guard_slot
@@ -250,7 +282,7 @@ impl Registry {
 
                 return Ok(Guard {
                     slot: guard_slot,
-                    registry: self,
+                    registry: &self.inner,
                     #[cfg(test)]
                     epoch,
                     #[cfg(test)]
@@ -303,7 +335,7 @@ impl Registry {
         let current = self.epoch();
         let mut min = current;
 
-        for s in self.guards.iter() {
+        for s in self.inner.guards.iter() {
             let guarded = s.epoch.load(Ordering::Relaxed);
             if guarded != 0 {
                 min = min.min(guarded);
@@ -344,7 +376,7 @@ impl Registry {
         // proceed anyways.
         //
         // This can help save an expensive slot scan.
-        let drain = self.drain.try_lock()?;
+        let drain = self.inner.drain.try_lock()?;
 
         let (can_advance, current) = self.can_advance(&mut delay);
 
@@ -363,10 +395,10 @@ impl Registry {
             //
             // However, this still needs to be `SeqCst` so that this properly synchronizes
             // with "GUARD FENCE" and "WAITING FENCE".
-            let _previous = self.epoch.fetch_add(1, Ordering::SeqCst);
+            let _previous = self.inner.epoch.fetch_add(1, Ordering::SeqCst);
             debug_assert_eq!(_previous, current, "concurrency violation");
 
-            let queue = &self.retiring[last_queue(current)];
+            let queue = &self.inner.retiring[last_queue(current)];
             Some(Drain {
                 queue,
                 _drain: drain,
@@ -379,7 +411,7 @@ impl Registry {
 
     #[cfg(test)]
     fn assert_no_workers(&self) {
-        for s in self.guards.iter() {
+        for s in self.inner.guards.iter() {
             assert_eq!(s.epoch.load(Ordering::Relaxed), 0);
         }
     }
@@ -388,6 +420,25 @@ impl Registry {
     fn waiting(&self) -> u64 {
         self.can_advance(&mut NoDelay).1
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RegistryHandle {
+    inner: Arc<Inner>,
+}
+
+impl RegistryHandle {
+    #[inline]
+    pub(crate) fn assert_guard_belongs(&self, guard: &Guard<'_>) {
+        if !self.inner.guard_belongs(guard) {
+            guard_does_not_belong(self, guard)
+        }
+    }
+}
+
+#[cold]
+fn guard_does_not_belong(_handle: &RegistryHandle, _guard: &Guard<'_>) -> ! {
+    panic!("invalid epoch guard");
 }
 
 /// A handle registering the caller as a reader at a particular epoch.
@@ -399,7 +450,7 @@ impl Registry {
 #[derive(Debug)]
 pub(crate) struct Guard<'a> {
     slot: &'a GuardSlot,
-    registry: &'a Registry,
+    registry: &'a Inner,
 
     #[cfg(test)]
     pub(super) epoch: u64,
@@ -772,7 +823,10 @@ mod tests {
         f();
 
         // Set the hint to `usize::MAX`.
-        registry.hint.store(usize::MAX - 10, Ordering::Relaxed);
+        registry
+            .inner
+            .hint
+            .store(usize::MAX - 10, Ordering::Relaxed);
 
         // Run tests again to ensure we can properly handle wrap-around.
         f();

@@ -164,12 +164,9 @@ impl Reranker {
         match self {
             Self::None => None,
             Self::Float16(distance) => {
-                let distance =
-                    repr::internal::simple::Temporary::new(Calf::Borrowed(query), *distance);
-
-                let reader = unsafe { simple.reader_unchecked(guard.share()) };
+                let distance = repr::full::QueryDistance::new(Calf::Borrowed(query), *distance);
+                let reader = simple.reader(guard.share());
                 let post_process = repr::internal::simple::Reranker::new(reader, distance);
-
                 Some(Box::new(post_process))
             }
         }
@@ -359,7 +356,7 @@ impl repr::Search for Spherical {
 
         let reader = self
             .store
-            .guard(|slots, guard| unsafe { slots.head().reader_unchecked(guard) })?;
+            .guard(|slots, guard| slots.head().reader(guard))?;
 
         let reranker = match self.store.slots().tail().slots() {
             Some(simple) => self.reranker.post_process(query, reader.guard(), simple),
@@ -405,7 +402,7 @@ impl repr::Insert for Spherical {
 
         let reader = self
             .store
-            .guard(|slots, guard| unsafe { slots.head().reader_unchecked(guard) })?;
+            .guard(|slots, guard| slots.head().reader(guard))?;
 
         let expand_beam = repr::internal::intrusive::ExpandBeam::new(
             reader,
@@ -432,7 +429,7 @@ impl repr::Insert for Spherical {
         let distance = DebugWrapper(self.quantizer.distance_computer_ref());
         let reader = self
             .store
-            .guard(|slots, guard| unsafe { slots.head().reader_unchecked(guard) })?;
+            .guard(|slots, guard| slots.head().reader(guard))?;
 
         let prune = repr::internal::intrusive::Prune::new(reader, distance);
 

@@ -30,10 +30,11 @@ impl slots::SlotsConfig for Config {
     type Error = diskann::error::Infallible;
     unsafe fn build(
         self,
+        handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
     ) -> Result<Simple, diskann::error::Infallible> {
         let Self { bytes } = self;
-        Ok(unsafe { Simple::new(bytes, tags.read_only()) })
+        Ok(unsafe { Simple::new(bytes, handle, tags.read_only()) })
     }
 }
 
@@ -41,6 +42,7 @@ impl slots::SlotsConfig for Config {
 pub(crate) struct Simple {
     buffer: Buffer,
     bytes: Bytes,
+    handle: epoch::RegistryHandle,
     tags: tag::ReadOnly,
 }
 
@@ -49,13 +51,14 @@ impl Simple {
         Config::new(bytes)
     }
 
-    unsafe fn new(bytes: Bytes, tags: tag::ReadOnly) -> Self {
+    unsafe fn new(bytes: Bytes, handle: epoch::RegistryHandle, tags: tag::ReadOnly) -> Self {
         let bytes = bytes.checked_next_multiple_of(Bytes::CACHELINE).unwrap();
         let buffer = Buffer::new(tags.id_limit().as_usize(), bytes, Align::_128).unwrap();
 
         Self {
             buffer,
             bytes,
+            handle,
             tags,
         }
     }
@@ -70,7 +73,13 @@ impl Simple {
         self.bytes
     }
 
-    pub(crate) unsafe fn reader_unchecked<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+    /// Return a [`Reader`] over [`Self`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `guard` does not belong to `self`'s [`epoch::Registry`].
+    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+        self.handle.assert_guard_belongs(&guard);
         Reader {
             buffer: &self.buffer,
             bytes: self.bytes,

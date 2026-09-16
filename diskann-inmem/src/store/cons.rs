@@ -6,6 +6,7 @@
 use thiserror::Error;
 
 use crate::{
+    epoch,
     num::IdLimit,
     store::{Lifecycle, slots},
     tag,
@@ -31,9 +32,13 @@ where
     type Slots = Cons<H::Slots, T::Slots>;
     type Error = ConsError<H::Error, T::Error>;
 
-    unsafe fn build(self, tags: &tag::Authoritative) -> Result<Self::Slots, Self::Error> {
-        let head = unsafe { self.head.build(tags) }.map_err(ConsError::Head)?;
-        let tail = unsafe { self.tail.build(tags) }.map_err(ConsError::Tail)?;
+    unsafe fn build(
+        self,
+        handle: epoch::RegistryHandle,
+        tags: &tag::Authoritative,
+    ) -> Result<Self::Slots, Self::Error> {
+        let head = unsafe { self.head.build(handle.clone(), tags) }.map_err(ConsError::Head)?;
+        let tail = unsafe { self.tail.build(handle, tags) }.map_err(ConsError::Tail)?;
         Ok(Cons::new(head, tail))
     }
 }
