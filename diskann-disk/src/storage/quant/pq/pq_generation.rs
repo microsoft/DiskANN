@@ -8,7 +8,7 @@ use std::{marker::PhantomData, time::Instant};
 use diskann::utils::VectorRepr;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{pq::generate_pq_pivots_fresh, GeneratePivotArguments},
+    model::{pq::generate_pq_pivots, GeneratePivotArguments},
     storage::PQStorage,
     utils::RayonThreadPoolRef,
 };
@@ -86,7 +86,7 @@ where
                 &mut rng.create_rnd(),
             )?;
 
-        generate_pq_pivots_fresh(
+        generate_pq_pivots(
             GeneratePivotArguments::new(
                 train_size,
                 train_dim,

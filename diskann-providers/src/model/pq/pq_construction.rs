@@ -67,9 +67,8 @@ where
 /// file pq_pivots_path as a s num_centers*dim floating point binary file
 /// PQ pivot table layout: {pivot offsets data: METADATA_SIZE}{pivot vector:[dim; num_centroid]}{centroid vector:[dim; 1]}{chunk offsets:[chunk_num+1; 1]}
 ///
-/// Preserves the legacy reuse behavior: an existing pivot file with matching dimensions and
-/// center count is reused, without checking its chunk count. Use [`generate_pq_pivots_fresh`]
-/// when the caller requires a newly trained codebook.
+/// Always trains a new codebook and replaces any existing pivot file after training succeeds.
+/// Training and input-shape errors leave any existing file unchanged.
 ///
 /// Argument `legacy_center_data` will center the provided data by the dataset mean.
 /// This is to supply backwards compatibility with some `diskann-disk` tests that used this
@@ -78,45 +77,6 @@ where
 /// This argument should **only** be used if the distance metric being used is L2. Otherwise
 /// any computed distance on the resulting PQ compressed data will be incorrect.
 pub fn generate_pq_pivots<Storage, Random>(
-    parameters: GeneratePivotArguments,
-    legacy_center_data: bool,
-    train_data: &mut [f32],
-    pq_storage: &PQStorage,
-    storage_provider: &Storage,
-    random_provider: RandomProvider<Random>,
-    pool: RayonThreadPoolRef<'_>,
-) -> ANNResult<()>
-where
-    Storage: StorageWriteProvider + StorageReadProvider,
-    Random: Rng,
-{
-    if pq_storage.pivot_data_exist(storage_provider) {
-        let (file_num_centers, file_dim) =
-            pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        if file_dim == parameters.dim() && file_num_centers == parameters.num_centers() {
-            // PQ pivot file exists. Not generating again.
-            return Ok(());
-        }
-    }
-
-    generate_pq_pivots_fresh(
-        parameters,
-        legacy_center_data,
-        train_data,
-        pq_storage,
-        storage_provider,
-        random_provider,
-        pool,
-    )
-}
-
-/// Train and save a new PQ codebook, replacing any existing pivot file after training succeeds.
-/// Training and input-shape errors leave any existing file unchanged.
-///
-/// Uses the same training algorithm and file format as [`generate_pq_pivots`].
-/// `legacy_center_data` must only be enabled for L2 distance; it centers the training data
-/// by its mean to preserve legacy results.
-pub fn generate_pq_pivots_fresh<Storage, Random>(
     parameters: GeneratePivotArguments,
     legacy_center_data: bool,
     train_data: &mut [f32],
@@ -684,61 +644,7 @@ mod pq_test {
     }
 
     #[rstest]
-    fn generate_pq_pivots_reuses_existing_codebook(
-        #[values(false, true)] legacy_center_data: bool,
-        #[values(1, 2)] existing_chunks: usize,
-    ) {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        let pivot_path = "/legacy_pivots.bin";
-        let pq_storage = PQStorage::new(pivot_path, "/unused.bin", None);
-        let existing_offsets: &[usize] = if existing_chunks == 1 {
-            &[0, 2]
-        } else {
-            &[0, 1, 2]
-        };
-        pq_storage
-            .write_pivot_data(
-                &[-100.0; 4],
-                None,
-                existing_offsets,
-                2,
-                2,
-                &storage_provider,
-            )
-            .unwrap();
-        let mut previous_pivots = Vec::new();
-        storage_provider
-            .open_reader(pivot_path)
-            .unwrap()
-            .read_to_end(&mut previous_pivots)
-            .unwrap();
-
-        // Legacy callers can reuse matching metadata without providing training data.
-        let mut invalid_data = [1.0; 7];
-        let pool = create_thread_pool_for_test();
-        generate_pq_pivots(
-            GeneratePivotArguments::new(4, 2, 2, 2, 5).unwrap(),
-            legacy_center_data,
-            &mut invalid_data,
-            &pq_storage,
-            &storage_provider,
-            crate::utils::create_rnd_provider_from_seed_in_tests(42),
-            pool.as_ref(),
-        )
-        .unwrap();
-
-        assert_eq!(invalid_data, [1.0; 7]);
-        let mut reused_pivots = Vec::new();
-        storage_provider
-            .open_reader(pivot_path)
-            .unwrap()
-            .read_to_end(&mut reused_pivots)
-            .unwrap();
-        assert_eq!(reused_pivots, previous_pivots);
-    }
-
-    #[rstest]
-    fn generate_pq_pivots_fresh_replaces_existing_codebook(
+    fn generate_pq_pivots_replaces_existing_codebook(
         #[values(false, true)] legacy_center_data: bool,
         #[values(1, 2)] existing_chunks: usize,
     ) {
@@ -777,7 +683,7 @@ mod pq_test {
         let pool = create_thread_pool_for_test();
         for storage in [&reference_storage, &pq_storage] {
             let mut train_data = training_data;
-            generate_pq_pivots_fresh(
+            generate_pq_pivots(
                 GeneratePivotArguments::new(4, 2, 2, 2, 5).unwrap(),
                 legacy_center_data,
                 &mut train_data,
@@ -799,7 +705,7 @@ mod pq_test {
     }
 
     #[rstest]
-    fn generate_pq_pivots_fresh_invalid_data_preserves_existing_codebook(
+    fn generate_pq_pivots_invalid_data_preserves_existing_codebook(
         #[values(false, true)] legacy_center_data: bool,
     ) {
         let storage_provider = VirtualStorageProvider::new_memory();
@@ -816,7 +722,7 @@ mod pq_test {
             .unwrap();
         let mut invalid_data = [1.0; 7];
         let pool = create_thread_pool_for_test();
-        let result = generate_pq_pivots_fresh(
+        let result = generate_pq_pivots(
             GeneratePivotArguments::new(4, 2, 2, 2, 5).unwrap(),
             legacy_center_data,
             &mut invalid_data,
