@@ -930,10 +930,7 @@ mod tests {
         (full, points)
     }
 
-    #[derive(Debug)]
-    struct TestDistance;
-
-    impl Distance<f32, f32> for TestDistance {
+    impl Distance<f32, f32> for repr::test::TestDistance {
         fn eval(&self, x: UnalignedSlice<'_, f32>, y: UnalignedSlice<'_, f32>) -> f32 {
             assert_eq!(x.len(), 1);
             assert_eq!(y.len(), 1);
@@ -941,18 +938,6 @@ mod tests {
             // SAFETY: `UnalignedSlice`s must point to valid data, and we've checked that
             // the length of each slice is exactly 1. Therefore, the pointer read is safe.
             unsafe { x.as_ptr().read_unaligned() + y.as_ptr().read_unaligned() }
-        }
-    }
-
-    impl repr::internal::RawDistance for TestDistance {
-        type Error = diskann::error::Infallible;
-
-        fn eval(&self, x: &[u8], y: &[u8]) -> Result<f32, Self::Error> {
-            Ok(Distance::eval(
-                self,
-                unaligned_from_bytes(x),
-                unaligned_from_bytes(y),
-            ))
         }
     }
 
@@ -1041,7 +1026,7 @@ mod tests {
             let into =
                 IntoExpandBeam::new(&full, Calf::Borrowed(std::slice::from_ref(&query))).unwrap();
 
-            let expand = into.into_expand_beam(TestDistance, prefetch::Loop::new());
+            let expand = into.into_expand_beam(repr::test::TestDistance, prefetch::Loop::new());
 
             assert_eq!(<_ as repr::ExpandBeam>::id_limit(&expand), id_limit);
 
@@ -1125,7 +1110,7 @@ mod tests {
 
     fn test_prune_inner(
         points: &HashMap<u32, f32>,
-        prune: &mut repr::internal::intrusive::Prune<'_, TestDistance>,
+        prune: &mut repr::internal::intrusive::Prune<'_, repr::test::TestDistance>,
         ids: &[u32],
     ) {
         let mut items: HashMap<u32, Option<repr::PruneKey>> =
@@ -1213,7 +1198,8 @@ mod tests {
             <_ as repr::Representation>::retire(&full, g1_id).unwrap();
         }
 
-        let mut prune = repr::internal::intrusive::Prune::new(full.reader().unwrap(), TestDistance);
+        let mut prune =
+            repr::internal::intrusive::Prune::new(full.reader().unwrap(), repr::test::TestDistance);
 
         // Note that we emit reads above the `IdLimit`, which we expect to be silently
         // rejected.

@@ -45,6 +45,14 @@
 //! Note that retired payloads are fixed to `u32` ids (typically interpreted by the caller
 //! as indices into some external storage); this is not a general-purpose deferred-drop EBR
 //! system.
+//!
+//! Additionally, [`Guard`]s are cheaply cloneable using [`Guard::share`]. These behave like
+//! [`std::sync::Arc`] with atomic reference counting, but do not require an initial allocation
+//! as the reference count lives inside the [`Registry`]. This enables uses where an initial
+//! [`Guard`] is acquired, then shared among multiple dataset readers.
+//!
+//! Finally, [`RegistryHandle`]s can be created with [`Registry::handle`]. Such a handle may
+//! check that a [`Guard`] actually belongs to registry.
 
 use std::{
     num::NonZeroUsize,
@@ -275,9 +283,11 @@ impl Registry {
                         old, 0,
                         "unclaimed guard slots should have zero reference count"
                     );
-                } else {
-                    guard_slot.references.store(1, Ordering::Relaxed);
                 }
+
+                // Under `test/integration-test` - this redoes work. However, we do want
+                // to make sure we hit it.
+                guard_slot.references.store(1, Ordering::Relaxed);
 
                 return Ok(Guard {
                     slot: guard_slot,
@@ -614,6 +624,88 @@ mod tests {
     use super::*;
 
     use crate::test::Sequencer;
+
+    #[test]
+    fn test_guard_belongs() {
+        let other = Registry::with_capacity(NonZeroUsize::new(5).unwrap());
+
+        for capacity in 1..10 {
+            let registry = Registry::with_capacity(NonZeroUsize::new(capacity).unwrap());
+            let mut guards = Vec::new();
+            while let Ok(guard) = registry.guard() {
+                guards.push(guard);
+            }
+
+            let handle = registry.handle();
+            for g in guards.iter() {
+                assert!(handle.inner.guard_belongs(g));
+                assert!(registry.inner.guard_belongs(g));
+
+                handle.assert_guard_belongs(g);
+
+                // We should correctly detect that `g` does not belong to the other registry.
+                assert!(!other.inner.guard_belongs(g));
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic = "invalid epoch guard"]
+    fn test_guard_belongs_panic() {
+        let a = Registry::with_capacity(NonZeroUsize::new(5).unwrap());
+        let b = Registry::with_capacity(NonZeroUsize::new(5).unwrap());
+
+        let guard = b.guard().unwrap();
+
+        // This function should panic since the guard does not belong.
+        a.handle().assert_guard_belongs(&guard);
+    }
+
+    #[test]
+    fn shared_guards_prevent_advancement() {
+        let registry = Registry::with_capacity(NonZeroUsize::new(5).unwrap());
+
+        let guard = registry.guard().unwrap();
+
+        // With one guard active at the current - we should be able to advance the epoch.
+        {
+            let drain = registry.try_advance().unwrap();
+            assert!(drain.is_empty());
+        }
+
+        // Now that we have advanced the epoch, the old guard should prevent epoch advandement.
+        assert!(
+            registry.try_advance().is_none(),
+            "guard should prevent epoch advancement"
+        );
+
+        // Clone the guard and drop the original one.
+        let clone = guard.share();
+        std::mem::drop(guard);
+
+        // The epoch should still not advance.
+        assert!(
+            registry.try_advance().is_none(),
+            "clone should prevent epoch advancement"
+        );
+
+        // Retire into `clone` and then drop it.
+        clone.retire(10);
+        std::mem::drop(clone);
+
+        registry.assert_no_workers();
+
+        {
+            let drain = registry.try_advance().unwrap();
+            assert!(drain.is_empty());
+        }
+
+        {
+            let drain = registry.try_advance().unwrap();
+            let ids: Vec<_> = drain.collect();
+            assert_eq!(&*ids, &[10]);
+        }
+    }
 
     // This test ensures that two threads racing on `hint` will correctly resolve themselves
     // when claiming a slot.

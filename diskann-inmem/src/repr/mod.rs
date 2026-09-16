@@ -32,6 +32,9 @@ pub mod spherical;
 #[cfg(feature = "quantization")]
 pub use spherical::Spherical;
 
+#[cfg(test)]
+mod test;
+
 //----------------//
 // Representation //
 //----------------//
