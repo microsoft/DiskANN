@@ -36,28 +36,14 @@ macros::aarch64_define_fma!(i32x4, vmlaq_s32);
 impl SIMDMinMax for i32x4 {
     #[inline(always)]
     fn min_simd(self, rhs: Self) -> Self {
-        if cfg!(miri) {
-            use crate::AsSIMD;
-            self.emulated()
-                .min_simd(rhs.emulated())
-                .as_simd(self.arch())
-        } else {
-            // SAFETY: Allowed by the `Neon` architecture.
-            Self(unsafe { vminq_s32(self.0, rhs.0) })
-        }
+        // SAFETY: Allowed by the `Neon` architecture.
+        Self(unsafe { vminq_s32(self.0, rhs.0) })
     }
 
     #[inline(always)]
     fn max_simd(self, rhs: Self) -> Self {
-        if cfg!(miri) {
-            use crate::AsSIMD;
-            self.emulated()
-                .max_simd(rhs.emulated())
-                .as_simd(self.arch())
-        } else {
-            // SAFETY: Allowed by the `Neon` architecture.
-            Self(unsafe { vmaxq_s32(self.0, rhs.0) })
-        }
+        // SAFETY: Allowed by the `Neon` architecture.
+        Self(unsafe { vmaxq_s32(self.0, rhs.0) })
     }
 }
 
