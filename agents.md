@@ -116,6 +116,10 @@ When touching architecture-specific intrinsics, run cross-platform validation pe
 
 ## Code Quality & Linting
 
+### License Headers
+
+Add the [license header](.github/LICENSE_HEADER.txt) when creating Rust source files.
+
 ### Error Handling
 
 There are three regimes of error handling and the strategy to use depends on the regime.

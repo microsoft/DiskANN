@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 use std::{num::NonZero, sync::RwLock};
 
 use diskann::utils::VectorRepr;
