@@ -119,7 +119,7 @@ impl<T: VectorRepr> VectorProvider<T> {
         &self.vector_index
     }
 
-    /// Set vector with Id, `i``, to `v`
+    /// Set vector with Id, `i`, to `v`
     ///
     /// Errors if:
     ///
