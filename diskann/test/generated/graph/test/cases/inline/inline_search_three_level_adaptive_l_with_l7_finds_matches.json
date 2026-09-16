@@ -1,6 +1,6 @@
 {
   "file": "diskann/src/graph/test/cases/inline.rs",
-  "test": "graph/test/cases/inline/inline_search_three_level_adaptive_l_with_l1_finds_matches",
+  "test": "graph/test/cases/inline/inline_search_three_level_adaptive_l_with_l7_finds_matches",
   "payload": {
     "comparisons": 14,
     "grid_size": 0,

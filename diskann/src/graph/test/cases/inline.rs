@@ -490,11 +490,11 @@ fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
 }
 
 #[test]
-fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
+fn inline_search_three_level_adaptive_l_with_l7_finds_matches() {
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
-    let name = path.push("inline_search_three_level_adaptive_l_with_l1_finds_matches");
+    let name = path.push("inline_search_three_level_adaptive_l_with_l7_finds_matches");
 
     let index = build_three_level_index();
 
