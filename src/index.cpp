@@ -3,6 +3,7 @@
 
 #include <omp.h>
 #include <array>
+#include <charconv>
 
 #include <type_traits>
 
@@ -336,19 +337,53 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
 
             if (_location_to_labels.size() > 0)
             {
-                std::ofstream label_writer(std::string(filename) + "_labels.txt");
+                // Avoid the per-line flush caused by std::endl on large label files.
+                std::ofstream label_writer(std::string(filename) + "_labels.txt", std::ios::binary);
                 assert(label_writer.is_open());
+
+                constexpr size_t kBatchSize = 32 * 1024 * 1024; // 32 MB
+                std::vector<char> batch;
+                batch.reserve(kBatchSize);
+
+                auto flush_batch = [&]() {
+                    if (!batch.empty())
+                    {
+                        label_writer.write(batch.data(), batch.size());
+                        batch.clear();
+                    }
+                };
+
+                auto append_label = [](std::vector<char> &dst, LabelT label) {
+                    char buffer[20]; // uint64 max: 20 digits
+                    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), label);
+                    if (result.ec != std::errc())
+                    {
+                        throw diskann::ANNException("Failed to format label ID", -1);
+                    }
+                    dst.insert(dst.end(), buffer, result.ptr);
+                };
+
                 for (uint32_t i = 0; i < _nd; i++)
                 {
                     for (uint32_t j = 0; j + 1 < _location_to_labels[i].size(); j++)
                     {
-                        label_writer << _location_to_labels[i][j] << ",";
+                        append_label(batch, _location_to_labels[i][j]);
+                        batch.push_back(',');
                     }
                     if (_location_to_labels[i].size() != 0)
-                        label_writer << _location_to_labels[i][_location_to_labels[i].size() - 1];
+                        append_label(batch, _location_to_labels[i][_location_to_labels[i].size() - 1]);
 
-                    label_writer << std::endl;
+#ifdef _WIN32
+                    batch.push_back('\r');
+#endif
+                    batch.push_back('\n');
+
+                    if (batch.size() >= kBatchSize)
+                    {
+                        flush_batch();
+                    }
                 }
+                flush_batch();
                 label_writer.close();
 
                 // write compacted raw_labels if data hence _location_to_labels was also compacted
@@ -1657,7 +1692,6 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
         for (auto &ngh : pool)
             ngh.distance = _data_store->get_distance(ngh.id, location);
     }
-
     // sort the pool based on distance to query and prune it with occlude_list
     std::sort(pool.begin(), pool.end());
     pruned_list.clear();
@@ -1788,9 +1822,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         auto node = visit_order[node_ctr];
 
-        // Find and add appropriate graph edges
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
+
         std::vector<uint32_t> pruned_list;
         if (_filtered_index)
         {

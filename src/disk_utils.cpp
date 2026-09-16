@@ -698,12 +698,11 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         if (use_filters)
         {
-            // need to copy the labels_to_medoids file to the specified input
+            // need to move the labels_to_medoids file to the specified input
             // file
             std::remove(labels_to_medoids_file.c_str());
             std::string mem_labels_to_medoid_file = mem_index_path + "_labels_to_medoids.txt";
-            copy_file(mem_labels_to_medoid_file, labels_to_medoids_file);
-            std::remove(mem_labels_to_medoid_file.c_str());
+            move_file(mem_labels_to_medoid_file, labels_to_medoids_file);
         }
 
         std::remove(medoids_file.c_str());
@@ -1396,46 +1395,51 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix, sample_sampling_rate);
     if (use_filters)
     {
-        copy_file(labels_file_to_use, disk_labels_file);
+        // Move the formatted labels file into its final disk-index location.
+        // The original code did copy_file + std::remove of a *different*
+        // mem_labels_file (the one Index::save wrote separately). Keep the
+        // remove of mem_labels_file (that file is redundant with
+        // labels_file_to_use in the static index case) and move
+        // labels_file_to_use into place.
+        move_file(labels_file_to_use, disk_labels_file);
         std::remove(mem_labels_file.c_str());
         if (universal_label != "" && universal_label_id != 0)
         {
-            copy_file(mem_univ_label_file, disk_univ_label_file);
-            std::remove(mem_univ_label_file.c_str());
+            move_file(mem_univ_label_file, disk_univ_label_file);
         }
         // rename bimask label file
         std::string bitmask_label_file = std::string(mem_index_path) + "_bitmask_labels.bin";
         if (file_exists(bitmask_label_file))
         {
-            copy_file(bitmask_label_file, disk_bitmask_labels_file);
-            std::remove(bitmask_label_file.c_str());
+            move_file(bitmask_label_file, disk_bitmask_labels_file);
         }
-        
+
         // rename integer label file
         std::string integer_label_file = std::string(mem_index_path) + "_integer_labels.bin";
         if (file_exists(integer_label_file))
         {
-            copy_file(integer_label_file, disk_integer_labels_file);
-            std::remove(integer_label_file.c_str());
+            move_file(integer_label_file, disk_integer_labels_file);
         }
 
         std::remove(augmented_data_file.c_str());
         std::remove(augmented_labels_file.c_str());
+        // labels_file_to_use was already moved to disk_labels_file above;
+        // the remove below is a no-op if that succeeded, and cleans up
+        // the copy-fallback case where move_file left the source behind
+        // because of a permission or cross-filesystem failure.
         std::remove(labels_file_to_use.c_str());
     }
-    
+
     std::string old_seller_mem_file = std::string(mem_index_path) + "_sellers.txt";
     if (file_exists(old_seller_mem_file))
     {
-        copy_file(old_seller_mem_file, old_disk_seller_file);
-        std::remove(old_seller_mem_file.c_str());
+        move_file(old_seller_mem_file, old_disk_seller_file);
     }
 
     std::string seller_mem_file = std::string(mem_index_path) + "_sellers.bin";
     if (file_exists(seller_mem_file))
     {
-        copy_file(seller_mem_file, disk_seller_file);
-        std::remove(seller_mem_file.c_str());
+        move_file(seller_mem_file, disk_seller_file);
     }
 
     if (created_temp_file_for_processed_data)
@@ -1443,7 +1447,6 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::remove(mem_index_path.c_str());
     if (use_disk_pq)
         std::remove(disk_pq_compressed_vectors_path.c_str());
-
     auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     diskann::cout << "Indexing time: " << diff.count() << std::endl;
