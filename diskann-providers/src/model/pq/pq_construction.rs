@@ -159,7 +159,6 @@ where
 /// The size of the `offsets` vector must be `num_pq_chunks + 1`.
 ///
 /// Result is stored in the `full_pivot_data`, which must be of size `num_centers * dim`.
-#[allow(clippy::too_many_arguments)]
 pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     parameters: &GeneratePivotArguments,
     train_data_slice: &[T],

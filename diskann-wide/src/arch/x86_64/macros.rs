@@ -11,7 +11,7 @@ use crate::traits::{SIMDMask, SIMDVector};
 macro_rules! x86_define_register {
     ($type:ident, $impl:ty, $mask:ty, $scalar:ty, $lanes:literal, $arch:ty) => {
         #[derive(Debug, Clone, Copy)]
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         #[repr(transparent)]
         pub struct $type(pub $impl);
 

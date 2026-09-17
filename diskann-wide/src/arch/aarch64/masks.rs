@@ -30,7 +30,7 @@ use super::Neon;
 macro_rules! define_mask {
     ($mask:ident, $repr:ident, $lanes:literal, $arch:ty) => {
         #[derive(Debug, Clone, Copy)]
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         #[repr(transparent)]
         pub struct $mask(pub(crate) $repr);
 

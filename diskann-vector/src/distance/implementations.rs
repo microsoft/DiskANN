@@ -116,7 +116,7 @@ where
 // Outline the panic formatting and keep the calling convention the same as
 // the top function. This keeps code generation extremely lightweight.
 #[inline(never)]
-#[allow(clippy::panic)]
+#[expect(clippy::panic)]
 fn fail_length_check<L, R>(x: UnalignedSlice<'_, L>, y: UnalignedSlice<'_, R>, len: usize) -> ! {
     let message = if x.len() != len {
         ("first", x.len())
@@ -658,7 +658,7 @@ mod tests {
         max_relative: f32,
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn run_test<L, R, To, Distribution, Callback>(
         under_test: fn(&[L], &[R]) -> To,
         reference: fn(&[L], &[R]) -> To,

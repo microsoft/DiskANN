@@ -19,7 +19,7 @@ use crate::{
 /// Block size for reading/processing large files and matrices in blocks
 const BLOCK_SIZE_LARGE_FILE: u32 = 10_000;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn partition_with_ram_budget<T, StorageProvider, F>(
     dataset_file: &str,
     dim: usize,
@@ -66,7 +66,7 @@ where
     Ok(num_parts)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn find_partition_size<T, StorageProvider, F>(
     dataset_file: &str,
     sampling_rate: f64,
@@ -231,7 +231,7 @@ where
     partition_count
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn shard_data_into_clusters_only_ids<T, StorageProvider>(
     dataset_file: &str,
     pivot_data: &[f32],
@@ -357,7 +357,7 @@ where
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn estimate_cluster_sizes(
     data_float: &[f32],
     num_pts: usize,

@@ -207,15 +207,15 @@ macro_rules! alias {
         $crate::alias!($var = <diskann_wide::arch::Current>::$type);
     };
     ($var:ident = <$arch:ty>::$type:ident) => {
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         type $var = <$arch as $crate::Architecture>::$type;
     };
     ($var:ident<$arch:ident> = $type:ident) => {
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         type $var<$arch> = <$arch as $crate::Architecture>::$type;
     };
     ($var:ident = type $type:path) => {
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         type $var = $type;
     };
 }

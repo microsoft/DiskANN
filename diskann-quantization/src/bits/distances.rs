@@ -2333,7 +2333,7 @@ impl
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::aarch64::Neon>::u8x16);
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         type u8s_8 = diskann_wide::arch::aarch64::u8x8;
         diskann_wide::alias!(u32s = <diskann_wide::arch::aarch64::Neon>::u32x4);
 
@@ -2426,7 +2426,7 @@ impl
     ) -> MathematicalResult<u32> {
         let len = check_lengths!(x, y)?;
 
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         type u8s_8 = diskann_wide::arch::aarch64::u8x8;
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::aarch64::Neon>::u8x16);
         diskann_wide::alias!(u8s_32 = <diskann_wide::arch::aarch64::Neon>::u8x32);
@@ -2562,7 +2562,7 @@ impl
         // returns number of quantized vectors
         let len = check_lengths!(x, y)?;
 
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         type u8s_8 = diskann_wide::arch::aarch64::u8x8;
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::aarch64::Neon>::u8x16);
         diskann_wide::alias!(u8s_32 = <diskann_wide::arch::aarch64::Neon>::u8x32);
