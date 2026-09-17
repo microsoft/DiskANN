@@ -794,8 +794,9 @@ mod tests {
     mod update_dual_topk_tests {
         use super::*;
 
-        // Assign one unique score to each unordered pair. Shuffling prevents the
-        // leaf scan order from also being distance order. The diagonal cannot rank.
+        // The lower triangle contains unique scores. The upper triangle mirrors them.
+        // Shuffle the scores so matrix order differs from distance order.
+        // Diagonal values cannot rank, so no point selects itself.
         fn shuffled_symmetric_distances(count: usize) -> Vec<f32> {
             use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
@@ -812,7 +813,7 @@ mod tests {
             distances
         }
 
-        // Happy path: every point retains K nearest neighbors from finite pair distances.
+        // Happy path: every point retains K nearest neighbors from finite distances.
         #[rstest]
         #[case::one_simd_block_and_tail(18)]
         #[case::two_simd_blocks(33)]
@@ -822,7 +823,7 @@ mod tests {
             #[case] count: usize,
             #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17)] width: usize,
         ) {
-            // Given: the oracle sorts complete rows, independent of the pair scan.
+            // Given: the oracle sorts complete rows, independent of the update order.
             // Every row has enough non-self candidates to fill its result.
             let distances = shuffled_symmetric_distances(count);
             let expected: Vec<_> = distances
@@ -833,7 +834,7 @@ mod tests {
             let mut thresholds = Vec::new();
             let mut rows = MutMatrixView::try_from(output.as_mut_slice(), count, width).unwrap();
 
-            // When: each lower-triangle pair reaches both endpoints exactly once.
+            // When: each distance updates the two points' neighbor lists once.
             with_topk!(width, |topk| {
                 topk.initialize(rows.as_mut_view(), &mut thresholds);
                 for source in 1..count {
@@ -866,10 +867,9 @@ mod tests {
         }
 
         #[test]
-        fn only_the_source_accepts_the_pair() {
-            // Given: point 2 is the source. Point 0 is the target.
-            // Points 0 and 1 already retain each other at distance 1.
-            // The source has no neighbors. Distance 2 improves only its result.
+        fn farther_points_do_not_replace_closer_neighbors() {
+            // Given: points 0 and 1 select each other at distance 1.
+            // Point 2 has no neighbors. Its distances to points 0 and 1 are 2 and 3.
             let mut output = [
                 Candidate::new(1, 1.0),
                 Candidate::new(0, 1.0),
@@ -896,11 +896,10 @@ mod tests {
         }
 
         #[test]
-        fn only_the_target_accepts_the_pair() {
-            // Given: point 2 is the source. Point 1 is the target.
-            // Points 0 and 1 retain each other at distance 3.
-            // The source first selects point 0 at distance 1.
-            // Its later distance 2 to the target improves only the target's result.
+        fn closer_points_replace_existing_neighbors() {
+            // Given: points 0 and 1 select each other at distance 3.
+            // Point 2 is closer to both: distance 1 from point 0 and 2 from point 1.
+            // Points 0 and 1 must select point 2. Point 2 must select point 0.
             let mut output = [
                 Candidate::new(1, 3.0),
                 Candidate::new(0, 3.0),
@@ -931,10 +930,10 @@ mod tests {
         }
 
         #[test]
-        fn both_points_reject_the_farther_pair() {
-            // Given: points 0 and 1 retain each other at distance 1.
-            // Point 2 first selects point 0 at distance 0.5. The later pair
-            // (2, 1) at distance 2 improves neither endpoint.
+        fn both_points_prefer_the_closer_neighbor() {
+            // Given: points 0 and 1 select each other at distance 1.
+            // Point 2 is 0.5 from point 0 and 2 from point 1.
+            // Points 1 and 2 must each select point 0, not each other.
             let mut output = [
                 Candidate::new(1, 1.0),
                 Candidate::new(0, 1.0),
@@ -1006,7 +1005,7 @@ mod tests {
         }
 
         #[test]
-        fn later_pairs_respect_saved_distance_limits() {
+        fn later_updates_respect_saved_distance_limits() {
             let mut output = [Candidate::default(); 3];
             let mut thresholds = [f32::INFINITY; 3];
             let topk = TopK::new(Fixed::<1>);
