@@ -184,7 +184,7 @@ impl<W: Width> TopK<W> {
                 distance_blocks(arch, distances).fold(
                     f32::INFINITY,
                     #[inline(always)]
-                    |limit, block| block.update_one(output, limit, self.width),
+                    |limit, block| block.update_topk_from_candidates(output, limit, self.width),
                 );
             },
             distances,
@@ -228,8 +228,13 @@ impl<W: Width> TopK<W> {
                     thresholds[point_idx],
                     #[inline(always)]
                     |limit, block| {
-                        let limit = block.update_one(remaining, limit, self.width);
-                        block.update_many(others, thresholds, point_idx as u32, self.width);
+                        let limit = block.update_topk_from_candidates(remaining, limit, self.width);
+                        block.update_topks_with_point(
+                            others,
+                            thresholds,
+                            point_idx as u32,
+                            self.width,
+                        );
                         limit
                     },
                 );
@@ -285,9 +290,17 @@ fn distance_blocks<A: PiPNNSIMDSchema>(
 }
 
 impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
-    /// Offer the block's candidates, preserving and returning the updated limit.
+    /// Update one top-k result from this block's candidates.
+    ///
+    /// Each candidate uses its index in the full distance row as its local ID.
+    /// Partition ranking uses leader IDs. Leaf ranking uses IDs of earlier points in the leaf.
+    ///
+    /// Compare candidates against the existing result without clearing its slots.
+    /// The first `width.capacity()` slots of `nearest` hold this result.
+    /// The distance limit is the last slot's distance, or positive infinity while slots remain empty.
+    /// Each insertion can lower this limit. Return the updated limit for the next block.
     #[inline(always)]
-    fn update_one<W: Width>(
+    fn update_topk_from_candidates<W: Width>(
         self,
         nearest: &mut [Candidate],
         mut max_distance: f32,
@@ -345,9 +358,22 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
         max_distance
     }
 
-    /// Offer one point to each result set identified by this block's candidate IDs.
+    /// Offer one leaf point to the top-k results of earlier leaf points.
+    ///
+    /// This block stores distances from `point_idx` to those earlier points.
+    /// Each candidate's local ID selects its result row in the full leaf, not its SIMD lane.
+    /// If that row accepts the pair, insert `point_idx` with the pair's distance.
+    ///
+    /// `candidates` starts at leaf row zero, with `width.capacity()` slots per row.
+    /// `thresholds` holds one distance limit per row.
+    /// The caller initializes both buffers once before the leaf scan.
+    /// These updates retain earlier candidates unless a nearer point displaces them.
+    ///
+    /// Each row compares the pair distance against its own limit.
+    /// Its decision does not depend on the current point's top-k result.
+    /// Update the row's limit after an insertion.
     #[inline(always)]
-    fn update_many<W: Width>(
+    fn update_topks_with_point<W: Width>(
         self,
         candidates: &mut [Candidate],
         thresholds: &mut [f32],
