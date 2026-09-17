@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn initialize_clears_candidates_and_resizes_thresholds() {
+    fn initialize_resets_results_and_limits() {
         // Given: candidate storage contains old results; the threshold buffer
         // still has the smaller previous leaf's length.
         let mut output = [
@@ -528,7 +528,7 @@ mod tests {
     #[rstest]
     #[case::fixed(Fixed::<0>)]
     #[case::runtime(Runtime(0))]
-    fn zero_capacity_accepts_both_update_operations(#[case] width: impl Width) {
+    fn zero_capacity_preserves_results_and_limits(#[case] width: impl Width) {
         let mut output = [];
         let mut thresholds = [f32::INFINITY; 2];
         let topk = TopK::new(width);
@@ -555,7 +555,7 @@ mod tests {
         #[rstest]
         #[case::fixed(Fixed::<3>)]
         #[case::runtime(Runtime(3))]
-        fn insertion_preserves_later_result_rows(#[case] width: impl Width) {
+        fn insertion_preserves_other_rows(#[case] width: impl Width) {
             // Given: the new candidate displaces the first result's farthest neighbor.
             let first_result = [
                 Candidate::new(0, 1.0),
@@ -589,35 +589,73 @@ mod tests {
         use super::*;
 
         #[rstest]
-        #[case::lane_minus_one(15, 3)]
-        #[case::complete_lane(16, 2)]
-        #[case::lane_and_tail(17, 10)]
-        #[case::two_lanes_minus_one(31, 1)]
-        #[case::two_complete_lanes(32, 4)]
-        #[case::two_lanes_and_tail(33, 17)]
-        #[case::capacity_five(33, 5)]
-        #[case::capacity_six(33, 6)]
-        #[case::capacity_seven(33, 7)]
-        #[case::capacity_eight(33, 8)]
-        #[case::capacity_nine(33, 9)]
+        #[case::before_first_simd_block(15)]
+        #[case::one_simd_block(16)]
+        #[case::one_simd_block_and_tail(17)]
+        #[case::before_second_simd_block(31)]
+        #[case::two_simd_blocks(32)]
+        #[case::two_simd_blocks_and_tail(33)]
+        #[case::three_simd_blocks_and_tail(49)]
         fn dispatched_selection_matches_independent_sort(
             #[case] count: usize,
-            #[case] width: usize,
+            #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)] width: usize,
         ) {
-            // Alternating signs force insertions at different positions, not just append.
+            // Given: alternating signs force replacement and interior insertion.
+            let distances: Vec<_> = (0..count)
+                .map(|i| if i % 2 == 0 { i as f32 } else { -(i as f32) })
+                .collect();
+            let expected = sorted_candidates(&distances, width);
+            let mut output = vec![Candidate::default(); width];
+            let mut runtime_output = output.clone();
+
+            // When
+            with_topk!(width, |topk| {
+                arch::dispatch1_no_features(
+                    SelectTopK,
+                    (&topk, distances.as_slice(), output.as_mut_slice()),
+                );
+            });
+            arch::dispatch1_no_features(
+                SelectTopK,
+                (
+                    &TopK::new(Runtime(width)),
+                    distances.as_slice(),
+                    runtime_output.as_mut_slice(),
+                ),
+            );
+
+            // Then: both width representations must satisfy the independent oracle.
+            assert_eq!(output, expected);
+            assert_eq!(runtime_output, expected);
+        }
+
+        #[rstest]
+        #[case::before_second_simd_block(31)]
+        #[case::two_simd_blocks(32)]
+        #[case::two_simd_blocks_and_tail(33)]
+        #[case::three_simd_blocks_and_tail(49)]
+        fn runtime_selection_matches_independent_sort(
+            #[case] count: usize,
+            #[values(11, 17)] width: usize,
+        ) {
+            // Given: K=17 fills during the second block. The third block starts
+            // with a finite limit. Each input has more candidates than result slots.
             let distances: Vec<_> = (0..count)
                 .map(|i| if i % 2 == 0 { i as f32 } else { -(i as f32) })
                 .collect();
             let expected = sorted_candidates(&distances, width);
             let mut output = vec![Candidate::default(); width];
 
+            // When: these capacities select the runtime branch of the batch dispatch.
             with_topk!(width, |topk| {
                 arch::dispatch1_no_features(
                     SelectTopK,
                     (&topk, distances.as_slice(), output.as_mut_slice()),
                 );
-                assert_eq!(output, expected);
             });
+
+            // Then
+            assert_eq!(output, expected);
         }
 
         #[rstest]
@@ -626,21 +664,23 @@ mod tests {
             &[f32::NAN, f32::INFINITY, 9.0],
             [Candidate::new(2, 9.0), Candidate::default()]
         )]
-        fn each_point_replaces_the_previous_points_candidates(
+        fn selection_replaces_previous_results(
             #[case] distances: &[f32],
             #[case] expected: [Candidate; 2],
         ) {
-            let mut output = [Candidate::default(); 2];
+            // Given: both slots contain candidates from the previous selection.
+            let mut output = [Candidate::new(1, 1.0), Candidate::new(2, 2.0)];
             let topk = TopK::new(Fixed::<2>);
-            topk.select_topk(diskann_wide::ARCH, &[3.0, 1.0, 2.0], &mut output);
 
+            // When: select again with the same output buffer.
             arch::dispatch1_no_features(SelectTopK, (&topk, distances, &mut output[..]));
 
+            // Then: unused slots contain no candidates from the previous selection.
             assert_eq!(output, expected);
         }
 
         #[test]
-        fn finite_simd_mask_rechecks_the_threshold_after_insertion() {
+        fn selection_rechecks_candidates_against_updated_limit() {
             // Group one fills K=1 at 5. Both 1 and 4 pass group two's initial
             // mask, but inserting 1 must prevent the later 4 from replacing it.
             let mut distances = [f32::INFINITY; 32];
@@ -656,7 +696,7 @@ mod tests {
         }
 
         #[test]
-        fn closer_candidates_shift_the_middle_of_a_full_result() {
+        fn middle_insertions_keep_nearest_first_order() {
             let mut output = [Candidate::default(); 3];
             let topk = TopK::new(Fixed::<3>);
 
@@ -678,7 +718,9 @@ mod tests {
         }
 
         #[test]
-        fn non_rankable_first_block_preserves_later_candidate_ids() {
+        fn non_rankable_block_preserves_input_indices() {
+            // The first block contributes no candidates. Later IDs still refer
+            // to positions in the full input, not positions among rankable values.
             let mut distances = [f32::INFINITY; 33];
             distances[..8].fill(f32::NAN);
             distances[16] = 4.0;
@@ -701,7 +743,7 @@ mod tests {
         }
 
         #[test]
-        fn nearer_tail_displaces_a_tied_candidate_without_duplicate_ids() {
+        fn tail_candidate_replaces_a_tied_neighbor() {
             let mut distances = [2.0; 17];
             distances[16] = 1.0;
             let mut output = [Candidate::default(); 3];
@@ -719,7 +761,7 @@ mod tests {
         }
 
         #[test]
-        fn special_rankable_distances_keep_distinct_ids_and_original_bits() {
+        fn selection_preserves_ids_and_float_bits() {
             let mut distances = [f32::INFINITY; 33];
             distances[0] = -0.0;
             distances[16] = 0.0;
@@ -752,61 +794,173 @@ mod tests {
     mod update_dual_topk_tests {
         use super::*;
 
-        #[test]
-        fn endpoints_accept_independently_in_both_simd_groups_and_tail() {
-            let mut distances = [f32::INFINITY; 33];
-            distances[0] = 0.5;
-            distances[1] = 4.0;
-            distances[2] = 6.0;
-            distances[16] = 2.0;
-            distances[32] = 0.75;
-            let mut output = [Candidate::default(); 34];
-            let mut thresholds = [f32::INFINITY; 34];
-            let topk = TopK::new(Fixed::<1>);
-            let mut rows = MutMatrixView::try_from(&mut output[..], 34, 1).unwrap();
-            // Earlier leaf rows establish each destination's threshold.
-            let mut previous = [f32::INFINITY; 32];
-            for point in 1..33 {
-                if point == 3 {
-                    previous[..3].copy_from_slice(&[0.2, 5.0, 5.0]);
-                }
-                arch::dispatch1_no_features(
-                    UpdatePair,
-                    (
-                        &topk,
-                        point,
-                        &previous[..point],
-                        rows.as_mut_view(),
-                        &mut thresholds[..],
-                    ),
-                );
-                previous.fill(f32::INFINITY);
-            }
-            let mut expected = [Candidate::default(); 34];
-            expected[0] = Candidate::new(3, 0.2);
-            expected[1] = Candidate::new(33, 4.0);
-            expected[2] = Candidate::new(3, 5.0);
-            expected[3] = Candidate::new(0, 0.2);
-            expected[16] = Candidate::new(33, 2.0);
-            expected[32] = Candidate::new(33, 0.75);
-            expected[33] = Candidate::new(0, 0.5);
+        // Assign one unique score to each unordered pair. Shuffling prevents the
+        // leaf scan order from also being distance order. The diagonal cannot rank.
+        fn shuffled_symmetric_distances(count: usize) -> Vec<f32> {
+            use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
+            let mut scores: Vec<_> = (1..=count * (count - 1) / 2).map(|i| i as f32).collect();
+            scores.shuffle(&mut StdRng::seed_from_u64(1287));
+            let mut distances = vec![f32::INFINITY; count * count];
+            for source in 1..count {
+                for target in 0..source {
+                    let score = scores.pop().unwrap();
+                    distances[source * count + target] = score;
+                    distances[target * count + source] = score;
+                }
+            }
+            distances
+        }
+
+        #[rstest]
+        #[case::one_simd_block_and_tail(18)]
+        #[case::two_simd_blocks(33)]
+        #[case::two_simd_blocks_and_tail(34)]
+        #[case::three_simd_blocks_and_tail(50)]
+        fn each_point_retains_its_nearest_neighbors(
+            #[case] count: usize,
+            #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17)] width: usize,
+        ) {
+            // Given: the oracle sorts complete rows, independent of the pair scan.
+            // Every row has enough non-self candidates to fill its result.
+            let distances = shuffled_symmetric_distances(count);
+            let expected: Vec<_> = distances
+                .chunks_exact(count)
+                .map(|row| sorted_candidates(row, width))
+                .collect();
+            let mut output = vec![Candidate::default(); count * width];
+            let mut thresholds = Vec::new();
+            let mut rows = MutMatrixView::try_from(output.as_mut_slice(), count, width).unwrap();
+
+            // When: each lower-triangle pair reaches both endpoints exactly once.
+            with_topk!(width, |topk| {
+                topk.initialize(rows.as_mut_view(), &mut thresholds);
+                for source in 1..count {
+                    arch::dispatch1_no_features(
+                        UpdatePair,
+                        (
+                            &topk,
+                            source,
+                            &distances[source * count..source * count + source],
+                            rows.as_mut_view(),
+                            thresholds.as_mut_slice(),
+                        ),
+                    );
+                }
+            });
+
+            // Then: check all source and reciprocal rows with their persisted limits.
+            for (source, expected) in expected.iter().enumerate() {
+                assert_eq!(
+                    rows.row(source),
+                    expected,
+                    "source={source}, N={count}, K={width}"
+                );
+                assert_eq!(
+                    thresholds[source],
+                    expected[width - 1].distance,
+                    "threshold for source={source}, N={count}, K={width}"
+                );
+            }
+        }
+
+        #[test]
+        fn only_the_source_accepts_the_pair() {
+            // Given: point 2 is the source. Point 0 is the target.
+            // Points 0 and 1 already retain each other at distance 1.
+            // The source has no neighbors. Distance 2 improves only its result.
+            let mut output = [
+                Candidate::new(1, 1.0),
+                Candidate::new(0, 1.0),
+                Candidate::default(),
+            ];
+            let mut thresholds = output.map(|candidate| candidate.distance);
+            let expected = [output[0], output[1], Candidate::new(0, 2.0)];
+
+            // When
             arch::dispatch1_no_features(
                 UpdatePair,
                 (
-                    &topk,
-                    33,
-                    &distances[..],
-                    rows.as_mut_view(),
+                    &TopK::new(Fixed::<1>),
+                    2,
+                    &[2.0, 3.0][..],
+                    MutMatrixView::try_from(&mut output[..], 3, 1).unwrap(),
                     &mut thresholds[..],
                 ),
             );
 
-            assert_eq!(rows.as_slice(), expected);
+            // Then
+            assert_eq!(output, expected);
+            assert_eq!(thresholds, expected.map(|candidate| candidate.distance));
         }
 
         #[test]
-        fn a_source_fills_across_blocks_with_few_rankable_distances() {
+        fn only_the_target_accepts_the_pair() {
+            // Given: point 2 is the source. Point 1 is the target.
+            // Points 0 and 1 retain each other at distance 3.
+            // The source first selects point 0 at distance 1.
+            // Its later distance 2 to the target improves only the target's result.
+            let mut output = [
+                Candidate::new(1, 3.0),
+                Candidate::new(0, 3.0),
+                Candidate::default(),
+            ];
+            let mut thresholds = output.map(|candidate| candidate.distance);
+            let expected = [
+                Candidate::new(2, 1.0),
+                Candidate::new(2, 2.0),
+                Candidate::new(0, 1.0),
+            ];
+
+            // When
+            arch::dispatch1_no_features(
+                UpdatePair,
+                (
+                    &TopK::new(Fixed::<1>),
+                    2,
+                    &[1.0, 2.0][..],
+                    MutMatrixView::try_from(&mut output[..], 3, 1).unwrap(),
+                    &mut thresholds[..],
+                ),
+            );
+
+            // Then
+            assert_eq!(output, expected);
+            assert_eq!(thresholds, expected.map(|candidate| candidate.distance));
+        }
+
+        #[test]
+        fn both_points_reject_the_farther_pair() {
+            // Given: points 0 and 1 retain each other at distance 1.
+            // Point 2 first selects point 0 at distance 0.5. The later pair
+            // (2, 1) at distance 2 improves neither endpoint.
+            let mut output = [
+                Candidate::new(1, 1.0),
+                Candidate::new(0, 1.0),
+                Candidate::default(),
+            ];
+            let mut thresholds = output.map(|candidate| candidate.distance);
+            let expected = [Candidate::new(2, 0.5), output[1], Candidate::new(0, 0.5)];
+
+            // When
+            arch::dispatch1_no_features(
+                UpdatePair,
+                (
+                    &TopK::new(Fixed::<1>),
+                    2,
+                    &[0.5, 2.0][..],
+                    MutMatrixView::try_from(&mut output[..], 3, 1).unwrap(),
+                    &mut thresholds[..],
+                ),
+            );
+
+            // Then
+            assert_eq!(output, expected);
+            assert_eq!(thresholds, expected.map(|candidate| candidate.distance));
+        }
+
+        #[test]
+        fn later_blocks_fill_source_neighbor_slots() {
             let mut output = [Candidate::default(); 34 * 3];
             let mut thresholds = [f32::INFINITY; 34];
             let topk = TopK::new(Fixed::<3>);
@@ -851,7 +1005,7 @@ mod tests {
         }
 
         #[test]
-        fn later_pairs_use_the_sources_updated_threshold() {
+        fn later_pairs_respect_saved_distance_limits() {
             let mut output = [Candidate::default(); 3];
             let mut thresholds = [f32::INFINITY; 3];
             let topk = TopK::new(Fixed::<1>);
@@ -889,34 +1043,52 @@ mod tests {
         }
 
         #[test]
-        fn runtime_capacity_updates_rows_filled_by_earlier_leaf_pairs() {
+        fn target_replaces_its_farthest_neighbor() {
+            // Given: point 15 retains points 0, 1, 2, and 3. It is the last
+            // lane in group one. Point 16 is the tail target and has no neighbors.
+            // Point 17 enters the middle of point 15's full row.
             let mut output = [Candidate::default(); 18 * 4];
             let mut thresholds = [f32::INFINITY; 18];
-            let mut previous = [f32::INFINITY; 17];
+            let mut previous = [f32::INFINITY; 15];
+            previous[..4].copy_from_slice(&[-1.0, 3.0, 5.0, 7.0]);
             let mut distances = [f32::INFINITY; 17];
             distances[0] = 4.0;
             distances[2] = 3.0;
             distances[15] = 2.0;
             distances[16] = 1.0;
+            let expected_source = [
+                Candidate::new(16, distances[16]),
+                Candidate::new(15, distances[15]),
+                Candidate::new(2, distances[2]),
+                Candidate::new(0, distances[0]),
+            ];
+            let expected_prior_row = [
+                Candidate::new(0, previous[0]),
+                Candidate::new(17, distances[15]),
+                Candidate::new(1, previous[1]),
+                Candidate::new(2, previous[2]),
+            ];
+            let expected_tail_row = [
+                Candidate::new(17, distances[16]),
+                Candidate::default(),
+                Candidate::default(),
+                Candidate::default(),
+            ];
 
             let mut rows = MutMatrixView::try_from(&mut output[..], 18, 4).unwrap();
             let topk = TopK::new(Runtime(4));
-            for point in 1..17 {
-                if point == 15 {
-                    previous[..4].copy_from_slice(&[-1.0, 3.0, 5.0, 7.0]);
-                }
-                arch::dispatch1_no_features(
-                    UpdatePair,
-                    (
-                        &topk,
-                        point,
-                        &previous[..point],
-                        rows.as_mut_view(),
-                        &mut thresholds[..],
-                    ),
-                );
-                previous.fill(f32::INFINITY);
-            }
+            arch::dispatch1_no_features(
+                UpdatePair,
+                (
+                    &topk,
+                    15,
+                    &previous[..],
+                    rows.as_mut_view(),
+                    &mut thresholds[..],
+                ),
+            );
+
+            // When
             arch::dispatch1_no_features(
                 UpdatePair,
                 (
@@ -928,39 +1100,19 @@ mod tests {
                 ),
             );
 
-            assert_eq!(
-                rows.row(17),
-                [
-                    Candidate::new(16, 1.0),
-                    Candidate::new(15, 2.0),
-                    Candidate::new(2, 3.0),
-                    Candidate::new(0, 4.0)
-                ]
-            );
-            assert_eq!(
-                rows.row(15),
-                [
-                    Candidate::new(0, -1.0),
-                    Candidate::new(17, 2.0),
-                    Candidate::new(1, 3.0),
-                    Candidate::new(2, 5.0)
-                ]
-            );
-            assert_eq!(
-                rows.row(16),
-                [
-                    Candidate::new(17, 1.0),
-                    Candidate::default(),
-                    Candidate::default(),
-                    Candidate::default()
-                ]
-            );
+            // Then: the source fills, the prior row evicts, and the tail stays underfilled.
+            assert_eq!(rows.row(17), expected_source);
+            assert_eq!(rows.row(15), expected_prior_row);
+            assert_eq!(rows.row(16), expected_tail_row);
+            assert_eq!(thresholds[17], expected_source[3].distance);
+            assert_eq!(thresholds[15], expected_prior_row[3].distance);
+            assert_eq!(thresholds[16], f32::INFINITY);
         }
 
         #[rstest]
         #[case::simd(15)]
         #[case::tail(16)]
-        fn negative_infinity_reaches_both_endpoints(#[case] candidate: usize) {
+        fn both_points_accept_negative_infinity(#[case] candidate: usize) {
             let mut distances = [f32::NAN; 17];
             distances[candidate] = f32::NEG_INFINITY;
             let mut output = [Candidate::default(); 18 * 2];

@@ -136,11 +136,35 @@ fn validate_output(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::pipnn::L2;
 
     mod test_support {
         use super::*;
+        #[cfg(not(miri))]
+        use diskann_wide::arch::Target2;
         use diskann_wide::arch::{self, Target1};
+
+        #[cfg(not(miri))]
+        pub(super) struct SelectLeaf<M>(pub(super) M);
+
+        #[cfg(not(miri))]
+        impl<A: PiPNNSIMDSchema, M: LeafMetric>
+            Target2<A, ANNResult<()>, MatrixView<'_, f32>, MutMatrixView<'_, Candidate>>
+            for SelectLeaf<M>
+        {
+            fn run(
+                self,
+                arch: A,
+                points: MatrixView<'_, f32>,
+                output: MutMatrixView<'_, Candidate>,
+            ) -> ANNResult<()> {
+                select_leaf_neighbors::<_, M>(
+                    arch,
+                    points,
+                    output,
+                    &mut LeafKernelWorkspace::default(),
+                )
+            }
+        }
 
         struct KernelCall<'a> {
             distances: MatrixView<'a, f32>,
@@ -189,8 +213,92 @@ mod tests {
         }
     }
 
+    // These entry-point tests call GEMM. Miri checks the distance scan below.
+    #[cfg(not(miri))]
     mod select_leaf_neighbors_tests {
+        use super::test_support::SelectLeaf;
         use super::*;
+        use crate::graph::pipnn::{Cosine, CosineNormalized, InnerProduct, L2, scalar_ranking};
+        use diskann_vector::distance::Metric;
+        use diskann_wide::arch;
+        use rstest::rstest;
+
+        #[rstest]
+        #[case::l2(L2, Metric::L2)]
+        #[case::cosine(Cosine, Metric::Cosine)]
+        #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
+        #[case::inner_product(InnerProduct, Metric::InnerProduct)]
+        fn leaf_neighbors_match_scalar_ranking<M: LeafMetric>(
+            #[case] metric: M,
+            #[case] scalar_metric: Metric,
+            #[values(2, 7, 8, 9, 15, 16, 17, 127, 128, 129, 384, 768)] dimensions: usize,
+            #[values(1, 3, 10, 11)] width: usize,
+        ) {
+            // Given: 34 points supply two SIMD groups and a tail in the last row.
+            // All coordinates contribute. Only normalized cosine receives unit vectors.
+            let values = scalar_ranking::arc_vectors(
+                (0..34).map(f64::from),
+                dimensions,
+                scalar_metric == Metric::CosineNormalized,
+            );
+            let points = MatrixView::try_from(values.as_slice(), 34, dimensions).unwrap();
+            let expected: Vec<Vec<_>> = points
+                .row_iter()
+                .enumerate()
+                .map(|(source, point)| {
+                    let mut row: Vec<_> = points
+                        .row_iter()
+                        .enumerate()
+                        .filter(|&(target, _)| source != target)
+                        .map(|(target, vector)| {
+                            (
+                                target as u32,
+                                scalar_ranking::distance(scalar_metric, point, vector),
+                            )
+                        })
+                        .collect();
+                    row.sort_by(|left, right| left.1.total_cmp(&right.1));
+                    row
+                })
+                .collect();
+            let ranking_tolerance = scalar_ranking::ranking_tolerance(scalar_metric, dimensions);
+            let mut output = vec![Candidate::default(); 34 * width];
+
+            // When: dispatch the complete points-to-metric-to-neighbors pipeline.
+            arch::dispatch2_no_features(
+                SelectLeaf(metric),
+                points,
+                MutMatrixView::try_from(output.as_mut_slice(), 34, width).unwrap(),
+            )
+            .unwrap();
+
+            // Then: compare in returned order, including each ID's own scalar score.
+            for (source, (row, expected)) in output.chunks_exact(width).zip(&expected).enumerate() {
+                let ids: Vec<_> = row.iter().map(|candidate| candidate.local_idx).collect();
+                scalar_ranking::assert_ranked_ids(&ids, expected, ranking_tolerance);
+                assert!(
+                    row.windows(2)
+                        .all(|pair| pair[0].distance <= pair[1].distance),
+                    "unordered row {source}"
+                );
+                for candidate in row {
+                    let score = expected
+                        .iter()
+                        .find(|&&(id, _)| id == candidate.local_idx)
+                        .unwrap()
+                        .1;
+                    let distance_tolerance = scalar_ranking::distance_tolerance(
+                        scalar_metric,
+                        points.row(source),
+                        points.row(candidate.local_idx as usize),
+                    );
+                    assert!(
+                        (f64::from(candidate.distance) - score).abs() <= distance_tolerance,
+                        "row {source}, candidate {candidate:?}, scalar {score}, tolerance {distance_tolerance}"
+                    );
+                }
+            }
+        }
 
         #[rstest::rstest]
         #[case::missing_row(2)]
@@ -215,7 +323,7 @@ mod tests {
         }
 
         #[test]
-        fn requesting_self_as_an_extra_neighbor_returns_an_error() {
+        fn excess_neighbor_count_returns_error() {
             let values = [0.0_f32, 1.0, 3.0];
             let mut output = [Candidate::default(); 9];
             let mut workspace = LeafKernelWorkspace::default();
@@ -237,7 +345,7 @@ mod tests {
         }
 
         #[test]
-        fn l2_neighbors_follow_new_geometry_when_workspace_is_reused() {
+        fn l2_neighbors_update_with_reused_workspace() {
             // Given: squared distances on the line determine each point's two neighbors.
             let values = [0.0_f32, 1.0, 3.0, 10.0];
             let expected = [
@@ -305,7 +413,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn lower_triangle_pairs_update_both_endpoints_across_a_simd_group_and_tail() {
+        fn lower_triangle_pairs_update_both_endpoints() {
             // Given: only three lower-triangle pairs rank. The diagonal and upper
             // triangle contain better distances, so reading either changes the answer.
             let mut distances = [f32::NEG_INFINITY; 18 * 18];

@@ -107,9 +107,13 @@ impl LeafMetric for CosineNormalized {
     }
 }
 
+// GEMM-backed tests run natively, not under Miri.
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use super::*;
+    use crate::graph::pipnn::scalar_ranking;
+    use diskann_vector::distance::Metric;
     use rstest::rstest;
 
     const POINT_COUNT: usize = 2;
@@ -140,8 +144,63 @@ mod tests {
     mod compute_distances_tests {
         use super::*;
 
+        #[rstest]
+        #[case::l2(L2, Metric::L2)]
+        #[case::cosine(Cosine, Metric::Cosine)]
+        #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
+        #[case::inner_product(InnerProduct, Metric::InnerProduct)]
+        fn lower_triangle_matches_scalar_ranking<M: LeafMetric>(
+            #[case] _metric: M,
+            #[case] scalar_metric: Metric,
+            #[values(64, 128, 256)] point_count: usize,
+            #[values(128, 384, 768)] dimensions: usize,
+        ) {
+            // Given: spread all points over the same arc as the matrix grows.
+            // NaN marks unwritten entries. The scalar oracle includes self pairs.
+            let values = scalar_ranking::arc_vectors(
+                (0..point_count).map(|point| 32.0 * point as f64 / point_count as f64),
+                dimensions,
+                scalar_metric == Metric::CosineNormalized,
+            );
+            let points = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+            let expected: Vec<Vec<_>> = points
+                .row_iter()
+                .enumerate()
+                .map(|(source, point)| {
+                    points
+                        .row_iter()
+                        .take(source + 1)
+                        .map(|target| {
+                            (
+                                scalar_ranking::distance(scalar_metric, point, target),
+                                scalar_ranking::distance_tolerance(scalar_metric, point, target),
+                            )
+                        })
+                        .collect()
+                })
+                .collect();
+            let mut distances = vec![f32::NAN; point_count * point_count];
+
+            // When: call the metric directly, without TopK selection.
+            M::compute_distances(points, &mut distances).unwrap();
+
+            // Then: check every required entry, including the diagonal.
+            // The upper triangle is outside the metric contract.
+            let actual =
+                MatrixView::try_from(distances.as_slice(), point_count, point_count).unwrap();
+            for (source, row) in expected.iter().enumerate() {
+                for (target, &(expected, tolerance)) in row.iter().enumerate() {
+                    let actual = f64::from(actual.row(source)[target]);
+                    assert!(
+                        (actual - expected).abs() <= tolerance,
+                        "{scalar_metric:?}, {point_count} points, D={dimensions}, pair ({source}, {target}): actual {actual}, expected {expected}, tolerance {tolerance}"
+                    );
+                }
+            }
+        }
+
         #[test]
-        fn squared_l2_ranking_equals_the_sum_of_squared_coordinate_differences() {
+        fn l2_writes_squared_distances() {
             // Given
             let first_point = [3.0_f32, 4.0];
             let second_point = [0.0_f32, 4.0];
@@ -157,7 +216,7 @@ mod tests {
         }
 
         #[test]
-        fn cosine_ranking_equals_one_minus_normalized_similarity() {
+        fn cosine_writes_one_minus_similarity() {
             // Given
             let first_point = [2.0_f32, 0.0];
             let second_point = [1.0_f32, 1.0];
@@ -179,7 +238,7 @@ mod tests {
         #[rstest]
         #[case::zero([0.0, 0.0])]
         #[case::subnormal([f32::MIN_POSITIVE.sqrt() / 2.0, 0.0])]
-        fn small_norm_produces_unit_cosine_ranking(#[case] small_point: [f32; DIMENSION_COUNT]) {
+        fn cosine_writes_one_for_small_norms(#[case] small_point: [f32; DIMENSION_COUNT]) {
             // Given: a zero or subnormal norm represents zero similarity.
             let unit_point = [1.0_f32, 0.0];
             let expected = 1.0;
@@ -192,7 +251,7 @@ mod tests {
         }
 
         #[test]
-        fn normalized_cosine_ranking_equals_the_negative_dot_product() {
+        fn normalized_cosine_writes_negative_dot_products() {
             // Given
             let first_point = [1.0_f32, 0.0];
             let second_point = [0.6_f32, 0.8];
@@ -207,7 +266,7 @@ mod tests {
         }
 
         #[test]
-        fn inner_product_ranking_equals_the_negative_dot_product() {
+        fn inner_product_writes_negative_dot_products() {
             // Given
             let first_point = [2.0_f32, -1.0];
             let second_point = [3.0_f32, 4.0];
@@ -250,7 +309,7 @@ mod tests {
         }
 
         #[test]
-        fn inner_product_uses_the_last_coordinate_beyond_a_complete_dimension_block() {
+        fn inner_product_includes_last_coordinate() {
             let dimensions = 129;
             let mut values = vec![0.0; 2 * dimensions];
             values[dimensions - 1] = 2.0;
