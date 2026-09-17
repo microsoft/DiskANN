@@ -224,281 +224,259 @@ impl PartitionMetric for CosineNormalized {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    mod create_leaders_tests {
-        use super::*;
-
-        #[test]
-        fn l2_norms_follow_sequential_sum_order() {
-            // Given: each small square is half an ULP at the first squared norm.
-            // Each sequential addition rounds back to that norm.
-            let mut values = [1.0_f32; 129];
-            values[0] = 4096.0;
-            let expected_squared_norm = 16_777_216.0_f32;
-            let matrix = MatrixView::try_from(&values[..], 1, values.len()).unwrap();
-
-            // When
-            let leaders = L2::create_leaders(matrix);
-
-            // Then
-            assert_eq!(leaders.norms, [expected_squared_norm]);
-        }
-    }
-
-    // GEMM-backed tests run natively, not under Miri.
     #[cfg(not(miri))]
-    mod compute_distances_tests {
-        use super::*;
-        use crate::graph::pipnn::scalar_ranking;
-        use diskann_vector::distance::Metric;
-        use rstest::rstest;
+    use crate::graph::pipnn::test_support;
+    #[cfg(not(miri))]
+    use diskann_vector::distance::Metric;
+    use rstest::rstest;
 
-        const DIMENSION_COUNT: usize = 2;
-        const STALE_DISTANCE: f32 = 99.0;
-        const FLOAT_TOLERANCE: f32 = 1.0e-6;
-
-        fn matrix(values: &[f32], rows: usize) -> MatrixView<'_, f32> {
-            MatrixView::try_from(values, rows, DIMENSION_COUNT).unwrap()
+    #[cfg(not(miri))]
+    #[rstest]
+    #[case::l2(L2, Metric::L2)]
+    #[case::cosine(Cosine, Metric::Cosine)]
+    #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
+    #[case::inner_product(InnerProduct, Metric::InnerProduct)]
+    fn point_to_leader_scores_match_scalar_distances<M: PartitionMetric>(
+        #[case] _metric: M,
+        #[case] scalar_metric: Metric,
+        #[values(1, 3)] point_count: usize,
+        #[values(1, 4, 17)] leader_count: usize,
+        #[values(1, 2, 7, 8, 9, 15, 16, 17, 127, 128, 129)] dimensions: usize,
+    ) {
+        // Small integer coordinates make unnormalized dot products exact. Points
+        // and leaders use different values, so swapped rows or columns change scores.
+        let mut point_values: Vec<_> = (0..point_count * dimensions)
+            .map(|index| (index % 7) as f32 - 3.0)
+            .collect();
+        let mut leader_values: Vec<_> = (0..leader_count * dimensions)
+            .map(|index| (index % 11) as f32 - 5.0)
+            .collect();
+        for (point, row) in point_values.chunks_exact_mut(dimensions).enumerate() {
+            row[0] = point as f32 + 1.0;
         }
-
-        fn compute_one_ranking<M: PartitionMetric>(
-            point: [f32; DIMENSION_COUNT],
-            leader: [f32; DIMENSION_COUNT],
-        ) -> f32 {
-            let leaders = M::create_leaders(matrix(&leader, 1));
-            let mut storage = [STALE_DISTANCE];
-
-            M::compute_distances(
-                matrix(&point, 1),
-                &leaders,
-                MutMatrixView::row_vector(&mut storage[..]),
-            )
-            .unwrap();
-
-            storage[0]
+        for (leader, row) in leader_values.chunks_exact_mut(dimensions).enumerate() {
+            row[0] = leader as f32 + 2.0;
         }
+        if scalar_metric == Metric::CosineNormalized {
+            test_support::normalize(&mut point_values, dimensions);
+            test_support::normalize(&mut leader_values, dimensions);
+        }
+        let points =
+            MatrixView::try_from(point_values.as_slice(), point_count, dimensions).unwrap();
+        let leader_matrix =
+            MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions).unwrap();
+        let leaders = M::create_leaders(leader_matrix);
+        let mut output = vec![f32::NAN; point_count * leader_count];
 
-        #[rstest]
-        #[case::l2(L2, Metric::L2)]
-        #[case::cosine(Cosine, Metric::Cosine)]
-        #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
-        #[case::inner_product(InnerProduct, Metric::InnerProduct)]
-        fn point_leader_matrix_matches_scalar_ranking<M: PartitionMetric>(
-            #[case] _metric: M,
-            #[case] scalar_metric: Metric,
-            #[values(32, 128)] point_count: usize,
-            #[values(64, 256)] leader_count: usize,
-            #[values(128, 384, 768)] dimensions: usize,
-        ) {
-            // Given: points and leaders sample the same bounded arc on different grids.
-            // NaN marks unwritten entries in every point-to-leader row.
-            let normalize = scalar_metric == Metric::CosineNormalized;
-            let point_values = scalar_ranking::arc_vectors(
-                (0..point_count).map(|point| 32.0 * (point as f64 + 0.5) / point_count as f64),
-                dimensions,
-                normalize,
-            );
-            let leader_values = scalar_ranking::arc_vectors(
-                (0..leader_count).map(|leader| 32.0 * leader as f64 / leader_count as f64),
-                dimensions,
-                normalize,
-            );
-            let points =
-                MatrixView::try_from(point_values.as_slice(), point_count, dimensions).unwrap();
-            let leader_vectors =
-                MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions).unwrap();
-            let expected: Vec<Vec<_>> = points
-                .row_iter()
-                .map(|point| {
-                    // Derive the omitted L2 term from input coordinates, not cached norms.
-                    let point_term = if scalar_metric == Metric::L2 {
-                        point.iter().map(|&value| f64::from(value).powi(2)).sum()
-                    } else {
-                        0.0
-                    };
-                    leader_vectors
-                        .row_iter()
-                        .map(|leader| {
-                            (
-                                scalar_ranking::distance(scalar_metric, point, leader) - point_term,
-                                scalar_ranking::distance_tolerance(scalar_metric, point, leader),
-                            )
-                        })
-                        .collect()
-                })
-                .collect();
-            let mut distances = vec![f32::NAN; point_count * leader_count];
+        M::compute_distances(
+            points,
+            &leaders,
+            MutMatrixView::try_from(output.as_mut_slice(), point_count, leader_count).unwrap(),
+        )
+        .unwrap();
 
-            // When: prepare leaders and call the metric without partition selection.
-            let leaders = M::create_leaders(leader_vectors);
-            M::compute_distances(
-                points,
-                &leaders,
-                MutMatrixView::try_from(distances.as_mut_slice(), point_count, leader_count)
-                    .unwrap(),
-            )
-            .unwrap();
-
-            // Then: check every leader column for every point, not only selected leaders.
-            let actual =
-                MatrixView::try_from(distances.as_slice(), point_count, leader_count).unwrap();
-            for (point, row) in expected.iter().enumerate() {
-                for (leader, &(expected, tolerance)) in row.iter().enumerate() {
-                    let actual = f64::from(actual.row(point)[leader]);
-                    assert!(
-                        (actual - expected).abs() <= tolerance,
-                        "{scalar_metric:?}, {point_count} points, {leader_count} leaders, D={dimensions}, pair ({point}, {leader}): actual {actual}, expected {expected}, tolerance {tolerance}"
-                    );
+        assert_eq!(M::leader_count(&leaders), leader_count);
+        for point in 0..point_count {
+            for leader in 0..leader_count {
+                let mut expected = test_support::distance(
+                    scalar_metric,
+                    points.row(point),
+                    leader_matrix.row(leader),
+                );
+                if scalar_metric == Metric::L2 {
+                    // Partition L2 omits exactly this constant from every column of the row.
+                    expected -= points
+                        .row(point)
+                        .iter()
+                        .map(|&x| f64::from(x).powi(2))
+                        .sum::<f64>();
                 }
-            }
-        }
-
-        #[rstest::rstest]
-        #[case::wrong_rows_with_equal_area(1, 4)]
-        #[case::wrong_columns(2, 1)]
-        fn output_shape_mismatch_returns_error<M: PartitionMetric>(
-            #[values(L2, Cosine, InnerProduct)] _metric: M,
-            #[case] rows: usize,
-            #[case] columns: usize,
-        ) {
-            // Given: two points and two leaders require a 2-by-2 output.
-            let leader_values = [1.0, 0.0, 0.0, 2.0];
-            let leaders = M::create_leaders(matrix(&leader_values, 2));
-            let points = matrix(&[0.0, 4.0, -2.0, 0.0], 2);
-            let mut storage = vec![STALE_DISTANCE; rows * columns];
-
-            // When
-            let result = M::compute_distances(
-                points,
-                &leaders,
-                MutMatrixView::try_from(storage.as_mut_slice(), rows, columns).unwrap(),
-            );
-
-            // Then: invalid output shapes stop the build.
-            assert!(result.is_err());
-        }
-
-        #[test]
-        fn l2_omits_squared_point_norm() {
-            // Given: leader norms are 25 and 4; each entry is norm - 2 * dot.
-            let leader_values = [3.0_f32, 4.0, 0.0, 2.0];
-            let leaders = L2::create_leaders(matrix(&leader_values, 2));
-            let points = matrix(&[2.0, 1.0, -1.0, 2.0], 2);
-            let expected = [5.0, 0.0, 15.0, -4.0];
-            let mut storage = [STALE_DISTANCE; 4];
-
-            // When
-            L2::compute_distances(
-                points,
-                &leaders,
-                MutMatrixView::try_from(&mut storage[..], 2, 2).unwrap(),
-            )
-            .unwrap();
-
-            // Then: every row replaces stale distances before GEMM accumulates.
-            assert_eq!(storage, expected);
-        }
-
-        #[rstest::rstest]
-        #[case::zero_point([0.0, 0.0], [1.0, 0.0])]
-        #[case::zero_leader([1.0, 0.0], [0.0, 0.0])]
-        #[case::subnormal_point([f32::MIN_POSITIVE.sqrt() / 2.0, 0.0], [1.0, 0.0])]
-        #[case::subnormal_leader([1.0, 0.0], [f32::MIN_POSITIVE.sqrt() / 2.0, 0.0])]
-        fn cosine_writes_one_for_small_norms(
-            #[case] point: [f32; DIMENSION_COUNT],
-            #[case] leader: [f32; DIMENSION_COUNT],
-        ) {
-            // Given: a zero or subnormal norm represents zero similarity.
-            let expected = 1.0;
-
-            // When
-            let actual = compute_one_ranking::<Cosine>(point, leader);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[rstest::rstest]
-        #[case::l2(compute_one_ranking::<L2>)]
-        #[case::cosine(compute_one_ranking::<Cosine>)]
-        #[case::inner_product(compute_one_ranking::<InnerProduct>)]
-        fn nan_coordinate_produces_nan_ranking(
-            #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
-        ) {
-            // Given: neither vector has zero norm.
-            let point = [f32::NAN, 1.0];
-            let leader = [1.0, 0.0];
-
-            // When
-            let actual = compute(point, leader);
-
-            // Then
-            assert!(actual.is_nan());
-        }
-
-        #[test]
-        fn normalized_cosine_writes_negative_dot_products() {
-            // Given
-            let point = [1.0_f32, 0.0];
-            let leader = [0.6_f32, 0.8];
-            let dot = point[0].mul_add(leader[0], point[1] * leader[1]);
-            let expected = -dot;
-
-            // When
-            let actual = compute_one_ranking::<CosineNormalized>(point, leader);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[test]
-        fn inner_product_writes_negative_dot_products() {
-            // Given
-            let point = [2.0_f32, -1.0];
-            let leader = [3.0_f32, 4.0];
-            let dot = point[0].mul_add(leader[0], point[1] * leader[1]);
-            let expected = -dot;
-
-            // When
-            let actual = compute_one_ranking::<InnerProduct>(point, leader);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[test]
-        fn cosine_replaces_all_distance_rows() {
-            // Given: non-unit points point right, up, and left. Leaders point
-            // diagonally up-right and up, so similarities include ±1/sqrt(2).
-            let leader_values = [1.0_f32, 1.0, 0.0, 2.0];
-            let leaders = Cosine::create_leaders(matrix(&leader_values, 2));
-            let points = matrix(&[2.0, 0.0, 0.0, 4.0, -2.0, 0.0], 3);
-            let diagonal_similarity = std::f32::consts::FRAC_1_SQRT_2;
-            let expected = [
-                1.0 - diagonal_similarity,
-                1.0,
-                1.0 - diagonal_similarity,
-                0.0,
-                1.0 + diagonal_similarity,
-                1.0,
-            ];
-            let mut storage = [STALE_DISTANCE; 6];
-
-            // When
-            Cosine::compute_distances(
-                points,
-                &leaders,
-                MutMatrixView::try_from(&mut storage[..], 3, 2).unwrap(),
-            )
-            .unwrap();
-
-            // Then
-            for (actual, expected) in storage.into_iter().zip(expected) {
+                let tolerance = match scalar_metric {
+                    Metric::L2 | Metric::InnerProduct => 0.0,
+                    // Bound f32 norm/dot reductions at unit scale, as in the leaf metric.
+                    Metric::Cosine | Metric::CosineNormalized => {
+                        8.0 * f64::from(f32::EPSILON) * dimensions as f64
+                    }
+                };
+                let actual = f64::from(output[point * leader_count + leader]);
                 assert!(
-                    (actual - expected).abs() <= FLOAT_TOLERANCE,
-                    "actual {actual} differs from expected {expected}"
+                    (actual - expected).abs() <= tolerance,
+                    "point={point}, leader={leader}, dimensions={dimensions}: {actual} != {expected}"
                 );
             }
         }
+    }
+
+    #[cfg(not(miri))]
+    #[rstest]
+    #[case::l2(L2, Metric::L2)]
+    #[case::cosine(Cosine, Metric::Cosine)]
+    #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
+    #[case::inner_product(InnerProduct, Metric::InnerProduct)]
+    fn large_dense_inputs_match_scalar_distances<M: PartitionMetric>(
+        #[case] _metric: M,
+        #[case] scalar_metric: Metric,
+        #[values((17, 33, 384), (33, 65, 768), (65, 129, 1536), (9, 17, 1537), (257, 513, 129), (5, 17, 4097))]
+        shape: (usize, usize, usize),
+    ) {
+        let (point_count, leader_count, dimensions) = shape;
+        let mut point_values = test_support::dense_points(point_count, dimensions, 1287);
+        let mut leader_values = test_support::dense_points(leader_count, dimensions, 2026);
+        if scalar_metric == Metric::CosineNormalized {
+            test_support::normalize(&mut point_values, dimensions);
+            test_support::normalize(&mut leader_values, dimensions);
+        }
+        let points =
+            MatrixView::try_from(point_values.as_slice(), point_count, dimensions).unwrap();
+        let leader_matrix =
+            MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions).unwrap();
+        let leaders = M::create_leaders(leader_matrix);
+        let mut output = vec![f32::NAN; point_count * leader_count];
+
+        M::compute_distances(
+            points,
+            &leaders,
+            MutMatrixView::try_from(output.as_mut_slice(), point_count, leader_count).unwrap(),
+        )
+        .unwrap();
+
+        let tolerance = match scalar_metric {
+            Metric::L2 | Metric::InnerProduct => 0.0,
+            // Dyadic dot/norm sums are exact; square roots and division round.
+            Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
+            Metric::CosineNormalized => {
+                // Bound product and sum rounding for normalized f32 coordinates.
+                let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
+                roundoff / (1.0 - roundoff)
+            }
+        };
+        for point in 0..point_count {
+            let point_norm: f64 = points
+                .row(point)
+                .iter()
+                .map(|&x| f64::from(x).powi(2))
+                .sum();
+            for leader in 0..leader_count {
+                let mut expected = test_support::distance(
+                    scalar_metric,
+                    points.row(point),
+                    leader_matrix.row(leader),
+                );
+                if scalar_metric == Metric::L2 {
+                    expected -= point_norm;
+                }
+                let actual = f64::from(output[point * leader_count + leader]);
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "shape={shape:?}, point={point}, leader={leader}: {actual} != {expected}, tolerance={tolerance}"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(miri))]
+    #[rstest]
+    #[case::l2(L2, &[2.0, 0.0, 0.0, 3.0], &[1.0, 0.0, 0.0, -2.0, -3.0, 0.0], [-3.0, 4.0, 21.0, 1.0, 16.0, 9.0])]
+    #[case::cosine(Cosine, &[2.0, 0.0, 0.0, 3.0], &[1.0, 0.0, 0.0, -2.0, -3.0, 0.0], [0.0, 1.0, 2.0, 1.0, 2.0, 1.0])]
+    #[case::inner_product(InnerProduct, &[2.0, 0.0, 0.0, 3.0], &[1.0, 0.0, 0.0, -2.0, -3.0, 0.0], [-2.0, 0.0, 6.0, 0.0, 6.0, 0.0])]
+    #[case::normalized_cosine(CosineNormalized, &[1.0, 0.0, 0.0, 1.0], &[1.0, 0.0, 0.0, -1.0, -1.0, 0.0], [-1.0, 0.0, 1.0, 0.0, 1.0, 0.0])]
+    fn leader_sets_can_be_reused_across_point_stripes<M: PartitionMetric>(
+        #[case] _metric: M,
+        #[case] point_values: &[f32],
+        #[case] leader_values: &[f32],
+        #[case] expected: [f32; 6],
+    ) {
+        let leaders = M::create_leaders(MatrixView::try_from(leader_values, 3, 2).unwrap());
+        let mut output = [-100.0; 3];
+
+        for (point, expected) in point_values.chunks_exact(2).zip(expected.chunks_exact(3)) {
+            M::compute_distances(
+                MatrixView::try_from(point, 1, 2).unwrap(),
+                &leaders,
+                MutMatrixView::try_from(&mut output[..], 1, 3).unwrap(),
+            )
+            .unwrap();
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[cfg(not(miri))]
+    #[test]
+    fn cosine_assigns_unit_distance_when_either_vector_has_zero_norm() {
+        let point_values = [0.0, 0.0, 0.0, 2.0];
+        let leader_values = [3.0, 0.0, 0.0, 0.0, 0.0, -4.0];
+        let leaders =
+            Cosine::create_leaders(MatrixView::try_from(&leader_values[..], 3, 2).unwrap());
+        let mut output = [42.0; 6];
+
+        Cosine::compute_distances(
+            MatrixView::try_from(&point_values[..], 2, 2).unwrap(),
+            &leaders,
+            MutMatrixView::try_from(&mut output[..], 2, 3).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(output, [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]);
+    }
+
+    #[rstest]
+    #[case::l2(L2)]
+    #[case::cosine(Cosine)]
+    #[case::normalized_cosine(CosineNormalized)]
+    #[case::inner_product(InnerProduct)]
+    fn output_shape_mismatch_is_rejected_before_writing<M: PartitionMetric>(
+        #[case] _metric: M,
+        #[values((1, 3), (2, 2), (3, 3), (2, 4))] shape: (usize, usize),
+    ) {
+        let point_values = [1.0, 2.0, 3.0, 4.0];
+        let leader_values = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
+        let leaders = M::create_leaders(MatrixView::try_from(&leader_values[..], 3, 2).unwrap());
+        let mut output = vec![17.0; shape.0 * shape.1];
+
+        let error = M::compute_distances(
+            MatrixView::try_from(&point_values[..], 2, 2).unwrap(),
+            &leaders,
+            MutMatrixView::try_from(output.as_mut_slice(), shape.0, shape.1).unwrap(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("point-to-leader output shape mismatch")
+        );
+        assert_eq!(output, vec![17.0; shape.0 * shape.1]);
+    }
+
+    #[rstest]
+    #[case::l2(L2)]
+    #[case::cosine(Cosine)]
+    #[case::normalized_cosine(CosineNormalized)]
+    #[case::inner_product(InnerProduct)]
+    fn mismatched_vector_dimensions_report_the_leader_matrix_error<M: PartitionMetric>(
+        #[case] _metric: M,
+    ) {
+        let point_values = [1.0, 2.0, 3.0];
+        let leader_values = [1.0, 2.0, 3.0, 4.0];
+        let leaders = M::create_leaders(MatrixView::try_from(&leader_values[..], 2, 2).unwrap());
+        let mut output = [17.0; 2];
+
+        let error = M::compute_distances(
+            MatrixView::try_from(&point_values[..], 1, 3).unwrap(),
+            &leaders,
+            MutMatrixView::try_from(&mut output[..], 1, 2).unwrap(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.downcast_ref::<diskann_linalg::SgemmError>(),
+            Some(&diskann_linalg::SgemmError::InvalidMatrixDimensions {
+                matrix_name: diskann_linalg::MatrixName::B,
+                expected_rows: 3,
+                expected_cols: 2,
+                actual_len: 4,
+            })
+        );
     }
 }
