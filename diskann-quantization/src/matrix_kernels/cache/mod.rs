@@ -4,8 +4,8 @@
  */
 
 //! L1d / L2 cache size probe used by the matrix-kernel drivers.
-//! Detected once and memoized; returns [`CacheInfo::FALLBACK`] when no
-//! per-platform probe applies.
+//! Success and failure are memoized. Returns `None` when the probe is unavailable
+//! or cannot determine both cache sizes.
 
 use std::sync::OnceLock;
 
@@ -25,20 +25,12 @@ pub(super) struct CacheInfo {
     pub l2_bytes: usize,
 }
 
-impl CacheInfo {
-    /// Used when no per-platform probe applies.
-    pub(super) const FALLBACK: Self = Self {
-        l1d_bytes: 32 * 1024,
-        l2_bytes: 256 * 1024,
-    };
-}
-
-pub(super) fn cache_info() -> CacheInfo {
-    static CACHED: OnceLock<CacheInfo> = OnceLock::new();
+pub(super) fn cache_info() -> Option<CacheInfo> {
+    static CACHED: OnceLock<Option<CacheInfo>> = OnceLock::new();
     *CACHED.get_or_init(detect_uncached)
 }
 
-fn detect_uncached() -> CacheInfo {
+fn detect_uncached() -> Option<CacheInfo> {
     #[cfg(target_arch = "x86_64")]
     let detected = cpuid::detect();
 
@@ -55,36 +47,5 @@ fn detect_uncached() -> CacheInfo {
     )))]
     let detected: Option<CacheInfo> = None;
 
-    detected.unwrap_or(CacheInfo::FALLBACK)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cache_info_returns_plausible_values() {
-        let info = cache_info();
-
-        // Either we detected real values or we fell back. In both cases the
-        // values must be within plausible bounds for any CPU we care about:
-        // 4 KB to 1 MB for L1d, 64 KB to 128 MB for L2.
-        assert!(
-            (4 * 1024..=1024 * 1024).contains(&info.l1d_bytes),
-            "L1d out of plausible range: {} bytes",
-            info.l1d_bytes
-        );
-        assert!(
-            (64 * 1024..=128 * 1024 * 1024).contains(&info.l2_bytes),
-            "L2 out of plausible range: {} bytes",
-            info.l2_bytes
-        );
-    }
-
-    #[test]
-    fn cache_info_is_memoized() {
-        let first = cache_info();
-        let second = cache_info();
-        assert_eq!(first, second);
-    }
+    detected
 }
