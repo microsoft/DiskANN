@@ -10,6 +10,9 @@ use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDVector};
 /// Default SIMD representation used by both PiPNN ranking kernels.
 ///
 /// This alias is the single build-time width selection.
+///
+/// TODO: This 16-lane choice lacks Neon-specific validation.
+/// Add Neon coverage in a follow-up.
 type DefaultVector<A> = <A as Architecture>::f32x16;
 
 /// PiPNN SIMD representation for one architecture.

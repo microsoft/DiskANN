@@ -61,20 +61,21 @@ where
     }
     let leader_count = M::leader_count(leaders);
     let distance_count = point_count * leader_count;
-    let PartitionKernelWorkspace {
-        distance_scratch,
-        ranked_leaders,
-    } = workspace;
-    if distance_scratch.len() < distance_count {
-        distance_scratch.resize(distance_count, 0.0);
+    if workspace.distance_scratch.len() < distance_count {
+        workspace.distance_scratch.resize(distance_count, 0.0);
     }
     let mut distances = MutMatrixView::try_from(
-        &mut distance_scratch[..distance_count],
+        &mut workspace.distance_scratch[..distance_count],
         point_count,
         leader_count,
     )?;
     M::compute_distances(points, leaders, distances.as_mut_view())?;
-    rank_leader_distances(arch, distances.as_view(), output, ranked_leaders);
+    rank_leader_distances(
+        arch,
+        distances.as_view(),
+        output,
+        &mut workspace.ranked_leaders,
+    );
     Ok(())
 }
 

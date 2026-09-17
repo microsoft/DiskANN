@@ -455,7 +455,7 @@ mod tests {
         }
     }
 
-    struct UpdatePair;
+    struct UpdateDualTopK;
     impl<A: PiPNNSIMDSchema, W: Width>
         Target1<
             A,
@@ -467,7 +467,7 @@ mod tests {
                 MutMatrixView<'_, Candidate>,
                 &mut [f32],
             ),
-        > for UpdatePair
+        > for UpdateDualTopK
     {
         fn run(
             self,
@@ -535,7 +535,7 @@ mod tests {
 
         arch::dispatch1_no_features(SelectTopK, (&topk, &[1.0, 2.0][..], &mut output[..]));
         arch::dispatch1_no_features(
-            UpdatePair,
+            UpdateDualTopK,
             (
                 &topk,
                 1,
@@ -812,12 +812,13 @@ mod tests {
             distances
         }
 
+        // Happy path: every point retains K nearest neighbors from finite pair distances.
         #[rstest]
         #[case::one_simd_block_and_tail(18)]
         #[case::two_simd_blocks(33)]
         #[case::two_simd_blocks_and_tail(34)]
         #[case::three_simd_blocks_and_tail(50)]
-        fn each_point_retains_its_nearest_neighbors(
+        fn update_dual_topk_selects_nearest_neighbors(
             #[case] count: usize,
             #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17)] width: usize,
         ) {
@@ -837,7 +838,7 @@ mod tests {
                 topk.initialize(rows.as_mut_view(), &mut thresholds);
                 for source in 1..count {
                     arch::dispatch1_no_features(
-                        UpdatePair,
+                        UpdateDualTopK,
                         (
                             &topk,
                             source,
@@ -879,7 +880,7 @@ mod tests {
 
             // When
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &TopK::new(Fixed::<1>),
                     2,
@@ -914,7 +915,7 @@ mod tests {
 
             // When
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &TopK::new(Fixed::<1>),
                     2,
@@ -944,7 +945,7 @@ mod tests {
 
             // When
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &TopK::new(Fixed::<1>),
                     2,
@@ -976,7 +977,7 @@ mod tests {
             // A leaf source starts empty. It remains partially filled after
             // group one and acquires its finite threshold within group two.
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &topk,
                     33,
@@ -1012,7 +1013,7 @@ mod tests {
             let mut rows = MutMatrixView::try_from(&mut output[..], 3, 1).unwrap();
 
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &topk,
                     1,
@@ -1022,7 +1023,7 @@ mod tests {
                 ),
             );
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &topk,
                     2,
@@ -1078,7 +1079,7 @@ mod tests {
             let mut rows = MutMatrixView::try_from(&mut output[..], 18, 4).unwrap();
             let topk = TopK::new(Runtime(4));
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &topk,
                     15,
@@ -1090,7 +1091,7 @@ mod tests {
 
             // When
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &topk,
                     17,
@@ -1124,7 +1125,7 @@ mod tests {
             expected[candidate][0] = Candidate::new(17, f32::NEG_INFINITY);
 
             arch::dispatch1_no_features(
-                UpdatePair,
+                UpdateDualTopK,
                 (
                     &topk,
                     17,

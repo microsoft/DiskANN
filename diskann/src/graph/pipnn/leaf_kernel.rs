@@ -72,20 +72,16 @@ where
     let point_count = points.nrows();
     validate_output(point_count, &output).map_err(ANNError::new)?;
     let distance_count = point_count * point_count;
-    let LeafKernelWorkspace {
-        distance_scratch,
-        worst,
-    } = workspace;
-    if distance_scratch.len() < distance_count {
-        distance_scratch.resize(distance_count, 0.0);
+    if workspace.distance_scratch.len() < distance_count {
+        workspace.distance_scratch.resize(distance_count, 0.0);
     }
     let mut distances = MutMatrixView::try_from(
-        &mut distance_scratch[..distance_count],
+        &mut workspace.distance_scratch[..distance_count],
         point_count,
         point_count,
     )?;
     M::compute_distances(points, distances.as_mut_slice())?;
-    rank_leaf_distances(arch, distances.as_view(), output, worst);
+    rank_leaf_distances(arch, distances.as_view(), output, &mut workspace.worst);
     Ok(())
 }
 
