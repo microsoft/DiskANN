@@ -12,6 +12,10 @@
 //! dimension or metadata. MinMax reduction uses the original D and opaque accumulators.
 //! Scratch is owned by each call, never by the shared prepared query.
 
+mod decode;
+pub(crate) mod layout;
+pub(crate) mod reader;
+
 use diskann_wide::{Architecture, SIMDMinMax, SIMDVector, arch::Scalar};
 
 use crate::{
@@ -27,12 +31,10 @@ use crate::{
     minmax::MinMaxCompensation,
 };
 
-use super::{
-    super::packed_f32_x_unpacked_f32::Params as CacheParams,
-    decode::Decoder,
-    layout::PackedQueryView,
-    reader::{BTile, MinMax4Rows},
-};
+use super::packed_f32_x_unpacked_f32::Params as CacheParams;
+use decode::Decoder;
+use layout::PackedQueryView;
+use reader::{BTile, MinMax4Rows};
 
 /// Structure-of-arrays coefficients for one complete query panel.
 #[derive(Debug, Clone, Copy)]
@@ -796,7 +798,7 @@ mod tests {
 
     use diskann_utils::views::Matrix;
 
-    use super::super::layout::{self, EvenOdd64Layout, PackedQuery};
+    use super::layout::{EvenOdd64Layout, PackedQuery};
     use super::*;
     use crate::{
         matrix_kernels::{num::value_or_one, test_util::panic_message_for},
