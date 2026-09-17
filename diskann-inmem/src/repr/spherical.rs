@@ -525,3 +525,17 @@ impl repr::internal::RawDistance for DebugWrapper<'_> {
             .map_err(ANNError::new)
     }
 }
+
+// ///////////
+// // Tests //
+// ///////////
+//
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//
+//     fn test_repr(
+//         data: MatrixView<'_, f32>,
+//
+//     )
+// }
