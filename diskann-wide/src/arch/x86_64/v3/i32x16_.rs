@@ -61,6 +61,7 @@ mod test_x86_f32 {
     test_utils::ops::test_mul!(i32x16, 0x57e2dbc100a1ed82, V3::new_checked_uncached());
     test_utils::ops::test_fma!(i32x16, 0x138fd8f4ec8e5530, V3::new_checked_uncached());
     test_utils::ops::test_abs!(i32x16, 0xd45290c6a8b26899, V3::new_checked_uncached());
+    test_utils::ops::test_minmax!(i32x16, 0x6d7fc8ed6d852187, V3::new_checked_uncached());
 
     test_utils::ops::test_cmp!(i32x16, 0x3b68b51ecb187598, V3::new_checked_uncached());
     test_utils::ops::test_splitjoin!(i32x16 => i32x8, 0x11f385aeffd15159, V3::new_checked_uncached());
