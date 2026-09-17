@@ -718,121 +718,214 @@ mod tests {
         }
     }
 }
+
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test matrices have fixed valid shapes")]
 mod sgemm_aat_lower_tests {
-    use super::{sgemm_aat_lower, sgemm_aat_lower_add, MatrixName, SgemmError};
+    use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn replace_writes_the_scaled_lower_triangle_and_preserves_the_upper_triangle() {
-        // Given: rows [1, 2, 3] and [4, 5, 6] have Gram entries 14, 32, and 77.
-        let matrix = [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let upper_triangle_sentinel = -123.0_f32;
-        let expected = [-14.0, upper_triangle_sentinel, -32.0, -77.0];
-        let mut actual = [upper_triangle_sentinel; 4];
+    type LowerProduct = fn(usize, usize, f32, &[f32], &mut [f32]) -> Result<(), SgemmError>;
 
-        // When
-        sgemm_aat_lower(2, 3, -1.0, &matrix, &mut actual).unwrap();
+    #[rstest]
+    #[case::replace(sgemm_aat_lower, [-8.0, 101.0, 102.0, 8.0, -26.0, 103.0, 12.0, -36.0, -50.0])]
+    #[case::add(sgemm_aat_lower_add, [2.0, 101.0, 102.0, 28.0, 4.0, 103.0, 52.0, 14.0, 10.0])]
+    fn scaled_products_change_only_the_diagonal_and_lower_triangle(
+        #[case] operation: LowerProduct,
+        #[case] expected: [f32; 9],
+    ) {
+        // Rows [2,0], [-2,3], [-3,4] have lower Gram entries 4,-4,13,-6,18,25.
+        let input = [2.0, 0.0, -2.0, 3.0, -3.0, 4.0];
+        let mut output = [10.0, 101.0, 102.0, 20.0, 30.0, 103.0, 40.0, 50.0, 60.0];
 
-        // Then
-        assert_eq!(actual, expected);
+        operation(3, 2, -2.0, &input, &mut output).unwrap();
+
+        assert_eq!(output, expected);
+    }
+
+    #[rstest]
+    #[case::replace(sgemm_aat_lower, false)]
+    #[case::add(sgemm_aat_lower_add, true)]
+    fn rectangular_inputs_match_scalar_dot_products(
+        #[case] operation: LowerProduct,
+        #[case] add: bool,
+        #[values(1, 3, 17)] rows: usize,
+        #[values(0, 1, 7, 8, 9, 16, 17, 33)] dimensions: usize,
+    ) {
+        let input: Vec<_> = (0..rows * dimensions)
+            .map(|i| (i % 9) as f32 - 4.0)
+            .collect();
+        let previous: Vec<_> = (0..rows * rows).map(|i| 100.0 + i as f32).collect();
+        let mut output = previous.clone();
+
+        operation(rows, dimensions, -2.0, &input, &mut output).unwrap();
+
+        for row in 0..rows {
+            for column in 0..rows {
+                let index = row * rows + column;
+                if column > row {
+                    assert_eq!(
+                        output[index].to_bits(),
+                        previous[index].to_bits(),
+                        "upper ({row},{column})"
+                    );
+                } else {
+                    let dot: f64 = (0..dimensions)
+                        .map(|d| {
+                            f64::from(input[row * dimensions + d])
+                                * f64::from(input[column * dimensions + d])
+                        })
+                        .sum();
+                    let expected = -2.0 * dot + if add { f64::from(previous[index]) } else { 0.0 };
+                    assert_eq!(
+                        f64::from(output[index]),
+                        expected,
+                        "lower ({row},{column}), dimensions={dimensions}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[rstest]
+    #[case::replace(sgemm_aat_lower, false)]
+    #[case::add(sgemm_aat_lower_add, true)]
+    fn large_dense_inputs_match_scalar_dot_products(
+        #[case] operation: LowerProduct,
+        #[case] add: bool,
+        #[values((33, 384), (65, 768), (129, 1536), (17, 1537), (513, 129), (17, 4097))] shape: (
+            usize,
+            usize,
+        ),
+    ) {
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let (rows, dimensions) = shape;
+        let mut rng = StdRng::seed_from_u64(1287);
+        // Bounded multiples of 1/8 keep products and sums exact in f32.
+        let mut input: Vec<_> = (0..rows * dimensions)
+            .map(|_| rng.random_range(-16..=16) as f32 / 8.0)
+            .collect();
+        for (row, values) in input.chunks_exact_mut(dimensions).enumerate() {
+            values[dimensions - 1] = 8.0 + (row % 7) as f32;
+        }
+        let previous: Vec<_> = (0..rows * rows).map(|i| (i % 97) as f32 - 48.0).collect();
+        let mut output = previous.clone();
+
+        operation(rows, dimensions, -2.0, &input, &mut output).unwrap();
+
+        // Check every entry, including the untouched upper triangle.
+        for row in 0..rows {
+            for column in 0..rows {
+                let index = row * rows + column;
+                if column > row {
+                    assert_eq!(
+                        output[index].to_bits(),
+                        previous[index].to_bits(),
+                        "shape={shape:?}, upper ({row},{column})"
+                    );
+                } else {
+                    let dot: f64 = (0..dimensions)
+                        .map(|dimension| {
+                            f64::from(input[row * dimensions + dimension])
+                                * f64::from(input[column * dimensions + dimension])
+                        })
+                        .sum();
+                    let expected = -2.0 * dot + if add { f64::from(previous[index]) } else { 0.0 };
+                    assert_eq!(
+                        f64::from(output[index]),
+                        expected,
+                        "shape={shape:?}, lower ({row},{column})"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
-    fn add_accumulates_the_scaled_lower_triangle_and_preserves_the_upper_triangle() {
-        // Given: adding -2 times the Gram entries (14, 32, 77) to (10, 20, 30)
-        // produces (-18, -44, -124), while the upper triangle remains unchanged.
-        let matrix = [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let upper_triangle_sentinel = -123.0_f32;
-        let expected = [-18.0, upper_triangle_sentinel, -44.0, -124.0];
-        let mut actual = [10.0, upper_triangle_sentinel, 20.0, 30.0];
+    fn replacement_does_not_read_old_lower_triangle_values() {
+        let input = [1.0, 2.0, -3.0, 4.0];
+        let mut output = [f32::NAN, 17.0, f32::NAN, f32::NAN];
 
-        // When
-        sgemm_aat_lower_add(2, 3, -2.0, &matrix, &mut actual).unwrap();
+        sgemm_aat_lower(2, 2, 1.0, &input, &mut output).unwrap();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert_eq!(output, [5.0, 17.0, 5.0, 25.0]);
     }
 
-    #[test]
-    fn invalid_input_length_returns_the_a_matrix_error() {
-        // Given
-        let row_count = 2;
-        let dimension_count = 2;
-        let invalid_input = [0.0_f32; 3];
-        let mut output = [0.0_f32; 4];
-        let expected = SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::A,
-            expected_rows: row_count,
-            expected_cols: dimension_count,
-            actual_len: invalid_input.len(),
-        };
+    #[rstest]
+    #[case::replace(sgemm_aat_lower, [0.0, 17.0, 0.0, 0.0])]
+    #[case::add(sgemm_aat_lower_add, [3.0, 17.0, 5.0, 7.0])]
+    fn zero_scale_respects_the_accumulation_mode(
+        #[case] operation: LowerProduct,
+        #[case] expected: [f32; 4],
+    ) {
+        let mut output = [3.0, 17.0, 5.0, 7.0];
 
-        // When
-        let actual = sgemm_aat_lower(row_count, dimension_count, 1.0, &invalid_input, &mut output)
-            .unwrap_err();
+        operation(2, 1, 0.0, &[2.0, 4.0], &mut output).unwrap();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert_eq!(output, expected);
     }
 
-    #[test]
-    fn invalid_output_length_returns_the_c_matrix_error() {
-        // Given
-        let row_count = 2;
-        let dimension_count = 2;
-        let input = [0.0_f32; 4];
-        let mut invalid_output = [0.0_f32; 3];
-        let expected = SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::C,
-            expected_rows: row_count,
-            expected_cols: row_count,
-            actual_len: invalid_output.len(),
-        };
-
-        // When
-        let actual =
-            sgemm_aat_lower_add(row_count, dimension_count, 1.0, &input, &mut invalid_output)
-                .unwrap_err();
-
-        // Then
-        assert_eq!(actual, expected);
+    #[rstest]
+    #[case::replace(sgemm_aat_lower)]
+    #[case::add(sgemm_aat_lower_add)]
+    fn empty_matrices_require_no_storage(#[case] operation: LowerProduct) {
+        assert_eq!(operation(0, 3, 2.0, &[], &mut []), Ok(()));
     }
 
-    #[test]
-    fn input_size_overflow_returns_the_a_matrix_error() {
-        // Given
-        let row_count = usize::MAX;
-        let dimension_count = 2;
-        let expected = SgemmError::DimensionOverflow {
-            matrix_name: MatrixName::A,
-            rows: row_count,
-            cols: dimension_count,
-        };
+    #[rstest]
+    #[case::short_input(3, 4, MatrixName::A, 2, 2, 3)]
+    #[case::long_input(5, 4, MatrixName::A, 2, 2, 5)]
+    #[case::short_output(4, 3, MatrixName::C, 2, 2, 3)]
+    #[case::long_output(4, 5, MatrixName::C, 2, 2, 5)]
+    fn length_mismatch_reports_the_matrix_and_preserves_output(
+        #[case] input_len: usize,
+        #[case] output_len: usize,
+        #[case] matrix_name: MatrixName,
+        #[case] expected_rows: usize,
+        #[case] expected_cols: usize,
+        #[case] actual_len: usize,
+        #[values(sgemm_aat_lower, sgemm_aat_lower_add)] operation: LowerProduct,
+    ) {
+        let input = vec![1.0; input_len];
+        let mut output = vec![19.0; output_len];
 
-        // When
-        let actual = sgemm_aat_lower(row_count, dimension_count, 1.0, &[], &mut []).unwrap_err();
+        let error = operation(2, 2, 1.0, &input, &mut output).unwrap_err();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert_eq!(
+            error,
+            SgemmError::InvalidMatrixDimensions {
+                matrix_name,
+                expected_rows,
+                expected_cols,
+                actual_len
+            }
+        );
+        assert_eq!(output, vec![19.0; output_len]);
     }
 
-    #[test]
-    fn output_size_overflow_returns_the_c_matrix_error() {
-        // Given
-        let row_count = usize::MAX;
-        let dimension_count = 0;
-        let expected = SgemmError::DimensionOverflow {
-            matrix_name: MatrixName::C,
-            rows: row_count,
-            cols: row_count,
-        };
+    #[rstest]
+    #[case::input(usize::MAX, 2, MatrixName::A, usize::MAX, 2)]
+    #[case::output(usize::MAX, 0, MatrixName::C, usize::MAX, usize::MAX)]
+    fn shape_overflow_reports_the_matrix_and_preserves_output(
+        #[case] rows: usize,
+        #[case] dimensions: usize,
+        #[case] matrix_name: MatrixName,
+        #[case] error_rows: usize,
+        #[case] error_cols: usize,
+        #[values(sgemm_aat_lower, sgemm_aat_lower_add)] operation: LowerProduct,
+    ) {
+        let mut output = [23.0, 29.0];
 
-        // When
-        let actual =
-            sgemm_aat_lower_add(row_count, dimension_count, 1.0, &[], &mut []).unwrap_err();
+        let error = operation(rows, dimensions, 1.0, &[], &mut output).unwrap_err();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert_eq!(
+            error,
+            SgemmError::DimensionOverflow {
+                matrix_name,
+                rows: error_rows,
+                cols: error_cols
+            }
+        );
+        assert_eq!(output, [23.0, 29.0]);
     }
 }
