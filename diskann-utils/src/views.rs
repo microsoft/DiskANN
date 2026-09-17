@@ -732,6 +732,53 @@ where
 ///////////
 
 #[cfg(test)]
+mod matrix_shape_tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::wraps_to_empty(usize::MAX / 2 + 1, 2, &[])]
+    #[case::wraps_to_one(usize::MAX, usize::MAX, &[7])]
+    fn overflowing_shape_is_rejected_even_when_wrapping_matches_the_buffer(
+        #[case] rows: usize,
+        #[case] columns: usize,
+        #[case] values: &[u32],
+    ) {
+        let data = values.to_vec().into_boxed_slice();
+
+        let error = Matrix::try_from(data, rows, columns).unwrap_err();
+
+        assert_eq!((error.nrows, error.ncols), (rows, columns));
+        assert_eq!(error.into_inner().as_ref(), values);
+    }
+
+    #[test]
+    fn rejected_mutable_view_returns_the_original_buffer() {
+        let mut values = [11_u32];
+
+        let error = MutMatrixView::try_from(&mut values[..], usize::MAX, usize::MAX).unwrap_err();
+
+        let returned = error.into_inner();
+        assert_eq!(returned, [11]);
+        returned[0] = 13;
+        assert_eq!(values, [13]);
+    }
+
+    #[rstest]
+    #[case::zero_rows(0, usize::MAX)]
+    #[case::zero_columns(usize::MAX, 0)]
+    fn zero_sized_shapes_remain_valid_with_a_large_other_dimension(
+        #[case] rows: usize,
+        #[case] columns: usize,
+    ) {
+        let matrix = MatrixView::try_from(&[] as &[u32], rows, columns).unwrap();
+
+        assert_eq!((matrix.nrows(), matrix.ncols()), (rows, columns));
+        assert!(matrix.as_slice().is_empty());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::lazy_format;
@@ -1053,8 +1100,6 @@ mod tests {
             m.unwrap_err().to_string(),
             "tried to construct a matrix view with 5 rows and 4 columns over a slice of length 12"
         );
-
-        assert!(MatrixView::try_from(&[] as &[usize], usize::MAX / 2 + 1, 2).is_err());
     }
 
     #[test]
