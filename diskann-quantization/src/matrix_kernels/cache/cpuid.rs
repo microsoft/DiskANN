@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! x86_64 CPUID cache probe via deterministic cache parameters — `raw-cpuid`'s
 //! cache-parameter enumeration (CPUID `0x4` on Intel, `0x8000001D` on AMD).

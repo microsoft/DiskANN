@@ -7,7 +7,6 @@
 //!
 //! This module is a work in progress. There are many pieces that are still needed:
 //!
-//! * Proper run time cache-size detection.
 //! * GEMM-like kernels beyond "maxsim".
 //! * Quantization support.
 //! * Blocking along the contraction dimension "k".
@@ -38,6 +37,7 @@ pub(crate) mod blocks;
 
 // private
 mod bounds;
+mod cache;
 mod driver;
 mod num;
 mod ptr;
@@ -47,7 +47,7 @@ mod util;
 pub(crate) use driver::Drive;
 pub(crate) use num::DimK;
 
-/// Placeholder model for CPU caches.
+/// Cache budgets for matrix-kernel blocking.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Cache {
     l1: NonZeroUsize,
@@ -59,25 +59,27 @@ impl Cache {
         Self { l1, l2 }
     }
 
-    /// Return the L1 cache size in bytes.
+    /// Return the L1 data-cache budget in bytes.
     fn l1(&self) -> NonZeroUsize {
         self.l1
     }
 
-    /// Return the L2 cache size in bytes.
+    /// Return the L2 cache budget in bytes.
     fn l2(&self) -> NonZeroUsize {
         self.l2
     }
 
-    /// Try to detect the cache of the CPU.
-    ///
-    /// # Note
-    ///
-    /// This currently doesn't work.
+    /// Use memoized CPU cache sizes, or 32 KiB L1d / 256 KiB L2 if detection fails.
+    /// Reserve 75% of L1d and 50% of L2 for the kernel working set.
     pub(crate) fn detect() -> Self {
-        const L1: NonZeroUsize = NonZeroUsize::new((3 * 48_000) / 4).unwrap();
-        const L2: NonZeroUsize = NonZeroUsize::new(1_250_000 / 2).unwrap();
-        Self::new(L1, L2)
+        Self::from_info(cache::cache_info())
+    }
+
+    fn from_info(info: cache::CacheInfo) -> Self {
+        // Subtract the reserved quarter to avoid overflowing when scaling L1d.
+        let l1 = num::value_or_one(info.l1d_bytes - info.l1d_bytes.div_ceil(4));
+        let l2 = num::value_or_one(info.l2_bytes / 2);
+        Self::new(l1, l2)
     }
 }
 
@@ -87,3 +89,41 @@ impl Cache {
 
 #[cfg(test)]
 mod test_util;
+
+#[cfg(test)]
+mod tests {
+    use super::{Cache, cache::CacheInfo};
+
+    #[test]
+    fn cache_budgets_scale_detected_sizes() {
+        for (l1d_bytes, l2_bytes, l1_budget, l2_budget) in [
+            (32 * 1024, 256 * 1024, 24 * 1024, 128 * 1024),
+            (48_000, 1_250_000, 36_000, 625_000),
+            (128 * 1024, 4 * 1024 * 1024, 96 * 1024, 2 * 1024 * 1024),
+            (7, 7, 5, 3),
+            (0, 0, 1, 1),
+            (1, 1, 1, 1),
+            (
+                usize::MAX,
+                usize::MAX,
+                (usize::MAX / 4) * 3 + 2,
+                usize::MAX / 2,
+            ),
+        ] {
+            let cache = Cache::from_info(CacheInfo {
+                l1d_bytes,
+                l2_bytes,
+            });
+            assert_eq!(cache.l1().get(), l1_budget);
+            assert_eq!(cache.l2().get(), l2_budget);
+        }
+    }
+
+    #[test]
+    fn detect_uses_probed_sizes() {
+        let info = super::cache::cache_info();
+        let cache = Cache::detect();
+        assert_eq!(cache.l1().get(), info.l1d_bytes * 3 / 4);
+        assert_eq!(cache.l2().get(), info.l2_bytes / 2);
+    }
+}

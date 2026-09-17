@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! aarch64 Linux cache probe via sysfs (`/sys/devices/system/cpu/cpu0/cache/`).
 //! Returns `None` when the cache sysfs entries are absent, as in some

@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! aarch64 macOS sysctl cache probe. Reads `hw.perflevel0.*`
 //! and divides the cluster L2 by `cpusperl2` for a per-core budget.
