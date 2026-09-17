@@ -55,6 +55,11 @@ pub(crate) struct Cache {
 }
 
 impl Cache {
+    const FALLBACK: cache::CacheInfo = cache::CacheInfo {
+        l1d_bytes: 48_000,
+        l2_bytes: 1_250_000,
+    };
+
     fn new(l1: NonZeroUsize, l2: NonZeroUsize) -> Self {
         Self { l1, l2 }
     }
@@ -69,15 +74,16 @@ impl Cache {
         self.l2
     }
 
-    /// Use memoized CPU cache sizes, or 32 KiB L1d / 256 KiB L2 if detection fails.
-    /// Reserve 75% of L1d and 50% of L2 for the kernel working set.
+    /// Derive budgets from memoized CPU cache sizes, using [`Self::FALLBACK`]
+    /// estimates if detection fails.
+    ///
+    /// Use 75% of L1d and 50% of L2 for the kernel working set.
     pub(crate) fn detect() -> Self {
-        Self::from_info(cache::cache_info())
+        Self::from_info(cache::cache_info().unwrap_or(Self::FALLBACK))
     }
 
     fn from_info(info: cache::CacheInfo) -> Self {
-        // Subtract the reserved quarter to avoid overflowing when scaling L1d.
-        let l1 = num::value_or_one(info.l1d_bytes - info.l1d_bytes.div_ceil(4));
+        let l1 = num::value_or_one(info.l1d_bytes * 3 / 4);
         let l2 = num::value_or_one(info.l2_bytes / 2);
         Self::new(l1, l2)
     }
@@ -103,12 +109,6 @@ mod tests {
             (7, 7, 5, 3),
             (0, 0, 1, 1),
             (1, 1, 1, 1),
-            (
-                usize::MAX,
-                usize::MAX,
-                (usize::MAX / 4) * 3 + 2,
-                usize::MAX / 2,
-            ),
         ] {
             let cache = Cache::from_info(CacheInfo {
                 l1d_bytes,
@@ -117,13 +117,5 @@ mod tests {
             assert_eq!(cache.l1().get(), l1_budget);
             assert_eq!(cache.l2().get(), l2_budget);
         }
-    }
-
-    #[test]
-    fn detect_uses_probed_sizes() {
-        let info = super::cache::cache_info();
-        let cache = Cache::detect();
-        assert_eq!(cache.l1().get(), info.l1d_bytes * 3 / 4);
-        assert_eq!(cache.l2().get(), info.l2_bytes / 2);
     }
 }

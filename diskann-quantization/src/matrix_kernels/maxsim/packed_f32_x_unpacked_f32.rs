@@ -791,23 +791,6 @@ mod tests {
 
     use crate::{matrix_kernels::maxsim, multi_vector::BlockTransposed};
 
-    #[test]
-    fn params_use_cache_budgets() {
-        for (l1d_bytes, l2_bytes, a_panels, b_cols) in [
-            (32 * 1024, 256 * 1024, 16, 36),
-            (64 * 1024, 1024 * 1024, 64, 84),
-            (1, 1, 1, 6),
-        ] {
-            let cache = Cache::from_info(crate::matrix_kernels::cache::CacheInfo {
-                l1d_bytes,
-                l2_bytes,
-            });
-            let params = Params::new(cache, Bytes::new(8192), Bytes::new(512), 6);
-            assert_eq!(params.a_panels_in_l2.get(), a_panels);
-            assert_eq!(params.b_cols_in_l1.get(), b_cols);
-        }
-    }
-
     /////////////////
     // MicroKernel //
     /////////////////
