@@ -176,11 +176,11 @@ impl<W: Width> TopK<W> {
         arch.run2(
             #[inline(always)]
             move |distances: &[f32], output: &mut [Candidate]| {
-                let output = &mut output[..self.width.capacity()];
-                if output.is_empty() {
+                let k = self.width.capacity();
+                if k == 0 {
                     return;
                 }
-                output.fill(Candidate::default());
+                output[..k].fill(Candidate::default());
                 distance_blocks(arch, distances).fold(
                     f32::INFINITY,
                     #[inline(always)]
@@ -224,12 +224,11 @@ impl<W: Width> TopK<W> {
                 );
                 // Keep this point's result and local limit independent of reciprocal updates.
                 let (others, remaining) = output.as_mut_slice().split_at_mut(point_idx * k);
-                let nearest = &mut remaining[..k];
                 let limit = distance_blocks(arch, distances).fold(
                     thresholds[point_idx],
                     #[inline(always)]
                     |limit, block| {
-                        let limit = block.update_one(nearest, limit, self.width);
+                        let limit = block.update_one(remaining, limit, self.width);
                         block.update_many(others, thresholds, point_idx as u32, self.width);
                         limit
                     },
@@ -364,7 +363,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                 let limit = &mut thresholds[candidate_idx];
                 if distance < *limit {
                     *limit = insert_sorted(
-                        &mut candidates[candidate_idx * k..][..k],
+                        &mut candidates[candidate_idx * k..],
                         Candidate::new(point_idx, distance),
                         width,
                     );
@@ -384,7 +383,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                     eligible &= eligible - 1;
                     // Each lane updates a different result; its limit is current.
                     limits[lane] = insert_sorted(
-                        &mut candidates[(first_candidate + lane) * k..][..k],
+                        &mut candidates[(first_candidate + lane) * k..],
                         Candidate::new(point_idx, distances[lane]),
                         width,
                     );
@@ -395,11 +394,16 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
 }
 
 /// Insert an eligible candidate in nearest-first order and return the new distance limit.
+/// Only the first `width.capacity()` slots belong to this result.
 /// The caller must check the candidate against the current limit before insertion.
-/// The width exposes fixed capacities to loop unrolling.
 #[inline(always)]
 fn insert_sorted<W: Width>(nearest: &mut [Candidate], candidate: Candidate, width: W) -> f32 {
-    let last = width.capacity() - 1;
+    let k = width.capacity();
+    // Keep this slice here for performance.
+    // Fixed<K> gives the slice a compile-time constant length.
+    // After inlining, LLVM can unroll the loop and remove bounds checks.
+    let nearest = &mut nearest[..k];
+    let last = nearest.len() - 1;
     let mut slot = last;
     while slot > 0 && candidate.distance < nearest[slot - 1].distance {
         nearest[slot] = nearest[slot - 1];
@@ -517,6 +521,42 @@ mod tests {
 
         assert!(output.is_empty());
         assert_eq!(thresholds, [f32::INFINITY; 2]);
+    }
+
+    mod insert_sorted_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::fixed(Fixed::<3>)]
+        #[case::runtime(Runtime(3))]
+        fn insertion_preserves_later_result_rows(#[case] width: impl Width) {
+            // Given: the new candidate displaces the first result's farthest neighbor.
+            let first_result = [
+                Candidate::new(0, 1.0),
+                Candidate::new(1, 4.0),
+                Candidate::new(2, 6.0),
+            ];
+            let next_result = [
+                Candidate::new(3, 8.0),
+                Candidate::new(4, 10.0),
+                Candidate::new(5, 12.0),
+            ];
+            let candidate = Candidate::new(6, 3.0);
+            let expected_first_result = [
+                Candidate::new(0, 1.0),
+                Candidate::new(6, 3.0),
+                Candidate::new(1, 4.0),
+            ];
+            let expected_limit = 4.0;
+            let mut results = [first_result, next_result];
+
+            // When
+            let limit = insert_sorted(results.as_flattened_mut(), candidate, width);
+
+            // Then
+            assert_eq!(results, [expected_first_result, next_result]);
+            assert_eq!(limit, expected_limit);
+        }
     }
 
     mod select_topk_tests {
