@@ -423,7 +423,7 @@ where
     // Pick the first point randomly.
     let mut previous_square_norm = {
         let i = all_rows.sample(rng);
-        points.row_mut(0).copy_from_slice(data.row_or_panic(i));
+        points.row_mut(0).copy_from_slice(data.row(i));
         picked.insert(i);
         norms[i]
     };
@@ -451,9 +451,7 @@ where
                     if rolling_sum >= threshold && (*d > 0.0) && !picked.contains(&i) {
                         // This point is the winner.
                         // Copy it over and update our scratch variables.
-                        points
-                            .row_mut(current)
-                            .clone_from_slice(data.row_or_panic(i));
+                        points.row_mut(current).clone_from_slice(data.row(i));
                         picked.insert(i);
                         previous_square_norm = norms[i];
                         selected = current + 1;

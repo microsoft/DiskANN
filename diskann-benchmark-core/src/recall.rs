@@ -189,7 +189,7 @@ where
 
         for i in 0..nrows {
             let gt_row = groundtruth.row(i);
-            let distances_row = distances.row_or_panic(i);
+            let distances_row = distances.row(i);
             if gt_row.len() != distances_row.len() {
                 return Err(ComputeRecallError::GroundTruthDistanceMismatch(
                     distances_row.len(),
@@ -239,7 +239,7 @@ where
         // If we have distances, then continue to append distances as long as the distance
         // value is constant
         if let Some(distances) = groundtruth_distances {
-            let distances_row = distances.row_or_panic(i);
+            let distances_row = distances.row(i);
 
             // we've already checked that `results` and `distances` have at lesat
             // `recall_k >= this_recall_k` entries, so it's safe to access `distances_row[this_recall_k - 1]`

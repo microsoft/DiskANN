@@ -1298,7 +1298,7 @@ mod tests {
         for row in 0..sliced.nrows() {
             for col in 0..sliced.ncols() {
                 assert_eq!(
-                    *sliced.element_or_panic(row, col),
+                    *sliced.element(row, col),
                     chunk.get(row, col),
                     "failed on row {} and col {}",
                     row,

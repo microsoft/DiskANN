@@ -14,7 +14,7 @@ use crate::{
 
 /// The layout for [`Strided`].
 ///
-/// This struct ensures that the [`Self::cstride`] is greater than or equal to[`Self::ncols`]
+/// This struct ensures that the [`Self::cstride`] is greater than or equal to [`Self::ncols`]
 /// and that the linear length of the representation does not overflow `usize::MAX`.
 ///
 /// The linear length of [`Strided`] is given by the forumula
@@ -239,7 +239,7 @@ impl<'a, T> Strided<'a, T> {
     }
 
     /// Return the specified element if `row < self.nrows()` and `col < self.ncols()`.
-    pub fn element(&self, row: usize, col: usize) -> Option<&T> {
+    pub fn get_element(&self, row: usize, col: usize) -> Option<&T> {
         if row < self.nrows() && col < self.ncols() {
             // SAFETY: `row` and `col` are in-bounds.
             Some(unsafe { self.element_unchecked(row, col) })
@@ -253,7 +253,7 @@ impl<'a, T> Strided<'a, T> {
     /// # Panics
     ///
     /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-    pub fn element_or_panic(&self, row: usize, col: usize) -> &T {
+    pub fn element(&self, row: usize, col: usize) -> &T {
         assert!(
             row < self.nrows(),
             "row {} is out of bounds for a matrix with {} rows",
@@ -291,7 +291,7 @@ impl<'a, T> Strided<'a, T> {
     }
 
     /// Return the requested row if `row < self.nrows()`.
-    pub fn row(&self, row: usize) -> Option<&[T]> {
+    pub fn get_row(&self, row: usize) -> Option<&[T]> {
         if row < self.nrows() {
             // SAFETY: `row` is in-bounds.
             Some(unsafe { self.row_unchecked(row) })
@@ -305,7 +305,7 @@ impl<'a, T> Strided<'a, T> {
     /// # Panic
     ///
     /// Panics if `row >= self.nrows()`.
-    pub fn row_or_panic(&self, row: usize) -> &[T] {
+    pub fn row(&self, row: usize) -> &[T] {
         assert!(
             row < self.nrows(),
             "row {} is out of bounds for a matrix with {} rows",
@@ -540,38 +540,38 @@ mod tests {
         let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
 
         // In-bounds accesses succeed.
-        assert!(v.element(2, 3).is_some());
-        assert!(v.row(2).is_some());
+        assert!(v.get_element(2, 3).is_some());
+        assert!(v.get_row(2).is_some());
 
         // Out-of-bounds row and/or col return `None` rather than panicking.
-        assert!(v.element(3, 0).is_none(), "row out-of-bounds");
-        assert!(v.element(0, 4).is_none(), "col out-of-bounds");
-        assert!(v.element(3, 4).is_none(), "both out-of-bounds");
-        assert!(v.row(3).is_none());
+        assert!(v.get_element(3, 0).is_none(), "row out-of-bounds");
+        assert!(v.get_element(0, 4).is_none(), "col out-of-bounds");
+        assert!(v.get_element(3, 4).is_none(), "both out-of-bounds");
+        assert!(v.get_row(3).is_none());
     }
 
     #[test]
     #[should_panic(expected = "row 3 is out of bounds for a matrix with 3 rows")]
-    fn test_element_or_panic_panics_on_row() {
+    fn test_element_panics_on_row() {
         let m = create_test_matrix(3, 4);
         let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
-        v.element_or_panic(3, 0);
+        v.element(3, 0);
     }
 
     #[test]
     #[should_panic(expected = "col 4 is out of bounds for a matrix with 4 cols")]
-    fn test_element_or_panic_panics_on_col() {
+    fn test_element_panics_on_col() {
         let m = create_test_matrix(3, 4);
         let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
-        v.element_or_panic(0, 4);
+        v.element(0, 4);
     }
 
     #[test]
     #[should_panic(expected = "row 3 is out of bounds for a matrix with 3 rows")]
-    fn test_row_or_panic_panics() {
+    fn test_row_panics() {
         let m = create_test_matrix(3, 4);
         let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
-        v.row_or_panic(3);
+        v.row(3);
     }
 
     #[test]
@@ -684,7 +684,7 @@ mod tests {
                 let e = expected[(row, col)];
 
                 assert_eq!(
-                    *dut.element_or_panic(row, col),
+                    *dut.element(row, col),
                     e,
                     "failed on (row, col) = ({}, {})",
                     row,
@@ -692,7 +692,7 @@ mod tests {
                 );
 
                 assert_eq!(
-                    *dut.element(row, col).unwrap(),
+                    *dut.get_element(row, col).unwrap(),
                     e,
                     "failed on (row, col) = ({}, {})",
                     row,
@@ -703,15 +703,10 @@ mod tests {
 
         // Compare via row.
         for row in 0..dut.nrows() {
-            assert_eq!(
-                dut.row_or_panic(row),
-                expected.row(row),
-                "failed on row {}",
-                row
-            );
+            assert_eq!(dut.row(row), expected.row(row), "failed on row {}", row);
 
             assert_eq!(
-                dut.row(row).unwrap(),
+                dut.get_row(row).unwrap(),
                 expected.row(row),
                 "failed on row {}",
                 row
@@ -811,7 +806,7 @@ mod tests {
 
         for row in 0..v.nrows() {
             let empty: &[usize] = &[];
-            assert_eq!(v.row(row).unwrap(), empty);
+            assert_eq!(v.get_row(row).unwrap(), empty);
         }
     }
 
