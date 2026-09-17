@@ -1,7 +1,9 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
-//! L1d / L2 cache size probe used by the multi-vector tile planner.
+//! L1d / L2 cache size probe used by the matrix-kernel drivers.
 //! Detected once and memoized; returns [`CacheInfo::FALLBACK`] when no
 //! per-platform probe applies.
 
