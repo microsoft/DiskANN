@@ -110,162 +110,194 @@ impl LeafMetric for CosineNormalized {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(miri))]
+    use crate::graph::pipnn::test_support;
+    #[cfg(not(miri))]
+    use diskann_vector::distance::Metric;
     use rstest::rstest;
 
-    const POINT_COUNT: usize = 2;
-    const DIMENSION_COUNT: usize = 2;
-    const FIRST_POINT: usize = 0;
-    const SECOND_POINT: usize = 1;
-    const STALE_DISTANCE: f32 = 99.0;
-    const FLOAT_TOLERANCE: f32 = 1.0e-6;
+    #[cfg(not(miri))]
+    #[rstest]
+    #[case::l2(L2, Metric::L2)]
+    #[case::cosine(Cosine, Metric::Cosine)]
+    #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
+    #[case::inner_product(InnerProduct, Metric::InnerProduct)]
+    fn lower_triangle_matches_scalar_distances<M: LeafMetric>(
+        #[case] _metric: M,
+        #[case] scalar_metric: Metric,
+        #[values(1, 4, 17)] point_count: usize,
+        #[values(1, 2, 7, 8, 9, 15, 16, 17, 127, 128, 129)] dimensions: usize,
+    ) {
+        // Small integers keep L2 and dot products exact; the first coordinate gives
+        // every vector a nonzero norm. Every dimension contributes to the result.
+        let mut values: Vec<_> = (0..point_count * dimensions)
+            .map(|index| (index % 11) as f32 - 5.0)
+            .collect();
+        for (point, row) in values.chunks_exact_mut(dimensions).enumerate() {
+            row[0] = point as f32 + 1.0;
+        }
+        if scalar_metric == Metric::CosineNormalized {
+            test_support::normalize(&mut values, dimensions);
+        }
+        let points = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+        let mut output = vec![f32::NAN; point_count * point_count];
 
-    fn compute_pair_ranking<M: LeafMetric>(
-        first_point: [f32; DIMENSION_COUNT],
-        second_point: [f32; DIMENSION_COUNT],
-    ) -> f32 {
-        let point_values = [
-            first_point[0],
-            first_point[1],
-            second_point[0],
-            second_point[1],
-        ];
-        let points = MatrixView::try_from(&point_values[..], POINT_COUNT, DIMENSION_COUNT).unwrap();
-        let mut storage = [STALE_DISTANCE; POINT_COUNT * POINT_COUNT];
+        M::compute_distances(points, &mut output).unwrap();
 
-        M::compute_distances(points, &mut storage).unwrap();
-
-        storage[SECOND_POINT * POINT_COUNT + FIRST_POINT]
+        for source in 0..point_count {
+            for target in 0..=source {
+                let expected =
+                    test_support::distance(scalar_metric, points.row(source), points.row(target));
+                let actual = f64::from(output[source * point_count + target]);
+                // Cosine reductions and normalization round in f32; allow eight ulps
+                // per dimension at unit scale. Integer L2 and dot products are exact.
+                let tolerance = match scalar_metric {
+                    Metric::L2 | Metric::InnerProduct => 0.0,
+                    Metric::Cosine | Metric::CosineNormalized => {
+                        8.0 * f64::from(f32::EPSILON) * dimensions as f64
+                    }
+                };
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "pair=({source},{target}), dimensions={dimensions}: {actual} != {expected}"
+                );
+            }
+        }
     }
 
-    mod compute_distances_tests {
-        use super::*;
-
-        #[test]
-        fn squared_l2_ranking_equals_the_sum_of_squared_coordinate_differences() {
-            // Given
-            let first_point = [3.0_f32, 4.0];
-            let second_point = [0.0_f32, 4.0];
-            let x_difference = first_point[0] - second_point[0];
-            let y_difference = first_point[1] - second_point[1];
-            let expected = x_difference.mul_add(x_difference, y_difference * y_difference);
-
-            // When
-            let actual = compute_pair_ranking::<L2>(first_point, second_point);
-
-            // Then
-            assert_eq!(actual, expected);
+    #[cfg(not(miri))]
+    #[rstest]
+    #[case::l2(L2, Metric::L2)]
+    #[case::cosine(Cosine, Metric::Cosine)]
+    #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
+    #[case::inner_product(InnerProduct, Metric::InnerProduct)]
+    fn large_dense_inputs_match_scalar_distances<M: LeafMetric>(
+        #[case] _metric: M,
+        #[case] scalar_metric: Metric,
+        #[values((33, 384), (65, 768), (129, 1536), (17, 1537), (513, 129), (17, 4097))] shape: (
+            usize,
+            usize,
+        ),
+    ) {
+        let (point_count, dimensions) = shape;
+        let mut values = test_support::dense_points(point_count, dimensions, 1287);
+        if scalar_metric == Metric::CosineNormalized {
+            test_support::normalize(&mut values, dimensions);
         }
+        let points = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+        let mut output = vec![f32::NAN; point_count * point_count];
 
-        #[test]
-        fn cosine_ranking_equals_one_minus_normalized_similarity() {
-            // Given
-            let first_point = [2.0_f32, 0.0];
-            let second_point = [1.0_f32, 1.0];
-            let dot = first_point[0].mul_add(second_point[0], first_point[1] * second_point[1]);
-            let first_norm = first_point[0].hypot(first_point[1]);
-            let second_norm = second_point[0].hypot(second_point[1]);
-            let expected = 1.0 - dot / (first_norm * second_norm);
+        M::compute_distances(points, &mut output).unwrap();
 
-            // When
-            let actual = compute_pair_ranking::<Cosine>(first_point, second_point);
-
-            // Then
-            assert!(
-                (actual - expected).abs() <= FLOAT_TOLERANCE,
-                "actual {actual} differs from expected {expected}"
-            );
+        let tolerance = match scalar_metric {
+            Metric::L2 | Metric::InnerProduct => 0.0,
+            // Dyadic dot/norm sums are exact; only square roots and division round.
+            Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
+            Metric::CosineNormalized => {
+                // Normalized f32 coordinates need a dot-product rounding bound.
+                // Sum |x*y| is at most approximately one; EPSILON allows both
+                // product and reduction rounding in gamma = n*u/(1-n*u).
+                let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
+                roundoff / (1.0 - roundoff)
+            }
+        };
+        for source in 0..point_count {
+            for target in 0..=source {
+                let expected =
+                    test_support::distance(scalar_metric, points.row(source), points.row(target));
+                let actual = f64::from(output[source * point_count + target]);
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "shape={shape:?}, pair=({source},{target}): {actual} != {expected}, tolerance={tolerance}"
+                );
+            }
         }
+    }
 
-        #[rstest]
-        #[case::zero([0.0, 0.0])]
-        #[case::subnormal([f32::MIN_POSITIVE.sqrt() / 2.0, 0.0])]
-        fn small_norm_produces_unit_cosine_ranking(#[case] small_point: [f32; DIMENSION_COUNT]) {
-            // Given: a zero or subnormal norm represents zero similarity.
-            let unit_point = [1.0_f32, 0.0];
-            let expected = 1.0;
+    #[cfg(not(miri))]
+    #[rstest]
+    #[case::squared_l2(L2, &[2.0, 0.0, 0.0, 3.0, -4.0, 0.0], [0.0, 13.0, 0.0, 36.0, 25.0, 0.0])]
+    #[case::negative_dot(InnerProduct, &[2.0, 0.0, 0.0, 3.0, -4.0, 0.0], [-4.0, 0.0, -9.0, 8.0, 0.0, -16.0])]
+    #[case::cosine(Cosine, &[2.0, 0.0, 0.0, 3.0, -4.0, 0.0], [0.0, 1.0, 0.0, 2.0, 1.0, 0.0])]
+    #[case::normalized_cosine(CosineNormalized, &[1.0, 0.0, 0.0, 1.0, -1.0, 0.0], [-1.0, 0.0, -1.0, 1.0, 0.0, -1.0])]
+    fn ranking_values_follow_the_metric_definition<M: LeafMetric>(
+        #[case] _metric: M,
+        #[case] values: &[f32],
+        #[case] expected: [f32; 6],
+    ) {
+        let points = MatrixView::try_from(values, 3, 2).unwrap();
+        let mut output = [42.0; 9];
 
-            // When
-            let actual = compute_pair_ranking::<Cosine>(small_point, unit_point);
+        M::compute_distances(points, &mut output).unwrap();
 
-            // Then
-            assert_eq!(actual, expected);
-        }
+        assert_eq!(
+            [
+                output[0], output[3], output[4], output[6], output[7], output[8]
+            ],
+            expected
+        );
+    }
 
-        #[test]
-        fn normalized_cosine_ranking_equals_the_negative_dot_product() {
-            // Given
-            let first_point = [1.0_f32, 0.0];
-            let second_point = [0.6_f32, 0.8];
-            let dot = first_point[0].mul_add(second_point[0], first_point[1] * second_point[1]);
-            let expected = -dot;
+    #[cfg(not(miri))]
+    #[rstest]
+    #[case::zero(0.0)]
+    #[case::squared_norm_underflows(f32::MIN_POSITIVE)]
+    fn cosine_gives_unit_distance_to_points_with_small_norms(#[case] coordinate: f32) {
+        let values = [coordinate, 0.0, 0.0, 2.0];
+        let points = MatrixView::try_from(&values[..], 2, 2).unwrap();
+        let mut output = [42.0; 4];
 
-            // When
-            let actual = compute_pair_ranking::<CosineNormalized>(first_point, second_point);
+        Cosine::compute_distances(points, &mut output).unwrap();
 
-            // Then
-            assert_eq!(actual, expected);
-        }
+        assert_eq!([output[0], output[2], output[3]], [1.0, 1.0, 0.0]);
+    }
 
-        #[test]
-        fn inner_product_ranking_equals_the_negative_dot_product() {
-            // Given
-            let first_point = [2.0_f32, -1.0];
-            let second_point = [3.0_f32, 4.0];
-            let dot = first_point[0].mul_add(second_point[0], first_point[1] * second_point[1]);
-            let expected = -dot;
+    #[cfg(not(miri))]
+    #[rstest]
+    #[case::l2(L2, 2.0)]
+    #[case::cosine(Cosine, 1.0)]
+    #[case::normalized_cosine(CosineNormalized, 0.0)]
+    #[case::inner_product(InnerProduct, 0.0)]
+    fn a_nan_point_does_not_change_other_pair_distances<M: LeafMetric>(
+        #[case] _metric: M,
+        #[case] expected_finite_pair: f32,
+    ) {
+        let values = [1.0, 0.0, 0.0, -1.0, f32::NAN, f32::NAN];
+        let mut output = [42.0; 9];
 
-            // When
-            let actual = compute_pair_ranking::<InnerProduct>(first_point, second_point);
+        M::compute_distances(
+            MatrixView::try_from(&values[..], 3, 2).unwrap(),
+            &mut output,
+        )
+        .unwrap();
 
-            // Then
-            assert_eq!(actual, expected);
-        }
+        assert_eq!(output[3], expected_finite_pair);
+        assert!(output[6..=8].iter().all(|distance| distance.is_nan()));
+    }
 
-        #[rstest]
-        #[case::l2(compute_pair_ranking::<L2>)]
-        #[case::cosine(compute_pair_ranking::<Cosine>)]
-        #[case::inner_product(compute_pair_ranking::<InnerProduct>)]
-        fn nan_coordinate_produces_nan_ranking(
-            #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
-        ) {
-            // Given: neither vector has zero norm.
-            let first_point = [f32::NAN, 1.0];
-            let second_point = [1.0, 0.0];
+    #[rstest]
+    #[case::l2(L2)]
+    #[case::cosine(Cosine)]
+    #[case::normalized_cosine(CosineNormalized)]
+    #[case::inner_product(InnerProduct)]
+    fn storage_length_mismatch_reports_the_output_matrix_error<M: LeafMetric>(#[case] _metric: M) {
+        let values = [1.0, 0.0, 0.0, 2.0];
+        let mut output = [42.0; 5];
 
-            // When
-            let actual = compute(first_point, second_point);
+        let error = M::compute_distances(
+            MatrixView::try_from(&values[..], 2, 2).unwrap(),
+            &mut output,
+        )
+        .unwrap_err();
 
-            // Then
-            assert!(actual.is_nan());
-        }
-
-        #[rstest]
-        #[case::inner_product(compute_pair_ranking::<InnerProduct>)]
-        #[case::normalized_cosine(compute_pair_ranking::<CosineNormalized>)]
-        fn orthogonal_vectors_have_zero_ranking(
-            #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
-        ) {
-            // The contract permits either zero sign at both metric entry points.
-            assert_eq!(compute([1.0, 0.0], [0.0, 1.0]), 0.0);
-        }
-
-        #[test]
-        fn inner_product_uses_the_last_coordinate_beyond_a_complete_dimension_block() {
-            let dimensions = 129;
-            let mut values = vec![0.0; 2 * dimensions];
-            values[dimensions - 1] = 2.0;
-            values[dimensions] = -1.0;
-            values[2 * dimensions - 1] = 3.0;
-            let points = MatrixView::try_from(values.as_slice(), 2, dimensions).unwrap();
-            let mut distances = [STALE_DISTANCE; 4];
-
-            InnerProduct::compute_distances(points, &mut distances).unwrap();
-
-            // Dot products are 4, 6 and 10; all nonzero pair contribution is in the tail.
-            assert_eq!(
-                [distances[0], distances[2], distances[3]],
-                [-4.0, -6.0, -10.0]
-            );
-        }
+        assert_eq!(
+            error.downcast_ref::<diskann_linalg::SgemmError>(),
+            Some(&diskann_linalg::SgemmError::InvalidMatrixDimensions {
+                matrix_name: diskann_linalg::MatrixName::C,
+                expected_rows: 2,
+                expected_cols: 2,
+                actual_len: 5,
+            })
+        );
     }
 }
