@@ -69,10 +69,7 @@ fn build_three_level_labeled_provider() -> test_provider::Provider {
     )
     .unwrap();
 
-    let start_neighbors = std::iter::once((
-        start_id,
-        AdjacencyList::from_iter_untrusted(1..=10),
-    ));
+    let start_neighbors = std::iter::once((start_id, AdjacencyList::from_iter_untrusted(1..=10)));
 
     let mut points = Vec::new();
     for level_one_id in 1..=10 {
@@ -116,7 +113,7 @@ impl LevelLabelProvider {
         match id {
             0..=30 => 0,  // start + non-final levels
             31..=70 => 1, // final level only
-            _ => 255,    // unknown id
+            _ => 255,     // unknown id
         }
     }
 }
@@ -488,7 +485,6 @@ fn inline_search_three_level_no_adaptive_l_with_l2_finds_no_matches() {
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
-
 }
 
 #[test]
