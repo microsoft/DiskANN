@@ -28,6 +28,8 @@ where
     ///
     /// * [`MaxSimError::InvalidBufferLength`] if `scores.len() != self.nrows()`.
     /// * [`MaxSimError::UnequalDim`] if the document dimension does not match the query.
+    ///
+    /// Neither error modifies `scores`. Concurrent calls use independent scratch storage.
     fn compute_max_sim(
         &self,
         doc: MatRef<'_, MinMaxMeta<DOC_BITS>>,

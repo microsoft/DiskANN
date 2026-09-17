@@ -5,8 +5,6 @@
 
 //! Factory for tiled MinMax-quantized multi-vector kernels.
 
-use std::num::NonZeroUsize;
-
 use diskann_wide::Architecture;
 use diskann_wide::arch::Scalar;
 
@@ -18,25 +16,23 @@ use diskann_wide::arch::x86_64::{V3, V4};
 use super::MinMaxMeta;
 use super::kernel::{MinMaxErase, MinMaxMaxSimKernel};
 use crate::matrix_kernels as mk;
-use crate::matrix_kernels::maxsim::minmax8_x_minmax4::{Driver, Grouped, QueryCompensation};
-use crate::multi_vector::{BlockTransposed, MatRef, MaxSimError, MaxSimIsa, NotSupported};
+use crate::matrix_kernels::maxsim::minmax8_x_minmax4::{
+    Driver, QueryCompensation, layout::PackedQuery, reader::MinMax4Rows,
+};
+use crate::multi_vector::{MatRef, MaxSimError, MaxSimIsa, NotSupported};
 
 #[derive(Debug)]
-struct Prepared<A, const N: usize, const MR: usize, const NR: usize> {
+struct Prepared<A, const PACK: usize, const MR: usize, const NR: usize> {
     arch: A,
-    prepared: BlockTransposed<Grouped<N>, MR>,
+    prepared: PackedQuery<MR, PACK>,
     compensation: Vec<QueryCompensation<MR>>,
     dim: usize,
 }
 
-impl<A, const N: usize, const MR: usize, const NR: usize> Prepared<A, N, MR, NR> {
-    #[expect(
-        clippy::expect_used,
-        reason = "output is allocated with the input row count"
-    )]
+impl<A, const PACK: usize, const MR: usize, const NR: usize> Prepared<A, PACK, MR, NR> {
     fn new(arch: A, query: MatRef<'_, MinMaxMeta<8>>) -> Self {
         let dim = query.repr().intrinsic_dim();
-        let mut prepared = BlockTransposed::new(query.num_vectors(), Grouped::<N>::count(dim));
+        let mut prepared = PackedQuery::new(query.num_vectors(), dim);
         let mut compensation = vec![QueryCompensation::default(); query.num_vectors().div_ceil(MR)];
         for (i, row) in query.rows().enumerate() {
             let meta = row.meta();
@@ -44,12 +40,7 @@ impl<A, const N: usize, const MR: usize, const NR: usize> Prepared<A, N, MR, NR>
             block.scale[i % MR] = meta.a;
             block.bias[i % MR] = meta.b;
             block.scaled_sum[i % MR] = meta.n;
-            let mut output = prepared.get_row_mut(i).expect("matching query row count");
-            let vector = row.vector();
-            let values = vector.as_slice();
-            for group in 0..Grouped::<N>::count(dim) {
-                output.set(group, Grouped::<N>::from_query(values, group));
-            }
+            prepared.set_row(i, row.vector().as_slice());
         }
         Self {
             arch,
@@ -60,11 +51,11 @@ impl<A, const N: usize, const MR: usize, const NR: usize> Prepared<A, N, MR, NR>
     }
 }
 
-impl<A, const N: usize, const MR: usize, const NR: usize> MinMaxMaxSimKernel<8, 4>
-    for Prepared<A, N, MR, NR>
+impl<A, const PACK: usize, const MR: usize, const NR: usize> MinMaxMaxSimKernel<8, 4>
+    for Prepared<A, PACK, MR, NR>
 where
     A: Architecture,
-    for<'a> Driver<'a, A, N, MR, NR>: mk::Drive,
+    for<'a> Driver<'a, A, PACK, MR, NR>: mk::Drive,
 {
     fn nrows(&self) -> usize {
         self.prepared.nrows()
@@ -84,67 +75,43 @@ where
                 self.dim,
             ));
         }
-        let Some(b) = canonical_rows(doc) else {
+        let Some(b) = MinMax4Rows::new(doc) else {
             scores.fill(f32::MAX);
             return Ok(());
         };
 
-        let Some(dim) = NonZeroUsize::new(self.dim).map(mk::DimK::new) else {
+        if self.dim == 0 {
             scores.fill(0.0);
             return Ok(());
-        };
-        let Some(a) = mk::blocks::packed::View::from_block_transposed(self.prepared.as_view())
-        else {
+        }
+        let Some(a) = self.prepared.as_view() else {
             return Ok(());
         };
-        // SAFETY: The constructor provides the selected grouped layout and one metadata
-        // entry per block. Shape checks establish the document and output dimensions.
-        let mut driver = unsafe {
-            Driver::new(
-                self.arch,
-                a,
-                &self.compensation,
-                b,
-                scores,
-                dim,
-                mk::Cache::detect(),
-            )
-        };
+        let mut driver = Driver::new(
+            self.arch,
+            a,
+            &self.compensation,
+            b,
+            scores,
+            mk::Cache::detect(),
+        );
         mk::Drive::drive(&mut driver);
         Ok(())
     }
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "canonical metadata ensures a positive stride and exact byte length"
-)]
-fn canonical_rows(doc: MatRef<'_, MinMaxMeta<4>>) -> Option<mk::blocks::unpacked::View<'_, u8>> {
-    let rows = NonZeroUsize::new(doc.num_vectors())?;
-    let stride = mk::DimK::new(
-        NonZeroUsize::new(doc.repr().ncols()).expect("canonical rows include metadata"),
-    );
-    // SAFETY: MinMaxMeta stores exactly `num_vectors * ncols` canonical bytes and
-    // the returned view cannot outlive the input MatRef.
-    let bytes =
-        unsafe { std::slice::from_raw_parts(doc.as_raw_ptr(), rows.get() * stride.value().get()) };
-    let matrix =
-        diskann_utils::views::MatrixView::try_from(bytes, rows.get(), stride.value().get())
-            .expect("canonical matrix has exactly rows * stride bytes");
-    mk::blocks::unpacked::View::from_matrix_view(matrix)
-}
-
 struct BuildAndErase<E>(E);
 
 macro_rules! impl_builder {
-    ($arch:ty, $n:literal, $mr:literal, $nr:literal) => {
+    ($arch:ty, $pack:literal, $mr:literal, $nr:literal) => {
         impl<E> diskann_wide::arch::Target1<$arch, E::Output, MatRef<'_, MinMaxMeta<8>>>
             for BuildAndErase<E>
         where
             E: MinMaxErase<8, 4>,
         {
             fn run(self, arch: $arch, query: MatRef<'_, MinMaxMeta<8>>) -> E::Output {
-                self.0.erase(Prepared::<_, $n, $mr, $nr>::new(arch, query))
+                self.0
+                    .erase(Prepared::<_, $pack, $mr, $nr>::new(arch, query))
             }
         }
     };
@@ -160,7 +127,8 @@ impl_builder!(V4, 8, 16, 8);
 
 /// Build a tiled MinMax8-query by MinMax4-document MaxSim kernel.
 ///
-/// Owns an architecture-packed copy of the query. Canonical MinMax4 documents are borrowed.
+/// Owns a block-transposed query in the shared 64-dimensional even/odd order, padded to 64.
+/// Packing width is selected with the backend. Canonical MinMax4 documents are borrowed.
 /// Each document tile is decoded once into temporary scratch and reused across all query
 /// cache tiles and panels. Tile sizes use the same byte-based cache model as the f32 kernels.
 ///
@@ -226,6 +194,7 @@ where
 mod tests {
     use diskann_utils::ReborrowMut;
     use diskann_vector::DistanceFunctionMut;
+    use std::num::NonZeroUsize;
 
     use super::*;
     use crate::CompressInto;
@@ -243,7 +212,7 @@ mod tests {
         MaxSimIsa::Auto,
     ];
 
-    fn check_packing<const N: usize, const MR: usize>() {
+    fn check_packing<const PACK: usize, const MR: usize>() {
         for rows in [0, 1, MR - 1, MR, MR + 1, 2 * MR + 1] {
             for dim in 0..=17 {
                 let mut query = Mat::new(MinMaxMeta::<8>::new(rows, dim), Defaulted).unwrap();
@@ -261,24 +230,10 @@ mod tests {
                             .unwrap();
                     }
                 }
-                let packed = Prepared::<_, N, MR, 6>::new(Scalar::new(), query.as_view());
+                let packed = Prepared::<_, PACK, MR, 6>::new(Scalar::new(), query.as_view());
                 assert_eq!(packed.prepared.nrows(), rows);
-                assert_eq!(packed.prepared.ncols(), Grouped::<N>::count(dim));
                 assert_eq!(packed.dim, dim);
                 assert_eq!(packed.compensation.len(), rows.div_ceil(MR));
-                for (index, group) in packed.prepared.as_slice().iter().enumerate() {
-                    let k = Grouped::<N>::count(dim);
-                    let row = index / (MR * k) * MR + index % MR;
-                    let g = index / MR % k;
-                    let expected = if row < rows {
-                        let values: Vec<_> =
-                            (0..dim).map(|d| ((row * 17 + d + 1) % 256) as u8).collect();
-                        Grouped::<N>::from_query(&values, g)
-                    } else {
-                        Grouped::<N>::default()
-                    };
-                    assert_eq!(*group, expected);
-                }
                 for (block, meta) in packed.compensation.iter().enumerate() {
                     for lane in 0..MR {
                         let row = block * MR + lane;
@@ -376,6 +331,14 @@ mod tests {
             (33, 129, 513),
         ]
         .into_iter()
+        .chain(
+            [
+                1, 7, 8, 9, 31, 32, 33, 63, 64, 65, 127, 128, 129, 249, 250, 255, 256, 257, 1024,
+                1025,
+            ]
+            .into_iter()
+            .map(|dim| (17, 65, dim)),
+        )
         .chain((1..=16).flat_map(|doc_rows| (1..=17).map(move |dim| (17, doc_rows, dim))))
         .chain((1..=33).flat_map(|query_rows| {
             [1, 7, 8, 9, 15, 16, 17]
@@ -516,5 +479,40 @@ mod tests {
         let err =
             build_minmax_max_sim(MaxSimIsa::Reference, query.as_view(), BoxErase).unwrap_err();
         assert_eq!(err.isa, MaxSimIsa::Reference);
+    }
+
+    #[test]
+    fn prepared_query_supports_concurrent_calls() {
+        let query = compress::<8>(
+            &[1.0, -1.0, 0.5, 2.0, -3.0, 0.0, 1.5, -0.5, 4.0].repeat(17),
+            17,
+            9,
+        );
+        let docs = compress::<4>(
+            &[0.5, 1.0, -2.0, 3.0, 0.0, 0.25, -1.0, 2.0, -0.75].repeat(257),
+            257,
+            9,
+        );
+        for isa in ISAS.into_iter().filter(|isa| isa.is_available()) {
+            let kernel = build_minmax_max_sim(isa, query.as_view(), BoxErase).unwrap();
+            let mut expected = vec![0.0; 17];
+            kernel
+                .compute_max_sim(docs.as_view(), &mut expected)
+                .unwrap();
+            std::thread::scope(|scope| {
+                for _ in 0..4 {
+                    let kernel = &kernel;
+                    let docs = &docs;
+                    let expected = &expected;
+                    scope.spawn(move || {
+                        let mut scores = vec![123.0; 17];
+                        for _ in 0..3 {
+                            kernel.compute_max_sim(docs.as_view(), &mut scores).unwrap();
+                            assert_eq!(&scores, expected);
+                        }
+                    });
+                }
+            });
+        }
     }
 }
