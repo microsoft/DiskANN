@@ -15,7 +15,8 @@ use std::{fmt, path::Path, time::Instant};
 
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_graphivf::{
-    GraphParams, OnlineCentroidRouting, OnlineClusterer, OnlineParams, SeedStrategy,
+    GraphParams, OnlineCentroidRouting, OnlineClusterer, OnlineParams, OnlineUpperLevelParams,
+    SeedStrategy,
 };
 use diskann_utils::views::Matrix;
 use serde::{Deserialize, Serialize};
@@ -57,8 +58,16 @@ pub(super) struct GraphIvfOnlineBuildStats {
     /// Live centroids at the end of the build.
     final_clusters: usize,
     total_splits: u64,
-    /// Points that changed cluster, summed over splits (a point moved twice counts twice).
+    /// Bottom points that changed bottom cluster, summed over bottom splits.
     total_reassigned: u64,
+    /// Bottom centroids that changed upper cluster, summed over upper splits.
+    upper_total_reassigned: u64,
+    /// Live dynamic upper clusters at the end of the build; zero when disabled.
+    upper_final_clusters: usize,
+    /// Mean underlying bottom points represented by a live upper cluster.
+    upper_mean_weight: f64,
+    /// Maximum underlying bottom points represented by a live upper cluster.
+    upper_max_weight: usize,
     min_cluster_size: usize,
     mean_cluster_size: f64,
     max_cluster_size: usize,
@@ -90,7 +99,22 @@ impl fmt::Display for GraphIvfOnlineBuildStats {
             self.seeded_clusters, self.final_clusters
         )?;
         writeln!(f, "  splits:         {}", self.total_splits)?;
-        writeln!(f, "  reassigned:     {}", self.total_reassigned)?;
+        writeln!(
+            f,
+            "  reassigned:     {} bottom points",
+            self.total_reassigned
+        )?;
+        writeln!(
+            f,
+            "  upper reassigned:{} bottom centroids",
+            self.upper_total_reassigned
+        )?;
+        writeln!(f, "  upper clusters: {}", self.upper_final_clusters)?;
+        writeln!(
+            f,
+            "  upper weights:  mean={:.1} max={} bottom points",
+            self.upper_mean_weight, self.upper_max_weight
+        )?;
         writeln!(
             f,
             "  cluster sizes:  min={} mean={:.1} max={}",
@@ -115,6 +139,20 @@ fn centroid_capacity(params: &GraphIvfOnlineBuild, num_points: usize) -> usize {
             params
                 .max_clusters
                 .map_or(0, |m| 2 * m + params.warmup_centroids),
+        )
+}
+
+fn upper_centroid_capacity(
+    upper: crate::inputs::graph_ivf::OnlineUpperLevelClusteringConfig,
+    num_points: usize,
+) -> usize {
+    ((upper.capacity_mult * 2 * num_points) / upper.split_threshold.max(1))
+        .max(2 * upper.warmup_centroids)
+        .max(upper.warmup_centroids + 1)
+        .max(
+            upper
+                .max_clusters
+                .map_or(0, |m| 2 * m + upper.warmup_centroids),
         )
 }
 
@@ -180,6 +218,19 @@ where
     let decompress: MicroSeconds = decompress_start.elapsed().into();
 
     let centroid_capacity = centroid_capacity(params, num_points);
+    let upper_level = params
+        .upper_level_clustering
+        .map(|upper| OnlineUpperLevelParams {
+            max_clusters: upper.max_clusters,
+            centroid_capacity: upper_centroid_capacity(upper, num_points),
+            split_threshold: upper.split_threshold,
+            reassign_neighbors: upper.reassign_neighbors,
+            two_means_iters: upper.two_means_iters,
+            merge_threshold: upper.merge_threshold,
+            min_clusters: upper.min_clusters,
+            warmup_centroids: upper.warmup_centroids,
+            warmup_iters: upper.warmup_iters,
+        });
     let online_params = OnlineParams {
         max_clusters: params.max_clusters,
         centroid_capacity,
@@ -193,6 +244,7 @@ where
         normalize_centroids: params.normalize,
         num_threads: params.num_threads,
         seed: params.seed,
+        upper_level,
     };
 
     let seed_strategy = SeedStrategy::Warmup {
@@ -248,6 +300,17 @@ where
     let flush: MicroSeconds = flush_start.elapsed().into();
 
     let telemetry = clusterer.telemetry();
+    let upper_total_reassigned = clusterer
+        .upper_level_telemetry()
+        .map_or(0, |upper| upper.total_reassigned);
+    let upper_final_clusters = clusterer.upper_level_num_clusters().unwrap_or(0);
+    let upper_weights = clusterer.upper_level_cluster_weights().unwrap_or_default();
+    let upper_mean_weight = if upper_weights.is_empty() {
+        0.0
+    } else {
+        upper_weights.iter().sum::<usize>() as f64 / upper_weights.len() as f64
+    };
+    let upper_max_weight = upper_weights.iter().copied().max().unwrap_or(0);
     if let Some(csv) = &params.telemetry_csv {
         telemetry
             .write_csv(Path::new(csv))
@@ -275,6 +338,10 @@ where
         final_clusters: clusterer.num_clusters(),
         total_splits: telemetry.total_splits,
         total_reassigned: telemetry.total_reassigned,
+        upper_total_reassigned,
+        upper_final_clusters,
+        upper_mean_weight,
+        upper_max_weight,
         min_cluster_size,
         mean_cluster_size: num_points as f64 / sizes.len().max(1) as f64,
         max_cluster_size,
@@ -405,6 +472,7 @@ mod tests {
             },
             num_threads: 2,
             seed: 0,
+            upper_level_clustering: None,
             save_path: fixture.save_path.clone(),
             telemetry_csv: None,
         }

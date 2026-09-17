@@ -9,7 +9,7 @@ use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_graphivf::{
     AssignMethod, BuildParams, BuildProfile, CentroidInit, CentroidRouting, CentroidSearch,
-    EmptyClusterPolicy, GraphIvfIndex, GraphParams, Metric as GraphIvfMetric,
+    EmptyClusterPolicy, GraphIvfIndex, GraphParams, Metric as GraphIvfMetric, UpperLevelClustering,
 };
 use diskann_utils::views::Matrix;
 use serde::{Deserialize, Serialize};
@@ -228,6 +228,12 @@ where
             EmptyClusterConfig::PreserveOld => EmptyClusterPolicy::PreserveOld,
             EmptyClusterConfig::ReseedFarthest => EmptyClusterPolicy::ReseedFarthest,
         },
+        upper_level_clustering: params
+            .upper_level_clustering
+            .map(|upper| UpperLevelClustering {
+                num_clusters: upper.num_clusters,
+                kmeans_iters: upper.kmeans_iters,
+            }),
         normalize_centroids: false,
     };
 

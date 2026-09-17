@@ -33,6 +33,8 @@ pub struct BuildProfile {
     pub sample: Duration,
     /// Lloyd's k-means iterations over the sample.
     pub kmeans: Duration,
+    /// Clustering bottom-level centroids to determine physical list order.
+    pub upper_level_kmeans: Duration,
     /// Persisting the centroid matrix to disk.
     pub write_centroids: Duration,
     /// Building the in-memory centroid (Vamana) graph.
@@ -53,11 +55,12 @@ pub struct BuildProfile {
 impl BuildProfile {
     /// The phases in execution order paired with their labels (excludes
     /// [`total`](Self::total)).
-    pub fn phases(&self) -> [(&'static str, Duration); 9] {
+    pub fn phases(&self) -> [(&'static str, Duration); 10] {
         [
             ("normalize", self.normalize),
             ("sample", self.sample),
             ("kmeans", self.kmeans),
+            ("upper_level_kmeans", self.upper_level_kmeans),
             ("write_centroids", self.write_centroids),
             ("build_graph", self.build_graph),
             ("write_graph", self.write_graph),

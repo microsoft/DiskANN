@@ -322,6 +322,38 @@ A job is one `source` (how the index comes to exist) plus an optional final
 | `OnlineRunbook` | Replay BigANN insert/delete/search stages against a live online index, then flush it once. | nested `build`, `runbook`, and `search` objects; see below |
 | `Load` | Search an index built by an earlier job. | `load_path` |
 
+Static builds can optionally add a layout-only second Lloyd clustering level:
+
+```json
+"upper_level_clustering": {
+  "num_clusters": 512,
+  "kmeans_iters": 5
+}
+```
+
+For online and runbook builds, the same field selects an incremental upper Graph-IVF:
+
+```json
+"upper_level_clustering": {
+  "split_threshold": 128,
+  "warmup_centroids": 4,
+  "warmup_iters": 5,
+  "two_means_iters": 5,
+  "reassign_neighbors": 8,
+  "merge_threshold": 0,
+  "min_clusters": 1,
+  "max_clusters": null,
+  "capacity_mult": 3
+}
+```
+
+Bottom centroid ids are points in this nested online clusterer. Bottom splits and
+retirements insert and delete those points immediately, so the upper partition evolves
+with the bottom partition instead of being fitted at flush. Flush writes bottom posting
+lists contiguously by their maintained upper assignment. In either mode, bottom
+centroids, point assignments, and query routing are unchanged: queries still select
+bottom centroids directly. Omitting the object retains the flat physical order.
+
 `batch_size` (required) controls how many points an `Online` build consumes at
 a time. There is one write path and a single insert is a batch of one, so `1` is
 the reference semantics: route a point, split its cluster if it overflowed. A

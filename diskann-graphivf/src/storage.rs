@@ -13,7 +13,7 @@
 //!   whole file is zero-padded up to a 512-byte multiple so that sector-aligned
 //!   reads never run past the end of the file.
 //! * `<prefix>.graphivf_meta` — a compact header plus the per-cluster point
-//!   counts. Byte offsets are recomputed from the counts on load.
+//!   counts and, for reordered indexes, centroid-indexed byte offsets.
 //! * `<prefix>.graphivf_centroids.fbin` — the centroid matrix, always `f32`.
 //! * `<prefix>.graphivf_graph` — the centroid graph's adjacency, written
 //!   whenever the index was built with one. Absent for an exact-routed build,
@@ -59,7 +59,7 @@ const MAGIC: u32 = 0x4756_4947; // "GIVF" little-endian
 /// on every load. Version 2 additionally records whether the graph itself was
 /// persisted. Version 1 files still load: they simply take the rebuild path,
 /// which is what they have always done.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// Oldest metadata version still readable.
 const MIN_VERSION: u32 = 1;
@@ -115,8 +115,10 @@ pub(crate) struct Layout {
     pub has_graph: bool,
     /// Number of points in each cluster, indexed by cluster id.
     pub counts: Vec<u32>,
-    /// Prefix-sum byte offsets into the list file; `offsets[c]` is the start of
-    /// cluster `c` and `offsets[num_clusters]` is the total data length.
+    /// Byte offsets into the list file; `offsets[c]` is the physical start of
+    /// cluster `c` and `offsets[num_clusters]` is the total data length. These
+    /// are prefix sums for a flat layout but need not be monotonic when lists
+    /// have been grouped by an upper-level clustering.
     pub offsets: Vec<u64>,
 }
 
@@ -189,11 +191,24 @@ pub(crate) fn parse_cluster<'a, T: VectorRepr>(
 /// `assignments[p]` is the centroid id that corpus point `p` was assigned to.
 /// Input vectors are always `f32` and are encoded to `T` via
 /// [`num_traits::FromPrimitive::from_f32`].
+#[cfg(test)]
 pub(crate) fn write_lists<T: VectorRepr>(
     path: &Path,
     data: MatrixView<'_, f32>,
     assignments: &[u32],
     num_clusters: usize,
+) -> Result<(Vec<u32>, Vec<u64>)> {
+    let order: Vec<u32> = (0..num_clusters as u32).collect();
+    write_lists_ordered::<T>(path, data, assignments, num_clusters, &order)
+}
+
+/// Write lists in `list_order`, which maps physical position to centroid id.
+pub(crate) fn write_lists_ordered<T: VectorRepr>(
+    path: &Path,
+    data: MatrixView<'_, f32>,
+    assignments: &[u32],
+    num_clusters: usize,
+    list_order: &[u32],
 ) -> Result<(Vec<u32>, Vec<u64>)> {
     let dim = data.ncols();
     let elem_size = std::mem::size_of::<T>();
@@ -203,12 +218,15 @@ pub(crate) fn write_lists<T: VectorRepr>(
         buckets[c as usize].push(pid as u32);
     }
     let counts: Vec<u32> = buckets.iter().map(|b| b.len() as u32).collect();
-    let offsets = compute_offsets(&counts, dim, elem_size);
+    validate_list_order(list_order, num_clusters)?;
+    let mut offsets = vec![0u64; num_clusters + 1];
 
     let mut writer = BufWriter::new(File::create(path)?);
     let mut written: u64 = 0;
     let mut encoded: Vec<T> = Vec::with_capacity(dim);
-    for bucket in &buckets {
+    for &cid in list_order {
+        offsets[cid as usize] = written;
+        let bucket = &buckets[cid as usize];
         writer.write_all(bytemuck::cast_slice(bucket))?;
         for &pid in bucket {
             encoded.clear();
@@ -227,6 +245,7 @@ pub(crate) fn write_lists<T: VectorRepr>(
         }
         written += record_bytes(bucket.len(), dim, elem_size);
     }
+    offsets[num_clusters] = written;
 
     let pad = (align_up(written, ALIGN) - written) as usize;
     if pad > 0 {
@@ -250,11 +269,13 @@ pub(crate) fn write_lists<T: VectorRepr>(
 /// build flushes a corpus some of whose points were deleted or never inserted.
 /// The ids written into each list are the original row indices either way, so a
 /// partial index still refers to points by their corpus position.
-pub(crate) fn write_lists_stored<T: VectorRepr>(
+/// Write already-encoded vectors in `list_order` physical order.
+pub(crate) fn write_lists_stored_ordered<T: VectorRepr>(
     path: &Path,
     data: MatrixView<'_, T>,
     assignments: &[u32],
     num_clusters: usize,
+    list_order: &[u32],
 ) -> Result<(Vec<u32>, Vec<u64>)> {
     let dim = data.ncols();
     let elem_size = std::mem::size_of::<T>();
@@ -267,11 +288,14 @@ pub(crate) fn write_lists_stored<T: VectorRepr>(
         buckets[c as usize].push(pid as u32);
     }
     let counts: Vec<u32> = buckets.iter().map(|b| b.len() as u32).collect();
-    let offsets = compute_offsets(&counts, dim, elem_size);
+    validate_list_order(list_order, num_clusters)?;
+    let mut offsets = vec![0u64; num_clusters + 1];
 
     let mut writer = BufWriter::new(File::create(path)?);
     let mut written: u64 = 0;
-    for bucket in &buckets {
+    for &cid in list_order {
+        offsets[cid as usize] = written;
+        let bucket = &buckets[cid as usize];
         writer.write_all(bytemuck::cast_slice(bucket))?;
         for &pid in bucket {
             writer.write_all(bytemuck::cast_slice(data.row(pid as usize)))?;
@@ -284,6 +308,7 @@ pub(crate) fn write_lists_stored<T: VectorRepr>(
         }
         written += record_bytes(bucket.len(), dim, elem_size);
     }
+    offsets[num_clusters] = written;
 
     let pad = (align_up(written, ALIGN) - written) as usize;
     if pad > 0 {
@@ -292,6 +317,23 @@ pub(crate) fn write_lists_stored<T: VectorRepr>(
     writer.flush()?;
 
     Ok((counts, offsets))
+}
+
+fn validate_list_order(order: &[u32], num_clusters: usize) -> Result<()> {
+    if order.len() != num_clusters {
+        return Err(GraphIvfError::invalid(format!(
+            "list order has {} entries but index has {num_clusters} clusters",
+            order.len()
+        )));
+    }
+    let mut seen = vec![false; num_clusters];
+    for &cid in order {
+        let cid = cid as usize;
+        if cid >= num_clusters || std::mem::replace(&mut seen[cid], true) {
+            return Err(GraphIvfError::invalid("list order is not a permutation"));
+        }
+    }
+    Ok(())
 }
 
 /// Write the centroid matrix (always `f32`) to `path` in the `.fbin` format.
@@ -320,6 +362,7 @@ pub(crate) fn write_metadata(path: &Path, layout: &Layout) -> Result<()> {
     w.write_f32::<LittleEndian>(layout.graph.alpha)?;
     w.write_u32::<LittleEndian>(layout.has_graph as u32)?;
     w.write_all(bytemuck::cast_slice(&layout.counts))?;
+    w.write_all(bytemuck::cast_slice(&layout.offsets))?;
     w.flush()?;
     Ok(())
 }
@@ -368,7 +411,13 @@ pub(crate) fn read_metadata(path: &Path) -> Result<Layout> {
 
     let mut counts = vec![0u32; num_clusters];
     r.read_exact(bytemuck::cast_slice_mut(&mut counts))?;
-    let offsets = compute_offsets(&counts, dim, element_size);
+    let offsets = if version >= 3 {
+        let mut offsets = vec![0u64; num_clusters + 1];
+        r.read_exact(bytemuck::cast_slice_mut(&mut offsets))?;
+        offsets
+    } else {
+        compute_offsets(&counts, dim, element_size)
+    };
 
     Ok(Layout {
         dim,
@@ -623,6 +672,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ordered_lists_keep_offsets_indexed_by_centroid_id() {
+        let dim = 2;
+        let raw: Vec<f32> = (0..12).map(|value| value as f32).collect();
+        let matrix = Matrix::try_from(raw.into_boxed_slice(), 6, dim).unwrap();
+        let assignments = [0u32, 1, 2, 0, 1, 2];
+        let order = [2u32, 0, 1];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ordered-lists.bin");
+        let (counts, offsets) =
+            write_lists_ordered::<f32>(&path, matrix.as_view(), &assignments, 3, &order).unwrap();
+        assert_eq!(counts, vec![2, 2, 2]);
+        assert_eq!(offsets[2], 0);
+        assert!(offsets[0] < offsets[1]);
+        assert!(offsets[2] < offsets[0]);
+
+        let layout = Layout {
+            dim,
+            metric: Metric::L2,
+            element_size: F32_SZ,
+            num_points: 6,
+            graph: GraphParams::default(),
+            has_graph: false,
+            counts,
+            offsets,
+        };
+        let bytes = fs::read(&path).unwrap();
+        for cid in 0..3 {
+            let window = cluster_window(&layout, cid);
+            let start = window.aligned_start as usize;
+            let end = start + window.aligned_len;
+            let (ids, _) = parse_cluster::<f32>(&bytes[start..end], &window, dim);
+            let expected: Vec<u32> = assignments
+                .iter()
+                .enumerate()
+                .filter_map(|(pid, &assigned)| (assigned == cid as u32).then_some(pid as u32))
+                .collect();
+            assert_eq!(ids, expected);
+        }
+    }
+
     /// Same round-trip for f16 lists, where odd-length records exercise the
     /// 4-byte record padding and the ids must stay 4-byte aligned.
     #[test]
@@ -713,7 +804,7 @@ mod tests {
         assert_eq!(loaded.graph.slack, 1.5);
         assert_eq!(loaded.graph.alpha, 1.3);
         assert!(loaded.has_graph);
-        // Offsets are recomputed identically from the persisted counts.
+        // Version 3 persists offsets explicitly, including reordered layouts.
         assert_eq!(loaded.offsets, compute_offsets(&counts, dim, F16_SZ));
     }
 

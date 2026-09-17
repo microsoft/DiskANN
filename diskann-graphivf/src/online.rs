@@ -62,7 +62,7 @@ use crate::{
     centroids::{self, AdjacencyCensus},
     cluster::{self, sq_l2},
     index::{with_suffix, CENTROIDS_SUFFIX, GRAPH_SUFFIX, LISTS_SUFFIX, META_SUFFIX},
-    params::{EmptyClusterPolicy, OnlineCentroidRouting, OnlineParams},
+    params::{EmptyClusterPolicy, OnlineCentroidRouting, OnlineParams, OnlineUpperLevelParams},
     storage::{self, Layout},
     GraphIvfError, Result,
 };
@@ -177,6 +177,133 @@ struct MergePlan {
     started: Instant,
 }
 
+/// Incremental second level. Bottom centroid ids are point ids in another
+/// ordinary [`OnlineClusterer`], so both levels share exactly the same
+/// split/reassign/dissolve implementation.
+struct DynamicUpperLevel {
+    clusterer: Box<OnlineClusterer>,
+    present: Vec<bool>,
+}
+
+impl DynamicUpperLevel {
+    fn new(
+        bottom: &CentroidRegistry,
+        bottom_partition: &IvfPartition,
+        dim: usize,
+        inherited: OnlineParams,
+        params: OnlineUpperLevelParams,
+    ) -> Result<Self> {
+        let bottom_capacity = bottom.capacity();
+        let live: Vec<(u32, Vec<f32>)> = bottom
+            .iter_live()
+            .map(|(id, vector)| (id, vector.to_vec()))
+            .collect();
+        if params.warmup_centroids == 0 || params.warmup_centroids > live.len() {
+            return Err(GraphIvfError::invalid(format!(
+                "upper warmup_centroids ({}) must be in 1..={}",
+                params.warmup_centroids,
+                live.len()
+            )));
+        }
+
+        let mut seed_points = Matrix::new(0.0f32, live.len(), dim);
+        let mut points = Matrix::new(0.0f32, bottom_capacity, dim);
+        for (row, (id, vector)) in live.iter().enumerate() {
+            seed_points.row_mut(row).copy_from_slice(vector);
+            points.row_mut(*id as usize).copy_from_slice(vector);
+        }
+
+        let upper_params = OnlineParams {
+            max_clusters: params.max_clusters,
+            centroid_capacity: params.centroid_capacity,
+            split_threshold: params.split_threshold,
+            reassign_neighbors: params.reassign_neighbors,
+            two_means_iters: params.two_means_iters,
+            merge_threshold: params.merge_threshold,
+            min_clusters: params.min_clusters,
+            routing: inherited.routing,
+            metric: crate::Metric::L2,
+            normalize_centroids: inherited.normalize_centroids,
+            num_threads: inherited.num_threads,
+            seed: inherited.seed ^ 0x5550_5045_524c_564c,
+            upper_level: None,
+        };
+        let initial = SeedStrategy::Warmup {
+            num_centroids: params.warmup_centroids,
+            warmup_points: live.len(),
+            iters: params.warmup_iters,
+        }
+        .resolve(seed_points.as_view(), &upper_params)?;
+        let mut clusterer = OnlineClusterer::new(points, initial, upper_params)?;
+        clusterer.point_weights = Some(vec![0; bottom_capacity]);
+        let ids: Vec<u32> = live.iter().map(|(id, _)| *id).collect();
+        for &id in &ids {
+            clusterer.point_weights.as_mut().unwrap()[id as usize] = bottom_partition.list_len(id);
+        }
+        clusterer.insert_batch(&ids)?;
+        let mut present = vec![false; bottom_capacity];
+        for id in ids {
+            present[id as usize] = true;
+        }
+        Ok(Self {
+            clusterer: Box::new(clusterer),
+            present,
+        })
+    }
+
+    fn synchronize(&mut self, live: &[(u32, Vec<f32>, usize)]) -> Result<()> {
+        let mut now = vec![false; self.present.len()];
+        for (id, _, _) in live {
+            now[*id as usize] = true;
+        }
+        let removed: Vec<u32> = self
+            .present
+            .iter()
+            .zip(&now)
+            .enumerate()
+            .filter_map(|(id, (&was, &is))| (was && !is).then_some(id as u32))
+            .collect();
+        if !removed.is_empty() {
+            self.clusterer.delete_batch(&removed)?;
+        }
+        let mut added = Vec::new();
+        for (id, vector, weight) in live {
+            self.clusterer.point_weights.as_mut().unwrap()[*id as usize] = *weight;
+            if !self.present[*id as usize] {
+                self.clusterer
+                    .points
+                    .row_mut(*id as usize)
+                    .copy_from_slice(vector);
+                added.push(*id);
+            }
+        }
+        if !added.is_empty() {
+            self.clusterer.insert_batch(&added)?;
+        }
+        self.clusterer.split_weight_overflows()?;
+        self.present = now;
+        Ok(())
+    }
+
+    fn list_order(&self, dense_remap: &[u32], num_bottom: usize) -> Result<Vec<u32>> {
+        let mut grouped = Vec::with_capacity(num_bottom);
+        for (old_id, &dense_id) in dense_remap.iter().enumerate() {
+            if dense_id == UNASSIGNED {
+                continue;
+            }
+            let upper_id = self.clusterer.partition.assignment(old_id as u32);
+            if upper_id == UNASSIGNED {
+                return Err(GraphIvfError::invalid(format!(
+                    "live bottom centroid {old_id} is absent from the upper level"
+                )));
+            }
+            grouped.push((upper_id, dense_id));
+        }
+        grouped.sort_unstable();
+        Ok(grouped.into_iter().map(|(_, dense_id)| dense_id).collect())
+    }
+}
+
 /// An incremental graph-IVF clusterer with insert-driven splits, delete-driven
 /// dissolves, and live in-memory search.
 pub struct OnlineClusterer {
@@ -206,6 +333,12 @@ pub struct OnlineClusterer {
     /// the complete operation succeeds. Graph retirement cannot be rolled
     /// back, so a failed commit permanently disables further use.
     poisoned: Option<String>,
+    /// Optional online index over live bottom centroids.
+    upper_level: Option<Box<DynamicUpperLevel>>,
+    /// Optional per-point load used by the nested upper level. Ordinary bottom
+    /// clusterers use unit weights. An upper point's weight is the number of
+    /// corpus points in the represented bottom posting list.
+    point_weights: Option<Vec<usize>>,
 }
 
 impl OnlineClusterer {
@@ -320,7 +453,7 @@ impl OnlineClusterer {
             .map_err(ANNError::from)?;
         let pool = create_thread_pool(params.num_threads)?;
 
-        Ok(Self {
+        let mut clusterer = Self {
             points,
             dim,
             params,
@@ -332,7 +465,31 @@ impl OnlineClusterer {
             telemetry: BuildTelemetry::default(),
             scratch: MaintenanceScratch::default(),
             poisoned: None,
-        })
+            upper_level: None,
+            point_weights: None,
+        };
+        if let Some(upper) = params.upper_level {
+            clusterer.upper_level = Some(Box::new(DynamicUpperLevel::new(
+                &clusterer.centroids,
+                &clusterer.partition,
+                dim,
+                params,
+                upper,
+            )?));
+        }
+        Ok(clusterer)
+    }
+
+    fn synchronize_upper_level(&mut self) -> Result<()> {
+        let live: Vec<(u32, Vec<f32>, usize)> = self
+            .centroids
+            .iter_live()
+            .map(|(id, vector)| (id, vector.to_vec(), self.partition.list_len(id)))
+            .collect();
+        if let Some(upper) = &mut self.upper_level {
+            upper.synchronize(&live)?;
+        }
+        Ok(())
     }
 
     fn ensure_healthy(&self) -> Result<()> {
@@ -371,6 +528,35 @@ impl OnlineClusterer {
     /// Read-only access to the build telemetry accumulated so far.
     pub fn telemetry(&self) -> &BuildTelemetry {
         &self.telemetry
+    }
+
+    /// Read-only telemetry for the dynamically maintained upper level.
+    /// Returns `None` when upper-level clustering is disabled.
+    pub fn upper_level_telemetry(&self) -> Option<&BuildTelemetry> {
+        self.upper_level
+            .as_ref()
+            .map(|upper| upper.clusterer.telemetry())
+    }
+
+    /// Number of live clusters in the dynamically maintained upper level.
+    /// Returns `None` when upper-level clustering is disabled.
+    pub fn upper_level_num_clusters(&self) -> Option<usize> {
+        self.upper_level
+            .as_ref()
+            .map(|upper| upper.clusterer.num_clusters())
+    }
+
+    /// Underlying bottom-point population represented by each live upper
+    /// cluster. Returns `None` when upper-level clustering is disabled.
+    pub fn upper_level_cluster_weights(&self) -> Option<Vec<usize>> {
+        self.upper_level.as_ref().map(|upper| {
+            upper
+                .clusterer
+                .centroids
+                .live_ids()
+                .map(|cid| upper.clusterer.cluster_weight(cid))
+                .collect()
+        })
     }
 
     /// Current size of every live cluster (points assigned to it), in no
@@ -475,7 +661,7 @@ impl OnlineClusterer {
         // Complete every fallible planning step against the old partition.
         // Parent plans explicitly include points from this batch that will be
         // attached during commit.
-        let parents = self.select_split_parents(&routes);
+        let parents = self.select_split_parents(pids, &routes);
         let split = if parents.is_empty() {
             None
         } else {
@@ -490,9 +676,11 @@ impl OnlineClusterer {
         };
 
         self.begin_commit();
-        let result = self.commit_insert(pids, &routes, split);
+        let mut result = self.commit_insert(pids, &routes, split);
         if result.is_err() {
             self.reattach_pending_points();
+        } else if let Err(error) = self.synchronize_upper_level() {
+            result = Err(error);
         }
         self.finish_commit(&result);
         result
@@ -520,18 +708,37 @@ impl OnlineClusterer {
 
     /// Select overflowing routed-to clusters using their projected post-insert
     /// sizes, then apply id-budget and live-cluster admission limits.
-    fn select_split_parents(&self, routes: &[u32]) -> Vec<u32> {
-        let mut sorted = routes.to_vec();
+    fn point_weight(&self, pid: u32) -> usize {
+        self.point_weights
+            .as_ref()
+            .map_or(1, |weights| weights[pid as usize])
+    }
+
+    fn cluster_weight(&self, cid: u32) -> usize {
+        self.partition
+            .members(cid)
+            .iter()
+            .map(|&pid| self.point_weight(pid))
+            .sum()
+    }
+
+    fn select_split_parents(&self, pids: &[u32], routes: &[u32]) -> Vec<u32> {
+        let mut sorted: Vec<(u32, u32)> =
+            routes.iter().copied().zip(pids.iter().copied()).collect();
         sorted.sort_unstable();
         let mut parents = Vec::new();
         let mut start = 0;
         while start < sorted.len() {
-            let cid = sorted[start];
+            let cid = sorted[start].0;
             let end = sorted[start..]
                 .iter()
-                .position(|&candidate| candidate != cid)
+                .position(|&(candidate, _)| candidate != cid)
                 .map_or(sorted.len(), |offset| start + offset);
-            if self.partition.list_len(cid) + end - start > self.params.split_threshold {
+            let incoming_weight: usize = sorted[start..end]
+                .iter()
+                .map(|&(_, pid)| self.point_weight(pid))
+                .sum();
+            if self.cluster_weight(cid) + incoming_weight > self.params.split_threshold {
                 parents.push(cid);
             }
             start = end;
@@ -542,19 +749,60 @@ impl OnlineClusterer {
             admitted = admitted.min(max_clusters.saturating_sub(self.centroids.live_count()));
         }
         if admitted < parents.len() {
-            let incoming_count = |cid: u32| {
-                sorted.partition_point(|&route| route <= cid)
-                    - sorted.partition_point(|&route| route < cid)
+            let incoming_weight = |cid: u32| {
+                let start = sorted.partition_point(|&(route, _)| route < cid);
+                let end = sorted.partition_point(|&(route, _)| route <= cid);
+                sorted[start..end]
+                    .iter()
+                    .map(|&(_, pid)| self.point_weight(pid))
+                    .sum::<usize>()
             };
             parents.sort_unstable_by(|&a, &b| {
-                let size_a = self.partition.list_len(a) + incoming_count(a);
-                let size_b = self.partition.list_len(b) + incoming_count(b);
+                let size_a = self.cluster_weight(a) + incoming_weight(a);
+                let size_b = self.cluster_weight(b) + incoming_weight(b);
                 size_b.cmp(&size_a).then(a.cmp(&b))
             });
             parents.truncate(admitted);
             parents.sort_unstable();
         }
         parents
+    }
+
+    /// Split weighted clusters that crossed the threshold because existing
+    /// points grew in weight rather than because new point ids were inserted.
+    fn split_weight_overflows(&mut self) -> Result<()> {
+        if self.point_weights.is_none() {
+            return Ok(());
+        }
+        loop {
+            let mut parents: Vec<u32> = self
+                .centroids
+                .live_ids()
+                .filter(|&cid| {
+                    self.partition.list_len(cid) >= 2
+                        && self.cluster_weight(cid) > self.params.split_threshold
+                })
+                .collect();
+            let mut admitted = parents.len().min(self.centroids.alloc_budget() / 2);
+            if let Some(max_clusters) = self.params.max_clusters {
+                admitted = admitted.min(max_clusters.saturating_sub(self.centroids.live_count()));
+            }
+            parents.sort_unstable_by(|&a, &b| {
+                self.cluster_weight(b)
+                    .cmp(&self.cluster_weight(a))
+                    .then(a.cmp(&b))
+            });
+            parents.truncate(admitted);
+            parents.sort_unstable();
+            if parents.is_empty() {
+                return Ok(());
+            }
+            let plan = self.prepare_split(&parents, &std::collections::HashMap::new())?;
+            self.begin_commit();
+            let result = self.commit_split(plan);
+            self.finish_commit(&result);
+            result?;
+        }
     }
 
     /// Delete a batch of points, then merge whichever clusters that emptied
@@ -653,9 +901,11 @@ impl OnlineClusterer {
         };
 
         self.begin_commit();
-        let result = self.commit_delete(&by_cluster, merge);
+        let mut result = self.commit_delete(&by_cluster, merge);
         if result.is_err() {
             self.reattach_pending_points();
+        } else if let Err(error) = self.synchronize_upper_level() {
+            result = Err(error);
         }
         self.finish_commit(&result);
         result
@@ -1251,6 +1501,23 @@ impl OnlineClusterer {
     /// does not match the corpus. Points that were never inserted or have been
     /// deleted are omitted from the serialized index.
     pub fn flush<T: VectorRepr>(&self, prefix: &Path, stored: MatrixView<'_, T>) -> Result<()> {
+        self.flush_with_upper_level(prefix, stored, None)
+    }
+
+    /// Compatibility entry point. Online upper levels must now be configured
+    /// in [`OnlineParams`] so they are maintained during mutation rather than
+    /// fitted after the fact at flush.
+    pub fn flush_with_upper_level<T: VectorRepr>(
+        &self,
+        prefix: &Path,
+        stored: MatrixView<'_, T>,
+        upper_level: Option<crate::UpperLevelClustering>,
+    ) -> Result<()> {
+        if upper_level.is_some() {
+            return Err(GraphIvfError::invalid(
+                "online upper-level clustering must be configured in OnlineParams",
+            ));
+        }
         self.ensure_healthy()?;
         let num_points = self.points.nrows();
         if stored.nrows() != num_points {
@@ -1263,6 +1530,11 @@ impl OnlineClusterer {
         // Dense remap of live centroid ids to a contiguous 0..k range.
         let (remap, centroids_mat) = self.centroids.densify()?;
         let k = centroids_mat.nrows();
+        let list_order = if let Some(upper) = &self.upper_level {
+            upper.list_order(&remap, k)?
+        } else {
+            (0..k as u32).collect()
+        };
 
         // Dense per-point assignments. A point that is not currently in the
         // index — never inserted, or deleted — is marked `UNASSIGNED` and
@@ -1299,7 +1571,8 @@ impl OnlineClusterer {
         // Write inverted lists from the stored representation and the metadata.
         let stored_dim = stored.ncols();
         let lists_path = with_suffix(prefix, LISTS_SUFFIX);
-        let (counts, offsets) = storage::write_lists_stored::<T>(&lists_path, stored, &dense, k)?;
+        let (counts, offsets) =
+            storage::write_lists_stored_ordered::<T>(&lists_path, stored, &dense, k, &list_order)?;
         let layout = Layout {
             dim: stored_dim,
             metric: self.params.metric,

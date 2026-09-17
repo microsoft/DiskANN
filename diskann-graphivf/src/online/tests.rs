@@ -126,6 +126,26 @@ fn assert_live_invariants(c: &OnlineClusterer, live: &[u32]) {
     }
     assert!(c.centroids.live_count() <= c.centroids.capacity());
 
+    if let Some(upper) = &c.upper_level {
+        let mut upper_points = 0;
+        for cid in 0..c.centroids.capacity() as u32 {
+            assert_eq!(
+                upper.present[cid as usize],
+                c.centroids.is_live(cid),
+                "upper membership differs for bottom centroid {cid}"
+            );
+            let assignment = upper.clusterer.partition.assignment(cid);
+            if c.centroids.is_live(cid) {
+                assert_ne!(assignment, UNASSIGNED);
+                assert!(upper.clusterer.centroids.is_live(assignment));
+                upper_points += 1;
+            } else {
+                assert_eq!(assignment, UNASSIGNED);
+            }
+        }
+        assert_eq!(upper_points, c.centroids.live_count());
+    }
+
     // Sum of live list lengths == live count; retired ids hold nothing.
     let mut total = 0usize;
     for cid in 0..c.centroids.capacity() as u32 {
@@ -212,6 +232,44 @@ fn split_creates_cluster_and_tightens() {
         c.residual() / (n as f64) < 5.0,
         "residual too large: {}",
         c.residual()
+    );
+}
+
+#[test]
+fn dynamic_upper_level_tracks_bottom_splits() {
+    let (points, n) = two_blobs(80, 2026);
+    let initial = mat(vec![10.0, 10.0], 1, 2);
+    let mut p = params(8, 12);
+    p.max_clusters = None;
+    p.centroid_capacity = 64;
+    p.upper_level = Some(OnlineUpperLevelParams {
+        max_clusters: None,
+        centroid_capacity: 32,
+        split_threshold: 24,
+        reassign_neighbors: 2,
+        two_means_iters: 5,
+        merge_threshold: 0,
+        min_clusters: 1,
+        warmup_centroids: 1,
+        warmup_iters: 2,
+    });
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    for batch in (0..n as u32).collect::<Vec<_>>().chunks(8) {
+        c.insert_batch(batch).unwrap();
+    }
+
+    assert_invariants(&c, n);
+    let upper = c.upper_level.as_ref().unwrap();
+    assert!(c.centroids.live_count() > 2);
+    assert!(upper.clusterer.centroids.live_count() > 1);
+    assert!(c.upper_level_telemetry().unwrap().total_reassigned > 0);
+    assert!(
+        c.upper_level_cluster_weights()
+            .unwrap()
+            .into_iter()
+            .all(|weight| weight <= 24),
+        "upper group exceeded its represented-point threshold"
     );
 }
 

@@ -15,6 +15,10 @@
                     "num_clusters": 16,
                     "sample_size": 256,
                     "kmeans_iters": 5,
+                    "upper_level_clustering": {
+                        "num_clusters": 4,
+                        "kmeans_iters": 5
+                    },
                     "routing": {
                         "graph": {
                             "assign_l": 32,

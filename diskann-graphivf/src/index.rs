@@ -317,6 +317,21 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         // Stored vector width: the canonical `T` width for pre-compressed
         // corpora, otherwise the logical dimension of `work`.
         let stored_dim = stored.map(|m| m.ncols()).unwrap_or(dim);
+        // Cluster only the finished bottom-level centroids to derive physical
+        // posting-list order. The matrix itself is not changed.
+        let upper_level_start = Instant::now();
+        let list_order = if let Some(upper) = params.upper_level_clustering {
+            cluster::upper_level_order(
+                centroids_mat.as_view(),
+                upper.num_clusters,
+                upper.kmeans_iters,
+                params.seed ^ 0x5550_5045_524c_564c,
+                pool,
+            )?
+        } else {
+            (0..centroids_mat.nrows() as u32).collect()
+        };
+        profile.upper_level_kmeans = upper_level_start.elapsed();
         // Persist centroids: the graph is saved alongside them, but a load that
         // cannot reuse it rebuilds from these.
         let write_centroids_start = Instant::now();
@@ -359,15 +374,20 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         let write_lists_start = Instant::now();
         let lists_path = with_suffix(prefix, LISTS_SUFFIX);
         let (counts, offsets) = match stored {
-            Some(stored_rows) => storage::write_lists_stored::<T>(
+            Some(stored_rows) => storage::write_lists_stored_ordered::<T>(
                 &lists_path,
                 stored_rows,
                 &assignments,
                 params.num_clusters,
+                &list_order,
             )?,
-            None => {
-                storage::write_lists::<T>(&lists_path, work, &assignments, params.num_clusters)?
-            }
+            None => storage::write_lists_ordered::<T>(
+                &lists_path,
+                work,
+                &assignments,
+                params.num_clusters,
+                &list_order,
+            )?,
         };
         profile.write_lists = write_lists_start.elapsed();
 
@@ -873,3 +893,4 @@ pub(crate) fn with_suffix(prefix: &Path, suffix: &str) -> PathBuf {
     s.push(suffix);
     PathBuf::from(s)
 }
+// Suffixes are appended to the complete path rather than replacing its extension.

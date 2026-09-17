@@ -19,6 +19,7 @@ use diskann_disk::utils::{compute_closest_centers, compute_vecs_l2sq};
 use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPool};
 use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::distance::Metric as VectorMetric;
+use rand::{rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
 
 use crate::{
@@ -266,6 +267,59 @@ pub(crate) fn lloyd(
         iters_run,
         residual,
     })
+}
+
+/// Cluster bottom-level centroids and return their ids ordered first by
+/// upper-level cluster and then by original id.
+///
+/// The input centroid matrix is never modified. The returned permutation maps
+/// physical list position to the original bottom-level centroid id.
+pub(crate) fn upper_level_order(
+    bottom_centroids: MatrixView<'_, f32>,
+    num_upper_clusters: usize,
+    kmeans_iters: usize,
+    seed: u64,
+    pool: &RayonThreadPool,
+) -> Result<Vec<u32>> {
+    let num_bottom = bottom_centroids.nrows();
+    let dim = bottom_centroids.ncols();
+    debug_assert!(num_upper_clusters > 0 && num_upper_clusters <= num_bottom);
+    debug_assert!(kmeans_iters > 0);
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let sampled = rand::seq::index::sample(&mut rng, num_bottom, num_upper_clusters);
+    let mut initial = vec![0.0f32; num_upper_clusters * dim];
+    for (dst, cid) in initial.chunks_mut(dim).zip(sampled.iter()) {
+        dst.copy_from_slice(bottom_centroids.row(cid));
+    }
+    let mut upper_centroids = Matrix::try_from(initial.into_boxed_slice(), num_upper_clusters, dim)
+        .map_err(|_| GraphIvfError::invalid("upper-level centroid matrix shape mismatch"))?;
+
+    let mut assigner = ExactAssigner::default();
+    lloyd(
+        bottom_centroids,
+        &mut upper_centroids,
+        &mut assigner,
+        kmeans_iters,
+        EmptyClusterPolicy::PreserveOld,
+        false,
+        pool,
+    )?;
+
+    // Lloyd updates centroids after its final assignment. Assign once more so
+    // the physical grouping reflects the final upper-level centroids.
+    let mut assignments = vec![0u32; num_bottom];
+    assigner.assign(
+        bottom_centroids,
+        upper_centroids.as_view(),
+        kmeans_iters,
+        &mut assignments,
+        pool,
+    )?;
+
+    let mut order: Vec<u32> = (0..num_bottom as u32).collect();
+    order.sort_unstable_by_key(|&cid| (assignments[cid as usize], cid));
+    Ok(order)
 }
 
 /// Partition point indices by their assigned centroid (in increasing point
