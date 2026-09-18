@@ -1985,6 +1985,9 @@ impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for DynamicQuantization {
 }
 
 impl<'a, T: VectorRepr> InsertStrategy<'a, GarnetProvider<T>, &'a [T]> for DynamicQuantization {
+    type SearchAccessor = DynamicAccessor<'a, T>;
+    type SearchAccessorError = GarnetProviderError;
+
     type PruneStrategy = Self;
 
     fn insert_search_accessor(
