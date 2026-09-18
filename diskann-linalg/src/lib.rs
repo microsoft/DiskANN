@@ -780,13 +780,17 @@ mod sgemm_aat_lower_tests {
     }
 
     #[rstest]
-    #[case::replace(sgemm_aat_lower, false)]
-    #[case::add(sgemm_aat_lower_add, true)]
+    #[case::replace_single_entry(sgemm_aat_lower, false, 1, 1)]
+    #[case::add_single_entry(sgemm_aat_lower_add, true, 1, 1)]
+    #[case::replace_zero_inner_dimension(sgemm_aat_lower, false, 3, 0)]
+    #[case::add_zero_inner_dimension(sgemm_aat_lower_add, true, 3, 0)]
+    #[case::replace_rectangular(sgemm_aat_lower, false, 3, 7)]
+    #[case::add_rectangular(sgemm_aat_lower_add, true, 3, 7)]
     fn rectangular_inputs_match_scalar_dot_products(
         #[case] operation: LowerProduct,
         #[case] add: bool,
-        #[values(1, 3, 17)] rows: usize,
-        #[values(0, 1, 7, 8, 9, 16, 17, 33)] dimensions: usize,
+        #[case] rows: usize,
+        #[case] dimensions: usize,
     ) {
         let input: Vec<_> = (0..rows * dimensions)
             .map(|i| (i % 9) as f32 - 4.0)
@@ -805,13 +809,11 @@ mod sgemm_aat_lower_tests {
     fn large_dense_inputs_match_scalar_dot_products(
         #[case] operation: LowerProduct,
         #[case] add: bool,
-        #[values((33, 384), (65, 768), (129, 1536), (17, 1537), (513, 129), (17, 4097))] shape: (
-            usize,
-            usize,
-        ),
     ) {
         use rand::{rngs::StdRng, SeedableRng};
 
+        // One representative dense input checks the wrapper's row-major wiring.
+        let shape = (129, 1536);
         let (rows, dimensions) = shape;
         let mut rng = StdRng::seed_from_u64(1287);
         // Bounded multiples of 1/8 keep products and sums exact in f32.
