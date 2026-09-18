@@ -12,7 +12,7 @@ use crate::{
     views::{ChunkOffsets, ChunkOffsetsView},
 };
 use diskann_utils::{
-    strided,
+    strided::Strided,
     views::{self, MatrixView, MutMatrixView},
 };
 use thiserror::Error;
@@ -89,7 +89,7 @@ impl TransposedTable {
             .map(|i| {
                 let range = offsets.at(i);
                 largest = largest.max(range.len());
-                let view = strided::StridedView::try_shrink_from(
+                let view = Strided::try_from_data(
                     &(pivots.as_slice()[range.start..]),
                     pivots.nrows(),
                     range.len(),
