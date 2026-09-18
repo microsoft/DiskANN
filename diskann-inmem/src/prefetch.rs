@@ -202,7 +202,41 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
 /// # Safety
 ///
 /// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
+    #[inline(always)]
+    unsafe fn prefetch_l1(ptr: *const i8) {
+        // SAFETY: `prfm` is a non-faulting prefetch hint and does not create Rust references.
+        unsafe {
+            std::arch::asm!(
+                "prfm pldl1keep, [{ptr}]",
+                ptr = in(reg) ptr,
+                options(nostack, preserves_flags),
+            );
+        }
+    }
+
+    // Fetch the final location (the one containing the tag) first.
+    let stride = Bytes::CACHELINE.value();
+    let ptr = ptr.cast::<i8>();
+    let lines = len.div_ceil(stride);
+    if lines == 0 {
+        return;
+    }
+
+    // SAFETY: Inherited from caller.
+    unsafe { prefetch_l1(ptr.add(stride * (lines - 1))) };
+    for i in 0..(lines - 1) {
+        // SAFETY: Inherited from caller.
+        unsafe { prefetch_l1(ptr.add(stride * i)) };
+    }
+}
+
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "avx2"),
+    target_arch = "aarch64"
+)))]
 pub(crate) unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
 
 ///////////
