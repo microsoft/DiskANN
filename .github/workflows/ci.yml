@@ -102,6 +102,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check license headers for Rust source files
         run: python3 .github/scripts/check_license_headers.py check
+      - name: Install Rust
+        run: rustup show
+      - name: Check workspace direct dependency versions
+        run: python3 .github/scripts/check_direct_dependency_versions.py --manifest-path Cargo.toml
 
   fmt:
     name: format check
