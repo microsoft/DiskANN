@@ -526,16 +526,74 @@ impl repr::internal::RawDistance for DebugWrapper<'_> {
     }
 }
 
-// ///////////
-// // Tests //
-// ///////////
-//
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     fn test_repr(
-//         data: MatrixView<'_, f32>,
-//
-//     )
-// }
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use diskann::graph::test::synthetic::Grid;
+
+    // For the spherical quantizer tests, we use the canonical grid layout, but center the
+    // data around the origin.
+    //
+    // This allows cosine distances to return reasonable results as the data is distributed
+    // around the origin.
+    //
+    // To keep computation mostly tractable, we only use a 2d grid with 16 points. So the
+    // coordinates are as follows:
+    //
+    // 0:  [-1.5, -1.5]
+    // 1:  [-1.5, -0.5]
+    // 2:  [-1.5, +0.5]
+    // 3:  [-1.5, +1.5]
+    //
+    // 4:  [-0.5, -1.5]
+    // 5:  [-0.5, -0.5]
+    // 6:  [-0.5, +0.5]
+    // 7:  [-0.5, +1.5]
+    //
+    // 8:  [+0.5, -1.5]
+    // 9:  [+0.5, -0.5]
+    // 10: [+0.5, +0.5]
+    // 11: [+0.5, +1.5]
+    //
+    // 12: [+1.5, -1.5]
+    // 13: [+1.5, -0.5]
+    // 14: [+1.5, +0.5]
+    // 15: [+1.5, +1.5]
+    //
+    // We put two start points at [`-2.0, -2.0`] and `[+2.0, +2.0]`.
+
+    #[derive(Debug)]
+    enum Bits {
+        One,
+        Two,
+        Four,
+    }
+
+    fn test_repr(
+        metric: SupportedMetric,
+        rerank: Rerank,
+    ) -> Spherical {
+        use diskann_quantization::{
+            algorithms::transforms,
+            spherical,
+        };
+
+        let grid = Grid::Two;
+        let mut data = grid.data(4);
+        let offset = 1.5;
+        data.as_mut_slice().iter_mut().for_each(|v| *v -= offset);
+
+        let mut start_points = Matrix::new(0.0, 2, data.ncols());
+        start_points.row(0).fill(-2.0);
+        start_points.row(1).fill(2.0);
+
+        let config = Spherical::config(
+
+        )
+    }
+}

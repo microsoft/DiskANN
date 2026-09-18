@@ -41,12 +41,20 @@ where
 // Distances //
 ///////////////
 
+/// Compute a query distance on a raw slice.
+///
+/// Implementations should not assume that `x` has any particular alignment.
 pub(super) trait RawQueryDistance: std::fmt::Debug + Send + Sync {
     type Error: diskann::error::StandardError;
 
     fn eval(&self, x: &[u8]) -> Result<f32, Self::Error>;
 }
 
+/// Compute a distance between two raw slices.
+///
+/// Implementations should not assume that `x` or `y` have any particular alignment.
+///
+/// Nowever, they can generally rely on the length of `x` and `y` being the same.
 pub(super) trait RawDistance: std::fmt::Debug + Send + Sync {
     type Error: diskann::error::StandardError;
 

@@ -137,7 +137,9 @@ mod tests {
             assert_eq!(
                 *n.distance(),
                 -1.0 + (i as f32),
-                "mismatch for id {} at position {}", n.id(), i
+                "mismatch for id {} at position {}",
+                n.id(),
+                i
             );
 
             // Verify that the ID matches what we think it should.
@@ -176,7 +178,9 @@ mod tests {
                 assert_eq!(
                     *n.distance(),
                     -1.0 + ((2 * i + 1) as f32),
-                    "mismatch for id {} at position {}", n.id(), i
+                    "mismatch for id {} at position {}",
+                    n.id(),
+                    i
                 );
 
                 // Verify that the ID matches what we think it should.
@@ -185,6 +189,5 @@ mod tests {
 
             seq.advance_past(0);
         });
-
     }
 }

@@ -431,12 +431,19 @@ impl Registry {
     }
 }
 
+/// A read-only handle to a [`Registry`] used to validate that [`Guard`]s belong to
+/// the said registry.
 #[derive(Debug, Clone)]
 pub(crate) struct RegistryHandle {
     inner: Arc<Inner>,
 }
 
 impl RegistryHandle {
+    /// Assert that [`Guard`] belongs to the handle's [`Registry`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Guard`] belongs to a different registry.
     #[inline]
     pub(crate) fn assert_guard_belongs(&self, guard: &Guard<'_>) {
         if !self.inner.guard_belongs(guard) {
@@ -480,10 +487,15 @@ impl<'a> Guard<'a> {
         self.queue().push(i)
     }
 
+    /// Cheaply clone `self` into another [`Guard`] with the same lifetime.
+    ///
+    /// The epoch associated with the original [`Guard`] will be released only when all
+    /// transitively shared guards are dropped.
     #[inline]
     pub(crate) fn share(&self) -> Guard<'a> {
         let ref_count = self.slot.references.fetch_add(1, Ordering::Relaxed);
 
+        // See the note on `MAX_REFCOUNT`.
         if ref_count > MAX_REFCOUNT {
             std::process::abort();
         }
