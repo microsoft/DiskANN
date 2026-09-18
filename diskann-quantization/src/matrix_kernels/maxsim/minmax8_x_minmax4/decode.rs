@@ -61,9 +61,9 @@ pub(super) trait Decoder: Architecture {
 impl Decoder for Scalar {
     #[inline(always)]
     fn decode_block(self, packed: &[u8; 32], output: &mut [u8; 64]) {
-        for (position, value) in output.iter_mut().enumerate() {
-            let d = EvenOdd64Layout::source_dimension(position);
-            *value = (packed[d / 2] >> (4 * (d % 2))) & 15;
+        for (i, &value) in packed.iter().enumerate() {
+            output[i] = value & 0x0F;
+            output[EvenOdd64Layout::PACKED_BYTES + i] = value >> 4;
         }
     }
 }
