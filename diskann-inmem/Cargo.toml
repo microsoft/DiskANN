@@ -33,6 +33,7 @@ diskann-benchmark-core = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 
 [lints.clippy]
+allow_attributes = "warn"
 undocumented_unsafe_blocks = "warn"
 unwrap_used = "warn"
 expect_used = "warn"

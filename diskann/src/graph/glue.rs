@@ -911,32 +911,29 @@ pub trait PruneAccessor: HasId + Send + Sync {
 /// This strategy is used during the greedy search portion of index construction.
 /// After the candidate list has been retrieved from greedy search, the [`PruneStrategy`]
 /// is used for the rest.
-pub trait InsertStrategy<'a, Provider, T>:
-    SearchStrategy<'a, Provider, T, SearchAccessor: SearchAccessor> + 'static
+pub trait InsertStrategy<'a, Provider, T>: Send + Sync + 'static
 where
     Provider: DataProvider,
 {
+    /// The type of the [`SearchAccessor`] used for candidate generation.
+    type SearchAccessor: SearchAccessor<Id = Provider::InternalId>;
+
+    /// An error that can occur when getting a search_accessor.
+    type SearchAccessorError: StandardError;
+
     /// The pruning strategy associated with the insertion strategy.
     type PruneStrategy: PruneStrategy<Provider>;
 
-    /// Return the prune strategy used for insertion.
-    fn prune_strategy(&self) -> Self::PruneStrategy;
-
-    /// This API is invoked during inserts to create the associated `SearchAccessor`.
-    ///
-    /// The provided implementation uses
-    /// [`SearchStrategy::search_accessor`], but implementors of
-    /// [`InsertStrategy`] can customize the implementation if the behavior of the search
-    /// accessor needs to be slightly different between searches for build and regular
-    /// searches.
+    /// This API is invoked during inserts to create the associated [`SearchAccessor`].
     fn insert_search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
         vector: T,
-    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        self.search_accessor(provider, context, vector)
-    }
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
+
+    /// Return the prune strategy used for insertion.
+    fn prune_strategy(&self) -> Self::PruneStrategy;
 }
 
 /// A strategy for pruning elements from the data provider.

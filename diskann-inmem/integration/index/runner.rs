@@ -531,9 +531,8 @@ impl Test {
     ) -> anyhow::Result<Arc<dyn Index>> {
         use diskann_quantization::{
             algorithms::transforms,
-            alloc::{self, GlobalAllocator},
-            poly,
-            spherical::{PreScale, SphericalQuantizer, iface},
+            alloc::GlobalAllocator,
+            spherical::{PreScale, SphericalQuantizer},
         };
         use rand::SeedableRng;
 
@@ -559,19 +558,10 @@ impl Test {
         )?;
 
         // Step 2: Associate it with the target bit-width.
-        let quantizer: alloc::Poly<dyn iface::Quantizer> = match bits {
-            spherical::Bits::One => {
-                let q = iface::Impl::<1, _>::new(quantizer)?;
-                poly!({ iface::Quantizer }, q, GlobalAllocator)?
-            }
-            spherical::Bits::Two => {
-                let q = iface::Impl::<2, _>::new(quantizer)?;
-                poly!({ iface::Quantizer }, q, GlobalAllocator)?
-            }
-            spherical::Bits::Four => {
-                let q = iface::Impl::<4, _>::new(quantizer)?;
-                poly!({ iface::Quantizer }, q, GlobalAllocator)?
-            }
+        let quantizer = match bits {
+            spherical::Bits::One => quantizer.as_quantizer::<1>()?,
+            spherical::Bits::Two => quantizer.as_quantizer::<2>()?,
+            spherical::Bits::Four => quantizer.as_quantizer::<4>()?,
         };
 
         let start_point = Matrix::row_vector(Box::from(

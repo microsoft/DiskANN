@@ -89,7 +89,6 @@ fn bench_parsers_comparison(c: &mut Criterion) {
     group.finish();
 }
 
-#[allow(clippy::disallowed_methods)]
 fn rng() -> rand::prelude::ThreadRng {
     rand::rng()
 }

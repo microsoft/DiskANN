@@ -472,7 +472,7 @@ impl repr::Insert for Spherical {
         &'a self,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
-        let distance = DebugWrapper(self.quantizer.distance_computer_ref());
+        let distance = self.quantizer.distance_computer_ref();
         let reader = self
             .store
             .guard(|slots, guard| slots.first().reader(guard))?;
@@ -493,7 +493,7 @@ impl repr::Insert for Spherical {
 
 impl<A> repr::internal::RawQueryDistance for iface::QueryComputer<A>
 where
-    A: Allocator + Send + Sync,
+    A: Allocator + std::fmt::Debug + Send + Sync,
 {
     type Error = ANNError;
 
@@ -504,24 +504,11 @@ where
     }
 }
 
-struct DebugWrapper<'a>(&'a dyn iface::DynDistanceComputer);
-
-impl std::fmt::Debug for DebugWrapper<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "spherical::iface::DistanceComputer {{ layout: {:?} }}",
-            self.0.layout()
-        )
-    }
-}
-
-impl repr::internal::RawDistance for DebugWrapper<'_> {
+impl repr::internal::RawDistance for &dyn iface::DynDistanceComputer {
     type Error = ANNError;
 
     fn eval(&self, x: &[u8], y: &[u8]) -> Result<f32, Self::Error> {
-        self.0
-            .evaluate(iface::Opaque::new(x), iface::Opaque::new(y))
+        self.evaluate(iface::Opaque::new(x), iface::Opaque::new(y))
             .map_err(ANNError::new)
     }
 }
@@ -574,19 +561,31 @@ mod tests {
         Four,
     }
 
-    fn test_repr(
-        metric: SupportedMetric,
-        rerank: Rerank,
-    ) -> Spherical {
-        use diskann_quantization::{
-            algorithms::transforms,
-            spherical,
-        };
+    fn test_repr(metric: SupportedMetric, bits: Bits, rerank: Rerank) -> Spherical {
+        use diskann_quantization::{algorithms::transforms, spherical};
+        use rand::{SeedableRng, rngs::StdRng};
 
         let grid = Grid::Two;
         let mut data = grid.data(4);
         let offset = 1.5;
         data.as_mut_slice().iter_mut().for_each(|v| *v -= offset);
+
+        let quantizer = {
+            let q = spherical::SphericalQuantizer::train(
+                data.as_view(),
+                transforms::TransformKind::Null,
+                metric,
+                spherical::PreScale::None,
+                &mut StdRng::seed_from_u64(0x019823745),
+                GlobalAllocator,
+            )
+            .unwrap();
+            match bits {
+                Bits::One => q.as_quantizer::<1>(),
+                Bits::Two => q.as_quantizer::<2>(),
+                Bits::Four => q.as_quantizer::<4>(),
+            }
+        };
 
         let mut start_points = Matrix::new(0.0, 2, data.ncols());
         start_points.row(0).fill(-2.0);

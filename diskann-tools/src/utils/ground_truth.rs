@@ -118,8 +118,7 @@ fn build_query_bitmaps<StorageProvider: StorageReadProvider + StorageWriteProvid
     Ok(query_bitmaps)
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::panic)]
+#[expect(clippy::too_many_arguments)]
 /// Computes the true nearest neighbors for a set of queries and writes them to a file.
 ///
 /// # Arguments
@@ -222,8 +221,7 @@ pub fn compute_ground_truth_from_datafiles<
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::panic)]
+#[expect(clippy::too_many_arguments)]
 /// Computes range-search ground truth for a set of queries and writes it to a file.
 ///
 /// # Arguments
@@ -281,7 +279,6 @@ pub fn compute_range_ground_truth_from_datafiles<
     write_range_search_ground_truth(storage_provider, ground_truth_file, query_num, ground_truth)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn compute_range_ground_truth_from_data<V, A, VectorReader>(
     distance_function: Metric,
     dataset_iter: VectorDataIterator<VectorReader, V, A>,
@@ -387,8 +384,7 @@ impl FromStr for MultivecAggregationMethod {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::panic)]
+#[expect(clippy::too_many_arguments)]
 /// Computes the true nearest neighbors for a set of queries and writes them to a file.
 ///
 /// # Arguments
@@ -585,7 +581,6 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 /// * `insert_iter` - Optional iterator containing more dataset vectors. This may be useful if you are testing recall for an index that has points dynamically inserted into it.
 /// * `skip_base` - Optional number of base points to skip. This is useful if you want to compute the ground truth for a set where the first skip_base points are deleted from the index.
 /// * `query_bitmaps` - Optional per-query bitmaps restricting which base point ids contribute to that query's neighbors.
-#[allow(clippy::too_many_arguments)]
 pub fn compute_ground_truth_from_data<V, A, VectorReader>(
     distance_function: Metric,
     dataset_iter: VectorDataIterator<VectorReader, V, A>,
@@ -692,7 +687,6 @@ where
     Ok((neighbor_queues, id_to_associated_data))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn compute_multivec_ground_truth_from_data<T>(
     distance_function: Metric,
     aggregation_method: MultivecAggregationMethod,

@@ -135,7 +135,7 @@ where
             SamplingDensity::Dense => {
                 // Buffered reader for dense sampling
                 VectorDataReader::BufferedAccess(BufReader::with_capacity(
-                    READ_WRITE_BLOCK_SIZE as usize,
+                    READ_WRITE_BLOCK_SIZE,
                     storage_provider.open_reader(data_file)?,
                 ))
             }

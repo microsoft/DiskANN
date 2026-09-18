@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
@@ -8,7 +8,7 @@ use crate::SIMDVector;
 macro_rules! aarch64_define_register {
     ($type:ident, $impl:ty, $mask:ty, $scalar:ty, $lanes:literal, $arch:ty) => {
         #[derive(Debug, Clone, Copy)]
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         #[repr(transparent)]
         pub struct $type(pub $impl);
 

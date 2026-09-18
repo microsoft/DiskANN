@@ -1,10 +1,10 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
 use crate::{
-    Emulated, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq,
+    Emulated, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq,
     SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
@@ -32,6 +32,20 @@ helpers::unsafe_map_binary_op!(i32x4, std::ops::Sub, sub, vsubq_s32, "neon");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Mul, mul, vmulq_s32, "neon");
 helpers::unsafe_map_unary_op!(i32x4, SIMDAbs, abs_simd, vabsq_s32, "neon");
 macros::aarch64_define_fma!(i32x4, vmlaq_s32);
+
+impl SIMDMinMax for i32x4 {
+    #[inline(always)]
+    fn min_simd(self, rhs: Self) -> Self {
+        // SAFETY: Allowed by the `Neon` architecture.
+        Self(unsafe { vminq_s32(self.0, rhs.0) })
+    }
+
+    #[inline(always)]
+    fn max_simd(self, rhs: Self) -> Self {
+        // SAFETY: Allowed by the `Neon` architecture.
+        Self(unsafe { vmaxq_s32(self.0, rhs.0) })
+    }
+}
 
 macros::aarch64_define_cmp!(
     i32x4,
@@ -219,6 +233,7 @@ mod tests {
     test_utils::ops::test_mul!(i32x4, 0x0f4caa80eceaa523, test_neon());
     test_utils::ops::test_fma!(i32x4, 0xb8f702ba85375041, test_neon());
     test_utils::ops::test_abs!(i32x4, 0xb8f702ba85375041, test_neon());
+    test_utils::ops::test_minmax!(i32x4, 0x6d7fc8ed6d852187, test_neon());
 
     test_utils::ops::test_cmp!(i32x4, 0x941757bd5cc641a1, test_neon());
 

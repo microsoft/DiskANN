@@ -41,6 +41,7 @@ where
     T: Copy + VectorRepr,
     Q: QuantCompressor<T>,
 {
+    /// Construct the quantizer, which may train and write its codebook.
     pub fn new(
         data_path: String,
         compressed_data_path: String,
@@ -57,16 +58,9 @@ where
 
     /// This method reads the source data file, processes vectors in batches, compresses them
     /// using the provided quantizer, and writes the results to the compressed data file.
-    //
-    /// The implementation is adapted from generate_quantized_data_internal in pq_construction.rs
-    //
-    /// # Processing Flow
-    /// 1. Opens the source data file and validates its metadata.
-    /// 2. Deletes any existing output.
-    /// 3. Creates or opens output compressed file and writes metadata header - [num_points as i32, compressed_vector_size as i32]
-    /// 4. Processes data in bounded blocks.
-    /// 5. Compresses each block in small batch sizes in parallel to (potentially) take advantage of batch compression with quantizer
-    /// 6. Writes compressed blocks to the output file.
+    ///
+    /// Each call replaces the compressed output, using the already constructed quantizer
+    /// for every block.
     pub fn generate_data<Storage>(
         &self,
         storage_provider: &Storage, // Provider for reading source data and writing compressed results
@@ -78,20 +72,9 @@ where
     {
         let timer = Instant::now();
 
-        let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
+        let metadata =
+            validate_data_generation_input(storage_provider, &self.data_path, max_block_size)?;
         let (num_points, dim) = metadata.into_dims();
-        if max_block_size == 0 {
-            return Err(diskann_error!(
-                ErrorKind::PQError,
-                "Data compression chunk vector count must be greater than zero",
-            ));
-        }
-        if num_points == 0 {
-            return Err(diskann_error!(
-                ErrorKind::PQError,
-                "Cannot generate compressed data for an empty dataset",
-            ));
-        }
 
         let compressed_path = self.compressed_data_path.as_str();
 
@@ -183,6 +166,28 @@ where
 
         Ok(())
     }
+}
+
+/// Validate the dataset and block size before disk builds train their search quantizer.
+pub(crate) fn validate_data_generation_input(
+    storage_provider: &impl StorageReadProvider,
+    data_path: &str,
+    max_block_size: usize,
+) -> ANNResult<Metadata> {
+    if max_block_size == 0 {
+        return Err(diskann_error!(
+            ErrorKind::PQError,
+            "Data compression chunk vector count must be greater than zero",
+        ));
+    }
+    let metadata = load_metadata_from_file(storage_provider, data_path)?;
+    if metadata.npoints() == 0 {
+        return Err(diskann_error!(
+            ErrorKind::PQError,
+            "Cannot generate compressed data for an empty dataset",
+        ));
+    }
+    Ok(metadata)
 }
 
 //////////////////
@@ -353,7 +358,6 @@ mod generator_tests {
             4,
             10_000,
         );
-
         assert!(result.is_err());
         assert!(!storage_provider.exists(&compressed_path));
         Ok(())

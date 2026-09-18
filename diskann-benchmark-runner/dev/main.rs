@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Development CLI for exercising the benchmark runner with its test registry.
+
 use clap::Parser;
 use diskann_benchmark_runner::{output, test, App, Registry};
 

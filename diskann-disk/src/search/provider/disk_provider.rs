@@ -1349,7 +1349,7 @@ where
 
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn search_internal(
         &self,
         query: &[Data::VectorDataType],
@@ -1376,7 +1376,7 @@ where
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn search_internal_impl(
         &self,
         query: &[Data::VectorDataType],

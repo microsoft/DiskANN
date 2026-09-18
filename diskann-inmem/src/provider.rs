@@ -730,6 +730,8 @@ where
     R: repr::Insert,
     M: Id,
 {
+    type SearchAccessor = SearchAccessor<'a>;
+    type SearchAccessorError = ANNError;
     type PruneStrategy = Self;
 
     fn insert_search_accessor(
