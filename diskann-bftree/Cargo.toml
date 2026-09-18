@@ -38,6 +38,7 @@ default = []
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
 
 [lints.clippy]
+allow_attributes = "warn"
 undocumented_unsafe_blocks = "warn"
 unwrap_used = "warn"
 expect_used = "warn"

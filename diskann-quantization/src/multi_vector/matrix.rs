@@ -884,7 +884,7 @@ impl<'a, T> MatRef<'a, Standard<T>> {
     }
 
     /// Return a [`MatrixView`] over the backing data.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     #[inline]
     pub fn as_matrix_view(&self) -> MatrixView<'a, T> {
         // `Standard::new` validates that `nrows * ncols` does not overflow,

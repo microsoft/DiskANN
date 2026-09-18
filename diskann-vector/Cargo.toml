@@ -34,6 +34,7 @@ name = "bench_main_vector_iai"
 harness = false
 
 [lints]
+clippy.allow_attributes = "warn"
 # Commenting out for now. It would give warnings.
 # clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"

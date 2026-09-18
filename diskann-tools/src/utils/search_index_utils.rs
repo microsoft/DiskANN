@@ -117,7 +117,6 @@ impl KRecallAtN {
 
 /// Calculate the intersection between the top `k` ground truth elements and the top `n`
 /// obtained results.
-#[allow(clippy::too_many_arguments)]
 pub fn calculate_recall<T: Eq + Hash + Copy>(
     num_queries: usize,
     ground_truth: &[T],

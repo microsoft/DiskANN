@@ -87,7 +87,6 @@ impl Range {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn validate_and_create(
         max_returned: Option<usize>,
         starting_l: usize,

@@ -21,10 +21,10 @@ use serde::{Deserialize, Serialize};
 #[non_exhaustive]
 pub(crate) enum BenchIsa {
     #[serde(rename = "x86-64-v4")]
-    #[allow(non_camel_case_types)]
+    #[expect(non_camel_case_types)]
     X86_64_V4,
     #[serde(rename = "x86-64-v3")]
-    #[allow(non_camel_case_types)]
+    #[expect(non_camel_case_types)]
     X86_64_V3,
     Neon,
     Scalar,

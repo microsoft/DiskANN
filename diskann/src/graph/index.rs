@@ -2253,7 +2253,6 @@ where
     ///
     /// We're going through a temporary phase of moving the `Context` into the `Strategy`.
     /// For now - we unfortunately need both.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn add_edge_and_prune<'a, A>(
         &'a self,
         accessor: &'a mut A,

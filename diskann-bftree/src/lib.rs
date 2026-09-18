@@ -159,11 +159,10 @@ impl TestCallCount {
 }
 
 #[cfg(not(test))]
-#[allow(dead_code)]
 pub(crate) struct TestCallCount {}
 
 #[cfg(not(test))]
-#[allow(dead_code)]
+#[expect(dead_code)]
 impl TestCallCount {
     pub fn new() -> Self {
         Self {}

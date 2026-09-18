@@ -72,7 +72,7 @@ impl SimpleNeighborProviderAsync {
         );
 
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].write().unwrap();
 
         // SAFETY: We are holding the write lock for this id.
@@ -94,7 +94,7 @@ impl SimpleNeighborProviderAsync {
         self.num_get_calls.increment();
 
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].read().unwrap();
 
         // SAFETY: We are holding the read lock for `id`.
@@ -105,7 +105,7 @@ impl SimpleNeighborProviderAsync {
 
     pub fn append_vector_sync(&self, id: usize, new_neighbor_ids: &[u32]) -> ANNResult<()> {
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].write().unwrap();
 
         // SAFETY: We took the write lock for `id` above.

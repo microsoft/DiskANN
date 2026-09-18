@@ -16,7 +16,7 @@ where
     type Guard = std::sync::MutexGuard<'a, T>;
 
     fn lock_or_panic(&'a self) -> Self::Guard {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         self.lock().expect("lock was poisoned")
     }
 }

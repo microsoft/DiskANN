@@ -13,9 +13,9 @@ mod file_io;
 mod io_completion_port;
 mod ssd_io_context;
 
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub type ULONG_PTR = usize;
-#[allow(clippy::upper_case_acronyms)]
+#[expect(clippy::upper_case_acronyms)]
 pub type DWORD = u32;
-#[allow(clippy::upper_case_acronyms)]
+#[expect(clippy::upper_case_acronyms)]
 pub type OVERLAPPED = windows_sys::Win32::System::IO::OVERLAPPED;

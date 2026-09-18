@@ -75,7 +75,7 @@ use crate::{
 macro_rules! maybe_miri {
     ($mod:ident, $type:ident, $T:ty, $N:literal) => {
         #[cfg(miri)]
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         pub type $type = crate::Emulated<$T, $N, V4>;
 
         #[cfg(not(miri))]

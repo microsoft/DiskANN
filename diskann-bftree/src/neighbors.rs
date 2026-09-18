@@ -23,7 +23,7 @@ use crate::{bftree_insert, TestCallCount};
 pub struct NeighborProvider<I: BfTreeId> {
     adjacency_list_index: BfTree,
     dim: usize, // Max number of neighbors in a neighbor list + 1 for the neighbor count
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) num_get_calls: TestCallCount,
     _phantom: PhantomData<I>,
 }

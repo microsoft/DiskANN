@@ -39,7 +39,6 @@ pub fn file_exists<StorageProvider: StorageReadProvider>(
 /// * Data: [vec1 (len1 * dimension bytes), vec2 (len2 * dimension bytes), ..., vec npts (len npts * dimension bytes)]
 ///
 /// Returns the header information along with the loaded vectors as a vec of vecs
-#[allow(clippy::type_complexity)]
 pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: StorageReadProvider>(
     storage_read_provider: &StorageReader,
     bin_file: &str,

@@ -336,7 +336,7 @@ verbose_eq!(InlineFilterBaseline {
     hops,
 });
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_inline_on_grid(
     index: &graph::DiskANNIndex<test_provider::Provider>,
     filter: &dyn labeled::QueryLabelProvider<u32>,

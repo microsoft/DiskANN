@@ -69,7 +69,7 @@ unsafe impl AllocatorCore for AlignedAllocator {
     unsafe fn deallocate(&self, ptr: NonNull<[u8]>, layout: std::alloc::Layout) {
         // Lint: The given `layout` **should** be the same as that passed to `allocate`,
         // which must have succeeded for the pointer to be valid in the first place.
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let layout = layout
             .align_to(self.alignment())
             .expect("invalid layout provided");

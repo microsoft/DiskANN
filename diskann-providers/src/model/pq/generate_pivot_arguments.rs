@@ -40,21 +40,36 @@ pub struct GeneratePivotArguments {
     max_k_means_reps: usize,
 }
 
+/// Invalid dimensions or chunk counts supplied to [`GeneratePivotArguments::new`].
 #[derive(Error, Debug, PartialEq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum GeneratePivotArgumentsError {
+    /// The number of PQ chunks exceeds the vector dimension.
     #[error("number of chunks {num_pq_chunks} more than dimension {dim}")]
-    NumChunksMoreThanDim { num_pq_chunks: usize, dim: usize },
+    NumChunksMoreThanDim {
+        /// The requested number of PQ chunks.
+        num_pq_chunks: usize,
+        /// The supplied vector dimension.
+        dim: usize,
+    },
 
+    /// At least one PQ chunk is required.
     #[error("invalid number of chunks 0 reatively to dimension")]
     NumChunksIsZero,
 
+    /// The vector dimension cannot be represented by the BLAS `i32` parameter.
     #[error("vector dimension {0} is greater than i32::MAX_VALUE")]
-    DimGreaterThanI32MaxValue(usize),
+    DimGreaterThanI32MaxValue(
+        /// The supplied vector dimension.
+        usize,
+    ),
 
+    /// The training vector count cannot be represented by the BLAS `i32` parameter.
     #[error("number of vectors {0} is greater than i32::MAX_VALUE")]
-    NumTrainGreaterThanI32MaxValue(usize),
+    NumTrainGreaterThanI32MaxValue(
+        /// The supplied number of training vectors.
+        usize,
+    ),
 }
 
 diskann::convert_error!(GeneratePivotArgumentsError);

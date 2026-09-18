@@ -246,13 +246,12 @@ pub(super) use __assert;
 pub(super) use check_eq;
 pub(super) use check_ge;
 
-#[allow(unused_imports, reason = "this completes the comparison API")]
+#[expect(unused_imports, reason = "this completes the comparison API")]
 pub(super) use check_gt;
 
-#[allow(unused_imports, reason = "this completes the comparison API")]
+#[expect(unused_imports, reason = "this completes the comparison API")]
 pub(super) use check_le;
 
-#[allow(unused_imports, reason = "this completes the comparison API")]
 pub(super) use check_lt;
 
 #[cfg(any(test, debug_assertions))]

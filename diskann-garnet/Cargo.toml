@@ -9,6 +9,9 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[lints.clippy]
+allow_attributes = "warn"
+
 [dependencies]
 bytemuck.workspace = true
 crossbeam = "0.8.4"

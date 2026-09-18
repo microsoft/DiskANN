@@ -89,7 +89,7 @@ impl Unsigned {
         0..=2i64.pow(NBITS as u32) - 1
     }
 
-    #[allow(clippy::panic)]
+    #[expect(clippy::panic)]
     const fn domain_str(nbits: usize) -> &'static &'static str {
         match nbits {
             8 => &"[0, 255]",

@@ -669,7 +669,7 @@ where
 }
 
 #[inline(never)]
-#[allow(clippy::panic)]
+#[expect(clippy::panic)]
 fn emit_length_error(xlen: usize, ylen: usize) -> ! {
     panic!(
         "lengths must be equal, instead got: xlen = {}, ylen = {}",
@@ -3814,7 +3814,7 @@ mod tests {
         test_util::test_distance_function(&mut checker, dist, dist, dim, 10, rng);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn stress_test<L, R, DistLeft, DistRight, O, Rand, A>(
         arch: A,
         reference: fn(&[L], &[R]) -> f32,

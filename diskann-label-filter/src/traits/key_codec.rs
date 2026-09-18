@@ -156,7 +156,6 @@ impl KeyCodec for DefaultKeyCodec {
 }
 
 #[cfg(test)]
-#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -341,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_format_float_key() {
-        let key = DefaultKeyCodec::format_float_value("score", 3.14);
+        let key = DefaultKeyCodec::format_float_value("score", 3.13);
         let key_str = String::from_utf8(key.clone()).unwrap();
 
         // Check structure

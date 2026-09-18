@@ -69,7 +69,7 @@ impl TransposedTable {
     ///   by the offsets.
     ///
     /// * `pivots.nrows() == 0`: The pivot table cannot be empty.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn from_parts(
         pivots: views::MatrixView<f32>,
         offsets: ChunkOffsets,
@@ -151,7 +151,7 @@ impl TransposedTable {
     /// Panics under the following conditions:
     /// * `data.cols() != self.dim()`: The number of columns in the source dataset must match
     ///   the number of dimensions expected by the schema.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn compress_batch<T, F, DelegateError>(
         &self,
         data: views::MatrixView<'_, T>,

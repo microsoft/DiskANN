@@ -644,7 +644,7 @@ mod tests {
     ////////////////////////////////////
 
     /// Test that the table works correctly when there are two inner PQ tables.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn test_distance_computer_multi_with_two<R>(
         computer: &MultiDistanceComputer<'_, usize>,
         new: &FixedChunkPQTable,
@@ -822,7 +822,7 @@ mod tests {
     // Query Computer - One Table //
     ////////////////////////////////
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn check_query_computer<R: Rng>(
         computer: &MultiQueryComputer<'_, usize>,
         table: &FixedChunkPQTable,
@@ -936,7 +936,7 @@ mod tests {
     // Query Computer - Two Tables //
     /////////////////////////////////
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn test_query_computer_multi_with_two<'a, R>(
         create: impl Fn(usize, usize, &[f32]) -> MultiQueryComputer<'a, usize>,
         new: &'a FixedChunkPQTable,

@@ -20,6 +20,8 @@ const LOCATION_REVERSE_KEY_LIST: &str = "reverse_key_list";
 const LOCATION_SERIALIZE_KEY_LIST: &str = "serialize_key_list";
 pub(crate) const DATA_TYPE_POSTING_LIST: &str = "posting_list";
 
+pub(crate) type FieldNormalizer = dyn Fn(&str) -> String + Send + Sync;
+
 /// A generic inverted index implementation.
 ///
 /// This index can work with any combination of:
@@ -49,8 +51,7 @@ pub struct GenericIndex<S: KvStore, PL: PostingList, K: KeyCodec + Default> {
     pub(crate) _pl: PhantomData<PL>,
     pub(crate) _kc: PhantomData<K>,
     /// Optional field normalizer function for query processing
-    #[allow(clippy::type_complexity)]
-    pub(crate) field_normalizer: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
+    pub(crate) field_normalizer: Option<Arc<FieldNormalizer>>,
 }
 
 impl<S, PL, K> GenericIndex<S, PL, K>
@@ -321,7 +322,6 @@ where
 }
 
 #[cfg(test)]
-#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
     use crate::stores::bftree_store::BfTreeStore;
@@ -455,8 +455,8 @@ mod tests {
         assert_eq!(TestIndex::get_compare_value(&op), Some(42.0));
 
         // Eq with float
-        let op = CompareOp::Eq(json!(3.14));
-        assert_eq!(TestIndex::get_compare_value(&op), Some(3.14));
+        let op = CompareOp::Eq(json!(3.13));
+        assert_eq!(TestIndex::get_compare_value(&op), Some(3.13));
 
         // Eq with string (no numeric value)
         let op = CompareOp::Eq(json!("hello"));
@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_get_float_range_bounds_gte() {
-        let op = CompareOp::Gte(3.14);
+        let op = CompareOp::Gte(3.13);
         let (start, end) = TestIndex::get_float_range_bounds("price", &op);
 
         assert!(!start.is_empty());

@@ -10,7 +10,7 @@ use super::common::Transpose;
 /// Computes a matrix-matrix product with general matrices.
 /// This implementation is used for miri testing.
 /// Miri doesn't support cblas::sgemm().
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(super) fn sgemm_impl(
     atranspose: Transpose,
     btranspose: Transpose,
@@ -102,7 +102,7 @@ impl<F> GemmFunction for F where
 
 impl TestProblem {
     // We're in a world with too many arguments unfortunately.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         atranspose: Transpose,
         btranspose: Transpose,
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_reference_implementation() {
-        #[allow(clippy::too_many_arguments)]
+        #[expect(clippy::too_many_arguments)]
         fn sgemm_impl_wrapper(
             atranspose: Transpose,
             btranspose: Transpose,

@@ -35,7 +35,7 @@ macro_rules! double_alias {
         // Implement `SIMDVector` and friends for the `Double` type.
         doubled::double_vector!($scalar, $lanes, $subtype);
 
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         pub type $type = Doubled<$subtype>;
     };
 }

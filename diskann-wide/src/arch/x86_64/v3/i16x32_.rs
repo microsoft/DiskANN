@@ -14,7 +14,7 @@ use crate::{LoHi, SplitJoin, doubled};
 doubled::double_vector!(i16, 32, i16x16);
 doubled::double_scalar_shift!(Doubled<i16x16>);
 
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub type i16x32 = doubled::Doubled<i16x16>;
 
 impl From<u8x32> for i16x32 {

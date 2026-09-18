@@ -62,7 +62,7 @@ where
 
     // Lints: Using `ParallelIterator::collect`. It's the caller's responsibility to invoke
     // this in a properly sized Rayon environment.
-    #[allow(clippy::disallowed_methods)]
+    #[expect(clippy::disallowed_methods)]
     let times: Vec<Times> = output
         .par_row_iter_mut()
         .zip(queries.par_row_iter())

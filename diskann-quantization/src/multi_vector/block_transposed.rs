@@ -336,7 +336,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<usize>
     type Output = T;
 
     #[inline]
-    #[allow(clippy::panic)] // Index is expected to panic on OOB
+    #[expect(clippy::panic)] // Index is expected to panic on OOB
     fn index(&self, col: usize) -> &Self::Output {
         self.get(col)
             .unwrap_or_else(|| panic!("column index {col} out of bounds (ncols = {})", self.ncols))
@@ -446,7 +446,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<usize>
     type Output = T;
 
     #[inline]
-    #[allow(clippy::panic)] // Index is expected to panic on OOB
+    #[expect(clippy::panic)] // Index is expected to panic on OOB
     fn index(&self, col: usize) -> &Self::Output {
         self.get(col)
             .unwrap_or_else(|| panic!("column index {col} out of bounds (ncols = {})", self.ncols))
@@ -457,7 +457,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::IndexMut<usize>
     for RowMut<'_, T, GROUP, PACK>
 {
     #[inline]
-    #[allow(clippy::panic)] // IndexMut is expected to panic on OOB
+    #[expect(clippy::panic)] // IndexMut is expected to panic on OOB
     fn index_mut(&mut self, col: usize) -> &mut Self::Output {
         let ncols = self.ncols;
         self.get_mut(col)
@@ -821,7 +821,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
     /// # Panics
     ///
     /// Panics if `block >= self.full_blocks()`.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn block(&self, block: usize) -> MatrixView<'a, T> {
         assert!(block < self.full_blocks());
         let offset = self.data.repr().block_offset(block);
@@ -838,7 +838,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
     ///
     /// The returned view has the same dimensions as [`block()`](Self::block):
     /// `padded_ncols / PACK` rows and `GROUP * PACK` columns.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn remainder_block(&self) -> Option<MatrixView<'a, T>> {
         if self.remainder() == 0 {
             None
@@ -909,9 +909,9 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     delegate_to_ref!(pub fn padded_nrows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
-    delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
-    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block(&self, block: usize) -> MatrixView<'_, T>);
-    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
+    delegate_to_ref!(#[expect(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
+    delegate_to_ref!(pub fn block(&self, block: usize) -> MatrixView<'_, T>);
+    delegate_to_ref!(pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
     delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
 
     /// Group size (blocking factor `GROUP`).
@@ -961,12 +961,11 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     /// # Panics
     ///
     /// Panics if `block >= self.full_blocks()`.
-    #[allow(clippy::expect_used)]
     pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
         self.reborrow_mut().block_mut_inner(block)
     }
 
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     fn block_mut_inner(mut self, block: usize) -> MutMatrixView<'a, T> {
         let repr = *self.data.repr();
         assert!(block < repr.full_blocks());
@@ -986,12 +985,11 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
 
     /// Return a mutable view over the remainder block, or `None` if there is no
     /// remainder.
-    #[allow(clippy::expect_used)]
     pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
         self.reborrow_mut().remainder_block_mut_inner()
     }
 
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     fn remainder_block_mut_inner(mut self) -> Option<MutMatrixView<'a, T>> {
         let repr = *self.data.repr();
         if repr.remainder() == 0 {
@@ -1051,9 +1049,9 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     delegate_to_ref!(pub fn padded_nrows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
-    delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
-    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block(&self, block: usize) -> MatrixView<'_, T>);
-    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
+    delegate_to_ref!(#[expect(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
+    delegate_to_ref!(pub fn block(&self, block: usize) -> MatrixView<'_, T>);
+    delegate_to_ref!(pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
     delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
 
     /// Group size (blocking factor `GROUP`).
@@ -1086,13 +1084,11 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     }
 
     /// See [`BlockTransposedMut::block_mut`].
-    #[allow(clippy::expect_used)]
     pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
         self.as_view_mut().block_mut_inner(block)
     }
 
     /// See [`BlockTransposedMut::remainder_block_mut`].
-    #[allow(clippy::expect_used)]
     pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
         self.as_view_mut().remainder_block_mut_inner()
     }
@@ -1125,7 +1121,7 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
     /// # Panics
     ///
     /// Panics if the dimensions overflow the allocation budget.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn new(nrows: usize, ncols: usize) -> Self {
         let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)
             .expect("dimensions should not overflow");

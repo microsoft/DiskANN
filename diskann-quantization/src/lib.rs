@@ -171,7 +171,14 @@ pub use traits::{AsFunctor, CompressInto, CompressIntoWith};
 
 // serialization
 #[cfg(feature = "flatbuffers")]
-#[allow(mismatched_lifetime_syntaxes)] // The generated code isn't clippy-clean.
+#[expect(
+    clippy::allow_attributes,
+    reason = "FlatBuffers-generated bindings and their import macro use blanket allow attributes"
+)]
+#[expect(
+    mismatched_lifetime_syntaxes,
+    reason = "Generated bindings omit lifetime placeholders in return types"
+)]
 pub(crate) mod flatbuffers;
 
 // common algorithms
