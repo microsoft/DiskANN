@@ -418,7 +418,7 @@ fn max_results_respected_and_second_round_triggered() {
 /// a squared distance of 3.0 from the query. Setting the radius to 3 will then
 /// include just the start point and the closest point [4,4,4] in the in-range
 /// results at the end of the first round of search. Thus, a second round can
-/// only be triggered if the initial slack is .5 or less
+/// only be triggered if the initial slack is less than .75.
 
 #[test]
 fn initial_slack_low_triggers_second_round() {
@@ -529,7 +529,7 @@ fn initial_slack_high_avoids_second_round() {
         range_search_second_round: stats.range_search_second_round,
     };
 
-     assert!(
+    assert!(
         !stats.range_search_second_round,
         "high initial_slack ({}) should avoid second round",
         high_slack
