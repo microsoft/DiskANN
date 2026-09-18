@@ -20,11 +20,10 @@ flatbuffers = { version = "25.2.10", optional = true }
 half = { version = "2.6.0", features = ["bytemuck"] }
 diskann-utils = { workspace = true }
 
-# Cache size detection. x86_64 uses CPUID; aarch64 Linux/macOS use OS APIs.
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+# Detect L1/L2 cache sizes to size matrix-kernel tile budgets.
+[target.'cfg(any(all(target_arch = "x86", not(target_env = "sgx"), target_feature = "sse"), all(target_arch = "x86_64", not(target_env = "sgx"))))'.dependencies]
 raw-cpuid = "11.5"
-
-[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))'.dependencies]
+[target.'cfg(target_vendor = "apple")'.dependencies]
 libc = "0.2.148"
 
 [lints.clippy]
