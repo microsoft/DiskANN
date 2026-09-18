@@ -10,6 +10,10 @@
 
 use crate::{ANNError, ANNResult};
 use diskann_utils::views::MatrixView;
+use diskann_vector::{
+    Norm,
+    norm::{FastL2Norm, FastL2NormSquared},
+};
 
 use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 
@@ -36,7 +40,7 @@ impl LeafMetric for L2 {
         // The expanded L2 formula is `||x||² + ||y||² - 2(x·y)`.
         let squared_norms: Vec<f32> = points
             .row_iter()
-            .map(|point| point.iter().map(|value| value * value).sum())
+            .map(|point| FastL2NormSquared.evaluate(point))
             .collect();
         // Initialize the first two terms before GEMM adds the dot-product term.
         for source in 0..point_count {
@@ -63,7 +67,6 @@ impl LeafMetric for L2 {
 impl LeafMetric for Cosine {
     fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
         let point_count = points.nrows();
-        // The diagonal supplies each point norm after GEMM computes all dots.
         diskann_linalg::sgemm_aat_lower(
             point_count,
             points.ncols(),
@@ -72,8 +75,9 @@ impl LeafMetric for Cosine {
             storage,
         )
         .map_err(ANNError::new)?;
-        let norms: Vec<f32> = (0..point_count)
-            .map(|point| storage[point * point_count + point].sqrt())
+        let norms: Vec<f32> = points
+            .row_iter()
+            .map(|point| FastL2Norm.evaluate(point))
             .collect();
         // Convert each lower-triangle dot to the bounded cosine distance.
         for source in 0..point_count {
@@ -115,6 +119,31 @@ mod tests {
     #[cfg(not(miri))]
     use diskann_vector::distance::Metric;
     use rstest::rstest;
+
+    #[cfg(not(miri))]
+    #[test]
+    fn l2_distance_retains_small_coordinate_contributions() {
+        // Given: 4096^2 + 127 unit coordinates, orthogonal to a unit vector.
+        // Scalar left-to-right f32 summation loses every unit after 4096^2.
+        let mut values = vec![1.0; 2 * 129];
+        values[0] = 4096.0;
+        values[128] = 0.0;
+        values[129..].fill(0.0);
+        values[257] = 1.0;
+        let points = MatrixView::try_from(values.as_slice(), 2, 129).unwrap();
+        let mut output = [f32::NAN; 4];
+        let expected = 16_777_344.0; // 4096^2 + 128.
+
+        L2::compute_distances(points, &mut output).unwrap();
+
+        // Allow eight f32 ULPs at this scale, far less than the lost 128.
+        let tolerance = 16.0;
+        assert!(
+            (output[2] - expected).abs() <= tolerance,
+            "{} != {expected}",
+            output[2]
+        );
+    }
 
     #[cfg(not(miri))]
     #[rstest]
