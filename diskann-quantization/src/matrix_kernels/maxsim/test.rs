@@ -24,7 +24,7 @@ pub(super) fn generate(
             for b_col in 0..n {
                 let mut ip = 0.0;
                 for (k, a) in a_row.iter().enumerate() {
-                    ip = a.mul_add(ref_b[(k, b_col)], ip);
+                    ip = a.mul_add(*ref_b.element(k, b_col), ip);
                 }
                 max_ip = max_ip.max(ip);
             }

@@ -3,10 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    fmt,
-    ops::{Index, IndexMut},
-};
+use std::fmt;
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::{IndexedParallelIterator, ParallelIterator, ParallelSlice, ParallelSliceMut};
@@ -585,39 +582,62 @@ where
         self.as_mut_slice().as_mut_ptr()
     }
 
-    /// Return the value at the specified `row` and `col`.
-    ///
-    /// If either index is out-of-bounds, return `None`.
-    pub fn try_get(&self, row: usize, col: usize) -> Option<&T::Elem> {
-        if row >= self.nrows() || col >= self.ncols() {
-            None
-        } else {
-            // SAFETY: We just verified that `row` and `col` are in-bounds.
-            Some(unsafe { self.get_unchecked(row, col) })
-        }
-    }
-
-    /// Returns a reference to an element without boundschecking.
+    /// Return a reference to the element at the specified `row` and `col`.
     ///
     /// # Safety
     ///
     /// The following conditions must hold to avoid undefined behavior:
+    ///
     /// * `row < self.nrows()`.
     /// * `col < self.ncols()`.
-    pub unsafe fn get_unchecked(&self, row: usize, col: usize) -> &T::Elem {
+    pub unsafe fn element_unchecked(&self, row: usize, col: usize) -> &T::Elem {
         debug_assert!(row < self.nrows);
         debug_assert!(col < self.ncols);
         self.as_slice().get_unchecked(row * self.ncols + col)
     }
 
-    /// Returns a mutable reference to an element without boundschecking.
+    /// Return a reference to the element at the specified `row` and `col`.
+    ///
+    /// If either index is out-of-bounds, return `None`.
+    pub fn get_element(&self, row: usize, col: usize) -> Option<&T::Elem> {
+        if row >= self.nrows() || col >= self.ncols() {
+            None
+        } else {
+            // SAFETY: We just verified that `row` and `col` are in-bounds.
+            Some(unsafe { self.element_unchecked(row, col) })
+        }
+    }
+
+    /// Return a reference to the element at the specified `row` and `col`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
+    pub fn element(&self, row: usize, col: usize) -> &T::Elem {
+        assert!(
+            row < self.nrows(),
+            "row {row} is out of bounds (max: {})",
+            self.nrows()
+        );
+        assert!(
+            col < self.ncols(),
+            "col {col} is out of bounds (max: {})",
+            self.ncols()
+        );
+
+        // SAFETY: We have checked that `row` and `col` are in-bounds.
+        unsafe { self.element_unchecked(row, col) }
+    }
+
+    /// Return a reference to the element at the specified `row` and `col`.
     ///
     /// # Safety
     ///
     /// The following conditions must hold to avoid undefined behavior:
+    ///
     /// * `row < self.nrows()`.
     /// * `col < self.ncols()`.
-    pub unsafe fn get_unchecked_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
+    pub unsafe fn element_unchecked_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
     where
         T: MutDenseData,
     {
@@ -625,6 +645,45 @@ where
         debug_assert!(row < self.nrows);
         debug_assert!(col < self.ncols);
         self.as_mut_slice().get_unchecked_mut(row * ncols + col)
+    }
+
+    /// Return a mutable reference to the element at the specified `row` and `col`.
+    ///
+    /// Returns `None` if `row >= self.nrows()` or `col >= self.ncols()`.
+    pub fn get_element_mut(&mut self, row: usize, col: usize) -> Option<&mut T::Elem>
+    where
+        T: MutDenseData,
+    {
+        if row >= self.nrows() || col >= self.ncols() {
+            None
+        } else {
+            // SAFETY: We have checked that `row` and `col` are in-bounds.
+            Some(unsafe { self.element_unchecked_mut(row, col) })
+        }
+    }
+
+    /// Return a mutable reference to the element at the specified `row` and `col`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
+    pub fn element_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
+    where
+        T: MutDenseData,
+    {
+        assert!(
+            row < self.nrows(),
+            "row {row} is out of bounds (max: {})",
+            self.nrows()
+        );
+        assert!(
+            col < self.ncols(),
+            "col {col} is out of bounds (max: {})",
+            self.ncols()
+        );
+
+        // SAFETY: We have checked that `row` and `col` are in-bounds.
+        unsafe { self.element_unchecked_mut(row, col) }
     }
 
     pub fn to_owned(&self) -> Matrix<T::Elem>
@@ -649,7 +708,7 @@ where
         let f = Init(|| {
             // SAFETY: `row` and `cols` are always less than `self.nrows()` and `self.ncols()`
             // respectively.
-            let v = unsafe { self.get_unchecked(row, col) }.clone();
+            let v = unsafe { self.element_unchecked(row, col) }.clone();
             row += 1;
             if row == self.nrows() {
                 row = 0;
@@ -696,60 +755,6 @@ impl<'a, T> From<MatrixView<'a, T>> for &'a [T] {
 impl<'a, T> From<MutMatrixView<'a, T>> for &'a [T] {
     fn from(view: MutMatrixView<'a, T>) -> Self {
         view.data
-    }
-}
-
-/// Return a reference to the item at entry `(row, col)` in the matrix.
-///
-/// # Panics
-///
-/// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-impl<T> Index<(usize, usize)> for MatrixBase<T>
-where
-    T: DenseData,
-{
-    type Output = T::Elem;
-
-    fn index(&self, (row, col): (usize, usize)) -> &Self::Output {
-        assert!(
-            row < self.nrows(),
-            "row {row} is out of bounds (max: {})",
-            self.nrows()
-        );
-        assert!(
-            col < self.ncols(),
-            "col {col} is out of bounds (max: {})",
-            self.ncols()
-        );
-
-        // SAFETY: We have checked that `row` and `col` are in-bounds.
-        unsafe { self.get_unchecked(row, col) }
-    }
-}
-
-/// Return a mutable reference to the item at entry `(row, col)` in the matrix.
-///
-/// # Panics
-///
-/// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-impl<T> IndexMut<(usize, usize)> for MatrixBase<T>
-where
-    T: MutDenseData,
-{
-    fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut Self::Output {
-        assert!(
-            row < self.nrows(),
-            "row {row} is out of bounds (max: {})",
-            self.nrows()
-        );
-        assert!(
-            col < self.ncols(),
-            "col {col} is out of bounds (max: {})",
-            self.ncols()
-        );
-
-        // SAFETY: We have checked that `row` and `col` are in-bounds.
-        unsafe { self.get_unchecked_mut(row, col) }
     }
 }
 
@@ -888,13 +893,13 @@ mod tests {
 
                 // Make sure we are in the correct window of the original matrix.
                 let base = i * batchsize;
-                assert_eq!(submatrix[(0, 0)], base);
-                assert_eq!(submatrix[(0, 1)], base + 1);
-                assert_eq!(submatrix[(0, 2)], base + 2);
+                assert_eq!(*submatrix.element(0, 0), base);
+                assert_eq!(*submatrix.element(0, 1), base + 1);
+                assert_eq!(*submatrix.element(0, 2), base + 2);
 
-                assert_eq!(submatrix[(1, 0)], base + 1);
-                assert_eq!(submatrix[(1, 1)], base + 2);
-                assert_eq!(submatrix[(1, 2)], base + 3);
+                assert_eq!(*submatrix.element(1, 0), base + 1);
+                assert_eq!(*submatrix.element(1, 1), base + 2);
+                assert_eq!(*submatrix.element(1, 2), base + 3);
             });
 
         // Try again, but with a batch size of 3 to ensure that we correctly handle cases
@@ -908,25 +913,25 @@ mod tests {
                     assert_eq!(submatrix.ncols(), m.ncols());
 
                     // Check indexing
-                    assert_eq!(submatrix[(0, 0)], 0);
-                    assert_eq!(submatrix[(0, 1)], 1);
-                    assert_eq!(submatrix[(0, 2)], 2);
+                    assert_eq!(*submatrix.element(0, 0), 0);
+                    assert_eq!(*submatrix.element(0, 1), 1);
+                    assert_eq!(*submatrix.element(0, 2), 2);
 
-                    assert_eq!(submatrix[(1, 0)], 1);
-                    assert_eq!(submatrix[(1, 1)], 2);
-                    assert_eq!(submatrix[(1, 2)], 3);
+                    assert_eq!(*submatrix.element(1, 0), 1);
+                    assert_eq!(*submatrix.element(1, 1), 2);
+                    assert_eq!(*submatrix.element(1, 2), 3);
 
-                    assert_eq!(submatrix[(2, 0)], 2);
-                    assert_eq!(submatrix[(2, 1)], 3);
-                    assert_eq!(submatrix[(2, 2)], 4);
+                    assert_eq!(*submatrix.element(2, 0), 2);
+                    assert_eq!(*submatrix.element(2, 1), 3);
+                    assert_eq!(*submatrix.element(2, 2), 4);
                 } else {
                     assert_eq!(submatrix.nrows(), 1);
                     assert_eq!(submatrix.ncols(), m.ncols());
 
                     // Check indexing
-                    assert_eq!(submatrix[(0, 0)], 3);
-                    assert_eq!(submatrix[(0, 1)], 4);
-                    assert_eq!(submatrix[(0, 2)], 5);
+                    assert_eq!(*submatrix.element(0, 0), 3);
+                    assert_eq!(*submatrix.element(0, 1), 4);
+                    assert_eq!(*submatrix.element(0, 2), 5);
                 }
             });
 
@@ -953,21 +958,37 @@ mod tests {
         assert_eq!(m.ncols(), 3);
 
         // Basic indexing
-        assert_eq!(m[(0, 0)], 0);
-        assert_eq!(m[(0, 1)], 1);
-        assert_eq!(m[(0, 2)], 2);
+        assert_eq!(*m.element(0, 0), 0);
+        assert_eq!(*m.element(0, 1), 1);
+        assert_eq!(*m.element(0, 2), 2);
 
-        assert_eq!(m[(1, 0)], 1);
-        assert_eq!(m[(1, 1)], 2);
-        assert_eq!(m[(1, 2)], 3);
+        assert_eq!(*m.element(1, 0), 1);
+        assert_eq!(*m.element(1, 1), 2);
+        assert_eq!(*m.element(1, 2), 3);
 
-        assert_eq!(m[(2, 0)], 2);
-        assert_eq!(m[(2, 1)], 3);
-        assert_eq!(m[(2, 2)], 4);
+        assert_eq!(*m.element(2, 0), 2);
+        assert_eq!(*m.element(2, 1), 3);
+        assert_eq!(*m.element(2, 2), 4);
 
-        assert_eq!(m[(3, 0)], 3);
-        assert_eq!(m[(3, 1)], 4);
-        assert_eq!(m[(3, 2)], 5);
+        assert_eq!(*m.element(3, 0), 3);
+        assert_eq!(*m.element(3, 1), 4);
+        assert_eq!(*m.element(3, 2), 5);
+
+        assert_eq!(*m.get_element(0, 0).unwrap(), 0);
+        assert_eq!(*m.get_element(0, 1).unwrap(), 1);
+        assert_eq!(*m.get_element(0, 2).unwrap(), 2);
+
+        assert_eq!(*m.get_element(1, 0).unwrap(), 1);
+        assert_eq!(*m.get_element(1, 1).unwrap(), 2);
+        assert_eq!(*m.get_element(1, 2).unwrap(), 3);
+
+        assert_eq!(*m.get_element(2, 0).unwrap(), 2);
+        assert_eq!(*m.get_element(2, 1).unwrap(), 3);
+        assert_eq!(*m.get_element(2, 2).unwrap(), 4);
+
+        assert_eq!(*m.get_element(3, 0).unwrap(), 3);
+        assert_eq!(*m.get_element(3, 1).unwrap(), 4);
+        assert_eq!(*m.get_element(3, 2).unwrap(), 5);
 
         // Row indexing.
         assert_eq!(m.row(0), &[0, 1, 2]);
@@ -991,13 +1012,13 @@ mod tests {
 
                 // Make sure we are in the correct window of the original matrix.
                 let base = i * batchsize;
-                assert_eq!(submatrix[(0, 0)], base);
-                assert_eq!(submatrix[(0, 1)], base + 1);
-                assert_eq!(submatrix[(0, 2)], base + 2);
+                assert_eq!(*submatrix.element(0, 0), base);
+                assert_eq!(*submatrix.element(0, 1), base + 1);
+                assert_eq!(*submatrix.element(0, 2), base + 2);
 
-                assert_eq!(submatrix[(1, 0)], base + 1);
-                assert_eq!(submatrix[(1, 1)], base + 2);
-                assert_eq!(submatrix[(1, 2)], base + 3);
+                assert_eq!(*submatrix.element(1, 0), base + 1);
+                assert_eq!(*submatrix.element(1, 1), base + 2);
+                assert_eq!(*submatrix.element(1, 2), base + 3);
             });
 
         // Try again, but with a batch size of 3 to ensure that we correctly handle cases
@@ -1011,25 +1032,25 @@ mod tests {
                     assert_eq!(submatrix.ncols(), m.ncols());
 
                     // Check indexing
-                    assert_eq!(submatrix[(0, 0)], 0);
-                    assert_eq!(submatrix[(0, 1)], 1);
-                    assert_eq!(submatrix[(0, 2)], 2);
+                    assert_eq!(*submatrix.element(0, 0), 0);
+                    assert_eq!(*submatrix.element(0, 1), 1);
+                    assert_eq!(*submatrix.element(0, 2), 2);
 
-                    assert_eq!(submatrix[(1, 0)], 1);
-                    assert_eq!(submatrix[(1, 1)], 2);
-                    assert_eq!(submatrix[(1, 2)], 3);
+                    assert_eq!(*submatrix.element(1, 0), 1);
+                    assert_eq!(*submatrix.element(1, 1), 2);
+                    assert_eq!(*submatrix.element(1, 2), 3);
 
-                    assert_eq!(submatrix[(2, 0)], 2);
-                    assert_eq!(submatrix[(2, 1)], 3);
-                    assert_eq!(submatrix[(2, 2)], 4);
+                    assert_eq!(*submatrix.element(2, 0), 2);
+                    assert_eq!(*submatrix.element(2, 1), 3);
+                    assert_eq!(*submatrix.element(2, 2), 4);
                 } else {
                     assert_eq!(submatrix.nrows(), 1);
                     assert_eq!(submatrix.ncols(), m.ncols());
 
                     // Check indexing
-                    assert_eq!(submatrix[(0, 0)], 3);
-                    assert_eq!(submatrix[(0, 1)], 4);
-                    assert_eq!(submatrix[(0, 2)], 5);
+                    assert_eq!(*submatrix.element(0, 0), 3);
+                    assert_eq!(*submatrix.element(0, 1), 4);
+                    assert_eq!(*submatrix.element(0, 2), 5);
                 }
             });
 
@@ -1100,7 +1121,7 @@ mod tests {
         // Construct the test matrix manually.
         for i in 0..view.nrows() {
             for j in 0..view.ncols() {
-                view[(i, j)] = i + j;
+                *view.element_mut(i, j) = i + j;
             }
         }
 
@@ -1142,7 +1163,7 @@ mod tests {
         // Construct the test matrix manually.
         for i in 0..m.nrows() {
             for j in 0..m.ncols() {
-                m[(i, j)] = i + j;
+                *m.element_mut(i, j) = i + j;
             }
         }
         test_basic_indexing(&m);
@@ -1233,32 +1254,34 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
-    fn test_index_panics_row() {
+    fn test_element_panics_row() {
         let m = Matrix::<usize>::new(0, 3, 7);
-        assert!(m.try_get(3, 2).is_none());
-        let _ = m[(3, 2)];
+        assert!(m.get_element(3, 2).is_none());
+        let _ = m.element(3, 2);
     }
 
     #[test]
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
-    fn test_index_panics_col() {
+    fn test_element_panics_col() {
         let m = Matrix::<usize>::new(0, 3, 7);
-        assert!(m.try_get(2, 7).is_none());
-        let _ = m[(2, 7)];
+        assert!(m.get_element(2, 7).is_none());
+        let _ = m.element(2, 7);
     }
 
     #[test]
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
-    fn test_index_mut_panics_row() {
+    fn test_element_mut_panics_row() {
         let mut m = Matrix::<usize>::new(0, 3, 7);
-        m[(3, 2)] = 1;
+        assert!(m.get_element_mut(3, 2).is_none());
+        *m.element_mut(3, 2) = 1;
     }
 
     #[test]
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
-    fn test_index_mut_panics_col() {
+    fn test_element_mut_panics_col() {
         let mut m = Matrix::<usize>::new(0, 3, 7);
-        m[(2, 7)] = 1;
+        assert!(m.get_element_mut(2, 7).is_none());
+        *m.element_mut(2, 7) = 1;
     }
 
     #[test]
@@ -1345,19 +1368,19 @@ mod tests {
 
         // Safety: derives from known size of matrix and access element ids
         unsafe {
-            assert_eq!(*m.get_unchecked(0, 0), 0);
-            assert_eq!(*m.get_unchecked(1, 2), 3);
-            assert_eq!(*m.get_unchecked(3, 1), 4);
+            assert_eq!(*m.element_unchecked(0, 0), 0);
+            assert_eq!(*m.element_unchecked(1, 2), 3);
+            assert_eq!(*m.element_unchecked(3, 1), 4);
         }
 
         // Safety: derives from known size of matrix and access element ids
         unsafe {
-            *m.get_unchecked_mut(0, 0) = 100;
-            *m.get_unchecked_mut(1, 2) = 200;
+            *m.element_unchecked_mut(0, 0) = 100;
+            *m.element_unchecked_mut(1, 2) = 200;
         }
 
-        assert_eq!(m[(0, 0)], 100);
-        assert_eq!(m[(1, 2)], 200);
+        assert_eq!(*m.element(0, 0), 100);
+        assert_eq!(*m.element(1, 2), 200);
 
         // Safety: derives from known size of matrix and access element ids
         unsafe {
@@ -1373,7 +1396,7 @@ mod tests {
             row1[0] = 300;
         }
 
-        assert_eq!(m[(1, 0)], 300);
+        assert_eq!(*m.element(1, 0), 300);
     }
 
     #[test]
@@ -1440,8 +1463,8 @@ mod tests {
         let m = Matrix::new(42, 1, 1);
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 1);
-        assert_eq!(m[(0, 0)], 42);
-        assert_eq!(*m.try_get(0, 0).unwrap(), 42);
+        assert_eq!(*m.element(0, 0), 42);
+        assert_eq!(*m.get_element(0, 0).unwrap(), 42);
 
         // Test single row matrix
         let m = Matrix::new(7, 1, 5);
@@ -1465,10 +1488,10 @@ mod tests {
         let m = MatrixView::try_from(data.as_slice(), 2, 1).unwrap();
         assert_eq!(m.nrows(), 2);
         assert_eq!(m.ncols(), 1);
-        assert_eq!(m[(0, 0)], 10);
-        assert_eq!(m[(1, 0)], 20);
-        assert_eq!(*m.try_get(0, 0).unwrap(), 10);
-        assert_eq!(*m.try_get(1, 0).unwrap(), 20);
+        assert_eq!(*m.element(0, 0), 10);
+        assert_eq!(*m.element(1, 0), 20);
+        assert_eq!(*m.get_element(0, 0).unwrap(), 10);
+        assert_eq!(*m.get_element(1, 0).unwrap(), 20);
         assert_eq!(m.row(0), &[10]);
         assert_eq!(m.row(1), &[20]);
 
@@ -1476,10 +1499,10 @@ mod tests {
         let m = MatrixView::try_from(data.as_slice(), 1, 2).unwrap();
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 2);
-        assert_eq!(m[(0, 0)], 10);
-        assert_eq!(m[(0, 1)], 20);
-        assert_eq!(*m.try_get(0, 0).unwrap(), 10);
-        assert_eq!(*m.try_get(0, 1).unwrap(), 20);
+        assert_eq!(*m.element(0, 0), 10);
+        assert_eq!(*m.element(0, 1), 20);
+        assert_eq!(*m.get_element(0, 0).unwrap(), 10);
+        assert_eq!(*m.get_element(0, 1).unwrap(), 20);
         assert_eq!(m.row(0), &[10, 20]);
     }
 
@@ -1502,8 +1525,8 @@ mod tests {
         let m = Matrix::row_vector(vec![10u64, 20].into_boxed_slice());
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 2);
-        assert_eq!(m[(0, 0)], 10);
-        assert_eq!(m[(0, 1)], 20);
+        assert_eq!(*m.element(0, 0), 10);
+        assert_eq!(*m.element(0, 1), 20);
     }
 
     #[test]
@@ -1513,9 +1536,9 @@ mod tests {
         assert_eq!(m.nrows(), 3);
         assert_eq!(m.ncols(), 1);
         assert_eq!(m.as_slice(), &[1, 2, 3]);
-        assert_eq!(m[(0, 0)], 1);
-        assert_eq!(m[(1, 0)], 2);
-        assert_eq!(m[(2, 0)], 3);
+        assert_eq!(*m.element(0, 0), 1);
+        assert_eq!(*m.element(1, 0), 2);
+        assert_eq!(*m.element(2, 0), 3);
         assert_eq!(m.row(0), &[1]);
         assert_eq!(m.row(1), &[2]);
         assert_eq!(m.row(2), &[3]);
@@ -1530,8 +1553,8 @@ mod tests {
         let m = Matrix::column_vector(vec![10u64, 20].into_boxed_slice());
         assert_eq!(m.nrows(), 2);
         assert_eq!(m.ncols(), 1);
-        assert_eq!(m[(0, 0)], 10);
-        assert_eq!(m[(1, 0)], 20);
+        assert_eq!(*m.element(0, 0), 10);
+        assert_eq!(*m.element(1, 0), 20);
     }
 
     #[test]
@@ -1548,12 +1571,17 @@ mod tests {
     }
 
     #[test]
-    fn test_try_get() {
-        let m = Matrix::try_from(vec![1, 2, 3, 4, 5, 6].into(), 2, 3).unwrap();
-        assert_eq!(m.try_get(0, 0), Some(&1));
-        assert_eq!(m.try_get(1, 2), Some(&6));
-        assert_eq!(m.try_get(2, 0), None);
-        assert_eq!(m.try_get(0, 3), None);
+    fn test_get_element() {
+        let mut m = Matrix::try_from(vec![1, 2, 3, 4, 5, 6].into(), 2, 3).unwrap();
+        assert_eq!(m.get_element(0, 0), Some(&1));
+        assert_eq!(m.get_element(1, 2), Some(&6));
+        assert_eq!(m.get_element(2, 0), None);
+        assert_eq!(m.get_element(0, 3), None);
+
+        *m.get_element_mut(1, 2).unwrap() = 7;
+        assert_eq!(m.get_element(1, 2), Some(&7));
+        assert_eq!(m.get_element_mut(2, 0), None);
+        assert_eq!(m.get_element_mut(0, 3), None);
     }
 
     #[test]
@@ -1741,12 +1769,12 @@ mod tests {
         let m = Matrix::new(Init(|| counter.fetch_add(1, Ordering::SeqCst)), 2, 3);
 
         // Should be filled in memory order
-        assert_eq!(m[(0, 0)], 0);
-        assert_eq!(m[(0, 1)], 1);
-        assert_eq!(m[(0, 2)], 2);
-        assert_eq!(m[(1, 0)], 3);
-        assert_eq!(m[(1, 1)], 4);
-        assert_eq!(m[(1, 2)], 5);
+        assert_eq!(*m.element(0, 0), 0);
+        assert_eq!(*m.element(0, 1), 1);
+        assert_eq!(*m.element(0, 2), 2);
+        assert_eq!(*m.element(1, 0), 3);
+        assert_eq!(*m.element(1, 1), 4);
+        assert_eq!(*m.element(1, 2), 5);
     }
 
     #[test]
@@ -1917,7 +1945,7 @@ mod tests {
                         for col in 0..ncols {
                             let expected = row * ncols + col;
                             assert_eq!(
-                                m[(row, col)],
+                                *m.element(row, col),
                                 expected,
                                 "pos ({}, {}) - {}",
                                 row,
@@ -2014,7 +2042,7 @@ mod tests {
         for row in 0..nrows {
             for col in 0..ncols {
                 let expected = (row * ncols + col) as u32;
-                assert_eq!(m[(row, col)], expected, "pos ({}, {})", row, col);
+                assert_eq!(*m.element(row, col), expected, "pos ({}, {})", row, col);
             }
         }
 
@@ -2034,7 +2062,13 @@ mod tests {
         for row in 0..nrows {
             for col in 0..ncols {
                 let expected = ((row * ncols + col) * 2) as u32;
-                assert_eq!(m[(row, col)], expected, "doubled pos ({}, {})", row, col);
+                assert_eq!(
+                    *m.element(row, col),
+                    expected,
+                    "doubled pos ({}, {})",
+                    row,
+                    col
+                );
             }
         }
     }
@@ -2079,7 +2113,7 @@ mod tests {
 
         let windows: Vec<_> = tiny.par_window_iter(1).collect();
         assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0][(0, 0)], 42);
+        assert_eq!(*windows[0].element(0, 0), 42);
 
         let rows: Vec<_> = tiny.par_row_iter().collect();
         assert_eq!(rows.len(), 1);
@@ -2104,7 +2138,7 @@ mod tests {
                         let global_row = window_idx * 2 + row_idx;
                         let expected = global_row * 5 + col_idx;
                         assert_eq!(
-                            window[(row_idx, col_idx)],
+                            *window.element(row_idx, col_idx),
                             expected,
                             "window {}, pos ({}, {})",
                             window_idx,
@@ -2127,7 +2161,7 @@ mod tests {
                     let col = slice_idx % window.ncols();
                     assert_eq!(
                         value,
-                        window[(row, col)],
+                        *window.element(row, col),
                         "window {}, slice_idx {}",
                         window_idx,
                         slice_idx
@@ -2143,7 +2177,7 @@ mod tests {
             for (row_idx, row) in rows_via_iter.iter().enumerate() {
                 assert_eq!(row.len(), window.ncols());
                 for (col_idx, &value) in row.iter().enumerate() {
-                    assert_eq!(value, window[(row_idx, col_idx)]);
+                    assert_eq!(value, *window.element(row_idx, col_idx));
                 }
             }
         });
@@ -2186,7 +2220,7 @@ mod tests {
         // Verify correctness
         for row in 0..nrows {
             for col in 0..ncols {
-                assert_eq!(m[(row, col)], row * ncols + col);
+                assert_eq!(*m.element(row, col), row * ncols + col);
             }
         }
 

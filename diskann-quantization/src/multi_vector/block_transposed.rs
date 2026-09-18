@@ -1367,7 +1367,7 @@ mod tests {
         for row in 0..nrows {
             for col in 0..ncols {
                 assert_eq!(
-                    data[(row, col)],
+                    *data.element(row, col),
                     transpose[(row, col)],
                     "Index at ({}, {}) -- {}",
                     row,
@@ -1375,7 +1375,7 @@ mod tests {
                     context,
                 );
                 assert_eq!(
-                    data[(row, col)],
+                    *data.element(row, col),
                     transpose.get_element(row, col),
                     "get_element at ({}, {}) -- {}",
                     row,
@@ -1394,7 +1394,7 @@ mod tests {
             assert_eq!(row_view.is_empty(), ncols == 0, "{}", context);
             for col in 0..ncols {
                 assert_eq!(
-                    data[(row, col)],
+                    *data.element(row, col),
                     row_view[col],
                     "row view at ({}, {}) -- {}",
                     row,
@@ -1404,7 +1404,7 @@ mod tests {
             }
             // Row::get — in-bounds + OOB.
             if ncols > 0 {
-                assert_eq!(row_view.get(0), Some(&data[(row, 0)]), "{}", context);
+                assert_eq!(row_view.get(0), Some(data.element(row, 0)), "{}", context);
             }
             assert_eq!(row_view.get(ncols), None, "{}", context);
 
@@ -1417,9 +1417,7 @@ mod tests {
 
             let collected: Vec<T> = row_view.iter().collect();
             assert_eq!(collected.len(), ncols, "{}", context);
-            for col in 0..ncols {
-                assert_eq!(data[(row, col)], collected[col], "{}", context);
-            }
+            assert_eq!(data.row(row), &*collected, "{}", context);
         }
         // OOB row returns None.
         assert!(view.get_row(nrows).is_none(), "{}", context);
@@ -1447,7 +1445,7 @@ mod tests {
             for row in 0..nrows {
                 for col in 0..ncols {
                     assert_eq!(
-                        data[(row, col)],
+                        *data.element(row, col),
                         view.get_element(row, col),
                         "Ref get_element at ({}, {}) -- {}",
                         row,
@@ -1457,7 +1455,7 @@ mod tests {
                 }
                 let row_view = view.get_row(row).unwrap();
                 for col in 0..ncols {
-                    assert_eq!(data[(row, col)], row_view[col], "{}", context);
+                    assert_eq!(*data.element(row, col), row_view[col], "{}", context);
                 }
             }
             assert!(view.get_row(nrows).is_none(), "{}", context);
@@ -1491,7 +1489,7 @@ mod tests {
             for row in 0..nrows {
                 for col in 0..ncols {
                     assert_eq!(
-                        data[(row, col)],
+                        *data.element(row, col),
                         mut_view.get_element(row, col),
                         "Mut get_element at ({}, {}) -- {}",
                         row,
@@ -1501,7 +1499,7 @@ mod tests {
                 }
                 let row_view = mut_view.get_row(row).unwrap();
                 for col in 0..ncols {
-                    assert_eq!(data[(row, col)], row_view[col], "{}", context);
+                    assert_eq!(*data.element(row, col), row_view[col], "{}", context);
                 }
             }
             assert!(mut_view.get_row(nrows).is_none(), "{}", context);
@@ -1516,7 +1514,7 @@ mod tests {
             for row in 0..nrows {
                 for col in 0..ncols {
                     assert_eq!(
-                        data[(row, col)],
+                        *data.element(row, col),
                         ref_from_mut.get_element(row, col),
                         "{}",
                         context,
@@ -1659,7 +1657,7 @@ mod tests {
                 assert_eq!(row_view.len(), ncols, "{}", context);
                 assert_eq!(row_view.is_empty(), ncols == 0, "{}", context);
                 for col in 0..ncols {
-                    assert_eq!(data[(row, col)], row_view[col], "{}", context);
+                    assert_eq!(*data.element(row, col), row_view[col], "{}", context);
                 }
             }
             assert!(mut_view.get_row_mut(nrows).is_none(), "{}", context);
@@ -1898,8 +1896,8 @@ mod tests {
             for i in 0..block.nrows() {
                 for j in 0..block.ncols() {
                     assert_eq!(
-                        block[(i, j)],
-                        data[(GROUP * b + j, i)],
+                        *block.element(i, j),
+                        *data.element(GROUP * b + j, i),
                         "block {} at ({}, {}) -- GROUP={}, nrows={}, ncols={}",
                         b,
                         i,
@@ -1919,8 +1917,8 @@ mod tests {
             for i in 0..block.nrows() {
                 for j in 0..transpose.remainder() {
                     assert_eq!(
-                        block[(i, j)],
-                        data[(GROUP * fb + j, i)],
+                        *block.element(i, j),
+                        *data.element(GROUP * fb + j, i),
                         "remainder at ({}, {}) -- GROUP={}, nrows={}, ncols={}",
                         i,
                         j,

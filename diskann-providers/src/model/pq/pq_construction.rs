@@ -584,30 +584,30 @@ mod pq_test {
         let mut reader = storage_provider.open_reader(pivot_file_name).unwrap();
         let offsets = read_bin_from::<u64>(&mut reader, 0).unwrap();
         let file_offset_data = offsets.map(|x| x.into_usize());
-        assert_eq!(file_offset_data[(0, 0)], METADATA_SIZE);
+        assert_eq!(*file_offset_data.element(0, 0), METADATA_SIZE);
         assert_eq!(offsets.nrows(), 4);
         assert_eq!(offsets.ncols(), 1);
 
-        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)]).unwrap();
+        let pivots = read_bin_from::<f32>(&mut reader, *file_offset_data.element(0, 0)).unwrap();
 
         assert_eq!(pivots.as_slice().len(), 16);
         assert_eq!(pivots.nrows(), 2);
         assert_eq!(pivots.ncols(), 8);
 
-        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)]).unwrap();
+        let centroid = read_bin_from::<f32>(&mut reader, *file_offset_data.element(1, 0)).unwrap();
         assert_eq!(
-            centroid[(0, 0)],
+            *centroid.element(0, 0),
             (1.0f32 + 2.0f32 + 2.1f32 + 2.2f32 + 100.0f32) / 5.0f32
         );
         assert_eq!(centroid.nrows(), 8);
         assert_eq!(centroid.ncols(), 1);
 
-        let chunk_offsets = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])
+        let chunk_offsets = read_bin_from::<u32>(&mut reader, *file_offset_data.element(2, 0))
             .unwrap()
             .map(|x| x.into_usize());
-        assert_eq!(chunk_offsets[(0, 0)], 0);
-        assert_eq!(chunk_offsets[(1, 0)], 4);
-        assert_eq!(chunk_offsets[(2, 0)], 8);
+        assert_eq!(*chunk_offsets.element(0, 0), 0);
+        assert_eq!(*chunk_offsets.element(1, 0), 4);
+        assert_eq!(*chunk_offsets.element(2, 0), 8);
         assert_eq!(chunk_offsets.nrows(), 3);
         assert_eq!(chunk_offsets.ncols(), 1);
     }
@@ -738,8 +738,8 @@ mod pq_test {
         .unwrap();
         assert_eq!(compressed.nrows(), 5);
         assert_eq!(compressed.ncols(), 2);
-        assert_eq!(compressed[(0, 0)], compressed[(1, 0)]);
-        assert_ne!(compressed[(0, 0)], compressed[(4, 0)]);
+        assert_eq!(compressed.element(0, 0), compressed.element(1, 0));
+        assert_ne!(compressed.element(0, 0), compressed.element(4, 0));
 
         storage_provider.delete(data_file).unwrap();
         storage_provider.delete(pq_pivots_path).unwrap();
