@@ -1313,7 +1313,20 @@ where
     Q: AsyncFriendly,
     I: BfTreeId,
 {
+    type SearchAccessor = FullAccessor<'a, T, Q, I>;
+    type SearchAccessorError = Infallible;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a BfTreeProvider<T, Q, I>,
+        context: &'a DefaultContext,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }
@@ -1447,7 +1460,20 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
+    type SearchAccessor = QuantAccessor<'a, T, I>;
+    type SearchAccessorError = ANNError;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a BfTreeProvider<T, QuantVectorProvider, I>,
+        context: &'a DefaultContext,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }

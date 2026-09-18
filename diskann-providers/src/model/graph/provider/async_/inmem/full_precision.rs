@@ -537,7 +537,20 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
+    type SearchAccessor = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchAccessorError = Panics;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }
