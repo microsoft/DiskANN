@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <set>
 #include <string>
@@ -158,12 +159,12 @@ std::vector<uint8_t> build_dict_bytes(const std::vector<std::tuple<std::string, 
 
 void write_bitmask_labels_file(const std::string &path, uint64_t npts,
                                const std::vector<std::tuple<std::string, uint32_t, uint32_t>> &dict_entries,
-                               const std::vector<std::vector<uint32_t>> &per_point_label_ints,
-                               uint64_t total_labels, uint32_t universal_label)
+                               const std::vector<std::vector<uint32_t>> &per_point_label_ints, uint64_t total_labels,
+                               uint32_t universal_label)
 {
     UnifiedIndexWriter w(path);
-    const uint64_t dim = 4;
-    const uint64_t aligned_dim = 4;
+    const uint64_t dim = 8;
+    const uint64_t aligned_dim = 8;
     const uint32_t max_degree = 4;
     w.begin(npts, dim, aligned_dim, max_degree, DataTypeTag::Float, MetricTag::L2, /*start_node=*/0);
 
@@ -195,15 +196,15 @@ void write_bitmask_labels_file(const std::string &path, uint64_t npts,
     }
     const uint64_t bitmap_bytes_len = bitmask.size() * sizeof(uint64_t);
     w.write_labels_bitmask(total_labels, universal_label, dict_bytes.data(), dict_bytes.size(), bitmask.data(),
-                            bitmap_bytes_len);
+                           bitmap_bytes_len);
 
     w.finalize();
 }
 
 void write_integer_labels_file(const std::string &path, uint64_t npts,
                                const std::vector<std::tuple<std::string, uint32_t, uint32_t>> &dict_entries,
-                               const std::vector<std::vector<uint32_t>> &per_point_label_ints,
-                               uint64_t total_labels, uint32_t universal_label)
+                               const std::vector<std::vector<uint32_t>> &per_point_label_ints, uint64_t total_labels,
+                               uint32_t universal_label)
 {
     UnifiedIndexWriter w(path);
     const uint64_t dim = 4;
@@ -234,7 +235,7 @@ void write_integer_labels_file(const std::string &path, uint64_t npts,
         flat.insert(flat.end(), per_point_label_ints[i].begin(), per_point_label_ints[i].end());
     }
     w.write_labels_integer(total_labels, universal_label, dict_bytes.data(), dict_bytes.size(), flat.data(),
-                            flat.size() * sizeof(uint32_t), offsets.data());
+                           flat.size() * sizeof(uint32_t), offsets.data());
 
     w.finalize();
 }
@@ -299,8 +300,7 @@ inline std::vector<uint64_t> brute_force_topk(const std::vector<std::vector<floa
     pairs.reserve(points.size());
     for (uint64_t i = 0; i < points.size(); ++i)
         pairs.emplace_back(l2_sq(points[i], query), i);
-    std::sort(pairs.begin(), pairs.end(),
-              [](const auto &a, const auto &b) { return a.first < b.first; });
+    std::sort(pairs.begin(), pairs.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
     if (K > pairs.size())
         K = pairs.size();
     std::vector<uint64_t> out(K);
@@ -402,12 +402,11 @@ BOOST_AUTO_TEST_CASE(bitmask_load_and_match_proxy)
     // (simple_bitmask_full_val::merge_bitmask_val) indexes word 99/64 == 1 of a
     // single-word query buffer and corrupts the heap.
     const std::vector<std::tuple<std::string, uint32_t, uint32_t>> dict = {
-        {"red", 10u, 0u}, {"green", 11u, 1u}, {"blue", 12u, 2u}};
-    const std::vector<std::vector<uint32_t>> per_point = {
-        {10u},       // point 0 -> red
-        {11u, 12u},  // point 1 -> green, blue
-        {12u},       // point 2 -> blue
-        {10u, 11u}}; // point 3 -> red, green
+        {"red", 10u, 0u}, {"green", 11u, 1u}, {"blue", 12u, 2u}, {"universal", 99u, 3u}};
+    const std::vector<std::vector<uint32_t>> per_point = {{10u},            // point 0 -> red
+                                                          {11u, 12u},       // point 1 -> green, blue
+                                                          {12u},            // point 2 -> blue
+                                                          {10u, 11u, 99u}}; // point 3 -> red, green, universal
     write_bitmask_labels_file(sf.path, npts, dict, per_point, /*total_labels=*/100, /*universal_label=*/99);
 
     UnifiedIndexReader r(sf.path);
@@ -415,7 +414,7 @@ BOOST_AUTO_TEST_CASE(bitmask_load_and_match_proxy)
     BOOST_REQUIRE(labels != nullptr);
     BOOST_CHECK_EQUAL(static_cast<int>(labels->encoding()), static_cast<int>(LabelEncoding::Bitmask));
     BOOST_CHECK(labels->has_labels());
-    BOOST_CHECK_EQUAL(labels->num_labels(), 3u);
+    BOOST_CHECK_EQUAL(labels->num_labels(), 4u);
     BOOST_CHECK(labels->is_valid_label("red"));
     BOOST_CHECK(labels->is_valid_label("green"));
     BOOST_CHECK(!labels->is_valid_label("yellow"));
@@ -432,27 +431,27 @@ BOOST_AUTO_TEST_CASE(bitmask_load_and_match_proxy)
     BOOST_CHECK_EQUAL(blue_medoids[0], 2u);
 
     // collect_label_medoids appends every label's entry-point medoid (one per
-    // label). Dict above maps red/green/blue -> medoids 0/1/2. It appends (does
-    // not clear), so a pre-existing element must be preserved. Order is
-    // unspecified (hash-map iteration), so sort before comparing.
+    // label), including the universal label. It appends (does not clear), so a
+    // pre-existing element must be preserved. Order is unspecified (hash-map
+    // iteration), so sort before comparing.
     std::vector<uint32_t> all_medoids = {42u};
     labels->collect_label_medoids(all_medoids);
-    BOOST_REQUIRE_EQUAL(all_medoids.size(), 4u);
+    BOOST_REQUIRE_EQUAL(all_medoids.size(), 5u);
     std::sort(all_medoids.begin(), all_medoids.end());
-    const std::vector<uint32_t> expected_medoids = {0u, 1u, 2u, 42u};
+    const std::vector<uint32_t> expected_medoids = {0u, 1u, 2u, 3u, 42u};
     BOOST_CHECK_EQUAL_COLLECTIONS(all_medoids.begin(), all_medoids.end(), expected_medoids.begin(),
                                   expected_medoids.end());
 
-    // Match-proxy: filter "blue" -> matches points 1, 2, but NOT 0, 3.
+    // Match-proxy: filter "blue" -> matches points 1, 2 and universal point 3.
     auto proxy = labels->make_match_proxy(blue_ints);
     BOOST_REQUIRE(proxy != nullptr);
     BOOST_CHECK(!proxy->contain_filtered_label(0));
     BOOST_CHECK(proxy->contain_filtered_label(1));
     BOOST_CHECK(proxy->contain_filtered_label(2));
-    BOOST_CHECK(!proxy->contain_filtered_label(3));
+    BOOST_CHECK(proxy->contain_filtered_label(3));
 }
 
-BOOST_AUTO_TEST_CASE(bitmask_unknown_label_string_throws)
+BOOST_AUTO_TEST_CASE(bitmask_unknown_label_without_universal_is_not_searchable)
 {
     ScopedFile sf(tmp_path("bitmask_unknown"));
     write_bitmask_labels_file(sf.path, /*npts=*/2,
@@ -462,7 +461,56 @@ BOOST_AUTO_TEST_CASE(bitmask_unknown_label_string_throws)
     auto labels = make_unified_label_data(r, r.header(), r.header().npts);
     BOOST_REQUIRE(labels != nullptr);
     std::vector<uint32_t> ints, medoids;
-    BOOST_CHECK_THROW(labels->resolve_filters({"nonexistent"}, ints, medoids), ANNException);
+    const auto resolution = labels->resolve_filters({"nonexistent"}, ints, medoids);
+    BOOST_CHECK(!resolution.label_valid);
+    BOOST_CHECK(!resolution.should_search);
+    BOOST_CHECK(ints.empty());
+    BOOST_CHECK(medoids.empty());
+}
+
+BOOST_AUTO_TEST_CASE(bitmask_unknown_label_with_universal_uses_universal)
+{
+    ScopedFile sf(tmp_path("bitmask_unknown_universal"));
+    write_bitmask_labels_file(sf.path, /*npts=*/2,
+                              /*dict=*/{{"a", 1u, 1u}, {"universal", 2u, 0u}},
+                              /*per_point=*/{{2u}, {1u}}, /*total_labels=*/3,
+                              /*universal_label=*/2);
+    UnifiedIndexReader r(sf.path);
+    auto labels = make_unified_label_data(r, r.header(), r.header().npts);
+    BOOST_REQUIRE(labels != nullptr);
+
+    std::vector<uint32_t> ints, medoids;
+    const auto resolution = labels->resolve_filters({"nonexistent"}, ints, medoids);
+    BOOST_CHECK(!resolution.label_valid);
+    BOOST_CHECK(resolution.should_search);
+    BOOST_REQUIRE_EQUAL(ints.size(), 1u);
+    BOOST_CHECK_EQUAL(ints[0], 2u);
+    BOOST_REQUIRE_EQUAL(medoids.size(), 1u);
+    BOOST_CHECK_EQUAL(medoids[0], 0u);
+
+    auto proxy = labels->make_match_proxy(ints);
+    BOOST_REQUIRE(proxy != nullptr);
+    BOOST_CHECK(proxy->contain_filtered_label(0));
+    BOOST_CHECK(!proxy->contain_filtered_label(1));
+}
+
+BOOST_AUTO_TEST_CASE(bitmask_missing_universal_medoid_is_not_searchable)
+{
+    ScopedFile sf(tmp_path("bitmask_missing_universal_medoid"));
+    write_bitmask_labels_file(sf.path, /*npts=*/2,
+                              /*dict=*/{{"a", 1u, 1u}}, /*per_point=*/{{2u}, {1u}}, /*total_labels=*/3,
+                              /*universal_label=*/2);
+    UnifiedIndexReader r(sf.path);
+    auto labels = make_unified_label_data(r, r.header(), r.header().npts);
+    BOOST_REQUIRE(labels != nullptr);
+
+    std::vector<uint32_t> ints, medoids;
+    const auto resolution = labels->resolve_filters({"nonexistent"}, ints, medoids);
+    BOOST_CHECK(!resolution.label_valid);
+    BOOST_CHECK(!resolution.should_search);
+    BOOST_REQUIRE_EQUAL(ints.size(), 1u);
+    BOOST_CHECK_EQUAL(ints[0], 2u);
+    BOOST_CHECK(medoids.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -478,16 +526,16 @@ BOOST_AUTO_TEST_CASE(integer_load_and_match_proxy)
     ScopedFile sf(tmp_path("integer"));
     const uint64_t npts = 4;
     const std::vector<std::tuple<std::string, uint32_t, uint32_t>> dict = {
-        {"red", 10u, 0u}, {"green", 11u, 1u}, {"blue", 12u, 2u}};
-    const std::vector<std::vector<uint32_t>> per_point = {{10u}, {11u, 12u}, {12u}, {10u, 11u}};
-    write_integer_labels_file(sf.path, npts, dict, per_point, /*total_labels=*/13, /*universal_label=*/99);
+        {"red", 10u, 0u}, {"green", 11u, 1u}, {"blue", 12u, 2u}, {"universal", 99u, 3u}};
+    const std::vector<std::vector<uint32_t>> per_point = {{10u}, {11u, 12u}, {12u}, {10u, 11u, 99u}};
+    write_integer_labels_file(sf.path, npts, dict, per_point, /*total_labels=*/100, /*universal_label=*/99);
 
     UnifiedIndexReader r(sf.path);
     auto labels = make_unified_label_data(r, r.header(), r.header().npts);
     BOOST_REQUIRE(labels != nullptr);
     BOOST_CHECK_EQUAL(static_cast<int>(labels->encoding()), static_cast<int>(LabelEncoding::Integer));
     BOOST_CHECK(labels->has_labels());
-    BOOST_CHECK_EQUAL(labels->num_labels(), 3u);
+    BOOST_CHECK_EQUAL(labels->num_labels(), 4u);
 
     std::vector<uint32_t> blue_ints, blue_medoids;
     labels->resolve_filters({"blue"}, blue_ints, blue_medoids);
@@ -496,7 +544,7 @@ BOOST_AUTO_TEST_CASE(integer_load_and_match_proxy)
     BOOST_CHECK(!proxy->contain_filtered_label(0));
     BOOST_CHECK(proxy->contain_filtered_label(1));
     BOOST_CHECK(proxy->contain_filtered_label(2));
-    BOOST_CHECK(!proxy->contain_filtered_label(3));
+    BOOST_CHECK(proxy->contain_filtered_label(3));
 }
 
 BOOST_AUTO_TEST_CASE(integer_match_proxy_sorts_filter_labels)
@@ -524,13 +572,13 @@ BOOST_AUTO_TEST_CASE(integer_match_proxy_sorts_filter_labels)
     labels->resolve_filters({"green", "red"}, ints, medoids);
     auto proxy = labels->make_match_proxy(ints);
     BOOST_REQUIRE(proxy != nullptr);
-    BOOST_CHECK(proxy->contain_filtered_label(0)); // red -- the case the sort fixes
-    BOOST_CHECK(proxy->contain_filtered_label(1)); // green
+    BOOST_CHECK(proxy->contain_filtered_label(0));  // red -- the case the sort fixes
+    BOOST_CHECK(proxy->contain_filtered_label(1));  // green
     BOOST_CHECK(!proxy->contain_filtered_label(2)); // blue only
-    BOOST_CHECK(proxy->contain_filtered_label(3)); // red + green
+    BOOST_CHECK(proxy->contain_filtered_label(3));  // red + green
 }
 
-BOOST_AUTO_TEST_CASE(integer_unknown_label_string_throws)
+BOOST_AUTO_TEST_CASE(integer_unknown_label_without_universal_is_not_searchable)
 {
     ScopedFile sf(tmp_path("integer_unknown"));
     write_integer_labels_file(sf.path, /*npts=*/2,
@@ -540,7 +588,11 @@ BOOST_AUTO_TEST_CASE(integer_unknown_label_string_throws)
     auto labels = make_unified_label_data(r, r.header(), r.header().npts);
     BOOST_REQUIRE(labels != nullptr);
     std::vector<uint32_t> ints, medoids;
-    BOOST_CHECK_THROW(labels->resolve_filters({"nonexistent"}, ints, medoids), ANNException);
+    const auto resolution = labels->resolve_filters({"nonexistent"}, ints, medoids);
+    BOOST_CHECK(!resolution.label_valid);
+    BOOST_CHECK(!resolution.should_search);
+    BOOST_CHECK(ints.empty());
+    BOOST_CHECK(medoids.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -554,8 +606,7 @@ BOOST_AUTO_TEST_SUITE(unified_label_data_factory_tests)
 BOOST_AUTO_TEST_CASE(factory_no_labels_returns_null)
 {
     ScopedFile sf(tmp_path("no_labels"));
-    write_minimal_unified_file(sf.path, /*npts=*/2, /*dim=*/4, /*aligned_dim=*/4, /*max_degree=*/4,
-                                DataTypeTag::Float);
+    write_minimal_unified_file(sf.path, /*npts=*/2, /*dim=*/4, /*aligned_dim=*/4, /*max_degree=*/4, DataTypeTag::Float);
     // write_minimal_unified_file doesn't call finalize. Do it here.
     {
         // Re-open as writer? No -- minimal helper writes nothing post-medoids.
@@ -680,8 +731,7 @@ BOOST_AUTO_TEST_CASE(factory_ssd_dispatches_on_data_type)
     ScopedFile sf(tmp_path("ssd_disp"));
     {
         UnifiedIndexWriter w(sf.path);
-        w.begin(/*npts=*/2, /*dim=*/aligned_dim, aligned_dim, /*max_degree=*/4, DataTypeTag::Float, MetricTag::L2,
-                 0);
+        w.begin(/*npts=*/2, /*dim=*/aligned_dim, aligned_dim, /*max_degree=*/4, DataTypeTag::Float, MetricTag::L2, 0);
         w.begin_graph_region();
         std::vector<float> coord(aligned_dim, 0.0f);
         const uint32_t nb = 0;
@@ -708,8 +758,7 @@ BOOST_AUTO_TEST_CASE(factory_ssd_dispatches_on_data_type)
         // Either the SSD index class flags the missing PQ ("requires HAS_PQ"),
         // or the file fails to open for some other reason. Either way the
         // throw should originate from our SSD code path.
-        BOOST_CHECK(msg.find("HAS_PQ") != std::string::npos ||
-                    msg.find("unified_index_ssd") != std::string::npos ||
+        BOOST_CHECK(msg.find("HAS_PQ") != std::string::npos || msg.find("unified_index_ssd") != std::string::npos ||
                     msg.find("unified_node_store_ssd") != std::string::npos);
     }
     BOOST_CHECK(threw);
@@ -805,6 +854,78 @@ BOOST_AUTO_TEST_CASE(memory_search_validates_K_and_L)
     sctx.L = 8;
     sctx.filter_labels = {"red"};
     BOOST_CHECK_THROW(idx->search(sctx), ANNException);
+}
+
+BOOST_AUTO_TEST_CASE(memory_invalid_label_returns_empty_success)
+{
+    ScopedFile sf(tmp_path("memory_invalid_label"));
+    write_bitmask_labels_file(sf.path, /*npts=*/2,
+                              /*dict=*/{{"a", 1u, 0u}}, /*per_point=*/{{1u}, {}}, /*total_labels=*/2,
+                              /*universal_label=*/0);
+
+    UnifiedLoadContext load_ctx;
+    load_ctx.path = sf.path;
+    load_ctx.num_threads = 1;
+    load_ctx.search_l = 4;
+    auto idx = make_unified_index_memory(load_ctx);
+    BOOST_REQUIRE(idx != nullptr);
+
+    std::vector<float> query(8, 0.0f);
+    std::vector<uint64_t> out_ids(2, 0);
+    std::vector<float> out_dists(2, 0.0f);
+    QueryStats stats;
+
+    UnifiedSearchContext search_ctx;
+    search_ctx.query = query.data();
+    search_ctx.K = 2;
+    search_ctx.L = 4;
+    search_ctx.filter_labels = {"missing"};
+    search_ctx.indices = out_ids.data();
+    search_ctx.distances = out_dists.data();
+    search_ctx.stats = &stats;
+
+    BOOST_CHECK_NO_THROW(idx->search(search_ctx));
+    BOOST_CHECK(!stats.label_valid);
+    for (size_t i = 0; i < out_ids.size(); ++i)
+    {
+        BOOST_CHECK_EQUAL(out_ids[i], std::numeric_limits<uint64_t>::max());
+        BOOST_CHECK_EQUAL(out_dists[i], std::numeric_limits<float>::max());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(memory_invalid_label_with_universal_searches)
+{
+    ScopedFile sf(tmp_path("memory_invalid_label_universal"));
+    write_bitmask_labels_file(sf.path, /*npts=*/2,
+                              /*dict=*/{{"a", 1u, 1u}, {"universal", 2u, 0u}},
+                              /*per_point=*/{{2u}, {1u}}, /*total_labels=*/3,
+                              /*universal_label=*/2);
+
+    UnifiedLoadContext load_ctx;
+    load_ctx.path = sf.path;
+    load_ctx.num_threads = 1;
+    load_ctx.search_l = 4;
+    auto idx = make_unified_index_memory(load_ctx);
+    BOOST_REQUIRE(idx != nullptr);
+
+    std::vector<float> query(8, 0.0f);
+    std::vector<uint64_t> out_ids(1, std::numeric_limits<uint64_t>::max());
+    std::vector<float> out_dists(1, std::numeric_limits<float>::max());
+    QueryStats stats;
+
+    UnifiedSearchContext search_ctx;
+    search_ctx.query = query.data();
+    search_ctx.K = 1;
+    search_ctx.L = 4;
+    search_ctx.filter_labels = {"missing"};
+    search_ctx.indices = out_ids.data();
+    search_ctx.distances = out_dists.data();
+    search_ctx.stats = &stats;
+
+    BOOST_CHECK_NO_THROW(idx->search(search_ctx));
+    BOOST_CHECK(!stats.label_valid);
+    BOOST_CHECK_EQUAL(out_ids[0], 0u);
+    BOOST_CHECK_LT(out_dists[0], std::numeric_limits<float>::max());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1072,7 +1193,7 @@ BOOST_AUTO_TEST_CASE(builder_with_pq_emits_ssd_loadable_file)
     ctx.L = 32;
     ctx.alpha = 1.2f;
     ctx.num_threads = 1;
-    ctx.pq_dim = 4; // PQ-compress 16-dim into 4 chunks
+    ctx.pq_dim = 4;             // PQ-compress 16-dim into 4 chunks
     ctx.pq_sampling_rate = 1.0; // train on full data (tiny set)
 
     unified_index_builder builder;
@@ -1201,8 +1322,7 @@ struct ScopedLegacyMemFiles
 };
 
 // Fraction of `a`'s top-K ids that also appear in `b`'s top-K (set overlap).
-template <typename IdA, typename IdB>
-double topk_overlap(const std::vector<IdA> &a, const std::vector<IdB> &b)
+template <typename IdA, typename IdB> double topk_overlap(const std::vector<IdA> &a, const std::vector<IdB> &b)
 {
     std::unordered_set<uint64_t> bs;
     for (auto id : b)
@@ -1267,8 +1387,8 @@ void make_legacy_ssd_from_index(Index<float, uint32_t, uint32_t> &idx, const std
 
     // 2) Train PQ once. These files feed BOTH the legacy PQFlashIndex and (via
     //    slurp) the unified file, so both sides use byte-identical codes.
-    diskann::generate_quantized_data<float>(data_file, pq_pivots, pq_codes, metric, /*p_val=*/1.0,
-                                            num_pq_chunks, /*use_opq=*/false, /*codebook_prefix=*/"");
+    diskann::generate_quantized_data<float>(data_file, pq_pivots, pq_codes, metric, /*p_val=*/1.0, num_pq_chunks,
+                                            /*use_opq=*/false, /*codebook_prefix=*/"");
 
     // 3) Pack coords + adjacency into the sector-aligned legacy disk index.
     diskann::create_disk_layout<float>(data_file, mem_index, disk_index);
@@ -1724,10 +1844,8 @@ BOOST_AUTO_TEST_CASE(memory_filtered_parity_legacy_vs_unified)
     {
         // save_path_prefix == legacy prefix so the labels_map + label files that
         // build/save emit all co-locate for the subsequent legacy load().
-        IndexFilterParams fp = IndexFilterParamsBuilder()
-                                   .with_label_file(rawlabels_sf.path)
-                                   .with_save_path_prefix(legacy.prefix)
-                                   .build();
+        IndexFilterParams fp =
+            IndexFilterParamsBuilder().with_label_file(rawlabels_sf.path).with_save_path_prefix(legacy.prefix).build();
         idx.build(data_sf.path, npts, fp);
     }
 
@@ -1935,10 +2053,8 @@ BOOST_AUTO_TEST_CASE(ssd_filtered_parity_legacy_vs_unified)
                                          /*concurrent_consolidate=*/false, /*pq_dist_build=*/false,
                                          /*num_pq_chunks=*/0, /*use_opq=*/false, /*filtered_index=*/true);
     {
-        IndexFilterParams fp = IndexFilterParamsBuilder()
-                                   .with_label_file(rawlabels_sf.path)
-                                   .with_save_path_prefix(legacy.prefix)
-                                   .build();
+        IndexFilterParams fp =
+            IndexFilterParamsBuilder().with_label_file(rawlabels_sf.path).with_save_path_prefix(legacy.prefix).build();
         idx.build(data_sf.path, npts, fp);
     }
 
@@ -2029,8 +2145,95 @@ BOOST_AUTO_TEST_CASE(ssd_filtered_parity_legacy_vs_unified)
     // so with the shared graph + PQ the results should be highly similar.
     BOOST_CHECK_GE(avg_overlap, 0.90);
 
+    // An unknown label without a universal label is a successful empty search
+    // and is reported through QueryStats for the caller's invalid-label counter.
+    std::vector<float> invalid_query(dim);
+    for (uint32_t j = 0; j < dim; ++j)
+        invalid_query[j] = det_float(/*seed=*/333, /*i=*/0, j);
+    std::vector<uint64_t> invalid_ids(K, 0);
+    std::vector<float> invalid_dists(K, 0.0f);
+    QueryStats invalid_stats;
+    UnifiedSearchContext invalid_ctx;
+    invalid_ctx.query = invalid_query.data();
+    invalid_ctx.K = K;
+    invalid_ctx.L = search_L;
+    invalid_ctx.indices = invalid_ids.data();
+    invalid_ctx.distances = invalid_dists.data();
+    invalid_ctx.beam_width = beam;
+    invalid_ctx.filter_labels = {"missing"};
+    invalid_ctx.stats = &invalid_stats;
+    BOOST_CHECK_NO_THROW(uidx->search(invalid_ctx));
+    BOOST_CHECK(!invalid_stats.label_valid);
+    for (size_t i = 0; i < K; ++i)
+    {
+        BOOST_CHECK_EQUAL(invalid_ids[i], std::numeric_limits<uint64_t>::max());
+        BOOST_CHECK_EQUAL(invalid_dists[i], std::numeric_limits<float>::max());
+    }
+
     uidx.reset();
     ureader->close();
+
+    // Reuse the same unified index and designate existing label "1" as the
+    // universal label. Unknown-label search must now run and return only points
+    // carrying that universal label while still reporting label_valid=false.
+    ScopedFile universal_sf(tmp_path("parity_fssd_universal"));
+    {
+        std::ifstream src(unified_sf.path, std::ios::binary);
+        std::ofstream dst(universal_sf.path, std::ios::binary | std::ios::trunc);
+        BOOST_REQUIRE(src.is_open());
+        BOOST_REQUIRE(dst.is_open());
+        dst << src.rdbuf();
+    }
+    {
+        std::fstream file(universal_sf.path, std::ios::binary | std::ios::in | std::ios::out);
+        BOOST_REQUIRE(file.is_open());
+        UnifiedIndexHeader header{};
+        file.read(reinterpret_cast<char *>(&header), sizeof(header));
+        BOOST_REQUIRE(file.good());
+        const uint32_t universal_label = idx.get_converted_label("1");
+        BOOST_REQUIRE_NE(universal_label, 0u);
+        header.universal_label = universal_label;
+        file.seekp(0, std::ios::beg);
+        file.write(reinterpret_cast<const char *>(&header), sizeof(header));
+        BOOST_REQUIRE(file.good());
+    }
+
+    UnifiedLoadContext universal_load_ctx;
+    universal_load_ctx.path = universal_sf.path;
+    universal_load_ctx.num_threads = 1;
+    universal_load_ctx.search_l = search_L;
+    auto universal_reader = make_reader();
+    auto universal_idx = make_unified_index_ssd(universal_reader, universal_load_ctx);
+    BOOST_REQUIRE(universal_idx != nullptr);
+
+    std::vector<uint64_t> universal_ids(K, std::numeric_limits<uint64_t>::max());
+    std::vector<float> universal_dists(K, std::numeric_limits<float>::max());
+    QueryStats universal_stats;
+    UnifiedSearchContext universal_ctx;
+    universal_ctx.query = invalid_query.data();
+    universal_ctx.K = K;
+    universal_ctx.L = search_L;
+    universal_ctx.indices = universal_ids.data();
+    universal_ctx.distances = universal_dists.data();
+    universal_ctx.beam_width = beam;
+    universal_ctx.filter_labels = {"missing"};
+    universal_ctx.stats = &universal_stats;
+    BOOST_CHECK_NO_THROW(universal_idx->search(universal_ctx));
+    BOOST_CHECK(!universal_stats.label_valid);
+
+    size_t universal_result_count = 0;
+    for (uint64_t id : universal_ids)
+    {
+        if (id != std::numeric_limits<uint64_t>::max())
+        {
+            ++universal_result_count;
+            BOOST_CHECK(point_has_label(label_sets, static_cast<uint32_t>(id), "1"));
+        }
+    }
+    BOOST_CHECK_GT(universal_result_count, 0u);
+
+    universal_idx.reset();
+    universal_reader->close();
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -2061,8 +2264,8 @@ BOOST_AUTO_TEST_CASE(memory_stats_unfiltered)
     // Memory keeps the full graph region resident, so total > 0 and is the sum
     // of the parts.
     BOOST_CHECK_GT(st.total_mem_usage, 0u);
-    BOOST_CHECK_EQUAL(st.total_mem_usage, st.node_mem_usage + st.graph_mem_usage + st.label_mem_usage +
-                                              st.tag_memory_usage);
+    BOOST_CHECK_EQUAL(st.total_mem_usage,
+                      st.node_mem_usage + st.graph_mem_usage + st.label_mem_usage + st.tag_memory_usage);
 }
 
 BOOST_AUTO_TEST_CASE(ssd_stats_pq_codes)
@@ -2097,8 +2300,8 @@ BOOST_AUTO_TEST_CASE(ssd_stats_pq_codes)
     // SSD node_mem_usage == resident PQ codes == npts * n_chunks; graph on disk.
     BOOST_CHECK_EQUAL(st.node_mem_usage, static_cast<size_t>(npts) * pq_dim);
     BOOST_CHECK_EQUAL(st.graph_mem_usage, 0u);
-    BOOST_CHECK_EQUAL(st.total_mem_usage, st.node_mem_usage + st.graph_mem_usage + st.label_mem_usage +
-                                              st.tag_memory_usage);
+    BOOST_CHECK_EQUAL(st.total_mem_usage,
+                      st.node_mem_usage + st.graph_mem_usage + st.label_mem_usage + st.tag_memory_usage);
 
     idx.reset();
     reader->close();

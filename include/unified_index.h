@@ -40,16 +40,18 @@ struct UnifiedLoadContext
 struct UnifiedSearchContext
 {
     // ---- Inputs ----
-    const void *query = nullptr;          // typed by caller as const T*
+    const void *query = nullptr; // typed by caller as const T*
     size_t K = 10;
     uint32_t L = 100;
-    // Filter labels as user-facing strings. Required non-empty if the loaded
-    // index has labels; required empty otherwise. The index converts strings
-    // to internal label ints per its encoding.
+    // Filter labels as user-facing strings. Required empty for an unfiltered
+    // index. A filtered index ignores unknown labels; if none resolve, it
+    // returns an empty successful result unless a universal label is available,
+    // in which case it performs a universal-label search. QueryStats::label_valid
+    // reports whether at least one requested label resolved.
     std::vector<std::string> filter_labels;
-    std::optional<uint32_t> beam_width;                            // SSD-only
-    std::optional<uint32_t> io_limit;                              // SSD-only
-    std::function<float(const std::uint8_t *, size_t)> rerank_fn;  // SSD-only
+    std::optional<uint32_t> beam_width;                           // SSD-only
+    std::optional<uint32_t> io_limit;                             // SSD-only
+    std::function<float(const std::uint8_t *, size_t)> rerank_fn; // SSD-only
 
     // ---- Outputs (caller-allocated, length >= K) ----
     uint64_t *indices = nullptr;
@@ -90,7 +92,7 @@ DISKANN_DLLEXPORT std::unique_ptr<unified_index> make_unified_index_memory(const
 
 // Factory: open a unified file in disk-resident (SSD) mode. The supplied
 // AlignedFileReader is handed to the constructed unified_index_ssd<T>.
-DISKANN_DLLEXPORT std::unique_ptr<unified_index> make_unified_index_ssd(
-    std::shared_ptr<AlignedFileReader> reader, const UnifiedLoadContext &ctx);
+DISKANN_DLLEXPORT std::unique_ptr<unified_index> make_unified_index_ssd(std::shared_ptr<AlignedFileReader> reader,
+                                                                        const UnifiedLoadContext &ctx);
 
 } // namespace diskann

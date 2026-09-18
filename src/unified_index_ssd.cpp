@@ -25,7 +25,6 @@
 namespace diskann
 {
 
-
 template <typename T>
 unified_index_ssd<T>::unified_index_ssd(std::shared_ptr<AlignedFileReader> reader, diskann::Metric metric)
     : unified_index_base<T>(metric), _reader(std::move(reader)), _thread_data(nullptr)
@@ -46,8 +45,7 @@ template <typename T> unified_index_ssd<T>::~unified_index_ssd()
     }
 }
 
-template <typename T>
-void unified_index_ssd<T>::load_storage(UnifiedIndexReader &r, const UnifiedLoadContext &ctx)
+template <typename T> void unified_index_ssd<T>::load_storage(UnifiedIndexReader &r, const UnifiedLoadContext &ctx)
 {
     const UnifiedIndexHeader &h = r.header();
     if (!(h.flags & HAS_PQ))
@@ -138,7 +136,7 @@ void unified_index_ssd<T>::load_storage(UnifiedIndexReader &r, const UnifiedLoad
             SSDThreadData<T> *tdata = manager.scratch_space();
             NodeFetchScratch fetch_scratch;
             fetch_scratch.attach_borrowed(tdata->ctx, tdata->scratch.sector_scratch,
-                                           defaults::MAX_N_SECTOR_READS * defaults::SECTOR_LEN);
+                                          defaults::MAX_N_SECTOR_READS * defaults::SECTOR_LEN);
             std::vector<uint32_t> cached_list;
             ssd_store->cache_bfs_levels(seed_ids, ctx.num_nodes_to_cache, cached_list, fetch_scratch);
         }
@@ -210,7 +208,7 @@ template <typename T> void unified_index_ssd<T>::use_medoids_data_as_centroids()
     SSDThreadData<T> *tdata = manager.scratch_space();
     NodeFetchScratch scratch;
     scratch.attach_borrowed(tdata->ctx, tdata->scratch.sector_scratch,
-                             defaults::MAX_N_SECTOR_READS * defaults::SECTOR_LEN);
+                            defaults::MAX_N_SECTOR_READS * defaults::SECTOR_LEN);
 
     std::vector<uint64_t> ids(1);
     std::vector<NodeView<T>> views;
@@ -237,13 +235,47 @@ template <typename T> void unified_index_ssd<T>::search_impl(UnifiedSearchContex
 template <typename T>
 void unified_index_ssd<T>::cached_beam_search(const T *query, uint64_t K, uint64_t L, uint64_t *indices,
                                               float *distances, uint32_t beam_width,
-                                              const std::vector<std::string> &filter_label_strings,
-                                              uint32_t io_limit, QueryStats *stats,
-                                              DebugTraversalInfo * /*debug_info*/)
+                                              const std::vector<std::string> &filter_label_strings, uint32_t io_limit,
+                                              QueryStats *stats, DebugTraversalInfo * /*debug_info*/)
 {
     const uint64_t aligned_dim = this->_header.aligned_dim;
     const uint64_t dim = this->_header.dim;
     auto *ssd_store = static_cast<unified_node_store_ssd<T> *>(this->_store.get());
+
+    // Resolve filters before doing query preprocessing or IO. Unknown labels
+    // are ignored. If none resolve, return an empty successful result unless a
+    // universal label is available, in which case search with that label.
+    std::unique_ptr<filter_match_proxy> proxy;
+    thread_local std::vector<uint32_t> filter_label_ints;
+    thread_local std::vector<uint32_t> filter_init_ids;
+    filter_label_ints.clear();
+    filter_init_ids.clear();
+    if (stats != nullptr)
+    {
+        stats->label_valid = true;
+    }
+    if (this->_labels && this->_labels->has_labels())
+    {
+        const auto resolution =
+            this->_labels->resolve_filters(filter_label_strings, filter_label_ints, filter_init_ids);
+        if (stats != nullptr)
+        {
+            stats->label_valid = resolution.label_valid;
+        }
+        if (!resolution.should_search)
+        {
+            std::fill_n(indices, K, std::numeric_limits<uint64_t>::max());
+            std::fill_n(distances, K, std::numeric_limits<float>::max());
+            if (stats != nullptr)
+            {
+                stats->n_hops = 0;
+                stats->n_cmps = 0;
+                stats->n_ios = 0;
+            }
+            return;
+        }
+        proxy = this->_labels->make_match_proxy(filter_label_ints);
+    }
 
     // Borrow per-thread scratch.
     ScratchStoreManager<SSDThreadData<T>> manager(_thread_data);
@@ -282,21 +314,6 @@ void unified_index_ssd<T>::cached_beam_search(const T *query, uint64_t K, uint64
     std::vector<Neighbor> &full_retset = tdata->scratch.full_retset;
     tsl::robin_set<uint64_t> &visited = tdata->scratch.visited;
 
-    // Build filter proxy if applicable. Resolve the filter label strings a
-    // single time here: resolve_filters returns both the internal label ints
-    // (consumed by make_match_proxy) and the per-label medoid seed ids
-    // (consumed by the filtered-seeding branch below), so the label dictionary
-    // is probed once per label instead of once for the proxy and again for the
-    // init ids.
-    std::unique_ptr<filter_match_proxy> proxy;
-    thread_local std::vector<uint32_t> filter_label_ints;
-    thread_local std::vector<uint32_t> filter_init_ids;
-    if (this->_labels && this->_labels->has_labels())
-    {
-        this->_labels->resolve_filters(filter_label_strings, filter_label_ints, filter_init_ids);
-        proxy = this->_labels->make_match_proxy(filter_label_ints);
-    }
-
     // Seed retset. Branches on filtered vs. unfiltered, mirroring the legacy
     // PQFlashIndex::cached_beam_search (src/pq_flash_index.cpp:1329-1377).
     //
@@ -310,12 +327,13 @@ void unified_index_ssd<T>::cached_beam_search(const T *query, uint64_t K, uint64
     // above (one dictionary probe shared with the match proxy).
     if (proxy == nullptr)
     {
+        // Unfiltered path -- pick the closest global medoid.
         uint32_t best_medoid = _medoids.empty() ? 0 : _medoids[0];
         float best_medoid_dist = std::numeric_limits<float>::max();
         for (size_t i = 0; i < _medoids.size(); ++i)
         {
             float d = _dist_cmp_float->compare(query_float, _centroid_data + i * aligned_dim,
-                                                static_cast<uint32_t>(aligned_dim));
+                                               static_cast<uint32_t>(aligned_dim));
             if (d < best_medoid_dist)
             {
                 best_medoid_dist = d;
@@ -325,6 +343,20 @@ void unified_index_ssd<T>::cached_beam_search(const T *query, uint64_t K, uint64
         compute_pq_dists(&best_medoid, 1, dist_scratch);
         retset.insert(Neighbor(best_medoid, dist_scratch[0]));
         visited.insert(best_medoid);
+    }
+    else if (filter_init_ids.empty())
+    {
+        // A valid filtered index supplies a medoid for every label, including
+        // the universal label. Missing init IDs indicate invalid index data.
+        std::fill_n(indices, K, std::numeric_limits<uint64_t>::max());
+        std::fill_n(distances, K, std::numeric_limits<float>::max());
+        if (stats != nullptr)
+        {
+            stats->n_hops = 0;
+            stats->n_cmps = 0;
+            stats->n_ios = 0;
+        }
+        return;
     }
     else
     {
@@ -349,7 +381,7 @@ void unified_index_ssd<T>::cached_beam_search(const T *query, uint64_t K, uint64
     // (MAX_N_SECTOR_READS * SECTOR_LEN), allocated once at load time.
     NodeFetchScratch fetch_scratch;
     fetch_scratch.attach_borrowed(tdata->ctx, tdata->scratch.sector_scratch,
-                                   defaults::MAX_N_SECTOR_READS * defaults::SECTOR_LEN);
+                                  defaults::MAX_N_SECTOR_READS * defaults::SECTOR_LEN);
     // Per-thread scratch reused across hops and across calls. Capacity grows
     // once to the worst-case beam_width that this thread ever sees.
     thread_local std::vector<uint64_t> beam_ids;
@@ -379,8 +411,7 @@ void unified_index_ssd<T>::cached_beam_search(const T *query, uint64_t K, uint64
         {
             const uint32_t id = static_cast<uint32_t>(beam_ids[bi]);
             const NodeView<T> &view = beam_views[bi];
-            const float exact_d = _dist_cmp->compare(aligned_query_T, view.coords,
-                                                       static_cast<uint32_t>(aligned_dim));
+            const float exact_d = _dist_cmp->compare(aligned_query_T, view.coords, static_cast<uint32_t>(aligned_dim));
             full_retset.push_back(Neighbor(id, exact_d));
 
             // PQ-rank neighbors and admit unvisited ones to the search frontier.
@@ -407,8 +438,8 @@ void unified_index_ssd<T>::cached_beam_search(const T *query, uint64_t K, uint64
     for (size_t i = 0; i < out_count; ++i)
     {
         indices[i] = static_cast<uint64_t>(full_retset[i].id);
-        distances[i] = (this->_metric == diskann::Metric::INNER_PRODUCT) ? -full_retset[i].distance
-                                                                          : full_retset[i].distance;
+        distances[i] =
+            (this->_metric == diskann::Metric::INNER_PRODUCT) ? -full_retset[i].distance : full_retset[i].distance;
     }
     for (size_t i = out_count; i < K; ++i)
     {

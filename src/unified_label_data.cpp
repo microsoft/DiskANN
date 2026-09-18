@@ -26,14 +26,16 @@ void unified_label_data_base::load(UnifiedIndexReader &r, const UnifiedIndexHead
     _has_labels = false;
     _use_universal_label = false;
     _universal_label = 0;
+    _has_universal_medoid = false;
+    _universal_medoid = 0;
     _label_map.clear();
 
     if ((h.flags & HAS_LABELS) == 0 || h.label_encoding == LabelEncoding::None)
     {
         // Factory shouldn't construct a derived label-data object in this
         // case; throw if it happens through some other path.
-        throw ANNException("unified_label_data_base::load called on a header with no labels", -1, __FUNCSIG__,
-                           __FILE__, __LINE__);
+        throw ANNException("unified_label_data_base::load called on a header with no labels", -1, __FUNCSIG__, __FILE__,
+                           __LINE__);
     }
 
     _has_labels = true;
@@ -50,6 +52,15 @@ void unified_label_data_base::load(UnifiedIndexReader &r, const UnifiedIndexHead
     {
         _use_universal_label = true;
         _universal_label = static_cast<uint32_t>(h.universal_label);
+        for (const auto &entry : _label_map)
+        {
+            if (entry.second.label_int == _universal_label)
+            {
+                _has_universal_medoid = true;
+                _universal_medoid = entry.second.medoid;
+                break;
+            }
+        }
     }
 }
 
@@ -97,27 +108,42 @@ bool unified_label_data_base::get_converted_label(const std::string &s, uint32_t
     return true;
 }
 
-void unified_label_data_base::resolve_filters(const std::vector<std::string> &filter_label_strings,
-                                              std::vector<uint32_t> &out_label_ints,
-                                              std::vector<uint32_t> &out_medoids) const
+filter_resolution_result unified_label_data_base::resolve_filters(const std::vector<std::string> &filter_label_strings,
+                                                                  std::vector<uint32_t> &out_label_ints,
+                                                                  std::vector<uint32_t> &out_medoids) const
 {
     out_label_ints.clear();
     out_medoids.clear();
     out_label_ints.reserve(filter_label_strings.size());
     out_medoids.reserve(filter_label_strings.size());
+
+    filter_resolution_result result;
     for (const auto &s : filter_label_strings)
     {
         auto it = _label_map.find(s);
         if (it == _label_map.end())
         {
-            throw ANNException(std::string("unified_label_data: unknown filter label string: ") + s, -1, __FUNCSIG__,
-                               __FILE__, __LINE__);
+            continue;
         }
+
+        result.label_valid = true;
         // Single probe yields both the label int (for the match proxy) and the
         // per-label medoid (for init-id seeding).
         out_label_ints.push_back(it->second.label_int);
         out_medoids.push_back(it->second.medoid);
     }
+
+    if (!result.label_valid && _use_universal_label)
+    {
+        out_label_ints.push_back(_universal_label);
+        if (_has_universal_medoid)
+        {
+            out_medoids.push_back(_universal_medoid);
+        }
+    }
+
+    result.should_search = result.label_valid || (_use_universal_label && _has_universal_medoid);
+    return result;
 }
 
 void unified_label_data_base::collect_label_medoids(std::vector<uint32_t> &out) const
@@ -183,8 +209,8 @@ void unified_label_data_integer::load_encoding(UnifiedIndexReader &r, const Unif
     }
     if (h.per_point_labels_len % sizeof(uint32_t) != 0)
     {
-        throw ANNException("unified_label_data_integer: labels region size is not a uint32 multiple", -1,
-                           __FUNCSIG__, __FILE__, __LINE__);
+        throw ANNException("unified_label_data_integer: labels region size is not a uint32 multiple", -1, __FUNCSIG__,
+                           __FILE__, __LINE__);
     }
     const size_t total_labels = h.per_point_labels_len / sizeof(uint32_t);
 

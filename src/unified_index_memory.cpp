@@ -41,8 +41,7 @@ template <typename T> unified_index_memory<T>::~unified_index_memory()
     }
 }
 
-template <typename T>
-void unified_index_memory<T>::load_storage(UnifiedIndexReader &r, const UnifiedLoadContext &ctx)
+template <typename T> void unified_index_memory<T>::load_storage(UnifiedIndexReader &r, const UnifiedLoadContext &ctx)
 {
     // Build the resident node store.
     auto store = std::make_unique<unified_node_store_memory<T>>();
@@ -91,17 +90,18 @@ template <typename T> void unified_index_memory<T>::init_scratch_pool(uint32_t n
     std::vector<uint32_t> empty_sellers;
     for (uint32_t i = 0; i < num_threads; ++i)
     {
-        auto *s = new InMemQueryScratch<T>(search_l, search_l, R, maxc, dim, aligned_dim, alignment_factor,
-                                           empty_sellers,
-                                           /*init_pq_scratch=*/false, bitmask_size);
+        auto *s =
+            new InMemQueryScratch<T>(search_l, search_l, R, maxc, dim, aligned_dim, alignment_factor, empty_sellers,
+                                     /*init_pq_scratch=*/false, bitmask_size);
         _query_scratch.push(s);
     }
 }
 
 template <typename T>
-std::pair<uint32_t, uint32_t> unified_index_memory<T>::iterate_to_fixed_point(
-    InMemQueryScratch<T> *scratch, uint32_t L, const T *query, const std::vector<uint32_t> &init_ids,
-    filter_match_proxy *match_proxy)
+std::pair<uint32_t, uint32_t> unified_index_memory<T>::iterate_to_fixed_point(InMemQueryScratch<T> *scratch, uint32_t L,
+                                                                              const T *query,
+                                                                              const std::vector<uint32_t> &init_ids,
+                                                                              filter_match_proxy *match_proxy)
 {
     auto *store = static_cast<unified_node_store_memory<T> *>(this->_store.get());
     const uint64_t aligned_dim = this->_header.aligned_dim;
@@ -124,9 +124,8 @@ std::pair<uint32_t, uint32_t> unified_index_memory<T>::iterate_to_fixed_point(
     {
         if (inserted_into_pool_bs.size() < total_num_points)
         {
-            auto resize_size = 2 * total_num_points > MAX_POINTS_FOR_USING_BITSET
-                                   ? MAX_POINTS_FOR_USING_BITSET
-                                   : 2 * total_num_points;
+            auto resize_size =
+                2 * total_num_points > MAX_POINTS_FOR_USING_BITSET ? MAX_POINTS_FOR_USING_BITSET : 2 * total_num_points;
             inserted_into_pool_bs.resize(resize_size);
         }
     }
@@ -206,6 +205,38 @@ std::pair<uint32_t, uint32_t> unified_index_memory<T>::iterate_to_fixed_point(
 
 template <typename T> void unified_index_memory<T>::search_impl(UnifiedSearchContext &ctx)
 {
+    // Resolve filters before borrowing scratch so an all-invalid request
+    // without a universal label can return a successful empty result cheaply.
+    std::unique_ptr<filter_match_proxy> proxy;
+    thread_local std::vector<uint32_t> init_ids;
+    init_ids.clear();
+    if (ctx.stats != nullptr)
+    {
+        ctx.stats->label_valid = true;
+    }
+    if (this->_labels && this->_labels->has_labels())
+    {
+        thread_local std::vector<uint32_t> filter_label_ints;
+        const auto resolution = this->_labels->resolve_filters(ctx.filter_labels, filter_label_ints, init_ids);
+        if (ctx.stats != nullptr)
+        {
+            ctx.stats->label_valid = resolution.label_valid;
+        }
+        if (!resolution.should_search)
+        {
+            std::fill_n(ctx.indices, ctx.K, std::numeric_limits<uint64_t>::max());
+            std::fill_n(ctx.distances, ctx.K, std::numeric_limits<float>::max());
+            if (ctx.stats != nullptr)
+            {
+                ctx.stats->n_hops = 0;
+                ctx.stats->n_cmps = 0;
+                ctx.stats->n_ios = 0;
+            }
+            return;
+        }
+        proxy = this->_labels->make_match_proxy(filter_label_ints);
+    }
+
     // Borrow per-thread scratch. ScratchStoreManager blocks until a scratch
     // object is available, so when more queries arrive concurrently than the
     // pool holds, callers wait for a free slot rather than failing. The pool is
@@ -231,26 +262,6 @@ template <typename T> void unified_index_memory<T>::search_impl(UnifiedSearchCon
         std::memcpy(aligned_query, ctx.query, dim * sizeof(T));
     }
 
-    // Build the label match proxy if the index is filtered, resolving the
-    // filter label strings once: resolve_filters yields both the internal
-    // label ints (for the proxy) and the per-label medoid seed ids (init_ids
-    // below) from a single dictionary probe per label.
-    //
-    // init_ids / filter_label_ints are thread_local: search_impl runs once per
-    // query on a pooled thread, so reusing these buffers across queries avoids a
-    // per-call heap allocation (mirrors unified_index_ssd::cached_beam_search).
-    // init_ids must be cleared up front because the unfiltered branch below
-    // relies on it being empty when no filter is applied.
-    std::unique_ptr<filter_match_proxy> proxy;
-    thread_local std::vector<uint32_t> init_ids;
-    init_ids.clear();
-    if (this->_labels && this->_labels->has_labels())
-    {
-        thread_local std::vector<uint32_t> filter_label_ints;
-        this->_labels->resolve_filters(ctx.filter_labels, filter_label_ints, init_ids);
-        proxy = this->_labels->make_match_proxy(filter_label_ints);
-    }
-
     // Seed init_ids. Aligned with unified_index_ssd::cached_beam_search:
     // - Unfiltered: pick the single closest medoid from _medoids by
     //   full-vector L2 (memory has all coords resident, so we don't need the
@@ -260,9 +271,9 @@ template <typename T> void unified_index_memory<T>::search_impl(UnifiedSearchCon
     //   seeding dramatically improves recall on filtered search because the
     //   global start node may not lie within any filter-label cluster.
     auto *store = static_cast<unified_node_store_memory<T> *>(this->_store.get());
-    if (init_ids.empty())
+    if (proxy == nullptr)
     {
-        // Unfiltered path -- pick closest of the global medoid set.
+        // Unfiltered path -- pick the closest global medoid.
         uint32_t best_id = _medoids.empty() ? _start : _medoids[0];
         float best_dist = std::numeric_limits<float>::max();
         for (uint32_t mid : _medoids)
@@ -276,6 +287,20 @@ template <typename T> void unified_index_memory<T>::search_impl(UnifiedSearchCon
             }
         }
         init_ids.push_back(best_id);
+    }
+    else if (init_ids.empty())
+    {
+        // A valid filtered index supplies a medoid for every label, including
+        // the universal label. Missing init IDs indicate invalid index data.
+        std::fill_n(ctx.indices, ctx.K, std::numeric_limits<uint64_t>::max());
+        std::fill_n(ctx.distances, ctx.K, std::numeric_limits<float>::max());
+        if (ctx.stats != nullptr)
+        {
+            ctx.stats->n_hops = 0;
+            ctx.stats->n_cmps = 0;
+            ctx.stats->n_ios = 0;
+        }
+        return;
     }
 
     auto [hops, cmps] = iterate_to_fixed_point(scratch, ctx.L, aligned_query, init_ids, proxy.get());
