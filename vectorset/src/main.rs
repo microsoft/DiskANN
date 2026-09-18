@@ -10,9 +10,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use loader::DatasetLoader;
 use redis::{
-    AsyncTypedCommands, IntoConnectionInfo, Pipeline, ToRedisArgs, aio::MultiplexedConnection,
+    AsyncConnectionConfig, AsyncTypedCommands, IntoConnectionInfo, Pipeline, ToRedisArgs,
+    aio::MultiplexedConnection,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -20,6 +21,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use thiserror::Error;
 use tokio::{
     fs::File,
     io::AsyncReadExt,
@@ -27,23 +29,70 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 
+use crate::{
+    catalog::Catalog,
+    garnet::Garnet,
+    runbook::Runbook,
+    runner::{Filter, Runner},
+};
+
+mod catalog;
+mod dataset;
+mod driver;
+mod garnet;
 mod loader;
+mod report;
+mod runbook;
+mod runner;
+#[cfg(test)]
+mod test_utils;
 
 const DEFAULT_PORT: u16 = 6379;
 
-trait Element: bytemuck::Pod + std::fmt::Debug + Send + Sync + 'static {}
+/// redis-rs defaults to a 500ms response timeout, which a pipelined batch of searches or
+/// inserts will always exceed.
+fn connection_config() -> AsyncConnectionConfig {
+    AsyncConnectionConfig::new()
+        .set_response_timeout(None)
+        .set_connection_timeout(Some(Duration::from_secs(30)))
+}
 
-impl Element for u8 {}
-impl Element for i8 {}
-impl Element for f32 {}
+#[derive(Debug, Clone, PartialEq)]
+pub enum ElementType {
+    F32,
+    U8,
+    I8,
+    U32,
+}
 
+pub trait Element: bytemuck::Pod + Default + std::fmt::Debug + Send + Sync + 'static {
+    const ELEMENT_TYPE: ElementType;
+}
+
+impl Element for f32 {
+    const ELEMENT_TYPE: ElementType = ElementType::F32;
+}
+
+impl Element for u8 {
+    const ELEMENT_TYPE: ElementType = ElementType::U8;
+}
+
+impl Element for i8 {
+    const ELEMENT_TYPE: ElementType = ElementType::I8;
+}
+
+impl Element for u32 {
+    const ELEMENT_TYPE: ElementType = ElementType::U32;
+}
 #[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
 struct Config {
     ips: Vec<String>,
     port: Option<u16>,
     secure: bool,
     scope: Option<String>,
     username: Option<String>,
+    dataset_search_paths: Option<Vec<PathBuf>>,
 }
 
 #[derive(Parser)]
@@ -74,6 +123,8 @@ enum Commands {
     Delete(DeleteArgs),
     /// Run queries and calculate recall
     Query(QueryArgs),
+    /// Run runbook
+    Run(RunArgs),
 }
 
 #[derive(Args)]
@@ -143,11 +194,11 @@ struct QueryArgs {
     #[arg(long, default_value = "15")]
     l_search: usize,
 
-    /// Number of search results to return
+    /// Number of ground truth neighbors to score against (the k in k-recall@n)
     #[arg(short, long, default_value = "10")]
     k: usize,
 
-    /// Number of ground vectors to consider
+    /// Number of search results to return (the n in k-recall@n)
     #[arg(short, long, default_value = "10")]
     n: usize,
 
@@ -162,6 +213,71 @@ struct QueryArgs {
     gt_path: PathBuf,
 }
 
+#[derive(Args)]
+struct RunArgs {
+    /// Vector set key prefix
+    #[arg(short, long, value_name = "VECTOR_SET", default_value = "vs0")]
+    set: String,
+
+    /// Number of parallel search tasks
+    #[arg(
+        short,
+        long,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
+    )]
+    tasks: Option<usize>,
+
+    /// Number of pipelined commands to the server (searches are never pipelined)
+    #[arg(
+        long,
+        default_value_t = 64,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
+    )]
+    pipeline_size: usize,
+
+    /// Graph degree
+    #[arg(long, default_value = "16")]
+    degree: usize,
+
+    /// Candidate list size during build
+    #[arg(long, default_value = "15")]
+    l_build: usize,
+
+    /// Candidate list size during search
+    #[arg(long, default_value = "15")]
+    l_search: usize,
+
+    /// Number of ground truth neighbors to score against (the k in k-recall@n)
+    #[arg(short, long, default_value = "10")]
+    k: usize,
+
+    /// Number of search results to return (the n in k-recall@n)
+    #[arg(short, long, default_value = "10")]
+    n: usize,
+
+    /// Include dataset filter
+    #[arg(long)]
+    include: Vec<String>,
+
+    /// Exclude dataset filter
+    #[arg(long)]
+    exclude: Vec<String>,
+
+    /// Repeat search steps
+    #[arg(long, default_value_t = 5, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+    search_repetitions: usize,
+
+    /// Output directory for reports
+    #[arg(long, default_value = "reports")]
+    report_path: PathBuf,
+
+    /// Runbook to execute
+    runbook: PathBuf,
+
+    /// Dataset catalog directory
+    catalog: PathBuf,
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum DataType {
     Uint8,
@@ -170,7 +286,7 @@ enum DataType {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default, Serialize)]
 enum Quantizer {
     /// f32 vectors; no quantization
     #[default]
@@ -232,11 +348,22 @@ impl std::fmt::Display for Quantizer {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize, Deserialize)]
 enum DistanceMetric {
+    #[serde(rename = "l2", alias = "L2")]
     L2,
+    #[serde(rename = "cosine", alias = "COSINE")]
     Cosine,
+    #[serde(rename = "cosine_normalized", alias = "COSINE_NORMALIZED")]
     CosineNormalized,
+    #[serde(
+        rename = "innerproduct",
+        alias = "InnerProduct",
+        alias = "ip",
+        alias = "INNERPRODUCT",
+        alias = "inner_product",
+        alias = "INNER_PRODUCT"
+    )]
     InnerProduct,
 }
 
@@ -266,6 +393,14 @@ impl ToRedisArgs for VectorId {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum ExpiringCredentialError {
+    #[error("redis error: {0}")]
+    Redis(#[from] redis::RedisError),
+    #[error("azure error: {0}")]
+    Azure(#[from] azure_core::Error),
+}
+
 #[derive(Clone)]
 struct ExpiringCredential {
     scope: String,
@@ -289,7 +424,10 @@ impl ExpiringCredential {
         }
     }
 
-    async fn refresh_if_needed(mut self, con: &mut MultiplexedConnection) -> Result<Self> {
+    async fn refresh_if_needed(
+        mut self,
+        con: &mut MultiplexedConnection,
+    ) -> std::result::Result<Self, ExpiringCredentialError> {
         if self.expires - OffsetDateTime::now_utc() < Duration::from_secs(300) {
             let res = self.cred.get_token(&[&self.scope], None).await?;
 
@@ -387,31 +525,35 @@ async fn async_main(opts: Options) -> Result<()> {
     };
 
     match opts.quantizer.data_type() {
-        DataType::Uint8 => dispatch::<u8>(&opts.command, &opts, infos, cred).await,
-        DataType::Int8 => dispatch::<i8>(&opts.command, &opts, infos, cred).await,
-        DataType::Float32 => dispatch::<f32>(&opts.command, &opts, infos, cred).await,
+        DataType::Uint8 => dispatch::<u8>(&config, &opts.command, &opts, infos, cred).await,
+        DataType::Int8 => dispatch::<i8>(&config, &opts.command, &opts, infos, cred).await,
+        DataType::Float32 => dispatch::<f32>(&config, &opts.command, &opts, infos, cred).await,
     }
 }
 
 async fn dispatch<T: Element>(
+    config: &Config,
     command: &Commands,
     opts: &Options,
     infos: Vec<redis::ConnectionInfo>,
     cred: Option<ExpiringCredential>,
 ) -> Result<()> {
     match command {
-        Commands::Ping => ping::<T>(infos[0].clone()).await?,
+        Commands::Ping => ping(infos[0].clone()).await?,
         Commands::Ingest(args) => ingest::<T>(opts, args, infos[0].clone(), cred).await?,
-        Commands::Delete(args) => delete::<T>(args, infos[0].clone()).await?,
+        Commands::Delete(args) => delete(args, infos[0].clone()).await?,
         Commands::Query(args) => query::<T>(opts, args, infos, cred).await?,
+        Commands::Run(args) => run::<T>(config, opts, args, infos, cred).await?,
     }
 
     Ok(())
 }
 
-async fn ping<T: Element>(info: redis::ConnectionInfo) -> Result<()> {
+async fn ping(info: redis::ConnectionInfo) -> Result<()> {
     let client = redis::Client::open(info).unwrap();
-    let mut con = client.get_multiplexed_async_connection().await?;
+    let mut con = client
+        .get_multiplexed_async_connection_with_config(&connection_config())
+        .await?;
 
     println!("PING...");
     let result = con.ping().await?;
@@ -454,7 +596,9 @@ async fn ingest<T: Element>(
     // Insert base vectors
     for _ in 0..parallelism {
         let client = redis::Client::open(info.clone())?;
-        let mut con = client.get_multiplexed_async_connection().await?;
+        let mut con = client
+            .get_multiplexed_async_connection_with_config(&connection_config())
+            .await?;
         let ds = ds.clone();
         let pipeline_size = args.pipeline_size;
         let vset = vset.clone();
@@ -556,12 +700,13 @@ async fn ingest<T: Element>(
     Ok(())
 }
 
-async fn delete<T: Element>(args: &DeleteArgs, info: redis::ConnectionInfo) -> Result<()> {
+async fn delete(args: &DeleteArgs, info: redis::ConnectionInfo) -> Result<()> {
     let client = redis::Client::open(info).unwrap();
-    let mut con = client.get_multiplexed_async_connection().await?;
+    let mut con = client
+        .get_multiplexed_async_connection_with_config(&connection_config())
+        .await?;
 
     con.del(&args.set).await?;
-    con.flushdb().await?;
     Ok(())
 }
 
@@ -600,7 +745,9 @@ async fn query<T: Element>(
     let time_start = Instant::now();
     for task_idx in 0..parallelism {
         let client = redis::Client::open(infos[task_idx % infos.len()].clone())?;
-        let mut con = client.get_multiplexed_async_connection().await?;
+        let mut con = client
+            .get_multiplexed_async_connection_with_config(&connection_config())
+            .await?;
         let pipeline_size = args.pipeline_size;
         let tx = tx.clone();
         let queries = queries.clone();
@@ -719,6 +866,62 @@ async fn query<T: Element>(
         100.0 * total_recalled as f64 / total_candidates as f64
     );
     println!("    latency: {avg_latency:0.2}us");
+
+    Ok(())
+}
+
+async fn run<T: Element>(
+    config: &Config,
+    opts: &Options,
+    args: &RunArgs,
+    infos: Vec<redis::ConnectionInfo>,
+    cred: Option<ExpiringCredential>,
+) -> Result<()> {
+    let book = Runbook::from_path(&args.runbook)?;
+    let cat = Catalog::load_directory(&args.catalog, config.dataset_search_paths.as_deref())?;
+
+    let parallelism = args.tasks.unwrap_or(thread::available_parallelism()?.get());
+    let client = redis::Client::open(infos[0].clone())?;
+
+    let filter = if !args.include.is_empty() || !args.exclude.is_empty() {
+        let mut filter = Filter::default();
+        for included in &args.include {
+            filter.include(included);
+        }
+        for excluded in &args.exclude {
+            filter.exclude(excluded);
+        }
+        Some(filter)
+    } else {
+        None
+    };
+
+    // Execute the runbook
+    let driver = Garnet::<T>::new(
+        client,
+        cred,
+        args.set.clone(),
+        args.pipeline_size,
+        parallelism,
+        opts.quantizer.data_type(),
+        args.degree,
+        args.l_build,
+        args.l_search,
+        opts.quantizer,
+    );
+    let runner = Runner::new(driver);
+    runner
+        .run(
+            &book,
+            &cat,
+            &args.report_path,
+            args.k,
+            args.n,
+            filter,
+            args,
+            opts,
+        )
+        .await?;
 
     Ok(())
 }
