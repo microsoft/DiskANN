@@ -11,7 +11,10 @@
 use crate::{ANNError, ANNResult};
 use diskann_linalg::Transpose;
 use diskann_utils::views::{MatrixView, MutMatrixView};
-use diskann_vector::{Norm, norm::FastL2NormSquared};
+use diskann_vector::{
+    Norm,
+    norm::{FastL2Norm, FastL2NormSquared},
+};
 
 use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 
@@ -55,13 +58,11 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
     ) -> ANNResult<()>;
 }
 
-/// Compute L2 squared norms with sequential accumulation.
-///
-/// This order fixes rounding of the leader term before GEMM adds the dot term.
+/// Compute squared norms with DiskANN's vector implementation.
 fn l2_squared_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
     vectors
         .row_iter()
-        .map(|vector| vector.iter().map(|value| value * value).sum())
+        .map(|vector| FastL2NormSquared.evaluate(vector))
         .collect()
 }
 
@@ -69,7 +70,7 @@ fn l2_squared_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
 fn cosine_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
     vectors
         .row_iter()
-        .map(|vector| FastL2NormSquared.evaluate(vector).sqrt())
+        .map(|vector| FastL2Norm.evaluate(vector))
         .collect()
 }
 
@@ -229,6 +230,39 @@ mod tests {
     #[cfg(not(miri))]
     use diskann_vector::distance::Metric;
     use rstest::rstest;
+
+    #[cfg(not(miri))]
+    #[test]
+    fn l2_ranking_retains_small_coordinate_contributions() {
+        // Given: the origin ranks leaders solely by their squared norms.
+        // 4096^2 + 127 is larger than 4096^2 + 16, regardless of coordinate order.
+        let points = [0.0; 129];
+        let mut values = vec![1.0; 2 * 129];
+        values[0] = 4096.0;
+        values[128] = 0.0;
+        values[129..].fill(0.0);
+        values[129] = 4096.0;
+        values[130] = 4.0;
+        let leaders = L2::create_leaders(MatrixView::try_from(values.as_slice(), 2, 129).unwrap());
+        let mut output = [f32::NAN; 2];
+
+        L2::compute_distances(
+            MatrixView::try_from(&points[..], 1, 129).unwrap(),
+            &leaders,
+            MutMatrixView::try_from(&mut output[..], 1, 2).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            output[1] < output[0],
+            "nearer leader was ranked behind farther leader: {output:?}"
+        );
+        assert!(
+            (output[0] - 16_777_344.0).abs() <= 16.0,
+            "lost small squared coordinates: {output:?}"
+        );
+        assert_eq!(output[1], 16_777_232.0);
+    }
 
     #[cfg(not(miri))]
     #[rstest]
