@@ -726,6 +726,43 @@ mod sgemm_aat_lower_tests {
 
     type LowerProduct = fn(usize, usize, f32, &[f32], &mut [f32]) -> Result<(), SgemmError>;
 
+    #[track_caller]
+    fn assert_lower_product_matches_scalar(
+        shape: (usize, usize),
+        input: &[f32],
+        previous: &[f32],
+        output: &[f32],
+        add: bool,
+    ) {
+        let (rows, dimensions) = shape;
+        for row in 0..rows {
+            for column in 0..rows {
+                let index = row * rows + column;
+                if column > row {
+                    assert_eq!(
+                        output[index].to_bits(),
+                        previous[index].to_bits(),
+                        "shape={shape:?}, upper ({row},{column})"
+                    );
+                } else {
+                    let dot: f64 = (0..dimensions)
+                        .map(|dimension| {
+                            f64::from(input[row * dimensions + dimension])
+                                * f64::from(input[column * dimensions + dimension])
+                        })
+                        .sum();
+                    // Both sweeps use alpha = -2 and exactly representable arithmetic.
+                    let expected = -2.0 * dot + if add { f64::from(previous[index]) } else { 0.0 };
+                    assert_eq!(
+                        f64::from(output[index]),
+                        expected,
+                        "shape={shape:?}, lower ({row},{column})"
+                    );
+                }
+            }
+        }
+    }
+
     #[rstest]
     #[case::replace(sgemm_aat_lower, [-8.0, 101.0, 102.0, 8.0, -26.0, 103.0, 12.0, -36.0, -50.0])]
     #[case::add(sgemm_aat_lower_add, [2.0, 101.0, 102.0, 28.0, 4.0, 103.0, 52.0, 14.0, 10.0])]
@@ -759,31 +796,7 @@ mod sgemm_aat_lower_tests {
 
         operation(rows, dimensions, -2.0, &input, &mut output).unwrap();
 
-        for row in 0..rows {
-            for column in 0..rows {
-                let index = row * rows + column;
-                if column > row {
-                    assert_eq!(
-                        output[index].to_bits(),
-                        previous[index].to_bits(),
-                        "upper ({row},{column})"
-                    );
-                } else {
-                    let dot: f64 = (0..dimensions)
-                        .map(|d| {
-                            f64::from(input[row * dimensions + d])
-                                * f64::from(input[column * dimensions + d])
-                        })
-                        .sum();
-                    let expected = -2.0 * dot + if add { f64::from(previous[index]) } else { 0.0 };
-                    assert_eq!(
-                        f64::from(output[index]),
-                        expected,
-                        "lower ({row},{column}), dimensions={dimensions}"
-                    );
-                }
-            }
-        }
+        assert_lower_product_matches_scalar((rows, dimensions), &input, &previous, &output, add);
     }
 
     #[rstest]
@@ -813,32 +826,7 @@ mod sgemm_aat_lower_tests {
 
         operation(rows, dimensions, -2.0, &input, &mut output).unwrap();
 
-        // Check every entry, including the untouched upper triangle.
-        for row in 0..rows {
-            for column in 0..rows {
-                let index = row * rows + column;
-                if column > row {
-                    assert_eq!(
-                        output[index].to_bits(),
-                        previous[index].to_bits(),
-                        "shape={shape:?}, upper ({row},{column})"
-                    );
-                } else {
-                    let dot: f64 = (0..dimensions)
-                        .map(|dimension| {
-                            f64::from(input[row * dimensions + dimension])
-                                * f64::from(input[column * dimensions + dimension])
-                        })
-                        .sum();
-                    let expected = -2.0 * dot + if add { f64::from(previous[index]) } else { 0.0 };
-                    assert_eq!(
-                        f64::from(output[index]),
-                        expected,
-                        "shape={shape:?}, lower ({row},{column})"
-                    );
-                }
-            }
-        }
+        assert_lower_product_matches_scalar(shape, &input, &previous, &output, add);
     }
 
     #[test]
