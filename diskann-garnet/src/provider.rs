@@ -1011,14 +1011,14 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
     }
 }
 
-impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
+impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
     type SetError = GarnetProviderError;
 
     async fn set_element(
         &self,
         context: &Self::Context,
         id: &Self::ExternalId,
-        element: &[T],
+        element: (&[T], &[u8]),
     ) -> Result<Self::Guard, Self::SetError> {
         let internal_id = self.fsm.next_id(context)?;
 
@@ -1033,7 +1033,7 @@ impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
 
         let insert = || -> Result<(), Self::SetError> {
             self.callbacks
-                .write_iid(&context.term(Term::Vector), internal_id.id(), element)
+                .write_iid(&context.term(Term::Vector), internal_id.id(), element.0)
                 .then_some(())
                 .ok_or(GarnetError::Write)?;
             if let Some(quantizer) = &self.quantizer
@@ -1042,12 +1042,18 @@ impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
                 let mut quant = self
                     .quant_buffer_pool
                     .get_ref(Undef::new(quantizer.bytes()));
-                let element_f32 = T::as_f32(element).map_err(|e| {
+                let element_f32 = T::as_f32(element.0).map_err(|e| {
                     GarnetProviderError::Quantizer(GarnetQuantizerError::Compression(Box::new(e)))
                 })?;
                 quantizer.compress(&element_f32, &mut quant)?;
                 self.callbacks
                     .write_iid(&context.term(Term::Quantized), internal_id.id(), &quant)
+                    .then_some(())
+                    .ok_or(GarnetError::Write)?;
+            }
+            if !element.1.is_empty() {
+                self.callbacks
+                    .write_iid(&context.term(Term::Attributes), internal_id.id(), element.1)
                     .then_some(())
                     .ok_or(GarnetError::Write)?;
             }
@@ -1069,6 +1075,21 @@ impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
         match insert() {
             Ok(()) => (),
             Err(e) => {
+                // Clean up any potential data we inserted, but ignore failures.
+                let _ = self
+                    .callbacks
+                    .delete_iid(&context.term(Term::Vector), internal_id.id());
+                let _ = self
+                    .callbacks
+                    .delete_iid(&context.term(Term::Quantized), internal_id.id());
+                let _ = self
+                    .callbacks
+                    .delete_iid(&context.term(Term::Attributes), internal_id.id());
+                let _ = self
+                    .callbacks
+                    .delete_iid(&context.term(Term::ExtMap), internal_id.id());
+                let _ = self.callbacks.delete_eid(&context.term(Term::IntMap), id);
+
                 self.fsm.mark_free(context, internal_id.id())?;
                 return Err(e);
             }
@@ -1984,7 +2005,9 @@ impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for DynamicQuantization {
     }
 }
 
-impl<'a, T: VectorRepr> InsertStrategy<'a, GarnetProvider<T>, &'a [T]> for DynamicQuantization {
+impl<'a, T: VectorRepr> InsertStrategy<'a, GarnetProvider<T>, (&'a [T], &'a [u8])>
+    for DynamicQuantization
+{
     type SearchAccessor = DynamicAccessor<'a, T>;
     type SearchAccessorError = GarnetProviderError;
 
@@ -1994,10 +2017,10 @@ impl<'a, T: VectorRepr> InsertStrategy<'a, GarnetProvider<T>, &'a [T]> for Dynam
         &'a self,
         provider: &'a GarnetProvider<T>,
         context: &'a <GarnetProvider<T> as DataProvider>::Context,
-        vector: &'a [T],
+        vector_and_attrs: (&'a [T], &'a [u8]),
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         let quantized = provider.is_quantized();
-        DynamicAccessor::new(provider, context, vector, quantized)
+        DynamicAccessor::new(provider, context, vector_and_attrs.0, quantized)
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -2082,7 +2105,7 @@ mod tests {
 
         let id = GarnetId::from(bytemuck::bytes_of(&0));
 
-        let res = provider.set_element(&ctx, &id, &[0f32, 0f32]).await;
+        let res = provider.set_element(&ctx, &id, (&[0f32, 0f32], &[])).await;
         assert!(res.is_ok());
 
         let res = provider.delete(&ctx, &id).await;
@@ -2138,6 +2161,7 @@ mod tests {
                 &ctx,
                 &GarnetId::from(bytemuck::bytes_of::<u32>(&id)),
                 bytemuck::cast_slice::<f32, u8>(&v),
+                &[],
             )
             .unwrap();
             last_inserted_id = id;
@@ -2211,6 +2235,7 @@ mod tests {
                 &ctx,
                 &GarnetId::from(bytemuck::bytes_of::<u32>(&id)),
                 bytemuck::cast_slice::<f32, u8>(&v),
+                &[],
             )
             .unwrap();
             last_inserted_id = id;
@@ -2301,6 +2326,7 @@ mod tests {
                 &ctx,
                 &GarnetId::from(bytemuck::bytes_of::<u32>(&id)),
                 bytemuck::cast_slice::<f32, u8>(&v),
+                &[],
             )
             .unwrap();
             last_inserted_id = id;
@@ -2408,6 +2434,7 @@ mod tests {
                 &ctx,
                 &GarnetId::from(bytemuck::bytes_of::<u32>(&id)),
                 bytemuck::cast_slice::<f32, u8>(&v),
+                &[],
             )
             .unwrap();
         }
