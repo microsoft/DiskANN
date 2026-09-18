@@ -15,7 +15,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use super::{
     partition_metric::PartitionMetric,
     simd::PiPNNSIMDSchema,
-    topk::{Candidate, UNASSIGNED, with_topk},
+    topk::{Candidate, TopK, TopKVisitor, UNASSIGNED, Width, with_topk},
 };
 
 /// No sampled partition center was rankable for this output slot.
@@ -83,18 +83,38 @@ where
 fn rank_leader_distances<A: PiPNNSIMDSchema>(
     arch: A,
     distances: MatrixView<'_, f32>,
-    mut output: MutMatrixView<'_, u32>,
+    output: MutMatrixView<'_, u32>,
     candidates: &mut Vec<Candidate>,
 ) {
     candidates.resize(output.ncols(), Candidate::default());
-    with_topk!(output.ncols(), |topk| {
-        for (distances, output) in distances.row_iter().zip(output.row_iter_mut()) {
-            topk.select_topk(arch, distances, candidates.as_mut_slice());
-            for (destination, candidate) in output.iter_mut().zip(candidates.iter()) {
+    with_topk(
+        output.ncols(),
+        RankLeaders {
+            arch,
+            distances,
+            output,
+            candidates,
+        },
+    );
+}
+
+struct RankLeaders<'a, A> {
+    arch: A,
+    distances: MatrixView<'a, f32>,
+    output: MutMatrixView<'a, u32>,
+    candidates: &'a mut Vec<Candidate>,
+}
+
+impl<A: PiPNNSIMDSchema> TopKVisitor for RankLeaders<'_, A> {
+    #[inline]
+    fn visit<W: Width>(mut self, topk: TopK<W>) {
+        for (distances, output) in self.distances.row_iter().zip(self.output.row_iter_mut()) {
+            topk.select_topk(self.arch, distances, self.candidates.as_mut_slice());
+            for (destination, candidate) in output.iter_mut().zip(self.candidates.iter()) {
                 *destination = candidate.local_idx;
             }
         }
-    });
+    }
 }
 
 #[cfg(test)]

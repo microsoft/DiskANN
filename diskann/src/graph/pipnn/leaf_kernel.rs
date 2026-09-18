@@ -14,7 +14,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use super::{
     leaf_metric::LeafMetric,
     simd::PiPNNSIMDSchema,
-    topk::{Candidate, with_topk},
+    topk::{Candidate, TopK, TopKVisitor, Width, with_topk},
 };
 
 /// Reusable storage for one leaf numerical pipeline.
@@ -89,21 +89,41 @@ where
 fn rank_leaf_distances<A: PiPNNSIMDSchema>(
     arch: A,
     distances: MatrixView<'_, f32>,
-    mut output: MutMatrixView<'_, Candidate>,
+    output: MutMatrixView<'_, Candidate>,
     worst: &mut Vec<f32>,
 ) {
-    with_topk!(output.ncols(), |topk| {
-        topk.initialize(output.as_mut_view(), worst);
-        for point_idx in 1..distances.nrows() {
+    with_topk(
+        output.ncols(),
+        RankLeaf {
+            arch,
+            distances,
+            output,
+            thresholds: worst,
+        },
+    );
+}
+
+struct RankLeaf<'a, A> {
+    arch: A,
+    distances: MatrixView<'a, f32>,
+    output: MutMatrixView<'a, Candidate>,
+    thresholds: &'a mut Vec<f32>,
+}
+
+impl<A: PiPNNSIMDSchema> TopKVisitor for RankLeaf<'_, A> {
+    #[inline]
+    fn visit<W: Width>(mut self, topk: TopK<W>) {
+        topk.initialize(self.output.as_mut_view(), self.thresholds);
+        for point_idx in 1..self.distances.nrows() {
             topk.update_dual_topk(
-                arch,
+                self.arch,
                 point_idx,
-                &distances.row(point_idx)[..point_idx],
-                output.as_mut_view(),
-                worst.as_mut_slice(),
+                &self.distances.row(point_idx)[..point_idx],
+                self.output.as_mut_view(),
+                self.thresholds.as_mut_slice(),
             );
         }
-    });
+    }
 }
 
 /// Check for one output row per point and a valid non-self neighbor count.
