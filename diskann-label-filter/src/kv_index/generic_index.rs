@@ -20,7 +20,7 @@ const LOCATION_REVERSE_KEY_LIST: &str = "reverse_key_list";
 const LOCATION_SERIALIZE_KEY_LIST: &str = "serialize_key_list";
 pub(crate) const DATA_TYPE_POSTING_LIST: &str = "posting_list";
 
-type FieldNormalizer = dyn Fn(&str) -> String + Send + Sync;
+pub(crate) type FieldNormalizer = dyn Fn(&str) -> String + Send + Sync;
 
 /// A generic inverted index implementation.
 ///
