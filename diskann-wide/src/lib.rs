@@ -195,7 +195,7 @@ pub const ARCH: arch::Current = arch::current();
 ///    ```text
 ///    use of generic parameter from outer item
 ///    ```
-/// 5. `diskann_wide::alias!(f32s = type a::b::f32x4) => type f32s<A> = a::b::f32x4`:
+/// 5. `diskann_wide::alias!(f32s = type a::b::f32x4) => type f32s = a::b::f32x4`:
 ///    Use a direct path to the type rather than reaching the type as an associated type of
 ///    [`Architecture`].
 #[allow(
