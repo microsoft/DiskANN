@@ -198,6 +198,10 @@ pub const ARCH: arch::Current = arch::current();
 /// 5. `diskann_wide::alias!(f32s = type a::b::f32x4) => type f32s<A> = a::b::f32x4`:
 ///    Use a direct path to the type rather than reaching the type as an associated type of
 ///    [`Architecture`].
+#[allow(
+    clippy::allow_attributes,
+    reason = "This is a publicly exported macro that may have different lints than DiskANN"
+)]
 #[macro_export]
 macro_rules! alias {
     ($var:ident) => {
@@ -207,26 +211,14 @@ macro_rules! alias {
         $crate::alias!($var = <diskann_wide::arch::Current>::$type);
     };
     ($var:ident = <$arch:ty>::$type:ident) => {
-        #[expect(
-            clippy::allow_attributes,
-            reason = "Keep allow: CamelCase aliases do not trigger the naming lint"
-        )]
         #[allow(non_camel_case_types)]
         type $var = <$arch as $crate::Architecture>::$type;
     };
     ($var:ident<$arch:ident> = $type:ident) => {
-        #[expect(
-            clippy::allow_attributes,
-            reason = "Keep allow: CamelCase aliases do not trigger the naming lint"
-        )]
         #[allow(non_camel_case_types)]
         type $var<$arch> = <$arch as $crate::Architecture>::$type;
     };
     ($var:ident = type $type:path) => {
-        #[expect(
-            clippy::allow_attributes,
-            reason = "Keep allow: CamelCase aliases do not trigger the naming lint"
-        )]
         #[allow(non_camel_case_types)]
         type $var = $type;
     };
