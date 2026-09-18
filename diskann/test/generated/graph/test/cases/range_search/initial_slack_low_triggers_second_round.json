@@ -3,7 +3,7 @@
   "test": "graph/test/cases/range_search/initial_slack_low_triggers_second_round",
   "payload": {
     "comparisons": 14,
-    "description": "Grid setup where radius of 3.0 includes exactly two points in the in-range results at the end of the second round of search. Thus, initial slack of .5 or lower should trigger a second round.",
+    "description": "Grid setup where radius of 3.0 includes exactly two points in the in-range results at the end of the second round of search. Thus, initial slack of lower than .75 should trigger a second round.",
     "grid_dims": 3,
     "grid_size": 5,
     "hops": 7,

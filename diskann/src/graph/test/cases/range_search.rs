@@ -424,7 +424,7 @@ fn max_results_respected_and_second_round_triggered() {
 fn initial_slack_low_triggers_second_round() {
     let description = "Grid setup where radius of 3.0 includes exactly two points \
     in the in-range results at the end of the second round of search. Thus, initial \
-    slack of .5 or lower should trigger a second round.";
+    slack of lower than .75 should trigger a second round.";
 
     let rt = current_thread_runtime();
     let mut test_root = root();
@@ -435,7 +435,7 @@ fn initial_slack_low_triggers_second_round() {
     let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
     let radius = 3.0;
     let starting_l = 4;
-    let low_slack = 0.5;
+    let low_slack = 0.74;
 
     let range_search = Range::builder(starting_l, radius)
         .initial_slack(low_slack)
@@ -468,14 +468,14 @@ fn initial_slack_low_triggers_second_round() {
         range_search_second_round: stats.range_search_second_round,
     };
 
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
     assert!(
         stats.range_search_second_round,
         "low initial_slack ({}) should trigger second round",
         low_slack
     );
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
 
     assert_range_invariants(&results, radius, None);
     assert_no_duplicates(&results);
@@ -485,7 +485,7 @@ fn initial_slack_low_triggers_second_round() {
 fn initial_slack_high_avoids_second_round() {
     let description = "Grid setup where radius of 3.0 includes exactly two points \
     in the in-range results at the end of the second round of search. Thus, initial \
-    slack of .51 or higher should avoid triggering a second round.";
+    slack of .75 or higher should avoid triggering a second round.";
 
     let rt = current_thread_runtime();
     let mut test_root = root();
@@ -496,7 +496,7 @@ fn initial_slack_high_avoids_second_round() {
     let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
     let radius = 3.0;
     let starting_l = 4;
-    let high_slack = 0.51;
+    let high_slack = 0.75;
 
     let range_search = Range::builder(starting_l, radius)
         .initial_slack(high_slack)
@@ -528,6 +528,12 @@ fn initial_slack_high_avoids_second_round() {
         result_count: results.len(),
         range_search_second_round: stats.range_search_second_round,
     };
+
+     assert!(
+        !stats.range_search_second_round,
+        "high initial_slack ({}) should avoid second round",
+        high_slack
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
