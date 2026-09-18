@@ -88,7 +88,6 @@ impl<StorageProvider: StorageReadProvider, T: VectorRepr, A>
         self.num_points
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn next_n(&mut self, n: usize) -> Option<Vec<(Box<[T]>, A)>>
     where
         A: for<'de> Deserialize<'de> + Default,
@@ -440,7 +439,7 @@ mod tests {
         .unwrap();
 
         // nth(0) should be equivalent to next()
-        #[allow(clippy::iter_nth_zero)]
+        #[expect(clippy::iter_nth_zero)]
         let (vector, associated_data) = iterator.nth(0).unwrap();
         assert_eq!(vector, vec![1_f32, 2_f32].into_boxed_slice());
         assert_eq!(associated_data, 10_u32);

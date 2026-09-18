@@ -524,7 +524,7 @@ macro_rules! vector {
     }
 }
 
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub trait Architecture: sealed::Sealed {
     // mask types
     type mask_f16x8: SIMDMask;

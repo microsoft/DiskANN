@@ -350,12 +350,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::read_zero_byte_vec)]
     fn test_read_no_requests() {
         let mut reader = LinuxAlignedFileReader::new(TEST_INDEX_PATH).unwrap();
 
-        let mut read_requests = Vec::<AlignedRead<u8, A512>>::new();
-        let result = reader.read(&mut read_requests);
+        let result = reader.read(&mut []);
         assert!(result.is_ok());
     }
 

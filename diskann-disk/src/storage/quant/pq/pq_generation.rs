@@ -190,7 +190,7 @@ mod pq_generation_tests {
         2.1f32, 2.1f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 100.0f32,
         100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32,
     ];
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn create_context<'a, F: vfs::FileSystem>(
         provider: &'a VirtualStorageProvider<F>,
         dim: usize,
@@ -218,7 +218,7 @@ mod pq_generation_tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn create_new_compressor<'a, F: vfs::FileSystem>(
         provider: &'a VirtualStorageProvider<F>,
         dim: usize,
