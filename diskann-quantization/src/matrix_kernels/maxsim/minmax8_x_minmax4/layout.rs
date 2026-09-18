@@ -41,13 +41,6 @@ impl EvenOdd64Layout {
     pub(super) fn padded(self) -> usize {
         self.padded
     }
-
-    pub(super) fn source_dimension(position: usize) -> usize {
-        let within = position % Self::BLOCK;
-        position / Self::BLOCK * Self::BLOCK
-            + 2 * (within % Self::PACKED_BYTES)
-            + within / Self::PACKED_BYTES
-    }
 }
 
 /// Only row-wise writes in original dimension order can populate this storage.
@@ -83,9 +76,15 @@ impl<const MR: usize, const PACK: usize> PackedQuery<MR, PACK> {
             .values
             .get_row_mut(row)
             .expect("query row out of bounds");
-        for position in 0..self.layout.padded() {
-            let source = EvenOdd64Layout::source_dimension(position);
-            output.set(position, values.get(source).copied().unwrap_or(0));
+        // Fixed dimensions keep the zero-initialized padding untouched across row rewrites.
+        for (block, source) in values.chunks(EvenOdd64Layout::BLOCK).enumerate() {
+            let base = block * EvenOdd64Layout::BLOCK;
+            for (lane, &value) in source.iter().step_by(2).enumerate() {
+                output.set(base + lane, value);
+            }
+            for (lane, &value) in source.iter().skip(1).step_by(2).enumerate() {
+                output.set(base + EvenOdd64Layout::PACKED_BYTES + lane, value);
+            }
         }
     }
 
@@ -143,31 +142,33 @@ pub(super) mod tests {
         for &dim in DIMS {
             for rows in [0, 1, MR - 1, MR, MR + 1, 3 * MR + 1] {
                 let mut storage = PackedQuery::<MR, PACK>::new(rows, dim);
-                for row in 0..rows {
-                    let values: Vec<_> =
-                        (0..dim).map(|d| ((row * 17 + d) % 255 + 1) as u8).collect();
-                    storage.set_row(row, &values);
-                }
                 let k = dim.div_ceil(64) * 64;
                 assert_eq!(storage.values.ncols(), k);
-                let mut expected = vec![0; rows.div_ceil(MR) * MR * k];
-                // Derive destinations from original dimensions, independently of the
-                // production mapping from packed position back to original dimension.
-                for row in 0..rows {
-                    for d in 0..dim {
-                        let p = (d / 64) * 64 + (d % 2) * 32 + (d % 64) / 2;
-                        let offset = (row / MR) * MR * k
-                            + (p / PACK) * MR * PACK
-                            + (row % MR) * PACK
-                            + p % PACK;
-                        expected[offset] = ((row * 17 + d) % 255 + 1) as u8;
+                for generation in [0, 127] {
+                    for row in 0..rows {
+                        let values: Vec<_> = (0..dim)
+                            .map(|d| ((row * 17 + d + generation) % 255 + 1) as u8)
+                            .collect();
+                        storage.set_row(row, &values);
                     }
+                    let mut expected = vec![0; rows.div_ceil(MR) * MR * k];
+                    // Derive each destination independently from the original dimension.
+                    for row in 0..rows {
+                        for d in 0..dim {
+                            let p = (d / 64) * 64 + (d % 2) * 32 + (d % 64) / 2;
+                            let offset = (row / MR) * MR * k
+                                + (p / PACK) * MR * PACK
+                                + (row % MR) * PACK
+                                + p % PACK;
+                            expected[offset] = ((row * 17 + d + generation) % 255 + 1) as u8;
+                        }
+                    }
+                    assert_eq!(
+                        storage.values.as_slice(),
+                        expected,
+                        "rows={rows}, dim={dim}, generation={generation}"
+                    );
                 }
-                assert_eq!(
-                    storage.values.as_slice(),
-                    expected,
-                    "rows={rows}, dim={dim}"
-                );
                 assert_eq!(storage.as_view().is_none(), rows == 0 || dim == 0);
             }
         }

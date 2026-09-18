@@ -14,6 +14,14 @@ pub(super) trait Decoder: Architecture {
     /// The capability token enables the required ISA.
     fn decode_block(self, packed: &[u8; 32], output: &mut [u8; 64]);
 
+    /// Decode up to 32 packed bytes, treating bytes beyond the input as zero.
+    #[inline]
+    fn decode_tail(self, packed: &[u8], output: &mut [u8; 64]) {
+        let mut tail = [0; 32];
+        tail[..packed.len()].copy_from_slice(packed);
+        self.decode_block(&tail, output);
+    }
+
     /// All output bytes are overwritten, including dimension padding.
     #[expect(
         clippy::expect_used,
@@ -42,18 +50,14 @@ pub(super) trait Decoder: Architecture {
         }
         if !layout.dim().is_multiple_of(EvenOdd64Layout::BLOCK) {
             let source = &packed[full * EvenOdd64Layout::PACKED_BYTES..];
-            let mut tail = [0; 32];
-            tail[..source.len()].copy_from_slice(source);
+            let output: &mut [u8; 64] = (&mut output[full * EvenOdd64Layout::BLOCK..])
+                .try_into()
+                .expect("one tail block");
+            self.decode_tail(source, output);
             if !layout.dim().is_multiple_of(2) {
                 // The final high nibble is outside D even when its byte is in bounds.
-                tail[source.len() - 1] &= 15;
+                output[EvenOdd64Layout::PACKED_BYTES + source.len() - 1] = 0;
             }
-            self.decode_block(
-                &tail,
-                (&mut output[full * EvenOdd64Layout::BLOCK..])
-                    .try_into()
-                    .expect("one tail block"),
-            );
         }
     }
 }
@@ -105,6 +109,22 @@ mod x86_64 {
         fn decode_block(self, packed: &[u8; 32], output: &mut [u8; 64]) {
             self.retarget().decode_block(packed, output);
         }
+
+        #[inline(always)]
+        fn decode_tail(self, packed: &[u8], output: &mut [u8; 64]) {
+            assert!(packed.len() <= 32, "packed tail exceeds one block");
+            self.run_inline(
+                #[inline]
+                || {
+                    diskann_wide::alias!(u8s = <V4>::u8x32);
+                    // SAFETY: Only packed.len() bytes are accessed; masked-off lanes
+                    // are zeroed, including when the input ends at an allocation boundary.
+                    let codes =
+                        unsafe { u8s::load_simd_first(self, packed.as_ptr(), packed.len()) };
+                    self.retarget().decode_block(&codes.to_array(), output);
+                },
+            );
+        }
     }
 }
 
@@ -137,7 +157,7 @@ mod tests {
     use super::*;
 
     fn check<A: Decoder>(arch: A) {
-        for &dim in super::super::layout::tests::DIMS {
+        for dim in (1..64).chain(super::super::layout::tests::DIMS.iter().copied()) {
             for pattern in [Some(0), Some(255), Some(0x5a), Some(0xa5), Some(0x73), None] {
                 // An offset of one exercises unaligned input; the final nibble remains
                 // nonzero for odd dimensions. Sentinels guard both output boundaries.
