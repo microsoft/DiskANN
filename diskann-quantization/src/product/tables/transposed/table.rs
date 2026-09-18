@@ -12,7 +12,7 @@ use crate::{
     views::{ChunkOffsets, ChunkOffsetsView},
 };
 use diskann_utils::{
-    strided,
+    strided::Strided,
     views::{self, MatrixView, MutMatrixView},
 };
 use thiserror::Error;
@@ -69,7 +69,7 @@ impl TransposedTable {
     ///   by the offsets.
     ///
     /// * `pivots.nrows() == 0`: The pivot table cannot be empty.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn from_parts(
         pivots: views::MatrixView<f32>,
         offsets: ChunkOffsets,
@@ -89,7 +89,7 @@ impl TransposedTable {
             .map(|i| {
                 let range = offsets.at(i);
                 largest = largest.max(range.len());
-                let view = strided::StridedView::try_shrink_from(
+                let view = Strided::try_from_data(
                     &(pivots.as_slice()[range.start..]),
                     pivots.nrows(),
                     range.len(),
@@ -151,7 +151,7 @@ impl TransposedTable {
     /// Panics under the following conditions:
     /// * `data.cols() != self.dim()`: The number of columns in the source dataset must match
     ///   the number of dimensions expected by the schema.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn compress_batch<T, F, DelegateError>(
         &self,
         data: views::MatrixView<'_, T>,

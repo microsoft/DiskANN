@@ -336,7 +336,7 @@ mod imp {
                 diskann_utils::views::Matrix::new(0, input.nrows(), quantizer.get_num_chunks());
 
             // Compress the data.
-            #[allow(clippy::disallowed_methods)]
+            #[expect(clippy::disallowed_methods)]
             data.par_row_iter_mut()
                 .zip(input.par_row_iter())
                 .try_for_each(|(d, i)| -> anyhow::Result<()> {
