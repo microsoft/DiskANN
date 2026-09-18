@@ -8,17 +8,16 @@
 //! Metric modules fill portable distance buffers. Kernel modules use architecture
 //! `A` to traverse those buffers. Callers select metric `M` once per graph build.
 
-#[allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "graph construction integrates these kernels in the next PR"
+)]
+
 mod leaf_kernel;
-#[allow(dead_code)]
 mod leaf_metric;
-#[allow(dead_code)]
 mod partition_kernel;
-#[allow(dead_code)]
 mod partition_metric;
-#[allow(dead_code)]
 mod simd;
-#[allow(dead_code)]
 mod topk;
 
 pub(super) struct L2;
