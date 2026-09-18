@@ -207,15 +207,27 @@ macro_rules! alias {
         $crate::alias!($var = <diskann_wide::arch::Current>::$type);
     };
     ($var:ident = <$arch:ty>::$type:ident) => {
-        #[expect(non_camel_case_types)]
+        #[expect(
+            clippy::allow_attributes,
+            reason = "Keep allow: CamelCase aliases do not trigger the naming lint"
+        )]
+        #[allow(non_camel_case_types)]
         type $var = <$arch as $crate::Architecture>::$type;
     };
     ($var:ident<$arch:ident> = $type:ident) => {
-        #[expect(non_camel_case_types)]
+        #[expect(
+            clippy::allow_attributes,
+            reason = "Keep allow: CamelCase aliases do not trigger the naming lint"
+        )]
+        #[allow(non_camel_case_types)]
         type $var<$arch> = <$arch as $crate::Architecture>::$type;
     };
     ($var:ident = type $type:path) => {
-        #[expect(non_camel_case_types)]
+        #[expect(
+            clippy::allow_attributes,
+            reason = "Keep allow: CamelCase aliases do not trigger the naming lint"
+        )]
+        #[allow(non_camel_case_types)]
         type $var = $type;
     };
 }
