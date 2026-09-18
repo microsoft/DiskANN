@@ -67,81 +67,39 @@ impl Width for Runtime {
     }
 }
 
-/// Select the width specialization once for a batch.
-/// Specialize small capacities 1..=10; larger capacities use the runtime path.
-/// Typical partition K is 10 or 3, and leaf K is 3 or 2.
-/// The width is evaluated once. The body has ordinary block control flow.
-macro_rules! with_topk {
-    ($width:expr, |$topk:ident| $body:block) => {{
-        let width = $width;
-        match width {
-            1 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<1>);
-                $body
-            }
-            2 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<2>);
-                $body
-            }
-            3 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<3>);
-                $body
-            }
-            4 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<4>);
-                $body
-            }
-            5 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<5>);
-                $body
-            }
-            6 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<6>);
-                $body
-            }
-            7 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<7>);
-                $body
-            }
-            8 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<8>);
-                $body
-            }
-            9 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<9>);
-                $body
-            }
-            10 => {
-                let $topk =
-                    $crate::graph::pipnn::topk::TopK::new($crate::graph::pipnn::topk::Fixed::<10>);
-                $body
-            }
-            _ => {
-                let $topk = $crate::graph::pipnn::topk::TopK::new(
-                    $crate::graph::pipnn::topk::Runtime(width),
-                );
-                $body
-            }
-        }
-    }};
+/// A batch operation that accepts any TopK width specialization.
+pub(super) trait TopKVisitor {
+    /// Consume the operation and run it with the selected width.
+    fn visit<W: Width>(self, topk: TopK<W>);
 }
-pub(super) use with_topk;
+
+/// Select the width specialization and run the visitor once for the batch.
+///
+/// Specialize capacities 1..=10; zero and larger capacities use the runtime path.
+/// Typical partition K is 10 or 3, and leaf K is 3 or 2.
+#[inline]
+pub(super) fn with_topk<V: TopKVisitor>(width: usize, visitor: V) {
+    match width {
+        1 => visitor.visit(TopK::new(Fixed::<1>)),
+        2 => visitor.visit(TopK::new(Fixed::<2>)),
+        3 => visitor.visit(TopK::new(Fixed::<3>)),
+        4 => visitor.visit(TopK::new(Fixed::<4>)),
+        5 => visitor.visit(TopK::new(Fixed::<5>)),
+        6 => visitor.visit(TopK::new(Fixed::<6>)),
+        7 => visitor.visit(TopK::new(Fixed::<7>)),
+        8 => visitor.visit(TopK::new(Fixed::<8>)),
+        9 => visitor.visit(TopK::new(Fixed::<9>)),
+        10 => visitor.visit(TopK::new(Fixed::<10>)),
+        _ => visitor.visit(TopK::new(Runtime(width))),
+    }
+}
 
 /// Top-k selection with a fixed result capacity and caller-owned storage.
 ///
 /// This object stores no candidates or thresholds. Each operation borrows only
 /// the buffers it updates. Candidate IDs are slice positions, not dataset IDs.
 /// Callers supply each candidate at most once per result; equal distances need
-/// no fixed tie order. The construction macro specializes the width per batch.
+/// no fixed tie order. [`with_topk`] specializes the width per batch.
 /// Selection and dual updates run inside their own architecture scope.
 pub(super) struct TopK<W> {
     width: W,
@@ -529,6 +487,17 @@ mod tests {
         count: usize,
         #[values(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, LANES + 1)] capacity: usize,
     ) {
+        struct SelectRow<'a> {
+            distances: &'a [f32],
+            output: &'a mut [Candidate],
+        }
+
+        impl TopKVisitor for SelectRow<'_> {
+            fn visit<W: Width>(self, topk: TopK<W>) {
+                topk.select_topk(ARCH, self.distances, self.output);
+            }
+        }
+
         // Each pair offers a nearer score before a farther one. Later pairs improve
         // on earlier pairs, so a full result must keep lowering its cutoff mid-vector.
         let mut distances: Vec<_> = (0..count).map(|i| -(i as f32) - 1.0).collect();
@@ -548,14 +517,15 @@ mod tests {
         let mut output = vec![EMPTY; capacity];
         let mut capacity_reads = 0;
 
-        with_topk!(
+        with_topk(
             {
                 capacity_reads += 1;
                 capacity
             },
-            |topk| {
-                topk.select_topk(ARCH, &distances, &mut output);
-            }
+            SelectRow {
+                distances: &distances,
+                output: &mut output,
+            },
         );
 
         assert_eq!(output, expected, "count={count}, capacity={capacity}");
@@ -648,6 +618,27 @@ mod tests {
         point_count: usize,
         #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17)] capacity: usize,
     ) {
+        struct ScanPairs<'a> {
+            distances: &'a [Vec<f32>],
+            output: MutMatrixView<'a, Candidate>,
+            limits: &'a mut Vec<f32>,
+        }
+
+        impl TopKVisitor for ScanPairs<'_> {
+            fn visit<W: Width>(mut self, topk: TopK<W>) {
+                topk.initialize(self.output.as_mut_view(), self.limits);
+                for (point, row) in self.distances.iter().enumerate().skip(1) {
+                    topk.update_dual_topk(
+                        ARCH,
+                        point,
+                        &row[..point],
+                        self.output.as_mut_view(),
+                        self.limits,
+                    );
+                }
+            }
+        }
+
         // Given: XOR gives symmetric distances with distinct, exact scores in each row.
         // The final pair row has point_count - 1 distances, straddling vector boundaries.
         let distances: Vec<Vec<f32>> = (0..point_count)
@@ -663,12 +654,14 @@ mod tests {
             MutMatrixView::try_from(output.as_mut_slice(), point_count, capacity).unwrap();
 
         // When: offer every non-self pair once, through the production width dispatch.
-        with_topk!(capacity, |topk| {
-            topk.initialize(rows.as_mut_view(), &mut limits);
-            for (point, row) in distances.iter().enumerate().skip(1) {
-                topk.update_dual_topk(ARCH, point, &row[..point], rows.as_mut_view(), &mut limits);
-            }
-        });
+        with_topk(
+            capacity,
+            ScanPairs {
+                distances: &distances,
+                output: rows.as_mut_view(),
+                limits: &mut limits,
+            },
+        );
 
         // Then: independently sort each complete row, excluding only the point itself.
         for (point, row) in distances.iter().enumerate() {
