@@ -4,7 +4,7 @@
  */
 
 use crate::{
-    Emulated, LoHi, SplitJoin, ZipUnzip,
+    Emulated,
     constant::Const,
     helpers,
     traits::{SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDVector},
@@ -29,6 +29,7 @@ macros::aarch64_define_register!(u8x16, uint8x16_t, mask8x16, u8, 16, Neon);
 macros::aarch64_define_splat!(u8x16, vmovq_n_u8);
 macros::aarch64_define_loadstore!(u8x16, vld1q_u8, internal::load_first::u8x16, vst1q_u8, 16);
 macros::aarch64_splitjoin!(u8x16, u8x8, vget_low_u8, vget_high_u8, vcombine_u8);
+macros::aarch64_zipunzip!(u8x16, u8x8, vzip1_u8, vzip2_u8, vuzp1_u8, vuzp2_u8);
 
 helpers::unsafe_map_binary_op!(u8x16, std::ops::Add, add, vaddq_u8, "neon");
 helpers::unsafe_map_binary_op!(u8x16, std::ops::Sub, sub, vsubq_u8, "neon");
@@ -61,37 +62,6 @@ macros::aarch64_define_bitops!(
     ),
     (u8, i8, vmovq_n_s8),
 );
-
-impl ZipUnzip for u8x16 {
-    #[inline(always)]
-    fn zip(halves: LoHi<<Self as SplitJoin>::Halved>) -> Self {
-        use crate::SIMDVector;
-        // SAFETY: Caller asserts that these intrinsics match the element types.
-        unsafe {
-            let lo_raw = halves.lo.to_underlying();
-            let hi_raw = halves.hi.to_underlying();
-            <Self as SplitJoin>::join(LoHi::new(
-                u8x8::from_underlying(halves.lo.arch(), vzip1_u8(lo_raw, hi_raw)),
-                u8x8::from_underlying(halves.lo.arch(), vzip2_u8(lo_raw, hi_raw)),
-            ))
-        }
-    }
-
-    #[inline(always)]
-    fn unzip(self) -> LoHi<<Self as SplitJoin>::Halved> {
-        use crate::SIMDVector;
-        // SAFETY: Caller asserts that these intrinsics match the element types.
-        unsafe {
-            let halves = self.split();
-            let lo_raw = halves.lo.to_underlying();
-            let hi_raw = halves.hi.to_underlying();
-            LoHi::new(
-                u8x8::from_underlying(self.arch(), vuzp1_u8(lo_raw, hi_raw)),
-                u8x8::from_underlying(self.arch(), vuzp2_u8(lo_raw, hi_raw)),
-            )
-        }
-    }
-}
 
 ///////////
 // Tests //
