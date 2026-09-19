@@ -105,6 +105,15 @@ pub enum TrainError {
     AllocatorError(#[from] AllocatorError),
 }
 
+#[derive(Debug, Clone, Copy, Error, PartialEq)]
+#[non_exhaustive]
+pub enum CentroidDistanceError {
+    #[error("centroid distance is not finite")]
+    NonFiniteDistance,
+    #[error("expected centroid to have length {expected}")]
+    DimensionMismatch { expected: usize },
+}
+
 impl<A> SphericalQuantizer<A>
 where
     A: Allocator,
@@ -143,6 +152,53 @@ where
     /// A value of 1.0 means that no scaling is occurring.
     pub fn pre_scale(&self) -> Positive<f32> {
         self.pre_scale
+    }
+
+    /// Compute the effective squared L2 distance of `centroid` relative to the
+    /// quantizer's internal shift.
+    ///
+    /// Metric-specific adjustments are applied consistently with vector compression,
+    /// so this generally differs from the direct squared L2 distance between
+    /// `centroid` and [`Self::shift`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `centroid.len()` is not equal to [`Self::input_dim`] or
+    /// the computed distance is non-finite.
+    pub fn centroid_squared_distance(
+        &self,
+        centroid: &[f32],
+    ) -> Result<f32, CentroidDistanceError> {
+        if centroid.len() != self.input_dim() {
+            return Err(CentroidDistanceError::DimensionMismatch {
+                expected: self.input_dim(),
+            });
+        }
+
+        let multiplier = match self.metric {
+            SupportedMetric::Cosine => {
+                let norm = (FastL2Norm).evaluate(centroid);
+                if norm == 0.0 { 1.0 } else { 1.0 / norm }
+            }
+            SupportedMetric::SquaredL2 | SupportedMetric::InnerProduct => {
+                self.pre_scale.into_inner()
+            }
+        };
+
+        let distance = centroid
+            .iter()
+            .zip(self.shift.iter())
+            .map(|(&candidate, &shift)| {
+                let delta = multiplier * candidate - shift;
+                delta * delta
+            })
+            .sum::<f32>();
+
+        if !distance.is_finite() {
+            return Err(CentroidDistanceError::NonFiniteDistance);
+        }
+
+        Ok(distance)
     }
 
     /// Return a reference to the allocator used by this data structure.
@@ -1379,6 +1435,22 @@ mod tests {
         }
     }
 
+    fn assert_centroid_distance_matches_preprocess(quantizer: &SphericalQuantizer, vector: &[f32]) {
+        let preprocessed = quantizer
+            .preprocess(vector, ScopedAllocator::global())
+            .unwrap();
+        let expected = preprocessed.shifted_norm * preprocessed.shifted_norm;
+        let actual = quantizer.centroid_squared_distance(vector).unwrap();
+        let tolerance = 2.0e-6 * expected.abs().max(1.0);
+
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "centroid squared distance should match preprocess shifted norm: got {}, expected {}",
+            actual,
+            expected,
+        );
+    }
+
     fn test_l2<const Q: usize, const D: usize, Perm>(
         setup: &Setup,
         problem: &test_util::TestProblem,
@@ -1429,6 +1501,8 @@ mod tests {
         for _ in 0..setup.num_trials {
             let i = distribution.sample(rng);
             let v = problem.data.row(i);
+
+            assert_centroid_distance_matches_preprocess(&quantizer, v);
 
             quantizer
                 .compress_into_with(v, b.reborrow_mut(), scoped_global)
@@ -1678,6 +1752,8 @@ mod tests {
             let i = distribution.sample(rng);
             let v = problem.data.row(i);
 
+            assert_centroid_distance_matches_preprocess(&quantizer, v);
+
             quantizer
                 .compress_into_with(v, b.reborrow_mut(), scoped_global)
                 .unwrap();
@@ -1913,6 +1989,8 @@ mod tests {
                 .iter()
                 .map(|i| if vnorm == 0.0 { 0.0 } else { *i / vnorm })
                 .collect();
+
+            assert_centroid_distance_matches_preprocess(&quantizer, v);
 
             quantizer
                 .compress_into_with(v, b.reborrow_mut(), scoped_global)
@@ -2530,6 +2608,33 @@ mod tests {
                 .compress_into_with(data, v.reborrow_mut(), ScopedAllocator::global())
                 .is_ok(),
             "if this failed, the likely culprit is exceeding the value of the 16-bit correction terms"
+        );
+    }
+
+    #[test]
+    fn centroid_squared_distance_validates_input() {
+        let quantizer = SphericalQuantizer::generate(
+            Poly::from_iter([2.0f32, 4.0].into_iter(), GlobalAllocator).unwrap(),
+            1.0,
+            TransformKind::Null,
+            SupportedMetric::SquaredL2,
+            Some(1.0),
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[2.0]),
+            Err(CentroidDistanceError::DimensionMismatch { expected: 2 })
+        );
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[f32::NAN, 4.0]),
+            Err(CentroidDistanceError::NonFiniteDistance)
+        );
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[f32::MAX, f32::MAX]),
+            Err(CentroidDistanceError::NonFiniteDistance)
         );
     }
 }
