@@ -28,6 +28,7 @@ macros::aarch64_define_register!(f32x4, float32x4_t, mask32x4, f32, 4, Neon);
 macros::aarch64_define_splat!(f32x4, vmovq_n_f32);
 macros::aarch64_define_loadstore!(f32x4, vld1q_f32, internal::load_first::f32x4, vst1q_f32, 4);
 macros::aarch64_splitjoin!(f32x4, f32x2, vget_low_f32, vget_high_f32, vcombine_f32);
+macros::aarch64_zipunzip!(f32x4, f32x2, vzip1_f32, vzip2_f32, vuzp1_f32, vuzp2_f32);
 
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Add, add, vaddq_f32, "neon");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Sub, sub, vsubq_f32, "neon");
@@ -201,6 +202,7 @@ mod tests {
     test_utils::ops::test_abs!(f32x4, 0xb8f702ba85375041, test_neon());
     test_utils::ops::test_minmax!(f32x4, 0x6d7fc8ed6d852187, test_neon());
     test_utils::ops::test_splitjoin!(f32x4 => f32x2, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(f32x4 => f32x2, 0x2b5dbfb2cadbd75c, test_neon());
 
     test_utils::ops::test_cmp!(f32x4, 0xc4f468b224622326, test_neon());
     test_utils::ops::test_select!(f32x4, 0xef24013b8578637c, test_neon());

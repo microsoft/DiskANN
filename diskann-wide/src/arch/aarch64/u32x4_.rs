@@ -13,7 +13,7 @@ use super::{
     Neon, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x4,
-    u8x16,
+    u8x16, u32x2,
 };
 
 // AArch64 intrinsics
@@ -26,6 +26,8 @@ use std::arch::{aarch64::*, asm};
 macros::aarch64_define_register!(u32x4, uint32x4_t, mask32x4, u32, 4, Neon);
 macros::aarch64_define_splat!(u32x4, vmovq_n_u32);
 macros::aarch64_define_loadstore!(u32x4, vld1q_u32, internal::load_first::u32x4, vst1q_u32, 4);
+macros::aarch64_splitjoin!(u32x4, u32x2, vget_low_u32, vget_high_u32, vcombine_u32);
+macros::aarch64_zipunzip!(u32x4, u32x2, vzip1_u32, vzip2_u32, vuzp1_u32, vuzp2_u32);
 
 helpers::unsafe_map_binary_op!(u32x4, std::ops::Add, add, vaddq_u32, "neon");
 helpers::unsafe_map_binary_op!(u32x4, std::ops::Sub, sub, vsubq_u32, "neon");
@@ -150,6 +152,8 @@ mod tests {
     test_utils::ops::test_sub!(u32x4, 0xfc627f10b5f8db8a, test_neon());
     test_utils::ops::test_mul!(u32x4, 0x0f4caa80eceaa523, test_neon());
     test_utils::ops::test_fma!(u32x4, 0xb8f702ba85375041, test_neon());
+    test_utils::ops::test_splitjoin!(u32x4 => u32x2, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(u32x4 => u32x2, 0x61c5d598ac4fb304, test_neon());
 
     test_utils::ops::test_cmp!(u32x4, 0x941757bd5cc641a1, test_neon());
 
