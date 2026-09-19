@@ -10,7 +10,9 @@ use std::num::NonZeroUsize;
 use diskann::ANNError;
 use thiserror::Error;
 
-use super::QuantizationType;
+#[cfg(feature = "pipnn")]
+use super::PiPNNParameters;
+use super::{BuildAlgorithm, QuantizationType};
 
 use crate::error::{diskann_error, ErrorKind};
 
@@ -107,9 +109,10 @@ impl NumPQChunks {
 }
 
 /// Parameters specific for disk index construction.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct DiskIndexBuildParameters {
-    /// Limit on the memory allowed for building the index.
+    /// Memory budget for disk-index stages that support bounded work.
+    /// PiPNN always uses its one-shot graph build.
     build_memory_limit: MemoryBudget,
 
     /// Number of PQ chunks stored in-memory for search and to be generated during build.
@@ -120,6 +123,9 @@ pub struct DiskIndexBuildParameters {
 
     /// Number of vectors processed per data-compression chunk.
     data_compression_chunk_vector_count: usize,
+
+    /// Which graph construction algorithm to use.
+    build_algorithm: BuildAlgorithm,
 }
 
 impl DiskIndexBuildParameters {
@@ -134,6 +140,26 @@ impl DiskIndexBuildParameters {
             search_pq_chunks,
             build_quantization,
             data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
+            build_algorithm: BuildAlgorithm::default(),
+        }
+    }
+
+    /// Create parameters for one-shot PiPNN graph construction.
+    ///
+    /// PiPNN uses the common search-PQ and disk layout. The memory budget does
+    /// not limit its one-shot graph build.
+    #[cfg(feature = "pipnn")]
+    pub fn new_pipnn(
+        build_memory_limit: MemoryBudget,
+        search_pq_chunks: NumPQChunks,
+        config: PiPNNParameters,
+    ) -> Self {
+        Self {
+            build_memory_limit,
+            search_pq_chunks,
+            build_quantization: QuantizationType::FP,
+            data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
+            build_algorithm: BuildAlgorithm::PiPNN(config),
         }
     }
 
@@ -164,6 +190,19 @@ impl DiskIndexBuildParameters {
     /// Get the number of vectors processed per data-compression chunk.
     pub fn data_compression_chunk_vector_count(&self) -> usize {
         self.data_compression_chunk_vector_count
+    }
+
+    /// Get the graph-construction algorithm.
+    pub fn build_algorithm(&self) -> &BuildAlgorithm {
+        &self.build_algorithm
+    }
+
+    #[cfg(feature = "pipnn")]
+    pub(crate) fn pipnn_config(&self) -> Option<diskann::graph::pipnn::PiPNNConfig> {
+        match &self.build_algorithm {
+            BuildAlgorithm::PiPNN(config) => Some(config.into()),
+            BuildAlgorithm::Vamana => None,
+        }
     }
 }
 
