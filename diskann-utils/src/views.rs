@@ -1758,8 +1758,7 @@ mod tests {
         // Create a large ZST slice without taking forever on debug builds.
         let b = Box::<[Zst]>::new_uninit_slice((isize::MAX as usize) + 1);
 
-        // SAFETY: `b` truly has zero size, and all zero sized types are valid. In particualr,
-        // iT's okay to wink in a `Zst` from nowwhere, so this is safe.
+        // SAFETY: `b` has zero-sized elements, so all elements are initialized.
         let b = unsafe { b.assume_init() };
 
         let m = Matrix::column_vector(b);
