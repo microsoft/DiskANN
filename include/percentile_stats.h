@@ -33,6 +33,7 @@ struct QueryStats
     unsigned n_cmps = 0;       // # cmps
     unsigned n_cache_hits = 0; // # cache_hits
     unsigned n_hops = 0;       // # search hops
+    bool label_valid = true;   // whether at least one requested filter label was valid
 };
 
 struct TableStats

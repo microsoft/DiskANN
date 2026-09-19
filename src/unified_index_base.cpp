@@ -9,8 +9,7 @@
 namespace diskann
 {
 
-template <typename T>
-unified_index_base<T>::unified_index_base(diskann::Metric metric) : _metric(metric)
+template <typename T> unified_index_base<T>::unified_index_base(diskann::Metric metric) : _metric(metric)
 {
 }
 
@@ -26,8 +25,7 @@ template <typename T> void unified_index_base<T>::validate_header(const UnifiedI
         throw ANNException("unified_index_base: data_type mismatch with T", -1, __FUNCSIG__, __FILE__, __LINE__);
 }
 
-template <typename T>
-void unified_index_base<T>::validate_search_context(const UnifiedSearchContext &ctx) const
+template <typename T> void unified_index_base<T>::validate_search_context(const UnifiedSearchContext &ctx) const
 {
     if (ctx.query == nullptr)
         throw ANNException("UnifiedSearchContext: query == nullptr", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -41,9 +39,6 @@ void unified_index_base<T>::validate_search_context(const UnifiedSearchContext &
 
     const bool filtered = has_labels();
     const bool has_filters = !ctx.filter_labels.empty();
-    if (filtered && !has_filters)
-        throw ANNException("UnifiedSearchContext: filter_labels must be non-empty for a filtered index", -1,
-                           __FUNCSIG__, __FILE__, __LINE__);
     if (!filtered && has_filters)
         throw ANNException("UnifiedSearchContext: filter_labels must be empty for a non-filtered index", -1,
                            __FUNCSIG__, __FILE__, __LINE__);

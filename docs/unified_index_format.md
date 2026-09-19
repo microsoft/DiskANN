@@ -193,7 +193,7 @@ Replaces today's `_labels_map.txt` + `_labels_to_medoids.txt`. One row per disti
 
 `label_integer` is always written as a 4-byte little-endian unsigned integer, independent of the build-time `LabelT` template parameter (`uint16_t` values are zero-extended). This makes the on-disk dictionary self-describing and uniform across writer instantiations. Row count is implicit: read rows until `label_dictionary_len` bytes are consumed.
 
-If `header.universal_label != 0`, the dictionary MAY contain a row whose `label_integer` matches it; otherwise the universal label has no explicit dictionary entry.
+If `header.universal_label != 0`, the dictionary MUST contain a row whose `label_integer` matches it. That row supplies the universal label's filtered-search medoid.
 
 #### 2.4.2 Per-point labels
 
@@ -267,6 +267,16 @@ Present iff `HAS_MAX_BASE_NORM` (MIPS preprocessing only). Payload: byte-identic
 This change is encapsulated in a single helper (`node_read_window(N)`) so the bulk of `cached_beam_search` is unchanged.
 
 ---
+
+### 3.3 Filtered search compatibility
+
+Unified-index search preserves the legacy invalid-label behavior:
+
+- Unknown label strings are ignored when at least one requested label resolves.
+- If no requested label resolves and no universal label is configured, search completes successfully with an empty result and reports `QueryStats::label_valid == false`.
+- If no requested label resolves and a universal label is configured with its required dictionary medoid, search reports `label_valid == false` but performs an ANN search using that universal label and medoid.
+- A filtered index missing the resolved label medoid, including the universal medoid, is treated as invalid data and returns an empty successful result.
+- Supplying filter labels to an unfiltered index remains an error.
 
 ## 4. Build Path (informative)
 
