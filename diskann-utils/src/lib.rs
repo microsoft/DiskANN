@@ -8,6 +8,8 @@
 #[cfg(not(target_endian = "little"))]
 compile_error!("diskann-utils assumes little-endian targets");
 
+mod assert_contains;
+
 pub mod reborrow;
 pub use reborrow::{Reborrow, ReborrowMut};
 

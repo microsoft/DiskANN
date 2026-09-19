@@ -760,7 +760,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lazy_format;
+    use crate::{assert_contains, lazy_format};
 
     /// This function is only callable with copyable types.
     ///
@@ -857,11 +857,10 @@ mod tests {
         };
 
         let debug = format!("{:?}", x);
-        println!("debug = {}", debug);
-        assert!(debug.contains("TryFromError"));
-        assert!(debug.contains("data_len: 0"));
-        assert!(debug.contains("nrows: 1"));
-        assert!(debug.contains("ncols: 2"));
+        assert_contains!(debug, "TryFromError");
+        assert_contains!(debug, "data_len: 0");
+        assert_contains!(debug, "nrows: 1");
+        assert_contains!(debug, "ncols: 2");
     }
 
     fn make_test_matrix() -> Vec<usize> {
@@ -1314,9 +1313,12 @@ mod tests {
         assert_eq!(static_err.ncols, 3);
 
         // Test Display for TryFromErrorLight
-        let display_msg = format!("{}", static_err);
-        assert!(display_msg.contains("tried to construct a matrix view with 2 rows and 3 columns"));
-        assert!(display_msg.contains("slice of length 3"));
+        let display_msg = static_err.to_string();
+        assert_contains!(
+            display_msg,
+            "tried to construct a matrix view with 2 rows and 3 columns"
+        );
+        assert_contains!(display_msg, "slice of length 3");
 
         // Test into_inner method
         let recovered_data = err.into_inner();
@@ -1787,12 +1789,12 @@ mod tests {
         // Test Debug implementation for TryFromError
         let data = vec![1, 2, 3];
         let err = Matrix::try_from(data.into(), 2, 3).unwrap_err();
-
         let debug_str = format!("{:?}", err);
-        assert!(debug_str.contains("TryFromError"));
-        assert!(debug_str.contains("data_len: 3"));
-        assert!(debug_str.contains("nrows: 2"));
-        assert!(debug_str.contains("ncols: 3"));
+
+        assert_contains!(debug_str, "TryFromError");
+        assert_contains!(debug_str, "data_len: 3");
+        assert_contains!(debug_str, "nrows: 2");
+        assert_contains!(debug_str, "ncols: 3");
 
         // Ensure Debug doesn't require T: Debug by using a non-Debug type
         #[derive(Clone, Debug)]
@@ -1801,7 +1803,7 @@ mod tests {
         let non_debug_data: Box<[NonDebug]> = vec![NonDebug(1), NonDebug(2)].into();
         let non_debug_err = Matrix::try_from(non_debug_data, 1, 3).unwrap_err();
         let debug_str = format!("{:?}", non_debug_err);
-        assert!(debug_str.contains("TryFromError"));
+        assert_contains!(debug_str, "TryFromError");
     }
 
     // Comprehensive tests for rayon-specific functionality
