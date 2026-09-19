@@ -452,6 +452,8 @@ impl<T> DerefMut for PoolOption<T> {
 mod tests {
     use super::*;
 
+    use crate::assert_contains;
+
     #[derive(Debug)]
     struct TestItem {
         value: Box<u32>,
@@ -787,12 +789,7 @@ mod tests {
     // contains `msg`.
     fn check_error(err: &dyn std::any::Any, contains: &str) {
         match err.downcast_ref::<&'static str>() {
-            Some(msg) => assert!(
-                msg.contains(contains),
-                "failed: message \"{}\" does not contain \"{}\"",
-                msg,
-                contains
-            ),
+            Some(msg) => assert_contains!(msg, contains),
             None => panic!("incorrect downcast type"),
         }
     }
