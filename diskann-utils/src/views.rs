@@ -1755,7 +1755,14 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct Zst;
 
-        let m = Matrix::new(Zst, (isize::MAX as usize) + 1, 1);
+        // Create a large ZST slice without taking forever on debug builds.
+        let b = Box::<[Zst]>::new_uninit_slice((isize::MAX as usize) + 1);
+
+        // SAFETY: `b` truly has zero size, and all zero sized types are valid. In particualr,
+        // iT's okay to wink in a `Zst` from nowwhere, so this is safe.
+        let b = unsafe { b.assume_init() };
+
+        let m = Matrix::column_vector(b);
         let err = m.try_map(|_: &Zst| 0u8).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("isize::MAX"), "{msg}");
