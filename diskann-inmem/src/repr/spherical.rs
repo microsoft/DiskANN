@@ -522,37 +522,10 @@ mod tests {
     use super::*;
 
     use diskann::graph::test::synthetic::Grid;
+    use diskann_utils::views::MatrixView;
+    use hashbrown::HashMap;
 
-    // For the spherical quantizer tests, we use the canonical grid layout, but center the
-    // data around the origin.
-    //
-    // This allows cosine distances to return reasonable results as the data is distributed
-    // around the origin.
-    //
-    // To keep computation mostly tractable, we only use a 2d grid with 16 points. So the
-    // coordinates are as follows:
-    //
-    // 0:  [-1.5, -1.5]
-    // 1:  [-1.5, -0.5]
-    // 2:  [-1.5, +0.5]
-    // 3:  [-1.5, +1.5]
-    //
-    // 4:  [-0.5, -1.5]
-    // 5:  [-0.5, -0.5]
-    // 6:  [-0.5, +0.5]
-    // 7:  [-0.5, +1.5]
-    //
-    // 8:  [+0.5, -1.5]
-    // 9:  [+0.5, -0.5]
-    // 10: [+0.5, +0.5]
-    // 11: [+0.5, +1.5]
-    //
-    // 12: [+1.5, -1.5]
-    // 13: [+1.5, -0.5]
-    // 14: [+1.5, +0.5]
-    // 15: [+1.5, +1.5]
-    //
-    // We put two start points at [`-2.0, -2.0`] and `[+2.0, +2.0]`.
+    use crate::{num::{LogicalId, SlotId}, repr::test::Reference};
 
     #[derive(Debug)]
     enum Bits {
@@ -561,38 +534,94 @@ mod tests {
         Four,
     }
 
-    fn test_repr(metric: SupportedMetric, bits: Bits, rerank: Rerank) -> Spherical {
+    fn train_quantizer(
+        data: MatrixView<'_, f32>,
+        metric: SupportedMetric,
+        bits: Bits,
+    ) -> Poly<dyn iface::Quantizer> {
         use diskann_quantization::{algorithms::transforms, spherical};
         use rand::{SeedableRng, rngs::StdRng};
 
+        let q = spherical::SphericalQuantizer::train(
+            data.as_view(),
+            transforms::TransformKind::Null,
+            metric,
+            spherical::PreScale::None,
+            &mut StdRng::seed_from_u64(0x019823745),
+            GlobalAllocator,
+        )
+        .unwrap();
+
+        match bits {
+            Bits::One => q.as_quantizer::<1>().unwrap(),
+            Bits::Two => q.as_quantizer::<2>().unwrap(),
+            Bits::Four => q.as_quantizer::<4>().unwrap(),
+        }
+    }
+
+    // For the spherical quantizer tests, we use the canonical grid layout, but center the
+    // data around the origin.
+    //
+    // This allows cosine distances to return reasonable results as the data is distributed
+    // around the origin.
+    //
+    // To keep computation mostly tractable, we only use a 2d grid with 9 points. So the
+    // coordinates are as follows:
+    //
+    // 0:  [-1, -1]
+    // 1:  [-1,  0]
+    // 2:  [-1, +1]
+    //
+    // 3:  [ 0, -1]
+    // 4:  [ 0,  0]
+    // 5:  [ 0, +1]
+    //
+    // 6:  [+1, -1]
+    // 7:  [+1,  0]
+    // 8:  [+1, +1]
+    //
+    // We put two start points at `[-2, -2]` and `[+2, +2]`.
+    fn test_repr(
+        metric: SupportedMetric,
+        bits: Bits,
+        rerank: Rerank,
+    ) -> (Spherical, Reference) {
         let grid = Grid::Two;
-        let mut data = grid.data(4);
+        let mut data = grid.data(3);
         let offset = 1.5;
         data.as_mut_slice().iter_mut().for_each(|v| *v -= offset);
 
-        let quantizer = {
-            let q = spherical::SphericalQuantizer::train(
-                data.as_view(),
-                transforms::TransformKind::Null,
-                metric,
-                spherical::PreScale::None,
-                &mut StdRng::seed_from_u64(0x019823745),
-                GlobalAllocator,
-            )
-            .unwrap();
-            match bits {
-                Bits::One => q.as_quantizer::<1>(),
-                Bits::Two => q.as_quantizer::<2>(),
-                Bits::Four => q.as_quantizer::<4>(),
-            }
-        };
+        let quantizer = train_quantizer(data.as_view(), metric, bits);
 
         let mut start_points = Matrix::new(0.0, 2, data.ncols());
-        start_points.row(0).fill(-2.0);
-        start_points.row(1).fill(2.0);
+        start_points.row_mut(0).fill(-2.0);
+        start_points.row_mut(1).fill(2.0);
 
         let config = Spherical::config(
-
+            quantizer,
+            Capacity::new(data.nrows()),
+            MaxDegree::new(0),
+            start_points,
+            rerank,
         )
+        .unwrap();
+
+        let spherical = config.build().unwrap();
+
+        let mut reference = Reference::new(grid.dim());
+        for (i, row) in data.row_iter().enumerate() {
+            let guard = repr::Set::set(&spherical, row).unwrap();
+            let id = repr::Guard::id(&guard);
+
+            reference.insert(LogicalId(i), SlotId(id), row);
+            repr::Guard::publish(guard);
+        }
+
+        (spherical, reference)
+    }
+
+    #[test]
+    fn test_spherical() {
+        let spherical = test_repr(SupportedMetric::SquaredL2, Bits::One, Rerank::F16);
     }
 }

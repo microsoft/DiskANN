@@ -160,11 +160,11 @@ impl std::fmt::Display for Align {
 //-------------------------//
 
 macro_rules! typed_int {
-    ($(#[$doc:meta])* $vis:vis $name:ident, $T:ty $(,)?) => {
+    ($(#[$doc:meta])* $vis:vis $name:ident ($vis_inner:vis $T:ty)) => {
         $(#[$doc])*
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
         #[repr(transparent)]
-        $vis struct $name($T);
+        $vis struct $name($vis_inner $T);
 
         impl $name {
             $vis const fn new(value: $T) -> Self {
@@ -188,14 +188,12 @@ typed_int!(
     /// The number of distinct slots a [`crate::Provider`] or [`crate::repr::Representation`]
     /// has capacity for. This is logically distinct from [`IdLimit`], which may be greater
     /// due to immutable points within a storage container.
-    pub Capacity,
-    usize,
+    pub Capacity(usize)
 );
 
 typed_int!(
     /// The maximum degree of an adjacency list.
-    pub MaxDegree,
-    usize
+    pub MaxDegree(usize)
 );
 
 typed_int!(
@@ -206,8 +204,7 @@ typed_int!(
     ///
     /// [`Capacity`] is related, but the [`IdLimit`] for a collection may be larger due to
     /// immutable points.
-    pub IdLimit,
-    u32
+    pub IdLimit(u32)
 );
 
 impl IdLimit {
@@ -228,6 +225,24 @@ impl IdLimit {
         self.value() as usize
     }
 }
+
+//-----------//
+// Test Only //
+//-----------//
+
+#[cfg(test)]
+typed_int!(
+    /// Used in test data structures to track the logical ID of an entry.
+    #[derive(Hash)]
+    pub(crate) LogicalId(pub(crate) usize)
+);
+
+#[cfg(test)]
+typed_int!(
+    /// Used in test data structures to track the logical ID of an entry.
+    #[derive(Hash)]
+    pub(crate) SlotId(pub(crate) u32)
+);
 
 ///////////
 // Tests //

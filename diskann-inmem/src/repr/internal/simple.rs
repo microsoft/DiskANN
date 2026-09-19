@@ -80,13 +80,13 @@ where
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
-
     use diskann::utils::IntoUsize;
+    use hashbrown::HashMap;
 
     use crate::{
         counters::Counters,
-        num::{Bytes, Capacity, MaxDegree},
+        num::{Bytes, Capacity, LogicalId, MaxDegree, SlotId},
+        repr::test::Reference,
         store::{self, Store},
         test::Sequencer,
     };
@@ -95,7 +95,7 @@ mod tests {
     fn test_simple_rerank() {
         // Since we don't necessarily guarantee monotonic slot accesses, this hash map
         // serves as a translation layer for slot ids to the expected payload.
-        let mut map = HashMap::<u32, f32>::new();
+        let mut map = Reference::new(1);
 
         let store = Store::new(
             store::Layout::new(Capacity::new(10), MaxDegree::new(0), 0),
@@ -104,11 +104,18 @@ mod tests {
         )
         .unwrap();
 
-        for i in 0..10 {
-            let v = (9 - i) as f32;
+        // Insert in reverse order to decouple logical ids from slot ids.
+        for i in (0..10).rev() {
+            let v = i as f32;
 
             let mut exclusive = store.acquire().unwrap();
-            assert!(map.insert(exclusive.slot(), v).is_none());
+
+            map.insert(
+                LogicalId(i),
+                SlotId(exclusive.slot()),
+                std::slice::from_ref(&v),
+            );
+
             exclusive
                 .data()
                 .as_mut_slice()
@@ -143,7 +150,9 @@ mod tests {
             );
 
             // Verify that the ID matches what we think it should.
-            assert_eq!(map[n.id()], i as f32);
+            let slot = SlotId(*n.id());
+            assert_eq!(map.logical_id_for(slot), LogicalId(i));
+            assert_eq!(map[slot], [i as f32]);
         }
 
         // Multi-threaded.
@@ -154,40 +163,35 @@ mod tests {
 
         std::thread::scope(|s| {
             s.spawn(|| {
-                for (id, v) in map.iter() {
-                    if (*v as u32).is_multiple_of(2) {
-                        store.retire(id.into_usize()).unwrap();
-                    }
+                for id in (0..10).step_by(2) {
+                    store
+                        .retire(map.slot_id_for(LogicalId(id)).value().into_usize())
+                        .unwrap()
                 }
-
-                seq.wait_for(0);
             });
-
-            // Wait until we know the IDs have been deleted.
-            seq.until_waiting_for(0);
-
-            // Now rerank again - all even distances should be filtered out.
-            repr::PostProcess::post_process(&mut reranker, &mut neighbors).unwrap();
-
-            // Check that everything is in the right order.
-            //
-            // We expect these to be by increasing distance. Since we inserted floating point
-            // values from 0 to 9, we expected distances from -1 to 8.
-            assert_eq!(neighbors.len(), 5);
-            for (i, n) in neighbors.iter().enumerate() {
-                assert_eq!(
-                    *n.distance(),
-                    -1.0 + ((2 * i + 1) as f32),
-                    "mismatch for id {} at position {}",
-                    n.id(),
-                    i
-                );
-
-                // Verify that the ID matches what we think it should.
-                assert_eq!(map[n.id()], (2 * i + 1) as f32);
-            }
-
-            seq.advance_past(0);
         });
+
+        // Now rerank again - all even distances should be filtered out.
+        repr::PostProcess::post_process(&mut reranker, &mut neighbors).unwrap();
+
+        // Check that everything is in the right order.
+        //
+        // We expect these to be by increasing distance. Since we inserted floating point
+        // values from 0 to 9, we expected distances from -1 to 8.
+        assert_eq!(neighbors.len(), 5);
+        for (i, n) in neighbors.iter().enumerate() {
+            assert_eq!(
+                *n.distance(),
+                -1.0 + ((2 * i + 1) as f32),
+                "mismatch for id {} at position {}",
+                n.id(),
+                i
+            );
+
+            // Verify that the ID matches what we think it should.
+            let slot = SlotId(*n.id());
+            assert_eq!(map.logical_id_for(slot), LogicalId(2 * i + 1));
+            assert_eq!(map[slot], [(2 * i + 1) as f32]);
+        }
     }
 }
