@@ -16,62 +16,80 @@ use crate::{
 
 /// A view over packed memory.
 ///
-/// Elements are gathered into groups of size `SZ`. A collection of `self.k` groups forms
-/// a "block". `self.blocks` tracks how many such blocks are in the view.
-///
-/// This layout requires that no block is partially filled.
+/// Each block contains `SZ` bands of `k` padded scalar columns. Within a block,
+/// `PACK` adjacent elements of each band are contiguous before advancing to the next
+/// band. There are `k / PACK` groups of `SZ * PACK` elements, regardless of element type.
+/// See [`BlockTransposedRef`] for the physical layout. No block may be partially filled.
 ///
 /// # Class Invariants
 ///
 /// * The tracked length `ptr.len()` must be equal to `SZ * blocks * k`.
 /// * `SZ` may not be zero.
+/// * `PACK` may not be zero and must divide both `SZ` and `k`.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct View<'a, T, const SZ: usize> {
+pub(crate) struct View<'a, T, const SZ: usize, const PACK: usize = 1> {
     ptr: Slice<'a, T>,
     blocks: NonZeroUsize,
     k: Bound,
 }
 
-impl<'a, T, const SZ: usize> View<'a, T, SZ> {
+impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
+    /// Compile-time layout constraints shared by every constructor.
+    const ASSERTIONS: () = {
+        assert!(SZ > 0, "group size may not be zero");
+        assert!(PACK > 0, "packing factor may not be zero");
+        assert!(
+            SZ.is_multiple_of(PACK),
+            "the group size must be a multiple of PACK"
+        );
+    };
+
     /// Construct a [`View`] from a [`BlockTransposedRef`].
     ///
     /// The mapping of parameters is as follows:
     ///
     /// * The group size `SZ` is taken from the `GROUP` const-generic on [`BlockTransposedRef`].
-    /// * The number of groups in each block is [`BlockTransposedRef::ncols`].
+    /// * The packing factor `PACK` is taken from the `PACK` const-generic.
+    /// * `k` is [`BlockTransposedRef::padded_ncols`], the physical scalar column count.
     /// * The number of blocks is [`BlockTransposedRef::num_blocks`].
     ///
     /// Returns `None` if any of the runtime values is zero.
-    pub(crate) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ>) -> Option<Self>
+    pub(crate) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ, PACK>) -> Option<Self>
     where
         T: Copy,
     {
-        if SZ == 0 {
+        if SZ == 0 || PACK == 0 {
             return None;
         }
 
         let blocks = NonZeroUsize::new(v.num_blocks())?;
-        let k = DimK::new(NonZeroUsize::new(v.ncols())?);
+        let k = DimK::new(NonZeroUsize::new(v.padded_ncols())?);
 
         // SAFETY: `BlockTransposedRef` ensures the underlying slice has a length of
-        // exactly `SZ * blocks * k`.
+        // exactly `SZ * blocks * padded_ncols`.
         Some(unsafe { Self::new(Slice::new(v.as_slice()), blocks, k) })
     }
 
     /// # Safety
     ///
-    /// `ptr.len()` must be exactly equal to `SZ * blocks * k`.
+    /// `ptr.len()` must be exactly equal to `SZ * blocks * k`, and `k % PACK == 0`.
     pub(in crate::matrix_kernels) unsafe fn new(
         ptr: Slice<'a, T>,
         blocks: NonZeroUsize,
         k: DimK,
     ) -> Self {
+        let () = Self::ASSERTIONS;
         bounds::check_eq!(
             ptr.len(),
             blocks.get() * SZ * k.value().get(),
             "invalid block-transposed access",
         );
         bounds::check_lt!(Bound::new(0), SZ, "group size may not be zero.",);
+        bounds::check_eq!(
+            Bound::new(k.value().get() % PACK),
+            0,
+            "k must be a multiple of the packing factor",
+        );
 
         // SAFETY: Inherited from caller.
         unsafe { Self::new_inner(ptr, blocks, Bound::new(k.value().get())) }
@@ -79,14 +97,22 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 
     /// # Safety
     ///
-    /// `ptr.len()` must be exactly equal to `SZ * blocks * k`.
+    /// `ptr.len()` must be exactly equal to `SZ * blocks * k`, and `k % PACK == 0`.
     unsafe fn new_inner(ptr: Slice<'a, T>, blocks: NonZeroUsize, k: Bound) -> Self {
+        let () = Self::ASSERTIONS;
         bounds::check_eq!(
             ptr.len(),
             Bound::new(blocks.get()) * Bound::new(SZ) * k,
             "invalid block-transposed access",
         );
         bounds::check_lt!(Bound::new(0), SZ, "group size may not be zero.",);
+        k.with(|k| {
+            bounds::check_eq!(
+                Bound::new(k % PACK),
+                0,
+                "k must be a multiple of the packing factor",
+            );
+        });
 
         Self { ptr, blocks, k }
     }
@@ -135,7 +161,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         k: DimK,
         mut f: F,
     ) where
-        F: FnMut(View<'_, T, SZ>, usize),
+        F: FnMut(View<'_, T, SZ, PACK>, usize),
     {
         let stride = self.block_stride(k);
 
@@ -181,7 +207,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
     /// The bound [`Self::k`] must be equal to `k`.
     pub(in crate::matrix_kernels) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
     where
-        F: FnMut(Panel<'_, T, SZ>, usize),
+        F: FnMut(Panel<'_, T, SZ, PACK>, usize),
     {
         let stride = self.block_stride(k);
         for b in 0..self.blocks().get() {
@@ -202,10 +228,10 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 }
 
 #[cfg(test)]
-impl<'a, T, const SZ: usize> View<'a, T, SZ> {
+impl<T, const SZ: usize, const PACK: usize> View<'_, T, SZ, PACK> {
     fn checked_visit_sub_views<F>(&self, sub_blocks: NonZeroUsize, f: F)
     where
-        F: FnMut(View<'_, T, SZ>, usize),
+        F: FnMut(View<'_, T, SZ, PACK>, usize),
     {
         let k = DimK::from_bound(self.k());
         // SAFETY: Checked in test builds.
@@ -214,7 +240,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 
     fn checked_visit_panels<F>(&self, f: F)
     where
-        F: FnMut(Panel<'_, T, SZ>, usize),
+        F: FnMut(Panel<'_, T, SZ, PACK>, usize),
     {
         let k = DimK::from_bound(self.k());
         // SAFETY: Checked in test builds.
@@ -226,21 +252,23 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 // Panel //
 //-------//
 
-/// A block containing `k` contiguous groups of size `SZ`.
+/// A block containing `k` contiguous columns of `SZ` bands.
+///
+/// Elements are grouped `PACK` columns at a time; see [`View`] for the layout description.
 ///
 /// # Class Invariants
 ///
-/// The bound `ptr.len()` must be equal to `SZ * k`.
+/// The bound `ptr.len()` must be equal to `SZ * k`, and `k % PACK == 0`.
 #[derive(Debug, Clone, Copy)]
-pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize> {
+pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize, const PACK: usize = 1> {
     ptr: Slice<'a, T>,
     k: Bound,
 }
 
-impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
+impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     /// # Safety
     ///
-    /// `ptr.len()` must be equal to `SZ * k`.
+    /// `ptr.len()` must be equal to `SZ * k`, and `k % PACK == 0`.
     #[cfg(test)]
     pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
         bounds::check_eq!(ptr.len(), SZ * k.value().get());
@@ -250,9 +278,24 @@ impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
 
     /// # Safety
     ///
-    /// `ptr.len()` must be equal to `SZ * k`.
+    /// `ptr.len()` must be equal to `SZ * k`, and `k % PACK == 0`.
     unsafe fn new_inner(ptr: Slice<'a, T>, k: Bound) -> Self {
-        k.with(|k| bounds::check_eq!(ptr.len(), SZ * k));
+        const {
+            assert!(SZ > 0, "group size may not be zero");
+            assert!(PACK > 0, "packing factor may not be zero");
+            assert!(
+                SZ.is_multiple_of(PACK),
+                "the group size must be a multiple of PACK"
+            );
+        }
+        k.with(|k| {
+            bounds::check_eq!(ptr.len(), SZ * k);
+            bounds::check_eq!(
+                Bound::new(k % PACK),
+                0,
+                "k must be a multiple of the packing factor"
+            );
+        });
 
         Self { ptr, k }
     }
@@ -268,14 +311,39 @@ impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
     pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
+
+    /// Return the span for dot-product group `group`.
+    ///
+    /// Group `g` covers columns `[g * PACK, (g + 1) * PACK)` of every band and therefore
+    /// occupies `SZ * PACK` contiguous elements starting at `group * SZ * PACK`.
+    ///
+    /// # Safety
+    ///
+    /// `group` must be strictly less than `k / PACK`, where `k` is the contraction
+    /// dimension tracked by [`Self::k`].
+    pub(in crate::matrix_kernels) unsafe fn group(&self, group: usize) -> Slice<'a, T> {
+        // SAFETY: `group * SZ * PACK + SZ * PACK <= SZ * k` follows from the caller's
+        // guarantee that `group < k / PACK`.
+        unsafe {
+            self.ptr
+                .add(Elements::new(group * SZ * PACK))
+                .truncate(Elements::new(SZ * PACK))
+        }
+    }
 }
 
 #[cfg(test)]
-impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
+impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     fn checked_as_std_slice(self) -> &'a [T] {
         let len = SZ * self.k().value();
         // SAFETY: Bounds are retained under `cfg(test)`.
         unsafe { self.ptr.as_std_slice(len) }
+    }
+
+    fn checked_group(self, group: usize) -> Slice<'a, T> {
+        assert!(group < self.k().value() / PACK);
+        // SAFETY: Checked immediately above.
+        unsafe { self.group(group) }
     }
 }
 
@@ -299,24 +367,41 @@ mod tests {
                 let k = NonZeroUsize::new(k).unwrap();
                 let ctx = format_args!("blocks = {blocks}, k = {k}");
 
-                test_visit_panels_inner::<1>(blocks, k, ctx);
-                test_visit_panels_inner::<3>(blocks, k, ctx);
-                test_visit_panels_inner::<4>(blocks, k, ctx);
+                test_visit_panels_inner::<1, 1>(blocks, k, ctx);
+                test_visit_panels_inner::<3, 1>(blocks, k, ctx);
+                test_visit_panels_inner::<4, 1>(blocks, k, ctx);
+            }
+        }
+
+        // `PACK > 1` requires `k` to be a multiple of `PACK`.
+        for blocks in (1..20).step_by(3) {
+            for groups in 1..6 {
+                let blocks = NonZeroUsize::new(blocks).unwrap();
+                let ctx = format_args!("blocks = {blocks}, groups = {groups}");
+
+                let k4 = NonZeroUsize::new(4 * groups).unwrap();
+                test_visit_panels_inner::<4, 4>(blocks, k4, ctx);
+                test_visit_panels_inner::<8, 4>(blocks, k4, ctx);
+                test_visit_panels_inner::<16, 4>(blocks, k4, ctx);
+
+                let k8 = NonZeroUsize::new(8 * groups).unwrap();
+                test_visit_panels_inner::<8, 8>(blocks, k8, ctx);
+                test_visit_panels_inner::<16, 8>(blocks, k8, ctx);
             }
         }
     }
 
-    fn test_visit_panels_inner<const SZ: usize>(
+    fn test_visit_panels_inner<const SZ: usize, const PACK: usize>(
         blocks: NonZeroUsize,
         k: NonZeroUsize,
         ctx: std::fmt::Arguments<'_>,
     ) {
         let matrix = test_matrix(blocks.get() * SZ, k.get());
-        let packed = pack::<SZ>(matrix.as_view());
+        let packed = pack::<SZ, PACK>(matrix.as_view());
         let dim_k = DimK::new(k);
 
         // SAFETY: `packed` contains `blocks` complete blocks of `SZ` rows and `k` columns.
-        let view = unsafe { View::<_, SZ>::new(Slice::new(&packed), blocks, dim_k) };
+        let view = unsafe { View::<_, SZ, PACK>::new(Slice::new(&packed), blocks, dim_k) };
 
         assert_eq!(view.blocks(), blocks, "{ctx}");
         assert_eq!(view.extent().get(), matrix.nrows(), "{ctx}");
@@ -345,23 +430,37 @@ mod tests {
                 let k = NonZeroUsize::new(k).unwrap();
                 let ctx = format_args!("blocks = {blocks}, k = {k}");
 
-                test_visit_sub_views_inner::<1>(blocks, k, ctx);
-                test_visit_sub_views_inner::<3>(blocks, k, ctx);
-                test_visit_sub_views_inner::<4>(blocks, k, ctx);
+                test_visit_sub_views_inner::<1, 1>(blocks, k, ctx);
+                test_visit_sub_views_inner::<3, 1>(blocks, k, ctx);
+                test_visit_sub_views_inner::<4, 1>(blocks, k, ctx);
+            }
+        }
+
+        for blocks in (1..20).step_by(3) {
+            for groups in 1..5 {
+                let blocks = NonZeroUsize::new(blocks).unwrap();
+                let ctx = format_args!("blocks = {blocks}, groups = {groups}");
+
+                let k4 = NonZeroUsize::new(4 * groups).unwrap();
+                test_visit_sub_views_inner::<4, 4>(blocks, k4, ctx);
+                test_visit_sub_views_inner::<16, 4>(blocks, k4, ctx);
+
+                let k8 = NonZeroUsize::new(8 * groups).unwrap();
+                test_visit_sub_views_inner::<16, 8>(blocks, k8, ctx);
             }
         }
     }
 
-    fn test_visit_sub_views_inner<const SZ: usize>(
+    fn test_visit_sub_views_inner<const SZ: usize, const PACK: usize>(
         blocks: NonZeroUsize,
         k: NonZeroUsize,
         ctx: std::fmt::Arguments<'_>,
     ) {
         let matrix = test_matrix(blocks.get() * SZ, k.get());
-        let packed = pack::<SZ>(matrix.as_view());
+        let packed = pack::<SZ, PACK>(matrix.as_view());
 
         // SAFETY: `packed` contains `blocks` complete blocks of `SZ` rows and `k` columns.
-        let view = unsafe { View::<_, SZ>::new(Slice::new(&packed), blocks, DimK::new(k)) };
+        let view = unsafe { View::<_, SZ, PACK>::new(Slice::new(&packed), blocks, DimK::new(k)) };
 
         let sub_blocks = [
             1,
@@ -403,8 +502,8 @@ mod tests {
         }
     }
 
-    fn assert_panel<const SZ: usize>(
-        panel: Panel<'_, f32, SZ>,
+    fn assert_panel<const SZ: usize, const PACK: usize>(
+        panel: Panel<'_, f32, SZ, PACK>,
         reference: MatrixView<'_, f32>,
         block: usize,
         ctx: std::fmt::Arguments<'_>,
@@ -416,8 +515,10 @@ mod tests {
 
         for col in 0..k {
             for row in 0..SZ {
+                // Independently derived physical index for `(row, col)` inside a panel.
+                let index = (col / PACK) * SZ * PACK + row * PACK + col % PACK;
                 assert_eq!(
-                    packed[col * SZ + row],
+                    packed[index],
                     reference[(block * SZ + row, col)],
                     "{ctx}, block = {block}, row = {row}, col = {col}",
                 );
@@ -496,18 +597,122 @@ mod tests {
         )
     }
 
-    fn pack<const SZ: usize>(matrix: MatrixView<'_, f32>) -> Vec<f32> {
+    fn pack<const SZ: usize, const PACK: usize>(matrix: MatrixView<'_, f32>) -> Vec<f32> {
         assert!(matrix.nrows().is_multiple_of(SZ));
+        assert!(matrix.ncols().is_multiple_of(PACK));
 
         let mut packed = Vec::with_capacity(matrix.as_slice().len());
         for block in 0..matrix.nrows() / SZ {
-            for col in 0..matrix.ncols() {
+            for group in 0..matrix.ncols() / PACK {
                 for row in 0..SZ {
-                    packed.push(matrix[(block * SZ + row, col)]);
+                    for lane in 0..PACK {
+                        packed.push(matrix[(block * SZ + row, group * PACK + lane)]);
+                    }
                 }
             }
         }
 
         packed
+    }
+
+    #[test]
+    fn test_group_spans_cover_each_panel_exactly_once() {
+        check_group_spans::<4, 1>();
+        check_group_spans::<8, 4>();
+        check_group_spans::<16, 4>();
+        check_group_spans::<16, 8>();
+    }
+
+    fn check_group_spans<const SZ: usize, const PACK: usize>() {
+        for groups in 1..5 {
+            let k = NonZeroUsize::new(groups * PACK).unwrap();
+            let blocks = NonZeroUsize::new(3).unwrap();
+            let matrix = test_matrix(blocks.get() * SZ, k.get());
+            let packed = pack::<SZ, PACK>(matrix.as_view());
+
+            // SAFETY: `packed` holds `blocks` complete blocks of `SZ` rows and `k` columns.
+            let view =
+                unsafe { View::<_, SZ, PACK>::new(Slice::new(&packed), blocks, DimK::new(k)) };
+
+            view.checked_visit_panels(|panel, block| {
+                for group in 0..groups {
+                    let span = panel.checked_group(group);
+                    assert_eq!(span.len().value(), SZ * PACK);
+
+                    // SAFETY: `group` returns exactly `SZ * PACK` elements.
+                    let span = unsafe { span.as_std_slice(SZ * PACK) };
+                    for row in 0..SZ {
+                        for lane in 0..PACK {
+                            assert_eq!(
+                                span[row * PACK + lane],
+                                matrix[(block * SZ + row, group * PACK + lane)],
+                                "SZ = {SZ}, PACK = {PACK}, group = {group}",
+                            );
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn test_from_block_transposed_uses_padded_columns() {
+        check_from_block_transposed::<4, 1>();
+        check_from_block_transposed::<8, 4>();
+        check_from_block_transposed::<16, 8>();
+    }
+
+    fn check_from_block_transposed<const SZ: usize, const PACK: usize>() {
+        use crate::multi_vector::BlockTransposed;
+
+        for nrows in [1, SZ - 1, SZ, SZ + 1, 2 * SZ + 1] {
+            for ncols in 1..(3 * PACK + 2) {
+                let mut matrix = BlockTransposed::<f32, SZ, PACK>::new(nrows, ncols);
+                for row in 0..nrows {
+                    let mut row_mut = matrix.get_row_mut(row).unwrap();
+                    for col in 0..ncols {
+                        row_mut.set(col, (row * 1000 + col) as f32);
+                    }
+                }
+
+                let view = View::<_, SZ, PACK>::from_block_transposed(matrix.as_view()).unwrap();
+
+                assert_eq!(view.blocks().get(), nrows.div_ceil(SZ));
+                assert_eq!(view.k().value(), ncols.next_multiple_of(PACK));
+
+                view.checked_visit_panels(|panel, block| {
+                    let packed = panel.checked_as_std_slice();
+                    for row in 0..SZ {
+                        for col in 0..ncols.next_multiple_of(PACK) {
+                            let index = (col / PACK) * SZ * PACK + row * PACK + col % PACK;
+                            let logical = block * SZ + row;
+                            if logical < nrows && col < ncols {
+                                assert_eq!(packed[index], (logical * 1000 + col) as f32);
+                            } else {
+                                assert_eq!(packed[index], 0.0);
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_rejects_k_not_multiple_of_pack() {
+        let data = [0u8; 24];
+        let blocks = NonZeroUsize::new(2).unwrap();
+        let k = DimK::new(NonZeroUsize::new(3).unwrap());
+
+        let message = panic_message_for(|| {
+            // SAFETY: The deliberate `k % PACK != 0` violation is caught under `cfg(test)`.
+            let _ = unsafe { View::<_, 4, 2>::new(Slice::new(&data), blocks, k) };
+        });
+        assert_contains!(message, "k must be a multiple of the packing factor");
+        let message = panic_message_for(|| {
+            // SAFETY: The invalid packing dimension is checked before accessing the data.
+            let _ = unsafe { Panel::<_, 4, 2>::new(Slice::new(&data[..12]), k) };
+        });
+        assert_contains!(message, "k must be a multiple of the packing factor");
     }
 }
