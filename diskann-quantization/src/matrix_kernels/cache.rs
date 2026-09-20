@@ -66,6 +66,22 @@ fn detect_uncached() -> Option<CacheInfo> {
     None
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[cfg(not(miri))]
+    fn detects_current_cache() {
+        let info = super::cache_info()
+            .expect("expected L1d and L2 cache detection to succeed on this host");
+        println!(
+            "Detected cache sizes (bytes): L1d={}, L2={}",
+            info.l1d_bytes, info.l2_bytes,
+        );
+        assert!(info.l1d_bytes > 0, "{info:?}");
+        assert!(info.l2_bytes > 0, "{info:?}");
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use std::fs;

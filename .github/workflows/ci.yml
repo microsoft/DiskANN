@@ -460,6 +460,9 @@ jobs:
           cargo nextest run --locked --workspace --config "$RUST_CONFIG"
           cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
+      - name: Report detected cache sizes
+        run: cargo test --locked -p diskann-quantization --lib --config "$RUST_CONFIG" matrix_kernels::cache::tests::detects_current_cache -- --exact --nocapture
+
   test-workspace-features:
     needs: basics
     name: test workspace (all features)
