@@ -1796,7 +1796,7 @@ mod tests {
 
         // Ensure Debug doesn't require T: Debug by using a non-Debug type
         #[derive(Clone, Debug)]
-        struct NonDebug(#[allow(dead_code)] i32);
+        struct NonDebug(#[expect(dead_code)] i32);
 
         let non_debug_data: Box<[NonDebug]> = vec![NonDebug(1), NonDebug(2)].into();
         let non_debug_err = Matrix::try_from(non_debug_data, 1, 3).unwrap_err();
