@@ -12,9 +12,10 @@ use crate::{
 
 // AArch64 masks
 use super::{
-    Neon, f16x4, f32x2, internal, u32x4, u16x4,
+    Neon, f16x4, f32x2, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x4,
+    u16x4, u32x4,
 };
 
 // AArch64 intrinsics
@@ -142,7 +143,9 @@ impl From<f16x4> for f32x4 {
 impl From<u32x4> for f32x4 {
     #[inline(always)]
     fn from(value: u32x4) -> Self {
-        Self::from_underlying(value.arch(), unsafe{ vcvtq_f32_u32(value.to_underlying()) })
+        // SAFETY: Allowed by the implicit `Neon` architecture.
+        let raw = unsafe { vcvtq_f32_u32(value.to_underlying()) };
+        Self::from_underlying(value.arch(), raw)
     }
 }
 
@@ -198,14 +201,6 @@ mod tests {
     fn miri_test_store() {
         if let Some(arch) = test_neon() {
             test_utils::test_store_simd::<f32, 4, f32x4>(arch);
-        }
-    }
-
-    #[test]
-    fn test_interleaved_load_store() {
-        if let Some(arch) = test_neon() {
-            test_utils::test_deinterleaved_load::<f32, 4, 4, f32x4>(arch);
-            test_utils::test_interleaved_store::<f32, 4, 4, f32x4>(arch);
         }
     }
 

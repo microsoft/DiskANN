@@ -8,7 +8,7 @@ use std::arch::aarch64::*;
 use half::f16;
 
 use crate::{
-    LoHi, SIMDVector, SplitJoin, ZipUnzip,
+    LoHi, SIMDVector, SplitJoin,
     doubled::{self, Doubled},
 };
 
@@ -113,35 +113,6 @@ super::macros::aarch64_zipunzip!(
     vuzp1q_u16,
     vuzp2q_u16
 );
-
-impl ZipUnzip for u8x16 {
-    #[inline(always)]
-    fn zip(halves: LoHi<<Self as SplitJoin>::Halved>) -> Self {
-        // SAFETY: The intrinsics operate on the `u8` lanes represented by both halves.
-        unsafe {
-            let lo_raw = halves.lo.to_underlying();
-            let hi_raw = halves.hi.to_underlying();
-            Self::join(LoHi::new(
-                u8x8::from_underlying(halves.lo.arch(), vzip1_u8(lo_raw, hi_raw)),
-                u8x8::from_underlying(halves.lo.arch(), vzip2_u8(lo_raw, hi_raw)),
-            ))
-        }
-    }
-
-    #[inline(always)]
-    fn unzip(self) -> LoHi<<Self as SplitJoin>::Halved> {
-        // SAFETY: The intrinsics operate on the `u8` lanes represented by both halves.
-        unsafe {
-            let halves = self.split();
-            let lo_raw = halves.lo.to_underlying();
-            let hi_raw = halves.hi.to_underlying();
-            LoHi::new(
-                u8x8::from_underlying(self.arch(), vuzp1_u8(lo_raw, hi_raw)),
-                u8x8::from_underlying(self.arch(), vuzp2_u8(lo_raw, hi_raw)),
-            )
-        }
-    }
-}
 
 //-------------//
 // Conversions //
