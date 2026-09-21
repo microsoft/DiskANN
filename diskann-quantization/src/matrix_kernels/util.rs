@@ -158,6 +158,8 @@ mod aarch64 {
     impl_loadstore!(f32, 4, f32x4, Neon);
     impl_loadstore!(f32, 8, f32x8, Neon);
     impl_loadstore!(f32, 16, f32x16, Neon);
+    impl_loadstore!(i32, 8, i32x8, Neon);
+    impl_loadstore!(i32, 16, i32x16, Neon);
 }
 
 //////////
@@ -352,6 +354,7 @@ mod test {
         test_load_store_neon,
         Neon::new_checked(),
         f32 => { 4, 8, 16 },
+        i32 => { 8, 16 },
     );
 
     #[test]

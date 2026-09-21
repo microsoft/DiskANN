@@ -506,8 +506,12 @@ impl<E: Erase<i8>> diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Stand
     for BuildAndErase<E>
 {
     fn run(self, arch: Neon, query: MatRef<'_, Standard<i8>>) -> E::Output {
-        // Neon retargets to Scalar until the dotprod kernel lands.
-        diskann_wide::arch::Target1::<Scalar, _, _>::run(self, Scalar::from(arch), query)
+        let prepared = BlockTransposed::<i8, 8, 4>::from_matrix_view(query.as_matrix_view());
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
     }
 }
 

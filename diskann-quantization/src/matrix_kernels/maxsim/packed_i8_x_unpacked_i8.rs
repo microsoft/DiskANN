@@ -29,7 +29,9 @@ use super::packed_f32_x_unpacked_f32::Params;
 
 diskann_wide::alias!(i8x16<A> = i8x16);
 diskann_wide::alias!(i16x16<A> = i16x16);
+diskann_wide::alias!(i32x4<A> = i32x4);
 diskann_wide::alias!(i32x8<A> = i32x8);
+diskann_wide::alias!(u32x4<A> = u32x4);
 diskann_wide::alias!(u32x8<A> = u32x8);
 
 /// Widen a `PACK = 2` group into the little-endian `i16` lane pair consumed by the 16-bit
@@ -390,6 +392,33 @@ unsafe fn group<const PACK: usize>(ptr: Slice<'_, i8>, valid: usize) -> [i8; PAC
     })
 }
 
+/// Accumulate one packed row of `a`, held in `ai`, against every column of `b`, whose
+/// contraction offset `bp` already points at.
+///
+/// # Safety
+///
+/// `valid` must not exceed `PACK`, and for every `j < NR` the first `valid` elements at
+/// `bp.add(bstride * j)` must be readable.
+#[inline(always)]
+unsafe fn accumulate_row<W, const MR: usize, const NR: usize, const PACK: usize>(
+    wide: W,
+    ai: W::Wide,
+    bp: Slice<'_, i8>,
+    bstride: Elements<i8>,
+    valid: usize,
+    acc: &mut [W::Acc; NR],
+) where
+    W: ExtraWide<MR, PACK>,
+{
+    for (j, acc) in acc.iter_mut().enumerate() {
+        // SAFETY: By preconditions, the pointer offset is valid and its first `valid`
+        // elements are readable.
+        let bj = wide.splat(unsafe { group::<PACK>(bp.add(bstride * j), valid) });
+
+        *acc = W::dot(ai, bj, *acc);
+    }
+}
+
 /// # Safety
 ///
 /// Bounds `a.k()` and `b.k()` must be equal to `k`.
@@ -419,29 +448,53 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize, const PACK: usize>(
     let rows = a.rows(k);
     let k = k.value().get();
 
-    for row in 0..rows {
-        // SAFETY: By preconditions, `ap.len() == astride * rows`. Since `row < rows`:
-        //
-        // * The pointer offset is valid.
-        // * The subsequent truncation is valid.
-        // * The slice passed to `wide.load` has a length equal to `astride`.
-        let ai = unsafe { wide.load(ap.add(astride * row).truncate(astride)) };
+    // Loads the packed row `row` of `a`, which callers must keep below `rows`.
+    //
+    // SAFETY: By preconditions, `ap.len() == astride * rows`. Since `row < rows`:
+    //
+    // * The pointer offset is valid.
+    // * The subsequent truncation is valid.
+    // * The slice passed to `wide.load` has a length equal to `astride`.
+    let load = |row| unsafe { wide.load(ap.add(astride * row).truncate(astride)) };
 
-        // The trailing row of `a` is zero padded, so zero filling `b` past `k` keeps every
-        // padded product at zero.
+    // Rows whose group lies entirely within `k`. Peeling the trailing partial group keeps
+    // `valid` constant here, folding away the zero-fill branch in `group` on the hot path.
+    let full = k / PACK;
+
+    for row in 0..full {
         let i = row * PACK;
-        let valid = PACK.min(k - i);
 
-        for (j, acc) in acc.iter_mut().enumerate() {
-            // SAFETY: By preconditions, `bp.len() == bstride * NR`. Since `i < k`, `j < NR`
-            // and `i + valid <= k`:
-            //
-            // * The pointer offset is valid and its first `valid` elements are readable.
-            let bj =
-                wide.splat(unsafe { group::<PACK>(bp.add(bstride * j + Elements::new(i)), valid) });
+        // SAFETY: `row < full <= rows`, and since `i + PACK <= k`, every column of `b` has
+        // `PACK` readable elements at offset `i`.
+        unsafe {
+            accumulate_row(
+                wide,
+                load(row),
+                bp.add(Elements::new(i)),
+                bstride,
+                PACK,
+                &mut acc,
+            )
+        };
+    }
 
-            *acc = W::dot(ai, bj, *acc);
-        }
+    // The trailing row of `a` is zero padded, so zero filling `b` past `k` keeps every
+    // padded product at zero.
+    if full < rows {
+        let i = full * PACK;
+
+        // SAFETY: `full < rows`, and every column of `b` has `k - i` readable elements at
+        // offset `i`.
+        unsafe {
+            accumulate_row(
+                wide,
+                load(full),
+                bp.add(Elements::new(i)),
+                bstride,
+                k - i,
+                &mut acc,
+            )
+        };
     }
 
     wide.max_into(Folder::fold(acc, W::max), c);
@@ -604,6 +657,146 @@ mod x86_64 {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+mod aarch64 {
+    use super::*;
+
+    use diskann_wide::arch::aarch64::Neon;
+
+    panel_kernel!(Neon, 8, 6, 4, [1, 2, 3, 4, 5]);
+    panel_kernel!(Neon, 16, 6, 4, [1, 2, 3, 4, 5]);
+
+    micro_kernel!(Neon, 8, 4, { 6, 5, 4, 3, 2, 1 });
+    micro_kernel!(Neon, 16, 4, { 6, 5, 4, 3, 2, 1 });
+
+    /// Pack a `PACK = 4` group into the little-endian byte quad consumed by `sdot`.
+    ///
+    /// Broadcasting through `u32` lowers to a single `ld1r`.
+    #[inline(always)]
+    fn i8_quad(group: [i8; 4]) -> u32 {
+        u32::from_le_bytes(group.map(|x| x as u8))
+    }
+
+    //-----------//
+    // ExtraWide //
+    //-----------//
+
+    impl ExtraWide<8, 4> for Neon {
+        type Wide = [i8x16<Neon>; 2];
+        type Splat = i8x16<Neon>;
+        type Acc = [i32x4<Neon>; 2];
+
+        #[inline(always)]
+        fn default(self) -> Self::Acc {
+            [SIMDVector::default(self), SIMDVector::default(self)]
+        }
+
+        #[inline(always)]
+        unsafe fn load(self, slice: Slice<'_, i8>) -> Self::Wide {
+            bounds::check_eq!(slice.len(), 32);
+
+            // SAFETY: Since `slice.len()` must be 32, the pointer offset and 16-wide SIMD
+            // loads are valid.
+            unsafe {
+                [
+                    SIMDVector::load_simd(self, slice.as_ptr()),
+                    SIMDVector::load_simd(self, slice.add(Elements::new(16)).as_ptr()),
+                ]
+            }
+        }
+
+        #[inline(always)]
+        fn splat(self, group: [i8; 4]) -> Self::Splat {
+            u32x4::<Neon>::splat(self, i8_quad(group)).reinterpret_simd()
+        }
+
+        #[inline(always)]
+        fn dot(a: Self::Wide, b: Self::Splat, acc: Self::Acc) -> Self::Acc {
+            core::array::from_fn(|i| acc[i].dot_simd(a[i], b))
+        }
+
+        #[inline(always)]
+        fn max(lhs: Self::Acc, rhs: Self::Acc) -> Self::Acc {
+            core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
+        }
+
+        #[inline(always)]
+        fn max_into(self, lhs: Self::Acc, into: &mut [i32; 8]) {
+            // SAFETY: Since `into.len()` is 8, the pointer offset and 4-wide SIMD loads are
+            // valid.
+            let previous: Self::Acc = unsafe {
+                [
+                    SIMDVector::load_simd(self, into.as_ptr()),
+                    SIMDVector::load_simd(self, into.as_ptr().add(4)),
+                ]
+            };
+
+            let max = <Self as ExtraWide<8, 4>>::max(lhs, previous);
+
+            // SAFETY: Since `into.len()` is 8, the pointer offset and 4-wide SIMD stores are
+            // valid.
+            unsafe {
+                max[0].store_simd(into.as_mut_ptr());
+                max[1].store_simd(into.as_mut_ptr().add(4));
+            }
+        }
+    }
+
+    impl ExtraWide<16, 4> for Neon {
+        type Wide = [i8x16<Neon>; 4];
+        type Splat = i8x16<Neon>;
+        type Acc = [i32x4<Neon>; 4];
+
+        #[inline(always)]
+        fn default(self) -> Self::Acc {
+            [SIMDVector::default(self); 4]
+        }
+
+        #[inline(always)]
+        unsafe fn load(self, slice: Slice<'_, i8>) -> Self::Wide {
+            bounds::check_eq!(slice.len(), 64);
+
+            // SAFETY: Since `slice.len()` must be 64, the pointer offsets and 16-wide SIMD
+            // loads are valid.
+            core::array::from_fn(|i| unsafe {
+                SIMDVector::load_simd(self, slice.add(Elements::new(16 * i)).as_ptr())
+            })
+        }
+
+        #[inline(always)]
+        fn splat(self, group: [i8; 4]) -> Self::Splat {
+            u32x4::<Neon>::splat(self, i8_quad(group)).reinterpret_simd()
+        }
+
+        #[inline(always)]
+        fn dot(a: Self::Wide, b: Self::Splat, acc: Self::Acc) -> Self::Acc {
+            core::array::from_fn(|i| acc[i].dot_simd(a[i], b))
+        }
+
+        #[inline(always)]
+        fn max(lhs: Self::Acc, rhs: Self::Acc) -> Self::Acc {
+            core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
+        }
+
+        #[inline(always)]
+        fn max_into(self, lhs: Self::Acc, into: &mut [i32; 16]) {
+            // SAFETY: Since `into.len()` is 16, the pointer offsets and 4-wide SIMD loads
+            // are valid.
+            let previous: Self::Acc = core::array::from_fn(|i| unsafe {
+                SIMDVector::load_simd(self, into.as_ptr().add(4 * i))
+            });
+
+            let max = <Self as ExtraWide<16, 4>>::max(lhs, previous);
+
+            for (i, max) in max.into_iter().enumerate() {
+                // SAFETY: Since `into.len()` is 16, the pointer offsets and 4-wide SIMD
+                // stores are valid.
+                unsafe { max.store_simd(into.as_mut_ptr().add(4 * i)) };
+            }
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -618,6 +811,9 @@ mod tests {
 
     #[cfg(target_arch = "x86_64")]
     use diskann_wide::arch::x86_64::V3;
+
+    #[cfg(target_arch = "aarch64")]
+    use diskann_wide::arch::aarch64::Neon;
 
     use crate::{matrix_kernels::maxsim, multi_vector::BlockTransposed};
 
@@ -717,6 +913,16 @@ mod tests {
         V3::new_checked(),
         0xe0a5c31f8b62d94a,
         2,
+        16 => { 6, 5, 4, 3, 2, 1 },
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    test_micro_kernel!(
+        test_micro_kernel_neon,
+        Neon::new_checked(),
+        0x7d4a1e6c93b0f582,
+        4,
+        8 => { 6, 5, 4, 3, 2, 1 },
         16 => { 6, 5, 4, 3, 2, 1 },
     );
 
@@ -829,6 +1035,15 @@ mod tests {
         (16, 6, 2),
     );
 
+    #[cfg(target_arch = "aarch64")]
+    test_panel_kernel!(
+        test_panel_kernel_neon,
+        Neon::new_checked(),
+        0x9f3e7ab4c05d1268,
+        (8, 6, 4),
+        (16, 6, 4),
+    );
+
     ////////////
     // Driver //
     ////////////
@@ -917,5 +1132,14 @@ mod tests {
         V3::new_checked(),
         0x63c8ed19f4720ab5,
         (16, 6, 2),
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    test_driver!(
+        test_driver_neon,
+        Neon::new_checked(),
+        0x63c8ed19f4720ab5,
+        (8, 6, 4),
+        (16, 6, 4),
     );
 }
