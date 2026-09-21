@@ -6,15 +6,18 @@
 //! Hierarchical Agglomerative Clustering (HAC) for reducing late-interaction multi-vectors.
 //!
 //! Intended for roughly **250–2,000 vectors per document**, rather than the training
-//! sets of 10k-100k vectors used with [`super::kmeans`]. This algorithm scales poorly
-//! to large number of vectors (quadratic memory and runtime complexity), so prefer
-//! [`super::kmeans`] for those cases.
+//! sets of 10k-100k vectors used with [`super::kmeans`]. Pair storage is quadratic,
+//! and total distance arithmetic is O(n²d). Cached-minimum maintenance can still
+//! inspect O(n³) costs in the worst case; prefer [`super::kmeans`] for large inputs.
 //!
 //! **Difference from classical Ward linkage:** The spherical Ward-style criterion implemented
 //! here uses size-weighted cosine costs (found to be better in experiments) and normalizes the
 //! centroid after every merge.
 
-use std::collections::TryReserveError;
+use std::{
+    collections::TryReserveError,
+    hash::{DefaultHasher, Hash, Hasher},
+};
 
 use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::{
@@ -64,8 +67,8 @@ pub enum SphericalWardError {
 /// where `ni` and `nj` are # original rows, not previous merges.
 /// Note: The final centroid need not point along the mean of its original members.
 ///
-/// This code is sequential, and callers can parallelize over documents (account for the
-/// per-document working memory that is quadratic in the number of input vectors).
+/// Exact score ties use a priority derived from the stable pair IDs, and priorities
+/// remain fixed throughout a call, independent of visitation order or parallel callers.
 ///
 /// Throws a [`SphericalWardError`] on failure (see [`SphericalWardError`] for details).
 /// Normalization rejects zero, subnormal, or non-finite computed `f32` squared norms
@@ -106,7 +109,7 @@ pub fn spherical_ward(
             let cost = state.cost(j, i);
             costs.values[costs.offsets[i] + j] = cost;
             let candidate = (cost, j, i);
-            if candidate < *best {
+            if precedes(candidate, *best) {
                 *best = candidate;
             }
         }
@@ -117,7 +120,7 @@ pub fn spherical_ward(
         // Scanning row minima avoids an all-pairs heap and stale-entry growth.
         let mut best = NO_PAIR;
         for &i in &state.active {
-            if nearest[i] < best {
+            if precedes(nearest[i], best) {
                 best = nearest[i];
             }
         }
@@ -144,7 +147,7 @@ pub fn spherical_ward(
                 nearest[i] = costs.row_min(i, &state.sizes);
             } else if keep < i {
                 let candidate = (costs.values[costs.index(i, keep)], keep, i);
-                if candidate < nearest[i] {
+                if precedes(candidate, nearest[i]) {
                     nearest[i] = candidate;
                 }
             }
@@ -260,6 +263,21 @@ impl HacState {
 type Candidate = (f32, usize, usize);
 const NO_PAIR: Candidate = (f32::INFINITY, usize::MAX, usize::MAX);
 
+// Hash only exact ties, so ordinary distance comparisons pay no hashing cost.
+// A fixed pair priority keeps cached and recomputed minima consistent. Do not
+// use fresh random draws here: they would invalidate unchanged cached minima.
+fn precedes(candidate: Candidate, best: Candidate) -> bool {
+    candidate.0 < best.0
+        || (candidate.0 == best.0 && pair_priority(candidate) < pair_priority(best))
+}
+
+fn pair_priority((_, left, right): Candidate) -> (u64, usize, usize) {
+    let mut hasher = DefaultHasher::new();
+    (left, right).hash(&mut hasher);
+    // Stable IDs resolve the unlikely hash collision and keep the lower ID alive.
+    (hasher.finish(), left, right)
+}
+
 /// Strict lower triangle. Row i holds pairs (j, i), j < i; stable slots avoid
 /// moving matrix rows or columns after removal.
 struct HacCosts {
@@ -306,7 +324,7 @@ impl HacCosts {
         {
             if size > 0 {
                 let candidate = (cost, j, row);
-                if candidate < best {
+                if precedes(candidate, best) {
                     best = candidate;
                 }
             }
@@ -338,7 +356,7 @@ mod tests {
             for (pos, &i) in state.active.iter().enumerate() {
                 for &j in &state.active[pos + 1..] {
                     let candidate = (state.cost(i, j), i, j);
-                    if candidate < best {
+                    if precedes(candidate, best) {
                         best = candidate;
                     }
                 }
@@ -536,6 +554,71 @@ mod tests {
     }
 
     #[test]
+    fn tie_priorities_never_change_score_ordering() {
+        // Exercise finite costs including zero and its smallest positive neighbor.
+        for score in [0.0f32, f32::MIN_POSITIVE, 0.5, 1.0, 1000.0] {
+            let next = f32::from_bits(score.to_bits() + 1);
+            for i in 0..32 {
+                let a = (score, i, 32);
+                let b = (next, 0, 33);
+                assert!(precedes(a, b));
+                assert!(!precedes(b, a));
+                assert!(precedes(a, NO_PAIR));
+                assert!(!precedes(a, a));
+            }
+        }
+    }
+
+    #[test]
+    fn exact_ties_match_exhaustive_pair_priorities() {
+        let rows = if cfg!(miri) { 8 } else { 128 };
+        let costs = HacCosts::new(rows).unwrap();
+        let mut first_neighbor = 0;
+        for i in 1..rows {
+            let expected = (0..i)
+                .map(|j| (0.0, j, i))
+                .min_by_key(|&pair| pair_priority(pair))
+                .unwrap();
+            assert_eq!(costs.row_min(i, &vec![1; rows]), expected);
+            first_neighbor += usize::from(expected.1 == 0);
+        }
+        // Duplicate rows must not all choose row zero as their cached minimum.
+        assert!(
+            first_neighbor < rows - 1,
+            "{first_neighbor} of {rows} rows chose zero"
+        );
+    }
+
+    #[test]
+    fn tied_distinct_directions_match_reference_at_every_cut() {
+        // Unlike identical vectors, different tied merge choices are observable
+        // in the output directions, exercising invalidation after tied merges.
+        let rows = if cfg!(miri) { 5 } else { 24 };
+        let mut data = Matrix::new(0.0, rows, rows);
+        for i in 0..rows {
+            data[(i, i)] = 1.0;
+        }
+        for target in 1..rows {
+            let out = spherical_ward(data.as_view(), target).unwrap();
+            assert_eq!(out, reference(data.as_view(), target).unwrap());
+            assert_unit(out.as_view());
+        }
+    }
+
+    #[test]
+    fn duplicate_vectors_match_reference_at_every_cut() {
+        let rows = if cfg!(miri) { 5 } else { 24 };
+        for dim in [1, 3, 128] {
+            let data = Matrix::new(1.0, rows, dim);
+            for target in 1..rows {
+                let out = spherical_ward(data.as_view(), target).unwrap();
+                assert_eq!(out, reference(data.as_view(), target).unwrap());
+                assert_unit(out.as_view());
+            }
+        }
+    }
+
+    #[test]
     fn packed_cost_storage_and_inactive_neighbors() {
         assert!(HacCosts::new(0).unwrap().values.is_empty());
         let mut costs = HacCosts::new(4).unwrap();
@@ -548,7 +631,11 @@ mod tests {
         }
         costs.values[3..].copy_from_slice(&[2.0, 1.0, 1.0]);
         assert_eq!(costs.row_min(0, &[1; 4]), NO_PAIR);
-        assert_eq!(costs.row_min(3, &[1; 4]), (1.0, 1, 3));
+        let expected = [(1.0, 1, 3), (1.0, 2, 3)]
+            .into_iter()
+            .min_by_key(|&pair| pair_priority(pair))
+            .unwrap();
+        assert_eq!(costs.row_min(3, &[1; 4]), expected);
         assert_eq!(costs.row_min(3, &[1, 0, 1, 1]), (1.0, 2, 3));
         assert_eq!(costs.row_min(3, &[0, 0, 0, 1]), NO_PAIR);
     }
