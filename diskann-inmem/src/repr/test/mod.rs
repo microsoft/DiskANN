@@ -18,12 +18,8 @@ impl repr::internal::RawDistance for TestDistance {
     type Error = diskann::error::Infallible;
 
     fn eval(&self, x: &[u8], y: &[u8]) -> Result<f32, Self::Error> {
-        assert_eq!(x.len(), std::mem::size_of::<f32>());
-        assert_eq!(y.len(), std::mem::size_of::<f32>());
-
-        let x = unsafe { x.as_ptr().cast::<f32>().read_unaligned() };
-        let y = unsafe { y.as_ptr().cast::<f32>().read_unaligned() };
-
+        let x: f32 = bytemuck::pod_read_unaligned(x);
+        let y: f32 = bytemuck::pod_read_unaligned(y);
         Ok(x + y)
     }
 }
@@ -44,10 +40,7 @@ impl repr::internal::RawQueryDistance for TestQueryDistance {
     type Error = diskann::error::Infallible;
 
     fn eval(&self, x: &[u8]) -> Result<f32, Self::Error> {
-        assert_eq!(x.len(), std::mem::size_of::<f32>());
-
-        let x = unsafe { x.as_ptr().cast::<f32>().read_unaligned() };
-
+        let x: f32 = bytemuck::pod_read_unaligned(x);
         Ok(self.query + x)
     }
 }
@@ -116,14 +109,6 @@ impl Reference {
         }
 
         slot
-    }
-
-    #[must_use = "this function has no side-effects"]
-    pub(super) fn contains_id<I>(&self, i: &I) -> bool
-    where
-        I: ReferenceLookup,
-    {
-        self.get(i).is_some()
     }
 
     /// Get the data payload for the id `i`.

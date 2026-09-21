@@ -318,6 +318,16 @@ impl<'a> SearchAccessor<'a> {
             counters,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn get_expand_beam(&self) -> &dyn repr::ExpandBeam {
+        &*self.expand_beam
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_post_process(&mut self) -> Option<&mut (dyn repr::PostProcess + 'a)> {
+        self.post_process.as_deref_mut()
+    }
 }
 
 impl diskann::provider::HasId for SearchAccessor<'_> {
@@ -434,6 +444,11 @@ impl<'a> PruneAccessor<'a> {
             neighbors,
             counters,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_prune(&mut self) -> &mut dyn repr::Prune {
+        &mut *self.prune
     }
 }
 

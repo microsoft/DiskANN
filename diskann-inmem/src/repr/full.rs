@@ -1045,13 +1045,7 @@ mod tests {
 
                 buf.resize(list.len(), Default::default());
 
-                // SAFETY: By construction, all entries in `list` are within `id_limit`
-                // (verified against this `ExpandBeam` instance.
-                //
-                // Also by construction `buf` is at least as long as `list`.
-                let read =
-                    unsafe { <_ as repr::ExpandBeam>::expand_beam(&expand, &list, &mut buf) }
-                        .unwrap();
+                let read = repr::safe_expand_beam(&expand, &list, &mut buf).unwrap();
 
                 let expected: Vec<(u32, f32)> = list
                     .iter()

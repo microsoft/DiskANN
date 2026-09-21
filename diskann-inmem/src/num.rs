@@ -167,6 +167,7 @@ macro_rules! typed_int {
         $vis struct $name($vis_inner $T);
 
         impl $name {
+            #[allow(unused)]
             $vis const fn new(value: $T) -> Self {
                 Self(value)
             }

@@ -81,14 +81,12 @@ mod tests {
     use super::*;
 
     use diskann::utils::IntoUsize;
-    use hashbrown::HashMap;
 
     use crate::{
         counters::Counters,
         num::{Bytes, Capacity, LogicalId, MaxDegree, SlotId},
         repr::test::Reference,
         store::{self, Store},
-        test::Sequencer,
     };
 
     #[test]
@@ -159,8 +157,9 @@ mod tests {
         //
         // In this test - we go again. However, another thread deletes all odd distances.
         let mut neighbors: Vec<_> = (0..10).map(|i| Neighbor::new(i, -500.0)).collect();
-        let seq = Sequencer::new();
 
+        // Run this on another thread to prove that *some* amount of cross-thread action
+        // is happening. Not a perfect test: `thread::scope` already synchronizes.
         std::thread::scope(|s| {
             s.spawn(|| {
                 for id in (0..10).step_by(2) {

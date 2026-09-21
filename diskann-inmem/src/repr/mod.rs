@@ -194,6 +194,29 @@ pub(crate) unsafe trait ExpandBeam: Send + Sync + std::fmt::Debug {
     unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [Neighbor<u32>]) -> ANNResult<usize>;
 }
 
+/// A safe entry-point for resting [`ExpandBeam::expand_beam`].
+#[cfg(test)]
+fn safe_expand_beam(
+    expand_beam: &dyn ExpandBeam,
+    list: &[u32],
+    buffer: &mut [Neighbor<u32>],
+) -> ANNResult<usize> {
+    assert!(list.len() <= buffer.len());
+
+    let limit = expand_beam.id_limit();
+    for id in list.iter() {
+        if !limit.is_in_bounds(*id) {
+            panic!("id {} is not within {} -- {:?}", id, limit, expand_beam);
+        }
+    }
+
+    // SAFETY: We have verified that:
+    //
+    // 1. All entries in `list` are less than `expand_beam.id_limit()`.
+    // 2 `buffer.len() >= list.len()`.
+    unsafe { expand_beam.expand_beam(list, buffer) }
+}
+
 pub(crate) trait PostProcess: Send + Sync + std::fmt::Debug {
     fn post_process(&mut self, buffer: &mut Vec<Neighbor<u32>>) -> ANNResult<()>;
 }

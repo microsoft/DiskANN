@@ -30,40 +30,7 @@ use crate::{
     },
 };
 
-///////////
-// Stuff //
-///////////
-
-/// Choose how data is going to be reranked.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Rerank {
-    None,
-    F16,
-}
-
-impl Rerank {
-    #[expect(
-        clippy::expect_used,
-        reason = "the arithmetic should not overflow for the feasible `dim` values"
-    )]
-    fn bytes(&self, dim: usize) -> Bytes {
-        match self {
-            Self::None => Bytes::new(0),
-            Self::F16 => Bytes::new(
-                dim.checked_mul(2)
-                    .expect("f16 is smaller than the f32 in the quantizer"),
-            ),
-        }
-    }
-
-    fn config(self, dim: usize) -> Option<simple::Config> {
-        match self {
-            Self::None => None,
-            Self::F16 => Some(Simple::config(self.bytes(dim))),
-        }
-    }
-}
-
+#[derive(Debug)]
 pub struct Config {
     quantizer: Poly<dyn iface::Quantizer>,
     start_points: Matrix<f32>,
@@ -74,12 +41,6 @@ pub struct Config {
 }
 
 const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(16).unwrap();
-
-impl std::fmt::Debug for Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "todo")
-    }
-}
 
 impl Config {
     pub fn new(
@@ -162,8 +123,8 @@ impl ConfigError {
 enum ConfigErrorInner {
     #[error(
         "quantizer configured for dimension {} but given start points have dimension {}",
-        start_points,
-        quantizer
+        quantizer,
+        start_points
     )]
     DimMismatch {
         quantizer: usize,
@@ -178,6 +139,36 @@ impl repr::RepresentationConfig for Config {
 
     fn build(self) -> ANNResult<Spherical> {
         <Config>::build(self)
+    }
+}
+
+/// Choose how data is going to be reranked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Rerank {
+    None,
+    F16,
+}
+
+impl Rerank {
+    #[expect(
+        clippy::expect_used,
+        reason = "the arithmetic should not overflow for the feasible `dim` values"
+    )]
+    fn bytes(&self, dim: usize) -> Bytes {
+        match self {
+            Self::None => Bytes::new(0),
+            Self::F16 => Bytes::new(
+                dim.checked_mul(2)
+                    .expect("f16 is smaller than the f32 in the quantizer"),
+            ),
+        }
+    }
+
+    fn config(self, dim: usize) -> Option<simple::Config> {
+        match self {
+            Self::None => None,
+            Self::F16 => Some(Simple::config(self.bytes(dim))),
+        }
     }
 }
 
@@ -230,6 +221,7 @@ impl Reranker {
     }
 }
 
+#[derive(Debug)]
 pub struct Spherical {
     store: Store<Cons<Intrusive, Optional<Simple>>>,
     quantizer: Poly<dyn iface::Quantizer>,
@@ -300,6 +292,11 @@ impl Spherical {
         rerank: Rerank,
     ) -> Result<Config, ConfigError> {
         Config::new(quantizer, capacity, max_degree, start_points, rerank)
+    }
+
+    /// Return the dimension of the data held within `self`.
+    pub fn dim(&self) -> usize {
+        self.full_dim
     }
 
     fn set(
@@ -384,6 +381,11 @@ impl Spherical {
             self.store.frozen(),
             counters,
         ))
+    }
+
+    #[cfg(test)]
+    fn quantizer(&self) -> &dyn iface::Quantizer {
+        &*self.quantizer
     }
 }
 
@@ -521,13 +523,18 @@ impl repr::internal::RawDistance for &dyn iface::DynDistanceComputer {
 mod tests {
     use super::*;
 
-    use diskann::graph::test::synthetic::Grid;
+    use diskann::{graph::test::synthetic::Grid, neighbor::Neighbor};
     use diskann_utils::views::MatrixView;
     use hashbrown::HashMap;
 
-    use crate::{num::{LogicalId, SlotId}, repr::test::Reference};
+    use crate::{
+        counters::Counters,
+        num::{LogicalId, SlotId},
+        repr::test::Reference,
+        test::assert_contains,
+    };
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Copy)]
     enum Bits {
         One,
         Two,
@@ -559,6 +566,9 @@ mod tests {
         }
     }
 
+    /// See the description in [`make_test_repr`].
+    const TEST_LIMIT: IdLimit = IdLimit::new(11);
+
     // For the spherical quantizer tests, we use the canonical grid layout, but center the
     // data around the origin.
     //
@@ -581,10 +591,11 @@ mod tests {
     // 8:  [+1, +1]
     //
     // We put two start points at `[-2, -2]` and `[+2, +2]`.
-    fn test_repr(
+    fn make_test_repr(
         metric: SupportedMetric,
         bits: Bits,
         rerank: Rerank,
+        fill: bool,
     ) -> (Spherical, Reference) {
         let grid = Grid::Two;
         let mut data = grid.data(3);
@@ -601,27 +612,565 @@ mod tests {
             quantizer,
             Capacity::new(data.nrows()),
             MaxDegree::new(0),
-            start_points,
+            start_points.clone(),
             rerank,
         )
         .unwrap();
 
         let spherical = config.build().unwrap();
 
-        let mut reference = Reference::new(grid.dim());
-        for (i, row) in data.row_iter().enumerate() {
-            let guard = repr::Set::set(&spherical, row).unwrap();
-            let id = repr::Guard::id(&guard);
+        assert_eq!(repr::Representation::id_limit(&spherical), TEST_LIMIT);
+        assert_eq!(spherical.dim(), grid.dim().into());
 
-            reference.insert(LogicalId(i), SlotId(id), row);
-            repr::Guard::publish(guard);
+        let mut reference = Reference::new(grid.dim().into());
+
+        if fill {
+            for (i, row) in data.row_iter().enumerate() {
+                let guard = repr::Set::set(&spherical, row).unwrap();
+                let id = repr::Guard::id(&guard);
+
+                reference.insert(LogicalId(i), SlotId(id), row);
+                repr::Guard::publish(guard);
+            }
+        }
+
+        // Insert frozen points.
+        for (slot, point) in spherical.store.frozen().zip(start_points.row_iter()) {
+            reference.insert(LogicalId(slot.into_usize()), SlotId(slot), point);
         }
 
         (spherical, reference)
     }
 
+    /// Performs the following set of tests:
+    ///
+    /// * [`ExpandBeam::evaluate`]: For each id in `ids` - attempt to evaluate the distance
+    ///   through [`ExpandBeam::evaluate`]. If the id is present in `distances`, assert that
+    ///   the value in `distances` agrees with the result of the `EpandBeam method.
+    ///
+    ///   Otherwise, assert that `ExpandBeam` returns `None`.
+    ///
+    /// * [`ExpandBeam::expand_beam`]: Provid all `ids` to `expand_beam`. Verify that ids not
+    ///   present in `distances` get removed and all remaining ids are present and have a
+    ///   distance value equal to the corresponding entry in `distances`.
+    fn test_expand_beam(
+        accessor: &dyn repr::ExpandBeam,
+        distances: HashMap<SlotId, f32>,
+        ids: &[SlotId],
+        ctx: &dyn std::fmt::Display,
+    ) {
+        assert_eq!(accessor.id_limit(), TEST_LIMIT, "{ctx}");
+
+        for slot_id in ids {
+            if let Some(distance) = distances.get(slot_id) {
+                assert_eq!(
+                    accessor.evaluate(slot_id.value()).unwrap(),
+                    Some(*distance),
+                    "failed on slot id {} -- {}",
+                    slot_id,
+                    ctx,
+                );
+            } else {
+                assert!(
+                    accessor.evaluate(slot_id.value()).unwrap().is_none(),
+                    "failed on slot id {} -- {}",
+                    slot_id,
+                    ctx
+                );
+            }
+        }
+
+        // Test via `expand_beam`.
+        let list: Vec<u32> = ids.iter().map(|slot_id| slot_id.value()).collect();
+        let mut buffer = vec![Neighbor::default(); list.len()];
+        let len = repr::safe_expand_beam(accessor, &list, &mut buffer).unwrap();
+
+        let expected: Vec<Neighbor<u32>> = ids
+            .iter()
+            .filter_map(|slot_id| {
+                distances
+                    .get(slot_id)
+                    .map(|distance| Neighbor::new(slot_id.value(), *distance))
+            })
+            .collect();
+
+        assert_eq!(
+            expected.len(),
+            len,
+            "`expand_beam` returned the incorrect number of items -- {}",
+            ctx,
+        );
+
+        for (i, (got, expected)) in std::iter::zip(buffer.iter(), expected.iter()).enumerate() {
+            assert_eq!(
+                got.id(),
+                expected.id(),
+                "failed on entry {} of {} -- {}",
+                i,
+                len,
+                ctx
+            );
+            assert_eq!(
+                got.distance(),
+                expected.distance(),
+                "failed on entry {} of {} -- {}",
+                i,
+                len,
+                ctx,
+            );
+        }
+    }
+
+    /// Test that the [`repr::Prune`] computes distances according to the ground truth in
+    /// `distances`.
+    ///
+    /// This assumes that `distances` contains all valid (i.e., between undeleted) entries
+    /// in `ids` - including self distances.
+    ///
+    /// For example, if `ids` contains `[0, 1, 2, 3(deleted)]`, then `distances` should contain
+    /// the keys:
+    ///
+    /// (0, 0), (0, 1), (0, 2)
+    /// (1, 0), (1, 1), (1, 2)
+    /// (2, 0), (2, 1), (2, 2)
+    fn test_prune(
+        accessor: &mut dyn repr::Prune,
+        distances: HashMap<(SlotId, SlotId), f32>,
+        ids: &[SlotId],
+        ctx: &dyn std::fmt::Display,
+    ) {
+        let num_present_ids = ids
+            .iter()
+            .filter(|&&slot_id| distances.contains_key(&(slot_id, slot_id)))
+            .count();
+
+        let mut items: HashMap<u32, Option<repr::PruneKey>> =
+            ids.iter().map(|slot_id| (slot_id.value(), None)).collect();
+
+        let count = accessor.prepare(items.iter_mut()).unwrap();
+        assert_eq!(count, num_present_ids, "{ctx}");
+
+        let mut visited = 0;
+        for slot_id0 in ids.iter() {
+            if let Some(key0) = items[&slot_id0.value()] {
+                for slot_id1 in ids.iter() {
+                    if let Some(key1) = items[&slot_id1.value()] {
+                        let d = accessor.evaluate(key0, key1);
+                        let expected = distances[&(*slot_id0, *slot_id1)];
+                        assert_eq!(
+                            d, expected,
+                            "failed for {} x {} -- {}",
+                            slot_id0, slot_id1, ctx
+                        );
+
+                        visited += 1;
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            visited,
+            distances.len(),
+            "not all distances were visited -- {}",
+            ctx
+        );
+    }
+
+    /// Test that [`repr::PostProcess`] reranks correctly.
+    ///
+    /// Pass all `ids` to [`repr::PostProcess::post_process`]. Verify that all ids not
+    /// present in `distances` have been removed and the remaining ids are present, sorted,
+    /// and have distance values matching those in `distances`.
+    fn test_rerank(
+        post_process: &mut dyn repr::PostProcess,
+        distances: HashMap<SlotId, f32>,
+        ids: &[SlotId],
+        ctx: &dyn std::fmt::Display,
+    ) {
+        let mut buffer: Vec<_> = ids
+            .iter()
+            .map(|slot_id| Neighbor::new(slot_id.value(), 0.0))
+            .collect();
+
+        post_process.post_process(&mut buffer).unwrap();
+        let mut previous = f32::NEG_INFINITY;
+        assert_eq!(buffer.len(), distances.len(), "{ctx}");
+        for neighbor in buffer.iter() {
+            let current = *neighbor.distance();
+            assert_eq!(current, distances[&SlotId(*neighbor.id())], "{ctx}",);
+
+            assert!(
+                current >= previous,
+                "distances is not monotonically increasing, previous = {}, current = {} -- {}",
+                previous,
+                current,
+                ctx,
+            );
+
+            previous = current;
+        }
+
+        assert!(
+            previous > f32::NEG_INFINITY,
+            "previous = {} -- {}",
+            previous,
+            ctx
+        );
+    }
+
+    /// Here - we don't test the whole `expand_beam` loop. That would be a waste of time and
+    /// is already tested by other code.
+    ///
+    /// Instead we use:
+    ///
+    /// * `ExpandBeam::evaluate` to verify that the correct type of distance computer is
+    ///   created.
+    ///
+    /// * `Prune` to validate that the correct distance computer is made.
+    ///
+    /// * If reranking exists, that rereanking works as expected.
+    fn test_distances(
+        spherical: &Spherical,
+        reference: &mut Reference,
+        metric: SupportedMetric,
+        rerank: Rerank,
+        ctx: &dyn std::fmt::Display,
+    ) {
+        use repr::internal::{RawDistance, RawQueryDistance};
+
+        assert_eq!(
+            repr::Representation::id_limit(spherical),
+            TEST_LIMIT,
+            "{ctx}"
+        );
+
+        let query = [10.0, -10.0];
+
+        // Generate a couple of data points in the dataset.
+        let i0 = LogicalId(2);
+        let s0 = reference.slot_id_for(i0);
+
+        let i1 = LogicalId(5);
+        let s1 = reference.slot_id_for(i1);
+
+        let i2 = LogicalId(10);
+        let s2 = reference.slot_id_for(i2);
+
+        // Perform Deletes //
+        let i3_deleted = LogicalId(8);
+        let s3_deleted = reference.slot_id_for(i3_deleted);
+
+        repr::Representation::retire(spherical, s3_deleted.value()).unwrap();
+        reference.delete(i3_deleted);
+
+        let i4_deleted = LogicalId(4);
+        let s4_deleted = reference.slot_id_for(i4_deleted);
+
+        repr::Representation::retire(spherical, s4_deleted.value()).unwrap();
+        reference.delete(i4_deleted);
+
+        // Extract Values.
+        let v0 = &reference[i0];
+        let v1 = &reference[i1];
+        let v2 = &reference[i2];
+
+        // Compress the dataset vectors.
+        let quantizer = spherical.quantizer();
+        let bytes = quantizer.bytes();
+        let mut b0 = vec![0u8; bytes];
+        let mut b1 = vec![0u8; bytes];
+        let mut b2 = vec![0u8; bytes];
+
+        fn _compress(quantizer: &dyn iface::Quantizer, v: &[f32], b: &mut [u8]) {
+            let alloc = ScopedAllocator::global();
+            quantizer
+                .compress(v, iface::OpaqueMut::new(b), alloc)
+                .unwrap();
+
+            // Make sure that compression actually did something.
+            assert!(!b.iter().all(|i| *i == 0));
+        }
+
+        _compress(quantizer, v0, &mut b0);
+        _compress(quantizer, v1, &mut b1);
+        _compress(quantizer, v2, &mut b2);
+
+        // Insert
+        {
+            let computer = quantizer
+                .fused_query_computer(
+                    &query,
+                    iface::QueryLayout::SameAsData,
+                    false,
+                    GlobalAllocator,
+                    ScopedAllocator::global(),
+                )
+                .unwrap();
+
+            let distances = HashMap::from_iter([
+                (s0, RawQueryDistance::eval(&computer, &b0).unwrap()),
+                (s1, RawQueryDistance::eval(&computer, &b1).unwrap()),
+                (s2, RawQueryDistance::eval(&computer, &b2).unwrap()),
+            ]);
+
+            let counters = Counters::new();
+            let mut sa = repr::Insert::insert_search_accessor(
+                spherical,
+                query.as_slice(),
+                &(),
+                counters.local(),
+            )
+            .unwrap();
+
+            assert!(
+                sa.get_post_process().is_none(),
+                "insert accessors should not build a post-processor -- {}",
+                ctx,
+            );
+
+            test_expand_beam(
+                sa.get_expand_beam(),
+                distances,
+                &[s0, s1, s3_deleted, s2, s4_deleted],
+                ctx,
+            );
+        }
+
+        // Search
+        {
+            let computer = quantizer
+                .fused_query_computer(
+                    &query,
+                    iface::QueryLayout::FullPrecision,
+                    true,
+                    GlobalAllocator,
+                    ScopedAllocator::global(),
+                )
+                .unwrap();
+
+            let distances = HashMap::from_iter([
+                (s0, RawQueryDistance::eval(&computer, &b0).unwrap()),
+                (s1, RawQueryDistance::eval(&computer, &b1).unwrap()),
+                (s2, RawQueryDistance::eval(&computer, &b2).unwrap()),
+            ]);
+
+            let counters = Counters::new();
+            let mut sa =
+                repr::Search::search_accessor(spherical, query.as_slice(), &(), counters.local())
+                    .unwrap();
+
+            test_expand_beam(
+                sa.get_expand_beam(),
+                distances,
+                &[s0, s1, s3_deleted, s2, s4_deleted],
+                ctx,
+            );
+
+            if rerank == Rerank::None {
+                assert!(
+                    sa.get_post_process().is_none(),
+                    "search accessors should not build a post-processor with reranking disabled -- {}",
+                    ctx,
+                );
+            } else {
+                let post_process = match sa.get_post_process() {
+                    Some(post_process) => post_process,
+                    None => panic!("expected a post processor -- {}", ctx),
+                };
+
+                let f = <f32 as diskann_vector::distance::DistanceProvider<f32>>::distance_comparer(
+                    convert_metric(metric),
+                    None,
+                );
+
+                let distances = HashMap::from_iter([
+                    (s0, f.call(&query, v0)),
+                    (s1, f.call(&query, v1)),
+                    (s2, f.call(&query, v2)),
+                ]);
+
+                test_rerank(
+                    post_process,
+                    distances,
+                    &[s0, s1, s3_deleted, s2, s4_deleted],
+                    ctx,
+                );
+            }
+        }
+
+        // Prune
+        {
+            let computer = quantizer.distance_computer_ref();
+            let b00 = RawDistance::eval(&computer, &b0, &b0).unwrap();
+            let b01 = RawDistance::eval(&computer, &b0, &b1).unwrap();
+            let b02 = RawDistance::eval(&computer, &b0, &b2).unwrap();
+
+            let b10 = b01;
+            let b11 = RawDistance::eval(&computer, &b1, &b1).unwrap();
+            let b12 = RawDistance::eval(&computer, &b1, &b2).unwrap();
+
+            let b20 = b02;
+            let b21 = b12;
+            let b22 = RawDistance::eval(&computer, &b2, &b2).unwrap();
+
+            let distances = HashMap::from_iter([
+                ((s0, s0), b00),
+                ((s0, s1), b01),
+                ((s0, s2), b02),
+                ((s1, s0), b10),
+                ((s1, s1), b11),
+                ((s1, s2), b12),
+                ((s2, s0), b20),
+                ((s2, s1), b21),
+                ((s2, s2), b22),
+            ]);
+
+            let counters = Counters::new();
+            let mut pa = repr::Insert::prune_accessor(spherical, counters.local()).unwrap();
+
+            test_prune(
+                pa.get_prune(),
+                distances,
+                &[s0, s1, s3_deleted, s2, s4_deleted],
+                ctx,
+            );
+        }
+    }
+
+    /// The happy-patch entry point.
+    ///
+    /// Note that this method does a grid of the supported parameters. Adding new values
+    /// to these parameters has a multiplicative effect on runtime.
+    ///
+    /// This mainly matters for Miri tests. Currently, the Miri test for this function takes
+    /// about 30 seconds. If it starts to take much longer, this test should be split into
+    /// multiple entry points for parallelism.
     #[test]
     fn test_spherical() {
-        let spherical = test_repr(SupportedMetric::SquaredL2, Bits::One, Rerank::F16);
+        let metrics = [
+            SupportedMetric::SquaredL2,
+            SupportedMetric::InnerProduct,
+            SupportedMetric::Cosine,
+        ];
+
+        let bits = [Bits::One, Bits::Two, Bits::Four];
+        let rerank = [Rerank::None, Rerank::F16];
+
+        for metric in metrics {
+            for bits in bits {
+                for rerank in rerank {
+                    let (spherical, mut reference) = make_test_repr(metric, bits, rerank, true);
+
+                    test_distances(
+                        &spherical,
+                        &mut reference,
+                        metric,
+                        rerank,
+                        &format_args!(
+                            "metric = {:?}, bits = {:?}, rerank = {:?}",
+                            metric, bits, rerank
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    //-------------//
+    // Error Paths //
+    //-------------//
+
+    #[test]
+    fn test_config_dim_mismatch() {
+        let data = Matrix::new(1.0f32, 2, 5);
+        let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
+
+        let start_points = Matrix::new(0.0f32, 1, 6); // Wrong number of columns
+        let err = Spherical::config(
+            quantizer,
+            Capacity::new(10),
+            MaxDegree::new(0),
+            start_points,
+            Rerank::None,
+        )
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert_contains!(
+            msg,
+            "quantizer configured for dimension 5 but given start points have dimension 6"
+        );
+    }
+
+    #[test]
+    fn test_build_error_uncompressible_query() {
+        let data = Matrix::new(1.0f32, 2, 5);
+        let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
+
+        let start_points = Matrix::new(f32::INFINITY, 1, 5); // Wrong number of columns
+        let config = Spherical::config(
+            quantizer,
+            Capacity::new(10),
+            MaxDegree::new(0),
+            start_points,
+            Rerank::None,
+        )
+        .unwrap();
+
+        let err = repr::RepresentationConfig::build(config).unwrap_err();
+        let msg = err.to_string();
+        assert_contains!(
+            msg,
+            "query compression",
+            "we tried to compress a start point with infinites in it - this should error"
+        );
+
+        assert_contains!(
+            msg,
+            "1 of 1",
+            "error message should contain which query errored",
+        );
+    }
+
+    #[test]
+    fn test_set_capacity_exhaustion() {
+        let (spherical, _) =
+            make_test_repr(SupportedMetric::SquaredL2, Bits::One, Rerank::None, true);
+
+        let err = repr::Set::set(&spherical, &[1.0, 2.0]).unwrap_err();
+        assert_contains!(err.to_string(), "could not allocate a new slot",);
+    }
+
+    #[test]
+    fn test_set_dim_mismatch() {
+        let (spherical, _) =
+            make_test_repr(SupportedMetric::SquaredL2, Bits::One, Rerank::None, false);
+
+        let err = repr::Set::set(&spherical, &[1.0, 2.0, 3.0]).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "vector dim 3 does not match quantizer dim 2",
+        );
+    }
+
+    #[test]
+    fn test_insert_slot_recovery() {
+        let (spherical, _) =
+            make_test_repr(SupportedMetric::SquaredL2, Bits::One, Rerank::F16, true);
+
+        // Free up one slot.
+        repr::Representation::retire(&spherical, 0).unwrap();
+
+        // Insert something that is incompressible.
+        let err = repr::Set::set(&spherical, &[f32::INFINITY, f32::INFINITY]).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "query compression"
+        );
+
+        // If we insert again, this should succeed.
+        let guard = repr::Set::set(&spherical, &[1.0, 2.0]).unwrap();
+        assert_eq!(repr::Guard::id(&guard), 0);
     }
 }
