@@ -614,7 +614,8 @@ mod tests {
     #[case::several_workers(3)]
     fn multiple_stripes_and_their_partial_tail_preserve_all_assignments(#[case] workers: usize) {
         // More than two maximum-sized stripes, with three points left over.
-        // Repeated dense rows at 0, 4 and 10 have unambiguous nearest centers.
+        // Each dense row selects two of the three centers at 10, 0 and 4.
+        // Every row selects 4; its other center is 10 for x=10 and 0 otherwise.
         let point_count = 2 * MAX_ASSIGNMENT_STRIPE_POINTS + 3;
         let dimensions = 384;
         let values: Vec<_> = (0..point_count)
@@ -631,6 +632,7 @@ mod tests {
                 .copied()
                 .filter(|id| id % 3 != 2)
                 .collect::<Vec<_>>(),
+            ids.clone(),
         ];
         let buffers = StripeBufferPool::new((), 0, None);
         let pool = rayon::ThreadPoolBuilder::new()
@@ -639,7 +641,7 @@ mod tests {
             .unwrap();
 
         let actual = pool
-            .install(|| assign_to_leaders::<_, L2, _>(ARCH, data, &ids, &[2, 0], 1, &buffers))
+            .install(|| assign_to_leaders::<_, L2, _>(ARCH, data, &ids, &[2, 0, 1], 2, &buffers))
             .unwrap();
 
         assert_eq!(
@@ -865,6 +867,60 @@ mod tests {
                 "duplicate IDs in leaf {leaf:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_second_replica_adds_new_leaf_memberships() {
+        let point_count = 33;
+        let values = test_support::dense_points(point_count, 17, 1290);
+        let data = MatrixView::try_from(values.as_slice(), point_count, 17).unwrap();
+        let config = PiPNNConfig {
+            c_max: 8,
+            c_min: 1,
+            p_samp: 0.25,
+            fanout: vec![1],
+            ..splitting_config()
+        };
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let first = pool
+            .install(|| partition::<_, L2, _>(ARCH, data, &config))
+            .unwrap();
+
+        let combined = pool
+            .install(|| {
+                partition::<_, L2, _>(
+                    ARCH,
+                    data,
+                    &PiPNNConfig {
+                        replicas: 2,
+                        ..config
+                    },
+                )
+            })
+            .unwrap();
+
+        let first = sorted_leaf_memberships(&first);
+        let combined = sorted_leaf_memberships(&combined);
+        assert!(first.iter().all(|leaf| combined.contains(leaf)));
+        // This fixed cloud and partial sample produce different memberships in
+        // the second pass. Repeating the first seed would only duplicate leaves.
+        assert!(combined.iter().any(|leaf| !first.contains(leaf)));
+        // Fanout one gives every point exactly one membership per replica.
+        let mut memberships = vec![0; point_count];
+        for leaf in &combined {
+            assert!(
+                !leaf.is_empty() && leaf.len() <= config.c_max,
+                "leaf {leaf:?}"
+            );
+            assert_eq!(leaf.iter().collect::<HashSet<_>>().len(), leaf.len());
+            for &id in leaf {
+                memberships[id as usize] += 1;
+            }
+        }
+        assert_eq!(memberships, vec![2; point_count]);
     }
 
     #[rstest]
