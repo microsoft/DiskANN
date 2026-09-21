@@ -706,6 +706,49 @@ mod construction_tests {
     }
 
     #[rstest]
+    #[case::l2(Metric::L2, vec![vec![2], vec![], vec![0], vec![]])]
+    #[case::cosine(Metric::Cosine, vec![vec![1], vec![0], vec![3], vec![2]])]
+    #[case::normalized_cosine(Metric::CosineNormalized, vec![vec![1], vec![0], vec![3], vec![2]])]
+    #[case::inner_product(Metric::InnerProduct, vec![vec![1], vec![0], vec![3], vec![2]])]
+    fn splitting_uses_the_requested_metric_to_group_points(
+        #[case] metric: Metric,
+        #[case] expected: Vec<Vec<u32>>,
+    ) {
+        // Four points force splitting at c_max=2. Every point is sampled, so
+        // leader order cannot change memberships. With L2, leader 0 gets {0,2}
+        // and leader 2 gets all four points, which then split into singletons.
+        // Cosine pairs directions {0,1} and {2,3}. Inner product picks leaders
+        // {1,2} for points 0/1 and {2,3} for points 2/3; the oversized leader-2
+        // cluster then splits into those same pairs using fanout one.
+        let values = test_support::packed_points(
+            &[[1.0, 0.0], [6.0, 1.0], [2.0, 4.0], [0.0, 9.0]],
+            2,
+            metric == Metric::CosineNormalized,
+        );
+        let data = MatrixView::try_from(values.as_slice(), 4, 2).unwrap();
+        let config = PiPNNConfig {
+            c_max: 2,
+            ..partition_policy()
+        };
+        // Every two-point leaf contributes its only pair; degree three retains
+        // every edge. The graph therefore exposes partition membership directly.
+        let graph = graph_policy(3, metric).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
+
+        let actual = build_graph(data, &context).unwrap();
+        let actual: Vec<_> = actual.into_iter().map(Vec::from).collect();
+
+        assert_eq!(
+            test_support::sorted_members_per_row(&actual),
+            test_support::sorted_members_per_row(&expected)
+        );
+    }
+
+    #[rstest]
     #[case::signed_leaf_ranking([1_i8, 0, 4, 1, 1, 2, 0, 9], 1, 3)]
     #[case::unsigned_leaf_ranking([1_u8, 0, 4, 1, 1, 2, 0, 9], 1, 3)]
     #[case::signed_final_pruning([1_i8, 0, 4, 1, 1, 2, 0, 9], 3, 1)]
