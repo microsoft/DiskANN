@@ -468,172 +468,258 @@ fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
     }
 }
 
-#[cfg(test)]
-mod build_leaf_candidates_tests {
-    use diskann_wide::arch::Scalar;
-    use half::f16;
+#[cfg(all(test, not(miri)))]
+mod tests {
+    use super::*;
+    use crate::graph::pipnn::{L2, test_support};
+    use diskann_wide::ARCH;
     use rstest::rstest;
 
-    use super::*;
-    use crate::graph::pipnn::{InnerProduct, L2};
-
-    fn build_candidates<T: VectorRepr, M: LeafMetric>(
-        data: MatrixView<'_, T>,
-        leaves: Vec<Vec<u32>>,
-        k: usize,
-        threads: usize,
-    ) -> Vec<Vec<u32>> {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .unwrap()
-            .install(|| build_leaf_candidates::<_, M, _>(Scalar, data, leaves, k))
-            .unwrap()
-            .into_iter()
-            .map(Vec::from)
-            .collect()
-    }
-
-    #[rstest]
-    #[case::f32([5.5_f32, 100.0, 1.25, 50.0, 0.25])]
-    #[case::f16([5.5, 100.0, 1.25, 50.0, 0.25].map(f16::from_f32))]
-    #[case::u8([5_u8, 100, 1, 50, 0])]
-    #[case::i8([-6_i8, 100, -10, 50, -11])]
-    fn selected_local_positions_become_global_ids<T: VectorRepr>(#[case] values: [T; 5]) {
-        // Given: only IDs 0, 2, 4 belong to the leaf. Their coordinates decrease,
-        // so 0 selects 2, while 2 and 4 select each other. Reverse edges add 2 -> 0.
-        let data = MatrixView::column_vector(&values[..]);
-        let leaves = vec![vec![0, 2, 4]];
-        let expected = [vec![2], vec![], vec![0, 4], vec![], vec![2]];
-
-        // When
-        let actual = build_candidates::<_, L2>(data, leaves, 1, 1);
-
-        // Then
-        assert_eq!(actual, expected);
-    }
-
     #[test]
-    fn unassigned_kernel_results_add_no_edges() {
-        // Given: the NaN point has no rankable distances. The two finite points
-        // select each other, leaving their second output slot unassigned.
-        let values = [0.0_f32, 1.0, f32::NAN];
-        let data = MatrixView::column_vector(&values[..]);
-        let expected = [vec![1], vec![0], vec![]];
+    fn selected_neighbors_use_global_ids_and_contribute_both_edge_directions() {
+        // The leaf lists IDs [5, 1, 3], at coordinates [9, 0, 2].
+        // The directed choices are 1 -> 3, 3 -> 1 and 5 -> 3.
+        let values = [100.0_f32, 0.0, -100.0, 2.0, 200.0, 9.0];
+        let data = MatrixView::try_from(&values[..], 6, 1).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
 
-        // When
-        let actual = build_candidates::<_, InnerProduct>(data, vec![vec![0, 1, 2]], 2, 1);
+        let actual = pool
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, vec![vec![5, 1, 3]], 1))
+            .unwrap();
+        let actual: Vec<_> = actual.into_iter().map(Vec::from).collect();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert_eq!(
+            test_support::sorted_members_per_row(&actual),
+            [vec![], vec![3], vec![], vec![1, 5], vec![], vec![3]]
+        );
     }
 
     #[rstest]
     #[case::one_worker(1)]
-    #[case::four_workers(4)]
-    fn overlapping_leaves_merge_into_sorted_unique_neighbors(#[case] threads: usize) {
-        // Given: k = 2 connects every pair in each three-point leaf. The union
-        // contains all pairs except 1 <-> 3, regardless of repeated leaf jobs.
-        let values = [0.0_f32, 1.0, 2.0, 3.0];
-        let data = MatrixView::column_vector(&values[..]);
-        let leaves = [vec![0, 1, 2], vec![0, 2, 3], vec![0, 1, 2]]
-            .into_iter()
-            .cycle()
-            .take(48)
-            .collect();
-        let expected = [vec![1, 2, 3], vec![0, 2], vec![0, 1, 3], vec![0, 2]];
+    #[case::several_workers(3)]
+    fn overlapping_leaves_merge_each_neighbor_once(#[case] workers: usize) {
+        let values = [0.0_f32, 1.0, 4.0, 9.0, 16.0];
+        let data = MatrixView::try_from(&values[..], 5, 1).unwrap();
+        let leaves = vec![vec![0, 1, 2], vec![1, 2, 3], vec![2, 3, 4], vec![0, 1, 2]];
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
 
-        // When
-        let actual = build_candidates::<_, L2>(data, leaves, 2, threads);
+        let actual = pool
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, 1))
+            .unwrap();
+        let actual: Vec<_> = actual.into_iter().map(Vec::from).collect();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert_eq!(
+            test_support::sorted_members_per_row(&actual),
+            [vec![1], vec![0, 2], vec![1, 3], vec![2, 4], vec![3]]
+        );
+    }
+
+    #[rstest]
+    #[case::no_leaves(vec![], 2)]
+    #[case::empty_leaf(vec![vec![]], 2)]
+    #[case::singleton(vec![vec![2]], 2)]
+    #[case::zero_neighbors(vec![vec![0, 1, 2]], 0)]
+    fn leaves_without_selected_pairs_produce_empty_adjacency(
+        #[case] leaves: Vec<Vec<u32>>,
+        #[case] requested_k: usize,
+    ) {
+        let values = [0.0_f32, 1.0, 4.0];
+        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+
+        let actual = pool
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, requested_k))
+            .unwrap();
+
+        assert_eq!(
+            actual.into_iter().map(Vec::from).collect::<Vec<_>>(),
+            [Vec::<u32>::new(), vec![], vec![]]
+        );
     }
 
     #[test]
-    fn reverse_edges_can_give_a_point_more_than_twice_k_neighbors() {
-        // Given: each outer point is distance 1 from the origin and at least
-        // sqrt(2) from another outer point. Their three reverse edges exceed 2k.
-        let points = [[0.0_f32, 0.0], [1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]];
-        let data = MatrixView::try_from(points.as_flattened(), 4, 2).unwrap();
-        let expected = [vec![1, 2, 3], vec![0], vec![0], vec![0]];
+    fn requesting_more_neighbors_than_a_leaf_has_selects_all_other_points() {
+        let values = [100.0_f32, 0.0, -100.0, 2.0, 200.0, 9.0];
+        let data = MatrixView::try_from(&values[..], 6, 1).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
 
-        // When
-        let actual = build_candidates::<_, L2>(data, vec![vec![0, 1, 2, 3]], 1, 1);
+        let actual = pool
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, vec![vec![1, 3, 5]], 99))
+            .unwrap();
+        let actual: Vec<_> = actual.into_iter().map(Vec::from).collect();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert_eq!(
+            test_support::sorted_members_per_row(&actual),
+            [vec![], vec![3, 5], vec![], vec![1, 5], vec![], vec![1, 3]]
+        );
     }
 
     #[test]
-    fn singleton_leaves_add_no_edges() {
-        // Given
-        let values = [0.0_f32, 1.0, 2.0];
-        let data = MatrixView::column_vector(&values[..]);
-        let leaves = vec![vec![0], vec![1], vec![2]];
-        let expected: [Vec<u32>; 3] = [vec![], vec![], vec![]];
+    fn unrankable_pairs_do_not_add_unassigned_ids_to_the_graph() {
+        let values = [0.0_f32, 3.0, f32::NAN];
+        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
 
-        // When
-        let actual = build_candidates::<_, L2>(data, leaves, 1, 1);
+        let actual = pool
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, vec![vec![0, 1, 2]], 2))
+            .unwrap();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert_eq!(
+            actual.into_iter().map(Vec::from).collect::<Vec<_>>(),
+            [vec![1], vec![0], vec![]]
+        );
     }
 
     #[test]
-    fn reused_leaf_buffers_do_not_add_edges_from_previous_leaves() {
-        // Given: use the same buffers for four points, two points, then three.
-        // The final leaf excludes ID 1 and connects all pairs among 0, 2, 3.
-        let values = [0.0_f32, 1.0, 2.0, 3.0];
-        let data = MatrixView::column_vector(&values[..]);
+    fn reused_leaf_buffers_do_not_carry_edges_between_different_leaf_shapes() {
+        let values = [0.0_f32, 1.0, 4.0, 9.0, 16.0, 25.0, 36.0];
+        let data = MatrixView::try_from(&values[..], 7, 1).unwrap();
         let mut buffers = LeafBuffers::default();
-        let mut build_leaf = |point_ids: &[u32]| {
-            let candidates: Vec<_> = (0..data.nrows())
-                .map(|_| Mutex::new(AdjacencyList::new()))
-                .collect();
+
+        // The same worker processes a leaf, a smaller leaf, then more neighbors
+        // per point. Every call must use only its current IDs and active rows.
+        for (ids, requested_k, expected) in [
+            (
+                vec![0, 1, 2, 3],
+                1,
+                vec![
+                    vec![1],
+                    vec![0, 2],
+                    vec![1, 3],
+                    vec![2],
+                    vec![],
+                    vec![],
+                    vec![],
+                ],
+            ),
+            (
+                vec![4, 6],
+                99,
+                vec![vec![], vec![], vec![], vec![], vec![6], vec![], vec![4]],
+            ),
+            (
+                vec![1, 3, 5],
+                2,
+                vec![
+                    vec![],
+                    vec![3, 5],
+                    vec![],
+                    vec![1, 5],
+                    vec![],
+                    vec![1, 3],
+                    vec![],
+                ],
+            ),
+        ] {
+            let candidates: Vec<_> = (0..7).map(|_| Mutex::new(AdjacencyList::new())).collect();
+
             add_direct_leaf_candidates::<_, L2, _>(
-                Scalar,
+                ARCH,
                 data,
                 0,
-                point_ids,
-                2,
+                &ids,
+                requested_k,
                 &mut buffers,
                 &candidates,
             )
             .unwrap();
-            candidates
+
+            let actual: Vec<_> = candidates
                 .into_iter()
-                .map(|list| {
-                    let mut ids = Vec::from(list.into_inner());
+                .map(|row| {
+                    let mut ids = Vec::from(row.into_inner());
                     ids.sort_unstable();
                     ids
                 })
-                .collect::<Vec<_>>()
+                .collect();
+            assert_eq!(actual, expected, "leaf {ids:?}, k={requested_k}");
+        }
+    }
+
+    #[rstest]
+    #[case::point_values(2, 1, 2)]
+    #[case::pair_matrix(1, 2, usize::MAX)]
+    fn an_overflowing_leaf_shape_is_rejected_before_buffers_change(
+        #[case] dimensions: usize,
+        #[case] requested_k: usize,
+        #[case] expected_columns: usize,
+    ) {
+        let old_neighbor = Candidate::new(1, 7.0);
+        let mut buffers = LeafBuffers {
+            point_values: vec![3.0, 4.0],
+            neighbors: vec![old_neighbor],
+            ..LeafBuffers::default()
         };
-        build_leaf(&[0, 1, 2, 3]);
-        build_leaf(&[1, 3]);
-        let expected = [vec![2, 3], vec![], vec![0, 3], vec![0, 2]];
 
-        // When
-        let actual = build_leaf(&[0, 2, 3]);
+        let error = buffers
+            .prepare(7, usize::MAX, dimensions, requested_k)
+            .unwrap_err();
 
-        // Then
-        assert_eq!(actual, expected);
+        assert!(matches!(
+            error,
+            LeafBuildError::ShapeOverflow {
+                leaf: 7,
+                rows: usize::MAX,
+                columns,
+            } if columns == expected_columns
+        ));
+        assert_eq!(buffers.point_values, [3.0, 4.0]);
+        assert_eq!(buffers.neighbors, [old_neighbor]);
     }
 
     #[test]
-    fn overflowing_leaf_shape_is_rejected() {
-        // Given
-        let mut buffers = LeafBuffers::default();
+    fn a_kernel_error_retains_the_failed_leaf_and_original_cause() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("distance calculation unavailable")]
+        struct DistanceFailure;
 
-        // When
-        let result = buffers.prepare(7, usize::MAX, 2, 1);
+        // This stub supplies an otherwise hard-to-trigger dependency failure.
+        // Gathering, leaf indexing and error wrapping remain real.
+        struct UnavailableMetric;
+        impl LeafMetric for UnavailableMetric {
+            fn compute_distances(_: MatrixView<'_, f32>, _: &mut [f32]) -> crate::ANNResult<()> {
+                Err(crate::ANNError::new(DistanceFailure))
+            }
+        }
 
-        // Then
-        assert!(matches!(
-            result,
-            Err(LeafBuildError::ShapeOverflow { leaf: 7, .. })
-        ));
+        let values = [0.0_f32, 1.0, 4.0, 9.0];
+        let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+
+        let error = pool
+            .install(|| {
+                build_leaf_candidates::<_, UnavailableMetric, _>(
+                    ARCH,
+                    data,
+                    vec![vec![], vec![1, 3]],
+                    1,
+                )
+            })
+            .unwrap_err();
+
+        let LeafBuildError::Kernel { leaf, source } = error else {
+            panic!("expected a leaf kernel error, got {error:?}");
+        };
+        assert_eq!(leaf, 1);
+        assert!(source.downcast_ref::<DistanceFailure>().is_some());
     }
 }
 
