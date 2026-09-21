@@ -803,7 +803,7 @@ mod tests {
     ) where
         for<'a> MicroKernel<'a, A, MR, NR>: driver::MicroKernel,
     {
-        let (ref_a, ref_b, ref_c) = maxsim::test::generate(MR, k.value().get(), NR, rng);
+        let (ref_a, ref_b, ref_c) = maxsim::test::generate_f32(MR, k.value().get(), NR, rng);
 
         // From the reference problem, we need to transpose both `ref_a` and `ref_b` to get
         // them into the desired format.
@@ -931,7 +931,8 @@ mod tests {
                     continue;
                 }
 
-                let (ref_a, ref_b, ref_c) = maxsim::test::generate(MR, k.value().get(), cols, rng);
+                let (ref_a, ref_b, ref_c) =
+                    maxsim::test::generate_f32(MR, k.value().get(), cols, rng);
 
                 // From the reference problem, we need to transpose both `ref_a` and `ref_b` to get
                 // them into the desired format.
@@ -1056,7 +1057,7 @@ mod tests {
             let k = DimK::new(NonZeroUsize::new(k).unwrap());
 
             let (ref_a, ref_b, ref_c) =
-                maxsim::test::generate(total_a_rows, k.value().get(), total_b_cols, rng);
+                maxsim::test::generate_f32(total_a_rows, k.value().get(), total_b_cols, rng);
 
             // Massage the input data in the form needed by the kernel.
             let a_bt = BlockTransposed::<f32, MR>::from_matrix_view(ref_a.as_view());

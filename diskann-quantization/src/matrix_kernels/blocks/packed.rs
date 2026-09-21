@@ -290,8 +290,6 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     }
 
     /// Return the number of elements spanned by one physical row.
-    // Exercised by tests; consumed by PACK-aware kernels once they land.
-    #[allow(dead_code)]
     pub(in crate::matrix_kernels) const fn row_stride(&self) -> Elements<T> {
         Elements::new(SZ * PACK)
     }
@@ -299,8 +297,6 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     /// Return the number of physical rows in `self`.
     ///
     /// `k` must be equal to the contraction dimension tracked by [`Self::k`].
-    // Exercised by tests; consumed by PACK-aware kernels once they land.
-    #[allow(dead_code)]
     pub(in crate::matrix_kernels) fn rows(&self, k: DimK) -> usize {
         bounds::check_eq!(self.k, k.value());
         padded_k::<PACK>(k.value().get()) / PACK

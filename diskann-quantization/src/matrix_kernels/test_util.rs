@@ -64,6 +64,12 @@ impl Distribution<f32> for TestDistr {
     }
 }
 
+impl Distribution<i8> for TestDistr {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> i8 {
+        rng.random_range(i8::MIN..=i8::MAX)
+    }
+}
+
 impl Distribution<f16> for TestDistr {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> f16 {
         f16::from_f32(<Self as Distribution<f32>>::sample(self, rng))

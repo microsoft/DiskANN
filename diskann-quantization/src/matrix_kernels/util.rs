@@ -102,6 +102,7 @@ mod x86_64 {
 
     impl_loadstore!(f32, 8, f32x8, V3);
     impl_loadstore!(f32, 16, f32x16, V3);
+    impl_loadstore!(i32, 16, i32x16, V3);
 
     impl_loadstore!(f32, 8, f32x8, V4);
     impl_loadstore!(f32, 16, f32x16, V4);
@@ -273,6 +274,12 @@ mod test {
         }
     }
 
+    impl FromUsize for i32 {
+        fn from_usize(v: usize) -> Self {
+            v as i32
+        }
+    }
+
     fn double<T>(x: usize) -> T
     where
         T: FromUsize,
@@ -322,6 +329,7 @@ mod test {
         test_load_store_scalar,
         Some(Scalar),
         f32 => { 4, 8, 16 },
+        i32 => { 8 },
     );
 
     #[cfg(target_arch = "x86_64")]
@@ -329,6 +337,7 @@ mod test {
         test_load_store_v3,
         V3::new_checked(),
         f32 => { 8, 16 },
+        i32 => { 16 },
     );
 
     #[cfg(target_arch = "x86_64")]

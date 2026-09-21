@@ -8,7 +8,7 @@ use diskann_utils::views::Matrix;
 use crate::matrix_kernels::test_util::TestDistr;
 
 /// Generate a test MaxSim problem `[M x K] . [K x N]` where both matrices are row-major.
-pub(super) fn generate(
+pub(super) fn generate_f32(
     m: usize,
     k: usize,
     n: usize,
@@ -25,6 +25,36 @@ pub(super) fn generate(
                 let mut ip = 0.0;
                 for (k, a) in a_row.iter().enumerate() {
                     ip = a.mul_add(ref_b[(k, b_col)], ip);
+                }
+                max_ip = max_ip.max(ip);
+            }
+
+            max_ip
+        })
+        .collect();
+
+    (ref_a, ref_b, ref_c)
+}
+
+/// Generate a test integer MaxSim problem `[M x K] . [K x N]` where both matrices are
+/// row-major.
+pub(super) fn generate_i8(
+    m: usize,
+    k: usize,
+    n: usize,
+    rng: &mut impl rand::Rng,
+) -> (Matrix<i8>, Matrix<i8>, Vec<i32>) {
+    let ref_a = TestDistr::matrix::<i8>(m, k, rng);
+    let ref_b = TestDistr::matrix::<i8>(k, n, rng);
+
+    let ref_c: Vec<i32> = ref_a
+        .row_iter()
+        .map(|a_row| {
+            let mut max_ip = i32::MIN;
+            for b_col in 0..n {
+                let mut ip = 0;
+                for (k, a) in a_row.iter().enumerate() {
+                    ip += i32::from(*a) * i32::from(ref_b[(k, b_col)]);
                 }
                 max_ip = max_ip.max(ip);
             }
