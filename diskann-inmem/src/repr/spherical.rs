@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! A quantized store for RabitQ style compressed vectors.
+
 use std::num::NonZeroUsize;
 
 use diskann::{ANNError, ANNResult, error::ErrorContext, utils::IntoUsize};
@@ -30,9 +32,12 @@ use crate::{
     },
 };
 
+/// The configuration for a [`Spherical`] representation.
 #[derive(Debug)]
 pub struct Config {
+    /// The underlying quantizer for the compressed store.
     quantizer: Poly<dyn iface::Quantizer>,
+    /// The start points. These must have dimensions equal to `quantizer.full_dim()`.
     start_points: Matrix<f32>,
     layout: store::Layout,
     store: store::Config,
@@ -43,6 +48,30 @@ pub struct Config {
 const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 
 impl Config {
+    /// Create a new [`Config`]. Parameters will be used as described below:
+    ///
+    /// * `quantizer`: The [`iface::Quantizer`] used to compress vectors and compute
+    ///   distances among compressed vectors.
+    ///
+    /// * `capacity`: The number points allocate space fore.
+    ///
+    /// * `max_degree`: The maximum degree of the internal graph.
+    ///
+    /// * `start_points`: The points to use as frozen start points in the index.
+    ///
+    /// * `rerank`: Whether or not reranking is enabled and if so, the representation of the
+    ///   higher precision vectors.
+    ///
+    /// # Errors
+    ///
+    /// Errors under the following conditions:
+    ///
+    /// * `start_points.ncols() != quantizer.full_dim()`: The dimensionality of the start
+    ///   points must agree with the quantizer.
+    ///
+    /// * `start_points.nrows() == 0`: Currently, empty start-points are not supported.
+    ///
+    /// * The number of start points exceeds `u32::MAX`.
     pub fn new(
         quantizer: Poly<dyn iface::Quantizer>,
         capacity: Capacity,
@@ -56,6 +85,10 @@ impl Config {
                 quantizer_dim,
                 start_points.ncols(),
             ));
+        }
+
+        if start_points.nrows() == 0 {
+            return Err(ConfigError::empty_start_points());
         }
 
         let num_start_points: u32 = start_points
@@ -89,11 +122,13 @@ impl Config {
         self
     }
 
+    /// Build the [`Spherical`] from `self`.
     pub fn build(self) -> ANNResult<Spherical> {
         Spherical::new(self)
     }
 }
 
+/// Errors that can occur during the construction of [`Config`].
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct ConfigError {
@@ -109,6 +144,12 @@ impl ConfigError {
                 quantizer,
                 start_points,
             },
+        }
+    }
+
+    fn empty_start_points() -> Self {
+        Self {
+            inner: ConfigErrorInner::EmptyStartPoints,
         }
     }
 
@@ -130,6 +171,8 @@ enum ConfigErrorInner {
         quantizer: usize,
         start_points: usize,
     },
+    #[error("at least one start point must be provided")]
+    EmptyStartPoints,
     #[error("{} start points exceeds u32::MAX", num_start_points)]
     TooManyStartPoints { num_start_points: usize },
 }
@@ -145,7 +188,12 @@ impl repr::RepresentationConfig for Config {
 /// Choose how data is going to be reranked.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Rerank {
+    /// No reranking will be performed and no space for higher precision vectors will be
+    /// allocated in [`Spherical`].
     None,
+
+    /// Use 16-bit floating point numbers to store the higher-precision representation.
+    /// These will be used automatically during search to rerank candidates.
     F16,
 }
 
@@ -172,6 +220,9 @@ impl Rerank {
     }
 }
 
+/// Internal representation of [`Rerank`].
+///
+/// This is used for computing distances among the raw values in the auxiliary store.
 #[derive(Debug)]
 enum Reranker {
     None,
@@ -189,6 +240,7 @@ fn convert_metric(metric: SupportedMetric) -> diskann_vector::distance::Metric {
 }
 
 impl Reranker {
+    /// Construct a new [`Reranker`].
     fn new(rerank: Rerank, metric: SupportedMetric, dim: usize) -> Self {
         match rerank {
             Rerank::None => Self::None,
@@ -196,6 +248,10 @@ impl Reranker {
         }
     }
 
+    /// Create a [`repr::PostProcess`].
+    ///
+    /// This assumes that `simple` has the same dimensions as `self`'s contained distance
+    /// computation and that `guard` belongs to `simple`.
     fn post_process<'a>(
         &'a self,
         query: &'a [f32],
@@ -215,12 +271,19 @@ impl Reranker {
         }
     }
 
+    /// Store the vector `v` into the raw buffer `buf`.
     fn store(&self, v: &[f32], buf: &mut [u8]) {
-        use diskann_vector::conversion::CastFromSlice;
-        bytemuck::cast_slice_mut::<u8, f16>(buf).cast_from_slice(v);
+        match self {
+            Self::None => {}
+            Self::F16(_) => {
+                use diskann_vector::conversion::CastFromSlice;
+                bytemuck::cast_slice_mut::<u8, f16>(buf).cast_from_slice(v);
+            }
+        }
     }
 }
 
+/// Spherically quantized data representation.
 #[derive(Debug)]
 pub struct Spherical {
     store: Store<Cons<Intrusive, Optional<Simple>>>,
@@ -233,6 +296,26 @@ pub struct Spherical {
 }
 
 impl Spherical {
+    /// Initialize a [`Config`] for this representation.
+    ///
+    /// See also: [`Config::new`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors described by [`Config::new`].
+    pub fn config(
+        quantizer: Poly<dyn iface::Quantizer>,
+        capacity: Capacity,
+        max_degree: MaxDegree,
+        start_points: Matrix<f32>,
+        rerank: Rerank,
+    ) -> Result<Config, ConfigError> {
+        Config::new(quantizer, capacity, max_degree, start_points, rerank)
+    }
+
+    /// Create a new full-precision representation from `config`.
+    ///
+    /// See: [`Config::build`].
     fn new(config: Config) -> ANNResult<Self> {
         let Config {
             quantizer,
@@ -244,14 +327,12 @@ impl Spherical {
         } = config;
 
         let full_dim = quantizer.full_dim();
-
         let slots = cons::Config::new(
             Intrusive::config(Bytes::new(quantizer.bytes())),
             rerank.config(full_dim),
         );
 
         let store = Store::new(layout, store, slots)?;
-
         let reranker = Reranker::new(rerank, quantizer.metric(), full_dim);
 
         let this = Self {
@@ -284,21 +365,14 @@ impl Spherical {
         Ok(this)
     }
 
-    pub fn config(
-        quantizer: Poly<dyn iface::Quantizer>,
-        capacity: Capacity,
-        max_degree: MaxDegree,
-        start_points: Matrix<f32>,
-        rerank: Rerank,
-    ) -> Result<Config, ConfigError> {
-        Config::new(quantizer, capacity, max_degree, start_points, rerank)
-    }
-
     /// Return the dimension of the data held within `self`.
     pub fn dim(&self) -> usize {
         self.full_dim
     }
 
+    /// * Attempt to compress `v` into the [`cons::Exclusive::first`] position.
+    /// * If [`cons::Exclusive::second`] is occupied, use `self.reranker` to store data
+    ///   into that slot.
     fn set(
         &self,
         v: &[f32],
@@ -319,6 +393,9 @@ impl Spherical {
         Ok(())
     }
 
+    /// Shared entry point for creating [`crate::provider::SearchAccessor`].
+    ///
+    /// See: [`AccessorArgs`].
     fn create_accessor<'a>(
         &'a self,
         query: &'a [f32],
@@ -389,10 +466,23 @@ impl Spherical {
     }
 }
 
+/// Arguments to [`Spherical::create_accessor`].
 #[derive(Debug)]
 struct AccessorArgs {
+    /// The [`iface::QueryLayout`] to use when compressing the query.
     layout: iface::QueryLayout,
+
+    /// Whether or not the query vector can be rescaled.
+    ///
+    /// This only applies to query search. For searches used as part of insertion, rescaling
+    /// should be disabled to ensure distance are compatible with distances computed during
+    /// prune.
     allow_rescale: bool,
+
+    /// Create a [`repr::PostProcess`] for reranking if enabled in the parent struct.
+    ///
+    /// Since insert does not use a reranking step, this can be left as `false` to save
+    /// some processing and allocations.
     rerank_if_enabled: bool,
 }
 
@@ -407,6 +497,7 @@ impl repr::Set<&[f32]> for Spherical {
     type Guard<'a> = Guard<'a>;
 
     fn set(&self, v: &[f32]) -> ANNResult<Guard<'_>> {
+        // Easy check to reject invalid vectors before acquiring an epoch guard.
         if v.len() != self.full_dim {
             let vlen = v.len();
             let full_dim = self.full_dim;
@@ -480,7 +571,6 @@ impl repr::Insert for Spherical {
             .guard(|slots, guard| slots.first().reader(guard))?;
 
         let prune = repr::internal::intrusive::Prune::new(reader, distance);
-
         Ok(crate::provider::PruneAccessor::new(
             prune.boxed(),
             self.store.neighbors(),
@@ -1104,6 +1194,25 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_start_points() {
+        let data = Matrix::new(1.0f32, 2, 5);
+        let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
+
+        let start_points = Matrix::new(0.0f32, 0, 5); // Empty
+        let err = Spherical::config(
+            quantizer,
+            Capacity::new(10),
+            MaxDegree::new(0),
+            start_points,
+            Rerank::None,
+        )
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert_contains!(msg, "at least one start point must be provided",);
+    }
+
+    #[test]
     fn test_build_error_uncompressible_query() {
         let data = Matrix::new(1.0f32, 2, 5);
         let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
@@ -1164,10 +1273,7 @@ mod tests {
 
         // Insert something that is incompressible.
         let err = repr::Set::set(&spherical, &[f32::INFINITY, f32::INFINITY]).unwrap_err();
-        assert_contains!(
-            err.to_string(),
-            "query compression"
-        );
+        assert_contains!(err.to_string(), "query compression");
 
         // If we insert again, this should succeed.
         let guard = repr::Set::set(&spherical, &[1.0, 2.0]).unwrap();
