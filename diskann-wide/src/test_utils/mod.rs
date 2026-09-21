@@ -19,6 +19,3 @@ pub(crate) use ops::{test_binary_op, test_trinary_op, test_unary_op};
 pub(crate) mod dot_product;
 
 pub(crate) mod mask;
-
-pub(crate) mod interleaved;
-pub(crate) use interleaved::{test_deinterleaved_load, test_interleaved_store};

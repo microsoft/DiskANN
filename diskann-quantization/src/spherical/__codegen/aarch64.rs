@@ -22,11 +22,8 @@ pub fn onebit_neon_ip_full_data(
     shift: &[f32],
     dim: usize,
 ) -> Result<DistanceComputer, AllocatorError> {
-    let reify = Reify::<_, _, AsFull, AsData<1>>::new(
-        vectors::CompensatedIP::new(shift, dim),
-        dim,
-        arch,
-    );
+    let reify =
+        Reify::<_, _, AsFull, AsData<1>>::new(vectors::CompensatedIP::new(shift, dim), dim, arch);
 
     DistanceComputer::new(reify, GlobalAllocator)
 }
@@ -39,11 +36,8 @@ pub fn twobit_neon_ip_full_data(
     shift: &[f32],
     dim: usize,
 ) -> Result<DistanceComputer, AllocatorError> {
-    let reify = Reify::<_, _, AsFull, AsData<2>>::new(
-        vectors::CompensatedIP::new(shift, dim),
-        dim,
-        arch,
-    );
+    let reify =
+        Reify::<_, _, AsFull, AsData<2>>::new(vectors::CompensatedIP::new(shift, dim), dim, arch);
 
     DistanceComputer::new(reify, GlobalAllocator)
 }
@@ -56,11 +50,8 @@ pub fn fourbit_neon_ip_full_data(
     shift: &[f32],
     dim: usize,
 ) -> Result<DistanceComputer, AllocatorError> {
-    let reify = Reify::<_, _, AsFull, AsData<4>>::new(
-        vectors::CompensatedIP::new(shift, dim),
-        dim,
-        arch,
-    );
+    let reify =
+        Reify::<_, _, AsFull, AsData<4>>::new(vectors::CompensatedIP::new(shift, dim), dim, arch);
 
     DistanceComputer::new(reify, GlobalAllocator)
 }
