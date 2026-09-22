@@ -84,6 +84,16 @@ use crate::{
 pub(crate) mod intrusive;
 pub(crate) mod slots;
 
+// Quantization
+#[cfg(feature = "quantization")]
+pub(crate) mod cons;
+
+#[cfg(feature = "quantization")]
+pub(crate) mod optional;
+
+#[cfg(any(test, feature = "quantization", feature = "integration-test"))]
+pub(crate) mod simple;
+
 // Integration Test
 #[cfg(any(test, feature = "integration-test"))]
 pub(crate) mod checked;
