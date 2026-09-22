@@ -481,12 +481,8 @@ mod tests {
         assert_eq!(output, [Candidate::new(1, 3.0), Candidate::new(2, 9.0)]);
     }
 
-    #[rstest]
-    fn batch_selection_matches_a_full_sort(
-        #[values(0, 1, LANES - 1, LANES, LANES + 1, 2 * LANES, 2 * LANES + 3, 3 * LANES + 2)]
-        count: usize,
-        #[values(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, LANES + 1)] capacity: usize,
-    ) {
+    #[test]
+    fn batch_selection_matches_a_full_sort() {
         struct SelectRow<'a> {
             distances: &'a [f32],
             output: &'a mut [Candidate],
@@ -498,38 +494,51 @@ mod tests {
             }
         }
 
-        // Each pair offers a nearer score before a farther one. Later pairs improve
-        // on earlier pairs, so a full result must keep lowering its cutoff mid-vector.
-        let mut distances: Vec<_> = (0..count).map(|i| -(i as f32) - 1.0).collect();
-        for pair in distances.chunks_exact_mut(2) {
-            pair.swap(0, 1);
+        for count in [
+            0,
+            1,
+            LANES - 1,
+            LANES,
+            LANES + 1,
+            2 * LANES,
+            2 * LANES + 3,
+            3 * LANES + 2,
+        ] {
+            for capacity in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, LANES + 1] {
+                // Each pair offers a nearer score before a farther one. Later pairs improve
+                // on earlier pairs, so a full result must keep lowering its cutoff mid-vector.
+                let mut distances: Vec<_> = (0..count).map(|i| -(i as f32) - 1.0).collect();
+                for pair in distances.chunks_exact_mut(2) {
+                    pair.swap(0, 1);
+                }
+
+                // Sorting the whole input is independent of TopK's insertion and cutoff logic.
+                let mut expected: Vec<_> = distances
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &distance)| Candidate::new(index as u32, distance))
+                    .collect();
+                expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+                expected.truncate(capacity);
+                expected.resize(capacity, EMPTY);
+                let mut output = vec![EMPTY; capacity];
+                let mut capacity_reads = 0;
+
+                with_topk(
+                    {
+                        capacity_reads += 1;
+                        capacity
+                    },
+                    SelectRow {
+                        distances: &distances,
+                        output: &mut output,
+                    },
+                );
+
+                assert_eq!(output, expected, "count={count}, capacity={capacity}");
+                assert_eq!(capacity_reads, 1, "count={count}, capacity={capacity}");
+            }
         }
-
-        // Sorting the whole input is independent of TopK's insertion and cutoff logic.
-        let mut expected: Vec<_> = distances
-            .iter()
-            .enumerate()
-            .map(|(index, &distance)| Candidate::new(index as u32, distance))
-            .collect();
-        expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-        expected.truncate(capacity);
-        expected.resize(capacity, EMPTY);
-        let mut output = vec![EMPTY; capacity];
-        let mut capacity_reads = 0;
-
-        with_topk(
-            {
-                capacity_reads += 1;
-                capacity
-            },
-            SelectRow {
-                distances: &distances,
-                output: &mut output,
-            },
-        );
-
-        assert_eq!(output, expected, "count={count}, capacity={capacity}");
-        assert_eq!(capacity_reads, 1);
     }
 
     #[test]
@@ -612,12 +621,8 @@ mod tests {
         assert_eq!(limits, [6.0, 7.0, 4.0, 4.0]);
     }
 
-    #[rstest]
-    fn pair_scans_match_full_row_sort_across_capacities_and_lengths(
-        #[values(LANES, LANES + 1, LANES + 2, 2 * LANES, 2 * LANES + 1, 2 * LANES + 2)]
-        point_count: usize,
-        #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17)] capacity: usize,
-    ) {
+    #[test]
+    fn pair_scans_match_full_row_sort_across_capacities_and_lengths() {
         struct ScanPairs<'a> {
             distances: &'a [Vec<f32>],
             output: MutMatrixView<'a, Candidate>,
@@ -639,52 +644,63 @@ mod tests {
             }
         }
 
-        // Given: XOR gives symmetric distances with distinct, exact scores in each row.
-        // The final pair row has point_count - 1 distances, straddling vector boundaries.
-        let distances: Vec<Vec<f32>> = (0..point_count)
-            .map(|point| {
-                (0..point_count)
-                    .map(|other| (point ^ other) as f32)
-                    .collect()
-            })
-            .collect();
-        let mut output = vec![EMPTY; point_count * capacity];
-        let mut limits = Vec::new();
-        let mut rows =
-            MutMatrixView::try_from(output.as_mut_slice(), point_count, capacity).unwrap();
+        for point_count in [
+            LANES,
+            LANES + 1,
+            LANES + 2,
+            2 * LANES,
+            2 * LANES + 1,
+            2 * LANES + 2,
+        ] {
+            for capacity in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17] {
+                // Given: XOR gives symmetric distances with distinct, exact scores in each row.
+                // The final pair row has point_count - 1 distances, straddling vector boundaries.
+                let distances: Vec<Vec<f32>> = (0..point_count)
+                    .map(|point| {
+                        (0..point_count)
+                            .map(|other| (point ^ other) as f32)
+                            .collect()
+                    })
+                    .collect();
+                let mut output = vec![EMPTY; point_count * capacity];
+                let mut limits = Vec::new();
+                let mut rows =
+                    MutMatrixView::try_from(output.as_mut_slice(), point_count, capacity).unwrap();
 
-        // When: offer every non-self pair once, through the production width dispatch.
-        with_topk(
-            capacity,
-            ScanPairs {
-                distances: &distances,
-                output: rows.as_mut_view(),
-                limits: &mut limits,
-            },
-        );
+                // When: offer every non-self pair once, through the production width dispatch.
+                with_topk(
+                    capacity,
+                    ScanPairs {
+                        distances: &distances,
+                        output: rows.as_mut_view(),
+                        limits: &mut limits,
+                    },
+                );
 
-        // Then: independently sort each complete row, excluding only the point itself.
-        for (point, row) in distances.iter().enumerate() {
-            let mut expected: Vec<_> = row
-                .iter()
-                .enumerate()
-                .filter(|(other, _)| *other != point)
-                .map(|(other, &distance)| Candidate::new(other as u32, distance))
-                .collect();
-            expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-            expected.truncate(capacity);
-            expected.resize(capacity, EMPTY);
+                // Then: independently sort each complete row, excluding only the point itself.
+                for (point, row) in distances.iter().enumerate() {
+                    let mut expected: Vec<_> = row
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != point)
+                        .map(|(other, &distance)| Candidate::new(other as u32, distance))
+                        .collect();
+                    expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+                    expected.truncate(capacity);
+                    expected.resize(capacity, EMPTY);
 
-            assert_eq!(
-                rows.row(point),
-                expected,
-                "point={point}, point_count={point_count}, capacity={capacity}"
-            );
-            assert_eq!(
-                limits[point],
-                expected[capacity - 1].distance,
-                "limit for point={point}, point_count={point_count}, capacity={capacity}"
-            );
+                    assert_eq!(
+                        rows.row(point),
+                        expected,
+                        "point={point}, point_count={point_count}, capacity={capacity}"
+                    );
+                    assert_eq!(
+                        limits[point],
+                        expected[capacity - 1].distance,
+                        "limit for point={point}, point_count={point_count}, capacity={capacity}"
+                    );
+                }
+            }
         }
     }
 

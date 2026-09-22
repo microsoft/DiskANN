@@ -154,42 +154,50 @@ mod tests {
     fn lower_triangle_matches_scalar_distances<M: LeafMetric>(
         #[case] _metric: M,
         #[case] scalar_metric: Metric,
-        #[values(1, 4, 17)] point_count: usize,
-        #[values(1, 2, 7, 8, 9, 15, 16, 17, 127, 128, 129)] dimensions: usize,
     ) {
-        // Small integers keep L2 and dot products exact; the first coordinate gives
-        // every vector a nonzero norm. Every dimension contributes to the result.
-        let mut values: Vec<_> = (0..point_count * dimensions)
-            .map(|index| (index % 11) as f32 - 5.0)
-            .collect();
-        for (point, row) in values.chunks_exact_mut(dimensions).enumerate() {
-            row[0] = point as f32 + 1.0;
-        }
-        if scalar_metric == Metric::CosineNormalized {
-            test_support::normalize(&mut values, dimensions);
-        }
-        let points = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
-        let mut output = vec![f32::NAN; point_count * point_count];
+        for point_count in [1, 4, 17] {
+            for dimensions in [1, 2, 7, 8, 9, 15, 16, 17, 127, 128, 129] {
+                // Small integers keep L2 and dot products exact; the first coordinate gives
+                // every vector a nonzero norm. Every dimension contributes to the result.
+                let mut values: Vec<_> = (0..point_count * dimensions)
+                    .map(|index| (index % 11) as f32 - 5.0)
+                    .collect();
+                for (point, row) in values.chunks_exact_mut(dimensions).enumerate() {
+                    row[0] = point as f32 + 1.0;
+                }
+                if scalar_metric == Metric::CosineNormalized {
+                    test_support::normalize(&mut values, dimensions);
+                }
+                let points =
+                    MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+                let mut output = vec![f32::NAN; point_count * point_count];
 
-        M::compute_distances(points, &mut output).unwrap();
+                M::compute_distances(points, &mut output).unwrap_or_else(|error| {
+                    panic!("point_count={point_count}, dimensions={dimensions}: {error}")
+                });
 
-        for source in 0..point_count {
-            for target in 0..=source {
-                let expected =
-                    test_support::distance(scalar_metric, points.row(source), points.row(target));
-                let actual = f64::from(output[source * point_count + target]);
-                // Cosine reductions and normalization round in f32; allow eight ulps
-                // per dimension at unit scale. Integer L2 and dot products are exact.
-                let tolerance = match scalar_metric {
-                    Metric::L2 | Metric::InnerProduct => 0.0,
-                    Metric::Cosine | Metric::CosineNormalized => {
-                        8.0 * f64::from(f32::EPSILON) * dimensions as f64
+                for source in 0..point_count {
+                    for target in 0..=source {
+                        let expected = test_support::distance(
+                            scalar_metric,
+                            points.row(source),
+                            points.row(target),
+                        );
+                        let actual = f64::from(output[source * point_count + target]);
+                        // Cosine reductions and normalization round in f32; allow eight ulps
+                        // per dimension at unit scale. Integer L2 and dot products are exact.
+                        let tolerance = match scalar_metric {
+                            Metric::L2 | Metric::InnerProduct => 0.0,
+                            Metric::Cosine | Metric::CosineNormalized => {
+                                8.0 * f64::from(f32::EPSILON) * dimensions as f64
+                            }
+                        };
+                        assert!(
+                            (actual - expected).abs() <= tolerance,
+                            "point_count={point_count}, dimensions={dimensions}, pair=({source},{target}): {actual} != {expected}"
+                        );
                     }
-                };
-                assert!(
-                    (actual - expected).abs() <= tolerance,
-                    "pair=({source},{target}), dimensions={dimensions}: {actual} != {expected}"
-                );
+                }
             }
         }
     }
@@ -203,42 +211,51 @@ mod tests {
     fn large_dense_inputs_match_scalar_distances<M: LeafMetric>(
         #[case] _metric: M,
         #[case] scalar_metric: Metric,
-        #[values((33, 384), (65, 768), (129, 1536), (17, 1537), (513, 129), (17, 4097))] shape: (
-            usize,
-            usize,
-        ),
     ) {
-        let (point_count, dimensions) = shape;
-        let mut values = test_support::dense_points(point_count, dimensions, 1287);
-        if scalar_metric == Metric::CosineNormalized {
-            test_support::normalize(&mut values, dimensions);
-        }
-        let points = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
-        let mut output = vec![f32::NAN; point_count * point_count];
-
-        M::compute_distances(points, &mut output).unwrap();
-
-        let tolerance = match scalar_metric {
-            Metric::L2 | Metric::InnerProduct => 0.0,
-            // Dyadic dot/norm sums are exact; only square roots and division round.
-            Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
-            Metric::CosineNormalized => {
-                // Normalized f32 coordinates need a dot-product rounding bound.
-                // Sum |x*y| is at most approximately one; EPSILON allows both
-                // product and reduction rounding in gamma = n*u/(1-n*u).
-                let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
-                roundoff / (1.0 - roundoff)
+        for shape in [
+            (33, 384),
+            (65, 768),
+            (129, 1536),
+            (17, 1537),
+            (513, 129),
+            (17, 4097),
+        ] {
+            let (point_count, dimensions) = shape;
+            let mut values = test_support::dense_points(point_count, dimensions, 1287);
+            if scalar_metric == Metric::CosineNormalized {
+                test_support::normalize(&mut values, dimensions);
             }
-        };
-        for source in 0..point_count {
-            for target in 0..=source {
-                let expected =
-                    test_support::distance(scalar_metric, points.row(source), points.row(target));
-                let actual = f64::from(output[source * point_count + target]);
-                assert!(
-                    (actual - expected).abs() <= tolerance,
-                    "shape={shape:?}, pair=({source},{target}): {actual} != {expected}, tolerance={tolerance}"
-                );
+            let points = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+            let mut output = vec![f32::NAN; point_count * point_count];
+
+            M::compute_distances(points, &mut output)
+                .unwrap_or_else(|error| panic!("shape={shape:?}: {error}"));
+
+            let tolerance = match scalar_metric {
+                Metric::L2 | Metric::InnerProduct => 0.0,
+                // Dyadic dot/norm sums are exact; only square roots and division round.
+                Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
+                Metric::CosineNormalized => {
+                    // Normalized f32 coordinates need a dot-product rounding bound.
+                    // Sum |x*y| is at most approximately one; EPSILON allows both
+                    // product and reduction rounding in gamma = n*u/(1-n*u).
+                    let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
+                    roundoff / (1.0 - roundoff)
+                }
+            };
+            for source in 0..point_count {
+                for target in 0..=source {
+                    let expected = test_support::distance(
+                        scalar_metric,
+                        points.row(source),
+                        points.row(target),
+                    );
+                    let actual = f64::from(output[source * point_count + target]);
+                    assert!(
+                        (actual - expected).abs() <= tolerance,
+                        "shape={shape:?}, pair=({source},{target}): {actual} != {expected}, tolerance={tolerance}"
+                    );
+                }
             }
         }
     }
