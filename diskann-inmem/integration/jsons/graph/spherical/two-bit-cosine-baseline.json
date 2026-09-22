@@ -1,0 +1,124 @@
+[
+  {
+    "input": {
+      "content": {
+        "build": {
+          "alpha": 1.2000000476837158,
+          "l_build": 20,
+          "max_degree": 20,
+          "pruned_degree": 16
+        },
+        "data": {
+          "data": "/yfcc/yfcc_10k.fbin",
+          "data_type": "f32",
+          "groundtruth": "/yfcc/groundtruth_cosine.bin",
+          "metric": "cosine",
+          "preprocess": [],
+          "queries": "/yfcc/yfcc_query_100.fbin"
+        },
+        "representation": {
+          "spherical": {
+            "bits": "two",
+            "rerank": "none"
+          }
+        },
+        "search": {
+          "knn": [
+            {
+              "beam_width": 1,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 100
+            }
+          ]
+        }
+      },
+      "type": "integration-test"
+    },
+    "results": {
+      "build": {
+        "append_neighbors": 103313,
+        "distance": 3222189,
+        "get_neighbors": 362992,
+        "get_vector": 2907863,
+        "query_distance": 2319765,
+        "set_neighbors": 25639,
+        "set_vector": 10000
+      },
+      "knn": [
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 5448,
+            "get_vector": 45829,
+            "query_distance": 45829,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 45829,
+            "hops": 5448
+          },
+          "recall": {
+            "average": 0.782,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 5795,
+            "get_vector": 49558,
+            "query_distance": 49558,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 49558,
+            "hops": 5795
+          },
+          "recall": {
+            "average": 0.784,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 10618,
+            "get_vector": 75560,
+            "query_distance": 75560,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 75560,
+            "hops": 10618
+          },
+          "recall": {
+            "average": 0.794,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        }
+      ]
+    }
+  }
+]

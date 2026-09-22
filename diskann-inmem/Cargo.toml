@@ -32,6 +32,12 @@ rand = { workspace = true, optional = true }
 diskann-benchmark-core = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 
+[lints.rust]
+# Some longer-running integration tests are skipped when running code coverage by using
+# `cfg(coverage)`. This prevents us from getting warnings for the `coverage` condition,
+# which is added by `llvm-cov` but is otherwise not a standard condition name.
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(coverage)'] }
+
 [lints.clippy]
 allow_attributes = "allow"
 undocumented_unsafe_blocks = "warn"

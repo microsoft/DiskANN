@@ -1,0 +1,96 @@
+{
+  "search_directories": [
+    "yfcc"
+  ],
+  "output_directory": null,
+  "jobs": [
+    {
+      "type": "integration-test",
+      "content": {
+        "build": {
+          "alpha": 1.2000000476837158,
+          "l_build": 20,
+          "max_degree": 20,
+          "pruned_degree": 16
+        },
+        "data": {
+          "data": "yfcc_10k.fbin",
+          "data_type": "f32",
+          "groundtruth": "groundtruth_cosine.bin",
+          "metric": "cosine",
+          "queries": "yfcc_query_100.fbin",
+          "preprocess": []
+        },
+        "representation": {
+          "spherical": {
+            "bits": "one",
+            "rerank": "none"
+          }
+        },
+        "search": {
+          "knn": [
+            {
+              "beam_width": null,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "integration-test",
+      "content": {
+        "build": {
+          "alpha": 1.2000000476837158,
+          "l_build": 20,
+          "max_degree": 20,
+          "pruned_degree": 16
+        },
+        "data": {
+          "data": "yfcc_10k.fbin",
+          "data_type": "f32",
+          "groundtruth": "groundtruth_cosine.bin",
+          "metric": "cosine",
+          "queries": "yfcc_query_100.fbin",
+          "preprocess": []
+        },
+        "representation": {
+          "spherical": {
+            "bits": "one",
+            "rerank": "f16"
+          }
+        },
+        "search": {
+          "knn": [
+            {
+              "beam_width": null,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 100
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
