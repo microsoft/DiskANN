@@ -75,7 +75,7 @@ pub(super) trait TopKVisitor {
 
 /// Select the width specialization and run the visitor once for the batch.
 ///
-/// Specialize capacities 1..=10; zero and larger capacities use the runtime path.
+/// Specialize capacities 1, 2, 3, 8, and 10; other capacities use the runtime path.
 /// Typical partition K is 10 or 3, and leaf K is 3 or 2.
 #[inline]
 pub(super) fn with_topk<V: TopKVisitor>(width: usize, visitor: V) {
@@ -83,12 +83,7 @@ pub(super) fn with_topk<V: TopKVisitor>(width: usize, visitor: V) {
         1 => visitor.visit(TopK::new(Fixed::<1>)),
         2 => visitor.visit(TopK::new(Fixed::<2>)),
         3 => visitor.visit(TopK::new(Fixed::<3>)),
-        4 => visitor.visit(TopK::new(Fixed::<4>)),
-        5 => visitor.visit(TopK::new(Fixed::<5>)),
-        6 => visitor.visit(TopK::new(Fixed::<6>)),
-        7 => visitor.visit(TopK::new(Fixed::<7>)),
         8 => visitor.visit(TopK::new(Fixed::<8>)),
-        9 => visitor.visit(TopK::new(Fixed::<9>)),
         10 => visitor.visit(TopK::new(Fixed::<10>)),
         _ => visitor.visit(TopK::new(Runtime(width))),
     }
