@@ -292,7 +292,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
         let fsm: FreeSpaceMap = FreeSpaceMap::new(
             context,
             callbacks,
-            quantizer.is_some() && all_quantized,
+            quantizer
+                .as_ref()
+                .is_some_and(|quantizer| quantizer.is_trained()),
             quantizer.is_none() || all_quantized,
         )?;
 
@@ -2296,6 +2298,35 @@ mod tests {
                 .is_ok(),
             "quant compression failed"
         );
+
+        let inserted_id = last_inserted_id + 1;
+        DynIndex::insert(
+            &index,
+            &ctx,
+            &GarnetId::from(bytemuck::bytes_of(&inserted_id)),
+            bytemuck::cast_slice(&tv),
+            &[],
+        )
+        .unwrap();
+        assert!(provider.callbacks.exists_iid(
+            &ctx.term(Term::Quantized),
+            max_id + 1,
+            provider.quant_vector_size()
+        ));
+        assert_eq!(provider.fsm.max_id_for_backfill(), max_id);
+
+        for job_id in 0..4 {
+            assert!(provider.backfill_quant_vectors(&ctx, job_id, 4));
+        }
+        assert!(provider.is_quantized());
+
+        for id in 0..=max_id + 1 {
+            assert!(provider.callbacks.exists_iid(
+                &ctx.term(Term::Quantized),
+                id,
+                provider.quant_vector_size()
+            ));
+        }
     }
 
     /// Test that restarts during phase three quant bootstrap work.
