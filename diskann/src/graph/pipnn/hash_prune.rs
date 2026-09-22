@@ -24,7 +24,7 @@ use std::cell::UnsafeCell;
 use super::{
     bf16::f32_to_bf16,
     lsh::{LshSketches, MAX_PLANES},
-    simd::PiPNNSIMDSchema,
+    simd::Simd,
 };
 use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
 use bytemuck::Pod;
@@ -349,7 +349,7 @@ where
 
 impl<A> FTarget1<A, u16, RelativeHashArgs> for RelativeHashKernel
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
 {
     fn run(arch: A, args: RelativeHashArgs) -> u16 {
         relative_hash_simd::<A>(arch, args)
@@ -387,7 +387,7 @@ where
 /// the bit on every architecture.
 fn relative_hash_simd<A>(arch: A, args: RelativeHashArgs) -> u16
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
 {
     if A::Vector::LANES >= MAX_PLANES {
         // SAFETY: `src` and `dst` each contain `len <= MAX_PLANES <= A::Vector::LANES`
