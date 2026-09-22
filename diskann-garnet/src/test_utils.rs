@@ -127,6 +127,29 @@ impl Store {
     }
 }
 
+/// A deterministic Q8 state distinct from the default DoubleHadamard transform.
+pub fn q8_state_with_identity_transform(
+    dim: usize,
+) -> diskann_quantization::alloc::Poly<[u8], diskann_quantization::alloc::GlobalAllocator> {
+    use diskann_quantization::{
+        algorithms::{Transform, TransformKind},
+        alloc::GlobalAllocator,
+        minmax::MinMaxQuantizer,
+        num::POSITIVE_ONE_F32,
+    };
+
+    let transform = Transform::new(
+        TransformKind::Null,
+        std::num::NonZero::new(dim).unwrap(),
+        None,
+        GlobalAllocator,
+    )
+    .unwrap();
+    MinMaxQuantizer::new(transform, POSITIVE_ONE_F32)
+        .serialize(GlobalAllocator)
+        .unwrap()
+}
+
 unsafe extern "C" fn test_read(
     ctx: u64,
     count: u32,
