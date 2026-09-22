@@ -50,19 +50,19 @@ pub(super) struct Runtime(pub(super) usize);
 
 /// Keep fixed capacities available to inlined insertion across architecture scopes.
 pub(super) trait Width: Copy {
-    fn capacity(self) -> usize;
+    fn width(self) -> usize;
 }
 
 impl<const K: usize> Width for Fixed<K> {
     #[inline(always)]
-    fn capacity(self) -> usize {
+    fn width(self) -> usize {
         K
     }
 }
 
 impl Width for Runtime {
     #[inline(always)]
-    fn capacity(self) -> usize {
+    fn width(self) -> usize {
         self.0
     }
 }
@@ -134,7 +134,7 @@ impl<W: Width> TopK<W> {
         arch.run2(
             #[inline(always)]
             move |distances: &[f32], output: &mut [Candidate]| {
-                let k = self.width.capacity();
+                let k = self.width.width();
                 if k == 0 {
                     return;
                 }
@@ -167,7 +167,7 @@ impl<W: Width> TopK<W> {
             move |distances: &[f32],
                   mut output: MutMatrixView<'_, Candidate>,
                   thresholds: &mut [f32]| {
-                let k = self.width.capacity();
+                let k = self.width.width();
                 debug_assert_eq!(
                     output.ncols(),
                     k,
@@ -254,7 +254,7 @@ impl<A: Simd> DistanceBlock<'_, A> {
     /// Partition ranking uses leader IDs. Leaf ranking uses IDs of earlier points in the leaf.
     ///
     /// Compare candidates against the existing result without clearing its slots.
-    /// The first `width.capacity()` slots of `nearest` hold this result.
+    /// The first `width.width()` slots of `nearest` hold this result.
     /// The distance limit is the last slot's distance, or positive infinity while slots remain empty.
     /// Each insertion can lower this limit. Return the updated limit for the next block.
     #[inline(always)]
@@ -322,7 +322,7 @@ impl<A: Simd> DistanceBlock<'_, A> {
     /// Each candidate's local ID selects its result row in the full leaf, not its SIMD lane.
     /// If that row accepts the pair, insert `point_idx` with the pair's distance.
     ///
-    /// `candidates` starts at leaf row zero, with `width.capacity()` slots per row.
+    /// `candidates` starts at leaf row zero, with `width.width()` slots per row.
     /// `thresholds` holds one distance limit per row.
     /// The caller initializes both buffers once before the leaf scan.
     /// These updates retain earlier candidates unless a nearer point displaces them.
@@ -338,7 +338,7 @@ impl<A: Simd> DistanceBlock<'_, A> {
         point_idx: u32,
         width: W,
     ) {
-        let k = width.capacity();
+        let k = width.width();
         match self {
             Self::Scalar {
                 candidate_idx,
@@ -378,11 +378,11 @@ impl<A: Simd> DistanceBlock<'_, A> {
 }
 
 /// Insert an eligible candidate in nearest-first order and return the new distance limit.
-/// Only the first `width.capacity()` slots belong to this result.
+/// Only the first `width.width()` slots belong to this result.
 /// The caller must check the candidate against the current limit before insertion.
 #[inline(always)]
 fn insert_sorted<W: Width>(nearest: &mut [Candidate], candidate: Candidate, width: W) -> f32 {
-    let k = width.capacity();
+    let k = width.width();
     // Keep this slice here for performance.
     // Fixed<K> gives the slice a compile-time constant length.
     // After inlining, LLVM can unroll the loop and remove bounds checks.
