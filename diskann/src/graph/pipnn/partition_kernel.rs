@@ -14,7 +14,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 
 use super::{
     partition_metric::PartitionMetric,
-    simd::PiPNNSIMDSchema,
+    simd::Simd,
     topk::{Candidate, TopK, TopKVisitor, UNASSIGNED, Width, with_topk},
 };
 
@@ -49,7 +49,7 @@ pub(super) fn assign_leaders<A, M>(
     workspace: &mut PartitionKernelWorkspace,
 ) -> ANNResult<()>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: PartitionMetric,
 {
     let point_count = points.nrows();
@@ -80,7 +80,7 @@ where
 }
 
 /// Select leader columns from each point's distance row.
-fn rank_leader_distances<A: PiPNNSIMDSchema>(
+fn rank_leader_distances<A: Simd>(
     arch: A,
     distances: MatrixView<'_, f32>,
     output: MutMatrixView<'_, u32>,
@@ -105,7 +105,7 @@ struct RankLeaders<'a, A> {
     candidates: &'a mut Vec<Candidate>,
 }
 
-impl<A: PiPNNSIMDSchema> TopKVisitor for RankLeaders<'_, A> {
+impl<A: Simd> TopKVisitor for RankLeaders<'_, A> {
     #[inline]
     fn visit<W: Width>(mut self, topk: TopK<W>) {
         for (distances, output) in self.distances.row_iter().zip(self.output.row_iter_mut()) {

@@ -13,7 +13,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 
 use super::{
     leaf_metric::LeafMetric,
-    simd::PiPNNSIMDSchema,
+    simd::Simd,
     topk::{Candidate, TopK, TopKVisitor, Width, with_topk},
 };
 
@@ -66,7 +66,7 @@ pub(super) fn select_leaf_neighbors<A, M>(
     workspace: &mut LeafKernelWorkspace,
 ) -> ANNResult<()>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: LeafMetric,
 {
     let point_count = points.nrows();
@@ -86,7 +86,7 @@ where
 }
 
 /// Offer each lower-triangle row to the two endpoint neighbor lists.
-fn rank_leaf_distances<A: PiPNNSIMDSchema>(
+fn rank_leaf_distances<A: Simd>(
     arch: A,
     distances: MatrixView<'_, f32>,
     output: MutMatrixView<'_, Candidate>,
@@ -110,7 +110,7 @@ struct RankLeaf<'a, A> {
     thresholds: &'a mut Vec<f32>,
 }
 
-impl<A: PiPNNSIMDSchema> TopKVisitor for RankLeaf<'_, A> {
+impl<A: Simd> TopKVisitor for RankLeaf<'_, A> {
     #[inline]
     fn visit<W: Width>(mut self, topk: TopK<W>) {
         topk.initialize(self.output.as_mut_view(), self.thresholds);

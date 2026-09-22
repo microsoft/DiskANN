@@ -9,7 +9,7 @@
 use diskann_utils::views::MutMatrixView;
 use diskann_wide::{SIMDPartialOrd, SIMDVector};
 
-use super::simd::PiPNNSIMDSchema;
+use super::simd::Simd;
 
 /// An output slot with no assigned candidate.
 pub(super) const UNASSIGNED: u32 = u32::MAX;
@@ -125,7 +125,7 @@ impl<W: Width> TopK<W> {
     /// Select the nearest candidates, replacing the previous contents of output.
     /// Slice positions become candidate IDs. The threshold is local to this call.
     #[inline(always)]
-    pub(super) fn select_topk<A: PiPNNSIMDSchema>(
+    pub(super) fn select_topk<A: Simd>(
         &self,
         arch: A,
         distances: &[f32],
@@ -154,7 +154,7 @@ impl<W: Width> TopK<W> {
     /// Call [`Self::initialize`] once before the pair scan; subsequent updates preserve its state.
     /// Preserve existing results; all slice indexes must be less than point_idx.
     #[inline]
-    pub(super) fn update_dual_topk<A: PiPNNSIMDSchema>(
+    pub(super) fn update_dual_topk<A: Simd>(
         &self,
         arch: A,
         point_idx: usize,
@@ -208,7 +208,7 @@ impl<W: Width> TopK<W> {
 /// A complete SIMD group or one tail distance. This never leaves the TopK module.
 /// Both update directions share the loaded vector; scalar reads borrow the input.
 #[derive(Clone, Copy)]
-enum DistanceBlock<'a, A: PiPNNSIMDSchema> {
+enum DistanceBlock<'a, A: Simd> {
     Simd {
         first_candidate: usize,
         values: A::Vector,
@@ -222,7 +222,7 @@ enum DistanceBlock<'a, A: PiPNNSIMDSchema> {
 
 /// Keep all distance loads and tail indexing inside TopK's architecture scope.
 #[inline(always)]
-fn distance_blocks<A: PiPNNSIMDSchema>(
+fn distance_blocks<A: Simd>(
     arch: A,
     distances: &[f32],
 ) -> impl Iterator<Item = DistanceBlock<'_, A>> {
@@ -247,7 +247,7 @@ fn distance_blocks<A: PiPNNSIMDSchema>(
         )
 }
 
-impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
+impl<A: Simd> DistanceBlock<'_, A> {
     /// Update one top-k result from this block's candidates.
     ///
     /// Each candidate uses its index in the full distance row as its local ID.
@@ -404,7 +404,7 @@ mod tests {
     use rstest::rstest;
 
     const EMPTY: Candidate = Candidate::new(UNASSIGNED, f32::INFINITY);
-    const LANES: usize = <<Current as PiPNNSIMDSchema>::Vector as SIMDVector>::LANES;
+    const LANES: usize = <<Current as Simd>::Vector as SIMDVector>::LANES;
 
     #[rstest]
     #[case::first_batch(0, 3)]
