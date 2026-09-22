@@ -26,7 +26,7 @@ use rayon::prelude::*;
 use super::{
     leaf_kernel::{LeafKernelWorkspace, leaf_neighbor_count, select_leaf_neighbors},
     leaf_metric::LeafMetric,
-    simd::PiPNNSIMDSchema,
+    simd::Simd,
     topk::Candidate,
 };
 
@@ -119,7 +119,7 @@ pub(super) fn build_leaf_candidates<A, M, T>(
     requested_k: usize,
 ) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: LeafMetric,
     T: VectorRepr,
 {
@@ -169,7 +169,7 @@ fn add_direct_leaf_candidates<A, M, T>(
     candidates: &[Mutex<AdjacencyList<u32>>],
 ) -> Result<(), LeafBuildError>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: LeafMetric,
     T: VectorRepr,
 {

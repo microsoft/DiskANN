@@ -191,8 +191,9 @@ pub fn sgemm(
 
 /// Replace the lower triangle of `C` with $\alpha A A^\mathsf{T}$.
 ///
-/// `A` is a dense row-major $m \times k$ matrix. The function does not change
-/// the upper triangle of `C`. Use this operation when `C` has no prior term.
+/// `A` is a dense row-major $m \times k$ matrix. `C` is a dense row-major
+/// $m \times m$ matrix backed by exactly `m * m` elements. The function does not
+/// change the upper triangle of `C`. Use this operation when `C` has no prior term.
 ///
 /// # Errors
 ///
@@ -214,8 +215,9 @@ pub fn sgemm_aat_lower(
 
 /// Add the lower triangle of $\alpha A A^\mathsf{T}$ to `C`.
 ///
-/// `A` is a dense row-major $m \times k$ matrix. The function changes only the
-/// lower triangle of `C`. Use this operation when `C` contains an initial term.
+/// `A` is a dense row-major $m \times k$ matrix. `C` is a dense row-major
+/// $m \times m$ matrix backed by exactly `m * m` elements. The function changes
+/// only the lower triangle of `C`. Use this operation when `C` contains an initial term.
 ///
 /// # Errors
 ///
@@ -722,13 +724,12 @@ mod tests {
 #[cfg(test)]
 mod sgemm_aat_lower_tests {
     use super::*;
-    use rstest::rstest;
 
     type LowerProduct = fn(usize, usize, f32, &[f32], &mut [f32]) -> Result<(), SgemmError>;
 
-    #[track_caller]
     fn assert_lower_product_matches_scalar(
         shape: (usize, usize),
+        alpha: f32,
         input: &[f32],
         previous: &[f32],
         output: &[f32],
@@ -740,95 +741,109 @@ mod sgemm_aat_lower_tests {
                 let index = row * rows + column;
                 if column > row {
                     assert_eq!(
-                        output[index].to_bits(),
-                        previous[index].to_bits(),
-                        "shape={shape:?}, upper ({row},{column})"
+                        output[index], previous[index],
+                        "shape={shape:?}, alpha={alpha}, add={add}, upper ({row},{column})"
                     );
                 } else {
-                    let dot: f64 = (0..dimensions)
+                    let dot: f32 = (0..dimensions)
                         .map(|dimension| {
-                            f64::from(input[row * dimensions + dimension])
-                                * f64::from(input[column * dimensions + dimension])
+                            input[row * dimensions + dimension]
+                                * input[column * dimensions + dimension]
                         })
                         .sum();
-                    // Both sweeps use alpha = -2 and exactly representable arithmetic.
-                    let expected = -2.0 * dot + if add { f64::from(previous[index]) } else { 0.0 };
+                    let expected = alpha * dot + if add { previous[index] } else { 0.0 };
                     assert_eq!(
-                        f64::from(output[index]),
-                        expected,
-                        "shape={shape:?}, lower ({row},{column})"
+                        output[index], expected,
+                        "shape={shape:?}, alpha={alpha}, add={add}, lower ({row},{column})"
                     );
                 }
             }
         }
     }
 
-    #[rstest]
-    #[case::replace(sgemm_aat_lower, [-8.0, 101.0, 102.0, 8.0, -26.0, 103.0, 12.0, -36.0, -50.0])]
-    #[case::add(sgemm_aat_lower_add, [2.0, 101.0, 102.0, 28.0, 4.0, 103.0, 52.0, 14.0, 10.0])]
-    fn scaled_products_change_only_the_diagonal_and_lower_triangle(
-        #[case] operation: LowerProduct,
-        #[case] expected: [f32; 9],
-    ) {
-        // Rows [2,0], [-2,3], [-3,4] have lower Gram entries 4,-4,13,-6,18,25.
-        let input = [2.0, 0.0, -2.0, 3.0, -3.0, 4.0];
-        let mut output = [10.0, 101.0, 102.0, 20.0, 30.0, 103.0, 40.0, 50.0, 60.0];
+    #[test]
+    fn scaled_products_change_only_the_diagonal_and_lower_triangle() {
+        for (name, operation, expected) in [
+            (
+                "replace",
+                sgemm_aat_lower as LowerProduct,
+                [-8.0, 101.0, 102.0, 8.0, -26.0, 103.0, 12.0, -36.0, -50.0],
+            ),
+            (
+                "add",
+                sgemm_aat_lower_add as LowerProduct,
+                [2.0, 101.0, 102.0, 28.0, 4.0, 103.0, 52.0, 14.0, 10.0],
+            ),
+        ] {
+            // Rows [2,0], [-2,3], [-3,4] have lower Gram entries 4,-4,13,-6,18,25.
+            let input = [2.0, 0.0, -2.0, 3.0, -3.0, 4.0];
+            let mut output = [10.0, 101.0, 102.0, 20.0, 30.0, 103.0, 40.0, 50.0, 60.0];
 
-        operation(3, 2, -2.0, &input, &mut output).unwrap();
+            operation(3, 2, -2.0, &input, &mut output)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
 
-        assert_eq!(output, expected);
+            assert_eq!(output, expected, "{name}");
+        }
     }
 
-    #[rstest]
-    #[case::replace_single_entry(sgemm_aat_lower, false, 1, 1)]
-    #[case::add_single_entry(sgemm_aat_lower_add, true, 1, 1)]
-    #[case::replace_zero_inner_dimension(sgemm_aat_lower, false, 3, 0)]
-    #[case::add_zero_inner_dimension(sgemm_aat_lower_add, true, 3, 0)]
-    #[case::replace_rectangular(sgemm_aat_lower, false, 3, 7)]
-    #[case::add_rectangular(sgemm_aat_lower_add, true, 3, 7)]
-    fn rectangular_inputs_match_scalar_dot_products(
-        #[case] operation: LowerProduct,
-        #[case] add: bool,
-        #[case] rows: usize,
-        #[case] dimensions: usize,
-    ) {
-        let input: Vec<_> = (0..rows * dimensions)
-            .map(|i| (i % 9) as f32 - 4.0)
-            .collect();
-        let previous: Vec<_> = (0..rows * rows).map(|i| 100.0 + i as f32).collect();
-        let mut output = previous.clone();
+    #[test]
+    fn rectangular_inputs_match_scalar_dot_products() {
+        for (rows, dimensions) in [(1, 1), (3, 0), (3, 7)] {
+            for (mode, operation, add) in [
+                ("replace", sgemm_aat_lower as LowerProduct, false),
+                ("add", sgemm_aat_lower_add as LowerProduct, true),
+            ] {
+                let alpha = -2.0;
+                let input: Vec<_> = (0..rows * dimensions)
+                    .map(|i| (i % 9) as f32 - 4.0)
+                    .collect();
+                let previous: Vec<_> = (0..rows * rows).map(|i| 100.0 + i as f32).collect();
+                let mut output = previous.clone();
 
-        operation(rows, dimensions, -2.0, &input, &mut output).unwrap();
+                operation(rows, dimensions, alpha, &input, &mut output).unwrap_or_else(|error| {
+                    panic!("{mode}, rows={rows}, dimensions={dimensions}: {error}")
+                });
 
-        assert_lower_product_matches_scalar((rows, dimensions), &input, &previous, &output, add);
+                assert_lower_product_matches_scalar(
+                    (rows, dimensions),
+                    alpha,
+                    &input,
+                    &previous,
+                    &output,
+                    add,
+                );
+            }
+        }
     }
 
-    #[rstest]
-    #[case::replace(sgemm_aat_lower, false)]
-    #[case::add(sgemm_aat_lower_add, true)]
-    fn large_dense_inputs_match_scalar_dot_products(
-        #[case] operation: LowerProduct,
-        #[case] add: bool,
-    ) {
+    #[test]
+    fn large_dense_inputs_match_scalar_dot_products() {
         use rand::{rngs::StdRng, SeedableRng};
 
-        // One representative dense input checks the wrapper's row-major wiring.
-        let shape = (129, 1536);
-        let (rows, dimensions) = shape;
-        let mut rng = StdRng::seed_from_u64(1287);
-        // Bounded multiples of 1/8 keep products and sums exact in f32.
-        let mut input: Vec<_> = (0..rows * dimensions)
-            .map(|_| rng.random_range(-16..=16) as f32 / 8.0)
-            .collect();
-        for (row, values) in input.chunks_exact_mut(dimensions).enumerate() {
-            values[dimensions - 1] = 8.0 + (row % 7) as f32;
+        for (name, operation, add) in [
+            ("replace", sgemm_aat_lower as LowerProduct, false),
+            ("add", sgemm_aat_lower_add as LowerProduct, true),
+        ] {
+            // One representative dense input checks the wrapper's row-major wiring.
+            let shape = (129, 1536);
+            let (rows, dimensions) = shape;
+            let alpha = -2.0;
+            let mut rng = StdRng::seed_from_u64(1287);
+            // Bounded multiples of 1/8 keep products and sums exact in f32.
+            let mut input: Vec<_> = (0..rows * dimensions)
+                .map(|_| rng.random_range(-16..=16) as f32 / 8.0)
+                .collect();
+            for (row, values) in input.chunks_exact_mut(dimensions).enumerate() {
+                values[dimensions - 1] = 8.0 + (row % 7) as f32;
+            }
+            let previous: Vec<_> = (0..rows * rows).map(|i| (i % 97) as f32 - 48.0).collect();
+            let mut output = previous.clone();
+
+            operation(rows, dimensions, alpha, &input, &mut output)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+
+            assert_lower_product_matches_scalar(shape, alpha, &input, &previous, &output, add);
         }
-        let previous: Vec<_> = (0..rows * rows).map(|i| (i % 97) as f32 - 48.0).collect();
-        let mut output = previous.clone();
-
-        operation(rows, dimensions, -2.0, &input, &mut output).unwrap();
-
-        assert_lower_product_matches_scalar(shape, &input, &previous, &output, add);
     }
 
     #[test]
@@ -841,81 +856,107 @@ mod sgemm_aat_lower_tests {
         assert_eq!(output, [5.0, 17.0, 5.0, 25.0]);
     }
 
-    #[rstest]
-    #[case::replace(sgemm_aat_lower, [0.0, 17.0, 0.0, 0.0])]
-    #[case::add(sgemm_aat_lower_add, [3.0, 17.0, 5.0, 7.0])]
-    fn zero_scale_respects_the_accumulation_mode(
-        #[case] operation: LowerProduct,
-        #[case] expected: [f32; 4],
-    ) {
-        let mut output = [3.0, 17.0, 5.0, 7.0];
+    #[test]
+    fn zero_scale_respects_the_accumulation_mode() {
+        for (name, operation, expected) in [
+            (
+                "replace",
+                sgemm_aat_lower as LowerProduct,
+                [0.0, 17.0, 0.0, 0.0],
+            ),
+            (
+                "add",
+                sgemm_aat_lower_add as LowerProduct,
+                [3.0, 17.0, 5.0, 7.0],
+            ),
+        ] {
+            let mut output = [3.0, 17.0, 5.0, 7.0];
 
-        operation(2, 1, 0.0, &[2.0, 4.0], &mut output).unwrap();
+            operation(2, 1, 0.0, &[2.0, 4.0], &mut output)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
 
-        assert_eq!(output, expected);
+            assert_eq!(output, expected, "{name}");
+        }
     }
 
-    #[rstest]
-    #[case::replace(sgemm_aat_lower)]
-    #[case::add(sgemm_aat_lower_add)]
-    fn empty_matrices_require_no_storage(#[case] operation: LowerProduct) {
-        assert_eq!(operation(0, 3, 2.0, &[], &mut []), Ok(()));
+    #[test]
+    fn empty_matrices_require_no_storage() {
+        for (name, operation) in [
+            ("replace", sgemm_aat_lower as LowerProduct),
+            ("add", sgemm_aat_lower_add as LowerProduct),
+        ] {
+            assert_eq!(operation(0, 3, 2.0, &[], &mut []), Ok(()), "{name}");
+        }
     }
 
-    #[rstest]
-    #[case::short_input(3, 4, MatrixName::A, 2, 2, 3)]
-    #[case::long_input(5, 4, MatrixName::A, 2, 2, 5)]
-    #[case::short_output(4, 3, MatrixName::C, 2, 2, 3)]
-    #[case::long_output(4, 5, MatrixName::C, 2, 2, 5)]
-    fn length_mismatch_reports_the_matrix_and_preserves_output(
-        #[case] input_len: usize,
-        #[case] output_len: usize,
-        #[case] matrix_name: MatrixName,
-        #[case] expected_rows: usize,
-        #[case] expected_cols: usize,
-        #[case] actual_len: usize,
-        #[values(sgemm_aat_lower, sgemm_aat_lower_add)] operation: LowerProduct,
-    ) {
-        let input = vec![1.0; input_len];
-        let mut output = vec![19.0; output_len];
+    #[test]
+    fn length_mismatch_reports_the_matrix_and_preserves_output() {
+        for (name, input_len, output_len, matrix_name, expected_rows, expected_cols, actual_len) in [
+            ("short_input", 3, 4, MatrixName::A, 2, 2, 3),
+            ("long_input", 5, 4, MatrixName::A, 2, 2, 5),
+            ("short_output", 4, 3, MatrixName::C, 2, 2, 3),
+            ("long_output", 4, 5, MatrixName::C, 2, 2, 5),
+        ] {
+            for (mode, operation) in [
+                ("replace", sgemm_aat_lower as LowerProduct),
+                ("add", sgemm_aat_lower_add as LowerProduct),
+            ] {
+                let input = vec![1.0; input_len];
+                let mut output = vec![19.0; output_len];
 
-        let error = operation(2, 2, 1.0, &input, &mut output).unwrap_err();
+                let Err(error) = operation(2, 2, 1.0, &input, &mut output) else {
+                    panic!("{name}, {mode}: expected a length error");
+                };
 
-        assert_eq!(
-            error,
-            SgemmError::InvalidMatrixDimensions {
-                matrix_name,
-                expected_rows,
-                expected_cols,
-                actual_len
+                assert_eq!(
+                    error,
+                    SgemmError::InvalidMatrixDimensions {
+                        matrix_name,
+                        expected_rows,
+                        expected_cols,
+                        actual_len
+                    },
+                    "{name}, {mode}"
+                );
+                assert_eq!(output, vec![19.0; output_len], "{name}, {mode}");
             }
-        );
-        assert_eq!(output, vec![19.0; output_len]);
+        }
     }
 
-    #[rstest]
-    #[case::input(usize::MAX, 2, MatrixName::A, usize::MAX, 2)]
-    #[case::output(usize::MAX, 0, MatrixName::C, usize::MAX, usize::MAX)]
-    fn shape_overflow_reports_the_matrix_and_preserves_output(
-        #[case] rows: usize,
-        #[case] dimensions: usize,
-        #[case] matrix_name: MatrixName,
-        #[case] error_rows: usize,
-        #[case] error_cols: usize,
-        #[values(sgemm_aat_lower, sgemm_aat_lower_add)] operation: LowerProduct,
-    ) {
-        let mut output = [23.0, 29.0];
+    #[test]
+    fn shape_overflow_reports_the_matrix_and_preserves_output() {
+        for (name, rows, dimensions, matrix_name, error_rows, error_cols) in [
+            ("input", usize::MAX, 2, MatrixName::A, usize::MAX, 2),
+            (
+                "output",
+                usize::MAX,
+                0,
+                MatrixName::C,
+                usize::MAX,
+                usize::MAX,
+            ),
+        ] {
+            for (mode, operation) in [
+                ("replace", sgemm_aat_lower as LowerProduct),
+                ("add", sgemm_aat_lower_add as LowerProduct),
+            ] {
+                let mut output = [23.0, 29.0];
 
-        let error = operation(rows, dimensions, 1.0, &[], &mut output).unwrap_err();
+                let Err(error) = operation(rows, dimensions, 1.0, &[], &mut output) else {
+                    panic!("{name}, {mode}: expected an overflow error");
+                };
 
-        assert_eq!(
-            error,
-            SgemmError::DimensionOverflow {
-                matrix_name,
-                rows: error_rows,
-                cols: error_cols
+                assert_eq!(
+                    error,
+                    SgemmError::DimensionOverflow {
+                        matrix_name,
+                        rows: error_rows,
+                        cols: error_cols
+                    },
+                    "{name}, {mode}"
+                );
+                assert_eq!(output, [23.0, 29.0], "{name}, {mode}");
             }
-        );
-        assert_eq!(output, [23.0, 29.0]);
+        }
     }
 }
