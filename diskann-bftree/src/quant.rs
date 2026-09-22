@@ -235,8 +235,7 @@ impl QuantVectorProvider {
 pub(crate) fn create_test_quantizer(dim: usize) -> Poly<dyn Quantizer> {
     use diskann_quantization::{
         algorithms::TransformKind,
-        alloc::poly,
-        spherical::{iface, PreScale, SphericalQuantizer, SupportedMetric},
+        spherical::{PreScale, SphericalQuantizer, SupportedMetric},
     };
     use diskann_utils::views::Init;
     use diskann_utils::views::Matrix;
@@ -255,7 +254,7 @@ pub(crate) fn create_test_quantizer(dim: usize) -> Poly<dyn Quantizer> {
     );
 
     let mut rng = StdRng::seed_from_u64(42);
-    let quantizer = SphericalQuantizer::train(
+    SphericalQuantizer::train(
         data.as_view(),
         TransformKind::Null,
         SupportedMetric::SquaredL2,
@@ -263,10 +262,9 @@ pub(crate) fn create_test_quantizer(dim: usize) -> Poly<dyn Quantizer> {
         &mut rng,
         GlobalAllocator,
     )
-    .unwrap();
-
-    let imp = iface::Impl::<1>::new(quantizer).unwrap();
-    poly!(Quantizer, imp, GlobalAllocator).unwrap()
+    .unwrap()
+    .as_quantizer::<1>()
+    .unwrap()
 }
 
 ///////////
