@@ -73,10 +73,25 @@
 //! transition, the store ensures the slot is not externally available in its previous
 //! state. Further, the store commits the destination state only after the lifecycle API call
 //! completes.
+//!
+//! ## Safety Considerations
+//!
+//! [`SlotsConfig::build`] is expected to receive two additional arguments:
+//!
+//! * [`epoch::RegistryHandle`]: A handle into the [`epoch::Registry`] used to protect the
+//!   constructed [`Slots`]. This allows implementations to check the validity of
+//!   [`epoch::Guard`]s via [`epoch::RegistryHandle::assert_guard_belongs`].
+//!
+//!   Unsafe code may rely on this check and all reader construction paths should use it
+//!   as it is cheap.
+//!
+//! * [`tag::Authoritative`]: A reference to the authoritative tag source for the constructed
+//!   [`Slots`]. Implementations can use [`tag::Authoritative::read_only`] to obtain a
+//!   read-only, synchronizing view into the authoritative tag collection.
 
 use std::fmt::Debug;
 
-use crate::num::IdLimit;
+use crate::{epoch, num::IdLimit, tag};
 
 use super::Lifecycle;
 
@@ -88,8 +103,24 @@ pub(crate) trait SlotsConfig: Debug {
     /// Construction errors.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Build the associated [`Slots`] from self with the [`IdLimit`].
-    fn build(self, id_limit: IdLimit) -> Result<Self::Slots, Self::Error>;
+    /// Construct [`Self::Slots`].
+    ///
+    /// The [`IdLimit`] for the resulting store can be obtained from `tags.id_limit()`.
+    ///
+    /// # Safety
+    ///
+    /// This assumes that the resulting [`Slots`] is embedded in a [`crate::store::Store`]
+    /// and that the following hold:
+    ///
+    /// * `handle` is an [`epoch::RegistryHandle`] into the [`epoch::Registry`] in the
+    ///   containing `Store`.
+    ///
+    /// * `tags` is the [`tag::Authoritative`] collection in the containing `Store`.
+    unsafe fn build(
+        self,
+        handle: epoch::RegistryHandle,
+        tags: &tag::Authoritative,
+    ) -> Result<Self::Slots, Self::Error>;
 }
 
 /// A lifecycle backend for [`super::Store`]'s EBR scheme.

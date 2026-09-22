@@ -318,7 +318,7 @@ where
     }
 
     fn reader(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
-        Intrusive::reader(&self.store)
+        self.store.guard(|intrusive, guard| intrusive.reader(guard))
     }
 }
 

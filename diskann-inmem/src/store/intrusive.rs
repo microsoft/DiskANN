@@ -11,8 +11,8 @@
 //! ## Lifecycle Details
 //!
 //! Lifecycle details are relatively straightforward. The intrusive [`AtomicTag`] mostly
-//! follows the transitions made by the [`Store`]. A [`Reader`] checks the tag for
-//! readability before creating a shared reference to the data payload.
+//! follows the transitions made by the [`crate::store::Store`]. A [`Reader`] checks the tag
+//! for readability before creating a shared reference to the data payload.
 //!
 //! The problematic transition from "published" to "retiring" is made safe because
 //!
@@ -30,11 +30,11 @@
 //!
 //! ## Safety
 //!
-//! The safety of this module depends on [`Intrusive`] being embedded in a [`Store`] that
-//! observes the slot lifecycle. Every lifecycle operation requires a [`Lifecycle`] token,
-//! which is constructible only by the parent store module. The unsafe [`slots::Slots`]
-//! methods additionally rely on [`Store`] to satisfy their documented state and exclusivity
-//! preconditions.
+//! The safety of this module depends on [`Intrusive`] being embedded in a
+//! [`crate::store::Store`] that observes the slot lifecycle. Every lifecycle operation
+//! requires a [`Lifecycle`] token, which is constructible only by the parent store module.
+//! The unsafe [`slots::Slots`] methods additionally rely on [`crate::store::Store`] to
+//! satisfy their documented state and exclusivity preconditions.
 
 use std::sync::atomic::Ordering;
 
@@ -45,8 +45,8 @@ use crate::{
     buffer::{Buffer, BufferError, RawSlice},
     epoch,
     num::{Align, Bytes, IdLimit},
-    store::{Lifecycle, Store, slots},
-    tag::{AtomicTag, Tag},
+    store::{Lifecycle, slots},
+    tag::{self, AtomicTag, Tag},
 };
 
 /// A [`slots::SlotsConfig`] for [`Intrusive`].
@@ -61,19 +61,21 @@ impl Config {
     pub(crate) fn new(bytes: Bytes) -> Self {
         Self { bytes }
     }
-
-    /// Build an [`Intrusive`] store holding `id_limit` slots.
-    pub(crate) fn build(self, id_limit: IdLimit) -> Result<Intrusive, IntrusiveError> {
-        let Self { bytes } = self;
-        Intrusive::new(id_limit, bytes)
-    }
 }
 
 impl slots::SlotsConfig for Config {
     type Slots = Intrusive;
     type Error = IntrusiveError;
-    fn build(self, id_limit: IdLimit) -> Result<Intrusive, IntrusiveError> {
-        <Config>::build(self, id_limit)
+
+    unsafe fn build(
+        self,
+        handle: epoch::RegistryHandle,
+        tags: &tag::Authoritative,
+    ) -> Result<Intrusive, IntrusiveError> {
+        let Self { bytes } = self;
+
+        // SAFETY: Inherited from caller.
+        unsafe { Intrusive::new(bytes, handle, tags.id_limit()) }
     }
 }
 
@@ -86,6 +88,9 @@ pub(crate) struct Intrusive {
     // The unpadded size of each row in `buffer`. This includes both the data **and** the
     // 1-byte tag. Tags are located at byte `unpadded - 1`.
     unpadded: Bytes,
+
+    // A handle to the [`epoch::Registry`] managing this store.
+    handle: epoch::RegistryHandle,
 }
 
 impl Intrusive {
@@ -102,7 +107,11 @@ impl Intrusive {
     ///
     /// Returns an error if the internal buffer allocation exceeds `isize::MAX` or
     /// computation of the padded, intrusive bytes exceeds `usize::MAX`.
-    pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Result<Self, IntrusiveError> {
+    pub(crate) unsafe fn new(
+        bytes: Bytes,
+        handle: epoch::RegistryHandle,
+        id_limit: IdLimit,
+    ) -> Result<Self, IntrusiveError> {
         let Some(unpadded) = bytes.checked_add(AtomicTag::SIZE) else {
             return Err(IntrusiveError::bytes_overflowed());
         };
@@ -115,7 +124,11 @@ impl Intrusive {
             Err(err) => return Err(IntrusiveError::buffer_error(err)),
         };
 
-        Ok(Self { buffer, unpadded })
+        Ok(Self {
+            buffer,
+            unpadded,
+            handle,
+        })
     }
 
     /// Return the [`IdLimit`] for this store.
@@ -135,13 +148,18 @@ impl Intrusive {
         self.unpadded
     }
 
-    /// Return a [`Reader`] over [`Self`] inside `store`.
-    pub(crate) fn reader(store: &Store<Self>) -> Result<Reader<'_>, epoch::Unavailable> {
-        store.guard(|this, guard: epoch::Guard<'_>| Reader {
-            buffer: &this.buffer,
-            unpadded: this.unpadded,
-            _guard: guard,
-        })
+    /// Return a [`Reader`] over [`Self`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `guard` does not belong to `self`'s [`epoch::Registry`].
+    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+        self.handle.assert_guard_belongs(&guard);
+        Reader {
+            buffer: &self.buffer,
+            unpadded: self.unpadded,
+            guard,
+        }
     }
 
     /// Return the data at position `i` without bound-checking.
@@ -245,7 +263,12 @@ impl slots::Slots for Intrusive {
 pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
     unpadded: Bytes,
-    _guard: epoch::Guard<'a>,
+
+    #[cfg_attr(
+        not(feature = "quantization"),
+        expect(unused, reason = "quantization uses this to share the guard")
+    )]
+    guard: epoch::Guard<'a>,
 }
 
 impl<'a> Reader<'a> {
@@ -346,7 +369,7 @@ impl<'a> Reader<'a> {
             .can_read();
 
         if can_read {
-            // SAFETY: We've passed the `can_read` check - `_guard` will ensure the read
+            // SAFETY: We've passed the `can_read` check - `guard` will ensure the read
             // slice is valid and race-free.
             Some(unsafe { data.as_slice() })
         } else {
@@ -378,6 +401,12 @@ impl<'a> Reader<'a> {
     /// Return the number of bytes plus the atomic tag.
     pub(crate) fn bytes_plus_tag(&self) -> Bytes {
         self.unpadded
+    }
+
+    /// Return a reference to the contained [`epoch::Guard`].
+    #[cfg(feature = "quantization")]
+    pub(crate) fn guard(&self) -> &epoch::Guard<'a> {
+        &self.guard
     }
 }
 
@@ -430,7 +459,7 @@ mod tests {
 
     use crate::{
         num::{Capacity, MaxDegree},
-        store,
+        store::{self, Store},
     };
 
     // Build a store with `entries` writable slots of `entry_bytes` each, backed by `frozen`
@@ -473,7 +502,7 @@ mod tests {
         // Writable slots are [0, 4); frozen points occupy [4, 6).
         assert_eq!(s.frozen(), 4..6);
 
-        let reader = Intrusive::reader(&s).unwrap();
+        let reader = s.guard(|intrusive, guard| intrusive.reader(guard)).unwrap();
         for i in 0..4 {
             assert!(!s.can_read_approximate(i).unwrap());
             assert!(!reader.can_read(i).unwrap());
@@ -501,7 +530,9 @@ mod tests {
     fn acquire_write_publish_read_roundtrip() {
         let s = store(4, 8, 1).unwrap();
 
-        let reader = Intrusive::reader(&s).expect("reader guard available");
+        let reader = s
+            .guard(|intrusive, guard| intrusive.reader(guard))
+            .expect("reader guard available");
 
         let idx = {
             let mut slot = s.acquire().expect("a fresh store has free slots");
@@ -525,7 +556,9 @@ mod tests {
     fn unpublished_slots_are_immediately_available() {
         let s = store(4, 8, 1).unwrap();
 
-        let reader = Intrusive::reader(&s).expect("reader guard available");
+        let reader = s
+            .guard(|intrusive, guard| intrusive.reader(guard))
+            .expect("reader guard available");
 
         let idx = {
             let mut slot = s.acquire().expect("a fresh store has free slots");
@@ -599,7 +632,10 @@ mod tests {
         assert!(s.retire(idx).is_ok());
 
         // A reader opened after retirement must not observe the retired slot.
-        let reader = Intrusive::reader(&s).unwrap();
+        let reader = s
+            .guard(|intrusive, guard| intrusive.reader(guard))
+            .expect("reader guard available");
+
         assert_eq!(reader.read(idx), None);
         assert_eq!(reader.can_read(idx), Some(false));
 
