@@ -728,9 +728,9 @@ mod sgemm_aat_lower_tests {
 
     type LowerProduct = fn(usize, usize, f32, &[f32], &mut [f32]) -> Result<(), SgemmError>;
 
-    #[track_caller]
     fn assert_lower_product_matches_scalar(
         shape: (usize, usize),
+        alpha: f32,
         input: &[f32],
         previous: &[f32],
         output: &[f32],
@@ -742,23 +742,20 @@ mod sgemm_aat_lower_tests {
                 let index = row * rows + column;
                 if column > row {
                     assert_eq!(
-                        output[index].to_bits(),
-                        previous[index].to_bits(),
+                        output[index], previous[index],
                         "shape={shape:?}, upper ({row},{column})"
                     );
                 } else {
-                    let dot: f64 = (0..dimensions)
+                    let dot: f32 = (0..dimensions)
                         .map(|dimension| {
-                            f64::from(input[row * dimensions + dimension])
-                                * f64::from(input[column * dimensions + dimension])
+                            input[row * dimensions + dimension]
+                                * input[column * dimensions + dimension]
                         })
                         .sum();
-                    // Both sweeps use alpha = -2 and exactly representable arithmetic.
-                    let expected = -2.0 * dot + if add { f64::from(previous[index]) } else { 0.0 };
+                    let expected = alpha * dot + if add { previous[index] } else { 0.0 };
                     assert_eq!(
-                        f64::from(output[index]),
-                        expected,
-                        "shape={shape:?}, lower ({row},{column})"
+                        output[index], expected,
+                        "shape={shape:?}, alpha={alpha}, add={add}, lower ({row},{column})"
                     );
                 }
             }
@@ -794,15 +791,23 @@ mod sgemm_aat_lower_tests {
         #[case] rows: usize,
         #[case] dimensions: usize,
     ) {
+        let alpha = -2.0;
         let input: Vec<_> = (0..rows * dimensions)
             .map(|i| (i % 9) as f32 - 4.0)
             .collect();
         let previous: Vec<_> = (0..rows * rows).map(|i| 100.0 + i as f32).collect();
         let mut output = previous.clone();
 
-        operation(rows, dimensions, -2.0, &input, &mut output).unwrap();
+        operation(rows, dimensions, alpha, &input, &mut output).unwrap();
 
-        assert_lower_product_matches_scalar((rows, dimensions), &input, &previous, &output, add);
+        assert_lower_product_matches_scalar(
+            (rows, dimensions),
+            alpha,
+            &input,
+            &previous,
+            &output,
+            add,
+        );
     }
 
     #[rstest]
@@ -817,6 +822,7 @@ mod sgemm_aat_lower_tests {
         // One representative dense input checks the wrapper's row-major wiring.
         let shape = (129, 1536);
         let (rows, dimensions) = shape;
+        let alpha = -2.0;
         let mut rng = StdRng::seed_from_u64(1287);
         // Bounded multiples of 1/8 keep products and sums exact in f32.
         let mut input: Vec<_> = (0..rows * dimensions)
@@ -828,9 +834,9 @@ mod sgemm_aat_lower_tests {
         let previous: Vec<_> = (0..rows * rows).map(|i| (i % 97) as f32 - 48.0).collect();
         let mut output = previous.clone();
 
-        operation(rows, dimensions, -2.0, &input, &mut output).unwrap();
+        operation(rows, dimensions, alpha, &input, &mut output).unwrap();
 
-        assert_lower_product_matches_scalar(shape, &input, &previous, &output, add);
+        assert_lower_product_matches_scalar(shape, alpha, &input, &previous, &output, add);
     }
 
     #[test]
