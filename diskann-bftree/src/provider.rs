@@ -131,9 +131,9 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// implements the [`CreateQuantProvider`] trait.
 /// ```
 /// use diskann_quantization::{
-///     alloc::{GlobalAllocator, Poly, poly},
+///     alloc::{GlobalAllocator},
 ///     algorithms::TransformKind,
-///     spherical::{iface, SphericalQuantizer, SupportedMetric, PreScale},
+///     spherical::{SphericalQuantizer, SupportedMetric, PreScale},
 /// };
 /// use diskann_utils::views::{Init, Matrix};
 /// use diskann_bftree::provider::{
@@ -153,9 +153,9 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 ///     SupportedMetric::SquaredL2, PreScale::None,
 ///     &mut rng, GlobalAllocator,
 /// )
-///     .unwrap()
-///     .as_quantizer::<1>()
-///     .unwrap();
+/// .unwrap()
+/// .as_quantizer::<1>()
+/// .unwrap();
 ///
 /// let parameters = BfTreeProviderParameters {
 ///     max_points: 5,
