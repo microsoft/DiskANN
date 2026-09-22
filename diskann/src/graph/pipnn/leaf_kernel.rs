@@ -14,7 +14,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use super::{
     leaf_metric::LeafMetric,
     simd::Simd,
-    topk::{Candidate, TopK, TopKVisitor, Width, with_topk},
+    topk::{Batch, BatchRanker, BatchVisitor, Candidate, with_batch},
 };
 
 /// Reusable storage for one leaf numerical pipeline.
@@ -92,36 +92,22 @@ fn rank_leaf_distances<A: Simd>(
     output: MutMatrixView<'_, Candidate>,
     worst: &mut Vec<f32>,
 ) {
-    with_topk(
-        output.ncols(),
-        RankLeaf {
-            arch,
-            distances,
-            output,
-            thresholds: worst,
-        },
-    );
+    with_batch(output, worst, RankLeaf { arch, distances });
 }
 
 struct RankLeaf<'a, A> {
     arch: A,
     distances: MatrixView<'a, f32>,
-    output: MutMatrixView<'a, Candidate>,
-    thresholds: &'a mut Vec<f32>,
 }
 
-impl<A: Simd> TopKVisitor for RankLeaf<'_, A> {
+impl<A: Simd> BatchVisitor for RankLeaf<'_, A> {
     #[inline]
-    fn visit<W: Width>(mut self, topk: TopK<W>) {
-        topk.initialize(self.output.as_mut_view(), self.thresholds);
+    fn visit<'a, Rows>(self, mut batch: Batch<'a, Rows>)
+    where
+        Batch<'a, Rows>: BatchRanker,
+    {
         for point_idx in 1..self.distances.nrows() {
-            topk.update_dual_topk(
-                self.arch,
-                point_idx,
-                &self.distances.row(point_idx)[..point_idx],
-                self.output.as_mut_view(),
-                self.thresholds.as_mut_slice(),
-            );
+            batch.update_dual_topk(self.arch, &self.distances.row(point_idx)[..point_idx]);
         }
     }
 }
