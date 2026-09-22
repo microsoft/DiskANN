@@ -31,4 +31,3 @@ RUSTDOCFLAGS="--cfg docsrs -D rustdoc::all" cargo +nightly doc \
     --document-private-items
 ```
 
-

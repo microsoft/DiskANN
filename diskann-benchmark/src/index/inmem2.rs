@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Context;
 use diskann::graph::{self, DiskANNIndex, InplaceDeleteMethod, StartPointStrategy};
 use diskann_benchmark_core::{
     self as benchmark_core, build as build_core, recall,
@@ -35,7 +36,6 @@ use diskann_inmem::{
 };
 use diskann_quantization::{
     alloc::{GlobalAllocator, Poly},
-    poly,
     spherical::iface,
 };
 use diskann_utils::views::{Matrix, MatrixView};
@@ -450,26 +450,18 @@ impl Spherical {
             transforms::TransformKind::DoubleHadamard {
                 target_dim: transforms::TargetDim::Same,
             },
-            metric.try_into().unwrap(),
+            metric
+                .try_into()
+                .context("internal error - dispatch should reject invalid metrics")?,
             spherical::PreScale::ReciprocalMeanNorm,
             &mut rng,
             GlobalAllocator,
-        )
-        .unwrap();
+        )?;
 
         let quantizer = match self.bits {
-            SphericalBits::One => {
-                let i = iface::Impl::<1, _>::new(quantizer)?;
-                poly!({ iface::Quantizer }, i, GlobalAllocator)?
-            }
-            SphericalBits::Two => {
-                let i = iface::Impl::<2, _>::new(quantizer)?;
-                poly!({ iface::Quantizer }, i, GlobalAllocator)?
-            }
-            SphericalBits::Four => {
-                let i = iface::Impl::<4, _>::new(quantizer)?;
-                poly!({ iface::Quantizer }, i, GlobalAllocator)?
-            }
+            SphericalBits::One => quantizer.as_quantizer::<1>()?,
+            SphericalBits::Two => quantizer.as_quantizer::<2>()?,
+            SphericalBits::Four => quantizer.as_quantizer::<4>()?,
         };
 
         Ok(quantizer)
@@ -531,6 +523,7 @@ impl StaticBuild {
         DispatchParams {
             data_type: self.data.data_type,
             quantization: &self.quantization,
+            distance: self.data.distance,
         }
     }
 }
@@ -541,6 +534,8 @@ struct DispatchParams<'a> {
     data_type: DataType,
     /// The quantization used by the dataset.
     quantization: &'a Quantization,
+    /// The metric being used.
+    distance: Metric,
 }
 
 impl Display for StaticBuild {
@@ -641,7 +636,10 @@ where
         let DispatchParams {
             data_type,
             quantization,
+            distance,
         } = input.dispatch_params();
+
+        accept_all(&distance);
 
         if !matches!(quantization, Quantization::None) {
             score.fail(
@@ -782,10 +780,21 @@ impl Benchmark for SphericalBuild {
         let DispatchParams {
             data_type,
             quantization,
+            distance,
         } = input.dispatch_params();
 
         if !matches!(quantization, Quantization::Spherical(_)) {
             score.fail(2000, &"needed spherical-quantization");
+        }
+
+        if distance == Metric::CosineNormalized {
+            score.fail(
+                500,
+                &format_args!(
+                    "{} is not supported for spherical quantization- use \"cosine\" instead",
+                    Metric::CosineNormalized
+                ),
+            );
         }
 
         if !f32::is_match(data_type) {
@@ -1397,3 +1406,6 @@ where
         false
     }
 }
+
+// Dispatch helper to make an item as used.
+fn accept_all<T>(_: &T) {}
