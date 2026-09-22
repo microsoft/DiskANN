@@ -13,8 +13,8 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 
 use super::{
     leaf_metric::LeafMetric,
-    simd::PiPNNSIMDSchema,
-    topk::{Candidate, TopK, TopKVisitor, Width, with_topk},
+    simd::Simd,
+    topk::{Batch, BatchRanker, BatchVisitor, Candidate, with_batch},
 };
 
 /// Reusable storage for one leaf numerical pipeline.
@@ -66,7 +66,7 @@ pub(super) fn select_leaf_neighbors<A, M>(
     workspace: &mut LeafKernelWorkspace,
 ) -> ANNResult<()>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: LeafMetric,
 {
     let point_count = points.nrows();
@@ -86,42 +86,28 @@ where
 }
 
 /// Offer each lower-triangle row to the two endpoint neighbor lists.
-fn rank_leaf_distances<A: PiPNNSIMDSchema>(
+fn rank_leaf_distances<A: Simd>(
     arch: A,
     distances: MatrixView<'_, f32>,
     output: MutMatrixView<'_, Candidate>,
     worst: &mut Vec<f32>,
 ) {
-    with_topk(
-        output.ncols(),
-        RankLeaf {
-            arch,
-            distances,
-            output,
-            thresholds: worst,
-        },
-    );
+    with_batch(output, worst, RankLeaf { arch, distances });
 }
 
 struct RankLeaf<'a, A> {
     arch: A,
     distances: MatrixView<'a, f32>,
-    output: MutMatrixView<'a, Candidate>,
-    thresholds: &'a mut Vec<f32>,
 }
 
-impl<A: PiPNNSIMDSchema> TopKVisitor for RankLeaf<'_, A> {
+impl<A: Simd> BatchVisitor for RankLeaf<'_, A> {
     #[inline]
-    fn visit<W: Width>(mut self, topk: TopK<W>) {
-        topk.initialize(self.output.as_mut_view(), self.thresholds);
+    fn visit<'a, Rows>(self, mut batch: Batch<'a, Rows>)
+    where
+        Batch<'a, Rows>: BatchRanker,
+    {
         for point_idx in 1..self.distances.nrows() {
-            topk.update_dual_topk(
-                self.arch,
-                point_idx,
-                &self.distances.row(point_idx)[..point_idx],
-                self.output.as_mut_view(),
-                self.thresholds.as_mut_slice(),
-            );
+            batch.update_dual_topk(self.arch, &self.distances.row(point_idx)[..point_idx]);
         }
     }
 }
@@ -152,10 +138,8 @@ fn validate_output(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(miri))]
     use crate::graph::pipnn::test_support;
     use crate::graph::pipnn::{Cosine, CosineNormalized, InnerProduct, L2};
-    #[cfg(not(miri))]
     use diskann_vector::distance::Metric;
     use diskann_wide::ARCH;
     use rstest::rstest;
@@ -177,7 +161,6 @@ mod tests {
         assert_eq!(leaf_neighbor_count(points, requested), expected);
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2, [[1,3,2,4], [0,2,3,4], [4,0,1,3], [0,2,1,4], [2,1,0,3]])]
     #[case::cosine(Cosine, Metric::Cosine, [[3,1,2,4], [0,3,4,2], [4,3,0,1], [0,2,1,4], [2,1,3,0]])]
@@ -187,102 +170,108 @@ mod tests {
         #[case] _metric: M,
         #[case] scalar_metric: Metric,
         #[case] expected_ids: [[u32; 4]; 5],
-        #[values(0, 1, 2, 3, 4)] neighbors: usize,
-        #[values(2, 7, 8, 9, 15, 16, 17, 128, 129)] dimensions: usize,
     ) {
-        // These five points have distinct scores in each row for every metric.
-        let coordinates = [
-            [2.0, 2.0],
-            [-1.0, 3.0],
-            [0.0, -2.0],
-            [5.0, 0.0],
-            [-3.0, -4.0],
-        ];
-        let values = test_support::packed_points(
-            &coordinates,
-            dimensions,
-            scalar_metric == Metric::CosineNormalized,
-        );
-        let points = MatrixView::try_from(values.as_slice(), 5, dimensions).unwrap();
-        let mut output = vec![Candidate::new(0, -100.0); 5 * neighbors];
-        let mut workspace = LeafKernelWorkspace::default();
-
-        select_leaf_neighbors::<_, M>(
-            ARCH,
-            points,
-            MutMatrixView::try_from(output.as_mut_slice(), 5, neighbors).unwrap(),
-            &mut workspace,
-        )
-        .unwrap();
-
-        for point in 0..5 {
-            let actual = &output[point * neighbors..(point + 1) * neighbors];
-            assert_eq!(
-                actual.iter().map(|c| c.local_idx).collect::<Vec<_>>(),
-                expected_ids[point][..neighbors],
-                "point={point}"
-            );
-            for candidate in actual {
-                let expected = test_support::distance(
-                    scalar_metric,
-                    points.row(point),
-                    points.row(candidate.local_idx as usize),
+        for neighbors in [0, 1, 2, 3, 4] {
+            for dimensions in [2, 7, 8, 9, 15, 16, 17, 128, 129] {
+                // These five points have distinct scores in each row for every metric.
+                let coordinates = [
+                    [2.0, 2.0],
+                    [-1.0, 3.0],
+                    [0.0, -2.0],
+                    [5.0, 0.0],
+                    [-3.0, -4.0],
+                ];
+                let values = test_support::packed_points(
+                    &coordinates,
+                    dimensions,
+                    scalar_metric == Metric::CosineNormalized,
                 );
-                // Only two coordinates are nonzero, so eight f32 ulps at the score scale
-                // cover the dot/norm rounding without admitting another neighbor.
-                let tolerance = 8.0 * f64::from(f32::EPSILON) * expected.abs().max(1.0);
-                assert!(
-                    (f64::from(candidate.distance) - expected).abs() <= tolerance,
-                    "point={point}, candidate={candidate:?}, expected={expected}"
-                );
+                let points = MatrixView::try_from(values.as_slice(), 5, dimensions).unwrap();
+                let mut output = vec![Candidate::new(0, -100.0); 5 * neighbors];
+                let mut workspace = LeafKernelWorkspace::default();
+
+                select_leaf_neighbors::<_, M>(
+                    ARCH,
+                    points,
+                    MutMatrixView::try_from(output.as_mut_slice(), 5, neighbors).unwrap(),
+                    &mut workspace,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("neighbors={neighbors}, dimensions={dimensions}: {error}")
+                });
+
+                for point in 0..5 {
+                    let actual = &output[point * neighbors..(point + 1) * neighbors];
+                    assert_eq!(
+                        actual.iter().map(|c| c.local_idx).collect::<Vec<_>>(),
+                        expected_ids[point][..neighbors],
+                        "neighbors={neighbors}, dimensions={dimensions}, point={point}"
+                    );
+                    for candidate in actual {
+                        let expected = test_support::distance(
+                            scalar_metric,
+                            points.row(point),
+                            points.row(candidate.local_idx as usize),
+                        );
+                        // Only two coordinates are nonzero, so eight f32 ulps at the score scale
+                        // cover the dot/norm rounding without admitting another neighbor.
+                        let tolerance = 8.0 * f64::from(f32::EPSILON) * expected.abs().max(1.0);
+                        assert!(
+                            (f64::from(candidate.distance) - expected).abs() <= tolerance,
+                            "neighbors={neighbors}, dimensions={dimensions}, point={point}, candidate={candidate:?}, expected={expected}"
+                        );
+                    }
+                }
             }
         }
     }
 
-    #[cfg(not(miri))]
-    #[rstest]
-    fn neighbors_match_scalar_ranking_across_leaf_sizes_and_counts(
-        #[values(1, 2, 16, 17, 18, 33, 34)] point_count: usize,
-        #[values(1, 2, 3, 10, 11, 17)] requested: usize,
-    ) {
-        // Slightly increasing gaps avoid ties between the two sides of each point.
-        // Center the coordinates so intermediate norm sums stay exactly representable.
-        let mut values: Vec<_> = (0..point_count).map(|i| (64 * i + i * i) as f32).collect();
-        let center = values[point_count - 1] / 2.0;
-        for value in &mut values {
-            *value -= center;
-        }
-        let neighbors = requested.min(point_count - 1);
-        let mut output = vec![EMPTY; point_count * neighbors];
+    #[test]
+    fn neighbors_match_scalar_ranking_across_leaf_sizes_and_counts() {
+        for point_count in [1, 2, 16, 17, 18, 33, 34] {
+            for requested in [1, 2, 3, 10, 11, 17] {
+                // Slightly increasing gaps avoid ties between the two sides of each point.
+                // Center the coordinates so intermediate norm sums stay exactly representable.
+                let mut values: Vec<_> =
+                    (0..point_count).map(|i| (64 * i + i * i) as f32).collect();
+                let center = values[point_count - 1] / 2.0;
+                for value in &mut values {
+                    *value -= center;
+                }
+                let neighbors = requested.min(point_count - 1);
+                let mut output = vec![EMPTY; point_count * neighbors];
 
-        select_leaf_neighbors::<_, L2>(
-            ARCH,
-            MatrixView::try_from(values.as_slice(), point_count, 1).unwrap(),
-            MutMatrixView::try_from(output.as_mut_slice(), point_count, neighbors).unwrap(),
-            &mut LeafKernelWorkspace::default(),
-        )
-        .unwrap();
+                select_leaf_neighbors::<_, L2>(
+                    ARCH,
+                    MatrixView::try_from(values.as_slice(), point_count, 1).unwrap(),
+                    MutMatrixView::try_from(output.as_mut_slice(), point_count, neighbors).unwrap(),
+                    &mut LeafKernelWorkspace::default(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("point_count={point_count}, requested={requested}: {error}")
+                });
 
-        for point in 0..point_count {
-            let mut expected: Vec<_> = values
-                .iter()
-                .enumerate()
-                .filter(|&(other, _)| other != point)
-                .map(|(other, &value)| {
-                    Candidate::new(other as u32, (values[point] - value).powi(2))
-                })
-                .collect();
-            expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-            expected.truncate(neighbors);
-            assert_eq!(
-                &output[point * neighbors..(point + 1) * neighbors],
-                expected,
-                "point={point}, point_count={point_count}, neighbors={neighbors}"
-            );
+                for point in 0..point_count {
+                    let mut expected: Vec<_> = values
+                        .iter()
+                        .enumerate()
+                        .filter(|&(other, _)| other != point)
+                        .map(|(other, &value)| {
+                            Candidate::new(other as u32, (values[point] - value).powi(2))
+                        })
+                        .collect();
+                    expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+                    expected.truncate(neighbors);
+                    assert_eq!(
+                        &output[point * neighbors..(point + 1) * neighbors],
+                        expected,
+                        "point_count={point_count}, requested={requested}, point={point}, neighbors={neighbors}"
+                    );
+                }
+            }
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -291,76 +280,82 @@ mod tests {
     fn large_dense_leaves_select_nearest_non_self_neighbors<M: LeafMetric>(
         #[case] _metric: M,
         #[case] scalar_metric: Metric,
-        #[values((33, 384), (65, 768), (129, 1536), (35, 1537))] shape: (usize, usize),
-        #[values(3, 11)] neighbors: usize,
     ) {
-        let (point_count, dimensions) = shape;
-        let mut values = test_support::dense_points(point_count, dimensions, 1287);
-        if scalar_metric == Metric::CosineNormalized {
-            test_support::normalize(&mut values, dimensions);
-        }
-        let points = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
-        let mut output = vec![EMPTY; point_count * neighbors];
+        for shape in [(33, 384), (65, 768), (129, 1536), (35, 1537)] {
+            for neighbors in [3, 11] {
+                let (point_count, dimensions) = shape;
+                let mut values = test_support::dense_points(point_count, dimensions, 1287);
+                if scalar_metric == Metric::CosineNormalized {
+                    test_support::normalize(&mut values, dimensions);
+                }
+                let points =
+                    MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+                let mut output = vec![EMPTY; point_count * neighbors];
 
-        select_leaf_neighbors::<_, M>(
-            ARCH,
-            points,
-            MutMatrixView::try_from(output.as_mut_slice(), point_count, neighbors).unwrap(),
-            &mut LeafKernelWorkspace::default(),
-        )
-        .unwrap();
+                select_leaf_neighbors::<_, M>(
+                    ARCH,
+                    points,
+                    MutMatrixView::try_from(output.as_mut_slice(), point_count, neighbors).unwrap(),
+                    &mut LeafKernelWorkspace::default(),
+                )
+                .unwrap_or_else(|error| panic!("shape={shape:?}, neighbors={neighbors}: {error}"));
 
-        // Unnormalized dyadic sums are exact; cosine rounds sqrt/division, while
-        // normalized dot products also accumulate coordinate rounding.
-        let tolerance = match scalar_metric {
-            Metric::L2 | Metric::InnerProduct => 0.0,
-            Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
-            Metric::CosineNormalized => {
-                let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
-                roundoff / (1.0 - roundoff)
-            }
-        };
-        for point in 0..point_count {
-            let mut expected: Vec<_> = (0..point_count)
-                .filter(|&other| other != point)
-                .map(|other| {
-                    (
-                        other as u32,
-                        test_support::distance(scalar_metric, points.row(point), points.row(other)),
-                    )
-                })
-                .collect();
-            expected.sort_by(|left, right| left.1.total_cmp(&right.1));
-            let actual = &output[point * neighbors..(point + 1) * neighbors];
-            for (rank, candidate) in actual.iter().enumerate() {
-                assert!(
-                    !actual[..rank]
-                        .iter()
-                        .any(|previous| previous.local_idx == candidate.local_idx),
-                    "duplicate neighbor for point={point}: {candidate:?}"
-                );
-                let own_score = expected
-                    .iter()
-                    .find(|&&(id, _)| id == candidate.local_idx)
-                    .unwrap_or_else(|| {
-                        panic!("invalid or self neighbor for point={point}: {candidate:?}")
-                    })
-                    .1;
-                assert!(
-                    (f64::from(candidate.distance) - own_score).abs() <= tolerance,
-                    "shape={shape:?}, point={point}, candidate={candidate:?}, score={own_score}"
-                );
-                // Equal scores may use either ID, but every rank must be nearest-first.
-                assert!(
-                    (own_score - expected[rank].1).abs() <= tolerance,
-                    "shape={shape:?}, point={point}, rank={rank}, score={own_score}, expected={:?}",
-                    expected[rank]
-                );
+                // Unnormalized dyadic sums are exact; cosine rounds sqrt/division, while
+                // normalized dot products also accumulate coordinate rounding.
+                let tolerance = match scalar_metric {
+                    Metric::L2 | Metric::InnerProduct => 0.0,
+                    Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
+                    Metric::CosineNormalized => {
+                        let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
+                        roundoff / (1.0 - roundoff)
+                    }
+                };
+                for point in 0..point_count {
+                    let mut expected: Vec<_> = (0..point_count)
+                        .filter(|&other| other != point)
+                        .map(|other| {
+                            (
+                                other as u32,
+                                test_support::distance(
+                                    scalar_metric,
+                                    points.row(point),
+                                    points.row(other),
+                                ),
+                            )
+                        })
+                        .collect();
+                    expected.sort_by(|left, right| left.1.total_cmp(&right.1));
+                    let actual = &output[point * neighbors..(point + 1) * neighbors];
+                    for (rank, candidate) in actual.iter().enumerate() {
+                        assert!(
+                            !actual[..rank]
+                                .iter()
+                                .any(|previous| previous.local_idx == candidate.local_idx),
+                            "shape={shape:?}, neighbors={neighbors}, duplicate neighbor for point={point}: {candidate:?}"
+                        );
+                        let own_score = expected
+                            .iter()
+                            .find(|&&(id, _)| id == candidate.local_idx)
+                            .unwrap_or_else(|| {
+                                panic!("shape={shape:?}, neighbors={neighbors}, invalid or self neighbor for point={point}: {candidate:?}")
+                            })
+                            .1;
+                        assert!(
+                            (f64::from(candidate.distance) - own_score).abs() <= tolerance,
+                            "shape={shape:?}, neighbors={neighbors}, point={point}, candidate={candidate:?}, score={own_score}"
+                        );
+                        // Equal scores may use either ID, but every rank must be nearest-first.
+                        assert!(
+                            (own_score - expected[rank].1).abs() <= tolerance,
+                            "shape={shape:?}, neighbors={neighbors}, point={point}, rank={rank}, score={own_score}, expected={:?}",
+                            expected[rank]
+                        );
+                    }
+                }
             }
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn workspace_reuse_does_not_mix_results_from_different_leaves() {
         let values = [0.0, 1.0, 4.0, 10.0, 21.0];
@@ -452,7 +447,6 @@ mod tests {
         assert_eq!(output, [Candidate::new(1, 7.0), Candidate::new(0, 7.0)]);
     }
 
-    // Keep this module path available to the nightly Miri selector.
     mod rank_leaf_distances_tests {
         use super::*;
 

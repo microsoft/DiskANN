@@ -9,7 +9,7 @@
 use diskann_utils::views::MutMatrixView;
 use diskann_wide::{SIMDPartialOrd, SIMDVector};
 
-use super::simd::PiPNNSIMDSchema;
+use super::simd::Simd;
 
 /// An output slot with no assigned candidate.
 pub(super) const UNASSIGNED: u32 = u32::MAX;
@@ -40,167 +40,229 @@ impl Default for Candidate {
     }
 }
 
-/// A result capacity known at compile time.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Fixed<const K: usize>;
+/// One borrowed result row whose length is its capacity.
+pub(super) trait Ranker: AsRef<[Candidate]> + AsMut<[Candidate]> + Sized {
+    /// Insert a candidate below this non-empty row's limit and return the new limit.
+    fn insert(&mut self, candidate: Candidate) -> f32;
 
-/// A result capacity selected at runtime.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Runtime(pub(super) usize);
-
-/// Keep fixed capacities available to inlined insertion across architecture scopes.
-pub(super) trait Width: Copy {
-    fn capacity(self) -> usize;
-}
-
-impl<const K: usize> Width for Fixed<K> {
+    /// Replace this row with the nearest input positions.
+    ///
+    /// Equal distances need no fixed tie order. Empty rows retain no candidates.
     #[inline(always)]
-    fn capacity(self) -> usize {
-        K
-    }
-}
-
-impl Width for Runtime {
-    #[inline(always)]
-    fn capacity(self) -> usize {
-        self.0
-    }
-}
-
-/// A batch operation that accepts any TopK width specialization.
-pub(super) trait TopKVisitor {
-    /// Consume the operation and run it with the selected width.
-    fn visit<W: Width>(self, topk: TopK<W>);
-}
-
-/// Select the width specialization and run the visitor once for the batch.
-///
-/// Specialize capacities 1..=10; zero and larger capacities use the runtime path.
-/// Typical partition K is 10 or 3, and leaf K is 3 or 2.
-#[inline]
-pub(super) fn with_topk<V: TopKVisitor>(width: usize, visitor: V) {
-    match width {
-        1 => visitor.visit(TopK::new(Fixed::<1>)),
-        2 => visitor.visit(TopK::new(Fixed::<2>)),
-        3 => visitor.visit(TopK::new(Fixed::<3>)),
-        4 => visitor.visit(TopK::new(Fixed::<4>)),
-        5 => visitor.visit(TopK::new(Fixed::<5>)),
-        6 => visitor.visit(TopK::new(Fixed::<6>)),
-        7 => visitor.visit(TopK::new(Fixed::<7>)),
-        8 => visitor.visit(TopK::new(Fixed::<8>)),
-        9 => visitor.visit(TopK::new(Fixed::<9>)),
-        10 => visitor.visit(TopK::new(Fixed::<10>)),
-        _ => visitor.visit(TopK::new(Runtime(width))),
-    }
-}
-
-/// Top-k selection with a fixed result capacity and caller-owned storage.
-///
-/// This object stores no candidates or thresholds. Each operation borrows only
-/// the buffers it updates. Candidate IDs are slice positions, not dataset IDs.
-/// Callers supply each candidate at most once per result; equal distances need
-/// no fixed tie order. [`with_topk`] specializes the width per batch.
-/// Selection and dual updates run inside their own architecture scope.
-pub(super) struct TopK<W> {
-    width: W,
-}
-
-impl<W: Width> TopK<W> {
-    /// Configure the result capacity.
-    pub(super) fn new(width: W) -> Self {
-        Self { width }
-    }
-
-    /// Clear results and prepare reusable thresholds before a sequence of dual updates.
-    pub(super) fn initialize(
-        &self,
-        mut output: MutMatrixView<'_, Candidate>,
-        thresholds: &mut Vec<f32>,
-    ) {
-        output.as_mut_slice().fill(Candidate::default());
-        thresholds.resize(output.nrows(), f32::INFINITY);
-        thresholds.fill(f32::INFINITY);
-    }
-
-    /// Select the nearest candidates, replacing the previous contents of output.
-    /// Slice positions become candidate IDs. The threshold is local to this call.
-    #[inline(always)]
-    pub(super) fn select_topk<A: PiPNNSIMDSchema>(
-        &self,
-        arch: A,
-        distances: &[f32],
-        output: &mut [Candidate],
-    ) {
+    fn select_topk<A: Simd>(&mut self, arch: A, distances: &[f32]) {
         arch.run2(
             #[inline(always)]
-            move |distances: &[f32], output: &mut [Candidate]| {
-                let k = self.width.capacity();
-                if k == 0 {
+            move |distances: &[f32], ranker: &mut Self| {
+                if ranker.as_ref().is_empty() {
                     return;
                 }
-                output[..k].fill(Candidate::default());
+                ranker.as_mut().fill(Candidate::default());
                 distance_blocks(arch, distances).fold(
                     f32::INFINITY,
                     #[inline(always)]
-                    |limit, block| block.update_topk_from_candidates(output, limit, self.width),
+                    |limit, block| block.update_topk_from_candidates(ranker, limit),
                 );
             },
             distances,
-            output,
+            self,
         );
     }
+}
 
-    /// Add each pair (point_idx, j) independently to both endpoints' top-k results.
-    /// Call [`Self::initialize`] once before the pair scan; subsequent updates preserve its state.
-    /// Preserve existing results; all slice indexes must be less than point_idx.
+impl Ranker for &mut [Candidate] {
+    #[inline(always)]
+    fn insert(&mut self, candidate: Candidate) -> f32 {
+        insert_sorted(self, candidate)
+    }
+}
+
+impl<const K: usize> Ranker for &mut [Candidate; K] {
+    #[inline(always)]
+    fn insert(&mut self, candidate: Candidate) -> f32 {
+        insert_sorted(*self, candidate)
+    }
+}
+
+/// A batch operation over one bound result row.
+pub(super) trait TopKVisitor {
+    fn visit<R: Ranker>(self, ranker: R);
+}
+
+/// Bind one result row and specialize its capacity once for the visitor.
+///
+/// Specialize capacities 1, 2, 3, 8, and 10; other capacities use the slice path.
+/// Typical partition K is 10 or 3, and leaf K is 3 or 2.
+#[inline]
+#[expect(
+    clippy::unwrap_used,
+    reason = "each match arm proves the candidate slice has the array length"
+)]
+pub(super) fn with_topk<V: TopKVisitor>(candidates: &mut [Candidate], visitor: V) {
+    // Each arm checks this same slice's length, so conversion to its array cannot fail.
+    match candidates.len() {
+        1 => visitor.visit::<&mut [_; 1]>(candidates.try_into().unwrap()),
+        2 => visitor.visit::<&mut [_; 2]>(candidates.try_into().unwrap()),
+        3 => visitor.visit::<&mut [_; 3]>(candidates.try_into().unwrap()),
+        8 => visitor.visit::<&mut [_; 8]>(candidates.try_into().unwrap()),
+        10 => visitor.visit::<&mut [_; 10]>(candidates.try_into().unwrap()),
+        _ => visitor.visit(candidates),
+    }
+}
+
+/// Access complete result rows with their static or runtime capacity.
+pub(super) trait BatchRanker {
+    type Ranker<'a>: Ranker
+    where
+        Self: 'a;
+
+    fn ranker(&mut self, index: usize) -> Option<Self::Ranker<'_>>;
+}
+
+/// Candidate rows and their limits stay borrowed together throughout a pair scan.
+pub(super) struct Batch<'a, Rows> {
+    candidates: Rows,
+    thresholds: &'a mut [f32],
+}
+
+impl<'a> Batch<'a, MutMatrixView<'a, Candidate>> {
+    fn new(mut candidates: MutMatrixView<'a, Candidate>, thresholds: &'a mut Vec<f32>) -> Self {
+        let rows = candidates.nrows();
+        candidates.as_mut_slice().fill(Candidate::default());
+        thresholds.truncate(rows);
+        thresholds.fill(f32::INFINITY);
+        thresholds.resize(rows, f32::INFINITY);
+        Self {
+            candidates,
+            thresholds,
+        }
+    }
+}
+
+impl<Rows> Batch<'_, Rows> {
+    fn nrows(&self) -> usize {
+        self.thresholds.len()
+    }
+}
+
+impl<const K: usize> BatchRanker for Batch<'_, &mut [[Candidate; K]]> {
+    type Ranker<'a>
+        = &'a mut [Candidate; K]
+    where
+        Self: 'a;
+
+    #[inline(always)]
+    fn ranker(&mut self, index: usize) -> Option<Self::Ranker<'_>> {
+        self.candidates.get_mut(index)
+    }
+}
+
+impl BatchRanker for Batch<'_, MutMatrixView<'_, Candidate>> {
+    type Ranker<'a>
+        = &'a mut [Candidate]
+    where
+        Self: 'a;
+
+    #[inline(always)]
+    fn ranker(&mut self, index: usize) -> Option<Self::Ranker<'_>> {
+        if index < self.nrows() {
+            Some(self.candidates.row_mut(index))
+        } else {
+            None
+        }
+    }
+}
+
+/// A batch operation over initialized pair-scan storage.
+pub(super) trait BatchVisitor {
+    fn visit<'a, Rows>(self, batch: Batch<'a, Rows>)
+    where
+        Batch<'a, Rows>: BatchRanker;
+}
+
+/// Initialize a result matrix and specialize its row representation once for the visitor.
+#[inline]
+pub(super) fn with_batch<V: BatchVisitor>(
+    candidates: MutMatrixView<'_, Candidate>,
+    thresholds: &mut Vec<f32>,
+    visitor: V,
+) {
+    let Batch {
+        candidates,
+        thresholds,
+    } = Batch::new(candidates, thresholds);
+    // The matrix width selects K, so its storage contains only complete K-element rows.
+    match candidates.ncols() {
+        1 => visitor.visit(Batch {
+            candidates: candidates.into_inner().as_chunks_mut::<1>().0,
+            thresholds,
+        }),
+        2 => visitor.visit(Batch {
+            candidates: candidates.into_inner().as_chunks_mut::<2>().0,
+            thresholds,
+        }),
+        3 => visitor.visit(Batch {
+            candidates: candidates.into_inner().as_chunks_mut::<3>().0,
+            thresholds,
+        }),
+        8 => visitor.visit(Batch {
+            candidates: candidates.into_inner().as_chunks_mut::<8>().0,
+            thresholds,
+        }),
+        10 => visitor.visit(Batch {
+            candidates: candidates.into_inner().as_chunks_mut::<10>().0,
+            thresholds,
+        }),
+        _ => visitor.visit(Batch {
+            candidates,
+            thresholds,
+        }),
+    }
+}
+
+impl<'a, Rows> Batch<'a, Rows>
+where
+    Self: BatchRanker,
+{
+    /// Offer one point's distances to all preceding points to both endpoints' results.
+    ///
+    /// The source point index is `distances.len()`: each entry describes its pair
+    /// with the earlier point at that position. Supply each pair once; earlier results are preserved.
+    /// Equal distances need no fixed tie order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `distances.len()` is outside the batch.
     #[inline]
-    pub(super) fn update_dual_topk<A: PiPNNSIMDSchema>(
-        &self,
-        arch: A,
-        point_idx: usize,
-        distances: &[f32],
-        output: MutMatrixView<'_, Candidate>,
-        thresholds: &mut [f32],
-    ) {
-        arch.run3(
+    #[expect(
+        clippy::unwrap_used,
+        reason = "the first ranker lookup rejects an invalid point before scanning"
+    )]
+    pub(super) fn update_dual_topk<A: Simd>(&mut self, arch: A, distances: &[f32]) {
+        let point_idx = distances.len();
+        // ranker rejects an out-of-bounds point before any results are changed.
+        if self.ranker(point_idx).unwrap().as_ref().is_empty() {
+            return;
+        }
+        arch.run2(
             #[inline(always)]
-            move |distances: &[f32],
-                  mut output: MutMatrixView<'_, Candidate>,
-                  thresholds: &mut [f32]| {
-                let k = self.width.capacity();
-                debug_assert_eq!(
-                    output.ncols(),
-                    k,
-                    "top-k output width must match its capacity"
-                );
-                if k == 0 {
-                    return;
-                }
-                debug_assert!(
-                    distances.len() <= point_idx,
-                    "candidate indexes must exclude the updated point"
-                );
-                // Keep this point's result and local limit independent of reciprocal updates.
-                let (others, remaining) = output.as_mut_slice().split_at_mut(point_idx * k);
+            move |distances: &[f32], batch: &mut Self| {
                 let limit = distance_blocks(arch, distances).fold(
-                    thresholds[point_idx],
+                    batch.thresholds[point_idx],
                     #[inline(always)]
                     |limit, block| {
-                        let limit = block.update_topk_from_candidates(remaining, limit, self.width);
-                        block.update_topks_with_point(
-                            others,
-                            thresholds,
-                            point_idx as u32,
-                            self.width,
-                        );
+                        // End the source row borrow before offering this block to earlier rows.
+                        let limit = {
+                            let mut nearest = batch.ranker(point_idx).unwrap();
+                            block.update_topk_from_candidates(&mut nearest, limit)
+                        };
+                        block.update_topks_with_point(batch, point_idx as u32);
                         limit
                     },
                 );
-                thresholds[point_idx] = limit;
+                batch.thresholds[point_idx] = limit;
             },
             distances,
-            output,
-            thresholds,
+            self,
         );
     }
 }
@@ -208,7 +270,7 @@ impl<W: Width> TopK<W> {
 /// A complete SIMD group or one tail distance. This never leaves the TopK module.
 /// Both update directions share the loaded vector; scalar reads borrow the input.
 #[derive(Clone, Copy)]
-enum DistanceBlock<'a, A: PiPNNSIMDSchema> {
+enum DistanceBlock<'a, A: Simd> {
     Simd {
         first_candidate: usize,
         values: A::Vector,
@@ -222,7 +284,7 @@ enum DistanceBlock<'a, A: PiPNNSIMDSchema> {
 
 /// Keep all distance loads and tail indexing inside TopK's architecture scope.
 #[inline(always)]
-fn distance_blocks<A: PiPNNSIMDSchema>(
+fn distance_blocks<A: Simd>(
     arch: A,
     distances: &[f32],
 ) -> impl Iterator<Item = DistanceBlock<'_, A>> {
@@ -247,34 +309,24 @@ fn distance_blocks<A: PiPNNSIMDSchema>(
         )
 }
 
-impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
+impl<A: Simd> DistanceBlock<'_, A> {
     /// Update one top-k result from this block's candidates.
     ///
     /// Each candidate uses its index in the full distance row as its local ID.
     /// Partition ranking uses leader IDs. Leaf ranking uses IDs of earlier points in the leaf.
     ///
-    /// Compare candidates against the existing result without clearing its slots.
-    /// The first `width.capacity()` slots of `nearest` hold this result.
+    /// Compare candidates against the complete result row without clearing its slots.
     /// The distance limit is the last slot's distance, or positive infinity while slots remain empty.
     /// Each insertion can lower this limit. Return the updated limit for the next block.
     #[inline(always)]
-    fn update_topk_from_candidates<W: Width>(
-        self,
-        nearest: &mut [Candidate],
-        mut max_distance: f32,
-        width: W,
-    ) -> f32 {
+    fn update_topk_from_candidates<R: Ranker>(self, nearest: &mut R, mut max_distance: f32) -> f32 {
         match self {
             Self::Scalar {
                 candidate_idx,
                 distance,
             } => {
                 if distance < max_distance {
-                    max_distance = insert_sorted(
-                        nearest,
-                        Candidate::new(candidate_idx as u32, distance),
-                        width,
-                    );
+                    max_distance = nearest.insert(Candidate::new(candidate_idx as u32, distance));
                 }
             }
             Self::Simd {
@@ -287,11 +339,8 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                 if max_distance == f32::INFINITY {
                     for (lane, &distance) in distances.iter().enumerate() {
                         if distance < max_distance {
-                            max_distance = insert_sorted(
-                                nearest,
-                                Candidate::new((first_candidate + lane) as u32, distance),
-                                width,
-                            );
+                            max_distance = nearest
+                                .insert(Candidate::new((first_candidate + lane) as u32, distance));
                         }
                     }
                 } else {
@@ -303,11 +352,10 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                         eligible &= eligible - 1;
                         // Earlier insertions in this block can lower the limit.
                         if distances[lane] < max_distance {
-                            max_distance = insert_sorted(
-                                nearest,
-                                Candidate::new((first_candidate + lane) as u32, distances[lane]),
-                                width,
-                            );
+                            max_distance = nearest.insert(Candidate::new(
+                                (first_candidate + lane) as u32,
+                                distances[lane],
+                            ));
                         }
                     }
                 }
@@ -322,35 +370,33 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
     /// Each candidate's local ID selects its result row in the full leaf, not its SIMD lane.
     /// If that row accepts the pair, insert `point_idx` with the pair's distance.
     ///
-    /// `candidates` starts at leaf row zero, with `width.capacity()` slots per row.
-    /// `thresholds` holds one distance limit per row.
-    /// The caller initializes both buffers once before the leaf scan.
-    /// These updates retain earlier candidates unless a nearer point displaces them.
+    /// Only the earlier rows identified by this block can change.
+    /// Their candidates are retained unless a nearer point displaces them.
     ///
     /// Each row compares the pair distance against its own limit.
     /// Its decision does not depend on the current point's top-k result.
     /// Update the row's limit after an insertion.
     #[inline(always)]
-    fn update_topks_with_point<W: Width>(
-        self,
-        candidates: &mut [Candidate],
-        thresholds: &mut [f32],
-        point_idx: u32,
-        width: W,
-    ) {
-        let k = width.capacity();
+    #[expect(
+        clippy::unwrap_used,
+        reason = "all block positions precede the checked source point"
+    )]
+    fn update_topks_with_point<'a, Rows>(self, batch: &mut Batch<'a, Rows>, point_idx: u32)
+    where
+        Batch<'a, Rows>: BatchRanker,
+    {
         match self {
             Self::Scalar {
                 candidate_idx,
                 distance,
             } => {
-                let limit = &mut thresholds[candidate_idx];
-                if distance < *limit {
-                    *limit = insert_sorted(
-                        &mut candidates[candidate_idx * k..],
-                        Candidate::new(point_idx, distance),
-                        width,
-                    );
+                if distance < batch.thresholds[candidate_idx] {
+                    // Block positions are less than the source index checked by update_dual_topk.
+                    let limit = batch
+                        .ranker(candidate_idx)
+                        .unwrap()
+                        .insert(Candidate::new(point_idx, distance));
+                    batch.thresholds[candidate_idx] = limit;
                 }
             }
             Self::Simd {
@@ -358,7 +404,7 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                 values,
                 distances,
             } => {
-                let limits = &mut thresholds[first_candidate..][..A::Vector::LANES];
+                let limits = &batch.thresholds[first_candidate..][..A::Vector::LANES];
                 // SAFETY: the slice above has one distance limit per SIMD lane.
                 let limit_values = unsafe { A::Vector::load_simd(values.arch(), limits.as_ptr()) };
                 let mut eligible = A::active_lanes(values.lt_simd(limit_values));
@@ -366,11 +412,13 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
                     let lane = eligible.trailing_zeros() as usize;
                     eligible &= eligible - 1;
                     // Each lane updates a different result; its limit is current.
-                    limits[lane] = insert_sorted(
-                        &mut candidates[(first_candidate + lane) * k..],
-                        Candidate::new(point_idx, distances[lane]),
-                        width,
-                    );
+                    let index = first_candidate + lane;
+                    // Every SIMD lane describes an earlier, in-bounds point.
+                    let limit = batch
+                        .ranker(index)
+                        .unwrap()
+                        .insert(Candidate::new(point_idx, distances[lane]));
+                    batch.thresholds[index] = limit;
                 }
             }
         }
@@ -378,15 +426,10 @@ impl<A: PiPNNSIMDSchema> DistanceBlock<'_, A> {
 }
 
 /// Insert an eligible candidate in nearest-first order and return the new distance limit.
-/// Only the first `width.capacity()` slots belong to this result.
+/// `nearest` contains exactly one non-empty result row.
 /// The caller must check the candidate against the current limit before insertion.
 #[inline(always)]
-fn insert_sorted<W: Width>(nearest: &mut [Candidate], candidate: Candidate, width: W) -> f32 {
-    let k = width.capacity();
-    // Keep this slice here for performance.
-    // Fixed<K> gives the slice a compile-time constant length.
-    // After inlining, LLVM can unroll the loop and remove bounds checks.
-    let nearest = &mut nearest[..k];
+fn insert_sorted(nearest: &mut [Candidate], candidate: Candidate) -> f32 {
     let last = nearest.len() - 1;
     let mut slot = last;
     while slot > 0 && candidate.distance < nearest[slot - 1].distance {
@@ -404,7 +447,7 @@ mod tests {
     use rstest::rstest;
 
     const EMPTY: Candidate = Candidate::new(UNASSIGNED, f32::INFINITY);
-    const LANES: usize = <<Current as PiPNNSIMDSchema>::Vector as SIMDVector>::LANES;
+    const LANES: usize = <<Current as Simd>::Vector as SIMDVector>::LANES;
 
     #[rstest]
     #[case::first_batch(0, 3)]
@@ -417,12 +460,11 @@ mod tests {
         #[case] rows: usize,
     ) {
         // Given: reusable storage contains assigned candidates and finite limits.
-        let topk = TopK::new(Fixed::<2>);
         let mut output = vec![[Candidate::new(0, -12.0), Candidate::new(1, -6.0)]; rows];
         let mut limits = vec![-6.0; previous_rows];
 
         // When: prepare storage for a new batch.
-        topk.initialize(
+        Batch::new(
             MutMatrixView::try_from(output.as_flattened_mut(), rows, 2).unwrap(),
             &mut limits,
         );
@@ -430,6 +472,55 @@ mod tests {
         // Then: no old candidate or limit belongs to the new batch.
         assert_eq!(output, vec![[EMPTY; 2]; rows]);
         assert_eq!(limits, vec![f32::INFINITY; rows]);
+    }
+
+    #[test]
+    fn batch_rankers_borrow_one_complete_row_without_touching_adjacent_rows() {
+        struct UpdateMiddleRow;
+
+        impl BatchVisitor for UpdateMiddleRow {
+            fn visit<'a, Rows>(self, mut batch: Batch<'a, Rows>)
+            where
+                Batch<'a, Rows>: BatchRanker,
+            {
+                assert!(batch.ranker(3).is_none());
+                batch
+                    .ranker(1)
+                    .unwrap()
+                    .as_mut()
+                    .fill(Candidate::new(42, -5.0));
+            }
+        }
+
+        // Exercise array rows and runtime rows through the production dispatcher.
+        for capacity in [2, 4] {
+            let mut candidates = vec![Candidate::new(9, -12.0); 3 * capacity];
+            let mut thresholds = vec![-12.0; 5];
+
+            with_batch(
+                MutMatrixView::try_from(candidates.as_mut_slice(), 3, capacity).unwrap(),
+                &mut thresholds,
+                UpdateMiddleRow,
+            );
+
+            assert_eq!(&candidates[..capacity], vec![EMPTY; capacity]);
+            assert_eq!(
+                &candidates[capacity..2 * capacity],
+                vec![Candidate::new(42, -5.0); capacity]
+            );
+            assert_eq!(&candidates[2 * capacity..], vec![EMPTY; capacity]);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn a_pair_scan_rejects_a_point_outside_the_batch() {
+        let mut candidates = [EMPTY; 3];
+        let mut limits = Vec::new();
+        let output = MutMatrixView::try_from(&mut candidates[..], 3, 1).unwrap();
+        let mut batch = Batch::new(output, &mut limits);
+
+        batch.update_dual_topk(ARCH, &[3.0, 4.0, 5.0]);
     }
 
     #[rstest]
@@ -456,80 +547,79 @@ mod tests {
         #[case] expected: [Candidate; 3],
     ) {
         // Given: output still holds results from a different input.
-        let topk = TopK::new(Fixed::<3>);
         let mut output = [
             Candidate::new(2, -20.0),
             Candidate::new(4, -10.0),
             Candidate::new(9, -1.0),
         ];
 
-        topk.select_topk(ARCH, distances, &mut output);
+        (&mut output).select_topk(ARCH, distances);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn reusing_output_starts_a_selection_with_a_fresh_distance_limit() {
-        let topk = TopK::new(Fixed::<2>);
         let mut output = [EMPTY; 2];
-        topk.select_topk(ARCH, &[-20.0, -10.0], &mut output);
+        (&mut output).select_topk(ARCH, &[-20.0, -10.0]);
         assert_eq!(output, [Candidate::new(0, -20.0), Candidate::new(1, -10.0)]);
 
         // Every new distance exceeds the previous selection's limit.
-        topk.select_topk(ARCH, &[16.0, 3.0, 9.0], &mut output);
+        (&mut output).select_topk(ARCH, &[16.0, 3.0, 9.0]);
 
         assert_eq!(output, [Candidate::new(1, 3.0), Candidate::new(2, 9.0)]);
     }
 
-    #[rstest]
-    fn batch_selection_matches_a_full_sort(
-        #[values(0, 1, LANES - 1, LANES, LANES + 1, 2 * LANES, 2 * LANES + 3, 3 * LANES + 2)]
-        count: usize,
-        #[values(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, LANES + 1)] capacity: usize,
-    ) {
+    #[test]
+    fn batch_selection_matches_a_full_sort() {
         struct SelectRow<'a> {
             distances: &'a [f32],
-            output: &'a mut [Candidate],
         }
 
         impl TopKVisitor for SelectRow<'_> {
-            fn visit<W: Width>(self, topk: TopK<W>) {
-                topk.select_topk(ARCH, self.distances, self.output);
+            fn visit<R: Ranker>(self, mut ranker: R) {
+                ranker.select_topk(ARCH, self.distances);
             }
         }
 
-        // Each pair offers a nearer score before a farther one. Later pairs improve
-        // on earlier pairs, so a full result must keep lowering its cutoff mid-vector.
-        let mut distances: Vec<_> = (0..count).map(|i| -(i as f32) - 1.0).collect();
-        for pair in distances.chunks_exact_mut(2) {
-            pair.swap(0, 1);
+        for count in [
+            0,
+            1,
+            LANES - 1,
+            LANES,
+            LANES + 1,
+            2 * LANES,
+            2 * LANES + 3,
+            3 * LANES + 2,
+        ] {
+            for capacity in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, LANES + 1] {
+                // Each pair offers a nearer score before a farther one. Later pairs improve
+                // on earlier pairs, so a full result must keep lowering its cutoff mid-vector.
+                let mut distances: Vec<_> = (0..count).map(|i| -(i as f32) - 1.0).collect();
+                for pair in distances.chunks_exact_mut(2) {
+                    pair.swap(0, 1);
+                }
+
+                // Sorting the whole input is independent of TopK's insertion and cutoff logic.
+                let mut expected: Vec<_> = distances
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &distance)| Candidate::new(index as u32, distance))
+                    .collect();
+                expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+                expected.truncate(capacity);
+                expected.resize(capacity, EMPTY);
+                let mut output = vec![EMPTY; capacity];
+                with_topk(
+                    &mut output,
+                    SelectRow {
+                        distances: &distances,
+                    },
+                );
+
+                assert_eq!(output, expected, "count={count}, capacity={capacity}");
+            }
         }
-
-        // Sorting the whole input is independent of TopK's insertion and cutoff logic.
-        let mut expected: Vec<_> = distances
-            .iter()
-            .enumerate()
-            .map(|(index, &distance)| Candidate::new(index as u32, distance))
-            .collect();
-        expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-        expected.truncate(capacity);
-        expected.resize(capacity, EMPTY);
-        let mut output = vec![EMPTY; capacity];
-        let mut capacity_reads = 0;
-
-        with_topk(
-            {
-                capacity_reads += 1;
-                capacity
-            },
-            SelectRow {
-                distances: &distances,
-                output: &mut output,
-            },
-        );
-
-        assert_eq!(output, expected, "count={count}, capacity={capacity}");
-        assert_eq!(capacity_reads, 1);
     }
 
     #[test]
@@ -539,7 +629,7 @@ mod tests {
         distances[best_index] = -2.0;
         let mut output = [EMPTY; 4];
 
-        TopK::new(Fixed::<4>).select_topk(ARCH, &distances, &mut output);
+        (&mut output).select_topk(ARCH, &distances);
 
         assert_eq!(output[0], Candidate::new(best_index as u32, -2.0));
         // Any three distinct input positions with distance 8 are valid; tie order is free.
@@ -569,122 +659,136 @@ mod tests {
         distances[index] = distance;
         let mut output = [EMPTY; 2];
 
-        TopK::new(Runtime(2)).select_topk(ARCH, &distances, &mut output);
+        output.as_mut_slice().select_topk(ARCH, &distances);
 
         assert_eq!(output[0].local_idx, index as u32);
         assert_eq!(output[0].distance.to_bits(), distance.to_bits());
         assert_eq!(output[1], EMPTY);
     }
 
-    #[rstest]
-    #[case::fixed(Fixed::<2>)]
-    #[case::runtime(Runtime(2))]
-    fn successive_pair_rows_accumulate_each_points_nearest_neighbors(#[case] width: impl Width) {
-        let topk = TopK::new(width);
-        let mut output = [[EMPTY; 2]; 4];
-        let mut limits = Vec::new();
-        let mut rows = MutMatrixView::try_from(output.as_flattened_mut(), 4, 2).unwrap();
-        topk.initialize(rows.as_mut_view(), &mut limits);
+    #[test]
+    fn successive_pair_rows_accumulate_each_points_nearest_neighbors() {
+        fn check<'a, Rows>(mut batch: Batch<'a, Rows>)
+        where
+            Batch<'a, Rows>: BatchRanker,
+        {
+            // Given: pairs 0-1=9, 0-2=2, and 1-2=7; point 3 has no offered pairs.
+            batch.update_dual_topk(ARCH, &[9.0]);
+            batch.update_dual_topk(ARCH, &[2.0, 7.0]);
+            let before_last_point = [
+                [Candidate::new(2, 2.0), Candidate::new(1, 9.0)],
+                [Candidate::new(2, 7.0), Candidate::new(0, 9.0)],
+                [Candidate::new(0, 2.0), Candidate::new(1, 7.0)],
+                [EMPTY; 2],
+            ];
+            for (index, expected) in before_last_point.iter().enumerate() {
+                assert_eq!(batch.ranker(index).unwrap().as_ref(), expected);
+            }
+            assert_eq!(batch.thresholds, [9.0, 9.0, 7.0, f32::INFINITY]);
 
-        // Given: pairs 0-1=9, 0-2=2, and 1-2=7; point 3 has no offered pairs.
-        topk.update_dual_topk(ARCH, 1, &[9.0], rows.as_mut_view(), &mut limits);
-        topk.update_dual_topk(ARCH, 2, &[2.0, 7.0], rows.as_mut_view(), &mut limits);
-        let before_last_point = [
-            [Candidate::new(2, 2.0), Candidate::new(1, 9.0)],
-            [Candidate::new(2, 7.0), Candidate::new(0, 9.0)],
-            [Candidate::new(0, 2.0), Candidate::new(1, 7.0)],
-            [EMPTY; 2],
-        ];
-        assert_eq!(rows.as_slice(), before_last_point.as_flattened());
-        assert_eq!(limits, [9.0, 9.0, 7.0, f32::INFINITY]);
+            // When: point 3 is at distances 6, 1, and 4 from points 0, 1, and 2.
+            batch.update_dual_topk(ARCH, &[6.0, 1.0, 4.0]);
 
-        // When: point 3 is at distances 6, 1, and 4 from points 0, 1, and 2.
-        topk.update_dual_topk(ARCH, 3, &[6.0, 1.0, 4.0], rows.as_mut_view(), &mut limits);
-
-        // Then: each endpoint keeps its own nearest two, with its farthest retained limit.
-        let expected = [
-            [Candidate::new(2, 2.0), Candidate::new(3, 6.0)],
-            [Candidate::new(3, 1.0), Candidate::new(2, 7.0)],
-            [Candidate::new(0, 2.0), Candidate::new(3, 4.0)],
-            [Candidate::new(1, 1.0), Candidate::new(2, 4.0)],
-        ];
-        assert_eq!(rows.as_slice(), expected.as_flattened());
-        assert_eq!(limits, [6.0, 7.0, 4.0, 4.0]);
-    }
-
-    #[rstest]
-    fn pair_scans_match_full_row_sort_across_capacities_and_lengths(
-        #[values(LANES, LANES + 1, LANES + 2, 2 * LANES, 2 * LANES + 1, 2 * LANES + 2)]
-        point_count: usize,
-        #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17)] capacity: usize,
-    ) {
-        struct ScanPairs<'a> {
-            distances: &'a [Vec<f32>],
-            output: MutMatrixView<'a, Candidate>,
-            limits: &'a mut Vec<f32>,
+            // Then: each endpoint keeps its own nearest two, with its farthest retained limit.
+            let expected = [
+                [Candidate::new(2, 2.0), Candidate::new(3, 6.0)],
+                [Candidate::new(3, 1.0), Candidate::new(2, 7.0)],
+                [Candidate::new(0, 2.0), Candidate::new(3, 4.0)],
+                [Candidate::new(1, 1.0), Candidate::new(2, 4.0)],
+            ];
+            for (index, expected) in expected.iter().enumerate() {
+                assert_eq!(batch.ranker(index).unwrap().as_ref(), expected);
+            }
+            assert_eq!(batch.thresholds, [6.0, 7.0, 4.0, 4.0]);
         }
 
-        impl TopKVisitor for ScanPairs<'_> {
-            fn visit<W: Width>(mut self, topk: TopK<W>) {
-                topk.initialize(self.output.as_mut_view(), self.limits);
+        let mut fixed = [[EMPTY; 2]; 4];
+        let mut fixed_limits = Vec::new();
+        fixed_limits.resize(fixed.len(), f32::INFINITY);
+        check(Batch {
+            candidates: fixed.as_mut_slice(),
+            thresholds: &mut fixed_limits,
+        });
+
+        let mut dynamic = [EMPTY; 8];
+        let mut dynamic_limits = Vec::new();
+        let rows = MutMatrixView::try_from(&mut dynamic[..], 4, 2).unwrap();
+        check(Batch::new(rows, &mut dynamic_limits));
+    }
+
+    #[test]
+    fn pair_scans_match_full_row_sort_across_capacities_and_lengths() {
+        struct ScanPairs<'a> {
+            distances: &'a [Vec<f32>],
+        }
+
+        impl BatchVisitor for ScanPairs<'_> {
+            fn visit<'a, Rows>(self, mut batch: Batch<'a, Rows>)
+            where
+                Batch<'a, Rows>: BatchRanker,
+            {
                 for (point, row) in self.distances.iter().enumerate().skip(1) {
-                    topk.update_dual_topk(
-                        ARCH,
-                        point,
-                        &row[..point],
-                        self.output.as_mut_view(),
-                        self.limits,
-                    );
+                    batch.update_dual_topk(ARCH, &row[..point]);
                 }
             }
         }
 
-        // Given: XOR gives symmetric distances with distinct, exact scores in each row.
-        // The final pair row has point_count - 1 distances, straddling vector boundaries.
-        let distances: Vec<Vec<f32>> = (0..point_count)
-            .map(|point| {
-                (0..point_count)
-                    .map(|other| (point ^ other) as f32)
-                    .collect()
-            })
-            .collect();
-        let mut output = vec![EMPTY; point_count * capacity];
-        let mut limits = Vec::new();
-        let mut rows =
-            MutMatrixView::try_from(output.as_mut_slice(), point_count, capacity).unwrap();
+        for point_count in [
+            LANES,
+            LANES + 1,
+            LANES + 2,
+            2 * LANES,
+            2 * LANES + 1,
+            2 * LANES + 2,
+        ] {
+            for capacity in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17] {
+                // Given: XOR gives symmetric distances with distinct, exact scores in each row.
+                // The final pair row has point_count - 1 distances, straddling vector boundaries.
+                let distances: Vec<Vec<f32>> = (0..point_count)
+                    .map(|point| {
+                        (0..point_count)
+                            .map(|other| (point ^ other) as f32)
+                            .collect()
+                    })
+                    .collect();
+                let mut output = vec![EMPTY; point_count * capacity];
+                let mut limits = Vec::new();
+                let mut rows =
+                    MutMatrixView::try_from(output.as_mut_slice(), point_count, capacity).unwrap();
 
-        // When: offer every non-self pair once, through the production width dispatch.
-        with_topk(
-            capacity,
-            ScanPairs {
-                distances: &distances,
-                output: rows.as_mut_view(),
-                limits: &mut limits,
-            },
-        );
+                // When: offer every non-self pair once, through the production width dispatch.
+                with_batch(
+                    rows.as_mut_view(),
+                    &mut limits,
+                    ScanPairs {
+                        distances: &distances,
+                    },
+                );
 
-        // Then: independently sort each complete row, excluding only the point itself.
-        for (point, row) in distances.iter().enumerate() {
-            let mut expected: Vec<_> = row
-                .iter()
-                .enumerate()
-                .filter(|(other, _)| *other != point)
-                .map(|(other, &distance)| Candidate::new(other as u32, distance))
-                .collect();
-            expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-            expected.truncate(capacity);
-            expected.resize(capacity, EMPTY);
+                // Then: independently sort each complete row, excluding only the point itself.
+                for (point, row) in distances.iter().enumerate() {
+                    let mut expected: Vec<_> = row
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != point)
+                        .map(|(other, &distance)| Candidate::new(other as u32, distance))
+                        .collect();
+                    expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+                    expected.truncate(capacity);
+                    expected.resize(capacity, EMPTY);
 
-            assert_eq!(
-                rows.row(point),
-                expected,
-                "point={point}, point_count={point_count}, capacity={capacity}"
-            );
-            assert_eq!(
-                limits[point],
-                expected[capacity - 1].distance,
-                "limit for point={point}, point_count={point_count}, capacity={capacity}"
-            );
+                    assert_eq!(
+                        rows.row(point),
+                        expected,
+                        "point={point}, point_count={point_count}, capacity={capacity}"
+                    );
+                    assert_eq!(
+                        limits[point],
+                        expected[capacity - 1].distance,
+                        "limit for point={point}, point_count={point_count}, capacity={capacity}"
+                    );
+                }
+            }
         }
     }
 
@@ -693,25 +797,24 @@ mod tests {
         #[values(1, LANES - 1, LANES, 2 * LANES + 1)] target: usize,
     ) {
         let source = 2 * LANES + 2;
-        let topk = TopK::new(Fixed::<1>);
         let mut output = vec![EMPTY; source + 1];
         let mut limits = Vec::new();
         let mut rows = MutMatrixView::try_from(output.as_mut_slice(), source + 1, 1).unwrap();
-        topk.initialize(rows.as_mut_view(), &mut limits);
+        let mut batch = Batch::new(rows.as_mut_view(), &mut limits);
         let mut distances = vec![f32::INFINITY; source];
         distances[0] = -6.0;
         distances[target] = 4.0;
 
         // The source fills its only slot with point 0 before reaching this target.
-        topk.update_dual_topk(ARCH, source, &distances, rows.as_mut_view(), &mut limits);
+        batch.update_dual_topk(ARCH, &distances);
 
         let mut expected = vec![EMPTY; source + 1];
         expected[0] = Candidate::new(source as u32, -6.0);
         expected[target] = Candidate::new(source as u32, 4.0);
         expected[source] = Candidate::new(0, -6.0);
         let expected_limits: Vec<_> = expected.iter().map(|c| c.distance).collect();
-        assert_eq!(rows.as_slice(), expected, "target={target}");
-        assert_eq!(limits, expected_limits);
+        assert_eq!(batch.candidates.as_mut_slice(), expected, "target={target}");
+        assert_eq!(batch.thresholds, expected_limits);
     }
 
     #[rstest]
@@ -719,33 +822,26 @@ mod tests {
         #[values(1, LANES - 1, LANES, 2 * LANES + 1)] target: usize,
     ) {
         let source = 2 * LANES + 2;
-        let topk = TopK::new(Fixed::<1>);
         let mut output = vec![EMPTY; source + 1];
         let mut limits = Vec::new();
         let mut rows = MutMatrixView::try_from(output.as_mut_slice(), source + 1, 1).unwrap();
-        topk.initialize(rows.as_mut_view(), &mut limits);
+        let mut batch = Batch::new(rows.as_mut_view(), &mut limits);
         let mut previous_distances = vec![f32::INFINITY; target];
         previous_distances[0] = 1.0;
-        topk.update_dual_topk(
-            ARCH,
-            target,
-            &previous_distances,
-            rows.as_mut_view(),
-            &mut limits,
-        );
+        batch.update_dual_topk(ARCH, &previous_distances);
         let mut distances = vec![f32::INFINITY; source];
         distances[target] = 5.0;
 
         // The target already has a closer neighbor; the source still needs one.
-        topk.update_dual_topk(ARCH, source, &distances, rows.as_mut_view(), &mut limits);
+        batch.update_dual_topk(ARCH, &distances);
 
         let mut expected = vec![EMPTY; source + 1];
         expected[0] = Candidate::new(target as u32, 1.0);
         expected[target] = Candidate::new(0, 1.0);
         expected[source] = Candidate::new(target as u32, 5.0);
         let expected_limits: Vec<_> = expected.iter().map(|c| c.distance).collect();
-        assert_eq!(rows.as_slice(), expected, "target={target}");
-        assert_eq!(limits, expected_limits);
+        assert_eq!(batch.candidates.as_mut_slice(), expected, "target={target}");
+        assert_eq!(batch.thresholds, expected_limits);
     }
 
     #[rstest]
@@ -757,24 +853,33 @@ mod tests {
         #[values(LANES - 1, LANES, 2 * LANES + 1)] target: usize,
     ) {
         let source = 2 * LANES + 2;
-        let topk = TopK::new(Fixed::<2>);
         let mut output = vec![EMPTY; (source + 1) * 2];
         let mut limits = Vec::new();
         let mut rows = MutMatrixView::try_from(output.as_mut_slice(), source + 1, 2).unwrap();
-        topk.initialize(rows.as_mut_view(), &mut limits);
+        let mut batch = Batch::new(rows.as_mut_view(), &mut limits);
         let mut distances = vec![f32::INFINITY; source];
         distances[target] = distance;
 
-        topk.update_dual_topk(ARCH, source, &distances, rows.as_mut_view(), &mut limits);
+        batch.update_dual_topk(ARCH, &distances);
 
         let mut expected = vec![EMPTY; (source + 1) * 2];
         expected[source * 2] = Candidate::new(target as u32, distance);
         expected[target * 2] = Candidate::new(source as u32, distance);
-        assert_eq!(rows.as_slice(), expected);
-        assert_eq!(rows.row(source)[0].distance.to_bits(), distance.to_bits());
-        assert_eq!(rows.row(target)[0].distance.to_bits(), distance.to_bits());
+        assert_eq!(batch.candidates.as_mut_slice(), expected);
+        assert_eq!(
+            batch.candidates.as_mut_slice()[source * 2]
+                .distance
+                .to_bits(),
+            distance.to_bits()
+        );
+        assert_eq!(
+            batch.candidates.as_mut_slice()[target * 2]
+                .distance
+                .to_bits(),
+            distance.to_bits()
+        );
         // One neighbor leaves each two-slot result open to another candidate.
-        assert_eq!(limits, vec![f32::INFINITY; source + 1]);
+        assert_eq!(batch.thresholds, vec![f32::INFINITY; source + 1]);
     }
 
     #[rstest]
@@ -783,35 +888,46 @@ mod tests {
     #[case::infinite_pairs(&[f32::INFINITY; 2 * LANES + 1])]
     fn an_update_without_rankable_pairs_preserves_existing_results(#[case] distances: &[f32]) {
         let source = 2 * LANES + 1;
-        let topk = TopK::new(Fixed::<1>);
         let mut output = vec![EMPTY; source + 1];
         let mut limits = Vec::new();
         let mut rows = MutMatrixView::try_from(output.as_mut_slice(), source + 1, 1).unwrap();
-        topk.initialize(rows.as_mut_view(), &mut limits);
-        topk.update_dual_topk(ARCH, 1, &[3.0], rows.as_mut_view(), &mut limits);
-        let previous_output = rows.as_slice().to_vec();
-        let previous_limits = limits.clone();
+        let mut batch = Batch::new(rows.as_mut_view(), &mut limits);
+        batch.update_dual_topk(ARCH, &[3.0]);
+        let previous_output = batch.candidates.as_mut_slice().to_vec();
+        let previous_limits = batch.thresholds.to_vec();
 
-        topk.update_dual_topk(ARCH, source, distances, rows.as_mut_view(), &mut limits);
+        batch.update_dual_topk(ARCH, distances);
 
-        assert_eq!(rows.as_slice(), previous_output);
-        assert_eq!(limits, previous_limits);
+        assert_eq!(batch.candidates.as_mut_slice(), previous_output);
+        assert_eq!(batch.thresholds, previous_limits);
     }
 
-    #[rstest]
-    #[case::fixed(Fixed::<0>)]
-    #[case::runtime(Runtime(0))]
-    fn zero_capacity_pair_scans_leave_no_neighbors_or_finite_limits(#[case] width: impl Width) {
-        let topk = TopK::new(width);
-        let mut output = [];
-        let mut limits = Vec::new();
-        let mut rows = MutMatrixView::try_from(&mut output[..], 3, 0).unwrap();
-        topk.initialize(rows.as_mut_view(), &mut limits);
+    #[test]
+    fn zero_capacity_pair_scans_leave_no_neighbors_or_finite_limits() {
+        fn check<'a, Rows>(mut batch: Batch<'a, Rows>)
+        where
+            Batch<'a, Rows>: BatchRanker,
+        {
+            batch.update_dual_topk(ARCH, &[4.0]);
+            batch.update_dual_topk(ARCH, &[2.0, 7.0]);
 
-        topk.update_dual_topk(ARCH, 1, &[4.0], rows.as_mut_view(), &mut limits);
-        topk.update_dual_topk(ARCH, 2, &[2.0, 7.0], rows.as_mut_view(), &mut limits);
+            for index in 0..batch.nrows() {
+                assert!(batch.ranker(index).unwrap().as_ref().is_empty());
+            }
+            assert_eq!(batch.thresholds, [f32::INFINITY; 3]);
+        }
 
-        assert!(rows.as_slice().is_empty());
-        assert_eq!(limits, [f32::INFINITY; 3]);
+        let mut fixed: [[Candidate; 0]; 3] = [[]; 3];
+        let mut fixed_limits = Vec::new();
+        fixed_limits.resize(fixed.len(), f32::INFINITY);
+        check(Batch {
+            candidates: fixed.as_mut_slice(),
+            thresholds: &mut fixed_limits,
+        });
+
+        let mut dynamic = [];
+        let mut dynamic_limits = Vec::new();
+        let rows = MutMatrixView::try_from(&mut dynamic[..], 3, 0).unwrap();
+        check(Batch::new(rows, &mut dynamic_limits));
     }
 }

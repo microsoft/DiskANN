@@ -30,7 +30,7 @@ use super::{
     PiPNNConfig,
     partition_kernel::{PartitionKernelWorkspace, UNASSIGNED_LEADER, assign_leaders},
     partition_metric::PartitionMetric,
-    simd::PiPNNSIMDSchema,
+    simd::Simd,
 };
 
 // These constants control internal batching and deterministic seed generation.
@@ -109,7 +109,7 @@ pub(super) fn partition<A, M, T>(
     config: &PiPNNConfig,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
@@ -136,7 +136,7 @@ fn partition_replica<A, M, T>(
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
@@ -199,7 +199,7 @@ fn split_partition<A, M, T>(
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<PartitionSplit>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
@@ -274,7 +274,7 @@ fn assign_to_leaders<A, M, T>(
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
@@ -351,7 +351,7 @@ fn assign_point_stripe<A, M, T>(
     assignments: &mut [u32],
 ) -> ANNResult<()>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: PartitionMetric,
     T: VectorRepr,
 {
