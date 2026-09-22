@@ -191,8 +191,9 @@ pub fn sgemm(
 
 /// Replace the lower triangle of `C` with $\alpha A A^\mathsf{T}$.
 ///
-/// `A` is a dense row-major $m \times k$ matrix. The function does not change
-/// the upper triangle of `C`. Use this operation when `C` has no prior term.
+/// `A` is a dense row-major $m \times k$ matrix. `C` is a dense row-major
+/// $m \times m$ matrix backed by exactly `m * m` elements. The function does not
+/// change the upper triangle of `C`. Use this operation when `C` has no prior term.
 ///
 /// # Errors
 ///
@@ -214,8 +215,9 @@ pub fn sgemm_aat_lower(
 
 /// Add the lower triangle of $\alpha A A^\mathsf{T}$ to `C`.
 ///
-/// `A` is a dense row-major $m \times k$ matrix. The function changes only the
-/// lower triangle of `C`. Use this operation when `C` contains an initial term.
+/// `A` is a dense row-major $m \times k$ matrix. `C` is a dense row-major
+/// $m \times m$ matrix backed by exactly `m * m` elements. The function changes
+/// only the lower triangle of `C`. Use this operation when `C` contains an initial term.
 ///
 /// # Errors
 ///
