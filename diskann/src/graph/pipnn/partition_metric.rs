@@ -225,13 +225,10 @@ impl PartitionMetric for CosineNormalized {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(miri))]
     use crate::graph::pipnn::test_support;
-    #[cfg(not(miri))]
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 
-    #[cfg(not(miri))]
     #[test]
     fn l2_ranking_retains_small_coordinate_contributions() {
         // Given: the origin ranks leaders solely by their squared norms.
@@ -264,7 +261,6 @@ mod tests {
         assert_eq!(output[1], 16_777_232.0);
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -353,7 +349,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -427,7 +422,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, &[2.0, 0.0, 0.0, 3.0], &[1.0, 0.0, 0.0, -2.0, -3.0, 0.0], [-3.0, 4.0, 21.0, 1.0, 16.0, 9.0])]
     #[case::cosine(Cosine, &[2.0, 0.0, 0.0, 3.0], &[1.0, 0.0, 0.0, -2.0, -3.0, 0.0], [0.0, 1.0, 2.0, 1.0, 2.0, 1.0])]
@@ -454,7 +448,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn cosine_assigns_unit_distance_when_either_vector_has_zero_norm() {
         let point_values = [0.0, 0.0, 0.0, 2.0];

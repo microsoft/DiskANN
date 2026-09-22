@@ -152,10 +152,8 @@ fn validate_output(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(miri))]
     use crate::graph::pipnn::test_support;
     use crate::graph::pipnn::{Cosine, CosineNormalized, InnerProduct, L2};
-    #[cfg(not(miri))]
     use diskann_vector::distance::Metric;
     use diskann_wide::ARCH;
     use rstest::rstest;
@@ -177,7 +175,6 @@ mod tests {
         assert_eq!(leaf_neighbor_count(points, requested), expected);
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2, [[1,3,2,4], [0,2,3,4], [4,0,1,3], [0,2,1,4], [2,1,0,3]])]
     #[case::cosine(Cosine, Metric::Cosine, [[3,1,2,4], [0,3,4,2], [4,3,0,1], [0,2,1,4], [2,1,3,0]])]
@@ -243,7 +240,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn neighbors_match_scalar_ranking_across_leaf_sizes_and_counts() {
         for point_count in [1, 2, 16, 17, 18, 33, 34] {
@@ -290,7 +286,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -375,7 +370,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn workspace_reuse_does_not_mix_results_from_different_leaves() {
         let values = [0.0, 1.0, 4.0, 10.0, 21.0];
@@ -467,7 +461,6 @@ mod tests {
         assert_eq!(output, [Candidate::new(1, 7.0), Candidate::new(0, 7.0)]);
     }
 
-    // Keep this module path available to the nightly Miri selector.
     mod rank_leaf_distances_tests {
         use super::*;
 

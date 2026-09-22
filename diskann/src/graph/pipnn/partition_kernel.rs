@@ -120,15 +120,12 @@ impl<A: Simd> TopKVisitor for RankLeaders<'_, A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(miri))]
     use crate::graph::pipnn::test_support;
     use crate::graph::pipnn::{Cosine, CosineNormalized, InnerProduct, L2};
-    #[cfg(not(miri))]
     use diskann_vector::distance::Metric;
     use diskann_wide::ARCH;
     use rstest::rstest;
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, false, [[0,1,3,2], [1,2,3,0], [3,0,2,1]])]
     #[case::cosine(Cosine, false, [[0,1,3,2], [1,2,0,3], [3,0,2,1]])]
@@ -181,7 +178,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn assignments_match_nearest_leaders_across_counts_and_widths() {
         for leader_count in [1, 5, 16, 17, 33] {
@@ -228,7 +224,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -312,7 +307,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn workspace_reuse_replaces_assignments_for_each_stripe() {
         let leader_values = [0.0, 5.0, 12.0];

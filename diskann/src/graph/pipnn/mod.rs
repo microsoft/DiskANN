@@ -113,7 +113,7 @@ mod cosine_distance_tests {
     }
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 mod test_support {
     use diskann_vector::distance::Metric;
 

@@ -114,13 +114,10 @@ impl LeafMetric for CosineNormalized {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(miri))]
     use crate::graph::pipnn::test_support;
-    #[cfg(not(miri))]
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 
-    #[cfg(not(miri))]
     #[test]
     fn l2_distance_retains_small_coordinate_contributions() {
         // Given: 4096^2 + 127 unit coordinates, orthogonal to a unit vector.
@@ -145,7 +142,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -202,7 +198,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -260,7 +255,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::squared_l2(L2, &[2.0, 0.0, 0.0, 3.0, -4.0, 0.0], [0.0, 13.0, 0.0, 36.0, 25.0, 0.0])]
     #[case::negative_dot(InnerProduct, &[2.0, 0.0, 0.0, 3.0, -4.0, 0.0], [-4.0, 0.0, -9.0, 8.0, 0.0, -16.0])]
@@ -284,7 +278,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::zero(0.0)]
     #[case::squared_norm_underflows(f32::MIN_POSITIVE)]
@@ -298,7 +291,6 @@ mod tests {
         assert_eq!([output[0], output[2], output[3]], [1.0, 1.0, 0.0]);
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, 2.0)]
     #[case::cosine(Cosine, 1.0)]
