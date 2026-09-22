@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, DataMeta, DataMetaError, DataMut,
-    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric,
+    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric, iface,
 };
 use crate::{
     AsFunctor, CompressIntoWith,
@@ -378,6 +378,18 @@ where
             shifted_norm,
             inner_product_with_centroid,
         })
+    }
+
+    /// Construct an [`iface::Quantizer`] trait object from `self`.
+    pub fn as_quantizer<const NBITS: usize>(
+        self,
+    ) -> Result<Poly<dyn iface::Quantizer>, AllocatorError>
+    where
+        A: 'static,
+        iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
+    {
+        let iface = iface::Impl::<NBITS, A>::new(self)?;
+        crate::poly!({ iface::Quantizer }, iface, GlobalAllocator)
     }
 }
 
