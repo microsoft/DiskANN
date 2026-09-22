@@ -86,13 +86,15 @@ pub(crate) trait DynQueryComputer: Send + Sync {
 /// vectors (but not thousands) for training. Quantized vectors have 1 bit per dimension plus up
 /// to 6 bytes of overhead.
 pub(crate) struct Spherical1Bit {
+    metric: Metric,
     dim: usize,
     inner: RwLock<Option<spherical::iface::Impl<1, GlobalAllocator>>>,
 }
 
 impl Spherical1Bit {
-    pub(crate) fn new(dim: usize) -> Self {
+    pub(crate) fn new(metric: Metric, dim: usize) -> Self {
         Self {
+            metric,
             dim,
             inner: RwLock::new(None),
         }
@@ -198,14 +200,24 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn deserialize(&self, state: &[u8]) -> Result<(), GarnetQuantizerError> {
+        if state.len() < 8 {
+            return Err(GarnetQuantizerError::UnsupportedSerialization);
+        }
+
         let mut guard = self.inner.write().unwrap();
         if guard.is_some() {
             Err(GarnetQuantizerError::UnsupportedSerialization)
         } else {
             let q = spherical::iface::Impl::<1>::try_deserialize(state, GlobalAllocator)
                 .map_err(|e| GarnetQuantizerError::Deserialization(Box::new(e)))?;
-            *guard = Some(q);
-            Ok(())
+            if <spherical::iface::Impl<1> as spherical::iface::Quantizer<GlobalAllocator>>::full_dim(&q) == self.dim &&
+                <spherical::iface::Impl<1> as spherical::iface::Quantizer<GlobalAllocator>>::dim(&q) == self.dim &&
+                <spherical::iface::Impl<1> as spherical::iface::Quantizer<GlobalAllocator>>::metric(&q) == self.metric {
+                *guard = Some(q);
+                Ok(())
+            } else {
+                Err(GarnetQuantizerError::UnsupportedSerialization)
+            }
         }
     }
 }
@@ -237,7 +249,8 @@ impl DynQueryComputer for iface::QueryComputer {
 /// quantized vector has 8 bits per dimension and 20 bytes of overhead.
 pub(crate) struct MinMax8Bit {
     metric: Metric,
-    inner: minmax::MinMaxQuantizer,
+    dim: usize,
+    inner: RwLock<minmax::MinMaxQuantizer>,
 }
 
 impl MinMax8Bit {
@@ -260,7 +273,8 @@ impl MinMax8Bit {
 
         Ok(Self {
             metric,
-            inner: minmax::MinMaxQuantizer::new(transform, grid_scale),
+            dim: dim.get(),
+            inner: RwLock::new(minmax::MinMaxQuantizer::new(transform, grid_scale)),
         })
     }
 
@@ -270,7 +284,11 @@ impl MinMax8Bit {
     ) -> Result<Self, GarnetQuantizerError> {
         let inner = MinMaxQuantizer::try_deserialize(bytes)
             .map_err(|e| GarnetQuantizerError::Deserialization(Box::new(e)))?;
-        Ok(Self { metric, inner })
+        Ok(Self {
+            metric,
+            dim: inner.dim(),
+            inner: RwLock::new(inner),
+        })
     }
 }
 
@@ -280,7 +298,7 @@ impl GarnetQuantizer for MinMax8Bit {
     }
 
     fn bytes(&self) -> usize {
-        minmax::Data::<8>::canonical_bytes(self.inner.dim())
+        minmax::Data::<8>::canonical_bytes(self.dim)
     }
 
     fn is_trained(&self) -> bool {
@@ -296,9 +314,11 @@ impl GarnetQuantizer for MinMax8Bit {
     }
 
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError> {
-        let into = minmax::DataMutRef::<8>::from_canonical_front_mut(into, self.inner.dim())
+        let into = minmax::DataMutRef::<8>::from_canonical_front_mut(into, self.dim)
             .map_err(|e| GarnetQuantizerError::Compression(Box::new(e)))?;
         self.inner
+            .read()
+            .unwrap()
             .compress_into(v, into)
             .map_err(|e| GarnetQuantizerError::Compression(Box::new(e)))?;
         Ok(())
@@ -308,17 +328,18 @@ impl GarnetQuantizer for MinMax8Bit {
         let computer = GarnetDistanceComputer::new(
             <diskann_providers::common::MinMax8 as VectorRepr>::distance(
                 self.metric,
-                Some(self.inner.dim()),
+                Some(self.dim),
             ),
         );
         Ok(computer)
     }
 
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError> {
+        let inner = self.inner.read().unwrap();
         let computer = GarnetQueryComputer::new(MinMax8BitQueryComputer::new(
-            &self.inner,
+            &inner,
             query,
-            self.inner.dim(),
+            self.dim,
             self.metric,
         )?);
         Ok(computer)
@@ -326,12 +347,26 @@ impl GarnetQuantizer for MinMax8Bit {
 
     fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
         self.inner
+            .read()
+            .unwrap()
             .serialize(GlobalAllocator)
             .map_err(|e| GarnetQuantizerError::Alloc(Box::new(e)))
     }
 
-    fn deserialize(&self, _state: &[u8]) -> Result<(), GarnetQuantizerError> {
-        Err(GarnetQuantizerError::UnsupportedSerialization)
+    fn deserialize(&self, state: &[u8]) -> Result<(), GarnetQuantizerError> {
+        if state.len() < 8 {
+            return Err(GarnetQuantizerError::UnsupportedSerialization);
+        }
+
+        let mut guard = self.inner.write().unwrap();
+        let quantizer = MinMaxQuantizer::try_deserialize(state)
+            .map_err(|error| GarnetQuantizerError::Deserialization(Box::new(error)))?;
+        if quantizer.dim() == self.dim && quantizer.output_dim() == self.dim {
+            *guard = quantizer;
+            Ok(())
+        } else {
+            Err(GarnetQuantizerError::UnsupportedSerialization)
+        }
     }
 }
 
@@ -385,7 +420,7 @@ mod tests {
 
     #[test]
     fn basic_spherical_1bit() {
-        let quantizer = Spherical1Bit::new(2);
+        let quantizer = Spherical1Bit::new(Metric::L2, 2);
 
         assert_eq!(quantizer.required_vectors(), 1000);
         assert_eq!(quantizer.bytes(), 1 + 6);
