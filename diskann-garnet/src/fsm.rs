@@ -366,6 +366,25 @@ impl FreeSpaceMap {
         Ok(ReuseGuard::new(id, barrier))
     }
 
+    /// Claim an ID.
+    ///
+    /// This is only used by the term importer. It bumps the known max ID to the given value,
+    /// and ensures the FSM is big enough, and marks it used.
+    pub(crate) fn claim_id(&self, ctx: &Context, id: u32) -> Result<(), FsmError> {
+        let mut id_minter = self.id_minter.write().unwrap();
+        let max_id = id_minter.next_id.saturating_sub(1);
+
+        if id > max_id {
+            // NOTE: expand_to will modify max_block if needed.
+            self.expand_to(&mut id_minter, ctx, id)?;
+            id_minter.next_id = id + 1;
+        }
+
+        let _ = self.mark_id_unchecked(ctx, id, true)?;
+
+        Ok(())
+    }
+
     /// Return the maximum ID that has been assigned to a vector.
     ///
     /// This ID may be free if that ID has been deleted since the ID was created.

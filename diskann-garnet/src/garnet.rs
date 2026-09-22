@@ -21,6 +21,10 @@ use thiserror::Error;
 /// Must have enough bits to represent all Term variants (max value is 6, needs 3 bits).
 pub(crate) const TERM_BITMASK: u64 = (1 << 3) - 1;
 
+#[derive(Debug, Error)]
+#[error("Invalid term {0}")]
+pub(crate) struct InvalidTerm(u32);
+
 #[derive(Debug)]
 pub(crate) enum Term {
     Vector = 0,
@@ -30,6 +34,23 @@ pub(crate) enum Term {
     Metadata = 4,
     IntMap = 5,
     ExtMap = 6,
+}
+
+impl TryFrom<u32> for Term {
+    type Error = InvalidTerm;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Term::Vector),
+            1 => Ok(Term::Neighbors),
+            2 => Ok(Term::Quantized),
+            3 => Ok(Term::Attributes),
+            4 => Ok(Term::Metadata),
+            5 => Ok(Term::IntMap),
+            6 => Ok(Term::ExtMap),
+            _ => Err(InvalidTerm(value)),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -147,7 +168,6 @@ impl Callbacks {
         self.log_callback
     }
 
-    #[cfg(test)]
     pub(crate) fn exists_iid(&self, ctx: &Context, id: u32, length_hint: usize) -> bool {
         let key = [4, id];
         // SAFETY: Key bytes are preceded by 4 bytes of space.
@@ -162,13 +182,9 @@ impl Callbacks {
         unsafe { self.exists_raw(ctx, &key_bytes[4..], length_hint) }
     }
 
-    #[expect(
-        dead_code,
-        reason = "currently unused, but may be needed in the future"
-    )]
     pub(crate) fn exists_eid(&self, ctx: &Context, id: &GarnetId, length_hint: usize) -> bool {
         // SAFETY: GarnetId ensures there are 4 bytes preceding the key bytes.
-        unsafe { self.exists_raw(ctx, id, length_hint) }
+        unsafe { self.exists_raw(ctx, id.as_prefixed_key_bytes(), length_hint) }
     }
 
     /// Check for a key's existance in Garnet.
