@@ -113,8 +113,9 @@ impl<W: Width> TopK<W> {
         thresholds: &mut Vec<f32>,
     ) {
         output.as_mut_slice().fill(Candidate::default());
-        thresholds.resize(output.nrows(), f32::INFINITY);
+        thresholds.truncate(output.nrows());
         thresholds.fill(f32::INFINITY);
+        thresholds.resize(output.nrows(), f32::INFINITY);
     }
 
     /// Select the nearest candidates, replacing the previous contents of output.
