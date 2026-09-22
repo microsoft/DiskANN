@@ -32,9 +32,9 @@
 //! ## Lifecycle Details
 //!
 //! Lifecycle transitions are carefully designed to allow readers of the slots to avoid any
-//! accesses to the authoritative [`Store`] for read-only operations. The [`Checked`] test
-//! code follows this pattern, but this does introduce a subtle detail that is worth
-//! highlighting. [`Reader::read`] needs to be able to check a slot for readability
+//! accesses to the authoritative [`crate::store::Store`] for read-only operations. The
+//! [`Checked`] test code follows this pattern, but this does introduce a subtle detail that
+//! is worth highlighting. [`Reader::read`] needs to be able to check a slot for readability
 //! **without** trying to acquire a [`RwLockReadGuard`] for that slot. Doing so even briefly
 //! will cause a [`RwLock::try_write`] on an otherwise correct [`slots::Slots`] state
 //! transition to fail.

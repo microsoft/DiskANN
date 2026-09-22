@@ -98,6 +98,7 @@ impl Reference {
     /// # Panics
     ///
     /// Panics if no mapping for `logical` exists.
+    #[cfg(feature = "quantization")]
     pub(super) fn delete(&mut self, logical: LogicalId) -> SlotId {
         let slot = match self.id.remove(&logical) {
             Some(slot) => slot,

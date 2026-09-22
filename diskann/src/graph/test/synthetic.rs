@@ -63,6 +63,7 @@ impl Grid {
     ///
     /// assert_eq!(d.nrows(), 8);
     /// assert_eq!(d.ncols(), 3);
+    ///
     /// assert_eq!(d.row(0), &[0, 0, 0]);
     /// assert_eq!(d.row(1), &[0, 0, 1]);
     ///

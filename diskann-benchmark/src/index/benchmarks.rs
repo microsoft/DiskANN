@@ -59,67 +59,67 @@ use crate::{
 ////////////////////////////
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    // // Notes on registration:
-    // //
-    // // We register all supported search types for `f32`, but intentionally limit the number
-    // // of search types for the other data types mainly to help reduce compilation time.
-    // //
-    // // Feel free to add additional search plugins as needed during exploration and add them
-    // // permanently if demand is sufficient.
-    // //
-    // // Note that each plugin registration will trigger an new monomorphization, so use with
-    // // care.
+    // Notes on registration:
+    //
+    // We register all supported search types for `f32`, but intentionally limit the number
+    // of search types for the other data types mainly to help reduce compilation time.
+    //
+    // Feel free to add additional search plugins as needed during exploration and add them
+    // permanently if demand is sufficient.
+    //
+    // Note that each plugin registration will trigger an new monomorphization, so use with
+    // care.
 
-    // // Full Precision
-    // registry.register(
-    //     "graph-index-full-precision-f32",
-    //     FullPrecision::<f32>::new()
-    //         .search(plugins::Topk)
-    //         .search(plugins::Range)
-    //         .search(plugins::FilteredRange)
-    //         .search(plugins::TopkBetaFilter)
-    //         .search(plugins::TopkMultihopFilter)
-    //         .search(plugins::TopkInlineFilter)
-    //         .search(plugins::DeterminantDiversity),
-    // )?;
+    // Full Precision
+    registry.register(
+        "graph-index-full-precision-f32",
+        FullPrecision::<f32>::new()
+            .search(plugins::Topk)
+            .search(plugins::Range)
+            .search(plugins::FilteredRange)
+            .search(plugins::TopkBetaFilter)
+            .search(plugins::TopkMultihopFilter)
+            .search(plugins::TopkInlineFilter)
+            .search(plugins::DeterminantDiversity),
+    )?;
 
-    // registry.register(
-    //     "graph-index-full-precision-f16",
-    //     FullPrecision::<f16>::new().search(plugins::Topk),
-    // )?;
-    // registry.register(
-    //     "graph-index-full-precision-u8",
-    //     FullPrecision::<u8>::new()
-    //         .search(plugins::Topk)
-    //         .search(plugins::TopkInlineFilter)
-    //         .search(plugins::FilteredRange),
-    // )?;
-    // registry.register(
-    //     "graph-index-full-precision-i8",
-    //     FullPrecision::<i8>::new().search(plugins::Topk),
-    // )?;
+    registry.register(
+        "graph-index-full-precision-f16",
+        FullPrecision::<f16>::new().search(plugins::Topk),
+    )?;
+    registry.register(
+        "graph-index-full-precision-u8",
+        FullPrecision::<u8>::new()
+            .search(plugins::Topk)
+            .search(plugins::TopkInlineFilter)
+            .search(plugins::FilteredRange),
+    )?;
+    registry.register(
+        "graph-index-full-precision-i8",
+        FullPrecision::<i8>::new().search(plugins::Topk),
+    )?;
 
-    // // Dynamic Full Precision
-    // registry.register(
-    //     "graph-index-dynamic-full-precision-f32",
-    //     DynamicFullPrecision::<f32>::new(),
-    // )?;
-    // registry.register(
-    //     "graph-index-dynamic-full-precision-f16",
-    //     DynamicFullPrecision::<f16>::new(),
-    // )?;
-    // registry.register(
-    //     "graph-index-dynamic-full-precision-u8",
-    //     DynamicFullPrecision::<u8>::new(),
-    // )?;
-    // registry.register(
-    //     "graph-index-dynamic-full-precision-i8",
-    //     DynamicFullPrecision::<i8>::new(),
-    // )?;
+    // Dynamic Full Precision
+    registry.register(
+        "graph-index-dynamic-full-precision-f32",
+        DynamicFullPrecision::<f32>::new(),
+    )?;
+    registry.register(
+        "graph-index-dynamic-full-precision-f16",
+        DynamicFullPrecision::<f16>::new(),
+    )?;
+    registry.register(
+        "graph-index-dynamic-full-precision-u8",
+        DynamicFullPrecision::<u8>::new(),
+    )?;
+    registry.register(
+        "graph-index-dynamic-full-precision-i8",
+        DynamicFullPrecision::<i8>::new(),
+    )?;
 
-    // product::register_benchmarks(registry)?;
-    // scalar::register_benchmarks(registry)?;
-    // spherical::register_benchmarks(registry)?;
+    product::register_benchmarks(registry)?;
+    scalar::register_benchmarks(registry)?;
+    spherical::register_benchmarks(registry)?;
     Ok(())
 }
 

@@ -85,7 +85,7 @@
 //!   Unsafe code may rely on this check and all reader construction paths should use it
 //!   as it is cheap.
 //!
-//! * [`tags::Authoritative`]: A reference to the authoritative tag source for the constructed
+//! * [`tag::Authoritative`]: A reference to the authoritative tag source for the constructed
 //!   [`Slots`]. Implementations can use [`tag::Authoritative::read_only`] to obtain a
 //!   read-only, synchronizing view into the authoritative tag collection.
 
@@ -115,7 +115,7 @@ pub(crate) trait SlotsConfig: Debug {
     /// * `handle` is an [`epoch::RegistryHandle`] into the [`epoch::Registry`] in the
     ///   containing `Store`.
     ///
-    /// * `tags` is the authoritative tag collection in the containing `Store`.
+    /// * `tags` is the [`tag::Authoritative`] collection in the containing `Store`.
     unsafe fn build(
         self,
         handle: epoch::RegistryHandle,

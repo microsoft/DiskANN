@@ -1397,10 +1397,3 @@ where
         false
     }
 }
-
-///////////
-// Utils //
-///////////
-
-/// Indicate that all values of a [`DispatchParams`] struct are valid.
-fn accept_all<T>(_: &T) {}

@@ -127,7 +127,3 @@ split-debuginfo = "packed"
 # See: https://doc.rust-lang.org/cargo/reference/profiles.html#test
 [profile.test]
 opt-level = 1
-
-[profile.samply]
-inherits = "release"
-debug = true

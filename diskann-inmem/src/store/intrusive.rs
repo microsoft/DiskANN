@@ -11,8 +11,8 @@
 //! ## Lifecycle Details
 //!
 //! Lifecycle details are relatively straightforward. The intrusive [`AtomicTag`] mostly
-//! follows the transitions made by the [`Store`]. A [`Reader`] checks the tag for
-//! readability before creating a shared reference to the data payload.
+//! follows the transitions made by the [`crate::store::Store`]. A [`Reader`] checks the tag
+//! for readability before creating a shared reference to the data payload.
 //!
 //! The problematic transition from "published" to "retiring" is made safe because
 //!
@@ -30,11 +30,11 @@
 //!
 //! ## Safety
 //!
-//! The safety of this module depends on [`Intrusive`] being embedded in a [`Store`] that
-//! observes the slot lifecycle. Every lifecycle operation requires a [`Lifecycle`] token,
-//! which is constructible only by the parent store module. The unsafe [`slots::Slots`]
-//! methods additionally rely on [`Store`] to satisfy their documented state and exclusivity
-//! preconditions.
+//! The safety of this module depends on [`Intrusive`] being embedded in a
+//! [`crate::store::Store`] that observes the slot lifecycle. Every lifecycle operation
+//! requires a [`Lifecycle`] token, which is constructible only by the parent store module.
+//! The unsafe [`slots::Slots`] methods additionally rely on [`crate::store::Store`] to
+//! satisfy their documented state and exclusivity preconditions.
 
 use std::sync::atomic::Ordering;
 
@@ -263,6 +263,11 @@ impl slots::Slots for Intrusive {
 pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
     unpadded: Bytes,
+
+    #[cfg_attr(
+        not(feature = "quantization"),
+        expect(unused, reason = "quantization uses this to share the guard")
+    )]
     guard: epoch::Guard<'a>,
 }
 
@@ -399,6 +404,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Return a reference to the contained [`epoch::Guard`].
+    #[cfg(feature = "quantization")]
     pub(crate) fn guard(&self) -> &epoch::Guard<'a> {
         &self.guard
     }

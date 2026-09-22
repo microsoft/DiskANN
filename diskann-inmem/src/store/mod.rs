@@ -80,14 +80,21 @@ use crate::{
     tag::{self, AtomicTag, Tag},
 };
 
+// Unconditional
+pub(crate) mod intrusive;
 pub(crate) mod slots;
 
+// Quantization
+#[cfg(feature = "quantization")]
 pub(crate) mod cons;
+
+#[cfg(feature = "quantization")]
 pub(crate) mod optional;
 
-pub(crate) mod intrusive;
+#[cfg(any(test, feature = "quantization", feature = "integration-test"))]
 pub(crate) mod simple;
 
+// Integration Test
 #[cfg(any(test, feature = "integration-test"))]
 pub(crate) mod checked;
 
@@ -784,6 +791,8 @@ mod tests {
 
     use std::assert_matches;
 
+    use crate::test::assert_contains;
+
     /// A faulty config for [`Checked`] that doesn't respect the [`IdLimit`].
     #[derive(Debug)]
     struct FaultyConfig;
@@ -839,6 +848,7 @@ mod tests {
         )
         .unwrap_err();
         assert_matches!(err.0, StoreErrorInner::TooManyEntries { .. });
+        assert_contains!(err.to_string(), "must not exceed `u32::MAX`");
     }
 
     #[test]

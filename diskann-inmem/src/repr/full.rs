@@ -14,8 +14,8 @@ mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
     //!
-    //! * [`super::ExpandBeam`]: For index search.
-    //! * [`super::Prune`]: For index construction.
+    //! * [`crate::repr::internal::intrusive::ExpandBeam`]: For index search.
+    //! * [`crate::repr::internal::intrusive::Prune`]: For index construction.
     //!
     //! These two structs are modular with respect to their exact distance function and
     //! prefetcher. Since [`super::repr::ExpandBeam`] and [`super::repr::Prune`] are
@@ -542,7 +542,7 @@ where
 // Expand Beam (Search) //
 //----------------------//
 
-/// A temporary precursor for [`ExpandBeam`] to simplify macros.
+/// A temporary precursor for [`repr::internal::intrusive::ExpandBeam`] to simplify macros.
 #[derive(Debug)]
 struct IntoExpandBeam<'a, T, U> {
     query: Calf<'a, [T]>,

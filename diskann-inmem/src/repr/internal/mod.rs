@@ -6,6 +6,8 @@
 use thiserror::Error;
 
 pub(super) mod intrusive;
+
+#[cfg(any(feature = "quantization", test))]
 pub(super) mod simple;
 
 pub(super) mod macros;

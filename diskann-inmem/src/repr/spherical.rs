@@ -9,7 +9,7 @@ use std::num::NonZeroUsize;
 
 use diskann::{ANNError, ANNResult, error::ErrorContext, utils::IntoUsize};
 use diskann_quantization::{
-    alloc::{Allocator, GlobalAllocator, Poly, ScopedAllocator},
+    alloc::{GlobalAllocator, Poly, ScopedAllocator},
     spherical::{SupportedMetric, iface},
 };
 use diskann_utils::{lazy_format, views::Matrix};
@@ -197,29 +197,6 @@ pub enum Rerank {
     F16,
 }
 
-impl Rerank {
-    #[expect(
-        clippy::expect_used,
-        reason = "the arithmetic should not overflow for the feasible `dim` values"
-    )]
-    fn bytes(&self, dim: usize) -> Bytes {
-        match self {
-            Self::None => Bytes::new(0),
-            Self::F16 => Bytes::new(
-                dim.checked_mul(2)
-                    .expect("f16 is smaller than the f32 in the quantizer"),
-            ),
-        }
-    }
-
-    fn config(self, dim: usize) -> Option<simple::Config> {
-        match self {
-            Self::None => None,
-            Self::F16 => Some(Simple::config(self.bytes(dim))),
-        }
-    }
-}
-
 /// Internal representation of [`Rerank`].
 ///
 /// This is used for computing distances among the raw values in the auxiliary store.
@@ -240,11 +217,44 @@ fn convert_metric(metric: SupportedMetric) -> diskann_vector::distance::Metric {
 }
 
 impl Reranker {
-    /// Construct a new [`Reranker`].
-    fn new(rerank: Rerank, metric: SupportedMetric, dim: usize) -> Self {
-        match rerank {
+    /// Construct a new [`Reranker`] and a [`store::slots::SlotsConfig`]  for the auxiliary
+    /// store.
+    fn new_with_config(
+        rerank: Rerank,
+        metric: SupportedMetric,
+        dim: usize,
+    ) -> (Self, Option<simple::Config>) {
+        let this = match rerank {
             Rerank::None => Self::None,
-            Rerank::F16 => Self::F16(f32::distance_comparer(convert_metric(metric), Some(dim))),
+            Rerank::F16 => {
+                let distance = <f32 as DistanceProvider<f16>>::distance_comparer(
+                    convert_metric(metric),
+                    Some(dim),
+                );
+
+                Self::F16(distance)
+            }
+        };
+
+        let config = match &this {
+            Self::None => None,
+            Self::F16(_) => Some(Simple::config(this.bytes_for(dim))),
+        };
+
+        (this, config)
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "the arithmetic should not overflow for the feasible `dim` values"
+    )]
+    fn bytes_for(&self, dim: usize) -> Bytes {
+        match self {
+            Self::None => Bytes::new(0),
+            Self::F16(_) => Bytes::new(
+                dim.checked_mul(2)
+                    .expect("f16 is smaller than the f32 in the quantizer"),
+            ),
         }
     }
 
@@ -252,33 +262,48 @@ impl Reranker {
     ///
     /// This assumes that `simple` has the same dimensions as `self`'s contained distance
     /// computation and that `guard` belongs to `simple`.
+    ///
+    /// # Pre-conditions
+    ///
+    /// This requires that `slots` is the [`store::slots::Slots`] created from the
+    /// configuration returned in [`Self::new_with_config`].
     fn post_process<'a>(
         &'a self,
         query: &'a [f32],
         guard: &epoch::Guard<'a>,
-        simple: &'a store::simple::Simple,
+        slots: &'a Optional<store::simple::Simple>,
         counters: &LocalCounters<'a>,
     ) -> Option<Box<dyn repr::PostProcess + 'a>> {
-        match self {
-            Self::None => None,
-            Self::F16(distance) => {
+        match (self, slots.slots()) {
+            (Self::None, None) => None,
+            (Self::F16(distance), Some(simple)) => {
                 let distance = repr::full::QueryDistance::new(Calf::Borrowed(query), *distance);
                 let reader = simple.reader(guard.share());
                 let post_process =
                     repr::internal::simple::Reranker::new(reader, distance, counters.fork());
                 Some(Box::new(post_process))
             }
+            _ => unreachable!("invalid combination of arguments"),
         }
     }
 
     /// Store the vector `v` into the raw buffer `buf`.
-    fn store(&self, v: &[f32], buf: &mut [u8]) {
-        match self {
-            Self::None => {}
-            Self::F16(_) => {
+    ///
+    /// # Pre-conditions
+    ///
+    /// `buf` must be consistent with the configuration returned from [`Self::new_with_config`],
+    /// and may only be `None` if that configuration was `None`.
+    ///
+    /// If it is `Some`, this function may panic if its length is not consistent with the
+    /// original configuration.
+    fn store(&self, v: &[f32], buf: &mut Option<simple::Exclusive<'_>>) {
+        match (self, buf) {
+            (Self::None, None) => {}
+            (Self::F16(_), Some(exclusive)) => {
                 use diskann_vector::conversion::CastFromSlice;
-                bytemuck::cast_slice_mut::<u8, f16>(buf).cast_from_slice(v);
+                bytemuck::cast_slice_mut::<u8, f16>(exclusive.as_mut_slice()).cast_from_slice(v);
             }
+            _ => unreachable!("invalid combination of arguments"),
         }
     }
 }
@@ -327,13 +352,15 @@ impl Spherical {
         } = config;
 
         let full_dim = quantizer.full_dim();
+        let (reranker, rerank_config) =
+            Reranker::new_with_config(rerank, quantizer.metric(), full_dim);
+
         let slots = cons::Config::new(
             Intrusive::config(Bytes::new(quantizer.bytes())),
-            rerank.config(full_dim),
+            rerank_config,
         );
 
         let store = Store::new(layout, store, slots)?;
-        let reranker = Reranker::new(rerank, quantizer.metric(), full_dim);
 
         let this = Self {
             store,
@@ -386,9 +413,7 @@ impl Spherical {
             )
             .map_err(ANNError::new)?;
 
-        if let Some(second) = slot.second() {
-            self.reranker.store(v, second.as_mut_slice());
-        }
+        self.reranker.store(v, slot.second());
 
         Ok(())
     }
@@ -440,10 +465,8 @@ impl Spherical {
 
             let post_process = rerank_if_enabled
                 .then(|| {
-                    cons.second().slots().and_then(|simple| {
-                        self.reranker
-                            .post_process(query, expand_beam.guard(), simple, &counters)
-                    })
+                    self.reranker
+                        .post_process(query, expand_beam.guard(), cons.second(), &counters)
                 })
                 .flatten();
 
@@ -585,7 +608,7 @@ impl repr::Insert for Spherical {
 
 impl<A> repr::internal::RawQueryDistance for iface::QueryComputer<A>
 where
-    A: Allocator + std::fmt::Debug + Send + Sync,
+    A: diskann_quantization::alloc::Allocator + std::fmt::Debug + Send + Sync,
 {
     type Error = ANNError;
 
@@ -1069,10 +1092,8 @@ mod tests {
                     None => panic!("expected a post processor -- {}", ctx),
                 };
 
-                let f = <f32 as diskann_vector::distance::DistanceProvider<f32>>::distance_comparer(
-                    convert_metric(metric),
-                    None,
-                );
+                let f =
+                    <f32 as DistanceProvider<f32>>::distance_comparer(convert_metric(metric), None);
 
                 let distances = HashMap::from_iter([
                     (s0, f.call(&query, v0)),

@@ -231,7 +231,7 @@ impl<'a> Reader<'a> {
     unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
         debug_assert!(self.is_in_bounds(i));
 
-        if self.tags.readable(i) {
+        if self.tags.can_read(i) {
             // SAFETY: The caller attests that `i` is in-bounds and we have checked that this
             // entry has a readable tag.
             //

@@ -79,3 +79,17 @@ integration-test = [
     "dep:rand",
     "diskann-utils/testing",
 ]
+
+# Note
+#
+# Build docs locally with
+# ```
+# RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc \
+#    --package diskann-inmem \
+#    --features quantization \
+#    --no-deps \
+#    --features quantization
+# ```
+[package.metadata.docs.rs]
+features = ["quantization"]
+rustdoc-args = ["--cfg", "docsrs"]

@@ -3,24 +3,33 @@
  * Licensed under the MIT license.
  */
 
+//! Shared infrastructure for implementing [`repr::ExpandBeam`] and [`repr::Prune`] on top
+//! of the [`crate::store::intrusive::Intrusive`].
+
 use std::num::NonZeroUsize;
 
 use diskann::{ANNError, ANNResult, error::IntoANNResult, neighbor::Neighbor, utils::IntoUsize};
 
 use crate::{
-    epoch,
     num::IdLimit,
     prefetch::{self, Prefetch},
     repr, store,
 };
 
-use super::{OutOfBounds, RawQueryDistance};
+use super::{OutOfBounds, RawDistance, RawQueryDistance};
 
 ////////////////
 // ExpandBeam //
 ////////////////
 
 /// A [`repr::ExpandBeam`] implementation for the invasive memory store.
+///
+/// Implementations can choose a [`RawQueryDistance`] and a [`Prefetch`] implementation.
+/// The distance implementation provided must work with slices of the length provided by
+/// `reader`.
+///
+/// At this moment, unsafe code may *not* rely on the assumption that only slices of length
+/// [`store::intrusive::Reader::bytes`] will be provided, but this should always be the case.
 #[derive(Debug)]
 pub(in crate::repr) struct ExpandBeam<'a, D, P> {
     /// The data reader.
@@ -41,7 +50,12 @@ pub(in crate::repr) struct ExpandBeam<'a, D, P> {
 impl<'a, D, P> ExpandBeam<'a, D, P> {
     /// Create a new [`ExpandBeam`] object.
     ///
-    /// Callers may rely on `distance` being provided with slices with length `reader.bytes()`.
+    /// Callers may generally assume on `distance` being provided with slices with length
+    /// `reader.bytes()`, but unsafe code may not yet use this.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `prefetch` is not compatible with [`store::intrusive::Reader::bytes_plus_tag`].
     pub(in crate::repr) fn new(
         reader: store::intrusive::Reader<'a>,
         distance: D,
@@ -66,8 +80,9 @@ impl<'a, D, P> ExpandBeam<'a, D, P> {
         }
     }
 
-    /// Return the [`epoch::Guard`] of the embedded reader.
-    pub(in crate::repr) fn guard(&self) -> &epoch::Guard<'a> {
+    /// Return the [`crate::epoch::Guard`] of the embedded reader.
+    #[cfg(feature = "quantization")]
+    pub(in crate::repr) fn guard(&self) -> &crate::epoch::Guard<'a> {
         self.reader.guard()
     }
 
@@ -163,6 +178,8 @@ where
 ///////////
 
 /// An implementation of [`repr::Prune`].
+///
+/// Implementations must provide a [`RawDistance`].
 #[derive(Debug)]
 pub(in crate::repr) struct Prune<'a, D> {
     /// The reader into the intrusive store.
@@ -187,6 +204,10 @@ pub(in crate::repr) struct Prune<'a, D> {
 impl<'a, D> Prune<'a, D> {
     /// Construct a new [`Prune`], using `distance` to compute distances for the raw data
     /// retrieved from `reader`.
+    ///
+    /// Callers may generally assume that only slices of length
+    /// [`store::intrusive::Reader::bytes`] will be passed to `distance`. However, unsafe
+    /// code may not rely on this.
     pub(in crate::repr) fn new(reader: store::intrusive::Reader<'a>, distance: D) -> Self {
         Self {
             reader,
@@ -208,7 +229,7 @@ unsafe impl<D> Sync for Prune<'_, D> where D: Sync {}
 
 impl<D> repr::Prune for Prune<'_, D>
 where
-    D: super::RawDistance,
+    D: RawDistance,
 {
     fn prepare(
         &mut self,
@@ -254,6 +275,6 @@ where
         )]
         self.distance
             .eval(a, b)
-            .expect("diskann curerntly does not support fallible prune")
+            .expect("diskann currently does not support fallible prune")
     }
 }

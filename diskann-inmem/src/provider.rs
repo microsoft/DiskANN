@@ -319,12 +319,12 @@ impl<'a> SearchAccessor<'a> {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "quantization"))]
     pub(crate) fn get_expand_beam(&self) -> &dyn repr::ExpandBeam {
         &*self.expand_beam
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "quantization"))]
     pub(crate) fn get_post_process(&mut self) -> Option<&mut (dyn repr::PostProcess + 'a)> {
         self.post_process.as_deref_mut()
     }
@@ -446,7 +446,7 @@ impl<'a> PruneAccessor<'a> {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "quantization"))]
     pub(crate) fn get_prune(&mut self) -> &mut dyn repr::Prune {
         &mut *self.prune
     }
