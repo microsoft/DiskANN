@@ -225,13 +225,10 @@ impl PartitionMetric for CosineNormalized {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(miri))]
     use crate::graph::pipnn::test_support;
-    #[cfg(not(miri))]
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 
-    #[cfg(not(miri))]
     #[test]
     fn l2_ranking_retains_small_coordinate_contributions() {
         // Given: the origin ranks leaders solely by their squared norms.
@@ -264,7 +261,6 @@ mod tests {
         assert_eq!(output[1], 16_777_232.0);
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -273,75 +269,86 @@ mod tests {
     fn point_to_leader_scores_match_scalar_distances<M: PartitionMetric>(
         #[case] _metric: M,
         #[case] scalar_metric: Metric,
-        #[values(1, 3)] point_count: usize,
-        #[values(1, 4, 17)] leader_count: usize,
-        #[values(1, 2, 7, 8, 9, 15, 16, 17, 127, 128, 129)] dimensions: usize,
     ) {
-        // Small integer coordinates make unnormalized dot products exact. Points
-        // and leaders use different values, so swapped rows or columns change scores.
-        let mut point_values: Vec<_> = (0..point_count * dimensions)
-            .map(|index| (index % 7) as f32 - 3.0)
-            .collect();
-        let mut leader_values: Vec<_> = (0..leader_count * dimensions)
-            .map(|index| (index % 11) as f32 - 5.0)
-            .collect();
-        for (point, row) in point_values.chunks_exact_mut(dimensions).enumerate() {
-            row[0] = point as f32 + 1.0;
-        }
-        for (leader, row) in leader_values.chunks_exact_mut(dimensions).enumerate() {
-            row[0] = leader as f32 + 2.0;
-        }
-        if scalar_metric == Metric::CosineNormalized {
-            test_support::normalize(&mut point_values, dimensions);
-            test_support::normalize(&mut leader_values, dimensions);
-        }
-        let points =
-            MatrixView::try_from(point_values.as_slice(), point_count, dimensions).unwrap();
-        let leader_matrix =
-            MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions).unwrap();
-        let leaders = M::create_leaders(leader_matrix);
-        let mut output = vec![f32::NAN; point_count * leader_count];
-
-        M::compute_distances(
-            points,
-            &leaders,
-            MutMatrixView::try_from(output.as_mut_slice(), point_count, leader_count).unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(M::leader_count(&leaders), leader_count);
-        for point in 0..point_count {
-            for leader in 0..leader_count {
-                let mut expected = test_support::distance(
-                    scalar_metric,
-                    points.row(point),
-                    leader_matrix.row(leader),
-                );
-                if scalar_metric == Metric::L2 {
-                    // Partition L2 omits exactly this constant from every column of the row.
-                    expected -= points
-                        .row(point)
-                        .iter()
-                        .map(|&x| f64::from(x).powi(2))
-                        .sum::<f64>();
-                }
-                let tolerance = match scalar_metric {
-                    Metric::L2 | Metric::InnerProduct => 0.0,
-                    // Bound f32 norm/dot reductions at unit scale, as in the leaf metric.
-                    Metric::Cosine | Metric::CosineNormalized => {
-                        8.0 * f64::from(f32::EPSILON) * dimensions as f64
+        for point_count in [1, 3] {
+            for leader_count in [1, 4, 17] {
+                for dimensions in [1, 2, 7, 8, 9, 15, 16, 17, 127, 128, 129] {
+                    // Small integer coordinates make unnormalized dot products exact. Points
+                    // and leaders use different values, so swapped rows or columns change scores.
+                    let mut point_values: Vec<_> = (0..point_count * dimensions)
+                        .map(|index| (index % 7) as f32 - 3.0)
+                        .collect();
+                    let mut leader_values: Vec<_> = (0..leader_count * dimensions)
+                        .map(|index| (index % 11) as f32 - 5.0)
+                        .collect();
+                    for (point, row) in point_values.chunks_exact_mut(dimensions).enumerate() {
+                        row[0] = point as f32 + 1.0;
                     }
-                };
-                let actual = f64::from(output[point * leader_count + leader]);
-                assert!(
-                    (actual - expected).abs() <= tolerance,
-                    "point={point}, leader={leader}, dimensions={dimensions}: {actual} != {expected}"
-                );
+                    for (leader, row) in leader_values.chunks_exact_mut(dimensions).enumerate() {
+                        row[0] = leader as f32 + 2.0;
+                    }
+                    if scalar_metric == Metric::CosineNormalized {
+                        test_support::normalize(&mut point_values, dimensions);
+                        test_support::normalize(&mut leader_values, dimensions);
+                    }
+                    let points =
+                        MatrixView::try_from(point_values.as_slice(), point_count, dimensions)
+                            .unwrap();
+                    let leader_matrix =
+                        MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions)
+                            .unwrap();
+                    let leaders = M::create_leaders(leader_matrix);
+                    let mut output = vec![f32::NAN; point_count * leader_count];
+
+                    M::compute_distances(
+                        points,
+                        &leaders,
+                        MutMatrixView::try_from(output.as_mut_slice(), point_count, leader_count)
+                            .unwrap(),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("point_count={point_count}, leader_count={leader_count}, dimensions={dimensions}: {error}")
+                    });
+
+                    assert_eq!(
+                        M::leader_count(&leaders),
+                        leader_count,
+                        "point_count={point_count}, leader_count={leader_count}, dimensions={dimensions}"
+                    );
+                    for point in 0..point_count {
+                        for leader in 0..leader_count {
+                            let mut expected = test_support::distance(
+                                scalar_metric,
+                                points.row(point),
+                                leader_matrix.row(leader),
+                            );
+                            if scalar_metric == Metric::L2 {
+                                // Partition L2 omits exactly this constant from every column of the row.
+                                expected -= points
+                                    .row(point)
+                                    .iter()
+                                    .map(|&x| f64::from(x).powi(2))
+                                    .sum::<f64>();
+                            }
+                            let tolerance = match scalar_metric {
+                                Metric::L2 | Metric::InnerProduct => 0.0,
+                                // Bound f32 norm/dot reductions at unit scale, as in the leaf metric.
+                                Metric::Cosine | Metric::CosineNormalized => {
+                                    8.0 * f64::from(f32::EPSILON) * dimensions as f64
+                                }
+                            };
+                            let actual = f64::from(output[point * leader_count + leader]);
+                            assert!(
+                                (actual - expected).abs() <= tolerance,
+                                "point_count={point_count}, leader_count={leader_count}, dimensions={dimensions}, point={point}, leader={leader}: {actual} != {expected}"
+                            );
+                        }
+                    }
+                }
             }
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
@@ -350,65 +357,71 @@ mod tests {
     fn large_dense_inputs_match_scalar_distances<M: PartitionMetric>(
         #[case] _metric: M,
         #[case] scalar_metric: Metric,
-        #[values((17, 33, 384), (33, 65, 768), (65, 129, 1536), (9, 17, 1537), (257, 513, 129), (5, 17, 4097))]
-        shape: (usize, usize, usize),
     ) {
-        let (point_count, leader_count, dimensions) = shape;
-        let mut point_values = test_support::dense_points(point_count, dimensions, 1287);
-        let mut leader_values = test_support::dense_points(leader_count, dimensions, 2026);
-        if scalar_metric == Metric::CosineNormalized {
-            test_support::normalize(&mut point_values, dimensions);
-            test_support::normalize(&mut leader_values, dimensions);
-        }
-        let points =
-            MatrixView::try_from(point_values.as_slice(), point_count, dimensions).unwrap();
-        let leader_matrix =
-            MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions).unwrap();
-        let leaders = M::create_leaders(leader_matrix);
-        let mut output = vec![f32::NAN; point_count * leader_count];
-
-        M::compute_distances(
-            points,
-            &leaders,
-            MutMatrixView::try_from(output.as_mut_slice(), point_count, leader_count).unwrap(),
-        )
-        .unwrap();
-
-        let tolerance = match scalar_metric {
-            Metric::L2 | Metric::InnerProduct => 0.0,
-            // Dyadic dot/norm sums are exact; square roots and division round.
-            Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
-            Metric::CosineNormalized => {
-                // Bound product and sum rounding for normalized f32 coordinates.
-                let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
-                roundoff / (1.0 - roundoff)
+        for shape in [
+            (17, 33, 384),
+            (33, 65, 768),
+            (65, 129, 1536),
+            (9, 17, 1537),
+            (257, 513, 129),
+            (5, 17, 4097),
+        ] {
+            let (point_count, leader_count, dimensions) = shape;
+            let mut point_values = test_support::dense_points(point_count, dimensions, 1287);
+            let mut leader_values = test_support::dense_points(leader_count, dimensions, 2026);
+            if scalar_metric == Metric::CosineNormalized {
+                test_support::normalize(&mut point_values, dimensions);
+                test_support::normalize(&mut leader_values, dimensions);
             }
-        };
-        for point in 0..point_count {
-            let point_norm: f64 = points
-                .row(point)
-                .iter()
-                .map(|&x| f64::from(x).powi(2))
-                .sum();
-            for leader in 0..leader_count {
-                let mut expected = test_support::distance(
-                    scalar_metric,
-                    points.row(point),
-                    leader_matrix.row(leader),
-                );
-                if scalar_metric == Metric::L2 {
-                    expected -= point_norm;
+            let points =
+                MatrixView::try_from(point_values.as_slice(), point_count, dimensions).unwrap();
+            let leader_matrix =
+                MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions).unwrap();
+            let leaders = M::create_leaders(leader_matrix);
+            let mut output = vec![f32::NAN; point_count * leader_count];
+
+            M::compute_distances(
+                points,
+                &leaders,
+                MutMatrixView::try_from(output.as_mut_slice(), point_count, leader_count).unwrap(),
+            )
+            .unwrap_or_else(|error| panic!("shape={shape:?}: {error}"));
+
+            let tolerance = match scalar_metric {
+                Metric::L2 | Metric::InnerProduct => 0.0,
+                // Dyadic dot/norm sums are exact; square roots and division round.
+                Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
+                Metric::CosineNormalized => {
+                    // Bound product and sum rounding for normalized f32 coordinates.
+                    let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
+                    roundoff / (1.0 - roundoff)
                 }
-                let actual = f64::from(output[point * leader_count + leader]);
-                assert!(
-                    (actual - expected).abs() <= tolerance,
-                    "shape={shape:?}, point={point}, leader={leader}: {actual} != {expected}, tolerance={tolerance}"
-                );
+            };
+            for point in 0..point_count {
+                let point_norm: f64 = points
+                    .row(point)
+                    .iter()
+                    .map(|&x| f64::from(x).powi(2))
+                    .sum();
+                for leader in 0..leader_count {
+                    let mut expected = test_support::distance(
+                        scalar_metric,
+                        points.row(point),
+                        leader_matrix.row(leader),
+                    );
+                    if scalar_metric == Metric::L2 {
+                        expected -= point_norm;
+                    }
+                    let actual = f64::from(output[point * leader_count + leader]);
+                    assert!(
+                        (actual - expected).abs() <= tolerance,
+                        "shape={shape:?}, point={point}, leader={leader}: {actual} != {expected}, tolerance={tolerance}"
+                    );
+                }
             }
         }
     }
 
-    #[cfg(not(miri))]
     #[rstest]
     #[case::l2(L2, &[2.0, 0.0, 0.0, 3.0], &[1.0, 0.0, 0.0, -2.0, -3.0, 0.0], [-3.0, 4.0, 21.0, 1.0, 16.0, 9.0])]
     #[case::cosine(Cosine, &[2.0, 0.0, 0.0, 3.0], &[1.0, 0.0, 0.0, -2.0, -3.0, 0.0], [0.0, 1.0, 2.0, 1.0, 2.0, 1.0])]
@@ -435,7 +448,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn cosine_assigns_unit_distance_when_either_vector_has_zero_norm() {
         let point_values = [0.0, 0.0, 0.0, 2.0];

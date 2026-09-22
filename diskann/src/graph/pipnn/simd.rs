@@ -13,7 +13,7 @@ use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDVector};
 type DefaultVector<A> = <A as Architecture>::f32x16;
 
 /// PiPNN SIMD representation for one architecture.
-pub(super) trait PiPNNSIMDSchema: Architecture {
+pub(super) trait Simd: Architecture {
     /// SIMD vector used by both ranking kernels.
     type Vector: SIMDVector<Arch = Self, Scalar = f32> + SIMDFloat;
 
@@ -21,7 +21,7 @@ pub(super) trait PiPNNSIMDSchema: Architecture {
     fn active_lanes(mask: <Self::Vector as SIMDVector>::Mask) -> u64;
 }
 
-impl<A> PiPNNSIMDSchema for A
+impl<A> Simd for A
 where
     A: Architecture,
     DefaultVector<A>: SIMDVector<Arch = A, Scalar = f32> + SIMDFloat,

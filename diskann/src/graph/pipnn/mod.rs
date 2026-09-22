@@ -52,7 +52,7 @@ use diskann_vector::distance::Metric;
 use diskann_wide::arch::{self, Target2};
 use rayon::ThreadPool;
 
-use self::{leaf_metric::LeafMetric, partition_metric::PartitionMetric, simd::PiPNNSIMDSchema};
+use self::{leaf_metric::LeafMetric, partition_metric::PartitionMetric, simd::Simd};
 
 pub(super) struct L2;
 pub(super) struct Cosine;
@@ -287,7 +287,7 @@ struct BuildGraph;
 impl<A, T> Target2<A, ANNResult<Vec<AdjacencyList<u32>>>, MatrixView<'_, T>, &PiPNNBuildContext<'_>>
     for BuildGraph
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     T: VectorRepr,
 {
     fn run(
@@ -322,7 +322,7 @@ fn build_graph_for<A, M, T>(
     metric: Metric,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
-    A: PiPNNSIMDSchema,
+    A: Simd,
     M: LeafMetric + PartitionMetric,
     T: VectorRepr,
 {
@@ -357,7 +357,7 @@ fn config_error(message: impl std::fmt::Display) -> ANNError {
     ANNError::message(format!("PiPNN configuration: {message}"))
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 mod test_support {
     use diskann_vector::distance::Metric;
 

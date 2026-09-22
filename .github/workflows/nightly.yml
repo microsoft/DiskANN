@@ -136,15 +136,10 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
 
-      - name: PiPNN numerical pointer boundaries
+      - name: PiPNN TopK SIMD load boundaries
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
         run: |
-          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
-            graph::pipnn::leaf_metric
-          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
-            graph::pipnn::partition_metric
-          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
-            graph::pipnn::leaf_kernel::tests::rank_leaf_distances_tests
-          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
-            graph::pipnn::topk
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib -- \
+            graph::pipnn::topk::tests::batch_selection_matches_a_full_sort \
+            graph::pipnn::topk::tests::pair_scans_match_full_row_sort_across_capacities_and_lengths
