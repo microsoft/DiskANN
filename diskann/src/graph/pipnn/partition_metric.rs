@@ -3,10 +3,13 @@
  * Licensed under the MIT license.
  */
 
-//! Build ranking distances from point stripes to partition leaders.
+//! Ranking distances from points to partition leaders.
 //!
-//! A ranking distance preserves nearest-first order. One leader set serves all
-//! point stripes in a partition split.
+//! A ranking distance orders the leaders of one point in the same way as the
+//! metric distance. It can omit terms that are equal for every leader of the
+//! point, so its value can differ from the metric distance. A point stripe is a
+//! block of consecutive points that one task assigns. One leader set serves all
+//! point stripes of a partition split.
 
 use crate::{ANNError, ANNResult};
 use diskann_linalg::Transpose;
@@ -18,39 +21,40 @@ use diskann_vector::{
 
 use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 
-/// Store leader values with immutable metric data.
+/// Leader vectors and the leader norms that a metric needs.
 ///
-/// L2 stores squared norms. Cosine stores norms. Construction computes them once
-/// before point stripes share the leader set. Other metrics need no norms.
+/// L2 stores squared norms, and Cosine stores norms. The norms are computed once,
+/// when the leader set is created, and all point stripes share them. Inner product
+/// and normalized cosine store no norms.
 pub(super) struct PartitionLeaders<'a, Norms> {
     values: MatrixView<'a, f32>,
     norms: Norms,
 }
 
-/// Fill one point-to-leader ranking matrix.
+/// Compute ranking distances from points to partition leaders.
 ///
-/// The associated leader type hides metric data from the caller. The caller
-/// creates one value and shares it across all point stripes.
+/// `Leaders` hides the norms of each metric from the caller. The caller creates
+/// one leader set for a partition split and shares it across all point stripes.
 pub(super) trait PartitionMetric: Send + Sync + 'static {
-    /// Leader values and immutable metric data for one partition split.
+    /// Leader vectors and precomputed norms for one partition split.
     type Leaders<'a>: Sync;
 
-    /// Bind one non-empty leader matrix to this metric.
+    /// Create a leader set from a matrix with one leader in each row.
     ///
-    /// Partitioning creates at least one leader before it calls this function.
+    /// Partitioning always samples at least one leader. The kernels do not support
+    /// an empty leader set.
     fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a>;
 
-    /// Return the number of leaders in a metric-owned leader set.
+    /// Return the number of leaders.
     fn leader_count(leaders: &Self::Leaders<'_>) -> usize;
 
-    /// Compute one row-major point-to-leader ranking buffer.
+    /// Write the ranking distance from each point to each leader.
     ///
-    /// Values preserve nearest-first order. L2 omits the point's squared norm,
-    /// which is constant across its row. Normalized cosine and inner product
-    /// return `-dot`; cosine returns `1 - similarity`.
-    ///
-    /// `storage` has `points.nrows()` rows and `leader_count` columns.
-    /// A zero distance can have either sign. Equal distances can select either leader.
+    /// L2 omits the squared norm of the point, which is equal for every leader of
+    /// the point. Normalized cosine and inner product give `-dot`. Cosine gives
+    /// `1 - similarity`. `storage` has one row per point and one column per leader.
+    /// [`assign_leaders`](super::partition_kernel::assign_leaders) creates it with
+    /// this shape. A zero distance can have either sign.
     fn compute_distances(
         points: MatrixView<'_, f32>,
         leaders: &Self::Leaders<'_>,
@@ -58,15 +62,8 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
     ) -> ANNResult<()>;
 }
 
-/// Compute squared norms with DiskANN's vector implementation.
-fn l2_squared_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
-    vectors
-        .row_iter()
-        .map(|vector| FastL2NormSquared.evaluate(vector))
-        .collect()
-}
-
-/// Compute cosine norms with the same reduction for points and leaders.
+/// Compute the L2 norm of each row. Points and leaders both use this function, so
+/// their norms round the same way.
 fn cosine_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
     vectors
         .row_iter()
@@ -80,7 +77,10 @@ impl PartitionMetric for L2 {
     fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
         PartitionLeaders {
             values,
-            norms: l2_squared_norms(values),
+            norms: values
+                .row_iter()
+                .map(|leader| FastL2NormSquared.evaluate(leader))
+                .collect(),
         }
     }
 
@@ -93,11 +93,9 @@ impl PartitionMetric for L2 {
         leaders: &Self::Leaders<'_>,
         mut storage: MutMatrixView<'_, f32>,
     ) -> ANNResult<()> {
-        if storage.nrows() != points.nrows() || storage.ncols() != leaders.values.nrows() {
-            return Err(ANNError::message("point-to-leader output shape mismatch"));
-        }
-        // The point norm is constant across a point row. It cannot change ranking.
-        // Initialize each point row before GEMM adds the dot-product term.
+        // The ranking distance is `||l||² - 2(p·l)`: the squared L2 distance without
+        // `||p||²`, which is equal for every leader of the point. Start each row with
+        // the leader norms, and let GEMM add the dot-product term.
         for row in storage.row_iter_mut() {
             row.copy_from_slice(&leaders.norms);
         }
@@ -137,9 +135,6 @@ impl PartitionMetric for Cosine {
         leaders: &Self::Leaders<'_>,
         mut storage: MutMatrixView<'_, f32>,
     ) -> ANNResult<()> {
-        if storage.nrows() != points.nrows() || storage.ncols() != leaders.values.nrows() {
-            return Err(ANNError::message("point-to-leader output shape mismatch"));
-        }
         diskann_linalg::sgemm(
             Transpose::None,
             Transpose::Ordinary,
@@ -155,7 +150,8 @@ impl PartitionMetric for Cosine {
         .map_err(ANNError::new)?;
         let point_norms = cosine_norms(points);
         let leader_norms = &leaders.norms;
-        // Convert each dot to cosine distance. Reuse leader norms across stripes.
+        // Convert each dot to cosine distance. The leader norms come from the leader
+        // set, so each stripe computes only its point norms.
         for (row, &point_norm) in storage.row_iter_mut().zip(point_norms.iter()) {
             for (distance, &leader_norm) in row.iter_mut().zip(leader_norms.iter()) {
                 *distance = cosine_distance(*distance, point_norm, leader_norm);
@@ -181,9 +177,6 @@ impl PartitionMetric for InnerProduct {
         leaders: &Self::Leaders<'_>,
         mut storage: MutMatrixView<'_, f32>,
     ) -> ANNResult<()> {
-        if storage.nrows() != points.nrows() || storage.ncols() != leaders.values.nrows() {
-            return Err(ANNError::message("point-to-leader output shape mismatch"));
-        }
         diskann_linalg::sgemm(
             Transpose::None,
             Transpose::Ordinary,
@@ -266,7 +259,7 @@ mod tests {
     #[case::cosine(Cosine, Metric::Cosine)]
     #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
     #[case::inner_product(InnerProduct, Metric::InnerProduct)]
-    fn point_to_leader_scores_match_scalar_distances<M: PartitionMetric>(
+    fn ranking_distances_match_the_scalar_reference<M: PartitionMetric>(
         #[case] _metric: M,
         #[case] scalar_metric: Metric,
     ) {
@@ -274,7 +267,7 @@ mod tests {
             for leader_count in [1, 4, 17] {
                 for dimensions in [1, 2, 7, 8, 9, 15, 16, 17, 127, 128, 129] {
                     // Small integer coordinates make unnormalized dot products exact. Points
-                    // and leaders use different values, so swapped rows or columns change scores.
+                    // and leaders use different values, so swapped rows or columns change the distances.
                     let mut point_values: Vec<_> = (0..point_count * dimensions)
                         .map(|index| (index % 7) as f32 - 3.0)
                         .collect();
@@ -322,13 +315,17 @@ mod tests {
                                 points.row(point),
                                 leader_matrix.row(leader),
                             );
-                            if scalar_metric == Metric::L2 {
-                                // Partition L2 omits exactly this constant from every column of the row.
-                                expected -= points
-                                    .row(point)
-                                    .iter()
-                                    .map(|&x| f64::from(x).powi(2))
-                                    .sum::<f64>();
+                            // Partition ranking omits one constant from every column of the row.
+                            match scalar_metric {
+                                Metric::L2 => {
+                                    expected -= points
+                                        .row(point)
+                                        .iter()
+                                        .map(|&x| f64::from(x).powi(2))
+                                        .sum::<f64>();
+                                }
+                                Metric::CosineNormalized => expected -= 1.0,
+                                Metric::Cosine | Metric::InnerProduct => {}
                             }
                             let tolerance = match scalar_metric {
                                 Metric::L2 | Metric::InnerProduct => 0.0,
@@ -409,8 +406,10 @@ mod tests {
                         points.row(point),
                         leader_matrix.row(leader),
                     );
-                    if scalar_metric == Metric::L2 {
-                        expected -= point_norm;
+                    match scalar_metric {
+                        Metric::L2 => expected -= point_norm,
+                        Metric::CosineNormalized => expected -= 1.0,
+                        Metric::Cosine | Metric::InnerProduct => {}
                     }
                     let actual = f64::from(output[point * leader_count + leader]);
                     assert!(
@@ -464,35 +463,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(output, [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]);
-    }
-
-    #[rstest]
-    #[case::l2(L2)]
-    #[case::cosine(Cosine)]
-    #[case::normalized_cosine(CosineNormalized)]
-    #[case::inner_product(InnerProduct)]
-    fn output_shape_mismatch_is_rejected_before_writing<M: PartitionMetric>(
-        #[case] _metric: M,
-        #[values((1, 3), (2, 2), (3, 3), (2, 4))] shape: (usize, usize),
-    ) {
-        let point_values = [1.0, 2.0, 3.0, 4.0];
-        let leader_values = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
-        let leaders = M::create_leaders(MatrixView::try_from(&leader_values[..], 3, 2).unwrap());
-        let mut output = vec![17.0; shape.0 * shape.1];
-
-        let error = M::compute_distances(
-            MatrixView::try_from(&point_values[..], 2, 2).unwrap(),
-            &leaders,
-            MutMatrixView::try_from(output.as_mut_slice(), shape.0, shape.1).unwrap(),
-        )
-        .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("point-to-leader output shape mismatch")
-        );
-        assert_eq!(output, vec![17.0; shape.0 * shape.1]);
     }
 
     #[rstest]

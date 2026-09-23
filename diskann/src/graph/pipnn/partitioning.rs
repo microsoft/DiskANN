@@ -28,9 +28,10 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    partition_kernel::{PartitionKernelWorkspace, UNASSIGNED_LEADER, assign_leaders},
+    partition_kernel::{PartitionKernelWorkspace, assign_leaders},
     partition_metric::PartitionMetric,
     simd::Simd,
+    topk::UNASSIGNED,
 };
 
 // These constants control internal batching and deterministic seed generation.
@@ -441,14 +442,14 @@ fn scatter_serial(
 ) -> Vec<Vec<u32>> {
     let mut sizes = vec![0usize; leaders];
     for &leader in assignments {
-        if leader != UNASSIGNED_LEADER {
+        if leader != UNASSIGNED {
             sizes[leader as usize] += 1;
         }
     }
     let mut clusters: Vec<Vec<u32>> = sizes.into_iter().map(Vec::with_capacity).collect();
     for (&point, point_assignments) in points.iter().zip(assignments.chunks_exact(fanout)) {
         for &leader in point_assignments {
-            if leader != UNASSIGNED_LEADER {
+            if leader != UNASSIGNED {
                 clusters[leader as usize].push(point);
             }
         }
@@ -700,9 +701,9 @@ mod tests {
         let ids: Vec<_> = (0..point_count).map(|i| 1_000_000 - i as u32).collect();
         let pattern = [
             [2, 0],
-            [UNASSIGNED_LEADER, 1],
-            [0, UNASSIGNED_LEADER],
-            [UNASSIGNED_LEADER, UNASSIGNED_LEADER],
+            [UNASSIGNED, 1],
+            [0, UNASSIGNED],
+            [UNASSIGNED, UNASSIGNED],
         ];
         let assignments: Vec<_> = (0..point_count).flat_map(|i| pattern[i % 4]).collect();
         let expected = vec![
