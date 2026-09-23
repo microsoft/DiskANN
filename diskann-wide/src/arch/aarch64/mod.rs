@@ -408,6 +408,7 @@ impl Neon {
     /// Compute the absolute difference between each lane of `x` and `y`.
     ///
     /// See: [`vabdq_u8`]
+    #[inline(always)]
     pub fn vabdq_u8(self, x: u8x16, y: u8x16) -> u8x16 {
         if cfg!(miri) {
             let x = x.to_array();
@@ -428,6 +429,7 @@ impl Neon {
     /// Unlike [`std::arch::aarch64::vabdq_s8`] - this function returns the results as
     /// **unsigned** integers. This is consistent with [`i8::abs_diff`] and can correctly
     /// encode all possible results.
+    #[inline(always)]
     pub fn vabdq_s8(self, x: i8x16, y: i8x16) -> u8x16 {
         if cfg!(miri) {
             let x = x.to_array();
@@ -614,7 +616,7 @@ mod tests {
                     )
                     .to_array();
 
-                test_utils::test_binary_op(&x, &y, &got, &|x: u8, y: u8| x.abs_diff(y), "vabdq_u8")
+                test_utils::test_binary_op(x, y, &got, &|x: u8, y: u8| x.abs_diff(y), "vabdq_u8")
             };
 
             test_utils::driver::drive_binary(&f, (16, 16), 0x52d61896fd4a30fe);
@@ -632,7 +634,7 @@ mod tests {
                     )
                     .to_array();
 
-                test_utils::test_binary_op(&x, &y, &got, &|x: i8, y: i8| x.abs_diff(y), "vabdq_s8")
+                test_utils::test_binary_op(x, y, &got, &|x: i8, y: i8| x.abs_diff(y), "vabdq_s8")
             };
 
             test_utils::driver::drive_binary(&f, (16, 16), 0xef9f703dfc172ad9);
