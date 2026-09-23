@@ -11,6 +11,8 @@ edition = "2024"
 bytemuck = { workspace = true, features = ["must_cast"] }
 crossbeam-queue = "0.3.12"
 dashmap.workspace = true
+# The workspace entry opts out of default features so the async runtime backend
+# stays opt-in; the `tokio`/`compio` features below forward the backend choice.
 diskann = { workspace = true }
 diskann-utils = { workspace = true, default-features = false }
 diskann-vector = { workspace = true }
@@ -27,6 +29,7 @@ anyhow = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 diskann-benchmark-core = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+compio = { workspace = true, optional = true }
 
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"
@@ -47,7 +50,19 @@ path = "integration/main.rs"
 required-features = ["integration-test"]
 
 [features]
-default = []
+default = ["tokio", "tracing"]
+
+# Use the tokio runtime (forwarded to `diskann`); upstream default behavior.
+tokio = ["dep:tokio", "diskann/tokio"]
+
+# Use the compio (thread-per-core) runtime instead. When both `tokio` and
+# `compio` are enabled, `tokio` takes precedence. At least one runtime backend
+# must be enabled.
+compio = ["dep:compio", "diskann/compio"]
+
+# Forward tracing instrumentation of the `diskann` crate (enabled by default,
+# matching the previous default-feature behavior).
+tracing = ["diskann/tracing"]
 
 # Enable stress test module
 integration-test = [

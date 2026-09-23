@@ -1051,10 +1051,13 @@ mod tests {
     use super::*;
 
     use diskann::{
-        graph::{DiskANNIndex, InplaceDeleteMethod, search::Knn, test::synthetic::Grid},
+        graph::{DiskANNIndex, search::Knn, test::synthetic::Grid},
         neighbor::Neighbor,
-        provider::{DataProvider, Delete},
+        provider::DataProvider,
     };
+    // Used only by the tokio-gated `smoke` test.
+    #[cfg(feature = "tokio")]
+    use diskann::{graph::InplaceDeleteMethod, provider::Delete};
     use diskann_vector::distance::Metric;
 
     use crate::layers::Full;
@@ -1077,6 +1080,7 @@ mod tests {
     ///   11 61 111 161 211
     ///    1 51 101 151 201
     ///
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn smoke() {
         let grid = Grid::Two;
@@ -1253,5 +1257,69 @@ mod tests {
         assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
         assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
         assert_eq!(neighbors[3].as_tuple(), (62, 2.0));
+    }
+    // End-to-end proof that the `compio` feature builds and runs this crate
+    // end-to-end without tokio: the same provider/index flow as `smoke`,
+    // driven by `compio::runtime::Runtime::block_on`.
+    #[cfg(all(feature = "compio", not(feature = "tokio")))]
+    #[test]
+    fn smoke_compio() {
+        let rt = compio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let grid = Grid::Two;
+            let size = 5;
+            let data = grid.data(size);
+            let start = grid.start_point(size);
+            let degree = 6;
+
+            let full = Full::<f32>::new(grid.dim().into(), Metric::L2);
+
+            let config = Config::new(grid.num_points(size), degree);
+
+            let provider =
+                Provider::<_, u64>::new(full, config, std::iter::once(start.as_slice())).unwrap();
+
+            let config = diskann::graph::config::Builder::new(
+                2 * (grid.dim() as usize),
+                diskann::graph::config::MaxDegree::new(provider.max_degree()),
+                10,
+                (Metric::L2).into(),
+            )
+            .build()
+            .unwrap();
+
+            let index = DiskANNIndex::new(config, provider, None);
+
+            for (i, data) in data.row_iter().enumerate() {
+                index
+                    .insert(&Strategy, &Context, &((10 * i + 1) as u64), data)
+                    .await
+                    .unwrap();
+            }
+
+            // Verify that each ID round trips.
+            for i in 0..data.nrows() {
+                let i = (10 * i + 1) as u64;
+                let internal = index.provider().to_internal_id(&Context, &i).unwrap();
+                assert_ne!(internal as u64, i);
+                assert_eq!(
+                    index.provider().to_external_id(&Context, internal).unwrap(),
+                    i
+                );
+            }
+
+            // Searches should return something reasonable.
+            let knn = Knn::new(10, None).unwrap();
+            let mut neighbors = Vec::<Neighbor<u64>>::new();
+            index
+                .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
+                .await
+                .unwrap();
+
+            assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+            assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
+            assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
+            assert_eq!(neighbors[3].as_tuple(), (61, 2.0));
+        });
     }
 }
