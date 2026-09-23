@@ -386,6 +386,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn common_errors() {
         let dim = 5;
@@ -558,6 +559,7 @@ mod tests {
     }
 
     // Test Saving and Loading.
+    #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "current_thread")]
     async fn test_async_save_load() {
         type Provider = FastMemoryQuantVectorProviderAsync;

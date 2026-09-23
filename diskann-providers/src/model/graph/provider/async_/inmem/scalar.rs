@@ -1043,6 +1043,7 @@ mod tests {
         let _ = dc.evaluate_similarity(x, y);
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_save_with_and_load_with() {
         let storage_provider = VirtualStorageProvider::new_memory();

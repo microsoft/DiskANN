@@ -417,6 +417,7 @@ mod tests {
         assert_eq!(adaptor.get_adjacency_list(1).unwrap(), vec![3]);
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_save_load() {
         let max_degree = 5;

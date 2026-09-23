@@ -428,6 +428,7 @@ mod tests {
     }
 
     // Test Saving and Loading.
+    #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "current_thread")]
     async fn test_async_save_load() {
         type Provider = MemoryQuantVectorProviderAsync;

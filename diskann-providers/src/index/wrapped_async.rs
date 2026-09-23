@@ -22,58 +22,52 @@ use diskann::{
 };
 use diskann_utils::Reborrow;
 
+use crate::runtime::Handle;
 use crate::storage::{LoadWith, StorageReadProvider};
 
-/// Synchronous wrapper around [`graph::DiskANNIndex`] that owns or borrows a tokio runtime.
+/// Synchronous wrapper around [`graph::DiskANNIndex`] that owns or borrows an async runtime.
+///
+/// The runtime backend is selected by crate features: `tokio` (default) or
+/// `compio`. Under `tokio`, external handles to an existing runtime are
+/// supported via [`Self::new_with_handle`]; under `compio` the runtime is
+/// thread-per-core, so only owned runtimes are available.
 pub struct DiskANNIndex<DP: DataProvider> {
     /// The underlying async DiskANNIndex.
     pub inner: Arc<graph::DiskANNIndex<DP>>,
     /// Keeps the runtime alive when `Self` owns it; `None` when using an external handle.
-    _runtime: Option<tokio::runtime::Runtime>,
-    handle: tokio::runtime::Handle,
-}
-
-/// Create a multi-threaded tokio runtime and return it together with its handle.
-fn create_multi_thread_runtime() -> (tokio::runtime::Runtime, tokio::runtime::Handle) {
-    #[allow(clippy::expect_used)]
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .build()
-        .expect("failed to create tokio runtime");
-    let handle = rt.handle().clone();
-    (rt, handle)
-}
-
-/// Create a current-thread tokio runtime and return it together with its handle.
-fn create_current_thread_runtime() -> (tokio::runtime::Runtime, tokio::runtime::Handle) {
-    #[allow(clippy::expect_used)]
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("failed to create tokio runtime");
-    let handle = rt.handle().clone();
-    (rt, handle)
+    _runtime: Option<crate::runtime::Runtime>,
+    handle: crate::runtime::Handle,
 }
 
 impl<DP> DiskANNIndex<DP>
 where
     DP: DataProvider,
 {
-    /// Construct a synchronous `DiskANNIndex` with its own multi-threaded `tokio::runtime::Runtime`.
+    /// Construct a synchronous `DiskANNIndex` with its own multi-threaded runtime.
     ///
-    /// A default multi-threaded runtime will be created and owned by `Self`. For a single-threaded
-    /// runtime use [`new_with_current_thread_runtime`](Self::new_with_current_thread_runtime), or
-    /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle).
+    /// Under the default `tokio` feature this creates a multi-threaded tokio
+    /// runtime owned by `Self`. Under `compio` (thread-per-core) the
+    /// single-threaded runtime is used instead. For a single-threaded runtime
+    /// use [`new_with_current_thread_runtime`](Self::new_with_current_thread_runtime), or
+    /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle)
+    /// (tokio only).
     pub fn new_with_multi_thread_runtime(config: graph::Config, data_provider: DP) -> Self {
-        let (rt, handle) = create_multi_thread_runtime();
+        let rt = crate::runtime::Runtime::multi_thread();
+        let handle = rt.handle();
         Self::new_internal(config, data_provider, Some(rt), handle, Some(ONE))
     }
 
-    /// Construct a synchronous `DiskANNIndex` with its own single-threaded `tokio::runtime::Runtime`.
+    /// Construct a synchronous `DiskANNIndex` with its own single-threaded runtime.
     ///
-    /// A default current-thread runtime will be created and owned by `Self`. For a multi-threaded
-    /// runtime use [`new_with_multi_thread_runtime`](Self::new_with_multi_thread_runtime), or
-    /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle).
+    /// Under the default `tokio` feature this creates a current-thread tokio
+    /// runtime owned by `Self`; under `compio` it creates a compio runtime.
+    /// For a multi-threaded runtime use
+    /// [`new_with_multi_thread_runtime`](Self::new_with_multi_thread_runtime), or
+    /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle)
+    /// (tokio only).
     pub fn new_with_current_thread_runtime(config: graph::Config, data_provider: DP) -> Self {
-        let (rt, handle) = create_current_thread_runtime();
+        let rt = crate::runtime::Runtime::current_thread();
+        let handle = rt.handle();
         Self::new_internal(config, data_provider, Some(rt), handle, Some(ONE))
     }
 
@@ -82,20 +76,28 @@ where
     /// The `tokio::runtime::Runtime` is owned externally and we just keep a `Handle` to it.
     /// `thread_hint` is forwarded to [`graph::DiskANNIndex::new`] to size internal thread pools;
     /// pass `None` to let it choose a default.
+    ///
+    /// This constructor requires the `tokio` feature: a compio runtime cannot
+    /// be entered from a foreign thread.
+    #[cfg(feature = "tokio")]
     pub fn new_with_handle(
         config: graph::Config,
         data_provider: DP,
         handle: tokio::runtime::Handle,
         thread_hint: Option<NonZeroUsize>,
     ) -> Self {
-        Self::new_internal(config, data_provider, None, handle, thread_hint)
+        Self {
+            inner: Arc::new(graph::DiskANNIndex::new(config, data_provider, thread_hint)),
+            _runtime: None,
+            handle: crate::runtime::Handle::from_tokio(handle),
+        }
     }
 
     fn new_internal(
         config: graph::Config,
         data_provider: DP,
-        runtime: Option<tokio::runtime::Runtime>,
-        handle: tokio::runtime::Handle,
+        runtime: Option<crate::runtime::Runtime>,
+        handle: crate::runtime::Handle,
         thread_hint: Option<NonZeroUsize>,
     ) -> Self {
         let inner = Arc::new(graph::DiskANNIndex::new(config, data_provider, thread_hint));
@@ -107,7 +109,7 @@ where
     }
 
     /// Run an arbitrary async operation against the underlying
-    /// [`graph::DiskANNIndex`] using this wrapper's tokio runtime.
+    /// [`graph::DiskANNIndex`] using this wrapper's runtime.
     ///
     /// This is a catch-all escape hatch for async methods on the inner index
     /// that do not (yet) have a dedicated synchronous wrapper. The closure
@@ -126,19 +128,23 @@ where
         self.handle.block_on(f(&self.inner))
     }
 
-    /// Load a prebuilt index from storage with its own multi-threaded `tokio::runtime::Runtime`.
+    /// Load a prebuilt index from storage with its own multi-threaded runtime.
     ///
     /// This is the synchronous equivalent of
     /// [`LoadWith::load_with`].
-    /// A default multi-threaded runtime is created and owned by `Self`.
+    /// A default multi-threaded runtime is created and owned by `Self` (under
+    /// `compio` the single-threaded runtime is used, see
+    /// [`Self::new_with_multi_thread_runtime`]).
     /// For a single-threaded runtime use [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime),
-    /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle).
+    /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle)
+    /// (tokio only).
     pub fn load_with_multi_thread_runtime<T, P>(provider: &P, auxiliary: &T) -> ANNResult<Self>
     where
         graph::DiskANNIndex<DP>: LoadWith<T, Error = ANNError>,
         P: StorageReadProvider,
     {
-        let (rt, handle) = create_multi_thread_runtime();
+        let rt = crate::runtime::Runtime::multi_thread();
+        let handle = rt.handle();
         let inner = handle.block_on(graph::DiskANNIndex::<DP>::load_with(provider, auxiliary))?;
         Ok(Self {
             inner: Arc::new(inner),
@@ -147,19 +153,21 @@ where
         })
     }
 
-    /// Load a prebuilt index from storage with its own single-threaded `tokio::runtime::Runtime`.
+    /// Load a prebuilt index from storage with its own single-threaded runtime.
     ///
     /// This is the synchronous equivalent of
     /// [`LoadWith::load_with`].
     /// A default current-thread runtime is created and owned by `Self`.
     /// For a multi-threaded runtime use [`load_with_multi_thread_runtime`](Self::load_with_multi_thread_runtime),
-    /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle).
+    /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle)
+    /// (tokio only).
     pub fn load_with_current_thread_runtime<T, P>(provider: &P, auxiliary: &T) -> ANNResult<Self>
     where
         graph::DiskANNIndex<DP>: LoadWith<T, Error = ANNError>,
         P: StorageReadProvider,
     {
-        let (rt, handle) = create_current_thread_runtime();
+        let rt = crate::runtime::Runtime::current_thread();
+        let handle = rt.handle();
         let inner = handle.block_on(graph::DiskANNIndex::<DP>::load_with(provider, auxiliary))?;
         Ok(Self {
             inner: Arc::new(inner),
@@ -175,6 +183,10 @@ where
     /// The `tokio::runtime::Runtime` is owned externally and we just keep a `Handle` to it.
     /// For an owned runtime use [`load_with_multi_thread_runtime`](Self::load_with_multi_thread_runtime)
     /// or [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime).
+    ///
+    /// This constructor requires the `tokio` feature: a compio runtime cannot
+    /// be entered from a foreign thread.
+    #[cfg(feature = "tokio")]
     pub fn load_with_handle<T, P>(
         provider: &P,
         auxiliary: &T,
@@ -184,11 +196,12 @@ where
         graph::DiskANNIndex<DP>: LoadWith<T, Error = ANNError>,
         P: StorageReadProvider,
     {
-        let inner = handle.block_on(graph::DiskANNIndex::<DP>::load_with(provider, auxiliary))?;
+        let inner = Handle::from_tokio(handle.clone())
+            .block_on(graph::DiskANNIndex::<DP>::load_with(provider, auxiliary))?;
         Ok(Self {
             inner: Arc::new(inner),
             _runtime: None,
-            handle,
+            handle: Handle::from_tokio(handle),
         })
     }
 
@@ -506,7 +519,7 @@ where
     }
 }
 
-/// Synchronous wrapper around [`graph::search::PagedSearch`] that owns a tokio runtime handle.
+/// Synchronous wrapper around [`graph::search::PagedSearch`] that owns a runtime handle.
 ///
 /// Created by [`DiskANNIndex::paged_search`]. Each call to [`next_page`](Self::next_page)
 /// blocks the current thread to drive the underlying async search forward.
@@ -515,7 +528,7 @@ where
     DP: DataProvider,
     A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
-    handle: tokio::runtime::Handle,
+    handle: Handle,
     inner: graph::search::PagedSearch<'a, DP, A>,
 }
 
@@ -894,5 +907,107 @@ mod tests {
             "unexpected error message:\n\n{}",
             err_msg
         );
+    }
+
+    // End-to-end proof for the `compio` backend: with tokio disabled, the
+    // synchronous wrapper builds an index through the parallel `multi_insert`
+    // path (exercising backend task spawning), saves, reloads and searches it
+    // on top of a compio runtime.
+    #[cfg(all(feature = "compio", not(feature = "tokio")))]
+    #[test]
+    fn test_compio_backend_end_to_end() {
+        // -- Load training data and prepare the provider ----------------------
+        let save_path = "/index";
+        let file_path = "/sift/siftsmall_learn_256pts.fbin";
+
+        let train_data = {
+            let storage = VirtualStorageProvider::new_overlay(test_data_root());
+            let mut reader = storage.open_reader(file_path).unwrap();
+            diskann_utils::io::read_bin::<f32>(&mut reader).unwrap()
+        };
+
+        let pq_bytes = 8;
+        let pq_table = diskann_async::train_pq(
+            train_data.as_view(),
+            pq_bytes,
+            &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
+            crate::utils::create_thread_pool(2).unwrap().as_ref(),
+        )
+        .unwrap();
+
+        let (build_config, parameters) = diskann_async::simplified_builder(
+            20,
+            32,
+            Metric::L2,
+            train_data.ncols(),
+            train_data.nrows(),
+            |_| {},
+        )
+        .unwrap();
+
+        let fp_precursor =
+            CreateFullPrecision::new(parameters.dim, parameters.prefetch_cache_line_level);
+        let data_provider =
+            DefaultProvider::new_empty(parameters, fp_precursor, pq_table, TableBasedDeletes)
+                .unwrap();
+
+        let index =
+            DiskANNIndex::new_with_multi_thread_runtime(build_config.clone(), data_provider);
+
+        // -- Build through the parallel multi-insert path ----------------------
+        let ctx = DefaultContext;
+        let batch: Arc<diskann_utils::views::Matrix<f32>> = Arc::new(train_data.clone());
+        let ids: Arc<[u32]> = (0..train_data.nrows() as u32).collect::<Vec<_>>().into();
+        index
+            .multi_insert::<_, diskann_utils::views::Matrix<f32>>(FullPrecision, &ctx, batch, ids)
+            .unwrap();
+
+        // -- Save through the runtime facade -----------------------------------
+        let save_metadata = AsyncIndexMetadata::new(save_path.to_string());
+        let storage = VirtualStorageProvider::new_memory();
+        let storage_ref = &storage;
+        let metadata_ref = &save_metadata;
+        index
+            .run(|inner| {
+                let inner = Arc::clone(inner);
+                async move { inner.save_with(storage_ref, metadata_ref).await }
+            })
+            .unwrap();
+
+        // -- Reload and verify the loaded index is functional ------------------
+        let load_config = IndexConfiguration::new(
+            Metric::L2,
+            train_data.ncols(),
+            train_data.nrows(),
+            ONE,
+            1,
+            build_config,
+        );
+
+        type TestProvider = inmem::FullPrecisionProvider<
+            f32,
+            crate::model::graph::provider::async_::FastMemoryQuantVectorProviderAsync,
+            crate::model::graph::provider::async_::TableDeleteProviderAsync,
+        >;
+
+        let loaded: DiskANNIndex<TestProvider> =
+            DiskANNIndex::load_with_multi_thread_runtime(&storage, &(save_path, load_config))
+                .unwrap();
+
+        // The query is itself in the dataset, so the nearest neighbor must be
+        // the point itself at distance zero.
+        let top_k = 5;
+        let mut result_ids = vec![0u32; top_k];
+        let mut distances = vec![0.0f32; top_k];
+        let mut output = search_output_buffer::IdDistance::new(&mut result_ids, &mut distances);
+
+        let kind = graph::search::Knn::new_default(20).unwrap();
+        let stats = loaded
+            .search(kind, &FullPrecision, &ctx, train_data.row(0), &mut output)
+            .unwrap();
+
+        assert_eq!(stats.result_count, top_k as u32);
+        assert_eq!(result_ids[0], 0);
+        assert_eq!(distances[0], 0.0);
     }
 }

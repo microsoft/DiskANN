@@ -191,6 +191,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_vector_provider() {
         let num_points = 100;
@@ -291,6 +292,7 @@ mod tests {
         check_providers_equal(&provider, &reloaded);
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "current_thread")]
     async fn test_async_save() {
         type Provider = MemoryVectorProviderAsync<f32>;

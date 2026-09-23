@@ -259,6 +259,7 @@ mod tests {
     // 2. Without quant, without delete set.
     // 3. With quant, with delete set.
     // 4. With quant, without delete set.
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_save_and_load() {
         let save_path = "/index";
@@ -446,6 +447,7 @@ mod tests {
         diskann_async::new_index::<f32, _>(config, parameters, NoDeletes).unwrap()
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_validate_single_starting_point() {
         // Test case 1: Single start point should succeed

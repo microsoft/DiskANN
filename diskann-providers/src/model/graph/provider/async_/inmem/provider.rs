@@ -736,6 +736,7 @@ mod tests {
         inmem::CreateFullPrecision,
     };
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_data_provider_and_delete_interface() {
         let ctx = &DefaultContext;

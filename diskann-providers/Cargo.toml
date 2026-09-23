@@ -27,10 +27,13 @@ cfg-if.workspace = true
 diskann-wide = { workspace = true }
 arc-swap.workspace = true
 tracing.workspace = true
+# The workspace entry opts out of default features so the async runtime backend
+# stays opt-in; the `tokio`/`compio` features below forward the backend choice.
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"], optional = true }
+compio = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 prost = "0.14.1"
 futures-util = { workspace = true, features = ["async-await"] }
@@ -56,7 +59,21 @@ targets = [
 ]
 
 [features]
-default = []
+default = ["tokio", "tracing"]
+
+# Use the tokio runtime for the synchronous index wrappers and forwarded task
+# spawning (upstream default behavior).
+tokio = ["dep:tokio", "diskann/tokio"]
+
+# Use the compio (thread-per-core) runtime instead. When both `tokio` and
+# `compio` are enabled, `tokio` takes precedence to preserve upstream behavior.
+# At least one runtime backend must be enabled.
+compio = ["dep:compio", "diskann/compio"]
+
+# Forward tracing instrumentation of the `diskann` crate (enabled by default,
+# matching the previous default-feature behavior).
+tracing = ["diskann/tracing"]
+
 testing = ["dep:tempfile"]
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
 virtual_storage = ["dep:vfs"]

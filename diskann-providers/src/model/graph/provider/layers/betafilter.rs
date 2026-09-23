@@ -272,6 +272,7 @@ mod tests {
 
     impl HybridPredicate<u32> for NotIn<'_> {}
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_beta_filter() {
         // The grid of 4x4 will look like this:
