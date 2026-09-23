@@ -17,7 +17,7 @@ targets = [
 
 [dependencies]
 # Core dependencies
-diskann = { workspace = true }
+diskann = { workspace = true, features = ["tracing", "tokio"] }
 diskann-utils = { workspace = true }
 diskann-providers = { workspace = true }
 diskann-vector = { workspace = true }
@@ -69,13 +69,15 @@ rstest.workspace = true
 tempfile.workspace = true
 vfs.workspace = true
 diskann-providers = { workspace = true, default-features = false, features = [
+    "tokio",
+    "tracing",
     "testing",
     "virtual_storage",
 ] }
 diskann-utils = { workspace = true, features = ["testing"] }
 criterion.workspace = true
 iai-callgrind.workspace = true
-diskann = { workspace = true }
+diskann = { workspace = true, features = ["tracing", "tokio"] }
 approx.workspace = true
 proptest.workspace = true
 

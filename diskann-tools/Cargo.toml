@@ -12,7 +12,7 @@ license.workspace = true
 [dependencies]
 byteorder.workspace = true
 clap = { workspace = true, features = ["derive"] }
-diskann-providers = { workspace = true, default-features = false } # see `linalg/Cargo.toml`
+diskann-providers = { workspace = true, default-features = false, features = ["tokio", "tracing"] } # see `linalg/Cargo.toml`
 diskann-vector = { workspace = true }
 diskann-utils = { workspace = true }
 diskann-benchmark-core = { workspace = true, features = ["bigann"] }
@@ -27,7 +27,7 @@ serde = { workspace = true, features = ["derive"] }
 bincode.workspace = true
 opentelemetry.workspace = true
 diskann-quantization = { workspace = true }
-diskann = { workspace = true }
+diskann = { workspace = true, features = ["tracing", "tokio"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tracing.workspace = true
 bit-set.workspace = true
@@ -40,6 +40,8 @@ serde_json.workspace = true
 rstest.workspace = true
 vfs = { workspace = true }
 diskann-providers = { workspace = true, default-features = false, features = [
+    "tokio",
+    "tracing",
     "virtual_storage",
 ] }
 diskann-utils = { workspace = true, features = ["testing"] }

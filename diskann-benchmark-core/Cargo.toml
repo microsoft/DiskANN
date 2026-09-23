@@ -9,7 +9,7 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
-diskann.workspace = true
+diskann = { workspace = true, features = ["tracing", "tokio"] }
 diskann-benchmark-runner = { workspace = true }
 diskann-utils.default-features = false
 diskann-utils.workspace = true
@@ -30,7 +30,7 @@ workspace = true
 
 [dev-dependencies]
 itertools.workspace = true
-diskann = { workspace = true, features = ["testing"] }
+diskann = { workspace = true, features = ["testing", "tracing", "tokio"] }
 diskann-vector = { workspace = true }
 diskann-benchmark-runner = { workspace = true, features = ["ux-tools"] }
 tempfile = { workspace = true }

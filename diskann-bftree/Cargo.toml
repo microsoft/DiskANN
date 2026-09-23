@@ -26,7 +26,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [dev-dependencies]
-diskann = { workspace = true, features = ["testing"] }
+diskann = { workspace = true, features = ["testing", "tracing", "tokio"] }
 diskann-providers = { workspace = true, features = ["testing"] }
 diskann-utils = { workspace = true, features = ["testing"] }
 rstest.workspace = true
