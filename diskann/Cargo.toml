@@ -23,7 +23,10 @@ hashbrown = { version = "0.16.0", default-features = false, features = ["default
 num-traits.workspace = true
 rand.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"], optional = true }
+# Optional thread-per-core runtime backend. Only the `runtime` feature is used
+# (spawn + block_on semantics); I/O features remain opt-in for downstream users.
+compio = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 diskann-vector = { workspace = true }
 diskann-wide = { workspace = true }
@@ -54,10 +57,18 @@ expect_used = "warn"
 panic = "warn"
 
 [features]
-default = ["tracing"]
+default = ["tracing", "tokio"]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]
+
+# Use the tokio runtime for task spawning (upstream default behavior).
+tokio = ["dep:tokio"]
+
+# Use the compio (thread-per-core) runtime for task spawning. When both `tokio`
+# and `compio` are enabled, `tokio` takes precedence to preserve upstream
+# behavior. At least one runtime backend must be enabled.
+compio = ["dep:compio"]
 
 # Enable testing providers.
 testing = ["dep:dashmap"]

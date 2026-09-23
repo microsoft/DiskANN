@@ -147,6 +147,7 @@ where
     A: HasId,
 {
     #[cfg(test)]
+    #[cfg(feature = "tokio")]
     pub(crate) fn new(inner: A, labels: &'a dyn QueryLabelProvider<A::Id>) -> Self {
         Self { inner, labels }
     }
@@ -303,8 +304,12 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::graph::glue::{HybridPredicate, Predicate, PredicateMut};
+    // The async tests below exercise the filtered strategy end-to-end and are
+    // only compiled with the tokio backend.
+    #[cfg(feature = "tokio")]
     use crate::graph::{
-        glue::{FilteredAccessor as _, HybridPredicate, Predicate, PredicateMut, SearchStrategy},
+        glue::{FilteredAccessor as _, SearchStrategy},
         test::{provider as test_provider, synthetic::Grid},
     };
 
@@ -346,6 +351,7 @@ mod tests {
     impl HybridPredicate<u32> for NotIn<'_> {}
     impl HybridPredicate<Accept<u32>> for NotIn<'_> {}
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn filtered_accessor_wrapping() {
         // Grid::Two, size 4:
@@ -429,6 +435,7 @@ mod tests {
         assert_eq!(get_vector_accept, results_accept.len());
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn filtered_strategy_produces_accessor() {
         let provider = test_provider::Provider::grid(Grid::Two, 4).unwrap();

@@ -619,6 +619,7 @@ mod tests {
     /// recursive, Rust struggles to properly deduce the hidden type for the opaque return
     /// type.
     #[allow(clippy::manual_async_fn)]
+    #[cfg(feature = "tokio")]
     fn test_spawning<Context>(
         context: Context,
         width: usize,
@@ -635,7 +636,11 @@ mod tests {
             let handles: Box<[_]> = (0..width)
                 .map(|_| {
                     let clone = context.clone();
-                    tokio::spawn(context.wrap_spawn(test_spawning(clone, width, depth - 1)))
+                    crate::runtime::spawn(context.wrap_spawn(test_spawning(
+                        clone,
+                        width,
+                        depth - 1,
+                    )))
                 })
                 .collect();
 
@@ -645,6 +650,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_task_spawning() {
         let context = TestContext::default();
@@ -678,6 +684,7 @@ mod tests {
     // Data Provider //
     ///////////////////
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_noop_guard() {
         // A guard that completes successfully.

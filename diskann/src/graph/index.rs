@@ -20,7 +20,8 @@ use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 use hashbrown::HashSet;
 use thiserror::Error;
-use tokio::task::JoinSet;
+
+use crate::runtime::{JoinError as RuntimeJoinError, JoinSet};
 
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
@@ -515,7 +516,7 @@ where
                             .await
                     };
 
-                    tokio::spawn(context.wrap_spawn(future))
+                    crate::runtime::spawn(context.wrap_spawn(future))
                 })
                 .collect();
 
@@ -706,7 +707,7 @@ where
                     let strategy = f();
                     let context_clone = context.clone();
                     let work_clone = work.clone();
-                    tokio::spawn(context.wrap_spawn(async move {
+                    crate::runtime::spawn(context.wrap_spawn(async move {
                         self_clone
                             .multi_insert_bootstrap_task(&strategy, &context_clone, &work_clone)
                             .await
@@ -880,7 +881,7 @@ where
                             )
                             .await
                     };
-                    tokio::spawn(context.wrap_spawn(future))
+                    crate::runtime::spawn(context.wrap_spawn(future))
                 })
                 .collect();
 
@@ -970,7 +971,7 @@ where
                     let backedges_clone = backedges.clone();
                     let seed_clone = seed.clone();
 
-                    tokio::spawn(context.wrap_spawn(async move {
+                    crate::runtime::spawn(context.wrap_spawn(async move {
                         let mut accessor = strategy_clone.seeded_prune_accessor(
                             self_clone.provider(),
                             &context_clone,
@@ -1385,7 +1386,7 @@ where
                                 )
                                 .await
                         };
-                        tokio::spawn(context.wrap_spawn(future))
+                        crate::runtime::spawn(context.wrap_spawn(future))
                     })
                     .collect();
 
@@ -1394,7 +1395,7 @@ where
                     let res = h.await.map_err(|err| {
                         #[derive(Debug, Error)]
                         #[error("Spawning a task failed in inplace-delete: {0}")]
-                        struct LocalError(tokio::task::JoinError);
+                        struct LocalError(RuntimeJoinError);
 
                         ANNError::new(LocalError(err))
                     });

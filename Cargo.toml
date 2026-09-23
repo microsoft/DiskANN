@@ -58,10 +58,12 @@ diskann-linalg = { path = "diskann-linalg", version = "0.59.0" }
 diskann-utils = { path = "diskann-utils", default-features = false, version = "0.59.0" }
 diskann-quantization = { path = "diskann-quantization", default-features = false, version = "0.59.0" }
 # Algorithm
-diskann = { path = "diskann", version = "0.59.0" }
+# Default features are opt-in so that runtime-backend selection can be forwarded
+# by depending crates (see the `tokio`/`compio` features).
+diskann = { path = "diskann", default-features = false, version = "0.59.0" }
 # Providers
-diskann-providers = { path = "diskann-providers", default-features = false, version = "0.59.0" }
-diskann-inmem = { path = "diskann-inmem", default-features = false, version = "0.59.0" }
+diskann-providers = { path = "diskann-providers", version = "0.59.0" }
+diskann-inmem = { path = "diskann-inmem", version = "0.59.0" }
 diskann-disk = { path = "diskann-disk", version = "0.59.0" }
 diskann-label-filter = { path = "diskann-label-filter", version = "0.59.0" }
 # Infra
@@ -106,6 +108,9 @@ serde_json = "1.0.142"
 tempfile = "3.20.0"
 thiserror = "2.0.12"
 tokio = "1.48.0"
+# Optional thread-per-core runtime backend; only the `runtime` feature is required
+# by the diskann crates.
+compio = { version = "0.19.2", default-features = false, features = ["runtime"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.20"
 vfs = "0.12.1"

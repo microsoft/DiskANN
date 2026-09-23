@@ -83,9 +83,12 @@ where
 #[cfg(test)]
 mod tests {
     use crate::flat::test::{
-        harness::{CopyIdsOracle, EvenIdsOnlyOracle, KnnOracleRun, OracleProcessor},
+        harness::{CopyIdsOracle, KnnOracleRun},
         provider::{self as flat_provider},
     };
+    // Used only by the tokio-only multithreaded search test.
+    #[cfg(feature = "tokio")]
+    use crate::flat::test::harness::{EvenIdsOnlyOracle, OracleProcessor};
     use crate::graph::test::synthetic::Grid;
 
     fn fixture(grid: Grid, size: usize) -> (flat_provider::Provider, usize) {
@@ -97,6 +100,7 @@ mod tests {
     /// `knn_search` returns a `Send` future, and a shared provider can serve
     /// many concurrent searches on a multi-threaded runtime, each producing the
     /// correct output independently.
+    #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn multithreaded_knn_search() {
         use std::sync::Arc;
@@ -118,7 +122,7 @@ mod tests {
 
         /// Spawn every `(query, k)` case under `oracle` onto `set`.
         fn spawn_cases<O>(
-            set: &mut tokio::task::JoinSet<(Vec<f32>, usize, KnnOracleRun)>,
+            set: &mut crate::runtime::JoinSet<(Vec<f32>, usize, KnnOracleRun)>,
             provider: &Arc<flat_provider::Provider>,
             oracle: O,
             cases: &[(&[f32], usize)],
@@ -138,7 +142,7 @@ mod tests {
             }
         }
 
-        let mut set = tokio::task::JoinSet::new();
+        let mut set = crate::runtime::JoinSet::new();
         spawn_cases(&mut set, &provider, CopyIdsOracle, cases);
         spawn_cases(&mut set, &provider, EvenIdsOnlyOracle, cases);
 
