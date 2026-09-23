@@ -56,15 +56,10 @@ verbose_eq!(InlineBaseline {
 });
 
 // Topology (3 levels below the start):
-//                    0(start)                    level 0, coord 0.0, label 0
-//                 /            \
-//                1              2               level 1, coord 0.0, label 0
-//              /   \          /   \
-//             3     4        5     6            level 2, coord 1.0, label 0
-//            / \   / \      / \   / \
-//           7  8  9  10    11 12 13 14          level 3, coord 2.0, label 1
+//   0 (start) -> 10 level-1 nodes -> 20 level-2 nodes -> 40 labeled leaves.
+// The wide first level reaches adaptive-L's minimum sample count in one hop.
 fn build_three_level_labeled_provider() -> test_provider::Provider {
-    let max_degree = 3;
+    let max_degree = 10;
     let start_id = 0u32;
 
     let config = test_provider::Config::new(
@@ -74,35 +69,34 @@ fn build_three_level_labeled_provider() -> test_provider::Provider {
     )
     .unwrap();
 
-    let start_neighbors = std::iter::once((start_id, AdjacencyList::from_iter_untrusted([1, 2])));
+    let start_neighbors = std::iter::once((start_id, AdjacencyList::from_iter_untrusted(1..=10)));
 
-    let points = vec![
-        // level 1: coord 0.0, label 0
-        (1, vec![0.0], AdjacencyList::from_iter_untrusted([0, 3, 4])),
-        (2, vec![0.0], AdjacencyList::from_iter_untrusted([0, 5, 6])),
-        // level 2: coord 1.0, label 0
-        (3, vec![1.0], AdjacencyList::from_iter_untrusted([1, 7, 8])),
-        (4, vec![1.0], AdjacencyList::from_iter_untrusted([1, 9, 10])),
-        (
-            5,
+    let mut points = Vec::new();
+    for level_one_id in 1..=10 {
+        let first_child = 11 + (level_one_id - 1) * 2;
+        points.push((
+            level_one_id,
+            vec![0.0],
+            AdjacencyList::from_iter_untrusted([start_id, first_child, first_child + 1]),
+        ));
+    }
+    for level_two_id in 11..=30 {
+        let parent = 1 + (level_two_id - 11) / 2;
+        let first_child = 31 + (level_two_id - 11) * 2;
+        points.push((
+            level_two_id,
             vec![1.0],
-            AdjacencyList::from_iter_untrusted([2, 11, 12]),
-        ),
-        (
-            6,
-            vec![1.0],
-            AdjacencyList::from_iter_untrusted([2, 13, 14]),
-        ),
-        // level 3 (final): coord 2.0, label 1
-        (7, vec![2.0], AdjacencyList::from_iter_untrusted([3])),
-        (8, vec![2.0], AdjacencyList::from_iter_untrusted([3])),
-        (9, vec![2.0], AdjacencyList::from_iter_untrusted([4])),
-        (10, vec![2.0], AdjacencyList::from_iter_untrusted([4])),
-        (11, vec![2.0], AdjacencyList::from_iter_untrusted([5])),
-        (12, vec![2.0], AdjacencyList::from_iter_untrusted([5])),
-        (13, vec![2.0], AdjacencyList::from_iter_untrusted([6])),
-        (14, vec![2.0], AdjacencyList::from_iter_untrusted([6])),
-    ];
+            AdjacencyList::from_iter_untrusted([parent, first_child, first_child + 1]),
+        ));
+    }
+    for leaf_id in 31..=70 {
+        let parent = 11 + (leaf_id - 31) / 2;
+        points.push((
+            leaf_id,
+            vec![2.0],
+            AdjacencyList::from_iter_untrusted([parent]),
+        ));
+    }
 
     test_provider::Provider::new_from(config, start_neighbors, points).unwrap()
 }
@@ -117,9 +111,9 @@ impl LevelLabelProvider {
 
     fn label_of(id: u32) -> u8 {
         match id {
-            0..=6 => 0,  // start + non-final levels
-            7..=14 => 1, // final level only
-            _ => 255,    // unknown id
+            0..=30 => 0,  // start + non-final levels
+            31..=70 => 1, // final level only
+            _ => 255,     // unknown id
         }
     }
 }
@@ -176,7 +170,7 @@ impl Setup1D {
             filter: (40..100).collect(),
             k: 5,
             l: 5,
-            adaptive_l: AdaptiveL::new(5, 16.0).unwrap(),
+            adaptive_l: AdaptiveL::new(10, 16.0).unwrap(),
             points: 100,
             query: [50.0],
             expected_fixed: vec![50, 51, 49, 52, 48],
@@ -218,18 +212,20 @@ impl Setup1D {
         }
     }
 
-    /// No matching items are found durihng the sample window. Adaptive will boost the
-    /// window size to the max.
+    /// No matching items are found until the sample size doubles six times,
+    /// after which one matching result is found and the resulting match
+    /// rate is higher than the max multiplier, so the max multiplier
+    /// is used.
     fn max() -> Self {
         Self {
-            filter: Filter::from_iter([10, 20, 30, 50]),
+            filter: Filter::from_iter([100, 200, 300, 500]),
             k: 3,
-            l: 5,
-            adaptive_l: AdaptiveL::new(5, 16.0).unwrap(),
-            points: 100,
-            query: [50.0],
-            expected_fixed: vec![50],
-            expected_adaptive: vec![50, 30, 20],
+            l: 100,
+            adaptive_l: AdaptiveL::new(10, 6.5).unwrap(),
+            points: 1000,
+            query: [500.0],
+            expected_fixed: vec![500],
+            expected_adaptive: vec![500, 300, 200],
         }
     }
 
@@ -302,10 +298,14 @@ enum TestKind {
 
 fn build_three_level_index() -> std::sync::Arc<graph::DiskANNIndex<test_provider::Provider>> {
     let provider = build_three_level_labeled_provider();
-    let index_config =
-        graph::config::Builder::new(3, graph::config::MaxDegree::same(), 32, Metric::L2.into())
-            .build()
-            .unwrap();
+    let index_config = graph::config::Builder::new(
+        provider.max_degree(),
+        graph::config::MaxDegree::same(),
+        32,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
     std::sync::Arc::new(graph::DiskANNIndex::new(index_config, provider, None))
 }
 
@@ -336,7 +336,7 @@ verbose_eq!(InlineFilterBaseline {
     hops,
 });
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_inline_on_grid(
     index: &graph::DiskANNIndex<test_provider::Provider>,
     filter: &dyn labeled::QueryLabelProvider<u32>,
@@ -429,7 +429,7 @@ fn inline_search_returns_only_final_level_matches() {
     assert!(stats.result_count > 0, "should return final-level matches");
     for id in results {
         assert!(
-            (7..=14).contains(&id),
+            (31..=70).contains(&id),
             "inline search should only return final-level nodes, got {}",
             id
         );
@@ -437,17 +437,17 @@ fn inline_search_returns_only_final_level_matches() {
 }
 
 #[test]
-fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
+fn inline_search_three_level_no_adaptive_l_with_l2_finds_no_matches() {
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
-    let name = path.push("inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches");
+    let name = path.push("inline_search_three_level_no_adaptive_l_with_l2_finds_no_matches");
 
     let index = build_three_level_index();
 
     let filter = LevelLabelProvider::new();
     let k = 1;
-    let l = 1;
+    let l = 2;
     let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), None);
 
     let mut ids = vec![0u32; k];
@@ -478,27 +478,27 @@ fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
         hops: stats.hops as usize,
     };
 
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
     assert_eq!(
         stats.result_count, 0,
-        "with l_search=1 and no adaptive L, search should not reach final-level matches"
+        "with l_search=2 and no adaptive L, search should not reach final-level matches"
     );
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
 }
 
 #[test]
-fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
+fn inline_search_three_level_adaptive_l_with_l2_finds_matches() {
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
-    let name = path.push("inline_search_three_level_adaptive_l_with_l1_finds_matches");
+    let name = path.push("inline_search_three_level_adaptive_l_with_l2_finds_matches");
 
     let index = build_three_level_index();
 
     let filter = LevelLabelProvider::new();
-    let l = 1;
-    let adaptive_l = AdaptiveL::new(1, 16.0).unwrap();
+    let l = 2;
+    let adaptive_l = AdaptiveL::new(10, 16.0).unwrap();
     let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), Some(adaptive_l));
 
     let k = 1;
@@ -530,18 +530,18 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
         hops: stats.hops as usize,
     };
 
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
     assert!(
         stats.result_count > 0,
         "adaptive L should expand search enough to find final-level matches"
     );
 
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
     let results = ids[..stats.result_count as usize].iter().copied();
     for id in results {
         assert!(
-            (7..=14).contains(&id),
+            (31..=70).contains(&id),
             "adaptive inline search should only return final-level nodes, got {}",
             id
         );

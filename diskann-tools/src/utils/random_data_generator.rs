@@ -19,7 +19,6 @@ Generate random points around a sphere with the specified radius and write them 
 
 When data_type is int8 or uint8 radius must be <= 127.0
  */
-#[allow(clippy::panic)]
 pub fn write_random_data<StorageProvider: StorageWriteProvider>(
     storage_provider: &StorageProvider,
     output_file: &str,
@@ -55,7 +54,6 @@ Generate random points around a sphere with the specified radius and write them 
 
 When data_type is int8 or uint8 radius must be <= 127.0
 */
-#[allow(clippy::panic)]
 fn write_random_data_writer<T: Sized + Write>(
     mut writer: BufWriter<T>,
     data_type: DataType,

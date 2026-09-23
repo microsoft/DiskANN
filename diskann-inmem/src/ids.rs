@@ -13,6 +13,8 @@ use diskann::utils::IntoUsize;
 use parking_lot::{RwLock, RwLockWriteGuard};
 use thiserror::Error;
 
+use crate::num::Capacity;
+
 const SHARD_SIZE: usize = 1024;
 
 /// Bidirectional mapping between an external id `I` and a dense internal `u32` id.
@@ -27,19 +29,19 @@ where
     // Since we know the internal IDs are contiguous from `[0..self.capacity)`, we can
     // use a lighter-weight `backward` ID map than a full `DashMap`.
     backward: Vec<RwLock<Box<[Option<I>]>>>,
-    capacity: usize,
+    capacity: Capacity,
 }
 
 impl<I> IdMap<I>
 where
     I: Hash + Eq,
 {
-    pub(crate) fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: Capacity) -> Self {
         let backward = std::iter::repeat_with(|| {
             let shard = std::iter::repeat_with(|| None).take(SHARD_SIZE).collect();
             RwLock::new(shard)
         })
-        .take(capacity.div_ceil(SHARD_SIZE))
+        .take(capacity.value().div_ceil(SHARD_SIZE))
         .collect();
 
         Self {
@@ -60,7 +62,7 @@ where
     where
         I: Eq + Hash + Clone,
     {
-        if internal.into_usize() >= self.capacity {
+        if internal.into_usize() >= self.capacity.value() {
             return Err(InsertError::OutOfBounds);
         }
 
@@ -108,7 +110,7 @@ where
     where
         I: Clone,
     {
-        if internal.into_usize() >= self.capacity {
+        if internal.into_usize() >= self.capacity.value() {
             return None;
         }
 
@@ -154,7 +156,7 @@ where
     }
 
     #[cfg(test)]
-    fn capacity(&self) -> usize {
+    fn capacity(&self) -> Capacity {
         self.capacity
     }
 }
@@ -221,7 +223,9 @@ mod tests {
             SHARD_SIZE,
             SHARD_SIZE + 1,
             3 * SHARD_SIZE,
-        ] {
+        ]
+        .map(Capacity::new)
+        {
             let map = IdMap::<u32>::new(capacity);
             assert_eq!(map.capacity(), capacity);
         }
@@ -229,7 +233,7 @@ mod tests {
 
     #[test]
     fn insert_round_trips() {
-        let map = IdMap::<u32>::new(16);
+        let map = IdMap::<u32>::new(Capacity::new(16));
         assert!(map.insert(100, 3).is_ok());
 
         assert_eq!(map.to_internal(&100), Some(3));
@@ -244,7 +248,7 @@ mod tests {
 
     #[test]
     fn insert_rejects_out_of_bounds_internal() {
-        let map = IdMap::<u32>::new(16);
+        let map = IdMap::<u32>::new(Capacity::new(16));
         assert!(matches!(map.insert(0, 16), Err(InsertError::OutOfBounds)));
         assert!(matches!(
             map.insert(0, u32::MAX),
@@ -257,7 +261,7 @@ mod tests {
 
     #[test]
     fn insert_rejects_duplicate_external_and_preserves_state() {
-        let map = IdMap::<u32>::new(16);
+        let map = IdMap::<u32>::new(Capacity::new(16));
         map.insert(7, 5).unwrap();
 
         assert!(matches!(map.insert(7, 6), Err(InsertError::ExternalExists)));
@@ -270,7 +274,7 @@ mod tests {
 
     #[test]
     fn insert_rejects_duplicate_internal_and_preserves_state() {
-        let map = IdMap::<u32>::new(16);
+        let map = IdMap::<u32>::new(Capacity::new(16));
         map.insert(7, 5).unwrap();
 
         assert!(matches!(map.insert(8, 5), Err(InsertError::InternalExists)));
@@ -283,7 +287,7 @@ mod tests {
 
     #[test]
     fn to_external_handles_bounds_and_empty_slots() {
-        let map = IdMap::<u32>::new(16);
+        let map = IdMap::<u32>::new(Capacity::new(16));
         // In-bounds but unmapped slot.
         assert_eq!(map.to_external(5), None);
         // Out-of-bounds slot.
@@ -292,7 +296,7 @@ mod tests {
 
     #[test]
     fn mappings_span_shard_boundaries() {
-        let capacity = 3 * SHARD_SIZE;
+        let capacity = Capacity::new(3 * SHARD_SIZE);
         let map = IdMap::<u32>::new(capacity);
 
         // Ids straddling every internal shard boundary.
@@ -302,7 +306,7 @@ mod tests {
             SHARD_SIZE as u32,
             (2 * SHARD_SIZE - 1) as u32,
             (2 * SHARD_SIZE) as u32,
-            (capacity - 1) as u32,
+            (capacity.value() - 1) as u32,
         ];
 
         for (external, &internal) in ids.iter().enumerate() {
@@ -317,7 +321,7 @@ mod tests {
 
     #[test]
     fn lookup_supports_borrowed_query() {
-        let map = IdMap::<String>::new(16);
+        let map = IdMap::<String>::new(Capacity::new(16));
         map.insert("alpha".to_string(), 1).unwrap();
 
         // Borrowed `&str` lookups against `String` keys.
@@ -329,7 +333,7 @@ mod tests {
 
     #[test]
     fn occupied_entry_exposes_mapping() {
-        let map = IdMap::<u32>::new(16);
+        let map = IdMap::<u32>::new(Capacity::new(16));
         map.insert(42, 9).unwrap();
 
         let entry = map.occupied_entry(42).expect("entry should exist");
@@ -339,13 +343,13 @@ mod tests {
 
     #[test]
     fn occupied_entry_absent_for_unmapped() {
-        let map = IdMap::<u32>::new(16);
+        let map = IdMap::<u32>::new(Capacity::new(16));
         assert!(map.occupied_entry(42).is_none());
     }
 
     #[test]
     fn entry_delete_clears_both_directions() {
-        let map = IdMap::<u32>::new(16);
+        let map = IdMap::<u32>::new(Capacity::new(16));
         map.insert(42, 9).unwrap();
 
         // Just creating and dropping an `occupied_entry` does not clear it.

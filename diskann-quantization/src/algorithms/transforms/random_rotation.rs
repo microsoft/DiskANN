@@ -87,7 +87,7 @@ impl RandomRotation {
 
         // Lint: By construction, the matrix returned from
         // `diskann_linalg::random_distance_preserving_matrix` will by `matrix_dim x matrix_dim`.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let initial = diskann_utils::views::Matrix::try_from(
             diskann_linalg::random_distance_preserving_matrix(matrix_dim, rng).into(),
             matrix_dim,

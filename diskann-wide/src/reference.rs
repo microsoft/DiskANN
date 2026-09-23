@@ -328,7 +328,7 @@ where
 /// general, we expect this to compile down to straight assembly without stack-allocating
 /// the intermediate arrays.
 ///
-/// An example can be seen here: https://godbolt.org/z/sMcdGbbPG
+/// An example can be seen here: <https://godbolt.org/z/sMcdGbbPG>
 macro_rules! impl_tree_reduce {
     ($N:literal) => {
         impl<T> TreeReduce for [T; $N]

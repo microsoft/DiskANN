@@ -20,8 +20,9 @@
 //! This seems like an odd distinction to make, but it's how the hardware intrinsics behave
 //! and the mixture of up-or-down rounding can avoid introducing systematic bias into the
 //! conversion.
-//!
-//! # Input File
+
+// Miri takes forever
+#![cfg(not(miri))]
 
 use std::{
     fs::File,

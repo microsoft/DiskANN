@@ -1320,11 +1320,9 @@ impl glue::PruneStrategy<Provider> for Strategy {
 }
 
 impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
+    type SearchAccessor = Accessor<'a>;
+    type SearchAccessorError = DimMismatch;
     type PruneStrategy = Self;
-
-    fn prune_strategy(&self) -> Self::PruneStrategy {
-        self.clone()
-    }
 
     fn insert_search_accessor(
         &'a self,
@@ -1333,6 +1331,10 @@ impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
         vector: &'a [f32],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Accessor::new(provider, vector)
+    }
+
+    fn prune_strategy(&self) -> Self::PruneStrategy {
+        self.clone()
     }
 }
 

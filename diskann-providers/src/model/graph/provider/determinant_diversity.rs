@@ -10,6 +10,8 @@
 //! relevance-ranked candidates and reorders them to maximize geometric diversity
 //! while maintaining relevance to the original query.
 //!
+//! This module is not async-specific.
+//!
 //! # Algorithm Overview
 //!
 //! Determinant-Diversity selects a diverse subset from an initial set of candidates
@@ -37,7 +39,7 @@
 //!
 //! # Variants
 //!
-//! The public entry point is [`determinant_diversity`].
+//! The public entry point is [`determinant_diversity()`].
 //! It applies either the unregularized (`eta == 0`) or ridge-regularized (`eta > 0`)
 //! formulation internally.
 //!

@@ -32,7 +32,7 @@ use crate::error::{diskann_error, ErrorKind};
 /// center to each data point, update centers, and also return inverted index.
 /// If closest_centers == NULL, will allocate memory and return.
 /// Similarly, if closest_docs == NULL, will allocate memory and return.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn lloyds_iter(
     data: &[f32],
     num_points: usize,
@@ -116,7 +116,7 @@ fn lloyds_iter(
 /// the results, else it will assume appropriate allocation as `closest_docs =
 /// new vec<usize> [num_centers]`, and `closest_center = new size_t[num_points]`
 /// Final centers are output in centers as row-major num_centers * dim.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn run_lloyds(
     data: &[f32],
     num_points: usize,
@@ -232,7 +232,7 @@ fn select_random_pivots(
 /// Returns an error if num_points > 8388608 (2^23).
 /// If there are are fewer than num_center distinct points, pick all unique points as pivots,
 /// and sample data randomly for the remaining pivots.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn k_meanspp_selecting_pivots(
     data: &[f32],
     num_points: usize,
@@ -399,7 +399,7 @@ pub fn k_meanspp_selecting_pivots(
 }
 
 /// k-means algorithm interface
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn k_means_clustering(
     data: &[f32],
     num_points: usize,

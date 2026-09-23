@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Distance computation for multi-vector representations.
 //!
@@ -45,7 +47,6 @@ mod factory;
 mod fallback;
 mod isa;
 mod kernel;
-mod kernels;
 mod max_sim;
 mod projected_eigen;
 

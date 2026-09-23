@@ -179,7 +179,7 @@ impl<T: bytemuck::Pod> AlignedMemoryVectorStore<T> {
     ///
     /// This function will not synchronize access, but the memory is guaranteed to be valid. Callers must synchronize
     /// themselves if they require consistency.
-    #[allow(clippy::mut_from_ref)]
+    #[expect(clippy::mut_from_ref)]
     pub unsafe fn get_mut_slice(&self, index: usize) -> &mut [T] {
         assert!(index < self.max_vectors);
         let index = index * self.padded_vector_dim + self.start_index;

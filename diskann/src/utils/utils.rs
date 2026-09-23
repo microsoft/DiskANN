@@ -72,8 +72,7 @@ macro_rules! impl_to_usize {
         unsafe impl IntoUsize for $type {
             fn into_usize(self) -> usize {
                 // This breaks at compile time if somehow the `cfg` guard above fails.
-                #[allow(unused)]
-                const STATIC_ASSERT: () = {
+                const _: () = {
                     if usize::BITS != 64 {
                         panic!("diskann is not compatible with non-64-bit systems");
                     }

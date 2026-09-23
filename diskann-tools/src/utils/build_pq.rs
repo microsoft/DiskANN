@@ -28,6 +28,8 @@ pub struct BuildPQParameters<'a> {
     pub pq_bytes: f64,
 }
 
+/// Train a new PQ codebook and compress the dataset, replacing existing outputs.
+/// Existing pivot files do not skip training.
 pub fn build_pq<T: VectorRepr>(
     storage_provider: &impl StorageReadProvider,
     parameters: BuildPQParameters,

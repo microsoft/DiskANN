@@ -35,8 +35,8 @@ use super::{DWORD, ULONG_PTR};
 ///
 /// This function is thread safe i.e. the same file handle can be used by multiple threads to read from the file
 /// as it uses the windows ReadFile API with async mode using OVERLAPPED structure.
-/// ReadFile Function - https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
-/// Synchronous and Asynchronous I/O - https://learn.microsoft.com/en-us/windows/win32/FileIO/synchronous-and-asynchronous-i-o
+/// ReadFile Function - <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile>
+/// Synchronous and Asynchronous I/O - <https://learn.microsoft.com/en-us/windows/win32/FileIO/synchronous-and-asynchronous-i-o>
 ///
 /// The only caveat is read operation is followed by polling on the handle using GetQueuedCompletionStatus API.
 /// If multiple threads are submitting read requests and polling then polling will return the completion status of any of the read requests.
@@ -93,8 +93,8 @@ pub unsafe fn read_file_to_slice<T>(
 ///
 /// This function is thread safe i.e. the same file handle can be used by multiple threads to read from the file
 /// as it uses the windows ReadFile API with async mode using OVERLAPPED structure.
-/// ReadFile Function - https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
-/// Synchronous and Asynchronous I/O - https://learn.microsoft.com/en-us/windows/win32/FileIO/synchronous-and-asynchronous-i-o
+/// ReadFile Function - <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile>
+/// Synchronous and Asynchronous I/O - <https://learn.microsoft.com/en-us/windows/win32/FileIO/synchronous-and-asynchronous-i-o>
 ///
 /// The only caveat is read operation is followed by polling on the handle using GetQueuedCompletionStatus API.
 /// If multiple threads are submitting read requests and polling then polling will return the completion status of any of the read requests.

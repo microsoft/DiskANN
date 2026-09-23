@@ -46,12 +46,6 @@ impl Bytes {
         }
     }
 
-    /// Perform integer division of `self` by `other`.
-    #[inline]
-    pub(crate) const fn div(self, other: NonZeroUsize) -> Bytes {
-        Bytes::new(self.value() / other.get())
-    }
-
     /// Subtract `other` from `self` without checking for underflow.
     #[inline]
     pub(crate) const fn unchecked_sub(self, other: Bytes) -> Bytes {
@@ -158,6 +152,80 @@ impl Align {
 impl std::fmt::Display for Align {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+//-------------------------//
+// General Number Wrappers //
+//-------------------------//
+
+macro_rules! typed_int {
+    ($(#[$doc:meta])* $vis:vis $name:ident, $T:ty $(,)?) => {
+        $(#[$doc])*
+        #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+        #[repr(transparent)]
+        $vis struct $name($T);
+
+        impl $name {
+            $vis const fn new(value: $T) -> Self {
+                Self(value)
+            }
+
+            $vis const fn value(self) -> $T {
+                self.0
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, concat!(stringify!($name), "({})"), self.value())
+            }
+        }
+    };
+}
+
+typed_int!(
+    /// The number of distinct slots a [`crate::Provider`] or [`crate::repr::Representation`]
+    /// has capacity for. This is logically distinct from [`IdLimit`], which may be greater
+    /// due to immutable points within a storage container.
+    pub Capacity,
+    usize,
+);
+
+typed_int!(
+    /// The maximum degree of an adjacency list.
+    pub MaxDegree,
+    usize
+);
+
+typed_int!(
+    /// One larger than the maximum ID that a [`crate::Provider`],
+    /// [`crate::repr::Representation`], or other such store in this crate can access in-bounds.
+    ///
+    /// This implies that access to ids `[0..self)` are in-bounds.
+    ///
+    /// [`Capacity`] is related, but the [`IdLimit`] for a collection may be larger due to
+    /// immutable points.
+    pub IdLimit,
+    u32
+);
+
+impl IdLimit {
+    /// Return `true` if `i` is within `[0..self)`.
+    pub const fn is_in_bounds(self, i: u32) -> bool {
+        i < self.value()
+    }
+
+    /// Return the [`Self::value`] as a [`usize`].
+    pub const fn as_usize(self) -> usize {
+        // We cannot use the `IntoUsize` trait in a const function unfortunately.
+        //
+        // Instead, we need to re-create the check that makes this conversion safe.
+        const {
+            assert!(std::mem::size_of::<u32>() <= std::mem::size_of::<usize>());
+        }
+
+        self.value() as usize
     }
 }
 

@@ -16,6 +16,8 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use crate::num::Bytes;
+
 /// A tag for controlling concurrent access to data.
 ///
 /// Tag updates and reads should use [`AtomicTag`].
@@ -169,6 +171,9 @@ impl std::fmt::Display for Tag {
 pub(crate) struct AtomicTag(AtomicU8);
 
 impl AtomicTag {
+    /// The size of an [`AtomicTag`].
+    pub(crate) const SIZE: Bytes = Bytes::size_of::<Self>();
+
     /// Construct a new [`AtomicTag`] initialized to `tag`.
     pub(crate) const fn new(tag: Tag) -> Self {
         Self(AtomicU8::new(tag.value()))

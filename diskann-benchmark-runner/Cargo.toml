@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 thiserror.workspace = true
 
 [lints.clippy]
+allow_attributes = "warn"
 undocumented_unsafe_blocks = "warn"
 uninlined_format_args = "allow"
 unwrap_used = "warn"

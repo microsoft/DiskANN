@@ -132,7 +132,7 @@ pub(crate) enum IdAggregator<I> {
     Empty,
     /// IDs have been aggregated and all of them are bounded with the same size
     /// stored in `num_ids`. The field `len` stores the total number of rows aggregated
-    /// to help with the final allocation in [`IdAggergator::finish`].
+    /// to help with the final allocation in [`IdAggregator::finish`].
     Fixed {
         matrices: Vec<Bounded<I>>,
         len: usize,

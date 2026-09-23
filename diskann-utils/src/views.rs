@@ -637,6 +637,32 @@ where
             ncols: self.ncols,
         }
     }
+
+    /// Transpose the elements in `self`.
+    pub fn transpose(&self) -> Matrix<T::Elem>
+    where
+        T::Elem: Clone,
+    {
+        let mut row = 0;
+        let mut col = 0;
+
+        let f = Init(|| {
+            // SAFETY: `row` and `cols` are always less than `self.nrows()` and `self.ncols()`
+            // respectively.
+            let v = unsafe { self.get_unchecked(row, col) }.clone();
+            row += 1;
+            if row == self.nrows() {
+                row = 0;
+                col += 1;
+                if col == self.ncols() {
+                    col = 0;
+                }
+            }
+            v
+        });
+
+        Matrix::new(f, self.ncols(), self.nrows())
+    }
 }
 
 /// Represents an owning, 2-dimensional view of a contiguous block of memory,
@@ -1724,6 +1750,39 @@ mod tests {
     }
 
     #[test]
+    fn test_transpose() {
+        {
+            let v = Matrix::new(0, 0, 0);
+            let t = v.transpose();
+            assert_eq!(t.nrows(), 0);
+            assert_eq!(t.ncols(), 0);
+        }
+
+        {
+            let v = Matrix::new(0, 0, 10);
+            let t = v.transpose();
+            assert_eq!(t.nrows(), 10);
+            assert_eq!(t.ncols(), 0);
+        }
+
+        {
+            let v = Matrix::new(0, 10, 0);
+            let t = v.transpose();
+            assert_eq!(t.nrows(), 0);
+            assert_eq!(t.ncols(), 10);
+        }
+
+        {
+            let v = Matrix::<usize>::try_from(Box::new([1, 2, 3, 4, 5, 6]), 2, 3).unwrap();
+            let t = v.transpose();
+
+            assert_eq!(t.row(0), &[1, 4]);
+            assert_eq!(t.row(1), &[2, 5]);
+            assert_eq!(t.row(2), &[3, 6]);
+        }
+    }
+
+    #[test]
     fn test_debug_error_formatting() {
         // Test Debug implementation for TryFromError
         let data = vec![1, 2, 3];
@@ -1737,7 +1796,7 @@ mod tests {
 
         // Ensure Debug doesn't require T: Debug by using a non-Debug type
         #[derive(Clone, Debug)]
-        struct NonDebug(#[allow(dead_code)] i32);
+        struct NonDebug(#[expect(dead_code)] i32);
 
         let non_debug_data: Box<[NonDebug]> = vec![NonDebug(1), NonDebug(2)].into();
         let non_debug_err = Matrix::try_from(non_debug_data, 1, 3).unwrap_err();

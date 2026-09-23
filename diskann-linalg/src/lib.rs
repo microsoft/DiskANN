@@ -143,7 +143,7 @@ mod reference;
 /// * `a.len() != m * k`
 /// * `b.len() != k * n`
 /// * `c.len() != m * n`
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn sgemm(
     atranspose: Transpose,
     btranspose: Transpose,

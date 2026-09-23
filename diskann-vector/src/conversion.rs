@@ -180,7 +180,7 @@ trait SIMDConvert<To, From>: Architecture {
 }
 
 #[inline(never)]
-#[allow(clippy::panic)]
+#[expect(clippy::panic)]
 fn emit_length_error(xlen: usize, ylen: usize) -> ! {
     panic!(
         "lengths must be equal, instead got: xlen = {}, ylen = {}",

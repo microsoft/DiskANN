@@ -239,8 +239,8 @@ extern "C" fn set_attribute(
 /// `max_filtering_effort` bounding the extra work spent satisfying the filter. Attribute data
 /// is evaluated through the `filter_callback` supplied to `create_index`.
 ///
-/// Returns the number of results, or -1 on error. Continuations are not implemented, so the
-/// `continuation` parameter is currently ignored.
+/// Returns the number of results, or -1 on error. If the supplied output buffers cannot hold all
+/// results, `overflow` is set to an opaque pointer that can be passed to `overflow_results`.
 #[unsafe(no_mangle)]
 extern "C" fn search_vector(
     context: u64,
@@ -257,7 +257,7 @@ extern "C" fn search_vector(
     output_distances: *mut f32,
     output_distances_len: usize,
     beam_width: u32,
-    continuation: *mut c_void,
+    overflow: *mut *mut c_void,
 ) -> i32;
 
 /// Find similar vectors, takes parameters of VSIM (https://redis.io/docs/latest/commands/vsim/) and maps to a reasonable interpretation.
@@ -280,25 +280,23 @@ extern "C" fn search_element(
     output_distances: *mut f32,
     output_distances_len: usize,
     beam_width: u32,
-    continuation: *mut c_void,
+    overflow: *mut *mut c_void,
 ) -> i32;
 
-/// Continues fetching results if not all were available after a call to search_xxx
+/// Fetches overflow results that did not fit after a call to search_xxx.
 ///
 /// Returns the number of results placed in output_xxx, or -1 on error, and sets
-/// new_continuation to non-zero if even more results are available.
-///
-/// NOTE: This is not implemented and always returns -1.
+/// `new_overflow` to non-null if even more results are available.
 #[unsafe(no_mangle)]
-extern "C" fn continue_search(
+extern "C" fn overflow_results(
     context: u64,
     index_ptr: *const c_void,
-    continuation: *mut c_void,
+    overflow: *mut c_void,
     output_ids: *mut u8,
     output_ids_len: usize,
     output_distances: *mut f32,
     output_distances_len: usize,
-    new_continuation: *mut c_void,
+    new_overflow: *mut *mut c_void,
 ) -> i32;
 
 /// Remove vector from index.
@@ -367,8 +365,8 @@ extern "C" fn random_members(
 /// For implementing VLINKS (https://redis.io/docs/latest/commands/vlinks/). Output buffers are
 /// filled as they are for search_xxx.
 ///
-/// Returns the number of neighbors written, or -1 on error. Continuations are not implemented,
-/// so the `continuation` parameter is currently ignored.
+/// Returns the number of neighbors written, or -1 on error. If the supplied output buffers cannot
+/// hold all results, `overflow` is set to an opaque pointer that can be passed to `overflow_results`.
 #[unsafe(no_mangle)]
 extern "C" fn search_neighbors(
     context: u64,
@@ -379,5 +377,5 @@ extern "C" fn search_neighbors(
     output_ids_len: usize,
     output_distances: *mut f32,
     output_distances_len: usize,
-    continuation: *mut c_void,
+    overflow: *mut *mut c_void,
 ) -> i32;
