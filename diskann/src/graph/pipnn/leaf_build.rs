@@ -25,7 +25,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    leaf_kernel::{LeafKernelWorkspace, leaf_neighbor_count, select_leaf_neighbors},
+    leaf_kernel::{LeafKernelWorkspace, select_leaf_neighbors},
     leaf_metric::LeafMetric,
     simd::Simd,
     topk::Candidate,
@@ -98,7 +98,9 @@ impl LeafBuffers {
                 rows: point_count,
                 columns: point_count,
             })?;
-        let leaf_k = leaf_neighbor_count(point_count, requested_k);
+        // A point has at most `point_count - 1` other points in its leaf. Wider rows
+        // would hold only empty slots.
+        let leaf_k = requested_k.min(point_count.saturating_sub(1));
         let neighbor_count =
             point_count
                 .checked_mul(leaf_k)
@@ -692,7 +694,10 @@ mod tests {
         // Gathering, leaf indexing and error wrapping remain real.
         struct UnavailableMetric;
         impl LeafMetric for UnavailableMetric {
-            fn compute_distances(_: MatrixView<'_, f32>, _: &mut [f32]) -> crate::ANNResult<()> {
+            fn compute_distances(
+                _: MatrixView<'_, f32>,
+                _: MutMatrixView<'_, f32>,
+            ) -> crate::ANNResult<()> {
                 Err(crate::ANNError::new(DistanceFailure))
             }
         }

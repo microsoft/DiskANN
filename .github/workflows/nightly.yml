@@ -136,13 +136,15 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
 
-      - name: PiPNN TopK SIMD load boundaries
+      - name: PiPNN top-k group loads
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+        # One selection over two full groups and one pair scan over two full groups
+        # reach all three unsafe group loads in the top-k module.
         run: |
           cargo +nightly miri test --locked -p diskann --features pipnn --lib -- \
-            graph::pipnn::topk::tests::batch_selection_matches_a_full_sort \
-            graph::pipnn::topk::tests::pair_scans_match_full_row_sort_across_capacities_and_lengths
+            graph::pipnn::topk::tests::selection_returns_distinct_candidates_when_distances_tie \
+            graph::pipnn::topk::tests::a_single_pair_updates_exactly_its_two_endpoints::case_1_finite
 
       - name: PiPNN HashPrune pointer boundaries
         env:

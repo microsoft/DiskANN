@@ -51,23 +51,28 @@ use crate::{
     graph::{AdjacencyList, Config},
     utils::VectorRepr,
 };
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use diskann_wide::arch::{self, Target2};
 use rayon::ThreadPool;
 
 use self::{leaf_metric::LeafMetric, partition_metric::PartitionMetric, simd::Simd};
 
+/// Squared Euclidean distance.
 pub(super) struct L2;
+/// Cosine distance, `1 - cos(x, y)`, for vectors of any norm.
 pub(super) struct Cosine;
+/// Cosine distance for unit vectors, computed from the dot product only.
 pub(super) struct CosineNormalized;
+/// Negated inner product: a larger dot product is nearer.
 pub(super) struct InnerProduct;
 
-/// Convert one dot product and two norms to cosine distance.
+/// Convert one dot product and two vector norms to cosine distance.
 ///
-/// Treat a zero or subnormal norm as zero similarity. This rule takes precedence
-/// over the dot value. Clamp finite similarity to the cosine range. Otherwise,
-/// a NaN input produces a NaN distance.
+/// A norm below `√f32::MIN_POSITIVE` counts as zero and gives distance 1 for any
+/// dot value, NaN included. Below this cutoff, the product of two norms can
+/// underflow. The similarity is clamped to `[-1, 1]` to remove rounding error.
+/// When neither norm is below the cutoff, a NaN dot or norm gives a NaN distance.
 #[inline(always)]
 fn cosine_distance(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
     if source_norm < f32::MIN_POSITIVE.sqrt() || target_norm < f32::MIN_POSITIVE.sqrt() {
@@ -75,6 +80,40 @@ fn cosine_distance(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
     } else {
         1.0 - (dot / (source_norm * target_norm)).clamp(-1.0, 1.0)
     }
+}
+
+/// Return an error if a kernel output does not have one row per input point.
+///
+/// The top-k functions panic on this mismatch. The kernel entry points call this
+/// check first, so a bad output shape is an error instead of a panic.
+fn check_output_rows(points: usize, rows: usize) -> ANNResult<()> {
+    if rows == points {
+        Ok(())
+    } else {
+        Err(ANNError::message(format!(
+            "invalid kernel output row count {rows} for {points} points"
+        )))
+    }
+}
+
+/// Borrow a `rows x columns` prefix of reusable distance storage.
+///
+/// The storage grows to the largest shape that it serves and never shrinks.
+/// A shape whose element count overflows `usize` is an error, not a wrapped size.
+fn distance_scratch(
+    storage: &mut Vec<f32>,
+    rows: usize,
+    columns: usize,
+) -> ANNResult<MutMatrixView<'_, f32>> {
+    let len = rows.checked_mul(columns).ok_or_else(|| {
+        ANNError::message(format!(
+            "distance matrix size overflows for {rows} x {columns}"
+        ))
+    })?;
+    if storage.len() < len {
+        storage.resize(len, 0.0);
+    }
+    Ok(MutMatrixView::try_from(&mut storage[..len], rows, columns)?)
 }
 
 #[cfg(test)]
@@ -88,7 +127,7 @@ mod cosine_distance_tests {
     #[case::orthogonal(0.0, 2.0, 3.0, 1.0)]
     #[case::positive_similarity(3.0, 2.0, 3.0, 0.5)]
     #[case::negative_similarity(-3.0, 2.0, 3.0, 1.5)]
-    fn distance_uses_both_vector_norms(
+    fn distance_is_one_minus_the_dot_divided_by_both_norms(
         #[case] dot: f32,
         #[case] source_norm: f32,
         #[case] target_norm: f32,
@@ -110,18 +149,17 @@ mod cosine_distance_tests {
     #[rstest]
     #[case::zero(0.0)]
     #[case::below_cutoff(f32::from_bits(f32::MIN_POSITIVE.sqrt().to_bits() - 1))]
-    fn a_small_norm_takes_precedence_over_the_dot_product(
-        #[case] small_norm: f32,
-        #[values(0.75, f32::NAN)] dot: f32,
-        #[values(false, true)] small_source: bool,
-    ) {
-        let (source_norm, target_norm) = if small_source {
-            (small_norm, 1.0)
-        } else {
-            (1.0, small_norm)
-        };
-
-        assert_eq!(cosine_distance(dot, source_norm, target_norm), 1.0);
+    fn a_norm_below_the_cutoff_gives_distance_one_for_any_dot(#[case] small_norm: f32) {
+        // A NaN dot must not change the result, and either norm can be the small one.
+        for dot in [0.75, f32::NAN] {
+            for (source_norm, target_norm) in [(small_norm, 1.0), (1.0, small_norm)] {
+                assert_eq!(
+                    cosine_distance(dot, source_norm, target_norm),
+                    1.0,
+                    "dot={dot}, norms=({source_norm:e}, {target_norm:e})"
+                );
+            }
+        }
     }
 
     #[rstest]
@@ -142,7 +180,7 @@ mod cosine_distance_tests {
     #[case::dot(f32::NAN, 2.0, 3.0)]
     #[case::source_norm(1.0, f32::NAN, 3.0)]
     #[case::target_norm(1.0, 2.0, f32::NAN)]
-    fn nan_propagates_when_neither_norm_is_small(
+    fn nan_propagates_when_neither_norm_is_below_the_cutoff(
         #[case] dot: f32,
         #[case] source_norm: f32,
         #[case] target_norm: f32,
@@ -656,6 +694,7 @@ mod config_tests {
 
 #[cfg(test)]
 mod test_support {
+    use super::simd::Simd;
     use diskann_vector::distance::Metric;
 
     // Ignore member order while preserving group positions and duplicate counts.
@@ -681,6 +720,52 @@ mod test_support {
         );
     }
 
+    /// A test body that runs once for each architecture.
+    pub(super) trait ArchCheck {
+        fn check<A: Simd>(&self, arch: A);
+    }
+
+    /// Run `test` with `Scalar` and with each SIMD architecture that this CPU supports.
+    ///
+    /// The emulated `Scalar` lanes always run. `V3` runs on AVX2 hardware, `V4` runs
+    /// on AVX-512 hardware or under Miri, and `Neon` runs on aarch64. Production
+    /// selects one of these architectures at run time, so each one needs its own run.
+    pub(super) fn for_each_arch(test: &impl ArchCheck) {
+        test.check(diskann_wide::arch::Scalar);
+        #[cfg(target_arch = "x86_64")]
+        {
+            use diskann_wide::arch::x86_64::{V3, V4};
+            if let Some(arch) = V3::new_checked() {
+                test.check(arch);
+            }
+            if let Some(arch) = V4::new_checked_miri() {
+                test.check(arch);
+            }
+        }
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+            test.check(arch);
+        }
+    }
+
+    /// Return the largest error between a kernel distance and [`distance`] for
+    /// [`dense_points`] inputs.
+    ///
+    /// L2 and inner product are exact for these inputs. Cosine rounds only in square
+    /// roots and division. Normalized cosine also rounds each normalized coordinate,
+    /// so its bound grows with the dimension.
+    pub(super) fn dense_tolerance(metric: Metric, dimensions: usize) -> f64 {
+        match metric {
+            Metric::L2 | Metric::InnerProduct => 0.0,
+            Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
+            Metric::CosineNormalized => {
+                // gamma = n*u / (1 - n*u) bounds product and reduction rounding.
+                let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
+                roundoff / (1.0 - roundoff)
+            }
+        }
+    }
+
     pub(super) fn dense_points(rows: usize, dimensions: usize, seed: u64) -> Vec<f32> {
         use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -697,33 +782,27 @@ mod test_support {
         values
     }
 
-    // These scalar definitions use the actual f32 inputs, with f64 arithmetic.
-    // Callers supply finite vectors with nonzero norms. L2 includes the point norm.
+    // These scalar definitions match the DiskANN metric distances. They use the
+    // actual f32 inputs with f64 arithmetic. Callers supply finite vectors with
+    // nonzero norms. L2 includes the point norm.
     pub(super) fn distance(metric: Metric, point: &[f32], target: &[f32]) -> f64 {
+        let dot = |x: &[f32], y: &[f32]| {
+            x.iter()
+                .zip(y)
+                .map(|(&x, &y)| f64::from(x) * f64::from(y))
+                .sum::<f64>()
+        };
         match metric {
             Metric::L2 => point
                 .iter()
                 .zip(target)
                 .map(|(&x, &y)| (f64::from(x) - f64::from(y)).powi(2))
                 .sum(),
-            Metric::InnerProduct | Metric::CosineNormalized => -point
-                .iter()
-                .zip(target)
-                .map(|(&x, &y)| f64::from(x) * f64::from(y))
-                .sum::<f64>(),
+            Metric::InnerProduct => -dot(point, target),
+            Metric::CosineNormalized => 1.0 - dot(point, target),
             Metric::Cosine => {
-                let dot: f64 = point
-                    .iter()
-                    .zip(target)
-                    .map(|(&x, &y)| f64::from(x) * f64::from(y))
-                    .sum();
-                let norm = |row: &[f32]| {
-                    row.iter()
-                        .map(|&x| f64::from(x).powi(2))
-                        .sum::<f64>()
-                        .sqrt()
-                };
-                1.0 - (dot / (norm(point) * norm(target))).clamp(-1.0, 1.0)
+                let norm = |row: &[f32]| dot(row, row).sqrt();
+                1.0 - (dot(point, target) / (norm(point) * norm(target))).clamp(-1.0, 1.0)
             }
         }
     }
@@ -759,7 +838,7 @@ mod test_support {
     }
 
     #[test]
-    fn dense_fixtures_are_replayable_and_exercise_the_last_dimension() {
+    fn dense_fixtures_are_deterministic_and_nonzero_in_the_last_dimension() {
         let values = dense_points(3, 17, 1287);
 
         assert_eq!(values, dense_points(3, 17, 1287));
@@ -772,6 +851,7 @@ mod test_support {
     #[rstest::rstest]
     #[case::squared_l2(Metric::L2, 18.0)]
     #[case::negative_dot(Metric::InnerProduct, -2.0)]
+    #[case::one_minus_dot(Metric::CosineNormalized, -1.0)]
     #[case::cosine(Metric::Cosine, 0.7830695421813438)]
     fn scalar_reference_matches_hand_calculated_distances(
         #[case] metric: Metric,
@@ -782,12 +862,12 @@ mod test_support {
     }
 
     #[test]
-    fn normalized_points_keep_their_direction_and_last_coordinate() {
+    fn normalized_packed_points_put_the_second_coordinate_last() {
         let actual = packed_points(&[[3.0, 4.0], [0.0, -2.0]], 3, true);
         assert_eq!(actual, [0.6, 0.0, 0.8, 0.0, 0.0, -1.0]);
         assert_eq!(
             distance(Metric::CosineNormalized, &actual[..3], &actual[3..]),
-            f64::from(0.8_f32)
+            1.0 + f64::from(0.8_f32)
         );
     }
 }
