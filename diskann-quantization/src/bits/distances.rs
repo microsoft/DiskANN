@@ -3625,8 +3625,7 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
         // returns number of quantized vectors
         let len = check_lengths!(x, y)?;
 
-        #[expect(non_camel_case_types)]
-        type u8s_8 = diskann_wide::arch::aarch64::u8x8;
+        diskann_wide::alias!(u8s_8 = type diskann_wide::arch::aarch64::u8x8);
         diskann_wide::alias!(f32s_8 = <diskann_wide::arch::aarch64::Neon>::f32x8);
 
         let px_f32: *const f32 = x.as_ptr();
@@ -3749,10 +3748,8 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
         // returns number of quantized vectors
         let len = check_lengths!(x, y)?;
 
-        #[expect(non_camel_case_types)]
-        type u8s_8 = diskann_wide::arch::aarch64::u8x8;
-        #[expect(non_camel_case_types)]
-        type u16s_8 = diskann_wide::arch::aarch64::u16x8;
+        diskann_wide::alias!(u8s_8 = type diskann_wide::arch::aarch64::u8x8);
+        diskann_wide::alias!(u16s_8 = type diskann_wide::arch::aarch64::u16x8);
         diskann_wide::alias!(f32s_8 = <diskann_wide::arch::aarch64::Neon>::f32x8);
 
         let px_f32: *const f32 = x.as_ptr();
@@ -3861,8 +3858,7 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
         // returns number of quantized vectors
         let len = check_lengths!(x, y)?;
 
-        #[expect(non_camel_case_types)]
-        type u8s_8 = diskann_wide::arch::aarch64::u8x8;
+        diskann_wide::alias!(u8s_8 = type diskann_wide::arch::aarch64::u8x8);
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::aarch64::Neon>::u8x16);
         diskann_wide::alias!(f32s_8 = <diskann_wide::arch::aarch64::Neon>::f32x8);
         diskann_wide::alias!(f32s_16 = <diskann_wide::arch::aarch64::Neon>::f32x16);
