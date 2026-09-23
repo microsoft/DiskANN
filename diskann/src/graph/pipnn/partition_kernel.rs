@@ -3,44 +3,47 @@
  * Licensed under the MIT license.
  */
 
-//! Select partition centers for PiPNN point assignment.
+//! Partition assignment for PiPNN.
 //!
-//! [`assign_leaders`] computes point-to-leader ranking values and selects the
-//! nearest leader-column IDs for partition scatter. Each sampled leader
-//! represents one child partition.
+//! [`assign_leaders`] computes the ranking distance from each point of a stripe to
+//! each partition leader, then selects the IDs of the nearest leaders. A ranking
+//! distance orders the leaders of a point in the same way as the metric distance.
+//! Each leader stands for one child partition, so the IDs tell the caller where to
+//! send each point.
 
-use crate::{ANNError, ANNResult};
+use crate::ANNResult;
 use diskann_utils::views::{MatrixView, MutMatrixView};
 
 use super::{
+    check_output_rows, distance_scratch,
     partition_metric::PartitionMetric,
     simd::Simd,
-    topk::{Candidate, Ranker, TopKVisitor, UNASSIGNED, with_topk},
+    topk::{Candidate, select_top_k_ids},
 };
 
-/// No sampled partition center was rankable for this output slot.
-pub(super) const UNASSIGNED_LEADER: u32 = UNASSIGNED;
-
-/// Reusable storage for one point-stripe numerical pipeline.
-#[derive(Default)]
+/// Reusable storage for [`assign_leaders`]. Reuse one workspace across stripes to
+/// avoid an allocation for each stripe.
+#[derive(Debug, Default)]
 pub(super) struct PartitionKernelWorkspace {
     distance_scratch: Vec<f32>,
-    ranked_leaders: Vec<Candidate>,
+    nearest_leaders: Vec<Candidate>,
 }
 
-/// Assign one packed point stripe to metric-owned partition leaders.
+/// Assign each point of one stripe to its k nearest partition leaders.
 ///
-/// Each output row contains leader-column IDs ordered by increasing ranking
-/// value. Equal values can select either leader. NaN and positive infinity are
-/// not retained.
+/// `points` holds one vector in each row. `leaders` must not be empty. k is the
+/// column count of `output`, which has one row per point. Each row receives
+/// leader IDs, nearest first. A leader ID is the row of the leader in the matrix
+/// that created `leaders`. Equal ranking distances can select either leader.
 ///
-/// A point can have fewer assignments than the output width. Each remaining
-/// slot contains [`UNASSIGNED_LEADER`].
+/// NaN and positive infinity never enter a row, so a point can have fewer than k
+/// leaders. Each remaining slot holds [`UNASSIGNED`](super::topk::UNASSIGNED).
 ///
 /// # Errors
 ///
-/// Returns an error for invalid GEMM input or an output row count different from
-/// the point count. A row-count mismatch leaves output and workspace unchanged.
+/// Returns an error if `output` does not have one row per point, if the
+/// distance matrix size overflows `usize`, or if points and leaders have
+/// different dimensions.
 pub(super) fn assign_leaders<A, M>(
     arch: A,
     points: MatrixView<'_, f32>,
@@ -53,77 +56,35 @@ where
     M: PartitionMetric,
 {
     let point_count = points.nrows();
-    if output.nrows() != point_count {
-        return Err(ANNError::message(format!(
-            "invalid partition output row count {} for {point_count} points",
-            output.nrows()
-        )));
-    }
-    let leader_count = M::leader_count(leaders);
-    let distance_count = point_count * leader_count;
-    if workspace.distance_scratch.len() < distance_count {
-        workspace.distance_scratch.resize(distance_count, 0.0);
-    }
-    let mut distances = MutMatrixView::try_from(
-        &mut workspace.distance_scratch[..distance_count],
+    check_output_rows(point_count, output.nrows())?;
+    let mut distances = distance_scratch(
+        &mut workspace.distance_scratch,
         point_count,
-        leader_count,
+        M::leader_count(leaders),
     )?;
     M::compute_distances(points, leaders, distances.as_mut_view())?;
-    rank_leader_distances(
+    select_top_k_ids(
         arch,
         distances.as_view(),
         output,
-        &mut workspace.ranked_leaders,
+        &mut workspace.nearest_leaders,
     );
     Ok(())
-}
-
-/// Select leader columns from each point's distance row.
-fn rank_leader_distances<A: Simd>(
-    arch: A,
-    distances: MatrixView<'_, f32>,
-    output: MutMatrixView<'_, u32>,
-    candidates: &mut Vec<Candidate>,
-) {
-    candidates.resize(output.ncols(), Candidate::default());
-    with_topk(
-        candidates.as_mut_slice(),
-        RankLeaders {
-            arch,
-            distances,
-            output,
-        },
-    );
-}
-
-struct RankLeaders<'a, A> {
-    arch: A,
-    distances: MatrixView<'a, f32>,
-    output: MutMatrixView<'a, u32>,
-}
-
-impl<A: Simd> TopKVisitor for RankLeaders<'_, A> {
-    #[inline]
-    fn visit<R: Ranker>(mut self, mut ranker: R) {
-        for (distances, output) in self.distances.row_iter().zip(self.output.row_iter_mut()) {
-            ranker.select_topk(self.arch, distances);
-            for (destination, candidate) in output.iter_mut().zip(ranker.as_ref().iter()) {
-                *destination = candidate.local_idx;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::pipnn::test_support;
+    use crate::graph::pipnn::test_support::{self, ArchCheck, for_each_arch};
+    use crate::graph::pipnn::topk::UNASSIGNED;
     use crate::graph::pipnn::{Cosine, CosineNormalized, InnerProduct, L2};
     use diskann_vector::distance::Metric;
     use diskann_wide::ARCH;
     use rstest::rstest;
+    use std::marker::PhantomData;
 
+    // The metric tests sweep dimensions and the TopK tests sweep widths and lengths.
+    // This test checks only that the kernel composes them with leader-column IDs.
     #[rstest]
     #[case::l2(L2, false, [[0,1,3,2], [1,2,3,0], [3,0,2,1]])]
     #[case::cosine(Cosine, false, [[0,1,3,2], [1,2,0,3], [3,0,2,1]])]
@@ -134,179 +95,156 @@ mod tests {
         #[case] unit_norm: bool,
         #[case] expected_ids: [[u32; 4]; 3],
     ) {
+        let point_values =
+            test_support::packed_points(&[[3.0, 2.0], [-1.0, 3.0], [2.0, -4.0]], 2, unit_norm);
+        let leader_values = test_support::packed_points(
+            &[[4.0, 0.0], [0.0, 3.0], [-2.0, 0.0], [0.0, -1.0]],
+            2,
+            unit_norm,
+        );
+        let leaders =
+            M::create_leaders(MatrixView::try_from(leader_values.as_slice(), 4, 2).unwrap());
+        // A width of six exceeds the four leaders.
         for assignments in [1, 2, 3, 4, 6] {
-            for dimensions in [2, 7, 8, 9, 15, 16, 17, 128, 129] {
-                let point_values = test_support::packed_points(
-                    &[[3.0, 2.0], [-1.0, 3.0], [2.0, -4.0]],
-                    dimensions,
-                    unit_norm,
-                );
-                let leader_values = test_support::packed_points(
-                    &[[4.0, 0.0], [0.0, 3.0], [-2.0, 0.0], [0.0, -1.0]],
-                    dimensions,
-                    unit_norm,
-                );
-                let leaders = M::create_leaders(
-                    MatrixView::try_from(leader_values.as_slice(), 4, dimensions).unwrap(),
-                );
-                let mut output = vec![0; 3 * assignments];
+            let mut output = vec![0; 3 * assignments];
 
-                assign_leaders::<_, M>(
-                    ARCH,
-                    MatrixView::try_from(point_values.as_slice(), 3, dimensions).unwrap(),
-                    &leaders,
-                    MutMatrixView::try_from(output.as_mut_slice(), 3, assignments).unwrap(),
-                    &mut PartitionKernelWorkspace::default(),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("assignments={assignments}, dimensions={dimensions}: {error}")
-                });
+            assign_leaders::<_, M>(
+                ARCH,
+                MatrixView::try_from(point_values.as_slice(), 3, 2).unwrap(),
+                &leaders,
+                MutMatrixView::try_from(output.as_mut_slice(), 3, assignments).unwrap(),
+                &mut PartitionKernelWorkspace::default(),
+            )
+            .unwrap_or_else(|error| panic!("assignments={assignments}: {error}"));
 
-                for point in 0..3 {
-                    let mut expected = expected_ids[point].to_vec();
-                    expected.truncate(assignments);
-                    expected.resize(assignments, UNASSIGNED_LEADER);
-                    assert_eq!(
-                        &output[point * assignments..(point + 1) * assignments],
-                        expected,
-                        "assignments={assignments}, dimensions={dimensions}, point={point}"
-                    );
-                }
+            for point in 0..3 {
+                let mut expected = expected_ids[point].to_vec();
+                expected.truncate(assignments);
+                expected.resize(assignments, UNASSIGNED);
+                assert_eq!(
+                    &output[point * assignments..(point + 1) * assignments],
+                    expected,
+                    "assignments={assignments}, point={point}"
+                );
             }
         }
     }
 
-    #[test]
-    fn assignments_match_nearest_leaders_across_counts_and_widths() {
-        for leader_count in [1, 5, 16, 17, 33] {
-            for assignments in [1, 3, 10, 11, 17] {
-                // Queries avoid midpoints, so each leader has a distinct distance.
-                let leader_values: Vec<_> = (0..leader_count).map(|i| 2.0 * i as f32).collect();
-                let point_values = [-1.0, 1.5, 2.0 * (leader_count - 1) as f32 + 0.25];
-                let leaders = L2::create_leaders(
-                    MatrixView::try_from(leader_values.as_slice(), leader_count, 1).unwrap(),
-                );
-                let mut output = vec![0; 3 * assignments];
-
-                assign_leaders::<_, L2>(
-                    ARCH,
-                    MatrixView::try_from(&point_values[..], 3, 1).unwrap(),
-                    &leaders,
-                    MutMatrixView::try_from(output.as_mut_slice(), 3, assignments).unwrap(),
-                    &mut PartitionKernelWorkspace::default(),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("leader_count={leader_count}, assignments={assignments}: {error}")
-                });
-
-                for (point, &coordinate) in point_values.iter().enumerate() {
-                    let mut ordered: Vec<_> = leader_values
-                        .iter()
-                        .enumerate()
-                        .map(|(id, &value)| (id as u32, (coordinate - value).powi(2)))
-                        .collect();
-                    ordered.sort_by(|left, right| left.1.total_cmp(&right.1));
-                    let mut expected: Vec<_> = ordered
-                        .iter()
-                        .take(assignments)
-                        .map(|&(id, _)| id)
-                        .collect();
-                    expected.resize(assignments, UNASSIGNED_LEADER);
-                    assert_eq!(
-                        &output[point * assignments..(point + 1) * assignments],
-                        expected,
-                        "point={point}, leader_count={leader_count}, assignments={assignments}"
-                    );
-                }
-            }
-        }
-    }
-
+    // The composition test above uses four leaders, fewer than one SIMD group. This test
+    // runs stripes whose leader rows cross SIMD groups, with a fixed-size nearest set
+    // and a slice, on each architecture that production can select.
     #[rstest]
     #[case::l2(L2, Metric::L2)]
     #[case::cosine(Cosine, Metric::Cosine)]
     #[case::normalized_cosine(CosineNormalized, Metric::CosineNormalized)]
     #[case::inner_product(InnerProduct, Metric::InnerProduct)]
-    fn large_dense_stripes_select_nearest_leaders<M: PartitionMetric>(
+    fn large_stripes_select_the_nearest_leaders_on_every_architecture<M: PartitionMetric>(
         #[case] _metric: M,
-        #[case] scalar_metric: Metric,
+        #[case] metric: Metric,
     ) {
-        for shape in [(9, 33, 384), (17, 65, 768), (33, 129, 1536), (5, 35, 1537)] {
-            for assignments in [3, 11] {
-                let (point_count, leader_count, dimensions) = shape;
-                let mut point_values = test_support::dense_points(point_count, dimensions, 1287);
-                let mut leader_values = test_support::dense_points(leader_count, dimensions, 2026);
-                if scalar_metric == Metric::CosineNormalized {
-                    test_support::normalize(&mut point_values, dimensions);
-                    test_support::normalize(&mut leader_values, dimensions);
-                }
-                let points =
-                    MatrixView::try_from(point_values.as_slice(), point_count, dimensions).unwrap();
-                let leader_matrix =
-                    MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions)
-                        .unwrap();
-                let leaders = M::create_leaders(leader_matrix);
-                let mut output = vec![UNASSIGNED_LEADER; point_count * assignments];
+        struct LargeStripes<M> {
+            metric: Metric,
+            partition_metric: PhantomData<M>,
+        }
 
-                assign_leaders::<_, M>(
-                    ARCH,
-                    points,
-                    &leaders,
-                    MutMatrixView::try_from(output.as_mut_slice(), point_count, assignments)
-                        .unwrap(),
-                    &mut PartitionKernelWorkspace::default(),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("shape={shape:?}, assignments={assignments}: {error}")
-                });
-
-                let tolerance = match scalar_metric {
-                    Metric::L2 | Metric::InnerProduct => 0.0,
-                    // Dyadic inputs make the dot/norm sums exact before cosine conversion.
-                    Metric::Cosine => 16.0 * f64::from(f32::EPSILON),
-                    Metric::CosineNormalized => {
-                        let roundoff = dimensions as f64 * f64::from(f32::EPSILON);
-                        roundoff / (1.0 - roundoff)
+        impl<M: PartitionMetric> ArchCheck for LargeStripes<M> {
+            fn check<A: Simd>(&self, arch: A) {
+                let metric = self.metric;
+                let arch_name = std::any::type_name::<A>();
+                // 35 leaders give distance rows with two SIMD groups and a tail. 129 leaders
+                // with 1536 dimensions give many groups and a typical embedding width.
+                for (point_count, leader_count, dimensions) in [(33, 35, 129), (65, 129, 1536)] {
+                    let mut point_values =
+                        test_support::dense_points(point_count, dimensions, 1287);
+                    let mut leader_values =
+                        test_support::dense_points(leader_count, dimensions, 2026);
+                    if metric == Metric::CosineNormalized {
+                        test_support::normalize(&mut point_values, dimensions);
+                        test_support::normalize(&mut leader_values, dimensions);
                     }
-                };
-                for point in 0..point_count {
-                    let mut expected: Vec<_> = (0..leader_count)
-                        .map(|leader| {
-                            (
-                                leader as u32,
-                                test_support::distance(
-                                    scalar_metric,
-                                    points.row(point),
-                                    leader_matrix.row(leader),
-                                ),
-                            )
+                    let points =
+                        MatrixView::try_from(point_values.as_slice(), point_count, dimensions)
+                            .unwrap();
+                    let leader_matrix =
+                        MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions)
+                            .unwrap();
+                    let leaders = M::create_leaders(leader_matrix);
+                    let tolerance = test_support::dense_tolerance(metric, dimensions);
+                    // The oracle sorts every leader by its scalar distance to the point.
+                    let oracle: Vec<Vec<(u32, f64)>> = (0..point_count)
+                        .map(|point| {
+                            let mut ranked: Vec<_> = (0..leader_count)
+                                .map(|leader| {
+                                    let distance = test_support::distance(
+                                        metric,
+                                        points.row(point),
+                                        leader_matrix.row(leader),
+                                    );
+                                    (leader as u32, distance)
+                                })
+                                .collect();
+                            ranked.sort_by(|left, right| left.1.total_cmp(&right.1));
+                            ranked
                         })
                         .collect();
-                    expected.sort_by(|left, right| left.1.total_cmp(&right.1));
-                    let actual = &output[point * assignments..(point + 1) * assignments];
-                    for (rank, &id) in actual.iter().enumerate() {
-                        assert!(
-                            !actual[..rank].contains(&id),
-                            "shape={shape:?}, assignments={assignments}, duplicate leader {id} for point={point}"
+
+                    // k = 3 uses a fixed-size nearest set. k = 11 uses a slice.
+                    for assignments in [3, 11] {
+                        let context = format!(
+                            "{arch_name}, {metric:?}, shape=({point_count}, {leader_count}, {dimensions}), assignments={assignments}"
                         );
-                        let score = expected
-                            .iter()
-                            .find(|&&(leader, _)| leader == id)
-                            .unwrap_or_else(|| panic!("shape={shape:?}, assignments={assignments}, invalid leader {id} for point={point}"))
-                            .1;
-                        assert!(
-                            (score - expected[rank].1).abs() <= tolerance,
-                            "shape={shape:?}, assignments={assignments}, point={point}, rank={rank}, score={score}, expected={:?}",
-                            expected[rank]
-                        );
+                        let mut output = vec![UNASSIGNED; point_count * assignments];
+
+                        assign_leaders::<A, M>(
+                            arch,
+                            points,
+                            &leaders,
+                            MutMatrixView::try_from(
+                                output.as_mut_slice(),
+                                point_count,
+                                assignments,
+                            )
+                            .unwrap(),
+                            &mut PartitionKernelWorkspace::default(),
+                        )
+                        .unwrap_or_else(|error| panic!("{context}: {error}"));
+
+                        for (point, expected) in oracle.iter().enumerate() {
+                            let actual = &output[point * assignments..(point + 1) * assignments];
+                            for (rank, &id) in actual.iter().enumerate() {
+                                assert!(
+                                    !actual[..rank].contains(&id),
+                                    "{context}, point={point}: duplicate leader {id}"
+                                );
+                                let distance = expected
+                                    .iter()
+                                    .find(|&&(leader, _)| leader == id)
+                                    .unwrap_or_else(|| {
+                                        panic!("{context}, point={point}: invalid leader {id}")
+                                    })
+                                    .1;
+                                // Equal distances can select either leader, but each rank must
+                                // be nearest-first.
+                                assert!(
+                                    (distance - expected[rank].1).abs() <= tolerance,
+                                    "{context}, point={point}, rank={rank}: {distance} != {:?}",
+                                    expected[rank]
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
+
+        for_each_arch(&LargeStripes::<M> {
+            metric,
+            partition_metric: PhantomData,
+        });
     }
 
     #[test]
-    fn workspace_reuse_replaces_assignments_for_each_stripe() {
+    fn workspace_reuse_does_not_mix_results_from_different_stripes() {
         let leader_values = [0.0, 5.0, 12.0];
         let leaders = L2::create_leaders(MatrixView::try_from(&leader_values[..], 3, 1).unwrap());
         let point_values = [1.0, 7.0, 11.0];
@@ -335,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn each_distance_row_replaces_previous_assignments_and_unused_slots() {
+    fn stale_output_and_scratch_do_not_leak_into_new_assignments() {
         let distances = [
             3.0,
             1.0,
@@ -353,7 +291,7 @@ mod tests {
         let mut output = [2; 9];
         let mut candidates = vec![Candidate::new(3, -10.0); 4];
 
-        rank_leader_distances(
+        select_top_k_ids(
             ARCH,
             MatrixView::try_from(&distances[..], 3, 4).unwrap(),
             MutMatrixView::try_from(&mut output[..], 3, 3).unwrap(),
@@ -363,75 +301,32 @@ mod tests {
         assert_eq!(
             output,
             [
-                1,
-                2,
-                0,
-                UNASSIGNED_LEADER,
-                UNASSIGNED_LEADER,
-                UNASSIGNED_LEADER,
-                1,
-                UNASSIGNED_LEADER,
-                UNASSIGNED_LEADER
+                1, 2, 0, UNASSIGNED, UNASSIGNED, UNASSIGNED, 1, UNASSIGNED, UNASSIGNED
             ]
         );
     }
 
     #[test]
-    fn invalid_output_rows_preserve_assignments_and_workspace() {
+    fn output_without_one_row_per_point_is_rejected() {
         let point_values = [1.0, 6.0];
         let leader_values = [0.0, 5.0, 12.0];
         let leaders = L2::create_leaders(MatrixView::try_from(&leader_values[..], 3, 1).unwrap());
         let mut output = [2];
-        let previous_candidates = vec![Candidate::new(1, 7.0)];
-        let mut workspace = PartitionKernelWorkspace {
-            distance_scratch: vec![9.0, 11.0],
-            ranked_leaders: previous_candidates.clone(),
-        };
 
         let error = assign_leaders::<_, L2>(
             ARCH,
             MatrixView::try_from(&point_values[..], 2, 1).unwrap(),
             &leaders,
             MutMatrixView::try_from(&mut output[..], 1, 1).unwrap(),
-            &mut workspace,
+            &mut PartitionKernelWorkspace::default(),
         )
         .unwrap_err();
 
         assert!(
             error
                 .to_string()
-                .contains("invalid partition output row count 1 for 2 points")
+                .contains("invalid kernel output row count 1 for 2 points"),
+            "{error}"
         );
-        assert_eq!(output, [2]);
-        assert_eq!(workspace.distance_scratch, [9.0, 11.0]);
-        assert_eq!(workspace.ranked_leaders, previous_candidates);
-    }
-
-    #[test]
-    fn metric_dimension_errors_are_returned_without_publishing_assignments() {
-        let point_values = [1.0, 2.0, 3.0];
-        let leader_values = [0.0, 1.0, 2.0, 3.0];
-        let leaders = L2::create_leaders(MatrixView::try_from(&leader_values[..], 2, 2).unwrap());
-        let mut output = [1];
-
-        let error = assign_leaders::<_, L2>(
-            ARCH,
-            MatrixView::try_from(&point_values[..], 1, 3).unwrap(),
-            &leaders,
-            MutMatrixView::try_from(&mut output[..], 1, 1).unwrap(),
-            &mut PartitionKernelWorkspace::default(),
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            error.downcast_ref::<diskann_linalg::SgemmError>(),
-            Some(&diskann_linalg::SgemmError::InvalidMatrixDimensions {
-                matrix_name: diskann_linalg::MatrixName::B,
-                expected_rows: 3,
-                expected_cols: 2,
-                actual_len: 4,
-            })
-        );
-        assert_eq!(output, [1]);
     }
 }
