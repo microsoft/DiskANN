@@ -84,8 +84,8 @@ fn cosine_distance(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
 
 /// Return an error if a kernel output does not have one row per input point.
 ///
-/// The top-k functions panic on this mismatch. The kernel entry points call this
-/// check first, so a bad output shape is an error instead of a panic.
+/// The top-k functions check this shape only in debug builds. The kernel entry
+/// points check it first, so a bad output shape is an error in every build.
 fn check_output_rows(points: usize, rows: usize) -> ANNResult<()> {
     if rows == points {
         Ok(())
