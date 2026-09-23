@@ -9,10 +9,18 @@
 //! owned or borrowed async runtime. Under the default `tokio` feature this
 //! module wraps a `tokio::runtime::Runtime` / `Handle` pair, preserving
 //! upstream behavior (including multi-threaded and current-thread flavors and
-//! external handles). Under the `compio` feature the same blocking semantics
-//! are provided by a `compio::runtime::Runtime`, which is single-flavored and
-//! bound to the thread that created it; consequently the "external handle"
-//! constructors are tokio-only and the wrapper types are `!Send` there.
+//! external handles).
+//!
+//! Under the `compio` feature the facade is *stateless*: compio is
+//! thread-per-core, and its `Runtime` (an `Rc`-shared executor/driver pair) is
+//! neither `Send` nor `Sync`, so the wrapper must not hold one — otherwise the
+//! wrapped index loses `Send + Sync`. Instead, compio runtimes are owned by
+//! each worker thread's entry loop, and the facade markers resolve the
+//! *current thread's* runtime through `Runtime::try_current()` on every
+//! blocking call. Calling outside of a compio runtime context panics. The
+//! "external handle" constructors (`new_with_handle`, `load_with_handle`)
+//! remain tokio-only, since a compio runtime can never be entered from a
+//! foreign thread.
 //!
 //! When both features are enabled, `tokio` wins so that existing users observe
 //! no change. Compiling without either backend fails via the `compile_error!`
@@ -20,7 +28,7 @@
 
 use std::future::Future;
 
-/// An owned async runtime kept alive by the wrapper.
+/// An owned async runtime kept alive by the wrapper (tokio backend only).
 #[derive(Debug)]
 pub(crate) struct Runtime(InnerRuntime);
 
@@ -32,23 +40,26 @@ pub(crate) struct Handle(InnerHandle);
 enum InnerRuntime {
     #[cfg(feature = "tokio")]
     Tokio(tokio::runtime::Runtime),
+    /// Marker only: under compio the worker thread's entry loop owns the
+    /// runtime; blocking calls resolve it via `Runtime::try_current()`.
     #[cfg(all(feature = "compio", not(feature = "tokio")))]
-    Compio(compio::runtime::Runtime),
+    Compio,
 }
 
 #[derive(Clone, Debug)]
 enum InnerHandle {
     #[cfg(feature = "tokio")]
     Tokio(tokio::runtime::Handle),
+    /// Marker only, see [`InnerRuntime::Compio`].
     #[cfg(all(feature = "compio", not(feature = "tokio")))]
-    Compio(compio::runtime::Runtime),
+    Compio,
 }
 
 impl Runtime {
     /// Create a runtime with multiple worker threads.
     ///
-    /// Under `compio` (thread-per-core) there is no multi-threaded flavor; the
-    /// single-threaded runtime is used instead.
+    /// Under `compio` (thread-per-core) there is no multi-threaded flavor and
+    /// the wrapper does not own any runtime; only a marker is stored.
     pub(crate) fn multi_thread() -> Self {
         #[cfg(feature = "tokio")]
         {
@@ -60,11 +71,14 @@ impl Runtime {
         }
         #[cfg(all(feature = "compio", not(feature = "tokio")))]
         {
-            Self(InnerRuntime::Compio(current_thread_compio()))
+            Self(InnerRuntime::Compio)
         }
     }
 
     /// Create a single-threaded (current-thread) runtime.
+    ///
+    /// Under `compio` the wrapper does not own any runtime; only a marker is
+    /// stored.
     pub(crate) fn current_thread() -> Self {
         #[cfg(feature = "tokio")]
         {
@@ -76,7 +90,7 @@ impl Runtime {
         }
         #[cfg(all(feature = "compio", not(feature = "tokio")))]
         {
-            Self(InnerRuntime::Compio(current_thread_compio()))
+            Self(InnerRuntime::Compio)
         }
     }
 
@@ -86,7 +100,7 @@ impl Runtime {
             #[cfg(feature = "tokio")]
             InnerRuntime::Tokio(rt) => Handle(InnerHandle::Tokio(rt.handle().clone())),
             #[cfg(all(feature = "compio", not(feature = "tokio")))]
-            InnerRuntime::Compio(rt) => Handle(InnerHandle::Compio(rt.clone())),
+            InnerRuntime::Compio => Handle(InnerHandle::Compio),
         }
     }
 }
@@ -104,13 +118,24 @@ impl Handle {
             #[cfg(feature = "tokio")]
             InnerHandle::Tokio(handle) => handle.block_on(future),
             #[cfg(all(feature = "compio", not(feature = "tokio")))]
-            InnerHandle::Compio(rt) => rt.block_on(future),
+            InnerHandle::Compio => current_compio().block_on(future),
         }
     }
 }
 
+/// Resolve the compio runtime of the current thread.
+///
+/// Worker threads run one compio runtime per core/thread; every blocking call
+/// of the wrappers must therefore happen inside that runtime's context (from
+/// within `block_on`/`enter` of the thread's own runtime).
 #[cfg(all(feature = "compio", not(feature = "tokio")))]
-fn current_thread_compio() -> compio::runtime::Runtime {
-    #[expect(clippy::expect_used)]
-    compio::runtime::Runtime::new().expect("failed to create compio runtime")
+fn current_compio() -> compio::runtime::Runtime {
+    compio::runtime::Runtime::try_current().unwrap_or_else(|| {
+        panic!(
+            "no compio runtime on the current thread: the compio backend is \
+             thread-per-core and resolves the thread's own runtime on every \
+             blocking call; construct and use the wrappers from within the \
+             worker thread's runtime context (block_on/enter)"
+        )
+    })
 }

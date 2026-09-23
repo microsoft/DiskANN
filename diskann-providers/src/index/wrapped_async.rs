@@ -46,8 +46,11 @@ where
     /// Construct a synchronous `DiskANNIndex` with its own multi-threaded runtime.
     ///
     /// Under the default `tokio` feature this creates a multi-threaded tokio
-    /// runtime owned by `Self`. Under `compio` (thread-per-core) the
-    /// single-threaded runtime is used instead. For a single-threaded runtime
+    /// runtime owned by `Self`. Under `compio` (thread-per-core) no runtime is
+    /// created: the wrapper stays stateless (`Send + Sync`) and every blocking
+    /// call resolves the *current thread's* runtime, so construction and use
+    /// must happen inside the worker thread's runtime context. For a
+    /// single-threaded runtime
     /// use [`new_with_current_thread_runtime`](Self::new_with_current_thread_runtime), or
     /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle)
     /// (tokio only).
@@ -60,7 +63,8 @@ where
     /// Construct a synchronous `DiskANNIndex` with its own single-threaded runtime.
     ///
     /// Under the default `tokio` feature this creates a current-thread tokio
-    /// runtime owned by `Self`; under `compio` it creates a compio runtime.
+    /// runtime owned by `Self`; under `compio` no runtime is created (see
+    /// [`Self::new_with_multi_thread_runtime`]).
     /// For a multi-threaded runtime use
     /// [`new_with_multi_thread_runtime`](Self::new_with_multi_thread_runtime), or
     /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle)
@@ -109,7 +113,8 @@ where
     }
 
     /// Run an arbitrary async operation against the underlying
-    /// [`graph::DiskANNIndex`] using this wrapper's runtime.
+    /// [`graph::DiskANNIndex`] using this wrapper's runtime (under `compio`:
+    /// the current thread's runtime).
     ///
     /// This is a catch-all escape hatch for async methods on the inner index
     /// that do not (yet) have a dedicated synchronous wrapper. The closure
@@ -133,8 +138,8 @@ where
     /// This is the synchronous equivalent of
     /// [`LoadWith::load_with`].
     /// A default multi-threaded runtime is created and owned by `Self` (under
-    /// `compio` the single-threaded runtime is used, see
-    /// [`Self::new_with_multi_thread_runtime`]).
+    /// `compio` no runtime is created; the call runs on the current thread's
+    /// runtime, see [`Self::new_with_multi_thread_runtime`]).
     /// For a single-threaded runtime use [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime),
     /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle)
     /// (tokio only).
@@ -696,6 +701,19 @@ mod tests {
 
     #[test]
     fn test_save_then_sync_load_round_trip() {
+        // compio: the wrapper resolves the worker thread's own runtime on
+        // every blocking call, so the flow must run inside that runtime's
+        // context. tokio (default): the wrapper builds its own runtime.
+        #[cfg(all(feature = "compio", not(feature = "tokio")))]
+        {
+            let rt = compio::runtime::Runtime::new().unwrap();
+            rt.enter(run_round_trip);
+        }
+        #[cfg(any(feature = "tokio", not(feature = "compio")))]
+        run_round_trip();
+    }
+
+    fn run_round_trip() {
         // -- Build an index in async context and save it -----------------------
         let save_path = "/index";
         let file_path = "/sift/siftsmall_learn_256pts.fbin";
@@ -908,6 +926,60 @@ mod tests {
         );
     }
 
+    // The wrapped index is shared across worker threads (thread-per-core:
+    // one compio runtime per thread); neither backend facade may smuggle in
+    // thread-bound state such as compio's `Rc`-shared executor.
+    #[test]
+    fn test_wrapper_types_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<crate::runtime::Runtime>();
+        assert_send_sync::<crate::runtime::Handle>();
+        assert_send_sync::<DiskANNIndex<graph::test::provider::Provider>>();
+    }
+
+    // Cross-thread misuse path (compio): calling the wrapper from a thread
+    // without a compio runtime must fail loudly with an actionable message
+    // instead of silently creating (or borrowing) a runtime.
+    #[cfg(all(feature = "compio", not(feature = "tokio")))]
+    #[test]
+    #[should_panic(expected = "no compio runtime on the current thread")]
+    fn test_blocking_without_runtime_context_panics() {
+        let index = wrapped_test_provider();
+        let _: () = index.run(|_| async {});
+    }
+
+    // Downstream shape (compio): the worker thread drives
+    // `rt.block_on(async { .. })` and calls the (synchronous) wrapper from
+    // inside the async block; the wrapper's own `block_on` nests into the
+    // same thread-local runtime.
+    #[cfg(all(feature = "compio", not(feature = "tokio")))]
+    #[test]
+    fn test_wrapper_blocking_inside_async_context() {
+        let rt = compio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let index = wrapped_test_provider();
+
+            let top_k = 5;
+            let mut ids = vec![0u32; top_k];
+            let mut distances = vec![0.0f32; top_k];
+            let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+
+            let kind = graph::search::Knn::new_default(10).unwrap();
+            let stats = index
+                .search(
+                    kind,
+                    &graph::test::provider::Strategy::new(),
+                    &graph::test::provider::Context::new(),
+                    &[0.0],
+                    &mut output,
+                )
+                .unwrap();
+
+            assert_eq!(stats.result_count, top_k as u32);
+        });
+    }
+
     // End-to-end proof for the `compio` backend: with tokio disabled, the
     // synchronous wrapper builds an index through the parallel `multi_insert`
     // path (exercising backend task spawning), saves, reloads and searches it
@@ -915,6 +987,14 @@ mod tests {
     #[cfg(all(feature = "compio", not(feature = "tokio")))]
     #[test]
     fn test_compio_backend_end_to_end() {
+        // Worker-thread shape: the thread owns the compio runtime and every
+        // wrapper call resolves it through the current-runtime context.
+        let rt = compio::runtime::Runtime::new().unwrap();
+        rt.enter(run_compio_end_to_end);
+    }
+
+    #[cfg(all(feature = "compio", not(feature = "tokio")))]
+    fn run_compio_end_to_end() {
         // -- Load training data and prepare the provider ----------------------
         let save_path = "/index";
         let file_path = "/sift/siftsmall_learn_256pts.fbin";

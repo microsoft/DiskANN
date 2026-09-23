@@ -68,7 +68,7 @@ features = [
 rstest.workspace = true
 tempfile.workspace = true
 vfs.workspace = true
-diskann-providers = { workspace = true, default-features = false, features = [
+diskann-providers = { workspace = true, features = [
     "tokio",
     "tracing",
     "testing",
