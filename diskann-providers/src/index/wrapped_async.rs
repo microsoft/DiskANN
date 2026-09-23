@@ -262,7 +262,6 @@ where
             .block_on(self.inner.drop_adj_list(accessor, vector_id))
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn get_undeleted_neighbors<NA>(
         &self,
         context: &DP::Context,

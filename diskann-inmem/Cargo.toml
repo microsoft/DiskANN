@@ -18,8 +18,9 @@ diskann-utils = { workspace = true, default-features = false }
 diskann-vector = { workspace = true }
 diskann-wide = { workspace = true }
 parking_lot = "0.12.5"
-thiserror = { workspace = true }
 half = { workspace = true }
+hashbrown = { workspace = true }
+thiserror = { workspace = true }
 
 # Integration Test Dependencies
 diskann-benchmark-runner = { workspace = true, optional = true, features = ["ux-tools"] }
@@ -32,6 +33,7 @@ tokio = { workspace = true, optional = true }
 compio = { workspace = true, optional = true }
 
 [lints.clippy]
+allow_attributes = "warn"
 undocumented_unsafe_blocks = "warn"
 unwrap_used = "warn"
 expect_used = "warn"

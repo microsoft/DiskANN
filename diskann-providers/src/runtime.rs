@@ -52,7 +52,7 @@ impl Runtime {
     pub(crate) fn multi_thread() -> Self {
         #[cfg(feature = "tokio")]
         {
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .build()
                 .expect("failed to create tokio runtime");
@@ -68,7 +68,7 @@ impl Runtime {
     pub(crate) fn current_thread() -> Self {
         #[cfg(feature = "tokio")]
         {
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             let rt = tokio::runtime::Builder::new_current_thread()
                 .build()
                 .expect("failed to create tokio runtime");
@@ -111,6 +111,6 @@ impl Handle {
 
 #[cfg(all(feature = "compio", not(feature = "tokio")))]
 fn current_thread_compio() -> compio::runtime::Runtime {
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     compio::runtime::Runtime::new().expect("failed to create compio runtime")
 }

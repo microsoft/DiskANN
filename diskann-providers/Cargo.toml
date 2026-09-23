@@ -83,6 +83,7 @@ virtual_storage = ["dep:vfs"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
 [lints.clippy]
+allow_attributes = "warn"
 # Commenting out for now. It would give warnings.
 # undocumented_unsafe_blocks = "warn"
 uninlined_format_args = "allow"

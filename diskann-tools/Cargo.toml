@@ -50,5 +50,6 @@ diskann-utils = { workspace = true, features = ["testing"] }
 default = []
 
 [lints]
+clippy.allow_attributes = "warn"
 clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"

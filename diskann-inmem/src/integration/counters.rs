@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-/// A snapshot of global [`Counters`](crate::counters::Counters).
+/// A snapshot of global counters.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct CounterSnapshot {

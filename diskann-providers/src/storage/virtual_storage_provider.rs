@@ -120,7 +120,7 @@ impl VirtualStorageProvider<OverlayFS> {
     /// Create a two-layer overlay filesystem with an in-memory filesystem for writes
     /// on top of the physical filesystem for reads.
     pub fn new_overlay<P: AsRef<std::path::Path>>(path: P) -> Self {
-        #[allow(clippy::disallowed_methods)]
+        #[expect(clippy::disallowed_methods)]
         let base_filesystem = PhysicalFS::new(path);
         let memory_filesystem = MemoryFS::new();
         let overlay_filesystem =
@@ -143,7 +143,7 @@ impl VirtualStorageProvider<PhysicalFS> {
     /// Create a storage provider that uses the physical filesystem with a custom root path.
     /// This prevents operations from writing outside of the specified sandbox.
     pub fn new_physical<P: AsRef<std::path::Path>>(path: P) -> Self {
-        #[allow(clippy::disallowed_methods)]
+        #[expect(clippy::disallowed_methods)]
         let physical_filesystem = PhysicalFS::new(path);
 
         VirtualStorageProvider::new(physical_filesystem)

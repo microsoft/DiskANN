@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
@@ -8,7 +8,7 @@ use crate::SIMDVector;
 macro_rules! aarch64_define_register {
     ($type:ident, $impl:ty, $mask:ty, $scalar:ty, $lanes:literal, $arch:ty) => {
         #[derive(Debug, Clone, Copy)]
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         #[repr(transparent)]
         pub struct $type(pub $impl);
 
@@ -584,7 +584,39 @@ pub(crate) use aarch64_splitjoin;
 ///
 /// The caller must ensure the provided intrinsics match the element type of `$half`.
 macro_rules! aarch64_zipunzip {
-    ($half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
+    ($full:path, $half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
+        impl $crate::ZipUnzip for $full {
+            #[inline(always)]
+            fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {
+                use $crate::SIMDVector;
+                // SAFETY: Caller asserts that these intrinsics match the element type.
+                unsafe {
+                    let arch = halves.lo.arch();
+                    let $crate::LoHi { lo, hi } = halves.map(SIMDVector::to_underlying);
+
+                    $crate::LoHi::new($zip1(lo, hi), $zip2(lo, hi))
+                        .map(|raw| SIMDVector::from_underlying(arch, raw))
+                        .join()
+                }
+            }
+
+            #[inline(always)]
+            fn unzip(self) -> $crate::LoHi<<Self as $crate::SplitJoin>::Halved> {
+                use $crate::SIMDVector;
+                // SAFETY: Caller asserts that these intrinsics match the element type.
+                unsafe {
+                    let arch = self.arch();
+
+                    let $crate::LoHi { lo, hi } =
+                        <Self as $crate::SplitJoin>::split(self).map(SIMDVector::to_underlying);
+
+                    $crate::LoHi::new($uzp1(lo, hi), $uzp2(lo, hi))
+                        .map(|raw| SIMDVector::from_underlying(arch, raw))
+                }
+            }
+        }
+    };
+    (Doubled<$half:path>, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
         impl $crate::ZipUnzip for $crate::doubled::Doubled<$half> {
             #[inline(always)]
             fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {

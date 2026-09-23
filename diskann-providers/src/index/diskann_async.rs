@@ -856,8 +856,12 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: for<'a> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + for<'a> DefaultSearchStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + Clone
+            + for<'a> DefaultSearchStrategy<
+                'a,
+                FullPrecisionProvider<T, DefaultQuant>,
+                &'a [T],
+                SearchAccessor: glue::SearchAccessor,
+            > + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
     {
@@ -983,8 +987,12 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: for<'a> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + for<'a> DefaultSearchStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + Clone
+            + for<'a> DefaultSearchStrategy<
+                'a,
+                FullPrecisionProvider<T, DefaultQuant>,
+                &'a [T],
+                SearchAccessor: glue::SearchAccessor,
+            > + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
     {

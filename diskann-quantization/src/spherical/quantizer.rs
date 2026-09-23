@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, DataMeta, DataMetaError, DataMut,
-    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric,
+    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric, iface,
 };
 use crate::{
     AsFunctor, CompressIntoWith,
@@ -378,6 +378,18 @@ where
             shifted_norm,
             inner_product_with_centroid,
         })
+    }
+
+    /// Construct an [`iface::Quantizer`] trait object from `self`.
+    pub fn as_quantizer<const NBITS: usize>(
+        self,
+    ) -> Result<Poly<dyn iface::Quantizer>, AllocatorError>
+    where
+        A: 'static,
+        iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
+    {
+        let iface = iface::Impl::<NBITS, A>::new(self)?;
+        crate::poly!({ iface::Quantizer }, iface, GlobalAllocator)
     }
 }
 
@@ -863,8 +875,6 @@ where
 
 struct AsNonZero<const NBITS: usize>;
 impl<const NBITS: usize> AsNonZero<NBITS> {
-    // Lint: Unwrap is being used in a const-context.
-    #[allow(clippy::unwrap_used)]
     const NON_ZERO: NonZeroUsize = NonZeroUsize::new(NBITS).unwrap();
 }
 
@@ -1025,7 +1035,7 @@ fn maximize_cosine_similarity(
 
     // Lint: This is a private method and all the callers have an invariant that they check
     // for non-empty inputs.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     let mut critical_values =
         SliceHeap::new(&mut base).expect("calling code should not allow the slice to be empty");
 
@@ -1196,7 +1206,7 @@ where
             //
             // Further, `c` has beem clamped to `[0, 2^NBITS - 1]` and is thus encodable
             // with the NBITS-bit unsigned representation.
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             into.vector_mut().set(i, c as i64).unwrap();
         });
 
