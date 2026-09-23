@@ -10,17 +10,19 @@
 ## Summary
 
 Add an accessor-based architecture for incrementally maintained inverted-file
-(IVF) indexes. The architecture separates the GraphIVF algorithm from point
-storage, centroid navigation, and inverted-list access without prescribing a
-cross-component snapshot or commit protocol.
+(IVF) indexes, along with co-location sets of centroids to assist with ordering 
+spatially similar posting lists on slower storage mediums. The architecture 
+separates the GraphIVF algorithm from point storage, centroid navigation, and 
+inverted-list access without prescribing a cross-component snapshot or commit 
+protocol.
 
 The generic API has two principal extension points:
 
 1. A query-bound search accessor selects centroids and scans the corresponding
    lists.
 2. An operation-scoped maintenance accessor presents one unified view of point
-   data, centroids, reverse assignments, and inverted lists while planning and
-   applying a split or dissolve.
+   data, centroids, reverse assignments, inverted lists, and co-location sets 
+   while planning and applying a split or dissolve.
 
 Each concrete strategy or aggregate provider is responsible for coordinating
 its components. It may use exclusive borrowing, locks, epochs, immutable roots,
@@ -58,6 +60,7 @@ insert batch may:
 - create child centroids and retire parent centroids;
 - read neighboring lists; and
 - reassign all points in the affected regions.
+- reassign centroids to other co-location sets, and create and retire co-location sets
 
 A delete batch removes points, retires underfull centroids, and moves each
 victim list's remaining members to nearby survivors. These are set-level
@@ -76,7 +79,7 @@ Adding imperative `remove`, `create_list`, and `replace_centroid` calls would
 make the generic algorithm choose a partial-write order for every backend.
 
 Third, GraphIVF planning needs list sizes, reverse assignments, list members,
-canonical vectors, centroid vectors, and fresh list ids. These operations must
+canonical vectors, centroid vectors, fresh list ids, and co-location sets. These operations must
 be available in batch-friendly forms so disk and blob implementations do not
 devolve into one request per point.
 
@@ -139,6 +142,7 @@ coordinates its provider, centroid index, and inverted-list store.
   may be full precision, quantized, or otherwise encoded.
 - **Partition update**: the complete logical centroid and point-membership
   change calculated by the algorithm.
+- **Co-Location Set**: a set of list ids that share some spatial similarity. May be the identity mapping.
 
 ### Required Logical Invariants
 
@@ -154,6 +158,7 @@ After a maintenance accessor returns `Ok(())` from `apply`:
 8. Deletes may trigger dissolves but not splits.
 9. When dissolves are enabled,
    `2 * merge_threshold <= split_threshold` provides hysteresis.
+10. Each live list may belong to only one co-location set
 
 The generic API does not specify whether an accessor uses copied state,
 exclusive access, or a versioned backend to preserve these invariants.
@@ -197,9 +202,10 @@ collisions with the current `ivf::SearchAccessor` and `ivf::SearchStrategy`.
 
 | Component | Owns | Does not decide |
 |---|---|---|
-| Dynamic IVF algorithm | split/dissolve policy, affected regions, child fitting, reassignment | physical layout, I/O shape, provider consistency mechanism |
+| Dynamic IVF algorithm | split/dissolve policy, affected regions, child fitting, reassignment, co-location sets | physical layout, I/O shape, provider consistency mechanism |
 | Aggregate provider/strategy | compatible point, centroid, and list implementations | split/dissolve policy |
 | `CentroidIndex` | live centroid catalog and exact or approximate navigation | inverted-list storage |
+| `CoLocationSet` | assignment of centroids to co-location groups | how co-location groups dictate ordering within the data provider |
 | Search accessor | query-bound selection, list scoring, coherent search view | top-k policy |
 | Maintenance accessor | unified planning view, point staging, id reservation, final update application | which centroids and points should move |
 
@@ -362,6 +368,8 @@ The update remains useful even for an in-place backend. It gives the provider
 the entire mutation before it chooses write order, batching, rollback, or
 recovery behavior.
 
+The co-location set updates follow an identical pattern.
+
 ### Maintenance Accessor
 
 The maintenance accessor combines planning reads and mutation staging:
@@ -509,6 +517,8 @@ the normal batch path. Reopen skips bootstrap when centroids already exist.
 
 No generic retry or version check occurs between selection and scanning.
 Coherence follows from exclusive index mutation and the accessor implementation.
+
+Note that co-location groups are never accessed during search.
 
 ### Batch Insert
 

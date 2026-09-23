@@ -101,6 +101,33 @@ pub trait CentroidIndex: Send + Sync {
     ) -> impl SendFuture<Result<SelectionPlan<Self::ListId>, Self::Error>>;
 }
 
+/// An authoritative grouping of live centroids for locality-preserving storage.
+///
+/// Every live centroid belongs to exactly one co-location group. Implementations
+/// may use an identity grouping, where each group contains one centroid. Group
+/// ids remain stable until retired and are independent of centroid/list ids.
+pub trait CoLocationSet: Send + Sync {
+    /// Stable logical centroid/list id.
+    type ListId: VectorId;
+
+    /// Stable logical co-location group id.
+    type CoLocationGroupId: VectorId;
+
+    /// Number of live co-location groups.
+    fn len(&self) -> usize;
+
+    /// Whether there are no live co-location groups.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Borrow the centroid ids in a live co-location group.
+    fn group(&self, id: Self::CoLocationGroupId) -> Option<&[Self::ListId]>;
+
+    /// Return the live co-location group containing a centroid.
+    fn group_for(&self, id: Self::ListId) -> Option<Self::CoLocationGroupId>;
+}
+
 /// Query-bound access to centroid selection and inverted-list scanning.
 ///
 /// This is the dynamic IVF search algorithm's primary extension point, in the
@@ -177,6 +204,24 @@ pub struct CentroidDelta<ListId> {
     pub retire: Vec<ListId>,
 }
 
+/// A new co-location group to install as part of a partition update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoLocationGroup<CoLocationGroupId, ListId> {
+    /// Fresh stable group id. Installed ids must never be reused after retirement.
+    pub id: CoLocationGroupId,
+    /// Live centroids that should be stored together.
+    pub centroids: Vec<ListId>,
+}
+
+/// Changes to the authoritative co-location set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoLocationDelta<CoLocationGroupId, ListId> {
+    /// Co-location groups made live by this update.
+    pub insert: Vec<CoLocationGroup<CoLocationGroupId, ListId>>,
+    /// Live co-location groups retired by this update.
+    pub retire: Vec<CoLocationGroupId>,
+}
+
 /// One point membership change in a partition mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PointMove<Id, ListId> {
@@ -192,11 +237,14 @@ pub struct PointMove<Id, ListId> {
 ///
 /// The maintenance accessor applies this update across point identity,
 /// canonical vectors, list membership, reverse assignments, scan payloads, and
-/// centroid liveness according to its provider-specific consistency contract.
+/// centroid liveness, and co-location membership according to its
+/// provider-specific consistency contract.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PartitionUpdate<Id, ListId> {
+pub struct PartitionUpdate<Id, ListId, CoLocationGroupId> {
     /// Centroids inserted and retired by this mutation.
     pub centroids: CentroidDelta<ListId>,
+    /// Co-location groups inserted and retired by this mutation.
+    pub co_locations: CoLocationDelta<CoLocationGroupId, ListId>,
     /// Point membership changes, including inserts and deletes.
     pub point_moves: Vec<PointMove<Id, ListId>>,
 }
@@ -221,14 +269,23 @@ where
     /// Stable centroid/list id.
     type ListId: VectorId;
 
+    /// Stable co-location group id.
+    type CoLocationGroupId: VectorId;
+
     /// In-memory centroid catalog and navigator in this accessor's unified view.
     type Centroids: CentroidIndex<ListId = Self::ListId, Error = Self::Error>;
+
+    /// Authoritative co-location grouping in this accessor's unified view.
+    type CoLocations: CoLocationSet<ListId = Self::ListId, CoLocationGroupId = Self::CoLocationGroupId>;
 
     /// Errors from planning reads, staging, or applying the update.
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
     /// Borrow the centroid index used for routing and maintenance neighborhoods.
     fn centroids(&self) -> &Self::Centroids;
+
+    /// Borrow the co-location set used to plan locality-preserving layout.
+    fn co_locations(&self) -> &Self::CoLocations;
 
     /// Read list sizes for `lists`.
     fn list_metadata<I, F>(
@@ -284,6 +341,12 @@ where
         count: usize,
     ) -> impl SendFuture<Result<Vec<Self::ListId>, Self::Error>>;
 
+    /// Reserve fresh co-location group ids that will not alias retired ids.
+    fn reserve_group_ids(
+        &mut self,
+        count: usize,
+    ) -> impl SendFuture<Result<Vec<Self::CoLocationGroupId>, Self::Error>>;
+
     /// Apply the complete logical update and finish this mutation operation.
     ///
     /// Returning `Ok(())` means all components expose one coherent resulting
@@ -291,7 +354,7 @@ where
     /// after `Err` are intentionally provider-defined.
     fn apply(
         self,
-        update: PartitionUpdate<Self::Id, Self::ListId>,
+        update: PartitionUpdate<Self::Id, Self::ListId, Self::CoLocationGroupId>,
     ) -> impl SendFuture<Result<(), Self::Error>>;
 }
 
