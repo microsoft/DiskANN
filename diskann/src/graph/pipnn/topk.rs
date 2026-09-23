@@ -68,22 +68,18 @@ impl Default for Candidate {
 
 /// Write the IDs of the k nearest columns of each distance row, nearest first.
 ///
-/// k is the column count of `output`, and `output` has one row per distance row.
-/// Equal distances can select either column. If a row has fewer than k distances
-/// that are not NaN or positive infinity, the remaining slots hold [`UNASSIGNED`].
-/// `scratch` is reusable storage for values of k without a fixed-size nearest set.
-///
-/// # Panics
-///
-/// Panics if `output` does not have one row per distance row, or if `distances`
-/// has no columns and k is not zero.
+/// k is the column count of `output`, and `output` must have one row per distance
+/// row. Debug builds check this. Equal distances can select either column. If a
+/// row has fewer than k distances that are not NaN or positive infinity, the
+/// remaining slots hold [`UNASSIGNED`]. `scratch` is reusable storage for values
+/// of k without a fixed-size nearest set.
 pub(super) fn select_top_k_ids<A: Simd>(
     arch: A,
     distances: MatrixView<'_, f32>,
     output: MutMatrixView<'_, u32>,
     scratch: &mut Vec<Candidate>,
 ) {
-    assert_eq!(
+    debug_assert_eq!(
         distances.nrows(),
         output.nrows(),
         "top-k IDs need one output row per distance row"
@@ -108,17 +104,14 @@ pub(super) fn select_top_k_ids<A: Simd>(
 
 /// Fill the nearest set of each point with its k nearest other points.
 ///
-/// `distances` is a symmetric matrix with one row and one column per point, and
-/// `output` has one row per point. k is the column count of `output`. Only the
+/// `distances` must be a symmetric matrix with one row and one column per point,
+/// and `output` has one row per point. Debug builds check the shape. k is the
+/// column count of `output`. Only the
 /// strict lower triangle of `distances` is read: each pair is read once and
 /// offered to both points. Candidate IDs are point positions. Equal distances can
 /// select either point. Slots that no pair fills hold [`Candidate::EMPTY`].
 /// `kth_distances` is reusable storage. It holds the k-th distance of each point
 /// after the scan.
-///
-/// # Panics
-///
-/// Panics if `distances` does not have one row and one column per output row.
 pub(super) fn select_top_k_symmetric<A: Simd>(
     arch: A,
     distances: MatrixView<'_, f32>,
@@ -126,7 +119,7 @@ pub(super) fn select_top_k_symmetric<A: Simd>(
     kth_distances: &mut Vec<f32>,
 ) {
     let points = output.nrows();
-    assert!(
+    debug_assert!(
         distances.nrows() == points && distances.ncols() == points,
         "a symmetric scan needs one distance row and column per point"
     );
@@ -157,8 +150,10 @@ fn select_ids_with<A, Nearest>(
     A: Simd,
     Nearest: AsMut<[Candidate]> + ?Sized,
 {
-    for (row, ids) in distances.row_iter().zip(output.row_iter_mut()) {
-        select_nearest(arch, nearest, row);
+    // `row_iter` panics on a matrix without columns. `row` returns an empty row,
+    // so every slot of that row becomes `UNASSIGNED`.
+    for (row, ids) in output.row_iter_mut().enumerate() {
+        select_nearest(arch, nearest, distances.row(row));
         for (id, candidate) in ids.iter_mut().zip(nearest.as_mut().iter()) {
             *id = candidate.local_idx;
         }
@@ -411,8 +406,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "one distance row and column per point")]
-    fn a_symmetric_scan_panics_on_a_distance_matrix_of_another_size() {
+    fn a_symmetric_scan_debug_checks_the_distance_matrix_size() {
         let distances = [0.0; 4];
         let mut output = [Candidate::EMPTY; 3];
 
@@ -893,5 +889,19 @@ mod tests {
 
         // A scan without slots leaves the reusable k-th distances untouched.
         assert_eq!(kth_distances, [-1.0; 2]);
+    }
+
+    #[test]
+    fn distance_rows_without_columns_leave_every_slot_unassigned() {
+        let mut output = [0; 4];
+
+        select_top_k_ids(
+            ARCH,
+            MatrixView::try_from(&[][..], 2, 0).unwrap(),
+            MutMatrixView::try_from(&mut output[..], 2, 2).unwrap(),
+            &mut Vec::new(),
+        );
+
+        assert_eq!(output, [UNASSIGNED; 4]);
     }
 }
