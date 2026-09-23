@@ -8,8 +8,6 @@
 #[cfg(not(target_endian = "little"))]
 compile_error!("diskann-utils assumes little-endian targets");
 
-mod assert_contains;
-
 pub mod reborrow;
 pub use reborrow::{Reborrow, ReborrowMut};
 
@@ -27,6 +25,13 @@ mod lazystring;
 pub use lazystring::LazyString;
 
 mod internal;
+
+/// There are *no* external stability guarantees for anything in `testing`.
+///
+/// Use at your own risk.
+#[cfg(any(test, feature = "testing"))]
+#[doc(hidden)]
+pub mod testing;
 
 #[cfg(feature = "testing")]
 #[doc(hidden)]

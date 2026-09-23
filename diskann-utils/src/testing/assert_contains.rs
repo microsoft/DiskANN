@@ -3,14 +3,25 @@
  * Licensed under the MIT license.
  */
 
+/// Return whether or not the `self` contains `item`.
+pub trait AssertContains<T>
+where
+    T: ?Sized,
+{
+    #[must_use]
+    fn contains_for_assert(&self, item: &T) -> bool;
+}
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! assert_contains {
     ($haystack:expr, $needle:expr $(,)?) => {
         match (&$haystack, &$needle) {
             (haystack, needle) => {
+                use $crate::testing::AssertContains as _;
+
                 assert!(
-                    haystack.contains(needle),
+                    haystack.contains_for_assert(needle),
                     "{:?} does not contain {:?}",
                     haystack,
                     needle,
@@ -21,8 +32,10 @@ macro_rules! assert_contains {
     ($haystack:expr, $needle:expr, $fmt:expr) => {
         match (&$haystack, &$needle) {
             (haystack, needle) => {
+                use $crate::testing::AssertContains as _;
+
                 assert!(
-                    haystack.contains(needle),
+                    haystack.contains_for_assert(needle),
                     concat!("{:?} does not contain {:?} -- ", $fmt),
                     haystack,
                     needle,
@@ -33,8 +46,10 @@ macro_rules! assert_contains {
     ($haystack:expr, $needle:expr, $fmt:expr, $($args:tt)*) => {
         match (&$haystack, &$needle) {
             (haystack, needle) => {
+                use $crate::testing::AssertContains as _;
+
                 assert!(
-                    haystack.contains(needle),
+                    haystack.contains_for_assert(needle),
                     concat!("{:?} does not contain {:?} -- ", $fmt),
                     haystack,
                     needle,
@@ -42,6 +57,21 @@ macro_rules! assert_contains {
                 );
             }
         }
+    }
+}
+
+impl AssertContains<str> for str {
+    fn contains_for_assert(&self, item: &str) -> bool {
+        self.contains(item)
+    }
+}
+
+impl<T> AssertContains<T> for [T]
+where
+    T: PartialEq,
+{
+    fn contains_for_assert(&self, item: &T) -> bool {
+        self.contains(item)
     }
 }
 
@@ -59,6 +89,46 @@ mod tests {
         assert_contains!(
             "haystack and needle",
             "needle",
+            "some context: {}, {}",
+            10,
+            20
+        );
+
+        assert_contains!(String::from("haystack and needle"), "needle");
+        assert_contains!(
+            String::from("haystack and needle"),
+            "needle",
+            "some context"
+        );
+        assert_contains!(
+            String::from("haystack and needle"),
+            "needle",
+            "some context: {}",
+            10
+        );
+        assert_contains!(
+            String::from("haystack and needle"),
+            "needle",
+            "some context: {}, {}",
+            10,
+            20
+        );
+
+        assert_contains!("haystack and needle", String::from("needle"));
+        assert_contains!(
+            "haystack and needle",
+            String::from("needle"),
+            "some context"
+        );
+        assert_contains!(
+            "haystack and needle",
+            String::from("needle"),
+            "some context: {}",
+            10
+        );
+        assert_contains!(
+            "haystack and needle",
+            String::from("needle"),
             "some context: {}, {}",
             10,
             20

@@ -32,6 +32,7 @@ diskann-wide = { workspace = true }
 dashmap = { workspace = true, optional = true }
 
 [dev-dependencies]
+diskann-utils = { workspace = true, features = ["testing"] }
 futures-util = { workspace = true, default-features = false  }
 pin-project.workspace = true
 rand.workspace = true
