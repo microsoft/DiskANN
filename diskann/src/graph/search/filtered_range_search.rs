@@ -57,7 +57,7 @@ impl FilteredRange {
         self.range_params.max_returned()
     }
 
-    /// Returns the maximum number of results to return.
+    /// Returns the effective maximum number of results to return (`max_returned + inc`, saturating), or `usize::MAX` if `max_returned` is unset.
     #[inline]
     pub fn effective_max_returned(&self, inc: usize) -> usize {
         self.range_params.effective_max_returned(inc)
