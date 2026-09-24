@@ -20,7 +20,6 @@ use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 use hashbrown::HashSet;
 use thiserror::Error;
-use tokio::task::JoinSet;
 
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
@@ -44,9 +43,10 @@ use crate::{
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
     provider::{
-        DataProvider, Delete, ElementStatus, ExecutionContext, Guard, NeighborAccessor,
-        NeighborAccessorMut, SetElement,
+        DataProvider, Delete, ElementStatus, Guard, NeighborAccessor, NeighborAccessorMut,
+        SetElement,
     },
+    task::{self, TaskGroup},
     tracked_debug, tracked_error, tracked_trace,
     utils::{
         IntoUsize,
@@ -62,6 +62,7 @@ pub struct DiskANNIndex<DP: DataProvider> {
 
     /// The data provider.
     pub data_provider: DP,
+    spawner: Arc<dyn crate::task::TaskSpawner>,
     scratch_pool: ObjectPool<SearchScratch<DP::InternalId>>,
 }
 
@@ -150,7 +151,27 @@ impl<DP> DiskANNIndex<DP>
 where
     DP: DataProvider,
 {
+    /// Construct an index using the current Tokio runtime for parallel operations.
+    #[cfg(any(feature = "tokio-runtime", test))]
     pub fn new(config: Config, data_provider: DP, thread_hint: Option<NonZeroUsize>) -> Self {
+        Self::new_with_spawner(
+            config,
+            data_provider,
+            thread_hint,
+            Arc::new(crate::task::TokioSpawner),
+        )
+    }
+
+    /// Construct an index that schedules parallel operations with `spawner`.
+    ///
+    /// Supply a spawner for the executor on which the index's async providers run.
+    /// This constructor is available without the `tokio-runtime` feature.
+    pub fn new_with_spawner(
+        config: Config,
+        data_provider: DP,
+        thread_hint: Option<NonZeroUsize>,
+        spawner: Arc<dyn crate::task::TaskSpawner>,
+    ) -> Self {
         let num_threads = thread_hint.map_or(0, |x| x.get());
 
         let scratch_pool = ObjectPool::new(
@@ -166,6 +187,7 @@ where
         Self {
             config,
             data_provider,
+            spawner,
             scratch_pool,
         }
     }
@@ -494,29 +516,29 @@ where
 
             let partitions = async_tools::PartitionIter::new(batch.len(), ntasks);
 
-            let handles: Vec<_> = partitions
-                .map(|r| {
+            let handles = task::spawn_all(
+                &self.spawner,
+                context,
+                partitions.map(|r| {
                     let self_clone = self.clone();
                     let context_clone = context.clone();
                     let batch_clone = batch.clone();
                     let ids_clone = ids.clone();
 
                     // The task assigned to each round of `set_element`.
-                    let future = async move {
+                    async move {
                         self_clone
                             .set_chunk(&context_clone, &batch_clone, &ids_clone, r)
                             .await
-                    };
-
-                    tokio::spawn(context.wrap_spawn(future))
-                })
-                .collect();
+                    }
+                }),
+            )?;
 
             // The collection of all the insert guards for the batch.
             let mut guards = Vec::with_capacity(batch.len());
 
             for h in handles {
-                let processed = h.await.map_err(ANNError::new)??;
+                let processed = h.join().await.map_err(ANNError::new)??;
                 for guard in processed {
                     guards.push(guard);
                 }
@@ -693,19 +715,21 @@ where
 
             // Note: `num_tasks - 1` cannot underflow because `num_tasks` is guaranteed
             // to be at least 1.
-            let handles: Vec<_> = (0..num_tasks - 1)
-                .map(|_| {
+            let handles = task::spawn_all(
+                &self.spawner,
+                &context,
+                (0..num_tasks - 1).map(|_| {
                     let self_clone = self.clone();
                     let strategy = f();
                     let context_clone = context.clone();
                     let work_clone = work.clone();
-                    tokio::spawn(context.wrap_spawn(async move {
+                    async move {
                         self_clone
                             .multi_insert_bootstrap_task(&strategy, &context_clone, &work_clone)
                             .await
-                    }))
-                })
-                .collect();
+                    }
+                }),
+            )?;
 
             // Process work on this thread.
             let mut next = match self
@@ -720,7 +744,7 @@ where
             };
 
             for h in handles {
-                match h.await {
+                match h.join().await {
                     Ok(maybe_ok) => match maybe_ok {
                         Ok(mut v) => next.append(&mut v),
                         Err((mut v, err)) => {
@@ -853,8 +877,10 @@ where
             let seed = Arc::new(seed);
             let strategy = Arc::new(strategy);
 
-            let handles: Vec<_> = (0..num_tasks.get() - 1)
-                .map(|_| {
+            let handles = task::spawn_all(
+                &self.spawner,
+                context,
+                (0..num_tasks.get() - 1).map(|_| {
                     let self_clone = self.clone();
                     let seed_clone = seed.clone();
                     let strategy_clone = strategy.clone();
@@ -862,7 +888,7 @@ where
                     let vectors_clone = vectors.clone();
                     let work_clone = work.clone();
 
-                    let future = async move {
+                    async move {
                         self_clone
                             .search_and_prune_batch(
                                 &*strategy_clone,
@@ -872,10 +898,9 @@ where
                                 &seed_clone,
                             )
                             .await
-                    };
-                    tokio::spawn(context.wrap_spawn(future))
-                })
-                .collect();
+                    }
+                }),
+            )?;
 
             // Defer dealing with the `result` until after we have joined the other tasks.
             let mut edges = match self
@@ -891,13 +916,13 @@ where
 
             // At this point - all the other tasks should be close to completing.
             for h in handles {
-                match h.await {
+                match h.join().await {
                     Ok(Ok(mut v)) => edges.append(&mut v),
                     Ok(Err((mut v, err))) => {
                         edges.append(&mut v);
                         tracked_error!("search_prune_and_search failed: {}", err)
                     }
-                    Err(err) => tracked_error!("Tokio spawned task join error: {}", err),
+                    Err(err) => tracked_error!("Spawned task join error: {}", err),
                 }
             }
 
@@ -955,15 +980,17 @@ where
             }
 
             // Spawn backedge insertions.
-            let handles: Vec<_> = (0..num_tasks.get())
-                .map(|i| {
+            let handles = task::spawn_all(
+                &self.spawner,
+                context,
+                (0..num_tasks.get()).map(|i| {
                     let self_clone = self.clone();
                     let context_clone = context.clone();
                     let strategy_clone = strategy.clone();
                     let backedges_clone = backedges.clone();
                     let seed_clone = seed.clone();
 
-                    tokio::spawn(context.wrap_spawn(async move {
+                    async move {
                         let mut accessor = strategy_clone.seeded_prune_accessor(
                             self_clone.provider(),
                             &context_clone,
@@ -996,15 +1023,15 @@ where
                                 .await?;
                         }
                         ANNResult::<()>::Ok(())
-                    }))
-                })
-                .collect();
+                    }
+                }),
+            )?;
 
             for handle in handles {
-                let result = handle.await;
+                let result = handle.join().await;
                 match result {
                     Err(err) => {
-                        tracked_error!("Tokio task error in multi_insert: {}", err);
+                        tracked_error!("Task error in multi_insert: {}", err);
                     }
                     Ok(Err(err)) => {
                         tracked_error!("Error in `add_edge_and_prune: {}", err);
@@ -1361,13 +1388,15 @@ where
                 }
 
                 // compute edge updates for each inplace delete, running in parallel
-                let handles: Vec<_> = (0..chunk.len())
-                    .map(|i| {
+                let handles = task::spawn_all(
+                    &self.spawner,
+                    context,
+                    (0..chunk.len()).map(|i| {
                         let self_clone = Arc::clone(self);
                         let chunk_clone = chunk.clone();
                         let context_clone = context.clone();
                         let strategy_clone = strategy.clone();
-                        let future = async move {
+                        async move {
                             self_clone
                                 .inplace_delete_inner(
                                     &strategy_clone,
@@ -1377,17 +1406,16 @@ where
                                     &inplace_delete_method,
                                 )
                                 .await
-                        };
-                        tokio::spawn(context.wrap_spawn(future))
-                    })
-                    .collect();
+                        }
+                    }),
+                )?;
 
                 let mut edge_collection = Vec::with_capacity(handles.len());
                 for h in handles {
-                    let res = h.await.map_err(|err| {
+                    let res = h.join().await.map_err(|err| {
                         #[derive(Debug, Error)]
-                        #[error("Spawning a task failed in inplace-delete: {0}")]
-                        struct LocalError(tokio::task::JoinError);
+                        #[error("Joining a task failed in inplace-delete: {0}")]
+                        struct LocalError(task::TaskJoinError);
 
                         ANNError::new(LocalError(err))
                     });
@@ -1416,7 +1444,7 @@ where
                         }
                         Err(err) => {
                             tracked_error!(
-                                "Tokio spawned task has a join error in multi_inplace_delete: {}",
+                                "Spawned task has a join error in multi_inplace_delete: {}",
                                 err
                             );
                         }
@@ -1434,7 +1462,7 @@ where
                 let ids_to_delete = Arc::new(ids_to_delete);
                 let edge_hashmaps = Arc::new(edge_hashmaps);
 
-                let mut tasks = JoinSet::new();
+                let mut tasks = TaskGroup::new();
                 for _ in 0..num_tasks.get() {
                     let self_clone = self.clone();
                     let context_clone = context.clone();
@@ -1442,7 +1470,7 @@ where
                     let edges_clone = edges_to_add.clone();
                     let ids_to_delete_clone = ids_to_delete.clone();
                     let edge_hashmaps_clone = edge_hashmaps.clone();
-                    tasks.spawn(async move {
+                    tasks.push(task::spawn(&self.spawner, context, async move {
                         loop {
                             let result = {
                                 let mut guard = edges_clone.lock().map_err(|_| {
@@ -1484,13 +1512,13 @@ where
                             }
                         }
                         ANNResult::Ok(())
-                    });
+                    })?);
                 }
 
                 // Wait for all tasks to complete.
                 while let Some(result) = tasks.join_next().await {
                     if let Err(_e) = result {
-                        tracked_error!("Tokio task JoinError in multi_inplace_delete");
+                        tracked_error!("Task join error in multi_inplace_delete");
                     } else if let Ok(Err(e)) = result {
                         tracked_error!("Error in add_edge_and_prune: {}", e);
                     }

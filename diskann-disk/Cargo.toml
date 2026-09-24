@@ -19,7 +19,7 @@ targets = [
 # Core dependencies
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
-diskann-providers = { workspace = true }
+diskann-providers = { workspace = true, features = ["tokio-runtime"] }
 diskann-vector = { workspace = true }
 diskann-linalg = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }

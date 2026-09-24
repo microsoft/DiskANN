@@ -39,7 +39,8 @@ pub use path_utility::{
 };
 
 pub mod index_storage;
+pub use index_storage::{create_load_context, load_with_spawner};
+#[cfg(feature = "tokio-runtime")]
 pub use index_storage::{
-    create_load_context, load_fp_index, load_index_with_deletes, load_pq_index,
-    load_pq_index_with_deletes,
+    load_fp_index, load_index_with_deletes, load_pq_index, load_pq_index_with_deletes,
 };

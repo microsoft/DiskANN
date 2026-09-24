@@ -8,6 +8,7 @@
 pub mod error;
 pub mod neighbor;
 pub mod provider;
+pub mod task;
 pub mod tracing;
 pub mod utils;
 

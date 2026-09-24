@@ -207,6 +207,9 @@ jobs:
               -- -Dwarnings
           done
 
+      - name: Non-Tokio async index test
+        run: cargo test --locked --package diskann-providers --no-default-features --test runtime_agnostic --config "$RUST_CONFIG"
+
   codeql:
     name: CodeQL security analysis
     runs-on: ubuntu-latest

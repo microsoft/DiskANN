@@ -18,7 +18,7 @@ crossbeam = "0.8.4"
 dashmap = { workspace = true, features = ["inline"] }
 diskann.workspace = true
 diskann-quantization = { workspace = true, features = ["flatbuffers"] }
-diskann-providers.workspace = true
+diskann-providers = { workspace = true, features = ["tokio-runtime"] }
 diskann-utils.workspace = true
 diskann-vector.workspace = true
 foldhash = "0.2.0"

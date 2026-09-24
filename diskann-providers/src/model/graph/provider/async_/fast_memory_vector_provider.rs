@@ -229,7 +229,7 @@ impl<T: VectorRepr> FastMemoryVectorProviderAsync<T> {
         self.prefetch_lookahead
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "tokio-runtime"))]
     pub(crate) fn compare_data(&self, other: &Self)
     where
         T: PartialEq,

@@ -354,7 +354,7 @@ where
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "tokio-runtime"))]
     pub(crate) fn computer(&self) -> &spherical::iface::QueryComputer {
         &self.computer
     }

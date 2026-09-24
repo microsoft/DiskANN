@@ -8,6 +8,7 @@ use std::sync::Arc;
 use diskann::{
     ANNResult,
     graph::{Config, DiskANNIndex},
+    task::TaskSpawner,
     utils::VectorRepr,
 };
 use diskann_utils::future::AsyncFriendly;
@@ -27,7 +28,7 @@ use crate::model::{
 // Helper Constructors //
 /////////////////////////
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tokio-runtime"))]
 pub(crate) fn simplified_builder(
     l_search: usize,
     pruned_degree: usize,
@@ -96,6 +97,7 @@ pub type PQMemoryIndex<T, D = NoDeletes> = QuantMemoryIndex<T, DefaultQuant, D>;
 
 pub type QuantOnlyIndex<Q, D = NoDeletes> = DiskANNIndex<DefaultProvider<NoStore, Q, D>>;
 
+#[cfg(feature = "tokio-runtime")]
 pub fn new_index<T, D>(
     config: Config,
     params: DefaultProviderParameters,
@@ -106,11 +108,37 @@ where
     D: CreateDeleteProvider,
     D::Target: AsyncFriendly,
 {
-    let fp_precursor = CreateFullPrecision::new(params.dim, params.prefetch_cache_line_level);
-    let data_provider = DefaultProvider::new_empty(params, fp_precursor, NoStore, deleter)?;
-    Ok(Arc::new(DiskANNIndex::new(config, data_provider, None)))
+    new_index_with_spawner(
+        config,
+        params,
+        deleter,
+        Arc::new(diskann::task::TokioSpawner),
+    )
 }
 
+/// Create an in-memory index using the caller's async executor for parallel work.
+pub fn new_index_with_spawner<T, D>(
+    config: Config,
+    params: DefaultProviderParameters,
+    deleter: D,
+    spawner: Arc<dyn TaskSpawner>,
+) -> ANNResult<MemoryIndex<T, D::Target>>
+where
+    T: VectorRepr,
+    D: CreateDeleteProvider,
+    D::Target: AsyncFriendly,
+{
+    let fp_precursor = CreateFullPrecision::new(params.dim, params.prefetch_cache_line_level);
+    let data_provider = DefaultProvider::new_empty(params, fp_precursor, NoStore, deleter)?;
+    Ok(Arc::new(DiskANNIndex::new_with_spawner(
+        config,
+        data_provider,
+        None,
+        spawner,
+    )))
+}
+
+#[cfg(feature = "tokio-runtime")]
 pub fn new_quant_index<T, Q, D>(
     config: Config,
     params: DefaultProviderParameters,
@@ -124,11 +152,41 @@ where
     D: CreateDeleteProvider,
     D::Target: AsyncFriendly,
 {
-    let fp_precursor = CreateFullPrecision::new(params.dim, params.prefetch_cache_line_level);
-    let data_provider = DefaultProvider::new_empty(params, fp_precursor, quant, deleter)?;
-    Ok(Arc::new(DiskANNIndex::new(config, data_provider, None)))
+    new_quant_index_with_spawner(
+        config,
+        params,
+        quant,
+        deleter,
+        Arc::new(diskann::task::TokioSpawner),
+    )
 }
 
+/// Create a quantized in-memory index using the caller's async executor.
+pub fn new_quant_index_with_spawner<T, Q, D>(
+    config: Config,
+    params: DefaultProviderParameters,
+    quant: Q,
+    deleter: D,
+    spawner: Arc<dyn TaskSpawner>,
+) -> ANNResult<QuantMemoryIndex<T, Q::Target, D::Target>>
+where
+    T: VectorRepr,
+    Q: CreateVectorStore,
+    Q::Target: AsyncFriendly,
+    D: CreateDeleteProvider,
+    D::Target: AsyncFriendly,
+{
+    let fp_precursor = CreateFullPrecision::new(params.dim, params.prefetch_cache_line_level);
+    let data_provider = DefaultProvider::new_empty(params, fp_precursor, quant, deleter)?;
+    Ok(Arc::new(DiskANNIndex::new_with_spawner(
+        config,
+        data_provider,
+        None,
+        spawner,
+    )))
+}
+
+#[cfg(feature = "tokio-runtime")]
 pub fn new_quant_only_index<Q, D>(
     config: Config,
     params: DefaultProviderParameters,
@@ -141,15 +199,38 @@ where
     D: CreateDeleteProvider,
     D::Target: AsyncFriendly,
 {
+    new_quant_only_index_with_spawner(
+        config,
+        params,
+        quant,
+        deleter,
+        Arc::new(diskann::task::TokioSpawner),
+    )
+}
+
+/// Create a quantized-only index using the caller's async executor.
+pub fn new_quant_only_index_with_spawner<Q, D>(
+    config: Config,
+    params: DefaultProviderParameters,
+    quant: Q,
+    deleter: D,
+    spawner: Arc<dyn TaskSpawner>,
+) -> ANNResult<QuantOnlyIndex<Q::Target, D::Target>>
+where
+    Q: CreateVectorStore,
+    Q::Target: AsyncFriendly,
+    D: CreateDeleteProvider,
+    D::Target: AsyncFriendly,
+{
     let data = DefaultProvider::new_empty(params, NoStore, quant, deleter)?;
-    Ok(DiskANNIndex::new(config, data, None))
+    Ok(DiskANNIndex::new_with_spawner(config, data, None, spawner))
 }
 
 ///////////
 // Tests //
 ///////////
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tokio-runtime"))]
 pub(crate) mod tests {
     use std::{
         marker::PhantomData,

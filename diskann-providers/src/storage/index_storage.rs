@@ -3,21 +3,24 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use super::{StorageReadProvider, StorageWriteProvider};
+#[cfg(feature = "tokio-runtime")]
+use diskann::utils::VectorRepr;
 use diskann::{
-    ANNError, ANNResult, graph::DiskANNIndex, provider::DataProvider, utils::VectorRepr,
+    ANNError, ANNResult, graph::DiskANNIndex, provider::DataProvider, task::TaskSpawner,
 };
 use diskann_utils::{future::AsyncFriendly, lazy_format};
 
 use super::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
+#[cfg(feature = "tokio-runtime")]
+use crate::model::graph::provider::async_::{
+    FastMemoryQuantVectorProviderAsync, TableDeleteProviderAsync, common,
+    inmem::{self, FullPrecisionStore},
+};
 use crate::model::{
-    configuration::IndexConfiguration,
-    graph::provider::async_::{
-        FastMemoryQuantVectorProviderAsync, TableDeleteProviderAsync, common,
-        inmem::{self, DefaultProvider, FullPrecisionStore},
-    },
+    configuration::IndexConfiguration, graph::provider::async_::inmem::DefaultProvider,
 };
 
 impl<U, V, D> SaveWith<AsyncIndexMetadata> for DiskANNIndex<DefaultProvider<U, V, D>>
@@ -84,6 +87,28 @@ pub fn create_load_context(
     })
 }
 
+/// Load an async index using the caller's executor for its parallel operations.
+pub async fn load_with_spawner<DP, P>(
+    provider: &P,
+    path: &str,
+    index_config: IndexConfiguration,
+    spawner: Arc<dyn TaskSpawner>,
+) -> ANNResult<DiskANNIndex<DP>>
+where
+    DP: DataProvider<InternalId = u32> + LoadWith<AsyncQuantLoadContext, Error = ANNError>,
+    P: StorageReadProvider,
+{
+    let pq_context = create_load_context(path, &index_config, false)?;
+    let data_provider = DP::load_with(provider, &pq_context).await?;
+    Ok(DiskANNIndex::new_with_spawner(
+        index_config.config,
+        data_provider,
+        NonZeroUsize::new(index_config.num_threads),
+        spawner,
+    ))
+}
+
+#[cfg(feature = "tokio-runtime")]
 impl<'a, DP> LoadWith<(&'a str, IndexConfiguration)> for DiskANNIndex<DP>
 where
     DP: DataProvider<InternalId = u32> + LoadWith<AsyncQuantLoadContext, Error = ANNError>,
@@ -96,18 +121,17 @@ where
     where
         P: StorageReadProvider,
     {
-        let pq_context = create_load_context(path, index_config, false)?;
-
-        let data_provider = DP::load_with(provider, &pq_context).await?;
-        let num_threads = index_config.num_threads;
-        Ok(Self::new(
-            index_config.config.clone(),
-            data_provider,
-            NonZeroUsize::new(num_threads),
-        ))
+        load_with_spawner(
+            provider,
+            path,
+            index_config.clone(),
+            Arc::new(diskann::task::TokioSpawner),
+        )
+        .await
     }
 }
 
+#[cfg(feature = "tokio-runtime")]
 pub async fn load_pq_index<T, P>(
     provider: &P,
     path: &str,
@@ -120,6 +144,7 @@ where
     DiskANNIndex::load_with(provider, &(path, config)).await
 }
 
+#[cfg(feature = "tokio-runtime")]
 pub async fn load_pq_index_with_deletes<T, P>(
     provider: &P,
     path: &str,
@@ -140,6 +165,7 @@ where
     DiskANNIndex::load_with(provider, &(path, config)).await
 }
 
+#[cfg(feature = "tokio-runtime")]
 pub async fn load_fp_index<T, P, Q>(
     provider: &P,
     path: &str,
@@ -154,6 +180,7 @@ where
     DiskANNIndex::load_with(provider, &(path, config)).await
 }
 
+#[cfg(feature = "tokio-runtime")]
 pub async fn load_index<P, U, V>(
     provider: &P,
     path: &str,
@@ -168,6 +195,7 @@ where
     DiskANNIndex::load_with(provider, &(path, config)).await
 }
 
+#[cfg(feature = "tokio-runtime")]
 pub async fn load_index_with_deletes<T, P>(
     provider: &P,
     path: &str,
@@ -213,7 +241,7 @@ fn get_and_validate_single_starting_point<U, V, D>(
 // Tests //
 ///////////
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tokio-runtime"))]
 mod tests {
     use std::{num::NonZeroUsize, sync::Arc};
 

@@ -2,6 +2,23 @@
 
 Stay tuned for more updates!
 
+## Async runtimes
+
+The async graph index uses an executor only to schedule parallel insert/delete work.
+`diskann` and `diskann-providers` enable the `tokio-runtime` compatibility feature
+by default, preserving `DiskANNIndex::new` and the existing provider constructors.
+For a different executor, disable those crates' default features and supply an
+`Arc<dyn diskann::task::TaskSpawner>` to `DiskANNIndex::new_with_spawner`,
+`diskann_providers::index::diskann_async::new_index_with_spawner` (or its
+quantized variants), or `diskann_providers::storage::load_with_spawner`.
+The spawner must schedule `Send` tasks independently on the same executor used
+by the provider, without blocking. It must drop cancelled tasks so callers
+waiting for their results receive a join error.
+
+The synchronous `diskann-providers` wrapper and `diskann-disk` builder/searcher
+still explicitly use Tokio runtimes; they are not part of the runtime-neutral
+async API.
+
 ## Developer Docs
 
 ### Test Baselines

@@ -5,4 +5,5 @@
 
 pub mod diskann_async;
 
+#[cfg(feature = "tokio-runtime")]
 pub mod wrapped_async;

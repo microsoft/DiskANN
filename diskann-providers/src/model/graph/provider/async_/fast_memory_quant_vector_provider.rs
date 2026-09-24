@@ -285,7 +285,7 @@ impl FastMemoryQuantVectorProviderAsync {
         storage::bin::save_to_bin(self, provider, data)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "tokio-runtime"))]
     pub(crate) fn compare_data(&self, other: &Self) {
         assert_eq!(self.max_vectors, other.max_vectors);
         assert_eq!(
