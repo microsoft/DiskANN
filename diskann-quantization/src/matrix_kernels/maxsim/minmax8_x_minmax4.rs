@@ -848,7 +848,7 @@ mod tests {
     use crate::{
         matrix_kernels::{num::value_or_one, test_util::panic_message_for},
         minmax::{Data, DataMutRef, DataRef, MinMaxMeta},
-        multi_vector::MatRef,
+        multi_vector::{MatRef, block_transposed::BlockLayout},
     };
 
     fn dimension(value: usize) -> DimK {
@@ -882,8 +882,7 @@ mod tests {
                     assert_eq!(meta.n, (row % 5) as f32 * 0.5);
                     let mut expected = vec![0; k];
                     for d in 0..dim {
-                        let p = d / 64 * 64 + d % 2 * 32 + d % 64 / 2;
-                        expected[p] = ((row * 7 + d * 3 + 1) % 16) as u8;
+                        expected[EvenOdd64Layout::position(d)] = ((row * 7 + d * 3 + 1) % 16) as u8;
                     }
                     assert_eq!(&values[row * k..(row + 1) * k], expected);
                 }
@@ -1218,10 +1217,10 @@ mod tests {
                 // Deliberately construct panels without query storage, the layout
                 // mapping, decoder, canonical reader, quantizer, or compensation. A's
                 // padding is non-zero so that any contribution from it is detected.
-                let mut a = vec![0xff; packed::Layout::<MR, PACK>::block_len(k)];
+                let mut a = vec![0xff; BlockLayout::<MR, PACK>::block_len(k)];
                 for row in 0..MR {
                     for d in 0..k {
-                        a[packed::Layout::<MR, PACK>::linear(row, d)] = a_value(row, d);
+                        a[BlockLayout::<MR, PACK>::linear_index(row, d, k)] = a_value(row, d);
                     }
                 }
                 let b: Vec<_> = (0..3)

@@ -170,8 +170,7 @@ mod tests {
                 arch.decode(codes, layout, &mut output[1..layout.padded() + 1]);
                 let mut expected = vec![0; layout.padded()];
                 for d in 0..dim {
-                    let p = (d / 64) * 64 + (d % 2) * 32 + (d % 64) / 2;
-                    expected[p] = (codes[d / 2] >> (4 * (d % 2))) & 15;
+                    expected[EvenOdd64Layout::position(d)] = (codes[d / 2] >> (4 * (d % 2))) & 15;
                 }
                 assert_eq!(&output[1..layout.padded() + 1], expected, "dim={dim}");
                 assert_eq!(output[0], 0xfe);

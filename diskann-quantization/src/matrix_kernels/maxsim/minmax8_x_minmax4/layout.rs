@@ -41,6 +41,15 @@ impl EvenOdd64Layout {
     pub(super) fn padded(self) -> usize {
         self.padded
     }
+
+    /// The position of original dimension `d` within a padded row.
+    ///
+    /// Within each 64-dimensional block, the 32 even dimensions come first in order,
+    /// followed by the 32 odd dimensions. This matches the low/high nibble order of
+    /// 32 packed MinMax4 bytes.
+    pub(super) const fn position(d: usize) -> usize {
+        d / Self::BLOCK * Self::BLOCK + d % 2 * Self::PACKED_BYTES + d % Self::BLOCK / 2
+    }
 }
 
 /// Only row-wise writes in original dimension order can populate this storage.
@@ -77,14 +86,8 @@ impl<const MR: usize, const PACK: usize> PackedQuery<MR, PACK> {
             .get_row_mut(row)
             .expect("query row out of bounds");
         // Fixed dimensions keep the zero-initialized padding untouched across row rewrites.
-        for (block, source) in values.chunks(EvenOdd64Layout::BLOCK).enumerate() {
-            let base = block * EvenOdd64Layout::BLOCK;
-            for (lane, &value) in source.iter().step_by(2).enumerate() {
-                output.set(base + lane, value);
-            }
-            for (lane, &value) in source.iter().skip(1).step_by(2).enumerate() {
-                output.set(base + EvenOdd64Layout::PACKED_BYTES + lane, value);
-            }
+        for (d, &value) in values.iter().enumerate() {
+            output.set(EvenOdd64Layout::position(d), value);
         }
     }
 
@@ -133,6 +136,7 @@ impl<'a, const MR: usize, const PACK: usize> PackedQueryView<'a, MR, PACK> {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::multi_vector::block_transposed::BlockLayout;
 
     pub(in crate::matrix_kernels::maxsim::minmax8_x_minmax4) const DIMS: &[usize] = &[
         0, 1, 7, 8, 9, 31, 32, 33, 63, 64, 65, 127, 128, 129, 249, 250, 255, 256, 257, 1024, 1025,
@@ -152,12 +156,13 @@ pub(super) mod tests {
                         storage.set_row(row, &values);
                     }
                     let mut expected = vec![0; rows.div_ceil(MR) * MR * k];
-                    // Derive each destination independently from the original dimension.
                     for row in 0..rows {
                         for d in 0..dim {
-                            let p = (d / 64) * 64 + (d % 2) * 32 + (d % 64) / 2;
-                            let offset = (row / MR) * packed::Layout::<MR, PACK>::block_len(k)
-                                + packed::Layout::<MR, PACK>::linear(row % MR, p);
+                            let offset = BlockLayout::<MR, PACK>::linear_index(
+                                row,
+                                EvenOdd64Layout::position(d),
+                                k,
+                            );
                             expected[offset] = ((row * 17 + d + generation) % 255 + 1) as u8;
                         }
                     }
@@ -170,6 +175,25 @@ pub(super) mod tests {
                 assert_eq!(storage.as_view().is_none(), rows == 0 || dim == 0);
             }
         }
+    }
+
+    /// Check `position` against the definition: within each 64-dimensional block, even
+    /// dimensions in order, then odd dimensions in order.
+    #[test]
+    fn even_odd_positions() {
+        let mut d = 0;
+        for block in 0..3 {
+            let base = block * EvenOdd64Layout::BLOCK;
+            for i in 0..EvenOdd64Layout::PACKED_BYTES {
+                assert_eq!(EvenOdd64Layout::position(base + 2 * i), base + i);
+                assert_eq!(
+                    EvenOdd64Layout::position(base + 2 * i + 1),
+                    base + EvenOdd64Layout::PACKED_BYTES + i
+                );
+                d += 2;
+            }
+        }
+        assert_eq!(d, 3 * EvenOdd64Layout::BLOCK);
     }
 
     #[test]

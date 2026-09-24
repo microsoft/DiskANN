@@ -11,71 +11,8 @@ use crate::{
         num::{DimK, Elements},
         ptr::Slice,
     },
-    multi_vector::BlockTransposedRef,
+    multi_vector::{BlockTransposedRef, block_transposed::BlockLayout},
 };
-
-//--------//
-// Layout //
-//--------//
-
-/// Index conversions for one block of `SZ` bands and `k` logical columns.
-///
-/// Columns are gathered into groups of `PACK`. Group `g` stores columns
-/// `[g * PACK, (g + 1) * PACK)` of all `SZ` bands contiguously, one band after another.
-/// When `PACK` does not divide `k`, the final group is padded to `PACK` columns.
-///
-/// Intra-block offsets do not depend on `k`; only the block stride does.
-pub(in crate::matrix_kernels) struct Layout<const SZ: usize, const PACK: usize>;
-
-impl<const SZ: usize, const PACK: usize> Layout<SZ, PACK> {
-    const ASSERTIONS: () = {
-        assert!(SZ > 0, "group size may not be zero");
-        assert!(PACK > 0, "packing factor may not be zero");
-        assert!(
-            SZ.is_multiple_of(PACK),
-            "the group size must be a multiple of PACK"
-        );
-    };
-
-    /// The number of groups needed to hold `k` logical columns.
-    pub(in crate::matrix_kernels) const fn groups(k: usize) -> usize {
-        let () = Self::ASSERTIONS;
-        k.div_ceil(PACK)
-    }
-
-    /// The number of physical columns in a block holding `k` logical columns.
-    pub(in crate::matrix_kernels) const fn padded_k(k: usize) -> usize {
-        Self::groups(k) * PACK
-    }
-
-    /// The number of physical elements in a block holding `k` logical columns.
-    pub(in crate::matrix_kernels) const fn block_len(k: usize) -> usize {
-        SZ * Self::padded_k(k)
-    }
-
-    /// Convert a logical `(band, col)` coordinate to its offset within a block.
-    #[cfg(test)]
-    pub(in crate::matrix_kernels) const fn linear(band: usize, col: usize) -> usize {
-        Self::group_offset(col / PACK) + band * PACK + col % PACK
-    }
-
-    /// The offset of group `group` within a block.
-    pub(in crate::matrix_kernels) const fn group_offset(group: usize) -> usize {
-        let () = Self::ASSERTIONS;
-        group * SZ * PACK
-    }
-
-    /// Convert an offset within a block to its `(band, col)` coordinate.
-    ///
-    /// The returned column may lie in the padding past the logical `k`.
-    #[cfg(test)]
-    pub(in crate::matrix_kernels) const fn logical(linear: usize) -> (usize, usize) {
-        let () = Self::ASSERTIONS;
-        let group = linear / (SZ * PACK);
-        let within = linear % (SZ * PACK);
-        (within / PACK, group * PACK + within % PACK)
-    }
-}
 
 //------//
 // View //
@@ -84,12 +21,12 @@ impl<const SZ: usize, const PACK: usize> Layout<SZ, PACK> {
 /// A view over packed memory.
 ///
 /// Each block contains `SZ` bands of `k` logical columns laid out according to
-/// [`Layout`]. A block occupies [`Layout::block_len`] elements. This matches the
+/// [`BlockLayout`]. A block occupies [`BlockLayout::block_len`] elements. This matches the
 /// physical layout of [`BlockTransposedRef`]. No block may be partially filled.
 ///
 /// # Class Invariants
 ///
-/// * The tracked length `ptr.len()` must be equal to `blocks * Layout::block_len(k)`.
+/// * The tracked length `ptr.len()` must be equal to `blocks * BlockLayout::block_len(k)`.
 /// * `SZ` and `PACK` may not be zero and `PACK` must divide `SZ`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct View<'a, T, const SZ: usize, const PACK: usize = 1> {
@@ -117,13 +54,13 @@ impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
         let k = DimK::new(NonZeroUsize::new(v.ncols())?);
 
         // SAFETY: `BlockTransposedRef` stores exactly `num_blocks * GROUP * padded_ncols`
-        // elements, where `padded_ncols == Layout::padded_k(ncols)`.
+        // elements, where `padded_ncols == BlockLayout::padded_ncols(ncols)`.
         Some(unsafe { Self::new(Slice::new(v.as_slice()), blocks, k) })
     }
 
     /// # Safety
     ///
-    /// `ptr.len()` must be exactly equal to `blocks * Layout::<SZ, PACK>::block_len(k)`.
+    /// `ptr.len()` must be exactly equal to `blocks * BlockLayout::<SZ, PACK>::block_len(k)`.
     pub(in crate::matrix_kernels) unsafe fn new(
         ptr: Slice<'a, T>,
         blocks: NonZeroUsize,
@@ -131,7 +68,7 @@ impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
     ) -> Self {
         bounds::check_eq!(
             ptr.len(),
-            blocks.get() * Layout::<SZ, PACK>::block_len(k.value().get()),
+            blocks.get() * BlockLayout::<SZ, PACK>::block_len(k.value().get()),
             "invalid block-transposed access",
         );
 
@@ -141,12 +78,12 @@ impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
 
     /// # Safety
     ///
-    /// `ptr.len()` must be exactly equal to `blocks * Layout::<SZ, PACK>::block_len(k)`.
+    /// `ptr.len()` must be exactly equal to `blocks * BlockLayout::<SZ, PACK>::block_len(k)`.
     unsafe fn new_inner(ptr: Slice<'a, T>, blocks: NonZeroUsize, k: Bound) -> Self {
         k.with(|k| {
             bounds::check_eq!(
                 ptr.len(),
-                blocks.get() * Layout::<SZ, PACK>::block_len(k),
+                blocks.get() * BlockLayout::<SZ, PACK>::block_len(k),
                 "invalid block-transposed access",
             );
         });
@@ -171,7 +108,7 @@ impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
     /// `k` must be equal to the contraction dimension tracked by [`Self::k`].
     pub(in crate::matrix_kernels) fn block_stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k, k.value());
-        Elements::new(Layout::<SZ, PACK>::block_len(k.value().get()))
+        Elements::new(BlockLayout::<SZ, PACK>::block_len(k.value().get()))
     }
 
     /// Return the number of bands stored in `self`.
@@ -289,11 +226,11 @@ impl<T, const SZ: usize, const PACK: usize> View<'_, T, SZ, PACK> {
 // Panel //
 //-------//
 
-/// A single block of `SZ` bands and `k` logical columns laid out according to [`Layout`].
+/// A single block of `SZ` bands and `k` logical columns laid out according to [`BlockLayout`].
 ///
 /// # Class Invariants
 ///
-/// The bound `ptr.len()` must be equal to `Layout::<SZ, PACK>::block_len(k)`.
+/// The bound `ptr.len()` must be equal to `BlockLayout::<SZ, PACK>::block_len(k)`.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize, const PACK: usize = 1> {
     ptr: Slice<'a, T>,
@@ -303,7 +240,7 @@ pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize, const PACK: u
 impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     /// # Safety
     ///
-    /// `ptr.len()` must be equal to `Layout::<SZ, PACK>::block_len(k)`.
+    /// `ptr.len()` must be equal to `BlockLayout::<SZ, PACK>::block_len(k)`.
     #[cfg(test)]
     pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
         // SAFETY: Inherited from caller.
@@ -312,9 +249,9 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
 
     /// # Safety
     ///
-    /// `ptr.len()` must be equal to `Layout::<SZ, PACK>::block_len(k)`.
+    /// `ptr.len()` must be equal to `BlockLayout::<SZ, PACK>::block_len(k)`.
     unsafe fn new_inner(ptr: Slice<'a, T>, k: Bound) -> Self {
-        k.with(|k| bounds::check_eq!(ptr.len(), Layout::<SZ, PACK>::block_len(k)));
+        k.with(|k| bounds::check_eq!(ptr.len(), BlockLayout::<SZ, PACK>::block_len(k)));
         Self { ptr, k }
     }
 
@@ -337,13 +274,13 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     ///
     /// # Safety
     ///
-    /// `group` must be strictly less than `Layout::<SZ, PACK>::groups(k)`, where `k` is
+    /// `group` must be strictly less than `BlockLayout::<SZ, PACK>::groups(k)`, where `k` is
     /// the contraction dimension tracked by [`Self::k`].
     pub(in crate::matrix_kernels) unsafe fn group(&self, group: usize) -> Patch<'a, T, SZ, PACK> {
         self.k.with(|k| {
             bounds::check_lt!(
                 Bound::new(group),
-                Layout::<SZ, PACK>::groups(k),
+                BlockLayout::<SZ, PACK>::groups(k),
                 "packed group out of bounds",
             );
         });
@@ -353,7 +290,7 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
         unsafe {
             Patch::new(
                 self.ptr
-                    .add(Elements::new(Layout::<SZ, PACK>::group_offset(group)))
+                    .add(Elements::new(BlockLayout::<SZ, PACK>::group_offset(group)))
                     .truncate(Elements::new(SZ * PACK)),
             )
         }
@@ -363,13 +300,13 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
 #[cfg(test)]
 impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     fn checked_as_std_slice(self) -> &'a [T] {
-        let len = Layout::<SZ, PACK>::block_len(self.k().value());
+        let len = BlockLayout::<SZ, PACK>::block_len(self.k().value());
         // SAFETY: Bounds are retained under `cfg(test)`.
         unsafe { self.ptr.as_std_slice(len) }
     }
 
     fn checked_group(self, group: usize) -> Patch<'a, T, SZ, PACK> {
-        assert!(group < Layout::<SZ, PACK>::groups(self.k().value()));
+        assert!(group < BlockLayout::<SZ, PACK>::groups(self.k().value()));
         // SAFETY: Checked immediately above.
         unsafe { self.group(group) }
     }
@@ -595,7 +532,7 @@ mod tests {
 
         assert_eq!(packed.len(), SZ * k.next_multiple_of(PACK), "{ctx}");
         for (index, &value) in packed.iter().enumerate() {
-            let (row, col) = Layout::<SZ, PACK>::logical(index);
+            let (row, col) = BlockLayout::<SZ, PACK>::logical_index(index, k);
             let expected = if col < k {
                 reference[(block * SZ + row, col)]
             } else {
@@ -708,40 +645,6 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_conversions() {
-        check_layout::<1, 1>();
-        check_layout::<4, 1>();
-        check_layout::<4, 2>();
-        check_layout::<8, 4>();
-        check_layout::<16, 4>();
-        check_layout::<16, 8>();
-    }
-
-    fn check_layout<const SZ: usize, const PACK: usize>() {
-        for k in 1..=(3 * PACK + 1) {
-            let groups = k.div_ceil(PACK);
-            assert_eq!(Layout::<SZ, PACK>::groups(k), groups);
-            assert_eq!(Layout::<SZ, PACK>::padded_k(k), groups * PACK);
-            assert_eq!(Layout::<SZ, PACK>::block_len(k), SZ * groups * PACK);
-
-            // Every physical offset, in the documented enumeration order, maps to a unique
-            // coordinate and back.
-            let mut linear = 0;
-            for group in 0..groups {
-                for band in 0..SZ {
-                    for lane in 0..PACK {
-                        let col = group * PACK + lane;
-                        assert_eq!(Layout::<SZ, PACK>::linear(band, col), linear);
-                        assert_eq!(Layout::<SZ, PACK>::logical(linear), (band, col));
-                        linear += 1;
-                    }
-                }
-            }
-            assert_eq!(linear, Layout::<SZ, PACK>::block_len(k));
-        }
-    }
-
-    #[test]
     fn test_group_patches() {
         check_group_patches::<4, 1>();
         check_group_patches::<4, 2>();
@@ -762,7 +665,7 @@ mod tests {
                 unsafe { View::<_, SZ, PACK>::new(Slice::new(&packed), blocks, DimK::new(k)) };
 
             view.checked_visit_panels(|panel, block| {
-                for group in 0..Layout::<SZ, PACK>::groups(k.get()) {
+                for group in 0..BlockLayout::<SZ, PACK>::groups(k.get()) {
                     let patch = panel.checked_group(group);
                     assert_eq!(patch.as_ptr().len().value(), SZ * PACK);
                     for (row, values) in patch.as_array().iter().enumerate() {
@@ -789,7 +692,7 @@ mod tests {
         let data = [0u8; 16];
         // Three logical columns occupy two groups of two.
         let k = DimK::new(NonZeroUsize::new(3).unwrap());
-        // SAFETY: `data` spans `4 * padded_k(3) = 16` elements.
+        // SAFETY: `data` spans `BlockLayout::<4, 2>::block_len(3) = 16` elements.
         let panel = unsafe { Panel::<_, 4, 2>::new(Slice::new(&data), k) };
         let message = panic_message_for(|| {
             // SAFETY: The deliberate out-of-bounds group is caught under `cfg(test)`.
@@ -830,7 +733,7 @@ mod tests {
                 view.checked_visit_panels(|panel, block| {
                     let packed = panel.checked_as_std_slice();
                     for (index, &value) in packed.iter().enumerate() {
-                        let (row, col) = Layout::<SZ, PACK>::logical(index);
+                        let (row, col) = BlockLayout::<SZ, PACK>::logical_index(index, ncols);
                         let logical = block * SZ + row;
                         let expected = if logical < nrows && col < ncols {
                             (logical * 1000 + col) as f32
