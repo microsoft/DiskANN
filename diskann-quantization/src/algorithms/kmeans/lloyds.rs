@@ -94,11 +94,11 @@ pub fn distances_in_place(
 
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
             let c0 = f32s::splat(diskann_wide::ARCH, unsafe {
-                *centers.get_unchecked(center_row_start, dim)
+                *centers.element_unchecked(center_row_start, dim)
             });
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
             let c1 = f32s::splat(diskann_wide::ARCH, unsafe {
-                *centers.get_unchecked(center_row_start + 1, dim)
+                *centers.element_unchecked(center_row_start + 1, dim)
             });
 
             s00 = c0.mul_add_simd(d0, s00);
@@ -134,7 +134,7 @@ pub fn distances_in_place(
 
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
             let c0 = f32s::splat(diskann_wide::ARCH, unsafe {
-                *centers.get_unchecked(center_row_start, dim)
+                *centers.element_unchecked(center_row_start, dim)
             });
 
             s00 = c0.mul_add_simd(d0, s00);

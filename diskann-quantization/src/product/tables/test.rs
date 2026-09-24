@@ -147,7 +147,7 @@ pub(super) fn create_dataset<R: Rng>(
                 .try_into()
                 .unwrap();
 
-            expected[(row_index, chunk)] = expected_index as usize;
+            *expected.element_mut(row_index, chunk) = expected_index as usize;
         }
     }
 
@@ -435,7 +435,7 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
             for row in 0..num_points {
                 clear(buf.as_mut_view());
                 let value = *sample.choose(&mut rng).unwrap();
-                buf[(row, distribution.sample(&mut rng))] = value;
+                *buf.element_mut(row, distribution.sample(&mut rng)) = value;
                 let err = table
                     .compress_into(buf.as_view(), output.as_mut_view())
                     .expect_err(&format!("expected a value of {}", value));

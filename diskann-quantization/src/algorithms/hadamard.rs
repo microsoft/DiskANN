@@ -403,11 +403,11 @@ mod tests {
 
             for c in 0..m.ncols() {
                 for r in 0..m.nrows() {
-                    let mut v = sub[(r % half, c % half)];
+                    let mut v = *sub.element(r % half, c % half);
                     if c >= half && r >= half {
                         v = -v;
                     }
-                    m[(c, r)] = v;
+                    *m.element_mut(c, r) = v;
                 }
             }
             m
@@ -431,9 +431,9 @@ mod tests {
             for j in 0..c.ncols() {
                 let mut v = 0.0;
                 for k in 0..a.ncols() {
-                    v = a[(i, k)].mul_add(b[(k, j)], v);
+                    v = a.element(i, k).mul_add(*b.element(k, j), v);
                 }
-                c[(i, j)] = v;
+                *c.element_mut(i, j) = v;
             }
         }
         c
@@ -457,8 +457,8 @@ mod tests {
         assert_eq!(src.ncols(), 1);
 
         for j in 0..src.nrows() {
-            let src = src[(j, 0)];
-            let reference = reference[(j, 0)];
+            let src = *src.element(j, 0);
+            let reference = *reference.element(j, 0);
 
             let relative_error = (src - reference).abs() / src.abs().max(reference.abs());
             assert!(
@@ -535,8 +535,8 @@ mod tests {
             assert_eq!(src_clone.ncols(), 1);
 
             for j in 0..src_clone.nrows() {
-                let src_clone = src_clone[(j, 0)];
-                let reference = reference[(j, 0)];
+                let src_clone = *src_clone.element(j, 0);
+                let reference = *reference.element(j, 0);
 
                 let relative_error =
                     (src_clone - reference).abs() / src_clone.abs().max(reference.abs());

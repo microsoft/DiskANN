@@ -305,7 +305,7 @@ mod tests {
                 let mut m = Matrix::new(0, nrows, this_dim);
                 for r in 0..nrows {
                     for c in 0..this_dim {
-                        m[(r, c)] = dim * r + offset + c;
+                        *m.element_mut(r, c) = dim * r + offset + c;
                     }
                 }
                 m
@@ -367,7 +367,7 @@ mod tests {
                     // Create a dataset with `nclusters`, each cluster
                     for cluster in 0..self.nclusters {
                         let this_offset = offset + (cluster as f32 * self.step_between_clusters);
-                        centers[(cluster, 0)] = this_offset;
+                        *centers.element_mut(cluster, 0) = this_offset;
 
                         for element in 0..self.cluster_size {
                             let row = initial.row_mut(cluster * self.cluster_size + element);
@@ -462,7 +462,7 @@ mod tests {
                 let mut min_distance = f32::MAX;
                 let mut min_index = 0;
                 for c in 0..dataset.centers.nrows() {
-                    let distance = broadcast_distance(row, dataset.centers[(c, i)]);
+                    let distance = broadcast_distance(row, *dataset.centers.element(c, i));
                     if distance < min_distance {
                         min_distance = distance;
                         min_index = c;
@@ -653,7 +653,7 @@ mod tests {
             let mut data = Matrix::<f32>::new(1.0, nrows, ncols);
 
             // Positive Infinity
-            data[(r, c)] = f32::INFINITY;
+            *data.element_mut(r, c) = f32::INFINITY;
             let result = trainer.train(
                 data.as_view(),
                 crate::views::ChunkOffsetsView::new(&offsets).unwrap(),
@@ -664,7 +664,7 @@ mod tests {
             check_result(result);
 
             // Positive Infinity
-            data[(r, c)] = f32::NEG_INFINITY;
+            *data.element_mut(r, c) = f32::NEG_INFINITY;
             let result = trainer.train(
                 data.as_view(),
                 crate::views::ChunkOffsetsView::new(&offsets).unwrap(),
@@ -675,7 +675,7 @@ mod tests {
             check_result(result);
 
             // NaN
-            data[(r, c)] = f32::NAN;
+            *data.element_mut(r, c) = f32::NAN;
             let result = trainer.train(
                 data.as_view(),
                 crate::views::ChunkOffsetsView::new(&offsets).unwrap(),
