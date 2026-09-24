@@ -326,10 +326,8 @@ trait ExtraWide<const PACK: usize, const MR: usize>: Copy {
     type Splat: Copy;
     type Accumulator: Copy;
 
-    /// # Safety
-    ///
-    /// `values` contains exactly MR * PACK bytes and `valid_rows <= MR`.
-    unsafe fn load(self, values: Slice<'_, u8>, valid_rows: usize) -> Self::Query;
+    /// Load one `MR x PACK` query group. Rows at or beyond `valid_rows` may be skipped.
+    fn load(self, values: packed::Patch<'_, u8, MR, PACK>, valid_rows: usize) -> Self::Query;
     fn zero(self) -> Self::Accumulator;
     fn splat(self, value: [u8; PACK]) -> Self::Splat;
 
@@ -338,9 +336,13 @@ trait ExtraWide<const PACK: usize, const MR: usize>: Copy {
     #[cfg(test)]
     fn accumulator_lanes(self, acc: Self::Accumulator) -> [u32; MR];
 
+    /// Contract `k` logical columns. When `PACK` does not divide `k`, the final group
+    /// reads only the remaining B columns and zero-fills the rest, so A's padding never
+    /// contributes.
+    ///
     /// # Safety
     ///
-    /// Both panels have contraction dimension `k`, `k % PACK == 0`, and `valid_rows <= MR`.
+    /// Both panels have contraction dimension `k` and `valid_rows <= MR`.
     /// B values are unsigned nibbles (0..=15).
     #[inline(always)]
     unsafe fn contract<const NR: usize>(
@@ -352,16 +354,18 @@ trait ExtraWide<const PACK: usize, const MR: usize>: Copy {
     ) -> [Self::Accumulator; NR] {
         bounds::check_eq!(a.k(), k);
         bounds::check_eq!(b.k(), k);
-        bounds::check_eq!(Bound::new(k.value().get() % PACK), 0);
         bounds::check_le!(Bound::new(valid_rows), MR);
         let mut acc = [self.zero(); NR];
         let bp = b.as_ptr();
         let b_stride = b.stride(k);
-        for group in 0..k.value().get() / PACK {
-            // SAFETY: Each group holds PACK contiguous bytes from every query row.
-            let a = unsafe { self.load(a.group(group), valid_rows) };
+        let full = k.value().get() / PACK;
+        let tail = k.value().get() % PACK;
+        for group in 0..full {
+            // SAFETY: `group < full <= groups(k)`.
+            let a = self.load(unsafe { a.group(group) }, valid_rows);
             for (j, acc) in acc.iter_mut().enumerate() {
-                // SAFETY: PACK divides K; this group lies wholly inside document row j.
+                // SAFETY: `(group + 1) * PACK <= k`, so this group lies wholly inside
+                // document row j.
                 let b = unsafe {
                     bp.add(b_stride * j + Elements::new(group * PACK))
                         .truncate(Elements::new(PACK))
@@ -371,6 +375,48 @@ trait ExtraWide<const PACK: usize, const MR: usize>: Copy {
                 };
                 *acc = self.dot(a, self.splat(b), *acc);
             }
+        }
+        if tail != 0 {
+            // SAFETY: Inherited from the caller; a partial final group exists.
+            acc = unsafe { self.contract_tail(a, b, k, valid_rows, acc) };
+        }
+        acc
+    }
+
+    /// Accumulate the partial final group of `k`, zero-filling B past its last column.
+    ///
+    /// Kept out of line so the full-group loop above compiles as if no tail existed.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Self::contract`], and `k % PACK != 0`.
+    #[cold]
+    #[inline(never)]
+    unsafe fn contract_tail<const NR: usize>(
+        self,
+        a: packed::Panel<'_, u8, MR, PACK>,
+        b: unpacked::Panel<'_, u8, NR>,
+        k: DimK,
+        valid_rows: usize,
+        mut acc: [Self::Accumulator; NR],
+    ) -> [Self::Accumulator; NR] {
+        let full = k.value().get() / PACK;
+        let tail = k.value().get() % PACK;
+        bounds::check_lt!(Bound::new(0), tail);
+        let bp = b.as_ptr();
+        let b_stride = b.stride(k);
+        // SAFETY: A partial final group exists, so `full < groups(k)`.
+        let a = self.load(unsafe { a.group(full) }, valid_rows);
+        for (j, acc) in acc.iter_mut().enumerate() {
+            let mut b = [0; PACK];
+            // SAFETY: Row j has exactly `tail` columns past `full * PACK`.
+            let source = unsafe {
+                bp.add(b_stride * j + Elements::new(full * PACK))
+                    .truncate(Elements::new(tail))
+                    .as_std_slice(tail)
+            };
+            b[..tail].copy_from_slice(source);
+            *acc = self.dot(a, self.splat(b), *acc);
         }
         acc
     }
@@ -401,10 +447,9 @@ impl ExtraWide<4, 8> for Scalar {
     }
 
     #[inline(always)]
-    unsafe fn load(self, values: Slice<'_, u8>, _: usize) -> Self::Query {
-        // SAFETY: The trait contract requires exactly 8 * 4 initialized bytes.
-        let values = unsafe { values.as_std_slice(32) };
-        core::array::from_fn(|d| core::array::from_fn(|row| u32::from(values[row * 4 + d])))
+    fn load(self, values: packed::Patch<'_, u8, 8, 4>, _: usize) -> Self::Query {
+        let values = values.as_array();
+        core::array::from_fn(|d| core::array::from_fn(|row| u32::from(values[row][d])))
     }
     #[inline(always)]
     fn zero(self) -> Self::Accumulator {
@@ -525,9 +570,9 @@ mod x86_64 {
         }
 
         #[inline(always)]
-        unsafe fn load(self, values: Slice<'_, u8>, rows: usize) -> Self::Query {
-            bounds::check_eq!(values.len(), 64);
-            // SAFETY: Each half contains eight groups, or 32 bytes.
+        fn load(self, values: packed::Patch<'_, u8, 16, 4>, rows: usize) -> Self::Query {
+            let values = values.as_ptr();
+            // SAFETY: The patch spans 16 * 4 bytes; each half holds eight rows, or 32 bytes.
             unsafe {
                 let lo = SIMDVector::load_simd(self, values.truncate(Elements::new(32)).as_ptr());
                 let hi = (rows > 8).then(|| {
@@ -613,9 +658,9 @@ mod x86_64 {
         }
 
         #[inline(always)]
-        unsafe fn load(self, values: Slice<'_, u8>, rows: usize) -> Self::Query {
-            bounds::check_eq!(values.len(), 128);
-            // SAFETY: Each half contains eight groups, or 64 bytes.
+        fn load(self, values: packed::Patch<'_, u8, 16, 8>, rows: usize) -> Self::Query {
+            let values = values.as_ptr();
+            // SAFETY: The patch spans 16 * 8 bytes; each half holds eight rows, or 64 bytes.
             unsafe {
                 let lo = SIMDVector::load_simd(self, values.truncate(Elements::new(64)).as_ptr());
                 let hi = (rows > 8).then(|| {
@@ -733,9 +778,9 @@ mod aarch64 {
         }
 
         #[inline(always)]
-        unsafe fn load(self, values: Slice<'_, u8>, rows: usize) -> Self::Query {
-            bounds::check_eq!(values.len(), 32);
-            // SAFETY: Each half contains four groups, or 16 bytes.
+        fn load(self, values: packed::Patch<'_, u8, 8, 4>, rows: usize) -> Self::Query {
+            let values = values.as_ptr();
+            // SAFETY: The patch spans 8 * 4 bytes; each half holds four rows, or 16 bytes.
             unsafe {
                 let lo = SIMDVector::load_simd(self, values.truncate(Elements::new(16)).as_ptr());
                 let hi = (rows > 4).then(|| {
@@ -1077,8 +1122,7 @@ mod tests {
                             }
                         })
                     });
-                    // SAFETY: The span has exactly MR groups and rows <= MR.
-                    let a = unsafe { arch.load(Slice::new(values.as_flattened()), rows) };
+                    let a = arch.load(packed::Patch::from_array(&values), rows);
                     let mut acc = arch.zero();
                     for _ in 0..3 {
                         acc = arch.dot(a, arch.splat(b), acc);
@@ -1135,9 +1179,8 @@ mod tests {
     ) {
         arch.run_inline(|| {
             if !cfg!(miri) {
-                let values = vec![255; MR * PACK];
-                // SAFETY: The span contains exactly MR * PACK bytes.
-                let a = unsafe { arch.load(Slice::new(&values), MR) };
+                let values = [[255; PACK]; MR];
+                let a = arch.load(packed::Patch::from_array(&values), MR);
                 let b = arch.splat([15; PACK]);
                 let mut acc = arch.zero();
                 for iteration in 1..=300_000 {
@@ -1160,26 +1203,33 @@ mod tests {
                     }
                 }
             }
-            for groups in [1, 2, 3, 8, 17, 129] {
-                let k = groups * PACK;
+            // Include every residue of `k` modulo `PACK` to exercise the partial final group.
+            let groups: &[usize] = if cfg!(miri) {
+                &[1, 2, 3]
+            } else {
+                &[1, 2, 3, 8, 17, 129]
+            };
+            let ks = groups
+                .iter()
+                .flat_map(|&groups| (0..PACK).map(move |r| groups * PACK - r));
+            for k in ks {
                 let a_value = |row: usize, d: usize| ((row * 17 + d * 23 + 255) % 256) as u8;
                 let b_value = |row: usize, d: usize| ((row * 7 + d * 3 + 15) % 16) as u8;
                 // Deliberately construct panels without query storage, the layout
-                // mapping, decoder, canonical reader, quantizer, or compensation.
-                let mut a = Vec::new();
-                for group in 0..groups {
-                    for row in 0..MR {
-                        for lane in 0..PACK {
-                            a.push(a_value(row, group * PACK + lane));
-                        }
+                // mapping, decoder, canonical reader, quantizer, or compensation. A's
+                // padding is non-zero so that any contribution from it is detected.
+                let mut a = vec![0xff; packed::Layout::<MR, PACK>::block_len(k)];
+                for row in 0..MR {
+                    for d in 0..k {
+                        a[packed::Layout::<MR, PACK>::linear(row, d)] = a_value(row, d);
                     }
                 }
                 let b: Vec<_> = (0..3)
                     .flat_map(|row| (0..k).map(move |d| b_value(row, d)))
                     .collect();
                 for rows in 1..=MR {
-                    // SAFETY: The manually packed A and row-major B have K columns,
-                    // PACK divides K, and all B values fit in four bits.
+                    // SAFETY: The manually packed A and row-major B have K columns and
+                    // all B values fit in four bits.
                     let acc = unsafe {
                         arch.contract(
                             packed::Panel::<_, MR, PACK>::new(Slice::new(&a), dimension(k)),
@@ -1194,7 +1244,7 @@ mod tests {
                             let expected = (0..k)
                                 .map(|d| u32::from(a_value(row, d)) * u32::from(b_value(doc, d)))
                                 .sum::<u32>();
-                            assert_eq!(actual, expected, "groups={groups}, row={row}, doc={doc}");
+                            assert_eq!(actual, expected, "k={k}, row={row}, doc={doc}");
                         }
                     }
                 }

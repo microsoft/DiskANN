@@ -156,10 +156,8 @@ pub(super) mod tests {
                     for row in 0..rows {
                         for d in 0..dim {
                             let p = (d / 64) * 64 + (d % 2) * 32 + (d % 64) / 2;
-                            let offset = (row / MR) * MR * k
-                                + (p / PACK) * MR * PACK
-                                + (row % MR) * PACK
-                                + p % PACK;
+                            let offset = (row / MR) * packed::Layout::<MR, PACK>::block_len(k)
+                                + packed::Layout::<MR, PACK>::linear(row % MR, p);
                             expected[offset] = ((row * 17 + d + generation) % 255 + 1) as u8;
                         }
                     }
