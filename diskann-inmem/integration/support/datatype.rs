@@ -7,6 +7,7 @@ use diskann_utils::{
     sampling::medoid::ComputeMedoid,
     views::{Matrix, MatrixView, MutMatrixView},
 };
+use diskann_wide::{cast_f16_to_f32, cast_f32_to_f16};
 use half::f16;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -146,8 +147,8 @@ where
 }
 
 fn f32_to_f16(x: f32) -> Result<f16, ()> {
-    let y = f16::from_f32(x);
-    let z = f32::from(y);
+    let y = cast_f32_to_f16(x);
+    let z = cast_f16_to_f32(y);
     if z != x { Err(()) } else { Ok(y) }
 }
 
@@ -164,11 +165,11 @@ fn f32_to_i8(x: f32) -> Result<i8, ()> {
 }
 
 fn f16_to_u8(x: f16) -> Result<u8, ()> {
-    f32_to_u8(x.into())
+    f32_to_u8(cast_f16_to_f32(x))
 }
 
 fn f16_to_i8(x: f16) -> Result<i8, ()> {
-    f32_to_i8(x.into())
+    f32_to_i8(cast_f16_to_f32(x))
 }
 
 impl<'a> SliceMut<'a> {
@@ -192,14 +193,14 @@ impl<'a> SliceMut<'a> {
 
         match (self, rhs) {
             (SliceMut::F32(dst), Slice::F32(src)) => dst.copy_from_slice(src),
-            (SliceMut::F32(dst), Slice::F16(src)) => map(dst, src, |x| x.into()),
+            (SliceMut::F32(dst), Slice::F16(src)) => map(dst, src, cast_f16_to_f32),
             (SliceMut::F32(dst), Slice::U8(src)) => map(dst, src, |x| x.into()),
             (SliceMut::F32(dst), Slice::I8(src)) => map(dst, src, |x| x.into()),
 
             (SliceMut::F16(dst), Slice::F32(src)) => try_map(dst, src, f32_to_f16)?,
             (SliceMut::F16(dst), Slice::F16(src)) => dst.copy_from_slice(src),
-            (SliceMut::F16(dst), Slice::U8(src)) => map(dst, src, |x| x.into()),
-            (SliceMut::F16(dst), Slice::I8(src)) => map(dst, src, |x| x.into()),
+            (SliceMut::F16(dst), Slice::U8(src)) => map(dst, src, |x| cast_f32_to_f16(x.into())),
+            (SliceMut::F16(dst), Slice::I8(src)) => map(dst, src, |x| cast_f32_to_f16(x.into())),
 
             (SliceMut::U8(dst), Slice::F32(src)) => try_map(dst, src, f32_to_u8)?,
             (SliceMut::U8(dst), Slice::F16(src)) => try_map(dst, src, f16_to_u8)?,
@@ -544,7 +545,7 @@ mod tests {
         SliceMut::from(dst.as_mut_slice())
             .convert_lossless(Slice::from(src))
             .unwrap();
-        assert_eq!(dst, [f16::from_f32(-5.0), f16::from_f32(7.0)]);
+        assert_eq!(dst, [cast_f32_to_f16(-5.0), cast_f32_to_f16(7.0)]);
     }
 
     #[test]

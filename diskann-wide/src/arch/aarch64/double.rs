@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
@@ -35,7 +35,7 @@ macro_rules! double_alias {
         // Implement `SIMDVector` and friends for the `Double` type.
         doubled::double_vector!($scalar, $lanes, $subtype);
 
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         pub type $type = Doubled<$subtype>;
     };
 }
@@ -83,12 +83,36 @@ doubled::double_scalar_shift!(Doubled<Doubled<i32x4>>);
 // ZipUnzip //
 //////////////
 
-super::macros::aarch64_zipunzip!(i8x16, vzip1q_s8, vzip2q_s8, vuzp1q_s8, vuzp2q_s8);
-super::macros::aarch64_zipunzip!(i16x8, vzip1q_s16, vzip2q_s16, vuzp1q_s16, vuzp2q_s16);
-super::macros::aarch64_zipunzip!(i32x4, vzip1q_s32, vzip2q_s32, vuzp1q_s32, vuzp2q_s32);
-super::macros::aarch64_zipunzip!(u8x16, vzip1q_u8, vzip2q_u8, vuzp1q_u8, vuzp2q_u8);
-super::macros::aarch64_zipunzip!(u32x4, vzip1q_u32, vzip2q_u32, vuzp1q_u32, vuzp2q_u32);
-super::macros::aarch64_zipunzip!(f16x8, vzip1q_u16, vzip2q_u16, vuzp1q_u16, vuzp2q_u16);
+super::macros::aarch64_zipunzip!(Doubled<i8x16>, vzip1q_s8, vzip2q_s8, vuzp1q_s8, vuzp2q_s8);
+super::macros::aarch64_zipunzip!(
+    Doubled<i16x8>,
+    vzip1q_s16,
+    vzip2q_s16,
+    vuzp1q_s16,
+    vuzp2q_s16
+);
+super::macros::aarch64_zipunzip!(
+    Doubled<i32x4>,
+    vzip1q_s32,
+    vzip2q_s32,
+    vuzp1q_s32,
+    vuzp2q_s32
+);
+super::macros::aarch64_zipunzip!(Doubled<u8x16>, vzip1q_u8, vzip2q_u8, vuzp1q_u8, vuzp2q_u8);
+super::macros::aarch64_zipunzip!(
+    Doubled<u32x4>,
+    vzip1q_u32,
+    vzip2q_u32,
+    vuzp1q_u32,
+    vuzp2q_u32
+);
+super::macros::aarch64_zipunzip!(
+    Doubled<f16x8>,
+    vzip1q_u16,
+    vzip2q_u16,
+    vuzp1q_u16,
+    vuzp2q_u16
+);
 
 //-------------//
 // Conversions //
@@ -361,6 +385,7 @@ mod tests {
         // Bit ops
         test_utils::ops::test_bitops!(i32x8, 0xc4491a44af4aa58e, test_neon());
         test_utils::ops::test_abs!(i32x8, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_minmax!(i32x8, 0x6d7fc8ed6d852187, test_neon());
 
         // Dot Products
         test_utils::dot_product::test_dot_product!(
@@ -394,6 +419,7 @@ mod tests {
         // Bit ops
         test_utils::ops::test_bitops!(i32x16, 0xc4491a44af4aa58e, test_neon());
         test_utils::ops::test_abs!(i32x16, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_minmax!(i32x16, 0x6d7fc8ed6d852187, test_neon());
 
         // Dot Products
         test_utils::dot_product::test_dot_product!(

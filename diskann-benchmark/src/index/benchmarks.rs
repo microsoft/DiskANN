@@ -91,6 +91,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         "graph-index-full-precision-u8",
         FullPrecision::<u8>::new()
             .search(plugins::Topk)
+            .search(plugins::TopkBetaFilter)
             .search(plugins::TopkInlineFilter)
             .search(plugins::FilteredRange),
     )?;
