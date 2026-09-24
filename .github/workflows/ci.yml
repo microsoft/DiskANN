@@ -515,7 +515,7 @@ jobs:
           cargo llvm-cov nextest --locked \
             --config "$RUST_CONFIG" \
             --workspace \
-            --features diskann/pipnn \
+            --all-features \
             --lcov --output-path lcov.info
 
       - name: Generate miri code coverage
