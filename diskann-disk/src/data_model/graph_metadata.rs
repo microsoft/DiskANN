@@ -42,7 +42,7 @@ pub struct GraphMetadata {
     pub associated_data_length: usize,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 impl GraphMetadata {
     /// Create a new `GraphMetadata` object.
     pub fn new(

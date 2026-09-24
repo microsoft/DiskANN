@@ -2,11 +2,11 @@
   "file": "diskann/src/graph/test/cases/range_search.rs",
   "test": "graph/test/cases/range_search/two_round_search",
   "payload": {
-    "comparisons": 11,
+    "comparisons": 129,
     "description": "Two round search test to validate that a low starting L with a large radius triggers a second round of range search.",
     "grid_dims": 3,
     "grid_size": 5,
-    "hops": 120,
+    "hops": 115,
     "inner_radius": null,
     "query": [
       5.0,

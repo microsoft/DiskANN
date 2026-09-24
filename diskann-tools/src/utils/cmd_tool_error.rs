@@ -25,11 +25,7 @@ impl fmt::Debug for CMDToolError {
     }
 }
 
-impl Error for CMDToolError {
-    fn description(&self) -> &str {
-        &self.details
-    }
-}
+impl Error for CMDToolError {}
 
 impl From<std::io::Error> for CMDToolError {
     fn from(err: std::io::Error) -> Self {
@@ -113,17 +109,6 @@ mod tests {
             details: "test error".to_string(),
         };
         assert_eq!(format!("{:?}", error), "test error");
-    }
-
-    #[test]
-    fn test_cmd_tool_error_description() {
-        let error = CMDToolError {
-            details: "test error".to_string(),
-        };
-        #[allow(deprecated)]
-        {
-            assert_eq!(error.description(), "test error");
-        }
     }
 
     #[test]

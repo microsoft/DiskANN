@@ -345,7 +345,7 @@ pub trait GetFullPrecision {
     fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<Self::Repr>;
 }
 
-/// A [`SearchPostProcess`]or that:
+/// A [`glue::SearchPostProcess`] implementation that:
 ///
 /// 1. Filters out deleted ids from being returned.
 /// 2. Reranks a candidate stream using full-precision distances.
@@ -537,7 +537,20 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
+    type SearchAccessor = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchAccessorError = Panics;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }

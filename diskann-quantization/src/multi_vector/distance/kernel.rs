@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Object-safe kernel boundary trait plus BYOTE visitor trait.
 
@@ -15,7 +17,9 @@ pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     ///
-    /// [`MaxSimError::InvalidBufferLength`] if `scores.len() != self.nrows()`.
+    /// * [`MaxSimError::InvalidBufferLength`] if `scores.len() != self.nrows()`.
+    /// * [`MaxSimError::UnequalDim`] if `doc.vector_dim()` does not match the internal
+    ///   vector dim.
     fn compute_max_sim(
         &self,
         doc: MatRef<'_, Standard<T>>,

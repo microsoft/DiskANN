@@ -22,8 +22,10 @@ mod inner {
         }
     }
 
+    // Must be public because it shows up in public APIs - but is unconstructable by
+    // downstream code.
     #[derive(Debug)]
-    pub(crate) struct LocalCounters<'a> {
+    pub struct LocalCounters<'a> {
         _marker: PhantomData<&'a ()>,
     }
 
@@ -41,7 +43,6 @@ mod inner {
         pub(crate) fn query_distance(&mut self, _i: u64) {}
         pub(crate) fn distance_ref(&self, _i: u64) {}
         pub(crate) fn get_vector(&mut self, _i: u64) {}
-        pub(crate) fn get_vector_ref(&self, _i: u64) {}
         pub(crate) fn set_vector(&mut self, _i: u64) {}
         pub(crate) fn get_neighbors(&mut self, _i: u64) {}
         pub(crate) fn set_neighbors(&mut self, _i: u64) {}
@@ -86,8 +87,10 @@ mod inner {
         }
     }
 
+    // Must be public because it shows up in public APIs - but is unconstructable by
+    // downstream code.
     #[derive(Debug)]
-    pub(crate) struct LocalCounters<'a> {
+    pub struct LocalCounters<'a> {
         query_distance: u64,
         // This fields needs to be `AtomicU64` because we increment in some loops where we
         // have to increment it behind a shared reference.
@@ -130,10 +133,6 @@ mod inner {
 
         pub(crate) fn get_vector(&mut self, i: u64) {
             *self.get_vector.get_mut() += i;
-        }
-
-        pub(crate) fn get_vector_ref(&self, i: u64) {
-            self.get_vector.fetch_add(i, Relaxed);
         }
 
         pub(crate) fn set_vector(&mut self, i: u64) {
