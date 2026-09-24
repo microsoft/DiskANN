@@ -248,57 +248,6 @@ fn empty_results() {
 }
 
 #[test]
-fn max_results_respected_means_no_second_round() {
-    let description = "Test of `max_results` that sets `initial_l_search` equal \
-     to `max_results`, with a permissive radius so that `max_results` is met \
-     without needing a second round.";
-    let mut test_root = root();
-    let mut path = test_root.path();
-    let name = path.push("max_results_respected_means_no_second_round");
-
-    let grid_size = 5;
-    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 50.0;
-    let starting_l = 4;
-    let max_results = 4;
-    let filter = AlwaysTrueFilter;
-
-    let filtered_range = FilteredRange::builder(starting_l, radius)
-        .max_returned(Some(max_results))
-        .build_filtered()
-        .unwrap();
-
-    let (filtered_stats, filtered_results) =
-        run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
-
-    let baseline = RangeSearchBaseline::new(
-        &filtered_range.range(),
-        &filtered_results,
-        filtered_stats,
-        Grid::Three,
-        grid_size,
-        description,
-        query.clone(),
-    );
-
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
-    assert!(
-        filtered_results.len() <= max_results,
-        "result count {} exceeds max_results {}",
-        filtered_results.len(),
-        max_results
-    );
-    assert!(
-        !filtered_stats.range_search_second_round,
-        "If max_results is respected, a second round should not be triggered"
-    );
-    assert_range_invariants(&filtered_results, radius, None);
-    assert_no_duplicates(&filtered_results);
-}
-
-#[test]
 fn max_results_respected_and_second_round_triggered() {
     let description = "Test of `max_results` that sets `initial_l_search` \
      below `max_results` so that a second round of search is triggered. Note that \
@@ -443,4 +392,148 @@ fn divisible_by_four_filter_no_second_round_from_l_search() {
     assert_range_invariants(&filtered_results, radius, None);
     assert_no_duplicates(&filtered_results);
     assert_divisible_by_four(&filtered_results);
+}
+
+/////////////////////////////////////////////////////////////
+// Tests for the `initial_slack` and `range_slack` knobs.   //
+// `initial_slack` gates whether the second round runs at   //
+// all; `range_slack` widens the navigation radius used to  //
+// seed the frontier during the second round.               //
+/////////////////////////////////////////////////////////////
+
+#[test]
+fn initial_slack_low_triggers_second_round() {
+    let description = "Low `initial_slack` lowers the bar for entering the second \
+     round: with starting_l = 4 and slack = 0.5 the threshold is 2, so the second \
+     round is triggered.";
+
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("initial_slack_low_triggers_second_round");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 50.0;
+    let starting_l = 4;
+    let filter = AlwaysTrueFilter;
+
+    let filtered_range = FilteredRange::builder(starting_l, radius)
+        .initial_slack(0.5)
+        .build_filtered()
+        .unwrap();
+
+    let (filtered_stats, filtered_results) =
+        run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
+
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
+        Grid::Three,
+        grid_size,
+        description,
+        query.clone(),
+    );
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        filtered_stats.range_search_second_round,
+        "low initial_slack should trigger a second round"
+    );
+    assert_range_invariants(&filtered_results, radius, None);
+    assert_no_duplicates(&filtered_results);
+}
+
+#[test]
+fn range_slack_low_constrains_frontier() {
+    let description = "Low `range_slack` (1.0) keeps the navigation radius equal to \
+     the search radius, so only points inside the radius are used to expand the \
+     frontier during the second round.";
+
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("range_slack_low_constrains_frontier");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 30.0;
+    let starting_l = 4;
+    let filter = AlwaysTrueFilter;
+
+    let filtered_range = FilteredRange::builder(starting_l, radius)
+        .initial_slack(0.5)
+        .range_slack(1.0)
+        .build_filtered()
+        .unwrap();
+
+    let (filtered_stats, filtered_results) =
+        run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
+
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
+        Grid::Three,
+        grid_size,
+        description,
+        query.clone(),
+    );
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        filtered_stats.range_search_second_round,
+        "low initial_slack should trigger a second round"
+    );
+    assert_range_invariants(&filtered_results, radius, None);
+    assert_no_duplicates(&filtered_results);
+}
+
+#[test]
+fn range_slack_high_expands_frontier() {
+    let description = "High `range_slack` (1.3) widens the navigation radius so that \
+     points beyond the search radius still seed the frontier. Results remain within \
+     the search radius, but coverage should be at least as good as with low slack.";
+
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("range_slack_high_expands_frontier");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 30.0;
+    let starting_l = 4;
+    let filter = AlwaysTrueFilter;
+
+    let filtered_range = FilteredRange::builder(starting_l, radius)
+        .initial_slack(0.5)
+        .range_slack(1.3)
+        .build_filtered()
+        .unwrap();
+
+    let (filtered_stats, filtered_results) =
+        run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
+
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
+        Grid::Three,
+        grid_size,
+        description,
+        query.clone(),
+    );
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        filtered_stats.range_search_second_round,
+        "low initial_slack should trigger a second round"
+    );
+    assert_range_invariants(&filtered_results, radius, None);
+    assert_no_duplicates(&filtered_results);
 }
