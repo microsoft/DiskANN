@@ -36,9 +36,10 @@ macro_rules! assert_contains {
 
                 assert!(
                     haystack.contains_for_assert(needle),
-                    concat!("{:?} does not contain {:?} -- ", $fmt),
+                    "{:?} does not contain {:?} -- {}",
                     haystack,
                     needle,
+                    format_args!($fmt),
                 );
             }
         }
@@ -50,10 +51,10 @@ macro_rules! assert_contains {
 
                 assert!(
                     haystack.contains_for_assert(needle),
-                    concat!("{:?} does not contain {:?} -- ", $fmt),
+                    "{:?} does not contain {:?} -- {}",
                     haystack,
                     needle,
-                    $($args)*
+                    format_args!($fmt, $($args)*),
                 );
             }
         }
@@ -138,6 +139,12 @@ mod tests {
         assert_contains!([0, 1, 2, 3], 3, "some context");
         assert_contains!([0, 1, 2, 3], 3, "some context: {}", 10);
         assert_contains!([0, 1, 2, 3], 3, "some context: {}, {}", 10, 20);
+
+        let x = 10;
+        assert_contains!([0, 1, 2, 3], 3);
+        assert_contains!([0, 1, 2, 3], 3, "some context");
+        assert_contains!([0, 1, 2, 3], 3, "some context: {x}");
+        assert_contains!([0, 1, 2, 3], 3, "some context: {x}, {}", 20);
     }
 
     #[test]
