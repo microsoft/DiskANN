@@ -92,10 +92,78 @@ use super::matrix::{
 use crate::bits::{AsMutPtr, AsPtr, MutSlicePtr, SlicePtr};
 use crate::utils;
 
-/// Round `ncols` up to the next multiple of `PACK`.
-#[inline]
-fn padded_ncols<const PACK: usize>(ncols: usize) -> usize {
-    ncols.next_multiple_of(PACK)
+/// Index arithmetic for the block-transposed layout.
+///
+/// This is the single source of truth for the layout described in the module
+/// documentation, shared by [`BlockTransposed`] and the matrix-kernel packed views.
+///
+/// A block holds `GROUP` rows and `ncols` logical columns. Columns are gathered into
+/// groups of `PACK`: group `g` stores columns `[g * PACK, (g + 1) * PACK)` of all `GROUP`
+/// rows contiguously, one row after another. The final group is zero-padded when `PACK`
+/// does not divide `ncols`. Offsets within a block do not depend on `ncols`; only the
+/// block length does.
+pub(crate) struct BlockLayout<const GROUP: usize, const PACK: usize>;
+
+impl<const GROUP: usize, const PACK: usize> BlockLayout<GROUP, PACK> {
+    const ASSERTIONS: () = {
+        assert!(GROUP > 0, "group size GROUP must be positive");
+        assert!(PACK > 0, "packing factor PACK must be positive");
+        assert!(
+            GROUP.is_multiple_of(PACK),
+            "GROUP must be divisible by PACK"
+        );
+    };
+
+    /// The number of column groups needed for `ncols` logical columns.
+    #[inline]
+    pub(crate) const fn groups(ncols: usize) -> usize {
+        let () = Self::ASSERTIONS;
+        ncols.div_ceil(PACK)
+    }
+
+    /// Round `ncols` up to the next multiple of `PACK`.
+    #[inline]
+    pub(crate) const fn padded_ncols(ncols: usize) -> usize {
+        Self::groups(ncols) * PACK
+    }
+
+    /// The number of elements in one block of `ncols` logical columns.
+    #[inline]
+    pub(crate) const fn block_len(ncols: usize) -> usize {
+        GROUP * Self::padded_ncols(ncols)
+    }
+
+    /// The offset of column group `group` from the start of a block.
+    #[inline]
+    pub(crate) const fn group_offset(group: usize) -> usize {
+        let () = Self::ASSERTIONS;
+        group * GROUP * PACK
+    }
+
+    /// The offset from a row's first element to the element at `col`.
+    #[inline]
+    pub(crate) const fn col_offset(col: usize) -> usize {
+        Self::group_offset(col / PACK) + col % PACK
+    }
+
+    /// The linear index of logical `(row, col)` in a matrix with `ncols` logical columns.
+    #[inline]
+    pub(crate) const fn linear_index(row: usize, col: usize, ncols: usize) -> usize {
+        (row / GROUP) * Self::block_len(ncols) + (row % GROUP) * PACK + Self::col_offset(col)
+    }
+
+    /// The logical `(row, col)` stored at linear index `index`, the inverse of
+    /// [`Self::linear_index`]. The column may lie in the padding at or past `ncols`.
+    ///
+    /// `ncols` must be nonzero.
+    #[cfg(test)]
+    pub(crate) const fn logical_index(index: usize, ncols: usize) -> (usize, usize) {
+        let block = index / Self::block_len(ncols);
+        let within = index % Self::block_len(ncols);
+        let group = within / (GROUP * PACK);
+        let lane = within % (GROUP * PACK);
+        (block * GROUP + lane / PACK, group * PACK + lane % PACK)
+    }
 }
 
 /// Compute the total number of `T` elements required to store a block-transposed matrix
@@ -104,12 +172,9 @@ fn padded_ncols<const PACK: usize>(ncols: usize) -> usize {
 /// This is the **unchecked** flavor — it assumes the caller has already validated that
 /// the dimensions do not overflow (e.g. after construction). For use in the constructor,
 /// prefer [`checked_compute_capacity`].
-///
-/// Compile-time constraints (`GROUP > 0`, `PACK > 0`, `GROUP % PACK == 0`) are enforced
-/// by [`BlockTransposedRepr::_ASSERTIONS`]; this function does **not** duplicate them.
 #[inline]
 fn compute_capacity<const GROUP: usize, const PACK: usize>(nrows: usize, ncols: usize) -> usize {
-    nrows.next_multiple_of(GROUP) * padded_ncols::<PACK>(ncols)
+    nrows.div_ceil(GROUP) * BlockLayout::<GROUP, PACK>::block_len(ncols)
 }
 
 /// Checked variant of [`compute_capacity`] that returns `None` if any intermediate
@@ -123,29 +188,6 @@ fn checked_compute_capacity<const GROUP: usize, const PACK: usize>(
     nrows
         .checked_next_multiple_of(GROUP)?
         .checked_mul(ncols.checked_next_multiple_of(PACK)?)
-}
-
-/// Compute the linear index for the element at logical `(row, col)` in a block-transposed
-/// layout with group size `GROUP`, packing factor `PACK`, and `ncols` logical columns.
-#[inline]
-fn linear_index<const GROUP: usize, const PACK: usize>(
-    row: usize,
-    col: usize,
-    ncols: usize,
-) -> usize {
-    let pncols = padded_ncols::<PACK>(ncols);
-    let block = row / GROUP;
-    let row_in_block = row % GROUP;
-    block * GROUP * pncols + (col / PACK) * GROUP * PACK + row_in_block * PACK + (col % PACK)
-}
-
-/// Compute the offset from a row's base pointer (at col=0) to the element at `col`.
-///
-/// This is purely a function of the column index and the const layout parameters, not
-/// of any particular matrix's dimensions.
-#[inline]
-fn col_offset<const GROUP: usize, const PACK: usize>(col: usize) -> usize {
-    (col / PACK) * GROUP * PACK + (col % PACK)
 }
 
 /// Internal layout descriptor for block-transposed matrices.
@@ -210,7 +252,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRepr<T, GROU
     /// the next multiple of `PACK`.
     #[inline]
     pub fn padded_ncols(&self) -> usize {
-        padded_ncols::<PACK>(self.ncols)
+        BlockLayout::<GROUP, PACK>::padded_ncols(self.ncols)
     }
 
     /// Number of completely full blocks.
@@ -243,7 +285,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRepr<T, GROU
     /// The stride (in elements) between the start of consecutive blocks.
     #[inline]
     fn block_stride(&self) -> usize {
-        GROUP * self.padded_ncols()
+        BlockLayout::<GROUP, PACK>::block_len(self.ncols)
     }
 
     /// The linear offset of the start of `block`.
@@ -313,7 +355,12 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> Row<'_, T, GROUP, PACK> {
     pub fn get(&self, col: usize) -> Option<&T> {
         if col < self.ncols {
             // SAFETY: bounds checked, offset computed from validated layout.
-            Some(unsafe { &*self.base.as_ptr().add(col_offset::<GROUP, PACK>(col)) })
+            Some(unsafe {
+                &*self
+                    .base
+                    .as_ptr()
+                    .add(BlockLayout::<GROUP, PACK>::col_offset(col))
+            })
         } else {
             None
         }
@@ -360,7 +407,12 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> Iterator for RowIter<'_, T,
             return None;
         }
         // SAFETY: col < ncols means the offset is within the backing allocation.
-        let val = unsafe { *self.base.as_ptr().add(col_offset::<GROUP, PACK>(self.col)) };
+        let val = unsafe {
+            *self
+                .base
+                .as_ptr()
+                .add(BlockLayout::<GROUP, PACK>::col_offset(self.col))
+        };
         self.col += 1;
         Some(val)
     }
@@ -406,7 +458,12 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> RowMut<'_, T, GROUP, PACK> 
     pub fn get(&self, col: usize) -> Option<&T> {
         if col < self.ncols {
             // SAFETY: bounds checked.
-            Some(unsafe { &*self.base.as_ptr().add(col_offset::<GROUP, PACK>(col)) })
+            Some(unsafe {
+                &*self
+                    .base
+                    .as_ptr()
+                    .add(BlockLayout::<GROUP, PACK>::col_offset(col))
+            })
         } else {
             None
         }
@@ -417,7 +474,12 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> RowMut<'_, T, GROUP, PACK> 
     pub fn get_mut(&mut self, col: usize) -> Option<&mut T> {
         if col < self.ncols {
             // SAFETY: bounds checked.
-            Some(unsafe { &mut *self.base.as_mut_ptr().add(col_offset::<GROUP, PACK>(col)) })
+            Some(unsafe {
+                &mut *self
+                    .base
+                    .as_mut_ptr()
+                    .add(BlockLayout::<GROUP, PACK>::col_offset(col))
+            })
         } else {
             None
         }
@@ -436,7 +498,12 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> RowMut<'_, T, GROUP, PACK> 
             self.ncols
         );
         // SAFETY: bounds checked.
-        unsafe { *self.base.as_mut_ptr().add(col_offset::<GROUP, PACK>(col)) = value };
+        unsafe {
+            *self
+                .base
+                .as_mut_ptr()
+                .add(BlockLayout::<GROUP, PACK>::col_offset(col)) = value
+        };
     }
 }
 
@@ -502,7 +569,7 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> Repr
         }
 
         let base_ptr = ptr.as_ptr().cast::<T>();
-        let offset = linear_index::<GROUP, PACK>(i, 0, self.ncols);
+        let offset = BlockLayout::<GROUP, PACK>::linear_index(i, 0, self.ncols);
 
         // SAFETY: The caller asserts `i < self.nrows()`. The backing allocation has at
         // least `self.storage_len()` elements, so the computed offset is in bounds.
@@ -543,7 +610,7 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprMut
         }
 
         let base_ptr = ptr.as_ptr().cast::<T>();
-        let offset = linear_index::<GROUP, PACK>(i, 0, self.ncols);
+        let offset = BlockLayout::<GROUP, PACK>::linear_index(i, 0, self.ncols);
 
         // SAFETY: `i < self.nrows` (debug-asserted) guarantees the offset is within
         // the backing allocation. Same reasoning as `get_row`.
@@ -829,8 +896,12 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
         // SAFETY: `block < full_blocks()` (asserted above) guarantees
         // `offset + stride` is within the backing allocation.
         let data: &[T] = unsafe { std::slice::from_raw_parts(self.as_ptr().add(offset), stride) };
-        MatrixView::try_from(data, self.padded_ncols() / PACK, GROUP * PACK)
-            .expect("base data should have been sized correctly")
+        MatrixView::try_from(
+            data,
+            BlockLayout::<GROUP, PACK>::groups(self.ncols()),
+            GROUP * PACK,
+        )
+        .expect("base data should have been sized correctly")
     }
 
     /// Return a view over the remainder block, or `None` if there is no
@@ -850,8 +921,12 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
             let data: &[T] =
                 unsafe { std::slice::from_raw_parts(self.as_ptr().add(offset), stride) };
             Some(
-                MatrixView::try_from(data, self.padded_ncols() / PACK, GROUP * PACK)
-                    .expect("base data should have been sized correctly"),
+                MatrixView::try_from(
+                    data,
+                    BlockLayout::<GROUP, PACK>::groups(self.ncols()),
+                    GROUP * PACK,
+                )
+                .expect("base data should have been sized correctly"),
             )
         }
     }
@@ -873,7 +948,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
             "col {col} out of bounds (ncols = {})",
             self.ncols()
         );
-        let idx = linear_index::<GROUP, PACK>(row, col, self.ncols());
+        let idx = BlockLayout::<GROUP, PACK>::linear_index(row, col, self.ncols());
         // SAFETY: bounds checked above.
         unsafe { *self.as_ptr().add(idx) }
     }
@@ -971,7 +1046,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
         assert!(block < repr.full_blocks());
         let offset = repr.block_offset(block);
         let stride = repr.block_stride();
-        let pncols = repr.padded_ncols();
+        let groups = BlockLayout::<GROUP, PACK>::groups(repr.ncols());
         // SAFETY: `block < full_blocks()`, so the range is within the allocation.
         let data: &mut [T] = unsafe {
             std::slice::from_raw_parts_mut(
@@ -979,7 +1054,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
                 stride,
             )
         };
-        MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
+        MutMatrixView::try_from(data, groups, GROUP * PACK)
             .expect("base data should have been sized correctly")
     }
 
@@ -997,7 +1072,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
         } else {
             let offset = repr.block_offset(repr.full_blocks());
             let stride = repr.block_stride();
-            let pncols = repr.padded_ncols();
+            let groups = BlockLayout::<GROUP, PACK>::groups(repr.ncols());
             // SAFETY: Remainder block exists, so the range is within the allocation.
             let data: &mut [T] = unsafe {
                 std::slice::from_raw_parts_mut(
@@ -1006,7 +1081,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
                 )
             };
             Some(
-                MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
+                MutMatrixView::try_from(data, groups, GROUP * PACK)
                     .expect("base data should have been sized correctly"),
             )
         }
@@ -1156,8 +1231,7 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
 
         let repr = *mat.data.repr();
         let num_blocks = repr.num_blocks();
-        let pncols = repr.padded_ncols();
-        let num_col_groups = pncols / PACK;
+        let num_col_groups = BlockLayout::<GROUP, PACK>::groups(ncols);
 
         // Walk the backing allocation in physical order so that writes are
         // sequential. The allocation is default-initialized, so padding positions
@@ -1218,7 +1292,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<(usize, usi
     fn index(&self, (row, col): (usize, usize)) -> &Self::Output {
         assert!(row < self.nrows());
         assert!(col < self.ncols());
-        let idx = linear_index::<GROUP, PACK>(row, col, self.ncols());
+        let idx = BlockLayout::<GROUP, PACK>::linear_index(row, col, self.ncols());
         // SAFETY: bounds checked above and the backing allocation has `storage_len()` elements.
         unsafe { &*self.as_ptr().add(idx) }
     }
@@ -1264,6 +1338,56 @@ mod tests {
         ((i % 255) + 1) as u8
     }
 
+    // ── Index arithmetic ─────────────────────────────────────────────
+
+    #[test]
+    fn block_layout_matches_physical_order() {
+        check_block_layout::<1, 1>();
+        check_block_layout::<3, 1>();
+        check_block_layout::<4, 2>();
+        check_block_layout::<8, 4>();
+        check_block_layout::<16, 4>();
+        check_block_layout::<16, 8>();
+    }
+
+    /// Walk the documented physical order (block, column group, row, lane) and check
+    /// that every position maps to its logical coordinate and back.
+    fn check_block_layout<const GROUP: usize, const PACK: usize>() {
+        type L<const G: usize, const P: usize> = BlockLayout<G, P>;
+
+        for ncols in 1..=(3 * PACK + 1) {
+            let groups = ncols.div_ceil(PACK);
+            assert_eq!(L::<GROUP, PACK>::groups(ncols), groups);
+            assert_eq!(L::<GROUP, PACK>::padded_ncols(ncols), groups * PACK);
+            assert_eq!(L::<GROUP, PACK>::block_len(ncols), GROUP * groups * PACK);
+
+            let mut index = 0;
+            for block in 0..3 {
+                for group in 0..groups {
+                    assert_eq!(
+                        L::<GROUP, PACK>::group_offset(group),
+                        index - block * L::<GROUP, PACK>::block_len(ncols),
+                    );
+                    for row_in_block in 0..GROUP {
+                        let row = block * GROUP + row_in_block;
+                        for lane in 0..PACK {
+                            let col = group * PACK + lane;
+                            assert_eq!(L::<GROUP, PACK>::linear_index(row, col, ncols), index);
+                            assert_eq!(L::<GROUP, PACK>::logical_index(index, ncols), (row, col));
+                            assert_eq!(
+                                L::<GROUP, PACK>::col_offset(col),
+                                L::<GROUP, PACK>::linear_index(row, col, ncols)
+                                    - L::<GROUP, PACK>::linear_index(row, 0, ncols),
+                            );
+                            index += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(index, 3 * L::<GROUP, PACK>::block_len(ncols));
+        }
+    }
+
     #[test]
     fn clone_has_independent_backing_allocation() {
         let mut data = Matrix::new(0, 5, 3);
@@ -1272,9 +1396,9 @@ mod tests {
             .enumerate()
             .for_each(|(i, value)| *value = (i + 1) as i32);
         let mut original = BlockTransposed::<i32, 4, 2>::from_matrix_view(data.as_view());
-        let column_padding = linear_index::<4, 2>(0, 3, original.ncols());
-        let row_padding = linear_index::<4, 2>(5, 0, original.ncols());
-        let row_and_column_padding = linear_index::<4, 2>(5, 3, original.ncols());
+        let column_padding = BlockLayout::<4, 2>::linear_index(0, 3, original.ncols());
+        let row_padding = BlockLayout::<4, 2>::linear_index(5, 0, original.ncols());
+        let row_and_column_padding = BlockLayout::<4, 2>::linear_index(5, 3, original.ncols());
         original.as_mut_slice()[column_padding] = -10;
         original.as_mut_slice()[row_padding] = -11;
         original.as_mut_slice()[row_and_column_padding] = -12;
@@ -1717,7 +1841,7 @@ mod tests {
         // Column padding.
         for row in 0..nrows {
             for col in ncols..expected_padded {
-                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
+                let idx = BlockLayout::<GROUP, PACK>::linear_index(row, col, ncols);
                 assert_eq!(
                     raw[idx],
                     T::default(),
@@ -1733,7 +1857,7 @@ mod tests {
         let padded_nrows = nrows.next_multiple_of(GROUP);
         for row in nrows..padded_nrows {
             for col in 0..expected_padded {
-                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
+                let idx = BlockLayout::<GROUP, PACK>::linear_index(row, col, ncols);
                 assert_eq!(
                     raw[idx],
                     T::default(),
@@ -2170,7 +2294,7 @@ mod tests {
         let raw: &[f32] = transpose.as_slice();
         for row in 0..nrows {
             for col in ncols..padded_ncols {
-                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
+                let idx = BlockLayout::<GROUP, PACK>::linear_index(row, col, ncols);
                 assert_eq!(
                     raw[idx], 0.0,
                     "column-padding at ({}, {}) should be zero",
