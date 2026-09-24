@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Instruction Set Architecture (ISA) selector for the multi-vector MaxSim
 //! factory.
@@ -14,7 +16,7 @@
 /// serialization format.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum MaxSimIsa {
     /// Pick the highest ISA the host CPU supports.
     Auto,

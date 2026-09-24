@@ -23,8 +23,8 @@
 //!
 //! - [`streaming`]: Tools for running streaming workloads consisting of inserts, deletes,
 //!   replaces, searches, etc.
-//!   - [`streaming::runbooks`]: Built-in [`streaming::Executor`]s for dynamic operations.
-//!     - [`streaming::runbooks::bigann`]: BigANN style runbook support.
+//!   - [`streaming::executors`]: Built-in [`streaming::Executor`]s for dynamic operations.
+//!     - [`streaming::executors::bigann`]: BigANN style runbook support.
 //!   - [`streaming::graph`]: Built-in utilities for working with [`diskann::graph::DiskANNIndex`].
 //!
 //! # Tools

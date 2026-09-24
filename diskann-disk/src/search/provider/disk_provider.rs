@@ -16,14 +16,16 @@ use std::{
 use crate::data_model::GraphDataType;
 use diskann::{
     error::IntoANNResult,
+    flat::{knn_search as flat_knn_search, DistancesUnordered, SearchStats as FlatSearchStats},
     graph::{
         self,
         ext::labeled::{self, QueryLabelProvider},
         glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
         search::{AdaptiveL, InlineFilterSearch, Knn},
-        search_output_buffer, DiskANNIndex,
+        search_output_buffer::{self, BufferState, IdDistanceAssociatedData},
+        DiskANNIndex,
     },
-    neighbor::{self, Neighbor, NeighborPriorityQueue},
+    neighbor::{self, Neighbor},
     provider::{DataProvider, DefaultContext, HasId, NoopGuard},
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
@@ -37,11 +39,12 @@ use diskann_providers::{
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_utils::{
+    future::SendFuture,
     object_pool::{ObjectPool, PoolOption, TryAsPooled},
     views::Matrix,
 };
 
-use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
+use crate::search::pq::{PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
 use tokio::runtime::Runtime;
 use tracing::debug;
@@ -69,7 +72,6 @@ use crate::{
 /// The data format for disk is different from that of the in-memory providers.
 /// The disk format stores both the vectors and the adjacency list next to each other for
 /// better locality for quicker access.
-/// Please refer to the RFC documentation at [`docs\rfcs\cy2025\disk_provider_for_async_index.md`] for design details.
 pub struct DiskProvider<Data>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -216,11 +218,11 @@ where
 /// Borrowed predicate used internally by the disk search pipeline.
 /// Spelled out here to keep the field/parameter signatures under
 /// `clippy::type_complexity`'s default threshold.
-type PostprocessFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
+type IdFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
 
 /// Encodes whether to accept all candidates at rerank time or apply a
 /// specific predicate. Used by `RerankAndFilter` and
-/// `DeterminantDiversityAndFilter` instead of `Option<PostprocessFilter>`
+/// `DeterminantDiversityAndFilter` instead of `Option<IdFilter>`
 /// so call sites are self-documenting without relying on comments to
 /// explain what `None` means.
 #[derive(Clone, Copy)]
@@ -229,7 +231,7 @@ pub enum PostprocessStrategy<'a> {
     /// (filtered at scan time) and `InlineFilter` (filtered at visit time).
     AcceptAll,
     /// Apply the given predicate; non-matching candidates are dropped.
-    Apply(PostprocessFilter<'a>),
+    Apply(IdFilter<'a>),
 }
 
 pub struct DiskSearchStrategy<'a, Data, ProviderFactory>
@@ -239,6 +241,7 @@ where
 {
     // Borrowed from `search_internal` so the strategy can be passed by value
     io_tracker: &'a IOTracker,
+    cache_indexed_vectors: bool,
     /// Consumed only by `default_post_processor()` → `RerankAndFilter`.
     /// `FlatScan` and `InlineFilter` filter earlier in their pipelines and
     /// pass `AcceptAll` here to avoid a redundant second pass.
@@ -320,14 +323,134 @@ impl<'a> DeterminantDiversityAndFilter<'a> {
     }
 }
 
+type IndexedVector<VectorData> = Option<Box<[VectorData]>>;
+type DistanceCacheEntry<AssociatedData, VectorData> =
+    (f32, AssociatedData, IndexedVector<VectorData>);
+type IndexedVectorOutput<'a, VectorData> = Option<&'a mut [IndexedVector<VectorData>]>;
+type SearchPayload<AssociatedData, VectorData> = (u32, AssociatedData, IndexedVector<VectorData>);
+
+struct SearchOutput<'a, A, V> {
+    output: IdDistanceAssociatedData<'a, u32, A>,
+    indexed_vectors: IndexedVectorOutput<'a, V>,
+}
+
+impl<'a, A, V> SearchOutput<'a, A, V> {
+    fn new(
+        ids: &'a mut [u32],
+        distances: &'a mut [f32],
+        associated_data: &'a mut [A],
+        indexed_vectors: IndexedVectorOutput<'a, V>,
+    ) -> ANNResult<Self> {
+        if indexed_vectors
+            .as_ref()
+            .is_some_and(|vectors| ids.len() != vectors.len())
+        {
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "ids and indexed_vectors must have the same length",
+            ));
+        }
+        Ok(Self {
+            output: IdDistanceAssociatedData::new(ids, distances, associated_data),
+            indexed_vectors,
+        })
+    }
+}
+
+impl<A: Clone + Send, V> search_output_buffer::SearchOutputBuffer<SearchPayload<A, V>>
+    for SearchOutput<'_, A, V>
+{
+    fn size_hint(&self) -> Option<usize> {
+        search_output_buffer::SearchOutputBuffer::size_hint(&self.output)
+    }
+
+    fn push(&mut self, neighbor: Neighbor<SearchPayload<A, V>>) -> BufferState {
+        let position = self.current_len();
+        if position == self.output.capacity() {
+            return BufferState::Full;
+        }
+
+        let ((id, data, vector), distance) = neighbor.as_tuple();
+        let state = search_output_buffer::SearchOutputBuffer::push(
+            &mut self.output,
+            Neighbor::new((id, data), distance),
+        );
+        if let Some(vectors) = &mut self.indexed_vectors {
+            vectors[position] = vector;
+        }
+        state
+    }
+
+    fn current_len(&self) -> usize {
+        search_output_buffer::SearchOutputBuffer::current_len(&self.output)
+    }
+
+    fn extend<Iter>(&mut self, iter: Iter) -> usize
+    where
+        Iter: IntoIterator<Item = Neighbor<SearchPayload<A, V>>>,
+    {
+        let start = self.current_len();
+        for neighbor in iter {
+            if self.push(neighbor).is_full() {
+                break;
+            }
+        }
+        self.current_len() - start
+    }
+}
+
+fn extend_output<Data, VP, B, I>(
+    accessor: &mut DiskAccessor<'_, Data, VP>,
+    reranked: I,
+    output: &mut B,
+) -> ANNResult<usize>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+    I: IntoIterator<Item = Neighbor<(u32, Data::AssociatedDataType)>>,
+    B: search_output_buffer::SearchOutputBuffer<
+            SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
+        > + Send
+        + ?Sized,
+{
+    if !accessor.cache_indexed_vectors {
+        return Ok(output.extend(reranked.into_iter().map(|candidate| {
+            let ((id, data), distance) = candidate.as_tuple();
+            Neighbor::new((id, data, None), distance)
+        })));
+    }
+
+    let mut count = 0;
+    for candidate in reranked {
+        if output.size_hint() == Some(0) {
+            break;
+        }
+        let ((id, data), distance) = candidate.as_tuple();
+        let vector = match accessor
+            .scratch
+            .distance_cache
+            .remove(&id)
+            .and_then(|(_, _, vector)| vector)
+        {
+            Some(vector) => vector,
+            None => Box::from(accessor.scratch.vertex_provider.get_vector(&id)?),
+        };
+        count += 1;
+        if output
+            .push(Neighbor::new((id, data, Some(vector)), distance))
+            .is_full()
+        {
+            break;
+        }
+    }
+    Ok(count)
+}
+
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
         &[Data::VectorDataType],
-        (
-            <DiskProvider<Data> as DataProvider>::InternalId,
-            Data::AssociatedDataType,
-        ),
+        SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
     > for RerankAndFilter<'_>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -343,8 +466,9 @@ where
     ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
-            + Send
+        B: search_output_buffer::SearchOutputBuffer<
+                SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
+            > + Send
             + ?Sized,
     {
         let provider = accessor.provider;
@@ -385,7 +509,7 @@ where
         reranked.sort_unstable_by(neighbor::ord::fast_distance);
 
         // Store the reranked results.
-        Ok(output.extend(reranked))
+        extend_output(accessor, reranked, output)
     }
 }
 
@@ -393,10 +517,7 @@ impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
         &[Data::VectorDataType],
-        (
-            <DiskProvider<Data> as DataProvider>::InternalId,
-            Data::AssociatedDataType,
-        ),
+        SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
     > for DeterminantDiversityAndFilter<'_>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -412,8 +533,9 @@ where
     ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
-            + Send
+        B: search_output_buffer::SearchOutputBuffer<
+                SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
+            > + Send
             + ?Sized,
     {
         let provider = accessor.provider;
@@ -460,11 +582,15 @@ where
             &self.params,
         )?;
 
-        Ok(output.extend(reranked.into_iter().map(|idx| {
-            let id = candidate_ids[idx];
-            let distance = candidate_distances[idx];
-            Neighbor::new((id, associated_data[idx]), distance)
-        })))
+        extend_output(
+            accessor,
+            reranked.into_iter().map(|idx| {
+                let id = candidate_ids[idx];
+                let distance = candidate_distances[idx];
+                Neighbor::new((id, associated_data[idx]), distance)
+            }),
+            output,
+        )
     }
 }
 
@@ -472,10 +598,7 @@ impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
         &[Data::VectorDataType],
-        (
-            <DiskProvider<Data> as DataProvider>::InternalId,
-            Data::AssociatedDataType,
-        ),
+        SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
     > for DiskSearchPostProcessor<'_>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -491,8 +614,9 @@ where
     ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
-            + Send
+        B: search_output_buffer::SearchOutputBuffer<
+                SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
+            > + Send
             + ?Sized,
     {
         match self {
@@ -522,13 +646,7 @@ where
         _context: &DefaultContext,
         query: &'this [Data::VectorDataType],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        DiskAccessor::new(
-            provider,
-            self.io_tracker,
-            query,
-            self.vertex_provider_factory,
-            self.scratch_pool,
-        )
+        DiskAccessor::new(provider, query, self)
     }
 }
 
@@ -537,10 +655,7 @@ impl<'this, Data, ProviderFactory>
         'this,
         DiskProvider<Data>,
         &'this [Data::VectorDataType],
-        (
-            <DiskProvider<Data> as DataProvider>::InternalId,
-            Data::AssociatedDataType,
-        ),
+        SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
     > for DiskSearchStrategy<'this, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -560,7 +675,8 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
-    distance_cache: HashMap<u32, (f32, Data::AssociatedDataType)>,
+    distance_cache:
+        HashMap<u32, DistanceCacheEntry<Data::AssociatedDataType, Data::VectorDataType>>,
     pq_scratch: PQScratch,
     vertex_provider: VP,
 }
@@ -613,6 +729,46 @@ where
     }
 }
 
+impl<Data, VP> DiskSearchScratch<Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    fn pooled_for_query<VPF>(
+        pool: &Arc<ObjectPool<Self>>,
+        provider: &DiskProvider<Data>,
+        io_tracker: &IOTracker,
+        query: &[Data::VectorDataType],
+        vertex_provider_factory: &VPF,
+    ) -> ANNResult<PoolOption<Self>>
+    where
+        VPF: VertexProviderFactory<Data, VertexProviderType = VP>,
+    {
+        let mut scratch = PoolOption::try_pooled(
+            pool,
+            &DiskSearchScratchArgs {
+                graph_degree: provider.graph_header.max_degree::<Data::VectorDataType>()?,
+                pq_dim: provider.pq_data.get_dim(),
+                num_pq_chunks: provider.pq_data.get_num_chunks(),
+                num_pq_centers: provider.pq_data.get_num_centers(),
+                vertex_factory: vertex_provider_factory,
+                graph_header: &provider.graph_header,
+            },
+        )?;
+
+        let timer = Instant::now();
+        let query = Data::VectorDataType::as_f32(query).into_ann_result()?;
+        scratch
+            .pq_scratch
+            .prepare_query(&provider.pq_data, provider.metric, &query)?;
+        IOTracker::add_time(
+            &io_tracker.preprocess_time_us,
+            timer.elapsed().as_micros() as u64,
+        );
+        Ok(scratch)
+    }
+}
+
 pub struct DiskAccessor<'a, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -622,6 +778,8 @@ where
     io_tracker: &'a IOTracker,
     scratch: PoolOption<DiskSearchScratch<Data, VP>>,
     query: &'a [Data::VectorDataType],
+    cache_indexed_vectors: bool,
+    flat_scan_filter: Option<IdFilter<'a>>,
 }
 
 impl<Data, VP> DiskAccessor<'_, Data, VP>
@@ -660,6 +818,46 @@ where
     VP: VertexProvider<Data>,
 {
     type Id = u32;
+}
+
+impl<Data, VP> DistancesUnordered for DiskAccessor<'_, Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Error = ANNError;
+
+    fn distances_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        F: Send + FnMut(Self::Id, f32),
+    {
+        async move {
+            let batch_size = self.scratch.pq_scratch.max_vectors();
+            if batch_size == 0 {
+                return Err(diskann_error!(
+                    ErrorKind::IndexError,
+                    "pq scratch must support at least one vector",
+                ));
+            }
+
+            let mut ids = Vec::with_capacity(batch_size);
+            let filter = self.flat_scan_filter;
+            let mut remaining = (0..self.provider.num_points as u32)
+                .filter(|id| filter.is_none_or(|filter| filter(id)));
+
+            loop {
+                ids.clear();
+                ids.extend(remaining.by_ref().take(batch_size));
+                if ids.is_empty() {
+                    break;
+                }
+
+                self.pq_distances(&ids, |distance, id| f(id, distance))?;
+            }
+
+            Ok(())
+        }
+    }
 }
 
 impl<Data, VP> glue::SearchAccessor for DiskAccessor<'_, Data, VP>
@@ -727,51 +925,44 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
-    fn new<VPF>(
+    fn new<ProviderFactory>(
         provider: &'a DiskProvider<Data>,
-        io_tracker: &'a IOTracker,
         query: &'a [Data::VectorDataType],
-        vertex_provider_factory: &'a VPF,
-        scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, VP>>>,
+        strategy: &'a DiskSearchStrategy<'a, Data, ProviderFactory>,
     ) -> ANNResult<Self>
     where
-        VPF: VertexProviderFactory<Data, VertexProviderType = VP>,
+        ProviderFactory: VertexProviderFactory<Data, VertexProviderType = VP>,
     {
-        let mut scratch = PoolOption::try_pooled(
-            scratch_pool,
-            &DiskSearchScratchArgs {
-                graph_degree: provider.graph_header.max_degree::<Data::VectorDataType>()?,
-                pq_dim: provider.pq_data.get_dim(),
-                num_pq_chunks: provider.pq_data.get_num_chunks(),
-                num_pq_centers: provider.pq_data.get_num_centers(),
-                vertex_factory: vertex_provider_factory,
-                graph_header: &provider.graph_header,
-            },
-        )?;
+        let pq_points = provider.pq_data.pq_compressed_data().nrows();
+        if pq_points != provider.num_points {
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "PQ data contains {pq_points} points, expected {}",
+                provider.num_points,
+            ));
+        }
 
-        // Decode caller's native vector representation into `f32`; downstream PQ kernels operate purely on `&[f32]`.
-        let f32_query = Data::VectorDataType::as_f32(query).into_ann_result()?;
-        scratch.pq_scratch.set(&f32_query)?;
-        let start_vertex_id = provider.graph_header.metadata().medoid as u32;
-
-        let timer = Instant::now();
-        quantizer_preprocess(
-            &mut scratch.pq_scratch,
-            &provider.pq_data,
-            provider.metric,
-            &[start_vertex_id],
+        let scratch = DiskSearchScratch::pooled_for_query(
+            strategy.scratch_pool,
+            provider,
+            strategy.io_tracker,
+            query,
+            strategy.vertex_provider_factory,
         )?;
-        IOTracker::add_time(
-            &io_tracker.preprocess_time_us,
-            timer.elapsed().as_micros() as u64,
-        );
 
         Ok(Self {
             provider,
-            io_tracker,
+            io_tracker: strategy.io_tracker,
             scratch,
             query,
+            cache_indexed_vectors: strategy.cache_indexed_vectors,
+            flat_scan_filter: None,
         })
+    }
+
+    fn with_flat_scan_filter(mut self, filter: Option<IdFilter<'a>>) -> Self {
+        self.flat_scan_filter = filter;
+        self
     }
 
     fn ensure_loaded(&mut self, ids: &[u32]) -> Result<(), ANNError> {
@@ -787,16 +978,28 @@ where
         );
         self.io_tracker.add_io_count(ids.len());
         for id in ids {
+            let vector = scratch.vertex_provider.get_vector(id)?;
             let distance = self
                 .provider
                 .distance_comparer
-                .evaluate_similarity(self.query, scratch.vertex_provider.get_vector(id)?);
+                .evaluate_similarity(self.query, vector);
             let associated_data = *scratch.vertex_provider.get_associated_data(id)?;
+            let indexed_vector = self.cache_indexed_vectors.then(|| Box::from(vector));
             scratch
                 .distance_cache
-                .insert(*id, (distance, associated_data));
+                .insert(*id, (distance, associated_data, indexed_vector));
         }
         Ok(())
+    }
+}
+
+impl<Data, VP> Drop for DiskAccessor<'_, Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    fn drop(&mut self) {
+        self.scratch.distance_cache.clear();
     }
 }
 
@@ -849,6 +1052,20 @@ pub struct SearchResultItem<AssociatedData> {
     pub data: AssociatedData,
     /// The distance between the nearest neighbor and the query vector.
     pub distance: f32,
+}
+
+/// Search results that include the native indexed vector for each neighbor.
+pub struct SearchResultWithVectors<AssociatedData, VectorData> {
+    pub results: Vec<SearchResultItemWithIndexedVector<AssociatedData, VectorData>>,
+    pub stats: SearchResultStats,
+}
+
+/// A nearest-neighbor result with its native indexed vector.
+pub struct SearchResultItemWithIndexedVector<AssociatedData, VectorData> {
+    pub vertex_id: u32,
+    pub data: AssociatedData,
+    pub distance: f32,
+    pub indexed_vector: Box<[VectorData]>,
 }
 
 impl<Data, ProviderFactory> DiskIndexSearcher<Data, ProviderFactory>
@@ -921,14 +1138,15 @@ where
         })
     }
 
-    /// Helper method to create a `DiskSearchStrategy` with common parameters.
     fn search_strategy<'a>(
         &'a self,
         io_tracker: &'a IOTracker,
         postprocess_filter: PostprocessStrategy<'a>,
+        cache_indexed_vectors: bool,
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
         DiskSearchStrategy {
             io_tracker,
+            cache_indexed_vectors,
             postprocess_filter,
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
@@ -952,58 +1170,31 @@ where
         output: &mut OB,
     ) -> ANNResult<graph::index::SearchStats>
     where
-        OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
+        OB: search_output_buffer::SearchOutputBuffer<
+                SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
+            > + Send,
     {
-        let provider = self.index.provider();
-        let mut accessor = strategy
-            .search_accessor(provider, &DefaultContext, query)
-            .into_ann_result()?;
-
-        // Derive the batch size from the scratch data structure. Providing too many vectors
-        // will panic.
-        let batch_size = accessor.scratch.pq_scratch.max_vectors();
-
-        // This check should always hold since `graph_degree` comes from
-        // `diskann::graph::Config` and is forced to be non-zero. But this is defensive
-        // against misconfiguration.
-        if batch_size == 0 {
-            return Err(diskann_error!(
+        let k = NonZeroUsize::new(neighbors_before_reranking).ok_or_else(|| {
+            diskann_error!(
                 ErrorKind::IndexError,
-                "pq scratch must support at least one vector",
-            ));
-        }
-
-        let mut id_buffer = Vec::with_capacity(batch_size);
-
-        let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
-        let mut cmps = 0u32;
-
-        // `None` short-circuits to `true` — no dyn-fn call per node on the
-        // unfiltered (recall-baseline) path.
-        let mut iter =
-            (0..provider.num_points as u32).filter(|id| vector_filter.is_none_or(|f| f(id)));
-        loop {
-            id_buffer.clear();
-            id_buffer.extend(iter.by_ref().take(batch_size));
-
-            if id_buffer.is_empty() {
-                break;
-            }
-
-            accessor.pq_distances(&id_buffer, |dist, id| best.insert(Neighbor::new(id, dist)))?;
-            cmps += id_buffer.len() as u32;
-        }
-
-        let result_count = strategy
-            .default_post_processor()
-            .post_process(&mut accessor, query, best.iter(), output)
-            .await
-            .into_ann_result()?;
+                "flat search list size must be greater than zero",
+            )
+        })?;
+        let mut visitor = DiskAccessor::new(self.index.provider(), query, strategy)?
+            .with_flat_scan_filter(vector_filter);
+        let FlatSearchStats { cmps, result_count } = flat_knn_search(
+            &mut visitor,
+            k,
+            RerankAndFilter::new(PostprocessStrategy::AcceptAll),
+            query,
+            output,
+        )
+        .await?;
 
         Ok(graph::index::SearchStats {
             cmps,
             hops: 0,
-            result_count: result_count as u32,
+            result_count,
             range_search_second_round: false,
         })
     }
@@ -1034,7 +1225,9 @@ where
         output: &mut OB,
     ) -> ANNResult<graph::index::SearchStats>
     where
-        OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
+        OB: search_output_buffer::SearchOutputBuffer<
+                SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
+            > + Send,
     {
         let filtered_strategy = labeled::Filtered::new(strategy, label_provider);
         let search = InlineFilterSearch::new(knn, adaptive_l);
@@ -1096,9 +1289,67 @@ where
         Ok(search_result)
     }
 
+    /// Perform a search on the disk index and return each result with its native indexed vector.
+    ///
+    /// Unlike [`Self::search`], this returns only valid results, so the result list length equals
+    /// `stats.result_count`.
+    pub fn search_with_indexed_vectors(
+        &self,
+        query: &[Data::VectorDataType],
+        return_list_size: u32,
+        search_list_size: u32,
+        beam_width: Option<usize>,
+        mode: SearchMode<'_>,
+    ) -> ANNResult<SearchResultWithVectors<Data::AssociatedDataType, Data::VectorDataType>> {
+        let result_count = return_list_size as usize;
+        let mut query_stats = QueryStatistics::default();
+        let mut indices = vec![0u32; result_count];
+        let mut distances = vec![0f32; result_count];
+        let mut associated_data = vec![Data::AssociatedDataType::default(); result_count];
+        let mut indexed_vectors = std::iter::repeat_with(|| None)
+            .take(result_count)
+            .collect::<Vec<_>>();
+
+        let stats = self.search_internal_impl(
+            query,
+            result_count,
+            search_list_size,
+            beam_width,
+            &mut query_stats,
+            &mut indices,
+            &mut distances,
+            &mut associated_data,
+            Some(&mut indexed_vectors),
+            &mode,
+        )?;
+
+        let results = indices
+            .into_iter()
+            .zip(distances)
+            .zip(associated_data)
+            .zip(indexed_vectors)
+            .take(stats.result_count as usize)
+            .map(|(((vertex_id, distance), data), indexed_vector)| {
+                Ok(SearchResultItemWithIndexedVector {
+                    vertex_id,
+                    data,
+                    distance,
+                    indexed_vector: indexed_vector.ok_or_else(|| {
+                        diskann_error!(
+                            ErrorKind::IndexError,
+                            "missing indexed vector for vertex {vertex_id}"
+                        )
+                    })?,
+                })
+            })
+            .collect::<ANNResult<Vec<_>>>()?;
+
+        Ok(SearchResultWithVectors { results, stats })
+    }
+
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn search_internal(
         &self,
         query: &[Data::VectorDataType],
@@ -1111,6 +1362,34 @@ where
         associated_data: &mut [Data::AssociatedDataType],
         mode: &SearchMode<'_>,
     ) -> ANNResult<SearchResultStats> {
+        self.search_internal_impl(
+            query,
+            k_value,
+            search_list_size,
+            beam_width,
+            query_stats,
+            indices,
+            distances,
+            associated_data,
+            None,
+            mode,
+        )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn search_internal_impl(
+        &self,
+        query: &[Data::VectorDataType],
+        k_value: usize,
+        search_list_size: u32,
+        beam_width: Option<usize>,
+        query_stats: &mut QueryStatistics,
+        indices: &mut [u32],
+        distances: &mut [f32],
+        associated_data: &mut [Data::AssociatedDataType],
+        indexed_vectors: IndexedVectorOutput<'_, Data::VectorDataType>,
+        mode: &SearchMode<'_>,
+    ) -> ANNResult<SearchResultStats> {
         let l = search_list_size as usize;
 
         if l < k_value {
@@ -1120,11 +1399,13 @@ where
             ));
         }
 
-        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
+        let cache_indexed_vectors = indexed_vectors.is_some();
+        let mut result_output_buffer = SearchOutput::new(
             &mut indices[..k_value],
             &mut distances[..k_value],
             &mut associated_data[..k_value],
-        );
+            indexed_vectors.map(|vectors| &mut vectors[..k_value]),
+        )?;
 
         let timer = Instant::now();
 
@@ -1141,7 +1422,11 @@ where
         //                    as the post-processor over the L candidate pool.
         let stats = match mode {
             SearchMode::FlatScan { filter } => {
-                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                let strategy = self.search_strategy(
+                    &io_tracker,
+                    PostprocessStrategy::AcceptAll,
+                    cache_indexed_vectors,
+                );
                 self.runtime.block_on(self.flat_search(
                     &strategy,
                     query,
@@ -1156,6 +1441,7 @@ where
                     filter
                         .as_deref()
                         .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
+                    cache_indexed_vectors,
                 );
                 let knn_search = Knn::new(l, beam_width)
                     .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
@@ -1171,7 +1457,11 @@ where
                 // Strategy is passed by value into `filter_search` so that the
                 // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
                 // its counters reachable from this scope.
-                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                let strategy = self.search_strategy(
+                    &io_tracker,
+                    PostprocessStrategy::AcceptAll,
+                    cache_indexed_vectors,
+                );
                 let knn_search = Knn::new(l, beam_width)?;
                 self.runtime.block_on(self.filter_search(
                     strategy,
@@ -1189,7 +1479,8 @@ where
                 let postprocess_config = filter
                     .as_deref()
                     .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
-                let strategy = self.search_strategy(&io_tracker, postprocess_config);
+                let strategy =
+                    self.search_strategy(&io_tracker, postprocess_config, cache_indexed_vectors);
                 let knn_search = Knn::new(l, beam_width)?;
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(postprocess_config, *params),
@@ -1251,7 +1542,7 @@ mod disk_provider_tests {
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
     use diskann_providers::utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool};
-    use diskann_utils::{io::read_bin, test_data_root};
+    use diskann_utils::{io::read_bin, test_data_root, views::Matrix};
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
@@ -1296,6 +1587,11 @@ mod disk_provider_tests {
     const TEST_PQ_COMPRESSED: &str =
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_pq_compressed.bin";
 
+    // These SIFT squared-L2 distances are around 256_000, where one f32 ULP is
+    // 0.015625. Allow one ULP for architecture-dependent SIMD accumulation;
+    // an absolute tolerance of 1e-4 would require identical f32 results.
+    const SIFT_DISTANCE_ABS_TOLERANCE: f32 = 0.02;
+
     #[test]
     fn test_disk_search_k10_l20_single_or_multi_thread_100dim() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
@@ -1318,6 +1614,7 @@ mod disk_provider_tests {
             thread_num: 1,
             query_file_path: TEST_QUERY_10PTS_100DIM,
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_100DIM,
+            source_data_file_path: None,
             k: 10,
             l: 20,
         });
@@ -1328,6 +1625,7 @@ mod disk_provider_tests {
             thread_num: 5,
             query_file_path: TEST_QUERY_10PTS_100DIM,
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_100DIM,
+            source_data_file_path: None,
             k: 10,
             l: 20,
         });
@@ -1360,6 +1658,7 @@ mod disk_provider_tests {
             thread_num: 1,
             query_file_path: TEST_QUERY_10PTS_128DIM,
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
+            source_data_file_path: Some(TEST_DATA_FILE),
             k: 10,
             l: 20,
         });
@@ -1370,6 +1669,7 @@ mod disk_provider_tests {
             thread_num: 5,
             query_file_path: TEST_QUERY_10PTS_128DIM,
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
+            source_data_file_path: Some(TEST_DATA_FILE),
             k: 10,
             l: 20,
         });
@@ -1536,6 +1836,58 @@ mod disk_provider_tests {
         result.into_inner().into_vec()
     }
 
+    fn load_source_data<StorageReader: StorageReadProvider>(
+        storage_provider: &StorageReader,
+        path: &str,
+    ) -> Matrix<f32> {
+        read_bin(&mut storage_provider.open_reader(path).unwrap()).unwrap()
+    }
+
+    fn assert_indexed_results_match(
+        indexed: &SearchResultWithVectors<(), f32>,
+        expected_result_count: u32,
+        expected_io_operations: u32,
+        expected_results: impl IntoIterator<Item = (u32, f32)>,
+        source: Option<&Matrix<f32>>,
+        vector_dimension: usize,
+    ) {
+        assert_eq!(indexed.stats.result_count, expected_result_count);
+        assert_eq!(indexed.results.len(), expected_result_count as usize);
+        assert_eq!(
+            indexed.stats.query_statistics.total_io_operations,
+            expected_io_operations
+        );
+        for (actual, expected) in indexed.results.iter().zip(expected_results) {
+            assert_eq!((actual.vertex_id, actual.distance), expected);
+            if let Some(source) = source {
+                assert_eq!(
+                    actual.indexed_vector.as_ref(),
+                    source.row(actual.vertex_id as usize)
+                );
+            } else {
+                assert_eq!(actual.indexed_vector.len(), vector_dimension);
+            }
+        }
+    }
+
+    fn assert_indexed_search_results_match(
+        result: &SearchResult<()>,
+        indexed: &SearchResultWithVectors<(), f32>,
+        source: &Matrix<f32>,
+    ) {
+        assert_indexed_results_match(
+            indexed,
+            result.stats.result_count,
+            result.stats.query_statistics.total_io_operations,
+            result
+                .results
+                .iter()
+                .map(|item| (item.vertex_id, item.distance)),
+            Some(source),
+            source.ncols(),
+        );
+    }
+
     struct TestDiskSearchParams<'a, StorageType> {
         storage_provider: &'a StorageType,
         index_search_engine: &'a DiskIndexSearcher<
@@ -1548,6 +1900,7 @@ mod disk_provider_tests {
         thread_num: u64,
         query_file_path: &'a str,
         truth_result_file_path: &'a str,
+        source_data_file_path: Option<&'a str>,
         k: usize,
         l: usize,
     }
@@ -1580,6 +1933,9 @@ mod disk_provider_tests {
         .unwrap();
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
+        let source = params
+            .source_data_file_path
+            .map(|path| load_source_data(params.storage_provider, path));
 
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
         queries
@@ -1616,6 +1972,25 @@ mod disk_provider_tests {
                 assert!(
                     result_unwrapped.query_statistics.total_vertices_loaded > 0,
                     "Expected vertices loaded to be greater than 0"
+                );
+
+                let indexed = params
+                    .index_search_engine
+                    .search_with_indexed_vectors(
+                        query,
+                        params.k as u32,
+                        params.l as u32,
+                        None,
+                        SearchMode::graph(),
+                    )
+                    .unwrap();
+                assert_indexed_results_match(
+                    &indexed,
+                    result_unwrapped.result_count,
+                    result_unwrapped.query_statistics.total_io_operations,
+                    indices.iter().copied().zip(distances.iter().copied()),
+                    source.as_ref(),
+                    query.len(),
                 );
 
                 // Compare res with truth_slice using assert_eq!
@@ -1795,6 +2170,17 @@ mod disk_provider_tests {
             Err(_) => {}
             Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
         }
+
+        match search_engine.search_with_indexed_vectors(
+            &query,
+            return_list_size,
+            search_list_size,
+            None,
+            SearchMode::graph(),
+        ) {
+            Err(error) => assert_eq!(error_kind(&error), ErrorKind::IndexError),
+            Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
+        }
     }
 
     #[test]
@@ -1819,13 +2205,11 @@ mod disk_provider_tests {
         let mut distances = vec![0f32; k];
         let mut associated_data = vec![(); k];
 
-        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-        );
+        let mut result_output_buffer =
+            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None).unwrap();
         let io_tracker = IOTracker::default();
-        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+        let strategy =
+            search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll, false);
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, Some(4)).unwrap();
         let recorded_search =
@@ -1923,6 +2307,18 @@ mod disk_provider_tests {
                 SearchMode::diverse_graph(params),
             )
             .unwrap();
+        let indexed = search_engine
+            .search_with_indexed_vectors(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                SearchMode::diverse_graph(params),
+            )
+            .unwrap();
+        let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
+        assert_indexed_search_results_match(&result, &indexed, &source);
+
         let det_div_ids: Vec<u32> = result.results.iter().map(|r| r.vertex_id).collect();
 
         assert_eq!(
@@ -2055,13 +2451,11 @@ mod disk_provider_tests {
         let mut distances = vec![0f32; original_k];
         let mut associated_data = vec![(); original_k];
 
-        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-        );
+        let mut result_output_buffer =
+            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None).unwrap();
         let io_tracker = IOTracker::default();
-        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+        let strategy =
+            search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll, false);
 
         // Create diverse search parameters with attribute provider
         let diverse_params = DiverseSearchParams::new(
@@ -2107,13 +2501,11 @@ mod disk_provider_tests {
         let mut indices2 = vec![0u32; original_k];
         let mut distances2 = vec![0f32; original_k];
         let mut associated_data2 = vec![(); original_k];
-        let mut result_output_buffer2 = search_output_buffer::IdDistanceAssociatedData::new(
-            &mut indices2,
-            &mut distances2,
-            &mut associated_data2,
-        );
+        let mut result_output_buffer2 =
+            SearchOutput::new(&mut indices2, &mut distances2, &mut associated_data2, None).unwrap();
         let io_tracker2 = IOTracker::default();
-        let strategy2 = search_engine.search_strategy(&io_tracker2, PostprocessStrategy::AcceptAll);
+        let strategy2 =
+            search_engine.search_strategy(&io_tracker2, PostprocessStrategy::AcceptAll, false);
         let search_params2 = Knn::new(search_list_size as usize, None).unwrap();
 
         let diverse_search2 =
@@ -2227,6 +2619,7 @@ mod disk_provider_tests {
         10,
         vec![152, 118, 72, 170, 87, 141, 79, 207, 124, 86],
         vec![256101.7, 256675.3, 256709.69, 256712.5, 256760.08, 256958.5, 257006.1, 257025.7, 257105.67, 257107.67],
+        false,
     )]
     // This case validates post-filtering using 2 ids which are not present in the unfiltered result set.
     // It is expected that the post-filtering will return an empty result
@@ -2236,24 +2629,29 @@ mod disk_provider_tests {
         0,
         vec![0; 10],
         vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        false,
     )]
     // This case validates pre-filtering using 2 ids which are not present in the unfiltered result set.
-    // It is expected that the pre-filtering will do search over matching ids
+    // It is expected that the pre-filtering will do search over matching ids.
+    // It also verifies indexed-vector output for FlatScan.
     #[case(
         |id: &u32| *id == 0 || *id == 1,
         true,
         2,
         vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         vec![257247.28, 258179.28, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        true,
     )]
     // This case validates post-filtering using 3 ids from the unfiltered result set.
-    // It is expected that the post-filtering will filter out non-matching ids
+    // It is expected that the post-filtering will filter out non-matching ids.
+    // It also verifies indexed-vector output and partial-result alignment for Graph.
     #[case(
         |id: &u32| *id == 72 || *id == 87 || *id == 170,
         false,
         3,
         vec![72, 170, 87, 0, 0, 0, 0, 0, 0, 0],
         vec![256709.69, 256712.5, 256760.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        true,
     )]
     // This case validates pre-filtering using 3 ids from the unfiltered result set.
     // It is expected that the pre-filtering will do search over matching ids
@@ -2263,6 +2661,7 @@ mod disk_provider_tests {
         3,
         vec![72, 170, 87, 0, 0, 0, 0, 0, 0, 0],
         vec![256709.69, 256712.5, 256760.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        false,
     )]
     fn test_search_with_vector_filter(
         #[case] vector_filter: fn(&u32) -> bool,
@@ -2270,20 +2669,16 @@ mod disk_provider_tests {
         #[case] expected_result_count: u32,
         #[case] expected_indices: Vec<u32>,
         #[case] expected_distances: Vec<f32>,
+        #[case] check_indexed_vectors: bool,
     ) {
-        // Exact distances can vary slightly depending on the architecture used
-        // to compute distances due to different unrolling strategies and SIMD widthd.
-        //
-        // This parameter allows for a small margin when matching distances.
         let check_distances = |got: &[f32], expected: &[f32]| -> bool {
-            const ABS_TOLERANCE: f32 = 0.02;
             assert_eq!(got.len(), expected.len());
             for (i, (g, e)) in std::iter::zip(got.iter(), expected.iter()).enumerate() {
-                if (g - e).abs() > ABS_TOLERANCE {
+                if (g - e).abs() > SIFT_DISTANCE_ABS_TOLERANCE {
                     panic!(
                         "distances differ at position {} by more than {}\n\n\
                          got: {:?}\nexpected: {:?}",
-                        i, ABS_TOLERANCE, got, expected,
+                        i, SIFT_DISTANCE_ABS_TOLERANCE, got, expected,
                     );
                 }
             }
@@ -2375,6 +2770,144 @@ mod disk_provider_tests {
             check_distances(&actual_distances, &expected_distances),
             "Expected distances to match"
         );
+
+        if check_indexed_vectors {
+            let indexed = search_engine
+                .search_with_indexed_vectors(&query, 10, 10, None, make_mode())
+                .unwrap();
+            let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
+            assert_indexed_search_results_match(&result_with_filter_unwrapped, &indexed, &source);
+        }
+    }
+
+    #[test]
+    fn unfiltered_flat_scan_matches_baseline() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let result = search_engine
+            .search(&[0.1; 128], 10, 10, None, SearchMode::flat())
+            .unwrap();
+
+        let expected = [
+            (152, 256101.7),
+            (115, 256400.48),
+            (98, 256451.28),
+            (73, 256572.89),
+            (20, 256623.28),
+            (173, 256636.9),
+            (95, 256661.28),
+            (137, 256673.7),
+            (118, 256675.3),
+            (72, 256709.69),
+        ];
+        assert_eq!(result.results.len(), expected.len());
+        for (index, (actual, (expected_id, expected_distance))) in
+            std::iter::zip(&result.results, expected).enumerate()
+        {
+            assert_eq!(
+                actual.vertex_id, expected_id,
+                "flat baseline ID mismatch at result {index}",
+            );
+            assert!(
+                (actual.distance - expected_distance).abs() <= SIFT_DISTANCE_ABS_TOLERANCE,
+                "flat baseline distance mismatch at result {index}: expected \
+                 {expected_distance}, got {}",
+                actual.distance,
+            );
+        }
+
+        assert!(result
+            .results
+            .windows(2)
+            .all(|pair| pair[0].distance <= pair[1].distance));
+        assert_eq!(result.stats.cmps, 256);
+        assert_eq!(result.stats.result_count, 10);
+    }
+
+    #[test]
+    fn flat_filter_runs_once_per_point() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let calls = AtomicUsize::new(0);
+
+        let result = search_engine
+            .search(
+                &[0.1; 128],
+                10,
+                10,
+                None,
+                SearchMode::flat_filtered(|id| {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    id % 64 == 0
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 256);
+        assert_eq!(result.stats.cmps, 4);
+        assert_eq!(result.stats.result_count, 4);
+        assert!(result.results.iter().all(|item| item.vertex_id % 64 == 0));
+    }
+
+    #[test]
+    fn graph_and_flat_queries_isolate_pooled_query_state() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let graph_before = search_engine
+            .search(&[0.1; 128], 10, 10, None, SearchMode::graph())
+            .unwrap();
+        let flat_before = search_engine
+            .search(&[0.9; 128], 10, 10, None, SearchMode::flat())
+            .unwrap();
+        let graph_after = search_engine
+            .search(&[0.1; 128], 10, 10, None, SearchMode::graph())
+            .unwrap();
+        let flat_after = search_engine
+            .search(&[0.9; 128], 10, 10, None, SearchMode::flat())
+            .unwrap();
+
+        let assert_same = |before: &SearchResult<()>, after: &SearchResult<()>| {
+            assert_eq!(before.stats.cmps, after.stats.cmps);
+            assert_eq!(before.results.len(), after.results.len());
+            for (before, after) in std::iter::zip(&before.results, &after.results) {
+                assert_eq!(before.vertex_id, after.vertex_id);
+                assert_eq!(before.distance, after.distance);
+            }
+        };
+        assert_same(&graph_before, &graph_after);
+        assert_same(&flat_before, &flat_after);
     }
 
     // ===========================================================================
@@ -2421,7 +2954,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     |_| true,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("inline filter with accept-all predicate must succeed");
@@ -2470,10 +3003,24 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     predicate,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("inline filter search with AdaptiveL must succeed");
+        let indexed = search_engine
+            .search_with_indexed_vectors(
+                &query,
+                10,
+                10,
+                None,
+                SearchMode::inline_filter(
+                    predicate,
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
+                ),
+            )
+            .expect("indexed-vector inline filter search with AdaptiveL must succeed");
+        let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
+        assert_indexed_search_results_match(&result, &indexed, &source);
 
         // `result.results` is pre-allocated to `return_list_size`; only the
         // first `result_count` entries are populated. The trailing entries
@@ -2521,14 +3068,12 @@ mod disk_provider_tests {
         let mut distances = vec![0f32; k];
         let mut associated_data = vec![(); k];
 
-        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-        );
+        let mut result_output_buffer =
+            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None).unwrap();
 
         let io_tracker = IOTracker::default();
-        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+        let strategy =
+            search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll, false);
 
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, Some(4)).unwrap();

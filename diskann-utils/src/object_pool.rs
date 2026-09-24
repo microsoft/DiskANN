@@ -114,8 +114,8 @@ impl<T> ObjectPool<T> {
     }
 
     /// Try to retrieve an object from the pool. If the pool is non-empty, then invoke
-    /// [`TryAsPooled::modify`] on the object with the given arguments. Otherwise, invoke
-    /// [`TryAsPooled::create`] to create a new object.
+    /// [`TryAsPooled::try_modify`] on the object with the given arguments. Otherwise, invoke
+    /// [`TryAsPooled::try_create`] to create a new object.
     ///
     /// If `try_modify` fails, the potentially modified object will not be returned to the
     /// queue and will instead be dropped.
@@ -232,7 +232,7 @@ where
     fn try_create(args: A) -> Result<Self, Self::Error>;
 
     /// Modify an existing object so it behaves semantically identical to an object
-    /// constructed using [`try_create`].
+    /// constructed using [`Self::try_create`].
     ///
     /// This is often trickier to achieve than first anticipated.
     ///
@@ -252,7 +252,7 @@ pub trait AsPooled<A> {
     fn create(args: A) -> Self;
 
     /// Modify an existing object so it behaves semantically identical to an object
-    /// constructed using [`create`].
+    /// constructed using [`Self::create`].
     ///
     /// This is often trickier to achieve than first anticipated.
     ///
@@ -275,7 +275,7 @@ pub struct Undef {
 }
 
 impl Undef {
-    /// Construct a new [`Defaulted`].
+    /// Construct a new [`Undef`] vector initializer.
     pub fn new(len: usize) -> Self {
         Self { len }
     }

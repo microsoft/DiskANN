@@ -124,7 +124,7 @@ impl std::fmt::Display for GenericStats {
 // Summary //
 /////////////
 
-/// A [`Display`] helper for a collection of [`StreamStats`] results.
+/// A [`std::fmt::Display`] helper for a collection of [`StreamStats`] results.
 #[derive(Debug)]
 pub(crate) struct Summary<I>(I);
 

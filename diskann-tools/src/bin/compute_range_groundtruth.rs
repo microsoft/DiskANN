@@ -2,6 +2,9 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
+//! Computes exact range-search ground truth.
+
 use std::time::Instant;
 
 use clap::Parser;

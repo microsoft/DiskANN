@@ -6,7 +6,7 @@
 use std::{collections::HashSet, fmt};
 
 use diskann_utils::{
-    strided::StridedView,
+    strided::Strided,
     views::{MatrixView, MutMatrixView},
 };
 use diskann_wide::{SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
@@ -380,7 +380,7 @@ impl KMeansPlusPlusError {
 
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
     mut points: MutMatrixView<'_, f32>,
-    data: StridedView<'_, f32>,
+    data: Strided<'_, f32>,
     transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
     rng: &mut dyn RngCore,
@@ -969,7 +969,7 @@ mod tests {
         set_default_values(data.as_mut_view());
 
         // A very large value that will overflow to infinity when computing the norm.
-        data[(6, 0)] = -3.4028235e38;
+        *data.element_mut(6, 0) = -3.4028235e38;
         let mut centers = Matrix::new(0.0, 2, 1);
 
         let mut rng = StdRng::seed_from_u64(0xc0449b2aa4e12f05);
@@ -991,7 +991,7 @@ mod tests {
         set_default_values(data.as_mut_view());
 
         // A very large value that will overflow to infinity when computing the norm.
-        data[(6, 0)] = f32::NAN;
+        *data.element_mut(6, 0) = f32::NAN;
         let mut centers = Matrix::new(0.0, 2, 1);
 
         let mut rng = StdRng::seed_from_u64(0x55808c6c728c8473);

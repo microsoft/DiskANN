@@ -72,7 +72,7 @@ impl SimpleNeighborProviderAsync {
         );
 
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].write().unwrap();
 
         // SAFETY: We are holding the write lock for this id.
@@ -94,7 +94,7 @@ impl SimpleNeighborProviderAsync {
         self.num_get_calls.increment();
 
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].read().unwrap();
 
         // SAFETY: We are holding the read lock for `id`.
@@ -105,7 +105,7 @@ impl SimpleNeighborProviderAsync {
 
     pub fn append_vector_sync(&self, id: usize, new_neighbor_ids: &[u32]) -> ANNResult<()> {
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].write().unwrap();
 
         // SAFETY: We took the write lock for `id` above.
@@ -142,8 +142,6 @@ impl HasId for SimpleNeighborProviderAsync {
 
 impl SimpleNeighborProviderAsync {
     /// Load the graph directly from a canonical DiskANN graph storage at path `path`.
-    ///
-    /// See also: [`storage::bin::load_graph`].
     pub fn load_direct<P>(provider: &P, path: &str) -> ANNResult<Self>
     where
         P: StorageReadProvider,
@@ -178,8 +176,6 @@ impl SimpleNeighborProviderAsync {
     }
 
     /// Save `self` directly to a canonical DiskANN graph storage at path `path`.
-    ///
-    /// See also: [`storage::bin::save_graph`].
     pub fn save_direct<P>(&self, provider: &P, start_point: u32, path: &str) -> ANNResult<usize>
     where
         P: StorageWriteProvider,
@@ -303,15 +299,14 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync {
 /// and the on-disk index format during serialization.
 ///
 /// Key differences between the formats:
-/// 1. Disk format requires a valid vector ID as start point, while async index uses a
-///    virtual ID (max_points + 1) that exceeds the valid dataset range
-/// 2. In-memory index appends the virtual start point at the end of adjacency lists
-/// 3. Disk format expects additional_points = 0, while async index uses additional_points = 1
+/// 1. The disk format does not support the virtual start point used by the in-memory index.
+/// 2. The in-memory index stores one virtual start point as an additional point, while the
+///    serialized disk graph omits it after remapping it to the actual medoid.
 ///
 /// This adaptor handles these differences by:
 /// - Substituting the virtual start point ID with an actual dataset ID when found in adjacency lists
 /// - Excluding the virtual point from the total count (subtracting 1 from length)
-/// - Setting additional_points to 0 as required by the disk format specification
+/// - Setting additional_points to 0 because the virtual point is omitted from the serialized graph
 ///
 /// Used with [`storage::bin::save_graph`] to persist an async index in standard DiskANN format.
 struct DiskAdaptor<'a> {
@@ -331,15 +326,26 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
         let mut list = AdjacencyList::new();
         self.provider.get_neighbors_sync(i, &mut list)?;
 
-        // Need to change to a `Vec` because remapping the start point can cause duplicates,
-        // and changing the logic to not have duplicates changes the exact nature of the
-        // graph and breaks integration tests for the disk index builder.
         let mut list: Vec<_> = list.into();
-        for i in list.iter_mut() {
-            if *i == self.inmem_start_point {
-                *i = self.actual_start_point;
+        let node_id = u32::try_from(i)?;
+        let mut seen_actual_start_point = false;
+        list.retain_mut(|neighbor| {
+            if *neighbor == self.inmem_start_point {
+                *neighbor = self.actual_start_point;
             }
-        }
+
+            if *neighbor == node_id {
+                return false;
+            }
+
+            if *neighbor != self.actual_start_point {
+                return true;
+            }
+
+            let first = !seen_actual_start_point;
+            seen_actual_start_point = true;
+            first
+        });
 
         Ok(list)
     }
@@ -365,7 +371,7 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::VirtualStorageProvider;
+    use crate::storage::{VirtualStorageProvider, bin::GetAdjacencyList};
 
     use super::*;
 
@@ -393,6 +399,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(new_adj_list, result);
+    }
+
+    #[test]
+    fn disk_adaptor_removes_duplicates_and_self_loops_after_remapping() {
+        let provider = SimpleNeighborProviderAsync::new(4, 1, 4, 1.0);
+        provider.set_neighbors_sync(0, &[4, 2, 1]).unwrap();
+        provider.set_neighbors_sync(1, &[4, 3]).unwrap();
+
+        let adaptor = DiskAdaptor {
+            provider: &provider,
+            inmem_start_point: 4,
+            actual_start_point: 1,
+        };
+
+        assert_eq!(adaptor.get_adjacency_list(0).unwrap(), vec![1, 2]);
+        assert_eq!(adaptor.get_adjacency_list(1).unwrap(), vec![3]);
     }
 
     #[tokio::test]

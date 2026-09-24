@@ -67,7 +67,8 @@ impl PQStorage {
     /// * `centroid` - Optional per-dimension centroid. Pass `None` for the standard
     ///   (non-legacy) code path; a zero vector of length `dim` is written to preserve
     ///   the on-disk file format. Pass `Some(centroid)` only when legacy centroid
-    ///   centering is enabled (see [`GeneratePivotArguments::with_legacy_centering`]).
+    ///   centering is enabled (see the `legacy_center_data` argument to
+    ///   [`crate::model::pq::generate_pq_pivots`]).
     /// * `chunk_offsets` - the chunk offsets of the pivot table
     /// * `num_centers` - the number of centers
     /// * `dim` - the dimension of the pivot table
@@ -245,7 +246,7 @@ impl PQStorage {
 
         info!(" Offset data: {:?}", file_offset_data.as_slice());
 
-        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
+        let pivots = read_bin_from::<f32>(&mut reader, *file_offset_data.element(0, 0))?;
         if pivots.nrows() > NUM_PQ_CENTROIDS {
             return Err(ANNError::message(format!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
@@ -255,7 +256,7 @@ impl PQStorage {
             )));
         }
 
-        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)])?;
+        let centroid = read_bin_from::<f32>(&mut reader, *file_offset_data.element(1, 0))?;
         if centroid.nrows() != pivots.ncols() || centroid.ncols() != 1 {
             return Err(ANNError::message(format!(
                 "Error reading pq_pivots file {}. file_dim = {}, file_cols = {} \
@@ -267,7 +268,7 @@ impl PQStorage {
             )));
         }
 
-        let chunk_offsets_m = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])?;
+        let chunk_offsets_m = read_bin_from::<u32>(&mut reader, *file_offset_data.element(2, 0))?;
         if chunk_offsets_m.ncols() != 1 {
             return Err(ANNError::message(format!(
                 "Error reading pq_pivots file at chunk offsets; file has nc={}, but expecting nc=1.",

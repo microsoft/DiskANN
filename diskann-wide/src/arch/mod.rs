@@ -339,8 +339,8 @@
 use half::f16;
 
 use crate::{
-    Const, SIMDCast, SIMDDotProduct, SIMDFloat, SIMDMask, SIMDSelect, SIMDSigned, SIMDSumTree,
-    SIMDUnsigned, SIMDVector, SplitJoin, ZipUnzip, lifetime::AddLifetime,
+    Const, SIMDCast, SIMDDotProduct, SIMDFloat, SIMDMask, SIMDMinMax, SIMDSelect, SIMDSigned,
+    SIMDSumTree, SIMDUnsigned, SIMDVector, SplitJoin, ZipUnzip, lifetime::AddLifetime,
 };
 
 pub(crate) mod emulated;
@@ -524,7 +524,7 @@ macro_rules! vector {
     }
 }
 
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub trait Architecture: sealed::Sealed {
     // mask types
     type mask_f16x8: SIMDMask;
@@ -555,6 +555,7 @@ pub trait Architecture: sealed::Sealed {
     type mask_u32x16: SIMDMask + SIMDSelect<Self::u32x16>;
     type mask_u64x2: SIMDMask;
     type mask_u64x4: SIMDMask;
+    type mask_u64x8: SIMDMask;
 
     /////////////////
     //-- vectors --//
@@ -632,10 +633,12 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         i32x4: <Self, i32, 4, mask_i32x4>
         + SIMDSigned
+        + SIMDMinMax
     );
     vector!(
         i32x8: <Self, i32, 8, mask_i32x8>
         + SIMDSigned
+        + SIMDMinMax
         + SIMDSumTree
         + SplitJoin<Halved = Self::i32x4>
         + ZipUnzip<Halved = Self::i32x4>
@@ -647,6 +650,7 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         i32x16: <Self, i32, 16, mask_i32x16>
         + SIMDSigned
+        + SIMDMinMax
         + SIMDSumTree
         + SplitJoin<Halved = Self::i32x8>
         + SIMDDotProduct<Self::u8x64, Self::i8x64>
@@ -696,6 +700,12 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         u64x4: <Self, u64, 4, mask_u64x4>
         + SplitJoin<Halved = Self::u64x2>
+        + SIMDUnsigned
+        + SIMDSumTree
+    );
+    vector!(
+        u64x8: <Self, u64, 8, mask_u64x8>
+        + SplitJoin<Halved = Self::u64x4>
         + SIMDUnsigned
         + SIMDSumTree
     );
@@ -1117,8 +1127,8 @@ macro_rules! hide {
         /// compatible.
         ///
         /// The caller must ensure that winking into existence an instance of `A` is
-        /// a safe operation. For [`Architectures`], this means that the requirements
-        /// of `A::new()` are upheld.
+        /// a safe operation. For [`Architecture`] implementations, this means that the
+        /// requirements of `A::new()` are upheld.
         ///
         /// Put plainly:
         ///
@@ -1209,6 +1219,7 @@ macro_rules! maskdef {
 
             mask_u64x2 = u64x2,
             mask_u64x4 = u64x4,
+            mask_u64x8 = u64x8,
         );
     };
 }
@@ -1245,6 +1256,7 @@ macro_rules! typedef {
 
             u64x2,
             u64x4,
+            u64x8,
         );
     };
     ($repr:ident) => {

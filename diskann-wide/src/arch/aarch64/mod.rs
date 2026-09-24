@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
@@ -34,8 +34,14 @@ pub use u8x8_::u8x8;
 pub mod u8x16_;
 pub use u8x16_::u8x16;
 
+pub mod u16x4_;
+pub use u16x4_::u16x4;
+
 pub mod u16x8_;
 pub use u16x8_::u16x8;
+
+pub mod u32x2_;
+pub use u32x2_::u32x2;
 
 pub mod u32x4_;
 pub use u32x4_::u32x4;
@@ -50,8 +56,14 @@ pub use i8x8_::i8x8;
 pub mod i8x16_;
 pub use i8x16_::i8x16;
 
+pub mod i16x4_;
+pub use i16x4_::i16x4;
+
 pub mod i16x8_;
 pub use i16x8_::i16x8;
+
+pub mod i32x2_;
+pub use i32x2_::i32x2;
 
 pub mod i32x4_;
 pub use i32x4_::i32x4;
@@ -83,6 +95,7 @@ pub use double::u32x8;
 pub use double::u32x16;
 
 pub use double::u64x4;
+pub use double::u64x8;
 
 // Internal helpers
 mod macros;
@@ -345,7 +358,7 @@ impl arch::Architecture for Neon {
         T0: AddLifetime,
         F: for<'a> FTarget1<Self, R, T0::Of<'a>>,
     {
-        let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, _, _>;
+        let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, T0, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
@@ -360,7 +373,7 @@ impl arch::Architecture for Neon {
         F: for<'a, 'b> FTarget2<Self, R, T0::Of<'a>, T1::Of<'b>>,
     {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>) -> R =
-            Self::run_function_with_2::<F, _, _, _>;
+            Self::run_function_with_2::<F, T0, T1, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
@@ -376,7 +389,7 @@ impl arch::Architecture for Neon {
         F: for<'a, 'b, 'c> FTarget3<Self, R, T0::Of<'a>, T1::Of<'b>, T2::Of<'c>>,
     {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>, T2::Of<'_>) -> R =
-            Self::run_function_with_3::<F, _, _, _, _>;
+            Self::run_function_with_3::<F, T0, T1, T2, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,

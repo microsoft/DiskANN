@@ -143,7 +143,7 @@ impl FreeSpaceMap {
         let block_key = Self::block_key(0);
         if this
             .callbacks
-            .exists_wid(&ctx.term(Term::Metadata), block_key)
+            .exists_wid(&ctx.term(Term::Metadata), block_key, BLOCK_SIZE_BYTES)
         {
             this.load_state(ctx)?;
         } else {
@@ -159,10 +159,11 @@ impl FreeSpaceMap {
     /// Load all state from Garnet by scanning the FSM blocks.
     fn load_state(&mut self, ctx: &Context) -> Result<(), FsmError> {
         let mut max_block_id = 0;
-        while self
-            .callbacks
-            .exists_wid(&ctx.term(Term::Metadata), Self::block_key(max_block_id))
-        {
+        while self.callbacks.exists_wid(
+            &ctx.term(Term::Metadata),
+            Self::block_key(max_block_id),
+            BLOCK_SIZE_BYTES,
+        ) {
             max_block_id += 1;
         }
 
@@ -201,6 +202,11 @@ impl FreeSpaceMap {
         id_minter.max_block = max_block_id - 1;
 
         id_minter.next_id = (last_used_id + 1) as u32;
+
+        let barrier = self.barrier.get_mut().unwrap();
+        if barrier.quantization_enabled {
+            barrier.max_id_for_backfill = id_minter.next_id.saturating_sub(1);
+        }
 
         self.total_used.store(total_used, Ordering::Release);
 
@@ -702,6 +708,33 @@ mod tests {
         assert_eq!(fsm.max_id() + 1, 64);
         assert!(fsm.has_free_ids.load(Ordering::Acquire));
         assert_eq!(fsm.fast_free_list.len(), 1);
+        assert_eq!(fsm.max_id_for_backfill(), u32::MAX);
+        assert_eq!(fsm.next_id(&ctx).unwrap().id(), 37);
+    }
+
+    #[test]
+    fn backfill_recovery() {
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, false).unwrap();
+
+        for _ in 0..64 {
+            let _ = fsm.next_id(&ctx).unwrap();
+        }
+        fsm.mark_free(&ctx, 37).unwrap();
+        fsm.enable_quantization();
+        drop(fsm);
+
+        let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), true, false).unwrap();
+        assert_eq!(fsm.max_id_for_backfill(), 63);
+
+        let next_id = fsm.next_id(&ctx).unwrap();
+        assert_eq!(next_id.id(), 64);
+        assert!(next_id.should_quantize());
+        drop(next_id);
+        assert_eq!(fsm.max_id_for_backfill(), 63);
+
+        fsm.enable_reuse();
         assert_eq!(fsm.next_id(&ctx).unwrap().id(), 37);
     }
 

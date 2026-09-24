@@ -14,4 +14,5 @@ pub mod configuration;
 // Re-export key types for convenience
 pub use configuration::{
     disk_index_build_parameter, filter_parameter, DiskIndexBuildParameters, QuantizationType,
+    SphericalBits,
 };

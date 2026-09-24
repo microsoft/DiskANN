@@ -11,19 +11,22 @@ use crate::neighbor::{self, Neighbor};
 
 /// A utility that asserts the contained neighbors are sorted by distance.
 #[derive(Debug)]
-pub struct SortedNeighbors<'a, I>(&'a [Neighbor<I>])
-where
-    I: Eq;
+pub(crate) struct SortedNeighbors<'a, I>(&'a [Neighbor<I>]);
 
-impl<'a, I> SortedNeighbors<'a, I>
-where
-    I: Eq + std::fmt::Debug,
-{
+impl<I> Clone for SortedNeighbors<'_, I> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<I> Copy for SortedNeighbors<'_, I> {}
+
+impl<'a, I> SortedNeighbors<'a, I> {
     /// Create a new `SortedNeighbors` around `neighbors` truncated to `max` length.
     ///
     /// As a by-product calling this method, `neighbors` will be resized to at most
     /// `max` and be sorted.
-    pub fn new(neighbors: &'a mut Vec<Neighbor<I>>, max: usize) -> Self {
+    pub(crate) fn new(neighbors: &'a mut Vec<Neighbor<I>>, max: usize) -> Self {
         // Here- we use `select_nth_unstable` to get the `position` index in the correct
         // location. We can then sort the prefix slice returned by that API.
         //
@@ -42,12 +45,29 @@ where
         neighbors.truncate(max);
         Self(&*neighbors)
     }
+
+    /// Apply the projection `f` to each element in `self` and store the result in `other`.
+    ///
+    /// The returned [`SortedNeighbors`] inherits the sorted property from `self`.
+    ///
+    /// # Side Effects
+    ///
+    /// This method removes all pre-existing elements from `storage`.
+    pub(crate) fn map_in<'b, F, J>(
+        self,
+        storage: &'b mut Vec<Neighbor<J>>,
+        mut f: F,
+    ) -> SortedNeighbors<'b, J>
+    where
+        F: FnMut(&I) -> J,
+    {
+        storage.clear();
+        storage.extend(self.iter().map(|n| Neighbor::new(f(n.id()), *n.distance())));
+        SortedNeighbors(storage)
+    }
 }
 
-impl<I> Deref for SortedNeighbors<'_, I>
-where
-    I: Eq,
-{
+impl<I> Deref for SortedNeighbors<'_, I> {
     type Target = [Neighbor<I>];
     fn deref(&self) -> &Self::Target {
         self.0
@@ -106,6 +126,48 @@ mod tests {
                 // Changes are visible on the taken vector.
                 assert_eq!(shuffled.len(), expected_len)
             }
+        }
+    }
+
+    #[test]
+    fn test_map() {
+        let messages = ["a", "b", "c", "d", "e", "f"];
+
+        let mut storage = vec![Neighbor::new("foo", 1.0), Neighbor::new("bar", 0.0)];
+
+        {
+            let mut neighbors = vec![
+                Neighbor::new(0usize, 5.0f32),
+                Neighbor::new(1, 4.0),
+                Neighbor::new(2, 3.0),
+                Neighbor::new(3, 2.0),
+                Neighbor::new(4, 1.0),
+                Neighbor::new(5, 0.0),
+            ];
+
+            let sorted = SortedNeighbors::new(&mut neighbors, 6);
+            let cache = sorted.map_in(&mut storage, |id: &usize| messages[*id]);
+
+            assert_eq_verbose!(
+                *cache,
+                [
+                    Neighbor::new("f", 0.0f32),
+                    Neighbor::new("e", 1.0),
+                    Neighbor::new("d", 2.0),
+                    Neighbor::new("c", 3.0),
+                    Neighbor::new("b", 4.0),
+                    Neighbor::new("a", 5.0),
+                ]
+                .as_slice()
+            );
+        }
+
+        // Empty
+        {
+            let mut neighbors = Vec::<Neighbor<usize>>::new();
+            let sorted = SortedNeighbors::new(&mut neighbors, 10);
+            let cache = sorted.map_in(&mut storage, |id: &usize| messages[*id]);
+            assert!(cache.is_empty());
         }
     }
 }

@@ -25,7 +25,7 @@ use crate::utils::BridgeErr;
 use crate::{
     model::{
         distance::common::distance_table_pool,
-        pq::{self, FixedChunkPQTable},
+        pq::{self, FixedChunkPQTable, distance::Shared},
     },
     storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith, bin},
     utils::PQPathNames,
@@ -68,7 +68,7 @@ impl MemoryQuantVectorProviderAsync {
         }
     }
 
-    /// Return the total number of points (including frozen points) included in `self.
+    /// Return the total number of points (including frozen points) included in `self`.
     #[inline(always)]
     pub fn total(&self) -> usize {
         self.max_vectors
@@ -90,7 +90,7 @@ impl MemoryQuantVectorProviderAsync {
         T: VectorRepr,
     {
         QueryComputer::new(
-            &self.pq_chunk_table,
+            Shared::Ref(&self.pq_chunk_table),
             self.metric,
             &T::as_f32(query).into_ann_result()?,
             Some(self.vec_pool.clone()),
@@ -99,7 +99,7 @@ impl MemoryQuantVectorProviderAsync {
 
     /// Create a distance computer for the underlying schema.
     pub fn distance_computer(&self) -> DistanceComputer<'_> {
-        DistanceComputer::new(&self.pq_chunk_table, self.metric)
+        DistanceComputer::new(Shared::Ref(&self.pq_chunk_table), self.metric)
     }
 
     /// Return an immutable, reference counted guard over the data as position `i`.
@@ -164,9 +164,6 @@ impl MemoryQuantVectorProviderAsync {
     ///
     /// The pivots file follows the format in [`storage::PQStorage::load_pivots`] and
     /// the compressed code is saved in a canonical `.bin` format.
-    ///
-    /// See also: [`storage::bin::load_from_bin`].
-    ///
     /// Because the number of start points and distance metric are not saved as part of the
     /// `.bin` file format, they must be provided externally.
     pub fn load_direct<P>(provider: &P, pivots: &str, data: &str, metric: Metric) -> ANNResult<Self>
@@ -212,9 +209,7 @@ impl MemoryQuantVectorProviderAsync {
     /// Save `self` to disk with the pivot table stored at path `pivots` and the compressed
     /// data store in `.bin` form to file path `data`.
     ///
-    /// See also:
-    /// * [`storage::PQStorage::write_pivot_data`]
-    /// * [`storage::bin::save_to_bin`]
+    /// See also: [`storage::PQStorage::write_pivot_data`].
     pub fn save_direct<P>(&self, provider: &P, pivots: &str, data: &str) -> ANNResult<usize>
     where
         P: StorageWriteProvider,
@@ -247,7 +242,7 @@ impl SaveWith<AsyncIndexMetadata> for MemoryQuantVectorProviderAsync {
 impl LoadWith<AsyncQuantLoadContext> for MemoryQuantVectorProviderAsync {
     type Error = ANNError;
 
-    /// Load the quant vector provider using the `prefix` in `ctx~ as a prefix to
+    /// Load the quant vector provider using the `prefix` in `ctx` as a prefix to
     /// [`PQPathNames`] along with the number of PQ bytes.
     async fn load_with<P>(provider: &P, ctx: &AsyncQuantLoadContext) -> ANNResult<Self>
     where

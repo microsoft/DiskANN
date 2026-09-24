@@ -14,7 +14,7 @@ use crate::doubled;
 doubled::double_vector!(u32, 16, u32x8);
 doubled::double_scalar_shift!(Doubled<u32x8>);
 
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub type u32x16 = doubled::Doubled<u32x8>;
 
 ///////////

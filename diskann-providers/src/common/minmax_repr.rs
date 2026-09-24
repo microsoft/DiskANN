@@ -150,13 +150,13 @@ where
         >,
     Unsigned: Representation<NBITS>,
 {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     // Lint: We're allowing panics in distance function for now.
     let xref = MinMaxElement::<NBITS>::from_raw(x).unwrap();
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     // Lint: We're allowing panics in distance function for now.
     let yref = MinMaxElement::<NBITS>::from_raw(y).unwrap();
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     // Lint: We're allowing panics in distance function for now.
     T::evaluate(xref, yref).unwrap()
 }
@@ -252,7 +252,8 @@ where
     /// This function fails when:
     /// - The input slice contains invalid MinMax metadata ([`MetaParseError`])
     /// - The data format is not canonical ([`NotCanonical`])
-    /// - The destination buffer size doesn't match the original vector dimension ([`WrongLength`])
+    /// - The destination buffer size doesn't match the original vector dimension
+    ///   ([`MMConvertError::WrongLength`])
     /// - The decompression process encounters corrupted data ([`DecompressError`])
     fn as_f32_into(src: &[Self], dst: &mut [f32]) -> Result<(), Self::Error> {
         let data_ref = Self::from_raw(src)?;
@@ -339,7 +340,7 @@ where
 // Distances //
 ///////////////
 
-/// A function pointer wrapper for [`MinMax`] distances.
+/// A function pointer wrapper for [`MinMaxElement`] distances.
 #[derive(Debug)]
 pub struct FnPtr<T>(fn(&[T], &[T]) -> f32);
 

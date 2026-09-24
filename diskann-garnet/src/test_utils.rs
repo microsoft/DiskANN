@@ -8,11 +8,15 @@ use core::slice;
 use dashmap::DashMap;
 use std::{
     ffi::c_void,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 thread_local! {
     pub static STORE: DashMap<Vec<u8>, Vec<u8>> = DashMap::new();
+    pub static LOGS: Mutex<Vec<(u64, String)>> = const { Mutex::new(Vec::new()) };
     pub static FULL_READS: AtomicUsize = const { AtomicUsize::new(0) };
     pub static QUANT_READS: AtomicUsize = const { AtomicUsize::new(0) };
 }
@@ -36,11 +40,22 @@ impl Store {
     }
 
     pub fn callbacks(&self) -> Callbacks {
-        Callbacks::new(test_read, test_write, test_delete, test_rmw, test_filter)
+        Callbacks::new(
+            test_read,
+            test_write,
+            test_delete,
+            test_rmw,
+            test_filter,
+            test_log,
+        )
     }
 
     pub fn clear(&self) {
         STORE.with(|s| s.clear());
+        LOGS.with(|l| {
+            let mut guard = l.lock().unwrap();
+            guard.clear();
+        });
         FULL_READS.with(|fr| fr.store(0, Ordering::Release));
         QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
     }
@@ -96,11 +111,19 @@ impl Store {
     pub fn quant_reads(&self) -> usize {
         QUANT_READS.with(|qr| qr.load(Ordering::Acquire))
     }
+
+    pub fn log(&self, context: u64, msg: &str) {
+        LOGS.with(|l| {
+            let mut guard = l.lock().unwrap();
+            guard.push((context, msg.to_owned()));
+        });
+    }
 }
 
 unsafe extern "C" fn test_read(
     ctx: u64,
     count: u32,
+    _length_hint: u32,
     id_bytes: *const u8,
     id_len: usize,
     cb: ReadDataCallback,
@@ -176,8 +199,15 @@ unsafe extern "C" fn test_rmw(
     true
 }
 
-unsafe extern "C" fn test_filter(_context: u64, _internal_id: u32) -> bool {
+unsafe extern "C" fn test_filter(_context: u64, _data: *const u8, _len: usize) -> bool {
     true
+}
+
+unsafe extern "C" fn test_log(context: u64, msg: *const u8, msg_len: usize) {
+    let store = Store::attach();
+    let msg_slice = unsafe { slice::from_raw_parts(msg, msg_len) };
+    let msg = str::from_utf8(msg_slice).unwrap();
+    store.log(context, msg)
 }
 
 mod tests {
@@ -196,7 +226,7 @@ mod tests {
         let ctx = Context::new(0);
 
         // Reading a non-existant key should fail.
-        assert!(!callbacks.exists_iid(&ctx, 0));
+        assert!(!callbacks.exists_iid(&ctx, 0, 10));
 
         // Round tripping a write should work.
         assert!(callbacks.write_iid(&ctx, 0, b"test"));
@@ -211,9 +241,9 @@ mod tests {
         assert_eq!(val, b"again");
 
         // Exists and delete should work.
-        assert!(callbacks.exists_iid(&ctx, 0));
+        assert!(callbacks.exists_iid(&ctx, 0, 10));
         assert!(callbacks.delete_iid(&ctx, 0));
-        assert!(!callbacks.exists_iid(&ctx, 0));
+        assert!(!callbacks.exists_iid(&ctx, 0, 10));
 
         // Different contexts should stay separate.
         assert!(callbacks.write_iid(&ctx.term(Term::Vector), 0, b"0000"));
@@ -228,7 +258,7 @@ mod tests {
         assert!(callbacks.write_iid(&ctx.term(Term::Vector), 1, b"2222"));
         let ids = [4u32, 0, 4, 1, 4, 2];
         let mut results = HashMap::new();
-        callbacks.read_multi_lpiid(&ctx.term(Term::Vector), &ids, |i, v| {
+        callbacks.read_multi_lpiid(&ctx.term(Term::Vector), &ids, 10, |i, v| {
             results.insert(i, v.to_owned());
         });
         assert_eq!(results.get(&0), Some(b"0000".to_vec()).as_ref());

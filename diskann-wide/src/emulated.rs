@@ -553,10 +553,10 @@ macro_rules! impl_sumtree {
 }
 
 impl_sumtree!(f32, 1, 2, 4, 8, 16);
-impl_sumtree!(i32, 4, 8, 16);
-impl_sumtree!(u32, 4, 8, 16);
-impl_sumtree!(i64, 2, 4);
-impl_sumtree!(u64, 2, 4);
+impl_sumtree!(i32, 1, 2, 4, 8, 16);
+impl_sumtree!(u32, 1, 2, 4, 8, 16);
+impl_sumtree!(i64, 1, 2, 4, 8);
+impl_sumtree!(u64, 1, 2, 4, 8);
 
 ////////////////
 // Conversion //
@@ -703,6 +703,7 @@ impl_splitjoin!(u8, 64 => 32);
 impl_splitjoin!(u32, 8 => 4);
 impl_splitjoin!(u32, 16 => 8);
 impl_splitjoin!(u64, 4 => 2);
+impl_splitjoin!(u64, 8 => 4);
 
 impl_splitjoin!(f32, 16 => 8);
 impl_splitjoin!(f32, 8 => 4);
@@ -971,6 +972,83 @@ mod test_emulated {
         (Emulated<u8, 64>, Emulated<u8, 64>) => Emulated<u32, 16>, 0x3001f05604e96289, SC
     );
 
+    // split/join
+    test_utils::ops::test_splitjoin!(
+        Emulated<i8, 32> => Emulated<i8, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i8, 64> => Emulated<i8, 32>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i16, 16> => Emulated<i16, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i16, 32> => Emulated<i16, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i32, 8> => Emulated<i32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i32, 16> => Emulated<i32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u8, 32> => Emulated<u8, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u8, 64> => Emulated<u8, 32>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u32, 8> => Emulated<u32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u32, 16> => Emulated<u32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u64, 4> => Emulated<u64, 2>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u64, 8> => Emulated<u64, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f32, 8> => Emulated<f32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f32, 16> => Emulated<f32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f16, 16> => Emulated<f16, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+
     // reductions
     test_utils::ops::test_sumtree!(Emulated<f32, 1>, 0x410bad8207a8ccfc, SC);
     test_utils::ops::test_sumtree!(Emulated<f32, 2>, 0xf2fc4e4bbd193493, SC);
@@ -978,19 +1056,27 @@ mod test_emulated {
     test_utils::ops::test_sumtree!(Emulated<f32, 8>, 0x0f075940b7e3732c, SC);
     test_utils::ops::test_sumtree!(Emulated<f32, 16>, 0x5b3cb860e3f02d3c, SC);
 
+    test_utils::ops::test_sumtree!(Emulated<i32, 1>, 0x7c829838e6a6643d, SC);
+    test_utils::ops::test_sumtree!(Emulated<i32, 2>, 0x0d83c1847e754d5f, SC);
     test_utils::ops::test_sumtree!(Emulated<i32, 4>, 0xf8c38f70a807e9d2, SC);
     test_utils::ops::test_sumtree!(Emulated<i32, 8>, 0xf8aa4a7e7a273e80, SC);
     test_utils::ops::test_sumtree!(Emulated<i32, 16>, 0x8d1a467fe835a9c5, SC);
 
+    test_utils::ops::test_sumtree!(Emulated<u32, 1>, 0xc89679e73e4f2399, SC);
+    test_utils::ops::test_sumtree!(Emulated<u32, 2>, 0xa560ade3865f683d, SC);
     test_utils::ops::test_sumtree!(Emulated<u32, 4>, 0x5e4cffc86a21e90d, SC);
     test_utils::ops::test_sumtree!(Emulated<u32, 8>, 0xf43f19adb43bc611, SC);
     test_utils::ops::test_sumtree!(Emulated<u32, 16>, 0xa43dfe10aa9de860, SC);
 
+    test_utils::ops::test_sumtree!(Emulated<i64, 1>, 0x849758bb58dfb298, SC);
     test_utils::ops::test_sumtree!(Emulated<i64, 2>, 0xbef8abe303356cc3, SC);
     test_utils::ops::test_sumtree!(Emulated<i64, 4>, 0x9aef214494ff5cd2, SC);
+    test_utils::ops::test_sumtree!(Emulated<i64, 8>, 0x7f6ba325baf079b3, SC);
 
+    test_utils::ops::test_sumtree!(Emulated<u64, 1>, 0x5fbc43ed24177b6a, SC);
     test_utils::ops::test_sumtree!(Emulated<u64, 2>, 0xe1dc2d07ae014508, SC);
     test_utils::ops::test_sumtree!(Emulated<u64, 4>, 0x529c27f62ea171ec, SC);
+    test_utils::ops::test_sumtree!(Emulated<u64, 8>, 0x7f6ba325baf079b3, SC);
 
     /////////////////
     // conversions //

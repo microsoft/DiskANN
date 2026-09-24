@@ -70,7 +70,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 ///
 ///   - [`QuantVectorProvider`]: A Bf-Tree based spherical quantized vector store.
 ///   - [`NoStore`]: Disable quantization altogether. Note that this disables all
-///     methods reached through quantization based [`Accessor`]s at compile-time.
+///     methods reached through quantization-based [`glue::SearchAccessor`]s at compile-time.
 ///
 /// # Indexing Strategies
 ///
@@ -131,9 +131,9 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// implements the [`CreateQuantProvider`] trait.
 /// ```
 /// use diskann_quantization::{
-///     alloc::{GlobalAllocator, Poly, poly},
+///     alloc::{GlobalAllocator},
 ///     algorithms::TransformKind,
-///     spherical::{iface, SphericalQuantizer, SupportedMetric, PreScale},
+///     spherical::{SphericalQuantizer, SupportedMetric, PreScale},
 /// };
 /// use diskann_utils::views::{Init, Matrix};
 /// use diskann_bftree::provider::{
@@ -148,14 +148,14 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// let dim = 4;
 /// let data = Matrix::new(Init(|| 1.0f32), 4, dim);
 /// let mut rng = StdRng::seed_from_u64(42);
-/// let sq = SphericalQuantizer::train(
+/// let quantizer = SphericalQuantizer::train(
 ///     data.as_view(), TransformKind::Null,
 ///     SupportedMetric::SquaredL2, PreScale::None,
 ///     &mut rng, GlobalAllocator,
-/// ).unwrap();
-/// let imp = iface::Impl::<1>::new(sq).unwrap();
-/// let poly = Poly::new(imp, GlobalAllocator).unwrap();
-/// let quantizer: Poly<dyn iface::Quantizer> = poly!(iface::Quantizer, poly);
+/// )
+/// .unwrap()
+/// .as_quantizer::<1>()
+/// .unwrap();
 ///
 /// let parameters = BfTreeProviderParameters {
 ///     max_points: 5,
@@ -468,11 +468,12 @@ impl DeleteQuant for NoStore {
 /// store is present, both the full-precision and quantized entries are removed.
 ///
 /// This has an important consequence for inplace delete: the
-/// [`InplaceDeleteMethod::VisitedAndTopK`] strategy is **incompatible** with this provider
+/// [`diskann::graph::InplaceDeleteMethod::VisitedAndTopK`] strategy is **incompatible** with this provider
 /// because it requires reading the deleted vector's data (via
 /// [`InplaceDeleteStrategy::get_delete_element`]) *after* the delete has already been committed.
-/// Use [`InplaceDeleteMethod::OneHop`] or [`InplaceDeleteMethod::TwoHopAndOneHop`] instead,
-/// as these strategies only require neighbor topology (which remains accessible).
+/// Use [`diskann::graph::InplaceDeleteMethod::OneHop`] or
+/// [`diskann::graph::InplaceDeleteMethod::TwoHopAndOneHop`] instead, as these strategies
+/// only require neighbor topology (which remains accessible).
 impl<T, Q, I> Delete for BfTreeProvider<T, Q, I>
 where
     T: VectorRepr,
@@ -810,11 +811,7 @@ where
 
 /// An accessor for retrieving full-precision vectors from the `BfTreeProvider`.
 ///
-/// This type implements the following traits:
-///
-/// * [`Accessor`] for the [`BfTreeProvider`].
-/// * [`BuildQueryComputer`].
-///
+/// This type implements [`glue::SearchAccessor`] for the [`BfTreeProvider`].
 pub struct FullAccessor<'a, T, Q, I>
 where
     T: VectorRepr,
@@ -919,10 +916,7 @@ where
 
 /// An accessor that retrieves the quantized portion of the [`BfTreeProvider`].
 ///
-/// This type implements the following traits:
-///
-/// * [`Accessor`] for the `BfTreeProvider`.
-///
+/// This type implements [`glue::SearchAccessor`] for the [`BfTreeProvider`].
 pub struct QuantAccessor<'a, T, I>
 where
     T: VectorRepr,
@@ -1245,7 +1239,7 @@ where
 ///
 /// Unlike inmem providers (which hand back zero-copy references into a contiguous backing
 /// array), bf_tree copies vector data out of the tree on every access. The
-/// [`workingset::View`] trait requires `get` to return something that implements
+/// [`diskann::graph::workingset::View`] trait requires `get` to return something that implements
 /// `Reborrow<'short, Target = Opaque<'short>>`, so we need an owned type that bridges
 /// bf_tree's copy-out model with the working set's reborrow expectation.
 pub struct Owned(Box<[u8]>);
@@ -1319,7 +1313,20 @@ where
     Q: AsyncFriendly,
     I: BfTreeId,
 {
+    type SearchAccessor = FullAccessor<'a, T, Q, I>;
+    type SearchAccessorError = Infallible;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a BfTreeProvider<T, Q, I>,
+        context: &'a DefaultContext,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }
@@ -1372,10 +1379,11 @@ where
 ///
 /// # Compatibility
 ///
-/// This strategy is used with [`InplaceDeleteMethod::OneHop`] and
-/// [`InplaceDeleteMethod::TwoHopAndOneHop`]. It is **not compatible** with
-/// [`InplaceDeleteMethod::VisitedAndTopK`] because `BfTreeProvider` performs hard deletes —
-/// the vector data is erased before `get_delete_element` is called, causing it to fail.
+/// This strategy is used with [`diskann::graph::InplaceDeleteMethod::OneHop`] and
+/// [`diskann::graph::InplaceDeleteMethod::TwoHopAndOneHop`]. It is **not compatible** with
+/// [`diskann::graph::InplaceDeleteMethod::VisitedAndTopK`] because `BfTreeProvider` performs
+/// hard deletes — the vector data is erased before `get_delete_element` is called, causing
+/// it to fail.
 impl<T, Q, I> InplaceDeleteStrategy<BfTreeProvider<T, Q, I>> for FullPrecision
 where
     T: VectorRepr,
@@ -1452,7 +1460,20 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
+    type SearchAccessor = QuantAccessor<'a, T, I>;
+    type SearchAccessorError = ANNError;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a BfTreeProvider<T, QuantVectorProvider, I>,
+        context: &'a DefaultContext,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }
@@ -1503,7 +1524,7 @@ where
 /// # Compatibility
 ///
 /// Same constraint as [`FullPrecision`]'s impl: not compatible with
-/// [`InplaceDeleteMethod::VisitedAndTopK`] due to hard deletes.
+/// [`diskann::graph::InplaceDeleteMethod::VisitedAndTopK`] due to hard deletes.
 impl<T, I> InplaceDeleteStrategy<BfTreeProvider<T, QuantVectorProvider, I>> for Quantized
 where
     T: VectorRepr,

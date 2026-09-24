@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Computes query-filter specificities against base labels.
+
 use clap::Parser;
 use diskann_label_filter::{read_and_parse_queries, read_baselabels};
 use diskann_tools::utils::compute_bitmap::compute_query_bitmaps;

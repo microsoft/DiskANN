@@ -171,7 +171,7 @@ impl MinMaxQuantizer {
         let mut vec = vec![f32::default(); self.output_dim()];
 
         // We know vec.len() == self.output_dim() and `from.len() == self.dim`
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         self.transform
             .transform_into(
                 &mut vec,
@@ -401,7 +401,7 @@ where
         }
 
         // We know vec.len() == self.output_dim() and `from.len() == self.dim`
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         self.transform
             .transform_into(to.vector_mut(), &from, ScopedAllocator::global())
             .unwrap();
@@ -504,9 +504,9 @@ mod minmax_quantizer_tests {
         assert!(
             (reconstruction_error / norm) <= relative_err,
             "Expected vector : {:?} to be reconstructed within error {} but instead got : {:?}, with error {} for dim : {}",
-            &vector,
+            vector,
             relative_err,
-            &reconstructed,
+            reconstructed,
             reconstruction_error / norm,
             dim,
         );
@@ -522,7 +522,7 @@ mod minmax_quantizer_tests {
             "Encoded vector with dim : {dim} is {:?}, got error : {} for vector : {:?}",
             encoded.reborrow(),
             (code_sum - expected_code_sum).abs(),
-            &vector,
+            vector,
         );
         let recon_norm_sq = reconstructed.iter().map(|x| x * x).sum::<f32>();
         assert!((encoded.reborrow().meta().norm_squared - recon_norm_sq).abs() <= 1e-3);

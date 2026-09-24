@@ -71,7 +71,7 @@
 //!   a [`Pipeline`].
 //!
 //! * [`InsertStrategy`]: Graph insertion consists of accepting the value to insert,
-//!   invoking [`crate::model::graph::traits::data_provider::SetElement`] on that value,
+//!   invoking [`provider::SetElement`] on that value,
 //!   then performing a graph search.
 //!
 //!   Following graph search, candidates are passed to a pruning phase.
@@ -90,7 +90,7 @@
 //! * [`InplaceDeleteStrategy`]: This follows the trend of defining accessors and related
 //!   strategies. One difference for inplace-deletion is that we use an element accessed
 //!   from the [`DataProvider`] itself for search. Therefore, methods like
-//!   [`crate::index::diskann_async::DiskANNIndex::inplace_delete`] also require the
+//!   [`crate::graph::DiskANNIndex::inplace_delete`] also require the
 //!   [`InplaceDeleteStrategy`] to implement an appropriate [`SearchStrategy`].
 //!
 //!   Like insertion, this trait delegates pruning to a dedicated `PruneStrategy`.
@@ -588,8 +588,7 @@ where
 /// Opt-in trait for strategies that have a default post-processor.
 ///
 /// Strategies implementing this trait can be used with index-level search APIs such as
-/// [`crate::index::diskann_async::DiskANNIndex::search`] and
-/// [`crate::index::diskann_async::DiskANNIndex::search_with`] when no explicit
+/// [`crate::graph::DiskANNIndex::search`] when no explicit
 /// post-processor is specified. The search infrastructure will call
 /// `default_post_processor()` to obtain the processor and invoke its
 /// [`SearchPostProcess::post_process`] method.
@@ -861,11 +860,11 @@ pub trait PruneAccessor: HasId + Send + Sync {
 
     /// Return a delegate for performing graph manipulation.
     ///
-    /// If `Self` implements [`NeighborAccessorMut`], then [`provider::Neighbors`] can be
+    /// If `Self` implements [`provider::NeighborAccessorMut`], then [`provider::Neighbors`] can be
     /// used to wrap `&mut self`.
     fn neighbors(&mut self) -> Self::Neighbors<'_>;
 
-    /// Make the data elements for items in `itr` available in the returned [`View`] and
+    /// Make the data elements for items in `itr` available in the returned [`Self::View`] and
     /// provide a means of computing distance between elements in the view.
     ///
     /// The input `itr` is `Clone` and is expected that the implementation of `Clone` is cheap
@@ -912,32 +911,29 @@ pub trait PruneAccessor: HasId + Send + Sync {
 /// This strategy is used during the greedy search portion of index construction.
 /// After the candidate list has been retrieved from greedy search, the [`PruneStrategy`]
 /// is used for the rest.
-pub trait InsertStrategy<'a, Provider, T>:
-    SearchStrategy<'a, Provider, T, SearchAccessor: SearchAccessor> + 'static
+pub trait InsertStrategy<'a, Provider, T>: Send + Sync + 'static
 where
     Provider: DataProvider,
 {
+    /// The type of the [`SearchAccessor`] used for candidate generation.
+    type SearchAccessor: SearchAccessor<Id = Provider::InternalId>;
+
+    /// An error that can occur when getting a search_accessor.
+    type SearchAccessorError: StandardError;
+
     /// The pruning strategy associated with the insertion strategy.
     type PruneStrategy: PruneStrategy<Provider>;
 
-    /// Return the prune strategy used for insertion.
-    fn prune_strategy(&self) -> Self::PruneStrategy;
-
-    /// This API is invoked during inserts to create the associated `SearchAccessor`.
-    ///
-    /// The provided implementation uses
-    /// [`<Self as SearchStrategy<Provider, T>>::search_accessor`], but implementors of
-    /// [`InsertStrategy`] can customize the implementation if the behavior of the search
-    /// accessor needs to be slightly different between searches for build and regular
-    /// searches.
+    /// This API is invoked during inserts to create the associated [`SearchAccessor`].
     fn insert_search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
         vector: T,
-    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        self.search_accessor(provider, context, vector)
-    }
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
+
+    /// Return the prune strategy used for insertion.
+    fn prune_strategy(&self) -> Self::PruneStrategy;
 }
 
 /// A strategy for pruning elements from the data provider.
@@ -970,7 +966,7 @@ where
 /// Multi-insert bulk-inserts a batch of vectors and provides this batch to
 /// [`MultiInsertStrategy::finish`] to create a seed. This seed is then provided to
 /// multiple calls to [`MultiInsertStrategy::seeded_prune_accessor`] to construct the various
-/// [`PruneAccessors`] needed during build.
+/// [`PruneAccessor`] instances needed during build.
 ///
 /// This architecture allows implementations to use overlays like
 /// [`Overlay`](crate::graph::workingset::map::Overlay) so accesses to batch elements can

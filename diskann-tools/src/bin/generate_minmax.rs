@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Generates MinMax-quantized vectors.
+
 use std::{
     fs::File,
     io::{BufWriter, Write},

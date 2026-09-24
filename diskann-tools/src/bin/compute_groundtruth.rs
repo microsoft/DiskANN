@@ -2,6 +2,9 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
+//! Computes exact k-nearest-neighbor ground truth.
+
 use std::time::Instant;
 
 use clap::Parser;

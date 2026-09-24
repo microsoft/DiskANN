@@ -3,11 +3,13 @@
  * Licensed under the MIT license.
  */
 use std::{
+    io::{BufWriter, Read, Seek, Write},
     marker::PhantomData,
     mem::{self, size_of},
 };
 
 use crate::data_model::GraphDataType;
+use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{utils::VectorRepr, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
@@ -17,6 +19,7 @@ use diskann_providers::{
         READ_WRITE_BLOCK_SIZE,
     },
 };
+use diskann_quantization::spherical::DataRef;
 use diskann_utils::io::read_bin;
 use rand::seq::SliceRandom;
 use tracing::info;
@@ -24,10 +27,10 @@ use tracing::info;
 use crate::{
     build::builder::{build::build_inmem_index, quantizer::BuildQuantizer},
     disk_index_build_parameter::BYTES_IN_GB,
-    storage::{CachedReader, CachedWriter, DiskIndexWriter},
+    storage::DiskIndexWriter,
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
     utils::partition_with_ram_budget,
-    DiskIndexBuildParameters, QuantizationType,
+    DiskIndexBuildParameters, QuantizationType, SphericalBits,
 };
 
 /// Overhead factor for RAM estimation during index build (10% buffer).
@@ -55,6 +58,9 @@ fn estimate_build_index_ram_usage(
         // `+ std::mem::size_of::<f32>()` for f32 compensation metadata for the scalar quantizer.
         QuantizationType::SQ { nbits, .. } => {
             (nbits as u64 * dim).div_ceil(8) + std::mem::size_of::<f32>() as u64
+        }
+        QuantizationType::Spherical(SphericalBits::One) => {
+            DataRef::<1>::canonical_bytes(dim as usize) as u64
         }
     };
 
@@ -174,21 +180,20 @@ where
 
         let (_npts, dim) = dataset_reader.get_dataset_headers();
 
-        let mut shard_base_cached_writer = CachedWriter::<StorageProvider>::new(
-            shard_base_file,
+        let mut shard_base_cached_writer = BufWriter::with_capacity(
             READ_WRITE_BLOCK_SIZE,
             storage_provider.create_for_write(shard_base_file)?,
-        )?;
+        );
 
         let dummy_size: u32 = 0;
-        shard_base_cached_writer.write(&dummy_size.to_le_bytes())?;
-        shard_base_cached_writer.write(&dim.to_le_bytes())?;
+        shard_base_cached_writer.write_all(&dummy_size.to_le_bytes())?;
+        shard_base_cached_writer.write_all(&dim.to_le_bytes())?;
 
         let mut num_written: u32 = 0;
         dataset_reader.read_vectors(shard_ids.as_slice().iter().copied(), |vector_t| {
             // Casting Pod type to bytes always succeeds (u8 has alignment of 1)
             let vector_bytes: &[u8] = bytemuck::must_cast_slice(vector_t);
-            shard_base_cached_writer.write(vector_bytes)?;
+            shard_base_cached_writer.write_all(vector_bytes)?;
             num_written += 1;
             Ok(())
         })?;
@@ -198,9 +203,9 @@ where
             shard_base_file, num_written
         );
 
+        shard_base_cached_writer.rewind()?;
+        shard_base_cached_writer.write_all(&num_written.to_le_bytes())?;
         shard_base_cached_writer.flush()?;
-        shard_base_cached_writer.reset()?;
-        shard_base_cached_writer.write(&num_written.to_le_bytes())?;
 
         Ok(())
     }
@@ -279,20 +284,19 @@ where
         // create cached vamana readers
         let mut vamana_readers = Vec::new();
         for name in &vamana_names {
-            let reader = CachedReader::<StorageProvider>::new(
+            let reader = crate::storage::open_buf_reader(
+                self.storage_provider,
                 name,
                 READ_WRITE_BLOCK_SIZE,
-                self.storage_provider,
             )?;
             vamana_readers.push(reader);
         }
 
         // create cached vamana writers
-        let mut merged_vamana_cached_writer = CachedWriter::<StorageProvider>::new(
-            &output_vamana,
+        let mut merged_vamana_cached_writer = BufWriter::with_capacity(
             READ_WRITE_BLOCK_SIZE,
             self.storage_provider.create_for_write(&output_vamana)?,
-        )?;
+        );
 
         // expected file size + max degree + medoid_id + frozen_point info
         let vamana_metadata_size =
@@ -301,7 +305,7 @@ where
         // we initialize the size of the merged index to the metadata size
         // we will overwrite the index size at the end
         let mut merged_index_size: u64 = vamana_metadata_size as u64;
-        merged_vamana_cached_writer.write(&merged_index_size.to_le_bytes())?;
+        merged_vamana_cached_writer.write_all(&merged_index_size.to_le_bytes())?;
 
         let mut read_buf_8_bytes = [0u8; 8];
 
@@ -309,9 +313,9 @@ where
         let mut max_input_width = 0;
         // read width from each vamana to advance buffer by sizeof(uint32_t) bytes
         for reader in &mut vamana_readers {
-            reader.read(&mut read_buf_8_bytes)?;
+            reader.read_exact(&mut read_buf_8_bytes)?;
             let _expected_file_size: u64 = u64::from_le_bytes(read_buf_8_bytes);
-            let input_width = reader.read_u32()?;
+            let input_width = reader.read_u32::<LittleEndian>()?;
             max_input_width = input_width.max(max_input_width);
         }
 
@@ -322,13 +326,13 @@ where
             max_input_width, output_width
         );
 
-        merged_vamana_cached_writer.write(&output_width.to_le_bytes())?;
+        merged_vamana_cached_writer.write_all(&output_width.to_le_bytes())?;
 
         // write medoid to merged_vamana_index
         for shard in 0..num_parts {
             // read medoid
-            let mut medoid: u32 = vamana_readers[shard].read_u32()?;
-            vamana_readers[shard].read(&mut read_buf_8_bytes)?;
+            let mut medoid: u32 = vamana_readers[shard].read_u32::<LittleEndian>()?;
+            vamana_readers[shard].read_exact(&mut read_buf_8_bytes)?;
             let vamana_index_frozen: u64 = u64::from_le_bytes(read_buf_8_bytes);
             debug_assert_eq!(vamana_index_frozen, 0);
 
@@ -338,14 +342,14 @@ where
             // write renamed medoid
             if shard == (num_parts - 1) {
                 // uncomment if running hierarchical
-                merged_vamana_cached_writer.write(&medoid.to_le_bytes())?;
+                merged_vamana_cached_writer.write_all(&medoid.to_le_bytes())?;
             }
         }
 
         let vamana_index_frozen: u64 = 0; // as of now the functionality to merge many overlapping vamana
                                           // indices is supported only for bulk indices without frozen point.
                                           // Hence the final index will also not have any frozen points.
-        merged_vamana_cached_writer.write(&vamana_index_frozen.to_le_bytes())?;
+        merged_vamana_cached_writer.write_all(&vamana_index_frozen.to_le_bytes())?;
 
         info!("Starting merge");
 
@@ -358,14 +362,14 @@ where
                 final_nbrs.shuffle(&mut self.rng);
 
                 let nnbrs: u32 = std::cmp::min(final_nbrs.len() as u32, max_degree);
-                merged_vamana_cached_writer.write(&nnbrs.to_le_bytes())?;
+                merged_vamana_cached_writer.write_all(&nnbrs.to_le_bytes())?;
 
                 let bytes = final_nbrs
                     .iter()
                     .take(nnbrs as usize)
                     .flat_map(|x| x.to_le_bytes())
                     .collect::<Vec<u8>>();
-                merged_vamana_cached_writer.write(&bytes)?;
+                merged_vamana_cached_writer.write_all(&bytes)?;
 
                 merged_index_size += (size_of::<u32>() + nnbrs as usize * size_of::<u32>()) as u64;
                 if cur_id % 499999 == 1 {
@@ -378,7 +382,7 @@ where
             }
 
             // read num of neighbors from vamana index
-            let num_nbrs = vamana_readers[shard_id as usize].read_u32()?;
+            let num_nbrs = vamana_readers[shard_id as usize].read_u32::<LittleEndian>()?;
 
             if num_nbrs == 0 {
                 info!(
@@ -387,7 +391,7 @@ where
                 );
             } else {
                 let mut nbrs_bytes = vec![0u8; num_nbrs as usize * mem::size_of::<u32>()];
-                vamana_readers[shard_id as usize].read(&mut nbrs_bytes)?;
+                vamana_readers[shard_id as usize].read_exact(&mut nbrs_bytes)?;
                 let nbrs: &[u32] = bytemuck::cast_slice(&nbrs_bytes);
 
                 // rename nodes
@@ -406,14 +410,14 @@ where
         final_nbrs.shuffle(&mut self.rng);
 
         let nnbrs: u32 = std::cmp::min(final_nbrs.len() as u32, max_degree);
-        merged_vamana_cached_writer.write(&nnbrs.to_le_bytes())?;
+        merged_vamana_cached_writer.write_all(&nnbrs.to_le_bytes())?;
 
         let bytes = final_nbrs
             .iter()
             .take(nnbrs as usize)
             .flat_map(|x| x.to_le_bytes())
             .collect::<Vec<u8>>();
-        merged_vamana_cached_writer.write(&bytes)?;
+        merged_vamana_cached_writer.write_all(&bytes)?;
 
         merged_index_size += (size_of::<u32>() + nnbrs as usize * size_of::<u32>()) as u64;
 
@@ -421,8 +425,9 @@ where
         final_nbrs.clear();
 
         info!("Expected size: {}", merged_index_size);
-        merged_vamana_cached_writer.reset()?;
-        merged_vamana_cached_writer.write(&merged_index_size.to_le_bytes())?;
+        merged_vamana_cached_writer.rewind()?;
+        merged_vamana_cached_writer.write_all(&merged_index_size.to_le_bytes())?;
+        merged_vamana_cached_writer.flush()?;
 
         info!("Finished merge");
         Ok(())
@@ -1167,6 +1172,7 @@ mod ram_estimation_tests {
     #[case(QuantizationType::FP)]
     #[case(QuantizationType::PQ { num_chunks: 15 })]
     #[case(QuantizationType::SQ { nbits: 1, standard_deviation: None })]
+    #[case(QuantizationType::Spherical(SphericalBits::One))]
     fn test_estimate_build_index_ram_usage(#[case] build_quantization_type: QuantizationType) {
         let num_points = 1000;
         let dim = 128;
@@ -1178,6 +1184,9 @@ mod ram_estimation_tests {
             QuantizationType::PQ { num_chunks } => num_chunks as u64,
             QuantizationType::SQ { nbits, .. } => {
                 (nbits as u64 * dim).div_ceil(8) + std::mem::size_of::<f32>() as u64
+            }
+            QuantizationType::Spherical(SphericalBits::One) => {
+                DataRef::<1>::canonical_bytes(dim as usize) as u64
             }
         };
         let mut expected_ram_usage = (num_points as f64)

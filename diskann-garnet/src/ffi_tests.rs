@@ -10,8 +10,8 @@ mod tests {
     use rand::{Rng, seq::SliceRandom};
 
     use crate::{
-        Index, InsertResult, VectorQuantType, backfill_quant_vectors, build_quant_table, card,
-        check_external_id_valid, check_internal_id_valid, create_index, drop_index,
+        Index, InsertResult, Overflow, VectorQuantType, backfill_quant_vectors, build_quant_table,
+        card, check_external_id_valid, check_internal_id_valid, create_index, drop_index,
         garnet::{Context, Term},
         insert,
         quantization::{GarnetQuantizer, Spherical1Bit},
@@ -60,6 +60,7 @@ mod tests {
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
                 callbacks.filter_callback(),
+                callbacks.log_callback(),
                 &mut quant_needed,
             )
         };
@@ -464,6 +465,7 @@ mod tests {
         let qv = &[0.0f32, 0.0];
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
+        let mut overflow = ptr::null_mut();
 
         let count = unsafe {
             search_vector(
@@ -480,11 +482,13 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                1,
+                &mut overflow,
             )
         };
 
         assert_eq!(count, 2);
+        assert!(overflow.is_null());
 
         let mut output_ids = vec![];
         let mut offset = 0;
@@ -571,6 +575,7 @@ mod tests {
 
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
+        let mut overflow = ptr::null_mut();
 
         let count = unsafe {
             crate::search_element(
@@ -587,11 +592,13 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                1,
+                &mut overflow,
             )
         };
 
         assert_eq!(count, 2);
+        assert!(overflow.is_null());
 
         let mut output_ids = vec![];
         let mut offset = 0;
@@ -631,13 +638,55 @@ mod tests {
     }
 
     #[test]
-    fn continue_search() {
+    fn search_element_writes_overflow_output() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        let id = 1u32;
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, id, &[0.0, 1.0]),
+            InsertResult::Success
+        );
+
+        let mut output_ids: [u8; 0] = [];
+        let mut output_distances: [f32; 1] = [0f32];
+        let mut overflow = ptr::null_mut();
+        let count = unsafe {
+            crate::search_element(
+                ctx.get(),
+                index_ptr,
+                bytemuck::bytes_of(&id).as_ptr(),
+                mem::size_of::<u32>(),
+                1.0,
+                10,
+                ptr::null(),
+                0,
+                0,
+                output_ids.as_mut_ptr(),
+                output_ids.len(),
+                output_distances.as_mut_ptr(),
+                output_distances.len(),
+                1,
+                &mut overflow,
+            )
+        };
+
+        assert_eq!(count, 0);
+        assert!(!overflow.is_null());
+
+        unsafe {
+            drop(Overflow::from_ptr(overflow));
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn overflow_results() {
         let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
         let res = unsafe {
-            crate::continue_search(
+            crate::overflow_results(
                 ctx.get(),
                 index_ptr,
                 ptr::null_mut(),
@@ -691,6 +740,7 @@ mod tests {
             Some(b) => (b.as_ptr(), b.len()),
             None => (ptr::null(), 0),
         };
+        let mut overflow = ptr::null_mut();
 
         let count = unsafe {
             search_vector(
@@ -707,9 +757,14 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                1,
+                &mut overflow,
             )
         };
+
+        if !overflow.is_null() {
+            unsafe { drop(Overflow::from_ptr(overflow)) };
+        }
 
         assert!(count >= 0, "search failed with {count}");
         let count = count as usize;
@@ -730,6 +785,49 @@ mod tests {
 
         output_dists.truncate(count);
         (ids, output_dists)
+    }
+
+    #[test]
+    fn search_vector_writes_overflow_output() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        let vector = [0.0f32, 1.0];
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, 1, &vector),
+            InsertResult::Success
+        );
+
+        let query_bytes = bytemuck::cast_slice(&vector);
+        let mut output_ids: [u8; 0] = [];
+        let mut output_distances: [f32; 1] = [0f32];
+        let mut overflow = ptr::null_mut();
+        let count = unsafe {
+            search_vector(
+                ctx.get(),
+                index_ptr,
+                query_bytes.as_ptr(),
+                vector.len(),
+                1.0,
+                10,
+                ptr::null(),
+                0,
+                0,
+                output_ids.as_mut_ptr(),
+                output_ids.len(),
+                output_distances.as_mut_ptr(),
+                output_distances.len(),
+                1,
+                &mut overflow,
+            )
+        };
+
+        assert_eq!(count, 0);
+        assert!(!overflow.is_null());
+
+        unsafe {
+            drop(Overflow::from_ptr(overflow));
+            drop_index(ctx.get(), index_ptr);
+        }
     }
 
     #[test]

@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Generates random vector datasets.
+
 use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{write_random_data, CMDResult, CMDToolError, DataType};

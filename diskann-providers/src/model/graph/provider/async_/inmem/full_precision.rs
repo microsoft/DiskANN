@@ -178,11 +178,8 @@ where
 
 /// An accessor for retrieving full-precision vectors from the `DefaultProvider`.
 ///
-/// This type implements the following traits:
-///
-/// * [`Accessor`] for the [`DefaultProvider`].
-/// * [`ComputerAccessor`] for comparing full-precision distances.
-/// * [`BuildQueryComputer`].
+/// This type implements [`glue::SearchAccessor`] for the [`DefaultProvider`], retrieving
+/// vectors and computing full-precision distances.
 pub struct FullAccessor<'a, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -348,7 +345,7 @@ pub trait GetFullPrecision {
     fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<Self::Repr>;
 }
 
-/// A [`SearchPostProcess`]or that:
+/// A [`glue::SearchPostProcess`] implementation that:
 ///
 /// 1. Filters out deleted ids from being returned.
 /// 2. Reranks a candidate stream using full-precision distances.
@@ -402,7 +399,7 @@ where
     }
 }
 
-/// A [`SearchPostProcess`]or that reranks a full-precision candidate stream using the
+/// A [`glue::SearchPostProcess`] implementation that reranks a full-precision candidate stream using the
 /// Determinant-Diversity algorithm, reordering results to promote geometric diversity
 /// while preserving relevance to the query.
 #[derive(Debug, Clone, Copy)]
@@ -540,7 +537,20 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
+    type SearchAccessor = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchAccessorError = Panics;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }

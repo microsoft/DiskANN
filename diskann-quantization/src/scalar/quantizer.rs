@@ -611,7 +611,7 @@ mod tests {
             (0..dim).for_each(|j| {
                 base.shuffle(rng);
                 for (i, b) in base.iter().enumerate() {
-                    output[(i, j)] = *b;
+                    *output.element_mut(i, j) = *b;
                 }
             });
             output

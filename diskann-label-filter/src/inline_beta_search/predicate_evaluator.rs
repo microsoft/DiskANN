@@ -16,7 +16,7 @@ use crate::{
 ///
 /// Type parameters:
 ///     T: AttributeType (u64 in the current implementation)
-///     ST: Set type, Set<T>
+///     ST: Set type, `Set<T>`
 pub struct PredicateEvaluator<'a, T, ST>
 where
     ST: Set<T>,

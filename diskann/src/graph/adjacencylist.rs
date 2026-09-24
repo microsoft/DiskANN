@@ -40,7 +40,7 @@ impl<I> AdjacencyList<I> {
     }
 
     /// Return the last `count` items in the list. This can be useful when combined with
-    /// [`Self::insert`] to obtain the newly added edges.
+    /// [`Self::push`] to obtain the newly added edges.
     pub fn last(&self, count: usize) -> Option<&[I]> {
         self.len().checked_sub(count).map(|start| {
             // SAFETY: We've checked that `start <= self.len()`.
@@ -114,7 +114,7 @@ where
         I::contains_simd(self, i)
     }
 
-    /// Sort the contents of the adjacency list. This internally uses [`Vec::sort_unstable`].
+    /// Sort the contents of the adjacency list. This internally uses [`slice::sort_unstable`].
     pub fn sort(&mut self)
     where
         I: Ord,
@@ -242,11 +242,7 @@ where
         // runtime is `O(len^2)`. However, this is only meant to run in debug mode and
         // allows us to bypass requiring `Eq + Hash` (for hash tables) or `Ord` for sorting
         // and de-duplicating.
-        #[cfg(debug_assertions)]
-        #[allow(clippy::panic)]
-        if !self.all_unique() {
-            panic!("duplicate items detected: {:?}", self);
-        }
+        debug_assert!(self.all_unique(), "duplicate items detected: {:?}", self);
     }
 }
 

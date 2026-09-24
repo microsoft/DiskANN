@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, DataMeta, DataMetaError, DataMut,
-    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric,
+    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric, iface,
 };
 use crate::{
     AsFunctor, CompressIntoWith,
@@ -82,13 +82,7 @@ where
     A: Allocator,
 {
     fn try_clone(&self) -> Result<Self, AllocatorError> {
-        Ok(Self {
-            shift: self.shift.try_clone()?,
-            transform: self.transform.try_clone()?,
-            metric: self.metric,
-            mean_norm: self.mean_norm,
-            pre_scale: self.pre_scale,
-        })
+        SphericalQuantizer::try_clone(self)
     }
 }
 
@@ -154,6 +148,17 @@ where
     /// Return a reference to the allocator used by this data structure.
     pub fn allocator(&self) -> &A {
         self.shift.allocator()
+    }
+
+    /// Return an independently allocated copy of this quantizer.
+    pub fn try_clone(&self) -> Result<Self, AllocatorError> {
+        Ok(Self {
+            shift: self.shift.try_clone()?,
+            transform: self.transform.try_clone()?,
+            metric: self.metric,
+            mean_norm: self.mean_norm,
+            pre_scale: self.pre_scale,
+        })
     }
 
     /// A lower-level constructor that accepts a centroid, mean norm, and pre-scale directly.
@@ -373,6 +378,18 @@ where
             shifted_norm,
             inner_product_with_centroid,
         })
+    }
+
+    /// Construct an [`iface::Quantizer`] trait object from `self`.
+    pub fn as_quantizer<const NBITS: usize>(
+        self,
+    ) -> Result<Poly<dyn iface::Quantizer>, AllocatorError>
+    where
+        A: 'static,
+        iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
+    {
+        let iface = iface::Impl::<NBITS, A>::new(self)?;
+        crate::poly!({ iface::Quantizer }, iface, GlobalAllocator)
     }
 }
 
@@ -858,8 +875,6 @@ where
 
 struct AsNonZero<const NBITS: usize>;
 impl<const NBITS: usize> AsNonZero<NBITS> {
-    // Lint: Unwrap is being used in a const-context.
-    #[allow(clippy::unwrap_used)]
     const NON_ZERO: NonZeroUsize = NonZeroUsize::new(NBITS).unwrap();
 }
 
@@ -1020,7 +1035,7 @@ fn maximize_cosine_similarity(
 
     // Lint: This is a private method and all the callers have an invariant that they check
     // for non-empty inputs.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     let mut critical_values =
         SliceHeap::new(&mut base).expect("calling code should not allow the slice to be empty");
 
@@ -1191,7 +1206,7 @@ where
             //
             // Further, `c` has beem clamped to `[0, 2^NBITS - 1]` and is thus encodable
             // with the NBITS-bit unsigned representation.
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             into.vector_mut().set(i, c as i64).unwrap();
         });
 
@@ -2310,7 +2325,7 @@ mod tests {
     #[test]
     fn err_norm_cannot_be_infinity() {
         let mut data = Matrix::new(0.0f32, 10, 10);
-        data[(2, 5)] = f32::INFINITY;
+        *data.element_mut(2, 5) = f32::INFINITY;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
@@ -2330,7 +2345,7 @@ mod tests {
     #[test]
     fn err_reciprocal_norm_cannot_be_infinity() {
         let mut data = Matrix::new(0.0f32, 10, 10);
-        data[(2, 5)] = 2.93863e-39;
+        *data.element_mut(2, 5) = 2.93863e-39;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(

@@ -2,6 +2,9 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
+//! Computes exact ground truth for multi-vector search.
+
 use std::time::Instant;
 
 use clap::Parser;

@@ -12,7 +12,7 @@ use crate::{
     views::{ChunkOffsets, ChunkOffsetsView},
 };
 use diskann_utils::{
-    strided,
+    strided::Strided,
     views::{self, MatrixView, MutMatrixView},
 };
 use thiserror::Error;
@@ -69,7 +69,7 @@ impl TransposedTable {
     ///   by the offsets.
     ///
     /// * `pivots.nrows() == 0`: The pivot table cannot be empty.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn from_parts(
         pivots: views::MatrixView<f32>,
         offsets: ChunkOffsets,
@@ -89,7 +89,7 @@ impl TransposedTable {
             .map(|i| {
                 let range = offsets.at(i);
                 largest = largest.max(range.len());
-                let view = strided::StridedView::try_shrink_from(
+                let view = Strided::try_from_data(
                     &(pivots.as_slice()[range.start..]),
                     pivots.nrows(),
                     range.len(),
@@ -151,7 +151,7 @@ impl TransposedTable {
     /// Panics under the following conditions:
     /// * `data.cols() != self.dim()`: The number of columns in the source dataset must match
     ///   the number of dimensions expected by the schema.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     pub fn compress_batch<T, F, DelegateError>(
         &self,
         data: views::MatrixView<'_, T>,
@@ -272,7 +272,7 @@ impl TransposedTable {
     ///
     /// * `query`: The query slice to process. Must have length `self.dim()`.
     /// * `partials`: Output matrix for the partial results. The result of the computation
-    ///   of chunk `i` against pivot `j` will be stored into `pivots[(i, j)]`.
+    ///   of chunk `i` against pivot `j` will be stored at `partials.element(i, j)`.
     ///
     ///   Must have `nrows = self.nchunks()` and `ncols = self.ncenters()`.
     ///
@@ -491,7 +491,7 @@ where
         let result = self.compress_batch(
             from,
             |RowChunk { row, chunk }, result| -> Result<(), PassThrough> {
-                result.map(|v| to[(row, chunk)] = v as u8, || PassThrough)
+                result.map(|v| *to.element_mut(row, chunk) = v as u8, || PassThrough)
             },
         );
 
@@ -661,7 +661,7 @@ mod test_compression {
                                 // Ensure that this is the expected value.
                                 assert_eq!(
                                 value.unwrap() as usize,
-                                expected[(row, chunk)],
+                                *expected.element(row, chunk),
                                 "failed at (row = {row}, chunk = {chunk}). data = {:?}, context: {}",
                                 &(data.row(row)[schema.at(chunk)]),
                                 context,
@@ -694,8 +694,8 @@ mod test_compression {
                     for row in 0..output.nrows() {
                         for col in 0..output.ncols() {
                             assert_eq!(
-                                output[(row, col)] as usize,
-                                expected[(row, col)],
+                                *output.element(row, col) as usize,
+                                *expected.element(row, col),
                                 "failed on row {}, col {}. Context = {}",
                                 row,
                                 col,
@@ -879,7 +879,7 @@ mod test_compression {
                     let data_chunk = &pivots.row(center)[range.clone()];
                     let expected: f32 = distance::InnerProduct::evaluate(query_chunk, data_chunk);
                     assert_eq!(
-                        output[(chunk, center)],
+                        *output.element(chunk, center),
                         expected,
                         "failed on (chunk, center) = ({}, {}) - offsets = {:?} - trial = {}",
                         chunk,
@@ -900,7 +900,7 @@ mod test_compression {
                     let data_chunk = &pivots.row(center)[range.clone()];
                     let expected: f32 = distance::SquaredL2::evaluate(query_chunk, data_chunk);
                     assert_eq!(
-                        output[(chunk, center)],
+                        *output.element(chunk, center),
                         expected,
                         "failed on (chunk, center) = ({}, {}) - offsets = {:?} - trial = {}",
                         chunk,
