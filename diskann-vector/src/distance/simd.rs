@@ -14,7 +14,7 @@ use diskann_wide::{
     SIMDSumTree, SIMDVector,
 };
 
-use crate::{AsUnaligned, Half};
+use crate::{AsUnaligned, Half, InnerProductScore, Score, SquaredL2Score};
 
 /// A helper trait to allow integer to f32 conversion (which may be lossy).
 pub trait LossyF32Conversion: Copy {
@@ -36,6 +36,24 @@ impl LossyF32Conversion for i32 {
 impl LossyF32Conversion for u32 {
     fn as_f32_lossy(self) -> f32 {
         self as f32
+    }
+}
+
+impl<T> LossyF32Conversion for SquaredL2Score<T>
+where
+    Self: Score<f32>,
+{
+    fn as_f32_lossy(self) -> f32 {
+        self.mathematical_value().into_inner()
+    }
+}
+
+impl<T> LossyF32Conversion for InnerProductScore<T>
+where
+    Self: Score<f32>,
+{
+    fn as_f32_lossy(self) -> f32 {
+        self.mathematical_value().into_inner()
     }
 }
 
@@ -1159,7 +1177,7 @@ impl SIMDSchema<i8, i8, V4> for L2 {
     type Accumulator = <V4 as Architecture>::i32x16;
     type Left = <V4 as Architecture>::i8x32;
     type Right = <V4 as Architecture>::i8x32;
-    type Return = f32;
+    type Return = SquaredL2Score<i32>;
     type Main = Strategy4x1;
 
     #[inline(always)]
@@ -1184,7 +1202,7 @@ impl SIMDSchema<i8, i8, V4> for L2 {
 
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
-        x.sum_tree().as_f32_lossy()
+        SquaredL2Score::new(x.sum_tree())
     }
 }
 
@@ -1194,7 +1212,7 @@ impl SIMDSchema<i8, i8, V3> for L2 {
     type Accumulator = <V3 as Architecture>::i32x8;
     type Left = <V3 as Architecture>::i8x16;
     type Right = <V3 as Architecture>::i8x16;
-    type Return = f32;
+    type Return = SquaredL2Score<i32>;
     type Main = Strategy4x1;
 
     #[inline(always)]
@@ -1220,7 +1238,7 @@ impl SIMDSchema<i8, i8, V3> for L2 {
     // Perform a final reduction.
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
-        x.sum_tree().as_f32_lossy()
+        SquaredL2Score::new(x.sum_tree())
     }
 }
 
@@ -1230,7 +1248,7 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
     type Accumulator = <Neon as Architecture>::i32x8;
     type Left = diskann_wide::arch::aarch64::i8x16;
     type Right = diskann_wide::arch::aarch64::i8x16;
-    type Return = f32;
+    type Return = SquaredL2Score<i32>;
     type Main = Strategy2x1;
 
     #[inline(always)]
@@ -1273,7 +1291,7 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
     // Perform a final reduction.
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
-        x.sum_tree().as_f32_lossy()
+        SquaredL2Score::new(x.sum_tree())
     }
 }
 
@@ -1282,7 +1300,7 @@ impl SIMDSchema<i8, i8, Scalar> for L2 {
     type Accumulator = Emulated<i32, 4>;
     type Left = Emulated<i8, 4>;
     type Right = Emulated<i8, 4>;
-    type Return = f32;
+    type Return = SquaredL2Score<i32>;
     type Main = Strategy1x1;
 
     #[inline(always)]
@@ -1306,7 +1324,7 @@ impl SIMDSchema<i8, i8, Scalar> for L2 {
     // Perform a final reduction.
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
-        x.to_array().into_iter().sum::<i32>().as_f32_lossy()
+        SquaredL2Score::new(x.to_array().into_iter().sum::<i32>())
     }
 
     #[inline(always)]
@@ -1915,7 +1933,7 @@ impl SIMDSchema<i8, i8, V4> for IP {
     type Accumulator = <V4 as Architecture>::i32x16;
     type Left = <V4 as Architecture>::i8x32;
     type Right = <V4 as Architecture>::i8x32;
-    type Return = f32;
+    type Return = InnerProductScore<i32>;
     type Main = Strategy4x1;
 
     #[inline(always)]
@@ -1939,7 +1957,7 @@ impl SIMDSchema<i8, i8, V4> for IP {
 
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
-        x.sum_tree().as_f32_lossy()
+        InnerProductScore::new(x.sum_tree())
     }
 }
 
@@ -1949,7 +1967,7 @@ impl SIMDSchema<i8, i8, V3> for IP {
     type Accumulator = <V3 as Architecture>::i32x8;
     type Left = <V3 as Architecture>::i8x16;
     type Right = <V3 as Architecture>::i8x16;
-    type Return = f32;
+    type Return = InnerProductScore<i32>;
     type Main = Strategy4x1;
 
     #[inline(always)]
@@ -1974,7 +1992,7 @@ impl SIMDSchema<i8, i8, V3> for IP {
     // Perform a final reduction.
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
-        x.sum_tree().as_f32_lossy()
+        InnerProductScore::new(x.sum_tree())
     }
 }
 
@@ -1984,7 +2002,7 @@ impl SIMDSchema<i8, i8, Neon> for IP {
     type Accumulator = <Neon as Architecture>::i32x4;
     type Left = <Neon as Architecture>::i8x16;
     type Right = <Neon as Architecture>::i8x16;
-    type Return = f32;
+    type Return = InnerProductScore<i32>;
     type Main = Strategy2x1;
 
     #[inline(always)]
@@ -2023,7 +2041,7 @@ impl SIMDSchema<i8, i8, Neon> for IP {
 
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
-        x.sum_tree().as_f32_lossy()
+        InnerProductScore::new(x.sum_tree())
     }
 }
 
@@ -2032,7 +2050,7 @@ impl SIMDSchema<i8, i8, Scalar> for IP {
     type Accumulator = Emulated<i32, 1>;
     type Left = Emulated<i8, 1>;
     type Right = Emulated<i8, 1>;
-    type Return = f32;
+    type Return = InnerProductScore<i32>;
     type Main = Strategy1x1;
 
     #[inline(always)]
@@ -2055,7 +2073,7 @@ impl SIMDSchema<i8, i8, Scalar> for IP {
     // Perform a final reduction.
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
-        x.to_array().into_iter().sum::<i32>().as_f32_lossy()
+        InnerProductScore::new(x.to_array().into_iter().sum::<i32>())
     }
 
     #[inline(always)]
@@ -3829,12 +3847,13 @@ mod tests {
         R: test_util::CornerCases + bytemuck::Pod,
         DistLeft: test_util::GenerateRandomArguments<L> + Copy,
         DistRight: test_util::GenerateRandomArguments<R> + Copy,
-        O: Default + SIMDSchema<L, R, A, Return = f32>,
+        O: Default + SIMDSchema<L, R, A>,
+        <O as SIMDSchema<L, R, A>>::Return: LossyF32Conversion,
         Rand: Rng,
         A: Architecture,
     {
         let mut checker = test_util::Checker::<L, R, f32>::new(
-            |x: &[L], y: &[R]| simd_op(&O::default(), arch, x, y),
+            |x: &[L], y: &[R]| simd_op(&O::default(), arch, x, y).as_f32_lossy(),
             reference,
             |got, expected| {
                 assert_relative_eq!(
@@ -3856,7 +3875,7 @@ mod tests {
         let mut left = unaligned::Buffer::default();
         let mut right = unaligned::Buffer::default();
         let mut checker = test_util::Checker::<L, R, f32>::new(
-            |a, b| simd_op(&O::default(), arch, a.as_unaligned(), b.as_unaligned()),
+            |a, b| simd_op(&O::default(), arch, a.as_unaligned(), b.as_unaligned()).as_f32_lossy(),
             |a, b| {
                 left.copy(a);
                 right.copy(b);
@@ -3866,6 +3885,7 @@ mod tests {
                     left.as_unaligned(),
                     right.as_unaligned(),
                 )
+                .as_f32_lossy()
             },
             |got, expected| assert_eq!(got, expected),
         );
@@ -4675,6 +4695,51 @@ mod tests {
         320,
         { Neon::new_checked() }
     );
+
+    // The `i8` kernels are exact up to the dimensions documented on `Score`.
+    fn i8_exact_at_limits_impl<A>(arch: A)
+    where
+        A: Architecture,
+        L2: SIMDSchema<i8, i8, A, Return = SquaredL2Score<i32>>,
+        IP: SIMDSchema<i8, i8, A, Return = InnerProductScore<i32>>,
+    {
+        const L2_LIMIT: usize = 33_025;
+        const IP_LIMIT: usize = 131_071;
+
+        let min = vec![i8::MIN; IP_LIMIT];
+        let max = vec![i8::MAX; IP_LIMIT];
+
+        assert_eq!(
+            simd_op(&L2, arch, &min[..L2_LIMIT], &max[..L2_LIMIT]),
+            SquaredL2Score::new(255 * 255 * L2_LIMIT as i32),
+        );
+        assert_eq!(
+            simd_op(&IP, arch, min.as_slice(), min.as_slice()),
+            InnerProductScore::new(128 * 128 * IP_LIMIT as i32),
+        );
+        assert_eq!(
+            simd_op(&IP, arch, min.as_slice(), max.as_slice()),
+            InnerProductScore::new(-128 * 127 * IP_LIMIT as i32),
+        );
+    }
+
+    #[test]
+    fn i8_exact_at_limits() {
+        i8_exact_at_limits_impl(ARCH);
+        i8_exact_at_limits_impl(diskann_wide::arch::Scalar::new());
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn i8_exact_at_limits_x86_64() {
+        if let Some(arch) = V3::new_checked() {
+            i8_exact_at_limits_impl(arch);
+        }
+
+        if let Some(arch) = V4::new_checked_miri() {
+            i8_exact_at_limits_impl(arch);
+        }
+    }
 
     int_test!(
         test_cosine_i8_current,

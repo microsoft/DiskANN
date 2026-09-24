@@ -8,7 +8,7 @@
 use std::{io::Write, num::NonZeroUsize};
 
 use diskann_utils::views::{Matrix, MatrixView};
-use diskann_vector::distance::simd;
+use diskann_vector::distance::simd::{self, LossyF32Conversion};
 use diskann_wide::Architecture;
 use half::f16;
 use rand::{
@@ -820,10 +820,18 @@ macro_rules! stamp {
                     // target features.
                     let result = match run.distance {
                         SimilarityMeasure::SquaredL2 => data.run(run, |q, d| {
-                            arch.run2(|q, d| simd::simd_op(l2, arch, q, d), q, d)
+                            arch.run2(
+                                |q: &[$Q], d: &[$D]| simd::simd_op(l2, arch, q, d).as_f32_lossy(),
+                                q,
+                                d,
+                            )
                         }),
                         SimilarityMeasure::InnerProduct => data.run(run, |q, d| {
-                            arch.run2(|q, d| simd::simd_op(ip, arch, q, d), q, d)
+                            arch.run2(
+                                |q: &[$Q], d: &[$D]| simd::simd_op(ip, arch, q, d).as_f32_lossy(),
+                                q,
+                                d,
+                            )
                         }),
                         SimilarityMeasure::Cosine => data.run(run, |q, d| {
                             arch.run2(|q, d| simd::simd_op(cosine, arch, q, d), q, d)

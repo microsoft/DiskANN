@@ -8,7 +8,8 @@ use diskann_wide::{arch::Target2, Architecture, ARCH};
 /// Experimental traits for distance functions.
 use super::simd;
 use crate::{
-    AsUnaligned, Half, MathematicalValue, PureDistanceFunction, SimilarityScore, UnalignedSlice,
+    AsUnaligned, Half, InnerProductScore, MathematicalValue, PureDistanceFunction, Score,
+    SimilarityScore, SquaredL2Score, UnalignedSlice,
 };
 
 macro_rules! architecture_hook {
@@ -206,6 +207,97 @@ macro_rules! use_simd_implementation {
     };
 }
 
+/// Provide exact `i32` outputs for a functor whose `i8` kernels return a [`Score`].
+///
+/// These use the same kernels as the `f32` outputs. Only the final conversion differs.
+macro_rules! use_exact_implementation {
+    ($functor:ty, $T:ty) => {
+        impl PureDistanceFunction<&[$T], &[$T], SimilarityScore<i32>> for $functor {
+            #[inline]
+            fn evaluate(x: &[$T], y: &[$T]) -> SimilarityScore<i32> {
+                <$functor>::default().run(ARCH, x, y)
+            }
+        }
+
+        impl<const N: usize> PureDistanceFunction<&[$T; N], &[$T; N], SimilarityScore<i32>>
+            for $functor
+        {
+            #[inline]
+            fn evaluate(x: &[$T; N], y: &[$T; N]) -> SimilarityScore<i32> {
+                <$functor>::default().run(ARCH, x, y)
+            }
+        }
+
+        impl PureDistanceFunction<&[$T], &[$T], MathematicalValue<i32>> for $functor {
+            #[inline]
+            fn evaluate(x: &[$T], y: &[$T]) -> MathematicalValue<i32> {
+                <$functor>::default().run(ARCH, x, y)
+            }
+        }
+
+        impl<const N: usize> PureDistanceFunction<&[$T; N], &[$T; N], MathematicalValue<i32>>
+            for $functor
+        {
+            #[inline]
+            fn evaluate(x: &[$T; N], y: &[$T; N]) -> MathematicalValue<i32> {
+                <$functor>::default().run(ARCH, x, y)
+            }
+        }
+    };
+}
+
+/// Every output of a functor over a [`Score`]-returning kernel is a view of that score.
+macro_rules! score_views {
+    ($functor:ty, $score:ident) => {
+        impl<S, T: Copy> PostOp<$score<S>, SimilarityScore<T>> for $functor
+        where
+            $score<S>: Score<T>,
+        {
+            #[inline(always)]
+            fn post_op(x: $score<S>) -> SimilarityScore<T> {
+                x.similarity_score()
+            }
+        }
+
+        impl<S, T: Copy> PostOp<$score<S>, MathematicalValue<T>> for $functor
+        where
+            $score<S>: Score<T>,
+        {
+            #[inline(always)]
+            fn post_op(x: $score<S>) -> MathematicalValue<T> {
+                x.mathematical_value()
+            }
+        }
+
+        impl<S> PostOp<$score<S>, f32> for $functor
+        where
+            $score<S>: Score<f32>,
+        {
+            #[inline(always)]
+            fn post_op(x: $score<S>) -> f32 {
+                x.similarity_score().into_inner()
+            }
+        }
+    };
+}
+
+/// Functors that apply a floating-point transformation to a [`Score`] reuse their `f32`
+/// post-op on the `f32` mathematical value.
+macro_rules! f32_score_views {
+    ($functor:ty, $score:ident) => {
+        impl<S, To> PostOp<$score<S>, To> for $functor
+        where
+            $score<S>: Score<f32>,
+            Self: PostOp<f32, To>,
+        {
+            #[inline(always)]
+            fn post_op(x: $score<S>) -> To {
+                <Self as PostOp<f32, To>>::post_op(x.mathematical_value().into_inner())
+            }
+        }
+    };
+}
+
 ///////////////
 // SquaredL2 //
 ///////////////
@@ -235,12 +327,15 @@ impl PostOp<f32, MathematicalValue<f32>> for SquaredL2 {
     }
 }
 
+score_views!(SquaredL2, SquaredL2Score);
+
 architecture_hook!(SquaredL2, simd::L2);
 use_simd_implementation!(SquaredL2, f32, f32);
 use_simd_implementation!(SquaredL2, f32, Half);
 use_simd_implementation!(SquaredL2, Half, Half);
 use_simd_implementation!(SquaredL2, i8, i8);
 use_simd_implementation!(SquaredL2, u8, u8);
+use_exact_implementation!(SquaredL2, i8);
 
 ////////////
 // FullL2 //
@@ -273,6 +368,8 @@ impl PostOp<f32, MathematicalValue<f32>> for FullL2 {
         MathematicalValue::new(x.sqrt())
     }
 }
+
+f32_score_views!(FullL2, SquaredL2Score);
 
 architecture_hook!(FullL2, simd::L2);
 use_simd_implementation!(FullL2, f32, f32);
@@ -313,12 +410,15 @@ impl PostOp<f32, f32> for InnerProduct {
     }
 }
 
+score_views!(InnerProduct, InnerProductScore);
+
 architecture_hook!(InnerProduct, simd::IP);
 use_simd_implementation!(InnerProduct, f32, f32);
 use_simd_implementation!(InnerProduct, f32, Half);
 use_simd_implementation!(InnerProduct, Half, Half);
 use_simd_implementation!(InnerProduct, i8, i8);
 use_simd_implementation!(InnerProduct, u8, u8);
+use_exact_implementation!(InnerProduct, i8);
 
 ////////////
 // Cosine //
@@ -397,6 +497,8 @@ impl PostOp<f32, f32> for CosineNormalized {
         <Self as PostOp<f32, SimilarityScore<f32>>>::post_op(x).into_inner()
     }
 }
+
+f32_score_views!(CosineNormalized, InnerProductScore);
 
 architecture_hook!(CosineNormalized, simd::IP);
 use_simd_implementation!(CosineNormalized, f32, f32);
@@ -888,6 +990,111 @@ mod tests {
             reference::reference_cosine_u8_similarity,
             &mut rng,
         );
+    }
+
+    ////////////////////////
+    // Exact i32 - Tester //
+    ////////////////////////
+
+    fn reference_squared_l2_i8_exact(x: &[i8], y: &[i8]) -> i32 {
+        assert_eq!(x.len(), y.len());
+        std::iter::zip(x, y)
+            .map(|(&a, &b)| (i32::from(a) - i32::from(b)).pow(2))
+            .sum()
+    }
+
+    fn reference_innerproduct_i8_exact(x: &[i8], y: &[i8]) -> i32 {
+        assert_eq!(x.len(), y.len());
+        std::iter::zip(x, y)
+            .map(|(&a, &b)| i32::from(a) * i32::from(b))
+            .sum()
+    }
+
+    // Like `run_integer_test`, but compares the outputs directly instead of through `f32`.
+    fn run_exact_test<T, R>(
+        under_test: fn(&[T], &[T]) -> R,
+        reference: fn(&[T], &[T]) -> R,
+        rng: &mut impl Rng,
+    ) where
+        T: test_util::CornerCases,
+        R: PartialEq + std::fmt::Debug,
+        rand::distr::StandardUniform: test_util::GenerateRandomArguments<T>,
+    {
+        let mut checker =
+            test_util::Checker::<T, T, R>::new(under_test, reference, |got, expected| {
+                assert_eq!(got, expected);
+            });
+
+        for dim in 0..MAX_DIM {
+            test_util::test_distance_function(
+                &mut checker,
+                rand::distr::StandardUniform,
+                rand::distr::StandardUniform,
+                dim,
+                INTEGER_TRIALS,
+                rng,
+            );
+        }
+    }
+
+    #[test]
+    fn test_squared_l2_i8_exact_mathematical() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x6d1f0c2a93b4e785);
+        run_exact_test(
+            as_function_pointer::<SquaredL2, i8, i8, MathematicalValue<i32>>,
+            |x, y| MathematicalValue::new(reference_squared_l2_i8_exact(x, y)),
+            &mut rng,
+        );
+    }
+
+    #[test]
+    fn test_squared_l2_i8_exact_similarity() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x1b9e44d07a3c52f6);
+        run_exact_test(
+            as_function_pointer::<SquaredL2, i8, i8, SimilarityScore<i32>>,
+            |x, y| SimilarityScore::new(reference_squared_l2_i8_exact(x, y)),
+            &mut rng,
+        );
+    }
+
+    #[test]
+    fn test_innerproduct_i8_exact_mathematical() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xc4a37e19f05b8d21);
+        run_exact_test(
+            as_function_pointer::<InnerProduct, i8, i8, MathematicalValue<i32>>,
+            |x, y| MathematicalValue::new(reference_innerproduct_i8_exact(x, y)),
+            &mut rng,
+        );
+    }
+
+    #[test]
+    fn test_innerproduct_i8_exact_similarity() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x58e2b0f4d61a973c);
+        run_exact_test(
+            as_function_pointer::<InnerProduct, i8, i8, SimilarityScore<i32>>,
+            |x, y| SimilarityScore::new(-reference_innerproduct_i8_exact(x, y)),
+            &mut rng,
+        );
+    }
+
+    #[test]
+    fn test_i8_exact_arrays() {
+        const N: usize = 37;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x93d05a7e2c1f64b8);
+        let x: [i8; N] = std::array::from_fn(|_| rng.random());
+        let y: [i8; N] = std::array::from_fn(|_| rng.random());
+
+        let l2 = reference_squared_l2_i8_exact(&x, &y);
+        let ip = reference_innerproduct_i8_exact(&x, &y);
+
+        let got: MathematicalValue<i32> = SquaredL2::evaluate(&x, &y);
+        assert_eq!(got, MathematicalValue::new(l2));
+        let got: SimilarityScore<i32> = SquaredL2::evaluate(&x, &y);
+        assert_eq!(got, SimilarityScore::new(l2));
+        let got: MathematicalValue<i32> = InnerProduct::evaluate(&x, &y);
+        assert_eq!(got, MathematicalValue::new(ip));
+        let got: SimilarityScore<i32> = InnerProduct::evaluate(&x, &y);
+        assert_eq!(got, SimilarityScore::new(-ip));
     }
 
     //////////////////
