@@ -159,7 +159,6 @@ where
         }
 
         // Indexed parallel collection preserves parent-partition order.
-        #[allow(clippy::disallowed_methods)]
         let splits: ANNResult<Vec<_>> = pending
             .into_par_iter()
             .map(|partition| {
@@ -302,7 +301,6 @@ where
 
     // Each worker chunk reuses one buffer lease for all its stripes.
     // `build_graph` runs this operation in the pool from the build context.
-    #[allow(clippy::disallowed_methods)]
     assignments
         .par_chunks_mut(worker_assignment_count)
         .enumerate()
@@ -404,7 +402,6 @@ fn scatter_assignments(
     let stripe_points = points.len().div_ceil(rayon::current_num_threads());
     let stripe_assignment_count = stripe_points * fanout;
     // Indexed parallel collection preserves stripe order.
-    #[allow(clippy::disallowed_methods)]
     let locals: Vec<_> = points
         .par_chunks(stripe_points)
         .zip(assignments.par_chunks(stripe_assignment_count))
@@ -420,7 +417,6 @@ fn scatter_assignments(
 
     // `build_graph` runs this Rayon operation in the pool from the build context.
     // Each worker creates one independent leader cluster.
-    #[allow(clippy::disallowed_methods)]
     sizes
         .into_par_iter()
         .enumerate()

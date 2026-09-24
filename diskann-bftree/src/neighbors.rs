@@ -23,7 +23,7 @@ use crate::{bftree_insert, TestCallCount};
 pub struct NeighborProvider<I: BfTreeId> {
     adjacency_list_index: BfTree,
     dim: usize, // Max number of neighbors in a neighbor list + 1 for the neighbor count
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) num_get_calls: TestCallCount,
     _phantom: PhantomData<I>,
 }
@@ -390,14 +390,13 @@ mod tests {
 
     use super::*;
 
-    /// Number of concurrent worker tasks for stress tests, scaled to the host's
-    /// available parallelism with a floor so contention is guaranteed even on
-    /// low-core CI runners. Falls back to the floor if parallelism is unknown.
+    /// Number of concurrent worker tasks for stress tests, bounded so the
+    /// CPU-scaled workload does not exceed bf-tree's default record size.
     fn stress_thread_count() -> u32 {
         std::thread::available_parallelism()
             .map(|n| n.get() as u32)
             .unwrap_or(8)
-            .max(8)
+            .clamp(8, 16)
     }
 
     /// Build a `NeighborProvider<u32>` with a default bf-tree config.

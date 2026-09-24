@@ -134,7 +134,7 @@ pub fn compute_vecs_l2sq(
 /// Pre-allocated dist_matrix should be num_points * num_centers and contain squared distances
 /// Default value of k is 1
 /// Ideally used only by compute_closest_centers
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn compute_closest_centers_in_block(
     data: &[f32],
     num_points: usize,
@@ -253,7 +253,7 @@ pub fn compute_closest_centers_in_block(
 /// it will return inverted index for each center, assuming each of the inverted
 /// indices is an empty vector. Additionally, if pts_norms_squared is not null,
 /// then it will assume that point norms are pre-computed and use those values
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn compute_closest_centers(
     data: &[f32],
     num_points: usize,

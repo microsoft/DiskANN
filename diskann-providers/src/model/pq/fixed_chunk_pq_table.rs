@@ -1077,7 +1077,6 @@ mod pq_index_prune_query_test {
     use super::*;
 
     #[test]
-    #[allow(clippy::identity_op)]
     fn pq_dist_lookup_test() {
         let pq_ids: Vec<u8> = vec![1u8, 3u8, 2u8, 2u8];
         let mut pq_dists: Vec<f32> = Vec::with_capacity(256 * 2);
@@ -1088,8 +1087,8 @@ mod pq_index_prune_query_test {
         let mut dists_out = vec![0.0f32; 2];
         pq_dist_lookup(&pq_ids, 2, 2, &pq_dists, dists_out.as_mut_slice()).unwrap();
         assert_eq!(dists_out.len(), 2);
-        assert_eq!(dists_out[0], pq_dists[0 + 1] + pq_dists[256 + 3]);
-        assert_eq!(dists_out[1], pq_dists[0 + 2] + pq_dists[256 + 2]);
+        assert_eq!(dists_out[0], pq_dists[1] + pq_dists[256 + 3]);
+        assert_eq!(dists_out[1], pq_dists[2] + pq_dists[256 + 2]);
     }
 
     #[test]

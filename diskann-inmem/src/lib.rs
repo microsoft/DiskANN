@@ -15,12 +15,12 @@ mod epoch;
 mod freelist;
 mod ids;
 mod neighbors;
+mod prefetch;
 mod tag;
 
-mod store;
-
-pub mod layers;
 pub mod provider;
+pub mod repr;
+pub mod store;
 
 pub use provider::{Context, Provider, Strategy};
 
@@ -30,20 +30,3 @@ mod test;
 #[cfg(feature = "integration-test")]
 #[doc(hidden)]
 pub mod integration;
-
-//----------------//
-// Internal Tools //
-//----------------//
-
-/// A "public" type that can only be constructed by this crate.
-///
-/// This helps with public traits with internal methods that we don't want users to call.
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct Hidden(());
-
-impl Hidden {
-    const fn new() -> Self {
-        Self(())
-    }
-}

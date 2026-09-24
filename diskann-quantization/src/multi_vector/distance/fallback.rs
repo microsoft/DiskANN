@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Fallback kernel implementation of multi-vector distance computation.
 
@@ -64,8 +66,8 @@ impl FallbackKernel {
     /// Core kernel for computing per-query-vector max similarities (min negated inner-product).
     ///
     /// For each `query` vector, computes the maximum similarity (negated inner product)
-    /// to any document vector, then calls `f(index, score)` with the result. If
-    /// there are no vectors in the `doc`, the kernel returns immediately.
+    /// to any document vector, then calls `f(index, score)` with the result.
+    /// If there are no vectors in the `doc`, the score is `f32::MAX`.
     ///
     /// The callback can be used to aggregate or set scores as needed - as is the
     /// case with [`MaxSim`] and [`Chamfer`].
@@ -84,11 +86,6 @@ impl FallbackKernel {
         F: FnMut(usize, f32),
         InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
-        // Early exit if no doc vectors - callback should never be invoked
-        if doc.num_vectors() == 0 {
-            return;
-        }
-
         for (i, q_vec) in query.rows().enumerate() {
             // `InnerProduct::evaluate` returns negated inner product
             let mut min_dist = f32::MAX;
@@ -171,6 +168,13 @@ where
 
         if self.size() != query.num_vectors() {
             return Err(MaxSimError::InvalidBufferLength(size, n_queries));
+        }
+
+        if query.vector_dim() != doc.vector_dim() {
+            return Err(MaxSimError::UnequalDim(
+                doc.vector_dim(),
+                query.vector_dim(),
+            ));
         }
 
         FallbackKernel::max_sim_kernel(query, doc, |i, score| {
@@ -394,7 +398,7 @@ mod tests {
 
             let result = Chamfer::evaluate(QueryMatRef::from(doc), query.deref().reborrow());
 
-            assert_eq!(result, 0.0);
+            assert_eq!(result, f32::INFINITY);
         }
 
         #[test]

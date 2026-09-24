@@ -42,7 +42,9 @@ use crate::{
     },
     error::{diskann_error, ErrorKind},
     storage::{
-        quant::{PQGeneration, PQGenerationContext, QuantDataGenerator},
+        quant::{
+            validate_data_generation_input, PQGeneration, PQGenerationContext, QuantDataGenerator,
+        },
         DiskIndexWriter,
     },
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
@@ -142,6 +144,10 @@ where
     }
 
     fn generate_compressed_data(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+        let data_path = self.index_writer.get_dataset_file();
+        let max_block_size = self.disk_build_param.data_compression_chunk_vector_count();
+        validate_data_generation_input(self.storage_provider, &data_path, max_block_size)?;
+
         let num_points = self.index_configuration.max_points;
         let num_chunks = self.disk_build_param.search_pq_chunks();
 
@@ -169,15 +175,11 @@ where
             Data::VectorDataType,
             PQGeneration<Data::VectorDataType, StorageProvider>,
         >::new(
-            self.index_writer.get_dataset_file(),
+            data_path,
             self.pq_storage.get_compressed_data_path().into(),
             &quantizer_context,
         )?;
-        generator.generate_data(
-            storage_provider,
-            pool,
-            self.disk_build_param.data_compression_chunk_vector_count(),
-        )
+        generator.generate_data(storage_provider, pool, max_block_size)
     }
 
     async fn build_graph(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {

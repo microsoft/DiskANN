@@ -113,7 +113,6 @@ impl LeafBuffers {
 ///
 /// Each selected leaf pair contributes both edge directions. Candidate lists use
 /// global dataset IDs and contain no duplicate IDs.
-#[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
 pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -156,7 +155,6 @@ where
 ///
 /// Reusable buffers can be longer than this leaf, so all accesses use the current
 /// leaf shape.
-#[allow(clippy::too_many_arguments)]
 #[expect(
     clippy::expect_used,
     reason = "buffer prefixes have the checked leaf shape"
