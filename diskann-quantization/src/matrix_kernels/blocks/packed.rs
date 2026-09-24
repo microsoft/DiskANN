@@ -287,9 +287,12 @@ impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
 mod tests {
     use super::*;
 
-    use diskann_utils::views::{Init, Matrix, MatrixView};
+    use diskann_utils::{
+        assert_contains,
+        views::{Init, Matrix, MatrixView},
+    };
 
-    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
+    use crate::matrix_kernels::test_util::panic_message_for;
 
     #[test]
     fn test_visit_panels() {

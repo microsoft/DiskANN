@@ -419,9 +419,12 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use diskann_utils::views::{Init, Matrix};
+    use diskann_utils::{
+        assert_contains,
+        views::{Init, Matrix},
+    };
 
-    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
+    use crate::matrix_kernels::test_util::panic_message_for;
 
     #[test]
     fn test_visit_panels() {
