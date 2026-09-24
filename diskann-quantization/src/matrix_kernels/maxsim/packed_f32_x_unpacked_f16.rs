@@ -266,7 +266,7 @@ mod tests {
             let k = DimK::new(NonZeroUsize::new(k).unwrap());
 
             let (ref_a, ref_b, ref_c) =
-                maxsim::test::generate(total_a_rows, k.value().get(), total_b_cols, rng);
+                maxsim::test::generate_f32(total_a_rows, k.value().get(), total_b_cols, rng);
 
             // Massage the input data in the form needed by the kernel.
             let a_bt = BlockTransposed::<f32, MR>::from_matrix_view(ref_a.as_view());

@@ -5,15 +5,15 @@
 
 //! Object-safe kernel boundary trait plus BYOTE visitor trait.
 
-use crate::multi_vector::{MatRef, MaxSimError, Standard};
+use crate::multi_vector::{MatRef, MaxSimElement, MaxSimError, Standard};
 
 /// Object-safe interface for computing per-query MaxSim scores.
-pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
+pub trait MaxSimKernel<T: MaxSimElement>: Send + Sync + std::fmt::Debug {
     /// Number of query rows whose scores this kernel produces.
     fn nrows(&self) -> usize;
 
     /// Compute per-query MaxSim scores into `scores`. On zero docs, fills
-    /// every slot with `f32::MAX`.
+    /// every slot with [`MaxSimElement::NO_MATCH`].
     ///
     /// # Errors
     ///
@@ -23,7 +23,7 @@ pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
     fn compute_max_sim(
         &self,
         doc: MatRef<'_, Standard<T>>,
-        scores: &mut [f32],
+        scores: &mut [T::Score],
     ) -> Result<(), MaxSimError>;
 }
 
@@ -31,7 +31,7 @@ pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
 /// kernel to [`Erase::erase`], which decides how to package it (e.g. as
 /// `Box<dyn MaxSimKernel<T>>` via [`BoxErase`], a chamfer-only closure, a
 /// batched evaluator, …).
-pub trait Erase<T: Copy> {
+pub trait Erase<T: MaxSimElement> {
     type Output;
     /// `K` is generic so the body sees its concrete type and the compiler
     /// can inline it.
@@ -42,7 +42,7 @@ pub trait Erase<T: Copy> {
 #[derive(Debug, Clone, Copy)]
 pub struct BoxErase;
 
-impl<T: Copy + 'static> Erase<T> for BoxErase {
+impl<T: MaxSimElement> Erase<T> for BoxErase {
     type Output = Box<dyn MaxSimKernel<T>>;
 
     fn erase<K: MaxSimKernel<T> + 'static>(self, kernel: K) -> Self::Output {

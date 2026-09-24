@@ -14,25 +14,40 @@ use crate::{
     multi_vector::BlockTransposedRef,
 };
 
+/// Round the logical contraction dimension up to the extent physically stored per band.
+#[inline]
+fn padded_k<const PACK: usize>(k: usize) -> usize {
+    k.next_multiple_of(PACK)
+}
+
 /// A view over packed memory.
 ///
 /// Elements are gathered into groups of size `SZ`. A collection of `self.k` groups forms
 /// a "block". `self.blocks` tracks how many such blocks are in the view.
 ///
+/// `PACK` interleaves that many consecutive columns within each group, so one pack spans
+/// `SZ * PACK` elements. `k` stays the logical dimension; a trailing pack that `PACK`
+/// does not fill is zero-padded.
+///
 /// This layout requires that no block is partially filled.
 ///
 /// # Class Invariants
 ///
-/// * The tracked length `ptr.len()` must be equal to `SZ * blocks * k`.
+/// * The tracked length `ptr.len()` must be equal to `SZ * blocks * padded_k::<PACK>(k)`.
 /// * `SZ` may not be zero.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct View<'a, T, const SZ: usize> {
+pub(crate) struct View<'a, T, const SZ: usize, const PACK: usize = 1> {
     ptr: Slice<'a, T>,
     blocks: NonZeroUsize,
     k: Bound,
 }
 
-impl<'a, T, const SZ: usize> View<'a, T, SZ> {
+impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
+    const _ASSERTIONS: () = {
+        assert!(PACK > 0, "packing factor PACK must be positive");
+        assert!(SZ.is_multiple_of(PACK), "SZ must be divisible by PACK");
+    };
+
     /// Construct a [`View`] from a [`BlockTransposedRef`].
     ///
     /// The mapping of parameters is as follows:
@@ -42,7 +57,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
     /// * The number of blocks is [`BlockTransposedRef::num_blocks`].
     ///
     /// Returns `None` if any of the runtime values is zero.
-    pub(crate) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ>) -> Option<Self>
+    pub(crate) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ, PACK>) -> Option<Self>
     where
         T: Copy,
     {
@@ -53,22 +68,23 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         let blocks = NonZeroUsize::new(v.num_blocks())?;
         let k = DimK::new(NonZeroUsize::new(v.ncols())?);
 
-        // SAFETY: `BlockTransposedRef` ensures the underlying slice has a length of
-        // exactly `SZ * blocks * k`.
+        // SAFETY: `BlockTransposedRef` sizes its allocation as `SZ * blocks * padded_ncols`,
+        // and `padded_ncols` is `padded_k::<PACK>(ncols)`.
         Some(unsafe { Self::new(Slice::new(v.as_slice()), blocks, k) })
     }
 
     /// # Safety
     ///
-    /// `ptr.len()` must be exactly equal to `SZ * blocks * k`.
+    /// `ptr.len()` must be exactly equal to `SZ * blocks * padded_k::<PACK>(k)`.
     pub(in crate::matrix_kernels) unsafe fn new(
         ptr: Slice<'a, T>,
         blocks: NonZeroUsize,
         k: DimK,
     ) -> Self {
+        let () = Self::_ASSERTIONS;
         bounds::check_eq!(
             ptr.len(),
-            blocks.get() * SZ * k.value().get(),
+            blocks.get() * SZ * padded_k::<PACK>(k.value().get()),
             "invalid block-transposed access",
         );
         bounds::check_lt!(Bound::new(0), SZ, "group size may not be zero.",);
@@ -79,13 +95,15 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 
     /// # Safety
     ///
-    /// `ptr.len()` must be exactly equal to `SZ * blocks * k`.
+    /// `ptr.len()` must be exactly equal to `SZ * blocks * padded_k::<PACK>(k)`.
     unsafe fn new_inner(ptr: Slice<'a, T>, blocks: NonZeroUsize, k: Bound) -> Self {
-        bounds::check_eq!(
-            ptr.len(),
-            Bound::new(blocks.get()) * Bound::new(SZ) * k,
-            "invalid block-transposed access",
-        );
+        k.with(|k| {
+            bounds::check_eq!(
+                ptr.len(),
+                blocks.get() * SZ * padded_k::<PACK>(k),
+                "invalid block-transposed access",
+            );
+        });
         bounds::check_lt!(Bound::new(0), SZ, "group size may not be zero.",);
 
         Self { ptr, blocks, k }
@@ -108,7 +126,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
     /// `k` must be equal to the contraction dimension tracked by [`Self::k`].
     pub(in crate::matrix_kernels) fn block_stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k, k.value());
-        Elements::new(SZ * k.value().get())
+        Elements::new(SZ * padded_k::<PACK>(k.value().get()))
     }
 
     /// Return the number of bands stored in `self`.
@@ -135,7 +153,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         k: DimK,
         mut f: F,
     ) where
-        F: FnMut(View<'_, T, SZ>, usize),
+        F: FnMut(View<'_, T, SZ, PACK>, usize),
     {
         let stride = self.block_stride(k);
 
@@ -181,7 +199,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
     /// The bound [`Self::k`] must be equal to `k`.
     pub(in crate::matrix_kernels) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
     where
-        F: FnMut(Panel<'_, T, SZ>, usize),
+        F: FnMut(Panel<'_, T, SZ, PACK>, usize),
     {
         let stride = self.block_stride(k);
         for b in 0..self.blocks().get() {
@@ -202,10 +220,10 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 }
 
 #[cfg(test)]
-impl<'a, T, const SZ: usize> View<'a, T, SZ> {
+impl<T, const SZ: usize, const PACK: usize> View<'_, T, SZ, PACK> {
     fn checked_visit_sub_views<F>(&self, sub_blocks: NonZeroUsize, f: F)
     where
-        F: FnMut(View<'_, T, SZ>, usize),
+        F: FnMut(View<'_, T, SZ, PACK>, usize),
     {
         let k = DimK::from_bound(self.k());
         // SAFETY: Checked in test builds.
@@ -214,7 +232,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 
     fn checked_visit_panels<F>(&self, f: F)
     where
-        F: FnMut(Panel<'_, T, SZ>, usize),
+        F: FnMut(Panel<'_, T, SZ, PACK>, usize),
     {
         let k = DimK::from_bound(self.k());
         // SAFETY: Checked in test builds.
@@ -228,31 +246,33 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 
 /// A block containing `k` contiguous groups of size `SZ`.
 ///
+/// `PACK` consecutive groups are interleaved into one pack of `SZ * PACK` elements.
+///
 /// # Class Invariants
 ///
-/// The bound `ptr.len()` must be equal to `SZ * k`.
+/// The bound `ptr.len()` must be equal to `SZ * padded_k::<PACK>(k)`.
 #[derive(Debug, Clone, Copy)]
-pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize> {
+pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize, const PACK: usize = 1> {
     ptr: Slice<'a, T>,
     k: Bound,
 }
 
-impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
+impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     /// # Safety
     ///
-    /// `ptr.len()` must be equal to `SZ * k`.
+    /// `ptr.len()` must be equal to `SZ * padded_k::<PACK>(k)`.
     #[cfg(test)]
     pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
-        bounds::check_eq!(ptr.len(), SZ * k.value().get());
+        bounds::check_eq!(ptr.len(), SZ * padded_k::<PACK>(k.value().get()));
         // SAFETY: Inherited from caller.
         unsafe { Self::new_inner(ptr, Bound::new(k.value().get())) }
     }
 
     /// # Safety
     ///
-    /// `ptr.len()` must be equal to `SZ * k`.
+    /// `ptr.len()` must be equal to `SZ * padded_k::<PACK>(k)`.
     unsafe fn new_inner(ptr: Slice<'a, T>, k: Bound) -> Self {
-        k.with(|k| bounds::check_eq!(ptr.len(), SZ * k));
+        k.with(|k| bounds::check_eq!(ptr.len(), SZ * padded_k::<PACK>(k)));
 
         Self { ptr, k }
     }
@@ -268,12 +288,25 @@ impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
     pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
+
+    /// Return the number of elements spanned by one pack.
+    pub(in crate::matrix_kernels) const fn pack_stride(&self) -> Elements<T> {
+        Elements::new(SZ * PACK)
+    }
+
+    /// Return the number of packs in `self`.
+    ///
+    /// `k` must be equal to the contraction dimension tracked by [`Self::k`].
+    pub(in crate::matrix_kernels) fn packs(&self, k: DimK) -> usize {
+        bounds::check_eq!(self.k, k.value());
+        padded_k::<PACK>(k.value().get()) / PACK
+    }
 }
 
 #[cfg(test)]
-impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
+impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     fn checked_as_std_slice(self) -> &'a [T] {
-        let len = SZ * self.k().value();
+        let len = SZ * padded_k::<PACK>(self.k().value());
         // SAFETY: Bounds are retained under `cfg(test)`.
         unsafe { self.ptr.as_std_slice(len) }
     }
@@ -289,7 +322,78 @@ mod tests {
 
     use diskann_utils::views::{Init, Matrix, MatrixView};
 
-    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
+    use crate::{
+        matrix_kernels::test_util::{assert_contains, panic_message_for},
+        multi_vector::BlockTransposed,
+    };
+
+    /// Pin the physical element order against the source matrix, rather than inferring it
+    /// from the layout documentation. Kernels index panel memory with this offset formula.
+    #[test]
+    fn test_pack_layout() {
+        for ncols in 1..20 {
+            assert_pack_layout::<1, 1>(3, ncols);
+            assert_pack_layout::<4, 1>(9, ncols);
+            assert_pack_layout::<8, 2>(20, ncols);
+            assert_pack_layout::<8, 4>(20, ncols);
+            assert_pack_layout::<16, 4>(33, ncols);
+        }
+    }
+
+    fn assert_pack_layout<const SZ: usize, const PACK: usize>(nrows: usize, ncols: usize) {
+        let ctx = format_args!("SZ = {SZ}, PACK = {PACK}, nrows = {nrows}, ncols = {ncols}");
+
+        // Values start at one so that zero unambiguously marks a padded slot.
+        let mut value = 0.0;
+        let matrix = Matrix::new(
+            Init(|| {
+                value += 1.0;
+                value
+            }),
+            nrows,
+            ncols,
+        );
+
+        let bt = BlockTransposed::<f32, SZ, PACK>::from_matrix_view(matrix.as_view());
+        let padded = bt.padded_ncols();
+
+        let view = View::<f32, SZ, PACK>::from_block_transposed(bt.as_view()).unwrap();
+        assert_eq!(view.blocks().get(), nrows.div_ceil(SZ), "{ctx}");
+        assert_eq!(view.k().value(), ncols, "{ctx}");
+
+        let dim_k = DimK::from_bound(view.k());
+        let mut blocks = 0;
+
+        view.checked_visit_panels(|panel, block| {
+            assert_eq!(block, blocks, "{ctx}");
+            assert_eq!(panel.packs(dim_k), padded / PACK, "{ctx}");
+            assert_eq!(panel.pack_stride().value(), SZ * PACK, "{ctx}");
+
+            let flat = panel.checked_as_std_slice();
+            assert_eq!(flat.len(), SZ * padded, "{ctx}");
+
+            for col in 0..padded {
+                for row in 0..SZ {
+                    let global_row = block * SZ + row;
+                    let expected = if col < ncols && global_row < nrows {
+                        matrix[(global_row, col)]
+                    } else {
+                        0.0
+                    };
+
+                    let offset = (col / PACK) * SZ * PACK + row * PACK + (col % PACK);
+                    assert_eq!(
+                        flat[offset], expected,
+                        "{ctx}, block = {block}, row = {row}, col = {col}",
+                    );
+                }
+            }
+
+            blocks += 1;
+        });
+
+        assert_eq!(blocks, nrows.div_ceil(SZ), "{ctx}");
+    }
 
     #[test]
     fn test_visit_panels() {
