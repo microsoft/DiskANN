@@ -5,7 +5,7 @@
 
 //! Typed results of low-level distance kernels.
 //!
-//! The `i8` squared L2 and inner product kernels compute their results exactly in `i32`.
+//! The `i8` squared L2 and inner product kernels compute their results in `i32`.
 //! Instead of converting to `f32` inside the kernel, they return a score type that records
 //! *which* quantity was computed and leaves the choice of output type to the caller. A
 //! single kernel can then serve both exact integer consumers and `f32` consumers.
@@ -78,8 +78,7 @@ impl Score<i32> for InnerProductScore<i32> {
     }
     #[inline(always)]
     fn similarity_score(self) -> SimilarityScore<i32> {
-        // Only `i32::MIN` wraps. An `i8` inner product can reach it only above dimension
-        // 132,104, which is outside the exact range.
+        // Only `i32::MIN` wraps, and the `i8` kernels return it only outside the exact range.
         SimilarityScore::new(self.0.wrapping_neg())
     }
 }
@@ -116,8 +115,8 @@ mod tests {
         assert_eq!(Score::<f32>::mathematical_value(score).into_inner(), 7.0);
         assert_eq!(Score::<f32>::similarity_score(score).into_inner(), -7.0);
 
-        // The `f32` similarity negates after converting, matching the kernels' previous
-        // `f32` output bit-for-bit (including `-0.0`).
+        // The `f32` similarity negates after converting, matching the previous `f32`
+        // similarity score bit-for-bit (including `-0.0`).
         let zero = Score::<f32>::similarity_score(InnerProductScore::new(0)).into_inner();
         assert_eq!(zero.to_bits(), (-0.0f32).to_bits());
 
