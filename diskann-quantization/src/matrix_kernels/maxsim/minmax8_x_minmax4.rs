@@ -754,7 +754,7 @@ mod x86_64 {
         }
     }
 
-    panel_kernel!(V3, 4, 16, 8, [1, 2, 3, 4, 5, 6, 7]);
+    panel_kernel!(V3, 4, 16, 6, [1, 2, 3, 4, 5]);
     panel_kernel!(V4, 8, 16, 8, [1, 2, 3, 4, 5, 6, 7]);
 }
 
@@ -1262,7 +1262,7 @@ mod tests {
     #[test]
     fn v3_driver_and_registers() {
         if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-            check_driver::<_, 4, 16, 8>(arch);
+            check_driver::<_, 4, 16, 6>(arch);
             check_registers::<_, 4, 16>(arch);
             check_contraction::<_, 4, 16>(arch);
             check_decoded_b(arch);

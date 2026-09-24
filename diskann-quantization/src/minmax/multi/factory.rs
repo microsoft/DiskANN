@@ -121,7 +121,7 @@ impl_builder!(Scalar, 4, 8, 6);
 #[cfg(target_arch = "aarch64")]
 impl_builder!(Neon, 4, 8, 8);
 #[cfg(target_arch = "x86_64")]
-impl_builder!(V3, 4, 16, 8);
+impl_builder!(V3, 4, 16, 6);
 #[cfg(target_arch = "x86_64")]
 impl_builder!(V4, 8, 16, 8);
 
