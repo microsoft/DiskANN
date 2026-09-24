@@ -3555,62 +3555,6 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<f32>, &[f32], US
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn load_deinterleaved2_f32x4(
-    arch: diskann_wide::arch::aarch64::Neon,
-    ptr: *const f32,
-) -> [<diskann_wide::arch::aarch64::Neon as Architecture>::f32x4; 2] {
-    #[expect(non_camel_case_types)]
-    type f32s_4 = <diskann_wide::arch::aarch64::Neon as Architecture>::f32x4;
-    if cfg!(miri) {
-        // SAFETY: The caller guarantees that `ptr` is valid for 8 consecutive `f32` values.
-        let input: [f32; 8] = std::array::from_fn(|i| unsafe { ptr.add(i).read_unaligned() });
-        [
-            f32s_4::from_array(arch, std::array::from_fn(|lane| input[lane * 2])),
-            f32s_4::from_array(arch, std::array::from_fn(|lane| input[lane * 2 + 1])),
-        ]
-    } else {
-        use std::arch::aarch64::vld2q_f32;
-        // SAFETY: The caller guarantees that `ptr` is valid for 8 consecutive `f32` values.
-        let raw = unsafe { vld2q_f32(ptr) };
-        [
-            f32s_4::from_underlying(arch, raw.0),
-            f32s_4::from_underlying(arch, raw.1),
-        ]
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn load_deinterleaved4_f32x4(
-    arch: diskann_wide::arch::aarch64::Neon,
-    ptr: *const f32,
-) -> [<diskann_wide::arch::aarch64::Neon as Architecture>::f32x4; 4] {
-    #[expect(non_camel_case_types)]
-    type f32s_4 = <diskann_wide::arch::aarch64::Neon as Architecture>::f32x4;
-    if cfg!(miri) {
-        // SAFETY: The caller guarantees that `ptr` is valid for 16 consecutive `f32` values.
-        let input: [f32; 16] = std::array::from_fn(|i| unsafe { ptr.add(i).read_unaligned() });
-        [
-            f32s_4::from_array(arch, std::array::from_fn(|lane| input[lane * 4])),
-            f32s_4::from_array(arch, std::array::from_fn(|lane| input[lane * 4 + 1])),
-            f32s_4::from_array(arch, std::array::from_fn(|lane| input[lane * 4 + 2])),
-            f32s_4::from_array(arch, std::array::from_fn(|lane| input[lane * 4 + 3])),
-        ]
-    } else {
-        use std::arch::aarch64::vld4q_f32;
-        // SAFETY: The caller guarantees that `ptr` is valid for 16 consecutive `f32` values.
-        let raw = unsafe { vld4q_f32(ptr) };
-        [
-            f32s_4::from_underlying(arch, raw.0),
-            f32s_4::from_underlying(arch, raw.1),
-            f32s_4::from_underlying(arch, raw.2),
-            f32s_4::from_underlying(arch, raw.3),
-        ]
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
 impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32], USlice<'_, 1>>
     for InnerProduct
 {
@@ -3648,11 +3592,13 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
             ) -> (f32s_8, f32s_8, f32s_8, f32s_8) {
                 // SAFETY: The caller guarantees that `ptr` is valid for 32 consecutive
                 // `f32` values. Each structured load reads 16 values.
-                let lo: [_; 4] = load_deinterleaved4_f32x4(arch, ptr);
+                let lo: [_; 4] = unsafe { arch.vld4q_f32(ptr) };
                 // SAFETY: Same caller guarantee as above; offsetting by 16 stays within the
                 // 32-element readable range.
                 let hi_ptr = unsafe { ptr.add(16) };
-                let hi: [_; 4] = load_deinterleaved4_f32x4(arch, hi_ptr);
+                // SAFETY: Same caller guarantee as above; offsetting by 16 stays within the
+                // 32-element readable range.
+                let hi: [_; 4] = unsafe { arch.vld4q_f32(hi_ptr) };
                 (
                     f32s_8::new(lo[0], hi[0]),
                     f32s_8::new(lo[1], hi[1]),
@@ -3776,11 +3722,13 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
                 let x_base = unsafe { px_f32.add(4 * i) };
                 // SAFETY: The loop condition guarantees 32 readable `f32` values at
                 // `x_base`; each structured load consumes 16 values.
-                let x_lo = load_deinterleaved4_f32x4(arch, x_base);
+                let x_lo = unsafe { arch.vld4q_f32(x_base) };
                 // SAFETY: Same bound as above; offsetting by 16 stays within the 32 readable
                 // values guaranteed by the loop condition.
                 let x_hi_base = unsafe { x_base.add(16) };
-                let x_hi = load_deinterleaved4_f32x4(arch, x_hi_base);
+                // SAFETY: Same bound as above; offsetting by 16 stays within the 32 readable
+                // values guaranteed by the loop condition.
+                let x_hi = unsafe { arch.vld4q_f32(x_hi_base) };
 
                 let x_vec1 = f32s_8::new(x_lo[0], x_hi[0]);
                 let y_vec1: f32s_8 = (y_vec & mask).into();
@@ -3880,12 +3828,10 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
                 let y_vec = unsafe { u8s_8::load_simd(arch, py_u8.add(i)) };
                 // SAFETY: Eight packed bytes represent 16 logical values, so the loop
                 // condition guarantees 16 readable `f32` values at offset `2 * i`.
-                let [x_vec_1, x_vec_2] =
-                    load_deinterleaved2_f32x4(arch, unsafe { px_f32.add(2 * i) });
+                let [x_vec_1, x_vec_2] = unsafe { arch.vld2q_f32(px_f32.add(2 * i)) };
                 // SAFETY: Eight packed bytes represent 16 logical values, so the loop
                 // condition guarantees 16 readable `f32` values at offset `2 * i`.
-                let [x_vec_3, x_vec_4] =
-                    load_deinterleaved2_f32x4(arch, unsafe { px_f32.add(2 * i + 8) });
+                let [x_vec_3, x_vec_4] = unsafe { arch.vld2q_f32(px_f32.add(2 * i + 8)) };
 
                 let x_vec_even = f32s_8::new(x_vec_1, x_vec_3);
                 let x_vec_odd = f32s_8::new(x_vec_2, x_vec_4);
