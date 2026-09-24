@@ -437,8 +437,8 @@ trait ExtraWide<const PACK: usize, const MR: usize>: Copy {
 }
 
 impl ExtraWide<4, 8> for Scalar {
-    type Query = [[u32; 8]; 4];
-    type Splat = [u32; 4];
+    type Query = [[u16; 8]; 4];
+    type Splat = [u16; 4];
     type Accumulator = [u32; 8];
 
     #[cfg(test)]
@@ -449,7 +449,7 @@ impl ExtraWide<4, 8> for Scalar {
     #[inline(always)]
     fn load(self, values: packed::Patch<'_, u8, 8, 4>, _: usize) -> Self::Query {
         let values = values.as_array();
-        core::array::from_fn(|d| core::array::from_fn(|row| u32::from(values[row][d])))
+        core::array::from_fn(|d| core::array::from_fn(|row| u16::from(values[row][d])))
     }
     #[inline(always)]
     fn zero(self) -> Self::Accumulator {
@@ -457,13 +457,14 @@ impl ExtraWide<4, 8> for Scalar {
     }
     #[inline(always)]
     fn splat(self, value: [u8; 4]) -> Self::Splat {
-        value.map(u32::from)
+        value.map(u16::from)
     }
     #[inline(always)]
     fn dot(self, a: Self::Query, b: Self::Splat, acc: Self::Accumulator) -> Self::Accumulator {
+        // B holds nibbles, so four u8 x u4 products sum to at most 15300 and fit in u16.
         core::array::from_fn(|i| {
             let dot = a[0][i] * b[0] + a[1][i] * b[1] + a[2][i] * b[2] + a[3][i] * b[3];
-            acc[i].wrapping_add(dot)
+            acc[i].wrapping_add(u32::from(dot))
         })
     }
 
