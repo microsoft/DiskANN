@@ -769,7 +769,7 @@ mod tests {
         // Compare via linear indexing.
         for row in 0..dut.nrows() {
             for col in 0..dut.ncols() {
-                let e = expected[(row, col)];
+                let e = *expected.element(row, col);
 
                 assert_eq!(
                     *dut.element(row, col),
@@ -853,7 +853,7 @@ mod tests {
         let mut expected = views::Matrix::new(0, 5, 2);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
-                expected[(row, col)] = m[(row, col)];
+                *expected.element_mut(row, col) = *m.element(row, col);
             }
         }
         test_indexing(v, expected.as_view());
@@ -863,7 +863,7 @@ mod tests {
         let mut expected = views::Matrix::new(0, 5, 2);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
-                expected[(row, col)] = m[(row, col + 1)];
+                *expected.element_mut(row, col) = *m.element(row, col + 1);
             }
         }
         test_indexing(v, expected.as_view());

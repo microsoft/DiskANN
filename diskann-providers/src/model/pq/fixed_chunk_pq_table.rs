@@ -599,7 +599,7 @@ unsafe fn add_distance_for_a_tile(
             // `point` is less than `n_pts`(`coordinates.nrows()`) and
             // `chunk` is less than `pq_nchunks`(`coordinates.ncols()`)
             //  as validated in `pq_dist_lookup` function.
-            let centroid: u8 = unsafe { *coordinates.get_unchecked(point, chunk) };
+            let centroid: u8 = unsafe { *coordinates.element_unchecked(point, chunk) };
 
             // SAFETY: From above, `chunk` is less than `coordinatges.ncols()`, which must
             // be equal to `distances.nrows()` by the pre-conditions for this function.
@@ -841,8 +841,8 @@ mod fixed_chunk_pq_table_test {
             .enumerate()
             .for_each(|(i, d)| {
                 for chunk in 0..num_pq_chunks {
-                    let pq_coord = pq_data[(neighbor_vector_ids[i] as usize, chunk)];
-                    *d += distances[(chunk, pq_coord as usize)];
+                    let pq_coord = *pq_data.element(neighbor_vector_ids[i] as usize, chunk);
+                    *d += *distances.element(chunk, pq_coord as usize);
                 }
             });
 
@@ -932,9 +932,9 @@ mod fixed_chunk_pq_table_test {
         // inflate_vector_test
         let inflate_vector = fixed_chunk_pq_table.inflate_vector(&base_vec);
         assert_eq!(inflate_vector.len(), DIM);
-        assert_eq!(inflate_vector[0], pivots[(3, 0)]);
-        assert_eq!(inflate_vector[1], pivots[(3, 1)]);
-        assert_eq!(inflate_vector[127], pivots[(3, 127)]);
+        assert_eq!(inflate_vector[0], *pivots.element(3, 0));
+        assert_eq!(inflate_vector[1], *pivots.element(3, 1));
+        assert_eq!(inflate_vector[127], *pivots.element(3, 127));
     }
 
     #[test]

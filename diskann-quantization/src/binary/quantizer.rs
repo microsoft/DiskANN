@@ -142,8 +142,8 @@ mod tests {
         // Fill the test patterns randomly.
         for col in 0..len {
             domain.shuffle(rng);
-            for row in 0..test_pattern.nrows() {
-                test_pattern[(row, col)] = domain[row];
+            for (row, d) in std::iter::zip(test_pattern.row_iter_mut(), domain) {
+                row[col] = d;
             }
         }
 
