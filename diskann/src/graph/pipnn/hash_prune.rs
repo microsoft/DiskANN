@@ -807,7 +807,6 @@ impl HashPrune {
     }
 
     /// Consume the reservoirs and return at most `max_degree` nearest IDs per point.
-    #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
     pub(crate) fn into_nearest_lists(self, max_degree: usize) -> Vec<AdjacencyList<u32>> {
         let row_stride = self.row_stride;
         drop(self.sketches);
@@ -861,7 +860,6 @@ impl HashPrune {
     }
 
     /// Consume the reservoirs and return all retained IDs without sorting them.
-    #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
     pub(crate) fn into_candidate_lists(self) -> Vec<AdjacencyList<u32>> {
         let cap = self.l_max;
         let row_stride = self.row_stride;

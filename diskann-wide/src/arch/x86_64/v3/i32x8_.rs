@@ -17,8 +17,8 @@ use crate::{
     constant::Const,
     helpers,
     traits::{
-        SIMDAbs, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
-        SIMDSumTree, SIMDVector,
+        SIMDAbs, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+        SIMDSelect, SIMDSumTree, SIMDVector,
     },
 };
 
@@ -62,6 +62,20 @@ impl SIMDMulAdd for i32x8 {
     #[inline(always)]
     fn mul_add_simd(self, rhs: Self, accumulator: Self) -> Self {
         self * rhs + accumulator
+    }
+}
+
+impl SIMDMinMax for i32x8 {
+    #[inline(always)]
+    fn min_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm256_min_epi32` requires AVX2, which is implied by the V3 architecture.
+        Self(unsafe { _mm256_min_epi32(self.0, rhs.0) })
+    }
+
+    #[inline(always)]
+    fn max_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm256_max_epi32` requires AVX2, which is implied by the V3 architecture.
+        Self(unsafe { _mm256_max_epi32(self.0, rhs.0) })
     }
 }
 
@@ -297,6 +311,7 @@ mod test_x86_i32 {
     test_utils::ops::test_mul!(i32x8, 0x0ad0524dc17b747a, V3::new_checked_uncached());
     test_utils::ops::test_fma!(i32x8, 0x277aca15e0552388, V3::new_checked_uncached());
     test_utils::ops::test_abs!(i32x8, 0x62ca26a68c1a238d, V3::new_checked_uncached());
+    test_utils::ops::test_minmax!(i32x8, 0x6d7fc8ed6d852187, V3::new_checked_uncached());
 
     test_utils::ops::test_cmp!(i32x8, 0xdc88c2a44d17c78a, V3::new_checked_uncached());
     test_utils::ops::test_splitjoin!(i32x8 => i32x4, 0x475a19e80c2f3977, V3::new_checked_uncached());

@@ -58,6 +58,7 @@ jobs:
     name: CI gate
     runs-on: ubuntu-latest
     needs:
+      - repo-policy
       - fmt
       - clippy-default-features
       - clippy-features
@@ -85,6 +86,7 @@ jobs:
     name: basic checks
     runs-on: ubuntu-latest
     needs:
+      - repo-policy
       - fmt
       - clippy-default-features
       - clippy-features
@@ -92,6 +94,18 @@ jobs:
       - docs
     steps:
       - run: exit 0
+
+  repo-policy:
+    name: Repository policy checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check license headers for Rust source files
+        run: python3 .github/scripts/check_license_headers.py check
+      - name: Install Rust
+        run: rustup show
+      - name: Check workspace direct dependency versions
+        run: python3 .github/scripts/check_direct_dependency_versions.py --manifest-path Cargo.toml
 
   fmt:
     name: format check
@@ -205,7 +219,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           languages: rust
 
@@ -218,7 +232,7 @@ jobs:
         run: cargo build --workspace --locked --profile test
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           category: "/language:rust"
 
@@ -230,8 +244,8 @@ jobs:
       - name: Install Rust
         run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: "doc --workspace --no-deps"
-        run: cargo doc --locked --workspace --no-deps --features linalg,flatbuffers,experimental_diversity_search
+      - name: "workspace docs (including private items)"
+        run: cargo doc --locked --workspace --no-deps --all-features --document-private-items
         env:
           RUSTDOCFLAGS: -D rustdoc::all
 
@@ -438,7 +452,7 @@ jobs:
         run: rustup show
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-nextest
 
@@ -469,7 +483,7 @@ jobs:
         run: rustup show
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-nextest
 
@@ -499,12 +513,12 @@ jobs:
         run: rustup show && rustup component add llvm-tools-preview
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-llvm-cov
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-nextest
 
@@ -515,7 +529,7 @@ jobs:
           cargo llvm-cov nextest --locked \
             --config "$RUST_CONFIG" \
             --workspace \
-            --features diskann/pipnn \
+            --all-features \
             --lcov --output-path lcov.info
 
       - name: Generate miri code coverage
@@ -527,7 +541,7 @@ jobs:
             --lcov --output-path lcov_miri.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: lcov.info
           fail_ci_if_error: true
@@ -536,7 +550,7 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload miri coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: lcov_miri.info
           fail_ci_if_error: true

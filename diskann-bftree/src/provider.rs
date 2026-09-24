@@ -131,9 +131,9 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// implements the [`CreateQuantProvider`] trait.
 /// ```
 /// use diskann_quantization::{
-///     alloc::{GlobalAllocator, Poly, poly},
+///     alloc::{GlobalAllocator},
 ///     algorithms::TransformKind,
-///     spherical::{iface, SphericalQuantizer, SupportedMetric, PreScale},
+///     spherical::{SphericalQuantizer, SupportedMetric, PreScale},
 /// };
 /// use diskann_utils::views::{Init, Matrix};
 /// use diskann_bftree::provider::{
@@ -148,14 +148,14 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// let dim = 4;
 /// let data = Matrix::new(Init(|| 1.0f32), 4, dim);
 /// let mut rng = StdRng::seed_from_u64(42);
-/// let sq = SphericalQuantizer::train(
+/// let quantizer = SphericalQuantizer::train(
 ///     data.as_view(), TransformKind::Null,
 ///     SupportedMetric::SquaredL2, PreScale::None,
 ///     &mut rng, GlobalAllocator,
-/// ).unwrap();
-/// let imp = iface::Impl::<1>::new(sq).unwrap();
-/// let poly = Poly::new(imp, GlobalAllocator).unwrap();
-/// let quantizer: Poly<dyn iface::Quantizer> = poly!(iface::Quantizer, poly);
+/// )
+/// .unwrap()
+/// .as_quantizer::<1>()
+/// .unwrap();
 ///
 /// let parameters = BfTreeProviderParameters {
 ///     max_points: 5,
@@ -1313,7 +1313,20 @@ where
     Q: AsyncFriendly,
     I: BfTreeId,
 {
+    type SearchAccessor = FullAccessor<'a, T, Q, I>;
+    type SearchAccessorError = Infallible;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a BfTreeProvider<T, Q, I>,
+        context: &'a DefaultContext,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }
@@ -1447,7 +1460,20 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
+    type SearchAccessor = QuantAccessor<'a, T, I>;
+    type SearchAccessorError = ANNError;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a BfTreeProvider<T, QuantVectorProvider, I>,
+        context: &'a DefaultContext,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }

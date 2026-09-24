@@ -73,7 +73,6 @@ impl LshSketches {
 
         #[cfg(not(miri))]
         {
-            #[allow(clippy::disallowed_methods)] // caller installs the complete build in its pool.
             sketches
                 .par_chunks_mut(num_planes)
                 .enumerate()

@@ -110,7 +110,6 @@ pub(crate) fn prune_overfull<T: VectorRepr>(
     let distance = T::distance(metric, Some(data.ncols()));
 
     // The build context supplies the Rayon pool for this terminal operation.
-    #[allow(clippy::disallowed_methods)]
     candidates
         .into_par_iter()
         .enumerate()

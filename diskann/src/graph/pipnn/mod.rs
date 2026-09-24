@@ -492,11 +492,6 @@ fn config_error(message: impl std::fmt::Display) -> ANNError {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "deterministic test fixture construction must abort on invalid setup"
-)]
 mod build_graph_tests {
     use super::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig, build_graph};
     use crate::graph::config::{self, MaxDegree};
@@ -561,11 +556,6 @@ mod build_graph_tests {
     }
 }
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "deterministic test fixture construction must abort on invalid setup"
-)]
 mod config_tests {
     use super::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig};
     use crate::graph::config::{self, MaxDegree};

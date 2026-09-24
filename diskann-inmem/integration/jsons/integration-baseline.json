@@ -16,7 +16,7 @@
           "preprocess": [],
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
-        "layer": {
+        "representation": {
           "FullPrecision": {
             "data_type": "f32"
           }
@@ -48,7 +48,7 @@
         "append_neighbors": 96949,
         "distance": 2867876,
         "get_neighbors": 352139,
-        "get_vector": 3067092,
+        "get_vector": 2781513,
         "query_distance": 2240744,
         "set_neighbors": 23599,
         "set_vector": 10000
@@ -137,7 +137,7 @@
           "preprocess": [],
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
-        "layer": {
+        "representation": {
           "FullPrecision": {
             "data_type": "f16"
           }
@@ -169,7 +169,7 @@
         "append_neighbors": 96949,
         "distance": 2867876,
         "get_neighbors": 352139,
-        "get_vector": 3067092,
+        "get_vector": 2781513,
         "query_distance": 2240744,
         "set_neighbors": 23599,
         "set_vector": 10000
@@ -258,7 +258,7 @@
           "preprocess": [],
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
-        "layer": {
+        "representation": {
           "FullPrecision": {
             "data_type": "u8"
           }
@@ -290,7 +290,7 @@
         "append_neighbors": 96949,
         "distance": 2867876,
         "get_neighbors": 352139,
-        "get_vector": 3067092,
+        "get_vector": 2781513,
         "query_distance": 2240744,
         "set_neighbors": 23599,
         "set_vector": 10000
@@ -382,7 +382,7 @@
           ],
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
-        "layer": {
+        "representation": {
           "FullPrecision": {
             "data_type": "i8"
           }
@@ -414,7 +414,7 @@
         "append_neighbors": 97055,
         "distance": 2867292,
         "get_neighbors": 352087,
-        "get_vector": 3064106,
+        "get_vector": 2778779,
         "query_distance": 2238420,
         "set_neighbors": 23587,
         "set_vector": 10000
