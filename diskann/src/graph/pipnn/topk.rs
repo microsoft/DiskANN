@@ -342,8 +342,11 @@ fn offer_each(
 /// cost 11% of leaf ranking time.
 #[inline(always)]
 fn load_group<A: Simd>(arch: A, group: &[f32; LANES]) -> A::Vector {
-    // SAFETY: `group` holds exactly `LANES` readable values, and `A::Vector` has
-    // `LANES` lanes, so the load reads only `group`.
+    // A vector with more lanes than `LANES` would read past `group`. Both sides are
+    // constants, so release builds remove this check.
+    assert_eq!(A::Vector::LANES, group.len());
+    // SAFETY: the assertion above proves that the load reads exactly the
+    // `group.len()` readable values of `group`.
     unsafe { A::Vector::load_simd(arch, group.as_ptr()) }
 }
 
@@ -474,17 +477,18 @@ mod tests {
 
         impl ArchCheck for SelectionGrid {
             fn check<A: Simd>(&self, arch: A) {
+                let lanes = A::Vector::LANES;
                 let arch_name = std::any::type_name::<A>();
                 // An empty distance row has no matrix form here. The `empty_input` case of
                 // the selection test covers it.
                 for count in [
                     1,
-                    LANES - 1,
-                    LANES,
-                    LANES + 1,
-                    2 * LANES,
-                    2 * LANES + 3,
-                    3 * LANES + 2,
+                    lanes - 1,
+                    lanes,
+                    lanes + 1,
+                    2 * lanes,
+                    2 * lanes + 3,
+                    3 * lanes + 2,
                 ] {
                     // Each pair offers a nearer distance before a farther one. Later pairs
                     // improve on earlier pairs, so a full nearest set must keep lowering
@@ -495,7 +499,7 @@ mod tests {
                     }
                     // k = 1, 2, 3, 8, and 10 use fixed-size nearest sets. The others use
                     // slices.
-                    for k in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, LANES + 1] {
+                    for k in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, lanes + 1] {
                         // Sorting the whole input is independent of the insertion and
                         // k-th distance logic.
                         let mut order: Vec<_> = (0..count).collect();
@@ -562,11 +566,12 @@ mod tests {
 
         impl ArchCheck for FloatBits {
             fn check<A: Simd>(&self, arch: A) {
+                let lanes = A::Vector::LANES;
                 let arch_name = std::any::type_name::<A>();
                 // The first and last lanes of a group, the first lane of the next group,
                 // and the scalar tail.
-                for index in [0, LANES - 1, LANES, 2 * LANES + 1] {
-                    let mut distances = vec![f32::NAN; 2 * LANES + 2];
+                for index in [0, lanes - 1, lanes, 2 * lanes + 1] {
+                    let mut distances = vec![f32::NAN; 2 * lanes + 2];
                     distances[index] = self.distance;
                     let mut output = [Candidate::EMPTY; 2];
 
@@ -634,14 +639,15 @@ mod tests {
 
         impl ArchCheck for PairScanGrid {
             fn check<A: Simd>(&self, arch: A) {
+                let lanes = A::Vector::LANES;
                 let arch_name = std::any::type_name::<A>();
                 for point_count in [
-                    LANES,
-                    LANES + 1,
-                    LANES + 2,
-                    2 * LANES,
-                    2 * LANES + 1,
-                    2 * LANES + 2,
+                    lanes,
+                    lanes + 1,
+                    lanes + 2,
+                    2 * lanes,
+                    2 * lanes + 1,
+                    2 * lanes + 2,
                 ] {
                     // Given: each pair has a distinct integer distance in shuffled order, so
                     // rows see neighbors in an order unrelated to their IDs and no pairs tie.
