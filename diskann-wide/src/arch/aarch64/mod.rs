@@ -607,7 +607,7 @@ mod tests {
 
     #[test]
     fn test_vabdq_u8() {
-        if let Some(arch) = Neon::new_checked() {
+        if let Some(arch) = test_neon() {
             let f = move |x: &[u8], y: &[u8]| {
                 let got = arch
                     .vabdq_u8(
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn test_vabdq_s8() {
-        if let Some(arch) = Neon::new_checked() {
+        if let Some(arch) = test_neon() {
             let f = move |x: &[i8], y: &[i8]| {
                 let got = arch
                     .vabdq_s8(
