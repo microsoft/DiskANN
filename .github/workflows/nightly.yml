@@ -135,3 +135,13 @@ jobs:
         run: cargo +nightly miri nextest run --locked --package diskann-quantization
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+
+      - name: PiPNN top-k group loads
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+        # One selection over two full groups and one pair scan over two full groups
+        # reach all three unsafe group loads in the top-k module.
+        run: |
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib -- \
+            graph::pipnn::topk::tests::selection_returns_distinct_candidates_when_distances_tie \
+            graph::pipnn::topk::tests::a_single_pair_updates_exactly_its_two_endpoints::case_1_finite
