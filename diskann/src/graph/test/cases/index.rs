@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::future::Future;
+
 use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
     graph::{self, AdjacencyList, index::DegreeStats, test::provider as test_provider},
@@ -280,4 +282,96 @@ async fn test_drop_deleted_neighbors_noop() {
         .await
         .unwrap();
     assert_eq!(result, graph::ConsolidateKind::Complete);
+}
+
+fn zero_runtime_block_on<F: Future>(fut: F) -> F::Output {
+    use std::{
+        pin::pin,
+        task::{Context, Poll, Waker},
+        thread,
+    };
+
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    let mut fut = pin!(fut);
+    loop {
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(val) => return val,
+            Poll::Pending => thread::yield_now(),
+        }
+    }
+}
+
+/// End-to-end multi_insert and search running without ANY async runtime.
+///
+/// This serves as an end-to-end proof that the DiskANN core algorithm is fully runtime-agnostic.
+#[test]
+fn test_zero_runtime_multi_insert_and_search() {
+    use std::sync::Arc;
+
+    use diskann_vector::distance::Metric;
+
+    use crate::{
+        graph::{
+            DiskANNIndex,
+            config::{Builder, IntraBatchCandidates, MaxDegree},
+            search::Knn,
+            test::synthetic::Grid,
+        },
+        neighbor::{BackInserter, Neighbor},
+    };
+
+    let grid = Grid::Two;
+    let size = 3;
+    let max_degree = 8;
+    let start_vector = grid.start_point(size);
+
+    let config = test_provider::Config::new(
+        Metric::L2,
+        max_degree,
+        test_provider::StartPoint::new(u32::MAX, start_vector),
+    )
+    .unwrap();
+
+    let provider = test_provider::Provider::new(config);
+    let index_config =
+        Builder::new_with(4, MaxDegree::new(max_degree), 50, Metric::L2.into(), |b| {
+            b.intra_batch_candidates(IntraBatchCandidates::None)
+                .max_minibatch_par(2);
+        })
+        .build()
+        .unwrap();
+
+    let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
+    let strategy = test_provider::Strategy::new();
+    let context = test_provider::Context::new();
+
+    let data = grid.data(size);
+    let batch = Arc::new(data.to_owned());
+    let ids: Arc<[u32]> = (0..data.nrows() as u32).collect();
+
+    // Multi-insert driven entirely by zero_runtime_block_on without any Tokio runtime!
+    zero_runtime_block_on(index.multi_insert::<test_provider::Strategy, _>(
+        strategy.clone(),
+        &context,
+        batch,
+        ids,
+    ))
+    .unwrap();
+
+    // Search query close to node 0
+    let query = data.row(0);
+    let knn = Knn::new(5, None).unwrap();
+    let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+    let stats = zero_runtime_block_on(index.search(
+        knn,
+        &strategy,
+        &context,
+        query,
+        &mut BackInserter::new(neighbors.as_mut_slice()),
+    ))
+    .unwrap();
+
+    assert!(stats.result_count > 0);
+    assert_eq!(*neighbors[0].id(), 0);
 }

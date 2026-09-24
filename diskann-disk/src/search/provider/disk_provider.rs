@@ -110,7 +110,7 @@ where
     type Error = ANNError;
 
     /// Translate an external id to its corresponding internal id.
-    fn to_internal_id(
+    async fn to_internal_id(
         &self,
         _context: &DefaultContext,
         gid: &Self::ExternalId,
@@ -119,7 +119,7 @@ where
     }
 
     /// Translate an internal id its corresponding external id.
-    fn to_external_id(
+    async fn to_external_id(
         &self,
         _context: &DefaultContext,
         id: Self::InternalId,
@@ -2054,6 +2054,21 @@ mod disk_provider_tests {
 
     #[test]
     fn test_disk_search_invalid_input() {
+        use std::{
+            pin::pin,
+            task::{Context, Poll, Waker},
+        };
+
+        fn block_on<F: std::future::Future>(future: F) -> F::Output {
+            let waker = Waker::noop();
+            let mut cx = Context::from_waker(waker);
+            let mut future = pin!(future);
+            match future.as_mut().poll(&mut cx) {
+                Poll::Ready(output) => output,
+                Poll::Pending => panic!("future was not ready immediately"),
+            }
+        }
+
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let ctx = &DefaultContext;
 
@@ -2090,19 +2105,11 @@ mod disk_provider_tests {
 
         // minor validation tests to improve code coverage
         assert_eq!(
-            search_engine
-                .index
-                .data_provider
-                .to_external_id(ctx, 0)
-                .unwrap(),
+            block_on(search_engine.index.data_provider.to_external_id(ctx, 0)).unwrap(),
             0
         );
         assert_eq!(
-            search_engine
-                .index
-                .data_provider
-                .to_internal_id(ctx, &0)
-                .unwrap(),
+            block_on(search_engine.index.data_provider.to_internal_id(ctx, &0)).unwrap(),
             0
         );
 

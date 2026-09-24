@@ -575,7 +575,7 @@ where
     type Guard = NoopGuard<u32>;
 
     /// Translate an external id to its corresponding internal id.
-    fn to_internal_id(
+    async fn to_internal_id(
         &self,
         _context: &Self::Context,
         gid: &Self::ExternalId,
@@ -584,7 +584,7 @@ where
     }
 
     /// Translate an internal id its corresponding external id.
-    fn to_external_id(
+    async fn to_external_id(
         &self,
         _context: &Self::Context,
         id: Self::InternalId,
@@ -760,8 +760,8 @@ mod tests {
 
         let iter = provider.iter();
         for i in iter.clone() {
-            assert_eq!(provider.to_external_id(ctx, i).unwrap(), i);
-            assert_eq!(provider.to_internal_id(ctx, &i).unwrap(), i);
+            assert_eq!(provider.to_external_id(ctx, i).await.unwrap(), i);
+            assert_eq!(provider.to_internal_id(ctx, &i).await.unwrap(), i);
             assert_eq!(
                 provider.status_by_internal_id(ctx, i).await.unwrap(),
                 ElementStatus::Valid

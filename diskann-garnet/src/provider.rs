@@ -66,6 +66,27 @@ const QUANT_STATE_KEY: u32 = u32::from_be_bytes(*b"_qnt");
 /// Starting capacity of the pre-allocated rerank buffers.
 const RERANK_BUFFER_LENGTH: usize = 1024;
 
+/// Drive a future that is known to resolve on its first poll, without a runtime.
+///
+/// All `GarnetProvider` id translations go through Garnet's synchronous callbacks,
+/// so the futures they return never park; this lets the synchronous host entry
+/// points keep their shape after the async `DataProvider` contract.
+pub(crate) fn poll_immediate<F: Future>(future: F) -> F::Output {
+    use std::{
+        pin::pin,
+        task::{Context as TaskContext, Poll, Waker},
+    };
+
+    let waker = Waker::noop();
+    let mut task_cx = TaskContext::from_waker(waker);
+    let mut future = pin!(future);
+    match future.as_mut().poll(&mut task_cx) {
+        Poll::Ready(output) => output,
+        #[expect(clippy::panic)]
+        Poll::Pending => panic!("GarnetProvider futures must resolve in one poll"),
+    }
+}
+
 /// Size hint passed to Garnet when batch reading attributes. Attributes are variable
 /// length, so this is only an estimate used to size Garnet's read buffer.
 const ATTRIBUTE_LENGTH_HINT: usize = 1024;
@@ -474,7 +495,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
     }
 
     pub(crate) fn vector_id_exists(&self, context: &Context, id: &GarnetId) -> bool {
-        let iid = match self.to_internal_id(context, id) {
+        let iid = match poll_immediate(self.to_internal_id(context, id)) {
             Ok(iid) => iid,
             Err(_) => return false,
         };
@@ -747,7 +768,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     // Already considered on an earlier round.
                     continue;
                 }
-                let Ok(eid) = self.to_external_id(context, samp) else {
+                let Ok(eid) = poll_immediate(self.to_external_id(context, samp)) else {
                     // Deleted or otherwise unreadable.
                     continue;
                 };
@@ -774,7 +795,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         context: &Context,
         id: &GarnetId,
     ) -> ANNResult<Vec<Neighbor<GarnetId>>> {
-        let iid = self.to_internal_id(context, id)?;
+        let iid = poll_immediate(self.to_internal_id(context, id))?;
         let v = self.get_full_vector(context, iid)?;
         let mut neighbors = AdjacencyList::with_capacity(self.max_degree + 1);
 
@@ -790,7 +811,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 continue;
             }
             let nbr_v = self.get_full_vector(context, nbr_id)?;
-            let nbr_eid = self.to_external_id(context, nbr_id)?;
+            let nbr_eid = poll_immediate(self.to_external_id(context, nbr_id))?;
             let nbr_d = d.evaluate_similarity(&v, &nbr_v);
             result.push(Neighbor::new(nbr_eid, nbr_d));
         }
@@ -986,7 +1007,7 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
     type Error = GarnetProviderError;
     type Guard = NoopGuard<u32>;
 
-    fn to_internal_id(
+    async fn to_internal_id(
         &self,
         context: &Context,
         gid: &GarnetId,
@@ -1002,7 +1023,11 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
         Ok(id)
     }
 
-    fn to_external_id(&self, context: &Context, id: u32) -> Result<Self::ExternalId, Self::Error> {
+    async fn to_external_id(
+        &self,
+        context: &Context,
+        id: u32,
+    ) -> Result<Self::ExternalId, Self::Error> {
         match self
             .callbacks
             .read_varsize_iid(&context.term(Term::ExtMap), id)
@@ -1107,7 +1132,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         context: &Context,
         gid: &GarnetId,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        let id = match self.to_internal_id(context, gid) {
+        let id = match poll_immediate(self.to_internal_id(context, gid)) {
             Ok(id) => id,
             Err(e) => return future::ready(Err(e)),
         };
@@ -1175,7 +1200,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         context: &Self::Context,
         gid: &Self::ExternalId,
     ) -> Result<diskann::provider::ElementStatus, Self::Error> {
-        let id = self.to_internal_id(context, gid)?;
+        let id = self.to_internal_id(context, gid).await?;
         self.status_by_internal_id(context, id).await
     }
 }
@@ -1471,10 +1496,11 @@ impl<'a, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &[T], GarnetId
     {
         let initial = output.current_len();
         for n in candidates {
-            let id = match accessor.provider.to_external_id(accessor.context, *n.id()) {
-                Ok(id) => id,
-                Err(_) => continue, // Can't read the mapping; skip.
-            };
+            let id =
+                match poll_immediate(accessor.provider.to_external_id(accessor.context, *n.id())) {
+                    Ok(id) => id,
+                    Err(_) => continue, // Can't read the mapping; skip.
+                };
 
             if output.push(Neighbor::new(id, *n.distance())).is_full() {
                 break;
@@ -2071,6 +2097,7 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for DynamicQuantiza
 mod tests {
     use std::mem;
 
+    use crate::wrapped_async::DiskANNIndex;
     use diskann::{
         graph::{
             config::{self, defaults::GRAPH_SLACK_FACTOR},
@@ -2078,7 +2105,6 @@ mod tests {
         },
         provider::{Delete, SetElement},
     };
-    use diskann_providers::index::wrapped_async::DiskANNIndex;
     use diskann_vector::distance::Metric;
     use rand::Rng;
 
