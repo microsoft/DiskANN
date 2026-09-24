@@ -29,11 +29,33 @@
 //! These functions return the **mathematical** value of each metric. Any similarity-score
 //! transform (inner product `x -> -x`, cosine `x -> 1 - x`) is applied by the caller.
 
+use crate::conversion::CastFromSlice;
 use crate::{norm::FastL2Norm, Half};
 use diskann_wide::arch::dispatch1;
 
 /// Squared-norm floor below which a vector is treated as having zero norm for cosine.
 const NORM_LIMIT: f32 = f32::MIN_POSITIVE;
+
+/// True when two sorted, unique index arrays cannot share any index (either is empty, or their
+/// `[min, max]` ranges don't overlap).
+#[inline]
+fn disjoint_ranges(x_idx: &[u16], y_idx: &[u16]) -> bool {
+    x_idx.is_empty()
+        || y_idx.is_empty()
+        || x_idx[x_idx.len() - 1] < y_idx[0]
+        || y_idx[y_idx.len() - 1] < x_idx[0]
+}
+
+/// Widen both f16 operands into a single f32 buffer (`x` then `y`) using the dispatched SIMD
+/// slice conversion. One allocation; caller splits at `x_val.len()`.
+#[inline]
+fn widen_pair(x_val: &[Half], y_val: &[Half]) -> Vec<f32> {
+    let mut buf = vec![0.0f32; x_val.len() + y_val.len()];
+    let (xf, yf) = buf.split_at_mut(x_val.len());
+    xf.cast_from_slice(x_val);
+    yf.cast_from_slice(y_val);
+    buf
+}
 
 //////////////////////////////
 // Scalar merge kernels     //
@@ -48,11 +70,7 @@ fn merge_dot(
     yv: impl Fn(usize) -> f64,
 ) -> f64 {
     // Disjoint-range fast-out: sorted arrays cannot intersect if their ranges don't touch.
-    if x_idx.is_empty()
-        || y_idx.is_empty()
-        || x_idx[x_idx.len() - 1] < y_idx[0]
-        || y_idx[y_idx.len() - 1] < x_idx[0]
-    {
+    if disjoint_ranges(x_idx, y_idx) {
         return 0.0;
     }
 
@@ -62,7 +80,7 @@ fn merge_dot(
         let a = x_idx[i];
         let b = y_idx[j];
         if a == b {
-            acc += xv(i) * yv(j);
+            acc = xv(i).mul_add(yv(j), acc);
             i += 1;
             j += 1;
         } else if a < b {
@@ -90,27 +108,27 @@ fn merge_l2_sq(
         let b = y_idx[j];
         if a == b {
             let d = xv(i) - yv(j);
-            acc += d * d;
+            acc = d.mul_add(d, acc);
             i += 1;
             j += 1;
         } else if a < b {
             let v = xv(i);
-            acc += v * v;
+            acc = v.mul_add(v, acc);
             i += 1;
         } else {
             let v = yv(j);
-            acc += v * v;
+            acc = v.mul_add(v, acc);
             j += 1;
         }
     }
     while i < x_idx.len() {
         let v = xv(i);
-        acc += v * v;
+        acc = v.mul_add(v, acc);
         i += 1;
     }
     while j < y_idx.len() {
         let v = yv(j);
-        acc += v * v;
+        acc = v.mul_add(v, acc);
         j += 1;
     }
     acc
@@ -158,42 +176,38 @@ pub fn cosine_f32(x_idx: &[u16], x_val: &[f32], y_idx: &[u16], y_val: &[f32]) ->
 // f16 kernels              //
 //////////////////////////////
 
-/// `sqrt(Σ (x_i − y_i)²)` for f16 operands (values promoted to f32).
+/// `sqrt(Σ (x_i − y_i)²)` for f16 operands; values are pre-widened to f32, then reuse the f32
+/// union merge.
 #[inline]
 pub fn l2_f16(x_idx: &[u16], x_val: &[Half], y_idx: &[u16], y_val: &[Half]) -> f32 {
-    merge_l2_sq(
-        x_idx,
-        y_idx,
-        |i| x_val[i].to_f32() as f64,
-        |j| y_val[j].to_f32() as f64,
-    )
-    .sqrt() as f32
+    let buf = widen_pair(x_val, y_val);
+    let (xf, yf) = buf.split_at(x_val.len());
+    l2_f32(x_idx, xf, y_idx, yf)
 }
 
-/// `Σ x·y` over matching indices for f16 operands (values promoted to f32).
+/// `Σ x·y` over matching indices for f16 operands; a disjoint-range fast-out skips widening
+/// when the operands cannot intersect.
 #[inline]
 pub fn inner_product_f16(x_idx: &[u16], x_val: &[Half], y_idx: &[u16], y_val: &[Half]) -> f32 {
-    merge_dot(
-        x_idx,
-        y_idx,
-        |i| x_val[i].to_f32() as f64,
-        |j| y_val[j].to_f32() as f64,
-    ) as f32
+    if disjoint_ranges(x_idx, y_idx) {
+        return 0.0;
+    }
+    let buf = widen_pair(x_val, y_val);
+    let (xf, yf) = buf.split_at(x_val.len());
+    inner_product_f32(x_idx, xf, y_idx, yf)
 }
 
-/// Cosine similarity for f16 operands, clamped to `[-1, 1]`; `0` when either norm
-/// underflows. Norms reuse [`crate::norm::FastL2Norm`].
+/// Cosine similarity for f16 operands, clamped to `[-1, 1]`; `0` when either norm underflows or
+/// the operands are disjoint. Values are pre-widened once and reused for the numerator and both
+/// norms.
 #[inline]
 pub fn cosine_f16(x_idx: &[u16], x_val: &[Half], y_idx: &[u16], y_val: &[Half]) -> f32 {
-    let dot = merge_dot(
-        x_idx,
-        y_idx,
-        |i| x_val[i].to_f32() as f64,
-        |j| y_val[j].to_f32() as f64,
-    );
-    let nx = dispatch1(FastL2Norm, x_val);
-    let ny = dispatch1(FastL2Norm, y_val);
-    cosine_from_parts(dot, nx, ny)
+    if disjoint_ranges(x_idx, y_idx) {
+        return 0.0;
+    }
+    let buf = widen_pair(x_val, y_val);
+    let (xf, yf) = buf.split_at(x_val.len());
+    cosine_f32(x_idx, xf, y_idx, yf)
 }
 
 //////////////////////////////
@@ -204,6 +218,7 @@ pub fn cosine_f16(x_idx: &[u16], x_val: &[Half], y_idx: &[u16], y_val: &[Half]) 
 mod test {
     use super::*;
 
+    use diskann_wide::cast_f16_to_f32;
     use rand::{
         distr::{Distribution, Uniform},
         rngs::StdRng,
@@ -266,7 +281,7 @@ mod test {
         let mut idx = Vec::new();
         let mut val = Vec::new();
         for (i, &x) in v.iter().enumerate() {
-            if x.to_f32() != 0.0 {
+            if cast_f16_to_f32(x) != 0.0 {
                 idx.push(i as u16);
                 val.push(x);
             }
@@ -319,8 +334,8 @@ mod test {
         let yi = [0u16, 3, 4, 7, 12, 15];
         let yv = to_f16(&[1.0, 2.0, -0.5, 4.0, 1.25, -2.0]);
 
-        let xvf: Vec<f32> = xv.iter().map(|h| h.to_f32()).collect();
-        let yvf: Vec<f32> = yv.iter().map(|h| h.to_f32()).collect();
+        let xvf: Vec<f32> = xv.iter().map(|h| cast_f16_to_f32(*h)).collect();
+        let yvf: Vec<f32> = yv.iter().map(|h| cast_f16_to_f32(*h)).collect();
         let da = dense(&xi, &xvf, dim);
         let db = dense(&yi, &yvf, dim);
 
@@ -417,8 +432,8 @@ mod test {
                 let y = to_f16(&yf);
                 let (xi, xv) = to_sparse_f16(&x);
                 let (yi, yv) = to_sparse_f16(&y);
-                let da: Vec<f64> = x.iter().map(|v| v.to_f32() as f64).collect();
-                let db: Vec<f64> = y.iter().map(|v| v.to_f32() as f64).collect();
+                let da: Vec<f64> = x.iter().map(|v| cast_f16_to_f32(*v) as f64).collect();
+                let db: Vec<f64> = y.iter().map(|v| cast_f16_to_f32(*v) as f64).collect();
 
                 let l2 = l2_f16(&xi, &xv, &yi, &yv);
                 assert!(

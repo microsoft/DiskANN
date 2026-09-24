@@ -36,7 +36,7 @@ pub mod contains;
 pub mod conversion;
 pub mod distance;
 pub mod norm;
-pub mod sparsevector;
+pub mod sparse;
 
 cfg_if::cfg_if! {
     if #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] {
