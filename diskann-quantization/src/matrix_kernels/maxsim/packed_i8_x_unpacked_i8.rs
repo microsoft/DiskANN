@@ -6,7 +6,7 @@
 //! The integer counterpart of [`super::packed_f32_x_unpacked_f32`], accumulating in `i32`.
 //!
 //! The blocking strategy is identical. The difference is that `a` interleaves `PACK`
-//! consecutive contraction indices within each packed row so that a single lane of the
+//! consecutive contraction indices within each pack so that a single lane of the
 //! widening dot-product instructions consumes `PACK` products at a time. `PACK` is chosen
 //! per architecture to match the instruction used.
 //!
@@ -392,7 +392,7 @@ unsafe fn group<const PACK: usize>(ptr: Slice<'_, i8>, valid: usize) -> [i8; PAC
     })
 }
 
-/// Accumulate one packed row of `a`, held in `ai`, against every column of `b`, whose
+/// Accumulate one pack of `a`, held in `ai`, against every column of `b`, whose
 /// contraction offset `bp` already points at.
 ///
 /// # Safety
@@ -400,7 +400,7 @@ unsafe fn group<const PACK: usize>(ptr: Slice<'_, i8>, valid: usize) -> [i8; PAC
 /// `valid` must not exceed `PACK`, and for every `j < NR` the first `valid` elements at
 /// `bp.add(bstride * j)` must be readable.
 #[inline(always)]
-unsafe fn accumulate_row<W, const MR: usize, const NR: usize, const PACK: usize>(
+unsafe fn accumulate_pack<W, const MR: usize, const NR: usize, const PACK: usize>(
     wide: W,
     ai: W::Wide,
     bp: Slice<'_, i8>,
@@ -442,34 +442,34 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize, const PACK: usize>(
 
     let mut acc = [wide.default(); NR];
 
-    let astride = a.row_stride();
+    let astride = a.pack_stride();
     let bstride = b.stride(k);
 
-    let rows = a.rows(k);
+    let packs = a.packs(k);
     let k = k.value().get();
 
-    // Loads the packed row `row` of `a`, which callers must keep below `rows`.
+    // Loads pack `pack` of `a`, which callers must keep below `packs`.
     //
-    // SAFETY: By preconditions, `ap.len() == astride * rows`. Since `row < rows`:
+    // SAFETY: By preconditions, `ap.len() == astride * packs`. Since `pack < packs`:
     //
     // * The pointer offset is valid.
     // * The subsequent truncation is valid.
     // * The slice passed to `wide.load` has a length equal to `astride`.
-    let load = |row| unsafe { wide.load(ap.add(astride * row).truncate(astride)) };
+    let load = |pack| unsafe { wide.load(ap.add(astride * pack).truncate(astride)) };
 
-    // Rows whose group lies entirely within `k`. Peeling the trailing partial group keeps
+    // Packs whose group lies entirely within `k`. Peeling the trailing partial group keeps
     // `valid` constant here, folding away the zero-fill branch in `group` on the hot path.
     let full = k / PACK;
 
-    for row in 0..full {
-        let i = row * PACK;
+    for pack in 0..full {
+        let i = pack * PACK;
 
-        // SAFETY: `row < full <= rows`, and since `i + PACK <= k`, every column of `b` has
+        // SAFETY: `pack < full <= packs`, and since `i + PACK <= k`, every column of `b` has
         // `PACK` readable elements at offset `i`.
         unsafe {
-            accumulate_row(
+            accumulate_pack(
                 wide,
-                load(row),
+                load(pack),
                 bp.add(Elements::new(i)),
                 bstride,
                 PACK,
@@ -478,15 +478,15 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize, const PACK: usize>(
         };
     }
 
-    // The trailing row of `a` is zero padded, so zero filling `b` past `k` keeps every
+    // The trailing pack of `a` is zero padded, so zero filling `b` past `k` keeps every
     // padded product at zero.
-    if full < rows {
+    if full < packs {
         let i = full * PACK;
 
-        // SAFETY: `full < rows`, and every column of `b` has `k - i` readable elements at
+        // SAFETY: `full < packs`, and every column of `b` has `k - i` readable elements at
         // offset `i`.
         unsafe {
-            accumulate_row(
+            accumulate_pack(
                 wide,
                 load(full),
                 bp.add(Elements::new(i)),

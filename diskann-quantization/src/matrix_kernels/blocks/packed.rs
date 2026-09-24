@@ -25,8 +25,8 @@ fn padded_k<const PACK: usize>(k: usize) -> usize {
 /// Elements are gathered into groups of size `SZ`. A collection of `self.k` groups forms
 /// a "block". `self.blocks` tracks how many such blocks are in the view.
 ///
-/// `PACK` interleaves that many consecutive columns within each group, so one physical row
-/// spans `SZ * PACK` elements. `k` stays the logical dimension; a trailing row that `PACK`
+/// `PACK` interleaves that many consecutive columns within each group, so one pack spans
+/// `SZ * PACK` elements. `k` stays the logical dimension; a trailing pack that `PACK`
 /// does not fill is zero-padded.
 ///
 /// This layout requires that no block is partially filled.
@@ -246,7 +246,7 @@ impl<T, const SZ: usize, const PACK: usize> View<'_, T, SZ, PACK> {
 
 /// A block containing `k` contiguous groups of size `SZ`.
 ///
-/// `PACK` consecutive groups are interleaved into one physical row of `SZ * PACK` elements.
+/// `PACK` consecutive groups are interleaved into one pack of `SZ * PACK` elements.
 ///
 /// # Class Invariants
 ///
@@ -289,15 +289,15 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
         self.k
     }
 
-    /// Return the number of elements spanned by one physical row.
-    pub(in crate::matrix_kernels) const fn row_stride(&self) -> Elements<T> {
+    /// Return the number of elements spanned by one pack.
+    pub(in crate::matrix_kernels) const fn pack_stride(&self) -> Elements<T> {
         Elements::new(SZ * PACK)
     }
 
-    /// Return the number of physical rows in `self`.
+    /// Return the number of packs in `self`.
     ///
     /// `k` must be equal to the contraction dimension tracked by [`Self::k`].
-    pub(in crate::matrix_kernels) fn rows(&self, k: DimK) -> usize {
+    pub(in crate::matrix_kernels) fn packs(&self, k: DimK) -> usize {
         bounds::check_eq!(self.k, k.value());
         padded_k::<PACK>(k.value().get()) / PACK
     }
@@ -366,8 +366,8 @@ mod tests {
 
         view.checked_visit_panels(|panel, block| {
             assert_eq!(block, blocks, "{ctx}");
-            assert_eq!(panel.rows(dim_k), padded / PACK, "{ctx}");
-            assert_eq!(panel.row_stride().value(), SZ * PACK, "{ctx}");
+            assert_eq!(panel.packs(dim_k), padded / PACK, "{ctx}");
+            assert_eq!(panel.pack_stride().value(), SZ * PACK, "{ctx}");
 
             let flat = panel.checked_as_std_slice();
             assert_eq!(flat.len(), SZ * padded, "{ctx}");

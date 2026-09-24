@@ -5,7 +5,10 @@
 
 use diskann_utils::views::{Init, Matrix};
 use half::f16;
-use rand::{Rng, distr::Distribution};
+use rand::{
+    Rng,
+    distr::{Distribution, StandardUniform},
+};
 
 ///////////////////////
 // panic_message_for //
@@ -66,7 +69,7 @@ impl Distribution<f32> for TestDistr {
 
 impl Distribution<i8> for TestDistr {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> i8 {
-        rng.random_range(i8::MIN..=i8::MAX)
+        StandardUniform {}.sample(rng)
     }
 }
 
