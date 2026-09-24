@@ -732,6 +732,7 @@ where
                 }
             };
 
+            let mut dispatch_err = None;
             for result in spawned {
                 match result {
                     Ok(Ok(mut v)) => next.append(&mut v),
@@ -739,8 +740,16 @@ where
                         next.append(&mut v);
                         tracked_error!("bootstrap task failed: {}", err);
                     }
-                    Err(err) => tracked_error!("bootstrap task failed: {}", err),
+                    Err(err) => {
+                        tracked_error!("bootstrap task dispatch failed: {}", err);
+                        if dispatch_err.is_none() {
+                            dispatch_err = Some(err);
+                        }
+                    }
                 }
+            }
+            if let Some(err) = dispatch_err {
+                return Err(err);
             }
             Ok(next)
         }
@@ -906,6 +915,7 @@ where
                 }
             };
 
+            let mut dispatch_err = None;
             for result in spawned {
                 match result {
                     Ok(Ok(mut v)) => edges.append(&mut v),
@@ -913,8 +923,16 @@ where
                         edges.append(&mut v);
                         tracked_error!("search_prune_and_search failed: {}", err);
                     }
-                    Err(err) => tracked_error!("search_prune_and_search failed: {}", err),
+                    Err(err) => {
+                        tracked_error!("search_prune_and_search dispatch failed: {}", err);
+                        if dispatch_err.is_none() {
+                            dispatch_err = Some(err);
+                        }
+                    }
                 }
+            }
+            if let Some(err) = dispatch_err {
+                return Err(err);
             }
 
             let mut backedges = aggregate_backedges(&edges);
@@ -1017,13 +1035,23 @@ where
                 .collect();
 
             let results = join_all(handles).await;
+            let mut dispatch_err = None;
             for result in results {
                 match result {
-                    Err(err) | Ok(Err(err)) => {
+                    Err(err) => {
+                        tracked_error!("add_edge_and_prune task dispatch failed: {}", err);
+                        if dispatch_err.is_none() {
+                            dispatch_err = Some(err);
+                        }
+                    }
+                    Ok(Err(err)) => {
                         tracked_error!("Error in `add_edge_and_prune`: {}", err);
                     }
                     Ok(Ok(())) => {}
                 }
+            }
+            if let Some(err) = dispatch_err {
+                return Err(err);
             }
 
             // Indicate the batch as complete.
@@ -1404,6 +1432,7 @@ where
                 );
                 let mut edge_hashmaps = Vec::with_capacity(chunk.len());
 
+                let mut dispatch_err = None;
                 for output in edge_collection {
                     match output {
                         Ok(Ok(edges)) => {
@@ -1412,13 +1441,25 @@ where
                             }
                             edge_hashmaps.push(edges);
                         }
-                        Ok(Err(err)) | Err(err) => {
+                        Ok(Err(err)) => {
                             tracked_error!(
-                                "inplace_delete task failed in multi_inplace_delete: {}",
+                                "inplace_delete returned error in multi_inplace_delete: {}",
                                 err
                             );
                         }
+                        Err(err) => {
+                            tracked_error!(
+                                "inplace_delete task dispatch failed in multi_inplace_delete: {}",
+                                err
+                            );
+                            if dispatch_err.is_none() {
+                                dispatch_err = Some(err);
+                            }
+                        }
                     }
+                }
+                if let Some(err) = dispatch_err {
+                    return Err(err);
                 }
 
                 // next, insert and prune, adding the option to remove all the deleted neighbors
@@ -1488,13 +1529,23 @@ where
 
                 // Wait for all tasks to complete.
                 let results = join_all(tasks).await;
+                let mut dispatch_err = None;
                 for result in results {
                     match result {
-                        Err(e) | Ok(Err(e)) => {
+                        Err(e) => {
+                            tracked_error!("add_edge_and_prune task dispatch failed: {}", e);
+                            if dispatch_err.is_none() {
+                                dispatch_err = Some(e);
+                            }
+                        }
+                        Ok(Err(e)) => {
                             tracked_error!("Error in add_edge_and_prune: {}", e);
                         }
                         Ok(Ok(())) => {}
                     }
+                }
+                if let Some(err) = dispatch_err {
+                    return Err(err);
                 }
 
                 // finally, drop each deleted neighbor's edges, this can run sequentially
