@@ -64,8 +64,8 @@ mental models.
 ### question-new-crates `MAJOR`
 
 **Question new top-level crates.**
-New top-level crates should be added with great care. When adding new features to the repo consider the following mental 
-model on where they should be placed: 
+New top-level crates should be added with great care. When adding new features to the repo consider the following mental
+model on where they should be placed:
 1. Can the feature be added without a feature gate and without significantly impacting (1) transitive dependencies, (2) compile times, (3) API surface? If so, do that.
 2. If a feature benefits greatly from existing internals and is cleanly additive, use a feature gate.
 3. Make new crates as a last resort.
@@ -221,12 +221,12 @@ Silent truncation is a recurring source of ID-space bugs. Treat narrowing as con
 ---
 
 ## 3. Unsafe code
-### unsafe-code-should-be-tested-with-miri `MAJOR` 
+### unsafe-code-should-be-tested-with-miri `MAJOR`
 
-**All unsafe code should be miri tested.** 
-Unsafe code should be tested under cargo miri thoroughly to make sure there is no UB. 
+**All unsafe code should be miri tested.**
+Unsafe code should be tested under cargo miri thoroughly to make sure there is no UB.
 
-### invariants-for-unsafe-should-be-checked `MAJOR` 
+### invariants-for-unsafe-should-be-checked `MAJOR`
 
 **Invariants that unsafe code relies on should be explicitly checked in some way and should not be implicit.**
 More specifically, on invariants:
@@ -236,7 +236,7 @@ More specifically, on invariants:
 - Invariants must not depend on generic arguments implementing safe traits responsibly. Assume pathological cases exist. For example:
      - T: Deref<Target = &[f32]>: Unsafe code cannot rely on the same slice being returned on every deref for a generic T.
      - ExactSizeIterator: Implementations can by incorrect and the trait explicitly documents this.
-Either restructure the code to remove this dependence or make the necessary trait unsafe. 
+Either restructure the code to remove this dependence or make the necessary trait unsafe.
 
 ### safety-comment-required `BLOCK`
 
@@ -462,8 +462,8 @@ Coverage percentage is not proof. Verify the branch/heuristic under test is reac
 > that a single run with 8 threads might not be enough to surface non-determinism reliably." — #1158,
 > @harsha-simhadri
 
-### invest-in-test-infra `MAJOR` 
-Instead of repeating yourself in unit/integration testing, build clean, reproducible test infra. 
+### invest-in-test-infra `MAJOR`
+Instead of repeating yourself in unit/integration testing, build clean, reproducible test infra.
 
 ### test-unhappy-and-legacy-paths `MAJOR`
 
@@ -549,7 +549,7 @@ bloat and build-time impact.
 ### license-header `BLOCK`
 
 **License header on every new file.**
-We want License on new code, we can skip data files, test inputs or Markdown files. 
+We want License on new code, we can skip data files, test inputs or Markdown files.
 ```rust
 /*
  * Copyright (c) Microsoft Corporation.

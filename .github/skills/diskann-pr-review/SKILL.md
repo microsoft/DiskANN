@@ -6,7 +6,7 @@ description: Review pull requests, diffs, or staged changes in the DiskANN Rust 
 # DiskANN PR Review
 
 Review changes the way DiskANN maintainers actually review them. This skill encodes patterns
-distilled from the review history of merged PRs, the repo's own written conventions and judgements/values 
+distilled from the review history of merged PRs, the repo's own written conventions and judgements/values
 from the core contributors to the repo.
 
 **Companion file:** [rules.md](rules.md) — the full rule catalog with rationale and evidence. Read
