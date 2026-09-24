@@ -29,6 +29,7 @@ panic = "warn"
 uninlined_format_args = "allow"
 
 [dev-dependencies]
+diskann-utils = { workspace = true, features = ["testing"] }
 cfg-if = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

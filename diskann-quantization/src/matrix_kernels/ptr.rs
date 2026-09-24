@@ -315,7 +315,9 @@ const _: () = assert!(
 mod tests {
     use super::*;
 
-    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
+    use diskann_utils::assert_contains;
+
+    use crate::matrix_kernels::test_util::panic_message_for;
 
     #[test]
     fn test_slice() {
