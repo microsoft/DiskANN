@@ -8,6 +8,9 @@
 use diskann_benchmark_runner::reflect;
 
 fn main() -> anyhow::Result<()> {
-    println!("{}", reflect::reflect::<reflect::Test>().reflect());
+    println!("{}", reflect::reflect::<reflect::Test>().render());
+
+    println!("{}", reflect::reflect::<reflect::Test2>().render());
+
     Ok(())
 }

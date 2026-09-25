@@ -77,11 +77,14 @@ fn process_struct(input: &DeriveInput, s: &syn::DataStruct) -> proc_macro2::Toke
                 impl #impl_generics #path::Reflect for #type_name #ty_generics #where_clause {
                     fn reflect() -> #path::Type {
                         #path::Type::aggregate(
-                            #type_name_str,
                             #type_id,
                             #path::Fields::Named(vec![#(#fields),*]),
                             #doc,
                         )
+                    }
+
+                    fn type_name(f: &mut dyn ::std::fmt::Write) -> ::std::fmt::Result {
+                        f.write_str(#type_name_str)
                     }
                 }
             }
