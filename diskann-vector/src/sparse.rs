@@ -23,8 +23,8 @@
 //!   array).
 //! * **L2** — direct union merge of squared differences, `sqrt(Σ (x_i − y_i)²)`.
 //!
-//! Accumulation is in `f64` for numerical precision. The merge is scalar. A disjoint-range
-//! fast-out skips the intersection merge when the two index ranges cannot overlap.
+//! Accumulation is in `f32`. The merge is scalar. A disjoint-range fast-out skips the
+//! intersection merge when the two index ranges cannot overlap.
 //!
 //! These functions return the **mathematical** value of each metric. Any similarity-score
 //! transform (inner product `x -> -x`, cosine `x -> 1 - x`) is applied by the caller.
@@ -101,20 +101,20 @@ fn pairs<'a>(idx: &'a [u16], val: &'a [f32]) -> impl Iterator<Item = (u16, f32)>
 // Scalar merge kernels     //
 //////////////////////////////
 
-/// Intersection merge: `Σ x·y` over matching indices, accumulated in `f64`. `O(nnz_x + nnz_y)`.
+/// Intersection merge: `Σ x·y` over matching indices, accumulated in `f32`. `O(nnz_x + nnz_y)`.
 #[inline]
-fn merge_dot<I, J>(mut x: I, mut y: J) -> f64
+fn merge_dot<I, J>(mut x: I, mut y: J) -> f32
 where
     I: Iterator<Item = (u16, f32)>,
     J: Iterator<Item = (u16, f32)>,
 {
-    let mut acc = 0.0f64;
+    let mut acc = 0.0f32;
     let mut a = x.next();
     let mut b = y.next();
     while let (Some((ai, av)), Some((bi, bv))) = (a, b) {
         match ai.cmp(&bi) {
             Ordering::Equal => {
-                acc = (av as f64).mul_add(bv as f64, acc);
+                acc = av.mul_add(bv, acc);
                 a = x.next();
                 b = y.next();
             }
@@ -125,45 +125,41 @@ where
     acc
 }
 
-/// Direct union merge for squared L2: `Σ (x_i − y_i)²`, accumulated in `f64`; an index present
+/// Direct union merge for squared L2: `Σ (x_i − y_i)²`, accumulated in `f32`; an index present
 /// on only one side contributes `v²`. `O(nnz_x + nnz_y)`.
 #[inline]
-fn merge_l2_sq<I, J>(mut x: I, mut y: J) -> f64
+fn merge_l2_sq<I, J>(mut x: I, mut y: J) -> f32
 where
     I: Iterator<Item = (u16, f32)>,
     J: Iterator<Item = (u16, f32)>,
 {
-    let mut acc = 0.0f64;
+    let mut acc = 0.0f32;
     let mut a = x.next();
     let mut b = y.next();
     loop {
         match (a, b) {
             (Some((ai, av)), Some((bi, bv))) => match ai.cmp(&bi) {
                 Ordering::Equal => {
-                    let d = av as f64 - bv as f64;
+                    let d = av - bv;
                     acc = d.mul_add(d, acc);
                     a = x.next();
                     b = y.next();
                 }
                 Ordering::Less => {
-                    let v = av as f64;
-                    acc = v.mul_add(v, acc);
+                    acc = av.mul_add(av, acc);
                     a = x.next();
                 }
                 Ordering::Greater => {
-                    let v = bv as f64;
-                    acc = v.mul_add(v, acc);
+                    acc = bv.mul_add(bv, acc);
                     b = y.next();
                 }
             },
             (Some((_, av)), None) => {
-                let v = av as f64;
-                acc = v.mul_add(v, acc);
+                acc = av.mul_add(av, acc);
                 a = x.next();
             }
             (None, Some((_, bv))) => {
-                let v = bv as f64;
-                acc = v.mul_add(v, acc);
+                acc = bv.mul_add(bv, acc);
                 b = y.next();
             }
             (None, None) => break,
@@ -175,11 +171,11 @@ where
 /// Cosine of the angle from the numerator `dot` and the two operand norms; `0` when either
 /// squared norm underflows [`NORM_LIMIT`], otherwise the ratio clamped to `[-1, 1]`.
 #[inline]
-fn cosine_from_parts(dot: f64, nx: f32, ny: f32) -> f32 {
+fn cosine_from_parts(dot: f32, nx: f32, ny: f32) -> f32 {
     if nx * nx < NORM_LIMIT || ny * ny < NORM_LIMIT {
         0.0
     } else {
-        let v = dot as f32 / (nx * ny);
+        let v = dot / (nx * ny);
         (-1.0f32).max(1.0f32.min(v))
     }
 }
@@ -199,7 +195,7 @@ pub fn l2_f32(
     check_len(x_idx, x_val)?;
     check_len(y_idx, y_val)?;
     let d = merge_l2_sq(pairs(x_idx, x_val), pairs(y_idx, y_val));
-    Ok(d.sqrt() as f32)
+    Ok(d.sqrt())
 }
 
 /// `Σ x·y` over matching indices for f32 operands.
@@ -215,7 +211,7 @@ pub fn inner_product_f32(
     if disjoint_ranges(x_idx, y_idx) {
         return Ok(0.0);
     }
-    Ok(merge_dot(pairs(x_idx, x_val), pairs(y_idx, y_val)) as f32)
+    Ok(merge_dot(pairs(x_idx, x_val), pairs(y_idx, y_val)))
 }
 
 /// Cosine similarity `dot / (‖x‖·‖y‖)` for f32 operands, clamped to `[-1, 1]`; `0` when either
@@ -305,6 +301,7 @@ pub fn cosine_f16(
 mod test {
     use super::*;
 
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
     use diskann_wide::cast_f16_to_f32;
     use rand::{
         distr::{Distribution, Uniform},
@@ -342,10 +339,6 @@ mod test {
         } else {
             ref_dot(a, b) / (na * nb)
         }
-    }
-
-    fn close(a: f32, b: f32, rel: f32, abs: f32) -> bool {
-        (a - b).abs() <= abs + rel * a.abs().max(b.abs())
     }
 
     fn to_f16(v: &[f32]) -> Vec<Half> {
@@ -407,9 +400,9 @@ mod test {
         let l2 = l2_f32(&xi, &xv, &yi, &yv).unwrap();
         let cos = cosine_f32(&xi, &xv, &yi, &yv).unwrap();
 
-        assert!((ip as f64 - ref_dot(&da, &db)).abs() < 1e-5);
-        assert!((l2 as f64 - ref_l2(&da, &db)).abs() < 1e-5);
-        assert!((cos as f64 - ref_cos(&da, &db)).abs() < 1e-5);
+        assert_abs_diff_eq!(ip as f64, ref_dot(&da, &db), epsilon = 1e-5);
+        assert_abs_diff_eq!(l2 as f64, ref_l2(&da, &db), epsilon = 1e-5);
+        assert_abs_diff_eq!(cos as f64, ref_cos(&da, &db), epsilon = 1e-5);
     }
 
     // f16 kernels agree with an f64 densified reference for dot, L2, and cosine.
@@ -430,9 +423,9 @@ mod test {
         let l2 = l2_f16(&xi, &xv, &yi, &yv).unwrap();
         let cos = cosine_f16(&xi, &xv, &yi, &yv).unwrap();
 
-        assert!((ip as f64 - ref_dot(&da, &db)).abs() < 1e-3);
-        assert!((l2 as f64 - ref_l2(&da, &db)).abs() < 1e-3);
-        assert!((cos as f64 - ref_cos(&da, &db)).abs() < 1e-3);
+        assert_abs_diff_eq!(ip as f64, ref_dot(&da, &db), epsilon = 1e-3);
+        assert_abs_diff_eq!(l2 as f64, ref_l2(&da, &db), epsilon = 1e-3);
+        assert_abs_diff_eq!(cos as f64, ref_cos(&da, &db), epsilon = 1e-3);
     }
 
     // Operands with no shared indices have zero dot and zero cosine (f32 and f16).
@@ -460,7 +453,11 @@ mod test {
         let empty_v: [f32; 0] = [];
 
         assert_eq!(cosine_f32(&empty_i, &empty_v, &yi, &yv).unwrap(), 0.0);
-        assert!((l2_f32(&empty_i, &empty_v, &yi, &yv).unwrap() - 14.0f32.sqrt()).abs() < 1e-5);
+        assert_abs_diff_eq!(
+            l2_f32(&empty_i, &empty_v, &yi, &yv).unwrap(),
+            14.0f32.sqrt(),
+            epsilon = 1e-5
+        );
     }
 
     // f32 kernels match the f64 densified reference over random, partially-zeroed vectors.
@@ -482,21 +479,27 @@ mod test {
                 let db: Vec<f64> = y.iter().map(|&v| v as f64).collect();
 
                 let l2 = l2_f32(&xi, &xv, &yi, &yv).unwrap();
-                assert!(
-                    close(l2, ref_l2(&da, &db) as f32, 1e-4, 1e-3),
-                    "l2 dim={dim}"
+                assert_relative_eq!(
+                    l2 as f64,
+                    ref_l2(&da, &db),
+                    max_relative = 1e-4,
+                    epsilon = 1e-3
                 );
 
                 let ip = inner_product_f32(&xi, &xv, &yi, &yv).unwrap();
-                assert!(
-                    close(ip, ref_dot(&da, &db) as f32, 1e-4, 1e-2),
-                    "ip dim={dim}"
+                assert_relative_eq!(
+                    ip as f64,
+                    ref_dot(&da, &db),
+                    max_relative = 1e-4,
+                    epsilon = 1e-2
                 );
 
                 let cos = cosine_f32(&xi, &xv, &yi, &yv).unwrap();
-                assert!(
-                    close(cos, ref_cos(&da, &db) as f32, 1e-4, 1e-3),
-                    "cos dim={dim}"
+                assert_relative_eq!(
+                    cos as f64,
+                    ref_cos(&da, &db),
+                    max_relative = 1e-4,
+                    epsilon = 1e-3
                 );
             }
         }
@@ -523,21 +526,27 @@ mod test {
                 let db: Vec<f64> = y.iter().map(|v| cast_f16_to_f32(*v) as f64).collect();
 
                 let l2 = l2_f16(&xi, &xv, &yi, &yv).unwrap();
-                assert!(
-                    close(l2, ref_l2(&da, &db) as f32, 5e-3, 5e-2),
-                    "l2 dim={dim}"
+                assert_relative_eq!(
+                    l2 as f64,
+                    ref_l2(&da, &db),
+                    max_relative = 5e-3,
+                    epsilon = 5e-2
                 );
 
                 let ip = inner_product_f16(&xi, &xv, &yi, &yv).unwrap();
-                assert!(
-                    close(ip, ref_dot(&da, &db) as f32, 5e-3, 5e-2),
-                    "ip dim={dim}"
+                assert_relative_eq!(
+                    ip as f64,
+                    ref_dot(&da, &db),
+                    max_relative = 5e-3,
+                    epsilon = 5e-2
                 );
 
                 let cos = cosine_f16(&xi, &xv, &yi, &yv).unwrap();
-                assert!(
-                    close(cos, ref_cos(&da, &db) as f32, 5e-3, 5e-2),
-                    "cos dim={dim}"
+                assert_relative_eq!(
+                    cos as f64,
+                    ref_cos(&da, &db),
+                    max_relative = 5e-3,
+                    epsilon = 5e-2
                 );
             }
         }
