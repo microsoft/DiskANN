@@ -12,5 +12,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("{}", reflect::reflect::<reflect::Test2>().render());
 
+    println!("{}", reflect::reflect::<reflect::Metric>().render());
+
     Ok(())
 }

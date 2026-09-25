@@ -69,15 +69,10 @@ fn process_struct(input: &DeriveInput, s: &syn::DataStruct) -> proc_macro2::Toke
 
             let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-            let type_id = quote_spanned! {
-                input.span()=> ::std::any::TypeId::of::<#type_name #ty_generics>()
-            };
-
             quote! {
                 impl #impl_generics #path::Reflect for #type_name #ty_generics #where_clause {
                     fn reflect() -> #path::Type {
                         #path::Type::aggregate(
-                            #type_id,
                             #path::Fields::Named(vec![#(#fields),*]),
                             #doc,
                         )
