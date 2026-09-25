@@ -605,6 +605,7 @@ where
     {
         assert!(batchsize != 0, "window_iter batchsize cannot be zero");
         let ncols = self.ncols();
+
         self.data
             .as_slice()
             .chunks(ncols * batchsize)
@@ -772,10 +773,13 @@ where
     /// assert!(mat.subview(3..5).is_none());
     /// ```
     pub fn subview(&self, rows: std::ops::Range<usize>) -> Option<MatrixView<'_, T::Elem>> {
-        let ncols = self.ncols();
+        if rows.start > rows.end || rows.end > self.nrows() {
+            return None;
+        }
 
-        let lower = rows.start.checked_mul(ncols)?;
-        let upper = rows.end.checked_mul(ncols)?;
+        let ncols = self.ncols();
+        let lower = rows.start * ncols;
+        let upper = rows.end * ncols;
 
         if let Some(data) = self.as_slice().get(lower..upper) {
             // SAFETY: The successful checked index into `self.as_slice()` attests that
@@ -2122,6 +2126,45 @@ mod tests {
         // Bounds that overflow.
         assert!(m.subview(usize::MAX - 1..usize::MAX).is_none());
         assert!(m.subview(0..usize::MAX).is_none());
+    }
+
+    #[expect(
+        clippy::reversed_empty_ranges,
+        reason = "we want to make sure it doesn't work"
+    )]
+    #[test]
+    fn test_subview_zero_cols() {
+        let m = Matrix::new(0u32, 10, 0);
+
+        // Out-of-bounds indexing
+        assert!(m.subview(100..200).is_none());
+        assert!(m.subview(200..100).is_none());
+
+        assert!(m.subview(10..11).is_none());
+        assert!(m.subview(11..10).is_none());
+
+        assert!(m.subview(0..11).is_none());
+        assert!(m.subview(11..0).is_none());
+
+        assert!(m.subview(10..0).is_none());
+        assert!(m.subview(5..4).is_none());
+
+        // In-bounds.
+        let v = m.subview(5..10).unwrap();
+        assert_eq!(v.nrows(), 5);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(0..0).unwrap();
+        assert_eq!(v.nrows(), 0);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(10..10).unwrap();
+        assert_eq!(v.nrows(), 0);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(0..10).unwrap();
+        assert_eq!(v.nrows(), 10);
+        assert_eq!(v.ncols(), 0);
     }
 
     #[test]
