@@ -98,7 +98,6 @@ unsafe impl<T> MutDenseData for Box<[T]> {
 ///
 /// * `self.nrows() * self.ncols()` does not exceed `usize::MAX`.
 /// * `self.nrows() * self.ncols() * std::mem::size_of::<T>()` does not exceed `isize::MAX`.
-#[derive(Debug, PartialEq, Eq)]
 pub struct Layout<T> {
     nrows: usize,
     ncols: usize,
@@ -186,6 +185,24 @@ impl<T> Clone for Layout<T> {
 }
 
 impl<T> Copy for Layout<T> {}
+
+impl<T> std::fmt::Debug for Layout<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layout")
+            .field("nrows", &self.nrows)
+            .field("ncols", &self.ncols)
+            .field("elsize", &std::mem::size_of::<T>())
+            .finish()
+    }
+}
+
+impl<T> PartialEq for Layout<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nrows == other.nrows && self.ncols == other.ncols
+    }
+}
+
+impl<T> Eq for Layout<T> {}
 
 /// Errors in the invariants guaranteed by [`Layout`].
 #[derive(Debug, Clone, Copy)]
