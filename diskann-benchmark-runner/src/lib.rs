@@ -29,7 +29,7 @@ pub use checker::Checker;
 pub use features::Features;
 pub use input::Input;
 pub use output::Output;
-pub use reflect::Reflect;
+pub use reflect::{Reflect, Reflection};
 pub use registry::{Registry, RegistryError};
 pub use result::Checkpoint;
 

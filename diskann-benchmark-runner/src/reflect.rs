@@ -16,15 +16,8 @@ use crate::utils::fmt::Quote;
 const INDENT: usize = 2;
 
 pub trait Reflect: 'static {
-    fn reflect() -> Type;
-    fn type_name(f: &mut dyn Write) -> fmt::Result;
-}
-
-pub fn reflect<T>() -> Reflection
-where
-    T: Reflect,
-{
-    Reflection::new::<T>()
+    fn ty() -> Type;
+    fn format_type_name(f: &mut dyn Write) -> fmt::Result;
 }
 
 #[derive(Clone, Copy)]
@@ -42,8 +35,8 @@ impl Reflection {
         }
     }
 
-    pub fn reflect(&self) -> Type {
-        self.reflection.reflect()
+    pub fn ty(&self) -> Type {
+        self.reflection.ty()
     }
 
     pub fn type_name(&self) -> TypeName {
@@ -72,20 +65,20 @@ pub type Doc = Cow<'static, str>;
 pub struct TypeName(Reflection);
 
 impl TypeName {
-    fn format_into(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.reflection.type_name(f)
+    fn format_type_name(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.reflection.format_type_name(f)
     }
 }
 
 impl std::fmt::Debug for TypeName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.format_into(f)
+        self.format_type_name(f)
     }
 }
 
 impl std::fmt::Display for TypeName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.format_into(f)
+        self.format_type_name(f)
     }
 }
 
@@ -145,6 +138,22 @@ impl Type {
             Self::Aggregate(a) => a.has_body(),
             Self::Enum(e) => e.has_body(),
             Self::Sequence(_) => true,
+        }
+    }
+
+    fn as_aggregate(&self) -> Option<&Aggregate> {
+        if let Self::Aggregate(aggregate) = self {
+            Some(aggregate)
+        } else {
+            None
+        }
+    }
+
+    fn as_enum(&self) -> Option<&Enum> {
+        if let Self::Enum(enum_) = self {
+            Some(enum_)
+        } else {
+            None
         }
     }
 }
@@ -211,6 +220,10 @@ impl Aggregate {
         self.doc.as_deref()
     }
 
+    fn fields(&self) -> &Fields {
+        &self.fields
+    }
+
     fn has_body(&self) -> bool {
         self.fields.has_body()
     }
@@ -239,6 +252,22 @@ impl Fields {
     pub fn unnamed(itr: impl IntoIterator<Item = UnnamedField>) -> Self {
         Self::Unnamed(itr.into_iter().collect())
     }
+
+    fn as_named(&self) -> Option<&[NamedField]> {
+        if let Self::Named(fields) = self {
+            Some(fields)
+        } else {
+            None
+        }
+    }
+
+    fn as_unnamed(&self) -> Option<&[UnnamedField]> {
+        if let Self::Unnamed(fields) = self {
+            Some(fields)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -255,7 +284,7 @@ impl NamedField {
     {
         Self {
             name,
-            field: reflect::<T>(),
+            field: Reflection::new::<T>(),
             doc,
         }
     }
@@ -277,13 +306,17 @@ impl UnnamedField {
         T: Reflect,
     {
         Self {
-            field: reflect::<T>(),
+            field: Reflection::new::<T>(),
             doc,
         }
     }
 
     fn doc(&self) -> Option<&str> {
         self.doc.as_deref()
+    }
+
+    fn field(&self) -> Reflection {
+        self.field
     }
 }
 
@@ -315,6 +348,10 @@ impl Enum {
         self.doc.as_deref()
     }
 
+    fn variants(&self) -> &[Variant] {
+        &self.variants
+    }
+
     fn has_body(&self) -> bool {
         !self.variants.is_empty()
     }
@@ -335,7 +372,7 @@ pub enum EnumRepr {
     ///   "value": 10,
     ///   "members": [
     ///     1,
-    ///     "world",
+    ///     "world"
     ///   ]
     /// }
     /// ```
@@ -350,7 +387,7 @@ pub enum EnumRepr {
     ///     "value": 10,
     ///     "members": [
     ///       1,
-    ///       "world",
+    ///       "world"
     ///     ]
     ///   }
     /// }
@@ -371,6 +408,10 @@ pub struct Variant {
 impl Variant {
     pub fn new(name: &'static str, fields: Fields, doc: Option<Doc>) -> Self {
         Self { name, fields, doc }
+    }
+
+    fn name(&self) -> &'static str {
+        self.name
     }
 
     fn doc(&self) -> Option<&str> {
@@ -394,7 +435,7 @@ impl Sequence {
         T: Reflect,
     {
         Self {
-            element: reflect::<T>(),
+            element: Reflection::new::<T>(),
             doc,
         }
     }
@@ -417,7 +458,7 @@ struct Tagged {
 impl Tagged {
     fn new(reflection: Reflection) -> Self {
         Self {
-            ty: reflection.reflect(),
+            ty: reflection.ty(),
             reflection,
         }
     }
@@ -449,7 +490,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn at_bottom(&self) -> bool {
-        self.depth == self.max_depth
+        self.depth >= self.max_depth
     }
 
     fn line<D>(&mut self, display: D) -> fmt::Result
@@ -566,7 +607,7 @@ impl<'a> Renderer<'a> {
 
     fn render_enum(&mut self, enum_: &Enum) -> fmt::Result {
         match enum_.repr {
-            EnumRepr::External => self.line("Representation: string")?,
+            EnumRepr::External => self.line("Representation: externally tagged")?,
             EnumRepr::Internal { tag } => {
                 self.line(format_args!("Discriminant field: {}", Quote(tag)))?
             }
@@ -696,18 +737,31 @@ impl<'a> Renderer<'a> {
 // Bootstrap //
 ///////////////
 
+impl<T> Reflect for std::marker::PhantomData<T>
+where
+    T: Reflect,
+{
+    fn ty() -> Type {
+        Type::primitive(None)
+    }
+
+    fn format_type_name(f: &mut dyn Write) -> fmt::Result {
+        write!(f, "PhantomData<{}>", Reflection::new::<T>().type_name())
+    }
+}
+
 macro_rules! primitive {
     ($T:ty, $doc:literal, $type_name:literal) => {
         impl Reflect for $T {
-            fn reflect() -> Type {
+            fn ty() -> Type {
                 Type::primitive(Some($doc.into()))
             }
 
-            fn type_name(f: &mut dyn Write) -> fmt::Result {
+            fn format_type_name(f: &mut dyn Write) -> fmt::Result {
                 f.write_str($type_name)
             }
         }
-    }
+    };
 }
 
 primitive!(usize, "A system dependent unsigned integer", "usize");
@@ -719,13 +773,21 @@ impl<T> Reflect for Vec<T>
 where
     T: Reflect,
 {
-    fn reflect() -> Type {
+    fn ty() -> Type {
         Type::sequence::<T>(Some("An ordered collection of elements".into()))
     }
 
-    fn type_name(f: &mut dyn Write) -> fmt::Result {
-        write!(f, "Vec<{}>", reflect::<T>().type_name())
+    fn format_type_name(f: &mut dyn Write) -> fmt::Result {
+        write!(f, "Vec<{}>", Reflection::new::<T>().type_name())
     }
+}
+
+#[derive(Reflect)]
+pub struct UnitWithConst<const N: usize> {}
+
+#[derive(Reflect)]
+pub struct GenericBoundAdded<T> {
+    uses_t: Vec<T>,
 }
 
 /// This is a test!
@@ -740,11 +802,21 @@ pub struct Test {
     b: usize,
 }
 
+#[derive(Reflect)]
+pub struct TestUnnamed<T>(
+    /// Can I document this?
+    usize,
+    T,
+);
+
 /// This is a nother test!
 #[derive(Reflect)]
 pub struct Test2 {
     /// This field affects this value.
     a: usize,
+
+    /// This field doesn't have any names.
+    unnamed: TestUnnamed<u32>,
 
     other: Test,
 
@@ -762,67 +834,55 @@ struct Wrapper<T> {
 }
 
 /// An enum with no payloads.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Reflect)]
 pub enum Metric {
     SquaredL2,
     InnerProduct,
     Cosine,
 }
 
-impl Reflect for Metric {
-    fn reflect() -> Type {
-        Type::enum_(
-            EnumRepr::External,
-            [
-                Variant::new("squared-l2", Fields::Unit, Some("Squared Euclidean".into())),
-                Variant::new("inner-product", Fields::Unit, Some("Inner Product".into())),
-                Variant::new("cosine", Fields::Unit, Some("Cosine Similarity".into())),
-            ],
-            Some("The similarity measure to use".into()),
-        )
-    }
-
-    fn type_name(f: &mut dyn Write) -> fmt::Result {
-        f.write_str("Metric")
-    }
-}
-
 /// An enum with no payloads.
-#[derive(Debug)]
+#[derive(Debug, Reflect)]
 pub enum AdjacentEnum {
     SquaredL2,
+    /// Let me see if this works
     InnerProduct(u32),
-    Cosine { test: String },
+
+    /// Compute the cosine similarity
+    Cosine {
+        /// Thos actually doesn't do anything.
+        test: String,
+    },
 }
 
-impl Reflect for AdjacentEnum {
-    fn reflect() -> Type {
-        Type::enum_(
-            EnumRepr::Adjacent {
-                tag: "enum-type",
-                content: "content",
-            },
-            [
-                Variant::new("squared-l2", Fields::Unit, None),
-                Variant::new(
-                    "inner-product",
-                    Fields::unnamed([UnnamedField::new::<u32>(Some("testing".into()))]),
-                    Some("Inner Product with some payload".into()),
-                ),
-                Variant::new(
-                    "cosine",
-                    Fields::named([NamedField::new::<String>("test", None)]),
-                    Some("Cosine Similarity".into()),
-                ),
-            ],
-            Some("The similarity measure to use".into()),
-        )
-    }
-
-    fn type_name(f: &mut dyn Write) -> fmt::Result {
-        f.write_str("Metric")
-    }
-}
+// impl Reflect for AdjacentEnum {
+//     fn ty() -> Type {
+//         Type::enum_(
+//             EnumRepr::Adjacent {
+//                 tag: "enum-type",
+//                 content: "content",
+//             },
+//             [
+//                 Variant::new("squared-l2", Fields::Unit, None),
+//                 Variant::new(
+//                     "inner-product",
+//                     Fields::unnamed([UnnamedField::new::<u32>(Some("testing".into()))]),
+//                     Some("Inner Product with some payload".into()),
+//                 ),
+//                 Variant::new(
+//                     "cosine",
+//                     Fields::named([NamedField::new::<String>("test", None)]),
+//                     Some("Cosine Similarity".into()),
+//                 ),
+//             ],
+//             Some("The similarity measure to use".into()),
+//         )
+//     }
+//
+//     fn format_type_name(f: &mut dyn Write) -> fmt::Result {
+//         f.write_str("Metric")
+//     }
+// }
 
 //////////////
 // Internal //
@@ -832,8 +892,8 @@ pub(crate) mod internal {
     use std::marker::PhantomData;
 
     pub(crate) trait Reflect {
-        fn reflect(&self) -> super::Type;
-        fn type_name(&self, f: &mut dyn std::fmt::Write) -> std::fmt::Result;
+        fn ty(&self) -> super::Type;
+        fn format_type_name(&self, f: &mut dyn std::fmt::Write) -> std::fmt::Result;
         fn type_id(&self) -> std::any::TypeId;
     }
 
@@ -851,16 +911,298 @@ pub(crate) mod internal {
     where
         T: super::Reflect,
     {
-        fn reflect(&self) -> super::Type {
-            <T as super::Reflect>::reflect()
+        fn ty(&self) -> super::Type {
+            <T as super::Reflect>::ty()
         }
 
-        fn type_name(&self, f: &mut dyn std::fmt::Write) -> std::fmt::Result {
-            <T as super::Reflect>::type_name(f)
+        fn format_type_name(&self, f: &mut dyn std::fmt::Write) -> std::fmt::Result {
+            <T as super::Reflect>::format_type_name(f)
         }
 
         fn type_id(&self) -> std::any::TypeId {
             std::any::TypeId::of::<T>()
         }
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::assert_matches;
+
+    #[test]
+    fn test_unit() {
+        /// A unit struct.
+        #[derive(Reflect)]
+        struct Unit;
+
+        let r = Reflection::new::<Unit>();
+        let ty = r.ty();
+
+        assert_eq!(r.ty().doc().unwrap(), "A unit struct.");
+        assert_eq!(r.type_name().to_string(), "Unit");
+        assert!(!ty.has_body());
+    }
+
+    #[test]
+    fn test_unit_const_generic() {
+        /// A unit struct.
+        #[derive(Reflect)]
+        struct Unit<const N: usize>;
+
+        let r = Reflection::new::<Unit<10>>();
+        let ty = r.ty();
+
+        assert_eq!(ty.doc().unwrap(), "A unit struct.");
+        assert_eq!(r.type_name().to_string(), "Unit<10>");
+        assert!(!ty.has_body());
+    }
+
+    #[test]
+    fn test_unit_const_generic_2() {
+        #[derive(Reflect)]
+        struct Unit<const N: usize, const M: usize>;
+
+        let r = Reflection::new::<Unit<10, 20>>();
+        let ty = r.ty();
+
+        assert!(ty.doc().is_none());
+        assert_eq!(r.type_name().to_string(), "Unit<10, 20>");
+        assert!(!ty.has_body());
+    }
+
+    #[test]
+    fn test_empty_tuple_like() {
+        /// An empty tuple-like struct.
+        #[derive(Reflect)]
+        struct Empty();
+
+        let r = Reflection::new::<Empty>();
+        let ty = r.ty();
+
+        assert_eq!(ty.doc().unwrap(), "An empty tuple-like struct.");
+        assert_eq!(r.type_name().to_string(), "Empty");
+        assert!(!ty.has_body());
+    }
+
+    #[test]
+    fn test_empty_struct_like() {
+        /// An empty struct.
+        #[derive(Reflect)]
+        struct Empty {}
+
+        let r = Reflection::new::<Empty>();
+        let ty = r.ty();
+
+        assert_eq!(ty.doc().unwrap(), "An empty struct.");
+        assert_eq!(r.type_name().to_string(), "Empty");
+        assert!(!ty.has_body());
+    }
+
+    #[test]
+    fn test_struct() {
+        /// A struct with two fields.
+        #[expect(unused)]
+        #[derive(Reflect)]
+        struct Woo {
+            /// Foo
+            foo: usize,
+            /// Bar
+            bar: usize,
+        };
+
+        let r = Reflection::new::<Woo>();
+        let ty = r.ty();
+        assert_eq!(ty.doc().unwrap(), "A struct with two fields.");
+        assert_eq!(r.type_name().to_string(), "Woo");
+        assert!(ty.has_body());
+
+        let f = ty.as_aggregate().unwrap().fields().as_named().unwrap();
+        assert_eq!(f.len(), 2);
+
+        assert_eq!(f[0].name, "foo");
+        assert_eq!(f[0].doc().unwrap(), "Foo");
+        assert_eq!(f[0].field.type_name().to_string(), "usize");
+
+        assert_eq!(f[1].name, "bar");
+        assert_eq!(f[1].doc().unwrap(), "Bar");
+        assert_eq!(f[1].field.type_name().to_string(), "usize");
+    }
+
+    #[test]
+    fn test_tuple1() {
+        /// A tuple with one field.
+        #[expect(unused)]
+        #[derive(Reflect)]
+        struct Tuple1(
+            /// Field 0.
+            usize,
+        );
+
+        let r = Reflection::new::<Tuple1>();
+        let ty = r.ty();
+        assert_eq!(ty.doc().unwrap(), "A tuple with one field.");
+        assert_eq!(r.type_name().to_string(), "Tuple1");
+
+        assert!(ty.has_body());
+
+        let f = ty.as_aggregate().unwrap().fields().as_unnamed().unwrap();
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].doc().unwrap(), "Field 0.");
+        assert_eq!(f[0].field().type_name().to_string(), "usize");
+    }
+
+    #[test]
+    fn test_tuple2() {
+        #[expect(unused)]
+        #[derive(Reflect)]
+        struct Tuple2<T, U>(
+            T,
+            /// Field 1.
+            Vec<U>,
+        );
+
+        let r = Reflection::new::<Tuple2<usize, u32>>();
+        let ty = r.ty();
+        assert!(ty.doc().is_none());
+        assert_eq!(r.type_name().to_string(), "Tuple2<usize, u32>");
+        assert!(ty.has_body());
+
+        let f = ty.as_aggregate().unwrap().fields().as_unnamed().unwrap();
+        assert_eq!(f.len(), 2);
+
+        assert!(f[0].doc().is_none());
+        assert_eq!(f[0].field().type_name().to_string(), "usize");
+
+        assert_eq!(f[1].doc().unwrap(), "Field 1.");
+        assert_eq!(f[1].field().type_name().to_string(), "Vec<u32>");
+    }
+
+    #[test]
+    fn test_empty_enum() {
+        /// An empty enum.
+        #[derive(Reflect)]
+        enum Empty {}
+
+        let r = Reflection::new::<Empty>();
+        let ty = r.ty();
+        assert_eq!(ty.doc().unwrap(), "An empty enum.");
+        assert_eq!(r.type_name().to_string(), "Empty");
+        assert!(!ty.has_body());
+    }
+
+    #[test]
+    fn test_enum_with_generics() {
+        /// An enum with generics.
+        #[expect(unused)]
+        #[derive(Reflect)]
+        enum Either<A, B> {
+            A(Vec<A>),
+            /// It's a bee!
+            B(
+                /// Buzz buzz
+                B
+            ),
+        }
+
+        let r = Reflection::new::<Either<u32, String>>();
+        let ty = r.ty();
+        assert_eq!(ty.doc().unwrap(), "An enum with generics.");
+        assert_eq!(r.type_name().to_string(), "Either<u32, string>");
+        assert!(ty.has_body());
+
+        let variants = ty.as_enum().unwrap().variants();
+        assert_eq!(variants.len(), 2);
+
+        // Variant 0
+        assert!(variants[0].doc().is_none());
+        assert_eq!(variants[0].name(), "A");
+        assert!(variants[0].fields.has_body());
+
+        let f = variants[0].fields.as_unnamed().unwrap();
+        assert_eq!(f.len(), 1);
+        assert!(f[0].doc().is_none());
+        assert_eq!(f[0].field().type_name().to_string(), "Vec<u32>");
+
+        // Variant 1
+        assert_eq!(variants[1].doc().unwrap(), "It's a bee!");
+        assert_eq!(variants[1].name(), "B");
+        assert!(variants[1].fields.has_body());
+
+        let f = variants[1].fields.as_unnamed().unwrap();
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].doc().unwrap(), "Buzz buzz");
+        assert_eq!(f[0].field().type_name().to_string(), "string");
+    }
+
+    #[test]
+    fn test_enum_variants() {
+        /// All the enums.
+        #[expect(unused)]
+        #[derive(Reflect)]
+        enum All {
+            /// A unit variant.
+            Unit,
+            /// A tuple-like variant.
+            Tuple(
+                /// Field 0.
+                usize,
+                String,
+            ),
+            /// Struct-like.
+            Struct {
+                foo: usize,
+                /// All the bars!
+                bar: u32,
+            },
+        }
+
+        let r = Reflection::new::<All>();
+        let ty = r.ty();
+        assert_eq!(ty.doc().unwrap(), "All the enums.");
+        assert_eq!(r.type_name().to_string(), "All");
+        assert!(ty.has_body());
+
+        let variants = ty.as_enum().unwrap().variants();
+        assert_eq!(variants.len(), 3);
+
+        // Variant 0
+        assert_eq!(variants[0].doc().unwrap(), "A unit variant.");
+        assert_eq!(variants[0].name(), "Unit");
+        assert!(!variants[0].fields.has_body());
+        assert_matches!(variants[0].fields, Fields::Unit);
+
+        // Variant 1
+        assert_eq!(variants[1].doc().unwrap(), "A tuple-like variant.");
+        assert_eq!(variants[1].name(), "Tuple");
+        assert!(variants[1].fields.has_body());
+
+        let f = variants[1].fields.as_unnamed().unwrap();
+        assert_eq!(f.len(), 2);
+
+        assert_eq!(f[0].doc().unwrap(), "Field 0.");
+        assert_eq!(f[0].field.type_name().to_string(), "usize");
+
+        assert!(f[1].doc().is_none());
+        assert_eq!(f[1].field.type_name().to_string(), "string");
+
+        // Variant 2
+        assert_eq!(variants[2].name(), "Struct");
+        assert_eq!(variants[2].doc().unwrap(), "Struct-like.");
+        let f = variants[2].fields.as_named().unwrap();
+        assert_eq!(f.len(), 2);
+
+        assert_eq!(f[0].name, "foo");
+        assert!(f[0].doc().is_none());
+        assert_eq!(f[0].field.type_name().to_string(), "usize");
+
+        assert_eq!(f[1].name, "bar");
+        assert_eq!(f[1].doc().unwrap(), "All the bars!");
+        assert_eq!(f[1].field.type_name().to_string(), "u32");
     }
 }
