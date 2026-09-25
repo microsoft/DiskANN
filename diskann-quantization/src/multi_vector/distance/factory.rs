@@ -179,7 +179,7 @@ where
 impl<A, const GROUP: usize, const NR: usize, const PACK: usize> MaxSimKernel<i8>
     for Prepared<A, BlockTransposed<i8, GROUP, PACK>, NR>
 where
-    A: Architecture,
+    A: mk::maxsim::packed_i8_x_unpacked_i8::PrepareB + Architecture,
     for<'a> mk::maxsim::packed_i8_x_unpacked_i8::Driver<'a, A, GROUP, NR, PACK>: mk::Drive,
 {
     fn nrows(&self) -> usize {

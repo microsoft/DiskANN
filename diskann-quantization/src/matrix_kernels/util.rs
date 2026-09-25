@@ -38,6 +38,25 @@ where
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+impl Convert<i16, i8> for Converter<diskann_wide::arch::x86_64::V3> {
+    #[inline(always)]
+    fn convert(self, to: &mut [i16], from: &[i8]) {
+        use diskann_wide::{SIMDVector, arch::x86_64::V3};
+        diskann_wide::alias!(i8s = <V3>::i8x16);
+        diskann_wide::alias!(i16s = <V3>::i16x16);
+
+        debug_assert_eq!(to.len(), from.len(), "lengths must be equal");
+
+        let (to_chunks, to_tail) = to.as_chunks_mut::<16>();
+        let (from_chunks, from_tail) = from.as_chunks::<16>();
+
+        std::iter::zip(to_chunks, from_chunks)
+            .for_each(|(to, from)| *to = i16s::from(i8s::from_array(self.0, *from)).to_array());
+        std::iter::zip(to_tail, from_tail).for_each(|(to, from)| *to = (*from).into());
+    }
+}
+
 //////////
 // Load //
 //////////
@@ -265,6 +284,22 @@ mod test {
 
     #[cfg(target_arch = "aarch64")]
     use diskann_wide::arch::aarch64::Neon;
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_convert_i16_i8_v3() {
+        if let Some(arch) = V3::new_checked() {
+            for len in 0..40 {
+                let from: Vec<i8> = (0..len).map(|i| (37 * i) as i8).collect();
+                let mut to = vec![0; len];
+
+                Converter::new(arch).convert(&mut to, &from);
+
+                let expected: Vec<i16> = from.iter().map(|&x| x.into()).collect();
+                assert_eq!(to, expected, "len = {len}");
+            }
+        }
+    }
 
     trait FromUsize {
         fn from_usize(v: usize) -> Self;
