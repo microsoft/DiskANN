@@ -9,7 +9,8 @@
 //!
 //! Each operand is a pair of parallel slices:
 //!
-//! * `idx`: `nnz` dimension indices as `u16`, **sorted ascending and unique**;
+//! * `idx`: `nnz` dimension indices of a generic integer type (`u16`, `u32`, …), **sorted
+//!   ascending and unique**;
 //! * `val`: `nnz` values parallel to `idx` (`f32`, or `f16` via [`Half`]).
 //!
 //! Indices absent from an operand are implicit zeros.
@@ -41,7 +42,7 @@ const NORM_LIMIT: f32 = f32::MIN_POSITIVE;
 /// True when two sorted, unique index arrays cannot share any index (either is empty, or their
 /// `[min, max]` ranges don't overlap).
 #[inline]
-fn disjoint_ranges(x_idx: &[u16], y_idx: &[u16]) -> bool {
+fn disjoint_ranges<Idx: Ord>(x_idx: &[Idx], y_idx: &[Idx]) -> bool {
     x_idx.is_empty()
         || y_idx.is_empty()
         || x_idx[x_idx.len() - 1] < y_idx[0]
@@ -80,7 +81,7 @@ impl std::error::Error for LengthMismatch {}
 
 /// Validate that an operand's index and value slices are parallel (equal length).
 #[inline]
-fn check_len<T>(idx: &[u16], val: &[T]) -> Result<(), LengthMismatch> {
+fn check_len<Idx, T>(idx: &[Idx], val: &[T]) -> Result<(), LengthMismatch> {
     if idx.len() == val.len() {
         Ok(())
     } else {
@@ -93,7 +94,7 @@ fn check_len<T>(idx: &[u16], val: &[T]) -> Result<(), LengthMismatch> {
 
 /// Zip parallel index/value slices into `(index, value)` pairs for the merge kernels.
 #[inline]
-fn pairs<'a>(idx: &'a [u16], val: &'a [f32]) -> impl Iterator<Item = (u16, f32)> + 'a {
+fn pairs<'a, Idx: Copy>(idx: &'a [Idx], val: &'a [f32]) -> impl Iterator<Item = (Idx, f32)> + 'a {
     idx.iter().copied().zip(val.iter().copied())
 }
 
@@ -103,10 +104,11 @@ fn pairs<'a>(idx: &'a [u16], val: &'a [f32]) -> impl Iterator<Item = (u16, f32)>
 
 /// Intersection merge: `Σ x·y` over matching indices, accumulated in `f32`. `O(nnz_x + nnz_y)`.
 #[inline]
-fn merge_dot<I, J>(mut x: I, mut y: J) -> f32
+fn merge_dot<Idx, I, J>(mut x: I, mut y: J) -> f32
 where
-    I: Iterator<Item = (u16, f32)>,
-    J: Iterator<Item = (u16, f32)>,
+    Idx: Copy + Ord,
+    I: Iterator<Item = (Idx, f32)>,
+    J: Iterator<Item = (Idx, f32)>,
 {
     let mut acc = 0.0f32;
     let mut a = x.next();
@@ -128,10 +130,11 @@ where
 /// Direct union merge for squared L2: `Σ (x_i − y_i)²`, accumulated in `f32`; an index present
 /// on only one side contributes `v²`. `O(nnz_x + nnz_y)`.
 #[inline]
-fn merge_l2_sq<I, J>(mut x: I, mut y: J) -> f32
+fn merge_l2_sq<Idx, I, J>(mut x: I, mut y: J) -> f32
 where
-    I: Iterator<Item = (u16, f32)>,
-    J: Iterator<Item = (u16, f32)>,
+    Idx: Copy + Ord,
+    I: Iterator<Item = (Idx, f32)>,
+    J: Iterator<Item = (Idx, f32)>,
 {
     let mut acc = 0.0f32;
     let mut a = x.next();
@@ -186,10 +189,10 @@ fn cosine_from_parts(dot: f32, nx: f32, ny: f32) -> f32 {
 
 /// `sqrt(Σ (x_i − y_i)²)` for f32 operands.
 #[inline]
-pub fn l2_f32(
-    x_idx: &[u16],
+pub fn l2_f32<Idx: Copy + Ord>(
+    x_idx: &[Idx],
     x_val: &[f32],
-    y_idx: &[u16],
+    y_idx: &[Idx],
     y_val: &[f32],
 ) -> Result<f32, LengthMismatch> {
     check_len(x_idx, x_val)?;
@@ -200,10 +203,10 @@ pub fn l2_f32(
 
 /// `Σ x·y` over matching indices for f32 operands.
 #[inline]
-pub fn inner_product_f32(
-    x_idx: &[u16],
+pub fn inner_product_f32<Idx: Copy + Ord>(
+    x_idx: &[Idx],
     x_val: &[f32],
-    y_idx: &[u16],
+    y_idx: &[Idx],
     y_val: &[f32],
 ) -> Result<f32, LengthMismatch> {
     check_len(x_idx, x_val)?;
@@ -217,10 +220,10 @@ pub fn inner_product_f32(
 /// Cosine similarity `dot / (‖x‖·‖y‖)` for f32 operands, clamped to `[-1, 1]`; `0` when either
 /// norm underflows or the operands are disjoint. Norms reuse [`crate::norm::FastL2Norm`].
 #[inline]
-pub fn cosine_f32(
-    x_idx: &[u16],
+pub fn cosine_f32<Idx: Copy + Ord>(
+    x_idx: &[Idx],
     x_val: &[f32],
-    y_idx: &[u16],
+    y_idx: &[Idx],
     y_val: &[f32],
 ) -> Result<f32, LengthMismatch> {
     check_len(x_idx, x_val)?;
@@ -241,10 +244,10 @@ pub fn cosine_f32(
 /// `sqrt(Σ (x_i − y_i)²)` for f16 operands; values are pre-widened to f32, then reuse the f32
 /// union merge.
 #[inline]
-pub fn l2_f16(
-    x_idx: &[u16],
+pub fn l2_f16<Idx: Copy + Ord>(
+    x_idx: &[Idx],
     x_val: &[Half],
-    y_idx: &[u16],
+    y_idx: &[Idx],
     y_val: &[Half],
 ) -> Result<f32, LengthMismatch> {
     check_len(x_idx, x_val)?;
@@ -257,10 +260,10 @@ pub fn l2_f16(
 /// `Σ x·y` over matching indices for f16 operands; a disjoint-range fast-out skips widening
 /// when the operands cannot intersect.
 #[inline]
-pub fn inner_product_f16(
-    x_idx: &[u16],
+pub fn inner_product_f16<Idx: Copy + Ord>(
+    x_idx: &[Idx],
     x_val: &[Half],
-    y_idx: &[u16],
+    y_idx: &[Idx],
     y_val: &[Half],
 ) -> Result<f32, LengthMismatch> {
     check_len(x_idx, x_val)?;
@@ -277,10 +280,10 @@ pub fn inner_product_f16(
 /// the operands are disjoint. Values are pre-widened once and reused for the numerator and both
 /// norms.
 #[inline]
-pub fn cosine_f16(
-    x_idx: &[u16],
+pub fn cosine_f16<Idx: Copy + Ord>(
+    x_idx: &[Idx],
     x_val: &[Half],
-    y_idx: &[u16],
+    y_idx: &[Idx],
     y_val: &[Half],
 ) -> Result<f32, LengthMismatch> {
     check_len(x_idx, x_val)?;
@@ -571,5 +574,36 @@ mod test {
         let err = l2_f32(&xi, &xv, &yi, &yv).unwrap_err();
         assert_eq!(err.idx_len, 3);
         assert_eq!(err.val_len, 2);
+    }
+
+    // The kernels are generic over the index type; u32 indices give the same result as u16.
+    #[test]
+    fn generic_over_u32_matches_u16() {
+        let xv = [0.5f32, -1.5, 2.0, 0.25, 3.0];
+        let yv = [1.0f32, 2.0, -0.5, 4.0, 1.25, -2.0];
+        let xi16 = [1u16, 3, 4, 9, 12];
+        let yi16 = [0u16, 3, 4, 7, 12, 15];
+        let xi32 = [1u32, 3, 4, 9, 12];
+        let yi32 = [0u32, 3, 4, 7, 12, 15];
+
+        assert_eq!(
+            l2_f32(&xi16, &xv, &yi16, &yv).unwrap(),
+            l2_f32(&xi32, &xv, &yi32, &yv).unwrap()
+        );
+        assert_eq!(
+            inner_product_f32(&xi16, &xv, &yi16, &yv).unwrap(),
+            inner_product_f32(&xi32, &xv, &yi32, &yv).unwrap()
+        );
+        assert_eq!(
+            cosine_f32(&xi16, &xv, &yi16, &yv).unwrap(),
+            cosine_f32(&xi32, &xv, &yi32, &yv).unwrap()
+        );
+
+        let xvh = to_f16(&xv);
+        let yvh = to_f16(&yv);
+        assert_eq!(
+            l2_f16(&xi16, &xvh, &yi16, &yvh).unwrap(),
+            l2_f16(&xi32, &xvh, &yi32, &yvh).unwrap()
+        );
     }
 }
