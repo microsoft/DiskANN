@@ -24,24 +24,6 @@ where
     }
 }
 
-/////////////////////
-// assert_contains //
-/////////////////////
-
-macro_rules! assert_contains {
-    ($msg:expr, $expected:literal $(,)?) => {
-        let msg = $msg;
-        assert!(
-            msg.contains($expected),
-            "message \"{}\" did not contain \"{}\"",
-            msg,
-            $expected,
-        );
-    };
-}
-
-pub(super) use assert_contains;
-
 ////////////////////////
 // Test Distributions //
 ////////////////////////

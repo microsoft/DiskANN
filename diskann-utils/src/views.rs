@@ -1091,7 +1091,7 @@ enum TryFromErrorInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lazy_format;
+    use crate::{assert_contains, lazy_format};
 
     /// This function is only callable with copyable types.
     ///
@@ -1227,6 +1227,27 @@ mod tests {
             }
         }
 
+        #[expect(unused, reason = "we need this so the size is non-zero")]
+        struct NotDebugOrEq(u32);
+
+        assert_eq!(
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+        );
+
+        assert_eq!(
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+        );
+
+        assert_ne!(
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+        );
+
+        let fmt = format!("{:?}", Layout::<NotDebugOrEq>::new(5, 6).unwrap());
+        assert_eq!(fmt, "Layout { nrows: 5, ncols: 6, elsize: 4 }");
+
         // Overflowing the element count returns an error.
         let error = Layout::<u8>::new(usize::MAX, 2).unwrap_err();
         assert_eq!(
@@ -1284,7 +1305,7 @@ mod tests {
 
         let err = Matrix::try_new(0u32, isize::MAX as usize, 1).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("exceeds `isize::MAX` bytes"), "{msg}");
+        assert_contains!(msg, "exceeds `isize::MAX` bytes");
 
         // Panicking
         let err = std::panic::catch_unwind(|| {
@@ -1295,7 +1316,7 @@ mod tests {
         .unwrap();
 
         let msg = err.to_string();
-        assert!(msg.contains("exceeding `usize::MAX`"), "{msg}");
+        assert_contains!(msg, "exceeding `usize::MAX`");
 
         let err = std::panic::catch_unwind(|| {
             Matrix::new(0u32, isize::MAX as usize, 1);
@@ -1304,12 +1325,12 @@ mod tests {
         .downcast::<String>()
         .unwrap();
         let msg = err.to_string();
-        assert!(msg.contains("exceeds `isize::MAX` bytes"), "{msg}");
+        assert_contains!(msg, "exceeds `isize::MAX` bytes");
 
         // Construction fails without invoking the generator.
         let err = Matrix::try_new(Init(|| panic!("boom")), usize::MAX, usize::MAX).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("exceeding `usize::MAX`"), "{msg}");
+        assert_contains!(msg, "exceeding `usize::MAX`");
     }
 
     fn make_test_matrix() -> Vec<usize> {
@@ -1777,9 +1798,9 @@ mod tests {
         // Test `as_static` method
         let err_static = err.as_static();
         let msg = err_static.to_string();
-        assert!(
-            msg.contains("tried to construct a 2x3 matrix over a span of length 3"),
-            "{msg}"
+        assert_contains!(
+            msg,
+            "tried to construct a 2x3 matrix over a span of length 3",
         );
         // Test `into_inner` method
         let recovered_data = err.into_inner();
@@ -1788,7 +1809,7 @@ mod tests {
         // Invalid length.
         let err = MatrixView::try_from(data.as_slice(), 2, usize::MAX).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("usize::MAX"), "{msg}");
+        assert_contains!(msg, "usize::MAX");
 
         assert_eq!(data.as_slice(), err.into_inner());
     }
@@ -2326,18 +2347,20 @@ mod tests {
         // Test Debug implementation for TryFromError
         let data = vec![1, 2, 3];
         let err = Matrix::try_from(data.into(), 2, 3).unwrap_err();
-
         let debug_str = format!("{:?}", err);
-        assert!(debug_str.contains("TryFromError"));
+        assert_contains!(debug_str, "TryFromError");
 
         // Ensure Debug doesn't require T: Debug by using a non-Debug type
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         struct NonDebug(#[expect(dead_code)] i32);
 
         let non_debug_data: Box<[NonDebug]> = vec![NonDebug(1), NonDebug(2)].into();
-        let non_debug_err = Matrix::try_from(non_debug_data, 1, 3).unwrap_err();
+        let non_debug_err = match Matrix::try_from(non_debug_data, 1, 3) {
+            Ok(_) => panic!("should not have succeeded!"),
+            Err(err) => err,
+        };
         let debug_str = format!("{:?}", non_debug_err);
-        assert!(debug_str.contains("TryFromError"));
+        assert_contains!(debug_str, "TryFromError");
     }
 
     // Comprehensive tests for rayon-specific functionality

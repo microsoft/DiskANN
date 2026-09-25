@@ -213,7 +213,7 @@ pub enum SaveBinError {
 mod tests {
     use std::io::Cursor;
 
-    use crate::views::Init;
+    use crate::{assert_contains, views::Init};
 
     use super::*;
 
@@ -310,13 +310,10 @@ mod tests {
         let err = read_bin::<f32>(&mut cursor).unwrap_err();
         let msg = err.to_string();
 
-        assert!(msg.contains("100 points"), "missing npoints: {msg}");
-        assert!(msg.contains("32 dims"), "missing ndims: {msg}");
-        assert!(msg.contains("12800 bytes"), "missing expected: {msg}");
-        assert!(
-            msg.contains("0 bytes available"),
-            "missing available: {msg}"
-        );
+        assert_contains!(msg, "100 points", "missing npoints");
+        assert_contains!(msg, "32 dims", "missing ndims");
+        assert_contains!(msg, "12800 bytes", "missing expected");
+        assert_contains!(msg, "0 bytes available", "missing available");
     }
 
     #[test]

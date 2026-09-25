@@ -67,7 +67,10 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
 mod tests {
     use std::fmt::Display;
 
-    use crate::views::{Init, Matrix};
+    use crate::{
+        assert_contains,
+        views::{Init, Matrix},
+    };
     use diskann_vector::conversion::CastFromSlice;
     use half::f16;
     use rand::{
@@ -216,8 +219,9 @@ mod tests {
                             .expect("Column must exist")
                     })
                     .collect();
-                assert!(
-                    col_vals.contains(&val),
+                assert_contains!(
+                    col_vals,
+                    val,
                     "Value {} in column {} not found in data",
                     val,
                     col

@@ -39,5 +39,6 @@ default = ["rayon"]
 
 # Enable Rayon-based Parallelism for tagged kernels.
 rayon = ["dep:rayon"]
+
 # Enable testing utilities like test_data_root()
 testing = []
