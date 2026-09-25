@@ -6,8 +6,8 @@
 use half::f16;
 
 use crate::{
-    AsSIMD, Emulated, SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
-    SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
+    AsSIMD, Emulated, SIMDAbs, SIMDCast, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq,
+    SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
@@ -15,6 +15,7 @@ use super::{
     Neon, f16x4, f32x2, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x4,
+    u16x4, u32x4,
 };
 
 // AArch64 intrinsics
@@ -139,7 +140,26 @@ impl From<f16x4> for f32x4 {
     }
 }
 
-impl crate::SIMDCast<f16> for f32x4 {
+impl SIMDCast<f32> for u32x4 {
+    type Cast = f32x4;
+
+    #[inline(always)]
+    fn simd_cast(self) -> f32x4 {
+        // SAFETY: Allowed by the implicit `Neon` architecture.
+        let raw = unsafe { vcvtq_f32_u32(self.to_underlying()) };
+        f32x4::from_underlying(self.arch(), raw)
+    }
+}
+
+impl From<u16x4> for f32x4 {
+    #[inline(always)]
+    fn from(value: u16x4) -> f32x4 {
+        let value_u32s: u32x4 = value.into();
+        value_u32s.cast::<f32>()
+    }
+}
+
+impl SIMDCast<f16> for f32x4 {
     type Cast = f16x4;
     #[inline(always)]
     fn simd_cast(self) -> f16x4 {
@@ -210,6 +230,9 @@ mod tests {
     test_utils::ops::test_sumtree!(f32x4, 0x828bd890a470dc4d, test_neon());
 
     // Conversions
+    test_utils::ops::test_cast!(u32x4 => f32x4, 0xcd18de89bb8b2fcf, test_neon());
+    test_utils::ops::test_lossless_convert!(u16x4 => f32x4, 0x2e07f4c89da53bb1, test_neon());
+
     test_utils::ops::test_lossless_convert!(f16x4 => f32x4, 0xecba3008eae54ce7, test_neon());
 
     test_utils::ops::test_cast!(f32x4 => f16x4, 0xba8fe343fc9dbeff, test_neon());

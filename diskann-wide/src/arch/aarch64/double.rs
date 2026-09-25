@@ -8,14 +8,14 @@ use std::arch::aarch64::*;
 use half::f16;
 
 use crate::{
-    LoHi, SplitJoin,
+    LoHi, SIMDVector, SplitJoin,
     doubled::{self, Doubled},
 };
 
 use super::{
     f16x8, f32x4, i8x16, i16x8, i32x4,
     masks::{mask8x16, mask16x8, mask32x4, mask64x2},
-    u8x16, u32x4, u64x2,
+    u8x8, u8x16, u16x8, u32x4, u64x2,
 };
 
 // Double Masks
@@ -164,6 +164,54 @@ impl From<i8x32> for i16x32 {
     }
 }
 
+impl From<u8x8> for u16x8 {
+    #[inline(always)]
+    fn from(value: u8x8) -> Self {
+        let arch = value.arch();
+
+        // SAFETY: `vmovl_u8` is available on NEON and losslessly widens all eight lanes.
+        Self::from_underlying(arch, unsafe { vmovl_u8(value.to_underlying()) })
+    }
+}
+
+impl From<u8x8> for f32x8 {
+    #[inline(always)]
+    fn from(value: u8x8) -> Self {
+        let u16s = u16x8::from(value);
+        Self::from(u16s)
+    }
+}
+
+impl From<u16x8> for f32x8 {
+    #[inline(always)]
+    fn from(value: u16x8) -> Self {
+        let arch = value.arch();
+
+        // SAFETY: The widening conversions and integer-to-float conversions operate on
+        // matching lane types and are available with the `Neon` witness.
+        unsafe {
+            Self::new(
+                f32x4::from_underlying(
+                    arch,
+                    vcvtq_f32_u32(vmovl_u16(vget_low_u16(value.to_underlying()))),
+                ),
+                f32x4::from_underlying(
+                    arch,
+                    vcvtq_f32_u32(vmovl_u16(vget_high_u16(value.to_underlying()))),
+                ),
+            )
+        }
+    }
+}
+
+impl From<u8x16> for f32x16 {
+    #[inline(always)]
+    fn from(value: u8x16) -> Self {
+        let LoHi { lo, hi } = value.split();
+        Self::new(u16x8::from(lo).into(), u16x8::from(hi).into())
+    }
+}
+
 // (Potentially) Lossy
 impl crate::SIMDCast<f32> for f16x16 {
     type Cast = f32x16;
@@ -263,6 +311,11 @@ mod tests {
     }
 
     // u8s
+    mod test_u8x16 {
+        use super::*;
+        test_utils::ops::test_zipunzip!(u8x16 => u8x8, 0x78c92a4fe135db60, test_neon());
+    }
+
     mod test_u8x32 {
         use super::*;
         standard_tests!(u8x32, u8, 32);

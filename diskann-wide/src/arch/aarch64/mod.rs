@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::arch::aarch64::{vld2q_f32, vld4q_f32};
+
 use crate::{
     Architecture, SIMDVector,
     arch::{
@@ -244,6 +246,58 @@ impl Neon {
     /// Retarget the [`Scalar`] architecture.
     pub const fn retarget(self) -> Scalar {
         Scalar::new()
+    }
+
+    /// Load 8 `f32` values from an interleaved layout and deinterleave them into two vectors.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid to read 8 consecutive `f32` values.
+    #[inline(always)]
+    pub unsafe fn vld2q_f32(self, ptr: *const f32) -> [f32x4; 2] {
+        if cfg!(miri) {
+            // SAFETY: Guaranteed by the caller.
+            let input: [f32; 8] = core::array::from_fn(|i| unsafe { ptr.add(i).read_unaligned() });
+            [
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 2])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 2 + 1])),
+            ]
+        } else {
+            // SAFETY: Guaranteed by the caller.
+            let raw = unsafe { vld2q_f32(ptr) };
+            [
+                f32x4::from_underlying(self, raw.0),
+                f32x4::from_underlying(self, raw.1),
+            ]
+        }
+    }
+
+    /// Load 16 `f32` values from an interleaved layout and deinterleave them into four vectors.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid to read 16 consecutive `f32` values.
+    #[inline(always)]
+    pub unsafe fn vld4q_f32(self, ptr: *const f32) -> [f32x4; 4] {
+        if cfg!(miri) {
+            // SAFETY: Guaranteed by the caller.
+            let input: [f32; 16] = core::array::from_fn(|i| unsafe { ptr.add(i).read_unaligned() });
+            [
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 1])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 2])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 3])),
+            ]
+        } else {
+            // SAFETY: Guaranteed by the caller.
+            let raw = unsafe { vld4q_f32(ptr) };
+            [
+                f32x4::from_underlying(self, raw.0),
+                f32x4::from_underlying(self, raw.1),
+                f32x4::from_underlying(self, raw.2),
+                f32x4::from_underlying(self, raw.3),
+            ]
+        }
     }
 
     fn run_function_with_1<F, T0, R>(self, x0: T0::Of<'_>) -> R
@@ -555,5 +609,32 @@ mod tests {
 
         // Not equal across levels
         assert_ne!(scalar, neon);
+    }
+
+    #[test]
+    fn test_vld2q_f32() {
+        if let Some(arch) = test_neon() {
+            let input = [0.0, 10.0, 1.0, 11.0, 2.0, 12.0, 3.0, 13.0];
+            // SAFETY: `input` contains 8 consecutive values.
+            let [a, b] = unsafe { arch.vld2q_f32(input.as_ptr()) };
+            assert_eq!(a.to_array(), [0.0, 1.0, 2.0, 3.0]);
+            assert_eq!(b.to_array(), [10.0, 11.0, 12.0, 13.0]);
+        }
+    }
+
+    #[test]
+    fn test_vld4q_f32() {
+        if let Some(arch) = test_neon() {
+            let input = [
+                0.0, 10.0, 20.0, 30.0, 1.0, 11.0, 21.0, 31.0, 2.0, 12.0, 22.0, 32.0, 3.0, 13.0,
+                23.0, 33.0,
+            ];
+            // SAFETY: `input` contains 16 consecutive values.
+            let [a, b, c, d] = unsafe { arch.vld4q_f32(input.as_ptr()) };
+            assert_eq!(a.to_array(), [0.0, 1.0, 2.0, 3.0]);
+            assert_eq!(b.to_array(), [10.0, 11.0, 12.0, 13.0]);
+            assert_eq!(c.to_array(), [20.0, 21.0, 22.0, 23.0]);
+            assert_eq!(d.to_array(), [30.0, 31.0, 32.0, 33.0]);
+        }
     }
 }

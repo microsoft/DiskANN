@@ -13,7 +13,7 @@ use super::{
     Neon, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x4,
-    u8x16, u32x2,
+    u8x16, u16x4, u32x2,
 };
 
 // AArch64 intrinsics
@@ -59,6 +59,14 @@ macros::aarch64_define_bitops!(
     ),
     (u32, i32, vmovq_n_s32),
 );
+
+impl From<u16x4> for u32x4 {
+    #[inline(always)]
+    fn from(value: u16x4) -> Self {
+        // SAFETY: Allowed by the `Neon` architecture.
+        Self::from_underlying(value.arch(), unsafe { vmovl_u16(value.to_underlying()) })
+    }
+}
 
 impl SIMDSumTree for u32x4 {
     #[inline(always)]
