@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt, marker::PhantomData, ptr::NonNull};
+use std::{fmt, marker::PhantomData, num::NonZeroUsize, ptr::NonNull};
 use thiserror::Error;
 
 use crate::{
@@ -15,33 +15,38 @@ use crate::{
 /// The layout for [`Strided`].
 ///
 /// This struct ensures that the [`Self::cstride`] is greater than or equal to [`Self::ncols`]
-/// and that the linear length of the representation does not overflow `usize::MAX`.
+/// and that the addressable span is valid for elements of type `T`. In particular, the
+/// linear length does not overflow `usize::MAX` and its size in bytes does not exceed
+/// `isize::MAX`.
 ///
-/// The linear length of [`Strided`] is given by the forumula
+/// The linear length of [`Strided`] is given by the formula
 /// ```text
 /// self.nrows.saturating_sub(1) * self.cstride + self.nrows.min(1) * self.ncols
 /// ```
 /// This allows the last row to occupy less than a full stride.
-#[derive(Debug, Clone, Copy)]
-pub struct Layout {
+#[derive(Debug)]
+pub struct Layout<T> {
     nrows: usize,
     ncols: usize,
     cstride: usize,
+    _type: PhantomData<fn() -> T>,
 }
 
-impl Layout {
+impl<T> Layout<T> {
     /// Construct a new [`Layout`].
     ///
     /// Errors if:
     ///
     /// * `cstride < ncols`.
     /// * The computation of the linear length overflows `usize::MAX`.
+    /// * The number of bytes required for the full span exceeds `isize::MAX`.
     pub fn new(nrows: usize, ncols: usize, cstride: usize) -> Result<Self, LayoutError> {
-        LayoutError::check(nrows, ncols, cstride)?;
+        LayoutError::check::<T>(nrows, ncols, cstride)?;
         Ok(Self {
             nrows,
             ncols,
             cstride,
+            _type: PhantomData,
         })
     }
 
@@ -60,9 +65,29 @@ impl Layout {
         self.cstride
     }
 
-    /// Return the linear length of the [`Strided`] described by this [`Layout`].
+    /// Return the length of the addressable span described by this [`Layout`], including
+    /// gaps between rows.
     pub fn linear_length(&self) -> usize {
         self.nrows.saturating_sub(1) * self.cstride + self.nrows.min(1) * self.ncols
+    }
+}
+
+impl<T> Clone for Layout<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Layout<T> {}
+
+impl<T> From<views::Layout<T>> for Layout<T> {
+    fn from(layout: views::Layout<T>) -> Self {
+        Self {
+            nrows: layout.nrows(),
+            ncols: layout.ncols(),
+            cstride: layout.ncols(),
+            _type: PhantomData,
+        }
     }
 }
 
@@ -78,12 +103,32 @@ fn linear_length(nrows: usize, ncols: usize, cstride: usize) -> Option<usize> {
 pub struct LayoutError(LayoutErrorInner);
 
 impl LayoutError {
-    fn check(nrows: usize, ncols: usize, cstride: usize) -> Result<usize, Self> {
+    fn check<T>(nrows: usize, ncols: usize, cstride: usize) -> Result<usize, Self> {
         if cstride < ncols {
             Err(Self(LayoutErrorInner::InvalidStride { ncols, cstride }))
         } else {
-            linear_length(nrows, ncols, cstride)
-                .ok_or(Self(LayoutErrorInner::Overflow { nrows, cstride }))
+            let linear_length = match linear_length(nrows, ncols, cstride) {
+                Some(len) => len,
+                None => {
+                    return Err(Self(LayoutErrorInner::Overflow {
+                        nrows,
+                        cstride,
+                        elsize: None,
+                    }));
+                }
+            };
+
+            let elsize = std::mem::size_of::<T>();
+            let bytes = linear_length.saturating_mul(elsize);
+            if bytes > (isize::MAX as usize) {
+                Err(Self(LayoutErrorInner::Overflow {
+                    nrows,
+                    cstride,
+                    elsize: NonZeroUsize::new(elsize),
+                }))
+            } else {
+                Ok(linear_length)
+            }
         }
     }
 }
@@ -98,8 +143,15 @@ impl std::error::Error for LayoutError {}
 
 #[derive(Debug)]
 enum LayoutErrorInner {
-    InvalidStride { ncols: usize, cstride: usize },
-    Overflow { nrows: usize, cstride: usize },
+    InvalidStride {
+        ncols: usize,
+        cstride: usize,
+    },
+    Overflow {
+        nrows: usize,
+        cstride: usize,
+        elsize: Option<NonZeroUsize>,
+    },
 }
 
 impl fmt::Display for LayoutErrorInner {
@@ -110,11 +162,22 @@ impl fmt::Display for LayoutErrorInner {
                 "column stride {} must be greater than or equal to number of columns {}",
                 cstride, ncols
             ),
-            Self::Overflow { nrows, cstride } => write!(
-                f,
-                "a {}x{} strided matrix has a length exceeding usize::MAX",
-                nrows, cstride
-            ),
+            Self::Overflow {
+                nrows,
+                cstride,
+                elsize,
+            } => match elsize {
+                Some(elsize) => write!(
+                    f,
+                    "a {}x{} strided matrix with element size {} exceeds isize::MAX bytes",
+                    nrows, cstride, elsize
+                ),
+                None => write!(
+                    f,
+                    "a {}x{} strided matrix has a length exceeding usize::MAX",
+                    nrows, cstride
+                ),
+            },
         }
     }
 }
@@ -146,7 +209,7 @@ impl fmt::Display for LayoutErrorInner {
 #[derive(Debug)]
 pub struct Strided<'a, T> {
     ptr: NonNull<T>,
-    layout: Layout,
+    layout: Layout<T>,
     _lifetime: PhantomData<&'a [T]>,
 }
 
@@ -169,11 +232,23 @@ impl<'a, T> Strided<'a, T> {
                 expected,
             })
         } else {
-            Ok(Self {
-                ptr: internal::slice_to_nonnull(data),
-                layout,
-                _lifetime: PhantomData,
-            })
+            // SAFETY: `data.len() >= layout.linear_length()`.
+            Ok(unsafe { Self::from_data_unchecked(data, layout) })
+        }
+    }
+
+    /// Construct a strided view over `data`, shrinking the slice as needed, without
+    /// verifying that `data.len() >= layout.linear_length()`.
+    ///
+    /// # Safety
+    ///
+    /// `data.len()` must be greater-than or equal to `layout.linear_length()`.
+    unsafe fn from_data_unchecked(data: &'a [T], layout: Layout<T>) -> Self {
+        debug_assert!(data.len() >= layout.linear_length());
+        Self {
+            ptr: internal::slice_to_nonnull(data),
+            layout,
+            _lifetime: PhantomData,
         }
     }
 
@@ -182,7 +257,7 @@ impl<'a, T> Strided<'a, T> {
     }
 
     /// Return the [`Layout`] for the matrix.
-    pub fn layout(&self) -> Layout {
+    pub fn layout(&self) -> Layout<T> {
         self.layout
     }
 
@@ -302,7 +377,7 @@ impl<'a, T> Strided<'a, T> {
 
     /// Return row `row` as a slice.
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if `row >= self.nrows()`.
     pub fn row(&self, row: usize) -> &[T] {
@@ -340,17 +415,11 @@ pub enum TryFromError {
 
 impl<'a, T> From<views::MatrixView<'a, T>> for Strided<'a, T> {
     fn from(matrix: views::MatrixView<'a, T>) -> Self {
-        // FIXME: `views::MatrixView` doesn't quite ensure that `nrows * ncols` doesn't
-        // overflow. So for now, we need to be pessimistic.
-        //
-        // This will be fixed when `MatrixView` gets the same treatment.
-        Self::try_from_data(
-            matrix.into_inner(),
-            matrix.nrows(),
-            matrix.ncols(),
-            matrix.ncols(),
-        )
-        .expect("this will be made infallible in the future")
+        let layout = Layout::from(matrix.layout());
+
+        // SAFETY: `MatrixView` guarantees that the length of the base slice for `matrix`
+        // is exactly `layout.linear_length()`.
+        unsafe { Self::from_data_unchecked(matrix.into_inner(), layout) }
     }
 }
 
@@ -481,27 +550,27 @@ mod tests {
     #[test]
     fn test_layout_new() {
         // Valid layouts.
-        let layout = Layout::new(3, 4, 4).unwrap();
+        let layout = Layout::<usize>::new(3, 4, 4).unwrap();
         assert_eq!(layout.nrows(), 3);
         assert_eq!(layout.ncols(), 4);
         assert_eq!(layout.cstride(), 4);
         assert_eq!(layout.linear_length(), 12);
 
-        let layout = Layout::new(3, 4, 6).unwrap();
+        let layout = Layout::<usize>::new(3, 4, 6).unwrap();
         assert_eq!(layout.linear_length(), 2 * 6 + 4);
 
         // `cstride == ncols` is fine, even at zero.
-        assert!(Layout::new(0, 0, 0).is_ok());
+        assert!(Layout::<usize>::new(0, 0, 0).is_ok());
 
         // Invalid stride: `cstride < ncols`.
-        let err = Layout::new(3, 4, 3).unwrap_err();
+        let err = Layout::<usize>::new(3, 4, 3).unwrap_err();
         assert_eq!(
             err.to_string(),
             "column stride 3 must be greater than or equal to number of columns 4"
         );
 
         // Overflow: linear length exceeds `usize::MAX`.
-        let err = Layout::new(usize::MAX, usize::MAX, usize::MAX).unwrap_err();
+        let err = Layout::<usize>::new(usize::MAX, usize::MAX, usize::MAX).unwrap_err();
         assert_eq!(
             err.to_string(),
             format!(
@@ -510,6 +579,25 @@ mod tests {
                 usize::MAX
             )
         );
+
+        // Overflow: bytes exceeds `isize::MAX`.
+        let err = Layout::<usize>::new(isize::MAX as usize, 1, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "a {}x{} strided matrix with element size {} exceeds isize::MAX bytes",
+                isize::MAX,
+                1,
+                std::mem::size_of::<usize>(),
+            )
+        );
+
+        // The element type affects whether the addressable span is valid.
+        let length = isize::MAX as usize;
+        let layout = Layout::<u8>::new(length, 1, 1).unwrap();
+        assert_eq!(layout.linear_length(), length);
+        assert!(Layout::<u8>::new(length + 1, 1, 1).is_err());
+        assert!(Layout::<u16>::new(length, 1, 1).is_err());
     }
 
     #[test]
@@ -787,6 +875,8 @@ mod tests {
         let ptr = m.as_ptr();
         let v: Strided<_> = m.as_view().into();
         assert_eq!(v.as_ptr(), ptr);
+        assert_eq!(v.cstride(), m.ncols());
+        assert_eq!(v.layout().linear_length(), m.layout().num_elements());
         test_indexing(v, m.as_view());
     }
 

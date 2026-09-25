@@ -16,7 +16,7 @@ use std::io::{Read, Seek, Write};
 use diskann_wide::{LoHi, SplitJoin};
 use thiserror::Error;
 
-use crate::views::{Matrix, MatrixView};
+use crate::views::{Layout, Matrix, MatrixView};
 
 /// Read a matrix of `T` from the DiskANN binary format (see [module docs](self)).
 ///
@@ -29,14 +29,18 @@ where
     let (npoints, ndims) = (metadata.npoints(), metadata.ndims());
     let type_size = std::mem::size_of::<T>();
 
-    let expected_bytes = npoints
-        .checked_mul(ndims)
-        .and_then(|n| n.checked_mul(type_size))
-        .ok_or(ReadBinError::Overflow {
-            npoints: metadata.npoints_u32(),
-            ndims: metadata.ndims_u32(),
-            type_size,
-        })?;
+    let layout = match Layout::<T>::new(npoints, ndims) {
+        Ok(layout) => layout,
+        Err(_) => {
+            return Err(ReadBinError::Overflow {
+                npoints: metadata.npoints_u32(),
+                ndims: metadata.ndims_u32(),
+                type_size,
+            })
+        }
+    };
+
+    let expected_bytes = layout.num_elements() * std::mem::size_of::<T>();
 
     let data_start = reader.stream_position()?;
     let end = reader.seek(std::io::SeekFrom::End(0))?;
@@ -53,7 +57,7 @@ where
         });
     }
 
-    let mut data = Matrix::new(<T as bytemuck::Zeroable>::zeroed(), npoints, ndims);
+    let mut data = Matrix::new_with_layout(<T as bytemuck::Zeroable>::zeroed(), layout);
 
     reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(data.as_mut_slice()))?;
     Ok(data)
@@ -174,7 +178,7 @@ pub enum ReadBinError {
         type_size: usize,
     },
 
-    /// `npoints * ndims` overflows `usize` (corrupt or malicious header).
+    /// The dimensions do not describe a valid allocation (corrupt or malicious header).
     #[error(
         "header dimensions overflow: {npoints} points × {ndims} dims × {type_size} bytes overflows"
     )]
