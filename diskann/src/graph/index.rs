@@ -555,9 +555,11 @@ where
         async move {
             let mut output = Vec::new();
 
-            // Estimate the worst-case upper-bound for the capacity of the `PruneAccessor`'s
-            // working set as the combination of the batch plux `max_occlusion_size`
-            // candidates.
+            // Estimate an upper bound on the iterator length passed to `PruneAccessor::fill`.
+            // This is:
+            // - `max_occlusion_size`: Candidates retuend from search.
+            // - intra-batch candidates
+            // - internal_id.
             let working_set_capacity = self
                 .max_occlusion_size()
                 .saturating_add(self.config.intra_batch_candidates().get(batch.len()));
@@ -2470,8 +2472,9 @@ where
     /// All other fields of `scratch` are clobbered.
     ///
     /// This works by filling `working_set` with `internal_id`, `extras`, and the visited
-    /// candidates from `record`, capped at [`Self::max_occlusion_size`]. Items are filled in
-    /// priority order: `internal_id` first, then `extras`, then `record` candidates.
+    /// candidates from `record`, capped at [`Self::max_occlusion_size`] plus the anticipated
+    /// number of intra-batch candidates. Items are filled in priority order:
+    /// `internal_id` first, then `extras`, then `record` candidates.
     ///
     /// If `extras` is non-empty, distances from `internal_id` to each extra are computed and
     /// pushed into `record` before pruning. This allows batch neighbors to participate in
