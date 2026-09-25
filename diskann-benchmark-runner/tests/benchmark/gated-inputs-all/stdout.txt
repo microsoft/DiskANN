@@ -1,0 +1,5 @@
+Available input kinds are listed below:
+    sample-input
+    test-input-dim
+    test-input-types
+    phantom-input (requires the features "gated-feature-2" or "gated-feature-3")

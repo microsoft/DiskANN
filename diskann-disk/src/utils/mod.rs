@@ -19,10 +19,5 @@ pub use kmeans::{k_means_clustering, k_meanspp_selecting_pivots, run_lloyds};
 
 pub mod instrumentation;
 
-pub mod aligned_file_reader;
-pub use aligned_file_reader::AlignedFileReaderFactory;
-#[cfg(any(feature = "virtual_storage", test))]
-pub use aligned_file_reader::VirtualAlignedReaderFactory;
-
 pub mod statistics;
 pub use statistics::{get_mean_stats, get_percentile_stats, get_sum_stats, QueryStatistics};

@@ -80,9 +80,9 @@ fn assert_no_duplicates_across_pages(pages: &[Vec<Neighbor<u32>>]) {
     for (page_idx, page) in pages.iter().enumerate() {
         for n in page {
             assert!(
-                seen.insert(n.id),
+                seen.insert(*n.id()),
                 "duplicate id {} found on page {}",
-                n.id,
+                n.id(),
                 page_idx
             );
         }
@@ -94,13 +94,13 @@ fn assert_non_decreasing_distances(pages: &[Vec<Neighbor<u32>>]) {
     for (page_idx, page) in pages.iter().enumerate() {
         for window in page.windows(2) {
             assert!(
-                window[0].distance <= window[1].distance,
+                window[0].distance() <= window[1].distance(),
                 "page {}: distances not non-decreasing: id {} dist {} followed by id {} dist {}",
                 page_idx,
-                window[0].id,
-                window[0].distance,
-                window[1].id,
-                window[1].distance,
+                window[0].id(),
+                window[0].distance(),
+                window[1].id(),
+                window[1].distance(),
             );
         }
     }
@@ -135,7 +135,7 @@ fn build_baseline(
         page_size,
         pages: pages
             .iter()
-            .map(|p| p.iter().map(|n| (n.id, n.distance)).collect())
+            .map(|p| p.iter().map(|n| n.as_tuple()).collect())
             .collect(),
         total_results: pages.iter().map(|p| p.len()).sum(),
     }
@@ -154,14 +154,10 @@ fn basic_paged_search() {
     let search_l = 32;
     let page_size = 4;
     let ctx = test_provider::Context::new();
+    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(
-            test_provider::Strategy::new(),
-            &ctx,
-            query.as_slice(),
-            search_l,
-        ))
+        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
         .unwrap();
 
     let mut pages: Vec<Vec<Neighbor<u32>>> = Vec::new();
@@ -197,14 +193,10 @@ fn single_page() {
     let search_l = 200;
     let page_size = 200; // larger than total points (125)
     let ctx = test_provider::Context::new();
+    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(
-            test_provider::Strategy::new(),
-            &ctx,
-            query.as_slice(),
-            search_l,
-        ))
+        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
         .unwrap();
 
     let results = rt.block_on(search.next_page(page_size)).unwrap();
@@ -240,14 +232,10 @@ fn small_page_size() {
     let search_l = 32;
     let page_size = 1; // one result per page, maximum iterations
     let ctx = test_provider::Context::new();
+    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(
-            test_provider::Strategy::new(),
-            &ctx,
-            query.as_slice(),
-            search_l,
-        ))
+        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
         .unwrap();
 
     let mut pages: Vec<Vec<Neighbor<u32>>> = Vec::new();

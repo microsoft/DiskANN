@@ -3,8 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use crate::data_model::GraphDataType;
-use diskann::{graph::AdjacencyList, ANNError, ANNResult};
+use crate::{
+    data_model::GraphDataType,
+    error::{diskann_error, ErrorKind},
+};
+use diskann::{graph::AdjacencyList, ANNResult};
 use hashbrown::{hash_map::Entry::Occupied, HashMap};
 
 pub struct Cache<Data: GraphDataType<VectorIdType = u32>> {
@@ -91,7 +94,8 @@ where
         associated_data: Data::AssociatedDataType,
     ) -> ANNResult<()> {
         if self.dimension != vector.len() {
-            return ANNResult::Err(ANNError::log_index_error(
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
                 "Vector dimension does not match the dimension set in cache.",
             ));
         }
@@ -103,7 +107,8 @@ where
         }
 
         if self.mapping.len() >= self.capacity {
-            return ANNResult::Err(ANNError::log_index_error(
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
                 "Cache is full, cannot insert more nodes",
             ));
         }

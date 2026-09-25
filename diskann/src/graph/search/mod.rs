@@ -14,7 +14,7 @@
 //! ```ignore
 //! use diskann::graph::{
 //!     neighbor::{BackInserter, Neighbor},
-//!     search::{Knn, Range, MultihopSearch},
+//!     search::{Knn, Range, MultihopFilterSearch},
 //!     Search,
 //! };
 //!
@@ -42,8 +42,10 @@ use crate::{
     provider::DataProvider,
 };
 
+mod filtered_range_search;
+mod inline_filter_search;
 mod knn_search;
-mod multihop_search;
+pub(crate) mod multihop_filter_search;
 mod range_search;
 
 mod paged;
@@ -62,13 +64,15 @@ pub(crate) mod scratch;
 /// See the specific search types for detailed documentation:
 /// - [`Knn`] - Standard k-nearest neighbor search
 /// - [`Range`] - Range-based search within a distance radius
+/// - [`FilteredRange`] - Filtered range search
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
-/// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
+/// - [`MultihopFilterSearch`] - Label-filtered search with multi-hop expansion
+/// - [`InlineFilterSearch`] - Inline filtered search with optional adaptive L sizing
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
-pub trait Search<DP, S, T>
+pub trait Search<'a, DP, S, T>
 where
     DP: DataProvider,
-    S: graph::glue::SearchStrategy<DP, T>,
+    S: graph::glue::SearchStrategy<'a, DP, T>,
 {
     /// The result type returned by this search.
     type Output;
@@ -97,22 +101,24 @@ where
     /// Returns an error if there is a failure accessing elements or computing distances.
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> graph::glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: graph::glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
+pub use filtered_range_search::FilteredRange;
+pub use inline_filter_search::{AdaptiveL, InlineFilterSearch};
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
-pub use multihop_search::MultihopSearch;
-pub use range_search::{Range, RangeSearchError};
+pub use multihop_filter_search::MultihopFilterSearch;
+pub use range_search::{Range, RangeBuilder, RangeSearchError};
 
 // Feature-gated diverse search.
 #[cfg(feature = "experimental_diversity_search")]
@@ -120,3 +126,6 @@ mod diverse_search;
 
 #[cfg(feature = "experimental_diversity_search")]
 pub use diverse_search::Diverse;
+
+#[cfg(feature = "experimental_diversity_search")]
+pub use diverse_search::DiverseSearchParams;

@@ -5,10 +5,12 @@
 
 use core::fmt::Debug;
 
-use diskann::{ANNError, ANNResult};
+use diskann::ANNResult;
 use diskann_providers::model::FixedChunkPQTable;
-use diskann_quantization::product::TransposedTable;
+use diskann_quantization::{error::Format, product::TransposedTable};
 use diskann_utils::views::Matrix;
+
+use crate::error::{diskann_error, ErrorKind};
 
 #[derive(Debug)]
 pub struct PQData {
@@ -28,7 +30,7 @@ impl PQData {
             pq_pivot_table.view_pivots(),
             pq_pivot_table.view_offsets().to_owned(),
         )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
 
         Ok(Self {
             pq_pivot_table,
@@ -64,7 +66,10 @@ impl PQData {
     // Get compressed vector with the given vector id from the pq_compressed_data.
     pub fn get_compressed_vector(&self, vector_id: usize) -> ANNResult<&[u8]> {
         self.pq_compressed_data.get_row(vector_id).ok_or_else(|| {
-            ANNError::log_index_error("Vector id is out of boundary in the compressed dataset.")
+            diskann_error!(
+                ErrorKind::IndexError,
+                "Vector id is out of boundary in the compressed dataset."
+            )
         })
     }
 }

@@ -143,11 +143,7 @@ mod tests {
 
     #[test]
     fn test_from_ann_error() {
-        use diskann::ANNErrorKind;
-        let ann_error = diskann::ANNError::new(
-            ANNErrorKind::IndexError,
-            std::io::Error::other("test error"),
-        );
+        let ann_error = diskann::ANNError::new(std::io::Error::other("test error"));
         let cmd_error: CMDToolError = ann_error.into();
         assert!(cmd_error.details.contains("test error"));
     }

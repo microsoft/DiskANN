@@ -7,16 +7,22 @@ mod tests {
     use std::{ffi::c_void, mem, ptr};
 
     use diskann_vector::distance::Metric;
+    use rand::{Rng, seq::SliceRandom};
 
     use crate::{
-        VectorQuantType, VectorValueType, card, check_external_id_valid, create_index, drop_index,
-        garnet::Context, insert, remove, search_vector, set_attribute, test_utils::Store,
+        Index, InsertResult, Overflow, VectorQuantType, backfill_quant_vectors, build_quant_table,
+        card, check_external_id_valid, check_internal_id_valid, create_index, drop_index,
+        garnet::{Context, Term},
+        insert,
+        quantization::{GarnetQuantizer, Spherical1Bit},
+        remove, search_vector, set_attribute,
+        test_utils::Store,
     };
 
     /// Creates an index with default test values and returns (index_ptr, Context).
     /// The caller is responsible for calling drop_index when done.
-    fn create_test_index(store: &Store) -> (*const c_void, Context) {
-        let (index_ptr, ctx) = create_test_index_with_metric(store, Metric::L2 as i32);
+    fn create_test_index(store: &Store, quant_type: VectorQuantType) -> (*const c_void, Context) {
+        let (index_ptr, ctx) = create_test_index_with_metric(store, quant_type, Metric::L2 as i32);
         assert!(
             !index_ptr.is_null(),
             "create_test_index failed to create index"
@@ -26,21 +32,23 @@ mod tests {
 
     /// Creates an index with specified metric type and returns (index_ptr, Context).
     /// The caller is responsible for calling drop_index when done.
-    fn create_test_index_with_metric(store: &Store, metric_type: i32) -> (*const c_void, Context) {
-        store.clear();
-
+    fn create_test_index_with_metric(
+        store: &Store,
+        quant_type: VectorQuantType,
+        metric_type: i32,
+    ) -> (*const c_void, Context) {
         let callbacks = store.callbacks();
-        let ctx = Context(0);
+        let ctx = Context::new(0);
+        let mut quant_needed = false;
 
         let dim: u32 = 2;
         let reduce_dim = 0;
-        let quant_type = VectorQuantType::NoQuant;
         let l_build = 10;
         let max_degree = 20;
 
         let index_ptr = unsafe {
             create_index(
-                ctx.0,
+                ctx.get(),
                 dim,
                 reduce_dim,
                 quant_type,
@@ -51,6 +59,9 @@ mod tests {
                 callbacks.write_callback(),
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
+                callbacks.filter_callback(),
+                callbacks.log_callback(),
+                &mut quant_needed,
             )
         };
 
@@ -59,24 +70,25 @@ mod tests {
 
     #[test]
     fn basic_create_index() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
         assert!(!index_ptr.is_null());
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
     #[test]
     fn create_index_with_invalid_metric_returns_null() {
-        let store = Store;
+        let store = Store::new();
 
         // Test with invalid metric type values — passed as raw i32
         let invalid_metrics = [-1, -2, 99, i32::MAX, i32::MIN];
 
         for invalid_metric in invalid_metrics {
-            let (index_ptr, _ctx) = create_test_index_with_metric(&store, invalid_metric);
+            let (index_ptr, _ctx) =
+                create_test_index_with_metric(&store, VectorQuantType::NoQuant, invalid_metric);
             assert!(
                 index_ptr.is_null(),
                 "Expected null for invalid metric_type={}",
@@ -87,7 +99,7 @@ mod tests {
 
     #[test]
     fn create_index_with_valid_metrics() {
-        let store = Store;
+        let store = Store::new();
 
         // Test all valid metric types
         let valid_metrics = [
@@ -98,22 +110,23 @@ mod tests {
         ];
 
         for valid_metric in valid_metrics {
-            let (index_ptr, ctx) = create_test_index_with_metric(&store, valid_metric);
+            let (index_ptr, ctx) =
+                create_test_index_with_metric(&store, VectorQuantType::NoQuant, valid_metric);
             assert!(
                 !index_ptr.is_null(),
                 "Expected non-null for valid metric_type_raw={}",
                 valid_metric
             );
             unsafe {
-                drop_index(ctx.0, index_ptr);
+                drop_index(ctx.get(), index_ptr);
             }
         }
     }
 
     #[test]
     fn add_check_and_remove_vector() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         // Vector id with 4 bytes size
         let garnet_vector_id = 42u32;
@@ -126,13 +139,12 @@ mod tests {
         let attributes_bytes = b"wololo";
         let attributes_len = attributes_bytes.len();
 
-        let result: bool = unsafe {
+        let result = unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
@@ -140,32 +152,33 @@ mod tests {
             )
         };
 
-        assert!(result);
+        assert!(result > 0);
 
         // Confirm vector exists using FFI function
-        let exists =
-            unsafe { check_external_id_valid(ctx.0, index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
+        let exists = unsafe {
+            check_external_id_valid(ctx.get(), index_ptr, id_bytes.as_ptr(), id_bytes.len())
+        };
         assert!(exists);
 
-        let mut cardinality = unsafe { card(ctx.0, index_ptr) };
+        let mut cardinality = unsafe { card(ctx.get(), index_ptr) };
         assert_eq!(cardinality, 1);
 
-        let removed = unsafe { remove(ctx.0, index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
+        let removed = unsafe { remove(ctx.get(), index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
         assert!(removed);
 
         // Currently we're not tracking deletions for cardinality, so it should still be 1
-        cardinality = unsafe { card(ctx.0, index_ptr) };
+        cardinality = unsafe { card(ctx.get(), index_ptr) };
         assert_eq!(cardinality, 1);
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
     #[test]
     fn update_vector_attributes() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         // Vector id with 4 bytes size
         let garnet_vector_id = 42u32;
@@ -175,7 +188,7 @@ mod tests {
         let attributes1 = b"wololo";
         let set_attribute_result1 = unsafe {
             set_attribute(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
@@ -188,26 +201,25 @@ mod tests {
         let vector: [f32; 2] = [1.0, 2.0];
         let vector_bytes = bytemuck::cast_slice(&vector);
 
-        let result: bool = unsafe {
+        let result = unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_bytes.len() / 4,
                 attributes1.as_ptr(),
                 attributes1.len(),
             )
         };
-        assert!(result);
+        assert!(result > 0);
 
         // Set attributes after insertion
         let attributes2 = b"new_attributes";
         let set_attribute_result2 = unsafe {
             set_attribute(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
@@ -220,7 +232,7 @@ mod tests {
         // Set attributes to empty using null ptr
         let set_attribute_result3 = unsafe {
             set_attribute(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
@@ -233,7 +245,7 @@ mod tests {
         let empty_attribute = b"";
         let set_attribute_result4 = unsafe {
             set_attribute(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
@@ -244,14 +256,14 @@ mod tests {
         assert!(set_attribute_result4);
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
     #[test]
     fn external_id_exists_lifecycle() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         // EID 1
         let eid1 = 1u32;
@@ -269,127 +281,197 @@ mod tests {
 
         // Check external_id exists with EID 1 (should not exist initially)
         let exists1 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
         };
         assert!(!exists1, "EID 1 should not exist initially");
 
         // Add vector with EID 1
         let insert_result1 = unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 eid1_bytes.as_ptr(),
                 eid1_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
                 attributes_bytes.len(),
             )
         };
-        assert!(insert_result1, "Insert with EID 1 should succeed");
+        assert!(insert_result1 > 0, "Insert with EID 1 should succeed");
 
         // Check external_id exists with EID 1 (should exist after insert)
         let exists2 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
         };
         assert!(exists2, "EID 1 should exist after insert");
 
         // Remove vector with EID 1
-        let removed = unsafe { remove(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len()) };
+        let removed =
+            unsafe { remove(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len()) };
         assert!(removed, "Remove with EID 1 should succeed");
 
         // Check external_id exists with EID 1 (should not exist after removal)
         let exists3 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
         };
         assert!(!exists3, "EID 1 should not exist after removal");
 
         // Add vector with EID 2
         let insert_result2 = unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 eid2_bytes.as_ptr(),
                 eid2_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
                 attributes_bytes.len(),
             )
         };
-        assert!(insert_result2, "Insert with EID 2 should succeed");
+        assert!(insert_result2 > 0, "Insert with EID 2 should succeed");
 
         // Check external_id exists with EID 2 (should exist after insert)
         let exists4 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid2_bytes.as_ptr(), eid2_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid2_bytes.as_ptr(), eid2_bytes.len())
         };
         assert!(exists4, "EID 2 should exist after insert");
 
         // Check external_id exists with EID 1 (should still not exist)
         let exists5 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
         };
         assert!(!exists5, "EID 1 should still not exist");
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn internal_id_exists_lifecycle() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+
+        let bad_iid_bytes = [0u8; 5];
+        let exists0 = unsafe {
+            check_internal_id_valid(
+                ctx.get(),
+                index_ptr,
+                bad_iid_bytes.as_ptr(),
+                bad_iid_bytes.len(),
+            )
+        };
+        assert!(!exists0, "Bad ID should not exist");
+
+        let eid = 1u32;
+        let eid_bytes = bytemuck::bytes_of(&eid);
+
+        let vector: [f32; 2] = [1.0, 2.0];
+        let vector_bytes = bytemuck::cast_slice(&vector);
+        let vector_len = 2;
+
+        // First insert will get ID=1
+        let iid = 1u32;
+        let iid_bytes = bytemuck::bytes_of(&iid);
+
+        // Check internal ID does not exist
+        let exists1 = unsafe {
+            check_internal_id_valid(ctx.get(), index_ptr, iid_bytes.as_ptr(), iid_bytes.len())
+        };
+        assert!(!exists1, "ID should not exist initially");
+
+        // Insert vector
+        let insert_result = unsafe {
+            insert(
+                ctx.get(),
+                index_ptr,
+                eid_bytes.as_ptr(),
+                eid_bytes.len(),
+                vector_bytes.as_ptr(),
+                vector_len,
+                ptr::null(),
+                0,
+            )
+        };
+        assert!(insert_result > 0, "Insert should succeed");
+
+        // Check internal id exists
+        let exists2 = unsafe {
+            check_internal_id_valid(ctx.get(), index_ptr, iid_bytes.as_ptr(), iid_bytes.len())
+        };
+        assert!(exists2, "ID should exist after insert");
+
+        // Remove vector
+        let removed = unsafe { remove(ctx.get(), index_ptr, eid_bytes.as_ptr(), eid_bytes.len()) };
+        assert!(removed, "Remove with EID 1 should succeed");
+
+        // Check internal ID does not exist now
+        let exists3 = unsafe {
+            check_internal_id_valid(ctx.get(), index_ptr, iid_bytes.as_ptr(), iid_bytes.len())
+        };
+        assert!(!exists3, "ID should not exist after removal");
+
+        unsafe {
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
     /// Using u64 external IDs, insert some vectors and ensure search results are same.
     #[test]
     fn search_with_large_external_ids() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         let id1 = 1234u64;
-        let v1 = &[1u8, 0u8];
+        let v1 = &[1.0f32, 0.0];
         let id2 = 5678u64;
-        let v2 = &[0u8, 1u8];
+        let v2 = &[0.0f32, 1.0];
 
         let id1_bytes = bytemuck::bytes_of(&id1);
         let id2_bytes = bytemuck::bytes_of(&id2);
 
-        assert!(unsafe {
-            insert(
-                ctx.0,
-                index_ptr,
-                id1_bytes.as_ptr(),
-                id1_bytes.len(),
-                VectorValueType::XB8,
-                v1.as_ptr(),
-                v1.len(),
-                b"".as_ptr(),
-                0,
-            )
-        });
+        assert!(
+            unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    id1_bytes.as_ptr(),
+                    id1_bytes.len(),
+                    bytemuck::cast_slice::<f32, u8>(v1).as_ptr(),
+                    v1.len(),
+                    b"".as_ptr(),
+                    0,
+                )
+            } > 0
+        );
 
-        assert!(unsafe {
-            insert(
-                ctx.0,
-                index_ptr,
-                id2_bytes.as_ptr(),
-                id2_bytes.len(),
-                VectorValueType::XB8,
-                v2.as_ptr(),
-                v2.len(),
-                b"".as_ptr(),
-                0,
-            )
-        });
+        assert!(
+            unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    id2_bytes.as_ptr(),
+                    id2_bytes.len(),
+                    bytemuck::cast_slice::<f32, u8>(v2).as_ptr(),
+                    v2.len(),
+                    b"".as_ptr(),
+                    0,
+                )
+            } > 0
+        );
 
-        let qv = &[0u8, 0u8];
+        let qv = &[0.0f32, 0.0];
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
+        let mut overflow = ptr::null_mut();
 
         let count = unsafe {
             search_vector(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
-                VectorValueType::XB8,
-                qv.as_ptr(),
+                bytemuck::cast_slice::<f32, u8>(qv).as_ptr(),
                 qv.len(),
                 2.0,
                 10,
@@ -400,11 +482,13 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                1,
+                &mut overflow,
             )
         };
 
         assert_eq!(count, 2);
+        assert!(overflow.is_null());
 
         let mut output_ids = vec![];
         let mut offset = 0;
@@ -442,8 +526,178 @@ mod tests {
         }
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
+    }
+
+    #[test]
+    fn search_element() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+
+        let id1 = 1234u64;
+        let v1 = &[1.0f32, 0.0];
+        let id2 = 5678u64;
+        let v2 = &[0.0f32, 1.0];
+
+        let id1_bytes = bytemuck::bytes_of(&id1);
+        let id2_bytes = bytemuck::bytes_of(&id2);
+
+        assert!(
+            unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    id1_bytes.as_ptr(),
+                    id1_bytes.len(),
+                    bytemuck::cast_slice::<f32, u8>(v1).as_ptr(),
+                    v1.len(),
+                    b"".as_ptr(),
+                    0,
+                )
+            } > 0
+        );
+
+        assert!(
+            unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    id2_bytes.as_ptr(),
+                    id2_bytes.len(),
+                    bytemuck::cast_slice::<f32, u8>(v2).as_ptr(),
+                    v2.len(),
+                    b"".as_ptr(),
+                    0,
+                )
+            } > 0
+        );
+
+        let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
+        let mut output_dists = vec![0f32; 2];
+        let mut overflow = ptr::null_mut();
+
+        let count = unsafe {
+            crate::search_element(
+                ctx.get(),
+                index_ptr,
+                id1_bytes.as_ptr(),
+                id1_bytes.len(),
+                2.0,
+                10,
+                ptr::null(),
+                0,
+                0,
+                output_id_buffer.as_mut_ptr(),
+                output_id_buffer.len(),
+                output_dists.as_mut_ptr(),
+                output_dists.len(),
+                1,
+                &mut overflow,
+            )
+        };
+
+        assert_eq!(count, 2);
+        assert!(overflow.is_null());
+
+        let mut output_ids = vec![];
+        let mut offset = 0;
+        for _ in 0..(count as usize) {
+            let mut id_len = 0u32;
+            bytemuck::bytes_of_mut(&mut id_len)
+                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            offset += mem::size_of::<u32>();
+
+            assert_eq!(id_len, mem::size_of::<u64>() as u32);
+
+            let mut id = 0u64;
+            bytemuck::bytes_of_mut(&mut id)
+                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u64>()]);
+            offset += mem::size_of::<u64>();
+
+            output_ids.push(id);
+        }
+
+        match (output_ids[0], output_ids[1]) {
+            (1234u64, 5678u64) => {
+                assert_eq!(output_dists[0], 0.0);
+                assert_eq!(output_dists[1], 2.0);
+            }
+            (5678u64, 1234u64) => {
+                assert_eq!(output_dists[0], 2.0);
+                assert_eq!(output_dists[1], 0.0);
+            }
+            _ => {
+                panic!("got unexpected ids {} and {}", output_ids[0], output_ids[1]);
+            }
+        }
+
+        unsafe {
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn search_element_writes_overflow_output() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        let id = 1u32;
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, id, &[0.0, 1.0]),
+            InsertResult::Success
+        );
+
+        let mut output_ids: [u8; 0] = [];
+        let mut output_distances: [f32; 1] = [0f32];
+        let mut overflow = ptr::null_mut();
+        let count = unsafe {
+            crate::search_element(
+                ctx.get(),
+                index_ptr,
+                bytemuck::bytes_of(&id).as_ptr(),
+                mem::size_of::<u32>(),
+                1.0,
+                10,
+                ptr::null(),
+                0,
+                0,
+                output_ids.as_mut_ptr(),
+                output_ids.len(),
+                output_distances.as_mut_ptr(),
+                output_distances.len(),
+                1,
+                &mut overflow,
+            )
+        };
+
+        assert_eq!(count, 0);
+        assert!(!overflow.is_null());
+
+        unsafe {
+            drop(Overflow::from_ptr(overflow));
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn overflow_results() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
+        let mut output_dists = vec![0f32; 2];
+        let res = unsafe {
+            crate::overflow_results(
+                ctx.get(),
+                index_ptr,
+                ptr::null_mut(),
+                output_id_buffer.as_mut_ptr(),
+                output_id_buffer.len(),
+                output_dists.as_mut_ptr(),
+                output_dists.len(),
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(res, -1);
     }
 
     /// Helper to insert a vector with u32 external ID and FP32 data.
@@ -452,21 +706,21 @@ mod tests {
         index_ptr: *const c_void,
         eid: u32,
         vector: &[f32],
-    ) -> bool {
+    ) -> InsertResult {
         let id_bytes = bytemuck::bytes_of(&eid);
         let vector_bytes = bytemuck::cast_slice(vector);
         unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector.len(),
                 b"".as_ptr(),
                 0,
             )
+            .into()
         }
     }
 
@@ -486,12 +740,12 @@ mod tests {
             Some(b) => (b.as_ptr(), b.len()),
             None => (ptr::null(), 0),
         };
+        let mut overflow = ptr::null_mut();
 
         let count = unsafe {
             search_vector(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
-                VectorValueType::FP32,
                 query_bytes.as_ptr(),
                 query.len(),
                 0.0,
@@ -503,9 +757,14 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                1,
+                &mut overflow,
             )
         };
+
+        if !overflow.is_null() {
+            unsafe { drop(Overflow::from_ptr(overflow)) };
+        }
 
         assert!(count >= 0, "search failed with {count}");
         let count = count as usize;
@@ -529,84 +788,90 @@ mod tests {
     }
 
     #[test]
-    fn search_without_filter() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
+    fn search_vector_writes_overflow_output() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        let vector = [0.0f32, 1.0];
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, 1, &vector),
+            InsertResult::Success
+        );
+
+        let query_bytes = bytemuck::cast_slice(&vector);
+        let mut output_ids: [u8; 0] = [];
+        let mut output_distances: [f32; 1] = [0f32];
+        let mut overflow = ptr::null_mut();
+        let count = unsafe {
+            search_vector(
+                ctx.get(),
+                index_ptr,
+                query_bytes.as_ptr(),
+                vector.len(),
+                1.0,
+                10,
+                ptr::null(),
+                0,
+                0,
+                output_ids.as_mut_ptr(),
+                output_ids.len(),
+                output_distances.as_mut_ptr(),
+                output_distances.len(),
+                1,
+                &mut overflow,
+            )
+        };
+
+        assert_eq!(count, 0);
+        assert!(!overflow.is_null());
 
         unsafe {
-            assert!(insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]));
-            assert!(insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]));
-            assert!(insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]));
+            drop(Overflow::from_ptr(overflow));
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn search_without_filter() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+
+        unsafe {
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]),
+                InsertResult::Success
+            );
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]),
+                InsertResult::Success
+            );
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]),
+                InsertResult::Success
+            );
 
             let (ids, _dists) = do_search(&ctx, index_ptr, &[1.0, 0.0], 3, None);
             assert!(ids.len() >= 2, "should return at least 2 vectors");
             // Closest to [1,0] should be id=10 (exact match)
             assert_eq!(ids[0], 10);
 
-            drop_index(ctx.0, index_ptr);
-        }
-    }
-
-    #[test]
-    fn search_with_bitmap_all_match() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
-
-        unsafe {
-            assert!(insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]));
-            assert!(insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]));
-            assert!(insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]));
-
-            // Bitmap with bits 1,2,3 set (internal IDs for the 3 inserted vectors;
-            // internal ID 0 is the start point)
-            let bitmap: [u8; 8] = [0b00001110, 0, 0, 0, 0, 0, 0, 0];
-            let (ids, _dists) = do_search(&ctx, index_ptr, &[1.0, 0.0], 3, Some(&bitmap));
-            // Start point (internal ID 0) is filtered out from results,
-            // so we may get fewer than k results.
-            assert!(ids.len() >= 2, "should return at least 2 matching vectors");
-            assert_eq!(ids[0], 10, "closest should still be id=10");
-
-            drop_index(ctx.0, index_ptr);
-        }
-    }
-
-    #[test]
-    fn search_with_bitmap_partial_match() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
-
-        unsafe {
-            // Internal ID 0 -> EID 10, vector [1,0]
-            assert!(insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]));
-            // Internal ID 1 -> EID 20, vector [0,1]
-            assert!(insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]));
-            // Internal ID 2 -> EID 30, vector [1,1]
-            assert!(insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]));
-
-            // Bitmap with only bit 2 set (internal ID 2 = EID 20, second inserted vector)
-            let bitmap: [u8; 8] = [0b00000100, 0, 0, 0, 0, 0, 0, 0];
-            // Query close to EID 20's vector [0,1] to ensure it appears in results
-            let (ids, _dists) = do_search(&ctx, index_ptr, &[0.0, 1.0], 3, Some(&bitmap));
-            // BetaFilter biases toward matching vectors by scaling their distances.
-            assert!(!ids.is_empty(), "should return at least one result");
-            // EID 20 should appear since it's the closest to query AND matches the filter
-            assert!(
-                ids.contains(&20),
-                "filtered vector EID 20 should be in results"
-            );
-
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
     #[test]
     fn search_with_null_bitmap_same_as_unfiltered() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store);
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         unsafe {
-            assert!(insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]));
-            assert!(insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]));
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]),
+                InsertResult::Success
+            );
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]),
+                InsertResult::Success
+            );
 
             // Null bitmap should behave like no filter
             let (ids_null, dists_null) = do_search(&ctx, index_ptr, &[1.0, 0.0], 2, None);
@@ -617,7 +882,183 @@ mod tests {
             assert_eq!(ids_null, ids_empty);
             assert_eq!(dists_null, dists_empty);
 
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn basic_quant_bootstrap_lifecycle_bin() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Bin);
+        let index = unsafe { &*index_ptr.cast::<Index>() };
+
+        let quantizer = Spherical1Bit::new(2);
+        let required_vectors = quantizer.required_vectors();
+
+        let mut rng = rand::rng();
+
+        // pre-quantization phase
+
+        assert_eq!(index.inner.approximate_count(), 0);
+        for id in 0..required_vectors - 1 {
+            let v = [rng.random(), rng.random()];
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, id as u32, &v),
+                InsertResult::Success
+            );
+        }
+        assert_eq!(
+            index.inner.approximate_count() as usize,
+            required_vectors - 1
+        );
+
+        // transition phase
+
+        let v = [rng.random(), rng.random()];
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, required_vectors as u32 - 1, &v),
+            InsertResult::SuccessStartTraining
+        );
+
+        // signal to train the quantizer
+
+        let res = unsafe { build_quant_table(ctx.get(), index_ptr) };
+        assert!(res, "quantizer training failed");
+
+        // new inserts will be quantized
+
+        let v = [rng.random(), rng.random()];
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, required_vectors as u32, &v),
+            InsertResult::Success
+        );
+
+        // previous insert is unquantized; inserted before training
+        let iid = required_vectors as u32;
+        assert!(
+            store
+                .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
+                .is_none()
+        );
+
+        // latest insert is quantized
+        let iid = required_vectors as u32 + 1; // +1 to account for the start vector
+        let qv = store
+            .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
+            .expect("missing quant vector");
+        assert_eq!(qv.len(), quantizer.bytes());
+
+        // backfill quant vectors
+
+        unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 1) };
+
+        // all previous inserts are now quantized
+        for iid in 1..=required_vectors as u32 {
+            let qv = store
+                .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
+                .expect("missing quant vector");
+            assert_eq!(qv.len(), quantizer.bytes());
+        }
+
+        // do a search
+        let qv = [0.5f32, 0.5];
+        let (ids, _dists) = do_search(&ctx, index_ptr, &qv, 10, None);
+        assert!(!ids.is_empty(), "no results found");
+
+        // delete some vectors
+        let mut to_delete = (0..required_vectors as u32).collect::<Vec<_>>();
+        to_delete.shuffle(&mut rng);
+        for id in to_delete.into_iter().take(100) {
+            assert!(unsafe {
+                remove(
+                    ctx.get(),
+                    index_ptr,
+                    bytemuck::bytes_of(&id).as_ptr(),
+                    mem::size_of::<u32>(),
+                )
+            });
+        }
+
+        // do another search
+        let qv = [0.5f32, 0.5];
+        let (ids, _dists) = do_search(&ctx, index_ptr, &qv, 10, None);
+        assert!(!ids.is_empty(), "no results found");
+
+        unsafe {
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn recreate_basic_with_float_vectors() {
+        for quant_type in [
+            VectorQuantType::NoQuant,
+            VectorQuantType::Bin,
+            VectorQuantType::Q8,
+        ] {
+            let store = Store::new();
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
+
+            // add vectors
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]),
+                InsertResult::Success,
+                "failed to insert id=10 with quant_type={quant_type:?}",
+            );
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]),
+                InsertResult::Success,
+                "failed to insert id=20 with quant_type={quant_type:?}",
+            );
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]),
+                InsertResult::Success,
+                "failed to insert id=30 with quant_type={quant_type:?}",
+            );
+
+            // do a search; save results
+            let qv = [0.0f32, 0.0];
+            let (orig_ids, orig_dists) = do_search(&ctx, index_ptr, &qv, 10, None);
+            assert!(
+                !orig_ids.is_empty(),
+                "got empty id list for quant_type={quant_type:?}"
+            );
+            assert!(
+                !orig_dists.is_empty(),
+                "got empty dist list for quant_type={quant_type:?}"
+            );
+
+            let orig_num_vectors = unsafe { card(ctx.get(), index_ptr) } as usize;
+
+            // drop index
+            unsafe {
+                drop_index(ctx.get(), index_ptr);
+            }
+
+            // create_index with the same store
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
+
+            // check num vectors is the same
+            let num_vectors = unsafe { card(ctx.get(), index_ptr) } as usize;
+            assert_eq!(
+                num_vectors, orig_num_vectors,
+                "term count mismatch for quant_type={quant_type:?}"
+            );
+
+            // do a search; check results match above
+            let (ids, dists) = do_search(&ctx, index_ptr, &qv, 10, None);
+            assert_eq!(
+                ids, orig_ids,
+                "recreated search didn't match ids for quant_type={quant_type:?}"
+            );
+            assert_eq!(
+                dists, orig_dists,
+                "recreated search didn't match dists for quant_type={quant_type:?}"
+            );
+
+            unsafe {
+                drop_index(ctx.get(), index_ptr);
+            }
         }
     }
 }

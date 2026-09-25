@@ -6,8 +6,6 @@
 use std::{fmt::Debug, future::Future, num::NonZeroUsize};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-#[cfg(test)]
-use diskann::neighbor::Neighbor;
 use diskann::{
     ANNError, ANNResult,
     graph::AdjacencyList,
@@ -17,7 +15,7 @@ use diskann::{
     },
     utils::{IntoUsize, ONE, VectorRepr},
 };
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{future::AsyncFriendly, lazy_format};
 use diskann_vector::distance::Metric;
 
 use crate::{
@@ -49,7 +47,7 @@ use crate::{
 ///
 /// * `U`: The primary vector store that holds the main representation of vectors.
 ///   Typical use cases:
-///   - Full precision vectors (e.g., [`FullPrecisionStore`])
+///   - Full precision vectors (e.g., [`FullPrecisionStore`](super::FullPrecisionStore))
 ///   - Quantized vectors when no higher fidelity representation is required
 ///   - May be `NoStore` if no base representation is required
 ///
@@ -73,13 +71,14 @@ use crate::{
 ///
 /// # Indexing Strategies
 ///
-/// * [`FullPrecision`]: The strategies implemented by [`FullPrecision`] only retrieve data
+/// * [`FullPrecision`](super::super::common::FullPrecision): The strategies implemented by
+///   `FullPrecision` only retrieve data
 ///   from the full-precision portion of the index. No quantized vectors are used.
 ///
 ///   During search, start points are filtered from the final results.
 ///
-/// * [`Quantized`]: The strategies implemented by [`Quantized`] can use a mix of quantized
-///   and full-precision vectors.
+/// * [`Quantized`](super::super::common::Quantized): The strategies implemented by
+///   `Quantized` can use a mix of quantized and full-precision vectors.
 ///
 ///   - Search: During search, quantized vectors are used with reranking applied to the
 ///     results before returning.
@@ -133,8 +132,8 @@ use crate::{
 /// ## Full-Precision and PQ - No Deletes
 ///
 /// To create a two-level provider with a PQ-based quant vector store, a
-/// [`FixedChunkPQTable`] can be supplied for the `quant_precursor` argument, as this
-/// implements the [`CreateQuantProvider`] trait.
+/// [`FixedChunkPQTable`](crate::model::pq::FixedChunkPQTable) can be supplied for the
+/// `quant_precursor` argument, as this implements the [`CreateVectorStore`] trait.
 /// ```
 /// use std::num::NonZeroUsize;
 ///
@@ -181,8 +180,9 @@ use crate::{
 ///
 /// ## Full-Precision and PQ - With Deletes.
 ///
-/// If deletes are desired, than the type [`TableBasedDeletes`] can be passed to the
-/// constructor.
+/// If deletes are desired, then
+/// [`TableBasedDeletes`](crate::model::graph::provider::async_::common::TableBasedDeletes)
+/// can be passed to the constructor.
 /// ```
 /// use std::num::NonZeroUsize;
 ///
@@ -234,7 +234,7 @@ pub struct DefaultProvider<U, V = NoStore, D = NoDeletes, Ctx = DefaultContext> 
     pub aux_vectors: V,
 
     // Provider that holds the graph structure as neighbors of vectors.
-    pub(crate) neighbor_provider: SimpleNeighborProviderAsync<u32>,
+    pub(crate) neighbor_provider: SimpleNeighborProviderAsync,
 
     /// The delete provider. If `D == NoDeletes`, then delete related operations are disabled.
     ///
@@ -323,14 +323,6 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
         })
     }
 
-    /// Return a predicate that can be applied to `Iter::filter` to remove start points
-    /// from an iterator of neighbors.
-    #[cfg(test)]
-    pub(crate) fn is_not_start_point(&self) -> impl Fn(&Neighbor<u32>) -> bool {
-        let range = self.start_points.range();
-        move |neighbor| !range.contains(&neighbor.id)
-    }
-
     /// Return a vector of starting points.
     pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
         Ok(self.start_points.range().collect())
@@ -342,7 +334,7 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
     }
 
     /// Return a reference to the neighbor provider.
-    pub fn neighbors(&self) -> &SimpleNeighborProviderAsync<u32> {
+    pub fn neighbors(&self) -> &SimpleNeighborProviderAsync {
         &self.neighbor_provider
     }
 
@@ -411,11 +403,14 @@ where
         Itr: ExactSizeIterator<Item = &'a [T]> + 'a,
     {
         let start_points = self.start_points.range();
-        if itr.len() != start_points.len() {
-            return Err(ANNError::log_async_index_error(format!(
+        let num_start_points = start_points.len();
+        let itr_len = itr.len();
+        if itr_len != num_start_points {
+            return Err(ANNError::message(lazy_format!(
+                move,
                 "expected `itr` to contain `{}` items, instead it has {}",
-                start_points.len(),
-                itr.len(),
+                num_start_points,
+                itr_len,
             )));
         }
 
@@ -514,10 +509,13 @@ where
         let valid_points = npts
             .checked_sub(ctx.num_frozen_points.get())
             .ok_or_else(|| {
-                ANNError::log_index_error(format_args!(
+                let num_frozen_points = ctx.num_frozen_points.get();
+                let num_base_vectors = base_vectors.total();
+                ANNError::message(lazy_format!(
+                    move,
                     "Expected {} start points but the stored index only has {} total points",
-                    ctx.num_frozen_points.get(),
-                    base_vectors.total(),
+                    num_frozen_points,
+                    num_base_vectors,
                 ))
             })?;
         let start_points = StartPoints::new(valid_points as u32, ctx.num_frozen_points)?;
@@ -653,26 +651,26 @@ where
     }
 }
 
-impl NeighborAccessor for &SimpleNeighborProviderAsync<u32> {
+impl NeighborAccessor for &SimpleNeighborProviderAsync {
     async fn get_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> ANNResult<Self> {
+    ) -> ANNResult<()> {
         self.get_neighbors_sync(id.into_usize(), neighbors)?;
-        Ok(self)
+        Ok(())
     }
 }
 
-impl NeighborAccessorMut for &SimpleNeighborProviderAsync<u32> {
-    async fn set_neighbors(self, id: u32, neighbors: &[u32]) -> ANNResult<Self> {
+impl NeighborAccessorMut for &SimpleNeighborProviderAsync {
+    async fn set_neighbors(&mut self, id: u32, neighbors: &[u32]) -> ANNResult<()> {
         self.set_neighbors_sync(id.into_usize(), neighbors)?;
-        Ok(self)
+        Ok(())
     }
 
-    async fn append_vector(self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<Self> {
+    async fn append_vector(&mut self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<()> {
         self.append_vector_sync(id.into_usize(), new_neighbor_ids)?;
-        Ok(self)
+        Ok(())
     }
 }
 
@@ -683,7 +681,7 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    type Accessor<'a> = &'a SimpleNeighborProviderAsync<u32>;
+    type Accessor<'a> = &'a SimpleNeighborProviderAsync;
     fn default_accessor(&self) -> Self::Accessor<'_> {
         self.neighbors()
     }
@@ -789,7 +787,7 @@ mod tests {
         for i in iter.clone() {
             // set adjacency list to non-empty before release
             provider
-                .neighbor_provider
+                .neighbors()
                 .set_neighbors(i, &[1, 2])
                 .await
                 .unwrap();
@@ -805,7 +803,7 @@ mod tests {
             // check that adjacency list was reset after release
             let mut neighbors = AdjacencyList::new();
             provider
-                .neighbor_provider
+                .neighbors()
                 .get_neighbors(i, &mut neighbors)
                 .await
                 .unwrap();

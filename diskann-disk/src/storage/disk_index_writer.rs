@@ -1,14 +1,15 @@
-/* Copyright (c) Microsoft Corporation.
+/*
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 use std::{
-    io::{Read, Seek, Write},
+    io::{BufReader, BufWriter, Read, Seek, Write},
     mem,
 };
 
 use crate::data_model::GraphDataType;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use diskann::{ANNError, ANNResult};
+use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     storage::{get_mem_index_file, path_utility::*},
@@ -18,7 +19,7 @@ use tracing::info;
 
 use crate::{
     data_model::{GraphHeader, GraphMetadata},
-    storage::{CachedReader, CachedWriter},
+    error::{diskann_error, ErrorKind},
 };
 
 // Struct DiskIndexWriterState maintains the state of the process of creating a disk
@@ -34,10 +35,10 @@ where
     muti_shard_index_reader: Option<StorageProvider::Reader>,
 
     // Reader to get associated data from disk.
-    associated_data_reader: Option<CachedReader<StorageProvider>>,
+    associated_data_reader: Option<BufReader<StorageProvider::Reader>>,
 
     // Reader to get data from the disk.
-    dataset_reader: Option<CachedReader<StorageProvider>>,
+    dataset_reader: Option<BufReader<StorageProvider::Reader>>,
 
     // Parameters required for processing data. They are set before data processing starts.
     dims: u64,
@@ -47,8 +48,8 @@ where
     vamana_frozen_num: u64,
     node_len: u64,
     associated_data_length: usize,
-    read_blk_size: u64,
-    write_blk_size: u64,
+    read_blk_size: usize,
+    write_blk_size: usize,
 }
 
 impl<StorageProvider> DiskIndexWriterState<StorageProvider>
@@ -99,12 +100,10 @@ impl DiskIndexWriter {
         block_size: usize,
     ) -> ANNResult<Self> {
         if block_size < GraphMetadata::get_size() {
-            return Err(ANNError::log_index_config_error(
-                "index_block_size".to_string(),
-                format!(
-                    "block_size should be greater than the size of GraphMetadata: {}",
-                    GraphMetadata::get_size()
-                ),
+            return Err(diskann_error!(
+                ErrorKind::IndexConfigError("index_block_size"),
+                "block_size should be greater than the size of GraphMetadata: {}",
+                GraphMetadata::get_size()
             ));
         }
 
@@ -138,7 +137,10 @@ impl DiskIndexWriter {
         if let Some(vamana_reader) = state.muti_shard_index_reader.as_mut() {
             num_nbrs = vamana_reader.read_u32::<LittleEndian>()?;
         } else {
-            return Err(ANNError::log_index_error("invalid index reader"));
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "invalid index reader"
+            ));
         }
 
         Ok(num_nbrs)
@@ -154,7 +156,10 @@ impl DiskIndexWriter {
         if let Some(vamana_reader) = state.muti_shard_index_reader.as_mut() {
             vamana_reader.read_exact(nbrs_buf)?;
         } else {
-            return Err(ANNError::log_index_error("invalid index reader"));
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "invalid index reader"
+            ));
         }
 
         Ok(())
@@ -193,7 +198,10 @@ impl DiskIndexWriter {
             return Ok(());
         }
 
-        Err(ANNError::log_index_error("invalid index reader"))
+        Err(diskann_error!(
+            ErrorKind::IndexError,
+            "invalid index reader"
+        ))
     }
 
     fn open_associated_data_reader<StorageProvider>(
@@ -208,20 +216,22 @@ impl DiskIndexWriter {
             .associated_data_file
         {
             Some(associated_data_stream) => {
-                let mut associated_data_reader = CachedReader::<StorageProvider>::new(
-                    associated_data_stream.as_str(),
-                    state.read_blk_size,
+                let mut associated_data_reader = super::open_buf_reader(
                     storage_provider,
+                    associated_data_stream,
+                    state.read_blk_size,
                 )?;
 
-                let associated_data_num_pts = associated_data_reader.read_u32()? as u64;
-                let length = associated_data_reader.read_u32()? as usize;
+                let associated_data_num_pts =
+                    associated_data_reader.read_u32::<LittleEndian>()? as u64;
+                let length = associated_data_reader.read_u32::<LittleEndian>()? as usize;
 
                 if state.num_pts != associated_data_num_pts {
-                    return Err(ANNError::log_index_error(format_args!(
+                    return Err(diskann_error!(
+                        ErrorKind::IndexError,
                         "Number of points in dataset file ({}) does not match number of points in associated data file ({}).",
                         state.num_pts, associated_data_num_pts
-                    )));
+                    ));
                 }
 
                 (Option::Some(associated_data_reader), length)
@@ -241,17 +251,11 @@ impl DiskIndexWriter {
     where
         StorageProvider: StorageReadProvider,
     {
-        let dataset_reader = CachedReader::<StorageProvider>::new(
-            self.dataset_file.as_str(),
-            state.read_blk_size,
-            storage_provider,
-        )?;
+        let mut dataset_reader =
+            super::open_buf_reader(storage_provider, &self.dataset_file, state.read_blk_size)?;
+        state.num_pts = dataset_reader.read_u32::<LittleEndian>()? as u64;
+        state.dims = dataset_reader.read_u32::<LittleEndian>()? as u64;
         state.dataset_reader = Some(dataset_reader);
-
-        if let Some(dataset_reader) = state.dataset_reader.as_mut() {
-            state.num_pts = dataset_reader.read_u32()? as u64;
-            state.dims = dataset_reader.read_u32()? as u64;
-        }
 
         Ok(())
     }
@@ -272,7 +276,7 @@ impl DiskIndexWriter {
             let mut cur_node_coords =
                 vec![0u8; (state.dims as usize) * mem::size_of::<Data::VectorDataType>()];
 
-            dataset_reader.read(&mut cur_node_coords)?;
+            dataset_reader.read_exact(&mut cur_node_coords)?;
             block_buf[..cur_node_coords.len()].copy_from_slice(&cur_node_coords);
         }
 
@@ -303,7 +307,7 @@ impl DiskIndexWriter {
             let cur_node_associated_data = &mut block_buf[(state.node_len as usize
                 - state.associated_data_length * mem::size_of::<Data::AssociatedDataType>())
                 ..(state.node_len as usize)];
-            associated_data_reader.read(cur_node_associated_data)?;
+            associated_data_reader.read_exact(cur_node_associated_data)?;
         }
 
         Ok(())
@@ -435,17 +439,12 @@ impl DiskIndexWriter {
         info!("num_blocks: {}B", num_blocks);
 
         let disk_layout_file = self.disk_index_file();
+        let storage_writer = storage_provider.create_for_write(disk_layout_file.as_str())?;
+        let mut diskann_writer = BufWriter::with_capacity(state.write_blk_size, storage_writer);
         {
-            let storage_writer = storage_provider.create_for_write(disk_layout_file.as_str())?;
-            let mut diskann_writer = CachedWriter::<StorageProvider>::new(
-                disk_layout_file.as_str(),
-                state.write_blk_size,
-                storage_writer,
-            )?;
-
             // Buffer of block_size bytes for each block.
             let mut block_buf = vec![0u8; block_size];
-            diskann_writer.write(&block_buf)?;
+            diskann_writer.write_all(&block_buf)?;
 
             if num_nodes_per_block > 0 {
                 let mut cur_node_id = 0u64;
@@ -474,8 +473,7 @@ impl DiskIndexWriter {
                         cur_node_id += 1;
                     }
 
-                    // flush sector to disk
-                    diskann_writer.write(&block_buf)?;
+                    diskann_writer.write_all(&block_buf)?;
                 }
             } else {
                 // Write multi-sector nodes
@@ -490,32 +488,23 @@ impl DiskIndexWriter {
 
                     self.read_neighbors::<Data, _>(&mut state, &mut multi_block_buf)?;
 
-                    // flush sector to disk
-                    diskann_writer.write(&multi_block_buf)?;
+                    diskann_writer.write_all(&multi_block_buf)?;
                 }
             }
-
-            // Be sure to flush the writer before it goes out of scope so we can open a new one.
-            diskann_writer.flush()?;
         }
 
-        // Write the header.  Must re-open the file because the cached writer cannot seek to the start of the file.
-        // CachedWriter owns the underlying writer so we must open a new writer.  A new scope ensures that the old
-        // writer is out of scope.
-        {
-            let mut storage_writer = storage_provider.open_writer(disk_layout_file.as_str())?;
-            let disk_index_file_size = (num_blocks + 1) * (block_size as u64);
-            self.write_header::<Data, _, _>(
-                &mut state,
-                block_size,
-                num_nodes_per_block,
-                disk_index_file_size,
-                &mut storage_writer,
-            )?;
+        diskann_writer.rewind()?;
+        let disk_index_file_size = (num_blocks + 1) * (block_size as u64);
+        self.write_header::<Data, _, _>(
+            &mut state,
+            block_size,
+            num_nodes_per_block,
+            disk_index_file_size,
+            &mut diskann_writer,
+        )?;
 
-            storage_writer.flush()?;
-            Ok(())
-        }
+        diskann_writer.flush()?;
+        Ok(())
     }
 
     pub fn index_build_cleanup<StorageProvider>(
@@ -538,32 +527,12 @@ impl DiskIndexWriter {
         get_disk_index_file(&self.index_path_prefix)
     }
 
-    pub fn get_pq_pivot_file(&self) -> String {
-        get_pq_pivot_file(&self.index_path_prefix)
-    }
-
-    pub fn get_compressed_pq_pivot_file(&self) -> String {
-        get_compressed_pq_file(&self.index_path_prefix)
-    }
-
-    pub fn get_disk_index_pq_pivot_file(&self) -> String {
-        get_disk_index_pq_pivot_file(&self.index_path_prefix)
-    }
-
-    pub fn get_disk_index_compressed_pq_file(&self) -> String {
-        get_disk_index_compressed_pq_file(&self.index_path_prefix)
-    }
-
     pub fn get_index_path_prefix(&self) -> String {
         self.index_path_prefix.clone()
     }
 
     pub fn get_dataset_file(&self) -> String {
         self.dataset_file.clone()
-    }
-
-    pub fn get_associated_data_file(&self) -> Option<String> {
-        self.associated_data_file.clone()
     }
 
     pub fn get_mem_index_file(&self) -> String {
@@ -582,16 +551,8 @@ impl DiskIndexWriter {
         format!("{}_subshard-{}.bin", prefix, shard)
     }
 
-    pub fn get_merged_index_subshard_prefix(prefix: &str, shard: usize) -> String {
-        format!("{}_subshard-{}", prefix, shard)
-    }
-
     pub fn get_merged_index_subshard_mem_index_file(prefix: &str, shard: usize) -> String {
         format!("{}_subshard-{}_mem.index", prefix, shard)
-    }
-
-    pub fn get_merged_index_subshard_mem_dataset_file(subshard_mem_index_prefix: &str) -> String {
-        get_mem_index_data_file(subshard_mem_index_prefix)
     }
 }
 
@@ -790,34 +751,11 @@ mod disk_index_storage_test {
     struct ExpectedWriter {
         dataset_file: String,
         index_path_prefix: String,
-        pq_pivot_file: String,
-        compressed_pq_file: String,
-        disk_index_pq_pivot_file: String,
-        disk_index_compressed_pq_file: String,
-        associated_data_file: Option<String>,
     }
 
     fn assert_writer_eq_expected(writer: &DiskIndexWriter, expected: &ExpectedWriter) {
         assert_eq!(writer.dataset_file(), &expected.dataset_file);
         assert_eq!(writer.index_path_prefix(), &expected.index_path_prefix);
-
-        assert_eq!(writer.get_pq_pivot_file(), expected.pq_pivot_file);
-        assert_eq!(
-            writer.get_compressed_pq_pivot_file(),
-            expected.compressed_pq_file
-        );
-        assert_eq!(
-            writer.get_disk_index_pq_pivot_file(),
-            expected.disk_index_pq_pivot_file
-        );
-        assert_eq!(
-            writer.get_disk_index_compressed_pq_file(),
-            expected.disk_index_compressed_pq_file
-        );
-        assert_eq!(
-            writer.get_associated_data_file(),
-            expected.associated_data_file
-        );
     }
 
     #[test]
@@ -835,11 +773,6 @@ mod disk_index_storage_test {
         let expected = ExpectedWriter {
             dataset_file: dataset_file_name.to_string(),
             index_path_prefix: index_path_prefix.to_string(),
-            pq_pivot_file: get_pq_pivot_file(index_path_prefix),
-            compressed_pq_file: get_compressed_pq_file(index_path_prefix),
-            disk_index_pq_pivot_file: get_disk_index_pq_pivot_file(index_path_prefix),
-            disk_index_compressed_pq_file: get_disk_index_compressed_pq_file(index_path_prefix),
-            associated_data_file: Some(associated_data_file.to_string()),
         };
         assert_writer_eq_expected(&writer, &expected);
     }
@@ -894,31 +827,12 @@ mod disk_index_storage_test {
     }
 
     #[test]
-    fn test_get_merged_index_subshard_prefix() {
-        let prefix = "test_prefix";
-        let shard = 5;
-        assert_eq!(
-            DiskIndexWriter::get_merged_index_subshard_prefix(prefix, shard),
-            "test_prefix_subshard-5"
-        );
-    }
-
-    #[test]
     fn test_get_merged_index_subshard_mem_index_file() {
         let prefix = "test_prefix";
         let shard = 5;
         assert_eq!(
             DiskIndexWriter::get_merged_index_subshard_mem_index_file(prefix, shard),
             "test_prefix_subshard-5_mem.index"
-        );
-    }
-
-    #[test]
-    fn test_get_merged_index_subshard_mem_dataset_file() {
-        let prefix = "test_prefix";
-        assert_eq!(
-            DiskIndexWriter::get_merged_index_subshard_mem_dataset_file(prefix),
-            "test_prefix.data"
         );
     }
 

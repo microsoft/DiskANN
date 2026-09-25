@@ -13,3 +13,6 @@ rustflags = ["-C", "target-cpu=x86-64-v3"]
 # enabling this seems acceptable.
 [target.'cfg(target_arch="aarch64")']
 rustflags = ["-C", "target-feature=+neon,+dotprod"]
+
+[build]
+target-dir = "target"

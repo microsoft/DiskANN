@@ -3,9 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use criterion::Criterion;
+use criterion::{BatchSize, Criterion};
 use diskann_disk::utils::{compute_vecs_l2sq, k_means_clustering};
-use diskann_providers::utils::{create_thread_pool_for_bench, RayonThreadPoolRef};
+use diskann_providers::utils::create_thread_pool_for_bench;
 use rand::Rng;
 
 const NUM_POINTS: usize = 100000;
@@ -25,33 +25,34 @@ pub fn benchmark_kmeans(c: &mut Criterion) {
     group.sample_size(50);
 
     group.bench_function("K-Means Rust Run", |f| {
-        f.iter(|| {
-            let data_copy = data.clone();
-            let mut centers_copy = centers.clone();
-            k_means_clustering(
-                &data_copy,
-                NUM_POINTS,
-                DIM,
-                &mut centers_copy,
-                NUM_CENTERS,
-                MAX_KMEANS_REPS,
-                rng,
-                &mut false,
-                pool.as_ref(),
-            )
-        })
+        f.iter_batched(
+            || (data.clone(), centers.clone()),
+            |(data_copy, mut centers_copy)| {
+                k_means_clustering(
+                    &data_copy,
+                    NUM_POINTS,
+                    DIM,
+                    &mut centers_copy,
+                    NUM_CENTERS,
+                    MAX_KMEANS_REPS,
+                    rng,
+                    &mut false,
+                    pool.as_ref(),
+                )
+                .expect("k_means_clustering call failed");
+            },
+            BatchSize::SmallInput,
+        )
     });
 
     group.bench_function("Snrm2 Rust Run", |f| {
-        f.iter(|| {
-            let data_copy = data.clone();
-            snrm2_benchmark_rust(&data_copy, NUM_POINTS, DIM, pool.as_ref());
-        })
+        f.iter_batched(
+            || (data.clone(), vec![0.0f32; NUM_POINTS]),
+            |(data_copy, mut docs_l2sq)| {
+                compute_vecs_l2sq(&mut docs_l2sq, &data_copy, DIM, pool.as_ref())
+                    .expect("compute_vecs_l2sq call failed");
+            },
+            BatchSize::SmallInput,
+        )
     });
-}
-
-/// compute_vecs_l2sq benchmark
-fn snrm2_benchmark_rust(data: &[f32], num_points: usize, dim: usize, pool: RayonThreadPoolRef<'_>) {
-    let mut docs_l2sq = vec![0.0; num_points];
-    compute_vecs_l2sq(&mut docs_l2sq, data, dim, pool).unwrap();
 }

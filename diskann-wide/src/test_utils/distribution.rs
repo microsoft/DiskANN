@@ -19,6 +19,17 @@ use rand::{
     distr::{Distribution, StandardUniform},
 };
 
+// Must be a power of two to avoid bias when reducing a uniformly distributed integer.
+const TOTAL_WEIGHT: u64 = 128;
+const NORMAL_WEIGHT: u64 = 116;
+const SUBNORMAL_WEIGHT: u64 = 6;
+const ZERO_WEIGHT: u64 = 6;
+
+const _: () = assert!(
+    NORMAL_WEIGHT + SUBNORMAL_WEIGHT + ZERO_WEIGHT == TOTAL_WEIGHT,
+    "floating point weights must sum to the total weight"
+);
+
 trait Layout {
     type Bits;
 
@@ -53,7 +64,7 @@ impl Layout for f32 {
 pub struct Finite;
 
 macro_rules! finite {
-    ($T:ty, $bits:ty) => {
+    ($T:ty, $bits:ty, $twice:ty) => {
         impl Distribution<$T> for Finite {
             /// Generate floating point numbers spread more-or-less uniformly across the
             /// distribution of floating point numbers.
@@ -68,13 +79,23 @@ macro_rules! finite {
             ///
             /// This function does not generate infinities or NaNs.
             fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $T {
-                // Generate a uniformly distributed 32-bit integer
-                let mut value: $bits = StandardUniform {}.sample(rng);
+                // Generate a uniformly distributed integer.
+                //
+                // This integer is twice as large as what's actually needed to generate
+                //
+                // * the value that will be used to make the final floating point number
+                //   (the lower bits).
+                //
+                // * a selector for the kind of floating point number we are going to
+                //   generate (the upper bits).
+                //
+                // Generating a number twice as big allows us to perform just a single sample
+                // from the random number generator without biasing the result.
+                let twice: $twice = StandardUniform {}.sample(rng);
 
-                // The distribution from which we sample weights to determine the type of
-                // floating point number we are  going to generate.
-                let weight = value % 100;
-                let (mask, allow_edge_exponent, allow_zero_mantissa) = if weight < 90 {
+                let mut value = twice as $bits;
+                let kind = u64::from(twice >> <$bits>::BITS) % TOTAL_WEIGHT;
+                let (mask, allow_edge_exponent, allow_zero_mantissa) = if kind < NORMAL_WEIGHT {
                     // Generate a normal floating point number.
                     //
                     // All digits are fair game, but the exponent cannot be all zeros
@@ -82,12 +103,16 @@ macro_rules! finite {
                     // infinity/NaN).
                     //
                     // The mantissa is allowed to be all zeros.
-                    (<$T>::EXPONENT_MASK | <$T>::MANTISSA_MASK, false, true)
-                } else if weight < 95 {
+                    (
+                        <$T as Layout>::EXPONENT_MASK | <$T as Layout>::MANTISSA_MASK,
+                        false,
+                        true,
+                    )
+                } else if kind < NORMAL_WEIGHT + SUBNORMAL_WEIGHT {
                     // Generate a subnormal floating point number.
                     //
                     // The exponent must be all zero and the mantissa cannot be zero.
-                    (<$T>::MANTISSA_MASK, true, false)
+                    (<$T as Layout>::MANTISSA_MASK, true, false)
                 } else {
                     // Generate zero.
                     (0, true, true)
@@ -95,17 +120,19 @@ macro_rules! finite {
 
                 // Preserve the sign bit and mask out all other values that do not belong to
                 // the kind of floating point number we are generating.
-                value &= <$T>::SIGN_MASK | mask;
-                let exponent = value & <$T>::EXPONENT_MASK;
+                value &= <$T as Layout>::SIGN_MASK | mask;
+                let exponent = value & <$T as Layout>::EXPONENT_MASK;
 
                 // If the all zeros or all ones pattern is not allowed, set it to 0.
-                if !allow_edge_exponent && (exponent == 0 || exponent == <$T>::EXPONENT_MASK) {
+                if !allow_edge_exponent
+                    && (exponent == 0 || exponent == <$T as Layout>::EXPONENT_MASK)
+                {
                     // Clear the exponent bits and set it to the zero value.
-                    value &= !<$T>::EXPONENT_MASK;
-                    value |= <$T>::EXPONENT_ZERO;
+                    value &= !<$T as Layout>::EXPONENT_MASK;
+                    value |= <$T as Layout>::EXPONENT_ZERO;
                 }
 
-                if !allow_zero_mantissa && (value & <$T>::MANTISSA_MASK == 0) {
+                if !allow_zero_mantissa && (value & <$T as Layout>::MANTISSA_MASK == 0) {
                     // Make the mantissa non-zero.
                     value |= 1;
                 }
@@ -117,8 +144,8 @@ macro_rules! finite {
     };
 }
 
-finite!(half::f16, u16);
-finite!(f32, u32);
+finite!(half::f16, u16, u32);
+finite!(f32, u32, u64);
 
 ///////////
 // Tests //
@@ -133,13 +160,13 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct Kinds {
-        normal: i64,
-        subnormal: i64,
-        zero: i64,
+        normal: u64,
+        subnormal: u64,
+        zero: u64,
     }
 
     impl Kinds {
-        fn sum(&self) -> i64 {
+        fn sum(&self) -> u64 {
             self.normal + self.subnormal + self.zero
         }
     }
@@ -231,12 +258,7 @@ mod tests {
     where
         T: TestDistribution,
     {
-        let normal_weight = 90;
-        let subnormal_weight = 5;
-        let zero_weight = 5;
-        let total_weight = normal_weight + subnormal_weight + zero_weight;
-
-        let num_trials: i64 = 1_000_000;
+        let num_trials: u64 = 1_000_000;
         let margin = num_trials / 500;
         let counts = T::test_distribution(num_trials as usize, seed);
 
@@ -245,18 +267,34 @@ mod tests {
 
         println!("Counts = {:?}", counts);
 
-        assert!((positive_count - num_trials / 2).abs() < margin);
-        assert!((negative_count - num_trials / 2).abs() < margin);
+        assert!(positive_count.abs_diff(num_trials / 2) < margin);
+        assert!(negative_count.abs_diff(num_trials / 2) < margin);
 
-        assert!((counts.positive.normal - counts.negative.normal).abs() < margin);
-        assert!((counts.positive.subnormal - counts.negative.subnormal).abs() < margin);
-        assert!((counts.positive.zero - counts.negative.zero).abs() < margin);
+        assert!(counts.positive.normal.abs_diff(counts.negative.normal) < margin);
+        assert!(
+            counts
+                .positive
+                .subnormal
+                .abs_diff(counts.negative.subnormal)
+                < margin
+        );
+        assert!(counts.positive.zero.abs_diff(counts.negative.zero) < margin);
 
         let kinds = counts.sum_accross();
 
-        assert!((kinds.normal - num_trials * normal_weight / total_weight).abs() < margin);
-        assert!((kinds.subnormal - num_trials * subnormal_weight / total_weight).abs() < margin);
-        assert!((kinds.zero - num_trials * zero_weight / total_weight).abs() < margin);
+        assert!(
+            kinds
+                .normal
+                .abs_diff(num_trials * NORMAL_WEIGHT / TOTAL_WEIGHT)
+                < margin
+        );
+        assert!(
+            kinds
+                .subnormal
+                .abs_diff(num_trials * SUBNORMAL_WEIGHT / TOTAL_WEIGHT)
+                < margin
+        );
+        assert!(kinds.zero.abs_diff(num_trials * ZERO_WEIGHT / TOTAL_WEIGHT) < margin);
     }
 
     #[test]

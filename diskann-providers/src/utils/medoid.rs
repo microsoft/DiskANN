@@ -33,7 +33,7 @@ where
     for (v, _) in iter {
         let vector = T::as_f32(&v).map_err(|x| x.into())?;
         if vector.len() != dimension {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector f32 dimension doesn't match input dim.",
             ));
         }
@@ -111,7 +111,7 @@ where
 
     // If no vectors were processed, return error
     if !centroid_initialized {
-        Err(ANNError::log_index_error(
+        Err(ANNError::message(
             "Trying to compute centroid on zero vectors",
         ))
     } else {
@@ -185,11 +185,11 @@ where
         // Find medoid (point closest to centroid)
         let iter = VectorDataIterator::<Reader, T>::new(path, None, reader)?;
         let (medoid, medoid_id) = find_nearest_vector_with_id(iter, &centroid)?
-            .ok_or_else(|| ANNError::log_index_error("medoid not found"))?;
+            .ok_or_else(|| ANNError::message("medoid not found"))?;
 
         Ok((medoid.to_vec(), medoid_id))
     } else {
-        Err(ANNError::log_index_error(
+        Err(ANNError::message(
             "Medoid not calculable on zero length iterator",
         ))
     }
@@ -241,7 +241,7 @@ where
     // Find medoid (point closest to centroid) from the full dataset
     let iter = VectorDataIterator::<Reader, T>::new(path, None, reader)?;
     let (medoid, medoid_id) = find_nearest_vector_with_id(iter, &centroid)?
-        .ok_or_else(|| ANNError::log_index_error("medoid not found"))?;
+        .ok_or_else(|| ANNError::message("medoid not found"))?;
 
     Ok((medoid.to_vec(), medoid_id))
 }

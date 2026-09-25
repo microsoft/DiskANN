@@ -1,0 +1,60 @@
+// Query Filter Grammar
+
+// Whitespace (ignored in parsing)
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" | "//" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI) }
+
+// Main query expression
+query = { logical_top | object }
+
+// Top-level logical operation (direct in JSON root)
+logical_top = { "{" ~ logical_op_pair ~ "}" }
+logical_op_pair = { logical_op_key ~ ":" ~ (array_of_queries | query) }
+logical_op_key = { "\"$and\"" | "\"$or\"" | "\"$not\"" }
+
+// Object with multiple fields (implicit AND)
+object = { "{" ~ field_pair ~ ("," ~ field_pair)* ~ "}" }
+field_pair = { string ~ ":" ~ (compare_obj | value) }
+
+// Logical expressions (not top level)
+logical_expr = { 
+    and_expr |
+    or_expr |
+    not_expr
+}
+
+and_expr = { "\"$and\"" ~ ":" ~ array_of_queries }
+or_expr = { "\"$or\"" ~ ":" ~ array_of_queries }
+not_expr = { "\"$not\"" ~ ":" ~ query }
+
+array_of_queries = { "[" ~ query ~ ("," ~ query)* ~ "]" }
+
+// Comparison expressions
+compare_obj = { "{" ~ operator ~ ":" ~ value ~ "}" }
+operator = {
+    "\"$eq\"" |
+    "\"$ne\"" |
+    "\"$lt\"" |
+    "\"$lte\"" |
+    "\"$gt\"" |
+    "\"$gte\"" |
+    "\"$in\"" |
+    "\"$nin\""
+}
+
+// Values
+value = {
+    string |
+    number |
+    boolean |
+    array |
+    null |
+    object_value
+}
+
+object_value = { "{" ~ (string ~ ":" ~ value ~ ("," ~ string ~ ":" ~ value)*)? ~ "}" }
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+boolean = { "true" | "false" }
+array = { "[" ~ (value ~ ("," ~ value)*)? ~ "]" }
+null = { "null" }

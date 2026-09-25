@@ -3,28 +3,66 @@
  * Licensed under the MIT license.
  */
 
-use crate::garnet::{Callbacks, ReadDataCallback, RmwDataCallback, TERM_BITMASK};
+use crate::garnet::{Callbacks, ReadDataCallback, RmwDataCallback, TERM_BITMASK, Term};
 use core::slice;
 use dashmap::DashMap;
-use std::ffi::c_void;
+use std::{
+    ffi::c_void,
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 thread_local! {
     pub static STORE: DashMap<Vec<u8>, Vec<u8>> = DashMap::new();
+    pub static LOGS: Mutex<Vec<(u64, String)>> = const { Mutex::new(Vec::new()) };
+    pub static FULL_READS: AtomicUsize = const { AtomicUsize::new(0) };
+    pub static QUANT_READS: AtomicUsize = const { AtomicUsize::new(0) };
 }
 
-pub struct Store;
+/// Mock storage for testing.
+///
+/// Wraps a `()` to force use of the constructor and ensures storage starts empty.
+///
+/// This is implemented as a thread local DashMap.
+pub struct Store(());
 
 impl Store {
+    pub fn new() -> Store {
+        let store = Store(());
+        store.clear();
+        store
+    }
+
+    pub fn attach() -> Store {
+        Store(())
+    }
+
     pub fn callbacks(&self) -> Callbacks {
-        Callbacks::new(test_read, test_write, test_delete, test_rmw)
+        Callbacks::new(
+            test_read,
+            test_write,
+            test_delete,
+            test_rmw,
+            test_filter,
+            test_log,
+        )
     }
 
     pub fn clear(&self) {
         STORE.with(|s| s.clear());
+        LOGS.with(|l| {
+            let mut guard = l.lock().unwrap();
+            guard.clear();
+        });
+        FULL_READS.with(|fr| fr.store(0, Ordering::Release));
+        QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
     }
 
     pub fn set(&self, context: u64, key: &[u8], value: &[u8]) {
         let context = context & TERM_BITMASK;
+
         let mut k = Vec::new();
         k.extend_from_slice(bytemuck::bytes_of(&context));
         k.extend_from_slice(key);
@@ -33,24 +71,59 @@ impl Store {
 
     pub fn get(&self, context: u64, key: &[u8]) -> Option<Vec<u8>> {
         let context = context & TERM_BITMASK;
+
+        if context == Term::Vector as u64 {
+            FULL_READS.with(|fr| fr.fetch_add(1, Ordering::AcqRel));
+        } else if context == Term::Quantized as u64 {
+            QUANT_READS.with(|qr| qr.fetch_add(1, Ordering::AcqRel));
+        }
+
         let mut k = Vec::new();
         k.extend_from_slice(bytemuck::bytes_of(&context));
         k.extend_from_slice(key);
         STORE.with(|s| s.get(&k).map(|v| v.to_owned()))
     }
 
-    pub fn delete(&self, context: u64, key: &[u8]) {
+    pub fn delete(&self, context: u64, key: &[u8]) -> bool {
         let context = context & TERM_BITMASK;
         let mut k = Vec::new();
         k.extend_from_slice(bytemuck::bytes_of(&context));
         k.extend_from_slice(key);
-        STORE.with(|s| s.remove(&k));
+        STORE.with(|s| {
+            if s.contains_key(&k) {
+                s.remove(&k);
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    pub fn clear_read_counts(&self) {
+        FULL_READS.with(|fr| fr.store(0, Ordering::Release));
+        QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
+    }
+
+    pub fn full_reads(&self) -> usize {
+        FULL_READS.with(|fr| fr.load(Ordering::Acquire))
+    }
+
+    pub fn quant_reads(&self) -> usize {
+        QUANT_READS.with(|qr| qr.load(Ordering::Acquire))
+    }
+
+    pub fn log(&self, context: u64, msg: &str) {
+        LOGS.with(|l| {
+            let mut guard = l.lock().unwrap();
+            guard.push((context, msg.to_owned()));
+        });
     }
 }
 
 unsafe extern "C" fn test_read(
     ctx: u64,
     count: u32,
+    _length_hint: u32,
     id_bytes: *const u8,
     id_len: usize,
     cb: ReadDataCallback,
@@ -69,7 +142,7 @@ unsafe extern "C" fn test_read(
         let id = &ids[pos..pos + len as usize];
         pos += len as usize;
 
-        let store = Store;
+        let store = Store::attach();
         if let Some(v) = store.get(ctx, id) {
             unsafe {
                 cb(idx, cb_ctx, v.as_ptr(), v.len());
@@ -88,7 +161,7 @@ unsafe extern "C" fn test_write(
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
     let val = unsafe { slice::from_raw_parts(val_bytes, val_len) };
 
-    let store = Store;
+    let store = Store::attach();
     store.set(ctx, id, val);
     true
 }
@@ -96,9 +169,8 @@ unsafe extern "C" fn test_write(
 unsafe extern "C" fn test_delete(ctx: u64, id_bytes: *const u8, id_len: usize) -> bool {
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
-    let store = Store;
-    store.delete(ctx, id);
-    true
+    let store = Store::attach();
+    store.delete(ctx, id)
 }
 
 unsafe extern "C" fn test_rmw(
@@ -111,7 +183,7 @@ unsafe extern "C" fn test_rmw(
 ) -> bool {
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
-    let store = Store;
+    let store = Store::attach();
     let mut val = if let Some(v) = store.get(ctx, id) {
         v
     } else {
@@ -127,55 +199,66 @@ unsafe extern "C" fn test_rmw(
     true
 }
 
+unsafe extern "C" fn test_filter(_context: u64, _data: *const u8, _len: usize) -> bool {
+    true
+}
+
+unsafe extern "C" fn test_log(context: u64, msg: *const u8, msg_len: usize) {
+    let store = Store::attach();
+    let msg_slice = unsafe { slice::from_raw_parts(msg, msg_len) };
+    let msg = str::from_utf8(msg_slice).unwrap();
+    store.log(context, msg)
+}
+
 mod tests {
     use std::collections::HashMap;
 
     use crate::{
+        VectorQuantType,
         garnet::{Context, Term},
         test_utils::Store,
     };
 
     #[test]
     fn basic() {
-        let store = Store;
-        store.clear();
+        let store = Store::new();
         let callbacks = store.callbacks();
-        let ctx = Context(0);
+        let ctx = Context::new(0);
 
         // Reading a non-existant key should fail.
-        assert!(!callbacks.exists_iid(ctx, 0));
+        assert!(!callbacks.exists_iid(&ctx, 0, 10));
 
         // Round tripping a write should work.
-        assert!(callbacks.write_iid(ctx, 0, b"test"));
+        assert!(callbacks.write_iid(&ctx, 0, b"test"));
         let mut val = vec![0u8; 4];
-        assert!(callbacks.read_single_iid(ctx, 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx, 0, &mut val));
         assert_eq!(val, b"test");
 
         // Overwriting a key should work.
-        assert!(callbacks.write_iid(ctx, 0, b"again"));
+        assert!(callbacks.write_iid(&ctx, 0, b"again"));
         let mut val = vec![0u8; 5];
-        assert!(callbacks.read_single_iid(ctx, 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx, 0, &mut val));
         assert_eq!(val, b"again");
 
         // Exists and delete should work.
-        assert!(callbacks.exists_iid(ctx, 0));
-        assert!(callbacks.delete_iid(ctx, 0));
-        assert!(!callbacks.exists_iid(ctx, 0));
+        assert!(callbacks.exists_iid(&ctx, 0, 10));
+        assert!(callbacks.delete_iid(&ctx, 0));
+        assert!(!callbacks.exists_iid(&ctx, 0, 10));
 
         // Different contexts should stay separate.
-        assert!(callbacks.write_iid(ctx.term(Term::Vector), 0, b"0000"));
-        assert!(callbacks.write_iid(ctx.term(Term::Neighbors), 0, b"nnnn"));
+        assert!(callbacks.write_iid(&ctx.term(Term::Vector), 0, b"0000"));
+        assert!(callbacks.write_iid(&ctx.term(Term::Neighbors), 0, b"nnnn"));
         let mut val = vec![0u8; 4];
-        assert!(callbacks.read_single_iid(ctx.term(Term::Vector), 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx.term(Term::Vector), 0, &mut val));
         assert_eq!(val, b"0000");
-        assert!(callbacks.read_single_iid(ctx.term(Term::Neighbors), 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx.term(Term::Neighbors), 0, &mut val));
         assert_eq!(val, b"nnnn");
 
         // Multi-read should work.
-        assert!(callbacks.write_iid(ctx.term(Term::Vector), 1, b"2222"));
+        assert!(callbacks.write_iid(&ctx.term(Term::Vector), 1, b"2222"));
         let ids = [4u32, 0, 4, 1, 4, 2];
         let mut results = HashMap::new();
-        callbacks.read_multi_lpiid(ctx.term(Term::Vector), &ids, |i, v| {
+        callbacks.read_multi_lpiid(&ctx.term(Term::Vector), &ids, 10, |i, v| {
             results.insert(i, v.to_owned());
         });
         assert_eq!(results.get(&0), Some(b"0000".to_vec()).as_ref());
@@ -183,10 +266,10 @@ mod tests {
         assert_eq!(results.get(&2), None);
 
         // RMW should work.
-        assert!(callbacks.rmw_iid(ctx.term(Term::Vector), 0, 4, |data| {
+        assert!(callbacks.rmw_iid(&ctx.term(Term::Vector), 0, 4, |data| {
             data.copy_from_slice(b"0rmw");
         }));
-        assert!(callbacks.read_single_iid(ctx.term(Term::Vector), 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx.term(Term::Vector), 0, &mut val));
         assert_eq!(val, b"0rmw");
     }
 
@@ -195,15 +278,21 @@ mod tests {
         use crate::provider::GarnetProvider;
         use diskann_vector::distance::Metric;
 
-        let store: Store = Store;
-        store.clear();
+        let store: Store = Store::new();
         let callbacks = store.callbacks();
-        let ctx: Context = Context(0);
+        let ctx: Context = Context::new(0);
 
         // Create a u8 GarnetProvider with the test Store callbacks
         let dim = 8;
         let max_degree = 32;
-        let provider = GarnetProvider::<u8>::new(dim, Metric::L2, max_degree, callbacks, ctx);
+        let provider = GarnetProvider::<u8>::new(
+            dim,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            max_degree,
+            callbacks,
+            &ctx,
+        );
 
         // Provider should be created successfully
         assert!(provider.is_ok());
@@ -215,7 +304,14 @@ mod tests {
         // Create a u8 GarnetProvider with the test Store callbacks
         let dim = 8;
         let max_degree = 32;
-        let provider = GarnetProvider::<f32>::new(dim, Metric::L2, max_degree, callbacks, ctx);
+        let provider = GarnetProvider::<f32>::new(
+            dim,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            max_degree,
+            callbacks,
+            &ctx,
+        );
 
         // Provider should be created successfully
         assert!(provider.is_ok());

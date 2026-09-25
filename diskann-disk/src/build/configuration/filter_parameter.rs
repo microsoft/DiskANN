@@ -5,13 +5,6 @@
 
 use crate::data_model::GraphDataType;
 
-pub type AssociatedDataFilter<Data> =
-    Box<dyn Fn(&<Data as GraphDataType>::AssociatedDataType) -> bool>;
-
-pub fn default_associated_data_filter<Data: GraphDataType>() -> AssociatedDataFilter<Data> {
-    Box::new(|_| true)
-}
-
 pub type VectorFilter<'a, Data> =
     Box<dyn Fn(&<Data as GraphDataType>::VectorIdType) -> bool + Send + Sync + 'a>;
 
@@ -25,14 +18,6 @@ mod tests {
     use crate::test_utils::GraphDataF32VectorUnitData;
 
     type TestGraphData = GraphDataF32VectorUnitData;
-
-    #[test]
-    fn test_default_associated_data_filter_returns_true_for_all() {
-        let filter = default_associated_data_filter::<TestGraphData>();
-        // Test that the default filter always returns true
-        assert!(filter(&()));
-        assert!(filter(&()));
-    }
 
     #[test]
     fn test_default_vector_filter_returns_true_for_all() {

@@ -680,7 +680,7 @@ mod ux_tests {
     //
     // Run tests with the environment variable:
     // ```
-    // DISKANN_BENCHMARK_TEST=overwrite
+    // DISKANN_TEST=overwrite
     // ```
     // to regenerate the `expected.txt` files. Use `git diff` to review changes.
 

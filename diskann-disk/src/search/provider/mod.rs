@@ -13,3 +13,5 @@ pub mod disk_provider;
 pub mod disk_sector_graph;
 pub mod disk_vertex_provider;
 pub mod disk_vertex_provider_factory;
+
+pub mod aligned_file_reader;

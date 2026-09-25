@@ -4,11 +4,11 @@
  */
 
 //! Layers that can be added to existing strategies such as
-//! [`diskann::glue::SearchStrategy`].
+//! [`diskann::graph::glue::SearchStrategy`].
 //!
 //! Implementations:
 //!
 //! * [`BetaFilter`]
 
-mod betafilter;
+pub mod betafilter;
 pub use betafilter::BetaFilter;

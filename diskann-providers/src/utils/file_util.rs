@@ -10,7 +10,7 @@ use std::io::Read;
 
 use crate::storage::StorageReadProvider;
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
-use diskann_utils::{io::Metadata, views::Matrix};
+use diskann_utils::{io::Metadata, lazy_format, views::Matrix};
 
 /// Read metadata of data file.
 pub fn load_metadata_from_file<ReadProvider: StorageReadProvider>(
@@ -72,17 +72,17 @@ pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: Stora
     });
 
     if is_any_vector_zero_length {
-        return Err(ANNError::log_index_error(format_args!(
-            "Vector length cannot be zero"
-        )));
+        return Err(ANNError::message("Vector length cannot be zero"));
     }
 
     // compute sum of vector lengths and check that it's equal to total_results
     let sum_vec_lengths: usize = vec_lengths.iter().map(|&x| x as usize).sum();
     if sum_vec_lengths != total_results {
-        return Err(ANNError::log_index_error(format_args!(
+        return Err(ANNError::message(lazy_format!(
+            move,
             "Sum of vector lengths ({}) does not match total_results ({})",
-            sum_vec_lengths, total_results
+            sum_vec_lengths,
+            total_results
         )));
     }
 

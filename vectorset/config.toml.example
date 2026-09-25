@@ -2,5 +2,7 @@
 ips = ["127.0.0.1"]
 port = 6379
 secure = false
-# scope = "some-scope-here"
+
+# The following properties are used with Azure Managed Garnet
+# scope = "some-scope"
 # username = "someuser"

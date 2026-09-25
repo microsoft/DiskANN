@@ -8,7 +8,7 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    benchmark::{MatchContext, PassFail, Regression, Score},
     Benchmark, Checker, Checkpoint, Input, Output,
 };
 
@@ -97,24 +97,16 @@ impl Benchmark for SimpleBench {
     type Input = DimInput;
     type Output = usize;
 
-    fn try_match(&self, input: &DimInput) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &DimInput, context: &MatchContext) -> Score {
         if input.dim.is_none() {
-            Ok(MatchScore(0))
+            context.success(10)
         } else {
-            Err(FailureScore(1000))
+            context.fail(1000, &"expected dim=None")
         }
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&DimInput>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(input) if input.dim.is_none() => write!(f, "successful match"),
-            Some(_) => write!(f, "expected dim=None"),
-            None => write!(f, "dim=None only"),
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("dim=None only")
     }
 
     fn run(
@@ -136,20 +128,12 @@ impl Benchmark for DimBench {
     type Input = DimInput;
     type Output = usize;
 
-    fn try_match(&self, _input: &DimInput) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(0))
+    fn try_match(&self, _input: &DimInput, context: &MatchContext) -> Score {
+        context.success(10)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&DimInput>,
-    ) -> std::fmt::Result {
-        if input.is_some() {
-            write!(f, "perfect match")
-        } else {
-            write!(f, "matches all")
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("matches all")
     }
 
     fn run(

@@ -5,7 +5,7 @@
 
 use proc_macro::TokenStream;
 use quote::{quote, quote_spanned};
-use syn::{Data, DeriveInput, Fields, parse_macro_input, spanned::Spanned};
+use syn::{Data, DeriveInput, Fields, parse_macro_input, parse_quote, spanned::Spanned};
 
 fn crate_name() -> syn::Path {
     syn::parse_quote!(::diskann_benchmark_runner::reflect)
@@ -46,19 +46,39 @@ fn process_struct(input: &DeriveInput, s: &syn::DataStruct) -> proc_macro2::Toke
 
     match &s.fields {
         Fields::Named(named) => {
+            // To handle generics and automatically apply the `Reflect` bound to inner types,
+            // we extract each field type `T` and add the bound `T: Reflect` to the type's
+            // where clause.
+            let mut generics = input.generics.clone();
+            for field in &named.named {
+                let ty = &field.ty;
+                generics
+                    .make_where_clause()
+                    .predicates
+                    .push(parse_quote!(#ty: #path::Reflect));
+            }
+
             let fields = named.named.iter().map(|f| {
                 let ty = &f.ty;
+
                 let ident = f.ident.as_ref().unwrap().to_string();
                 let doc = format_docstrings(&f.attrs);
 
                 quote_spanned! { ty.span()=> #path::NamedField::new::<#ty>(#ident, #doc) }
             });
 
+            let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+            let type_id = quote_spanned! {
+                input.span()=> ::std::any::TypeId::of::<#type_name #ty_generics>()
+            };
+
             quote! {
-                impl #path::Reflect for #type_name {
+                impl #impl_generics #path::Reflect for #type_name #ty_generics #where_clause {
                     fn reflect() -> #path::Type {
                         #path::Type::aggregate(
                             #type_name_str,
+                            #type_id,
                             #path::Fields::Named(vec![#(#fields),*]),
                             #doc,
                         )

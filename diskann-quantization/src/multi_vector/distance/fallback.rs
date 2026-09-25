@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Fallback kernel implementation of multi-vector distance computation.
 
@@ -9,6 +11,7 @@ use diskann_vector::distance::InnerProduct;
 use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 
 use super::max_sim::{Chamfer, MaxSim};
+use super::projected_eigen::ProjectedEigen;
 use crate::multi_vector::{MatRef, MaxSimError, Repr, Standard};
 
 /////////////////
@@ -63,8 +66,8 @@ impl FallbackKernel {
     /// Core kernel for computing per-query-vector max similarities (min negated inner-product).
     ///
     /// For each `query` vector, computes the maximum similarity (negated inner product)
-    /// to any document vector, then calls `f(index, score)` with the result. If
-    /// there are no vectors in the `doc`, the kernel returns immediately.
+    /// to any document vector, then calls `f(index, score)` with the result.
+    /// If there are no vectors in the `doc`, the score is `f32::MAX`.
     ///
     /// The callback can be used to aggregate or set scores as needed - as is the
     /// case with [`MaxSim`] and [`Chamfer`].
@@ -83,11 +86,6 @@ impl FallbackKernel {
         F: FnMut(usize, f32),
         InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
-        // Early exit if no doc vectors - callback should never be invoked
-        if doc.num_vectors() == 0 {
-            return;
-        }
-
         for (i, q_vec) in query.rows().enumerate() {
             // `InnerProduct::evaluate` returns negated inner product
             let mut min_dist = f32::MAX;
@@ -98,6 +96,50 @@ impl FallbackKernel {
             }
 
             f(i, min_dist);
+        }
+    }
+
+    /// Core kernel for computing per-query-vector projected-eigen scores.
+    ///
+    /// For each `query` vector, sums the negated squared inner product
+    /// against every document vector, then calls `f(index, score)` with the
+    /// result. If there are no vectors in the `doc`, the kernel returns
+    /// immediately.
+    ///
+    /// The callback can be used to aggregate scores as needed - as is the
+    /// case with [`ProjectedEigen`].
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query multi-vector (wrapped as [`QueryMatRef`])
+    /// * `doc` - The document multi-vector
+    /// * `f` - Callback invoked with `(query_index, score)` for each query vector
+    #[inline]
+    pub(crate) fn projected_eigen_kernel<F, T: Copy>(
+        query: QueryMatRef<'_, Standard<T>>,
+        doc: MatRef<'_, Standard<T>>,
+        mut f: F,
+    ) where
+        F: FnMut(usize, f32),
+        InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
+    {
+        // Early exit if no doc vectors - callback should never be invoked
+        if doc.num_vectors() == 0 {
+            return;
+        }
+
+        for (i, q_vec) in query.rows().enumerate() {
+            let mut sum = 0.0f32;
+
+            for d_vec in doc.rows() {
+                // `InnerProduct::evaluate` returns the negated inner product;
+                // squaring discards the sign, so negate the squared value to
+                // obtain `-IP(q, d)²`.
+                let ip = InnerProduct::evaluate(q_vec, d_vec);
+                sum += -(ip * ip);
+            }
+
+            f(i, sum);
         }
     }
 }
@@ -126,6 +168,13 @@ where
 
         if self.size() != query.num_vectors() {
             return Err(MaxSimError::InvalidBufferLength(size, n_queries));
+        }
+
+        if query.vector_dim() != doc.vector_dim() {
+            return Err(MaxSimError::UnequalDim(
+                doc.vector_dim(),
+                query.vector_dim(),
+            ));
         }
 
         FallbackKernel::max_sim_kernel(query, doc, |i, score| {
@@ -159,6 +208,27 @@ where
     }
 }
 
+/////////////////////
+// ProjectedEigen //
+/////////////////////
+
+impl<T: Copy> PureDistanceFunction<QueryMatRef<'_, Standard<T>>, MatRef<'_, Standard<T>>, f32>
+    for ProjectedEigen
+where
+    InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
+{
+    #[inline(always)]
+    fn evaluate(query: QueryMatRef<'_, Standard<T>>, doc: MatRef<'_, Standard<T>>) -> f32 {
+        let mut sum = 0.0f32;
+
+        FallbackKernel::projected_eigen_kernel(query, doc, |_i, score| {
+            sum += score;
+        });
+
+        sum
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +253,17 @@ mod tests {
                 -ip
             })
             .fold(f32::MAX, f32::min)
+    }
+
+    /// Naive implementation of projected-eigen for a single query vector
+    /// against all doc vectors: `\sum_{j} -IP(q, d_{j})^2`.
+    fn naive_projected_eigen_single(query_vec: &[f32], doc: &MatRef<'_, Standard<f32>>) -> f32 {
+        doc.rows()
+            .map(|d_vec| {
+                let ip: f32 = query_vec.iter().zip(d_vec.iter()).map(|(a, b)| a * b).sum();
+                -(ip * ip)
+            })
+            .sum()
     }
 
     /// Generate deterministic test data.
@@ -225,7 +306,7 @@ mod tests {
             let doc = make_doc(&[1.0, 1.0], 1, 2);
 
             let mut scores = vec![0.0f32; 3]; // Wrong size
-            let r = MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+            let r = MaxSim::new(&mut scores).evaluate(query, doc);
             assert!(r.is_err());
         }
 
@@ -251,7 +332,7 @@ mod tests {
 
                 // Test MaxSim
                 let mut scores = vec![0.0f32; *nq];
-                let r = MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+                let r = MaxSim::new(&mut scores).evaluate(query, doc);
                 assert!(r.is_ok());
 
                 let expected_scores: Vec<f32> = query
@@ -286,6 +367,22 @@ mod tests {
                     nd,
                     dim
                 );
+
+                // Test ProjectedEigen
+                let projected = ProjectedEigen::evaluate(query, doc);
+                let expected_projected: f32 = query
+                    .rows()
+                    .map(|q_vec| naive_projected_eigen_single(q_vec, &doc))
+                    .sum();
+
+                assert!(
+                    (projected - expected_projected).abs()
+                        < 1e-6 * expected_projected.abs().max(1.0),
+                    "ProjectedEigen mismatch for ({},{},{})",
+                    nq,
+                    nd,
+                    dim
+                );
             }
         }
 
@@ -301,6 +398,16 @@ mod tests {
 
             let result = Chamfer::evaluate(QueryMatRef::from(doc), query.deref().reborrow());
 
+            assert_eq!(result, f32::INFINITY);
+        }
+
+        #[test]
+        fn projected_eigen_with_zero_docs_returns_zero() {
+            let query = make_query(&[1.0, 0.0, 0.0, 1.0], 2, 2);
+            let doc = make_doc(&[], 0, 2);
+
+            // No document vectors means no pairs contribute, so the sum is 0.
+            let result = ProjectedEigen::evaluate(query, doc);
             assert_eq!(result, 0.0);
         }
     }

@@ -8,6 +8,8 @@ use std::{cmp::Ordering, fmt, io::Cursor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{ANNError, ANNResult};
 
+use crate::error::{diskann_error, ErrorKind};
+
 /// Graph layout version. In the format of `major.minor`.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct GraphLayoutVersion {
@@ -69,11 +71,9 @@ impl<'a> TryFrom<&'a [u8]> for GraphLayoutVersion {
     /// | MajorVersion (4 bytes) | MinorVersion (4 bytes) |
     fn try_from(value: &'a [u8]) -> ANNResult<Self> {
         if value.len() < std::mem::size_of::<GraphLayoutVersion>() {
-            Err(ANNError::log_parse_slice_error(
-                "&[u8]".to_string(),
-                "GraphLayoutVersion".to_string(),
+            Err(diskann_error!(
+                ErrorKind::SerdeError,
                 "The given bytes are not long enough to create a valid graph layout version."
-                    .to_string(),
             ))
         } else {
             let mut cursor = Cursor::new(&value);

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_disk::utils::aligned_file_reader::{
+use diskann_disk::search::provider::aligned_file_reader::{
     traits::{AlignedFileReader, AlignedReaderFactory},
     AlignedFileReaderFactory, AlignedRead,
 };

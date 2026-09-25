@@ -1,0 +1,56 @@
+{
+  "search_directories": [
+    "test_data/yfcc"
+  ],
+  "jobs": [
+    {
+      "type": "graph-index-dynamic-run",
+      "content": {
+        "build": {
+          "data_type": "float32",
+          "data": "yfcc_10k.fbin",
+          "distance": "squared_l2",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 4,
+          "start_point_strategy": "medoid"
+        },
+        "search_phase": {
+            "search-type": "topk",
+            "queries": "yfcc_query_100.fbin",
+            "groundtruth": "groundtruth.bin",
+            "reps": 1,
+            "num_threads": [
+              2
+            ],
+            "runs": [
+              {
+                "search_n": 10,
+                "search_l": [
+                  20,
+                  40
+                ],
+                "recall_k": 10
+              }
+            ]
+        },
+        "runbook_params": {
+            "runbook_path": "yfcc_runbook.yaml",
+            "dataset_name": "yfcc-10K",
+            "gt_directory": "yfcc_runbook_gt",
+            "ip_delete_method": {
+              "method": "visited_and_top_k",
+              "params": {
+                "k_value": 20,
+                "l_value": 50
+              }
+            },
+            "ip_delete_num_to_replace": 3,
+            "consolidate_threshold": 0.2
+          }
+      }
+    }
+  ]
+}

@@ -10,6 +10,7 @@ extern crate self as diskann_benchmark_runner;
 
 pub mod benchmark;
 mod checker;
+mod features;
 mod internal;
 mod jobs;
 mod result;
@@ -25,6 +26,7 @@ pub mod utils;
 pub use app::App;
 pub use benchmark::Benchmark;
 pub use checker::Checker;
+pub use features::Features;
 pub use input::Input;
 pub use output::Output;
 pub use reflect::Reflect;

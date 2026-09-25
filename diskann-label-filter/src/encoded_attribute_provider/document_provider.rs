@@ -6,10 +6,10 @@
 use diskann::{
     error::{ErrorExt, IntoANNResult},
     provider::{DataProvider, Delete, Guard, SetElement},
-    ANNError, ANNErrorKind,
+    ANNError,
 };
 
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{future::AsyncFriendly, lazy_format};
 
 use crate::{document::Document, traits::attribute_store::AttributeStore};
 
@@ -122,10 +122,7 @@ where
         id: Self::InternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let _ = self.attribute_store.delete(&(id)).map_err(|_| {
-            ANNError::message(
-                ANNErrorKind::IndexError,
-                format!("Could not delete attributes of {}.", id),
-            )
+            ANNError::message(lazy_format!(move, "Could not delete attributes of {}.", id))
         });
 
         self.inner_provider.release(context, id)
@@ -137,30 +134,23 @@ where
         id: Self::InternalId,
     ) -> Result<diskann::provider::ElementStatus, Self::Error> {
         let is_id_in_attr_store_w = self.attribute_store.id_exists(&id).map_err(|e| {
-            ANNError::new(ANNErrorKind::IndexError, e)
-                .context("Failed to get attribute status by internal id.")
+            ANNError::new(e).context("Failed to get attribute status by internal id.")
         });
         let id_in_data_store_w = self
             .inner_provider
             .status_by_internal_id(context, id)
             .await
             .into_ann_result();
-        // .map_err(|e| {
-        //     ANNError::new(ANNErrorKind::IndexError, e)
-        //         .context("Failed to get status from data provider.")
-        // });
 
         let is_id_in_attr_store = is_id_in_attr_store_w?;
         let id_in_data_store = id_in_data_store_w?;
 
         if is_id_in_attr_store && id_in_data_store.is_deleted() {
             Err(ANNError::message(
-                ANNErrorKind::IndexError,
                 "Id was found in the attribute store, but not in the data store.",
             ))
         } else if !is_id_in_attr_store && id_in_data_store.is_valid() {
             Err(ANNError::message(
-                ANNErrorKind::IndexError,
                 "Id was found in the data store but not in the attribute store.",
             ))
         } else {

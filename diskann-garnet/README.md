@@ -1,35 +1,44 @@
 # diskann-garnet
 
-This crate providers an implementation of `DataProvider` for
+This crate provides an implementation of `DataProvider` for
 [Garnet](https://github.com/microsoft/garnet) as well as FFI endpoints for
 Garnet to access DiskANN functionality. Garnet is a remote cache service
-developed by Microsoft Research, offers Redis compatibility, and has better
+developed by Microsoft Research with Redis compatibility, and has better
 performance, throughput, and lower latency than competitors. With this crate, it
 also supports vector sets, allowing clients to use vector sets for ANN indexing
 and search.
 
 ## Supported Features
 
-diskann-garnet currently supports full precision vectors only with cosine
-distance metrics.
+diskann-garnet currently supports vectors with element types of 32-bit float and 8-bit signed or unsigned integers. Indexes can be full precision or quantized. When the index is quantized, the full precision vectors are still stored in order to rerank the final candidates during search operations, which improves recall.
 
 In addition to the normal vector set operations, the following extensions are
 added:
 
-- `XB8`: When specifying vector input type, you can use `XB8` instead of `FP32`
-  to specify binary data in uint8 format, one byte per dimension.
-- `XPREQ8`: This is a pseudo-quantizer that specifies the vector data will be
-  stored as full precision data in uint8 format.
+### New Element Types
 
-Generally you will use `XB8` with `XPREQ8` to input and store uint8 vectors and
-`FP32` with `NOQUANT` to input and store f32 vectors.
+- `XI8`: signed 8-bit integers
+- `XU8`: unsigned 8-bit integers
 
-Support for binary and scalar quantization is coming, along with support for
-customizing the distance metric.
+### Distance Metrics
 
-Currently there is limit of `2^32 - 1` vectors in a single instance due to
-internal IDs being `u32`. This will probably restriction will be lifted in the
-future.
+Redis always uses cosine distance, but many vector data sets use other metrics. The following metrics can be used by passing `XDISTANCE_METRIC <metric>` options to the `VADD` command. The default is `L2`.
+
+- `COSINE`
+- `XCOSINE_NORMALIZED`
+- `IP` (inner product)
+- `L2` (euclidean)
+
+### New Quantizers
+
+- `XNOQUANT_I8`: full precision 8-bit signed integer
+- `XNOQUANT_U8`: full precision 8-bit unsigned integer
+- `XBIN_I8`: binary quantization of 8-bit signed integer (using DiskANN's spherical quantizer based on RaBitQ)
+- `XBIN_U8`: binary quantization of 8-bit unsigned integer (using DiskANN's spherical quantizer based on RaBitQ)
+
+
+Currently there is a limit of `2^32 - 1` vectors in a single instance due to
+internal IDs being `u32`. This restriction will be lifted in the future.
 
 ## Installing
 
@@ -38,7 +47,7 @@ check out the Garnet repo on Windows or Linux, and if you have a dotnet
 toolchain installed you can just run:
 
 ```sh
-dotnet dotnet run -c Release -f net8.0 --project main/GarnetServer --enable-vector-set-preview
+dotnet run -c Release -f net10.0 --project main/GarnetServer -- --enable-vector-set-preview
 ```
 
 and it will build and launch Garnet with vector sets enabled.
@@ -56,12 +65,13 @@ mkdir ../target/pkg
 mkdir ../target/pkg/linux
 mkdir ../target/pkg/windows
 mkdir ../target/pkg/docs
+cp diskann-garnet.nuspec ../target/pkg
 cp README.md ../target/pkg/linux/libdiskann_garnet.so # dummy file
 cp ../target/release/*.dll ../target/pkg/windows
 cp ../target/release/*.pdb ../target/pkg/windows
 cp README.md ../target/pkg/docs
 nuget pack -BasePath ../target/pkg -OutputDirectory LOCAL_NUGET_PATH
-nuget locals -clear all
+nuget locals all -clear
 ```
 
 You will need to set up a local path to host NuGets and setup
@@ -95,11 +105,11 @@ then replace the files, and rezip.
 mkdir target/nupkg
 cd target/nupkg
 unzip PATH_TO/diskann-garnet.x.y.z.nupkg
-cd ../../diskann-garnet
-cargo build --release
-cp diskann-garnet.nuspec ../target/nupkg/
-cp ../target/release/libdiskann_garnet.so ../target/nupkg/runtimes/linux-x64/native/
-cd ../target/nupkg
+cd ../..
+cargo build --release --package diskann-garnet
+cp diskann-garnet/diskann-garnet.nuspec target/nupkg/
+cp target/release/libdiskann_garnet.so target/nupkg/runtimes/linux-x64/native/
+cd target/nupkg
 zip -r LOCAL_NUGET_PATH/diskann-garnet.X.Y.Z.nupkg *
 dotnet nuget locals all --clear
 ```
@@ -114,11 +124,11 @@ the one you want.
 ## Testing
 
 Unit tests are run in the usual way with `cargo test`, but many are end-to-end
-and run from the Garnet side. These two invocations will the relevant tests:
+and run from the Garnet side. These two invocations will run the relevant tests:
 
 ```
-dotnet test test/Garnet.test -f net8.0 -c Debug --filter RespVectorSetTests
-dotnet test test/Garnet.test -f net8.0 -c Debug --filter DiskANNServiceTests
+dotnet test test/standalone/Garnet.test.vectorset -f net10.0 -c Debug --filter RespVectorSetTests
+dotnet test test/standalone/Garnet.test.extensions -f net10.0 -c Debug --filter DiskANNServiceTests
 ```
 
 ## Client Examples

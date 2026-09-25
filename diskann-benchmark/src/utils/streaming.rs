@@ -131,6 +131,26 @@ impl TagSlotManager {
         Ok(())
     }
 
+    /// Immediately recycle tags back to empty slots, removing all mappings.
+    ///
+    /// Used by hard-delete providers where slots can be reused immediately
+    /// without waiting for a consolidation pass.
+    #[cfg(feature = "bftree")]
+    pub fn recycle_tags(&mut self, tag_range: std::ops::Range<usize>) -> anyhow::Result<()> {
+        for tag in tag_range {
+            if let Some(slot) = self.tag_to_slot.remove(&tag) {
+                self.slot_to_tag.remove(&slot);
+                self.empty_slots.push_back(slot);
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Tag {} not found in slot mapping for recycle",
+                    tag
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Consolidate deleted slots back to empty slots after background cleaning
     ///
     /// This method processes all deleted slots by:

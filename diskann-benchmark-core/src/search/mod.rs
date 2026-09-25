@@ -39,6 +39,7 @@
 //!
 //! ```rust
 //! use std::{sync::Arc, num::NonZeroUsize};
+//! use diskann::neighbor::Neighbor;
 //! use diskann_benchmark_core::search;
 //!
 //! /// A simple example implementation of the `Search` trait.
@@ -96,7 +97,7 @@
 //!        use diskann::graph::SearchOutputBuffer;
 //!
 //!        // Fill the buffer with `index`.
-//!        buffer.extend((0..parameters.num_ids).map(|_| (index, 0.0f32)));
+//!        buffer.extend((0..parameters.num_ids).map(|_| Neighbor::new(index, 0.0f32)));
 //!        Ok(Output::new(index))
 //!    }
 //! }
@@ -121,14 +122,17 @@
 //!
 //! ## Graph Index
 //!
-//! * [`graph::search::Knn`]: K-nearest neighbors search for [`diskann::graph::DiskANNIndex`].
-//! * [`graph::search::Range`]: Range search for [`diskann::graph::DiskANNIndex`].
+//! * [`graph::KNN`]: K-nearest neighbors search for [`diskann::graph::DiskANNIndex`].
+//! * [`graph::Range`]: Range search for [`diskann::graph::DiskANNIndex`].
+//! * [`graph::FilteredRange`]: Filtered range search for [`diskann::graph::DiskANNIndex`].
 //! * [`graph::MultiHop`]: Multi-hop filtered search for [`diskann::graph::DiskANNIndex`].
 
 pub(crate) mod ids;
 pub use ids::ResultIds;
 
 mod api;
-pub use api::{Aggregate, Id, IdCount, Run, Search, SearchResults, Setup, search, search_all};
+pub use api::{
+    Aggregate, Id, IdCount, Run, Search, SearchResults, Setup, search, search_all, search_all_with,
+};
 
 pub mod graph;

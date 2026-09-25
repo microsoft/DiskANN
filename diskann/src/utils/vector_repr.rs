@@ -6,7 +6,7 @@
 use std::fmt::Debug;
 
 use diskann_vector::{
-    DistanceFunction, PreprocessedDistanceFunction,
+    AsUnaligned, DistanceFunction, PreprocessedDistanceFunction, UnalignedSlice,
     conversion::CastFromSlice,
     distance::{DistanceProvider, Metric},
 };
@@ -42,13 +42,11 @@ impl<T> VectorElement for T where
 
 /// A common collection of behavior required for element types of vectors that
 /// behave like full-precision vectors. It covers native types like `f32`, `f16`
-/// `i8` and `u8` but also [`MinMaxElement`] which is an element type to represent
-/// vectors quantized using [`quantization::minmax`] and can be used in-place of
-/// full-precision vectors.
+/// `i8` and `u8`, as well as custom quantized element representations that can
+/// be used in place of full-precision vectors.
 pub trait VectorRepr: VectorElement {
     /// An error type for implementations that throw-errors when converting to full-precision
-    /// vectors; such as [`crate::MinMaxElement`]. For regular full-precision vectors this a
-    /// null type.
+    /// vectors.
     type Error: std::error::Error + Debug + Send + Sync + Into<ANNError>;
 
     /// An implementation of [`DistanceFunction`] for computing similarity between two
@@ -59,7 +57,7 @@ pub trait VectorRepr: VectorElement {
         + Sync
         + 'static;
 
-    /// An implementation of [`PreprocessedDistanceFunciton`] for computing similarity
+    /// An implementation of [`PreprocessedDistanceFunction`] for computing similarity
     /// between a fixed query and slices of `Self`.
     type QueryDistance: for<'a> PreprocessedDistanceFunction<&'a [Self], f32>
         + Debug
@@ -70,8 +68,8 @@ pub trait VectorRepr: VectorElement {
     /// Return the dimension of the vector when converted into a full-precision vector.
     ///
     /// For most implementations of `VectorRepr` this simply outputs the length of the input
-    /// slice; however, for quantized vectors such as [`minmax::Data`] that can be used instead of
-    /// flat full-precision vectors, the output of this might be different than the input length.
+    /// slice; however, for quantized vectors that can be used instead of flat full-precision
+    /// vectors, the output of this might be different than the input length.
     fn full_dimension(vec: &[Self]) -> Result<usize, Self::Error>;
 
     /// Return a [`DistanceFunction`] that computes distances between equal sized slices
@@ -110,14 +108,7 @@ pub struct NativeTypeLengthError {
     dst: usize,
 }
 
-impl From<NativeTypeLengthError> for ANNError {
-    fn from(err: NativeTypeLengthError) -> ANNError {
-        ANNError::log_index_error(format!(
-            "Unable to set full-precision vector of length {} into slice of length {}",
-            err.src, err.dst
-        ))
-    }
-}
+crate::convert_error!(NativeTypeLengthError);
 
 macro_rules! default_impl {
     (
@@ -238,6 +229,13 @@ impl<T, U> PreprocessedDistanceFunction<&[T]> for BufferedDistance<T, U> {
     }
 }
 
+impl<T, U> PreprocessedDistanceFunction<UnalignedSlice<'_, T>> for BufferedDistance<T, U> {
+    #[inline(always)]
+    fn evaluate_similarity(&self, x: UnalignedSlice<'_, T>) -> f32 {
+        self.f.call_unaligned((&*self.query).as_unaligned(), x)
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -273,5 +271,29 @@ mod tests {
         assert!(implements_vector_element::<u16>());
         // assert!(implements_vector_element::<u32>());
         // assert!(implements_vector_element::<u64>());
+    }
+
+    // This test works by copying a `f32` vector with known values into various unaligned
+    // offsets within a `Vec<u8>` to ensure that `BufferedDistance` correctly accepts
+    // `UnalignedSlices`.
+    #[test]
+    fn test_unaligned_buffered() {
+        let f = BufferedDistance::new(Box::new([1.0f32, 2.0, 3.0]), Metric::L2);
+
+        let x = [2.0f32, 3.0, 4.0];
+        let bytes = bytemuck::must_cast_slice::<f32, u8>(&x);
+        let size_of_x = std::mem::size_of_val(&x);
+        let mut buffer = vec![0u8; size_of_x + std::mem::size_of::<f32>()];
+        for offset in 0..std::mem::size_of::<f32>() {
+            buffer[offset..offset + size_of_x].copy_from_slice(bytes);
+            // Safety: The memory `buffer[offset..offset + size_of_x]` is valid - otherwise
+            // the previous indexing would have panicket. This is exactly the slice we
+            // pass to `UnalignedSlice::new`.
+            let unaligned =
+                unsafe { UnalignedSlice::new(buffer.as_ptr().add(offset).cast::<f32>(), x.len()) };
+
+            let distance = f.evaluate_similarity(unaligned);
+            assert_eq!(distance, 3.0);
+        }
     }
 }

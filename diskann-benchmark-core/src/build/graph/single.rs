@@ -60,7 +60,7 @@ where
 impl<DP, T, S> Build for SingleInsert<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default> + for<'a> provider::SetElement<&'a [T]>,
-    S: for<'a> glue::InsertStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
+    S: for<'a> glue::InsertStrategy<'a, DP, &'a [T]> + Clone + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Output = ();
@@ -74,7 +74,7 @@ where
             let context = DP::Context::default();
             self.index
                 .insert(
-                    self.strategy.clone(),
+                    &self.strategy,
                     &context,
                     &self.to_id.to_id(i)?,
                     self.data.row(i),
@@ -149,7 +149,7 @@ mod tests {
         .unwrap();
 
         // Ensure that the index is correctly populated.
-        let accessor = index.provider().neighbors();
+        let mut accessor = index.provider().neighbors();
         let mut v = diskann::graph::AdjacencyList::new();
 
         for i in 0..data.nrows() {

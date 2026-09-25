@@ -3,14 +3,12 @@
  * Licensed under the MIT license.
  */
 
-use std::ops::Deref;
-
 use diskann::ANNResult;
 use diskann_utils::Reborrow;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{QueryComputer, dynamic::VTable};
+use super::{QueryComputer, Shared, dynamic::VTable};
 use crate::model::FixedChunkPQTable;
 
 pub trait PQVersion: Eq + Copy {}
@@ -90,19 +88,21 @@ impl<'a, I: PQVersion> VersionedPQVectorRef<'a, I> {
 /// A wrapper for `FixedChunkPQTable` that contains either one or two inner
 /// `FixedChunkPQTables` with associated versions.
 #[derive(Debug, Clone)]
-pub enum MultiTable<T, I>
+pub enum MultiTable<'a, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     /// Only one table is present with an associated version.
-    One { table: T, version: I },
+    One {
+        table: Shared<'a, FixedChunkPQTable>,
+        version: I,
+    },
     /// Two tables are present, an incoming "new" table and an outgoing "old" table.
     /// The versions of these tables are recorded respectively in `new_version` and
     /// `old_version`.
     Two {
-        new: T,
-        old: T,
+        new: Shared<'a, FixedChunkPQTable>,
+        old: Shared<'a, FixedChunkPQTable>,
         new_version: I,
         old_version: I,
     },
@@ -112,20 +112,24 @@ where
 #[error("provided versions must not be equal")]
 pub struct EqualVersionsError;
 
-impl<T, I> MultiTable<T, I>
+impl<'a, I> MultiTable<'a, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     /// Construct a new `MultiTable` containing a single `FixedChunkPQTable`.
-    pub fn one(table: T, version: I) -> Self {
+    pub fn one(table: Shared<'a, FixedChunkPQTable>, version: I) -> Self {
         Self::One { table, version }
     }
 
     /// Construct a new `MultiTable` with two `FixedChunkPQTable`s.
     ///
     /// Returns an `Err` if the two provided versions are equal.
-    pub fn two(new: T, old: T, new_version: I, old_version: I) -> Result<Self, EqualVersionsError> {
+    pub fn two(
+        new: Shared<'a, FixedChunkPQTable>,
+        old: Shared<'a, FixedChunkPQTable>,
+        new_version: I,
+        old_version: I,
+    ) -> Result<Self, EqualVersionsError> {
         if new_version == old_version {
             Err(EqualVersionsError)
         } else {
@@ -173,23 +177,21 @@ where
 /// Returns `None` for distance computations when the version of the PQ vector does not
 /// match with any version in the local table.
 #[derive(Debug, Clone)]
-pub struct MultiDistanceComputer<T, I>
+pub struct MultiDistanceComputer<'a, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
-    table: MultiTable<T, I>,
+    table: MultiTable<'a, I>,
     vtable: VTable,
 }
 
-impl<T, I> MultiDistanceComputer<T, I>
+impl<'a, I> MultiDistanceComputer<'a, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     /// Construct a `MultiDistanceComputer` from the provided table implementing the
     /// requested metric.
-    pub fn new(table: MultiTable<T, I>, metric: Metric) -> Self {
+    pub fn new(table: MultiTable<'a, I>, metric: Metric) -> Self {
         Self {
             table,
             vtable: VTable::new(metric),
@@ -210,10 +212,9 @@ where
     }
 }
 
-impl<T, I> DistanceFunction<&[f32], &VersionedPQVector<I>, Option<f32>>
-    for MultiDistanceComputer<T, I>
+impl<I> DistanceFunction<&[f32], &VersionedPQVector<I>, Option<f32>>
+    for MultiDistanceComputer<'_, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     #[inline(always)]
@@ -222,10 +223,9 @@ where
     }
 }
 
-impl<T, I> DistanceFunction<&[f32], VersionedPQVectorRef<'_, I>, Option<f32>>
-    for MultiDistanceComputer<T, I>
+impl<I> DistanceFunction<&[f32], VersionedPQVectorRef<'_, I>, Option<f32>>
+    for MultiDistanceComputer<'_, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     fn evaluate_similarity(&self, x: &[f32], y: VersionedPQVectorRef<'_, I>) -> Option<f32> {
@@ -255,10 +255,9 @@ where
     }
 }
 
-impl<T, I> DistanceFunction<&VersionedPQVector<I>, &VersionedPQVector<I>, Option<f32>>
-    for MultiDistanceComputer<T, I>
+impl<I> DistanceFunction<&VersionedPQVector<I>, &VersionedPQVector<I>, Option<f32>>
+    for MultiDistanceComputer<'_, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     #[inline(always)]
@@ -278,10 +277,9 @@ where
 ///
 /// If two schemas are used and at least one of the versions of the argument vectors is not
 /// recognized, then return `None`.
-impl<T, I> DistanceFunction<VersionedPQVectorRef<'_, I>, VersionedPQVectorRef<'_, I>, Option<f32>>
-    for MultiDistanceComputer<T, I>
+impl<I> DistanceFunction<VersionedPQVectorRef<'_, I>, VersionedPQVectorRef<'_, I>, Option<f32>>
+    for MultiDistanceComputer<'_, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     fn evaluate_similarity(
@@ -347,30 +345,28 @@ where
 /// performing distance computations with either. Upon a version mismatch with a query,
 /// `None` is returned.
 #[derive(Debug)]
-pub enum MultiQueryComputer<T, I>
+pub enum MultiQueryComputer<'a, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     One {
-        computer: QueryComputer<T>,
+        computer: QueryComputer<'a>,
         version: I,
     },
     Two {
-        new: QueryComputer<T>,
-        old: QueryComputer<T>,
+        new: QueryComputer<'a>,
+        old: QueryComputer<'a>,
         new_version: I,
         old_version: I,
     },
 }
 
-impl<T, I> MultiQueryComputer<T, I>
+impl<'a, I> MultiQueryComputer<'a, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     /// Construct a new `MultiQueryComputer` with the requested metric and query.
-    pub fn new(table: MultiTable<T, I>, metric: Metric, query: &[f32]) -> ANNResult<Self> {
+    pub fn new(table: MultiTable<'a, I>, metric: Metric, query: &[f32]) -> ANNResult<Self> {
         let s = match table {
             MultiTable::One { table, version } => Self::One {
                 computer: { QueryComputer::new(table, metric, query, None)? },
@@ -406,10 +402,9 @@ where
     }
 }
 
-impl<T, I> PreprocessedDistanceFunction<&VersionedPQVector<I>, Option<f32>>
-    for MultiQueryComputer<T, I>
+impl<I> PreprocessedDistanceFunction<&VersionedPQVector<I>, Option<f32>>
+    for MultiQueryComputer<'_, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     #[inline(always)]
@@ -418,10 +413,9 @@ where
     }
 }
 
-impl<T, I> PreprocessedDistanceFunction<VersionedPQVectorRef<'_, I>, Option<f32>>
-    for MultiQueryComputer<T, I>
+impl<I> PreprocessedDistanceFunction<VersionedPQVectorRef<'_, I>, Option<f32>>
+    for MultiQueryComputer<'_, I>
 where
-    T: Deref<Target = FixedChunkPQTable>,
     I: PQVersion,
 {
     fn evaluate_similarity(&self, x: VersionedPQVectorRef<'_, I>) -> Option<f32> {
@@ -523,7 +517,7 @@ mod tests {
         let new = test_utils::seed_pivot_table(config);
         let old = test_utils::seed_pivot_table(config);
 
-        let result = MultiTable::two(&new, &old, 0, 0);
+        let result = MultiTable::two(Shared::Ref(&new), Shared::Ref(&old), 0, 0);
         assert!(
             matches!(result, Err(EqualVersionsError)),
             "MultiTable should now allow construction of the Two variant with equal versions"
@@ -536,7 +530,7 @@ mod tests {
 
     /// Test that the table works correctl where there is one inner PQ table.
     fn test_distance_computer_multi_with_one<R>(
-        computer: &MultiDistanceComputer<&'_ FixedChunkPQTable, usize>,
+        computer: &MultiDistanceComputer<'_, usize>,
         table: &FixedChunkPQTable,
         config: &test_utils::TableConfig,
         reference: &<f32 as VectorRepr>::Distance,
@@ -628,7 +622,7 @@ mod tests {
 
         let version: usize = 0x625b215f82f38008;
 
-        let multi_table = MultiTable::one(&table, version);
+        let multi_table = MultiTable::one(Shared::Ref(&table), version);
         let (n, o) = multi_table.versions();
         assert_eq!(*n, version);
         assert!(o.is_none());
@@ -652,7 +646,7 @@ mod tests {
     /// Test that the table works correctly when there are two inner PQ tables.
     #[allow(clippy::too_many_arguments)]
     fn test_distance_computer_multi_with_two<R>(
-        computer: &MultiDistanceComputer<&'_ FixedChunkPQTable, usize>,
+        computer: &MultiDistanceComputer<'_, usize>,
         new: &FixedChunkPQTable,
         old: &FixedChunkPQTable,
         new_config: &test_utils::TableConfig,
@@ -800,7 +794,13 @@ mod tests {
         let new_version: usize = 0x5a2b92a731766613;
         let old_version: usize = 0x2fab58c9c8b73841;
 
-        let multi_table = MultiTable::two(&new, &old, new_version, old_version).unwrap();
+        let multi_table = MultiTable::two(
+            Shared::Ref(&new),
+            Shared::Ref(&old),
+            new_version,
+            old_version,
+        )
+        .unwrap();
         let (n, o) = multi_table.versions();
         assert_eq!(*n, new_version);
         assert_eq!(*o.unwrap(), old_version);
@@ -824,7 +824,7 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn check_query_computer<R: Rng>(
-        computer: &MultiQueryComputer<&'_ FixedChunkPQTable, usize>,
+        computer: &MultiQueryComputer<'_, usize>,
         table: &FixedChunkPQTable,
         config: &test_utils::TableConfig,
         query: &[f32],
@@ -856,7 +856,7 @@ mod tests {
     }
 
     fn test_query_computer_multi_with_one<'a, R>(
-        mut create: impl FnMut(usize, &[f32]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
+        mut create: impl FnMut(usize, &[f32]) -> MultiQueryComputer<'a, usize>,
         table: &'a FixedChunkPQTable,
         config: &test_utils::TableConfig,
         reference: &<f32 as VectorRepr>::Distance,
@@ -918,7 +918,7 @@ mod tests {
         };
 
         let create = |version: usize, query: &[f32]| {
-            let schema = MultiTable::one(&table, version);
+            let schema = MultiTable::one(Shared::Ref(&table), version);
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };
         test_query_computer_multi_with_one(
@@ -938,7 +938,7 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn test_query_computer_multi_with_two<'a, R>(
-        create: impl Fn(usize, usize, &[f32]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
+        create: impl Fn(usize, usize, &[f32]) -> MultiQueryComputer<'a, usize>,
         new: &'a FixedChunkPQTable,
         old: &'a FixedChunkPQTable,
         new_config: &test_utils::TableConfig,
@@ -1043,7 +1043,13 @@ mod tests {
         let num_trials = 20;
 
         let create = |new_version: usize, old_version: usize, query: &[f32]| {
-            let schema = MultiTable::two(&new, &old, new_version, old_version).unwrap();
+            let schema = MultiTable::two(
+                Shared::Ref(&new),
+                Shared::Ref(&old),
+                new_version,
+                old_version,
+            )
+            .unwrap();
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };
 

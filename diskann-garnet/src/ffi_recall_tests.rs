@@ -10,7 +10,7 @@ mod tests {
     use diskann_vector::distance::{Cosine, Metric, SquaredL2};
 
     use crate::{
-        VectorQuantType, VectorValueType, create_index, drop_index, garnet::Context, insert,
+        Overflow, VectorQuantType, create_index, drop_index, garnet::Context, insert,
         search_vector, test_utils::Store,
     };
 
@@ -25,16 +25,15 @@ mod tests {
         let vector_bytes: &[u8] = bytemuck::cast_slice(vector);
         unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector.len(),
                 b"".as_ptr(),
                 0,
-            )
+            ) > 0
         }
     }
 
@@ -156,14 +155,15 @@ mod tests {
     ) -> f64 {
         store.clear();
         let callbacks = store.callbacks();
-        let ctx = Context(0);
+        let ctx = Context::new(0);
+        let mut quant_needed = false;
 
         let reduce_dimensions = 0;
         let l_build = 100;
         let max_degree = 32;
         let index_ptr = unsafe {
             create_index(
-                ctx.0,
+                ctx.get(),
                 dimensions,
                 reduce_dimensions,
                 VectorQuantType::NoQuant,
@@ -174,6 +174,9 @@ mod tests {
                 callbacks.write_callback(),
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
+                callbacks.filter_callback(),
+                callbacks.log_callback(),
+                &mut quant_needed,
             )
         };
         assert!(!index_ptr.is_null());
@@ -194,19 +197,18 @@ mod tests {
         let delta = 2.0_f32;
         let search_exploration_factor = 200_u32;
         let max_filtering_effort = 0_usize;
-        let continuation = ptr::null_mut();
 
         for vec in vectors {
             let query_bytes: &[u8] = bytemuck::cast_slice(vec);
             let max_id_size = mem::size_of::<u32>() + max_id_len;
             let mut output_id_buffer = vec![0u8; k * max_id_size];
             let mut output_dists = vec![0f32; k];
+            let mut overflow = ptr::null_mut();
 
             let count = unsafe {
                 search_vector(
-                    ctx.0,
+                    ctx.get(),
                     index_ptr,
-                    VectorValueType::FP32,
                     query_bytes.as_ptr(),
                     vec.len(),
                     delta,
@@ -218,7 +220,8 @@ mod tests {
                     output_id_buffer.len(),
                     output_dists.as_mut_ptr(),
                     output_dists.len(),
-                    continuation,
+                    1,
+                    &mut overflow,
                 )
             };
             assert!(count >= 0, "search failed");
@@ -235,9 +238,13 @@ mod tests {
             );
             total_matches += matches;
             total_expected += expected_ids.len();
+
+            if !overflow.is_null() {
+                unsafe { drop(Overflow::from_ptr(overflow)) };
+            }
         }
 
-        unsafe { drop_index(ctx.0, index_ptr) };
+        unsafe { drop_index(ctx.get(), index_ptr) };
 
         total_matches as f64 / total_expected as f64
     }
@@ -282,28 +289,28 @@ mod tests {
 
     #[test]
     fn grid_l2_recall_1d_100() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_grid_recall(&store, 1, 100, 3);
         assert!(recall >= 0.99, "1D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_2d_10() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_grid_recall(&store, 2, 10, 3);
         assert!(recall >= 0.99, "2D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_3d_7() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_grid_recall(&store, 3, 7, 3);
         assert!(recall >= 0.99, "3D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_4d_5() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_grid_recall(&store, 4, 5, 3);
         assert!(recall >= 0.99, "4D grid recall too low: {recall:.4}");
     }
@@ -346,7 +353,7 @@ mod tests {
     /// Circle with 100 points, radius=1.0, cosine distance, k=5
     #[test]
     fn circle_cosine_recall_r1_100pt() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_circle_recall(&store, 100, 1.0, 5);
         assert!(recall >= 0.99, "circle r=1 recall too low: {recall:.4}");
     }
@@ -354,7 +361,7 @@ mod tests {
     /// Circle with 93 points, radius=534.0, cosine distance, k=5
     #[test]
     fn circle_cosine_recall_r534_93pt() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_circle_recall(&store, 93, 534.0, 5);
         assert!(recall >= 0.99, "circle r=534 recall too low: {recall:.4}");
     }
@@ -362,7 +369,7 @@ mod tests {
     /// Circle with 50 points, radius=10.0, cosine distance, k=3
     #[test]
     fn circle_cosine_recall_r10_50pt() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_circle_recall(&store, 50, 10.0, 3);
         assert!(recall >= 0.99, "circle r=10 recall too low: {recall:.4}");
     }

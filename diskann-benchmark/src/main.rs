@@ -3,8 +3,15 @@
  * Licensed under the MIT license.
  */
 
-mod backend;
+//! Command-line benchmarks for DiskANN.
+
+mod disk_index;
+mod exhaustive;
+mod filters;
+mod flat;
+mod index;
 mod inputs;
+mod multi_vector;
 mod utils;
 
 use diskann_benchmark_runner as runner;
@@ -44,7 +51,12 @@ impl Cli {
 
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
-        backend::register_benchmarks(&mut registry)?;
+        exhaustive::register_benchmarks(&mut registry)?;
+        disk_index::register_benchmarks(&mut registry)?;
+        flat::register_benchmarks(&mut registry)?;
+        index::register_benchmarks(&mut registry)?;
+        filters::register_benchmarks(&mut registry)?;
+        multi_vector::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
     }
@@ -128,7 +140,7 @@ mod tests {
 
     use diskann_benchmark_runner::{app::Commands, output::Memory};
     use diskann_providers::storage::FileStorageProvider;
-    use diskann_tools::utils::{compute_ground_truth_from_datafiles, GraphDataF32Vector};
+    use diskann_tools::utils::compute_ground_truth_from_datafiles;
     use diskann_vector::distance::Metric;
 
     // Add these structs to deserialize the benchmark results
@@ -254,17 +266,15 @@ mod tests {
         }
     }
 
-    // Graph Index Build Integration Test.
-    #[test]
-    fn graph_index_integration() {
+    fn run_integration_test(mut raw: serde_json::Value) {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("graph-index.json"));
+        // let mut raw = serde_json::from_str(json_string).unwrap();
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
 
-        let input_path = tempdir.path().join("graph-index.json");
+        let input_path = tempdir.path().join("input.json");
         save_to_file(&input_path, &raw);
 
         let output_path = tempdir.path().join("output.json");
@@ -291,6 +301,161 @@ mod tests {
 
         let results: Vec<Value> = load_from_file(&output_path);
         assert_eq!(results.len(), num_jobs(&raw));
+    }
+
+    ////////////////////////////////
+    //      Graph Index Build     //
+    ////////////////////////////////
+    #[test]
+    fn graph_index_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index.json"));
+        run_integration_test(raw);
+    }
+
+    /////////////////////////
+    //    Flat Search      //
+    /////////////////////////
+
+    #[test]
+    fn flat_search_integration() {
+        let raw = value_from_file(&example_directory().join("flat-index.json"));
+        run_integration_test(raw);
+    }
+
+    ////////////////////////////
+    //      Dynamic Index     //
+    ////////////////////////////
+
+    #[test]
+    fn graph_index_dynamic_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-dynamic.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_dynamic_yfcc_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-dynamic-yfcc.json"));
+        run_integration_test(raw);
+    }
+
+    ////////////////////////////
+    //     BF-Tree Index      //
+    ////////////////////////////
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_spherical_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree-spherical.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree-stream.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_save_load_roundtrip() {
+        let mut raw = value_from_file(&example_directory().join("graph-index-bftree.json"));
+        run_bftree_save_roundtrip(&mut raw);
+
+        // Verify the saved index can be loaded back.
+        use diskann_bftree::{BfTreeProvider, NoStore};
+        use diskann_providers::storage::{FileStorageProvider, LoadWith};
+
+        let save_prefix = extract_save_path(&raw);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _loaded: BfTreeProvider<f32, NoStore> = rt
+            .block_on(<BfTreeProvider<f32, NoStore>>::load_with(
+                &FileStorageProvider,
+                &save_prefix,
+            ))
+            .expect("saved full-precision bftree index should load back");
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_spherical_save_load_roundtrip() {
+        let mut raw =
+            value_from_file(&example_directory().join("graph-index-bftree-spherical.json"));
+        run_bftree_save_roundtrip(&mut raw);
+
+        // Verify the saved index can be loaded back.
+        use diskann_bftree::{quant::QuantVectorProvider, BfTreeProvider};
+        use diskann_providers::storage::{FileStorageProvider, LoadWith};
+
+        let save_prefix = extract_save_path(&raw);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _loaded: BfTreeProvider<f32, QuantVectorProvider> = rt
+            .block_on(<BfTreeProvider<f32, QuantVectorProvider>>::load_with(
+                &FileStorageProvider,
+                &save_prefix,
+            ))
+            .expect("saved spherical bftree index should load back");
+    }
+
+    /// Run a bftree benchmark with `save_path` injected into the build config.
+    ///
+    /// Mutates `raw` in place so the caller can extract the save path afterward.
+    #[cfg(feature = "bftree")]
+    fn run_bftree_save_roundtrip(raw: &mut serde_json::Value) {
+        prefix_search_directories(raw, &root_directory());
+
+        let tempdir = tempfile::tempdir().unwrap();
+        // Leak the tempdir so files survive past this function for the caller's load step.
+        let tempdir = Box::leak(Box::new(tempdir));
+
+        let save_prefix = tempdir.path().join("bftree_roundtrip");
+        let save_prefix_str = save_prefix.to_str().unwrap();
+        raw["jobs"][0]["content"]["build"]["save_path"] =
+            serde_json::Value::String(save_prefix_str.to_string());
+
+        // Enable snapshots on each store config so save_with can snapshot the trees.
+        let content = &mut raw["jobs"][0]["content"];
+        for key in ["vector_store_config", "neighbor_store_config"] {
+            if let Some(cfg) = content[key].as_object_mut() {
+                cfg.insert("use_snapshot".into(), serde_json::Value::Bool(true));
+            }
+        }
+        if let Some(cfg) = content.get_mut("quant_store_config") {
+            if let Some(obj) = cfg.as_object_mut() {
+                obj.insert("use_snapshot".into(), serde_json::Value::Bool(true));
+            }
+        }
+
+        let input_path = tempdir.path().join("input.json");
+        save_to_file(&input_path, raw);
+
+        let output_path = tempdir.path().join("output.json");
+
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+        cli.run(&mut output).unwrap();
+    }
+
+    /// Extract the save_path from a mutated raw JSON value.
+    #[cfg(feature = "bftree")]
+    fn extract_save_path(raw: &serde_json::Value) -> String {
+        raw["jobs"][0]["content"]["build"]["save_path"]
+            .as_str()
+            .expect("save_path should be set")
+            .to_string()
     }
 
     ////////////////////////////
@@ -350,7 +515,7 @@ mod tests {
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("\"minmax-quantization\" feature"));
+        assert!(output.contains("feature \"minmax-quantization\""));
         println!("output = {}", output);
 
         // The output file should not have been created because we failed the test.
@@ -362,7 +527,7 @@ mod tests {
     /////////////////////////
 
     #[test]
-    fn scalar_quantization_intergration() {
+    fn scalar_quantization_integration() {
         let input_paths = [example_directory().join("scalar.json")];
 
         for input_path in input_paths {
@@ -417,7 +582,7 @@ mod tests {
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("\"scalar-quantization\" feature"));
+        assert!(output.contains("feature \"scalar-quantization\""));
         println!("output = {}", output);
 
         // The output file should not have been created because we failed the test.
@@ -488,7 +653,7 @@ mod tests {
 
         let output = String::from_utf8(output.into_inner()).unwrap();
         println!("output = {}", output);
-        assert!(output.contains("\"spherical-quantization\" feature"));
+        assert!(output.contains("feature \"spherical-quantization\""));
 
         // The output file should not have been created because we failed the test.
         assert!(!output_path.exists());
@@ -500,40 +665,8 @@ mod tests {
 
     #[test]
     fn label_index_integration() {
-        // First, parse and modify the input file to establish paths relative to the
-        // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("metadata-index.json"));
-        prefix_search_directories(&mut raw, &root_directory());
-
-        let tempdir = tempfile::tempdir().unwrap();
-
-        let input_path = tempdir.path().join("metadata-index.json");
-        save_to_file(&input_path, &raw);
-
-        let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
-
-        // Run the example program.
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-
-        cli.run(&mut output).unwrap();
-        println!(
-            "output = {}",
-            String::from_utf8(output.into_inner()).unwrap()
-        );
-
-        // Check that the results file is generated.
-        assert!(output_path.exists());
-
-        let results: Vec<Value> = load_from_file(&output_path);
-        assert_eq!(results.len(), num_jobs(&raw));
+        let raw = value_from_file(&example_directory().join("metadata-index.json"));
+        run_integration_test(raw);
     }
 
     #[test]
@@ -557,18 +690,47 @@ mod tests {
     fn graph_index_filter_integration() {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("graph-index-filter.json"));
+        let raw = value_from_file(&example_directory().join("graph-index-filter.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_inline_filter_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-range.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_filter_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-filter-range.json"));
+        run_integration_test(raw);
+    }
+
+    /// Filtered disk search end-to-end: drives the disk-index backend through
+    /// `disk-index-filter.json`
+    #[test]
+    #[cfg(feature = "disk-index")]
+    fn disk_index_filter_integration() {
+        let mut raw = value_from_file(&example_directory().join("disk-index-filter.json"));
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
-
-        let input_path = tempdir.path().join("graph-index-filter.json");
+        let input_path = tempdir.path().join("disk-index-filter.json");
         save_to_file(&input_path, &raw);
-
         let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
 
-        // Run the example program.
         let command = Commands::Run {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
@@ -577,18 +739,22 @@ mod tests {
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
+        let result = cli.run(&mut output);
+        let output_str = String::from_utf8(output.into_inner()).unwrap();
+        println!("output = {}", output_str);
+        result.expect("disk-index-filter run failed");
 
-        cli.run(&mut output).unwrap();
-        println!(
-            "output = {}",
-            String::from_utf8(output.into_inner()).unwrap()
-        );
-
-        // Check that the results file is generated.
         assert!(output_path.exists());
-
         let results: Vec<Value> = load_from_file(&output_path);
         assert_eq!(results.len(), num_jobs(&raw));
+    }
+
+    #[test]
+    fn graph_index_inline_filter_yfcc_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-inline-filter-yfcc.json"));
+        run_integration_test(raw);
     }
 
     #[test]
@@ -597,7 +763,7 @@ mod tests {
 
         let disk_index_search_path = root_directory().join("test_data/disk_index_search");
 
-        let result = compute_ground_truth_from_datafiles::<GraphDataF32Vector, FileStorageProvider>(
+        let result = compute_ground_truth_from_datafiles::<f32, (), FileStorageProvider>(
             &storage_provider,
             Metric::L2, // distance function
             disk_index_search_path
@@ -765,11 +931,97 @@ mod tests {
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("\"product-quantization\" feature"));
+        assert!(output.contains("feature \"product-quantization\""));
         println!("output = {}", output);
 
         // The output file should not have been created because we failed the test.
         assert!(!output_path.exists());
+    }
+
+    ///////////////////
+    // Multi-Vector  //
+    ///////////////////
+
+    #[test]
+    fn multi_vector_integration() {
+        let path = example_directory().join("multi-vector.json");
+        let tempdir = tempfile::tempdir().unwrap();
+        let output_path = tempdir.path().join("output.json");
+        assert!(!output_path.exists());
+
+        let modified_input_path = tempdir.path().join("input.json");
+
+        let mut raw = value_from_file(&path);
+        prefix_search_directories(&mut raw, &root_directory());
+        save_to_file(&modified_input_path, &raw);
+
+        run_multi_vector_integration(&modified_input_path, &output_path)
+    }
+
+    #[cfg(feature = "multi-vector")]
+    fn run_multi_vector_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        cli.run(&mut output).unwrap();
+        println!(
+            "output = {}",
+            String::from_utf8(output.into_inner()).unwrap()
+        );
+
+        // Check that the results file is generated.
+        assert!(output_path.exists());
+    }
+
+    #[cfg(not(feature = "multi-vector"))]
+    fn run_multi_vector_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        let err = cli.run(&mut output).unwrap_err();
+        println!("err = {:?}", err);
+
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        assert!(output.contains("feature \"multi-vector\""));
+        println!("output = {}", output);
+
+        // The output file should not have been created because we failed the test.
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    #[cfg(feature = "multi-vector")]
+    fn multi_vector_check_verify() {
+        let input_path = example_directory().join("multi-vector.json");
+        let tolerance_path = project_directory()
+            .join("perf_test_inputs")
+            .join("multi-vector-tolerance.json");
+
+        let command = Commands::Check(diskann_benchmark_runner::app::Check::Verify {
+            tolerances: tolerance_path,
+            input_file: input_path,
+        });
+
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+        cli.run(&mut output).unwrap();
+        println!(
+            "output = {}",
+            String::from_utf8(output.into_inner()).unwrap()
+        );
     }
 
     #[test]

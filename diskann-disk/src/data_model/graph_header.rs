@@ -11,6 +11,8 @@ use thiserror::Error;
 
 use super::{GraphLayoutVersion, GraphMetadata};
 
+use crate::error::{diskann_error, ErrorKind};
+
 /// GraphHeader. The header is stored in the first sector of the disk index file, or the first segment of the JET stream.
 pub struct GraphHeader {
     // Graph metadata.
@@ -34,7 +36,7 @@ pub enum GraphHeaderError {
 impl From<GraphHeaderError> for ANNError {
     #[track_caller]
     fn from(value: GraphHeaderError) -> Self {
-        ANNError::log_index_error(value)
+        diskann_error!(ErrorKind::IndexError, value)
     }
 }
 
@@ -124,10 +126,9 @@ impl<'a> TryFrom<&'a [u8]> for GraphHeader {
     /// | GraphMetadata (80 bytes) | BlockSize (8 bytes) | GraphLayoutVersion (8 bytes) |
     fn try_from(value: &'a [u8]) -> ANNResult<Self> {
         if value.len() < Self::get_size() {
-            Err(ANNError::log_parse_slice_error(
-                "&[u8]".to_string(),
-                "GraphHeader".to_string(),
-                "The given bytes are not long enough to create a valid graph header.".to_string(),
+            Err(diskann_error!(
+                ErrorKind::SerdeError,
+                "The given bytes are not long enough to create a valid graph header.",
             ))
         } else {
             // Parse metadata.
@@ -147,11 +148,13 @@ impl<'a> TryFrom<&'a [u8]> for GraphHeader {
 
 #[cfg(test)]
 mod tests {
-    use diskann::ANNErrorKind;
     use rstest::rstest;
 
     use super::*;
-    use crate::data_model::{GraphHeader, GraphLayoutVersion, GraphMetadata};
+    use crate::{
+        data_model::{GraphHeader, GraphLayoutVersion, GraphMetadata},
+        error::{error_kind, ErrorKind},
+    };
 
     #[test]
     fn test_graph_header_to_bytes_and_try_from() {
@@ -341,11 +344,11 @@ mod tests {
     fn test_graph_header_error_conversion() {
         let error = GraphHeaderError::MaxDegreeOverflow;
         let ann_error: ANNError = error.into();
-        assert_eq!(ann_error.kind(), ANNErrorKind::IndexError);
+        assert_eq!(error_kind(&ann_error), ErrorKind::IndexError);
 
         let layout_version = GraphLayoutVersion::new(1, 0);
         let error = GraphHeaderError::MaxDegreeUnsupportedLayoutVersion(layout_version);
         let ann_error: ANNError = error.into();
-        assert_eq!(ann_error.kind(), ANNErrorKind::IndexError);
+        assert_eq!(error_kind(&ann_error), ErrorKind::IndexError);
     }
 }

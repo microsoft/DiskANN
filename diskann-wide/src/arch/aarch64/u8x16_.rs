@@ -1,13 +1,13 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
 use crate::{
-    Emulated,
+    Emulated, LoHi, SplitJoin, ZipUnzip,
     constant::Const,
     helpers,
-    traits::{SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector},
+    traits::{SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDVector},
 };
 
 // AArch64 masks
@@ -33,6 +33,7 @@ macros::aarch64_splitjoin!(u8x16, u8x8, vget_low_u8, vget_high_u8, vcombine_u8);
 helpers::unsafe_map_binary_op!(u8x16, std::ops::Add, add, vaddq_u8, "neon");
 helpers::unsafe_map_binary_op!(u8x16, std::ops::Sub, sub, vsubq_u8, "neon");
 helpers::unsafe_map_binary_op!(u8x16, std::ops::Mul, mul, vmulq_u8, "neon");
+helpers::unsafe_map_unary_op!(u8x16, SIMDPopcount, popcount_simd, vcntq_u8, "neon");
 macros::aarch64_define_fma!(u8x16, vmlaq_u8);
 
 macros::aarch64_define_cmp!(
@@ -60,6 +61,37 @@ macros::aarch64_define_bitops!(
     ),
     (u8, i8, vmovq_n_s8),
 );
+
+impl ZipUnzip for u8x16 {
+    #[inline(always)]
+    fn zip(halves: LoHi<<Self as SplitJoin>::Halved>) -> Self {
+        use crate::SIMDVector;
+        // SAFETY: Caller asserts that these intrinsics match the element types.
+        unsafe {
+            let lo_raw = halves.lo.to_underlying();
+            let hi_raw = halves.hi.to_underlying();
+            <Self as SplitJoin>::join(LoHi::new(
+                u8x8::from_underlying(halves.lo.arch(), vzip1_u8(lo_raw, hi_raw)),
+                u8x8::from_underlying(halves.lo.arch(), vzip2_u8(lo_raw, hi_raw)),
+            ))
+        }
+    }
+
+    #[inline(always)]
+    fn unzip(self) -> LoHi<<Self as SplitJoin>::Halved> {
+        use crate::SIMDVector;
+        // SAFETY: Caller asserts that these intrinsics match the element types.
+        unsafe {
+            let halves = self.split();
+            let lo_raw = halves.lo.to_underlying();
+            let hi_raw = halves.hi.to_underlying();
+            LoHi::new(
+                u8x8::from_underlying(self.arch(), vuzp1_u8(lo_raw, hi_raw)),
+                u8x8::from_underlying(self.arch(), vuzp2_u8(lo_raw, hi_raw)),
+            )
+        }
+    }
+}
 
 ///////////
 // Tests //
@@ -98,9 +130,11 @@ mod tests {
     test_utils::ops::test_mul!(u8x16, 0x0f4caa80eceaa523, test_neon());
     test_utils::ops::test_fma!(u8x16, 0xb8f702ba85375041, test_neon());
     test_utils::ops::test_splitjoin!(u8x16 => u8x8, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(u8x16 => u8x8, 0x041c0a3d046e0211, test_neon());
 
     test_utils::ops::test_cmp!(u8x16, 0x941757bd5cc641a1, test_neon());
 
     // Bit ops
     test_utils::ops::test_bitops!(u8x16, 0xd62d8de09f82ed4e, test_neon());
+    test_utils::ops::test_popcount!(u8x16, 0xb801a142f098b25d, test_neon());
 }

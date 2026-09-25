@@ -58,7 +58,7 @@ where
 /// A function pointer-like type for computing distances between `&[T]` and `&[U]`.
 ///
 /// See: [`DistanceProvider`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Distance<T, U>
 where
     T: 'static,
@@ -97,6 +97,23 @@ where
     pub fn call_unaligned(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
         self.f.call(x, y)
     }
+}
+
+impl<T, U> Clone for Distance<T, U>
+where
+    T: 'static,
+    U: 'static,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T, U> Copy for Distance<T, U>
+where
+    T: 'static,
+    U: 'static,
+{
 }
 
 impl<T, U> crate::DistanceFunction<&[T], &[U], f32> for Distance<T, U>

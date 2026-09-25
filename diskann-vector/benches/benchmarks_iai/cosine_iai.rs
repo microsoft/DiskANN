@@ -7,9 +7,9 @@ use std::num::NonZeroUsize;
 
 use diskann_vector::{distance::Cosine, DistanceFunction};
 use half::f16;
-use iai_callgrind::black_box;
 use rand::{rngs::StdRng, SeedableRng};
 use rand_distr::{Distribution, Normal, StandardUniform};
+use std::hint::black_box;
 
 use crate::utils::{AlignedDataset, AlignedVector, DatasetArgs, InlineBarrier, Static};
 iai_callgrind::library_benchmark_group!(

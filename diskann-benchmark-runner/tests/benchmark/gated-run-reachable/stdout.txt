@@ -1,0 +1,17 @@
+######################
+# Running Job 1 of 3 #
+######################
+
+fully gated bench: PhantomInput { value: 42 }
+
+######################
+# Running Job 2 of 3 #
+######################
+
+another gated bench: DimInput { dim: Some(42) }
+
+######################
+# Running Job 3 of 3 #
+######################
+
+partially-gated bench: SampleInput { value: "hello" }

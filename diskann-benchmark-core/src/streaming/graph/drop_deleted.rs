@@ -10,7 +10,7 @@ use diskann::{ANNResult, graph, provider};
 use crate::build::{Build, ids::ToIdSized};
 
 /// A [`Build`] stage that invokes
-/// [`drop_deleted_neighbors`](diskann::graph::DiskANNIndex::drop_deleted_neighbors)    
+/// [`drop_deleted_neighbors`](diskann::graph::DiskANNIndex::drop_deleted_neighbors)
 /// on a collection of points.
 ///
 /// The collection of points is determined by an implementation of [`ToIdSized`].
@@ -54,7 +54,7 @@ where
 impl<DP> Build for DropDeleted<DP>
 where
     DP: provider::DataProvider<Context: Default> + provider::Delete + provider::DefaultAccessor,
-    for<'a> <DP as provider::DefaultAccessor>::Accessor<'a>: provider::AsNeighborMut,
+    for<'a> <DP as provider::DefaultAccessor>::Accessor<'a>: provider::NeighborAccessorMut,
 {
     type Output = ();
 
@@ -121,7 +121,7 @@ mod tests {
         )
         .unwrap();
 
-        let accessor = index.provider().neighbors();
+        let mut accessor = index.provider().neighbors();
         let mut v = diskann::graph::AdjacencyList::new();
 
         // `drop_deleted` short-circuits already deleted entries. So we should only check

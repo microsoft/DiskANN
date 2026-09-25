@@ -57,7 +57,7 @@ async fn basic_single() {
 
     for i in 1..6 {
         index
-            .insert(strat.clone(), &ctx, &i, &[i as f32, i as f32])
+            .insert(&strat, &ctx, &i, &[i as f32, i as f32])
             .await
             .unwrap();
     }
@@ -88,7 +88,7 @@ async fn basic_multi() {
 
     for i in 1..6 {
         index
-            .insert(strat.clone(), &ctx, &i, &[i as f32, i as f32])
+            .insert(&strat, &ctx, &i, &[i as f32, i as f32])
             .await
             .unwrap();
     }
@@ -116,7 +116,7 @@ async fn delete_node_3_and_validate(method: InplaceDeleteMethod) {
         .await
         .unwrap();
 
-    let neighbors = &index.provider().neighbors();
+    let neighbors = &mut index.provider().neighbors();
     validate_graph_rebuild_for_simple_graph_after_3_delete(neighbors).await;
 }
 
@@ -137,7 +137,7 @@ async fn multi_delete_2_and_3_and_validate(method: InplaceDeleteMethod) {
         .await
         .unwrap();
 
-    let neighbors = &index.provider().neighbors();
+    let neighbors = &mut index.provider().neighbors();
     validate_graph_after_2_and_3_delete(neighbors).await;
 }
 
@@ -176,7 +176,7 @@ async fn multi_inplace_delete_visited_and_topk() {
     .await;
 }
 
-async fn validate_graph_rebuild_for_simple_graph_after_3_delete<N>(neighbors: &N)
+async fn validate_graph_rebuild_for_simple_graph_after_3_delete<N>(neighbors: &mut N)
 where
     N: NeighborAccessor<Id = u32> + Copy,
 {
@@ -222,7 +222,7 @@ where
 ///   2: [3, 4]  — deleted
 ///   3: [2, 4]  — deleted
 ///   4: [0, 1, 2, 3] — edges to 2 and 3 must be removed
-async fn validate_graph_after_2_and_3_delete<N>(neighbors: &N)
+async fn validate_graph_after_2_and_3_delete<N>(neighbors: &mut N)
 where
     N: NeighborAccessor<Id = u32> + Copy,
 {
@@ -277,7 +277,7 @@ async fn delete_isolated_node() {
     let ctx = test_provider::Context::new();
 
     //capture state of neighbors pre-delete (ignoring node 2)
-    let accessor = index.provider().neighbors();
+    let mut accessor = index.provider().neighbors();
     let mut list = AdjacencyList::new();
     let mut before: Vec<Vec<u32>> = Vec::new();
 

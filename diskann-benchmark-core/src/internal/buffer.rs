@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use diskann::graph::{SearchOutputBuffer, search_output_buffer::BufferState};
+use diskann::{
+    graph::{SearchOutputBuffer, search_output_buffer::BufferState},
+    neighbor::Neighbor,
+};
 
 /// A [`SearchOutputBuffer`] implementation that either references a slice in-place for
 /// fixed sized outputs or references a growable vector.
@@ -58,7 +61,8 @@ impl<I, D> SearchOutputBuffer<I, D> for Buffer<'_, I> {
         <Buffer<I>>::current_len(self)
     }
 
-    fn push(&mut self, id: I, _distance: D) -> BufferState {
+    fn push(&mut self, neighbor: Neighbor<I, D>) -> BufferState {
+        let (id, _) = neighbor.as_tuple();
         match &mut self.0 {
             Inner::Slice { slice, written } => match slice.get_mut(*written) {
                 Some(slot) => {
@@ -81,14 +85,14 @@ impl<I, D> SearchOutputBuffer<I, D> for Buffer<'_, I> {
 
     fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: IntoIterator<Item = (I, D)>,
+        Itr: IntoIterator<Item = Neighbor<I, D>>,
     {
         match &mut self.0 {
             Inner::Slice { slice, written } => match slice.get_mut(*written..) {
                 Some(left) => {
                     let count = std::iter::zip(left.iter_mut(), itr)
                         .map(|(dst, src)| {
-                            *dst = src.0;
+                            *dst = src.as_tuple().0;
                         })
                         .count();
                     *written += count;
@@ -98,7 +102,7 @@ impl<I, D> SearchOutputBuffer<I, D> for Buffer<'_, I> {
             },
             Inner::Vec(vec) => {
                 let before = vec.len();
-                vec.extend(itr.into_iter().map(|i| i.0));
+                vec.extend(itr.into_iter().map(|i| i.as_tuple().0));
                 vec.len() - before
             }
         }
@@ -118,6 +122,10 @@ mod tests {
         T: SearchOutputBuffer<u32, f32>,
     {
         buffer.size_hint()
+    }
+
+    fn from_tuple<I, D>((id, distance): (I, D)) -> Neighbor<I, D> {
+        Neighbor::new(id, distance)
     }
 
     #[test]
@@ -144,7 +152,7 @@ mod tests {
         let mut data = [0u32; 5];
         let mut buffer = Buffer::slice(&mut data);
 
-        assert_eq!(buffer.push(42, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(42, 0.0)), BufferState::Available);
         assert_eq!(buffer.current_len(), 1);
         assert_eq!(data, [42, 0, 0, 0, 0]);
     }
@@ -157,27 +165,27 @@ mod tests {
         assert_eq!(buffer.current_len(), 0);
         assert_eq!(size_hint(&buffer), Some(5));
 
-        assert_eq!(buffer.push(100, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(100, 0.0)), BufferState::Available);
         assert_eq!(buffer.current_len(), 1);
         assert_eq!(size_hint(&buffer), Some(4));
 
-        assert_eq!(buffer.push(200, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(200, 0.0)), BufferState::Available);
         assert_eq!(buffer.current_len(), 2);
         assert_eq!(size_hint(&buffer), Some(3));
 
-        assert_eq!(buffer.push(300, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(300, 0.0)), BufferState::Available);
         assert_eq!(buffer.current_len(), 3);
         assert_eq!(size_hint(&buffer), Some(2));
 
-        assert_eq!(buffer.push(400, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(400, 0.0)), BufferState::Available);
         assert_eq!(buffer.current_len(), 4);
         assert_eq!(size_hint(&buffer), Some(1));
 
-        assert_eq!(buffer.push(500, 0.0), BufferState::Full);
+        assert_eq!(buffer.push(Neighbor::new(500, 0.0)), BufferState::Full);
         assert_eq!(buffer.current_len(), 5);
         assert_eq!(size_hint(&buffer), Some(0));
 
-        assert_eq!(buffer.push(600, 0.0), BufferState::Full);
+        assert_eq!(buffer.push(Neighbor::new(600, 0.0)), BufferState::Full);
         assert_eq!(buffer.current_len(), 5);
         assert_eq!(size_hint(&buffer), Some(0));
 
@@ -190,7 +198,7 @@ mod tests {
         let mut data = [0u32; 0];
         let mut buffer = Buffer::slice(&mut data);
 
-        assert_eq!(buffer.push(42, 0.0), BufferState::Full);
+        assert_eq!(buffer.push(Neighbor::new(42, 0.0)), BufferState::Full);
     }
 
     #[test]
@@ -203,13 +211,13 @@ mod tests {
             "vector-type buffers have no upper bound"
         );
 
-        assert_eq!(buffer.push(42, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(42, 0.0)), BufferState::Available);
         assert_eq!(buffer.current_len(), 1);
 
-        assert_eq!(buffer.push(50, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(50, 0.0)), BufferState::Available);
         assert_eq!(buffer.current_len(), 2);
 
-        assert_eq!(buffer.push(3, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(3, 0.0)), BufferState::Available);
         assert_eq!(buffer.current_len(), 3);
 
         assert_eq!(&vec, &[42, 50, 3]);
@@ -220,7 +228,7 @@ mod tests {
         let mut data = [0u32; 5];
         let mut buffer = Buffer::slice(&mut data);
 
-        let items = vec![(10, 1.0), (20, 2.0), (30, 3.0)];
+        let items = [(10, 1.0), (20, 2.0), (30, 3.0)].map(from_tuple);
         let count = buffer.extend(items);
 
         assert_eq!(count, 3);
@@ -233,7 +241,7 @@ mod tests {
         let mut data = [0u32; 3];
         let mut buffer = Buffer::slice(&mut data);
 
-        let items = vec![(10, 1.0), (20, 2.0), (30, 3.0), (40, 4.0), (50, 5.0)];
+        let items = [(10, 1.0), (20, 2.0), (30, 3.0), (40, 4.0), (50, 5.0)].map(from_tuple);
         let count = buffer.extend(items);
 
         // Only first 3 items should be written
@@ -247,7 +255,7 @@ mod tests {
         let mut vec = Vec::<u32>::new();
         let mut buffer = Buffer::vector(&mut vec);
 
-        let items = vec![(100, 1.0), (200, 2.0)];
+        let items = [(100, 1.0), (200, 2.0)].map(from_tuple);
         let count = buffer.extend(items);
 
         assert_eq!(count, 2);
@@ -260,14 +268,14 @@ mod tests {
         let mut vec = vec![1u32, 2, 3, 4, 5];
         let mut buffer = Buffer::vector(&mut vec);
 
-        let items = vec![(10, 1.0), (20, 2.0)];
+        let items = [(10, 1.0), (20, 2.0)].map(from_tuple);
         assert_eq!(buffer.extend(items), 2);
 
-        let items = vec![(21, 1.0), (22, 2.0)];
+        let items = [(21, 1.0), (22, 2.0)].map(from_tuple);
         assert_eq!(buffer.extend(items), 2);
 
         assert_eq!(
-            buffer.extend::<[(u32, f32); 0]>([]),
+            buffer.extend::<[Neighbor<u32, f32>; 0]>([]),
             0,
             "empty iterator should add nothing"
         );
@@ -281,27 +289,30 @@ mod tests {
         // Push then extend
         let mut data = [0u32; 5];
         let mut buffer = Buffer::slice(&mut data);
-        assert_eq!(buffer.push(1, 0.0), BufferState::Available);
-        assert_eq!(buffer.push(2, 0.0), BufferState::Available);
-        assert_eq!(buffer.extend(vec![(3, 0.0), (4, 0.0)]), 2);
+        assert_eq!(buffer.push(Neighbor::new(1, 0.0)), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(2, 0.0)), BufferState::Available);
+        assert_eq!(buffer.extend([(3, 0.0), (4, 0.0)].map(from_tuple)), 2);
         assert_eq!(data, [1, 2, 3, 4, 0]);
 
         // Extend then push to fill
         let mut data = [0u32; 5];
         let mut buffer = Buffer::slice(&mut data);
-        buffer.extend(vec![(10, 0.0), (20, 0.0)]);
-        assert_eq!(buffer.push(30, 0.0), BufferState::Available);
-        assert_eq!(buffer.push(40, 0.0), BufferState::Available);
-        assert_eq!(buffer.push(50, 0.0), BufferState::Full);
+        buffer.extend([(10, 0.0), (20, 0.0)].map(from_tuple));
+        assert_eq!(buffer.push(Neighbor::new(30, 0.0)), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(40, 0.0)), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(50, 0.0)), BufferState::Full);
         assert_eq!(data, [10, 20, 30, 40, 50]);
 
         // Interleaved operations
         let mut data = [0u32; 6];
         let mut buffer = Buffer::slice(&mut data);
-        assert_eq!(buffer.push(1, 0.0), BufferState::Available);
-        assert_eq!(buffer.extend(vec![(2, 0.0), (3, 0.0)]), 2);
-        assert_eq!(buffer.push(4, 0.0), BufferState::Available);
-        assert_eq!(buffer.extend(vec![(5, 0.0), (6, 0.0), (7, 0.0)]), 2);
+        assert_eq!(buffer.push(Neighbor::new(1, 0.0)), BufferState::Available);
+        assert_eq!(buffer.extend([(2, 0.0), (3, 0.0)].map(from_tuple)), 2);
+        assert_eq!(buffer.push(Neighbor::new(4, 0.0)), BufferState::Available);
+        assert_eq!(
+            buffer.extend([(5, 0.0), (6, 0.0), (7, 0.0)].map(from_tuple)),
+            2
+        );
         assert_eq!(data, [1, 2, 3, 4, 5, 6]);
     }
 
@@ -310,25 +321,25 @@ mod tests {
         // Extend fills buffer, push returns Full
         let mut data = [0u32; 2];
         let mut buffer = Buffer::slice(&mut data);
-        buffer.extend(vec![(1, 0.0), (2, 0.0)]);
-        assert_eq!(buffer.push(99, 0.0), BufferState::Full);
+        buffer.extend([(1, 0.0), (2, 0.0)].map(from_tuple));
+        assert_eq!(buffer.push(Neighbor::new(99, 0.0)), BufferState::Full);
         assert_eq!(data, [1, 2]);
 
         // Push fills buffer, extend returns 0
         let mut data = [0u32; 2];
         let mut buffer = Buffer::slice(&mut data);
-        assert_eq!(buffer.push(1, 0.0), BufferState::Available);
-        assert_eq!(buffer.push(2, 0.0), BufferState::Full);
-        assert_eq!(buffer.extend(vec![(99, 0.0)]), 0);
+        assert_eq!(buffer.push(Neighbor::new(1, 0.0)), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(2, 0.0)), BufferState::Full);
+        assert_eq!(buffer.extend([Neighbor::new(99, 0.0)]), 0);
         assert_eq!(data, [1, 2]);
 
         // Extend truncates when exceeding remaining capacity after push
         let mut data = [0u32; 4];
         let mut buffer = Buffer::slice(&mut data);
-        assert_eq!(buffer.push(1, 0.0), BufferState::Available);
-        assert_eq!(buffer.push(2, 0.0), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(1, 0.0)), BufferState::Available);
+        assert_eq!(buffer.push(Neighbor::new(2, 0.0)), BufferState::Available);
         assert_eq!(
-            buffer.extend(vec![(3, 0.0), (4, 0.0), (5, 0.0), (6, 0.0)]),
+            buffer.extend([(3, 0.0), (4, 0.0), (5, 0.0), (6, 0.0)].map(from_tuple)),
             2
         );
         assert_eq!(data, [1, 2, 3, 4]);
@@ -340,11 +351,11 @@ mod tests {
         let mut buffer = Buffer::vector(&mut vec);
 
         // Interleave push and extend - vec has no capacity limit
-        assert_eq!(buffer.push(1, 0.0), BufferState::Available);
-        assert_eq!(buffer.extend(vec![(2, 0.0), (3, 0.0)]), 2);
-        assert_eq!(buffer.push(4, 0.0), BufferState::Available);
-        assert_eq!(buffer.extend::<[(u32, f32); 0]>([]), 0); // empty extend
-        assert_eq!(buffer.extend(vec![(5, 0.0)]), 1);
+        assert_eq!(buffer.push(Neighbor::new(1, 0.0)), BufferState::Available);
+        assert_eq!(buffer.extend([(2, 0.0), (3, 0.0)].map(from_tuple)), 2);
+        assert_eq!(buffer.push(Neighbor::new(4, 0.0)), BufferState::Available);
+        assert_eq!(buffer.extend::<[Neighbor<u32, f32>; 0]>([]), 0); // empty extend
+        assert_eq!(buffer.extend(vec![Neighbor::new(5, 0.0)]), 1);
 
         assert_eq!(&vec, &[1, 2, 3, 4, 5]);
     }

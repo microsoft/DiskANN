@@ -1,0 +1,28 @@
+{
+  "file": "diskann/src/graph/test/cases/multihop.rs",
+  "test": "graph/test/cases/multihop/two_hop_reaches_through_non_matching",
+  "payload": {
+    "comparisons": 5,
+    "grid_size": 0,
+    "hops": 6,
+    "k": 5,
+    "l": 20,
+    "query": [
+      2.0
+    ],
+    "results": [
+      [
+        2,
+        0.0
+      ],
+      [
+        4,
+        4.0
+      ],
+      [
+        0,
+        4.0
+      ]
+    ]
+  }
+}

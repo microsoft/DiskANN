@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDVector},
+    traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDVector},
 };
 
 /////
@@ -32,6 +32,13 @@ helpers::unsafe_map_binary_op!(i32x4, std::ops::Add, add, _mm_add_epi32, "sse2")
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Sub, sub, _mm_sub_epi32, "sse2");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Mul, mul, _mm_mullo_epi32, "sse4.1");
 helpers::unsafe_map_unary_op!(i32x4, SIMDAbs, abs_simd, _mm_abs_epi32, "ssse3");
+helpers::unsafe_map_unary_op!(
+    i32x4,
+    SIMDPopcount,
+    popcount_simd,
+    _mm_popcnt_epi32,
+    "avx512vpopcntdq,avx512vl"
+);
 
 helpers::unsafe_map_binary_op!(i32x4, std::ops::BitAnd, bitand, _mm_and_si128, "sse2");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::BitOr, bitor, _mm_or_si128, "sse2");
@@ -109,4 +116,5 @@ mod test_x86_i32 {
 
     // Bit ops
     test_utils::ops::test_bitops!(i32x4, 0x763fc44f8f7cd40c, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(i32x4, 0x6b756a0a75b4f2d6, V4::new_checked_uncached());
 }

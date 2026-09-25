@@ -1,0 +1,7 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+disallowed-methods = [
+    { path = "bf_tree::BfTree::insert", reason = "This method is fallible but returns a custom result that is not `#[must_use]`. Use `crate::bftree_insert` instead" }
+]

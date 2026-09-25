@@ -5,10 +5,9 @@ name = "diskann-bftree"
 version.workspace = true
 description.workspace = true
 authors.workspace = true
-documentation.workspace = true
+repository.workspace = true
 license.workspace = true
 edition.workspace = true
-publish = false
 
 [dependencies]
 bf-tree.workspace = true
@@ -38,6 +37,11 @@ tokio = { workspace = true, features = ["full"] }
 default = []
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
 
-[lints]
-workspace = true
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+disallowed_methods = "warn"
+
 

@@ -44,6 +44,7 @@ pub trait SampleableForStart:
     diskann_utils::sampling::medoid::ComputeMedoid
     + diskann_utils::sampling::latin_hypercube::SampleLatinHyperCube
     + diskann_utils::sampling::random::RoundFromf32
+    + diskann_utils::sampling::WithApproximateNorm
 {
 }
 
@@ -51,6 +52,7 @@ impl<T> SampleableForStart for T where
     T: diskann_utils::sampling::medoid::ComputeMedoid
         + diskann_utils::sampling::latin_hypercube::SampleLatinHyperCube
         + diskann_utils::sampling::random::RoundFromf32
+        + diskann_utils::sampling::WithApproximateNorm
 {
 }
 
@@ -80,7 +82,7 @@ impl StartPointStrategy {
 
     pub fn compute<T>(&self, train_data: MatrixView<'_, T>) -> Result<Matrix<T>, StartPointError>
     where
-        T: Copy + SampleableForStart + diskann_utils::sampling::WithApproximateNorm,
+        T: Copy + SampleableForStart,
     {
         match self {
             StartPointStrategy::RandomSamples { nsamples, seed } => {

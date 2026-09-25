@@ -6,7 +6,6 @@
 
 //! Arguments for generate pq pivot
 
-use diskann::ANNError;
 use thiserror::Error;
 
 /// Represents the configuration parameters required to generate pivots for Product Quantization (PQ).
@@ -58,13 +57,7 @@ pub enum GeneratePivotArgumentsError {
     NumTrainGreaterThanI32MaxValue(usize),
 }
 
-// Compatibility with ANNError.
-impl From<GeneratePivotArgumentsError> for ANNError {
-    #[track_caller]
-    fn from(value: GeneratePivotArgumentsError) -> Self {
-        ANNError::log_pq_error(value)
-    }
-}
+diskann::convert_error!(GeneratePivotArgumentsError);
 
 impl GeneratePivotArguments {
     /// Constructor
@@ -132,7 +125,7 @@ impl GeneratePivotArguments {
 
 #[cfg(test)]
 mod arguments_test {
-    use diskann::{ANNErrorKind, ANNResult};
+    use diskann::ANNResult;
 
     use super::*;
 
@@ -233,7 +226,6 @@ mod arguments_test {
         let result = compatibility_helper();
 
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), ANNErrorKind::PQError,);
     }
 
     fn compatibility_helper() -> ANNResult<()> {

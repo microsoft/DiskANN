@@ -33,7 +33,7 @@ impl StartPoints {
             end: match valid_points.checked_add(frozen_points.get() as u32) {
                 Some(end) => end,
                 None => {
-                    return Err(ANNError::log_index_error(
+                    return Err(ANNError::message(
                         "Sum of valid points and frozen points exceeds u32::MAX",
                     ));
                 }
@@ -212,14 +212,6 @@ pub enum PrefetchCacheLineLevel {
 // Common data structure and traits for async providers //
 //////////////////////////////////////////////////////////
 
-/// A ZST for [`MultiInsertStrategy::seed`](diskann::graph::glue::MultiInsertStrategy::Seed)
-/// indicating no use of the input batch.
-///
-/// Inmem providers typically don't use a working set at all, instead passing through accesses
-/// directly to the underlying provider. As such, no seeding is needed.
-#[derive(Debug, Clone, Copy)]
-pub struct Unseeded;
-
 /// A helper trait to set element in the Async index.
 pub trait SetElementHelper<T> {
     /// Set an element in the index.
@@ -285,7 +277,7 @@ impl std::error::Error for Panics {}
 impl From<Panics> for ANNError {
     #[cold]
     fn from(_: Panics) -> ANNError {
-        ANNError::log_async_error("unreachable")
+        ANNError::message("unreachable")
     }
 }
 

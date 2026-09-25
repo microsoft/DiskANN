@@ -17,7 +17,7 @@ use crate::{
     bitmask::BitMask,
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDMulAdd, SIMDVector},
+    traits::{SIMDAbs, SIMDMulAdd, SIMDPopcount, SIMDVector},
 };
 
 ///////////////////
@@ -33,6 +33,13 @@ helpers::unsafe_map_binary_op!(i16x8, std::ops::Add, add, _mm_add_epi16, "sse2")
 helpers::unsafe_map_binary_op!(i16x8, std::ops::Sub, sub, _mm_sub_epi16, "sse2");
 helpers::unsafe_map_binary_op!(i16x8, std::ops::Mul, mul, _mm_mullo_epi16, "sse2");
 helpers::unsafe_map_unary_op!(i16x8, SIMDAbs, abs_simd, _mm_abs_epi16, "ssse3");
+helpers::unsafe_map_unary_op!(
+    i16x8,
+    SIMDPopcount,
+    popcount_simd,
+    _mm_popcnt_epi16,
+    "avx512bitalg,avx512vl"
+);
 
 helpers::unsafe_map_binary_op!(i16x8, std::ops::BitAnd, bitand, _mm_and_si128, "sse2");
 helpers::unsafe_map_binary_op!(i16x8, std::ops::BitOr, bitor, _mm_or_si128, "sse2");
@@ -125,4 +132,5 @@ mod test_x86_i16 {
 
     // Bit ops
     test_utils::ops::test_bitops!(i16x8, 0x2dd8796bda1cb89d, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(i16x8, 0x6bc496e226618794, V4::new_checked_uncached());
 }

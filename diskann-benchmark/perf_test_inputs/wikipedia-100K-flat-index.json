@@ -1,0 +1,22 @@
+{
+    "search_directories": [
+        "target/tmp"
+    ],
+    "jobs": [
+        {
+            "type": "flat-search",
+            "content": {
+                "data": "wikipedia_cohere/wikipedia_base.bin.crop_nb_100000",
+                "data_type": "float32",
+                "distance": "inner_product",
+                "search": {
+                    "queries": "wikipedia_cohere/wikipedia_query.bin",
+                    "groundtruth": "wikipedia_cohere/wikipedia-100K",
+                    "k": 100,
+                    "num_threads": [4, 8],
+                    "reps": 1
+                }
+            }
+        }
+    ]
+}

@@ -3,8 +3,10 @@
  * Licensed under the MIT license.
  */
 
+use std::hint::black_box;
+
 use diskann_disk::utils::{compute_vecs_l2sq, k_means_clustering};
-use diskann_providers::utils::create_thread_pool_for_bench;
+use diskann_providers::utils::{create_thread_pool_for_bench, RayonThreadPool};
 use rand::Rng;
 
 const NUM_POINTS: usize = 100000;
@@ -17,48 +19,38 @@ iai_callgrind::library_benchmark_group!(
     benchmarks = benchmark_kmeans_iai, snrm2_benchmark_rust_iai,
 );
 
-fn setup_data() -> Vec<f32> {
+fn setup_data() -> (Vec<f32>, RayonThreadPool) {
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
     let data: Vec<f32> = (0..NUM_POINTS * DIM)
         .map(|_| rng.random_range(-1.0..1.0))
         .collect();
+    let pool = create_thread_pool_for_bench();
 
-    data
+    (data, pool)
 }
 #[iai_callgrind::library_benchmark(setup = setup_data)]
-pub fn benchmark_kmeans_iai(data: Vec<f32>) {
-    let pool = create_thread_pool_for_bench();
-    let centers: Vec<f32> = vec![0.0; NUM_CENTERS * DIM];
+pub fn benchmark_kmeans_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
+    let mut centers: Vec<f32> = vec![0.0; NUM_CENTERS * DIM];
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
-
-    let data_copy = data.clone();
-    let mut centers_copy = centers.clone();
     k_means_clustering(
-        &data_copy,
+        black_box(&data),
         NUM_POINTS,
         DIM,
-        &mut centers_copy,
+        black_box(&mut centers),
         NUM_CENTERS,
         MAX_KMEANS_REPS,
         rng,
         &mut false,
         pool.as_ref(),
     )
-    .unwrap();
-
-    let data_copy = data.clone();
-    snrm2_benchmark_rust(&data_copy, NUM_POINTS, DIM);
+    .expect("k_means_clustering call failed");
+    black_box(centers);
 }
 
 #[iai_callgrind::library_benchmark(setup = setup_data)]
-pub fn snrm2_benchmark_rust_iai(data: Vec<f32>) {
-    let data_copy = data.clone();
-    snrm2_benchmark_rust(&data_copy, NUM_POINTS, DIM);
-}
-
-/// compute_vecs_l2sq benchmark
-pub fn snrm2_benchmark_rust(data: &[f32], num_points: usize, dim: usize) {
-    let mut docs_l2sq = vec![0.0; num_points];
-    let pool = create_thread_pool_for_bench();
-    compute_vecs_l2sq(&mut docs_l2sq, data, dim, pool.as_ref()).unwrap();
+pub fn snrm2_benchmark_rust_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
+    let mut docs_l2sq = vec![0.0; NUM_POINTS];
+    compute_vecs_l2sq(&mut docs_l2sq, black_box(&data), DIM, pool.as_ref())
+        .expect("compute_vecs_l2sq call failed");
+    black_box(docs_l2sq);
 }

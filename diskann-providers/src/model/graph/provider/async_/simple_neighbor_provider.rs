@@ -6,12 +6,9 @@
 use std::sync::RwLock;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::{
-    ANNError, ANNResult,
-    graph::AdjacencyList,
-    provider::HasId,
-    utils::{TryIntoVectorId, VectorId},
-};
+use diskann::{ANNError, ANNResult, graph::AdjacencyList, provider::HasId};
+use diskann_utils::lazy_format;
+use diskann_vector::contains::ContainsSimd;
 use tracing::trace;
 
 use super::common::{AlignedMemoryVectorStore, TestCallCount};
@@ -19,17 +16,17 @@ use crate::storage::{
     self, AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith,
 };
 
-pub struct SimpleNeighborProviderAsync<I: VectorId> {
+pub struct SimpleNeighborProviderAsync {
     // Each adjacency list is stored in a fixed size slice of size max_degree * graph_slack_factor + 1.
-    // The length of the list is stored in the extra element at the end.
-    graph: AlignedMemoryVectorStore<I>,
+    // The length of the list is stored in the extra element at the end as a u32.
+    graph: AlignedMemoryVectorStore<u32>,
     locks: Vec<RwLock<()>>,
     num_start_points: usize,
 
     pub num_get_calls: TestCallCount,
 }
 
-impl<I: VectorId> SimpleNeighborProviderAsync<I> {
+impl SimpleNeighborProviderAsync {
     pub fn new(
         max_points: usize,
         num_start_points: usize,
@@ -57,16 +54,16 @@ impl<I: VectorId> SimpleNeighborProviderAsync<I> {
     ///
     /// This function will never read out of bounds, but it does not synchronize access to
     /// the data. It must be called while holding the corresponding lock at `self.locks[index]`.
-    unsafe fn get_slice(&self, index: usize) -> &[I] {
+    unsafe fn get_slice(&self, index: usize) -> &[u32] {
         // SAFETY: This function must be called while the corresponding lock for this slot
         // is held.
         let s = unsafe { self.graph.get_slice(index) };
 
-        let len = s[self.graph.dim() - 1].into_usize();
+        let len = s[self.graph.dim() - 1] as usize;
         &s[0..len]
     }
 
-    pub fn set_neighbors_sync(&self, id: usize, neighbors: &[I]) -> ANNResult<()> {
+    pub fn set_neighbors_sync(&self, id: usize, neighbors: &[u32]) -> ANNResult<()> {
         assert!(
             neighbors.len() < self.graph.dim(),
             "neighbors ({}) exceeded max adjacency list size ({})",
@@ -82,15 +79,17 @@ impl<I: VectorId> SimpleNeighborProviderAsync<I> {
         let list = unsafe { self.graph.get_mut_slice(id) };
         list[0..neighbors.len()].copy_from_slice(neighbors);
 
-        // Lint: neighbor lists won't overflow the VectorIdType
-        #[allow(clippy::unwrap_used)]
-        {
-            list[self.graph.dim() - 1] = neighbors.len().try_into_vector_id().unwrap();
-        }
+        // The assertion above guarantees `neighbors.len() < self.graph.dim()`, which
+        // means it fits in a `u32` (graph dim is sized in `u32` anyway).
+        list[self.graph.dim() - 1] = neighbors.len() as u32;
         Ok(())
     }
 
-    pub fn get_neighbors_sync(&self, id: usize, neighbors: &mut AdjacencyList<I>) -> ANNResult<()> {
+    pub fn get_neighbors_sync(
+        &self,
+        id: usize,
+        neighbors: &mut AdjacencyList<u32>,
+    ) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
 
@@ -104,19 +103,19 @@ impl<I: VectorId> SimpleNeighborProviderAsync<I> {
         Ok(())
     }
 
-    pub fn append_vector_sync(&self, id: usize, new_neighbor_ids: &[I]) -> ANNResult<()> {
+    pub fn append_vector_sync(&self, id: usize, new_neighbor_ids: &[u32]) -> ANNResult<()> {
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
         #[allow(clippy::unwrap_used)]
         let _guard = self.locks[id].write().unwrap();
 
         // SAFETY: We took the write lock for `id` above.
         let list_raw = unsafe { self.graph.get_mut_slice(id) };
-        let len = list_raw[self.graph.dim() - 1].into_usize();
+        let len = list_raw[self.graph.dim() - 1] as usize;
         let mut new_len = len;
         let mut list = &mut list_raw[0..len];
 
         for new_neighbor_id in new_neighbor_ids {
-            if I::contains_simd(list, *new_neighbor_id) {
+            if u32::contains_simd(list, *new_neighbor_id) {
                 trace!("append_vector: new neighbor already exists");
                 continue;
             }
@@ -131,23 +130,18 @@ impl<I: VectorId> SimpleNeighborProviderAsync<I> {
             }
         }
 
-        // Lint: adjacency list sizes will not overflow VectorId
-        #[allow(clippy::unwrap_used)]
-        {
-            list_raw[self.graph.dim() - 1] = new_len.try_into_vector_id().unwrap();
-        }
+        // `new_len < self.graph.dim()` is enforced by the loop above, so the cast is safe.
+        list_raw[self.graph.dim() - 1] = new_len as u32;
         Ok(())
     }
 }
 
-impl<I: VectorId> HasId for SimpleNeighborProviderAsync<I> {
-    type Id = I;
+impl HasId for SimpleNeighborProviderAsync {
+    type Id = u32;
 }
 
-impl SimpleNeighborProviderAsync<u32> {
+impl SimpleNeighborProviderAsync {
     /// Load the graph directly from a canonical DiskANN graph storage at path `path`.
-    ///
-    /// See also: [`storage::bin::load_graph`].
     pub fn load_direct<P>(provider: &P, path: &str) -> ANNResult<Self>
     where
         P: StorageReadProvider,
@@ -161,9 +155,11 @@ impl SimpleNeighborProviderAsync<u32> {
                 //
                 // Work backwards from this value to determine the internal `max_points`.
                 let max_points = num_points.checked_sub(num_start_points).ok_or_else(|| {
-                    ANNError::log_index_error(format_args!(
+                    ANNError::message(lazy_format!(
+                        move,
                         "expected {} start points but the on-disk dataset only has {} total points",
-                        num_start_points, num_points,
+                        num_start_points,
+                        num_points,
                     ))
                 })?;
 
@@ -180,8 +176,6 @@ impl SimpleNeighborProviderAsync<u32> {
     }
 
     /// Save `self` directly to a canonical DiskANN graph storage at path `path`.
-    ///
-    /// See also: [`storage::bin::save_graph`].
     pub fn save_direct<P>(&self, provider: &P, start_point: u32, path: &str) -> ANNResult<usize>
     where
         P: StorageWriteProvider,
@@ -194,7 +188,7 @@ impl SimpleNeighborProviderAsync<u32> {
 ///
 /// The parameter consists of `(start_point, prefix)` because the index start point is not
 /// saved within `SimpleNeighborPRoviderAsync`.
-impl SaveWith<(u32, AsyncIndexMetadata)> for SimpleNeighborProviderAsync<u32> {
+impl SaveWith<(u32, AsyncIndexMetadata)> for SimpleNeighborProviderAsync {
     type Ok = usize;
     type Error = ANNError;
 
@@ -218,7 +212,7 @@ impl SaveWith<(u32, AsyncIndexMetadata)> for SimpleNeighborProviderAsync<u32> {
 ///
 /// The substitution of `start_point` with `actual_start_point` ensures compatibility
 /// with the on-disk format while preserving the correct entry point information.
-impl SaveWith<(u32, u32, DiskGraphOnly)> for SimpleNeighborProviderAsync<u32> {
+impl SaveWith<(u32, u32, DiskGraphOnly)> for SimpleNeighborProviderAsync {
     type Ok = usize;
     type Error = ANNError;
 
@@ -241,7 +235,7 @@ impl SaveWith<(u32, u32, DiskGraphOnly)> for SimpleNeighborProviderAsync<u32> {
 }
 
 /// This is an adaptor for compatibility with the async index serialization.
-impl LoadWith<AsyncIndexMetadata> for SimpleNeighborProviderAsync<u32> {
+impl LoadWith<AsyncIndexMetadata> for SimpleNeighborProviderAsync {
     type Error = ANNError;
 
     async fn load_with<P>(provider: &P, metadata: &AsyncIndexMetadata) -> ANNResult<Self>
@@ -253,7 +247,7 @@ impl LoadWith<AsyncIndexMetadata> for SimpleNeighborProviderAsync<u32> {
 }
 
 /// This is an adaptor for compatibility with the async index serialization.
-impl LoadWith<AsyncQuantLoadContext> for SimpleNeighborProviderAsync<u32> {
+impl LoadWith<AsyncQuantLoadContext> for SimpleNeighborProviderAsync {
     type Error = ANNError;
 
     async fn load_with<P>(provider: &P, ctx: &AsyncQuantLoadContext) -> ANNResult<Self>
@@ -269,7 +263,7 @@ impl LoadWith<AsyncQuantLoadContext> for SimpleNeighborProviderAsync<u32> {
 ///////////////////////////////////////////
 
 /// Hook into [`storage::bin::load_graph`] by implementing [`storage::bin::SetAdjacencyList`].
-impl storage::bin::SetAdjacencyList for SimpleNeighborProviderAsync<u32> {
+impl storage::bin::SetAdjacencyList for SimpleNeighborProviderAsync {
     type Item = u32;
     fn set_adjacency_list(&mut self, i: usize, element: &[u32]) -> ANNResult<()> {
         self.set_neighbors_sync(i, element)?;
@@ -278,7 +272,7 @@ impl storage::bin::SetAdjacencyList for SimpleNeighborProviderAsync<u32> {
 }
 
 /// Hook into [`storage::bin::save_graph`] by implementing [`storage::bin::GetAdjacencyList`].
-impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync<u32> {
+impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync {
     type Element = u32;
     type Item<'a> = AdjacencyList<u32>;
 
@@ -305,19 +299,18 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync<u32> {
 /// and the on-disk index format during serialization.
 ///
 /// Key differences between the formats:
-/// 1. Disk format requires a valid vector ID as start point, while async index uses a
-///    virtual ID (max_points + 1) that exceeds the valid dataset range
-/// 2. In-memory index appends the virtual start point at the end of adjacency lists
-/// 3. Disk format expects additional_points = 0, while async index uses additional_points = 1
+/// 1. The disk format does not support the virtual start point used by the in-memory index.
+/// 2. The in-memory index stores one virtual start point as an additional point, while the
+///    serialized disk graph omits it after remapping it to the actual medoid.
 ///
 /// This adaptor handles these differences by:
 /// - Substituting the virtual start point ID with an actual dataset ID when found in adjacency lists
 /// - Excluding the virtual point from the total count (subtracting 1 from length)
-/// - Setting additional_points to 0 as required by the disk format specification
+/// - Setting additional_points to 0 because the virtual point is omitted from the serialized graph
 ///
 /// Used with [`storage::bin::save_graph`] to persist an async index in standard DiskANN format.
 struct DiskAdaptor<'a> {
-    provider: &'a SimpleNeighborProviderAsync<u32>,
+    provider: &'a SimpleNeighborProviderAsync,
     inmem_start_point: u32,
     actual_start_point: u32,
 }
@@ -333,15 +326,26 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
         let mut list = AdjacencyList::new();
         self.provider.get_neighbors_sync(i, &mut list)?;
 
-        // Need to change to a `Vec` because remapping the start point can cause duplicates,
-        // and changing the logic to not have duplicates changes the exact nature of the
-        // graph and breaks integration tests for the disk index builder.
         let mut list: Vec<_> = list.into();
-        for i in list.iter_mut() {
-            if *i == self.inmem_start_point {
-                *i = self.actual_start_point;
+        let node_id = u32::try_from(i)?;
+        let mut seen_actual_start_point = false;
+        list.retain_mut(|neighbor| {
+            if *neighbor == self.inmem_start_point {
+                *neighbor = self.actual_start_point;
             }
-        }
+
+            if *neighbor == node_id {
+                return false;
+            }
+
+            if *neighbor != self.actual_start_point {
+                return true;
+            }
+
+            let first = !seen_actual_start_point;
+            seen_actual_start_point = true;
+            first
+        });
 
         Ok(list)
     }
@@ -367,13 +371,13 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::VirtualStorageProvider;
+    use crate::storage::{VirtualStorageProvider, bin::GetAdjacencyList};
 
     use super::*;
 
     #[test]
     fn test_neighbor_provider() {
-        let neighbor_provider = SimpleNeighborProviderAsync::<u32>::new(10, 1, 5, 1.0);
+        let neighbor_provider = SimpleNeighborProviderAsync::new(10, 1, 5, 1.0);
 
         let adj_list = vec![1, 2, 3];
         neighbor_provider.set_neighbors_sync(1, &adj_list).unwrap();
@@ -397,6 +401,22 @@ mod tests {
         assert_eq!(new_adj_list, result);
     }
 
+    #[test]
+    fn disk_adaptor_removes_duplicates_and_self_loops_after_remapping() {
+        let provider = SimpleNeighborProviderAsync::new(4, 1, 4, 1.0);
+        provider.set_neighbors_sync(0, &[4, 2, 1]).unwrap();
+        provider.set_neighbors_sync(1, &[4, 3]).unwrap();
+
+        let adaptor = DiskAdaptor {
+            provider: &provider,
+            inmem_start_point: 4,
+            actual_start_point: 1,
+        };
+
+        assert_eq!(adaptor.get_adjacency_list(0).unwrap(), vec![1, 2]);
+        assert_eq!(adaptor.get_adjacency_list(1).unwrap(), vec![3]);
+    }
+
     #[tokio::test]
     async fn test_save_load() {
         let max_degree = 5;
@@ -404,7 +424,7 @@ mod tests {
         let additional_points = 2;
 
         let provider =
-            SimpleNeighborProviderAsync::<u32>::new(max_points, additional_points, max_degree, 1.0);
+            SimpleNeighborProviderAsync::new(max_points, additional_points, max_degree, 1.0);
 
         // Setup a virtual storage provider with memory filesystem
         let storage = VirtualStorageProvider::new_memory();
@@ -430,8 +450,7 @@ mod tests {
             "Resumable graph file was not created"
         );
 
-        let receiver =
-            SimpleNeighborProviderAsync::<u32>::load_direct(&storage, prefix.prefix()).unwrap();
+        let receiver = SimpleNeighborProviderAsync::load_direct(&storage, prefix.prefix()).unwrap();
 
         for i in 0..max_points + additional_points {
             let mut result = AdjacencyList::new();

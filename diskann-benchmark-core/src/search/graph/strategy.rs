@@ -5,7 +5,6 @@
 
 use std::{fmt::Debug, sync::Arc};
 
-use diskann::ANNError;
 use thiserror::Error;
 
 /// A dynamic strategy (e.g. `diskann::graph::glue::SearchStrategy`) manager for built-in
@@ -168,12 +167,7 @@ impl Error {
     }
 }
 
-impl From<Error> for ANNError {
-    #[track_caller]
-    fn from(error: Error) -> ANNError {
-        ANNError::opaque(error)
-    }
-}
+diskann::convert_error!(Error);
 
 /// Error for an incorrect number of strategies.
 ///
@@ -227,6 +221,8 @@ impl std::error::Error for LengthIncompatible {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use diskann::ANNError;
 
     // Simple test strategy type
     #[derive(Debug, Clone, PartialEq, Eq)]
