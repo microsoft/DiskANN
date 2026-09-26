@@ -90,6 +90,87 @@ cfg_if::cfg_if! {
                     std::arch::x86_64::_mm_prefetch(vec_ptr.add(d * CACHE_LINE_SIZE), _MM_HINT_T0);
                 }
             }        }
+    } else if #[cfg(target_arch = "aarch64")] {
+        use std::arch::asm;
+
+        const CACHE_LINE_SIZE: usize = 64;
+
+        #[inline(always)]
+        unsafe fn prefetch_l1(ptr: *const i8) {
+            // SAFETY: The `prfm` hint does not dereference the pointer in Rust memory model
+            // terms, and this function is only compiled on aarch64.
+            unsafe {
+                asm!(
+                    "prfm pldl1keep, [{ptr}]",
+                    ptr = in(reg) ptr,
+                    options(nostack, preserves_flags),
+                );
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn prefetch_exactly<const N: usize>(ptr: *const i8) {
+            for i in 0..N {
+                // SAFETY: Pointer arithmetic stays within the caller-provided prefetch range and
+                // `prefetch_l1` is aarch64-only.
+                unsafe {
+                    prefetch_l1(ptr.add(i * CACHE_LINE_SIZE));
+                }
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn prefetch_at_most<const N: usize>(
+            ptr: *const i8,
+            bytes: usize,
+        ) {
+            for i in 0..N {
+                if CACHE_LINE_SIZE * i >= bytes {
+                    break;
+                }
+
+                // SAFETY: `i` is bounded by `bytes`, so the computed address remains within the
+                // caller-provided prefetch range and `prefetch_l1` is aarch64-only.
+                unsafe {
+                    prefetch_l1(ptr.add(i * CACHE_LINE_SIZE));
+                }
+            }
+        }
+
+        #[inline]
+        pub fn prefetch_hint_max<const MAX_CACHE_LINES: usize, T>(vec: &[T]) {
+            let vecsize = std::mem::size_of_val(vec);
+
+            if vecsize >= MAX_CACHE_LINES * CACHE_LINE_SIZE {
+                // SAFETY: Pointer originates from `vec` and prefetch count is bounded.
+                unsafe {
+                    prefetch_exactly::<MAX_CACHE_LINES>(vec.as_ptr().cast())
+                }
+            } else {
+                // SAFETY: Pointer originates from `vec`; bytes bound ensures addresses are valid.
+                unsafe {
+                    prefetch_at_most::<MAX_CACHE_LINES>(
+                        vec.as_ptr().cast(),
+                        vecsize,
+                    )
+                }
+            }
+        }
+
+        #[inline]
+        pub fn prefetch_hint_all<T>(vec: &[T]) {
+            let vecsize = std::mem::size_of_val(vec);
+            let num_prefetch_blocks = vecsize.div_ceil(CACHE_LINE_SIZE);
+            let vec_ptr = vec.as_ptr() as *const i8;
+
+            for d in 0..num_prefetch_blocks {
+                // SAFETY: Loop bounds are derived from `vec` length and this is a prefetch hint.
+                unsafe {
+                    prefetch_l1(vec_ptr.add(d * CACHE_LINE_SIZE));
+                }
+            }
+        }
+
     } else {
         pub fn prefetch_hint_max<const MAX_CACHE_LINES: usize, T>(_vec: &[T]) {}
         pub fn prefetch_hint_all<T>(_vec: &[T]) {}
