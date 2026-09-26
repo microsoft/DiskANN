@@ -3,14 +3,14 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashMap, io::Write, sync::atomic::Ordering::Relaxed};
+use std::{collections::HashMap, io::Write};
 
 use diskann_benchmark_runner as dbr;
-use diskann_inmem::integration::store::checked;
+use diskann_inmem::integration::store::simple;
 use serde::{Deserialize, Serialize};
 
 pub(super) fn register(registry: &mut dbr::Registry) -> Result<(), dbr::RegistryError> {
-    registry.register("store-stress-test-checked", Stress)
+    registry.register("simple-store-stress-test", Stress)
 }
 
 /// Configuration for a [`Stress`] run.
@@ -18,11 +18,22 @@ pub(super) fn register(registry: &mut dbr::Registry) -> Result<(), dbr::Registry
 struct Input {
     /// Shared stress test setup.
     setup: super::Setup,
+
+    /// Bytes per entry. Must be a non-zero multiple of 8 (the stamp lane width).
+    entry_bytes: usize,
 }
 
 impl Input {
     fn check(self) -> anyhow::Result<Self> {
         self.setup.check()?;
+
+        if self.entry_bytes == 0 || !self.entry_bytes.is_multiple_of(8) {
+            anyhow::bail!(
+                "`entry_bytes` ({}) must be a non-zero multiple of 8",
+                self.entry_bytes,
+            );
+        }
+
         Ok(self)
     }
 }
@@ -31,7 +42,7 @@ impl dbr::Input for Input {
     type Raw = Self;
 
     fn tag() -> &'static str {
-        "store-stress-checked"
+        "store-stress-simple"
     }
 
     fn from_raw(raw: Self::Raw, _checker: &mut dbr::Checker) -> anyhow::Result<Self> {
@@ -45,16 +56,18 @@ impl dbr::Input for Input {
     fn example() -> Self::Raw {
         Input {
             setup: super::Setup::example(),
+            entry_bytes: 128,
         }
     }
 }
 
 impl std::fmt::Display for Input {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Input { setup } = self;
+        let Input { setup, entry_bytes } = self;
 
         let mut kv = dbr::utils::fmt::KeyValue::new();
         kv.push("setup", &setup);
+        kv.push("entry_bytes", &entry_bytes);
         write!(f, "{}", kv)
     }
 }
@@ -75,7 +88,7 @@ impl dbr::Benchmark for Stress {
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "concurrency stress test for the checked in-memory store")
+        write!(f, "concurrency stress test for the simple in-memory store")
     }
 
     fn run(
@@ -84,26 +97,27 @@ impl dbr::Benchmark for Stress {
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
     ) -> anyhow::Result<Self::Output> {
-        let config = checked::Config {
+        let config = simple::Config {
             capacity: input.setup.capacity,
+            entry_bytes: input.entry_bytes,
             epoch_guard_slots: input.setup.epoch_guard_slots,
             freelist_recycle_capacity: input.setup.freelist_recycle_capacity,
         };
 
-        writeln!(output, "Checked Store Stress Test\n")?;
+        writeln!(output, "Simple Store Stress Test\n")?;
         writeln!(output, "{}", input)?;
-        let stats = super::run_benchmark(checked::Store::new(config), &input.setup)?;
+        let stats = super::run_benchmark(simple::Store::new(config), &input.setup)?;
         writeln!(output, "{}", stats)?;
         Ok(stats)
     }
 }
 
-impl super::Testable for checked::Store {
-    type Writer<'a> = checked::Writer<'a>;
+impl super::Testable for simple::Store {
+    type Writer<'a> = simple::Writer<'a>;
     type ReaderState<'a> = ReaderState<'a>;
 
     fn writer(&self) -> Option<Self::Writer<'_>> {
-        <checked::Store>::acquire(self)
+        <simple::Store>::acquire(self)
     }
 
     fn reader_state<'a>(
@@ -111,42 +125,43 @@ impl super::Testable for checked::Store {
         capacity_hint: usize,
         shared: &'a super::Shared<Self>,
     ) -> Self::ReaderState<'a> {
+        let observed = HashMap::with_capacity(capacity_hint);
         ReaderState {
             store: self,
+            observed,
             shared,
-            capacity_hint,
         }
     }
 
     fn retire(&self, i: usize) -> bool {
-        <checked::Store>::retire(self, i)
+        <simple::Store>::retire(self, i)
     }
 
     fn reclaim(&self) -> Option<usize> {
-        <checked::Store>::reclaim(self)
+        <simple::Store>::reclaim(self)
     }
 
     fn readable_slots(&self) -> usize {
-        <checked::Store>::readable_slots(self)
+        <simple::Store>::readable_slots(self)
     }
 
     fn writable_slots(&self) -> usize {
-        <checked::Store>::writable_slots(self)
+        <simple::Store>::writable_slots(self)
     }
 }
 
-impl super::Writer for checked::Writer<'_> {
+impl super::Writer for simple::Writer<'_> {
     fn write(mut self, stamp: u64) {
-        self.set(stamp);
+        super::intrusive::write_stamp(self.as_mut_slice(), stamp);
         self.publish();
     }
 }
 
 #[derive(Debug)]
 pub(super) struct ReaderState<'a> {
-    store: &'a checked::Store,
-    shared: &'a super::Shared<checked::Store>,
-    capacity_hint: usize,
+    store: &'a simple::Store,
+    observed: HashMap<usize, super::intrusive::SlotObservations>,
+    shared: &'a super::Shared<simple::Store>,
 }
 
 impl super::ReaderState for ReaderState<'_> {
@@ -159,11 +174,11 @@ impl super::ReaderState for ReaderState<'_> {
         let Some(reader) = self.store.reader() else {
             return false;
         };
-        let observed = HashMap::with_capacity(self.capacity_hint);
+        self.observed.clear();
 
         f(Reader {
-            reader: &reader,
-            observed,
+            reader,
+            observed: &mut self.observed,
             shared: self.shared,
         });
 
@@ -173,40 +188,16 @@ impl super::ReaderState for ReaderState<'_> {
 
 #[derive(Debug)]
 pub(super) struct Reader<'a> {
-    observed: HashMap<usize, checked::Value<'a>>,
-    reader: &'a checked::Reader<'a>,
-    shared: &'a super::Shared<checked::Store>,
+    reader: simple::Reader<'a>,
+    observed: &'a mut HashMap<usize, super::intrusive::SlotObservations>,
+    shared: &'a super::Shared<simple::Store>,
 }
 
 impl super::Reader for Reader<'_> {
     /// Feed a single observation of slot `i` into the per-guard checker, recording a
     /// violation on the shared state if a safety invariant is broken.
     fn observe(&mut self, i: usize) {
-        let read = self.reader.read(i);
-        let observed = self.observed.get(&i).map(|v| v.get());
-
-        match (observed, read) {
-            // Not yet observed readable; an unreadable slot tells us nothing actionable.
-            (None, None) => {}
-            // First readable observation: record the stamp (after a tearing check).
-            (None, Some(value)) => {
-                self.observed.insert(i, value);
-            }
-            // Still readable: the value must be identical and untorn.
-            (Some(previous), Some(value)) => {
-                if previous != value.get() {
-                    self.shared.record_violation(format!(
-                        "slot {i} value changed within guard: {} -> {}",
-                        previous,
-                        value.get(),
-                    ))
-                }
-            }
-            // Readable -> unreadable: an allowed, terminal transition.
-            (Some(_), None) => {
-                self.shared.transitions.fetch_add(1, Relaxed);
-            }
-        }
+        super::intrusive::observe(self.observed, i, self.reader.read(i), self.shared)
     }
 }
 
