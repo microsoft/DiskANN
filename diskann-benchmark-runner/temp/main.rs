@@ -8,11 +8,11 @@
 use diskann_benchmark_runner::{reflect, Reflection};
 
 fn main() -> anyhow::Result<()> {
-    println!("{}", Reflection::new::<reflect::Test>().render());
+    // println!("{}", Reflection::new::<reflect::Test>().render());
 
-    println!("{}", Reflection::new::<reflect::Test2>().render());
+    // println!("{}", Reflection::new::<reflect::Test2>().render());
 
-    println!("{}", Reflection::new::<reflect::Metric>().render());
+    // println!("{}", Reflection::new::<reflect::Metric>().render());
 
     Ok(())
 }

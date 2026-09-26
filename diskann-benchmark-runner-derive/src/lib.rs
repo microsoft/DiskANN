@@ -7,7 +7,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::{Data, DeriveInput, Fields, parse_macro_input, parse_quote, spanned::Spanned};
 
-mod serde;
+mod attributes;
 
 fn crate_name() -> syn::Path {
     syn::parse_quote!(::diskann_benchmark_runner::reflect)
@@ -21,7 +21,7 @@ fn crate_name() -> syn::Path {
 /// # Example
 ///
 /// ```ignore
-/// use diskann_benchmark_runner::reflect::Reflect;
+/// use diskann_benchmark_runner::Reflect;
 ///
 /// /// A test aggregate.
 /// #[derive(Reflect)]
@@ -61,9 +61,9 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let doc = format_docstrings(&input.attrs);
     let mut generics = input.generics.clone();
     add_generic_bounds(&mut generics);
+    let container = attributes::Container::parse(&input.attrs)?;
 
-    let format_type_name = generate_type_name_body(&input);
-    let container = serde::Container::parse(&input.attrs)?;
+    let format_type_name = generate_type_name_body(&input, container.type_name())?;
 
     let common = DeriveCommon {
         doc,
@@ -88,7 +88,7 @@ struct DeriveCommon {
     /// The implementation of `format_type_name`.
     format_type_name: TokenStream,
     /// Serde container-level attributes.
-    container: serde::Container,
+    container: attributes::Container,
 }
 
 /// Add a bound `T: Reflect` for each type parameter in the generic list.
@@ -166,7 +166,7 @@ where
 ///     f.write_str("<");
 ///     // This would come from the `Reflection::type_name` instead.
 ///     type_name_u32(f);
-///     f.write_str(">");
+///     f.write_str(">")
 /// }
 ///
 /// fn type_name_u32(f: &mut dyn std::fmt::Write) -> std::fmt::Result {
@@ -174,7 +174,19 @@ where
 /// }
 /// ```
 /// When there are no generics - we can print the type name directly.
-fn generate_type_name_body(input: &DeriveInput) -> TokenStream {
+///
+/// # Compatibility with type-name attributes
+///
+/// There are two type-name attributes supported:
+///
+/// * `reflect(prefix = "...")`: Apply the prefix to the final type-name.
+/// * `reflect(type_name = "...")`: Use the given type name literal instead.
+///
+///   To prevent mayhem, `type_name` may only be used on non-genric types.
+fn generate_type_name_body(
+    input: &DeriveInput,
+    type_name: attributes::TypeName,
+) -> syn::Result<TokenStream> {
     let path = crate_name();
     let name = input.ident.to_string();
     let arguments: Vec<_> = input
@@ -202,11 +214,37 @@ fn generate_type_name_body(input: &DeriveInput) -> TokenStream {
         })
         .collect();
 
+    // Check that the type-name attributes are compatible with the struct.
+    let prefix: Vec<TokenStream> = match type_name {
+        attributes::TypeName::Rename(rename) => {
+            if arguments.is_empty() {
+                let ts = quote! {
+                    f.write_str(#rename)
+                };
+                return Ok(ts);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    rename,
+                    "The `type_name` attribute cannot be applied to types with generics",
+                ));
+            }
+        },
+        attributes::TypeName::Prefix(prefix) => {
+            let ts = quote! {
+                f.write_str(#prefix)?;
+            };
+            vec![ts]
+        },
+        attributes::TypeName::None => Vec::new(),
+    };
+
     // If there are no generics, we can dump the typename directly.
     if arguments.is_empty() {
-        return quote! {
+        let ts = quote! {
+            #(#prefix)*
             f.write_str(#name)
         };
+        Ok(ts)
     } else {
         let writes = arguments.iter().enumerate().map(|(index, argument)| {
             if index == 0 {
@@ -221,19 +259,21 @@ fn generate_type_name_body(input: &DeriveInput) -> TokenStream {
             }
         });
 
-        quote! {
+        let ts = quote! {
+            #(#prefix)*
             f.write_str(#name)?;
             f.write_str("<")?;
             #(#writes)*
             f.write_str(">")
-        }
+        };
+        Ok(ts)
     }
 }
 
 fn build_fields(
     fields: &syn::Fields,
     generics: &mut syn::Generics,
-    rename_all: serde::RenameAll,
+    rename_all: attributes::RenameAll,
 ) -> syn::Result<TokenStream> {
     let path = crate_name();
 
@@ -252,7 +292,10 @@ fn build_fields(
     }
 }
 
-fn named_fields<'a, I>(fields: I, rename_all: serde::RenameAll) -> syn::Result<Vec<TokenStream>>
+fn named_fields<'a, I>(
+    fields: I,
+    rename_all: attributes::RenameAll,
+) -> syn::Result<Vec<TokenStream>>
 where
     I: IntoIterator<Item = &'a syn::Field>,
 {
@@ -269,8 +312,8 @@ where
             let name = syn::LitStr::new(&ident.to_string(), ident.span());
 
             let doc = format_docstrings(&f.attrs);
-            let field = serde::Field::parse(&f.attrs)?;
-            let name = field.rename_field_or(name, rename_all);
+            let attributes::Field { rename_field } = attributes::Field::parse(&f.attrs)?;
+            let name = rename_field.apply_to_field(name, rename_all);
             Ok(quote_spanned! { ty.span()=> #path::tree::NamedField::new::<#ty>(#name, #doc) })
         })
         .collect()
@@ -302,7 +345,7 @@ fn process_struct(
     } = common;
 
     // Validate that the attributes we parsed are compatible with a `struct` definition.
-    let serde::Struct { rename_all } = container.try_as_struct()?;
+    let attributes::Struct { rename_all } = container.try_as_struct()?;
 
     let type_name = &input.ident;
     let path = crate_name();
@@ -346,7 +389,7 @@ fn process_enum(
     } = common;
 
     // Validate that the attributes we parsed are compatible with an `enum` definition.
-    let serde::Enum {
+    let attributes::Enum {
         rename_all,
         enum_repr,
     } = container.as_enum();
@@ -361,21 +404,26 @@ fn process_enum(
         .map(|v| -> syn::Result<TokenStream> {
             let doc = format_docstrings(&v.attrs);
             let name = syn::LitStr::new(&v.ident.to_string(), v.ident.span());
-            let attrs = serde::Variant::parse(&v.attrs)?;
+            let attributes::Variant {
+                rename_variant,
+                rename_variant_fields,
+            } = attributes::Variant::parse(&v.attrs)?;
 
-            let fields = build_fields(&v.fields, &mut generics, attrs.field_rename_all())?;
+            let fields = build_fields(&v.fields, &mut generics, rename_variant_fields)?;
 
             // Rename the variant as needed.
-            let name = attrs.rename_variant_or(name, rename_all);
+            let name = rename_variant.apply_to_variant(name, rename_all);
             Ok(quote!(#path::tree::Variant::new(#name, #fields, #doc)))
         })
         .collect::<syn::Result<Vec<TokenStream>>>()?;
 
     // Build the enum representation.
     let enum_repr = match enum_repr {
-        serde::EnumRepr::External => quote!(#path::tree::EnumRepr::External),
-        serde::EnumRepr::Internal { tag } => quote!(#path::tree::EnumRepr::Internal { tag: #tag }),
-        serde::EnumRepr::Adjacent { tag, content } => {
+        attributes::EnumRepr::External => quote!(#path::tree::EnumRepr::External),
+        attributes::EnumRepr::Internal { tag } => {
+            quote!(#path::tree::EnumRepr::Internal { tag: #tag })
+        }
+        attributes::EnumRepr::Adjacent { tag, content } => {
             quote!(#path::tree::EnumRepr::Adjacent { tag: #tag, content: #content })
         }
     };

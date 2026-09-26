@@ -5,6 +5,7 @@
 
 use std::{
     any::TypeId,
+    collections::HashSet,
     fmt::{self, Write},
 };
 
@@ -13,6 +14,9 @@ pub use diskann_benchmark_runner_derive::Reflect;
 mod render;
 pub mod tree;
 pub use tree::Type;
+
+#[cfg(test)]
+mod test;
 
 pub trait Reflect: 'static {
     fn ty() -> Type;
@@ -48,6 +52,36 @@ impl Reflection {
 
     pub fn render(&self) -> Render {
         Render(*self)
+    }
+
+    // pub(crate) fn visit_all_reachable<F, E>(&self, f: F) -> Result<(), E>
+    // where
+    //     F: FnMut(Reflection) -> Result<(), E>,
+    // {
+    //     let mut id_map = HashSet::new();
+    //     visit_all_reachable(*self, &mut id_map, f)
+    // }
+
+    pub(crate) fn visit_unique<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(Reflection) -> Result<bool, E>,
+    {
+        let mut seen = HashSet::new();
+        self.visit_with(|r: Reflection| {
+            if seen.insert(r.type_id()) {
+                f(r)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+    }
+
+    pub(crate) fn visit_with<F, E>(&self, f: F) -> Result<(), E>
+    where
+        F: FnMut(Reflection) -> Result<bool, E>,
+    {
+        visit_with(*self, f)
     }
 }
 
@@ -88,6 +122,49 @@ impl std::fmt::Display for Render {
     }
 }
 
+//------------//
+// Algorithms //
+//------------//
+
+fn visit_with<F, E>(mut reflection: Reflection, mut f: F) -> Result<(), E>
+where
+    F: FnMut(Reflection) -> Result<bool, E>,
+{
+    use tree::Fields;
+
+    let mut stack = Vec::new();
+    loop {
+        // visit: expand this node if the closure returns `true`.
+        if f(reflection)? {
+            let mut push = |r: Reflection| stack.push(r);
+            let mut push_fields = |fields: &Fields| match fields {
+                Fields::Named(named) => named.iter().for_each(|field| push(field.field())),
+                Fields::Unnamed(unnamed) => unnamed.iter().for_each(|field| push(field.field())),
+                Fields::Unit => {}
+            };
+
+            // explore
+            match reflection.ty() {
+                // Nothing to do for primitives as there is no other object that can be reached.
+                Type::Primitive(_) => {}
+                Type::Aggregate(aggregate) => push_fields(aggregate.fields()),
+                Type::Enum(enum_) => enum_
+                    .variants()
+                    .iter()
+                    .for_each(|variant| push_fields(variant.fields())),
+                Type::Sequence(seq) => push(seq.element()),
+            }
+        }
+
+        // loop
+        if let Some(r) = stack.pop() {
+            reflection = r;
+        } else {
+            break Ok(());
+        }
+    }
+}
+
 ///////////////
 // Bootstrap //
 ///////////////
@@ -119,10 +196,43 @@ macro_rules! primitive {
     };
 }
 
+primitive!((), "empty", "()");
 primitive!(usize, "A system dependent unsigned integer", "usize");
 primitive!(u32, "A 32-bit unsigned integer", "u32");
+primitive!(bool, "A value of \"true\" or \"false\"", "bool");
 
 primitive!(String, "A string", "string");
+
+impl<T> Reflect for Option<T>
+where
+    T: Reflect,
+{
+    fn ty() -> Type {
+        Type::enum_(
+            // TODO: Untagged
+            tree::EnumRepr::External,
+            [
+                tree::Variant::new(
+                    "<null>",
+                    tree::Fields::Unit,
+                    Some("Use `null` to indicate that this value does not exist".into()),
+                ),
+                tree::Variant::new(
+                    "<present>",
+                    tree::Fields::unnamed([tree::UnnamedField::new::<T>(None)]),
+                    Some("Presence indicates the value is present".into()),
+                ),
+            ],
+            Some("An optional configuration".into()),
+        )
+    }
+
+    fn format_type_name(f: &mut dyn Write) -> fmt::Result {
+        f.write_str("Option<")?;
+        T::format_type_name(f)?;
+        f.write_str(">")
+    }
+}
 
 impl<T> Reflect for Vec<T>
 where
@@ -136,109 +246,6 @@ where
         write!(f, "Vec<{}>", Reflection::new::<T>().type_name())
     }
 }
-
-#[derive(Reflect)]
-pub struct UnitWithConst<const N: usize> {}
-
-#[derive(Reflect)]
-pub struct GenericBoundAdded<T> {
-    uses_t: Vec<T>,
-}
-
-/// This is a test!
-///
-/// Hello world!
-#[derive(Reflect)]
-pub struct Test {
-    /// This field affects this value.
-    a: usize,
-
-    /// This field does something else.
-    b: usize,
-}
-
-#[derive(Reflect)]
-pub struct TestUnnamed<T>(
-    /// Can I document this?
-    usize,
-    T,
-);
-
-/// This is a nother test!
-#[derive(Reflect)]
-pub struct Test2 {
-    /// This field affects this value.
-    a: usize,
-
-    /// This field doesn't have any names.
-    unnamed: TestUnnamed<u32>,
-
-    other: Test,
-
-    /// How are we going to compute distances?
-    metric: AdjacentEnum,
-
-    /// These control a bunch of parameters.
-    seq: Vec<Test>,
-}
-
-#[derive(Reflect)]
-struct Wrapper<T> {
-    /// Inner
-    a: T,
-}
-
-/// An enum with no payloads.
-#[derive(Debug, Clone, Copy, Reflect)]
-pub enum Metric {
-    SquaredL2,
-    InnerProduct,
-    Cosine,
-}
-
-/// An enum with no payloads.
-#[derive(Debug, Reflect)]
-#[serde(rename_all = "kebab-case")]
-pub enum AdjacentEnum {
-    SquaredL2,
-    /// Let me see if this works
-    InnerProduct(u32),
-
-    /// Compute the cosine similarity
-    Cosine {
-        /// Thos actually doesn't do anything.
-        test: String,
-    },
-}
-
-// impl Reflect for AdjacentEnum {
-//     fn ty() -> Type {
-//         Type::enum_(
-//             EnumRepr::Adjacent {
-//                 tag: "enum-type",
-//                 content: "content",
-//             },
-//             [
-//                 Variant::new("squared-l2", Fields::Unit, None),
-//                 Variant::new(
-//                     "inner-product",
-//                     Fields::unnamed([UnnamedField::new::<u32>(Some("testing".into()))]),
-//                     Some("Inner Product with some payload".into()),
-//                 ),
-//                 Variant::new(
-//                     "cosine",
-//                     Fields::named([NamedField::new::<String>("test", None)]),
-//                     Some("Cosine Similarity".into()),
-//                 ),
-//             ],
-//             Some("The similarity measure to use".into()),
-//         )
-//     }
-//
-//     fn format_type_name(f: &mut dyn Write) -> fmt::Result {
-//         f.write_str("Metric")
-//     }
-// }
 
 //////////////
 // Internal //
@@ -288,278 +295,4 @@ pub(crate) mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::assert_matches;
-
-    #[test]
-    fn test_unit() {
-        /// A unit struct.
-        #[derive(Reflect)]
-        struct Unit;
-
-        let r = Reflection::new::<Unit>();
-        let ty = r.ty();
-
-        assert_eq!(r.ty().doc().unwrap(), "A unit struct.");
-        assert_eq!(r.type_name().to_string(), "Unit");
-        assert!(!ty.has_body());
-    }
-
-    #[test]
-    fn test_unit_const_generic() {
-        /// A unit struct.
-        #[derive(Reflect)]
-        struct Unit<const N: usize>;
-
-        let r = Reflection::new::<Unit<10>>();
-        let ty = r.ty();
-
-        assert_eq!(ty.doc().unwrap(), "A unit struct.");
-        assert_eq!(r.type_name().to_string(), "Unit<10>");
-        assert!(!ty.has_body());
-    }
-
-    #[test]
-    fn test_unit_const_generic_2() {
-        #[derive(Reflect)]
-        struct Unit<const N: usize, const M: usize>;
-
-        let r = Reflection::new::<Unit<10, 20>>();
-        let ty = r.ty();
-
-        assert!(ty.doc().is_none());
-        assert_eq!(r.type_name().to_string(), "Unit<10, 20>");
-        assert!(!ty.has_body());
-    }
-
-    #[test]
-    fn test_empty_tuple_like() {
-        /// An empty tuple-like struct.
-        #[derive(Reflect)]
-        struct Empty();
-
-        let r = Reflection::new::<Empty>();
-        let ty = r.ty();
-
-        assert_eq!(ty.doc().unwrap(), "An empty tuple-like struct.");
-        assert_eq!(r.type_name().to_string(), "Empty");
-        assert!(!ty.has_body());
-    }
-
-    #[test]
-    fn test_empty_struct_like() {
-        /// An empty struct.
-        #[derive(Reflect)]
-        struct Empty {}
-
-        let r = Reflection::new::<Empty>();
-        let ty = r.ty();
-
-        assert_eq!(ty.doc().unwrap(), "An empty struct.");
-        assert_eq!(r.type_name().to_string(), "Empty");
-        assert!(!ty.has_body());
-    }
-
-    #[test]
-    fn test_struct() {
-        /// A struct with two fields.
-        #[expect(unused)]
-        #[derive(Reflect)]
-        struct Woo {
-            /// Foo
-            foo: usize,
-            /// Bar
-            bar: usize,
-        }
-
-        let r = Reflection::new::<Woo>();
-        let ty = r.ty();
-        assert_eq!(ty.doc().unwrap(), "A struct with two fields.");
-        assert_eq!(r.type_name().to_string(), "Woo");
-        assert!(ty.has_body());
-
-        let f = ty.as_aggregate().unwrap().fields().as_named().unwrap();
-        assert_eq!(f.len(), 2);
-
-        assert_eq!(f[0].name, "foo");
-        assert_eq!(f[0].doc().unwrap(), "Foo");
-        assert_eq!(f[0].field.type_name().to_string(), "usize");
-
-        assert_eq!(f[1].name, "bar");
-        assert_eq!(f[1].doc().unwrap(), "Bar");
-        assert_eq!(f[1].field.type_name().to_string(), "usize");
-    }
-
-    #[test]
-    fn test_tuple1() {
-        /// A tuple with one field.
-        #[expect(unused)]
-        #[derive(Reflect)]
-        struct Tuple1(
-            /// Field 0.
-            usize,
-        );
-
-        let r = Reflection::new::<Tuple1>();
-        let ty = r.ty();
-        assert_eq!(ty.doc().unwrap(), "A tuple with one field.");
-        assert_eq!(r.type_name().to_string(), "Tuple1");
-
-        assert!(ty.has_body());
-
-        let f = ty.as_aggregate().unwrap().fields().as_unnamed().unwrap();
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].doc().unwrap(), "Field 0.");
-        assert_eq!(f[0].field().type_name().to_string(), "usize");
-    }
-
-    #[test]
-    fn test_tuple2() {
-        #[expect(unused)]
-        #[derive(Reflect)]
-        struct Tuple2<T, U>(
-            T,
-            /// Field 1.
-            Vec<U>,
-        );
-
-        let r = Reflection::new::<Tuple2<usize, u32>>();
-        let ty = r.ty();
-        assert!(ty.doc().is_none());
-        assert_eq!(r.type_name().to_string(), "Tuple2<usize, u32>");
-        assert!(ty.has_body());
-
-        let f = ty.as_aggregate().unwrap().fields().as_unnamed().unwrap();
-        assert_eq!(f.len(), 2);
-
-        assert!(f[0].doc().is_none());
-        assert_eq!(f[0].field().type_name().to_string(), "usize");
-
-        assert_eq!(f[1].doc().unwrap(), "Field 1.");
-        assert_eq!(f[1].field().type_name().to_string(), "Vec<u32>");
-    }
-
-    #[test]
-    fn test_empty_enum() {
-        /// An empty enum.
-        #[derive(Reflect)]
-        enum Empty {}
-
-        let r = Reflection::new::<Empty>();
-        let ty = r.ty();
-        assert_eq!(ty.doc().unwrap(), "An empty enum.");
-        assert_eq!(r.type_name().to_string(), "Empty");
-        assert!(!ty.has_body());
-    }
-
-    #[test]
-    fn test_enum_with_generics() {
-        /// An enum with generics.
-        #[expect(unused)]
-        #[derive(Reflect)]
-        enum Either<A, B> {
-            A(Vec<A>),
-            /// It's a bee!
-            B(
-                /// Buzz buzz
-                B,
-            ),
-        }
-
-        let r = Reflection::new::<Either<u32, String>>();
-        let ty = r.ty();
-        assert_eq!(ty.doc().unwrap(), "An enum with generics.");
-        assert_eq!(r.type_name().to_string(), "Either<u32, string>");
-        assert!(ty.has_body());
-
-        let variants = ty.as_enum().unwrap().variants();
-        assert_eq!(variants.len(), 2);
-
-        // Variant 0
-        assert!(variants[0].doc().is_none());
-        assert_eq!(variants[0].name(), "A");
-        assert!(variants[0].fields.has_body());
-
-        let f = variants[0].fields.as_unnamed().unwrap();
-        assert_eq!(f.len(), 1);
-        assert!(f[0].doc().is_none());
-        assert_eq!(f[0].field().type_name().to_string(), "Vec<u32>");
-
-        // Variant 1
-        assert_eq!(variants[1].doc().unwrap(), "It's a bee!");
-        assert_eq!(variants[1].name(), "B");
-        assert!(variants[1].fields.has_body());
-
-        let f = variants[1].fields.as_unnamed().unwrap();
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].doc().unwrap(), "Buzz buzz");
-        assert_eq!(f[0].field().type_name().to_string(), "string");
-    }
-
-    #[test]
-    fn test_enum_variants() {
-        /// All the enums.
-        #[expect(unused)]
-        #[derive(Reflect)]
-        #[serde(tag = "tag", content = "content")]
-        enum All {
-            /// A unit variant.
-            Unit,
-            /// A tuple-like variant.
-            Tuple(
-                /// Field 0.
-                usize,
-                String,
-            ),
-            /// Struct-like.
-            Struct {
-                foo: usize,
-                /// All the bars!
-                bar: u32,
-            },
-        }
-
-        let r = Reflection::new::<All>();
-        let ty = r.ty();
-        assert_eq!(ty.doc().unwrap(), "All the enums.");
-        assert_eq!(r.type_name().to_string(), "All");
-        assert!(ty.has_body());
-
-        let variants = ty.as_enum().unwrap().variants();
-        assert_eq!(variants.len(), 3);
-
-        // Variant 0
-        assert_eq!(variants[0].doc().unwrap(), "A unit variant.");
-        assert_eq!(variants[0].name(), "Unit");
-        assert!(!variants[0].fields.has_body());
-        assert_matches!(variants[0].fields, Fields::Unit);
-
-        // Variant 1
-        assert_eq!(variants[1].doc().unwrap(), "A tuple-like variant.");
-        assert_eq!(variants[1].name(), "Tuple");
-        assert!(variants[1].fields.has_body());
-
-        let f = variants[1].fields.as_unnamed().unwrap();
-        assert_eq!(f.len(), 2);
-
-        assert_eq!(f[0].doc().unwrap(), "Field 0.");
-        assert_eq!(f[0].field.type_name().to_string(), "usize");
-
-        assert!(f[1].doc().is_none());
-        assert_eq!(f[1].field.type_name().to_string(), "string");
-
-        // Variant 2
-        assert_eq!(variants[2].name(), "Struct");
-        assert_eq!(variants[2].doc().unwrap(), "Struct-like.");
-        let f = variants[2].fields.as_named().unwrap();
-        assert_eq!(f.len(), 2);
-
-        assert_eq!(f[0].name, "foo");
-        assert!(f[0].doc().is_none());
-        assert_eq!(f[0].field.type_name().to_string(), "usize");
-
-        assert_eq!(f[1].name, "bar");
-        assert_eq!(f[1].doc().unwrap(), "All the bars!");
-        assert_eq!(f[1].field.type_name().to_string(), "u32");
-    }
 }

@@ -57,7 +57,7 @@ impl Type {
         }
     }
 
-    fn as_aggregate(&self) -> Option<&Aggregate> {
+    pub(super) fn as_aggregate(&self) -> Option<&Aggregate> {
         if let Self::Aggregate(aggregate) = self {
             Some(aggregate)
         } else {
@@ -65,7 +65,7 @@ impl Type {
         }
     }
 
-    fn as_enum(&self) -> Option<&Enum> {
+    pub(super) fn as_enum(&self) -> Option<&Enum> {
         if let Self::Enum(enum_) = self {
             Some(enum_)
         } else {
@@ -169,7 +169,7 @@ impl Fields {
         Self::Unnamed(itr.into_iter().collect())
     }
 
-    fn as_named(&self) -> Option<&[NamedField]> {
+    pub(super) fn as_named(&self) -> Option<&[NamedField]> {
         if let Self::Named(fields) = self {
             Some(fields)
         } else {
@@ -177,12 +177,16 @@ impl Fields {
         }
     }
 
-    fn as_unnamed(&self) -> Option<&[UnnamedField]> {
+    pub(super) fn as_unnamed(&self) -> Option<&[UnnamedField]> {
         if let Self::Unnamed(fields) = self {
             Some(fields)
         } else {
             None
         }
+    }
+
+    pub(super) fn is_unit(&self) -> bool {
+        matches!(self, Self::Unit)
     }
 }
 
@@ -242,7 +246,6 @@ impl UnnamedField {
     pub(super) fn doc(&self) -> Option<&str> {
         self.doc.as_deref()
     }
-
 }
 
 //------//
@@ -381,5 +384,3 @@ impl Sequence {
         self.doc.as_deref()
     }
 }
-
-

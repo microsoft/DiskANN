@@ -6,10 +6,12 @@
 use half::f16;
 use serde::{Deserialize, Serialize};
 
+use crate::Reflect;
+
 /// An enum representation for common DiskANN data types.
 ///
 /// See also: [`AsDataType`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
     Float64,

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::{internal::visibility::Visibility, Checker};
+use crate::{internal::visibility::Visibility, Checker, Reflect, Reflection};
 
 /// Inputs to [`Benchmarks`](crate::Benchmark).
 ///
@@ -16,7 +16,7 @@ pub trait Input: Sized + std::fmt::Debug + 'static {
     /// [`Deserialize`](serde::Deserialize) implementation.
     ///
     /// Final object validation is performed via [`from_raw`](Self::from_raw).
-    type Raw: serde::de::DeserializeOwned + serde::Serialize;
+    type Raw: serde::de::DeserializeOwned + serde::Serialize + Reflect;
 
     /// Return the discriminant associated with this type.
     ///
@@ -73,6 +73,11 @@ impl Registered<'_> {
         self.0.visibility()
     }
 
+    /// Return the [`Reflection`] for the raw input.
+    pub(crate) fn raw_reflection(&self) -> Option<Reflection> {
+        self.0.raw_reflection()
+    }
+
     /// Return a `std::fmt::Display` implementation that pretty-prints the input tag as well
     /// as any visibility modifiers.
     pub(crate) fn display(&self) -> Display<'_> {
@@ -125,7 +130,7 @@ pub(crate) fn order_inputs(a: &Registered<'_>, b: &Registered<'_>) -> std::cmp::
 pub(crate) mod internal {
     use super::*;
 
-    use crate::Features;
+    use crate::{Features, Reflection};
 
     /// Runtime representation of a deserialized [`Input`].
     #[derive(Debug)]
@@ -227,6 +232,7 @@ pub(crate) mod internal {
         fn visibility(&self) -> Visibility<'_>;
 
         // reflection
+        fn raw_reflection(&self) -> Option<Reflection>;
         fn as_any(&self) -> &dyn std::any::Any;
         fn type_name(&self) -> &'static str;
     }
@@ -251,6 +257,9 @@ pub(crate) mod internal {
         }
         fn visibility(&self) -> Visibility<'_> {
             Visibility::Available
+        }
+        fn raw_reflection(&self) -> Option<Reflection> {
+            Some(Reflection::new::<T::Raw>())
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -309,6 +318,9 @@ pub(crate) mod internal {
             Visibility::Gated {
                 features: &self.features,
             }
+        }
+        fn raw_reflection(&self) -> Option<Reflection> {
+            None
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self

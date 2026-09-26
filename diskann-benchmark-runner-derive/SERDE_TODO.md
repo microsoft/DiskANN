@@ -6,7 +6,7 @@ enum representations.
 
 ## Correctness
 
-- [ ] Use separate Serde-compatible case conversion for fields and variants.
+- [X] Use separate Serde-compatible case conversion for fields and variants.
   - Serde applies different rules in each context.
   - In particular, Serde converts an enum variant such as `XMLHttpRequest` to
     `x_m_l_http_request` under `snake_case`, while `heck` produces

@@ -8,10 +8,8 @@ use std::fmt::{self, Write};
 use crate::utils::fmt::Quote;
 
 use super::{
+    tree::{Aggregate, Enum, EnumRepr, Fields, NamedField, Sequence, Type, UnnamedField, Variant},
     Reflection,
-    tree::{
-    Type, Aggregate, Enum, EnumRepr, Sequence, Fields, NamedField, UnnamedField, Variant,
-    }
 };
 
 const INDENT: usize = 2;
@@ -187,14 +185,19 @@ impl<'a> Renderer<'a> {
         self.blank()?;
         self.line("Options:")?;
         self.indent(|r| {
-            let mut first = true;
+            let mut previous: Option<&Variant> = None;
             for variant in enum_.variants().iter() {
-                if !first {
-                    r.blank()?;
+                // Decide whether or not to put a space before this variant.
+                // Spaces and be skipped if the previous one was a `Unit` with no docs.
+                if let Some(previous) = previous {
+                    let skip = previous.fields().is_unit() && previous.doc().is_none();
+                    if !skip {
+                        r.blank()?;
+                    }
                 }
 
                 r.render_variant(variant)?;
-                first = false;
+                previous = Some(variant)
             }
 
             Ok(())
@@ -299,4 +302,3 @@ impl<'a> Renderer<'a> {
         })
     }
 }
-

@@ -519,6 +519,7 @@ dependencies = [
  "clap",
  "diskann-benchmark-runner-derive",
  "half",
+ "hashbrown 0.16.1",
  "indicatif",
  "serde",
  "serde_json",
@@ -530,7 +531,6 @@ dependencies = [
 name = "diskann-benchmark-runner-derive"
 version = "0.59.0"
 dependencies = [
- "heck",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

@@ -9,14 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     benchmark::{MatchContext, PassFail, Regression, Score},
-    Benchmark, Checker, Checkpoint, Input, Output,
+    Benchmark, Checker, Checkpoint, Input, Output, Reflect,
 };
 
 ///////////
 // Input //
 ///////////
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
 pub(super) struct DimInput {
     dim: Option<usize>,
 }
@@ -55,7 +55,7 @@ impl Input for DimInput {
 // Tolerance //
 ///////////////
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
 pub(super) struct Tolerance {
     succeed: bool,
     error_in_check: bool,

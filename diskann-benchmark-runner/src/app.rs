@@ -213,6 +213,10 @@ impl App {
                             describe
                         )?;
                         writeln!(output, "{}", serde_json::to_string_pretty(&repr)?)?;
+
+                        // // TODO: Make a little nicer.
+                        // writeln!(output, "{}", input.reflection().unwrap().render())?;
+
                         return Ok(());
                     } else {
                         writeln!(output, "No input found for \"{}\"", describe)?;
