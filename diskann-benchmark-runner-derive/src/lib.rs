@@ -7,6 +7,8 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::{Data, DeriveInput, Fields, parse_macro_input, parse_quote, spanned::Spanned};
 
+mod serde;
+
 fn crate_name() -> syn::Path {
     syn::parse_quote!(::diskann_benchmark_runner::reflect)
 }
@@ -28,12 +30,32 @@ fn crate_name() -> syn::Path {
 ///     threads: usize,
 /// }
 /// ```
-#[proc_macro_derive(Reflect, attributes(reflect))]
+///
+/// # Serde Compatibility
+///
+/// This is meant to be used in conjunction with `serde` for documenting benchmark inputs
+/// and as such, it respects several common `serde` attributes:
+///
+/// * rename_all = "lowercase" | "snake_case" | "kebab-case"
+/// * rename = "..."
+/// * tag = "..."
+/// * tag = "...", content = "..."
+#[proc_macro_derive(Reflect, attributes(reflect, serde))]
 pub fn derive_reflect(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
+    expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
+    // Error as early as possible.
     if matches!(input.data, Data::Union(_)) {
-        todo!("return a better error message");
+        return Err(syn::Error::new_spanned(
+            input,
+            "Reflect cannot be derived for unions",
+        ));
     }
 
     let doc = format_docstrings(&input.attrs);
@@ -41,19 +63,20 @@ pub fn derive_reflect(input: proc_macro::TokenStream) -> proc_macro::TokenStream
     add_generic_bounds(&mut generics);
 
     let format_type_name = generate_type_name_body(&input);
+    let container = serde::Container::parse(&input.attrs)?;
 
     let common = DeriveCommon {
         doc,
         generics,
         format_type_name,
+        container,
     };
 
-    let output = match &input.data {
+    match &input.data {
         Data::Struct(s) => process_struct(&input, s, common),
         Data::Enum(e) => process_enum(&input, e, common),
-        _ => todo!("need to figure this out"),
-    };
-    output.into()
+        Data::Union(_) => unreachable!("this has already been checked"),
+    }
 }
 
 /// Common pre-processed items.
@@ -64,6 +87,8 @@ struct DeriveCommon {
     generics: syn::Generics,
     /// The implementation of `format_type_name`.
     format_type_name: TokenStream,
+    /// Serde container-level attributes.
+    container: serde::Container,
 }
 
 /// Add a bound `T: Reflect` for each type parameter in the generic list.
@@ -205,39 +230,53 @@ fn generate_type_name_body(input: &DeriveInput) -> TokenStream {
     }
 }
 
-fn build_fields(fields: &syn::Fields, generics: &mut syn::Generics) -> TokenStream {
+fn build_fields(
+    fields: &syn::Fields,
+    generics: &mut syn::Generics,
+    rename: &dyn Fn(syn::LitStr) -> syn::LitStr,
+) -> syn::Result<TokenStream> {
     let path = crate_name();
 
     match fields {
         Fields::Named(fields) => {
             add_field_bounds(generics, &fields.named);
-            let list = named_fields(&fields.named);
-            quote!(#path::Fields::Named(vec![#(#list),*]))
+            let list = named_fields(&fields.named, rename)?;
+            Ok(quote!(#path::Fields::Named(vec![#(#list),*])))
         }
         Fields::Unnamed(fields) => {
             add_field_bounds(generics, &fields.unnamed);
             let list = unnamed_fields(&fields.unnamed);
-            quote!(#path::Fields::Unnamed(vec![#(#list),*]))
+            Ok(quote!(#path::Fields::Unnamed(vec![#(#list),*])))
         }
-        Fields::Unit => quote!(#path::Fields::Unit),
+        Fields::Unit => Ok(quote!(#path::Fields::Unit)),
     }
 }
 
-fn named_fields<'a, I>(fields: I) -> impl Iterator<Item = TokenStream>
+fn named_fields<'a, I>(
+    fields: I,
+    rename: &dyn Fn(syn::LitStr) -> syn::LitStr,
+) -> syn::Result<Vec<TokenStream>>
 where
     I: IntoIterator<Item = &'a syn::Field>,
 {
     let path = crate_name();
-    fields.into_iter().map(move |f| {
-        let ty = &f.ty;
-        let ident = f
-            .ident
-            .as_ref()
-            .expect("named fields should have identifiers")
-            .to_string();
-        let doc = format_docstrings(&f.attrs);
-        quote_spanned! { ty.span()=> #path::NamedField::new::<#ty>(#ident, #doc) }
-    })
+    fields
+        .into_iter()
+        .map(move |f| {
+            let ty = &f.ty;
+            let ident = f
+                .ident
+                .as_ref()
+                .expect("named fields should have identifiers");
+
+            let name = syn::LitStr::new(&ident.to_string(), ident.span());
+
+            let doc = format_docstrings(&f.attrs);
+            let field = serde::Field::parse(&f.attrs)?;
+            let name = field.rename_field_or(name, rename);
+            Ok(quote_spanned! { ty.span()=> #path::NamedField::new::<#ty>(#name, #doc) })
+        })
+        .collect()
 }
 
 fn unnamed_fields<'a, I>(fields: I) -> impl Iterator<Item = TokenStream>
@@ -253,20 +292,33 @@ where
 }
 
 /// Generate the `Reflect` implementation.
-fn process_struct(input: &DeriveInput, s: &syn::DataStruct, common: DeriveCommon) -> TokenStream {
+fn process_struct(
+    input: &DeriveInput,
+    s: &syn::DataStruct,
+    common: DeriveCommon,
+) -> syn::Result<TokenStream> {
     let DeriveCommon {
         doc,
         mut generics,
         format_type_name,
+        container,
     } = common;
+
+    // Validate that the attributes we parsed are compatible with a `struct` definition.
+    let container: serde::Struct = container.try_as_struct()?;
 
     let type_name = &input.ident;
     let path = crate_name();
 
-    let fields = build_fields(&s.fields, &mut generics);
+    let fields = build_fields(
+        &s.fields,
+        &mut generics,
+        &serde::RenameAll::visitor(container.rename_all),
+    )?;
+
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    quote! {
+    let ts = quote! {
         impl #impl_generics #path::Reflect for #type_name #ty_generics #where_clause {
             fn ty() -> #path::Type {
                 #path::Type::aggregate(
@@ -279,44 +331,67 @@ fn process_struct(input: &DeriveInput, s: &syn::DataStruct, common: DeriveCommon
                 #format_type_name
             }
         }
-    }
+    };
+
+    Ok(ts)
 }
 
 //-------//
 // Enums //
 //-------//
 
-fn process_enum(input: &DeriveInput, e: &syn::DataEnum, common: DeriveCommon) -> TokenStream {
+fn process_enum(
+    input: &DeriveInput,
+    e: &syn::DataEnum,
+    common: DeriveCommon,
+) -> syn::Result<TokenStream> {
     let DeriveCommon {
         doc,
         mut generics,
         format_type_name,
+        container,
     } = common;
+
+    // Validate that the attributes we parsed are compatible with an `enum` definition.
+    let container: serde::Enum = container.as_enum();
 
     // TODO: For now, we just assume that identifiers are taken as-is.
     let type_name = &input.ident;
     let path = crate_name();
 
-    let variants: Vec<_> = e
+    let renamer = serde::RenameAll::visitor(container.rename_all);
+    let variants = e
         .variants
         .iter()
-        .map(|v| {
+        .map(|v| -> syn::Result<TokenStream> {
             let doc = format_docstrings(&v.attrs);
-            let ident = v.ident.to_string();
+            let name = syn::LitStr::new(&v.ident.to_string(), v.ident.span());
+            let attrs = serde::Variant::parse(&v.attrs)?;
 
-            let fields = build_fields(&v.fields, &mut generics);
+            let fields = build_fields(&v.fields, &mut generics, &attrs.renamer())?;
 
-            quote!(#path::Variant::new(#ident, #fields, #doc))
+            // Rename the variant as needed.
+            let name = attrs.rename_variant_or(name, &renamer);
+            Ok(quote!(#path::Variant::new(#name, #fields, #doc)))
         })
-        .collect();
+        .collect::<syn::Result<Vec<TokenStream>>>()?;
+
+    // Build the enum representation.
+    let enum_repr = match container.enum_repr {
+        serde::EnumRepr::External => quote!(#path::EnumRepr::External),
+        serde::EnumRepr::Internal { tag } => quote!(#path::EnumRepr::Internal { tag: #tag }),
+        serde::EnumRepr::Adjacent { tag, content } => {
+            quote!(#path::EnumRepr::Adjacent { tag: #tag, content: #content })
+        }
+    };
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    quote! {
+    let ts = quote! {
         impl #impl_generics #path::Reflect for #type_name #ty_generics #where_clause {
             fn ty() -> #path::Type {
                 #path::Type::enum_(
-                    #path::EnumRepr::External,
+                    #enum_repr,
                     [#(#variants),*],
                     #doc,
                 )
@@ -326,7 +401,9 @@ fn process_enum(input: &DeriveInput, e: &syn::DataEnum, common: DeriveCommon) ->
                 #format_type_name
             }
         }
-    }
+    };
+
+    Ok(ts)
 }
 
 //-------------//

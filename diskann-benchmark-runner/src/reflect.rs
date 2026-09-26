@@ -843,6 +843,7 @@ pub enum Metric {
 
 /// An enum with no payloads.
 #[derive(Debug, Reflect)]
+#[serde(rename_all = "kebab-case")]
 pub enum AdjacentEnum {
     SquaredL2,
     /// Let me see if this works
@@ -1014,7 +1015,7 @@ mod tests {
             foo: usize,
             /// Bar
             bar: usize,
-        };
+        }
 
         let r = Reflection::new::<Woo>();
         let ty = r.ty();
@@ -1106,7 +1107,7 @@ mod tests {
             /// It's a bee!
             B(
                 /// Buzz buzz
-                B
+                B,
             ),
         }
 
@@ -1145,6 +1146,7 @@ mod tests {
         /// All the enums.
         #[expect(unused)]
         #[derive(Reflect)]
+        #[serde(tag = "tag", content = "content")]
         enum All {
             /// A unit variant.
             Unit,
