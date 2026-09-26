@@ -25,9 +25,10 @@ use diskann::{
     neighbor::Neighbor,
     utils::VectorRepr,
 };
-use diskann_providers::index::wrapped_async::DiskANNIndex;
 use diskann_quantization::alloc::Poly;
 use diskann_vector::distance::Metric;
+
+use crate::wrapped_async::DiskANNIndex;
 
 use crate::{
     alloc::AlignToEight,
@@ -54,6 +55,7 @@ mod provider;
 mod quantization;
 #[cfg(test)]
 mod test_utils;
+mod wrapped_async;
 
 const ADAPTIVE_L_SAMPLES: usize = 1000;
 

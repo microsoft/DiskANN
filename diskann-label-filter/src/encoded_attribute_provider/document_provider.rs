@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::future::Future;
+
 use diskann::{
     error::{ErrorExt, IntoANNResult},
     provider::{DataProvider, Delete, Guard, SetElement},
@@ -61,7 +63,7 @@ where
         &self,
         context: &Self::Context,
         gid: &Self::ExternalId,
-    ) -> Result<Self::InternalId, Self::Error> {
+    ) -> impl Future<Output = Result<Self::InternalId, Self::Error>> + Send {
         self.inner_provider.to_internal_id(context, gid)
     }
 
@@ -69,7 +71,7 @@ where
         &self,
         context: &Self::Context,
         id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error> {
+    ) -> impl Future<Output = Result<Self::ExternalId, Self::Error>> + Send {
         self.inner_provider.to_external_id(context, id)
     }
 }
@@ -164,7 +166,7 @@ where
         gid: &Self::ExternalId,
     ) -> Result<diskann::provider::ElementStatus, Self::Error> {
         // Convert external ID to internal ID and then check status by internal ID
-        let internal_id = self.to_internal_id(context, gid)?;
+        let internal_id = self.to_internal_id(context, gid).await?;
         self.status_by_internal_id(context, internal_id).await
     }
 }

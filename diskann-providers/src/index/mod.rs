@@ -4,5 +4,3 @@
  */
 
 pub mod diskann_async;
-
-pub mod wrapped_async;
