@@ -145,3 +145,12 @@ jobs:
           cargo +nightly miri test --locked -p diskann --features pipnn --lib -- \
             graph::pipnn::topk::tests::selection_returns_distinct_candidates_when_distances_tie \
             graph::pipnn::topk::tests::a_single_pair_updates_exactly_its_two_endpoints::case_1_finite
+
+      - name: PiPNN HashPrune pointer boundaries
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+        run: |
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::lsh::tests
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::hash_prune::tests
