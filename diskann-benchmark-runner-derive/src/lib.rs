@@ -241,14 +241,14 @@ fn build_fields(
         Fields::Named(fields) => {
             add_field_bounds(generics, &fields.named);
             let list = named_fields(&fields.named, rename_all)?;
-            Ok(quote!(#path::Fields::Named(vec![#(#list),*])))
+            Ok(quote!(#path::tree::Fields::Named(vec![#(#list),*])))
         }
         Fields::Unnamed(fields) => {
             add_field_bounds(generics, &fields.unnamed);
             let list = unnamed_fields(&fields.unnamed);
-            Ok(quote!(#path::Fields::Unnamed(vec![#(#list),*])))
+            Ok(quote!(#path::tree::Fields::Unnamed(vec![#(#list),*])))
         }
-        Fields::Unit => Ok(quote!(#path::Fields::Unit)),
+        Fields::Unit => Ok(quote!(#path::tree::Fields::Unit)),
     }
 }
 
@@ -271,7 +271,7 @@ where
             let doc = format_docstrings(&f.attrs);
             let field = serde::Field::parse(&f.attrs)?;
             let name = field.rename_field_or(name, rename_all);
-            Ok(quote_spanned! { ty.span()=> #path::NamedField::new::<#ty>(#name, #doc) })
+            Ok(quote_spanned! { ty.span()=> #path::tree::NamedField::new::<#ty>(#name, #doc) })
         })
         .collect()
 }
@@ -284,7 +284,7 @@ where
     fields.into_iter().map(move |f| {
         let ty = &f.ty;
         let doc = format_docstrings(&f.attrs);
-        quote_spanned! { ty.span()=> #path::UnnamedField::new::<#ty>(#doc) }
+        quote_spanned! { ty.span()=> #path::tree::UnnamedField::new::<#ty>(#doc) }
     })
 }
 
@@ -367,16 +367,16 @@ fn process_enum(
 
             // Rename the variant as needed.
             let name = attrs.rename_variant_or(name, rename_all);
-            Ok(quote!(#path::Variant::new(#name, #fields, #doc)))
+            Ok(quote!(#path::tree::Variant::new(#name, #fields, #doc)))
         })
         .collect::<syn::Result<Vec<TokenStream>>>()?;
 
     // Build the enum representation.
     let enum_repr = match enum_repr {
-        serde::EnumRepr::External => quote!(#path::EnumRepr::External),
-        serde::EnumRepr::Internal { tag } => quote!(#path::EnumRepr::Internal { tag: #tag }),
+        serde::EnumRepr::External => quote!(#path::tree::EnumRepr::External),
+        serde::EnumRepr::Internal { tag } => quote!(#path::tree::EnumRepr::Internal { tag: #tag }),
         serde::EnumRepr::Adjacent { tag, content } => {
-            quote!(#path::EnumRepr::Adjacent { tag: #tag, content: #content })
+            quote!(#path::tree::EnumRepr::Adjacent { tag: #tag, content: #content })
         }
     };
 
