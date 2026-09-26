@@ -233,14 +233,14 @@ fn generate_type_name_body(input: &DeriveInput) -> TokenStream {
 fn build_fields(
     fields: &syn::Fields,
     generics: &mut syn::Generics,
-    rename: &dyn Fn(syn::LitStr) -> syn::LitStr,
+    rename_all: serde::RenameAll,
 ) -> syn::Result<TokenStream> {
     let path = crate_name();
 
     match fields {
         Fields::Named(fields) => {
             add_field_bounds(generics, &fields.named);
-            let list = named_fields(&fields.named, rename)?;
+            let list = named_fields(&fields.named, rename_all)?;
             Ok(quote!(#path::Fields::Named(vec![#(#list),*])))
         }
         Fields::Unnamed(fields) => {
@@ -252,10 +252,7 @@ fn build_fields(
     }
 }
 
-fn named_fields<'a, I>(
-    fields: I,
-    rename: &dyn Fn(syn::LitStr) -> syn::LitStr,
-) -> syn::Result<Vec<TokenStream>>
+fn named_fields<'a, I>(fields: I, rename_all: serde::RenameAll) -> syn::Result<Vec<TokenStream>>
 where
     I: IntoIterator<Item = &'a syn::Field>,
 {
@@ -273,7 +270,7 @@ where
 
             let doc = format_docstrings(&f.attrs);
             let field = serde::Field::parse(&f.attrs)?;
-            let name = field.rename_field_or(name, rename);
+            let name = field.rename_field_or(name, rename_all);
             Ok(quote_spanned! { ty.span()=> #path::NamedField::new::<#ty>(#name, #doc) })
         })
         .collect()
@@ -305,16 +302,12 @@ fn process_struct(
     } = common;
 
     // Validate that the attributes we parsed are compatible with a `struct` definition.
-    let container: serde::Struct = container.try_as_struct()?;
+    let serde::Struct { rename_all } = container.try_as_struct()?;
 
     let type_name = &input.ident;
     let path = crate_name();
 
-    let fields = build_fields(
-        &s.fields,
-        &mut generics,
-        &serde::RenameAll::visitor(container.rename_all),
-    )?;
+    let fields = build_fields(&s.fields, &mut generics, rename_all)?;
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
@@ -353,13 +346,15 @@ fn process_enum(
     } = common;
 
     // Validate that the attributes we parsed are compatible with an `enum` definition.
-    let container: serde::Enum = container.as_enum();
+    let serde::Enum {
+        rename_all,
+        enum_repr,
+    } = container.as_enum();
 
     // TODO: For now, we just assume that identifiers are taken as-is.
     let type_name = &input.ident;
     let path = crate_name();
 
-    let renamer = serde::RenameAll::visitor(container.rename_all);
     let variants = e
         .variants
         .iter()
@@ -368,16 +363,16 @@ fn process_enum(
             let name = syn::LitStr::new(&v.ident.to_string(), v.ident.span());
             let attrs = serde::Variant::parse(&v.attrs)?;
 
-            let fields = build_fields(&v.fields, &mut generics, &attrs.renamer())?;
+            let fields = build_fields(&v.fields, &mut generics, attrs.field_rename_all())?;
 
             // Rename the variant as needed.
-            let name = attrs.rename_variant_or(name, &renamer);
+            let name = attrs.rename_variant_or(name, rename_all);
             Ok(quote!(#path::Variant::new(#name, #fields, #doc)))
         })
         .collect::<syn::Result<Vec<TokenStream>>>()?;
 
     // Build the enum representation.
-    let enum_repr = match container.enum_repr {
+    let enum_repr = match enum_repr {
         serde::EnumRepr::External => quote!(#path::EnumRepr::External),
         serde::EnumRepr::Internal { tag } => quote!(#path::EnumRepr::Internal { tag: #tag }),
         serde::EnumRepr::Adjacent { tag, content } => {

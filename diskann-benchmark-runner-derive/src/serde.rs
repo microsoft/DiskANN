@@ -26,39 +26,23 @@ fn set_unique(opt: &mut Option<syn::LitStr>, value: syn::LitStr, attr: &str) -> 
     }
 }
 
-fn set_rename_all(
-    opt: &mut Option<RenameAll>,
-    rename_all: RenameAll,
-    lit: syn::LitStr,
-) -> syn::Result<()> {
-    if opt.is_some() {
-        Err(syn::Error::new_spanned(
-            lit,
-            "serde attribute `rename_all` found multiple times",
-        ))
-    } else {
-        *opt = Some(rename_all);
-        Ok(())
-    }
-}
-
 pub(crate) struct Struct {
-    pub(crate) rename_all: Option<RenameAll>,
+    pub(crate) rename_all: RenameAll,
 }
 
 pub(crate) struct Enum {
-    pub(crate) rename_all: Option<RenameAll>,
+    pub(crate) rename_all: RenameAll,
     pub(crate) enum_repr: EnumRepr,
 }
 
 pub(crate) struct Container {
-    pub(crate) rename_all: Option<RenameAll>,
+    pub(crate) rename_all: RenameAll,
     pub(crate) enum_repr: EnumRepr,
 }
 
 impl Container {
     pub(crate) fn parse(attrs: &[syn::Attribute]) -> syn::Result<Self> {
-        let mut rename_all = Option::None;
+        let mut rename_all = RenameAll::None;
         let mut tag = Option::None;
         let mut content = Option::None;
 
@@ -67,8 +51,7 @@ impl Container {
                 // serde(rename_all = "...")
                 if meta.path.is_ident("rename_all") {
                     let value: syn::LitStr = meta.value()?.parse()?;
-                    let parsed = RenameAll::parse(&value)?;
-                    set_rename_all(&mut rename_all, parsed, value)?;
+                    rename_all.parse_in(value)?;
                     return Ok(());
                 }
 
@@ -153,8 +136,10 @@ impl EnumRepr {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub(crate) enum RenameAll {
+    #[default]
+    None,
     Lower,
     Snake,
     Kebab,
@@ -165,42 +150,85 @@ impl RenameAll {
         "\"lowercase\", \"snake_case\", or \"kebab-case\""
     }
 
-    fn parse(lit: &syn::LitStr) -> syn::Result<Self> {
-        let s = lit.value();
-
-        match &*s {
-            "lowercase" => Ok(Self::Lower),
-            "snake_case" => Ok(Self::Snake),
-            "kebab-case" => Ok(Self::Kebab),
-            _ => Err(syn::Error::new_spanned(
-                lit,
-                format!(
-                    "unsupported serde `rename_all` rule \"{}\" - expected one of {}",
-                    s,
-                    Self::supported()
-                ),
-            )),
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "lowercase" => Some(Self::Lower),
+            "snake_case" => Some(Self::Snake),
+            "kebab-case" => Some(Self::Kebab),
+            _ => None,
         }
     }
 
-    fn apply(&self, lit: syn::LitStr) -> syn::LitStr {
-        let s = lit.value();
-        let s = match self {
-            Self::Lower => s.to_lowercase(),
-            Self::Snake => heck::AsSnakeCase(s).to_string(),
-            Self::Kebab => heck::AsKebabCase(s).to_string(),
-        };
-
-        syn::LitStr::new(&s, lit.span())
+    fn parse_in(&mut self, s: syn::LitStr) -> syn::Result<Self> {
+        if *self != Self::None {
+            Err(syn::Error::new_spanned(
+                s,
+                "serde attribute `rename_all` found multiple times",
+            ))
+        } else {
+            let value = s.value();
+            match Self::parse(&value) {
+                Some(me) => Ok(me),
+                None => Err(syn::Error::new_spanned(
+                    s,
+                    format!(
+                        "unsupported serde `rename_all` rule \"{}\" - expected one of {}",
+                        value,
+                        Self::supported()
+                    ),
+                )),
+            }
+        }
     }
 
-    pub(crate) fn visitor(me: Option<Self>) -> impl Fn(syn::LitStr) -> syn::LitStr {
-        move |v| {
-            if let Some(rename_all) = me {
-                rename_all.apply(v)
-            } else {
-                v
+    /// These methods are taken from the `serde_derive` internals as they need to match.
+    ///
+    /// See: <https://github.com/serde-rs/serde/blob/master/serde_derive/src/internals/case.rs>
+    fn apply_to_variant_str(&self, variant: &str) -> String {
+        match self {
+            Self::None => variant.to_owned(),
+            Self::Lower => variant.to_ascii_lowercase(),
+            Self::Snake => {
+                let mut snake = String::new();
+                for (i, ch) in variant.char_indices() {
+                    if i > 0 && ch.is_uppercase() {
+                        snake.push('_');
+                    }
+                    snake.push(ch.to_ascii_lowercase());
+                }
+                snake
             }
+            Self::Kebab => (Self::Snake)
+                .apply_to_variant_str(variant)
+                .replace('_', "-"),
+        }
+    }
+
+    pub(crate) fn apply_to_variant(&self, variant: syn::LitStr) -> syn::LitStr {
+        if *self == Self::None {
+            variant
+        } else {
+            syn::LitStr::new(&self.apply_to_variant_str(&variant.value()), variant.span())
+        }
+    }
+
+    /// These methods are taken from the `serde_derive` internals as they need to match.
+    ///
+    /// Since Rust field are generally in lower snake case, there's less work to do.
+    ///
+    /// See: <https://github.com/serde-rs/serde/blob/master/serde_derive/src/internals/case.rs>
+    fn apply_to_field_str(&self, field: &str) -> String {
+        match self {
+            Self::None | Self::Lower | Self::Snake => field.to_owned(),
+            Self::Kebab => field.replace('_', "-"),
+        }
+    }
+
+    pub(crate) fn apply_to_field(&self, variant: syn::LitStr) -> syn::LitStr {
+        if *self == Self::None {
+            variant
+        } else {
+            syn::LitStr::new(&self.apply_to_field_str(&variant.value()), variant.span())
         }
     }
 }
@@ -208,7 +236,7 @@ impl RenameAll {
 #[derive(Default)]
 pub(crate) struct Variant {
     rename: Option<syn::LitStr>,
-    rename_all: Option<RenameAll>,
+    rename_all: RenameAll,
 }
 
 impl Variant {
@@ -220,8 +248,7 @@ impl Variant {
                 // serde(rename_all = "...")
                 if meta.path.is_ident("rename_all") {
                     let value: syn::LitStr = meta.value()?.parse()?;
-                    let rename_all = RenameAll::parse(&value)?;
-                    set_rename_all(&mut me.rename_all, rename_all, value)?;
+                    me.rename_all.parse_in(value)?;
                     return Ok(());
                 }
 
@@ -242,16 +269,13 @@ impl Variant {
     /// Replace the name of this variant if directed by `serde(rename = "...")`.
     ///
     /// If the rename attribute exists, it takes precedence. Otherwise, the fallback is used.
-    pub(crate) fn rename_variant_or(
-        self,
-        value: syn::LitStr,
-        or_else: &dyn Fn(syn::LitStr) -> syn::LitStr,
-    ) -> syn::LitStr {
-        self.rename.map_or_else(|| or_else(value), identity)
+    pub(crate) fn rename_variant_or(self, variant: syn::LitStr, or_else: RenameAll) -> syn::LitStr {
+        self.rename
+            .map_or_else(|| or_else.apply_to_variant(variant), identity)
     }
 
-    pub(crate) fn renamer(&self) -> impl Fn(syn::LitStr) -> syn::LitStr {
-        RenameAll::visitor(self.rename_all)
+    pub(crate) fn field_rename_all(&self) -> RenameAll {
+        self.rename_all
     }
 }
 
@@ -283,12 +307,8 @@ impl Field {
     /// Apply the renaming rules defined in `self`.
     ///
     /// If no renaming rules are present, instead invoke `or_else`.
-    pub(crate) fn rename_field_or(
-        self,
-        value: syn::LitStr,
-        or_else: &dyn Fn(syn::LitStr) -> syn::LitStr,
-    ) -> syn::LitStr {
+    pub(crate) fn rename_field_or(self, field: syn::LitStr, or_else: RenameAll) -> syn::LitStr {
         let Self { rename } = self;
-        rename.map_or_else(|| or_else(value), identity)
+        rename.map_or_else(|| or_else.apply_to_field(field), identity)
     }
 }
