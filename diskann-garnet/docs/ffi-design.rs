@@ -31,7 +31,13 @@ enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2I8,
 }
+
+/// Returns 1 if signed-int8 2-bit spherical quantization (enum value 8) is supported.
+/// Check for this symbol before using that enum value with an older native library.
+#[unsafe(no_mangle)]
+extern "C" fn supports_xspherical2_i8() -> u8;
 
 /// Status returned by `insert`, encoded as a `u8`.
 ///
@@ -260,6 +266,29 @@ extern "C" fn search_vector(
     overflow: *mut *mut c_void,
 ) -> i32;
 
+/// Like `search_vector`, but reranks at most `rerank_depth` quantized candidates at full precision.
+/// Requires output_distances_len <= rerank_depth <= search_exploration_factor and rerank_depth > 0;
+/// returns -1 if the depth is invalid. Unquantized searches are unchanged.
+#[unsafe(no_mangle)]
+extern "C" fn search_vector_rerank(
+    context: u64,
+    index_ptr: *const c_void,
+    vector_data: *const u8,
+    vector_len: usize,
+    delta: f32,
+    search_exploration_factor: u32,
+    bitmap_data: *const u8,
+    bitmap_len: usize,
+    max_filtering_effort: usize,
+    output_ids: *mut u8,
+    output_ids_len: usize,
+    output_distances: *mut f32,
+    output_distances_len: usize,
+    beam_width: u32,
+    overflow: *mut *mut c_void,
+    rerank_depth: u32,
+) -> i32;
+
 /// Find similar vectors, takes parameters of VSIM (https://redis.io/docs/latest/commands/vsim/) and maps to a reasonable interpretation.
 ///
 /// Works with item id. Parameters and return value are otherwise as documented on
@@ -281,6 +310,27 @@ extern "C" fn search_element(
     output_distances_len: usize,
     beam_width: u32,
     overflow: *mut *mut c_void,
+) -> i32;
+
+/// Like `search_element`, with the same rerank depth requirements as `search_vector_rerank`.
+#[unsafe(no_mangle)]
+extern "C" fn search_element_rerank(
+    context: u64,
+    index_ptr: *const c_void,
+    id_data: *const u8,
+    id_len: usize,
+    delta: f32,
+    search_exploration_factor: u32,
+    bitmap_data: *const u8,
+    bitmap_len: usize,
+    max_filtering_effort: usize,
+    output_ids: *mut u8,
+    output_ids_len: usize,
+    output_distances: *mut f32,
+    output_distances_len: usize,
+    beam_width: u32,
+    overflow: *mut *mut c_void,
+    rerank_depth: u32,
 ) -> i32;
 
 /// Fetches overflow results that did not fit after a call to search_xxx.

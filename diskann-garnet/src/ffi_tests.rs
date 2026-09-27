@@ -14,7 +14,7 @@ mod tests {
         card, check_external_id_valid, check_internal_id_valid, create_index, drop_index,
         garnet::{Context, Term},
         insert,
-        quantization::{GarnetQuantizer, Spherical1Bit},
+        quantization::{GarnetQuantizer, Spherical1Bit, Spherical2Bit},
         remove, search_vector, set_attribute,
         test_utils::Store,
     };
@@ -887,6 +887,178 @@ mod tests {
     }
 
     #[test]
+    fn rerank_depth_limits_full_vector_reads_for_vector_and_element_search() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Q8);
+        for id in 0..12 {
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, id, &[id as f32, (id % 3) as f32]),
+                InsertResult::Success
+            );
+        }
+
+        let query = [4.0f32, 1.0];
+        let query_bytes = bytemuck::cast_slice(&query);
+        let element = 4u32;
+        let element_bytes = bytemuck::bytes_of(&element);
+        let mut ids = [0u8; 8];
+        let mut distances = [0f32; 1];
+
+        for element_search in [false, true] {
+            for filtered in [false, true] {
+                let (filter_ptr, filter_len) = if filtered {
+                    (b"keep".as_ptr(), 4)
+                } else {
+                    (ptr::null(), 0)
+                };
+                let mut overflow = ptr::null_mut();
+                store.clear_read_counts();
+                let legacy_count = unsafe {
+                    if element_search {
+                        crate::search_element(
+                            ctx.get(),
+                            index_ptr,
+                            element_bytes.as_ptr(),
+                            element_bytes.len(),
+                            2.0,
+                            10,
+                            filter_ptr,
+                            filter_len,
+                            16,
+                            ids.as_mut_ptr(),
+                            ids.len(),
+                            distances.as_mut_ptr(),
+                            distances.len(),
+                            2,
+                            &mut overflow,
+                        )
+                    } else {
+                        search_vector(
+                            ctx.get(),
+                            index_ptr,
+                            query_bytes.as_ptr(),
+                            query.len(),
+                            2.0,
+                            10,
+                            filter_ptr,
+                            filter_len,
+                            16,
+                            ids.as_mut_ptr(),
+                            ids.len(),
+                            distances.as_mut_ptr(),
+                            distances.len(),
+                            2,
+                            &mut overflow,
+                        )
+                    }
+                };
+                assert_eq!(legacy_count, 1);
+                assert!(overflow.is_null());
+                let legacy_reads = store.full_reads();
+
+                store.clear_read_counts();
+                let capped_count = unsafe {
+                    if element_search {
+                        crate::search_element_rerank(
+                            ctx.get(),
+                            index_ptr,
+                            element_bytes.as_ptr(),
+                            element_bytes.len(),
+                            2.0,
+                            10,
+                            filter_ptr,
+                            filter_len,
+                            16,
+                            ids.as_mut_ptr(),
+                            ids.len(),
+                            distances.as_mut_ptr(),
+                            distances.len(),
+                            2,
+                            &mut overflow,
+                            1,
+                        )
+                    } else {
+                        crate::search_vector_rerank(
+                            ctx.get(),
+                            index_ptr,
+                            query_bytes.as_ptr(),
+                            query.len(),
+                            2.0,
+                            10,
+                            filter_ptr,
+                            filter_len,
+                            16,
+                            ids.as_mut_ptr(),
+                            ids.len(),
+                            distances.as_mut_ptr(),
+                            distances.len(),
+                            2,
+                            &mut overflow,
+                            1,
+                        )
+                    }
+                };
+                assert_eq!(capped_count, 1);
+                assert!(overflow.is_null());
+                assert!(
+                    store.full_reads() < legacy_reads,
+                    "rerank depth should reduce full-vector reads for element={element_search}, filtered={filtered}"
+                );
+            }
+        }
+
+        unsafe { drop_index(ctx.get(), index_ptr) };
+    }
+
+    #[test]
+    fn rerank_depth_rejects_values_outside_result_count_and_ef() {
+        for depth in [0, 1, 11] {
+            let vector_result = unsafe {
+                crate::search_vector_rerank(
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    2.0,
+                    10,
+                    ptr::null(),
+                    0,
+                    16,
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                    2,
+                    2,
+                    ptr::null_mut(),
+                    depth,
+                )
+            };
+            let element_result = unsafe {
+                crate::search_element_rerank(
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    2.0,
+                    10,
+                    ptr::null(),
+                    0,
+                    16,
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                    2,
+                    2,
+                    ptr::null_mut(),
+                    depth,
+                )
+            };
+            assert_eq!(vector_result, -1);
+            assert_eq!(element_result, -1);
+        }
+    }
+
+    #[test]
     fn basic_quant_bootstrap_lifecycle_bin() {
         let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Bin);
@@ -987,6 +1159,148 @@ mod tests {
         unsafe {
             drop_index(ctx.get(), index_ptr);
         }
+    }
+
+    #[test]
+    fn spherical_two_bit_int8_preserves_full_vectors_and_recovers() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::XSpherical2I8);
+        let required = Spherical2Bit::new(2).required_vectors();
+        let encoded_bytes = Spherical2Bit::new(2).bytes();
+
+        for id in 0..required {
+            let vector = [(id % 127) as i8 - 63, ((id * 47) % 127) as i8 - 63];
+            let eid = id as u32;
+            let result: InsertResult = unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    bytemuck::bytes_of(&eid).as_ptr(),
+                    mem::size_of::<u32>(),
+                    vector.as_ptr().cast(),
+                    vector.len(),
+                    ptr::null(),
+                    0,
+                )
+                .into()
+            };
+            assert_eq!(
+                result,
+                if id + 1 == required {
+                    InsertResult::SuccessStartTraining
+                } else {
+                    InsertResult::Success
+                }
+            );
+        }
+
+        assert!(unsafe { build_quant_table(ctx.get(), index_ptr) });
+        let vector = [-17i8, 29i8];
+        let eid = required as u32;
+        let result: InsertResult = unsafe {
+            insert(
+                ctx.get(),
+                index_ptr,
+                bytemuck::bytes_of(&eid).as_ptr(),
+                mem::size_of::<u32>(),
+                vector.as_ptr().cast(),
+                vector.len(),
+                ptr::null(),
+                0,
+            )
+            .into()
+        };
+        assert_eq!(result, InsertResult::Success);
+
+        let iid = (required + 1) as u32;
+        let key = bytemuck::bytes_of(&iid);
+        assert_eq!(
+            store.get(ctx.term(Term::Vector).get(), key).unwrap(),
+            bytemuck::cast_slice::<i8, u8>(&vector),
+        );
+        assert_eq!(
+            store
+                .get(ctx.term(Term::Quantized).get(), key)
+                .unwrap()
+                .len(),
+            encoded_bytes
+        );
+
+        assert!(unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 1) });
+        let search = |ptr| {
+            let mut ids = [0u8; 80];
+            let mut distances = [0f32; 10];
+            let mut overflow = ptr::null_mut();
+            let count = unsafe {
+                search_vector(
+                    ctx.get(),
+                    ptr,
+                    vector.as_ptr().cast(),
+                    vector.len(),
+                    0.0,
+                    32,
+                    ptr::null(),
+                    0,
+                    0,
+                    ids.as_mut_ptr(),
+                    ids.len(),
+                    distances.as_mut_ptr(),
+                    distances.len(),
+                    1,
+                    &mut overflow,
+                )
+            };
+            assert!(count > 0, "two-bit int8 search failed: {count}");
+            assert!(overflow.is_null());
+            (
+                ids[..count as usize * 8].to_vec(),
+                distances[..count as usize].to_vec(),
+            )
+        };
+
+        store.clear_read_counts();
+        let before = search(index_ptr);
+        assert!(store.quant_reads() > 0);
+        assert!(store.full_reads() > 0);
+
+        let mut ids = [0u8; 80];
+        let mut distances = [0f32; 10];
+        let mut overflow = ptr::null_mut();
+        store.clear_read_counts();
+        let capped_count = unsafe {
+            crate::search_vector_rerank(
+                ctx.get(),
+                index_ptr,
+                vector.as_ptr().cast(),
+                vector.len(),
+                0.0,
+                32,
+                ptr::null(),
+                0,
+                0,
+                ids.as_mut_ptr(),
+                ids.len(),
+                distances.as_mut_ptr(),
+                distances.len(),
+                1,
+                &mut overflow,
+                10,
+            )
+        };
+        assert_eq!(capped_count, 10);
+        assert!(overflow.is_null());
+        assert!(store.quant_reads() > 0);
+        assert!((1..=10).contains(&store.full_reads()));
+
+        unsafe { drop_index(ctx.get(), index_ptr) };
+
+        let (recovered, ctx) = create_test_index(&store, VectorQuantType::XSpherical2I8);
+        assert_eq!(
+            store.get(ctx.term(Term::Vector).get(), key).unwrap(),
+            bytemuck::cast_slice::<i8, u8>(&vector),
+        );
+        assert_eq!(before, search(recovered));
+        unsafe { drop_index(ctx.get(), recovered) };
     }
 
     #[test]
