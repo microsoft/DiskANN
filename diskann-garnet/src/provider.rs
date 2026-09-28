@@ -38,9 +38,9 @@ use std::{
     future,
     marker::PhantomData,
     mem,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Range},
     sync::{
-        Mutex,
+        Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -118,6 +118,19 @@ pub(crate) enum GarnetProviderError {
 diskann::convert_error!(GarnetProviderError);
 diskann::always_escalate!(GarnetProviderError);
 
+struct BackfillGuard<'a> {
+    ranges: &'a Mutex<HashSet<Range<u32>>>,
+    notify: &'a Condvar,
+    range: Range<u32>,
+}
+
+impl Drop for BackfillGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.ranges.lock().unwrap().remove(&self.range);
+        self.notify.notify_all();
+    }
+}
+
 /// The Garnet DataProvider implementation.
 pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// Dimension of the full precision vectors
@@ -137,6 +150,10 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     all_quantized: AtomicBool,
     /// Per job tracker for quantization backfill completion
     backfills_completed: AtomicU64,
+    /// Lock for active backfill and update ranges
+    backfill_lock: Mutex<HashSet<Range<u32>>>,
+    /// Signals released range reservations
+    backfill_notify: Condvar,
     /// Lock to ensure training only happens once.
     training_lock: Mutex<()>,
     /// Pool of pre-allocated buffers to use for neighbor lists
@@ -306,6 +323,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
             quantizer,
             all_quantized: AtomicBool::new(all_quantized),
             backfills_completed: AtomicU64::new(0),
+            backfill_lock: Mutex::new(HashSet::new()),
+            backfill_notify: Condvar::new(),
             training_lock: Mutex::new(()),
             id_buffer_pool,
             filtered_ids_pool,
@@ -317,6 +336,26 @@ impl<T: VectorRepr> GarnetProvider<T> {
             neighbor_cache,
             fsm,
             _phantom: PhantomData,
+        })
+    }
+
+    fn reserve_backfill_range(&self, range: Range<u32>) -> Option<BackfillGuard<'_>> {
+        if range.is_empty() {
+            return None;
+        }
+
+        let mut ranges = self.backfill_lock.lock().unwrap();
+        while ranges
+            .iter()
+            .any(|active| active.start < range.end && range.start < active.end)
+        {
+            ranges = self.backfill_notify.wait(ranges).unwrap();
+        }
+        let _ = ranges.insert(range.clone());
+        Some(BackfillGuard {
+            ranges: &self.backfill_lock,
+            notify: &self.backfill_notify,
+            range,
         })
     }
 
@@ -641,6 +680,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         let start_id = (work_count * task_idx) as u32;
         let end_id = (work_count * (task_idx + 1)).min(max_id + 1) as u32;
 
+        let _backfill_guard = self.reserve_backfill_range(start_id..end_id);
         let mut v = vec![T::default(); self.dim];
         let mut f = vec![0f32; self.dim];
         let mut q = vec![0u8; quantizer.bytes()];
@@ -1022,7 +1062,28 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
         id: &Self::ExternalId,
         element: (&[T], &[u8]),
     ) -> Result<Self::Guard, Self::SetError> {
-        let internal_id = self.fsm.next_id(context)?;
+        let (internal_id, is_update) = match self.to_internal_id(context, id) {
+            Ok(existing_id) => {
+                context.set_insert_is_update();
+                (self.fsm.existing_id(existing_id), true)
+            }
+            Err(_) => (self.fsm.next_id(context)?, false),
+        };
+
+        let _backfill_guard = if is_update
+            && self.quantizer.is_some()
+            && !self.all_quantized.load(Ordering::Acquire)
+            && (!internal_id.should_quantize()
+                || internal_id.id() <= internal_id.max_id_for_backfill())
+        {
+            let end_id = internal_id
+                .id()
+                .checked_add(1)
+                .ok_or(FsmError::IdOutOfRange(internal_id.id()))?;
+            self.reserve_backfill_range(internal_id.id()..end_id)
+        } else {
+            None
+        };
 
         // Set quantization readiness
         if let Some(quantizer) = &self.quantizer
@@ -1033,7 +1094,8 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
             context.set_quantizer_ready();
         }
 
-        let insert = || -> Result<(), Self::SetError> {
+        let mut error_term = Term::Vector;
+        let mut insert = || -> Result<(), Self::SetError> {
             self.callbacks
                 .write_iid(&context.term(Term::Vector), internal_id.id(), element.0)
                 .then_some(())
@@ -1041,6 +1103,7 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
             if let Some(quantizer) = &self.quantizer
                 && internal_id.should_quantize()
             {
+                error_term = Term::Quantized;
                 let mut quant = self
                     .quant_buffer_pool
                     .get_ref(Undef::new(quantizer.bytes()));
@@ -1054,15 +1117,18 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
                     .ok_or(GarnetError::Write)?;
             }
             if !element.1.is_empty() {
+                error_term = Term::Attributes;
                 self.callbacks
                     .write_iid(&context.term(Term::Attributes), internal_id.id(), element.1)
                     .then_some(())
                     .ok_or(GarnetError::Write)?;
             }
+            error_term = Term::ExtMap;
             self.callbacks
                 .write_iid(&context.term(Term::ExtMap), internal_id.id(), id)
                 .then_some(())
                 .ok_or(GarnetError::Write)?;
+            error_term = Term::IntMap;
             self.callbacks
                 .write_eid(
                     &context.term(Term::IntMap),
@@ -1076,6 +1142,15 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
 
         match insert() {
             Ok(()) => (),
+            Err(e) if is_update => {
+                self.callbacks.log(
+                    &context.term(Term::Vector),
+                    &format!(
+                        "Error: update failed for ID {id:?}, term {error_term:?}: {e}. Stored vector terms may be inconsistent."                      
+                    ),
+                );
+                return Err(e);
+            }
             Err(e) => {
                 // Clean up any potential data we inserted, but ignore failures.
                 let _ = self
@@ -2069,7 +2144,13 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for DynamicQuantiza
 
 #[cfg(test)]
 mod tests {
-    use std::mem;
+    use std::{
+        mem,
+        ops::Range,
+        sync::{atomic::Ordering, mpsc},
+        thread,
+        time::Duration,
+    };
 
     use diskann::{
         graph::{
@@ -2079,16 +2160,17 @@ mod tests {
         provider::{Delete, SetElement},
     };
     use diskann_providers::index::wrapped_async::DiskANNIndex;
+    use diskann_utils::views::Matrix;
     use diskann_vector::distance::Metric;
     use rand::Rng;
 
     use crate::{
         SearchResults, VectorQuantType,
         dyn_index::DynIndex,
-        garnet::{Context, GarnetId, Term},
+        garnet::{Callbacks, Context, GarnetId, TERM_BITMASK, Term, WriteCallback},
         provider::{GarnetProvider, QUANT_STATE_KEY},
         quantization::{GarnetQuantizer, Spherical1Bit},
-        test_utils::Store,
+        test_utils::{LOGS, STORE, Store},
     };
 
     #[tokio::test]
@@ -2112,6 +2194,294 @@ mod tests {
 
         let res = provider.delete(&ctx, &id).await;
         assert!(res.is_ok());
+    }
+
+    fn assert_waits_for_range(
+        provider: &GarnetProvider<f32>,
+        range: Range<u32>,
+        should_wait: bool,
+        operation: impl FnOnce() + Send,
+    ) {
+        let snapshot = STORE.with(Clone::clone);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let reservation = provider.reserve_backfill_range(range);
+            scope.spawn(move || {
+                STORE.with(|store| {
+                    for (key, value) in snapshot {
+                        store.insert(key, value);
+                    }
+                });
+                started_tx.send(()).unwrap();
+                operation();
+                finished_tx.send(()).unwrap();
+            });
+
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let early_result = finished_rx.recv_timeout(if should_wait {
+                Duration::from_millis(50)
+            } else {
+                Duration::from_secs(5)
+            });
+            drop(reservation);
+            if should_wait {
+                assert_eq!(early_result, Err(mpsc::RecvTimeoutError::Timeout));
+                finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            } else {
+                early_result.unwrap();
+            }
+        });
+        assert!(provider.backfill_lock.lock().unwrap().is_empty());
+    }
+
+    fn train_for_backfill(provider: &GarnetProvider<f32>, ctx: &Context) {
+        let quantizer = provider.quantizer.as_ref().unwrap();
+        let mut data = Matrix::new(0.0f32, quantizer.required_vectors(), 2);
+        for row in 0..data.nrows() {
+            data.row_mut(row)
+                .copy_from_slice(&[(row + 1) as f32, (row % 7 + 1) as f32]);
+        }
+        quantizer.train(Metric::L2, data.as_view()).unwrap();
+        let mut state = vec![0u8];
+        state.extend_from_slice(&quantizer.serialize().unwrap());
+        assert!(
+            provider
+                .callbacks
+                .write_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY, &state)
+        );
+        provider.fsm.enable_quantization();
+    }
+
+    #[test]
+    fn backfill_ranges_exclude_overlaps() {
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let index = create_2d_f32_index(VectorQuantType::NoQuant, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+
+        for (active, requested, should_wait) in [
+            (0..10, 5..6, true),
+            (5..6, 0..10, true),
+            (0..10, 0..10, true),
+            (0..10, 9..20, true),
+            (0..10, 10..20, false),
+            (0..10, 5..5, false),
+        ] {
+            assert_waits_for_range(provider, active, should_wait, || {
+                let _reservation = provider.reserve_backfill_range(requested);
+            });
+        }
+    }
+
+    #[test]
+    fn updates_reserve_backfill_ranges_only_when_needed() {
+        for (quant_type, train, finish, above_boundary, should_wait) in [
+            (VectorQuantType::NoQuant, false, false, false, false),
+            (VectorQuantType::Q8, false, false, false, false),
+            (VectorQuantType::Bin, false, false, false, true),
+            (VectorQuantType::Bin, true, false, false, true),
+            (VectorQuantType::Bin, true, false, true, false),
+            (VectorQuantType::Bin, true, true, false, false),
+        ] {
+            let store = Store::new();
+            let ctx = Context::new(0);
+            let index = create_2d_f32_index(quant_type, Metric::L2, &store, &ctx);
+            let provider = index.inner.provider();
+            let original = [0.0f32, 1.0];
+            let mut id = GarnetId::from(bytemuck::bytes_of(&42u32));
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            provider.maybe_set_start_point(&ctx, &original).unwrap();
+            runtime
+                .block_on(provider.set_element(&ctx, &id, (&original, &[])))
+                .unwrap();
+            if train {
+                train_for_backfill(provider, &ctx);
+            }
+            if above_boundary {
+                id = GarnetId::from(bytemuck::bytes_of(&43u32));
+                runtime
+                    .block_on(provider.set_element(&ctx, &id, (&original, &[])))
+                    .unwrap();
+            }
+            if finish {
+                assert!(provider.backfill_quant_vectors(&ctx, 0, 1));
+                assert!(provider.all_quantized.load(Ordering::Acquire));
+            }
+            let internal_id = store.get(ctx.term(Term::IntMap).get(), &id).unwrap();
+            let internal_id = bytemuck::pod_read_unaligned::<u32>(&internal_id);
+            let update_ctx = Context::new(0);
+            assert_waits_for_range(provider, internal_id..internal_id + 1, should_wait, || {
+                let updated = [1.0f32, 0.0];
+                runtime
+                    .block_on(provider.set_element(&update_ctx, &id, (&updated, &[])))
+                    .unwrap();
+                assert!(update_ctx.insert_is_update());
+                if let Some(quantizer) = &provider.quantizer
+                    && quantizer.is_trained()
+                {
+                    let mut expected = vec![0u8; quantizer.bytes()];
+                    quantizer.compress(&updated, &mut expected).unwrap();
+                    assert_eq!(
+                        Store::attach().get(
+                            ctx.term(Term::Quantized).get(),
+                            bytemuck::bytes_of(&internal_id),
+                        ),
+                        Some(expected)
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn backfill_waits_for_overlapping_updates() {
+        for (range, should_wait) in [(1..2, true), (2..3, false)] {
+            let store = Store::new();
+            let ctx = Context::new(0);
+            let index = create_2d_f32_index(VectorQuantType::Bin, Metric::L2, &store, &ctx);
+            let provider = index.inner.provider();
+            let original = [0.0f32, 1.0];
+            let id = GarnetId::from(bytemuck::bytes_of(&42u32));
+            provider.maybe_set_start_point(&ctx, &original).unwrap();
+            DynIndex::insert(&index, &ctx, &id, bytemuck::cast_slice(&original), &[]).unwrap();
+            train_for_backfill(provider, &ctx);
+            assert_waits_for_range(provider, range, should_wait, || {
+                assert!(provider.backfill_quant_vectors(&ctx, 0, 1));
+            });
+            assert!(provider.all_quantized.load(Ordering::Acquire));
+        }
+    }
+
+    #[tokio::test]
+    async fn update_reuses_id_and_preserves_entry_on_write_failure() {
+        unsafe extern "C" fn fail_write(
+            _context: u64,
+            _key: *const u8,
+            _key_len: usize,
+            _value: *const u8,
+            _value_len: usize,
+        ) -> bool {
+            false
+        }
+
+        unsafe extern "C" fn fail_after_vector_write(
+            context: u64,
+            key: *const u8,
+            key_len: usize,
+            value: *const u8,
+            value_len: usize,
+        ) -> bool {
+            context & TERM_BITMASK == Term::Vector as u64
+                && unsafe {
+                    (Store::attach().callbacks().write_callback())(
+                        context, key, key_len, value, value_len,
+                    )
+                }
+        }
+
+        for quant_type in [
+            VectorQuantType::NoQuant,
+            VectorQuantType::Bin,
+            VectorQuantType::Q8,
+        ] {
+            let store = Store::new();
+            let ctx = Context::new(0);
+            let mut provider =
+                GarnetProvider::<f32>::new(2, quant_type, Metric::L2, 10, store.callbacks(), &ctx)
+                    .unwrap();
+            let id = GarnetId::from(bytemuck::bytes_of(&42u32));
+            let original = [0.0f32, 1.0];
+            provider.maybe_set_start_point(&ctx, &original).unwrap();
+            provider
+                .set_element(&ctx, &id, (&original, b"old"))
+                .await
+                .unwrap();
+            let internal_id = store.get(ctx.term(Term::IntMap).get(), &id).unwrap();
+            let max_id = provider.fsm.max_id();
+            let total_used = provider.fsm.total_used();
+
+            let updated = [1.0f32, 0.0];
+            provider
+                .set_element(&ctx, &id, (&updated, b"new"))
+                .await
+                .unwrap();
+            assert!(ctx.insert_is_update());
+            assert_eq!(provider.fsm.max_id(), max_id);
+            assert_eq!(provider.fsm.total_used(), total_used);
+            assert_eq!(
+                store.get(ctx.term(Term::IntMap).get(), &id),
+                Some(internal_id.clone())
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::ExtMap).get(), &internal_id),
+                Some(id.to_vec())
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::Vector).get(), &internal_id),
+                Some(bytemuck::cast_slice::<f32, u8>(&updated).to_vec())
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::Attributes).get(), &internal_id),
+                Some(b"new".to_vec())
+            );
+            if let Some(quantizer) = &provider.quantizer
+                && quantizer.is_trained()
+            {
+                let mut expected = vec![0u8; quantizer.bytes()];
+                quantizer.compress(&updated, &mut expected).unwrap();
+                assert_eq!(
+                    store.get(ctx.term(Term::Quantized).get(), &internal_id),
+                    Some(expected)
+                );
+            }
+
+            let quantized_before = store.get(ctx.term(Term::Quantized).get(), &internal_id);
+            for (write_callback, expected_vector) in [
+                (fail_write as WriteCallback, &updated),
+                (fail_after_vector_write as WriteCallback, &original),
+            ] {
+                LOGS.with(|logs| logs.lock().unwrap().clear());
+                let callbacks = store.callbacks();
+                provider.callbacks = Callbacks::new(
+                    callbacks.read_callback(),
+                    write_callback,
+                    callbacks.delete_callback(),
+                    callbacks.rmw_callback(),
+                    callbacks.filter_callback(),
+                    callbacks.log_callback(),
+                );
+                let error = provider
+                    .set_element(&ctx, &id, (&original, b"failed"))
+                    .await
+                    .unwrap_err();
+                assert!(provider.backfill_lock.lock().unwrap().is_empty());
+                assert_eq!(provider.fsm.max_id(), max_id);
+                assert_eq!(provider.fsm.total_used(), total_used);
+                assert_eq!(
+                    store.get(ctx.term(Term::IntMap).get(), &id),
+                    Some(internal_id.clone())
+                );
+                assert_eq!(
+                    store.get(ctx.term(Term::Vector).get(), &internal_id),
+                    Some(bytemuck::cast_slice::<f32, u8>(expected_vector).to_vec())
+                );
+                assert_eq!(
+                    store.get(ctx.term(Term::Quantized).get(), &internal_id),
+                    quantized_before
+                );
+                LOGS.with(|logs| {
+                    let logs = logs.lock().unwrap();
+                    assert_eq!(logs.len(), 1);
+                    let (context, message) = &logs[0];
+                    assert_eq!(*context, ctx.term(Term::Vector).get());
+                    assert!(message.contains("update failed",));
+                    assert!(message.contains(&error.to_string()));
+                });
+            }
+        }
     }
 
     fn create_2d_f32_index(

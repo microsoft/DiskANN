@@ -21,6 +21,10 @@ use thiserror::Error;
 /// Must have enough bits to represent all Term variants (max value is 6, needs 3 bits).
 pub(crate) const TERM_BITMASK: u64 = (1 << 3) - 1;
 
+#[derive(Debug, Error)]
+#[error("Invalid term {0}")]
+pub(crate) struct InvalidTerm(u32);
+
 #[derive(Debug)]
 pub(crate) enum Term {
     Vector = 0,
@@ -32,17 +36,40 @@ pub(crate) enum Term {
     ExtMap = 6,
 }
 
+impl TryFrom<u32> for Term {
+    type Error = InvalidTerm;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Term::Vector),
+            1 => Ok(Term::Neighbors),
+            2 => Ok(Term::Quantized),
+            3 => Ok(Term::Attributes),
+            4 => Ok(Term::Metadata),
+            5 => Ok(Term::IntMap),
+            6 => Ok(Term::ExtMap),
+            _ => Err(InvalidTerm(value)),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ContextState {
+    quantizer_ready: AtomicBool,
+    insert_is_update: AtomicBool,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Context {
     inner: u64,
-    quantizer_ready: Arc<AtomicBool>,
+    state: Arc<ContextState>,
 }
 
 impl Context {
     pub(crate) fn new(inner: u64) -> Self {
         Self {
             inner,
-            quantizer_ready: Arc::new(AtomicBool::new(false)),
+            state: Arc::new(ContextState::default()),
         }
     }
 
@@ -52,25 +79,27 @@ impl Context {
     }
 
     pub(crate) fn term(&self, kind: Term) -> Self {
-        let Context {
-            inner,
-            quantizer_ready,
-        } = self;
+        let Context { inner, state } = self;
         let inner = *inner | (kind as u64 & TERM_BITMASK);
-        let quantizer_ready = quantizer_ready.clone();
+        let state = state.clone();
 
-        Self {
-            inner,
-            quantizer_ready,
-        }
+        Self { inner, state }
     }
 
     pub(crate) fn quantizer_ready(&self) -> bool {
-        self.quantizer_ready.load(Ordering::Acquire)
+        self.state.quantizer_ready.load(Ordering::Acquire)
     }
 
     pub(crate) fn set_quantizer_ready(&self) {
-        self.quantizer_ready.store(true, Ordering::Release);
+        self.state.quantizer_ready.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn insert_is_update(&self) -> bool {
+        self.state.insert_is_update.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_insert_is_update(&self) {
+        self.state.insert_is_update.store(true, Ordering::Release);
     }
 }
 
