@@ -465,7 +465,6 @@ mod pipnn_tests {
             "build_algorithm": {
                 "algorithm": "PiPNN",
                 "c_max": 17,
-                "c_min": 1,
                 "p_samp": 0.5,
                 "fanout": [2],
                 "k": 1,
