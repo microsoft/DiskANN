@@ -109,13 +109,13 @@ mod tests {
     };
 
     fn pipnn() -> PiPNNParameters {
+        let nz = |value| std::num::NonZeroUsize::new(value).unwrap();
         PiPNNParameters {
-            c_max: 512,
-            c_min: 64,
+            c_max: nz(512),
             p_samp: 0.01,
-            fanout: vec![10, 3],
-            k: 2,
-            replicas: 1,
+            fanout: vec![nz(10), nz(3)],
+            k: nz(2),
+            replicas: nz(1),
         }
     }
 
@@ -255,7 +255,7 @@ mod tests {
     fn builder_rejects_invalid_pipnn_config() {
         let storage = VirtualStorageProvider::new_memory();
         let invalid = PiPNNParameters {
-            c_max: 0,
+            p_samp: 0.0,
             ..PiPNNParameters::default()
         };
         let params = DiskIndexBuildParameters::new_pipnn(
@@ -272,6 +272,6 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(format!("{error:?}").contains("c_max must be greater than zero"));
+        assert!(format!("{error:?}").contains("p_samp (0) must be in (0, 1]"));
     }
 }
