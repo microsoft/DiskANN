@@ -287,9 +287,12 @@ impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
 mod tests {
     use super::*;
 
-    use diskann_utils::views::{Init, Matrix, MatrixView};
+    use diskann_utils::{
+        assert_contains,
+        views::{Init, Matrix, MatrixView},
+    };
 
-    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
+    use crate::matrix_kernels::test_util::panic_message_for;
 
     #[test]
     fn test_visit_panels() {
@@ -418,7 +421,7 @@ mod tests {
             for row in 0..SZ {
                 assert_eq!(
                     packed[col * SZ + row],
-                    reference[(block * SZ + row, col)],
+                    *reference.element(block * SZ + row, col),
                     "{ctx}, block = {block}, row = {row}, col = {col}",
                 );
             }
@@ -503,7 +506,7 @@ mod tests {
         for block in 0..matrix.nrows() / SZ {
             for col in 0..matrix.ncols() {
                 for row in 0..SZ {
-                    packed.push(matrix[(block * SZ + row, col)]);
+                    packed.push(*matrix.element(block * SZ + row, col));
                 }
             }
         }

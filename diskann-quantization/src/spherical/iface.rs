@@ -51,11 +51,11 @@
 //!     PreScale::None,
 //!     &mut rand::rng(),
 //!     GlobalAllocator
-//! ).unwrap();
+//! )
+//! .unwrap()
+//! .as_quantizer::<1>()
+//! .unwrap();
 //!
-//! let quantizer: Box<dyn iface::Quantizer> = Box::new(
-//!     iface::Impl::<1>::new(quantizer).unwrap()
-//! );
 //!
 //! let alloc = AlignedAllocator::new(PowerOfTwo::new(1).unwrap());
 //! let mut buf = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
@@ -2385,7 +2385,7 @@ mod tests {
         )
         .unwrap();
 
-        (Impl::<NBITS>::new(quantizer).unwrap(), data)
+        (Impl::new(quantizer).unwrap(), data)
     }
 
     #[test]
@@ -3497,9 +3497,9 @@ mod tests {
             metric: SupportedMetric,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-        ) -> (Impl<NBITS>, Matrix<f32>)
+        ) -> (Poly<dyn Quantizer>, Matrix<f32>)
         where
-            Impl<NBITS>: Constructible,
+            Impl<NBITS>: Constructible + Quantizer,
         {
             let data = test_dataset();
             let mut rng = StdRng::seed_from_u64(TRAINING_SEED);
@@ -3514,7 +3514,7 @@ mod tests {
             )
             .unwrap();
 
-            (Impl::<NBITS>::new(quantizer).unwrap(), data)
+            (quantizer.as_quantizer::<NBITS>().unwrap(), data)
         }
 
         fn run_compatibility_test<const NBITS: usize>(
@@ -3528,7 +3528,7 @@ mod tests {
             let dataset = data.as_view();
 
             let baseline = if should_overwrite() {
-                let baseline = generate_baseline(&quantizer, transform, pre_scale, dataset);
+                let baseline = generate_baseline(&*quantizer, transform, pre_scale, dataset);
                 save_baseline(&baseline);
                 baseline
             } else {

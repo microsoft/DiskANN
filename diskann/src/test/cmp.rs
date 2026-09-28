@@ -266,7 +266,7 @@ where
 mod tests {
     use super::*;
 
-    use crate::test::assert_message_contains;
+    use diskann_utils::assert_contains;
 
     // Built-in Types
     #[test]
@@ -333,8 +333,8 @@ mod tests {
         assert!(x.verbose_eq(&y).is_err());
 
         let msg = x.verbose_eq(&y).unwrap_err().to_string();
-        assert_message_contains!(msg, "first mismatch on index 0 of 1");
-        assert_message_contains!(msg, "LHS 1 is not equal to RHS 2");
+        assert_contains!(msg, "first mismatch on index 0 of 1");
+        assert_contains!(msg, "LHS 1 is not equal to RHS 2");
     }
 
     #[test]
@@ -348,13 +348,13 @@ mod tests {
 
         // Mismatch First
         let msg = (x, y).verbose_eq(&(y, x)).unwrap_err().to_string();
-        assert_message_contains!(msg, "first mismatch on index 0 of 2");
-        assert_message_contains!(msg, "LHS 1 is not equal to RHS 2");
+        assert_contains!(msg, "first mismatch on index 0 of 2");
+        assert_contains!(msg, "LHS 1 is not equal to RHS 2");
 
         // Mismatch Second
         let msg = (x, y).verbose_eq(&(x, x)).unwrap_err().to_string();
-        assert_message_contains!(msg, "first mismatch on index 1 of 2");
-        assert_message_contains!(msg, "LHS 2 is not equal to RHS 1");
+        assert_contains!(msg, "first mismatch on index 1 of 2");
+        assert_contains!(msg, "LHS 2 is not equal to RHS 1");
     }
 
     #[test]
@@ -369,18 +369,18 @@ mod tests {
 
         // Mismatch First
         let msg = (x, y, z).verbose_eq(&(y, x, z)).unwrap_err().to_string();
-        assert_message_contains!(msg, "first mismatch on index 0 of 3");
-        assert_message_contains!(msg, "LHS 1 is not equal to RHS 2");
+        assert_contains!(msg, "first mismatch on index 0 of 3");
+        assert_contains!(msg, "LHS 1 is not equal to RHS 2");
 
         // Mismatch Second
         let msg = (x, y, z).verbose_eq(&(x, x, z)).unwrap_err().to_string();
-        assert_message_contains!(msg, "first mismatch on index 1 of 3");
-        assert_message_contains!(msg, "LHS 2 is not equal to RHS 1");
+        assert_contains!(msg, "first mismatch on index 1 of 3");
+        assert_contains!(msg, "LHS 2 is not equal to RHS 1");
 
         // Mismatch Third
         let msg = (x, y, z).verbose_eq(&(x, y, y)).unwrap_err().to_string();
-        assert_message_contains!(msg, "first mismatch on index 2 of 3");
-        assert_message_contains!(msg, "LHS 3 is not equal to RHS 2");
+        assert_contains!(msg, "first mismatch on index 2 of 3");
+        assert_contains!(msg, "LHS 3 is not equal to RHS 2");
     }
 
     #[test]
@@ -397,10 +397,10 @@ mod tests {
             let x = vec![1, 2];
             let y = vec![1, 2, 3];
             let msg = x.verbose_eq(&y).unwrap_err().to_string();
-            assert_message_contains!(msg, "LHS vector has length 2 while RHS has 3");
+            assert_contains!(msg, "LHS vector has length 2 while RHS has 3");
 
             let msg = y.verbose_eq(&x).unwrap_err().to_string();
-            assert_message_contains!(msg, "LHS vector has length 3 while RHS has 2");
+            assert_contains!(msg, "LHS vector has length 3 while RHS has 2");
         }
 
         // Mismatching entries
@@ -408,8 +408,8 @@ mod tests {
             let x = vec![1, 2, 3];
             let y = vec![1, 2, 2];
             let msg = x.verbose_eq(&y).unwrap_err().to_string();
-            assert_message_contains!(msg, "first mismatch on index 2 of 3");
-            assert_message_contains!(msg, "LHS 3 is not equal to RHS 2");
+            assert_contains!(msg, "first mismatch on index 2 of 3");
+            assert_contains!(msg, "LHS 3 is not equal to RHS 2");
         }
     }
 
@@ -451,12 +451,12 @@ mod tests {
             assert!(lhs.verbose_eq(&lhs).is_ok());
 
             let msg = lhs.verbose_eq(&rhs1).unwrap_err().to_string();
-            assert_message_contains!(msg, "field \"string\"");
-            assert_message_contains!(msg, "LHS \"hello\" is not equal to RHS \"world\"");
+            assert_contains!(msg, "field \"string\"");
+            assert_contains!(msg, "LHS \"hello\" is not equal to RHS \"world\"");
 
             let msg = lhs.verbose_eq(&rhs2).unwrap_err().to_string();
-            assert_message_contains!(msg, "field \"value\"");
-            assert_message_contains!(msg, "LHS 20 is not equal to RHS 10");
+            assert_contains!(msg, "field \"value\"");
+            assert_contains!(msg, "LHS 20 is not equal to RHS 10");
         }
 
         {
@@ -472,18 +472,18 @@ mod tests {
             assert!(lhs.verbose_eq(&lhs).is_ok());
 
             let msg = lhs.verbose_eq(&rhs_1).unwrap_err().to_string();
-            assert_message_contains!(msg, "field \"a\"");
-            assert_message_contains!(msg, "field \"string\"");
-            assert_message_contains!(msg, "LHS \"hello\" is not equal to RHS \"world\"");
+            assert_contains!(msg, "field \"a\"");
+            assert_contains!(msg, "field \"string\"");
+            assert_contains!(msg, "LHS \"hello\" is not equal to RHS \"world\"");
 
             let msg = lhs.verbose_eq(&rhs_2).unwrap_err().to_string();
-            assert_message_contains!(msg, "field \"a\"");
-            assert_message_contains!(msg, "field \"value\"");
-            assert_message_contains!(msg, "LHS 20 is not equal to RHS 10");
+            assert_contains!(msg, "field \"a\"");
+            assert_contains!(msg, "field \"value\"");
+            assert_contains!(msg, "LHS 20 is not equal to RHS 10");
 
             let msg = lhs.verbose_eq(&rhs_3).unwrap_err().to_string();
-            assert_message_contains!(msg, "field \"value\"");
-            assert_message_contains!(msg, "LHS 10 is not equal to RHS 25");
+            assert_contains!(msg, "field \"value\"");
+            assert_contains!(msg, "LHS 10 is not equal to RHS 25");
         }
     }
 

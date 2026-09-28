@@ -1886,7 +1886,7 @@ mod tests {
         assert_eq!(view.ncols(), 3);
         for row in 0..2 {
             for col in 0..3 {
-                assert_eq!(view[(row, col)], data[row * 3 + col]);
+                assert_eq!(*view.element(row, col), data[row * 3 + col]);
             }
         }
         assert_eq!(matref.as_slice(), &data);
@@ -1904,7 +1904,7 @@ mod tests {
         assert_eq!(view.ncols(), 3);
         for row in 0..2 {
             for col in 0..3 {
-                assert_eq!(view[(row, col)], data[row * 3 + col]);
+                assert_eq!(*view.element(row, col), data[row * 3 + col]);
             }
         }
         assert_eq!(mat.as_slice(), &data);
@@ -1917,7 +1917,7 @@ mod tests {
         assert_eq!(view.ncols(), 3);
         for row in 0..2 {
             for col in 0..3 {
-                assert_eq!(view[(row, col)], data[row * 3 + col]);
+                assert_eq!(*view.element(row, col), data[row * 3 + col]);
             }
         }
         assert_eq!(matmut.as_slice(), &data);

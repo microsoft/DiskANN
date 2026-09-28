@@ -2954,7 +2954,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     |_| true,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("inline filter with accept-all predicate must succeed");
@@ -3003,7 +3003,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     predicate,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("inline filter search with AdaptiveL must succeed");
@@ -3015,7 +3015,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     predicate,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("indexed-vector inline filter search with AdaptiveL must succeed");
