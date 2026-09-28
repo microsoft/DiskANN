@@ -16,8 +16,8 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn primitive(doc: Option<Doc>) -> Self {
-        Self::from(Primitive::new(doc))
+    pub fn primitive(kind: PrimitiveKind, doc: Option<Doc>) -> Self {
+        Self::from(Primitive::new(kind, doc))
     }
 
     pub fn aggregate(fields: Fields, doc: Option<Doc>) -> Self {
@@ -57,6 +57,7 @@ impl Type {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn as_aggregate(&self) -> Option<&Aggregate> {
         if let Self::Aggregate(aggregate) = self {
             Some(aggregate)
@@ -65,6 +66,7 @@ impl Type {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn as_enum(&self) -> Option<&Enum> {
         if let Self::Enum(enum_) = self {
             Some(enum_)
@@ -102,17 +104,30 @@ impl From<Sequence> for Type {
 // Primitive //
 //-----------//
 
+#[derive(Debug, Clone, Copy)]
+pub enum PrimitiveKind {
+    Null,
+    Boolean,
+    Number,
+    String,
+}
+
 #[derive(Debug)]
 pub struct Primitive {
+    kind: PrimitiveKind,
     doc: Option<Doc>,
 }
 
 impl Primitive {
-    pub fn new(doc: Option<Doc>) -> Self {
-        Self { doc }
+    pub fn new(kind: PrimitiveKind, doc: Option<Doc>) -> Self {
+        Self { kind, doc }
     }
 
-    fn doc(&self) -> Option<&str> {
+    pub(super) fn kind(&self) -> PrimitiveKind {
+        self.kind
+    }
+
+    pub(super) fn doc(&self) -> Option<&str> {
         self.doc.as_deref()
     }
 }
@@ -149,6 +164,7 @@ impl Aggregate {
 pub enum Fields {
     Named(Vec<NamedField>),
     Unnamed(Vec<UnnamedField>),
+    NewType(UnnamedField),
     Unit,
 }
 
@@ -157,6 +173,7 @@ impl Fields {
         match self {
             Self::Named(fields) => !fields.is_empty(),
             Self::Unnamed(fields) => !fields.is_empty(),
+            Self::NewType(_) => true,
             Self::Unit => false,
         }
     }
@@ -169,6 +186,11 @@ impl Fields {
         Self::Unnamed(itr.into_iter().collect())
     }
 
+    pub fn newtype(field: UnnamedField) -> Self {
+        Self::NewType(field)
+    }
+
+    #[cfg(test)]
     pub(super) fn as_named(&self) -> Option<&[NamedField]> {
         if let Self::Named(fields) = self {
             Some(fields)
@@ -177,9 +199,19 @@ impl Fields {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn as_unnamed(&self) -> Option<&[UnnamedField]> {
         if let Self::Unnamed(fields) = self {
             Some(fields)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn as_newtype(&self) -> Option<&UnnamedField> {
+        if let Self::NewType(field) = self {
+            Some(field)
         } else {
             None
         }

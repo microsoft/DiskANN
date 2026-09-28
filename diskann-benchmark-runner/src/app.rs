@@ -215,7 +215,7 @@ impl App {
                         writeln!(output, "{}", serde_json::to_string_pretty(&repr)?)?;
 
                         // // TODO: Make a little nicer.
-                        // writeln!(output, "{}", input.reflection().unwrap().render())?;
+                        // writeln!(output, "{}", input.raw_reflection().unwrap().render())?;
 
                         return Ok(());
                     } else {

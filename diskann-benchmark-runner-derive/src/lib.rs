@@ -215,7 +215,7 @@ fn generate_type_name_body(
         .collect();
 
     // Check that the type-name attributes are compatible with the struct.
-    let prefix: Vec<TokenStream> = match type_name {
+    let prefix: Option<TokenStream> = match type_name {
         attributes::TypeName::Rename(rename) => {
             if arguments.is_empty() {
                 let ts = quote! {
@@ -228,20 +228,20 @@ fn generate_type_name_body(
                     "The `type_name` attribute cannot be applied to types with generics",
                 ));
             }
-        },
+        }
         attributes::TypeName::Prefix(prefix) => {
             let ts = quote! {
                 f.write_str(#prefix)?;
             };
-            vec![ts]
-        },
-        attributes::TypeName::None => Vec::new(),
+            Some(ts)
+        }
+        attributes::TypeName::None => None,
     };
 
     // If there are no generics, we can dump the typename directly.
     if arguments.is_empty() {
         let ts = quote! {
-            #(#prefix)*
+            #prefix
             f.write_str(#name)
         };
         Ok(ts)
@@ -260,7 +260,7 @@ fn generate_type_name_body(
         });
 
         let ts = quote! {
-            #(#prefix)*
+            #prefix
             f.write_str(#name)?;
             f.write_str("<")?;
             #(#writes)*
@@ -286,7 +286,16 @@ fn build_fields(
         Fields::Unnamed(fields) => {
             add_field_bounds(generics, &fields.unnamed);
             let list = unnamed_fields(&fields.unnamed);
-            Ok(quote!(#path::tree::Fields::Unnamed(vec![#(#list),*])))
+
+            // Unnamed fields of length 1 become new-types instead.
+            let ts = if list.len() == 1 {
+                let new_type = &list[0];
+                quote!(#path::tree::Fields::NewType(#new_type))
+            } else {
+                quote!(#path::tree::Fields::Unnamed(vec![#(#list),*]))
+            };
+
+            Ok(ts)
         }
         Fields::Unit => Ok(quote!(#path::tree::Fields::Unit)),
     }
@@ -309,7 +318,7 @@ where
                 .as_ref()
                 .expect("named fields should have identifiers");
 
-            let name = syn::LitStr::new(&ident.to_string(), ident.span());
+            let name = syn::LitStr::new(strip_raw_prefix(&ident.to_string()), ident.span());
 
             let doc = format_docstrings(&f.attrs);
             let attributes::Field { rename_field } = attributes::Field::parse(&f.attrs)?;
@@ -319,16 +328,19 @@ where
         .collect()
 }
 
-fn unnamed_fields<'a, I>(fields: I) -> impl Iterator<Item = TokenStream>
+fn unnamed_fields<'a, I>(fields: I) -> Vec<TokenStream>
 where
     I: IntoIterator<Item = &'a syn::Field>,
 {
     let path = crate_name();
-    fields.into_iter().map(move |f| {
-        let ty = &f.ty;
-        let doc = format_docstrings(&f.attrs);
-        quote_spanned! { ty.span()=> #path::tree::UnnamedField::new::<#ty>(#doc) }
-    })
+    fields
+        .into_iter()
+        .map(move |f| {
+            let ty = &f.ty;
+            let doc = format_docstrings(&f.attrs);
+            quote_spanned! { ty.span()=> #path::tree::UnnamedField::new::<#ty>(#doc) }
+        })
+        .collect()
 }
 
 /// Generate the `Reflect` implementation.
@@ -403,7 +415,7 @@ fn process_enum(
         .iter()
         .map(|v| -> syn::Result<TokenStream> {
             let doc = format_docstrings(&v.attrs);
-            let name = syn::LitStr::new(&v.ident.to_string(), v.ident.span());
+            let name = syn::LitStr::new(strip_raw_prefix(&v.ident.to_string()), v.ident.span());
             let attributes::Variant {
                 rename_variant,
                 rename_variant_fields,
@@ -486,4 +498,12 @@ fn extract_docs(attributes: &[syn::Attribute]) -> Option<String> {
     } else {
         Some(docstrings.join("\n"))
     }
+}
+
+//-----//
+// raw //
+//-----//
+
+fn strip_raw_prefix(s: &str) -> &str {
+    s.strip_prefix("r#").unwrap_or(s)
 }

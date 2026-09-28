@@ -5,7 +5,6 @@
 
 use std::{
     any::TypeId,
-    collections::HashSet,
     fmt::{self, Write},
 };
 
@@ -52,29 +51,6 @@ impl Reflection {
 
     pub fn render(&self) -> Render {
         Render(*self)
-    }
-
-    // pub(crate) fn visit_all_reachable<F, E>(&self, f: F) -> Result<(), E>
-    // where
-    //     F: FnMut(Reflection) -> Result<(), E>,
-    // {
-    //     let mut id_map = HashSet::new();
-    //     visit_all_reachable(*self, &mut id_map, f)
-    // }
-
-    pub(crate) fn visit_unique<F, E>(&self, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(Reflection) -> Result<bool, E>,
-    {
-        let mut seen = HashSet::new();
-        self.visit_with(|r: Reflection| {
-            if seen.insert(r.type_id()) {
-                f(r)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        })
     }
 
     pub(crate) fn visit_with<F, E>(&self, f: F) -> Result<(), E>
@@ -140,6 +116,7 @@ where
             let mut push_fields = |fields: &Fields| match fields {
                 Fields::Named(named) => named.iter().for_each(|field| push(field.field())),
                 Fields::Unnamed(unnamed) => unnamed.iter().for_each(|field| push(field.field())),
+                Fields::NewType(newtype) => push(newtype.field()),
                 Fields::Unit => {}
             };
 
@@ -174,7 +151,7 @@ where
     T: Reflect,
 {
     fn ty() -> Type {
-        Type::primitive(None)
+        Type::primitive(tree::PrimitiveKind::Null, None)
     }
 
     fn format_type_name(f: &mut dyn Write) -> fmt::Result {
@@ -183,10 +160,10 @@ where
 }
 
 macro_rules! primitive {
-    ($T:ty, $doc:literal, $type_name:literal) => {
+    ($T:ty, $kind:ident, $doc:literal, $type_name:literal) => {
         impl Reflect for $T {
             fn ty() -> Type {
-                Type::primitive(Some($doc.into()))
+                Type::primitive(tree::PrimitiveKind::$kind, Some($doc.into()))
             }
 
             fn format_type_name(f: &mut dyn Write) -> fmt::Result {
@@ -196,12 +173,37 @@ macro_rules! primitive {
     };
 }
 
-primitive!((), "empty", "()");
-primitive!(usize, "A system dependent unsigned integer", "usize");
-primitive!(u32, "A 32-bit unsigned integer", "u32");
-primitive!(bool, "A value of \"true\" or \"false\"", "bool");
+primitive!((), Null, "empty", "()");
+primitive!(
+    usize,
+    Number,
+    "A system dependent unsigned integer",
+    "usize"
+);
+primitive!(isize, Number, "A system dependent signed integer", "isize");
 
-primitive!(String, "A string", "string");
+primitive!(u8, Number, "An 8-bit unsigned integer", "u8");
+primitive!(u16, Number, "A 16-bit unsigned integer", "u16");
+primitive!(u32, Number, "A 32-bit unsigned integer", "u32");
+primitive!(u64, Number, "A 64-bit unsigned integer", "u64");
+
+primitive!(i8, Number, "An 8-bit signed integer", "i8");
+primitive!(i16, Number, "A 16-bit signed integer", "i16");
+primitive!(i32, Number, "A 32-bit signed integer", "i32");
+primitive!(i64, Number, "A 64-bit signed integer", "i64");
+
+primitive!(f32, Number, "An 32-bit floating-point number", "f32");
+primitive!(f64, Number, "An 64-bit floating-point number", "f64");
+
+primitive!(
+    std::num::NonZeroUsize,
+    Number,
+    "A system dependent, non-zero, unsigned integer",
+    "NonZero<usize>"
+);
+
+primitive!(bool, Boolean, "A value of \"true\" or \"false\"", "bool");
+primitive!(String, String, "A string", "string");
 
 impl<T> Reflect for Option<T>
 where
@@ -286,13 +288,4 @@ pub(crate) mod internal {
             std::any::TypeId::of::<T>()
         }
     }
-}
-
-///////////
-// Tests //
-///////////
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }

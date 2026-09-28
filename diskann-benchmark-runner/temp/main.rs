@@ -5,7 +5,7 @@
 
 //! Development CLI for exercising the benchmark runner with its test registry.
 
-use diskann_benchmark_runner::{reflect, Reflection};
+use diskann_benchmark_runner::{reflect, Reflect, Reflection};
 
 fn main() -> anyhow::Result<()> {
     // println!("{}", Reflection::new::<reflect::Test>().render());

@@ -24,6 +24,7 @@ pub(crate) struct TypeInput {
     error_when_checked: bool,
 }
 
+/// This is a test input for testing corner cases in the benchmark runner.
 #[derive(Serialize, Deserialize, Reflect)]
 pub(crate) struct TypeInputRaw {
     data_type: DataType,

@@ -236,6 +236,7 @@ impl<'a> Renderer<'a> {
                     self.render_unnamed_field(i, field)?;
                 }
             }
+            Fields::NewType(_) => todo!(),
             Fields::Unit => {}
         }
 
