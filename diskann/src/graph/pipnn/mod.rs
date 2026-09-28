@@ -5,31 +5,23 @@
 
 //! Provider-independent [PiPNN](https://arxiv.org/html/2602.21247v1) graph construction.
 //!
-//! PiPNN builds graph candidates in three steps. A leader is a sampled dataset
-//! point that acts as the center of one child partition. A leaf is a bounded
-//! child partition used for local neighbor selection.
+//! PiPNN builds a graph without graph search, in three steps. A leaf is a small
+//! cluster of at most `c_max` points; the build selects neighbors only inside
+//! leaves.
 //!
-//! 1. `partitioning` samples leaders and makes overlapping leaves of at most
-//!    `c_max` points. Points without rankable leaders contribute no assignments.
-//! 2. `leaf_build` computes one ranking-distance buffer for each leaf. It
-//!    selects local neighbors and merges their global point IDs.
-//! 3. `finalization` applies Vamana RobustPrune to each candidate list that is
-//!    longer than the graph degree.
+//! 1. `partitioning` splits the dataset into overlapping leaves.
+//! 2. `leaf_build` selects the `leaf_k` nearest neighbors of each point inside
+//!    each leaf and merges them into one candidate list per point.
+//! 3. `finalization` prunes each list that is longer than the graph degree with
+//!    Vamana RobustPrune.
 //!
-//! `diskann-wide` selects architecture `A` for the ranking kernels. One match
-//! selects metric marker `M`. Metric computation stays architecture-neutral.
-//! Ranking kernels reapply architecture features inside Rayon jobs.
+//! [`build_graph`] selects the SIMD architecture and the metric once, so the
+//! steps compile for one architecture and one metric. It borrows one contiguous
+//! [`MatrixView`] and returns one adjacency list for each point. Each step takes
+//! ownership of the previous output and frees it when it returns.
 //!
-//! [`PiPNNConfig`] contains partition and local-neighbor parameters.
-//! [`PiPNNBuildContext`] borrows graph policy and a Rayon pool. [`build_graph`]
-//! borrows one contiguous [`MatrixView`]. It returns one adjacency list for each
-//! input point.
-//!
-//! The function does not load providers or select start and frozen points. It
-//! also does not quantize, serialize, or search the graph.
-//!
-//! Partition and leaf work use separate reusable buffers. The build consumes
-//! each output before it creates another graph representation.
+//! The build does not load providers or select start points. It also does not
+//! quantize, serialize, or search the graph.
 
 mod conversion;
 mod finalization;
@@ -42,9 +34,11 @@ mod partitioning;
 mod simd;
 mod topk;
 
+use std::num::NonZeroUsize;
+
 use crate::{
     ANNError, ANNResult,
-    graph::{AdjacencyList, Config},
+    graph::{AdjacencyList, Config, config::PruneKind},
     utils::VectorRepr,
 };
 use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -185,64 +179,55 @@ mod cosine_distance_tests {
     }
 }
 
-/// PiPNN partition and leaf-selection policy.
+/// Error for invalid PiPNN parameters.
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum PiPNNConfigError {
+    #[error("p_samp ({0}) must be in (0, 1]")]
+    SamplingFraction(f64),
+    #[error("fanout must not be empty")]
+    EmptyFanout,
+    #[error("graph prune kind {prune_kind:?} does not match metric {metric:?}")]
+    PruneKind {
+        prune_kind: PruneKind,
+        metric: Metric,
+    },
+}
+
+crate::convert_error!(PiPNNConfigError);
+
+/// PiPNN partition and leaf parameters.
 ///
-/// DiskANN graph policy separately supplies degree, alpha, and prune metric.
+/// The DiskANN graph [`Config`] supplies the degree, alpha, and prune kind.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PiPNNConfig {
     /// Maximum number of points in a leaf.
-    pub c_max: usize,
-    /// Minimum leaf size used by global small-leaf merging.
-    pub c_min: usize,
-    /// Fraction of a cluster sampled as child-partition centers.
+    pub c_max: NonZeroUsize,
+    /// Fraction of the points of a cluster that a split samples as leaders, in
+    /// `(0, 1]`.
     pub p_samp: f64,
-    /// Number of nearest centers assigned at each recursive partition level.
-    /// Levels after this schedule assign each point to one center.
-    pub fanout: Vec<usize>,
-    /// Number of nearest neighbors selected within each leaf.
-    pub leaf_k: usize,
-    /// Number of independent partition passes over the dataset.
-    pub replicas: usize,
+    /// Number of nearest leaders that each point joins, for each split level.
+    /// Levels after this schedule use one leader. The schedule must not be empty.
+    pub fanout: Vec<NonZeroUsize>,
+    /// Number of nearest neighbors that each point selects inside a leaf.
+    pub leaf_k: NonZeroUsize,
+    /// Number of independent partitionings of the dataset.
+    pub replicas: NonZeroUsize,
 }
 
 impl PiPNNConfig {
-    /// Validate the algorithm-specific partition and leaf-build parameters.
-    pub fn validate(&self) -> ANNResult<()> {
-        if self.c_max == 0 {
-            return Err(config_error("c_max must be greater than zero"));
-        }
-        if self.c_min == 0 {
-            return Err(config_error("c_min must be greater than zero"));
-        }
-        if self.c_min > self.c_max {
-            return Err(config_error(format!(
-                "c_min ({}) must not exceed c_max ({})",
-                self.c_min, self.c_max
-            )));
-        }
+    /// Check the parameters that the field types do not constrain.
+    pub fn validate(&self) -> Result<(), PiPNNConfigError> {
         if !(0.0 < self.p_samp && self.p_samp <= 1.0) {
-            return Err(config_error(format!(
-                "p_samp ({}) must be in (0, 1]",
-                self.p_samp
-            )));
+            return Err(PiPNNConfigError::SamplingFraction(self.p_samp));
         }
         if self.fanout.is_empty() {
-            return Err(config_error("fanout must not be empty"));
-        }
-        if self.fanout.contains(&0) {
-            return Err(config_error("fanout values must be greater than zero"));
-        }
-        if self.leaf_k == 0 {
-            return Err(config_error("leaf_k must be greater than zero"));
-        }
-        if self.replicas == 0 {
-            return Err(config_error("replicas must be greater than zero"));
+            return Err(PiPNNConfigError::EmptyFanout);
         }
         Ok(())
     }
 }
 
-/// PiPNN policy and borrowed execution resources for one graph build.
+/// PiPNN parameters, graph policy, and the Rayon pool for one graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
     config: PiPNNConfig,
@@ -252,19 +237,20 @@ pub struct PiPNNBuildContext<'a> {
 }
 
 impl<'a> PiPNNBuildContext<'a> {
-    /// Check and combine PiPNN configuration with DiskANN graph policy.
+    /// Check `config` and combine it with the graph policy.
+    ///
+    /// Final pruning applies the prune kind of `graph` to distances of `metric`,
+    /// so the two must match.
     pub fn new(
         config: PiPNNConfig,
         graph: &'a Config,
         metric: Metric,
         pool: &'a ThreadPool,
-    ) -> ANNResult<Self> {
+    ) -> Result<Self, PiPNNConfigError> {
         config.validate()?;
-        if graph.prune_kind() != metric.into() {
-            return Err(config_error(format!(
-                "graph prune kind {:?} is incompatible with metric {metric:?}",
-                graph.prune_kind()
-            )));
+        let prune_kind = graph.prune_kind();
+        if prune_kind != metric.into() {
+            return Err(PiPNNConfigError::PruneKind { prune_kind, metric });
         }
 
         Ok(Self {
@@ -276,13 +262,11 @@ impl<'a> PiPNNBuildContext<'a> {
     }
 }
 
-/// Build one PiPNN adjacency list for each point in `data`.
+/// Build one adjacency list for each point of `data`.
 ///
-/// This graph contains only real dataset points. Start-point selection and index
-/// serialization are separate operations.
-///
-/// Raw `u8` and `i8` vectors are not unit-normalized after conversion to `f32`.
-/// The build therefore uses norm-aware cosine for these two input types.
+/// The graph links dataset points only; the caller selects start points and
+/// serializes the index. `CosineNormalized` on `u8` or `i8` data builds with
+/// `Cosine`, because converted integer vectors do not have unit norm.
 pub fn build_graph<T>(
     data: MatrixView<'_, T>,
     context: &PiPNNBuildContext<'_>,
@@ -312,14 +296,15 @@ where
         ));
     }
     if data.nrows() > u32::MAX as usize {
-        return Err(config_error(format!(
-            "dataset point count ({}) exceeds the u32 graph ID limit",
+        return Err(ANNError::message(format!(
+            "PiPNN dataset point count ({}) exceeds the u32 graph ID limit",
             data.nrows()
         )));
     }
     arch::dispatch2_no_features(BuildGraph, data, context)
 }
 
+/// Runs the build for the architecture that `diskann-wide` selects at run time.
 struct BuildGraph;
 
 impl<A, T> Target2<A, ANNResult<Vec<AdjacencyList<u32>>>, MatrixView<'_, T>, &PiPNNBuildContext<'_>>
@@ -349,10 +334,7 @@ where
     }
 }
 
-/// Run the PiPNN graph pipeline for one selected metric implementation.
-///
-/// The function builds overlapping leaves, merges direct candidates, and applies
-/// final graph-degree pruning.
+/// Run the three build steps for architecture `A` and metric `M`.
 fn build_graph_for<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -366,17 +348,17 @@ where
 {
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
-    // Leaf jobs borrow individual ID lists. This call consumes the leaf vector,
-    // so its complete allocation drops when leaf construction returns.
-    let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.leaf_k)
-    })?;
-    // Finalization consumes each candidate list. It reuses that list's allocation
-    // for the final adjacency when the graph policy permits it.
-    tracing::info_span!("pipnn.finalization")
-        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
+    // The leaf step takes the leaves by value, so their memory is free before
+    // final pruning starts.
+    let leaf_k = context.config.leaf_k.get();
+    let candidates = tracing::info_span!("pipnn.leaf_build")
+        .in_scope(|| leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, leaf_k))?;
+    // Final pruning cuts each candidate list in place.
+    Ok(tracing::info_span!("pipnn.finalization")
+        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric)))
 }
 
+/// Return the metric that the build uses for element type `T`. See [`build_graph`].
 fn effective_metric<T: VectorRepr>(metric: Metric) -> Metric {
     use std::any::TypeId;
 
@@ -389,19 +371,14 @@ fn effective_metric<T: VectorRepr>(metric: Metric) -> Metric {
     }
 }
 
-#[track_caller]
-fn config_error(message: impl std::fmt::Display) -> ANNError {
-    ANNError::message(format!("PiPNN configuration: {message}"))
-}
-
 #[cfg(test)]
 mod test_support {
     use super::simd::Simd;
     use diskann_vector::distance::Metric;
 
-    // Ignore member order while preserving group positions and duplicate counts.
-    // Positions identify leaders or graph sources; sorting the outer list would
-    // hide assignments to the wrong group. Copies keep the observations intact.
+    // Sort the members of each row but keep the row order. A row position is a
+    // leader column or a graph source, so sorting the rows would hide a wrong
+    // assignment. Repeated members stay visible.
     pub(super) fn sorted_members_per_row(rows: &[Vec<u32>]) -> Vec<Vec<u32>> {
         rows.iter()
             .map(|row| {
@@ -410,6 +387,10 @@ mod test_support {
                 members
             })
             .collect()
+    }
+
+    pub(super) fn nz(value: usize) -> std::num::NonZeroUsize {
+        std::num::NonZeroUsize::new(value).unwrap()
     }
 
     /// Build a Rayon pool with `threads` workers.
@@ -582,21 +563,20 @@ mod test_support {
     }
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 mod construction_tests {
     use super::*;
     use crate::graph::config;
     use half::f16;
-    use test_support::{sorted_members_per_row, thread_pool};
+    use test_support::{nz, sorted_members_per_row, thread_pool};
 
     fn partition_policy() -> PiPNNConfig {
         PiPNNConfig {
-            c_max: 4,
-            c_min: 1,
+            c_max: nz(4),
             p_samp: 1.0,
-            fanout: vec![2],
-            leaf_k: 1,
-            replicas: 1,
+            fanout: vec![nz(2)],
+            leaf_k: nz(1),
+            replicas: nz(1),
         }
     }
 
@@ -608,7 +588,6 @@ mod construction_tests {
     }
 
     /// Build the graph of `values` with `threads` workers.
-    #[expect(clippy::unwrap_used, reason = "an invalid fixture fails the test")]
     fn build<T: VectorRepr>(
         values: &[T],
         dimensions: usize,
@@ -626,77 +605,50 @@ mod construction_tests {
     }
 
     #[test]
-    fn invalid_configuration_identifies_the_rejected_condition() {
-        let invalid = |change: fn(&mut PiPNNConfig)| {
-            let mut config = partition_policy();
-            change(&mut config);
-            config
-        };
-        for (config, expected_message) in [
-            (invalid(|c| c.c_max = 0), "c_max must be greater than zero"),
-            (invalid(|c| c.c_min = 0), "c_min must be greater than zero"),
-            (
-                invalid(|c| c.c_min = 5),
-                "c_min (5) must not exceed c_max (4)",
-            ),
-            (invalid(|c| c.p_samp = 0.0), "p_samp (0) must be in (0, 1]"),
-            (
-                invalid(|c| c.p_samp = -0.5),
-                "p_samp (-0.5) must be in (0, 1]",
-            ),
-            (
-                invalid(|c| c.p_samp = 1.0 + f64::EPSILON),
-                "must be in (0, 1]",
-            ),
-            (
-                invalid(|c| c.p_samp = f64::NAN),
-                "p_samp (NaN) must be in (0, 1]",
-            ),
-            (
-                invalid(|c| c.p_samp = f64::INFINITY),
-                "p_samp (inf) must be in (0, 1]",
-            ),
-            (
-                invalid(|c| c.p_samp = f64::NEG_INFINITY),
-                "p_samp (-inf) must be in (0, 1]",
-            ),
-            (invalid(|c| c.fanout.clear()), "fanout must not be empty"),
-            (
-                invalid(|c| c.fanout = vec![2, 0, 1]),
-                "fanout values must be greater than zero",
-            ),
-            (
-                invalid(|c| c.leaf_k = 0),
-                "leaf_k must be greater than zero",
-            ),
-            (
-                invalid(|c| c.replicas = 0),
-                "replicas must be greater than zero",
-            ),
+    fn invalid_sampling_fractions_and_an_empty_fanout_are_rejected() {
+        for p_samp in [
+            0.0,
+            -0.5,
+            1.0 + f64::EPSILON,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
         ] {
-            let message = config.validate().unwrap_err().to_string();
-
-            assert!(message.contains(expected_message), "{message}");
-        }
-    }
-
-    #[test]
-    fn equal_leaf_bounds_and_valid_probability_endpoints_are_accepted() {
-        for p_samp in [f64::from_bits(1), 1.0] {
             let config = PiPNNConfig {
-                c_min: 4,
                 p_samp,
                 ..partition_policy()
             };
 
-            config.validate().unwrap();
+            let error = config.validate().unwrap_err();
+
+            assert!(
+                matches!(error, PiPNNConfigError::SamplingFraction(value) if value.to_bits() == p_samp.to_bits()),
+                "p_samp {p_samp}: {error}"
+            );
+        }
+        let config = PiPNNConfig {
+            fanout: vec![],
+            ..partition_policy()
+        };
+        assert_eq!(config.validate(), Err(PiPNNConfigError::EmptyFanout));
+    }
+
+    #[test]
+    fn sampling_fraction_endpoints_are_accepted() {
+        for p_samp in [f64::from_bits(1), 1.0] {
+            let config = PiPNNConfig {
+                p_samp,
+                ..partition_policy()
+            };
+
+            assert_eq!(config.validate(), Ok(()), "p_samp {p_samp}");
         }
     }
 
     #[test]
-    fn a_build_context_rejects_an_invalid_partition_policy() {
+    fn a_build_context_checks_the_configuration() {
         let config = PiPNNConfig {
-            leaf_k: 0,
+            fanout: vec![],
             ..partition_policy()
         };
         let graph = graph_policy(2, Metric::L2).unwrap();
@@ -704,12 +656,7 @@ mod construction_tests {
 
         let error = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("leaf_k must be greater than zero"),
-            "{error}"
-        );
+        assert_eq!(error, PiPNNConfigError::EmptyFanout);
     }
 
     #[test]
@@ -731,13 +678,17 @@ mod construction_tests {
             let case = format!("graph {graph_metric:?}, metric {metric:?}");
             match result {
                 Ok(_) => assert!(compatible, "{case}"),
-                Err(error) => {
-                    assert!(!compatible, "{case}: {error}");
-                    assert!(
-                        error.to_string().contains("incompatible with metric"),
-                        "{case}: {error}"
-                    );
-                }
+                Err(error) => assert_eq!(
+                    (compatible, error),
+                    (
+                        false,
+                        PiPNNConfigError::PruneKind {
+                            prune_kind: graph_metric.into(),
+                            metric
+                        }
+                    ),
+                    "{case}"
+                ),
             }
         }
     }
@@ -826,7 +777,7 @@ mod construction_tests {
         // Every two-point leaf contributes its only pair; degree three retains
         // every edge. The graph therefore exposes partition membership directly.
         let config = PiPNNConfig {
-            c_max: 2,
+            c_max: nz(2),
             ..partition_policy()
         };
         for (metric, expected) in [
@@ -866,7 +817,7 @@ mod construction_tests {
         fn check<T: VectorRepr>(values: [T; 8]) {
             for (leaf_k, degree) in [(1, 3), (3, 1)] {
                 let config = PiPNNConfig {
-                    leaf_k,
+                    leaf_k: nz(leaf_k),
                     ..partition_policy()
                 };
 
@@ -886,9 +837,9 @@ mod construction_tests {
     }
 
     #[test]
-    fn final_pruning_enforces_graph_degree_after_leaf_candidates_are_merged() {
+    fn final_pruning_cuts_merged_candidates_to_the_degree() {
         let config = PiPNNConfig {
-            leaf_k: 2,
+            leaf_k: nz(2),
             ..partition_policy()
         };
 
@@ -903,8 +854,8 @@ mod construction_tests {
         // of each close pair. Neither replicas nor worker count may duplicate edges.
         for (workers, replicas) in [(1, 1), (3, 2)] {
             let config = PiPNNConfig {
-                c_max: 2,
-                replicas,
+                c_max: nz(2),
+                replicas: nz(replicas),
                 ..partition_policy()
             };
 
@@ -940,12 +891,11 @@ mod construction_tests {
         // graph.
         let (points, dimensions, degree) = (1000, 16, 8);
         let config = PiPNNConfig {
-            c_max: 32,
-            c_min: 8,
+            c_max: nz(32),
             p_samp: 0.05,
-            fanout: vec![4, 2],
-            leaf_k: 2,
-            replicas: 1,
+            fanout: vec![nz(4), nz(2)],
+            leaf_k: nz(2),
+            replicas: nz(1),
         };
         for metric in [
             Metric::L2,

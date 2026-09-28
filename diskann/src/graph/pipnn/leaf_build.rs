@@ -3,19 +3,14 @@
  * Licensed under the MIT license.
  */
 
-//! Leaf-local graph construction and candidate accumulation.
+//! Leaf construction: select the nearest neighbors inside each leaf and merge
+//! them into one candidate list per data point.
 //!
-//! Partitioning supplies sorted, unique global point IDs for each leaf. One leaf
-//! job does these steps:
-//!
-//! 1. Gather each ID and convert its vector to reusable `f32` storage.
-//! 2. Call the leaf kernel for ranking-distance construction and local ranking.
-//! 3. Convert local positions to global point IDs.
-//! 4. Add both edge directions to global candidate lists.
-//!
-//! Overlapping leaves run concurrently. A worker locks one destination list only
-//! while it adds one leaf's IDs. Reusable buffers keep their largest allocation.
-//! Each operation uses an explicit active prefix.
+//! A leaf job gathers the vectors of its points as `f32`. The leaf kernel then
+//! selects the `k` nearest leaf points of each point, and the job adds each
+//! selected pair in both directions. Leaves overlap and run in parallel, so each
+//! data point has a locked candidate list. A job groups its edges by point first
+//! and then locks each list once.
 
 use parking_lot::Mutex;
 
@@ -31,10 +26,9 @@ use super::{
     topk::Candidate,
 };
 
-/// Reusable buffers for one Rayon leaf job.
+/// Scratch for one Rayon leaf job.
 ///
-/// The numerical vectors keep the largest leaf shape that this job observed.
-/// The job creates local adjacency lists only when the effective `k` is not zero.
+/// Each buffer keeps the largest size that the job needed. A leaf uses a prefix.
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
@@ -44,7 +38,8 @@ struct LeafBuffers {
 }
 
 impl LeafBuffers {
-    /// Grow the buffers for one leaf and return its effective `k`.
+    /// Grow the buffers for a leaf of `point_count` points and return the
+    /// effective `k` of the leaf.
     fn prepare(&mut self, point_count: usize, dimension_count: usize, requested_k: usize) -> usize {
         // A point has at most `point_count - 1` other points in its leaf. Wider rows
         // would hold only empty slots.
@@ -58,6 +53,7 @@ impl LeafBuffers {
         leaf_k
     }
 
+    /// Clear the edge lists of the first `point_count` leaf points.
     fn prepare_local_adjacency(&mut self, point_count: usize) {
         if self.local_adjacency.len() < point_count {
             self.local_adjacency.resize_with(point_count, Vec::new);
@@ -68,10 +64,12 @@ impl LeafBuffers {
     }
 }
 
-/// Build direct graph candidates from all overlapping leaves.
+/// Build one candidate list per data point from the nearest neighbors in all
+/// leaves.
 ///
-/// Each selected leaf pair contributes both edge directions. Candidate lists use
-/// global dataset IDs and contain no duplicate IDs.
+/// Each selected pair adds both directions. A list holds global IDs without
+/// duplicates. The lists are sorted, so the result does not depend on the order
+/// in which the parallel jobs finish.
 pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -89,14 +87,7 @@ where
     leaves
         .par_iter()
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
-            add_direct_leaf_candidates::<A, M, T>(
-                arch,
-                data,
-                point_ids,
-                requested_k,
-                buffers,
-                &candidates,
-            )
+            add_leaf_candidates::<A, M, T>(arch, data, point_ids, requested_k, buffers, &candidates)
         })?;
     Ok(candidates
         .into_iter()
@@ -108,12 +99,11 @@ where
         .collect())
 }
 
-/// Add one leaf's symmetric neighbors to the direct candidate lists.
+/// Add the selected pairs of one leaf to the candidate lists.
 ///
-/// Reusable buffers can be longer than this leaf, so all accesses use the current
-/// leaf shape. Leaf IDs are distinct dataset rows, so `points x dimensions` is no
+/// The IDs of a leaf are distinct dataset rows, so `points x dimensions` is not
 /// larger than the dataset.
-fn add_direct_leaf_candidates<A, M, T>(
+fn add_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     point_ids: &[u32],
@@ -158,6 +148,8 @@ where
     Ok(())
 }
 
+/// Convert each selected pair from leaf positions to global IDs and add it to
+/// the edge lists of both points.
 fn add_symmetric_neighbors(
     point_ids: &[u32],
     leaf_k: usize,
@@ -170,11 +162,10 @@ fn add_symmetric_neighbors(
                 continue;
             }
             let target = neighbor.local_idx as usize;
-            let source_id = point_ids[source];
-            let target_id = point_ids[target];
-            // Leaves contain unique IDs, and the kernel excludes each point itself.
-            local_adjacency[source].push(target_id);
-            local_adjacency[target].push(source_id);
+            // The kernel never selects a point for itself, and the IDs of a leaf
+            // are unique, so no list gets a self edge.
+            local_adjacency[source].push(point_ids[target]);
+            local_adjacency[target].push(point_ids[source]);
         }
     }
 }
@@ -185,7 +176,7 @@ fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
     }
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::graph::pipnn::{
@@ -195,7 +186,6 @@ mod tests {
     use diskann_wide::ARCH;
     use std::collections::BTreeSet;
 
-    #[expect(clippy::unwrap_used, reason = "an invalid fixture fails the test")]
     fn build(values: &[f32], leaves: Vec<Vec<u32>>, k: usize, workers: usize) -> Vec<Vec<u32>> {
         let data = MatrixView::try_from(values, values.len(), 1).unwrap();
         let candidates = thread_pool(workers)
@@ -205,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_neighbors_use_global_ids_and_contribute_both_edge_directions() {
+    fn selected_pairs_add_global_ids_in_both_directions() {
         // The leaf lists IDs [5, 1, 3], at coordinates [9, 0, 2].
         // The directed choices are 1 -> 3, 3 -> 1 and 5 -> 3.
         let values = [100.0_f32, 0.0, -100.0, 2.0, 200.0, 9.0];
@@ -235,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_without_selected_pairs_produce_empty_adjacency() {
+    fn leaves_without_pairs_add_no_candidates() {
         let values = [0.0_f32, 1.0, 4.0];
 
         for (leaves, k) in [
@@ -253,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn requesting_more_neighbors_than_a_leaf_has_selects_all_other_points() {
+    fn k_above_the_leaf_size_selects_every_other_point() {
         let values = [100.0_f32, 0.0, -100.0, 2.0, 200.0, 9.0];
 
         let actual = build(&values, vec![vec![1, 3, 5]], 99, 1);
@@ -265,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn unrankable_pairs_do_not_add_unassigned_ids_to_the_graph() {
+    fn unrankable_pairs_add_no_candidates() {
         let values = [0.0_f32, 3.0, f32::NAN];
 
         let actual = build(&values, vec![vec![0, 1, 2]], 2, 1);
@@ -274,11 +264,11 @@ mod tests {
     }
 
     #[test]
-    fn candidates_at_production_shape_are_the_symmetric_leaf_kernel_results() {
-        // Sixty overlapping leaves of 17 to 40 points run on four workers with
-        // reused buffers. They fill full SIMD groups of the leaf kernel. k = 2
-        // uses a fixed top-k width, and k = 5 uses the runtime width. The kernel
-        // on each leaf alone is the reference, so tie order cannot differ.
+    fn candidates_match_the_leaf_kernel_on_each_leaf() {
+        // The reference runs the leaf kernel on each leaf alone, so the tie order
+        // is the same. Sixty overlapping leaves of 17 to 40 points run on four
+        // workers with reused buffers and fill whole SIMD groups. k = 2 uses a
+        // fixed top-k width, and k = 5 uses the runtime width.
         let (point_count, dimensions) = (500, 24);
         let values = dense_points(point_count, dimensions, 1290);
         let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
@@ -331,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn reused_leaf_buffers_do_not_carry_edges_between_different_leaf_shapes() {
+    fn reused_buffers_do_not_carry_edges_between_leaves() {
         let values = [0.0_f32, 1.0, 4.0, 9.0, 16.0, 25.0, 36.0];
         let data = MatrixView::try_from(&values[..], 7, 1).unwrap();
         let mut buffers = LeafBuffers::default();
@@ -373,7 +363,7 @@ mod tests {
         ] {
             let candidates: Vec<_> = (0..7).map(|_| Mutex::new(AdjacencyList::new())).collect();
 
-            add_direct_leaf_candidates::<_, L2, _>(
+            add_leaf_candidates::<_, L2, _>(
                 ARCH,
                 data,
                 &ids,

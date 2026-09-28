@@ -3,18 +3,14 @@
  * Licensed under the MIT license.
  */
 
-//! Graph-degree enforcement with the Vamana RobustPrune kernel.
+//! Final pruning: cut each candidate list to the graph degree with RobustPrune.
 //!
-//! Candidate merging can produce more than the graph degree for one point.
-//! Lists within the degree limit pass through unchanged. Longer lists are sorted
-//! by source distance and passed to RobustPrune, then overwritten with the
-//! selected IDs. Reusable per-job scratch stores candidates and pruning state.
-//!
-//! RobustPrune owns occlusion and alpha-round behavior. This module supplies
-//! source vectors and metric distances.
+//! A list within the degree passes through unchanged. A longer list is sorted by
+//! distance to its source point and pruned with the shared Vamana RobustPrune,
+//! which owns occlusion and the alpha rounds. The selected IDs overwrite the list
+//! in place.
 
 use crate::{
-    ANNError, ANNResult,
     graph::{
         AdjacencyList, Config,
         internal::{SortedNeighbors, prune},
@@ -26,13 +22,7 @@ use diskann_utils::views::MatrixView;
 use diskann_vector::{DistanceFunction, distance::Metric};
 use rayon::prelude::*;
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum FinalizationError {
-    #[error("candidate count {actual} exceeds the u16 position limit {max}")]
-    TooManyCandidates { actual: usize, max: usize },
-}
-
-/// RobustPrune state for one Rayon job.
+/// RobustPrune scratch for one Rayon job.
 #[derive(Default)]
 struct PruneWorkspace {
     candidates: Vec<Neighbor<u32>>,
@@ -41,6 +31,7 @@ struct PruneWorkspace {
 }
 
 impl PruneWorkspace {
+    /// Prune the candidates of point `source` to the graph degree.
     fn prune<T: VectorRepr>(
         &mut self,
         data: MatrixView<'_, T>,
@@ -48,17 +39,10 @@ impl PruneWorkspace {
         mut source_candidates: AdjacencyList<u32>,
         graph: &Config,
         distance: &T::Distance,
-    ) -> ANNResult<AdjacencyList<u32>> {
+    ) -> AdjacencyList<u32> {
         let degree = graph.pruned_degree().get();
-        let candidate_count = source_candidates.len();
-        if candidate_count <= degree {
-            return Ok(source_candidates);
-        }
-        if candidate_count > u16::MAX as usize {
-            return Err(ANNError::new(FinalizationError::TooManyCandidates {
-                actual: candidate_count,
-                max: u16::MAX as usize,
-            }));
+        if source_candidates.len() <= degree {
+            return source_candidates;
         }
 
         let source_vector = data.row(source);
@@ -70,14 +54,17 @@ impl PruneWorkspace {
                     distance.evaluate_similarity(source_vector, data.row(candidate as usize)),
                 )
             }));
+        // RobustPrune stores candidate positions as `u16`, so keep the `u16::MAX`
+        // nearest candidates. Vamana limits its candidate pool the same way.
+        //
         // Sort before mapping: changing the element type can change the unstable
         // sort's order for equal distances, and therefore RobustPrune's choices.
-        let sorted = SortedNeighbors::new(&mut self.candidates, candidate_count);
+        let sorted = SortedNeighbors::new(&mut self.candidates, u16::MAX as usize);
         let mapped = sorted.map_in(&mut self.mapped_candidates, |&candidate| {
             (candidate as usize != source).then_some(candidate)
         });
         self.states.clear();
-        self.states.resize(candidate_count, prune::State::default());
+        self.states.resize(sorted.len(), prune::State::default());
         let selected = prune::robust_prune(
             mapped,
             &mut self.states,
@@ -94,22 +81,22 @@ impl PruneWorkspace {
             *destination = *sorted[state.neighbor as usize].id();
         }
         output.finish(selected);
-        Ok(source_candidates)
+        source_candidates
     }
 }
 
-/// Prune each candidate list that exceeds the graph degree.
+/// Prune each candidate list that is longer than the graph degree.
 ///
-/// Candidate builders supply one list per data row and valid dataset IDs.
+/// `candidates` holds one list of dataset IDs for each data row.
 pub(crate) fn prune_overfull<T: VectorRepr>(
     data: MatrixView<'_, T>,
     candidates: Vec<AdjacencyList<u32>>,
     graph: &Config,
     metric: Metric,
-) -> ANNResult<Vec<AdjacencyList<u32>>> {
+) -> Vec<AdjacencyList<u32>> {
     let distance = T::distance(metric, Some(data.ncols()));
 
-    // The build context supplies the Rayon pool for this terminal operation.
+    // This runs in the pool of the build context (see `build_graph`).
     candidates
         .into_par_iter()
         .enumerate()
@@ -149,9 +136,8 @@ mod tests {
         let data = MatrixView::try_from(values, values.len(), 1).unwrap();
         let graph = pruning_config(degree, Metric::L2, alpha).unwrap();
         let distance = f32::distance(Metric::L2, Some(1));
-        let pruned = PruneWorkspace::default()
-            .prune(data, 0, candidates_in_order(ids), &graph, &distance)
-            .unwrap();
+        let pruned =
+            PruneWorkspace::default().prune(data, 0, candidates_in_order(ids), &graph, &distance);
         pruned.to_vec()
     }
 
@@ -197,9 +183,13 @@ mod tests {
             let graph = pruning_config(2, metric, 1.0).unwrap();
             let distance = f32::distance(metric, Some(2));
 
-            let actual = PruneWorkspace::default()
-                .prune(data, 0, candidates_in_order(&[3, 2, 1]), &graph, &distance)
-                .unwrap();
+            let actual = PruneWorkspace::default().prune(
+                data,
+                0,
+                candidates_in_order(&[3, 2, 1]),
+                &graph,
+                &distance,
+            );
 
             assert_eq!(&*actual, expected, "{metric:?}");
         }
@@ -229,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn reused_workspace_does_not_carry_neighbors_or_occlusion_between_sources() {
+    fn a_reused_workspace_does_not_carry_state_between_sources() {
         let values = [0.0_f32, 1.0, 3.0, -2.0, 9.0];
         let data = MatrixView::try_from(&values[..], 5, 1).unwrap();
         let graph = pruning_config(2, Metric::L2, 1.0).unwrap();
@@ -242,37 +232,24 @@ mod tests {
             (4, &[3, 2, 1][..], &[2][..]),
             (1, &[4, 3, 2, 0][..], &[0, 2][..]),
         ] {
-            let actual = workspace
-                .prune(data, source, candidates_in_order(ids), &graph, &distance)
-                .unwrap();
+            let actual = workspace.prune(data, source, candidates_in_order(ids), &graph, &distance);
 
             assert_eq!(&*actual, expected, "source {source}");
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
-    fn the_candidate_position_limit_accepts_u16_max_and_rejects_one_more() {
-        let values: Vec<_> = (0..=u16::MAX as usize + 1).map(|i| i as f32).collect();
-        let data = MatrixView::try_from(values.as_slice(), values.len(), 1).unwrap();
+    fn a_list_above_the_u16_position_limit_keeps_its_nearest_candidates() {
+        let count = u16::MAX as usize + 1;
+        let values: Vec<_> = (0..=count).map(|i| i as f32).collect();
+        let data = MatrixView::try_from(values.as_slice(), count + 1, 1).unwrap();
         let graph = pruning_config(1, Metric::L2, 1.0).unwrap();
         let distance = f32::distance(Metric::L2, Some(1));
+        let candidates = AdjacencyList::from_iter_untrusted(1..=count as u32);
 
-        let largest = AdjacencyList::from_iter_untrusted(1..=u16::MAX as u32);
-        let actual = PruneWorkspace::default()
-            .prune(data, 0, largest, &graph, &distance)
-            .unwrap();
+        let actual = PruneWorkspace::default().prune(data, 0, candidates, &graph, &distance);
+
         assert_eq!(&*actual, [1]);
-
-        let too_many = AdjacencyList::from_iter_untrusted(1..=u16::MAX as u32 + 1);
-        let error = PruneWorkspace::default()
-            .prune(data, 0, too_many, &graph, &distance)
-            .unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<FinalizationError>(),
-            Some(FinalizationError::TooManyCandidates { actual, max })
-                if *actual == u16::MAX as usize + 1 && *max == u16::MAX as usize
-        ));
     }
 
     #[test]
@@ -287,8 +264,7 @@ mod tests {
                 .to_vec();
 
             let actual = thread_pool(workers)
-                .install(|| prune_overfull(data, candidates, &graph, Metric::L2))
-                .unwrap();
+                .install(|| prune_overfull(data, candidates, &graph, Metric::L2));
 
             assert_eq!(
                 actual.into_iter().map(Vec::from).collect::<Vec<_>>(),
