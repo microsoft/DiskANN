@@ -15,10 +15,16 @@
 //! A configured level assigns each point to `fanout[level]` leaders. A deeper
 //! level assigns each point to one leader. Each replica uses a different
 //! deterministic seed.
+//!
+//! Buffer sizes use plain multiplication. Point and leader IDs in one split are
+//! distinct dataset rows, so a gathered `rows x dimensions` buffer is no larger
+//! than the dataset. An assignment buffer holds `points x fanout` IDs. With at
+//! most `u32::MAX` points and `LEADER_CAP` leaders, this count fits in a 64-bit
+//! `usize`.
 
 use std::collections::HashSet;
 
-use crate::{ANNError, ANNResult, utils::VectorRepr};
+use crate::{ANNResult, utils::VectorRepr};
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool},
     views::{MatrixView, MutMatrixView},
@@ -28,41 +34,41 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
+    conversion::gather_as_f32,
     partition_kernel::{PartitionKernelWorkspace, assign_leaders},
     partition_metric::PartitionMetric,
     simd::Simd,
     topk::UNASSIGNED,
 };
 
-// These constants control internal batching and deterministic seed generation.
+/// Seed of the first replica. Fixed seeds make each build reproducible.
 const PARTITION_SEED: u64 = 1_000;
+/// Seed step between replicas, so each replica samples different leaders.
 const REPLICA_SEED_STEP: u64 = 7_919;
+/// Maximum number of leaders in one split. The PiPNN paper uses the same hard
+/// cap ("typically 1000", Section 4.1). A split costs
+/// `points x leaders x dimensions` multiply-adds. Without the cap, the first
+/// split of 10M points at `p_samp = 0.005` samples 50,000 leaders and does 50
+/// times the work.
 const LEADER_CAP: usize = 1_000;
-const ASSIGNMENT_CACHE_TARGET_BYTES: usize = 524_288;
-const MIN_ASSIGNMENT_STRIPE_POINTS: usize = 32;
+/// Size target of the distance block of one stripe, `points x leaders x 4`
+/// bytes. GEMM writes the block and the top-k scan reads it back, so the block
+/// must stay in the L2 cache of the core. On an AMD EPYC 7763 (512 KiB L2 per
+/// core), this value gave the shortest partition time for 10M points: 128 KiB
+/// was about 7% slower and 2 MiB about 5% slower. Current server cores have
+/// 512 KiB to 2 MiB of L2 cache.
+const ASSIGNMENT_CACHE_TARGET_BYTES: usize = 512 * 1024;
+/// Maximum number of points in one stripe. With few leaders, the cache target
+/// alone allows very tall stripes. This bound keeps the gathered points of one
+/// worker at `1024 x dimensions x 4` bytes or less.
 const MAX_ASSIGNMENT_STRIPE_POINTS: usize = 1_024;
+/// Clusters with at least this many points scatter in parallel. Such clusters
+/// occur at the first levels, where few splits run at the same time. A serial
+/// scatter of 10M points at fanout 10 takes 0.59 s, and a parallel scatter
+/// takes 0.15 s on 16 threads (AMD EPYC 7763). The serial time does not
+/// decrease with more threads, so its share of the build increases on larger
+/// machines. Below this size, a serial scatter takes a few milliseconds.
 const PARALLEL_SCATTER_MIN_POINTS: usize = 100_000;
-const MAX_PARTITION_ITERATIONS: usize = 30;
-
-/// Error from partition shape checks or recursion progress.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum PartitionError {
-    #[error("{buffer} shape {rows} x {cols} overflows usize")]
-    ShapeOverflow {
-        buffer: &'static str,
-        rows: usize,
-        cols: usize,
-    },
-    #[error(
-        "partition stopped after {limit} iterations with an oversized cluster of size \
-         {size} at level {level}"
-    )]
-    IterationLimit {
-        size: usize,
-        level: usize,
-        limit: usize,
-    },
-}
 
 struct PendingPartition {
     point_ids: Vec<u32>,
@@ -129,6 +135,11 @@ where
 ///
 /// The function processes one work queue per recursion level. It merges leaves
 /// smaller than `c_min` after the queue becomes empty.
+///
+/// The queue empties because the fanout schedule is finite. After the schedule,
+/// a split puts each point into at most one child. [`split_partition`] makes sure
+/// that such a child is smaller than its parent, so the cluster sizes decrease at
+/// each later level.
 fn partition_replica<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -152,12 +163,7 @@ where
         level: 0,
         seed,
     }];
-
-    for _ in 0..MAX_PARTITION_ITERATIONS {
-        if pending.is_empty() {
-            return Ok(merge_undersized_leaves(leaves, config.c_min, config.c_max));
-        }
-
+    while !pending.is_empty() {
         // Indexed parallel collection preserves parent-partition order.
         let splits: ANNResult<Vec<_>> = pending
             .into_par_iter()
@@ -173,18 +179,7 @@ where
         }
         pending = next_level;
     }
-
-    let Some(largest) = pending
-        .iter()
-        .max_by_key(|partition| partition.point_ids.len())
-    else {
-        return Ok(merge_undersized_leaves(leaves, config.c_min, config.c_max));
-    };
-    Err(ANNError::new(PartitionError::IterationLimit {
-        size: largest.point_ids.len(),
-        level: largest.level,
-        limit: MAX_PARTITION_ITERATIONS,
-    }))
+    Ok(merge_undersized_leaves(leaves, config.c_min, config.c_max))
 }
 
 /// Split one oversized cluster into child partitions.
@@ -217,7 +212,27 @@ where
 
     let mut pending = Vec::new();
     let mut leaves = Vec::new();
-    for cluster in clusters {
+    for (&leader, mut cluster) in leaders.iter().zip(clusters) {
+        if fanout == 1 && cluster.len() == partition.point_ids.len() {
+            // Every point chose this leader, so the split made no progress. Under
+            // L2, each leader is nearest to itself. Thus this occurs only when all
+            // sampled leaders are copies of one vector. Under cosine, vectors with
+            // the same direction also tie. Under inner product, one large leader
+            // can be first for every point.
+            //
+            // Copies of the leader have the same distance to every point, so any
+            // grouping of them gives the same leaf neighbors. Put the copies into
+            // leaves of equal size. The rest does not contain the leader, so it is
+            // smaller than its parent. Each stalled level therefore removes at
+            // least one point.
+            let copy = bytemuck::cast_slice::<T, u8>(data.row(leader as usize));
+            let (copies, rest): (Vec<_>, Vec<_>) = cluster
+                .into_iter()
+                .partition(|&id| bytemuck::cast_slice::<T, u8>(data.row(id as usize)) == copy);
+            let leaf_len = copies.len().div_ceil(copies.len().div_ceil(config.c_max));
+            leaves.extend(copies.chunks(leaf_len).map(<[u32]>::to_vec));
+            cluster = rest;
+        }
         if cluster.is_empty() {
             continue;
         }
@@ -253,8 +268,9 @@ fn replica_seed(replica: usize) -> u64 {
     PARTITION_SEED.wrapping_add((replica as u64).wrapping_mul(REPLICA_SEED_STEP))
 }
 
-// This LCG derives child seeds. Wrapping arithmetic gives the same mapping in
-// debug and release builds on all supported platforms.
+// This LCG step derives a child seed from the parent seed and the cluster size.
+// The multiplier is Knuth's MMIX constant. Wrapping arithmetic gives the same
+// mapping in debug and release builds on all supported platforms.
 fn mix_seed(seed: u64, salt: u64) -> u64 {
     seed.wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(salt)
@@ -279,51 +295,33 @@ where
     T: VectorRepr + Send + Sync,
 {
     let dimension_count = data.ncols();
-    let leader_values_len = checked_area("leader data", leader_ids.len(), dimension_count)?;
-    let mut leader_values = vec![0.0f32; leader_values_len];
-    gather_vectors(data, leader_ids, &mut leader_values)?;
+    let mut leader_values = vec![0.0f32; leader_ids.len() * dimension_count];
+    gather_as_f32(data, leader_ids, &mut leader_values)?;
 
     let leader_matrix =
-        MatrixView::try_from(leader_values.as_slice(), leader_ids.len(), dimension_count)
-            .map_err(|error| ANNError::new(error.as_static()))?;
+        MatrixView::try_from(leader_values.as_slice(), leader_ids.len(), dimension_count)?;
     let leaders = M::create_leaders(leader_matrix);
     let leader_count = M::leader_count(&leaders);
 
     let fanout = fanout.min(leader_count);
-    let assignment_len = checked_area("partition assignments", point_ids.len(), fanout)?;
-    let mut assignments = vec![0u32; assignment_len];
+    let mut assignments = vec![0u32; point_ids.len() * fanout];
     let stripe_points = assignment_stripe_point_count(leader_count);
-    let stripe_assignment_count = stripe_points * fanout;
-    let stripe_count = point_ids.len().div_ceil(stripe_points);
-    let worker_stripe_count = stripe_count.div_ceil(rayon::current_num_threads());
-    let worker_point_count = checked_area("assignment worker", worker_stripe_count, stripe_points)?;
-    let worker_assignment_count = checked_area("assignment worker", worker_point_count, fanout)?;
-
-    // Each worker chunk reuses one buffer lease for all its stripes.
     // `build_graph` runs this operation in the pool from the build context.
+    // A buffer lease takes one lock, which costs far less than the GEMM and
+    // ranking of one stripe.
     assignments
-        .par_chunks_mut(worker_assignment_count)
-        .enumerate()
-        .try_for_each(|(worker, worker_assignments)| {
-            let mut buffers = stripe_buffers.get_ref(());
-            let worker_first = worker * worker_point_count;
-            for (stripe, stripe_assignments) in worker_assignments
-                .chunks_mut(stripe_assignment_count)
-                .enumerate()
-            {
-                let first_point = worker_first + stripe * stripe_points;
-                let stripe_point_count = stripe_assignments.len() / fanout;
-                assign_point_stripe::<A, M, T>(
-                    arch,
-                    data,
-                    &point_ids[first_point..first_point + stripe_point_count],
-                    &leaders,
-                    fanout,
-                    &mut buffers,
-                    stripe_assignments,
-                )?;
-            }
-            Ok::<(), ANNError>(())
+        .par_chunks_mut(stripe_points * fanout)
+        .zip(point_ids.par_chunks(stripe_points))
+        .try_for_each(|(stripe_assignments, stripe_ids)| {
+            assign_point_stripe::<A, M, T>(
+                arch,
+                data,
+                stripe_ids,
+                &leaders,
+                fanout,
+                &mut stripe_buffers.get_ref(()),
+                stripe_assignments,
+            )
         })?;
 
     Ok(scatter_assignments(
@@ -356,7 +354,7 @@ where
 {
     let point_count = point_ids.len();
     let dimensions = data.ncols();
-    let point_values_len = checked_area("point stripe", point_count, dimensions)?;
+    let point_values_len = point_count * dimensions;
     // Keep each buffer at its largest length. Every operation uses an explicit
     // active prefix.
     if buffers.point_values.len() < point_values_len {
@@ -370,19 +368,10 @@ where
         &mut point_values[..point_values_len],
         point_count,
         dimensions,
-    )
-    .map_err(|error| ANNError::new(error.as_static()))?;
-    gather_vectors(data, point_ids, points.as_mut_slice())?;
-    let output = MutMatrixView::try_from(assignments, point_count, fanout)
-        .map_err(|error| ANNError::new(error.as_static()))?;
+    )?;
+    gather_as_f32(data, point_ids, points.as_mut_slice())?;
+    let output = MutMatrixView::try_from(assignments, point_count, fanout)?;
     assign_leaders::<A, M>(arch, points.as_view(), leaders, output, kernel_workspace)
-}
-
-fn gather_vectors<T>(data: MatrixView<'_, T>, indices: &[u32], output: &mut [f32]) -> ANNResult<()>
-where
-    T: VectorRepr,
-{
-    super::conversion::gather_as_f32(data, indices, output).map_err(|(_, error)| error.into())
 }
 
 /// Group assigned point IDs by child partition.
@@ -510,32 +499,28 @@ fn drain_sorted(set: &mut HashSet<u32>) -> Vec<u32> {
     values
 }
 
-fn checked_area(buffer: &'static str, rows: usize, cols: usize) -> ANNResult<usize> {
-    rows.checked_mul(cols)
-        .ok_or_else(|| ANNError::new(PartitionError::ShapeOverflow { buffer, rows, cols }))
-}
-
+/// Return the number of points in one assignment stripe.
+///
+/// `LEADER_CAP` keeps this count at 131 points or more.
 fn assignment_stripe_point_count(leader_count: usize) -> usize {
-    let point_count = ASSIGNMENT_CACHE_TARGET_BYTES / (leader_count * size_of::<f32>());
-    let point_count = if point_count.is_power_of_two() {
-        point_count
-    } else {
-        point_count.next_power_of_two() / 2
-    };
-    point_count.clamp(MIN_ASSIGNMENT_STRIPE_POINTS, MAX_ASSIGNMENT_STRIPE_POINTS)
+    (ASSIGNMENT_CACHE_TARGET_BYTES / (leader_count * size_of::<f32>()))
+        .min(MAX_ASSIGNMENT_STRIPE_POINTS)
 }
 
 #[cfg(all(test, not(miri)))]
 mod tests {
     use super::*;
-    use crate::graph::pipnn::{L2, test_support};
+    use crate::graph::pipnn::{
+        L2,
+        test_support::{self, dense_points, sorted_members_per_row, thread_pool},
+    };
+    use diskann_vector::distance::Metric;
     use diskann_wide::ARCH;
-    use rstest::rstest;
 
     // Neither leaf order nor point order within a leaf is part of the result.
     // Preserve repeated leaves and IDs so comparison still detects duplicates.
     fn sorted_leaf_memberships(leaves: &[Vec<u32>]) -> Vec<Vec<u32>> {
-        let mut leaves = test_support::sorted_members_per_row(leaves);
+        let mut leaves = sorted_members_per_row(leaves);
         leaves.sort_unstable();
         leaves
     }
@@ -551,65 +536,76 @@ mod tests {
         }
     }
 
-    #[rstest]
-    #[case::minimum_sample(7, 0.01, 2)]
-    #[case::rounded_fraction(7, 0.31, 3)]
-    #[case::all_points(7, 1.0, 7)]
-    #[case::below_cap(999, 1.0, 999)]
-    #[case::at_cap(1000, 1.0, 1000)]
-    #[case::above_cap(1001, 1.0, 1000)]
-    fn sampled_leaders_are_a_repeatable_subset_without_replacement(
-        #[case] point_count: u32,
-        #[case] fraction: f64,
-        #[case] expected_count: usize,
-    ) {
-        let ids: Vec<_> = (0..point_count).map(|id| 10 + 3 * id).collect();
-
-        let mut leaders = sample_leaders(&ids, fraction, 1290);
-
-        assert_eq!(leaders.len(), expected_count);
-        assert_eq!(
-            leaders.iter().copied().collect::<HashSet<_>>().len(),
-            expected_count
-        );
-        assert!(leaders.iter().all(|id| ids.contains(id)));
-        let mut repeated = sample_leaders(&ids, fraction, 1290);
-        leaders.sort_unstable();
-        repeated.sort_unstable();
-        assert_eq!(leaders, repeated);
+    #[expect(clippy::unwrap_used, reason = "an invalid fixture fails the test")]
+    fn split<M: PartitionMetric>(
+        data: MatrixView<'_, f32>,
+        config: &PiPNNConfig,
+        parent: PendingPartition,
+    ) -> PartitionSplit {
+        let buffers = StripeBufferPool::new((), 0, None);
+        thread_pool(2)
+            .install(|| split_partition::<_, M, _>(ARCH, data, config, parent, &buffers))
+            .unwrap()
     }
 
-    #[rstest]
-    #[case::nearest_only(1, vec![vec![5, 1], vec![4]])]
-    #[case::all_leaders(2, vec![vec![5, 4, 1], vec![5, 4, 1]])]
-    #[case::fanout_above_leader_count(9, vec![vec![5, 4, 1], vec![5, 4, 1]])]
-    fn points_join_their_nearest_leaders(#[case] fanout: usize, #[case] expected: Vec<Vec<u32>>) {
+    #[test]
+    fn sampled_leaders_are_a_repeatable_subset_without_replacement() {
+        // (points, sampling fraction, expected leaders)
+        for (point_count, fraction, expected_count) in [
+            (7, 0.01, 2), // A split needs two leaders.
+            (7, 0.31, 3), // 2.17 rounds up.
+            (7, 1.0, 7),
+            (999, 1.0, 999),
+            (1000, 1.0, LEADER_CAP),
+            (1001, 1.0, LEADER_CAP),
+        ] {
+            let case = format!("{point_count} points, fraction {fraction}");
+            let ids: Vec<_> = (0..point_count).map(|id| 10 + 3 * id).collect();
+
+            let mut leaders = sample_leaders(&ids, fraction, 1290);
+
+            assert_eq!(leaders.len(), expected_count, "{case}");
+            let distinct: HashSet<_> = leaders.iter().collect();
+            assert_eq!(distinct.len(), expected_count, "{case}");
+            assert!(leaders.iter().all(|id| ids.contains(id)), "{case}");
+            let mut repeated = sample_leaders(&ids, fraction, 1290);
+            leaders.sort_unstable();
+            repeated.sort_unstable();
+            assert_eq!(leaders, repeated, "{case}");
+        }
+    }
+
+    #[test]
+    fn points_join_their_nearest_leaders() {
         // Leader columns are global IDs [2, 0], at x=10 and x=0.
         // The requested points [5, 4, 1] are at x=8, x=2 and x=100.
         let values = [0.0_f32, 100.0, 10.0, -100.0, 2.0, 8.0];
         let data = MatrixView::try_from(&values[..], 6, 1).unwrap();
         let buffers = StripeBufferPool::new((), 0, None);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
-            .build()
-            .unwrap();
+        let pool = thread_pool(2);
 
-        let actual = pool
-            .install(|| {
-                assign_to_leaders::<_, L2, _>(ARCH, data, &[5, 4, 1], &[2, 0], fanout, &buffers)
-            })
-            .unwrap();
+        for (fanout, expected) in [
+            (1, [vec![5, 1], vec![4]]),
+            (2, [vec![5, 4, 1], vec![5, 4, 1]]),
+            // Fanout above the leader count assigns every point to every leader.
+            (9, [vec![5, 4, 1], vec![5, 4, 1]]),
+        ] {
+            let actual = pool
+                .install(|| {
+                    assign_to_leaders::<_, L2, _>(ARCH, data, &[5, 4, 1], &[2, 0], fanout, &buffers)
+                })
+                .unwrap();
 
-        assert_eq!(
-            test_support::sorted_members_per_row(&actual),
-            test_support::sorted_members_per_row(&expected)
-        );
+            assert_eq!(
+                sorted_members_per_row(&actual),
+                sorted_members_per_row(&expected),
+                "fanout {fanout}"
+            );
+        }
     }
 
-    #[rstest]
-    #[case::one_worker(1)]
-    #[case::several_workers(3)]
-    fn multiple_stripes_and_their_partial_tail_preserve_all_assignments(#[case] workers: usize) {
+    #[test]
+    fn multiple_stripes_and_their_partial_tail_preserve_all_assignments() {
         // More than two maximum-sized stripes, with three points left over.
         // Each dense row selects two of the three centers at 10, 0 and 4.
         // Every row selects 4; its other center is 10 for x=10 and 0 otherwise.
@@ -620,31 +616,72 @@ mod tests {
             .collect();
         let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
         let ids: Vec<_> = (0..point_count as u32).rev().collect();
-        let expected = vec![
-            ids.iter()
-                .copied()
-                .filter(|id| id % 3 == 2)
-                .collect::<Vec<_>>(),
-            ids.iter()
-                .copied()
-                .filter(|id| id % 3 != 2)
-                .collect::<Vec<_>>(),
+        let expected = [
+            ids.iter().copied().filter(|id| id % 3 == 2).collect(),
+            ids.iter().copied().filter(|id| id % 3 != 2).collect(),
             ids.clone(),
         ];
         let buffers = StripeBufferPool::new((), 0, None);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
+
+        for workers in [1, 3] {
+            let actual = thread_pool(workers)
+                .install(|| {
+                    assign_to_leaders::<_, L2, _>(ARCH, data, &ids, &[2, 0, 1], 2, &buffers)
+                })
+                .unwrap();
+
+            assert_eq!(
+                sorted_members_per_row(&actual),
+                sorted_members_per_row(&expected),
+                "{workers} workers"
+            );
+        }
+    }
+
+    #[test]
+    fn assignments_at_production_shape_join_each_point_to_its_nearest_leaders() {
+        // 300 leaders give stripes of 436 points, so 3,000 points use several
+        // stripes, a partial tail, several workers and full SIMD leader groups.
+        // Dense fixtures keep the f32 scores exact, so the check needs no
+        // tolerance. It accepts any order of tied leaders.
+        let (point_count, dimensions, fanout) = (3000, 32, 3);
+        let values = dense_points(point_count, dimensions, 1290);
+        let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+        let row = |id: u32| &values[id as usize * dimensions..][..dimensions];
+        let ids: Vec<u32> = (0..point_count as u32).rev().collect();
+        let leaders: Vec<u32> = (0..point_count as u32).step_by(10).collect();
+        let buffers = StripeBufferPool::new((), 0, None);
+
+        let clusters = thread_pool(4)
+            .install(|| assign_to_leaders::<_, L2, _>(ARCH, data, &ids, &leaders, fanout, &buffers))
             .unwrap();
 
-        let actual = pool
-            .install(|| assign_to_leaders::<_, L2, _>(ARCH, data, &ids, &[2, 0, 1], 2, &buffers))
-            .unwrap();
-
-        assert_eq!(
-            test_support::sorted_members_per_row(&actual),
-            test_support::sorted_members_per_row(&expected)
-        );
+        let mut chosen = vec![Vec::new(); point_count];
+        for (column, cluster) in clusters.iter().enumerate() {
+            // `ids` is descending, and scatter keeps the input order.
+            assert!(cluster.is_sorted_by(|a, b| a > b), "leader {column}");
+            for &id in cluster {
+                chosen[id as usize].push(column);
+            }
+        }
+        for (id, columns) in chosen.iter().enumerate() {
+            let distance = |column: usize| {
+                test_support::distance(Metric::L2, row(id as u32), row(leaders[column]))
+            };
+            let farthest_chosen = columns
+                .iter()
+                .map(|&column| distance(column))
+                .fold(f64::MIN, f64::max);
+            let nearest_other = (0..leaders.len())
+                .filter(|column| !columns.contains(column))
+                .map(distance)
+                .fold(f64::INFINITY, f64::min);
+            assert_eq!(columns.len(), fanout, "point {id}");
+            assert!(
+                farthest_chosen <= nearest_other,
+                "point {id}: chosen {columns:?} at {farthest_chosen}, other at {nearest_other}"
+            );
+        }
     }
 
     #[test]
@@ -679,79 +716,75 @@ mod tests {
                 .collect();
             let expected: Vec<_> = expected.chunks_exact(fanout).map(<[u32]>::to_vec).collect();
             assert_eq!(
-                test_support::sorted_members_per_row(&actual),
-                test_support::sorted_members_per_row(&expected),
+                sorted_members_per_row(&actual),
+                sorted_members_per_row(&expected),
                 "points {ids:?}, fanout={fanout}"
             );
         }
     }
 
-    #[rstest]
-    #[case::small_input(7)]
-    #[case::below_parallel_threshold(PARALLEL_SCATTER_MIN_POINTS - 1)]
-    #[case::at_parallel_threshold(PARALLEL_SCATTER_MIN_POINTS)]
-    #[case::uneven_parallel_chunks(PARALLEL_SCATTER_MIN_POINTS + 1)]
-    fn scatter_groups_assigned_points_by_leader_and_omits_unassigned_slots(
-        #[case] point_count: usize,
-    ) {
-        let ids: Vec<_> = (0..point_count).map(|i| 1_000_000 - i as u32).collect();
+    #[test]
+    fn scatter_groups_assigned_points_by_leader_and_omits_unassigned_slots() {
         let pattern = [
             [2, 0],
             [UNASSIGNED, 1],
             [0, UNASSIGNED],
             [UNASSIGNED, UNASSIGNED],
         ];
-        let assignments: Vec<_> = (0..point_count).flat_map(|i| pattern[i % 4]).collect();
-        let expected = vec![
-            ids.iter().copied().step_by(2).collect::<Vec<_>>(),
-            ids.iter().copied().skip(1).step_by(4).collect(),
-            ids.iter().copied().step_by(4).collect(),
-            vec![],
-        ];
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(3)
-            .build()
-            .unwrap();
+        let pool = thread_pool(3);
 
-        let actual = pool.install(|| scatter_assignments(&ids, &assignments, 2, 4));
+        // Counts around the parallel threshold cover both scatter paths and
+        // parallel chunks of unequal length.
+        for point_count in [
+            7,
+            PARALLEL_SCATTER_MIN_POINTS - 1,
+            PARALLEL_SCATTER_MIN_POINTS,
+            PARALLEL_SCATTER_MIN_POINTS + 1,
+        ] {
+            let ids: Vec<_> = (0..point_count).map(|i| 1_000_000 - i as u32).collect();
+            let assignments: Vec<_> = (0..point_count).flat_map(|i| pattern[i % 4]).collect();
+            let expected = [
+                ids.iter().copied().step_by(2).collect(),
+                ids.iter().copied().skip(1).step_by(4).collect(),
+                ids.iter().copied().step_by(4).collect(),
+                vec![],
+            ];
 
-        assert_eq!(
-            test_support::sorted_members_per_row(&actual),
-            test_support::sorted_members_per_row(&expected)
-        );
+            let actual = pool.install(|| scatter_assignments(&ids, &assignments, 2, 4));
+
+            assert_eq!(
+                sorted_members_per_row(&actual),
+                sorted_members_per_row(&expected),
+                "{point_count} points"
+            );
+        }
     }
 
-    #[rstest]
-    #[case::configured_overlap(0, vec![vec![0, 1], vec![0, 1], vec![2, 3], vec![2, 3]])]
-    #[case::after_schedule(1, vec![vec![0], vec![1], vec![2], vec![3]])]
-    fn a_split_uses_the_configured_fanout_then_falls_back_to_one_leader(
-        #[case] level: usize,
-        #[case] expected: Vec<Vec<u32>>,
-    ) {
+    #[test]
+    fn a_split_uses_the_configured_fanout_then_falls_back_to_one_leader() {
+        // Every point is a leader, so membership is fixed regardless of output order.
         let values = [0.0_f32, 1.0, 10.0, 11.0];
         let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
-        let config = splitting_config();
-        let parent = PendingPartition {
-            point_ids: vec![0, 1, 2, 3],
-            level,
-            seed: 1290,
-        };
-        let buffers = StripeBufferPool::new((), 0, None);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
-            .build()
-            .unwrap();
 
-        let actual = pool
-            .install(|| split_partition::<_, L2, _>(ARCH, data, &config, parent, &buffers))
-            .unwrap();
+        for (level, expected) in [
+            (0, vec![vec![0, 1], vec![0, 1], vec![2, 3], vec![2, 3]]),
+            (1, vec![vec![0], vec![1], vec![2], vec![3]]),
+        ] {
+            let parent = PendingPartition {
+                point_ids: vec![0, 1, 2, 3],
+                level,
+                seed: 1290,
+            };
 
-        // Every point is a leader, so membership is fixed regardless of output order.
-        assert_eq!(
-            sorted_leaf_memberships(&actual.leaves),
-            sorted_leaf_memberships(&expected)
-        );
-        assert!(actual.pending.is_empty());
+            let actual = split::<L2>(data, &splitting_config(), parent);
+
+            assert_eq!(
+                sorted_leaf_memberships(&actual.leaves),
+                sorted_leaf_memberships(&expected),
+                "level {level}"
+            );
+            assert!(actual.pending.is_empty(), "level {level}");
+        }
     }
 
     #[test]
@@ -767,15 +800,8 @@ mod tests {
             level: 0,
             seed: 1290,
         };
-        let buffers = StripeBufferPool::new((), 0, None);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
-            .build()
-            .unwrap();
 
-        let actual = pool
-            .install(|| split_partition::<_, L2, _>(ARCH, data, &config, parent, &buffers))
-            .unwrap();
+        let actual = split::<L2>(data, &config, parent);
 
         assert!(actual.leaves.is_empty());
         assert!(actual.pending.iter().all(|child| child.level == 1));
@@ -790,36 +816,71 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::below_limit(4)]
-    #[case::at_limit(3)]
-    fn data_within_cmax_forms_one_complete_leaf_per_replica(#[case] c_max: usize) {
-        let values = [0.0_f32, 1.0, 10.0];
-        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
+    #[test]
+    fn a_stalled_split_moves_the_leader_copies_into_leaves() {
+        // IDs 0 to 5 are copies of one vector, and ID 6 differs. When both
+        // sampled leaders are copies, all points tie and choose the same leader.
+        let values = [1.0_f32, 1.0, 1.0, 1.0, 1.0, 1.0, 9.0];
+        let data = MatrixView::try_from(&values[..], 7, 1).unwrap();
+        let ids: Vec<u32> = (0..7).collect();
         let config = PiPNNConfig {
-            c_max,
-            replicas: 2,
+            c_max: 4,
+            p_samp: 0.01,
+            fanout: vec![1],
             ..splitting_config()
         };
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
+        // `split_partition` derives its sampling seed from the parent seed and size.
+        let seed = (0..)
+            .find(|&seed| {
+                let leaders = sample_leaders(&ids, config.p_samp, mix_seed(seed, 7));
+                leaders.iter().all(|&id| id < 6)
+            })
             .unwrap();
+        let parent = PendingPartition {
+            point_ids: ids,
+            level: 0,
+            seed,
+        };
 
-        let actual = pool
-            .install(|| partition::<_, L2, _>(ARCH, data, &config))
-            .unwrap();
+        let actual = split::<L2>(data, &config, parent);
 
+        // The copies fill two equal leaves. The distinct point is not grouped with them.
         assert_eq!(
-            sorted_leaf_memberships(&actual),
-            [vec![0, 1, 2], vec![0, 1, 2]]
+            sorted_leaf_memberships(&actual.leaves),
+            [vec![0, 1, 2], vec![3, 4, 5], vec![6]]
         );
+        assert!(actual.pending.is_empty());
+    }
+
+    #[test]
+    fn data_within_cmax_forms_one_complete_leaf_per_replica() {
+        let values = [0.0_f32, 1.0, 10.0];
+        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
+        let pool = thread_pool(1);
+
+        for c_max in [3, 4] {
+            let config = PiPNNConfig {
+                c_max,
+                replicas: 2,
+                ..splitting_config()
+            };
+
+            let actual = pool
+                .install(|| partition::<_, L2, _>(ARCH, data, &config))
+                .unwrap();
+
+            assert_eq!(
+                sorted_leaf_memberships(&actual),
+                [vec![0, 1, 2], vec![0, 1, 2]],
+                "c_max {c_max}"
+            );
+        }
     }
 
     #[test]
     fn recursive_partitioning_preserves_leaf_membership_across_worker_counts() {
         let point_count = 129;
-        let values = test_support::dense_points(point_count, 17, 1290);
+        let values = dense_points(point_count, 17, 1290);
         let data = MatrixView::try_from(values.as_slice(), point_count, 17).unwrap();
         let config = PiPNNConfig {
             c_max: 16,
@@ -829,19 +890,11 @@ mod tests {
             replicas: 2,
             ..splitting_config()
         };
-        let serial = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
-        let parallel = rayon::ThreadPoolBuilder::new()
-            .num_threads(3)
-            .build()
-            .unwrap();
 
-        let first = serial
+        let first = thread_pool(1)
             .install(|| partition::<_, L2, _>(ARCH, data, &config))
             .unwrap();
-        let second = parallel
+        let second = thread_pool(3)
             .install(|| partition::<_, L2, _>(ARCH, data, &config))
             .unwrap();
 
@@ -869,7 +922,7 @@ mod tests {
     #[test]
     fn a_second_replica_adds_new_leaf_memberships() {
         let point_count = 33;
-        let values = test_support::dense_points(point_count, 17, 1290);
+        let values = dense_points(point_count, 17, 1290);
         let data = MatrixView::try_from(values.as_slice(), point_count, 17).unwrap();
         let config = PiPNNConfig {
             c_max: 8,
@@ -878,10 +931,7 @@ mod tests {
             fanout: vec![1],
             ..splitting_config()
         };
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
-            .build()
-            .unwrap();
+        let pool = thread_pool(2);
         let first = pool
             .install(|| partition::<_, L2, _>(ARCH, data, &config))
             .unwrap();
@@ -920,99 +970,82 @@ mod tests {
         assert_eq!(memberships, vec![2; point_count]);
     }
 
-    #[rstest]
-    #[case::one_unrankable([0.0, 3.0, f32::NAN], vec![vec![0], vec![1]])]
-    #[case::all_unrankable([f32::NAN; 3], vec![])]
-    fn unrankable_points_do_not_form_child_leaves(
-        #[case] values: [f32; 3],
-        #[case] expected: Vec<Vec<u32>>,
-    ) {
-        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
+    #[test]
+    fn unrankable_points_do_not_form_child_leaves() {
         let config = PiPNNConfig {
             c_max: 1,
             fanout: vec![1],
             ..splitting_config()
         };
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
+        let pool = thread_pool(1);
 
-        let actual = pool
-            .install(|| partition::<_, L2, _>(ARCH, data, &config))
-            .unwrap();
+        for (values, expected) in [
+            ([0.0, 3.0, f32::NAN], vec![vec![0], vec![1]]),
+            ([f32::NAN; 3], vec![]),
+        ] {
+            let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
 
-        assert_eq!(
-            sorted_leaf_memberships(&actual),
-            sorted_leaf_memberships(&expected)
-        );
+            let actual = pool
+                .install(|| partition::<_, L2, _>(ARCH, data, &config))
+                .unwrap();
+
+            assert_eq!(
+                sorted_leaf_memberships(&actual),
+                sorted_leaf_memberships(&expected),
+                "values {values:?}"
+            );
+        }
     }
 
     #[test]
-    fn indistinguishable_points_report_the_oversized_cluster_when_splitting_stalls() {
-        let values = [1.0_f32; 5];
-        let data = MatrixView::try_from(&values[..], 5, 1).unwrap();
-        let config = PiPNNConfig {
-            fanout: vec![1],
-            ..splitting_config()
-        };
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
+    fn small_leaf_merging_deduplicates_ids_without_exceeding_cmax() {
+        // (leaves, c_min, c_max, expected leaves)
+        for (leaves, c_min, c_max, expected) in [
+            (vec![], 2, 4, vec![]),
+            (
+                vec![vec![1, 4], vec![0, 3, 6, 8]],
+                2,
+                4,
+                vec![vec![1, 4], vec![0, 3, 6, 8]],
+            ),
+            // Overlapping small leaves merge into one leaf without repeated IDs.
+            (
+                vec![vec![4], vec![1], vec![4], vec![2]],
+                3,
+                4,
+                vec![vec![1, 2, 4]],
+            ),
+            // A merge that would exceed c_max flushes the first leaf.
+            (
+                vec![vec![4, 5], vec![0, 1]],
+                3,
+                3,
+                vec![vec![4, 5], vec![0, 1]],
+            ),
+            // After duplicate removal, the undersized remainder fits the last leaf.
+            (
+                vec![vec![1, 3, 5], vec![3], vec![6]],
+                3,
+                4,
+                vec![vec![1, 3, 5, 6]],
+            ),
+            (
+                vec![vec![1, 3, 5], vec![6], vec![8]],
+                3,
+                4,
+                vec![vec![1, 3, 5], vec![6, 8]],
+            ),
+            (vec![vec![7], vec![2]], 3, 4, vec![vec![2, 7]]),
+        ] {
+            let case = format!("{leaves:?}, c_min={c_min}, c_max={c_max}");
 
-        let error = pool
-            .install(|| partition::<_, L2, _>(ARCH, data, &config))
-            .unwrap_err();
+            let actual = merge_undersized_leaves(leaves, c_min, c_max);
 
-        assert_eq!(
-            error.downcast_ref::<PartitionError>().unwrap(),
-            &PartitionError::IterationLimit {
-                size: 5,
-                level: MAX_PARTITION_ITERATIONS,
-                limit: MAX_PARTITION_ITERATIONS,
-            }
-        );
-    }
-
-    #[rstest]
-    #[case::empty(vec![], 2, 4, vec![])]
-    #[case::large_leaves_unchanged(vec![vec![1, 4], vec![0, 3, 6, 8]], 2, 4,
-        vec![vec![1, 4], vec![0, 3, 6, 8]])]
-    #[case::overlapping_small_leaves(vec![vec![4], vec![1], vec![4], vec![2]], 3, 4,
-        vec![vec![1, 2, 4]])]
-    #[case::flush_before_exceeding_maximum(vec![vec![4, 5], vec![0, 1]], 3, 3,
-        vec![vec![4, 5], vec![0, 1]])]
-    #[case::remainder_fits_after_deduplication(vec![vec![1, 3, 5], vec![3], vec![6]], 3, 4,
-        vec![vec![1, 3, 5, 6]])]
-    #[case::remainder_does_not_fit(vec![vec![1, 3, 5], vec![6], vec![8]], 3, 4,
-        vec![vec![1, 3, 5], vec![6, 8]])]
-    #[case::only_an_undersized_remainder(vec![vec![7], vec![2]], 3, 4, vec![vec![2, 7]])]
-    fn small_leaf_merging_deduplicates_ids_without_exceeding_cmax(
-        #[case] leaves: Vec<Vec<u32>>,
-        #[case] c_min: usize,
-        #[case] c_max: usize,
-        #[case] expected: Vec<Vec<u32>>,
-    ) {
-        let actual = merge_undersized_leaves(leaves, c_min, c_max);
-
-        assert_eq!(
-            sorted_leaf_memberships(&actual),
-            sorted_leaf_memberships(&expected)
-        );
-    }
-
-    #[test]
-    fn an_overflowing_buffer_area_identifies_the_failed_shape() {
-        let error = checked_area("point stripe", usize::MAX, 2).unwrap_err();
-
-        assert_eq!(
-            error.downcast_ref::<PartitionError>().unwrap(),
-            &PartitionError::ShapeOverflow {
-                buffer: "point stripe",
-                rows: usize::MAX,
-                cols: 2,
-            }
-        );
+            assert_eq!(
+                sorted_leaf_memberships(&actual),
+                sorted_leaf_memberships(&expected),
+                "{case}"
+            );
+        }
     }
 }
