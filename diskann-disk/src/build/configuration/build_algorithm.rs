@@ -5,7 +5,9 @@
 
 //! Graph-build algorithm selection and its JSON-facing configuration.
 
-use std::{fmt, num::NonZeroUsize};
+use std::fmt;
+#[cfg(feature = "pipnn")]
+use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Serialize};
 
