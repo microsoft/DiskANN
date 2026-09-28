@@ -26,7 +26,7 @@ use diskann_benchmark_runner::{
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Benchmark, Checker, Input, Registry,
+    Benchmark, Checker, Input, Registry, Reflect,
 };
 
 ////////////////
@@ -55,7 +55,7 @@ impl<T: ?Sized> std::ops::Deref for DisplayWrapper<'_, T> {
 // Inputs //
 ////////////
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "snake_case")]
 pub enum SimilarityMeasure {
     SquaredL2,
@@ -74,17 +74,40 @@ impl std::fmt::Display for SimilarityMeasure {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// DiskANN provides specialization for different micro-architectures, allowing binaries
+/// compiled for an older machine to still execute accelerated kernels when the runtime
+/// CPU allows.
+///
+/// This enum selects the target micro-architecture's implementation to benchmark.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "kebab-case")]
 enum Arch {
+    /// Target AVX-512 with additional VNNI and population-count instructions.
+    ///
+    /// This is generally IceLake server or better.
+    ///
+    /// Only usable when compiling for x86-64.
     #[serde(rename = "x86-64-v4")]
     #[allow(non_camel_case_types)]
     X86_64_V4,
+
+    /// Target AVX2.
+    ///
+    /// Only usable when compiling for x86-64.
     #[serde(rename = "x86-64-v3")]
     #[allow(non_camel_case_types)]
     X86_64_V3,
+    /// Target the Aarch64 Neon instruction set.
+    ///
+    /// Only usable when compiling for aarch64.
     Neon,
+
+    /// Use the `diskann-vector` scalar fallbacks.
+    ///
+    /// These use a mixture of actual scalar code and auto-vectorization friendly loops.
     Scalar,
+
+    /// Reference operations using purely scalar loops.
     Reference,
 }
 
@@ -101,20 +124,37 @@ impl std::fmt::Display for Arch {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Parameters controlling the benchmark for an individual kernel.
+///
+/// Kernels work by using a fixed `query` vector and a variable of `data` vectors.
+/// Internal timers measure how long it takes to compute all distances from `query` to each
+/// data vector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Reflect)]
 struct Run {
+    /// The kernel type to test.
     distance: SimilarityMeasure,
+    /// The number of dimensions in each vector.
     dim: NonZeroUsize,
+    /// The number of data points to loop over.
     num_points: NonZeroUsize,
+    /// The number of loops to run between timing samples.
     loops_per_measurement: NonZeroUsize,
+    /// The total number of measurements to take.
     num_measurements: NonZeroUsize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// A full-precision SIMD Accelerated kernel.
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub struct SimdOp {
+    /// The data type for the left-hand side.
+    ///
+    /// This is typically the query in KNN scenarios.
     query_type: DataType,
+    /// The data type for the right-hand side.
     data_type: DataType,
+    /// The micro-architecture specialization.
     arch: Arch,
+    /// Kernel configurations.
     runs: Vec<Run>,
 }
 
@@ -205,7 +245,7 @@ impl Input for SimdOp {
 ///
 /// Each field specifies the maximum allowed relative increase in the corresponding metric.
 /// For example, a value of `0.10` means a 10% increase is tolerated.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
 struct SimdTolerance {
     min_time_regression: NonNegativeFinite,
 }
