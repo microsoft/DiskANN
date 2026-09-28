@@ -363,9 +363,12 @@ impl<'a, T, const ROWS: usize, const COLS: usize> Patch<'a, T, ROWS, COLS> {
 mod tests {
     use super::*;
 
-    use diskann_utils::views::{Init, Matrix, MatrixView};
+    use diskann_utils::{
+        assert_contains,
+        views::{Init, Matrix, MatrixView},
+    };
 
-    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
+    use crate::matrix_kernels::test_util::panic_message_for;
 
     #[test]
     fn test_visit_panels() {
@@ -534,7 +537,7 @@ mod tests {
         for (index, &value) in packed.iter().enumerate() {
             let (row, col) = BlockLayout::<SZ, PACK>::logical_index(index, k);
             let expected = if col < k {
-                reference[(block * SZ + row, col)]
+                *reference.element(block * SZ + row, col)
             } else {
                 PADDING
             };
@@ -632,7 +635,7 @@ mod tests {
                     for lane in 0..PACK {
                         let col = group * PACK + lane;
                         packed.push(if col < k {
-                            matrix[(block * SZ + row, col)]
+                            *matrix.element(block * SZ + row, col)
                         } else {
                             PADDING
                         });
@@ -672,7 +675,7 @@ mod tests {
                         for (lane, &value) in values.iter().enumerate() {
                             let col = group * PACK + lane;
                             let expected = if col < k.get() {
-                                matrix[(block * SZ + row, col)]
+                                *matrix.element(block * SZ + row, col)
                             } else {
                                 PADDING
                             };

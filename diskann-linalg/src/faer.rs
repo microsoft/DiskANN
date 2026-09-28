@@ -53,6 +53,47 @@ pub(super) fn sgemm_impl(
     faer::linalg::matmul::matmul(c, beta, a, b, alpha, Par::Seq)
 }
 
+/// Replace the lower triangle of `C` with `alpha * A * Aᵀ`.
+pub(super) fn sgemm_aat_lower_impl(m: usize, k: usize, alpha: f32, a: &[f32], c: &mut [f32]) {
+    sgemm_aat_lower_operation(faer::Accum::Replace, m, k, alpha, a, c);
+}
+
+/// Add the lower triangle of `alpha * A * Aᵀ` to `C`.
+pub(super) fn sgemm_aat_lower_add_impl(m: usize, k: usize, alpha: f32, a: &[f32], c: &mut [f32]) {
+    sgemm_aat_lower_operation(faer::Accum::Add, m, k, alpha, a, c);
+}
+
+/// Apply one lower-triangle accumulation mode.
+///
+/// The public wrapper validates both matrix shapes. Faer writes the diagonal
+/// and lower triangle. Faer does not read or write the upper triangle.
+fn sgemm_aat_lower_operation(
+    accumulation: faer::Accum,
+    m: usize,
+    k: usize,
+    alpha: f32,
+    a: &[f32],
+    c: &mut [f32],
+) {
+    use faer::linalg::matmul::triangular::{matmul, BlockStructure};
+
+    let a = faer::mat::MatRef::from_row_major_slice(a, m, k);
+    let at = a.transpose();
+    let c = faer::mat::MatMut::from_row_major_slice_mut(c, m, m);
+
+    matmul(
+        c,
+        BlockStructure::TriangularLower,
+        accumulation,
+        a,
+        BlockStructure::Rectangular,
+        at,
+        BlockStructure::Rectangular,
+        alpha,
+        Par::Seq,
+    );
+}
+
 /// See the documentation for `svd_into`.
 ///
 /// The implementation may assume the the specified invariants hold for the sizes of the

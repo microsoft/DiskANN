@@ -49,9 +49,9 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
         for start_idx in 0..num_samples {
             for dim_idx in 0..ncols {
                 let swap_idx = rng.random_range(0..num_samples);
-                let swap = result[(start_idx, dim_idx)];
-                result[(start_idx, dim_idx)] = result[(swap_idx, dim_idx)];
-                result[(swap_idx, dim_idx)] = swap;
+                let swap = *result.element(start_idx, dim_idx);
+                *result.element_mut(start_idx, dim_idx) = *result.element(swap_idx, dim_idx);
+                *result.element_mut(swap_idx, dim_idx) = swap;
             }
         }
 
@@ -67,7 +67,10 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
 mod tests {
     use std::fmt::Display;
 
-    use crate::views::{Init, Matrix};
+    use crate::{
+        assert_contains,
+        views::{Init, Matrix},
+    };
     use diskann_vector::conversion::CastFromSlice;
     use half::f16;
     use rand::{
@@ -216,8 +219,9 @@ mod tests {
                             .expect("Column must exist")
                     })
                     .collect();
-                assert!(
-                    col_vals.contains(&val),
+                assert_contains!(
+                    col_vals,
+                    val,
                     "Value {} in column {} not found in data",
                     val,
                     col
