@@ -36,7 +36,6 @@ pub(crate) enum Term {
 pub(crate) struct Context {
     inner: u64,
     quantizer_ready: Arc<AtomicBool>,
-    rerank_depth: Option<usize>,
 }
 
 impl Context {
@@ -44,17 +43,7 @@ impl Context {
         Self {
             inner,
             quantizer_ready: Arc::new(AtomicBool::new(false)),
-            rerank_depth: None,
         }
-    }
-
-    pub(crate) fn with_rerank_depth(mut self, depth: usize) -> Self {
-        self.rerank_depth = Some(depth);
-        self
-    }
-
-    pub(crate) fn rerank_depth(&self) -> Option<usize> {
-        self.rerank_depth
     }
 
     #[cfg(test)]
@@ -66,7 +55,6 @@ impl Context {
         let Context {
             inner,
             quantizer_ready,
-            rerank_depth,
         } = self;
         let inner = *inner | (kind as u64 & TERM_BITMASK);
         let quantizer_ready = quantizer_ready.clone();
@@ -74,7 +62,6 @@ impl Context {
         Self {
             inner,
             quantizer_ready,
-            rerank_depth: *rerank_depth,
         }
     }
 

@@ -851,97 +851,6 @@ pub unsafe extern "C" fn search_vector(
     beam_width: u32,
     overflow: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        search_vector_impl(
-            ctx,
-            index_ptr,
-            vector_data,
-            vector_len,
-            search_exploration_factor,
-            bitmap_data,
-            bitmap_len,
-            max_filtering_effort,
-            output_ids,
-            output_ids_len,
-            output_distances,
-            output_distances_len,
-            beam_width,
-            overflow,
-            None,
-        )
-    }
-}
-
-/// Search with a per-query limit on the number of quantized candidates read at full precision.
-/// The existing search_vector export remains unchanged for callers that rerank every candidate.
-///
-/// # Safety
-///
-/// FFI; the same pointer and length requirements as search_vector apply.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn search_vector_rerank(
-    ctx: u64,
-    index_ptr: *const c_void,
-    vector_data: *const u8,
-    vector_len: usize,
-    _delta: f32,
-    search_exploration_factor: u32,
-    bitmap_data: *const u8,
-    bitmap_len: usize,
-    max_filtering_effort: usize,
-    output_ids: *mut u8,
-    output_ids_len: usize,
-    output_distances: *mut f32,
-    output_distances_len: usize,
-    beam_width: u32,
-    overflow: *mut *mut c_void,
-    rerank_depth: u32,
-) -> i32 {
-    if rerank_depth == 0
-        || rerank_depth > search_exploration_factor
-        || (rerank_depth as usize) < output_distances_len
-    {
-        return -1;
-    }
-
-    unsafe {
-        search_vector_impl(
-            ctx,
-            index_ptr,
-            vector_data,
-            vector_len,
-            search_exploration_factor,
-            bitmap_data,
-            bitmap_len,
-            max_filtering_effort,
-            output_ids,
-            output_ids_len,
-            output_distances,
-            output_distances_len,
-            beam_width,
-            overflow,
-            Some(rerank_depth as usize),
-        )
-    }
-}
-
-unsafe fn search_vector_impl(
-    ctx: u64,
-    index_ptr: *const c_void,
-    vector_data: *const u8,
-    vector_len: usize,
-    search_exploration_factor: u32,
-    bitmap_data: *const u8,
-    bitmap_len: usize,
-    max_filtering_effort: usize,
-    output_ids: *mut u8,
-    output_ids_len: usize,
-    output_distances: *mut f32,
-    output_distances_len: usize,
-    beam_width: u32,
-    overflow: *mut *mut c_void,
-    rerank_depth: Option<usize>,
-) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
 
     let v = if let Some(v) = interpret_vector(index.quant_type, &vector_data, vector_len) {
@@ -950,10 +859,7 @@ unsafe fn search_vector_impl(
         return -1;
     };
 
-    let ctx = match rerank_depth {
-        Some(depth) => Context::new(ctx).with_rerank_depth(depth),
-        None => Context::new(ctx),
-    };
+    let ctx = Context::new(ctx);
 
     let mut output = SearchResults::new(
         output_distances_len,
@@ -1039,103 +945,10 @@ pub unsafe extern "C" fn search_element(
     beam_width: u32,
     overflow: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        search_element_impl(
-            ctx,
-            index_ptr,
-            id_data,
-            id_len,
-            search_exploration_factor,
-            bitmap_data,
-            bitmap_len,
-            max_filtering_effort,
-            output_ids,
-            output_ids_len,
-            output_distances,
-            output_distances_len,
-            beam_width,
-            overflow,
-            None,
-        )
-    }
-}
-
-/// Search for an existing element with a per-query full-precision reranking depth.
-///
-/// # Safety
-///
-/// FFI; the same pointer and length requirements as search_element apply.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn search_element_rerank(
-    ctx: u64,
-    index_ptr: *const c_void,
-    id_data: *const u8,
-    id_len: usize,
-    _delta: f32,
-    search_exploration_factor: u32,
-    bitmap_data: *const u8,
-    bitmap_len: usize,
-    max_filtering_effort: usize,
-    output_ids: *mut u8,
-    output_ids_len: usize,
-    output_distances: *mut f32,
-    output_distances_len: usize,
-    beam_width: u32,
-    overflow: *mut *mut c_void,
-    rerank_depth: u32,
-) -> i32 {
-    if rerank_depth == 0
-        || rerank_depth > search_exploration_factor
-        || (rerank_depth as usize) < output_distances_len
-    {
-        return -1;
-    }
-
-    unsafe {
-        search_element_impl(
-            ctx,
-            index_ptr,
-            id_data,
-            id_len,
-            search_exploration_factor,
-            bitmap_data,
-            bitmap_len,
-            max_filtering_effort,
-            output_ids,
-            output_ids_len,
-            output_distances,
-            output_distances_len,
-            beam_width,
-            overflow,
-            Some(rerank_depth as usize),
-        )
-    }
-}
-
-unsafe fn search_element_impl(
-    ctx: u64,
-    index_ptr: *const c_void,
-    id_data: *const u8,
-    id_len: usize,
-    search_exploration_factor: u32,
-    bitmap_data: *const u8,
-    bitmap_len: usize,
-    max_filtering_effort: usize,
-    output_ids: *mut u8,
-    output_ids_len: usize,
-    output_distances: *mut f32,
-    output_distances_len: usize,
-    beam_width: u32,
-    overflow: *mut *mut c_void,
-    rerank_depth: Option<usize>,
-) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
-    let ctx = match rerank_depth {
-        Some(depth) => Context::new(ctx).with_rerank_depth(depth),
-        None => Context::new(ctx),
-    };
+    let ctx = Context::new(ctx);
 
     let mut output = SearchResults::new(
         output_distances_len,

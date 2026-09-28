@@ -1542,7 +1542,7 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
         // Use the accessor.filtered_ids pre-allocated buffer to do a multi read from Garnet, placing the results in
         // the rerank buffer.
         accessor.filtered_ids.clear();
-        for nbor in candidates.take(accessor.context.rerank_depth().unwrap_or(usize::MAX)) {
+        for nbor in candidates {
             accessor.filtered_ids.push(4);
             accessor.filtered_ids.push(*nbor.id());
         }
