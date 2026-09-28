@@ -9,8 +9,8 @@
 //! care to support such fanciness in our benchmark inputs and outputs, especially since we
 //! need example JSONs to be round-trippable back to their serialized representations.
 //!
-//! As such, the main entry points ([`check_serde`] and [`check_enums`]) just take [`Serialize`]
-//! bounds.
+//! As such, the main entry points ([`check_struct`] and [`check_enums`]) just take [`Serialize`]
+//! bounds. We do not check round-trippability here. That's the user's problem.
 
 use std::{assert_matches, borrow::Cow};
 
@@ -295,8 +295,8 @@ fn extract_tag_and_content<'a>(
                     ctx
                 );
 
-                let kv: Vec<_> = m.iter().collect();
-                (&kv[0].0, Some(Cow::Borrowed(&kv[0].1)))
+                let kv = m.iter().next().unwrap();
+                (&kv.0, Some(Cow::Borrowed(&kv.1)))
             }
             _ => panic!("invalid representation\n\n{}", ctx),
         },
@@ -320,11 +320,7 @@ fn extract_tag_and_content<'a>(
             // Delete the tag field to reuse the rest of the checking infrastructure.
             let mut map = map.clone();
             map.remove(*tag);
-            if map.is_empty() {
-                (t, None)
-            } else {
-                (t, Some(Cow::Owned(Value::Object(map))))
-            }
+            (t, Some(Cow::Owned(Value::Object(map))))
         }
 
         // For adjacent tagging, the "content" field is ommitted when the corresponding
@@ -352,22 +348,6 @@ fn extract_tag_and_content<'a>(
     }
 }
 
-// See the inline notes in `extract_tag_and_content`.
-fn is_no_content_expected(repr: &tree::EnumRepr, variant: &tree::Variant) -> bool {
-    match repr {
-        tree::EnumRepr::External => variant.fields().is_unit(),
-        tree::EnumRepr::Internal { .. } => match variant.fields() {
-            tree::Fields::Named(named_fields) => named_fields.is_empty(),
-            tree::Fields::Unnamed(_) => unreachable!("unimplemented by serde"),
-            // Only allowed for new-type wrappers that themselves are structs. As sucn,
-            // we always expect a payload.
-            tree::Fields::NewType(_) => false,
-            tree::Fields::Unit => true,
-        },
-        tree::EnumRepr::Adjacent { .. } => variant.fields().is_unit(),
-    }
-}
-
 fn check_enum(e: &tree::Enum, s: &Value, ctx: Context<'_>) {
     let (tag, content) = extract_tag_and_content(e.repr(), s, ctx);
     assert_all_unique(e.variants().iter().map(|f| f.name()), ctx);
@@ -377,20 +357,38 @@ fn check_enum(e: &tree::Enum, s: &Value, ctx: Context<'_>) {
         None => panic!("could not find variant \"{}\"\n\n{}", tag, ctx),
     };
 
-    if is_no_content_expected(e.repr(), variant) {
-        assert!(content.is_none(), "{}", ctx);
-    } else {
-        let content: &Value = match content.as_deref() {
-            Some(content) => content,
-            None => panic!("No content was found when expected\n\n{}", ctx),
-        };
+    let next: &Value = match (e.repr(), &content) {
+        (tree::EnumRepr::External, None) => {
+            assert!(
+                variant.fields().is_unit(),
+                "content may only be excluded for unit variants\n\n{}", ctx
+            );
+            return;
+        },
+        (tree::EnumRepr::External, Some(c)) => &c,
+        (tree::EnumRepr::Internal { .. }, None) => unreachable!("internal always returns content"),
+        (tree::EnumRepr::Internal { .. }, Some(c)) => {
+            if variant.fields().is_unit() {
+                let map = value_as_map(c, ctx);
+                assert!(map.is_empty(), "unit enums should have no remaining values");
+                return;
+            } else {
+                c
+            }
+        },
+        (tree::EnumRepr::Adjacent { .. }, None) => {
+            assert!(variant.fields().is_unit(),
+                "content may only be excluded for unit variants\n\n{}", ctx);
+            return;
+        }
+        (tree::EnumRepr::Adjacent { .. }, Some(c)) => &c,
+    };
 
-        check_fields(
-            variant.fields(),
-            content,
-            context!(ctx, content, "variant \"{}\"", variant.name()),
-        )
-    }
+    check_fields(
+        variant.fields(),
+        next,
+        context!(ctx, next, "variant \"{}\"", variant.name()),
+    )
 }
 
 //----------//
@@ -456,6 +454,9 @@ fn value_as_array<'a>(v: &'a Value, ctx: Context<'_>) -> &'a [Value] {
 #[test]
 fn test_primitives() {
     check_struct(());
+
+    check_struct(false);
+
     check_struct(0u8);
     check_struct(0u16);
     check_struct(0u32);
@@ -467,6 +468,13 @@ fn test_primitives() {
     check_struct(0i32);
     check_struct(0i64);
     check_struct(0isize);
+
+    check_struct(0f32);
+    check_struct(0f64);
+
+    check_struct(std::marker::PhantomData::<usize>);
+
+    check_struct(String::from("hello"));
 }
 
 #[test]
@@ -605,12 +613,16 @@ fn enum_internally_tagged() {
     }
 
     #[derive(Serialize, Reflect)]
+    struct NewTypeEmpty {}
+
+    #[derive(Serialize, Reflect)]
     #[serde(rename_all = "kebab-case")]
     #[serde(tag = "fizzle")]
     enum Enum {
         Unit,
         EmptyStruct {},
         NewType(NewTypePayload),
+        NewTypeEmpty(NewTypeEmpty),
         Struct1 { a: usize },
         Struct2 { a: usize, b: usize },
         Struct3 { a: usize, b: usize, c: usize },
@@ -621,6 +633,7 @@ fn enum_internally_tagged() {
             Enum::Unit,
             Enum::EmptyStruct {},
             Enum::NewType(NewTypePayload { value: 10 }),
+            Enum::NewTypeEmpty(NewTypeEmpty {}),
             Enum::Struct1 { a: 0 },
             Enum::Struct2 { a: 0, b: 1 },
             Enum::Struct3 { a: 0, b: 1, c: 3 },
@@ -670,7 +683,7 @@ fn enum_adjacently_tagged() {
             Enum::Struct2 { a: 0, b: 1 },
             Enum::Struct3 { a: 0, b: 1, c: 3 },
         ],
-        format_args!("externally tagged enums"),
+        format_args!("adjacently tagged enums"),
     );
 }
 
