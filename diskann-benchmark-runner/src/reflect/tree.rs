@@ -13,6 +13,7 @@ pub enum Type {
     Aggregate(Aggregate),
     Enum(Enum),
     Sequence(Sequence),
+    Optional(Optional),
 }
 
 impl Type {
@@ -39,12 +40,22 @@ impl Type {
         Self::from(Sequence::new::<T>(doc))
     }
 
+    /// Keep the constructor private since we don't want users constructing the very special
+    /// `Optional` type for their own types.
+    pub(crate) fn optional<T>(doc: Option<Doc>) -> Self
+    where
+        T: Reflect,
+    {
+        Self::from(Optional::new::<T>(doc))
+    }
+
     pub fn doc(&self) -> Option<&str> {
         match self {
             Self::Primitive(p) => p.doc(),
             Self::Aggregate(a) => a.doc(),
             Self::Enum(e) => e.doc(),
             Self::Sequence(s) => s.doc(),
+            Self::Optional(o) => o.doc(),
         }
     }
 
@@ -54,6 +65,7 @@ impl Type {
             Self::Aggregate(a) => a.has_body(),
             Self::Enum(e) => e.has_body(),
             Self::Sequence(_) => true,
+            Self::Optional(_) => true,
         }
     }
 
@@ -97,6 +109,12 @@ impl From<Enum> for Type {
 impl From<Sequence> for Type {
     fn from(s: Sequence) -> Self {
         Self::Sequence(s)
+    }
+}
+
+impl From<Optional> for Type {
+    fn from(s: Optional) -> Self {
+        Self::Optional(s)
     }
 }
 
@@ -322,6 +340,7 @@ impl Enum {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum EnumRepr {
     /// Enums are tagged as the key in a collection.
     External,
@@ -409,6 +428,38 @@ impl Sequence {
     }
 
     pub(super) fn element(&self) -> Reflection {
+        self.element
+    }
+
+    pub(super) fn doc(&self) -> Option<&str> {
+        self.doc.as_deref()
+    }
+}
+
+//----------//
+// Optional //
+//----------//
+
+#[derive(Debug)]
+pub struct Optional {
+    element: Reflection,
+    doc: Option<Doc>,
+}
+
+impl Optional {
+    /// Keep the constructor private since we don't want users constructing the very special
+    /// `Optional` type for their own types.
+    pub(super) fn new<T>(doc: Option<Doc>) -> Self
+    where
+        T: Reflect,
+    {
+        Self {
+            element: Reflection::new::<T>(),
+            doc,
+        }
+    }
+
+    pub(super) fn value(&self) -> Reflection {
         self.element
     }
 

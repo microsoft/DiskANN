@@ -93,7 +93,7 @@ pub struct Render(Reflection);
 
 impl std::fmt::Display for Render {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut r = render::Renderer::new(f, 3);
+        let mut r = render::Renderer::new(f, 2);
         r.render_subject(self.0)
     }
 }
@@ -130,6 +130,7 @@ where
                     .iter()
                     .for_each(|variant| push_fields(variant.fields())),
                 Type::Sequence(seq) => push(seq.element()),
+                Type::Optional(opt) => push(opt.value()),
             }
         }
 
@@ -210,23 +211,7 @@ where
     T: Reflect,
 {
     fn ty() -> Type {
-        Type::enum_(
-            // TODO: Untagged
-            tree::EnumRepr::External,
-            [
-                tree::Variant::new(
-                    "<null>",
-                    tree::Fields::Unit,
-                    Some("Use `null` to indicate that this value does not exist".into()),
-                ),
-                tree::Variant::new(
-                    "<present>",
-                    tree::Fields::unnamed([tree::UnnamedField::new::<T>(None)]),
-                    Some("Presence indicates the value is present".into()),
-                ),
-            ],
-            Some("An optional configuration".into()),
-        )
+        Type::optional::<T>(Some("An optional type".into()))
     }
 
     fn format_type_name(f: &mut dyn Write) -> fmt::Result {

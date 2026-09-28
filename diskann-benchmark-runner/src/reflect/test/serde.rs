@@ -64,9 +64,9 @@ where
 /// A context for displaying where we are in the type tree.
 ///
 /// Contains the top level JSON we're working, the current JSON, and a stack of
-/// [`std::fmt::Argument`]s that describe the sequence of operations that led us into a mess.
+/// [`std::fmt::Arguments`] that describe the sequence of operations that led us into a mess.
 ///
-/// Use the [`context`] macro for creating nexted contexts.
+/// Use the [`context`] macro for creating nested contexts.
 #[derive(Debug, Clone, Copy)]
 struct Context<'a> {
     top: &'a Value,
@@ -135,6 +135,7 @@ fn check_type(ty: &Type, s: &Value, ctx: Context<'_>) {
         Type::Aggregate(a) => check_fields(a.fields(), s, context!(ctx, s, "aggregate")),
         Type::Enum(e) => check_enum(e, s, context!(ctx, s, "enum")),
         Type::Sequence(seq) => check_sequence(seq, s, context!(ctx, s, "sequence")),
+        Type::Optional(opt) => check_optional(opt, s, context!(ctx, s, "optional")),
     }
 }
 
@@ -266,7 +267,7 @@ fn check_enum_variants(e: &tree::Enum, s: &[Value], ctx: std::fmt::Arguments<'_>
 ///   "a": 10,
 /// }
 /// ```
-/// Adjaceny (say "tag = "mytag", "content" = "mycontent") looks like
+/// Adjacency (say "tag = "mytag", "content" = "mycontent") looks like
 /// ```json
 /// {
 ///   "mytag": "baz",
@@ -301,7 +302,7 @@ fn extract_tag_and_content<'a>(
             _ => panic!("invalid representation\n\n{}", ctx),
         },
 
-        // For internally tagged enums - we remove the tag after revrieval.
+        // For internally tagged enums - we remove the tag after retrieval.
         //
         // If the remaining dictionary is empty, then we change it to `None`.
         // This is technically a little ambiguous between unit variants and empty struct
@@ -323,7 +324,7 @@ fn extract_tag_and_content<'a>(
             (t, Some(Cow::Owned(Value::Object(map))))
         }
 
-        // For adjacent tagging, the "content" field is ommitted when the corresponding
+        // For adjacent tagging, the "content" field is omitted when the corresponding
         // variant is a unit variant.
         tree::EnumRepr::Adjacent { tag, content } => {
             let outer = value_as_map(s, ctx);
@@ -361,10 +362,11 @@ fn check_enum(e: &tree::Enum, s: &Value, ctx: Context<'_>) {
         (tree::EnumRepr::External, None) => {
             assert!(
                 variant.fields().is_unit(),
-                "content may only be excluded for unit variants\n\n{}", ctx
+                "content may only be excluded for unit variants\n\n{}",
+                ctx
             );
             return;
-        },
+        }
         (tree::EnumRepr::External, Some(c)) => &c,
         (tree::EnumRepr::Internal { .. }, None) => unreachable!("internal always returns content"),
         (tree::EnumRepr::Internal { .. }, Some(c)) => {
@@ -375,10 +377,13 @@ fn check_enum(e: &tree::Enum, s: &Value, ctx: Context<'_>) {
             } else {
                 c
             }
-        },
+        }
         (tree::EnumRepr::Adjacent { .. }, None) => {
-            assert!(variant.fields().is_unit(),
-                "content may only be excluded for unit variants\n\n{}", ctx);
+            assert!(
+                variant.fields().is_unit(),
+                "content may only be excluded for unit variants\n\n{}",
+                ctx
+            );
             return;
         }
         (tree::EnumRepr::Adjacent { .. }, Some(c)) => &c,
@@ -403,6 +408,16 @@ fn check_sequence(seq: &tree::Sequence, s: &Value, ctx: Context<'_>) {
             v,
             context!(ctx, v, "element {} of {}", i + 1, a.len()),
         );
+    }
+}
+
+//----------//
+// optional //
+//----------//
+
+fn check_optional(opt: &tree::Optional, s: &Value, ctx: Context<'_>) {
+    if !s.is_null() {
+        check_reflection(opt.value(), s, context!(ctx, s, "present optional"))
     }
 }
 
@@ -509,7 +524,7 @@ fn simple_aggregate() {
 
 #[test]
 fn simple_tuple() {
-    // A simple new-type tuple.
+    // A simple newtype tuple.
     #[derive(Serialize, Reflect, Clone)]
     struct NewType(String);
 
@@ -724,5 +739,51 @@ fn sequence_of_newtypes() {
 
     check_struct(Outer {
         values: vec![NewType(10), NewType(20)],
+    });
+}
+
+#[test]
+fn test_optionals() {
+    #[derive(Serialize, Reflect)]
+    #[serde(tag = "tag", content = "content", rename_all = "snake_case")]
+    enum CasesAdjacent {
+        NewType(Option<usize>),
+        Struct { val: Option<usize> },
+    };
+
+    #[derive(Serialize, Reflect)]
+    struct NewType(Option<usize>);
+
+    #[derive(Serialize, Reflect)]
+    struct More {
+        a: usize,
+        b: usize,
+    }
+
+    #[derive(Serialize, Reflect)]
+    struct Struct {
+        e0: CasesAdjacent,
+        e1: CasesAdjacent,
+        more: Option<More>,
+        opt: Option<usize>,
+        newtype: NewType,
+    }
+
+    check_struct(Struct {
+        e0: CasesAdjacent::NewType(None),
+        e1: CasesAdjacent::Struct { val: None },
+        more: None,
+        opt: None,
+        newtype: NewType(None),
+    });
+
+    let some = Some(1);
+
+    check_struct(Struct {
+        e0: CasesAdjacent::NewType(some),
+        e1: CasesAdjacent::Struct { val: some },
+        more: Some(More { a: 0, b: 1 }),
+        opt: some,
+        newtype: NewType(some),
     });
 }
