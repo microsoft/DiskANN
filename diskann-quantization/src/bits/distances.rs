@@ -714,29 +714,6 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn abs_diff(
-    arch: diskann_wide::arch::aarch64::Neon,
-    lhs: <diskann_wide::arch::aarch64::Neon as Architecture>::u8x16,
-    rhs: <diskann_wide::arch::aarch64::Neon as Architecture>::u8x16,
-) -> <diskann_wide::arch::aarch64::Neon as Architecture>::u8x16 {
-    if cfg!(miri) {
-        let lhs = lhs.to_array();
-        let rhs = rhs.to_array();
-        <diskann_wide::arch::aarch64::Neon as Architecture>::u8x16::from_array(
-            arch,
-            std::array::from_fn(|i| lhs[i].abs_diff(rhs[i])),
-        )
-    } else {
-        // SAFETY: the caller assumes target supports neon
-        // instruction required by `vabdq_u8`.
-        <diskann_wide::arch::aarch64::Neon as Architecture>::u8x16::from_underlying(arch, unsafe {
-            std::arch::aarch64::vabdq_u8(lhs.to_underlying(), rhs.to_underlying())
-        })
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
 impl
     Target2<
         diskann_wide::arch::aarch64::Neon,
@@ -782,13 +759,13 @@ impl
                 // compute abs diff then dot product for lower 4 bits, result is stored as 32x4
                 let lower_x: u8s = x_vec & mask;
                 let lower_y: u8s = y_vec & mask;
-                let d = abs_diff(arch, lower_x, lower_y);
+                let d = arch.vabdq_u8(lower_x, lower_y);
                 s0 = s0.dot_simd(d, d);
 
                 // compute abs diff then dot product for upper 4 bits, result is stored as 32x4
                 let upper_x: u8s = (x_vec >> 4) & mask;
                 let upper_y: u8s = (y_vec >> 4) & mask;
-                let d = abs_diff(arch, upper_x, upper_y);
+                let d = arch.vabdq_u8(upper_x, upper_y);
                 s1 = s1.dot_simd(d, d);
 
                 // repeat for next 16 bytes block
@@ -808,13 +785,13 @@ impl
                 // compute abs diff then dot product for lower 4 bits, result is stored as 32x4
                 let lower_x: u8s = x_vec & mask;
                 let lower_y: u8s = y_vec & mask;
-                let d = abs_diff(arch, lower_x, lower_y);
+                let d = arch.vabdq_u8(lower_x, lower_y);
                 s0 = s0.dot_simd(d, d);
 
                 // compute abs diff then dot product for upper 4 bits, result is stored as 32x4
                 let upper_x: u8s = (x_vec >> 4) & mask;
                 let upper_y: u8s = (y_vec >> 4) & mask;
-                let d = abs_diff(arch, upper_x, upper_y);
+                let d = arch.vabdq_u8(upper_x, upper_y);
                 s1 = s1.dot_simd(d, d);
 
                 i += remaining_bytes;
@@ -888,25 +865,25 @@ impl
                 // compute abs diff then dot product for lower 2 bits, result is stored as 32x4
                 let first_x: u8s = x_vec & mask;
                 let first_y: u8s = y_vec & mask;
-                let d = abs_diff(arch, first_x, first_y);
+                let d = arch.vabdq_u8(first_x, first_y);
                 s0 = s0.dot_simd(d, d);
 
                 // compute abs diff then dot product for next 2 bits, result is stored as 32x4
                 let second_x: u8s = (x_vec >> 2) & mask;
                 let second_y: u8s = (y_vec >> 2) & mask;
-                let d = abs_diff(arch, second_x, second_y);
+                let d = arch.vabdq_u8(second_x, second_y);
                 s1 = s1.dot_simd(d, d);
 
                 // compute abs diff then dot product for next 2 bits, result is stored as 32x4
                 let third_x: u8s = (x_vec >> 4) & mask;
                 let third_y: u8s = (y_vec >> 4) & mask;
-                let d = abs_diff(arch, third_x, third_y);
+                let d = arch.vabdq_u8(third_x, third_y);
                 s2 = s2.dot_simd(d, d);
 
                 // compute abs diff then dot product for last 2 bits, result is stored as 32x4
                 let fourth_x: u8s = (x_vec >> 6) & mask;
                 let fourth_y: u8s = (y_vec >> 6) & mask;
-                let d = abs_diff(arch, fourth_x, fourth_y);
+                let d = arch.vabdq_u8(fourth_x, fourth_y);
                 s3 = s3.dot_simd(d, d);
                 // repeat for next block
                 i += 16;
@@ -925,25 +902,25 @@ impl
                 // compute abs diff then dot product for first 2 bits, result is stored as 32x4
                 let first_x: u8s = x_vec & mask;
                 let first_y: u8s = y_vec & mask;
-                let d = abs_diff(arch, first_x, first_y);
+                let d = arch.vabdq_u8(first_x, first_y);
                 s0 = s0.dot_simd(d, d);
 
                 // compute abs diff then dot product for next 2 bits, result is stored as 32x4
                 let second_x: u8s = (x_vec >> 2) & mask;
                 let second_y: u8s = (y_vec >> 2) & mask;
-                let d = abs_diff(arch, second_x, second_y);
+                let d = arch.vabdq_u8(second_x, second_y);
                 s1 = s1.dot_simd(d, d);
 
                 // compute abs diff then dot product for next 2 bits, result is stored as 32x4
                 let third_x: u8s = (x_vec >> 4) & mask;
                 let third_y: u8s = (y_vec >> 4) & mask;
-                let d = abs_diff(arch, third_x, third_y);
+                let d = arch.vabdq_u8(third_x, third_y);
                 s2 = s2.dot_simd(d, d);
 
                 // compute abs diff then dot product for last 2 bits, result is stored as 32x4
                 let fourth_x: u8s = (x_vec >> 6) & mask;
                 let fourth_y: u8s = (y_vec >> 6) & mask;
-                let d = abs_diff(arch, fourth_x, fourth_y);
+                let d = arch.vabdq_u8(fourth_x, fourth_y);
                 s3 = s3.dot_simd(d, d);
                 i += remaining_bytes;
             }
