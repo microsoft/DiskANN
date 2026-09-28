@@ -63,9 +63,9 @@ impl<T: Pod> MmapSlab<T> {
                 len: 0,
             });
         }
-        let bytes = len
-            .checked_mul(std::mem::size_of::<T>())
-            .ok_or_else(|| super::config_error(format!("slab size {len} overflows usize")))?;
+        let bytes = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+            ANNError::message(format!("HashPrune slab size {len} overflows usize"))
+        })?;
         // SAFETY: `MAP_ANONYMOUS` returns zero-initialized memory.
         // `PROT_READ | PROT_WRITE` permits all accesses used by this slab.
         unsafe {
@@ -157,9 +157,9 @@ impl<T: Pod> MmapSlab<T> {
                 len: 0,
             });
         }
-        let bytes = len
-            .checked_mul(std::mem::size_of::<T>())
-            .ok_or_else(|| super::config_error(format!("slab size {len} overflows usize")))?;
+        let bytes = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+            ANNError::message(format!("HashPrune slab size {len} overflows usize"))
+        })?;
         // SAFETY: `MEM_RESERVE | MEM_COMMIT` returns zero-initialized memory.
         // `PAGE_READWRITE` permits all accesses used by this slab.
         unsafe {
@@ -635,7 +635,7 @@ impl HashPrune {
 
         // Each reservoir array has one `row_stride` row for each source point.
         let total = npoints.checked_mul(row_stride).ok_or_else(|| {
-            super::config_error(format!(
+            ANNError::message(format!(
                 "HashPrune slab shape {npoints} x {row_stride} overflows usize"
             ))
         })?;

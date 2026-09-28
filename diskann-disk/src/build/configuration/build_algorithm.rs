@@ -5,7 +5,7 @@
 
 //! Graph-build algorithm selection and its JSON-facing configuration.
 
-use std::fmt;
+use std::{fmt, num::NonZeroUsize};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,17 +18,15 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct PiPNNParameters {
     /// Maximum number of points in a leaf.
-    pub c_max: usize,
-    /// Minimum leaf size used by global small-leaf merging.
-    pub c_min: usize,
+    pub c_max: NonZeroUsize,
     /// Fraction of a cluster sampled as leaders.
     pub p_samp: f64,
     /// Number of nearest leaders retained at each partition level.
-    pub fanout: Vec<usize>,
+    pub fanout: Vec<NonZeroUsize>,
     /// Number of nearest neighbors selected within each leaf.
-    pub k: usize,
+    pub k: NonZeroUsize,
     /// Number of independent partition passes.
-    pub replicas: usize,
+    pub replicas: NonZeroUsize,
     /// HashPrune policy. `None` keeps all unique direct candidates.
     pub hash_prune: Option<HashPruneParameters>,
 }
@@ -71,13 +69,16 @@ impl From<&HashPruneParameters> for diskann::graph::pipnn::HashPruneConfig {
 #[cfg(feature = "pipnn")]
 impl Default for PiPNNParameters {
     fn default() -> Self {
+        const C_MAX: NonZeroUsize = NonZeroUsize::new(256).unwrap();
+        const FANOUT: [NonZeroUsize; 2] =
+            [NonZeroUsize::new(8).unwrap(), NonZeroUsize::new(3).unwrap()];
+        const K: NonZeroUsize = NonZeroUsize::new(2).unwrap();
         Self {
-            c_max: 256,
-            c_min: 16,
+            c_max: C_MAX,
             p_samp: 0.005,
-            fanout: vec![8, 3],
-            k: 2,
-            replicas: 1,
+            fanout: FANOUT.to_vec(),
+            k: K,
+            replicas: NonZeroUsize::MIN,
             hash_prune: None,
         }
     }
@@ -88,7 +89,6 @@ impl From<&PiPNNParameters> for diskann::graph::pipnn::PiPNNConfig {
     fn from(config: &PiPNNParameters) -> Self {
         Self {
             c_max: config.c_max,
-            c_min: config.c_min,
             p_samp: config.p_samp,
             fanout: config.fanout.clone(),
             leaf_k: config.k,
@@ -142,18 +142,19 @@ mod tests {
     #[cfg(feature = "pipnn")]
     #[test]
     fn pipnn_serde_uses_inline_defaults_and_rejects_unknown_fields() {
-        let algorithm: BuildAlgorithm = serde_json::from_str(
-            r#"{"algorithm":"PiPNN","c_max":512,"c_min":64,"fanout":[10,3],"k":3}"#,
-        )
-        .unwrap();
+        let algorithm: BuildAlgorithm =
+            serde_json::from_str(r#"{"algorithm":"PiPNN","c_max":512,"fanout":[10,3],"k":3}"#)
+                .unwrap();
         let BuildAlgorithm::PiPNN(config) = algorithm else {
             panic!("expected PiPNN");
         };
-        assert_eq!(config.c_max, 512);
-        assert_eq!(config.c_min, 64);
-        assert_eq!(config.fanout, [10, 3]);
-        assert_eq!(config.k, 3);
-        assert_eq!(config.replicas, 1);
+        assert_eq!(config.c_max.get(), 512);
+        assert_eq!(
+            config.fanout.iter().map(|f| f.get()).collect::<Vec<_>>(),
+            [10, 3]
+        );
+        assert_eq!(config.k.get(), 3);
+        assert_eq!(config.replicas.get(), 1);
         assert_eq!(config.hash_prune, None);
 
         let explicit: BuildAlgorithm =

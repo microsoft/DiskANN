@@ -3,18 +3,14 @@
  * Licensed under the MIT license.
  */
 
-//! Graph-degree enforcement with the Vamana RobustPrune kernel.
+//! Final pruning: cut each candidate list to the graph degree with RobustPrune.
 //!
-//! Candidate merging can produce more than the graph degree for one point.
-//! Lists within the degree limit pass through unchanged. Longer lists are sorted
-//! by source distance and passed to RobustPrune, then overwritten with the
-//! selected IDs. Reusable per-job scratch stores candidates and pruning state.
-//!
-//! RobustPrune owns occlusion and alpha-round behavior. This module supplies
-//! source vectors and metric distances.
+//! A list within the degree passes through unchanged. A longer list is sorted by
+//! distance to its source point and pruned with the shared Vamana RobustPrune,
+//! which owns occlusion and the alpha rounds. The selected IDs overwrite the list
+//! in place.
 
 use crate::{
-    ANNError, ANNResult,
     graph::{
         AdjacencyList, Config,
         internal::{SortedNeighbors, prune},
@@ -26,13 +22,7 @@ use diskann_utils::views::MatrixView;
 use diskann_vector::{DistanceFunction, distance::Metric};
 use rayon::prelude::*;
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum FinalizationError {
-    #[error("candidate count {actual} exceeds the u16 position limit {max}")]
-    TooManyCandidates { actual: usize, max: usize },
-}
-
-/// RobustPrune state for one Rayon job.
+/// RobustPrune scratch for one Rayon job.
 #[derive(Default)]
 struct PruneWorkspace {
     candidates: Vec<Neighbor<u32>>,
@@ -41,6 +31,7 @@ struct PruneWorkspace {
 }
 
 impl PruneWorkspace {
+    /// Prune the candidates of point `source` to the graph degree.
     fn prune<T: VectorRepr>(
         &mut self,
         data: MatrixView<'_, T>,
@@ -48,17 +39,10 @@ impl PruneWorkspace {
         mut source_candidates: AdjacencyList<u32>,
         graph: &Config,
         distance: &T::Distance,
-    ) -> ANNResult<AdjacencyList<u32>> {
+    ) -> AdjacencyList<u32> {
         let degree = graph.pruned_degree().get();
-        let candidate_count = source_candidates.len();
-        if candidate_count <= degree {
-            return Ok(source_candidates);
-        }
-        if candidate_count > u16::MAX as usize {
-            return Err(ANNError::new(FinalizationError::TooManyCandidates {
-                actual: candidate_count,
-                max: u16::MAX as usize,
-            }));
+        if source_candidates.len() <= degree {
+            return source_candidates;
         }
 
         let source_vector = data.row(source);
@@ -70,14 +54,17 @@ impl PruneWorkspace {
                     distance.evaluate_similarity(source_vector, data.row(candidate as usize)),
                 )
             }));
+        // RobustPrune stores candidate positions as `u16`, so keep the `u16::MAX`
+        // nearest candidates. Vamana limits its candidate pool the same way.
+        //
         // Sort before mapping: changing the element type can change the unstable
         // sort's order for equal distances, and therefore RobustPrune's choices.
-        let sorted = SortedNeighbors::new(&mut self.candidates, candidate_count);
+        let sorted = SortedNeighbors::new(&mut self.candidates, u16::MAX as usize);
         let mapped = sorted.map_in(&mut self.mapped_candidates, |&candidate| {
             (candidate as usize != source).then_some(candidate)
         });
         self.states.clear();
-        self.states.resize(candidate_count, prune::State::default());
+        self.states.resize(sorted.len(), prune::State::default());
         let selected = prune::robust_prune(
             mapped,
             &mut self.states,
@@ -94,22 +81,22 @@ impl PruneWorkspace {
             *destination = *sorted[state.neighbor as usize].id();
         }
         output.finish(selected);
-        Ok(source_candidates)
+        source_candidates
     }
 }
 
-/// Prune each candidate list that exceeds the graph degree.
+/// Prune each candidate list that is longer than the graph degree.
 ///
-/// Candidate builders supply one list per data row and valid dataset IDs.
+/// `candidates` holds one list of dataset IDs for each data row.
 pub(crate) fn prune_overfull<T: VectorRepr>(
     data: MatrixView<'_, T>,
     candidates: Vec<AdjacencyList<u32>>,
     graph: &Config,
     metric: Metric,
-) -> ANNResult<Vec<AdjacencyList<u32>>> {
+) -> Vec<AdjacencyList<u32>> {
     let distance = T::distance(metric, Some(data.ncols()));
 
-    // The build context supplies the Rayon pool for this terminal operation.
+    // This runs in the pool of the build context (see `build_graph`).
     candidates
         .into_par_iter()
         .enumerate()
@@ -125,8 +112,7 @@ pub(crate) fn prune_overfull<T: VectorRepr>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::config;
-    use rstest::rstest;
+    use crate::graph::{config, pipnn::test_support::thread_pool};
 
     fn pruning_config(
         degree: usize,
@@ -145,91 +131,95 @@ mod tests {
         candidates
     }
 
-    #[rstest]
-    #[case::empty(&[])]
-    #[case::below_degree(&[2])]
-    #[case::at_degree(&[3, 1])]
-    fn candidates_within_degree_keep_their_order(#[case] ids: &[u32]) {
-        let values = [0.0_f32, 1.0, 3.0, -2.0];
-        let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
-        let graph = pruning_config(2, Metric::L2, 1.0).unwrap();
+    /// Prune the candidates of source 0 in one-dimensional L2 data.
+    fn prune_l2(values: &[f32], ids: &[u32], degree: usize, alpha: f32) -> Vec<u32> {
+        let data = MatrixView::try_from(values, values.len(), 1).unwrap();
+        let graph = pruning_config(degree, Metric::L2, alpha).unwrap();
         let distance = f32::distance(Metric::L2, Some(1));
-
-        let actual = PruneWorkspace::default()
-            .prune(data, 0, candidates_in_order(ids), &graph, &distance)
-            .unwrap();
-
-        assert_eq!(&*actual, ids);
+        let pruned =
+            PruneWorkspace::default().prune(data, 0, candidates_in_order(ids), &graph, &distance);
+        pruned.to_vec()
     }
 
-    #[rstest]
-    #[case::l2(Metric::L2, [0.0, 0.0, 1.0, 0.0, 3.0, 0.0, -2.0, 0.0], [1, 3])]
-    #[case::cosine(Metric::Cosine, [1.0, 0.0, 2.0, 0.0, 1.0, 1.0, -1.0, 0.0], [1, 2])]
-    #[case::normalized_cosine(Metric::CosineNormalized, [1.0, 0.0, 0.8, 0.6, -1.0, 0.0, 0.0, -1.0], [1, 3])]
-    #[case::inner_product(Metric::InnerProduct, [1.0, 0.0, 3.0, 0.0, 2.0, 1.0, -1.0, 4.0], [1, 3])]
-    fn overfull_candidates_follow_the_metric_pruning_rule(
-        #[case] metric: Metric,
-        #[case] values: [f32; 8],
-        #[case] expected: [u32; 2],
-    ) {
-        // ID 1 is nearest. L2 occludes ID 2: 9 / 4 > 1.
+    #[test]
+    fn candidates_within_degree_keep_their_order() {
+        let values = [0.0_f32, 1.0, 3.0, -2.0];
+
+        for ids in [&[][..], &[2][..], &[3, 1][..]] {
+            assert_eq!(prune_l2(&values, ids, 2, 1.0), ids);
+        }
+    }
+
+    #[test]
+    fn overfull_candidates_follow_the_metric_pruning_rule() {
+        // Source 0 has candidates [3, 2, 1]; ID 1 is nearest for every metric.
+        // L2 occludes ID 2: 9 / 4 > 1.
         // Cosine retains ID 2: equal directions give an occlusion ratio of 1.
         // Normalized cosine retains ID 3: 1 / 1.6 < 1.
         // Inner product occludes ID 2: its dot with ID 1 is 6, versus 2 with the source.
-        let data = MatrixView::try_from(&values[..], 4, 2).unwrap();
-        let graph = pruning_config(2, metric, 1.0).unwrap();
-        let distance = f32::distance(metric, Some(2));
+        for (metric, values, expected) in [
+            (
+                Metric::L2,
+                [0.0, 0.0, 1.0, 0.0, 3.0, 0.0, -2.0, 0.0],
+                [1, 3],
+            ),
+            (
+                Metric::Cosine,
+                [1.0, 0.0, 2.0, 0.0, 1.0, 1.0, -1.0, 0.0],
+                [1, 2],
+            ),
+            (
+                Metric::CosineNormalized,
+                [1.0, 0.0, 0.8, 0.6, -1.0, 0.0, 0.0, -1.0],
+                [1, 3],
+            ),
+            (
+                Metric::InnerProduct,
+                [1.0, 0.0, 3.0, 0.0, 2.0, 1.0, -1.0, 4.0],
+                [1, 3],
+            ),
+        ] {
+            let data = MatrixView::try_from(&values[..], 4, 2).unwrap();
+            let graph = pruning_config(2, metric, 1.0).unwrap();
+            let distance = f32::distance(metric, Some(2));
 
-        let actual = PruneWorkspace::default()
-            .prune(data, 0, candidates_in_order(&[3, 2, 1]), &graph, &distance)
-            .unwrap();
+            let actual = PruneWorkspace::default().prune(
+                data,
+                0,
+                candidates_in_order(&[3, 2, 1]),
+                &graph,
+                &distance,
+            );
 
-        assert_eq!(&*actual, expected);
+            assert_eq!(&*actual, expected, "{metric:?}");
+        }
     }
 
     #[test]
     fn pruning_excludes_the_source_without_shifting_selected_ids() {
-        let values = [0.0_f32, 1.0, 3.0, -2.0];
-        let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
-        let graph = pruning_config(2, Metric::L2, 1.0).unwrap();
-        let distance = f32::distance(Metric::L2, Some(1));
-
-        let actual = PruneWorkspace::default()
-            .prune(
-                data,
-                0,
-                candidates_in_order(&[3, 0, 2, 1]),
-                &graph,
-                &distance,
-            )
-            .unwrap();
-
-        assert_eq!(&*actual, [1, 3]);
-    }
-
-    #[rstest]
-    #[case::strict(1.0, &[1])]
-    #[case::relaxed(2.0, &[1, 3])]
-    fn graph_alpha_controls_which_occluded_neighbors_return(
-        #[case] alpha: f32,
-        #[case] expected: &[u32],
-    ) {
-        // After selecting x=1, x=3 has ratio 9/4 and x=4 has ratio 16/9.
-        // Alpha 2 admits x=4 while x=3 remains occluded.
-        let values = [0.0_f32, 1.0, 3.0, 4.0];
-        let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
-        let graph = pruning_config(2, Metric::L2, alpha).unwrap();
-        let distance = f32::distance(Metric::L2, Some(1));
-
-        let actual = PruneWorkspace::default()
-            .prune(data, 0, candidates_in_order(&[3, 2, 1]), &graph, &distance)
-            .unwrap();
-
-        assert_eq!(&*actual, expected);
+        assert_eq!(
+            prune_l2(&[0.0, 1.0, 3.0, -2.0], &[3, 0, 2, 1], 2, 1.0),
+            [1, 3]
+        );
     }
 
     #[test]
-    fn reused_workspace_does_not_carry_neighbors_or_occlusion_between_sources() {
+    fn graph_alpha_controls_which_occluded_neighbors_return() {
+        // After selecting x=1, x=3 has ratio 9/4 and x=4 has ratio 16/9.
+        // Alpha 2 admits x=4 while x=3 remains occluded.
+        let values = [0.0_f32, 1.0, 3.0, 4.0];
+
+        for (alpha, expected) in [(1.0, &[1][..]), (2.0, &[1, 3][..])] {
+            assert_eq!(
+                prune_l2(&values, &[3, 2, 1], 2, alpha),
+                expected,
+                "alpha {alpha}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reused_workspace_does_not_carry_state_between_sources() {
         let values = [0.0_f32, 1.0, 3.0, -2.0, 9.0];
         let data = MatrixView::try_from(&values[..], 5, 1).unwrap();
         let graph = pruning_config(2, Metric::L2, 1.0).unwrap();
@@ -242,74 +232,45 @@ mod tests {
             (4, &[3, 2, 1][..], &[2][..]),
             (1, &[4, 3, 2, 0][..], &[0, 2][..]),
         ] {
-            let actual = workspace
-                .prune(data, source, candidates_in_order(ids), &graph, &distance)
-                .unwrap();
+            let actual = workspace.prune(data, source, candidates_in_order(ids), &graph, &distance);
 
             assert_eq!(&*actual, expected, "source {source}");
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
-    fn the_largest_supported_candidate_list_can_be_pruned() {
-        let count = u16::MAX as usize;
+    fn a_list_above_the_u16_position_limit_keeps_its_nearest_candidates() {
+        let count = u16::MAX as usize + 1;
         let values: Vec<_> = (0..=count).map(|i| i as f32).collect();
         let data = MatrixView::try_from(values.as_slice(), count + 1, 1).unwrap();
-        let candidates = AdjacencyList::from_iter_untrusted(1..=count as u32);
         let graph = pruning_config(1, Metric::L2, 1.0).unwrap();
         let distance = f32::distance(Metric::L2, Some(1));
+        let candidates = AdjacencyList::from_iter_untrusted(1..=count as u32);
 
-        let actual = PruneWorkspace::default()
-            .prune(data, 0, candidates, &graph, &distance)
-            .unwrap();
+        let actual = PruneWorkspace::default().prune(data, 0, candidates, &graph, &distance);
 
         assert_eq!(&*actual, [1]);
     }
 
-    #[cfg(not(miri))]
     #[test]
-    fn a_candidate_list_beyond_the_position_limit_returns_its_size() {
-        let count = u16::MAX as usize + 1;
-        let values: Vec<_> = (0..=count).map(|i| i as f32).collect();
-        let data = MatrixView::try_from(values.as_slice(), count + 1, 1).unwrap();
-        let candidates = AdjacencyList::from_iter_untrusted(1..=count as u32);
-        let graph = pruning_config(1, Metric::L2, 1.0).unwrap();
-        let distance = f32::distance(Metric::L2, Some(1));
-
-        let error = PruneWorkspace::default()
-            .prune(data, 0, candidates, &graph, &distance)
-            .unwrap_err();
-
-        let error = error.downcast_ref::<FinalizationError>().unwrap();
-        assert!(
-            matches!(error, FinalizationError::TooManyCandidates { actual, max }
-            if *actual == count && *max == u16::MAX as usize)
-        );
-    }
-
-    #[rstest]
-    #[case::one_worker(1)]
-    #[case::several_workers(3)]
-    fn parallel_pruning_keeps_each_result_with_its_source(#[case] workers: usize) {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
+    fn parallel_pruning_keeps_each_result_with_its_source() {
         let values = [0.0_f32, 1.0, 4.0, 9.0];
         let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
-        let candidates = [[3, 2, 1], [3, 2, 0], [3, 1, 0], [2, 1, 0]]
-            .map(|ids| candidates_in_order(&ids))
-            .to_vec();
         let graph = pruning_config(1, Metric::L2, 1.0).unwrap();
 
-        let actual = pool
-            .install(|| prune_overfull(data, candidates, &graph, Metric::L2))
-            .unwrap();
+        for workers in [1, 3] {
+            let candidates = [[3, 2, 1], [3, 2, 0], [3, 1, 0], [2, 1, 0]]
+                .map(|ids| candidates_in_order(&ids))
+                .to_vec();
 
-        assert_eq!(
-            actual.into_iter().map(Vec::from).collect::<Vec<_>>(),
-            [vec![1], vec![0], vec![1], vec![2]]
-        );
+            let actual = thread_pool(workers)
+                .install(|| prune_overfull(data, candidates, &graph, Metric::L2));
+
+            assert_eq!(
+                actual.into_iter().map(Vec::from).collect::<Vec<_>>(),
+                [vec![1], vec![0], vec![1], vec![2]],
+                "{workers} workers"
+            );
+        }
     }
 }

@@ -3,65 +3,39 @@
  * Licensed under the MIT license.
  */
 
-//! Leaf-local graph construction and candidate accumulation.
+//! Leaf construction: select the nearest neighbors inside each leaf and merge
+//! them into one candidate list per data point.
 //!
-//! Partitioning supplies sorted, unique global point IDs for each leaf. One leaf
-//! job does these steps:
+//! A leaf job gathers the vectors of its points as `f32`. The leaf kernel then
+//! selects the `k` nearest leaf points of each point, and the job adds each
+//! selected pair in both directions. Leaves overlap and run in parallel, so each
+//! data point has a locked candidate list. A job groups its edges by point first
+//! and then locks each list once.
 //!
-//! 1. Gather each ID and convert its vector to reusable `f32` storage.
-//! 2. Call the leaf kernel for ranking-distance construction and local ranking.
-//! 3. Convert local positions to global point IDs.
-//! 4. Add both edge directions to direct candidates or HashPrune reservoirs.
-//!
-//! Overlapping leaves run concurrently. The direct path locks one destination
-//! list while it adds IDs. The HashPrune path locks one source reservoir while it
-//! adds weighted edges. Reusable buffers keep their largest allocation. Each
-//! operation uses an explicit active prefix.
+//! The HashPrune merge groups the edges of a leaf the same way. Each edge also
+//! keeps its distance. The job adds the edges of each source point to the locked
+//! reservoir of that point.
 
 use parking_lot::Mutex;
 
-use crate::{graph::AdjacencyList, utils::VectorRepr};
+use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
+    conversion::gather_as_f32,
+    hash_prune::HashPrune,
     leaf_kernel::{LeafKernelWorkspace, select_leaf_neighbors},
     leaf_metric::LeafMetric,
     simd::Simd,
     topk::Candidate,
 };
 
-/// Failure while converting leaves into graph candidates.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum LeafBuildError {
-    #[error("leaf {leaf} shape {rows} x {columns} overflows usize")]
-    ShapeOverflow {
-        leaf: usize,
-        rows: usize,
-        columns: usize,
-    },
-    #[error("failed to convert point {point} in leaf {leaf}")]
-    Conversion {
-        leaf: usize,
-        point: u32,
-        #[source]
-        source: crate::ANNError,
-    },
-    #[error("nearest-neighbor selection failed for leaf {leaf}")]
-    Kernel {
-        leaf: usize,
-        #[source]
-        source: crate::ANNError,
-    },
-    #[error("leaf {leaf} produced too many directed edges")]
-    TooManyEdges { leaf: usize },
-}
-
-/// Reusable buffers for one Rayon leaf job.
+/// Scratch for one Rayon leaf job.
 ///
-/// The buffers keep the largest leaf shape that this job observed. The direct
-/// path uses `local_adjacency`. The HashPrune path uses the CSR and sketch
-/// buffers.
+/// Each buffer keeps the largest size that the job needed. A leaf uses a prefix.
+/// The direct merge uses `local_adjacency`. The HashPrune merge uses the edge
+/// buffers and `sketch_scratch`.
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
@@ -76,45 +50,22 @@ struct LeafBuffers {
 }
 
 impl LeafBuffers {
-    fn prepare(
-        &mut self,
-        leaf: usize,
-        point_count: usize,
-        dimension_count: usize,
-        requested_k: usize,
-    ) -> Result<(usize, usize), LeafBuildError> {
-        let point_value_count =
-            point_count
-                .checked_mul(dimension_count)
-                .ok_or(LeafBuildError::ShapeOverflow {
-                    leaf,
-                    rows: point_count,
-                    columns: dimension_count,
-                })?;
-        point_count
-            .checked_mul(point_count)
-            .ok_or(LeafBuildError::ShapeOverflow {
-                leaf,
-                rows: point_count,
-                columns: point_count,
-            })?;
+    /// Grow the buffers for a leaf of `point_count` points and return the
+    /// effective `k` of the leaf.
+    fn prepare(&mut self, point_count: usize, dimension_count: usize, requested_k: usize) -> usize {
         // A point has at most `point_count - 1` other points in its leaf. Wider rows
         // would hold only empty slots.
         let leaf_k = requested_k.min(point_count.saturating_sub(1));
-        let neighbor_count =
-            point_count
-                .checked_mul(leaf_k)
-                .ok_or(LeafBuildError::ShapeOverflow {
-                    leaf,
-                    rows: point_count,
-                    columns: leaf_k,
-                })?;
-
-        grow(&mut self.point_values, point_value_count, 0.0);
-        grow(&mut self.neighbors, neighbor_count, Candidate::default());
-        Ok((leaf_k, neighbor_count))
+        grow(&mut self.point_values, point_count * dimension_count, 0.0);
+        grow(
+            &mut self.neighbors,
+            point_count * leaf_k,
+            Candidate::default(),
+        );
+        leaf_k
     }
 
+    /// Clear the edge lists of the first `point_count` leaf points.
     fn prepare_local_adjacency(&mut self, point_count: usize) {
         if self.local_adjacency.len() < point_count {
             self.local_adjacency.resize_with(point_count, Vec::new);
@@ -124,22 +75,27 @@ impl LeafBuffers {
             .for_each(Vec::clear);
     }
 
+    /// Grow the `source x target` flags of a leaf of `point_count` points.
+    ///
+    /// A leaf has at most `u32::MAX` distinct points, so the product fits in a
+    /// 64-bit `usize`.
     fn prepare_seen_pairs(&mut self, point_count: usize) {
-        // `prepare` checked this product for the same leaf shape.
         grow(&mut self.seen_pairs, point_count * point_count, false);
     }
 }
 
-/// Build direct graph candidates from all overlapping leaves.
+/// Build one candidate list per data point from the nearest neighbors in all
+/// leaves.
 ///
-/// Each selected leaf pair contributes both edge directions. Candidate lists use
-/// global dataset IDs and contain no duplicate IDs.
+/// Each selected pair adds both directions. A list holds global IDs without
+/// duplicates. The lists are sorted, so the result does not depend on the order
+/// in which the parallel jobs finish.
 pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
-) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
+) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
     A: Simd,
     M: LeafMetric,
@@ -148,20 +104,11 @@ where
     let candidates: Vec<_> = (0..data.nrows())
         .map(|_| Mutex::new(AdjacencyList::new()))
         .collect();
-    leaves.par_iter().enumerate().try_for_each_init(
-        LeafBuffers::default,
-        |buffers, (leaf, point_ids)| {
-            add_direct_leaf_candidates::<A, M, T>(
-                arch,
-                data,
-                leaf,
-                point_ids,
-                requested_k,
-                buffers,
-                &candidates,
-            )
-        },
-    )?;
+    leaves
+        .par_iter()
+        .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
+            add_leaf_candidates::<A, M, T>(arch, data, point_ids, requested_k, buffers, &candidates)
+        })?;
     Ok(candidates
         .into_iter()
         .map(Mutex::into_inner)
@@ -172,35 +119,33 @@ where
         .collect())
 }
 
-/// Add weighted symmetric leaf edges to HashPrune reservoirs.
+/// Add the selected pairs of all leaves, with their distances, to the HashPrune
+/// reservoirs.
+///
+/// Each selected pair adds both directions.
 pub(super) fn add_hash_prune_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
-    hash_prune: &super::hash_prune::HashPrune,
-) -> Result<(), LeafBuildError>
+    reservoirs: &HashPrune,
+) -> ANNResult<()>
 where
     A: Simd,
     M: LeafMetric,
     T: VectorRepr,
 {
-    leaves.par_iter().enumerate().try_for_each_init(
-        LeafBuffers::default,
-        |buffers, (leaf, point_ids)| {
-            let leaf_k = gather_leaf_neighbors::<A, M, T>(
-                arch,
-                data,
-                leaf,
-                point_ids,
-                requested_k,
-                buffers,
-            )?;
+    leaves
+        .par_iter()
+        .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
+            let leaf_k =
+                gather_leaf_neighbors::<A, M, T>(arch, data, point_ids, requested_k, buffers)?;
+            if leaf_k == 0 {
+                return Ok(());
+            }
             let point_count = point_ids.len();
             buffers.prepare_seen_pairs(point_count);
             let edge_count = build_symmetric_edge_csr(
-                leaf,
-                point_ids,
                 leaf_k,
                 &buffers.neighbors[..point_count * leaf_k],
                 EdgeBuffers {
@@ -210,46 +155,42 @@ where
                     cursor: &mut buffers.edge_cursor,
                 },
             )?;
-            hash_prune.add_leaf_edges(
+            reservoirs.add_leaf_edges(
                 point_ids,
                 &buffers.edge_offsets[..point_count + 1],
                 &buffers.edges[..edge_count],
                 &mut buffers.sketch_scratch,
             );
             Ok(())
-        },
-    )
+        })
 }
 
-/// Add one leaf's symmetric neighbors to the direct candidate lists.
-///
-/// Reusable buffers can be longer than this leaf, so all accesses use the current
-/// leaf shape.
-fn add_direct_leaf_candidates<A, M, T>(
+/// Add the selected pairs of one leaf to the candidate lists.
+fn add_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
-    leaf: usize,
     point_ids: &[u32],
     requested_k: usize,
     buffers: &mut LeafBuffers,
     candidates: &[Mutex<AdjacencyList<u32>>],
-) -> Result<(), LeafBuildError>
+) -> ANNResult<()>
 where
     A: Simd,
     M: LeafMetric,
     T: VectorRepr,
 {
-    let leaf_k =
-        gather_leaf_neighbors::<A, M, T>(arch, data, leaf, point_ids, requested_k, buffers)?;
+    let leaf_k = gather_leaf_neighbors::<A, M, T>(arch, data, point_ids, requested_k, buffers)?;
     if leaf_k == 0 {
         return Ok(());
     }
-    buffers.prepare_local_adjacency(point_ids.len());
+
+    let point_count = point_ids.len();
+    buffers.prepare_local_adjacency(point_count);
     add_symmetric_neighbors(
         point_ids,
         leaf_k,
-        &buffers.neighbors[..point_ids.len() * leaf_k],
-        &mut buffers.local_adjacency[..point_ids.len()],
+        &buffers.neighbors[..point_count * leaf_k],
+        &mut buffers.local_adjacency[..point_count],
     );
     for (&point_id, additions) in point_ids.iter().zip(&buffers.local_adjacency) {
         candidates[point_id as usize]
@@ -259,61 +200,43 @@ where
     Ok(())
 }
 
-/// Select local nearest neighbors for one leaf.
+/// Select the `k` nearest leaf points of each point of one leaf into
+/// `buffers.neighbors`, and return the effective `k` of the leaf.
 ///
-/// The function gathers leaf IDs into a packed `f32` matrix. The leaf kernel
-/// owns Gram construction, norm preparation, and local ranking. This function
-/// returns the effective neighbor count for graph-edge mapping.
-#[expect(
-    clippy::expect_used,
-    reason = "buffer prefixes have the checked leaf shape"
-)]
+/// The IDs of a leaf are distinct dataset rows, so `points x dimensions` is not
+/// larger than the dataset.
 fn gather_leaf_neighbors<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
-    leaf: usize,
     point_ids: &[u32],
     requested_k: usize,
     buffers: &mut LeafBuffers,
-) -> Result<usize, LeafBuildError>
+) -> ANNResult<usize>
 where
     A: Simd,
     M: LeafMetric,
     T: VectorRepr,
 {
-    let (leaf_k, neighbor_value_count) =
-        buffers.prepare(leaf, point_ids.len(), data.ncols(), requested_k)?;
+    let point_count = point_ids.len();
+    let leaf_k = buffers.prepare(point_count, data.ncols(), requested_k);
     if leaf_k == 0 {
         return Ok(0);
     }
 
-    let point_value_count = point_ids.len() * data.ncols();
-    let point_values = &mut buffers.point_values[..point_value_count];
-
-    super::conversion::gather_as_f32(data, point_ids, point_values).map_err(
-        |(point, source)| LeafBuildError::Conversion {
-            leaf,
-            point,
-            source: source.into(),
-        },
-    )?;
-
-    let points = MatrixView::try_from(&*point_values, point_ids.len(), data.ncols())
-        .expect("point buffer prefix has the checked leaf shape");
+    let point_values = &mut buffers.point_values[..point_count * data.ncols()];
+    gather_as_f32(data, point_ids, point_values)?;
+    let points = MatrixView::try_from(&*point_values, point_count, data.ncols())?;
     let output = MutMatrixView::try_from(
-        &mut buffers.neighbors[..neighbor_value_count],
-        point_ids.len(),
+        &mut buffers.neighbors[..point_count * leaf_k],
+        point_count,
         leaf_k,
-    )
-    .expect("neighbor buffer prefix has the checked leaf shape");
-    select_leaf_neighbors::<A, M>(arch, points, output, &mut buffers.kernel_workspace)
-        .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
+    )?;
+    select_leaf_neighbors::<A, M>(arch, points, output, &mut buffers.kernel_workspace)?;
     Ok(leaf_k)
 }
 
-/// Add symmetric dataset IDs from one leaf-kernel result.
-///
-/// The leaf kernel returns only leaf-local positions in `point_ids`.
+/// Convert each selected pair from leaf positions to global IDs and add it to
+/// the edge lists of both points.
 fn add_symmetric_neighbors(
     point_ids: &[u32],
     leaf_k: usize,
@@ -326,65 +249,57 @@ fn add_symmetric_neighbors(
                 continue;
             }
             let target = neighbor.local_idx as usize;
-            let source_id = point_ids[source];
-            let target_id = point_ids[target];
-            // Leaves contain unique IDs, and the kernel excludes each point itself.
-            local_adjacency[source].push(target_id);
-            local_adjacency[target].push(source_id);
+            // The kernel never selects a point for itself, and the IDs of a leaf
+            // are unique, so no list gets a self edge.
+            local_adjacency[source].push(point_ids[target]);
+            local_adjacency[target].push(point_ids[source]);
         }
     }
 }
 
+/// Reusable storage of [`build_symmetric_edge_csr`].
 struct EdgeBuffers<'a> {
+    /// `source x target` flags of the leaf. All flags are clear between calls.
     seen: &'a mut [bool],
     offsets: &'a mut Vec<u32>,
     edges: &'a mut Vec<(u32, f32)>,
     cursor: &'a mut Vec<u32>,
 }
 
-/// Create directed leaf edges for HashPrune ingestion.
+/// Write the directed edges of one leaf as a CSR matrix and return the edge count.
 ///
-/// Each selected neighbor pair contributes both directions. Duplicate directions
-/// appear once. Each target is a position in `point_ids`.
-/// Build weighted CSR edges from one leaf-kernel result.
-///
-/// The leaf kernel returns only leaf-local positions in `point_ids`.
+/// Each selected pair adds both directions, and each direction appears once.
+/// Row `source` lists `(target, distance)` in leaf positions, in the order of
+/// the first selection. `offsets[..=point_count]` holds the row bounds.
 fn build_symmetric_edge_csr(
-    leaf: usize,
-    point_ids: &[u32],
     leaf_k: usize,
     neighbors: &[Candidate],
     buffers: EdgeBuffers<'_>,
-) -> Result<usize, LeafBuildError> {
+) -> ANNResult<usize> {
     let EdgeBuffers {
         seen,
         offsets,
         edges,
         cursor,
     } = buffers;
-    let point_count = point_ids.len();
+    let point_count = neighbors.len() / leaf_k;
     grow(offsets, point_count + 1, 0);
     offsets[..point_count + 1].fill(0);
-    if leaf_k == 0 {
-        return Ok(0);
-    }
 
-    // The prior successful write pass left the active `seen` area clear. This
-    // count pass marks each unique directed edge.
+    // The count pass sets the flag of each new direction and counts it in
+    // `offsets[source + 1]`. A source has at most `point_count - 1` targets, and
+    // a leaf has at most `u32::MAX` points, so a count fits in `u32`.
     for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
-        for neighbor in neighbors {
-            if !neighbor.is_assigned() {
-                continue;
-            }
+        for neighbor in neighbors.iter().filter(|neighbor| neighbor.is_assigned()) {
             let target = neighbor.local_idx as usize;
-            count_directed_edge(leaf, point_count, source, target, seen, offsets)?;
-            count_directed_edge(leaf, point_count, target, source, seen, offsets)?;
+            count_directed_edge(point_count, source, target, seen, offsets);
+            count_directed_edge(point_count, target, source, seen, offsets);
         }
     }
     for point in 1..=point_count {
         offsets[point] = offsets[point]
             .checked_add(offsets[point - 1])
-            .ok_or(LeafBuildError::TooManyEdges { leaf })?;
+            .ok_or_else(|| ANNError::message("a leaf has more than u32::MAX directed edges"))?;
     }
 
     let edge_count = offsets[point_count] as usize;
@@ -394,53 +309,31 @@ fn build_symmetric_edge_csr(
     let edges = &mut edges[..edge_count];
     let cursor = &mut cursor[..point_count];
 
-    // This pass visits the same directions as the count pass. The first
-    // occurrence writes its edge and clears its mark for the next leaf.
+    // The write pass visits the directions in the same order. The first visit
+    // of a direction writes its edge and clears its flag for the next leaf.
     for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
-        for neighbor in neighbors {
-            if !neighbor.is_assigned() {
-                continue;
-            }
+        for neighbor in neighbors.iter().filter(|neighbor| neighbor.is_assigned()) {
             let target = neighbor.local_idx as usize;
-            write_counted_directed_edge(
-                point_count,
-                source,
-                target,
-                neighbor.distance,
-                seen,
-                edges,
-                cursor,
-            );
-            write_counted_directed_edge(
-                point_count,
-                target,
-                source,
-                neighbor.distance,
-                seen,
-                edges,
-                cursor,
-            );
+            let distance = neighbor.distance;
+            write_counted_directed_edge(point_count, source, target, distance, seen, edges, cursor);
+            write_counted_directed_edge(point_count, target, source, distance, seen, edges, cursor);
         }
     }
     Ok(edge_count)
 }
 
 fn count_directed_edge(
-    leaf: usize,
     point_count: usize,
     source: usize,
     target: usize,
     seen: &mut [bool],
     offsets: &mut [u32],
-) -> Result<(), LeafBuildError> {
+) {
     let seen_entry = &mut seen[source * point_count + target];
     if !*seen_entry {
         *seen_entry = true;
-        offsets[source + 1] = offsets[source + 1]
-            .checked_add(1)
-            .ok_or(LeafBuildError::TooManyEdges { leaf })?;
+        offsets[source + 1] += 1;
     }
-    Ok(())
 }
 
 fn write_counted_directed_edge(
@@ -455,8 +348,7 @@ fn write_counted_directed_edge(
     let seen_entry = &mut seen[source * point_count + target];
     if *seen_entry {
         *seen_entry = false;
-        let edge_slot = cursor[source] as usize;
-        edges[edge_slot] = (target as u32, distance);
+        edges[cursor[source] as usize] = (target as u32, distance);
         cursor[source] += 1;
     }
 }
@@ -467,125 +359,152 @@ fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
     }
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::pipnn::{L2, test_support};
+    use crate::graph::pipnn::{
+        L2,
+        test_support::{dense_points, sorted_members_per_row, thread_pool},
+    };
     use diskann_wide::ARCH;
-    use rstest::rstest;
+    use std::collections::BTreeSet;
+
+    fn build(values: &[f32], leaves: Vec<Vec<u32>>, k: usize, workers: usize) -> Vec<Vec<u32>> {
+        let data = MatrixView::try_from(values, values.len(), 1).unwrap();
+        let candidates = thread_pool(workers)
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, k))
+            .unwrap();
+        sorted_members_per_row(&candidates.into_iter().map(Vec::from).collect::<Vec<_>>())
+    }
 
     #[test]
-    fn selected_neighbors_use_global_ids_and_contribute_both_edge_directions() {
+    fn selected_pairs_add_global_ids_in_both_directions() {
         // The leaf lists IDs [5, 1, 3], at coordinates [9, 0, 2].
         // The directed choices are 1 -> 3, 3 -> 1 and 5 -> 3.
         let values = [100.0_f32, 0.0, -100.0, 2.0, 200.0, 9.0];
-        let data = MatrixView::try_from(&values[..], 6, 1).unwrap();
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
 
-        let actual = pool
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, vec![vec![5, 1, 3]], 1))
-            .unwrap();
-        let actual: Vec<_> = actual.into_iter().map(Vec::from).collect();
+        let actual = build(&values, vec![vec![5, 1, 3]], 1, 1);
 
         assert_eq!(
-            test_support::sorted_members_per_row(&actual),
+            actual,
             [vec![], vec![3], vec![], vec![1, 5], vec![], vec![3]]
         );
     }
 
-    #[rstest]
-    #[case::one_worker(1)]
-    #[case::several_workers(3)]
-    fn overlapping_leaves_merge_each_neighbor_once(#[case] workers: usize) {
+    #[test]
+    fn overlapping_leaves_merge_each_neighbor_once() {
         let values = [0.0_f32, 1.0, 4.0, 9.0, 16.0];
-        let data = MatrixView::try_from(&values[..], 5, 1).unwrap();
         let leaves = vec![vec![0, 1, 2], vec![1, 2, 3], vec![2, 3, 4], vec![0, 1, 2]];
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
 
-        let actual = pool
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, 1))
-            .unwrap();
-        let actual: Vec<_> = actual.into_iter().map(Vec::from).collect();
+        for workers in [1, 3] {
+            let actual = build(&values, leaves.clone(), 1, workers);
 
-        assert_eq!(
-            test_support::sorted_members_per_row(&actual),
-            [vec![1], vec![0, 2], vec![1, 3], vec![2, 4], vec![3]]
-        );
-    }
-
-    #[rstest]
-    #[case::no_leaves(vec![], 2)]
-    #[case::empty_leaf(vec![vec![]], 2)]
-    #[case::singleton(vec![vec![2]], 2)]
-    #[case::zero_neighbors(vec![vec![0, 1, 2]], 0)]
-    fn leaves_without_selected_pairs_produce_empty_adjacency(
-        #[case] leaves: Vec<Vec<u32>>,
-        #[case] requested_k: usize,
-    ) {
-        let values = [0.0_f32, 1.0, 4.0];
-        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
-
-        let actual = pool
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, requested_k))
-            .unwrap();
-
-        assert_eq!(
-            actual.into_iter().map(Vec::from).collect::<Vec<_>>(),
-            [Vec::<u32>::new(), vec![], vec![]]
-        );
+            assert_eq!(
+                actual,
+                [vec![1], vec![0, 2], vec![1, 3], vec![2, 4], vec![3]],
+                "{workers} workers"
+            );
+        }
     }
 
     #[test]
-    fn requesting_more_neighbors_than_a_leaf_has_selects_all_other_points() {
-        let values = [100.0_f32, 0.0, -100.0, 2.0, 200.0, 9.0];
-        let data = MatrixView::try_from(&values[..], 6, 1).unwrap();
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
+    fn leaves_without_pairs_add_no_candidates() {
+        let values = [0.0_f32, 1.0, 4.0];
 
-        let actual = pool
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, vec![vec![1, 3, 5]], 99))
-            .unwrap();
-        let actual: Vec<_> = actual.into_iter().map(Vec::from).collect();
+        for (leaves, k) in [
+            (vec![], 2),
+            (vec![vec![]], 2),
+            (vec![vec![2]], 2),
+            (vec![vec![0, 1, 2]], 0),
+        ] {
+            let case = format!("leaves {leaves:?}, k={k}");
+
+            let actual = build(&values, leaves, k, 1);
+
+            assert_eq!(actual, [Vec::<u32>::new(), vec![], vec![]], "{case}");
+        }
+    }
+
+    #[test]
+    fn k_above_the_leaf_size_selects_every_other_point() {
+        let values = [100.0_f32, 0.0, -100.0, 2.0, 200.0, 9.0];
+
+        let actual = build(&values, vec![vec![1, 3, 5]], 99, 1);
 
         assert_eq!(
-            test_support::sorted_members_per_row(&actual),
+            actual,
             [vec![], vec![3, 5], vec![], vec![1, 5], vec![], vec![1, 3]]
         );
     }
 
     #[test]
-    fn unrankable_pairs_do_not_add_unassigned_ids_to_the_graph() {
+    fn unrankable_pairs_add_no_candidates() {
         let values = [0.0_f32, 3.0, f32::NAN];
-        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
 
-        let actual = pool
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, vec![vec![0, 1, 2]], 2))
-            .unwrap();
+        let actual = build(&values, vec![vec![0, 1, 2]], 2, 1);
 
-        assert_eq!(
-            actual.into_iter().map(Vec::from).collect::<Vec<_>>(),
-            [vec![1], vec![0], vec![]]
-        );
+        assert_eq!(actual, [vec![1], vec![0], vec![]]);
     }
 
     #[test]
-    fn reused_leaf_buffers_do_not_carry_edges_between_different_leaf_shapes() {
+    fn candidates_match_the_leaf_kernel_on_each_leaf() {
+        // The reference runs the leaf kernel on each leaf alone, so the tie order
+        // is the same. Sixty overlapping leaves of 17 to 40 points run on four
+        // workers with reused buffers and fill whole SIMD groups. k = 2 uses a
+        // fixed top-k width, and k = 5 uses the runtime width.
+        let (point_count, dimensions) = (500, 24);
+        let values = dense_points(point_count, dimensions, 1290);
+        let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+        let leaves: Vec<Vec<u32>> = (0..60u32)
+            .map(|leaf| {
+                let ids: BTreeSet<_> = (0..17 + leaf % 24)
+                    .map(|i| (leaf * 7 + i * 13) % point_count as u32)
+                    .collect();
+                ids.into_iter().collect()
+            })
+            .collect();
+
+        for k in [2, 5] {
+            let mut expected = vec![BTreeSet::new(); point_count];
+            for leaf in &leaves {
+                let rows: Vec<f32> = leaf
+                    .iter()
+                    .flat_map(|&id| &values[id as usize * dimensions..][..dimensions])
+                    .copied()
+                    .collect();
+                let width = k.min(leaf.len() - 1);
+                let mut output = vec![Candidate::default(); leaf.len() * width];
+                select_leaf_neighbors::<_, L2>(
+                    ARCH,
+                    MatrixView::try_from(rows.as_slice(), leaf.len(), dimensions).unwrap(),
+                    MutMatrixView::try_from(output.as_mut_slice(), leaf.len(), width).unwrap(),
+                    &mut LeafKernelWorkspace::default(),
+                )
+                .unwrap();
+                for (source, row) in output.chunks_exact(width).enumerate() {
+                    for neighbor in row.iter().filter(|neighbor| neighbor.is_assigned()) {
+                        let (source, target) = (leaf[source], leaf[neighbor.local_idx as usize]);
+                        expected[source as usize].insert(target);
+                        expected[target as usize].insert(source);
+                    }
+                }
+            }
+            let expected: Vec<Vec<u32>> = expected
+                .into_iter()
+                .map(|ids| ids.into_iter().collect())
+                .collect();
+
+            let actual = thread_pool(4)
+                .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves.clone(), k))
+                .unwrap();
+
+            let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
+            assert_eq!(actual, expected, "k={k}");
+        }
+    }
+
+    #[test]
+    fn reused_buffers_do_not_carry_edges_between_leaves() {
         let values = [0.0_f32, 1.0, 4.0, 9.0, 16.0, 25.0, 36.0];
         let data = MatrixView::try_from(&values[..], 7, 1).unwrap();
         let mut buffers = LeafBuffers::default();
@@ -627,10 +546,9 @@ mod tests {
         ] {
             let candidates: Vec<_> = (0..7).map(|_| Mutex::new(AdjacencyList::new())).collect();
 
-            add_direct_leaf_candidates::<_, L2, _>(
+            add_leaf_candidates::<_, L2, _>(
                 ARCH,
                 data,
-                0,
                 &ids,
                 requested_k,
                 &mut buffers,
@@ -640,226 +558,86 @@ mod tests {
 
             let actual: Vec<_> = candidates
                 .into_iter()
-                .map(|row| {
-                    let mut ids = Vec::from(row.into_inner());
-                    ids.sort_unstable();
-                    ids
-                })
+                .map(|row| Vec::from(row.into_inner()))
                 .collect();
-            assert_eq!(actual, expected, "leaf {ids:?}, k={requested_k}");
+            assert_eq!(
+                sorted_members_per_row(&actual),
+                expected,
+                "leaf {ids:?}, k={requested_k}"
+            );
         }
-    }
-
-    #[rstest]
-    #[case::point_values(2, 1, 2)]
-    #[case::pair_matrix(1, 2, usize::MAX)]
-    fn an_overflowing_leaf_shape_is_rejected_before_buffers_change(
-        #[case] dimensions: usize,
-        #[case] requested_k: usize,
-        #[case] expected_columns: usize,
-    ) {
-        let old_neighbor = Candidate::new(1, 7.0);
-        let mut buffers = LeafBuffers {
-            point_values: vec![3.0, 4.0],
-            neighbors: vec![old_neighbor],
-            ..LeafBuffers::default()
-        };
-
-        let error = buffers
-            .prepare(7, usize::MAX, dimensions, requested_k)
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            LeafBuildError::ShapeOverflow {
-                leaf: 7,
-                rows: usize::MAX,
-                columns,
-            } if columns == expected_columns
-        ));
-        assert_eq!(buffers.point_values, [3.0, 4.0]);
-        assert_eq!(buffers.neighbors, [old_neighbor]);
     }
 
     #[test]
-    fn a_kernel_error_retains_the_failed_leaf_and_original_cause() {
-        #[derive(Debug, thiserror::Error)]
-        #[error("distance calculation unavailable")]
-        struct DistanceFailure;
+    fn edge_csr_lists_each_direction_once_in_first_selection_order() {
+        // Each case gives the kernel output of a leaf with `k` columns.
+        // `Candidate::default()` is an empty slot.
+        for (case, k, neighbors, expected_offsets, expected_edges) in [
+            (
+                // The pair 1-2 is selected by both points. Its first selection,
+                // from point 1, sets the distance of both directions.
+                "three points",
+                1,
+                vec![
+                    Candidate::new(1, 1.0),
+                    Candidate::new(2, 2.0),
+                    Candidate::new(1, 1.5),
+                ],
+                vec![0, 1, 3, 4],
+                vec![(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)],
+            ),
+            (
+                "empty slot",
+                1,
+                vec![Candidate::new(1, 1.0), Candidate::default()],
+                vec![0, 1, 2],
+                vec![(1, 1.0), (0, 1.0)],
+            ),
+            (
+                "pair selected from both ends",
+                1,
+                vec![Candidate::new(1, 1.0), Candidate::new(0, 1.0)],
+                vec![0, 1, 2],
+                vec![(1, 1.0), (0, 1.0)],
+            ),
+            (
+                "two neighbors per point",
+                2,
+                vec![
+                    Candidate::new(1, 1.0),
+                    Candidate::new(2, 4.0),
+                    Candidate::new(0, 1.0),
+                    Candidate::new(2, 1.0),
+                    Candidate::new(1, 1.0),
+                    Candidate::new(0, 4.0),
+                ],
+                vec![0, 2, 4, 6],
+                vec![(1, 1.0), (2, 4.0), (0, 1.0), (2, 1.0), (0, 4.0), (1, 1.0)],
+            ),
+        ] {
+            let point_count = neighbors.len() / k;
+            let mut seen = vec![false; point_count * point_count];
+            // Stale values from a larger earlier leaf must not leak into this one.
+            let mut offsets = vec![9; point_count + 3];
+            let mut edges = vec![(99, 99.0); 8];
+            let mut cursor = vec![9; point_count + 3];
 
-        // This stub supplies an otherwise hard-to-trigger dependency failure.
-        // Gathering, leaf indexing and error wrapping remain real.
-        struct UnavailableMetric;
-        impl LeafMetric for UnavailableMetric {
-            fn compute_distances(
-                _: MatrixView<'_, f32>,
-                _: MutMatrixView<'_, f32>,
-            ) -> crate::ANNResult<()> {
-                Err(crate::ANNError::new(DistanceFailure))
-            }
-        }
-
-        let values = [0.0_f32, 1.0, 4.0, 9.0];
-        let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
-            .build()
+            let edge_count = build_symmetric_edge_csr(
+                k,
+                &neighbors,
+                EdgeBuffers {
+                    seen: &mut seen,
+                    offsets: &mut offsets,
+                    edges: &mut edges,
+                    cursor: &mut cursor,
+                },
+            )
             .unwrap();
 
-        let error = pool
-            .install(|| {
-                build_leaf_candidates::<_, UnavailableMetric, _>(
-                    ARCH,
-                    data,
-                    vec![vec![], vec![1, 3]],
-                    1,
-                )
-            })
-            .unwrap_err();
-
-        let LeafBuildError::Kernel { leaf, source } = error else {
-            panic!("expected a leaf kernel error, got {error:?}");
-        };
-        assert_eq!(leaf, 1);
-        assert!(source.downcast_ref::<DistanceFailure>().is_some());
-    }
-}
-
-#[cfg(test)]
-mod build_symmetric_edge_csr_tests {
-    use super::*;
-
-    #[test]
-    fn symmetric_edge_csr_contains_both_directions_in_source_order() {
-        // Given
-        let point_ids = [10, 20, 30];
-        let neighbors = [
-            Candidate::new(1, 1.0),
-            Candidate::new(2, 2.0),
-            Candidate::new(1, 1.5),
-        ];
-        let expected_edge_count = 4;
-        let expected_offsets = [0, 1, 3, 4];
-        let expected_edges = [(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)];
-        let mut seen = vec![false; 9];
-        let mut offsets = Vec::new();
-        let mut edges = Vec::new();
-        let mut cursor = Vec::new();
-
-        // When
-        let actual_edge_count = build_symmetric_edge_csr(
-            0,
-            &point_ids,
-            1,
-            &neighbors,
-            EdgeBuffers {
-                seen: &mut seen,
-                offsets: &mut offsets,
-                edges: &mut edges,
-                cursor: &mut cursor,
-            },
-        )
-        .unwrap();
-
-        // Then
-        assert_eq!(actual_edge_count, expected_edge_count);
-        assert_eq!(offsets, expected_offsets);
-        assert_eq!(edges, expected_edges);
-    }
-
-    #[test]
-    fn symmetric_edge_csr_omits_unassigned_neighbors() {
-        let point_ids = [10, 20];
-        let neighbors = [Candidate::new(1, 1.0), Candidate::default()];
-        let mut seen = vec![false; 4];
-        let mut offsets = Vec::new();
-        let mut edges = Vec::new();
-        let mut cursor = Vec::new();
-
-        let count = build_symmetric_edge_csr(
-            0,
-            &point_ids,
-            1,
-            &neighbors,
-            EdgeBuffers {
-                seen: &mut seen,
-                offsets: &mut offsets,
-                edges: &mut edges,
-                cursor: &mut cursor,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(count, 2);
-        assert_eq!(offsets, [0, 1, 2]);
-        assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
-    }
-
-    #[test]
-    fn symmetric_edge_csr_deduplicates_edges_seen_from_both_endpoints() {
-        let point_ids = [10, 20];
-        let neighbors = [Candidate::new(1, 1.0), Candidate::new(0, 1.0)];
-        let mut seen = vec![false; 4];
-        let mut offsets = Vec::new();
-        let mut edges = Vec::new();
-        let mut cursor = Vec::new();
-
-        let count = build_symmetric_edge_csr(
-            0,
-            &point_ids,
-            1,
-            &neighbors,
-            EdgeBuffers {
-                seen: &mut seen,
-                offsets: &mut offsets,
-                edges: &mut edges,
-                cursor: &mut cursor,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(count, 2);
-        assert_eq!(offsets, [0, 1, 2]);
-        assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
-        assert!(seen.iter().all(|&entry| !entry));
-    }
-
-    #[test]
-    fn singleton_leaf_produces_empty_edge_csr() {
-        // Given
-        let leaf = 0;
-        let point_ids = [10];
-        let effective_neighbor_count = 0;
-        let no_neighbors = [];
-        let stale_edge = (99, 99.0);
-        let expected_edge_count = 0;
-        let expected_offsets = [0, 0];
-        let expected_edges = [stale_edge];
-        let expected_seen = [false];
-        let mut seen = vec![false; 1];
-        let mut offsets = Vec::new();
-        let mut edges = vec![stale_edge];
-        let mut cursor = Vec::new();
-
-        // When
-        let actual_edge_count = build_symmetric_edge_csr(
-            leaf,
-            &point_ids,
-            effective_neighbor_count,
-            &no_neighbors,
-            EdgeBuffers {
-                seen: &mut seen,
-                offsets: &mut offsets,
-                edges: &mut edges,
-                cursor: &mut cursor,
-            },
-        )
-        .unwrap();
-
-        // Then
-        assert_eq!(actual_edge_count, expected_edge_count);
-        assert_eq!(offsets, expected_offsets);
-        assert_eq!(edges, expected_edges);
-        assert_eq!(seen, expected_seen);
+            assert_eq!(edge_count, expected_edges.len(), "{case}");
+            assert_eq!(offsets[..=point_count], expected_offsets, "{case}");
+            assert_eq!(edges[..edge_count], expected_edges, "{case}");
+            assert!(seen.iter().all(|&flag| !flag), "{case}: flags stay set");
+        }
     }
 }
