@@ -40,7 +40,7 @@ use super::{
     topk::UNASSIGNED,
 };
 
-/// Seed of the first replica. Fixed seeds make each build reproducible.
+/// Seed of the first replica. Fixed seeds give the same leaves in every build.
 const PARTITION_SEED: u64 = 1_000;
 /// Seed step between replicas, so each replica samples different leaders.
 const REPLICA_SEED_STEP: u64 = 7_919;
