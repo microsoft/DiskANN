@@ -86,7 +86,7 @@ impl PaddedTable {
         (0..offsets.len()).for_each(|i| {
             let range = offsets.at(i);
 
-            let view = strided::StridedView::try_shrink_from(
+            let view = strided::Strided::try_from_data(
                 &(pivots.as_slice()[range.start..]),
                 pivots.nrows(),
                 range.len(),
@@ -94,7 +94,7 @@ impl PaddedTable {
             )
             .expect("the check on `pivot_dim` and `offsets_dim` should cause this to never error");
 
-            view.row_iter().for_each(|src| {
+            view.rows().for_each(|src| {
                 copy_from_slice_subset(padded.row_mut(row), src);
                 row += 1;
             });
@@ -597,4 +597,14 @@ where
     }
 
     O::reduce_quad(a0, a1, a2, a3)
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
 }
