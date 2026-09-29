@@ -10,6 +10,7 @@
 //! L2 subviews and panels.
 //! Integer contraction consumes padded K-dimensional panels without knowing the original
 //! dimension or metadata. MinMax reduction uses the original D and opaque accumulators.
+//! Row tails select a fixed register path before contraction, not inside the dot loop.
 //! Scratch is owned by each call, never by the shared prepared query.
 
 mod decode;
@@ -307,9 +308,14 @@ where
             #[inline]
             || {
                 bounds::check_eq!(self.a.k(), self.k);
-                // SAFETY: The panel constructor establishes the common contraction
-                // dimension and the number of valid query rows.
-                let acc = unsafe { self.arch.contract(self.a, self.b, self.k, self.valid_rows) };
+                // SAFETY: The panels share a contraction dimension and B holds nibbles.
+                let acc = unsafe {
+                    if self.valid_rows <= MR / 2 {
+                        contract::<_, PACK, MR, NR, true>(self.arch, self.a, self.b, self.k)
+                    } else {
+                        contract::<_, PACK, MR, NR, false>(self.arch, self.a, self.b, self.k)
+                    }
+                };
                 // SAFETY: The metadata span contains exactly NR entries.
                 unsafe {
                     self.arch
@@ -320,106 +326,112 @@ where
     }
 }
 
-/// Register layout and instruction selection are private to each implementation.
+/// Contract query groups, zero-filling B's final column group so A's column padding
+/// cannot contribute. `HALF` limits the result to the first `MR / 2` query rows.
+///
+/// # Safety
+///
+/// Both panels have contraction dimension `k`. B values are unsigned nibbles (0..=15).
+#[inline(always)]
+unsafe fn contract<A, const PACK: usize, const MR: usize, const NR: usize, const HALF: bool>(
+    arch: A,
+    a: packed::Panel<'_, u8, MR, PACK>,
+    b: unpacked::Panel<'_, u8, NR>,
+    k: DimK,
+) -> [A::Accumulator; NR]
+where
+    A: ExtraWide<PACK, MR>,
+{
+    bounds::check_eq!(a.k(), k);
+    bounds::check_eq!(b.k(), k);
+    let mut acc = [arch.zero(); NR];
+    let bp = b.as_ptr();
+    let b_stride = b.stride(k);
+    let full = k.value().get() / PACK;
+    let tail = k.value().get() % PACK;
+    for group in 0..full {
+        // SAFETY: `group < full <= groups(k)`, and each patch includes all MR rows.
+        let a = arch.load::<HALF>(unsafe { a.group(group) });
+        for (j, acc) in acc.iter_mut().enumerate() {
+            // SAFETY: `(group + 1) * PACK <= k`, so this group lies wholly inside
+            // document row j.
+            let b = unsafe {
+                bp.add(b_stride * j + Elements::new(group * PACK))
+                    .truncate(Elements::new(PACK))
+                    .as_ptr()
+                    .cast::<[u8; PACK]>()
+                    .read_unaligned()
+            };
+            *acc = arch.dot::<HALF>(a, arch.splat(b), *acc);
+        }
+    }
+    if tail != 0 {
+        // SAFETY: Inherited from the caller; a partial final group exists.
+        acc = unsafe { contract_tail::<_, PACK, MR, NR, HALF>(arch, a, b, k, acc) };
+    }
+    acc
+}
+
+/// Accumulate the partial final column group, zero-filling B past its last column.
+///
+/// Kept out of line so the full-group loop compiles as if no tail existed.
+///
+/// # Safety
+///
+/// Same contract as [`contract`], and `k % PACK != 0`.
+#[cold]
+#[inline(never)]
+unsafe fn contract_tail<A, const PACK: usize, const MR: usize, const NR: usize, const HALF: bool>(
+    arch: A,
+    a: packed::Panel<'_, u8, MR, PACK>,
+    b: unpacked::Panel<'_, u8, NR>,
+    k: DimK,
+    mut acc: [A::Accumulator; NR],
+) -> [A::Accumulator; NR]
+where
+    A: ExtraWide<PACK, MR>,
+{
+    let full = k.value().get() / PACK;
+    let tail = k.value().get() % PACK;
+    bounds::check_lt!(Bound::new(0), tail);
+    let bp = b.as_ptr();
+    let b_stride = b.stride(k);
+    // SAFETY: A partial final group exists, so `full < groups(k)`.
+    let a = arch.load::<HALF>(unsafe { a.group(full) });
+    for (j, acc) in acc.iter_mut().enumerate() {
+        let mut b = [0; PACK];
+        // SAFETY: Row j has exactly `tail` columns past `full * PACK`.
+        let source = unsafe {
+            bp.add(b_stride * j + Elements::new(full * PACK))
+                .truncate(Elements::new(tail))
+                .as_std_slice(tail)
+        };
+        b[..tail].copy_from_slice(source);
+        *acc = arch.dot::<HALF>(a, arch.splat(b), *acc);
+    }
+    acc
+}
+
+/// Opaque register operations; panel traversal belongs to the micro-kernel.
 trait ExtraWide<const PACK: usize, const MR: usize>: Copy {
     type Query: Copy;
     type Splat: Copy;
     type Accumulator: Copy;
 
-    /// Load one `MR x PACK` query group. Rows at or beyond `valid_rows` may be skipped.
-    fn load(self, values: packed::Patch<'_, u8, MR, PACK>, valid_rows: usize) -> Self::Query;
+    /// Load a query group. With `HALF`, only the first `MR / 2` rows are needed.
+    fn load<const HALF: bool>(self, values: packed::Patch<'_, u8, MR, PACK>) -> Self::Query;
     fn zero(self) -> Self::Accumulator;
     fn splat(self, value: [u8; PACK]) -> Self::Splat;
-
-    fn dot(self, a: Self::Query, b: Self::Splat, acc: Self::Accumulator) -> Self::Accumulator;
+    /// Accumulate the rows selected by `load::<HALF>`; other rows are unspecified.
+    fn dot<const HALF: bool>(
+        self,
+        a: Self::Query,
+        b: Self::Splat,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator;
 
     #[cfg(test)]
     fn accumulator_lanes(self, acc: Self::Accumulator) -> [u32; MR];
-
-    /// Contract `k` logical columns. When `PACK` does not divide `k`, the final group
-    /// reads only the remaining B columns and zero-fills the rest, so A's padding never
-    /// contributes.
-    ///
-    /// # Safety
-    ///
-    /// Both panels have contraction dimension `k` and `valid_rows <= MR`.
-    /// B values are unsigned nibbles (0..=15).
-    #[inline(always)]
-    unsafe fn contract<const NR: usize>(
-        self,
-        a: packed::Panel<'_, u8, MR, PACK>,
-        b: unpacked::Panel<'_, u8, NR>,
-        k: DimK,
-        valid_rows: usize,
-    ) -> [Self::Accumulator; NR] {
-        bounds::check_eq!(a.k(), k);
-        bounds::check_eq!(b.k(), k);
-        bounds::check_le!(Bound::new(valid_rows), MR);
-        let mut acc = [self.zero(); NR];
-        let bp = b.as_ptr();
-        let b_stride = b.stride(k);
-        let full = k.value().get() / PACK;
-        let tail = k.value().get() % PACK;
-        for group in 0..full {
-            // SAFETY: `group < full <= groups(k)`.
-            let a = self.load(unsafe { a.group(group) }, valid_rows);
-            for (j, acc) in acc.iter_mut().enumerate() {
-                // SAFETY: `(group + 1) * PACK <= k`, so this group lies wholly inside
-                // document row j.
-                let b = unsafe {
-                    bp.add(b_stride * j + Elements::new(group * PACK))
-                        .truncate(Elements::new(PACK))
-                        .as_ptr()
-                        .cast::<[u8; PACK]>()
-                        .read_unaligned()
-                };
-                *acc = self.dot(a, self.splat(b), *acc);
-            }
-        }
-        if tail != 0 {
-            // SAFETY: Inherited from the caller; a partial final group exists.
-            acc = unsafe { self.contract_tail(a, b, k, valid_rows, acc) };
-        }
-        acc
-    }
-
-    /// Accumulate the partial final group of `k`, zero-filling B past its last column.
-    ///
-    /// Kept out of line so the full-group loop above compiles as if no tail existed.
-    ///
-    /// # Safety
-    ///
-    /// Same contract as [`Self::contract`], and `k % PACK != 0`.
-    #[cold]
-    #[inline(never)]
-    unsafe fn contract_tail<const NR: usize>(
-        self,
-        a: packed::Panel<'_, u8, MR, PACK>,
-        b: unpacked::Panel<'_, u8, NR>,
-        k: DimK,
-        valid_rows: usize,
-        mut acc: [Self::Accumulator; NR],
-    ) -> [Self::Accumulator; NR] {
-        let full = k.value().get() / PACK;
-        let tail = k.value().get() % PACK;
-        bounds::check_lt!(Bound::new(0), tail);
-        let bp = b.as_ptr();
-        let b_stride = b.stride(k);
-        // SAFETY: A partial final group exists, so `full < groups(k)`.
-        let a = self.load(unsafe { a.group(full) }, valid_rows);
-        for (j, acc) in acc.iter_mut().enumerate() {
-            let mut b = [0; PACK];
-            // SAFETY: Row j has exactly `tail` columns past `full * PACK`.
-            let source = unsafe {
-                bp.add(b_stride * j + Elements::new(full * PACK))
-                    .truncate(Elements::new(tail))
-                    .as_std_slice(tail)
-            };
-            b[..tail].copy_from_slice(source);
-            *acc = self.dot(a, self.splat(b), *acc);
-        }
-        acc
-    }
 
     /// Apply MinMax compensation without exposing the accumulator's register layout.
     ///
@@ -436,6 +448,21 @@ trait ExtraWide<const PACK: usize, const MR: usize>: Copy {
     );
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[inline(always)]
+fn dot_registers<A, B, C, const HALF: bool>(a: [A; 2], b: B, mut acc: [C; 2]) -> [C; 2]
+where
+    A: SIMDVector,
+    B: SIMDVector,
+    C: SIMDVector + diskann_wide::SIMDDotProduct<A, B>,
+{
+    acc[0] = acc[0].dot_simd(a[0], b);
+    if !HALF {
+        acc[1] = acc[1].dot_simd(a[1], b);
+    }
+    acc
+}
+
 impl ExtraWide<4, 8> for Scalar {
     type Query = [[u16; 8]; 4];
     type Splat = [u16; 4];
@@ -447,7 +474,7 @@ impl ExtraWide<4, 8> for Scalar {
     }
 
     #[inline(always)]
-    fn load(self, values: packed::Patch<'_, u8, 8, 4>, _: usize) -> Self::Query {
+    fn load<const HALF: bool>(self, values: packed::Patch<'_, u8, 8, 4>) -> Self::Query {
         let values = values.as_array();
         core::array::from_fn(|d| core::array::from_fn(|row| u16::from(values[row][d])))
     }
@@ -460,7 +487,12 @@ impl ExtraWide<4, 8> for Scalar {
         value.map(u16::from)
     }
     #[inline(always)]
-    fn dot(self, a: Self::Query, b: Self::Splat, acc: Self::Accumulator) -> Self::Accumulator {
+    fn dot<const HALF: bool>(
+        self,
+        a: Self::Query,
+        b: Self::Splat,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
         // B holds nibbles, so four u8 x u4 products sum to at most 15300 and fit in u16.
         core::array::from_fn(|i| {
             let dot = a[0][i] * b[0] + a[1][i] * b[1] + a[2][i] * b[2] + a[3][i] * b[3];
@@ -552,15 +584,12 @@ macro_rules! compensate {
 mod x86_64 {
     use super::*;
     use diskann_wide::{
-        SIMDDotProduct,
+        SIMDReinterpret, SplitJoin, ZipUnzip,
         arch::x86_64::{V3, V4},
     };
 
     impl ExtraWide<4, 16> for V3 {
-        type Query = (
-            <V3 as Architecture>::u8x32,
-            Option<<V3 as Architecture>::u8x32>,
-        );
+        type Query = [<V3 as Architecture>::u8x32; 2];
         type Splat = <V3 as Architecture>::i8x32;
         type Accumulator = [<V3 as Architecture>::i32x8; 2];
 
@@ -571,12 +600,14 @@ mod x86_64 {
         }
 
         #[inline(always)]
-        fn load(self, values: packed::Patch<'_, u8, 16, 4>, rows: usize) -> Self::Query {
+        fn load<const HALF: bool>(self, values: packed::Patch<'_, u8, 16, 4>) -> Self::Query {
             let values = values.as_ptr();
             // SAFETY: The patch spans 16 * 4 bytes; each half holds eight rows, or 32 bytes.
             unsafe {
                 let lo = SIMDVector::load_simd(self, values.truncate(Elements::new(32)).as_ptr());
-                let hi = (rows > 8).then(|| {
+                let hi = if HALF {
+                    SIMDVector::default(self)
+                } else {
                     SIMDVector::load_simd(
                         self,
                         values
@@ -584,8 +615,8 @@ mod x86_64 {
                             .truncate(Elements::new(32))
                             .as_ptr(),
                     )
-                });
-                (lo, hi)
+                };
+                [lo, hi]
             }
         }
         #[inline(always)]
@@ -595,33 +626,16 @@ mod x86_64 {
         #[inline(always)]
         fn splat(self, value: [u8; 4]) -> Self::Splat {
             diskann_wide::alias!(u32s = <V3>::u32x8);
-            Self::Splat::from_underlying(
-                self,
-                u32s::splat(self, u32::from_le_bytes(value)).to_underlying(),
-            )
+            u32s::splat(self, u32::from_le_bytes(value)).reinterpret_simd()
         }
         #[inline(always)]
-        fn dot(
+        fn dot<const HALF: bool>(
             self,
             a: Self::Query,
             b: Self::Splat,
-            mut acc: Self::Accumulator,
+            acc: Self::Accumulator,
         ) -> Self::Accumulator {
-            use std::arch::x86_64::_mm256_maddubs_epi16;
-            diskann_wide::alias!(i16s = <V3>::i16x16);
-            let dot = |a: <V3 as Architecture>::u8x32, acc: <V3 as Architecture>::i32x8| {
-                // SAFETY: V3 provides AVX2. B contains unsigned nibbles, so each
-                // pair sum is at most 2 * 255 * 15 and cannot saturate.
-                let products = i16s::from_underlying(self, unsafe {
-                    _mm256_maddubs_epi16(a.to_underlying(), b.to_underlying())
-                });
-                acc.dot_simd(products, i16s::splat(self, 1))
-            };
-            acc[0] = dot(a.0, acc[0]);
-            if let Some(hi) = a.1 {
-                acc[1] = dot(hi, acc[1]);
-            }
-            acc
+            dot_registers::<_, _, _, HALF>(a, b, acc)
         }
 
         #[inline(always)]
@@ -642,10 +656,7 @@ mod x86_64 {
     }
 
     impl ExtraWide<8, 16> for V4 {
-        type Query = (
-            <V4 as Architecture>::u8x64,
-            Option<<V4 as Architecture>::u8x64>,
-        );
+        type Query = [<V4 as Architecture>::u8x64; 2];
         type Splat = <V4 as Architecture>::i8x64;
         type Accumulator = [<V4 as Architecture>::i32x16; 2];
 
@@ -659,12 +670,14 @@ mod x86_64 {
         }
 
         #[inline(always)]
-        fn load(self, values: packed::Patch<'_, u8, 16, 8>, rows: usize) -> Self::Query {
+        fn load<const HALF: bool>(self, values: packed::Patch<'_, u8, 16, 8>) -> Self::Query {
             let values = values.as_ptr();
             // SAFETY: The patch spans 16 * 8 bytes; each half holds eight rows, or 64 bytes.
             unsafe {
                 let lo = SIMDVector::load_simd(self, values.truncate(Elements::new(64)).as_ptr());
-                let hi = (rows > 8).then(|| {
+                let hi = if HALF {
+                    SIMDVector::default(self)
+                } else {
                     SIMDVector::load_simd(
                         self,
                         values
@@ -672,8 +685,8 @@ mod x86_64 {
                             .truncate(Elements::new(64))
                             .as_ptr(),
                     )
-                });
-                (lo, hi)
+                };
+                [lo, hi]
             }
         }
         #[inline(always)]
@@ -682,34 +695,17 @@ mod x86_64 {
         }
         #[inline(always)]
         fn splat(self, value: [u8; 8]) -> Self::Splat {
-            // Miri's V4 registers use scalar arrays, so byte reinterpretation needs an
-            // explicit conversion rather than the native register's underlying type.
-            #[cfg(miri)]
-            {
-                Self::Splat::from_array(self, core::array::from_fn(|lane| value[lane % 8] as i8))
-            }
-
-            #[cfg(not(miri))]
-            {
-                diskann_wide::alias!(u64s = <V4>::u64x8);
-                Self::Splat::from_underlying(
-                    self,
-                    u64s::splat(self, u64::from_le_bytes(value)).to_underlying(),
-                )
-            }
+            diskann_wide::alias!(u64s = <V4>::u64x8);
+            u64s::splat(self, u64::from_le_bytes(value)).reinterpret_simd()
         }
         #[inline(always)]
-        fn dot(
+        fn dot<const HALF: bool>(
             self,
             a: Self::Query,
             b: Self::Splat,
-            mut acc: Self::Accumulator,
+            acc: Self::Accumulator,
         ) -> Self::Accumulator {
-            acc[0] = acc[0].dot_simd(a.0, b);
-            if let Some(hi) = a.1 {
-                acc[1] = acc[1].dot_simd(hi, b);
-            }
-            acc
+            dot_registers::<_, _, _, HALF>(a, b, acc)
         }
 
         #[inline(always)]
@@ -723,33 +719,14 @@ mod x86_64 {
         ) {
             diskann_wide::alias!(floats = <V4>::f32x8);
             let convert = |acc: Self::Accumulator, part: usize| {
-                // V4's emulated arrays cannot be passed to native AVX-512 intrinsics.
-                #[cfg(miri)]
-                {
-                    let values = acc[part].to_array();
-                    floats::from_array(
-                        self,
-                        core::array::from_fn(|i| {
-                            values[2 * i].wrapping_add(values[2 * i + 1]) as u32 as f32
-                        }),
-                    )
-                }
-
-                #[cfg(not(miri))]
-                {
-                    use std::arch::x86_64::{
-                        _mm512_add_epi32, _mm512_cvtepi64_epi32, _mm512_srli_epi64,
-                    };
-                    diskann_wide::alias!(i32s = <V4>::i32x8);
-
-                    let value = acc[part].to_underlying();
-                    // SAFETY: V4 provides AVX-512F and AVX-512DQ.
-                    let pairs = unsafe { _mm512_add_epi32(value, _mm512_srli_epi64::<32>(value)) };
-                    // SAFETY: V4 provides AVX-512F and AVX-512DQ.
-                    let reduced =
-                        i32s::from_underlying(self, unsafe { _mm512_cvtepi64_epi32(pairs) });
-                    floats::from_array(self, reduced.to_array().map(|x| x as u32 as f32))
-                }
+                let reduced: <V4 as Architecture>::i32x8 = acc[part]
+                    .split()
+                    .map(|half| {
+                        let pair = half.unzip();
+                        pair.lo + pair.hi
+                    })
+                    .join();
+                floats::from_array(self, reduced.to_array().map(|x| x as u32 as f32))
             };
             compensate!(self, floats, 8, 2, acc, convert, query, docs, dim, scores);
         }
@@ -762,13 +739,10 @@ mod x86_64 {
 #[cfg(target_arch = "aarch64")]
 mod aarch64 {
     use super::*;
-    use diskann_wide::{SIMDDotProduct, arch::aarch64::Neon};
+    use diskann_wide::arch::aarch64::Neon;
 
     impl ExtraWide<4, 8> for Neon {
-        type Query = (
-            <Neon as Architecture>::u8x16,
-            Option<<Neon as Architecture>::u8x16>,
-        );
+        type Query = [<Neon as Architecture>::u8x16; 2];
         type Splat = <Neon as Architecture>::u8x16;
         type Accumulator = [<Neon as Architecture>::u32x4; 2];
 
@@ -779,12 +753,14 @@ mod aarch64 {
         }
 
         #[inline(always)]
-        fn load(self, values: packed::Patch<'_, u8, 8, 4>, rows: usize) -> Self::Query {
+        fn load<const HALF: bool>(self, values: packed::Patch<'_, u8, 8, 4>) -> Self::Query {
             let values = values.as_ptr();
             // SAFETY: The patch spans 8 * 4 bytes; each half holds four rows, or 16 bytes.
             unsafe {
                 let lo = SIMDVector::load_simd(self, values.truncate(Elements::new(16)).as_ptr());
-                let hi = (rows > 4).then(|| {
+                let hi = if HALF {
+                    SIMDVector::default(self)
+                } else {
                     SIMDVector::load_simd(
                         self,
                         values
@@ -792,8 +768,8 @@ mod aarch64 {
                             .truncate(Elements::new(16))
                             .as_ptr(),
                     )
-                });
-                (lo, hi)
+                };
+                [lo, hi]
             }
         }
         #[inline(always)]
@@ -805,17 +781,13 @@ mod aarch64 {
             Self::Splat::from_array(self, core::array::from_fn(|i| value[i % 4]))
         }
         #[inline(always)]
-        fn dot(
+        fn dot<const HALF: bool>(
             self,
             a: Self::Query,
             b: Self::Splat,
-            mut acc: Self::Accumulator,
+            acc: Self::Accumulator,
         ) -> Self::Accumulator {
-            acc[0] = acc[0].dot_simd(a.0, b);
-            if let Some(hi) = a.1 {
-                acc[1] = acc[1].dot_simd(hi, b);
-            }
-            acc
+            dot_registers::<_, _, _, HALF>(a, b, acc)
         }
 
         #[inline(always)]
@@ -1115,17 +1087,27 @@ mod tests {
                     });
                     let values: [[u8; PACK]; MR] = core::array::from_fn(|i| {
                         core::array::from_fn(|j| {
-                            if i.is_multiple_of(2) {
+                            if i >= rows {
+                                0
+                            } else if i.is_multiple_of(2) {
                                 255
                             } else {
                                 (i * 11 + j * 13) as u8
                             }
                         })
                     });
-                    let a = arch.load(packed::Patch::from_array(&values), rows);
+                    let a = if rows <= MR / 2 {
+                        arch.load::<true>(packed::Patch::from_array(&values))
+                    } else {
+                        arch.load::<false>(packed::Patch::from_array(&values))
+                    };
                     let mut acc = arch.zero();
                     for _ in 0..3 {
-                        acc = arch.dot(a, arch.splat(b), acc);
+                        acc = if rows <= MR / 2 {
+                            arch.dot::<true>(a, arch.splat(b), acc)
+                        } else {
+                            arch.dot::<false>(a, arch.splat(b), acc)
+                        };
                     }
                     let query = QueryCompensation {
                         scale: [0.5; MR],
@@ -1145,7 +1127,7 @@ mod tests {
                         unsafe { arch.reduce([acc], &query, Slice::new(&[doc]), group_dim, scores) }
                     };
                     reduce(doc, &mut scores);
-                    for i in 0..rows {
+                    for i in 0..MR {
                         let raw: u32 = values[i]
                             .iter()
                             .zip(b.iter())
@@ -1180,11 +1162,11 @@ mod tests {
         arch.run_inline(|| {
             if !cfg!(miri) {
                 let values = [[255; PACK]; MR];
-                let a = arch.load(packed::Patch::from_array(&values), MR);
+                let a = arch.load::<false>(packed::Patch::from_array(&values));
                 let b = arch.splat([15; PACK]);
                 let mut acc = arch.zero();
                 for iteration in 1..=300_000 {
-                    acc = arch.dot(a, b, acc);
+                    acc = arch.dot::<false>(a, b, acc);
                     if matches!(iteration, 140_000 | 200_000 | 300_000) {
                         let expected = (iteration as u64 * PACK as u64 * 255 * 15) as u32;
                         assert_eq!(arch.accumulator_lanes(acc), [expected; MR]);
@@ -1227,24 +1209,34 @@ mod tests {
                 let b: Vec<_> = (0..3)
                     .flat_map(|row| (0..k).map(move |d| b_value(row, d)))
                     .collect();
-                for rows in 1..=MR {
-                    // SAFETY: The manually packed A and row-major B have K columns and
-                    // all B values fit in four bits.
+                // SAFETY: The manually packed A and row-major B have K columns and
+                // all B values fit in four bits.
+                let (ap, bp) = unsafe {
+                    (
+                        packed::Panel::<_, MR, PACK>::new(Slice::new(&a), dimension(k)),
+                        unpacked::Panel::<_, 3>::new(Slice::new(&b), dimension(k)),
+                    )
+                };
+                for half in [false, true] {
+                    // SAFETY: The panels above have K columns and B holds nibbles.
                     let acc = unsafe {
-                        arch.contract(
-                            packed::Panel::<_, MR, PACK>::new(Slice::new(&a), dimension(k)),
-                            unpacked::Panel::<_, 3>::new(Slice::new(&b), dimension(k)),
-                            dimension(k),
-                            rows,
-                        )
+                        if half {
+                            contract::<_, PACK, MR, 3, true>(arch, ap, bp, dimension(k))
+                        } else {
+                            contract::<_, PACK, MR, 3, false>(arch, ap, bp, dimension(k))
+                        }
                     };
+                    let rows = if half { MR / 2 } else { MR };
                     for (doc, acc) in acc.into_iter().enumerate() {
                         let lanes = arch.accumulator_lanes(acc);
                         for (row, &actual) in lanes.iter().take(rows).enumerate() {
                             let expected = (0..k)
                                 .map(|d| u32::from(a_value(row, d)) * u32::from(b_value(doc, d)))
                                 .sum::<u32>();
-                            assert_eq!(actual, expected, "k={k}, row={row}, doc={doc}");
+                            assert_eq!(
+                                actual, expected,
+                                "k={k}, row={row}, doc={doc}, half={half}"
+                            );
                         }
                     }
                 }
@@ -1259,6 +1251,41 @@ mod tests {
         check_contraction::<_, 4, 8>(Scalar::new());
     }
 
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[test]
+    fn dot_registers_handles_both_halves_and_wrapping() {
+        use diskann_wide::Emulated;
+
+        let arch = Scalar::new();
+        let query = [[255; 32], core::array::from_fn(|i| (i * 7) as u8)];
+        let doc = core::array::from_fn(|i| [0, 15, 1, 7][i % 4]);
+        let initial = [[i32::MAX; 8], core::array::from_fn(|i| i as i32 * 31)];
+        let b = Emulated::<i8, 32>::from_array(arch, doc);
+        let acc = initial.map(|x| Emulated::<i32, 8>::from_array(arch, x));
+        for hi in [[0; 32], query[1]] {
+            let query = [query[0], hi];
+            let a = query.map(|x| Emulated::<u8, 32>::from_array(arch, x));
+            for (half, actual) in [
+                (false, dot_registers::<_, _, _, false>(a, b, acc)),
+                (true, dot_registers::<_, _, _, true>(a, b, acc)),
+            ] {
+                let expected: [[i32; 8]; 2] = core::array::from_fn(|part| {
+                    core::array::from_fn(|lane| {
+                        let mut sum = initial[part][lane];
+                        if part == 0 || !half {
+                            for d in 4 * lane..4 * (lane + 1) {
+                                sum =
+                                    sum.wrapping_add(i32::from(query[part][d]) * i32::from(doc[d]));
+                            }
+                        }
+                        sum
+                    })
+                });
+                assert_eq!(actual.map(|x| x.to_array()), expected);
+            }
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn v3_driver_and_registers() {
@@ -1268,6 +1295,107 @@ mod tests {
             check_contraction::<_, 4, 16>(arch);
             check_decoded_b(arch);
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn v4_pairwise_reduction() {
+        use diskann_wide::arch::x86_64::V4;
+
+        let arch = V4::new_checked_miri();
+        if cfg!(miri) {
+            assert!(arch.is_some(), "V4 emulation requires V3 support");
+        }
+        let Some(arch) = arch else {
+            eprintln!("V4 unavailable; use Miri to exercise the emulated reduction");
+            return;
+        };
+        arch.run_inline(|| {
+            let lanes = [
+                [
+                    1,
+                    11,
+                    23,
+                    47,
+                    -1,
+                    2,
+                    i32::MAX,
+                    1,
+                    i32::MIN,
+                    -1,
+                    i32::MAX,
+                    i32::MAX,
+                    i32::MIN,
+                    i32::MIN,
+                    -17,
+                    -23,
+                ],
+                [
+                    31,
+                    5,
+                    113,
+                    257,
+                    -7,
+                    19,
+                    i32::MAX,
+                    2,
+                    i32::MIN,
+                    -2,
+                    i32::MAX,
+                    i32::MIN,
+                    i32::MIN,
+                    1,
+                    0,
+                    0,
+                ],
+            ];
+            let acc = lanes.map(|x| <V4 as Architecture>::i32x16::from_array(arch, x));
+            let query = QueryCompensation {
+                scale: [1.0; 16],
+                ..Default::default()
+            };
+            let docs = [MinMaxCompensation {
+                a: 1.0,
+                ..Default::default()
+            }];
+            let mut scores = [f32::MAX; 16];
+            // SAFETY: The accumulator has one document and all sixteen query lanes.
+            unsafe {
+                <V4 as ExtraWide<8, 16>>::reduce(
+                    arch,
+                    [acc],
+                    &query,
+                    Slice::new(&docs),
+                    1,
+                    &mut scores,
+                );
+            }
+            for (i, score) in scores.into_iter().enumerate() {
+                let part = &lanes[i / 8];
+                let pair = 2 * (i % 8);
+                let expected = -(part[pair].wrapping_add(part[pair + 1]) as u32 as f32);
+                assert_eq!(score, expected, "query lane {i}");
+            }
+        });
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn v4_padded_panels() {
+        use diskann_wide::arch::x86_64::V4;
+
+        let arch = V4::new_checked_miri();
+        if cfg!(miri) {
+            assert!(arch.is_some(), "V4 emulation requires V3 support");
+        }
+        let Some(arch) = arch else {
+            eprintln!("V4 unavailable; use Miri to exercise the padded panels");
+            return;
+        };
+        for rows in [1, 8, 9, 17] {
+            check_driver_case::<_, 8, 16, 8>(arch, rows, 9, 9, 1, 8);
+        }
+        check_contraction::<_, 8, 16>(arch);
     }
 
     #[cfg(target_arch = "x86_64")]

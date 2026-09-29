@@ -9,7 +9,7 @@ use std::arch::x86_64::*;
 use super::{
     f16x8_::f16x8, f16x16_::f16x16, f32x8_::f32x8, f32x16_::f32x16, i8x16_::i8x16, i8x32_::i8x32,
     i8x64_::i8x64, i16x8_::i16x8, i16x16_::i16x16, i16x32_::i16x32, i32x8_::i32x8, u8x16_::u8x16,
-    u8x32_::u8x32, u8x64_::u8x64, u32x8_::u32x8, u32x16_::u32x16,
+    u8x32_::u8x32, u8x64_::u8x64, u32x8_::u32x8, u32x16_::u32x16, u64x8_::u64x8,
 };
 use crate::{SIMDCast, SIMDReinterpret, SIMDVector, arch::x86_64::v3, helpers};
 
@@ -133,6 +133,18 @@ impl SIMDReinterpret<u8x16> for i16x8 {
 impl SIMDReinterpret<i16x8> for u8x16 {
     fn reinterpret_simd(self) -> i16x8 {
         i16x8(self.0)
+    }
+}
+
+impl SIMDReinterpret<u8x64> for u64x8 {
+    fn reinterpret_simd(self) -> u8x64 {
+        u8x64(self.0)
+    }
+}
+
+impl SIMDReinterpret<i8x64> for u64x8 {
+    fn reinterpret_simd(self) -> i8x64 {
+        i8x64(self.0)
     }
 }
 
