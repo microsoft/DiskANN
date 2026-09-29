@@ -3,18 +3,9 @@
  * Licensed under the MIT license.
  */
 
-//! IVF index traits and wrappers.
-//!
-//! Search selects candidate lists, scans them, and returns the best `k` results.
-//! The fixed-partition API inserts by appending to one selected list, while
-//! [`dynamic`] defines accessor and mutation contracts for incremental partitions.
+//! Incrementally maintained IVF index.
 
 pub mod dynamic;
-pub mod glue;
 pub mod index;
 
-pub use glue::{InsertAccessor, InsertStrategy, ListAccessor, SearchAccessor, SearchStrategy};
-pub use index::{IvfIndex, SearchStats};
-
-#[cfg(test)]
-mod test;
+pub use index::{ConfigError, DynamicIvfConfig, DynamicIvfIndex, InsertStats};

@@ -110,8 +110,6 @@ coordinates its provider, centroid index, and inverted-list store.
    the graph module's strategy/accessor style.
 9. Leave locking, reader visibility, durability, rollback, and recovery to each
    concrete accessor implementation.
-10. Preserve the existing fixed-partition IVF API while the dynamic algorithm
-    is developed.
 
 ### Non-Goals
 
@@ -189,14 +187,13 @@ implementation.
 ```text
 diskann/src/ivf/
   mod.rs
-  glue.rs       existing fixed-partition traits
-  index.rs      existing fixed-partition orchestration
   dynamic.rs    contracts proposed by this RFC
+  index.rs      DynamicIvfIndex initialize/insert orchestration
   online/       future GraphIVF algorithm and scratch state
 ```
 
-The dynamic names remain under `ivf::dynamic` while experimental, avoiding
-collisions with the current `ivf::SearchAccessor` and `ivf::SearchStrategy`.
+The initial fixed-partition prototype (`glue.rs`, `index.rs`, and its test
+provider) is removed; the contracts in `ivf::dynamic` replace it.
 
 ### Responsibilities
 
@@ -649,7 +646,7 @@ and search parameters. Durable metadata belongs to concrete provider crates.
 ### Phase 0: Compile-Only Contracts
 
 - Add `ivf::dynamic` with the traits and data types in this RFC.
-- Keep the fixed-partition API and tests unchanged.
+- Remove the fixed-partition prototype API and its tests.
 - Compile, lint, format, and build rustdoc for the skeleton.
 
 ### Phase 1: Unified In-Memory Provider

@@ -23,9 +23,9 @@ use crate::{
 
 /// One centroid/list selected during coarse search.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SelectedList<ListId> {
+pub struct SelectedList<L> {
     /// Stable logical list identifier.
-    pub id: ListId,
+    pub id: L,
     /// Distance from the bound query to this list's centroid.
     pub distance: f32,
 }
@@ -36,8 +36,8 @@ pub struct SelectedList<ListId> {
 /// The accessor is responsible for keeping centroid selection and list reads
 /// coherent using provider-specific coordination.
 #[derive(Debug, Clone)]
-pub struct SelectionPlan<ListId> {
-    selected: Vec<SelectedList<ListId>>,
+pub struct SelectionPlan<L> {
+    selected: Vec<SelectedList<L>>,
 }
 
 impl<ListId> SelectionPlan<ListId> {
@@ -196,7 +196,7 @@ pub struct CentroidRecord<ListId> {
 }
 
 /// Changes to the authoritative live-centroid catalog.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CentroidDelta<ListId> {
     /// Centroids made live by this update.
     pub insert: Vec<CentroidRecord<ListId>>,
@@ -214,7 +214,7 @@ pub struct CoLocationGroup<CoLocationGroupId, ListId> {
 }
 
 /// Changes to the authoritative co-location set.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CoLocationDelta<CoLocationGroupId, ListId> {
     /// Co-location groups made live by this update.
     pub insert: Vec<CoLocationGroup<CoLocationGroupId, ListId>>,
@@ -232,6 +232,7 @@ pub struct PointMove<Id, ListId> {
     /// New list, or `None` for a deleted point.
     pub to: Option<ListId>,
 }
+/// constrcutors for this too.
 
 /// A complete logical partition change.
 ///
@@ -239,7 +240,7 @@ pub struct PointMove<Id, ListId> {
 /// canonical vectors, list membership, reverse assignments, scan payloads, and
 /// centroid liveness, and co-location membership according to its
 /// provider-specific consistency contract.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PartitionUpdate<Id, ListId, CoLocationGroupId> {
     /// Centroids inserted and retired by this mutation.
     pub centroids: CentroidDelta<ListId>,
@@ -248,6 +249,7 @@ pub struct PartitionUpdate<Id, ListId, CoLocationGroupId> {
     /// Point membership changes, including inserts and deletes.
     pub point_moves: Vec<PointMove<Id, ListId>>,
 }
+///  constructor enforces safety + correctness.
 
 /// Operation-scoped reads and writes needed by split/dissolve maintenance.
 ///
