@@ -14,9 +14,12 @@
 //! Note that the type system does not enforce the tag protocol — only the documented
 //! transitions on [`Tag`] are sound, and it is the caller's responsibility to follow them.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 
-use crate::num::Bytes;
+use crate::num::{Bytes, IdLimit};
 
 /// A tag for controlling concurrent access to data.
 ///
@@ -230,6 +233,82 @@ impl AtomicTag {
     }
 }
 
+//-------------//
+// Shared tags //
+//-------------//
+
+/// An authoritative tag-store for the state of slots between 0 and some [`IdLimit`].
+///
+/// Access to the individual tags can be done by this struct's [`std::ops::Deref`]
+/// implementation, which gives access to the slice of tags directly.
+#[derive(Debug)]
+pub(crate) struct Authoritative {
+    tags: Arc<[AtomicTag]>,
+}
+
+impl Authoritative {
+    /// Construct a new [`AtomicTag`] authoritative tag source.
+    pub(crate) fn new(id_limit: IdLimit) -> Self {
+        Self {
+            tags: std::iter::repeat_n(Tag::AVAILABLE, id_limit.as_usize())
+                .map(AtomicTag::new)
+                .collect(),
+        }
+    }
+
+    /// Return the [`IdLimit`] for the tag store.
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        IdLimit::new(self.len() as u32)
+    }
+
+    /// Return a [`ReadOnly`], which can check the state of the tags but cannot modify it.
+    #[cfg(any(test, feature = "quantization", feature = "integration-test"))]
+    pub(crate) fn read_only(&self) -> ReadOnly {
+        ReadOnly::new(self.tags.clone())
+    }
+}
+
+impl std::ops::Deref for Authoritative {
+    type Target = [AtomicTag];
+    fn deref(&self) -> &[AtomicTag] {
+        &self.tags
+    }
+}
+
+/// A read-only handle to [`Authoritative`].
+#[cfg(any(test, feature = "quantization", feature = "integration-test"))]
+#[derive(Debug, Clone)]
+pub(crate) struct ReadOnly {
+    tags: Arc<[AtomicTag]>,
+}
+
+#[cfg(any(test, feature = "quantization", feature = "integration-test"))]
+impl ReadOnly {
+    fn new(tags: Arc<[AtomicTag]>) -> Self {
+        Self { tags }
+    }
+
+    /// Return the [`IdLimit`] for the tag store.
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        IdLimit::new(self.tags.len() as u32)
+    }
+
+    /// Return whether or not tag `i` is readable according to [`Tag::can_read`].
+    ///
+    /// If `i` exceeds [`Self::id_limit`], this always returns `false`.
+    ///
+    /// # Synchronization
+    ///
+    /// This method synchronizes the check with [`Ordering::Acquire`] semantics.
+    #[must_use]
+    pub(crate) fn can_read(&self, i: usize) -> bool {
+        self.tags
+            .get(i)
+            .map(|tag| tag.load(Ordering::Acquire).can_read())
+            .unwrap_or(false)
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -329,5 +408,32 @@ mod tests {
         // Guard against future changes.
         assert_eq!(Tag::new(Tag::RETIRING.value() + 1).to_string(), "Tag(3)");
         assert_eq!(Tag::new(Tag::PUBLISHED.value() - 1).to_string(), "Tag(253)");
+    }
+
+    #[test]
+    fn test_authoritative() {
+        let authoritative = Authoritative::new(IdLimit::new(10));
+        assert_eq!(authoritative.len(), 10);
+        assert_eq!(authoritative.id_limit(), IdLimit::new(10));
+
+        let read_only = authoritative.read_only();
+        assert_eq!(read_only.id_limit(), IdLimit::new(10));
+
+        for (i, tag) in authoritative.iter().enumerate() {
+            assert_eq!(tag.load(Ordering::Relaxed), Tag::AVAILABLE);
+            assert!(!read_only.can_read(i));
+        }
+
+        // If we change the state of a tag in the `authoritative`, then the `read_only`
+        // should be updated to reflect that state.
+        authoritative[5].store(Tag::PUBLISHED, Ordering::Relaxed);
+        assert!(!read_only.can_read(4));
+        assert!(read_only.can_read(5));
+        assert!(!read_only.can_read(6));
+
+        authoritative[5].store(Tag::RETIRING, Ordering::Relaxed);
+        assert!(!read_only.can_read(4));
+        assert!(!read_only.can_read(5));
+        assert!(!read_only.can_read(6));
     }
 }

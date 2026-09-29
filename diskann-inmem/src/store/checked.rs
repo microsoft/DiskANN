@@ -32,9 +32,9 @@
 //! ## Lifecycle Details
 //!
 //! Lifecycle transitions are carefully designed to allow readers of the slots to avoid any
-//! accesses to the authoritative [`Store`] for read-only operations. The [`Checked`] test
-//! code follows this pattern, but this does introduce a subtle detail that is worth
-//! highlighting. [`Reader::read`] needs to be able to check a slot for readability
+//! accesses to the authoritative [`crate::store::Store`] for read-only operations. The
+//! [`Checked`] test code follows this pattern, but this does introduce a subtle detail that
+//! is worth highlighting. [`Reader::read`] needs to be able to check a slot for readability
 //! **without** trying to acquire a [`RwLockReadGuard`] for that slot. Doing so even briefly
 //! will cause a [`RwLock::try_write`] on an otherwise correct [`slots::Slots`] state
 //! transition to fail.
@@ -80,7 +80,7 @@ use std::{
 use diskann::utils::IntoUsize;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::{epoch, num::IdLimit, store::Store};
+use crate::{epoch, num::IdLimit, tag};
 
 use super::{Lifecycle, slots};
 
@@ -299,8 +299,12 @@ impl slots::SlotsConfig for Config {
     type Slots = Checked;
     type Error = diskann::error::Infallible;
 
-    fn build(self, id_limit: IdLimit) -> Result<Checked, diskann::error::Infallible> {
-        Ok(Checked::new(id_limit))
+    unsafe fn build(
+        self,
+        handle: epoch::RegistryHandle,
+        tags: &tag::Authoritative,
+    ) -> Result<Checked, diskann::error::Infallible> {
+        Ok(Checked::new(handle, tags.id_limit()))
     }
 }
 
@@ -308,15 +312,17 @@ impl slots::SlotsConfig for Config {
 #[derive(Debug)]
 pub(crate) struct Checked {
     entries: Vec<Entry>,
+    handle: epoch::RegistryHandle,
 }
 
 impl Checked {
     /// Create a new [`Checked`] with `id_limit` slots.
-    pub(crate) fn new(id_limit: IdLimit) -> Self {
+    pub(crate) fn new(handle: epoch::RegistryHandle, id_limit: IdLimit) -> Self {
         Self {
             entries: std::iter::repeat_with(Entry::default)
                 .take(id_limit.as_usize())
                 .collect(),
+            handle,
         }
     }
 
@@ -331,11 +337,16 @@ impl Checked {
     }
 
     /// Return an epoch-protected [`Reader`] into [`Self`].
-    pub(crate) fn reader(store: &Store<Self>) -> Result<Reader<'_>, epoch::Unavailable> {
-        store.guard(|this, guard: epoch::Guard<'_>| Reader {
-            parent: this,
+    ///
+    /// # Panics
+    ///
+    /// Panics if `guard` does not belong to `self`'s [`epoch::Registry`].
+    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+        self.handle.assert_guard_belongs(&guard);
+        Reader {
+            parent: self,
             _guard: guard,
-        })
+        }
     }
 }
 

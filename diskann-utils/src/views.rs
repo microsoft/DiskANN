@@ -98,7 +98,6 @@ unsafe impl<T> MutDenseData for Box<[T]> {
 ///
 /// * `self.nrows() * self.ncols()` does not exceed `usize::MAX`.
 /// * `self.nrows() * self.ncols() * std::mem::size_of::<T>()` does not exceed `isize::MAX`.
-#[derive(Debug, PartialEq, Eq)]
 pub struct Layout<T> {
     nrows: usize,
     ncols: usize,
@@ -186,6 +185,24 @@ impl<T> Clone for Layout<T> {
 }
 
 impl<T> Copy for Layout<T> {}
+
+impl<T> std::fmt::Debug for Layout<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layout")
+            .field("nrows", &self.nrows)
+            .field("ncols", &self.ncols)
+            .field("elsize", &std::mem::size_of::<T>())
+            .finish()
+    }
+}
+
+impl<T> PartialEq for Layout<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nrows == other.nrows && self.ncols == other.ncols
+    }
+}
+
+impl<T> Eq for Layout<T> {}
 
 /// Errors in the invariants guaranteed by [`Layout`].
 #[derive(Debug, Clone, Copy)]
@@ -630,6 +647,7 @@ where
     {
         assert!(batchsize != 0, "window_iter batchsize cannot be zero");
         let ncols = self.ncols();
+
         self.data
             .as_slice()
             .chunks(ncols * batchsize)
@@ -797,10 +815,13 @@ where
     /// assert!(mat.subview(3..5).is_none());
     /// ```
     pub fn subview(&self, rows: std::ops::Range<usize>) -> Option<MatrixView<'_, T::Elem>> {
-        let ncols = self.ncols();
+        if rows.start > rows.end || rows.end > self.nrows() {
+            return None;
+        }
 
-        let lower = rows.start.checked_mul(ncols)?;
-        let upper = rows.end.checked_mul(ncols)?;
+        let ncols = self.ncols();
+        let lower = rows.start * ncols;
+        let upper = rows.end * ncols;
 
         if let Some(data) = self.as_slice().get(lower..upper) {
             // SAFETY: The successful checked index into `self.as_slice()` attests that
@@ -1077,7 +1098,7 @@ enum TryFromErrorInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lazy_format;
+    use crate::{assert_contains, lazy_format};
 
     /// This function is only callable with copyable types.
     ///
@@ -1213,6 +1234,27 @@ mod tests {
             }
         }
 
+        #[expect(unused, reason = "we need this so the size is non-zero")]
+        struct NotDebugOrEq(u32);
+
+        assert_eq!(
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+        );
+
+        assert_eq!(
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+        );
+
+        assert_ne!(
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+        );
+
+        let fmt = format!("{:?}", Layout::<NotDebugOrEq>::new(5, 6).unwrap());
+        assert_eq!(fmt, "Layout { nrows: 5, ncols: 6, elsize: 4 }");
+
         // Overflowing the element count returns an error.
         let error = Layout::<u8>::new(usize::MAX, 2).unwrap_err();
         assert_eq!(
@@ -1266,11 +1308,11 @@ mod tests {
     fn fallible_matrix_constructors() {
         let err = Matrix::try_from_element(usize::MAX, usize::MAX, 0u32).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("exceeding `usize::MAX`"), "{msg}");
+        assert_contains!(msg, "exceeding `usize::MAX`");
 
         let err = Matrix::try_from_element(isize::MAX as usize, 1, 0u32).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("exceeds `isize::MAX` bytes"), "{msg}");
+        assert_contains!(msg, "exceeds `isize::MAX` bytes");
 
         // Panicking
         let err = std::panic::catch_unwind(|| {
@@ -1281,7 +1323,7 @@ mod tests {
         .unwrap();
 
         let msg = err.to_string();
-        assert!(msg.contains("exceeding `usize::MAX`"), "{msg}");
+        assert_contains!(msg, "exceeding `usize::MAX`");
 
         let err = std::panic::catch_unwind(|| {
             Matrix::from_element(isize::MAX as usize, 1, 0u32);
@@ -1290,12 +1332,12 @@ mod tests {
         .downcast::<String>()
         .unwrap();
         let msg = err.to_string();
-        assert!(msg.contains("exceeds `isize::MAX` bytes"), "{msg}");
+        assert_contains!(msg, "exceeds `isize::MAX` bytes");
 
         // Construction fails without invoking the generator.
         let err = Matrix::try_from_fn(usize::MAX, usize::MAX, |_| panic!("boom")).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("exceeding `usize::MAX`"), "{msg}");
+        assert_contains!(msg, "exceeding `usize::MAX`");
     }
 
     fn make_test_matrix() -> Vec<usize> {
@@ -1763,9 +1805,9 @@ mod tests {
         // Test `as_static` method
         let err_static = err.as_static();
         let msg = err_static.to_string();
-        assert!(
-            msg.contains("tried to construct a 2x3 matrix over a span of length 3"),
-            "{msg}"
+        assert_contains!(
+            msg,
+            "tried to construct a 2x3 matrix over a span of length 3",
         );
         // Test `into_inner` method
         let recovered_data = err.into_inner();
@@ -1774,7 +1816,7 @@ mod tests {
         // Invalid length.
         let err = MatrixView::try_from(data.as_slice(), 2, usize::MAX).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("usize::MAX"), "{msg}");
+        assert_contains!(msg, "usize::MAX");
 
         assert_eq!(data.as_slice(), err.into_inner());
     }
@@ -2113,6 +2155,45 @@ mod tests {
         assert!(m.subview(0..usize::MAX).is_none());
     }
 
+    #[expect(
+        clippy::reversed_empty_ranges,
+        reason = "we want to make sure it doesn't work"
+    )]
+    #[test]
+    fn test_subview_zero_cols() {
+        let m = Matrix::from_element(10, 0, 0u32);
+
+        // Out-of-bounds indexing
+        assert!(m.subview(100..200).is_none());
+        assert!(m.subview(200..100).is_none());
+
+        assert!(m.subview(10..11).is_none());
+        assert!(m.subview(11..10).is_none());
+
+        assert!(m.subview(0..11).is_none());
+        assert!(m.subview(11..0).is_none());
+
+        assert!(m.subview(10..0).is_none());
+        assert!(m.subview(5..4).is_none());
+
+        // In-bounds.
+        let v = m.subview(5..10).unwrap();
+        assert_eq!(v.nrows(), 5);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(0..0).unwrap();
+        assert_eq!(v.nrows(), 0);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(10..10).unwrap();
+        assert_eq!(v.nrows(), 0);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(0..10).unwrap();
+        assert_eq!(v.nrows(), 10);
+        assert_eq!(v.ncols(), 0);
+    }
+
     #[test]
     #[cfg(all(not(miri), feature = "rayon"))]
     fn test_parallel_methods_edge_cases() {
@@ -2255,18 +2336,20 @@ mod tests {
         // Test Debug implementation for TryFromError
         let data = vec![1, 2, 3];
         let err = Matrix::try_from(data.into(), 2, 3).unwrap_err();
-
         let debug_str = format!("{:?}", err);
-        assert!(debug_str.contains("TryFromError"));
+        assert_contains!(debug_str, "TryFromError");
 
         // Ensure Debug doesn't require T: Debug by using a non-Debug type
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         struct NonDebug(#[expect(dead_code)] i32);
 
         let non_debug_data: Box<[NonDebug]> = vec![NonDebug(1), NonDebug(2)].into();
-        let non_debug_err = Matrix::try_from(non_debug_data, 1, 3).unwrap_err();
+        let non_debug_err = match Matrix::try_from(non_debug_data, 1, 3) {
+            Ok(_) => panic!("should not have succeeded!"),
+            Err(err) => err,
+        };
         let debug_str = format!("{:?}", non_debug_err);
-        assert!(debug_str.contains("TryFromError"));
+        assert_contains!(debug_str, "TryFromError");
     }
 
     // Comprehensive tests for rayon-specific functionality
