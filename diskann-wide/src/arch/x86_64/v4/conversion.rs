@@ -155,21 +155,13 @@ impl SIMDReinterpret<i16x8> for u8x16 {
 #[cfg(test)]
 mod test_x86_conversions {
     use super::*;
-    use crate::{
-        arch::x86_64::{
-            V4,
-            v4::{i8x64, u8x64, u64x8},
-        },
-        test_utils,
-    };
+    use crate::{arch::x86_64::V4, test_utils};
 
     test_utils::ops::test_reinterpret!(
-        u64x8 => u8x64, 0x891d3c75ef2064ba,
-        if cfg!(miri) { V4::new_checked_miri() } else { V4::new_checked_uncached() }
+        u64x8 => u8x64, 0x891d3c75ef2064ba, V4::new_checked_uncached()
     );
     test_utils::ops::test_reinterpret!(
-        u64x8 => i8x64, 0x891d3c75ef2064ba,
-        if cfg!(miri) { V4::new_checked_miri() } else { V4::new_checked_uncached() }
+        u64x8 => i8x64, 0x891d3c75ef2064ba, V4::new_checked_uncached()
     );
 
     // Lossless Conversions
