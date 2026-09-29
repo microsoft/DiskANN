@@ -532,6 +532,44 @@ macro_rules! test_cast {
     }
 }
 
+macro_rules! test_reinterpret_bytes {
+    (
+        $from:ident $(< $($fs:tt),+ >)? => $to:ident $(< $($ts:tt),+ >)?,
+        $seed:literal,
+        $arch:expr
+    ) => {
+        paste::paste! {
+            #[test]
+            fn [<reinterpret_ $from:lower $(_$($fs )x+)? _to_ $to:lower $(_$($ts )x+)?>]() {
+                use $crate::{SIMDReinterpret, SIMDVector};
+
+                type From = $from $(< $($fs),+>)?;
+                type To = $to $(< $($ts),+>)?;
+
+                if let Some(arch) = $arch {
+                    let f = move |input: &[<From as SIMDVector>::Scalar]| {
+                        let got: To = From::from_array(arch, input.try_into().unwrap())
+                            .reinterpret_simd();
+                        let expected: Vec<_> = input.iter()
+                            .flat_map(|x| x.to_le_bytes())
+                            .map(|x| x as <To as SIMDVector>::Scalar)
+                            .collect();
+                        assert_eq!(got.to_array().as_slice(), expected, "input: {input:?}");
+                    };
+
+                    let input: Vec<_> = (0..From::LANES).map(|lane| {
+                        <From as SIMDVector>::Scalar::from_le_bytes(std::array::from_fn(|byte| {
+                            [0x00, 0x7f, 0x80, 0xff, 0x01, 0x55, 0xaa, 0xfe][(lane + byte) % 8]
+                        }))
+                    }).collect();
+                    f(&input);
+                    $crate::test_utils::driver::drive_unary(&f, From::LANES, $seed);
+                }
+            }
+        }
+    };
+}
+
 macro_rules! test_abs {
     ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
         paste::paste! {
@@ -1146,6 +1184,7 @@ pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;
 pub(crate) use test_popcount;
+pub(crate) use test_reinterpret_bytes;
 pub(crate) use test_select;
 pub(crate) use test_splitjoin;
 pub(crate) use test_sub;

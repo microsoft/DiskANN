@@ -631,6 +631,11 @@ impl_little_endian_transmute_cast!(<u8, 16> => <i16, 8>);
 impl_little_endian_transmute_cast!(<u32, 16> => <u8, 64>);
 impl_little_endian_transmute_cast!(<u32, 16> => <i8, 64>);
 
+impl_little_endian_transmute_cast!(<u64, 8> => <u8, 64>);
+impl_little_endian_transmute_cast!(<u64, 8> => <i8, 64>);
+impl_little_endian_transmute_cast!(<u32, 8> => <u8, 32>);
+impl_little_endian_transmute_cast!(<u32, 8> => <i8, 32>);
+
 impl_little_endian_transmute_cast!(<u8, 64> => <u32, 16>);
 impl_little_endian_transmute_cast!(<i8, 64> => <u32, 16>);
 
@@ -1108,6 +1113,23 @@ mod test_emulated {
     );
     test_utils::ops::test_lossless_convert!(
         Emulated<u8, 4> => Emulated<i32, 4>, 0x75929494c5d333d0, SC
+    );
+
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret_bytes!(
+        Emulated<u32, 8> => Emulated<u8, 32>, 0x69b42dafe0917358, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret_bytes!(
+        Emulated<u32, 8> => Emulated<i8, 32>, 0x69b42dafe0917358, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret_bytes!(
+        Emulated<u64, 8> => Emulated<u8, 64>, 0x891d3c75ef2064ba, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret_bytes!(
+        Emulated<u64, 8> => Emulated<i8, 64>, 0x891d3c75ef2064ba, SC
     );
 
     ///////////

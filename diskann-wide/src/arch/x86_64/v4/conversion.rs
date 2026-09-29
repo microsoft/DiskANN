@@ -9,7 +9,7 @@ use std::arch::x86_64::*;
 use super::{
     f16x8_::f16x8, f16x16_::f16x16, f32x8_::f32x8, f32x16_::f32x16, i8x16_::i8x16, i8x32_::i8x32,
     i8x64_::i8x64, i16x8_::i16x8, i16x16_::i16x16, i16x32_::i16x32, i32x8_::i32x8, u8x16_::u8x16,
-    u8x32_::u8x32, u8x64_::u8x64, u32x8_::u32x8, u32x16_::u32x16,
+    u8x32_::u8x32, u8x64_::u8x64, u32x8_::u32x8, u32x16_::u32x16, u64x8_::u64x8,
 };
 use crate::{SIMDCast, SIMDReinterpret, SIMDVector, arch::x86_64::v3, helpers};
 
@@ -112,6 +112,18 @@ impl SIMDReinterpret<i8x64> for u32x16 {
     }
 }
 
+impl SIMDReinterpret<u8x64> for u64x8 {
+    fn reinterpret_simd(self) -> u8x64 {
+        u8x64(self.0)
+    }
+}
+
+impl SIMDReinterpret<i8x64> for u64x8 {
+    fn reinterpret_simd(self) -> i8x64 {
+        i8x64(self.0)
+    }
+}
+
 impl SIMDReinterpret<u32x16> for u8x64 {
     fn reinterpret_simd(self) -> u32x16 {
         u32x16(self.0)
@@ -143,7 +155,22 @@ impl SIMDReinterpret<i16x8> for u8x16 {
 #[cfg(test)]
 mod test_x86_conversions {
     use super::*;
-    use crate::{arch::x86_64::V4, test_utils};
+    use crate::{
+        arch::x86_64::{
+            V4,
+            v4::{i8x64, u8x64, u64x8},
+        },
+        test_utils,
+    };
+
+    test_utils::ops::test_reinterpret_bytes!(
+        u64x8 => u8x64, 0x891d3c75ef2064ba,
+        if cfg!(miri) { V4::new_checked_miri() } else { V4::new_checked_uncached() }
+    );
+    test_utils::ops::test_reinterpret_bytes!(
+        u64x8 => i8x64, 0x891d3c75ef2064ba,
+        if cfg!(miri) { V4::new_checked_miri() } else { V4::new_checked_uncached() }
+    );
 
     // Lossless Conversions
     #[cfg(not(miri))]
