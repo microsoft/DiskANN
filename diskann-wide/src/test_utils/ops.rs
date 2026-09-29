@@ -6,13 +6,10 @@
 use std::fmt::Debug;
 
 // Common test traits.
-use super::{
-    common::{self, ScalarTraits},
-    driver::{self, ScalarDriver},
-};
+use super::common::{self, ScalarTraits};
 use crate::{
-    BitMask, Const, SIMDMask, SIMDMinMax, SIMDPartialEq, SIMDPartialOrd, SIMDReinterpret,
-    SIMDSumTree, SIMDVector, SplitJoin, SupportedLaneCount, ZipUnzip, arch,
+    BitMask, Const, SIMDMask, SIMDMinMax, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector,
+    SplitJoin, SupportedLaneCount, ZipUnzip, arch,
     reference::{ReferenceIntegerOps, ReferenceScalarOps, TreeReduce},
 };
 
@@ -535,35 +532,46 @@ macro_rules! test_cast {
     }
 }
 
-pub(crate) fn test_reinterpret<From, To, const N: usize, const M: usize>(
-    arch: From::Arch,
-    seed: u64,
-) where
-    From: SIMDVector<ConstLanes = Const<N>> + SIMDReinterpret<To>,
-    To: SIMDVector<ConstLanes = Const<M>>,
-    From::Scalar: ScalarDriver + bytemuck::Pod,
-    To::Scalar: bytemuck::Pod,
-    Const<N>: SupportedLaneCount,
-    Const<M>: SupportedLaneCount,
-{
-    let check = move |input: &[From::Scalar]| {
-        let got: To = From::from_array(arch, input.try_into().unwrap()).reinterpret_simd();
-        assert_eq!(
-            common::bytes(&got.to_array()),
-            common::bytes(input),
-            "input: {input:?}"
-        );
-    };
+macro_rules! test_reinterpret {
+    (
+        $from:ident $(< $($fs:tt),+ >)? => $to:ident $(< $($ts:tt),+ >)?,
+        $seed:literal,
+        $arch:expr
+    ) => {
+        paste::paste! {
+            #[test]
+            fn [<reinterpret_ $from:lower $(_$($fs )x+)? _to_ $to:lower $(_$($ts )x+)?>]() {
+                use $crate::{SIMDReinterpret, SIMDVector};
 
-    // Distinct bytes expose lane/byte reordering; offsets exercise the signed-byte boundary.
-    let mut input = [From::Scalar::default(); N];
-    for start in [0u8, 0x7f, 0x80, 0xff] {
-        for (i, byte) in common::bytes_mut(&mut input).iter_mut().enumerate() {
-            *byte = start.wrapping_add(i as u8);
+                type From = $from $(< $($fs),+>)?;
+                type To = $to $(< $($ts),+>)?;
+
+                if let Some(arch) = $arch {
+                    let f = move |input: &[<From as SIMDVector>::Scalar]| {
+                        let got: To = From::from_array(arch, input.try_into().unwrap())
+                            .reinterpret_simd();
+                        assert_eq!(
+                            bytemuck::must_cast_slice::<_, u8>(&got.to_array()),
+                            bytemuck::must_cast_slice::<_, u8>(input),
+                            "input: {input:?}",
+                        );
+                    };
+
+                    // Distinct byte positions detect lane/byte reordering.
+                    let mut input = [<From as SIMDVector>::Scalar::default(); From::LANES];
+                    for start in [0u8, 0x7f, 0x80, 0xff] {
+                        for (i, byte) in bytemuck::must_cast_slice_mut::<_, u8>(&mut input)
+                            .iter_mut().enumerate()
+                        {
+                            *byte = start.wrapping_add(i as u8);
+                        }
+                        f(&input);
+                    }
+                    $crate::test_utils::driver::drive_unary(&f, From::LANES, $seed);
+                }
+            }
         }
-        check(&input);
-    }
-    driver::drive_unary(&check, N, seed);
+    };
 }
 
 macro_rules! test_abs {
@@ -1180,6 +1188,7 @@ pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;
 pub(crate) use test_popcount;
+pub(crate) use test_reinterpret;
 pub(crate) use test_select;
 pub(crate) use test_splitjoin;
 pub(crate) use test_sub;
