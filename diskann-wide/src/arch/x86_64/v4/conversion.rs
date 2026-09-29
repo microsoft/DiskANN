@@ -163,14 +163,18 @@ mod test_x86_conversions {
         test_utils,
     };
 
-    test_utils::ops::test_reinterpret_bytes!(
-        u64x8 => u8x64, 0x891d3c75ef2064ba,
-        if cfg!(miri) { V4::new_checked_miri() } else { V4::new_checked_uncached() }
-    );
-    test_utils::ops::test_reinterpret_bytes!(
-        u64x8 => i8x64, 0x891d3c75ef2064ba,
-        if cfg!(miri) { V4::new_checked_miri() } else { V4::new_checked_uncached() }
-    );
+    #[test]
+    fn reinterpret_u64x8_to_bytes() {
+        let arch = if cfg!(miri) {
+            V4::new_checked_miri()
+        } else {
+            V4::new_checked_uncached()
+        };
+        if let Some(arch) = arch {
+            test_utils::ops::test_reinterpret::<u64x8, u8x64, 8, 64>(arch, 0x891d3c75ef2064ba);
+            test_utils::ops::test_reinterpret::<u64x8, i8x64, 8, 64>(arch, 0x891d3c75ef2064ba);
+        }
+    }
 
     // Lossless Conversions
     #[cfg(not(miri))]

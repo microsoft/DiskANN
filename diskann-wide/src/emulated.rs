@@ -1116,21 +1116,30 @@ mod test_emulated {
     );
 
     #[cfg(target_endian = "little")]
-    test_utils::ops::test_reinterpret_bytes!(
-        Emulated<u32, 8> => Emulated<u8, 32>, 0x69b42dafe0917358, SC
-    );
+    #[test]
+    fn reinterpret_u32x8_to_bytes() {
+        test_utils::ops::test_reinterpret::<Emulated<u32, 8>, Emulated<u8, 32>, 8, 32>(
+            Scalar,
+            0x69b42dafe0917358,
+        );
+        test_utils::ops::test_reinterpret::<Emulated<u32, 8>, Emulated<i8, 32>, 8, 32>(
+            Scalar,
+            0x69b42dafe0917358,
+        );
+    }
+
     #[cfg(target_endian = "little")]
-    test_utils::ops::test_reinterpret_bytes!(
-        Emulated<u32, 8> => Emulated<i8, 32>, 0x69b42dafe0917358, SC
-    );
-    #[cfg(target_endian = "little")]
-    test_utils::ops::test_reinterpret_bytes!(
-        Emulated<u64, 8> => Emulated<u8, 64>, 0x891d3c75ef2064ba, SC
-    );
-    #[cfg(target_endian = "little")]
-    test_utils::ops::test_reinterpret_bytes!(
-        Emulated<u64, 8> => Emulated<i8, 64>, 0x891d3c75ef2064ba, SC
-    );
+    #[test]
+    fn reinterpret_u64x8_to_bytes() {
+        test_utils::ops::test_reinterpret::<Emulated<u64, 8>, Emulated<u8, 64>, 8, 64>(
+            Scalar,
+            0x891d3c75ef2064ba,
+        );
+        test_utils::ops::test_reinterpret::<Emulated<u64, 8>, Emulated<i8, 64>, 8, 64>(
+            Scalar,
+            0x891d3c75ef2064ba,
+        );
+    }
 
     ///////////
     // Casts //

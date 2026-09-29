@@ -135,12 +135,13 @@ mod test_x86_conversions {
     use super::*;
     use crate::{arch::x86_64::V3, test_utils};
 
-    test_utils::ops::test_reinterpret_bytes!(
-        u32x8 => u8x32, 0x69b42dafe0917358, V3::new_checked_uncached()
-    );
-    test_utils::ops::test_reinterpret_bytes!(
-        u32x8 => i8x32, 0x69b42dafe0917358, V3::new_checked_uncached()
-    );
+    #[test]
+    fn reinterpret_u32x8_to_bytes() {
+        if let Some(arch) = V3::new_checked_uncached() {
+            test_utils::ops::test_reinterpret::<u32x8, u8x32, 8, 32>(arch, 0x69b42dafe0917358);
+            test_utils::ops::test_reinterpret::<u32x8, i8x32, 8, 32>(arch, 0x69b42dafe0917358);
+        }
+    }
 
     // Lossless Conversions
     #[cfg(not(miri))]
