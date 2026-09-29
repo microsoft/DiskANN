@@ -3,9 +3,9 @@
  * Licensed under the MIT license.
  */
 
-//! The inmem index for DiskANN.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
-#![deny(rustdoc::broken_intra_doc_links)]
+//! The inmem index for DiskANN.
 
 pub mod num;
 
