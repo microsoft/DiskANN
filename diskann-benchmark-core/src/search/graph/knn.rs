@@ -448,7 +448,7 @@ mod tests {
 
         let index = search::graph::test_grid_provider();
 
-        let mut queries = Matrix::new(0.0f32, 5, index.provider().dim());
+        let mut queries = Matrix::from_element(5, index.provider().dim(), 0.0f32);
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -534,7 +534,7 @@ mod tests {
     fn test_knn_error() {
         let index = search::graph::test_grid_provider();
 
-        let queries = Arc::new(Matrix::new(0.0f32, 1, index.provider().dim()));
+        let queries = Arc::new(Matrix::from_element(1, index.provider().dim(), 0.0f32));
         let strategy = provider::Strategy::new();
 
         let err = KNN::new(

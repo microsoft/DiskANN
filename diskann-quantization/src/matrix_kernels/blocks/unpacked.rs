@@ -419,7 +419,7 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use diskann_utils::views::{Init, Matrix};
+    use diskann_utils::views::Matrix;
 
     use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
 
@@ -443,12 +443,13 @@ mod test {
     ) {
         let mat = {
             let mut i = 0.0;
-            let init = Init(|| {
+            let init = |_| {
                 let v = i;
                 i += 1.0;
                 v
-            });
-            Matrix::new(init, nrows.get(), ncols.get())
+            };
+
+            Matrix::from_fn(nrows.get(), ncols.get(), init)
         };
 
         let view = View::from_matrix_view(mat.as_view()).unwrap();
@@ -546,12 +547,13 @@ mod test {
     ) {
         let mat = {
             let mut i = 0.0;
-            let init = Init(|| {
+            let init = |_| {
                 let v = i;
                 i += 1.0;
                 v
-            });
-            Matrix::new(init, nrows.get(), ncols.get())
+            };
+
+            Matrix::from_fn(nrows.get(), ncols.get(), init)
         };
 
         let view = View::from_matrix_view(mat.as_view()).unwrap();

@@ -287,7 +287,7 @@ impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
 mod tests {
     use super::*;
 
-    use diskann_utils::views::{Init, Matrix, MatrixView};
+    use diskann_utils::views::{Matrix, MatrixView};
 
     use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
 
@@ -485,15 +485,11 @@ mod tests {
 
     fn test_matrix(nrows: usize, ncols: usize) -> Matrix<f32> {
         let mut value = 0.0;
-        Matrix::new(
-            Init(|| {
-                let current = value;
-                value += 1.0;
-                current
-            }),
-            nrows,
-            ncols,
-        )
+        Matrix::from_fn(nrows, ncols, |_| {
+            let current = value;
+            value += 1.0;
+            current
+        })
     }
 
     fn pack<const SZ: usize>(matrix: MatrixView<'_, f32>) -> Vec<f32> {

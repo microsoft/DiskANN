@@ -57,8 +57,7 @@ where
         });
     }
 
-    let mut data = Matrix::new_with_layout(<T as bytemuck::Zeroable>::zeroed(), layout);
-
+    let mut data = Matrix::from_element_with_layout(layout, <T as bytemuck::Zeroable>::zeroed());
     reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(data.as_mut_slice()))?;
     Ok(data)
 }
@@ -213,22 +212,16 @@ pub enum SaveBinError {
 mod tests {
     use std::io::Cursor;
 
-    use crate::views::Init;
-
     use super::*;
 
     #[test]
     fn round_trip_f32() {
         let mut counter = 1.0f32;
-        let matrix = Matrix::<f32>::new(
-            Init(|| {
-                let v = counter;
-                counter += 1.0;
-                v
-            }),
-            3,
-            4,
-        );
+        let matrix = Matrix::<f32>::from_fn(3, 4, |_| {
+            let v = counter;
+            counter += 1.0;
+            v
+        });
 
         assert_eq!(
             matrix.as_slice(),
