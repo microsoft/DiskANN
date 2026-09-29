@@ -53,8 +53,3 @@ pub fn test_data_directory() -> &'static str {
 pub fn test_data_root() -> std::path::PathBuf {
     workspace_root().join(test_data_directory())
 }
-
-#[inline(never)]
-pub fn test_function(layout: views::Layout<f32>) -> views::Matrix<f32> {
-    views::Matrix::from_fn_with_layout(layout, |_| Default::default())
-}

@@ -291,6 +291,8 @@ where
     layout: Layout<E>,
 }
 
+/// An initializer argument for the closure provided to [`Matrix::from_fn`] and
+/// [`Matrix::try_from_fn`] to remove ambiguity of the row and column being initialiazed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RowCol {
     pub row: usize,
@@ -303,7 +305,7 @@ impl<T> MatrixBase<Box<[T]>> {
     // Rust suggests methods in their declaration order, so this keeps the most common
     // methods as top suggestions.
 
-    /// Construct a new matrix using `init` it.
+    /// Construct a new matrix using `init`.
     ///
     /// Elements are initialized in memory order.
     ///
@@ -336,7 +338,7 @@ impl<T> MatrixBase<Box<[T]>> {
         }
     }
 
-    /// Construct a new matrix using `init` it.
+    /// Construct a new matrix using `init`.
     ///
     /// Elements are initialized in memory order.
     ///
@@ -383,6 +385,7 @@ impl<T> MatrixBase<Box<[T]>> {
     ///
     /// Panics if `nrows * ncols` overflows `usize::MAX`, or if the allocation size exceeds
     /// `isize::MAX`.
+    #[track_caller]
     pub fn from_element(nrows: usize, ncols: usize, element: T) -> Self
     where
         T: Clone,
@@ -420,7 +423,7 @@ impl<T> MatrixBase<Box<[T]>> {
 
     // Less common constructors.
 
-    /// Construct a new matrix using `init` it.
+    /// Construct a new matrix using `init`.
     ///
     /// Elements are initialized in memory order.
     pub fn from_fn_with_layout<F>(layout: Layout<T>, mut init: F) -> Self
