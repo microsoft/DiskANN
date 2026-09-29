@@ -303,9 +303,23 @@ impl<T> MatrixBase<Box<[T]>> {
     // Rust suggests methods in their declaration order, so this keeps the most common
     // methods as top suggestions.
 
-    /// Construct a new [`Matrix`] initialized with the contents of `generator`.
+    /// Construct a new matrix using `init` it.
     ///
     /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mut i = 0;
+    /// let mat = Matrix::from_fn(2, 3, |_| {
+    ///     let value = i;
+    ///     i += 1;
+    ///     value
+    /// });
+    ///
+    /// assert_eq!(mat.row(0), &[0, 1, 2]);
+    /// assert_eq!(mat.row(1), &[3, 4, 5]);
+    /// ```
     ///
     /// # Panics
     ///
@@ -322,9 +336,23 @@ impl<T> MatrixBase<Box<[T]>> {
         }
     }
 
-    /// Construct a new [`Matrix`] initialized with the contents of `generator`.
+    /// Construct a new matrix using `init` it.
     ///
     /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mut i = 0;
+    /// let mat = Matrix::try_from_fn(2, 3, |_| {
+    ///     let value = i;
+    ///     i += 1;
+    ///     value
+    /// }).unwrap();
+    ///
+    /// assert_eq!(mat.row(0), &[0, 1, 2]);
+    /// assert_eq!(mat.row(1), &[3, 4, 5]);
+    /// ```
     ///
     /// # Errors
     ///
@@ -338,6 +366,23 @@ impl<T> MatrixBase<Box<[T]>> {
         Ok(Self::from_fn_with_layout(layout, init))
     }
 
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::from_element(2, 3, 0u32);
+    ///
+    /// assert_eq!(mat.row(0), &[0, 0, 0]);
+    /// assert_eq!(mat.row(1), &[0, 0, 0]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nrows * ncols` overflows `usize::MAX`, or if the allocation size exceeds
+    /// `isize::MAX`.
     pub fn from_element(nrows: usize, ncols: usize, element: T) -> Self
     where
         T: Clone,
@@ -348,6 +393,23 @@ impl<T> MatrixBase<Box<[T]>> {
         }
     }
 
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::try_from_element(2, 3, 0u32).unwrap();
+    ///
+    /// assert_eq!(mat.row(0), &[0, 0, 0]);
+    /// assert_eq!(mat.row(1), &[0, 0, 0]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `nrows * ncols` overflows `usize::MAX`, or if the allocation size
+    /// exceeds `isize::MAX`.
     pub fn try_from_element(nrows: usize, ncols: usize, element: T) -> Result<Self, LayoutError>
     where
         T: Clone,
@@ -358,7 +420,7 @@ impl<T> MatrixBase<Box<[T]>> {
 
     // Less common constructors.
 
-    /// Construct a new [`Matrix`] initialized with the contents of `generator`.
+    /// Construct a new matrix using `init` it.
     ///
     /// Elements are initialized in memory order.
     pub fn from_fn_with_layout<F>(layout: Layout<T>, mut init: F) -> Self
@@ -383,6 +445,9 @@ impl<T> MatrixBase<Box<[T]>> {
         Self { data, layout }
     }
 
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
     pub fn from_element_with_layout(layout: Layout<T>, element: T) -> Self
     where
         T: Clone,
@@ -969,8 +1034,9 @@ where
     where
         T::Elem: Clone,
     {
-        Matrix::from_fn_with_layout(self.layout.transpose(), |RowCol { row, col }| unsafe {
-            self.element_unchecked(col, row).clone()
+        Matrix::from_fn_with_layout(self.layout.transpose(), |RowCol { row, col }| {
+            // SAFETY: By contruction, `col < self.nrows()` and `row < self.ncols()`.
+            unsafe { self.element_unchecked(col, row).clone() }
         })
     }
 }
