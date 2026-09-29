@@ -88,8 +88,9 @@ impl LeafBuffers {
 /// leaves.
 ///
 /// Each selected pair adds both directions. A list holds global IDs without
-/// duplicates. The lists are sorted, so the result does not depend on the order
-/// in which the parallel jobs finish.
+/// duplicates, in the order in which the parallel jobs add them. The lists stay
+/// unsorted: final pruning ranks candidates by distance, and a graph search reads
+/// all neighbors of a point, so the order only breaks distance ties.
 pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -109,14 +110,7 @@ where
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
             add_leaf_candidates::<A, M, T>(arch, data, point_ids, requested_k, buffers, &candidates)
         })?;
-    Ok(candidates
-        .into_iter()
-        .map(Mutex::into_inner)
-        .map(|mut neighbors| {
-            neighbors.sort();
-            neighbors
-        })
-        .collect())
+    Ok(candidates.into_iter().map(Mutex::into_inner).collect())
 }
 
 /// Add the selected pairs of all leaves, with their distances, to the HashPrune
@@ -499,7 +493,7 @@ mod tests {
                 .unwrap();
 
             let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
-            assert_eq!(actual, expected, "k={k}");
+            assert_eq!(sorted_members_per_row(&actual), expected, "k={k}");
         }
     }
 
