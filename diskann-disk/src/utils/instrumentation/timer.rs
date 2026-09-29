@@ -123,14 +123,9 @@ mod timer_tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::if_same_then_else)]
     fn test_new() {
         let timer = Timer::new();
-        if cfg!(windows) {
-            assert!(timer.cycles.is_some());
-        } else if cfg!(target_os = "linux") {
-            assert!(timer.cycles.is_some());
-        } else if cfg!(target_os = "macos") {
+        if cfg!(any(windows, target_os = "linux", target_os = "macos")) {
             assert!(timer.cycles.is_some());
         } else {
             panic!("No timer::test_new defined for current configuration");

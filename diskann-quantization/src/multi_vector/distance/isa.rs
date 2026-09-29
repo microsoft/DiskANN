@@ -16,7 +16,7 @@
 /// serialization format.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum MaxSimIsa {
     /// Pick the highest ISA the host CPU supports.
     Auto,

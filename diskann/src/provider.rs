@@ -618,7 +618,7 @@ mod tests {
     /// This needs to be manually `async` so we can aply the `'static` bound. Since it's
     /// recursive, Rust struggles to properly deduce the hidden type for the opaque return
     /// type.
-    #[allow(clippy::manual_async_fn)]
+    #[expect(clippy::manual_async_fn)]
     fn test_spawning<Context>(
         context: Context,
         width: usize,

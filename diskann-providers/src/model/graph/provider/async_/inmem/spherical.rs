@@ -611,9 +611,22 @@ where
             DefaultProvider<V, SphericalStore, D, Ctx>,
             &'a [T],
             SearchAccessor = QuantAccessor<'a, V, D, Ctx>,
+            SearchAccessorError = ANNError,
         >,
 {
+    type SearchAccessor = QuantAccessor<'a, V, D, Ctx>;
+    type SearchAccessorError = ANNError;
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }

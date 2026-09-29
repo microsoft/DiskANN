@@ -48,6 +48,7 @@ license = "MIT"
 edition = "2021"
 
 [workspace.lints.clippy]
+allow_attributes = "warn"
 undocumented_unsafe_blocks = "warn"
 
 [workspace.dependencies]

@@ -9,7 +9,7 @@ use std::{
 };
 
 use diskann_utils::{
-    strided::StridedView,
+    strided::Strided,
     views::{Matrix, MatrixView},
 };
 use thiserror::Error;
@@ -145,7 +145,7 @@ pub enum GroundTruthMode {
 /// than `recall_k` candidates.
 pub fn knn<T>(
     groundtruth: &dyn Rows<T>,
-    groundtruth_distances: Option<StridedView<'_, f32>>,
+    groundtruth_distances: Option<Strided<'_, f32>>,
     results: &dyn Rows<T>,
     recall_k: usize,
     recall_n: usize,
@@ -621,7 +621,7 @@ mod tests {
         let mut results = Matrix::<u32>::new(0, 10, 10);
         for i in 0..10 {
             for (j, v) in (1u32..=10).enumerate() {
-                results[(i, j)] = v;
+                *results.element_mut(i, j) = v;
             }
         }
         let recall = knn(
@@ -645,7 +645,7 @@ mod tests {
         let res_row: Vec<u32> = vec![1, 2, 3, 6, 7, 8, 9, 10, 11, 12];
         for i in 0..10 {
             for (j, &v) in res_row.iter().enumerate() {
-                results[(i, j)] = v;
+                *results.element_mut(i, j) = v;
             }
         }
         let recall = knn(
@@ -675,7 +675,7 @@ mod tests {
         let mut results = Matrix::<u32>::new(0, 10, 10);
         for i in 0..10 {
             for (j, v) in (1u32..=10).enumerate() {
-                results[(i, j)] = v;
+                *results.element_mut(i, j) = v;
             }
         }
 

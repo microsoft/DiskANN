@@ -24,7 +24,7 @@ pub(super) fn generate_f32(
             for b_col in 0..n {
                 let mut ip = 0.0;
                 for (k, a) in a_row.iter().enumerate() {
-                    ip = a.mul_add(ref_b[(k, b_col)], ip);
+                    ip = a.mul_add(*ref_b.element(k, b_col), ip);
                 }
                 max_ip = max_ip.max(ip);
             }
@@ -54,7 +54,7 @@ pub(super) fn generate_i8(
             for b_col in 0..n {
                 let mut ip = 0;
                 for (k, a) in a_row.iter().enumerate() {
-                    ip += i32::from(*a) * i32::from(ref_b[(k, b_col)]);
+                    ip += i32::from(*a) * i32::from(*ref_b.element(k, b_col));
                 }
                 max_ip = max_ip.max(ip);
             }

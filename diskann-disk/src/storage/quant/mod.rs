@@ -4,6 +4,7 @@
  */
 
 mod generator;
+pub(crate) use generator::validate_data_generation_input;
 pub use generator::QuantDataGenerator;
 
 pub(crate) mod pq;

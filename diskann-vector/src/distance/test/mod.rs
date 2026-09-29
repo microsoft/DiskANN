@@ -15,8 +15,6 @@ pub(crate) trait FullPrecisionDistance<T, const N: usize> {
     fn distance_compare(a: &[T; N], b: &[T; N], vec_type: Metric) -> f32;
 }
 
-// reason = "Not supported Metric type Metric::Cosine"
-#[allow(clippy::panic)]
 impl<const N: usize> FullPrecisionDistance<f32, N> for [f32; N] {
     /// Calculate distance between two f32 Vertex
     #[inline(always)]
@@ -30,8 +28,6 @@ impl<const N: usize> FullPrecisionDistance<f32, N> for [f32; N] {
     }
 }
 
-// reason = "Not supported Metric type Metric::Cosine"
-#[allow(clippy::panic)]
 impl<const N: usize> FullPrecisionDistance<Half, N> for [Half; N] {
     fn distance_compare(a: &[Half; N], b: &[Half; N], metric: Metric) -> f32 {
         match metric {

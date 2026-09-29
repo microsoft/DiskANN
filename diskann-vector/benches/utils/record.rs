@@ -62,7 +62,11 @@ impl<const N: usize> From<Static<N>> for usize {
 ///
 /// * `aligned/unaligned`: Whether the vector pointers provided are *all* 32-byte aligned
 ///   or not.
-#[allow(dead_code)] // benchmark_iai doesn't use this ...
+#[expect(
+    clippy::allow_attributes,
+    reason = "This shared helper is used by Criterion but not IAI"
+)]
+#[allow(dead_code)]
 pub(crate) fn format_benchmark<Dim>(dim: Dim, aligned: bool) -> String
 where
     Dim: Dimensionality,

@@ -320,12 +320,12 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
 mod tests {
     use super::*;
 
-    use diskann_utils::views::{Init, Matrix, MatrixView};
-
-    use crate::{
-        matrix_kernels::test_util::{assert_contains, panic_message_for},
-        multi_vector::BlockTransposed,
+    use diskann_utils::{
+        assert_contains,
+        views::{Init, Matrix, MatrixView},
     };
+
+    use crate::{matrix_kernels::test_util::panic_message_for, multi_vector::BlockTransposed};
 
     /// Pin the physical element order against the source matrix, rather than inferring it
     /// from the layout documentation. Kernels index panel memory with this offset formula.
@@ -376,7 +376,7 @@ mod tests {
                 for row in 0..SZ {
                     let global_row = block * SZ + row;
                     let expected = if col < ncols && global_row < nrows {
-                        matrix[(global_row, col)]
+                        *matrix.element(global_row, col)
                     } else {
                         0.0
                     };
@@ -522,7 +522,7 @@ mod tests {
             for row in 0..SZ {
                 assert_eq!(
                     packed[col * SZ + row],
-                    reference[(block * SZ + row, col)],
+                    *reference.element(block * SZ + row, col),
                     "{ctx}, block = {block}, row = {row}, col = {col}",
                 );
             }
@@ -607,7 +607,7 @@ mod tests {
         for block in 0..matrix.nrows() / SZ {
             for col in 0..matrix.ncols() {
                 for row in 0..SZ {
-                    packed.push(matrix[(block * SZ + row, col)]);
+                    packed.push(*matrix.element(block * SZ + row, col));
                 }
             }
         }

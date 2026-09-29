@@ -1349,7 +1349,7 @@ where
 
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn search_internal(
         &self,
         query: &[Data::VectorDataType],
@@ -1376,7 +1376,7 @@ where
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn search_internal_impl(
         &self,
         query: &[Data::VectorDataType],
@@ -2954,7 +2954,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     |_| true,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("inline filter with accept-all predicate must succeed");
@@ -3003,7 +3003,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     predicate,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("inline filter search with AdaptiveL must succeed");
@@ -3015,7 +3015,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     predicate,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("indexed-vector inline filter search with AdaptiveL must succeed");

@@ -53,7 +53,6 @@ pub struct IndexConfiguration {
 
 impl IndexConfiguration {
     /// Create IndexConfiguration instance
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         dist_metric: Metric,
         dim: usize,

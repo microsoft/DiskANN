@@ -6,33 +6,19 @@
 use diskann::{utils::VectorRepr, ANNResult};
 use diskann_utils::views::{MatrixView, MutMatrixView};
 
-/// [`QuantCompressor`] defines the interface for quantizers used by
-/// [`super::QuantDataGenerator`].
-///
-/// This trait serves as a general wrapper for different quantizers, allowing them to be
-/// used interchangeably with [`super::QuantDataGenerator`]. Any type implementing this trait
-/// can be used to compress vector data during the data generation process.
-///
-/// # Type Parameters
-/// - `T`: The data type of the input vectors. Must implement `Copy + Into<f32> + Pod + Sync`
-///   so that [`super::QuantDataGenerator`] can parallelize computation, call `compress_into`,
-///   and read from the data file.
-///
-/// # Associated Types
-/// - [`Self::CompressorContext`]: An overloadable type that provides initialization parameters
-///   for the compressor.
-///
-/// # Methods
-/// - `new`: Constructs a new compressor instance with the provided context.
-/// - `compress`: Compresses a batch of vectors into the output buffer.
-/// - `compressed_bytes`: Returns the size in bytes of each compressed vector
+/// A quantizer constructed once and shared across compression batches.
 pub trait QuantCompressor<T>: Sized + Sync
 where
     T: VectorRepr,
 {
     type CompressorContext;
 
+    /// Construct a quantizer, including any training and persistence it requires.
+    ///
+    /// # Errors
+    /// Returns an error if construction fails.
     fn new(context: &Self::CompressorContext) -> ANNResult<Self>;
+
     fn compress(&self, vector: MatrixView<f32>, output: MutMatrixView<u8>) -> ANNResult<()>;
     fn compressed_bytes(&self) -> usize;
 }
