@@ -1,0 +1,246 @@
+[
+  {
+    "input": {
+      "content": {
+        "build": {
+          "alpha": 1.2000000476837158,
+          "l_build": 20,
+          "max_degree": 20,
+          "pruned_degree": 16
+        },
+        "data": {
+          "data": "/yfcc/yfcc_10k.fbin",
+          "data_type": "f32",
+          "groundtruth": "/yfcc/groundtruth.bin",
+          "metric": "l2",
+          "preprocess": [],
+          "queries": "/yfcc/yfcc_query_100.fbin"
+        },
+        "representation": {
+          "spherical": {
+            "bits": "one",
+            "rerank": "none"
+          }
+        },
+        "search": {
+          "knn": [
+            {
+              "beam_width": 1,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 100
+            }
+          ]
+        }
+      },
+      "type": "integration-test"
+    },
+    "results": {
+      "build": {
+        "append_neighbors": 104879,
+        "distance": 3387869,
+        "get_neighbors": 370460,
+        "get_vector": 3161112,
+        "query_distance": 2555730,
+        "set_neighbors": 26181,
+        "set_vector": 10000
+      },
+      "knn": [
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 5500,
+            "get_vector": 49685,
+            "query_distance": 49685,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 49685,
+            "hops": 5500
+          },
+          "recall": {
+            "average": 0.624,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 5831,
+            "get_vector": 53179,
+            "query_distance": 53179,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 53179,
+            "hops": 5831
+          },
+          "recall": {
+            "average": 0.623,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 10740,
+            "get_vector": 82556,
+            "query_distance": 82556,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 82556,
+            "hops": 10740
+          },
+          "recall": {
+            "average": 0.631,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "build": {
+          "alpha": 1.2000000476837158,
+          "l_build": 20,
+          "max_degree": 20,
+          "pruned_degree": 16
+        },
+        "data": {
+          "data": "/yfcc/yfcc_10k.fbin",
+          "data_type": "f32",
+          "groundtruth": "/yfcc/groundtruth.bin",
+          "metric": "l2",
+          "preprocess": [],
+          "queries": "/yfcc/yfcc_query_100.fbin"
+        },
+        "representation": {
+          "spherical": {
+            "bits": "one",
+            "rerank": "f16"
+          }
+        },
+        "search": {
+          "knn": [
+            {
+              "beam_width": 1,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 100
+            }
+          ]
+        }
+      },
+      "type": "integration-test"
+    },
+    "results": {
+      "build": {
+        "append_neighbors": 104879,
+        "distance": 3387869,
+        "get_neighbors": 370460,
+        "get_vector": 3161112,
+        "query_distance": 2555730,
+        "set_neighbors": 26181,
+        "set_vector": 10000
+      },
+      "knn": [
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 5500,
+            "get_vector": 54785,
+            "query_distance": 54785,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 49685,
+            "hops": 5500
+          },
+          "recall": {
+            "average": 0.918,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 5831,
+            "get_vector": 58279,
+            "query_distance": 58279,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 53179,
+            "hops": 5831
+          },
+          "recall": {
+            "average": 0.918,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 10740,
+            "get_vector": 92656,
+            "query_distance": 92656,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 82556,
+            "hops": 10740
+          },
+          "recall": {
+            "average": 0.963,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        }
+      ]
+    }
+  }
+]

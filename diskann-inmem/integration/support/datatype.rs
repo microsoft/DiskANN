@@ -256,10 +256,6 @@ impl Dataset {
         }
     }
 
-    pub(crate) fn medoid(&self) -> Dataset {
-        self.as_view().medoid()
-    }
-
     pub(crate) fn preprocess(&mut self, op: &Preprocess) {
         match self {
             Self::F32(m) => op.apply(m.as_mut_view()),
@@ -617,7 +613,7 @@ mod tests {
     #[test]
     fn dataset_medoid_shape() {
         let ds: Dataset = matrix(&[1.0f32, 2.0, 3.0, 4.0], 2, 2).into();
-        let medoid = ds.medoid();
+        let medoid = ds.as_view().medoid();
         assert_eq!(medoid.nrows(), 1);
         assert_eq!(medoid.ncols(), 2);
     }
