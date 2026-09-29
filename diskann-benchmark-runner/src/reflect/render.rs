@@ -325,7 +325,7 @@ mod tests {
 
     use std::{
         fs::File,
-        io::{self, BufRead, BufReader, Write},
+        io::{BufRead, BufReader, Write},
         path::{Path, PathBuf},
     };
 
@@ -535,6 +535,7 @@ mod tests {
     #[derive(Reflect)]
     #[serde(rename_all = "kebab-case")]
     #[reflect(prefix = "render::")]
+    #[expect(unused, reason = "testing")]
     enum SimpleDataType {
         Float32,
         Float16,
@@ -544,6 +545,7 @@ mod tests {
     #[derive(Reflect)]
     #[serde(rename_all = "kebab-case")]
     #[reflect(prefix = "render::")]
+    #[expect(unused, reason = "testing")]
     enum AnnotatedDataType {
         /// Use high-precision.
         Float32,
@@ -555,6 +557,7 @@ mod tests {
     #[derive(Reflect)]
     #[serde(rename_all = "snake_case")]
     #[reflect(prefix = "render::")]
+    #[expect(unused, reason = "testing")]
     enum Source {
         /// Build from scratch.
         Build {
@@ -579,10 +582,12 @@ mod tests {
 
     /// A new-type wrapper around `Source`.
     #[derive(Reflect)]
+    #[expect(unused, reason = "testing")]
     struct SourceWrapper(Source);
 
     /// A top level config.
     #[derive(Reflect)]
+    #[expect(unused, reason = "testing")]
     struct Config {
         source: SourceWrapper,
         /// This does one thing.

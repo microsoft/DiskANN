@@ -24,7 +24,7 @@ pub trait Reflect: 'static {
 
 #[derive(Clone, Copy)]
 pub struct Reflection {
-    reflection: &'static dyn internal::Reflect,
+    reflection: &'static internal::VTable,
 }
 
 impl Reflection {
@@ -33,12 +33,12 @@ impl Reflection {
         T: Reflect,
     {
         Self {
-            reflection: &internal::Wrapper::<T>::INSTANCE,
+            reflection: internal::VTable::new::<T>(),
         }
     }
 
     pub fn ty(&self) -> Type {
-        self.reflection.ty()
+        (self.reflection.ty)()
     }
 
     pub fn type_name(&self) -> TypeName {
@@ -46,7 +46,7 @@ impl Reflection {
     }
 
     pub fn type_id(&self) -> TypeId {
-        self.reflection.type_id()
+        (self.reflection.type_id)()
     }
 
     pub fn render(&self) -> Render {
@@ -73,7 +73,7 @@ pub struct TypeName(Reflection);
 
 impl TypeName {
     fn format_type_name(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.reflection.format_type_name(f)
+        (self.0.reflection.format_type_name)(f)
     }
 }
 
@@ -238,39 +238,44 @@ where
 // Internal //
 //////////////
 
-pub(crate) mod internal {
-    use std::marker::PhantomData;
-
-    pub(crate) trait Reflect {
-        fn ty(&self) -> super::Type;
-        fn format_type_name(&self, f: &mut dyn std::fmt::Write) -> std::fmt::Result;
-        fn type_id(&self) -> std::any::TypeId;
+pub mod internal {
+    pub(super) struct VTable {
+        pub(super) ty: fn() -> super::Type,
+        pub(super) format_type_name: fn(&mut dyn std::fmt::Write) -> std::fmt::Result,
+        pub(super) type_id: fn() -> std::any::TypeId,
     }
 
-    pub(crate) struct Wrapper<T>(PhantomData<T>);
-
-    impl<T> Wrapper<T> {
-        pub(crate) const INSTANCE: Self = Self::new();
-
-        pub(crate) const fn new() -> Self {
-            Self(PhantomData)
+    impl VTable {
+        pub(super) const fn new<T>() -> &'static Self
+        where
+            T: super::Reflect,
+        {
+            &Self {
+                ty: ty::<T>,
+                format_type_name: format_type_name::<T>,
+                type_id: type_id::<T>,
+            }
         }
     }
 
-    impl<T> Reflect for Wrapper<T>
+    fn ty<T>() -> super::Type
     where
         T: super::Reflect,
     {
-        fn ty(&self) -> super::Type {
-            <T as super::Reflect>::ty()
-        }
+        <T as super::Reflect>::ty()
+    }
 
-        fn format_type_name(&self, f: &mut dyn std::fmt::Write) -> std::fmt::Result {
-            <T as super::Reflect>::format_type_name(f)
-        }
+    fn format_type_name<T>(f: &mut dyn std::fmt::Write) -> std::fmt::Result
+    where
+        T: super::Reflect,
+    {
+        <T as super::Reflect>::format_type_name(f)
+    }
 
-        fn type_id(&self) -> std::any::TypeId {
-            std::any::TypeId::of::<T>()
-        }
+    fn type_id<T>() -> std::any::TypeId
+    where
+        T: super::Reflect,
+    {
+        std::any::TypeId::of::<T>()
     }
 }

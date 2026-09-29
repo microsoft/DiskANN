@@ -749,7 +749,7 @@ fn test_optionals() {
     enum CasesAdjacent {
         NewType(Option<usize>),
         Struct { val: Option<usize> },
-    };
+    }
 
     #[derive(Serialize, Reflect)]
     struct NewType(Option<usize>);
