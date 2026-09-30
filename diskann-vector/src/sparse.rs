@@ -15,6 +15,8 @@
 //!
 //! Indices absent from an operand are implicit zeros.
 //!
+//! # Warning
+//!
 //! The kernels do not verify that `idx` is sorted and unique. Violating this yields
 //! incorrect results, not undefined behavior. Callers that cannot otherwise guarantee this
 //! invariant can check it with [`indices_sorted_unique`].
@@ -53,8 +55,11 @@ fn disjoint_ranges<Idx: Ord>(x_idx: &[Idx], y_idx: &[Idx]) -> bool {
         || y_idx[y_idx.len() - 1] < x_idx[0]
 }
 
-/// Returns `true` if `idx` is sorted ascending with no duplicates, as required by the
-/// kernels in this module. The kernels themselves do not perform this check.
+/// Returns `true` if `idx` is sorted ascending with no duplicates.
+///
+/// # Warning
+///
+/// The kernels in this module require this invariant but do not check it themselves.
 #[inline]
 pub fn indices_sorted_unique<Idx: Ord>(idx: &[Idx]) -> bool {
     idx.is_sorted_by(|a, b| a < b)
