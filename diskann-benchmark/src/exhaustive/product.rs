@@ -332,8 +332,11 @@ mod imp {
             quantizer: diskann_providers::model::pq::FixedChunkPQTable,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
-            let mut data =
-                diskann_utils::views::Matrix::new(0, input.nrows(), quantizer.get_num_chunks());
+            let mut data = diskann_utils::views::Matrix::try_new(
+                0,
+                input.nrows(),
+                quantizer.get_num_chunks(),
+            )?;
 
             // Compress the data.
             #[expect(clippy::disallowed_methods)]
