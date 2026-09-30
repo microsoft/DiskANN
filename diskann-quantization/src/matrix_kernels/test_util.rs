@@ -32,7 +32,11 @@ where
 pub(super) struct TestDistr;
 
 impl TestDistr {
-    pub(super) fn matrix<T>(nrows: usize, ncols: usize, rng: &mut impl rand::Rng) -> rowmajor::Owned<T>
+    pub(super) fn matrix<T>(
+        nrows: usize,
+        ncols: usize,
+        rng: &mut impl rand::Rng,
+    ) -> rowmajor::Owned<T>
     where
         Self: Distribution<T>,
     {

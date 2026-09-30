@@ -11,7 +11,10 @@ use std::{
     future::Future,
 };
 
-use diskann_utils::{future::SendFuture, views::rowmajor::{self, Matrix}};
+use diskann_utils::{
+    future::SendFuture,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 

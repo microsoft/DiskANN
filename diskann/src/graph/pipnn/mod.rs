@@ -88,7 +88,11 @@ fn distance_scratch(
     if storage.len() < len {
         storage.resize(len, 0.0);
     }
-    Ok(rowmajor::Mut::try_from_data(&mut storage[..len], rows, columns)?)
+    Ok(rowmajor::Mut::try_from_data(
+        &mut storage[..len],
+        rows,
+        columns,
+    )?)
 }
 
 #[cfg(test)]

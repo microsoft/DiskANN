@@ -171,7 +171,8 @@ mod tests {
                         test_support::normalize(&mut values, dimensions);
                     }
                     let points =
-                        rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions).unwrap();
+                        rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions)
+                            .unwrap();
                     let tolerance = test_support::dense_tolerance(metric, dimensions);
                     // The oracle sorts every other point by its scalar distance.
                     let oracle: Vec<Vec<(u32, f64)>> = (0..point_count)
@@ -202,8 +203,12 @@ mod tests {
                         select_leaf_neighbors::<A, M>(
                             arch,
                             points,
-                            rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, neighbors)
-                                .unwrap(),
+                            rowmajor::Mut::try_from_data(
+                                output.as_mut_slice(),
+                                point_count,
+                                neighbors,
+                            )
+                            .unwrap(),
                             &mut LeafKernelWorkspace::default(),
                         )
                         .unwrap_or_else(|error| panic!("{context}: {error}"));

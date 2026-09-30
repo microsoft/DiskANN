@@ -46,7 +46,11 @@ pub struct SimplePivots {
     pivots: Vec<rowmajor::Owned<f32>>,
 }
 
-fn flatten<T: Copy + Default>(pivots: &[rowmajor::Owned<T>], ncenters: usize, dim: usize) -> rowmajor::Owned<T> {
+fn flatten<T: Copy + Default>(
+    pivots: &[rowmajor::Owned<T>],
+    ncenters: usize,
+    dim: usize,
+) -> rowmajor::Owned<T> {
     let mut flattened = rowmajor::Owned::from_element(ncenters, dim, T::default());
     let mut col_start = 0;
     for matrix in pivots {
@@ -309,17 +313,18 @@ mod tests {
         let dim: usize = sub_dims.iter().sum();
 
         // Create the sub matrices.
-        let matrices: Vec<rowmajor::Owned<usize>> = std::iter::zip(sub_dims.iter(), prefix_sum.iter())
-            .map(|(&this_dim, &offset)| {
-                let mut m = rowmajor::Owned::from_element(nrows, this_dim, 0);
-                for r in 0..nrows {
-                    for c in 0..this_dim {
-                        *m.element_mut(r, c) = dim * r + offset + c;
+        let matrices: Vec<rowmajor::Owned<usize>> =
+            std::iter::zip(sub_dims.iter(), prefix_sum.iter())
+                .map(|(&this_dim, &offset)| {
+                    let mut m = rowmajor::Owned::from_element(nrows, this_dim, 0);
+                    for r in 0..nrows {
+                        for c in 0..this_dim {
+                            *m.element_mut(r, c) = dim * r + offset + c;
+                        }
                     }
-                }
-                m
-            })
-            .collect();
+                    m
+                })
+                .collect();
 
         let flattened = flatten(&matrices, nrows, dim);
         // Check that the output is correct.

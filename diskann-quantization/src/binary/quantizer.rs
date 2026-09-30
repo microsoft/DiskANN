@@ -129,7 +129,10 @@ impl AsFunctor<Hamming> for BinaryQuantizer {
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{ReborrowMut, views::rowmajor::{self, Matrix, MatrixMut}};
+    use diskann_utils::{
+        ReborrowMut,
+        views::rowmajor::{self, Matrix, MatrixMut},
+    };
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::*;

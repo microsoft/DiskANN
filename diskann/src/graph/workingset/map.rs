@@ -1016,7 +1016,8 @@ mod tests {
     /// 5.0  6.0
     /// ```
     fn test_matrix() -> rowmajor::Owned<f32> {
-        rowmajor::Owned::try_from_data(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0].into_boxed_slice(), 3, 2).unwrap()
+        rowmajor::Owned::try_from_data(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0].into_boxed_slice(), 3, 2)
+            .unwrap()
     }
 
     type TestOverlay = Overlay<u32, Ref<[f32]>>;

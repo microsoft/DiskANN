@@ -79,11 +79,7 @@
 
 use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
-use diskann_utils::{
-    Reborrow, ReborrowMut,
-    strided::Strided,
-    views::rowmajor,
-};
+use diskann_utils::{Reborrow, ReborrowMut, strided::Strided, views::rowmajor};
 
 use super::matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,

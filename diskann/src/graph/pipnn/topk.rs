@@ -667,15 +667,19 @@ mod tests {
                             }
                         })
                         .collect();
-                    let distances =
-                        rowmajor::Ref::try_from_data(distances.as_slice(), point_count, point_count)
-                            .unwrap();
+                    let distances = rowmajor::Ref::try_from_data(
+                        distances.as_slice(),
+                        point_count,
+                        point_count,
+                    )
+                    .unwrap();
                     // k = 1, 2, and 3 use fixed-size nearest sets. The others use slices.
                     for k in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17] {
                         let mut output = vec![Candidate::EMPTY; point_count * k];
                         let mut kth_distances = Vec::new();
                         let mut neighborhoods =
-                            rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, k).unwrap();
+                            rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, k)
+                                .unwrap();
 
                         // When: offer every non-self pair once, through the production
                         // width dispatch.

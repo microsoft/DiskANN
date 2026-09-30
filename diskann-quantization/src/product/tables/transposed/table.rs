@@ -685,7 +685,8 @@ mod test_compression {
                     assert_eq!(called.len(), num_data * schema.len());
 
                     // Trait Interface.
-                    let mut output = views::rowmajor::Owned::from_element(num_data, schema.len(), 0);
+                    let mut output =
+                        views::rowmajor::Owned::from_element(num_data, schema.len(), 0);
                     table
                         .compress_into(data.as_view(), output.as_view_mut())
                         .unwrap();
@@ -863,7 +864,8 @@ mod test_compression {
 
             let table = TransposedTable::from_parts(pivots.as_view(), offsets.clone()).unwrap();
 
-            let mut output = views::rowmajor::Owned::<f32>::from_element(num_chunks, num_centers, 0.0);
+            let mut output =
+                views::rowmajor::Owned::<f32>::from_element(num_chunks, num_centers, 0.0);
             let query: Vec<_> = (0..dim)
                 .map(|_| value_distribution.sample(rng) as f32)
                 .collect();
@@ -941,7 +943,8 @@ mod test_compression {
 
         // query has the wrong length.
         let query = vec![0.0; table.dim() - 1];
-        let mut partials = views::rowmajor::Owned::from_element(table.nchunks(), table.ncenters(), 0.0);
+        let mut partials =
+            views::rowmajor::Owned::from_element(table.nchunks(), table.ncenters(), 0.0);
         table.process_into::<InnerProduct>(&query, partials.as_view_mut());
     }
 
@@ -955,7 +958,8 @@ mod test_compression {
 
         let query = vec![0.0; table.dim()];
         // partials has the wrong numbers of rows.
-        let mut partials = views::rowmajor::Owned::from_element(table.nchunks() - 1, table.ncenters(), 0.0);
+        let mut partials =
+            views::rowmajor::Owned::from_element(table.nchunks() - 1, table.ncenters(), 0.0);
         table.process_into::<InnerProduct>(&query, partials.as_view_mut());
     }
 
@@ -969,7 +973,8 @@ mod test_compression {
 
         let query = vec![0.0; table.dim()];
         // partials has the wrong numbers of rows.
-        let mut partials = views::rowmajor::Owned::from_element(table.nchunks(), table.ncenters() - 1, 0.0);
+        let mut partials =
+            views::rowmajor::Owned::from_element(table.nchunks(), table.ncenters() - 1, 0.0);
         table.process_into::<InnerProduct>(&query, partials.as_view_mut());
     }
 }

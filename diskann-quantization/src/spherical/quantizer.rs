@@ -5,7 +5,10 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{ReborrowMut, views::rowmajor::{self, Matrix}};
+use diskann_utils::{
+    ReborrowMut,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::{
     MathematicalValue, Norm, PureDistanceFunction, distance::InnerProduct, norm::FastL2Norm,
 };

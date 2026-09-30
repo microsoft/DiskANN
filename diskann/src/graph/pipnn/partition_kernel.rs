@@ -102,8 +102,9 @@ mod tests {
             2,
             unit_norm,
         );
-        let leaders =
-            M::create_leaders(rowmajor::Ref::try_from_data(leader_values.as_slice(), 4, 2).unwrap());
+        let leaders = M::create_leaders(
+            rowmajor::Ref::try_from_data(leader_values.as_slice(), 4, 2).unwrap(),
+        );
         // A width of six exceeds the four leaders.
         for assignments in [1, 2, 3, 4, 6] {
             let mut output = vec![0; 3 * assignments];
@@ -162,12 +163,18 @@ mod tests {
                         test_support::normalize(&mut point_values, dimensions);
                         test_support::normalize(&mut leader_values, dimensions);
                     }
-                    let points =
-                        rowmajor::Ref::try_from_data(point_values.as_slice(), point_count, dimensions)
-                            .unwrap();
-                    let leader_matrix =
-                        rowmajor::Ref::try_from_data(leader_values.as_slice(), leader_count, dimensions)
-                            .unwrap();
+                    let points = rowmajor::Ref::try_from_data(
+                        point_values.as_slice(),
+                        point_count,
+                        dimensions,
+                    )
+                    .unwrap();
+                    let leader_matrix = rowmajor::Ref::try_from_data(
+                        leader_values.as_slice(),
+                        leader_count,
+                        dimensions,
+                    )
+                    .unwrap();
                     let leaders = M::create_leaders(leader_matrix);
                     let tolerance = test_support::dense_tolerance(metric, dimensions);
                     // The oracle sorts every leader by its scalar distance to the point.
@@ -246,7 +253,8 @@ mod tests {
     #[test]
     fn workspace_reuse_does_not_mix_results_from_different_stripes() {
         let leader_values = [0.0, 5.0, 12.0];
-        let leaders = L2::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 3, 1).unwrap());
+        let leaders =
+            L2::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 3, 1).unwrap());
         let point_values = [1.0, 7.0, 11.0];
         let expected_ids = [[0, 1, 2], [1, 2, 0], [2, 1, 0]];
         let mut output = Vec::new();
@@ -258,7 +266,8 @@ mod tests {
                 ARCH,
                 rowmajor::Ref::try_from_data(&point_values[..point_count], point_count, 1).unwrap(),
                 &leaders,
-                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, assignments).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, assignments)
+                    .unwrap(),
                 &mut workspace,
             )
             .unwrap();
@@ -310,7 +319,8 @@ mod tests {
     fn output_without_one_row_per_point_is_rejected() {
         let point_values = [1.0, 6.0];
         let leader_values = [0.0, 5.0, 12.0];
-        let leaders = L2::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 3, 1).unwrap());
+        let leaders =
+            L2::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 3, 1).unwrap());
         let mut output = [2];
 
         let error = assign_leaders::<_, L2>(

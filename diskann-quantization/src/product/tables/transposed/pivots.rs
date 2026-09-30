@@ -1537,7 +1537,8 @@ mod tests {
 
     fn test_process_into_impl(dim: usize, total: usize, rng: &mut StdRng) {
         let distribution = Uniform::<i32>::new(-10, 10).unwrap();
-        let base = views::rowmajor::Owned::<f32>::from_fn(total, dim, |_| distribution.sample(rng) as f32);
+        let base =
+            views::rowmajor::Owned::<f32>::from_fn(total, dim, |_| distribution.sample(rng) as f32);
 
         let chunk = Chunk::new(base.as_view().into()).unwrap();
         let mut input = vec![0.0; dim];

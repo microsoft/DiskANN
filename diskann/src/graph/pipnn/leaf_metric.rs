@@ -184,7 +184,8 @@ mod tests {
                     test_support::normalize(&mut values, dimensions);
                 }
                 let points =
-                    rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions).unwrap();
+                    rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions)
+                        .unwrap();
                 let mut output = vec![f32::NAN; point_count * point_count];
 
                 M::compute_distances(
@@ -244,12 +245,14 @@ mod tests {
             if scalar_metric == Metric::CosineNormalized {
                 test_support::normalize(&mut values, dimensions);
             }
-            let points = rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions).unwrap();
+            let points =
+                rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions).unwrap();
             let mut output = vec![f32::NAN; point_count * point_count];
 
             M::compute_distances(
                 points,
-                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, point_count).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, point_count)
+                    .unwrap(),
             )
             .unwrap_or_else(|error| panic!("shape={shape:?}: {error}"));
 

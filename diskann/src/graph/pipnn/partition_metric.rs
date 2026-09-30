@@ -233,7 +233,8 @@ mod tests {
         values[129..].fill(0.0);
         values[129] = 4096.0;
         values[130] = 4.0;
-        let leaders = L2::create_leaders(rowmajor::Ref::try_from_data(values.as_slice(), 2, 129).unwrap());
+        let leaders =
+            L2::create_leaders(rowmajor::Ref::try_from_data(values.as_slice(), 2, 129).unwrap());
         let mut output = [f32::NAN; 2];
 
         L2::compute_distances(
@@ -284,12 +285,18 @@ mod tests {
                         test_support::normalize(&mut point_values, dimensions);
                         test_support::normalize(&mut leader_values, dimensions);
                     }
-                    let points =
-                        rowmajor::Ref::try_from_data(point_values.as_slice(), point_count, dimensions)
-                            .unwrap();
-                    let leader_matrix =
-                        rowmajor::Ref::try_from_data(leader_values.as_slice(), leader_count, dimensions)
-                            .unwrap();
+                    let points = rowmajor::Ref::try_from_data(
+                        point_values.as_slice(),
+                        point_count,
+                        dimensions,
+                    )
+                    .unwrap();
+                    let leader_matrix = rowmajor::Ref::try_from_data(
+                        leader_values.as_slice(),
+                        leader_count,
+                        dimensions,
+                    )
+                    .unwrap();
                     let leaders = M::create_leaders(leader_matrix);
                     let mut output = vec![f32::NAN; point_count * leader_count];
 
@@ -371,16 +378,19 @@ mod tests {
                 test_support::normalize(&mut leader_values, dimensions);
             }
             let points =
-                rowmajor::Ref::try_from_data(point_values.as_slice(), point_count, dimensions).unwrap();
+                rowmajor::Ref::try_from_data(point_values.as_slice(), point_count, dimensions)
+                    .unwrap();
             let leader_matrix =
-                rowmajor::Ref::try_from_data(leader_values.as_slice(), leader_count, dimensions).unwrap();
+                rowmajor::Ref::try_from_data(leader_values.as_slice(), leader_count, dimensions)
+                    .unwrap();
             let leaders = M::create_leaders(leader_matrix);
             let mut output = vec![f32::NAN; point_count * leader_count];
 
             M::compute_distances(
                 points,
                 &leaders,
-                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, leader_count).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, leader_count)
+                    .unwrap(),
             )
             .unwrap_or_else(|error| panic!("shape={shape:?}: {error}"));
 
@@ -475,7 +485,8 @@ mod tests {
     ) {
         let point_values = [1.0, 2.0, 3.0];
         let leader_values = [1.0, 2.0, 3.0, 4.0];
-        let leaders = M::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 2, 2).unwrap());
+        let leaders =
+            M::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 2, 2).unwrap());
         let mut output = [17.0; 2];
 
         let error = M::compute_distances(

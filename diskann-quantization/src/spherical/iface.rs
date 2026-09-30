@@ -3151,7 +3151,10 @@ mod tests {
         // Helpers //
         /////////////
 
-        fn compress_dataset(quantizer: &dyn Quantizer, dataset: rowmajor::Ref<f32>) -> Vec<Vec<u8>> {
+        fn compress_dataset(
+            quantizer: &dyn Quantizer,
+            dataset: rowmajor::Ref<f32>,
+        ) -> Vec<Vec<u8>> {
             let scoped_global = ScopedAllocator::global();
             let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
             dataset
@@ -3224,8 +3227,7 @@ mod tests {
                 );
 
                 for (qi, (query_row, expected_distances)) in
-                    std::iter::zip(dataset.rows(), layout_distances.distances.iter())
-                        .enumerate()
+                    std::iter::zip(dataset.rows(), layout_distances.distances.iter()).enumerate()
                 {
                     let computer = quantizer
                         .fused_query_computer(
