@@ -3,23 +3,23 @@
  * Licensed under the MIT license.
  */
 
-use crate::views::MatrixView;
+use crate::views::rowmajor::{self, Matrix};
 use diskann_vector::{conversion::CastFromSlice, distance::SquaredL2, PureDistanceFunction};
 use half::f16;
 
 /// Return the row in `data` that is closest to the medoid of all rows.
 pub trait ComputeMedoid: Sized {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self>;
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self>;
 }
 
 impl ComputeMedoid for f32 {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self> {
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self> {
         if data.ncols() == 0 {
             return vec![];
         }
 
         let mut sum = vec![0.0f64; data.ncols()];
-        data.row_iter().for_each(|r| {
+        data.rows().for_each(|r| {
             std::iter::zip(sum.iter_mut(), r.iter()).for_each(|(o, i)| {
                 let i: f64 = (*i).into();
                 *o += i;
@@ -33,7 +33,7 @@ impl ComputeMedoid for f32 {
 
         let mut min_dist: f32 = f32::MAX;
         let mut medoid = None;
-        data.row_iter().for_each(|r| {
+        data.rows().for_each(|r| {
             let d = SquaredL2::evaluate(m.as_slice(), r);
             if d < min_dist {
                 min_dist = d;
@@ -48,14 +48,14 @@ impl ComputeMedoid for f32 {
 }
 
 impl ComputeMedoid for f16 {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self> {
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self> {
         if data.ncols() == 0 {
             return vec![];
         }
 
         let mut sum = vec![0.0f64; data.ncols()];
         let mut buffer = vec![0.0f32; data.ncols()];
-        data.row_iter().for_each(|r| {
+        data.rows().for_each(|r| {
             buffer.cast_from_slice(r);
             std::iter::zip(sum.iter_mut(), buffer.iter()).for_each(|(o, i)| {
                 let i: f64 = (*i).into();
@@ -69,7 +69,7 @@ impl ComputeMedoid for f16 {
 
         let mut min_dist: f32 = f32::MAX;
         let mut medoid = None;
-        data.row_iter().for_each(|r| {
+        data.rows().for_each(|r| {
             let d = SquaredL2::evaluate(buffer.as_slice(), r);
             if d < min_dist {
                 min_dist = d;
@@ -84,13 +84,13 @@ impl ComputeMedoid for f16 {
 }
 
 impl ComputeMedoid for u8 {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self> {
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self> {
         if data.ncols() == 0 {
             return vec![];
         }
 
         let mut sum = vec![0.0f64; data.ncols()];
-        data.row_iter().for_each(|r| {
+        data.rows().for_each(|r| {
             std::iter::zip(sum.iter_mut(), r.iter()).for_each(|(o, i)| {
                 let i: f64 = (*i).into();
                 *o += i;
@@ -105,7 +105,7 @@ impl ComputeMedoid for u8 {
         let mut min_dist: f32 = f32::MAX;
         let mut medoid = None;
         let mut as_float = vec![0.0f32; data.ncols()];
-        data.row_iter().for_each(|r| {
+        data.rows().for_each(|r| {
             std::iter::zip(as_float.iter_mut(), r.iter())
                 .for_each(|(dst, src)| *dst = (*src).into());
             let d = SquaredL2::evaluate(m.as_slice(), &*as_float);
@@ -120,13 +120,13 @@ impl ComputeMedoid for u8 {
 }
 
 impl ComputeMedoid for i8 {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self> {
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self> {
         if data.ncols() == 0 {
             return vec![];
         }
 
         let mut sum = vec![0.0f64; data.ncols()];
-        data.row_iter().for_each(|r| {
+        data.rows().for_each(|r| {
             std::iter::zip(sum.iter_mut(), r.iter()).for_each(|(o, i)| {
                 let i: f64 = (*i).into();
                 *o += i;
@@ -141,7 +141,7 @@ impl ComputeMedoid for i8 {
         let mut min_dist: f32 = f32::MAX;
         let mut medoid = None;
         let mut as_float = vec![0.0f32; data.ncols()];
-        data.row_iter().for_each(|r| {
+        data.rows().for_each(|r| {
             std::iter::zip(as_float.iter_mut(), r.iter())
                 .for_each(|(dst, src)| *dst = (*src).into());
             let d = SquaredL2::evaluate(m.as_slice(), &*as_float);
@@ -161,16 +161,17 @@ impl ComputeMedoid for i8 {
 
 #[cfg(test)]
 mod tests {
-    use crate::views::Matrix;
+    use super::*;
+
     use rand::{
         distr::{Distribution, StandardUniform},
         rngs::StdRng,
         SeedableRng,
     };
 
-    use super::*;
+    use crate::views::rowmajor::MatrixMut;
 
-    fn example_dataset() -> (Matrix<f32>, Vec<f32>) {
+    fn example_dataset() -> (rowmajor::Owned<f32>, Vec<f32>) {
         let data: Vec<f32> = vec![
             // row 0
             0.203688,
@@ -234,7 +235,7 @@ mod tests {
             0.329328,
         ];
 
-        let data = Matrix::<f32>::try_from(data.into(), 10, 5).unwrap();
+        let data = rowmajor::Owned::<f32>::try_from_data(data.into(), 10, 5).unwrap();
         let expected: Vec<f32> = data.row(5).into();
         (data, expected)
     }
@@ -242,11 +243,11 @@ mod tests {
     #[test]
     fn test_f32() {
         // No Rows
-        let x = Matrix::<f32>::from_element(0, 10, 0.0f32);
+        let x = rowmajor::Owned::<f32>::from_element(0, 10, 0.0f32);
         assert_eq!(f32::compute_medoid(x.as_view()), vec![0.0; x.ncols()]);
 
         // No Cols
-        let x = Matrix::<f32>::from_element(10, 0, 0.0f32);
+        let x = rowmajor::Owned::<f32>::from_element(10, 0, 0.0f32);
         assert_eq!(f32::compute_medoid(x.as_view()), Vec::<f32>::new());
 
         let mut rng = StdRng::seed_from_u64(0xaf2f5fa0b5161acf);
@@ -254,7 +255,7 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<f32>::from_fn(1, dim, |_| dist.sample(&mut rng));
+            let x = rowmajor::Owned::<f32>::from_fn(1, dim, |_| dist.sample(&mut rng));
             assert_eq!(&*f32::compute_medoid(x.as_view()), x.row(0));
         }
 
@@ -267,14 +268,14 @@ mod tests {
     #[test]
     fn test_f16() {
         // No Rows
-        let x = Matrix::<f16>::from_element(0, 10, f16::default());
+        let x = rowmajor::Owned::<f16>::from_element(0, 10, f16::default());
         assert_eq!(
             f16::compute_medoid(x.as_view()),
             vec![f16::default(); x.ncols()]
         );
 
         // No Cols
-        let x = Matrix::<f16>::from_element(10, 0, f16::default());
+        let x = rowmajor::Owned::<f16>::from_element(10, 0, f16::default());
         assert_eq!(f16::compute_medoid(x.as_view()), Vec::<f16>::new());
 
         let mut rng = StdRng::seed_from_u64(0x88e2f7096fc9b90e);
@@ -282,13 +283,15 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<f16>::from_fn(1, dim, |_| f16::from_f32(dist.sample(&mut rng)));
+            let x =
+                rowmajor::Owned::<f16>::from_fn(1, dim, |_| f16::from_f32(dist.sample(&mut rng)));
             assert_eq!(&*f16::compute_medoid(x.as_view()), x.row(0));
         }
 
         // Example dataset
         let (data, expected) = example_dataset();
-        let mut data_f16 = Matrix::<f16>::from_element(data.nrows(), data.ncols(), f16::default());
+        let mut data_f16 =
+            rowmajor::Owned::<f16>::from_element(data.nrows(), data.ncols(), f16::default());
         data_f16.as_mut_slice().cast_from_slice(data.as_slice());
 
         let mut expected_f16 = vec![f16::default(); expected.len()];
@@ -298,7 +301,7 @@ mod tests {
         assert_eq!(m, expected_f16);
     }
 
-    fn example_dataset_u8() -> (Matrix<u8>, Vec<u8>) {
+    fn example_dataset_u8() -> (rowmajor::Owned<u8>, Vec<u8>) {
         let data: Vec<u8> = vec![
             52, 215, 218, 204, 192, // row 0
             79, 55, 16, 89, 255, // row 1
@@ -308,7 +311,7 @@ mod tests {
             145, 111, 142, 122, 181, // row 5 -- this is the medoid
         ];
 
-        let data = Matrix::<u8>::try_from(data.into(), 6, 5).unwrap();
+        let data = rowmajor::Owned::<u8>::try_from_data(data.into(), 6, 5).unwrap();
         let expected: Vec<u8> = data.row(5).into();
         (data, expected)
     }
@@ -316,18 +319,18 @@ mod tests {
     #[test]
     fn test_u8() {
         // No Rows
-        let x = Matrix::<u8>::from_element(0, 10, 0u8);
+        let x = rowmajor::Owned::<u8>::from_element(0, 10, 0u8);
         assert_eq!(u8::compute_medoid(x.as_view()), vec![0u8; x.ncols()]);
 
         // No Cols
-        let x = Matrix::<u8>::from_element(10, 0, 0u8);
+        let x = rowmajor::Owned::<u8>::from_element(10, 0, 0u8);
         assert_eq!(u8::compute_medoid(x.as_view()), Vec::<u8>::new());
         let mut rng = StdRng::seed_from_u64(0x8f2f5fa0b5161acf);
 
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<u8>::from_fn(1, dim, |_| dist.sample(&mut rng));
+            let x = rowmajor::Owned::<u8>::from_fn(1, dim, |_| dist.sample(&mut rng));
             assert_eq!(&*u8::compute_medoid(x.as_view()), x.row(0));
         }
 
@@ -338,7 +341,7 @@ mod tests {
     }
 
     // This is a test for the i8 medoid function. Each entry is between -128 and 127.
-    fn example_dataset_i8() -> (Matrix<i8>, Vec<i8>) {
+    fn example_dataset_i8() -> (rowmajor::Owned<i8>, Vec<i8>) {
         let data: Vec<i8> = vec![
             -76, 87, 90, 76, 64, // row 0
             -49, -73, -112, -39, 127, // row 1
@@ -348,7 +351,7 @@ mod tests {
             17, -17, 14, -6, 53, // row 5 -- this is the medoid
         ];
 
-        let data = Matrix::<i8>::try_from(data.into(), 6, 5).unwrap();
+        let data = rowmajor::Owned::<i8>::try_from_data(data.into(), 6, 5).unwrap();
         let expected: Vec<i8> = data.row(5).into();
         (data, expected)
     }
@@ -356,11 +359,11 @@ mod tests {
     #[test]
     fn test_i8() {
         // No Rows
-        let x = Matrix::<i8>::from_element(0, 10, 0i8);
+        let x = rowmajor::Owned::<i8>::from_element(0, 10, 0i8);
         assert_eq!(i8::compute_medoid(x.as_view()), vec![0i8; x.ncols()]);
 
         // No Cols
-        let x = Matrix::<i8>::from_element(10, 0, 0i8);
+        let x = rowmajor::Owned::<i8>::from_element(10, 0, 0i8);
         assert_eq!(i8::compute_medoid(x.as_view()), Vec::<i8>::new());
 
         let mut rng = StdRng::seed_from_u64(0x8f2f5fa0b5161acf);
@@ -368,7 +371,7 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<i8>::from_fn(1, dim, |_| dist.sample(&mut rng));
+            let x = rowmajor::Owned::<i8>::from_fn(1, dim, |_| dist.sample(&mut rng));
             assert_eq!(&*i8::compute_medoid(x.as_view()), x.row(0));
         }
 
