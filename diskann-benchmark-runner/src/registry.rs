@@ -3,15 +3,15 @@
  * Licensed under the MIT license.
  */
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 
 use thiserror::Error;
 
 use crate::{
-    benchmark::{self, internal::AnnotatedMatch, Benchmark, MatchContext, Regression, Score},
+    Checkpoint, Features, Input, Output,
+    benchmark::{self, Benchmark, MatchContext, Regression, Score, internal::AnnotatedMatch},
     input,
     internal::visibility::Visibility,
-    Checkpoint, Features, Input, Output,
 };
 
 /// A collection of registered inputs and benchmarks.
@@ -609,7 +609,7 @@ pub(crate) struct RegisteredTolerance<'a> {
 mod tests {
     use super::*;
 
-    use crate::{input, Checker};
+    use crate::{Checker, input};
 
     macro_rules! input {
         ($T:ident, $tag:literal) => {

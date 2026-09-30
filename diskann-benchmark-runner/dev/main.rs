@@ -6,7 +6,7 @@
 //! Development CLI for exercising the benchmark runner with its test registry.
 
 use clap::Parser;
-use diskann_benchmark_runner::{output, test, App, Registry};
+use diskann_benchmark_runner::{App, Registry, output, test};
 
 fn main() -> anyhow::Result<()> {
     // Parse the command line options.
