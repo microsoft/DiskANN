@@ -169,7 +169,15 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 // Allocate scratch data structures.
                 let norms: Vec<f32> = view.rows().map(square_norm).collect();
                 let transpose = BlockTransposed::<f32, 16>::from_strided(view);
-                let mut centers = Matrix::new(0.0, trainer.ncenters, range.len());
+                let mut centers =
+                    Matrix::try_new(0.0, trainer.ncenters, range.len()).map_err(|err| {
+                        PQTrainingError {
+                            chunk: i,
+                            of: schema.len(),
+                            dim: range.len(),
+                            kind: PQTrainingErrorKind::InternalError(Box::new(err)),
+                        }
+                    })?;
 
                 // Construct the random number generator seeded by the PQ chunk.
                 let mut rng = rng_builder.build_boxed_rng(i);
