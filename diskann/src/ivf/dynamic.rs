@@ -13,7 +13,7 @@
 
 use std::fmt::Debug;
 
-use diskann_utils::future::SendFuture;
+use diskann_utils::{future::SendFuture, views::MutMatrixView};
 
 use crate::{
     error::{StandardError, ToRanked},
@@ -66,6 +66,12 @@ pub struct ScanStats {
     pub lists_scanned: u32,
 }
 
+/// A data provider whose points are partitioned into stable logical lists.
+pub trait ListProvider: DataProvider {
+    /// Stable id shared by a centroid and its inverted list.
+    type ListId: VectorId;
+}
+
 /// An in-memory index over the live centroids.
 ///
 /// The centroid catalog is authoritative. Approximate implementations, such as
@@ -101,33 +107,6 @@ pub trait CentroidIndex: Send + Sync {
     ) -> impl SendFuture<Result<SelectionPlan<Self::ListId>, Self::Error>>;
 }
 
-/// An authoritative grouping of live centroids for locality-preserving storage.
-///
-/// Every live centroid belongs to exactly one co-location group. Implementations
-/// may use an identity grouping, where each group contains one centroid. Group
-/// ids remain stable until retired and are independent of centroid/list ids.
-pub trait CoLocationSet: Send + Sync {
-    /// Stable logical centroid/list id.
-    type ListId: VectorId;
-
-    /// Stable logical co-location group id.
-    type CoLocationGroupId: VectorId;
-
-    /// Number of live co-location groups.
-    fn len(&self) -> usize;
-
-    /// Whether there are no live co-location groups.
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Borrow the centroid ids in a live co-location group.
-    fn group(&self, id: Self::CoLocationGroupId) -> Option<&[Self::ListId]>;
-
-    /// Return the live co-location group containing a centroid.
-    fn group_for(&self, id: Self::ListId) -> Option<Self::CoLocationGroupId>;
-}
-
 /// Query-bound access to centroid selection and inverted-list scanning.
 ///
 /// This is the dynamic IVF search algorithm's primary extension point, in the
@@ -135,7 +114,8 @@ pub trait CoLocationSet: Send + Sync {
 /// batch reads, coalesce blob requests, prefetch, decode quantized payloads, or
 /// fan work out across tasks.
 pub trait SearchAccessor: HasId + Send + Sync {
-    /// Stable logical centroid/list id.
+    /// Stable logical centroid/list id, fixed to [`ListProvider::ListId`] by the
+    /// strategy.
     type ListId: VectorId;
 
     /// Errors from list selection or scanning.
@@ -160,10 +140,10 @@ pub trait SearchAccessor: HasId + Send + Sync {
 /// Factory for one dynamic IVF search accessor.
 pub trait SearchStrategy<'a, Provider, T>: Send + Sync
 where
-    Provider: DataProvider,
+    Provider: ListProvider,
 {
     /// Query-bound accessor used for both coarse and fine search.
-    type SearchAccessor: SearchAccessor<Id = Provider::InternalId>;
+    type SearchAccessor: SearchAccessor<Id = Provider::InternalId, ListId = Provider::ListId>;
 
     /// Error constructing the accessor.
     type Error: StandardError;
@@ -179,88 +159,22 @@ where
 
 /// Size metadata for one logical inverted list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ListMetadata<ListId> {
-    /// Stable logical list identifier.
-    pub id: ListId,
+pub struct ListMetadata {
     /// Number of live point ids in the list.
     pub len: usize,
 }
-
-/// A new centroid to install as part of a partition update.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CentroidRecord<ListId> {
-    /// Fresh stable id. Installed ids must never be reused after retirement.
-    pub id: ListId,
-    /// Full-precision centroid used by maintenance and exact fallback.
-    pub vector: Box<[f32]>,
-}
-
-/// Changes to the authoritative live-centroid catalog.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CentroidDelta<ListId> {
-    /// Centroids made live by this update.
-    pub insert: Vec<CentroidRecord<ListId>>,
-    /// Live centroids retired by this update.
-    pub retire: Vec<ListId>,
-}
-
-/// A new co-location group to install as part of a partition update.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoLocationGroup<CoLocationGroupId, ListId> {
-    /// Fresh stable group id. Installed ids must never be reused after retirement.
-    pub id: CoLocationGroupId,
-    /// Live centroids that should be stored together.
-    pub centroids: Vec<ListId>,
-}
-
-/// Changes to the authoritative co-location set.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CoLocationDelta<CoLocationGroupId, ListId> {
-    /// Co-location groups made live by this update.
-    pub insert: Vec<CoLocationGroup<CoLocationGroupId, ListId>>,
-    /// Live co-location groups retired by this update.
-    pub retire: Vec<CoLocationGroupId>,
-}
-
-/// One point membership change in a partition mutation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PointMove<Id, ListId> {
-    /// Internal point id being inserted, deleted, or reassigned.
-    pub id: Id,
-    /// Previous list, or `None` for a newly inserted point.
-    pub from: Option<ListId>,
-    /// New list, or `None` for a deleted point.
-    pub to: Option<ListId>,
-}
-/// constrcutors for this too.
-
-/// A complete logical partition change.
-///
-/// The maintenance accessor applies this update across point identity,
-/// canonical vectors, list membership, reverse assignments, scan payloads, and
-/// centroid liveness, and co-location membership according to its
-/// provider-specific consistency contract.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct PartitionUpdate<Id, ListId, CoLocationGroupId> {
-    /// Centroids inserted and retired by this mutation.
-    pub centroids: CentroidDelta<ListId>,
-    /// Co-location groups inserted and retired by this mutation.
-    pub co_locations: CoLocationDelta<CoLocationGroupId, ListId>,
-    /// Point membership changes, including inserts and deletes.
-    pub point_moves: Vec<PointMove<Id, ListId>>,
-}
-///  constructor enforces safety + correctness.
 
 /// Operation-scoped reads and writes needed by split/dissolve maintenance.
 ///
 /// The accessor is the consistency boundary for one mutation. It must present a
 /// unified view across point data, centroids, reverse assignments, and inverted
 /// lists for all planning reads. It also owns any provider-specific lock, epoch,
-/// transaction, staging area, or poison state needed to apply the final update.
+/// transaction, staging area, or poison state needed to apply the final update
+/// through [`Apply`].
 ///
-/// Read methods are deliberately coarse grained so disk and blob providers can
-/// batch I/O. Callbacks may be invoked in any order. `read_members` may invoke
-/// its callback more than once for a list when the backend streams chunks.
+/// List reads take one list and return its result. [`Self::read_vectors`], which
+/// reads far more data, takes a batch so disk and blob providers can reorder,
+/// coalesce, or parallelize I/O.
 pub trait MaintenanceAccessor<T>: HasId + Send + Sized
 where
     T: Send,
@@ -268,54 +182,45 @@ where
     /// External point id accepted by the data provider.
     type ExternalId: PartialEq + Send + Sync + 'static;
 
-    /// Stable centroid/list id.
+    /// Stable centroid/list id, fixed to [`ListProvider::ListId`] by the strategy.
     type ListId: VectorId;
-
-    /// Stable co-location group id.
-    type CoLocationGroupId: VectorId;
 
     /// In-memory centroid catalog and navigator in this accessor's unified view.
     type Centroids: CentroidIndex<ListId = Self::ListId, Error = Self::Error>;
 
-    /// Authoritative co-location grouping in this accessor's unified view.
-    type CoLocations: CoLocationSet<ListId = Self::ListId, CoLocationGroupId = Self::CoLocationGroupId>;
-
     /// Errors from planning reads, staging, or applying the update.
     type Error: ToRanked + Debug + Send + Sync + 'static;
+
+    /// Dimension of every canonical vector and centroid in this accessor's view.
+    ///
+    /// Fixed for the provider's lifetime, including before the index is initialized.
+    fn dim(&self) -> usize;
 
     /// Borrow the centroid index used for routing and maintenance neighborhoods.
     fn centroids(&self) -> &Self::Centroids;
 
-    /// Borrow the co-location set used to plan locality-preserving layout.
-    fn co_locations(&self) -> &Self::CoLocations;
-
-    /// Read list sizes for `lists`.
-    fn list_metadata<I, F>(
+    /// Read the size of a live list.
+    fn list_metadata(
         &mut self,
-        lists: I,
-        emit: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
-    where
-        I: Iterator<Item = Self::ListId> + Send,
-        F: FnMut(ListMetadata<Self::ListId>) + Send;
+        list: Self::ListId,
+    ) -> impl SendFuture<Result<ListMetadata, Self::Error>>;
 
-    /// Resolve current list assignments for point ids.
-    fn assignments<I, F>(&mut self, ids: I, emit: F) -> impl SendFuture<Result<(), Self::Error>>
-    where
-        I: Iterator<Item = Self::Id> + Send,
-        F: FnMut(Self::Id, Option<Self::ListId>) + Send;
+    /// Read the member ids of a live list.
+    fn read_members(
+        &mut self,
+        list: Self::ListId,
+    ) -> impl SendFuture<Result<&[Self::Id], Self::Error>>;
 
-    /// Stream the live member ids of selected lists.
-    fn read_members<I, F>(&mut self, lists: I, emit: F) -> impl SendFuture<Result<(), Self::Error>>
-    where
-        I: Iterator<Item = Self::ListId> + Send,
-        F: FnMut(Self::ListId, &[Self::Id]) + Send;
-
-    /// Materialize canonical full-precision vectors for maintenance.
-    fn read_vectors<I, F>(&mut self, ids: I, emit: F) -> impl SendFuture<Result<(), Self::Error>>
-    where
-        I: Iterator<Item = Self::Id> + Send,
-        F: FnMut(Self::Id, &[f32]) + Send;
+    /// Write the canonical vector of `ids[i]` into row `i` of `out`, in any order.
+    ///
+    /// `out` has one row per id and [`Self::dim`] columns, and every row must be
+    /// written. Covers points staged by this accessor as well as visible points,
+    /// without making staged points visible through ordinary provider reads.
+    fn read_vectors(
+        &mut self,
+        ids: &[Self::Id],
+        out: MutMatrixView<'_, f32>,
+    ) -> impl SendFuture<Result<(), Self::Error>>;
 
     /// Stage a canonical point and reserve its internal id.
     fn stage_insert(
@@ -324,50 +229,51 @@ where
         element: T,
     ) -> impl SendFuture<Result<Self::Id, Self::Error>>;
 
-    /// Materialize canonical vectors for points staged by this accessor.
-    fn read_staged_vectors<I, F>(
-        &mut self,
-        ids: I,
-        emit: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
-    where
-        I: Iterator<Item = Self::Id> + Send,
-        F: FnMut(Self::Id, &[f32]) + Send;
-
-    /// Stage deletion of a currently visible internal point id.
-    fn stage_delete(&mut self, id: Self::Id) -> impl SendFuture<Result<(), Self::Error>>;
-
     /// Reserve fresh logical list ids that will not alias retired ids.
     fn reserve_list_ids(
         &mut self,
         count: usize,
     ) -> impl SendFuture<Result<Vec<Self::ListId>, Self::Error>>;
+}
 
-    /// Reserve fresh co-location group ids that will not alias retired ids.
-    fn reserve_group_ids(
-        &mut self,
-        count: usize,
-    ) -> impl SendFuture<Result<Vec<Self::CoLocationGroupId>, Self::Error>>;
+/// Applies one kind of partition update and finishes the maintenance operation.
+///
+/// Providers implement this once per update they support, from
+/// [`crate::ivf::update`]. For example, a provider that never splits implements only
+/// `Apply<Appends<_, _>>`. Only the index constructs updates, and it guarantees their
+/// documented invariants, so implementations may rely on them without re-checking.
+///
+/// Returning `Ok(())` means all components expose one coherent resulting index.
+/// Rollback, durability, concurrent-reader visibility, and recovery after `Err` are
+/// intentionally provider-defined.
+pub trait Apply<U>: Send + Sized {
+    /// Errors from applying the update.
+    type Error: ToRanked + Debug + Send + Sync + 'static;
 
-    /// Apply the complete logical update and finish this mutation operation.
-    ///
-    /// Returning `Ok(())` means all components expose one coherent resulting
-    /// index. Rollback, durability, concurrent-reader visibility, and recovery
-    /// after `Err` are intentionally provider-defined.
-    fn apply(
-        self,
-        update: PartitionUpdate<Self::Id, Self::ListId, Self::CoLocationGroupId>,
-    ) -> impl SendFuture<Result<(), Self::Error>>;
+    /// Apply `update`, consuming the accessor.
+    fn apply(self, update: U) -> impl SendFuture<Result<(), Self::Error>>;
 }
 
 /// Factory for an operation-scoped dynamic IVF maintenance accessor.
+///
+/// The provider is borrowed exclusively for the lifetime of the accessor, so no
+/// search or other mutation can observe it until the accessor is applied or
+/// dropped. Providers may therefore mutate plain in-memory state in
+/// [`Apply::apply`] without interior synchronization. Providers that share state
+/// outside this borrow (for example through an `Arc`) remain responsible for
+/// coordinating those aliases.
 pub trait MaintenanceStrategy<'a, Provider, T>: Send + Sync
 where
-    Provider: DataProvider,
+    Provider: ListProvider,
     T: Send,
 {
     /// Accessor used to plan and stage split/dissolve operations.
-    type MaintenanceAccessor: MaintenanceAccessor<T, Id = Provider::InternalId, ExternalId = Provider::ExternalId>;
+    type MaintenanceAccessor: MaintenanceAccessor<
+            T,
+            Id = Provider::InternalId,
+            ExternalId = Provider::ExternalId,
+            ListId = Provider::ListId,
+        >;
 
     /// Error constructing the accessor.
     type Error: StandardError;
@@ -375,7 +281,7 @@ where
     /// Construct one maintenance accessor.
     fn maintenance_accessor(
         &'a self,
-        provider: &'a Provider,
+        provider: &'a mut Provider,
         context: &'a Provider::Context,
     ) -> Result<Self::MaintenanceAccessor, Self::Error>;
 }
