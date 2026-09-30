@@ -71,21 +71,21 @@ impl ConvertingLoad for f32 {
     ))]
     fn converting_load(path: BinFile<'_>, data_type: DataType) -> anyhow::Result<Matrix<f32>> {
         #[inline(never)]
-        fn convert<T, U>(from: diskann_utils::views::MatrixView<T>) -> Matrix<U>
+        fn convert<T, U>(from: diskann_utils::views::MatrixView<T>) -> anyhow::Result<Matrix<U>>
         where
             U: Default + Clone + From<T>,
             T: Copy,
         {
-            let mut to = Matrix::from_element(from.nrows(), from.ncols(), U::default());
+            let mut to = Matrix::try_from_element(from.nrows(), from.ncols(), U::default())?;
             std::iter::zip(to.as_mut_slice().iter_mut(), from.as_slice().iter())
                 .for_each(|(t, f)| *t = (*f).into());
-            to
+            Ok(to)
         }
         match data_type {
             DataType::Float32 => load_dataset::<f32>(path),
-            DataType::Float16 => Ok(convert(load_dataset::<half::f16>(path)?.as_view())),
-            DataType::UInt8 => Ok(convert(load_dataset::<u8>(path)?.as_view())),
-            DataType::Int8 => Ok(convert(load_dataset::<i8>(path)?.as_view())),
+            DataType::Float16 => convert(load_dataset::<half::f16>(path)?.as_view()),
+            DataType::UInt8 => convert(load_dataset::<u8>(path)?.as_view()),
+            DataType::Int8 => convert(load_dataset::<i8>(path)?.as_view()),
             _ => Err(anyhow::anyhow!(
                 "data type {:?} is not supported for loading `f32` data",
                 data_type

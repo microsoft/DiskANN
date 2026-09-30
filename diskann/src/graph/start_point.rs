@@ -67,6 +67,9 @@ pub enum StartPointError {
 
     #[error("Error getting row_id {} from training data matrix view", row_id)]
     MatrixRowError { row_id: usize },
+
+    #[error(transparent)]
+    MatrixLayout(#[from] diskann_utils::views::LayoutError),
 }
 
 impl StartPointStrategy {
@@ -99,7 +102,7 @@ impl StartPointStrategy {
                     rand::seq::index::sample(&mut rng, train_data.nrows(), nsamples.get());
 
                 let mut points =
-                    Matrix::from_element(nsamples.get(), train_data.ncols(), T::default());
+                    Matrix::try_from_element(nsamples.get(), train_data.ncols(), T::default())?;
                 std::iter::zip(points.row_iter_mut(), indices).for_each(|(dst, src)| {
                     dst.copy_from_slice(train_data.row(src));
                 });
@@ -116,7 +119,7 @@ impl StartPointStrategy {
             } => {
                 let mut rng = StdRng::seed_from_u64(*seed);
                 let dim = train_data.ncols();
-                let mut points = Matrix::from_element(nsamples.get(), dim, T::default());
+                let mut points = Matrix::try_from_element(nsamples.get(), dim, T::default())?;
                 points.row_iter_mut().for_each(|row| {
                     row.copy_from_slice(&WithApproximateNorm::with_approximate_norm(
                         dim, *norm, &mut rng,
