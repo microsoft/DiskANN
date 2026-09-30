@@ -665,6 +665,7 @@ mod tests {
         utils::ONE,
     };
     use diskann_utils::test_data_root;
+    use diskann_utils::views::rowmajor::Matrix;
     use diskann_vector::distance::Metric;
 
     use super::DiskANNIndex;
@@ -723,7 +724,7 @@ mod tests {
 
         let storage = VirtualStorageProvider::new_memory();
         let ctx = DefaultContext;
-        for (i, v) in train_data.row_iter().enumerate() {
+        for (i, v) in train_data.rows().enumerate() {
             index.insert(&FullPrecision, &ctx, &(i as u32), v).unwrap();
         }
 

@@ -703,7 +703,7 @@ mod tests {
         alloc::GlobalAllocator,
         spherical::{SphericalQuantizer, SupportedMetric},
     };
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use diskann_vector::{
         DistanceFunction, PreprocessedDistanceFunction, PureDistanceFunction,
         distance::{InnerProduct, Metric, SquaredL2},
@@ -718,7 +718,7 @@ mod tests {
     ////////////////
 
     fn make_store<const NBITS: usize>(
-        data: MatrixView<f32>,
+        data: rowmajor::Ref<f32>,
         metric: SupportedMetric,
         rng: &mut StdRng,
     ) -> SphericalStore
@@ -745,8 +745,8 @@ mod tests {
         )
     }
 
-    fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> Matrix<f32> {
-        Matrix::from_fn(nrows, ncols, |_| StandardNormal {}.sample(rng))
+    fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> rowmajor::Owned<f32> {
+        rowmajor::Owned::from_fn(nrows, ncols, |_| StandardNormal {}.sample(rng))
     }
 
     #[test]
@@ -853,12 +853,12 @@ mod tests {
 
             let max_relative_error = 0.25;
 
-            for (i, r) in data.row_iter().enumerate() {
+            for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
             }
 
-            for (i, a) in data.row_iter().enumerate() {
-                for (j, b) in data.row_iter().enumerate().skip(i + 1) {
+            for (i, a) in data.rows().enumerate() {
+                for (j, b) in data.rows().enumerate().skip(i + 1) {
                     let expected: f32 = SquaredL2::evaluate(a, b);
                     let got: f32 = computer
                         .evaluate_similarity(
@@ -888,15 +888,15 @@ mod tests {
             let store = make_store::<1>(data.as_view(), SupportedMetric::InnerProduct, &mut rng);
             let computer = store.distance_computer().unwrap();
 
-            for (i, r) in data.row_iter().enumerate() {
+            for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
             }
 
             let mut signs_match = 0;
             let mut total = 0;
 
-            for (i, a) in data.row_iter().enumerate() {
-                for (j, b) in data.row_iter().enumerate().skip(i + 1) {
+            for (i, a) in data.rows().enumerate() {
+                for (j, b) in data.rows().enumerate().skip(i + 1) {
                     total += 1;
                     let expected: f32 = InnerProduct::evaluate(a, b);
                     let got: f32 = computer
@@ -933,15 +933,15 @@ mod tests {
             let store = make_store::<1>(data.as_view(), SupportedMetric::SquaredL2, &mut rng);
             let max_relative_error = 0.2;
 
-            for (i, r) in data.row_iter().enumerate() {
+            for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
             }
 
-            for (i, a) in data.row_iter().enumerate() {
+            for (i, a) in data.rows().enumerate() {
                 let computer = store
                     .query_computer(a, spherical::iface::QueryLayout::FourBitTransposed, false)
                     .unwrap();
-                for (j, b) in data.row_iter().enumerate() {
+                for (j, b) in data.rows().enumerate() {
                     if i == j {
                         continue;
                     }
@@ -974,18 +974,18 @@ mod tests {
         {
             let store = make_store::<1>(data.as_view(), SupportedMetric::InnerProduct, &mut rng);
 
-            for (i, r) in data.row_iter().enumerate() {
+            for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
             }
 
             let mut signs_match = 0;
             let mut total = 0;
 
-            for (i, a) in data.row_iter().enumerate() {
+            for (i, a) in data.rows().enumerate() {
                 let computer = store
                     .query_computer(a, spherical::iface::QueryLayout::FourBitTransposed, true)
                     .unwrap();
-                for (j, b) in data.row_iter().enumerate() {
+                for (j, b) in data.rows().enumerate() {
                     if i == j {
                         continue;
                     }
@@ -1027,7 +1027,7 @@ mod tests {
         assert!(matches!(err, RQError::CompressionError(..)));
     }
 
-    fn test_dataset() -> Matrix<f32> {
+    fn test_dataset() -> rowmajor::Owned<f32> {
         let data = vec![
             0.28657,
             -0.0318168,
@@ -1159,6 +1159,6 @@ mod tests {
             -0.324718, // row 15
         ];
 
-        Matrix::try_from(data.into(), 16, 8).unwrap()
+        rowmajor::Owned::try_from_data(data.into(), 16, 8).unwrap()
     }
 }
