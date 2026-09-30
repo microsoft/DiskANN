@@ -26,7 +26,7 @@ use diskann_benchmark_runner::{
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Benchmark, Checker, Input, Registry, Reflect,
+    Benchmark, Checker, Input, Reflect, Registry,
 };
 
 ////////////////

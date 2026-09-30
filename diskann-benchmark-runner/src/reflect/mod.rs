@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Run time inspection of types.
+
 use std::{
     any::TypeId,
     fmt::{self, Write},
@@ -17,17 +19,123 @@ pub use tree::Type;
 #[cfg(test)]
 mod test;
 
+/// Provide run-time information about compile-time types, including documentation.
+///
+/// This trait is derivable and supports a subset of `serde` attributes.
+///
+/// ```
+/// use diskann_benchmark_runner::{Reflect, Reflection};
+///
+/// /// An example struct.
+/// #[derive(Reflect)]
+/// struct Foo {
+///     /// An awesome field.
+///     #[serde(rename = "bar")]
+///     foo: usize,
+///     baz: usize,
+/// }
+///
+/// // Get information about `Foo`.
+/// let ty = Foo::ty();
+///
+/// // The documentation of `Foo` will automatically be extracted from the docstrings.
+/// assert_eq!(ty.doc().unwrap(),  "An example struct.");
+///
+/// // The type name can be extracted as well.
+/// let mut name = String::new();
+/// Foo::format_type_name(&mut name);
+/// assert_eq!(name, "Foo");
+///
+/// // To make typenames easier to extract, a `Reflection` can be use.
+/// let reflection = Reflection::new::<Foo>();
+/// assert_eq!(reflection.type_name().to_string(), "Foo");
+/// ```
+///
+/// # Attributes
+///
+/// For derivation, a combination of `serde` attributes and custom `reflect` attributes
+/// are supported.
+///
+/// ## Serde Attributes
+///
+/// Like the [serde crate](https://serde.rs/attributes.html), attributes are categorized by
+/// container, variant, or field.
+///
+/// ### Container Attributes
+///
+/// * `#[serde(rename_all = "...")]`: Rename all fields (if a struct) or variants (if enum)
+///   arrocding to the given case.
+///
+///   Possible values are "lowercase", "snake_case", and "kebab-case".
+///
+/// * `#[serde(tag = "type")]`: Used for internally tagged enums.
+///
+/// * `#[serde(tag = "t", content = "c")]`: Used for adjacently tagged enums.
+///
+/// ### Variant Attributes
+///
+/// * `#[serde(rename = "name")]`: Describe with the given name instead of its Rust name.
+///
+/// * `#[serde(rename_all = "...)]`: Rename all fiels of this struct variant with the given
+///   case convention.
+///
+///   Possible values are "lowercase", "snake_case", and "kebab-case".
+///
+/// ### Field Attributes
+///
+/// * `#[serde(rename = "name")]`: Describe with the given name instead of its Rust name.
+///
+/// ## Reflect Attributes
+///
+/// ### Container Attributes
+///
+/// * `#[reflect(type_name = "name")]`: Use the given name to describe a struct instead of
+///   its Rust name. This is used to avoid naming conflicts within a [`Registry`], which
+///   enforces that type names are unique.
+///
+///   Because of this, this attribute cannot be used on generic structs.
+///
+///   This is mutually exclusive with the `prefix` attribute.
+///
+///   ```
+///   use diskann_benchmark_runner::{Reflect, Reflection};
+///
+///   #[derive(Reflect)]
+///   #[reflect(type_name = "Bar")]
+///   struct Foo;
+///
+///   assert_eq!(Reflection::new::<Foo>().type_name().to_string(), "Bar");
+///   ```
+///
+/// * `#[reflect(prefix = "...")]`: Prefix the Rust name with the provided prefix. Like the
+///   `type_name` attribute, this can be used to create name spaces to help generate unique
+///   type names.
+///
+///   ```
+///   use diskann_benchmark_runner::{Reflect, Reflection};
+///
+///   #[derive(Reflect)]
+///   #[reflect(prefix = "mod::")]
+///   struct Foo;
+///
+///   assert_eq!(Reflection::new::<Foo>().type_name().to_string(), "mod::Foo");
+///   ```
 pub trait Reflect: 'static {
+    /// Return the [`Type`] containing the information about `self`.
     fn ty() -> Type;
+
+    /// Write the type-name for `self` into the buffer.
     fn format_type_name(f: &mut dyn Write) -> fmt::Result;
 }
 
+/// A [`Reflect`]ed type.
 #[derive(Clone, Copy)]
 pub struct Reflection {
     reflection: &'static internal::VTable,
 }
 
 impl Reflection {
+    /// Construct a new [`Reflection`] for `T`.
     pub const fn new<T>() -> Self
     where
         T: Reflect,
@@ -37,22 +145,36 @@ impl Reflection {
         }
     }
 
+    /// Return the [`Type`] for the type being reflected.
     pub fn ty(&self) -> Type {
         (self.reflection.ty)()
     }
 
+    /// Return a [`std::fmt::Display`] compatible struct for rendering the name of the type
+    /// being reflected.
     pub fn type_name(&self) -> TypeName {
         TypeName(*self)
     }
 
+    /// Return the [`TypeId`] of the
     pub fn type_id(&self) -> TypeId {
         (self.reflection.type_id)()
     }
 
-    pub fn render(&self) -> Render {
+    /// Return a [`std::fmt::Display`] comaptible struct for rendering the reflected type.
+    pub(crate) fn render(&self) -> Render {
         Render(*self)
     }
 
+    /// Visit all types reachable from the reflected type.
+    ///
+    /// This will traverse through all structs, enum variants, container types etc.
+    ///
+    /// The closure `f` can be used to direct the exploration by returning the following values:
+    ///
+    /// * `Ok(true)`: Continue exploring through the argument [`Reflection`].
+    /// * `Ok(false)`: Do not continue exploring through the argument [`Reflection`].
+    /// * `Err(E)`: Immediately stop exploring and return the error `E`.
     pub(crate) fn visit_with<F, E>(&self, f: F) -> Result<(), E>
     where
         F: FnMut(Reflection) -> Result<bool, E>,
@@ -69,6 +191,9 @@ impl fmt::Debug for Reflection {
     }
 }
 
+/// A [`std::fmt::Display`] compatible type for [`Reflection`].
+///
+/// See: [`Reflection::type_name`].
 pub struct TypeName(Reflection);
 
 impl TypeName {
@@ -89,7 +214,10 @@ impl std::fmt::Display for TypeName {
     }
 }
 
-pub struct Render(Reflection);
+/// A [`std::fmt::Display`] compatible type for rendering a [`Reflection`].
+///
+/// See: [`Reflection::render`].
+pub(crate) struct Render(Reflection);
 
 impl std::fmt::Display for Render {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

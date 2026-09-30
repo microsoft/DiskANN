@@ -1,0 +1,5 @@
+error: serde attribute `tag` found multiple times
+ --> tests/ui/fail/duplicate_tag.rs:9:30
+  |
+9 | #[serde(tag = "first", tag = "second")]
+  |                              ^^^^^^^^

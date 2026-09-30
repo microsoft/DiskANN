@@ -14,5 +14,9 @@ syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 
+[dev-dependencies]
+diskann-benchmark-runner = { workspace = true }
+trybuild = "1.0.120"
+
 [lints]
 workspace = true

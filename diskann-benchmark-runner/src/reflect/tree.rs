@@ -3,10 +3,17 @@
  * Licensed under the MIT license.
  */
 
+//! Model of the Rust type system.
+//!
+//! This is largely based on the structure of types in [`syn`](https://docs.rs/syn/latest/syn/)
+//! with some extra entries (e.g. [`Type::Optional`]) for a closer representation with how
+//! types are serialized by [`serde`].
+
 use super::{Reflect, Reflection};
 
 pub type Doc = std::borrow::Cow<'static, str>;
 
+/// Classification of types.
 #[derive(Debug)]
 pub enum Type {
     Primitive(Primitive),
@@ -17,27 +24,31 @@ pub enum Type {
 }
 
 impl Type {
+    /// Construc a new [`Type::Primitive`].
     pub fn primitive(kind: PrimitiveKind, doc: Option<Doc>) -> Self {
-        Self::from(Primitive::new(kind, doc))
+        Self::Primitive(Primitive::new(kind, doc))
     }
 
+    /// Construc a new [`Type::Aggregate`].
     pub fn aggregate(fields: Fields, doc: Option<Doc>) -> Self {
-        Self::from(Aggregate::new(fields, doc))
+        Self::Aggregate(Aggregate::new(fields, doc))
     }
 
+    /// Construc a new [`Type::Enum`].
     pub fn enum_(
         repr: EnumRepr,
         variants: impl IntoIterator<Item = Variant>,
         doc: Option<Doc>,
     ) -> Self {
-        Self::from(Enum::new(repr, variants, doc))
+        Self::Enum(Enum::new(repr, variants, doc))
     }
 
+    /// Construc a new [`Type::Sequence`].
     pub fn sequence<T>(doc: Option<Doc>) -> Self
     where
         T: Reflect,
     {
-        Self::from(Sequence::new::<T>(doc))
+        Self::Sequence(Sequence::new::<T>(doc))
     }
 
     /// Keep the constructor private since we don't want users constructing the very special
@@ -46,9 +57,10 @@ impl Type {
     where
         T: Reflect,
     {
-        Self::from(Optional::new::<T>(doc))
+        Self::Optional(Optional::new::<T>(doc))
     }
 
+    /// Return the struct level documentation if available.
     pub fn doc(&self) -> Option<&str> {
         match self {
             Self::Primitive(p) => p.doc(),
@@ -59,6 +71,7 @@ impl Type {
         }
     }
 
+    /// Return `true` if there is field level information of some kind to render.
     pub(super) fn has_body(&self) -> bool {
         match self {
             Self::Primitive(_) => false,
@@ -88,40 +101,11 @@ impl Type {
     }
 }
 
-impl From<Primitive> for Type {
-    fn from(primitive: Primitive) -> Self {
-        Self::Primitive(primitive)
-    }
-}
-
-impl From<Aggregate> for Type {
-    fn from(aggergate: Aggregate) -> Self {
-        Self::Aggregate(aggergate)
-    }
-}
-
-impl From<Enum> for Type {
-    fn from(e: Enum) -> Self {
-        Self::Enum(e)
-    }
-}
-
-impl From<Sequence> for Type {
-    fn from(s: Sequence) -> Self {
-        Self::Sequence(s)
-    }
-}
-
-impl From<Optional> for Type {
-    fn from(s: Optional) -> Self {
-        Self::Optional(s)
-    }
-}
-
 //-----------//
 // Primitive //
 //-----------//
 
+/// The native JSON representation for a primitive.
 #[derive(Debug, Clone, Copy)]
 pub enum PrimitiveKind {
     Null,
@@ -130,6 +114,7 @@ pub enum PrimitiveKind {
     String,
 }
 
+/// A primitive type that maps closely to a native JSON type.
 #[derive(Debug)]
 pub struct Primitive {
     kind: PrimitiveKind,
@@ -137,7 +122,7 @@ pub struct Primitive {
 }
 
 impl Primitive {
-    pub fn new(kind: PrimitiveKind, doc: Option<Doc>) -> Self {
+    pub(crate) fn new(kind: PrimitiveKind, doc: Option<Doc>) -> Self {
         Self { kind, doc }
     }
 
@@ -154,6 +139,7 @@ impl Primitive {
 // Aggregate //
 //-----------//
 
+/// A representation of aggregates like normal structs, unit structs, and tuple-like structs.
 #[derive(Debug)]
 pub struct Aggregate {
     fields: Fields,
@@ -161,7 +147,7 @@ pub struct Aggregate {
 }
 
 impl Aggregate {
-    pub fn new(fields: Fields, doc: Option<Doc>) -> Self {
+    pub(crate) fn new(fields: Fields, doc: Option<Doc>) -> Self {
         Self { fields, doc }
     }
 
@@ -178,11 +164,21 @@ impl Aggregate {
     }
 }
 
+/// Represent the fields of a struct.
 #[derive(Debug)]
 pub enum Fields {
+    /// Standard Rust structs.
     Named(Vec<NamedField>),
+
+    /// Tuple-like structs.
     Unnamed(Vec<UnnamedField>),
+
+    /// Tuple-like structs with a single named field.
+    ///
+    /// These are treated specially by `serde` and thus get their own variant.
     NewType(UnnamedField),
+
+    /// Unit structs.
     Unit,
 }
 
@@ -196,14 +192,17 @@ impl Fields {
         }
     }
 
+    /// Construct [`Fields::Named`] from the iterator.
     pub fn named(itr: impl IntoIterator<Item = NamedField>) -> Self {
         Self::Named(itr.into_iter().collect())
     }
 
+    /// Construct [`Fields::Unamed`] from the iterator.
     pub fn unnamed(itr: impl IntoIterator<Item = UnnamedField>) -> Self {
         Self::Unnamed(itr.into_iter().collect())
     }
 
+    /// Construct [`Fields::NewType`] from the iterator.
     pub fn newtype(field: UnnamedField) -> Self {
         Self::NewType(field)
     }
@@ -235,11 +234,13 @@ impl Fields {
         }
     }
 
+    /// Return `true` if `self` is [`Self::Unit`].
     pub(super) fn is_unit(&self) -> bool {
         matches!(self, Self::Unit)
     }
 }
 
+/// A struct field with a name.
 #[derive(Debug)]
 pub struct NamedField {
     name: &'static str,
@@ -248,6 +249,7 @@ pub struct NamedField {
 }
 
 impl NamedField {
+    /// Construct a new [`NamedField`] for `T`.
     pub fn new<T>(name: &'static str, doc: Option<Doc>) -> Self
     where
         T: Reflect,
@@ -272,6 +274,7 @@ impl NamedField {
     }
 }
 
+/// An unnamed field.
 #[derive(Debug)]
 pub struct UnnamedField {
     field: Reflection,
@@ -279,6 +282,7 @@ pub struct UnnamedField {
 }
 
 impl UnnamedField {
+    /// Construct a new [`UnnamedField`] for `T`.
     pub fn new<T>(doc: Option<Doc>) -> Self
     where
         T: Reflect,
@@ -302,6 +306,7 @@ impl UnnamedField {
 // Enum //
 //------//
 
+/// A representation for enums.
 #[derive(Debug)]
 pub struct Enum {
     repr: EnumRepr,
@@ -310,6 +315,7 @@ pub struct Enum {
 }
 
 impl Enum {
+    /// Construct a new [`Enum`].
     pub fn new(
         repr: EnumRepr,
         variants: impl IntoIterator<Item = Variant>,
@@ -339,6 +345,7 @@ impl Enum {
     }
 }
 
+/// Describe how an enum is being represented by `serde`.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EnumRepr {
@@ -381,6 +388,7 @@ pub enum EnumRepr {
     },
 }
 
+/// A variant of an [`Enum`].
 #[derive(Debug)]
 pub struct Variant {
     name: &'static str,
@@ -389,6 +397,7 @@ pub struct Variant {
 }
 
 impl Variant {
+    /// Construct a new [`Variant`].
     pub fn new(name: &'static str, fields: Fields, doc: Option<Doc>) -> Self {
         Self { name, fields, doc }
     }
@@ -410,6 +419,7 @@ impl Variant {
 // Sequence //
 //----------//
 
+/// A homogeneous sequence of values.
 #[derive(Debug)]
 pub struct Sequence {
     element: Reflection,
@@ -417,6 +427,7 @@ pub struct Sequence {
 }
 
 impl Sequence {
+    /// Create a new [`Sequence`] containing `T`.
     pub fn new<T>(doc: Option<Doc>) -> Self
     where
         T: Reflect,
@@ -440,6 +451,7 @@ impl Sequence {
 // Optional //
 //----------//
 
+/// An [`Option`].
 #[derive(Debug)]
 pub struct Optional {
     element: Reflection,

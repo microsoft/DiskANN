@@ -319,7 +319,7 @@ impl RenameOnce {
     }
 }
 
-/// Strategy for generting type-names.
+/// Strategy for generating type-names.
 #[derive(Default, Clone)]
 pub(crate) enum TypeName {
     #[default]
@@ -335,18 +335,28 @@ enum TypeNameKind {
 
 impl TypeName {
     fn set_unique(&mut self, kind: TypeNameKind, value: syn::LitStr) -> syn::Result<()> {
-        if !matches!(self, Self::None) {
-            Err(syn::Error::new_spanned(
-                value,
-                "reflect attribute `prefix` found multiple times",
-            ))
-        } else {
-            match kind {
-                TypeNameKind::Prefix => *self = Self::Prefix(value),
-                TypeNameKind::Rename => *self = Self::Rename(value),
+        let error = match (&*self, &kind) {
+            (Self::Prefix(_), TypeNameKind::Prefix) => {
+                Some("reflect attribute `prefix` found multiple times")
             }
-            Ok(())
+            (Self::Rename(_), TypeNameKind::Rename) => {
+                Some("reflect attribute `type_name` found multiple times")
+            }
+            (Self::Prefix(_), TypeNameKind::Rename) | (Self::Rename(_), TypeNameKind::Prefix) => {
+                Some("reflect attributes `prefix` and `type_name` are mutually exclusive")
+            }
+            (Self::None, _) => None,
+        };
+
+        if let Some(error) = error {
+            return Err(syn::Error::new_spanned(value, error));
         }
+
+        match kind {
+            TypeNameKind::Prefix => *self = Self::Prefix(value),
+            TypeNameKind::Rename => *self = Self::Rename(value),
+        }
+        Ok(())
     }
 }
 

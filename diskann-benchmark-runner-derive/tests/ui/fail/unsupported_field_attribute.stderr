@@ -1,0 +1,5 @@
+error: unsupported Serde attribute for Reflect
+  --> tests/ui/fail/unsupported_field_attribute.rs:10:13
+   |
+10 |     #[serde(default)]
+   |             ^^^^^^^

@@ -531,9 +531,11 @@ dependencies = [
 name = "diskann-benchmark-runner-derive"
 version = "0.59.0"
 dependencies = [
+ "diskann-benchmark-runner",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+ "trybuild",
 ]
 
 [[package]]

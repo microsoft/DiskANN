@@ -1,0 +1,5 @@
+error: reflect attribute `prefix` found multiple times
+ --> tests/ui/fail/duplicate_prefix.rs:9:38
+  |
+9 | #[reflect(prefix = "one::", prefix = "two::")]
+  |                                      ^^^^^^^
