@@ -292,7 +292,7 @@ where
 }
 
 /// An initializer argument for the closure provided to [`Matrix::from_fn`],
-/// [`Matrix::try_from_fn`], and [`Matrix::try_from_fn_with_layout`] to remove ambiguity of
+/// [`Matrix::try_from_fn`], and [`Matrix::from_fn_with_layout`] to remove ambiguity of
 /// the row and column being initialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RowCol {
