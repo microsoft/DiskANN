@@ -15,6 +15,10 @@
 //!
 //! Indices absent from an operand are implicit zeros.
 //!
+//! The kernels do not verify that `idx` is sorted and unique. Violating this yields
+//! incorrect results, not undefined behavior. Callers that cannot otherwise guarantee this
+//! invariant can check it with [`indices_sorted_unique`].
+//!
 //! # Kernels
 //!
 //! * **Inner product / cosine numerator** — intersection merge over the two sorted index
@@ -47,6 +51,13 @@ fn disjoint_ranges<Idx: Ord>(x_idx: &[Idx], y_idx: &[Idx]) -> bool {
         || y_idx.is_empty()
         || x_idx[x_idx.len() - 1] < y_idx[0]
         || y_idx[y_idx.len() - 1] < x_idx[0]
+}
+
+/// Returns `true` if `idx` is sorted ascending with no duplicates, as required by the
+/// kernels in this module. The kernels themselves do not perform this check.
+#[inline]
+pub fn indices_sorted_unique<Idx: Ord>(idx: &[Idx]) -> bool {
+    idx.is_sorted_by(|a, b| a < b)
 }
 
 /// Widen both f16 operands into a single f32 buffer (`x` then `y`) using the dispatched SIMD
@@ -445,6 +456,16 @@ mod test {
         let yvh = to_f16(&yv);
         assert_eq!(inner_product_f16(&xi, &xvh, &yi, &yvh).unwrap(), 0.0);
         assert_eq!(cosine_f16(&xi, &xvh, &yi, &yvh).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn indices_sorted_unique_detects_violations() {
+        let empty: [u16; 0] = [];
+        assert!(indices_sorted_unique(&empty));
+        assert!(indices_sorted_unique(&[1u16]));
+        assert!(indices_sorted_unique(&[1u16, 3, 4, 9]));
+        assert!(!indices_sorted_unique(&[1u16, 1]));
+        assert!(!indices_sorted_unique(&[3u16, 1, 4]));
     }
 
     // An empty (zero-norm) operand yields cosine 0 and L2 equal to the other operand's norm.
