@@ -20,9 +20,10 @@ mod double_hadamard;
 mod null;
 mod padding_hadamard;
 
-#[cfg(feature = "linalg")]
-#[cfg_attr(docsrc, doc(cfg(feature = "linalg")))]
 mod random_rotation;
+crate::utils::features! {
+    #![feature = "linalg"]
+}
 
 mod utils;
 
