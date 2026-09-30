@@ -57,6 +57,7 @@ impl<T: ?Sized> std::ops::Deref for DisplayWrapper<'_, T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "snake_case")]
+#[reflect(prefix = "simd::")]
 pub enum SimilarityMeasure {
     SquaredL2,
     InnerProduct,
@@ -81,6 +82,7 @@ impl std::fmt::Display for SimilarityMeasure {
 /// This enum selects the target micro-architecture's implementation to benchmark.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "kebab-case")]
+#[reflect(prefix = "simd::")]
 enum Arch {
     /// Target AVX-512 with additional VNNI and population-count instructions.
     ///
@@ -130,6 +132,7 @@ impl std::fmt::Display for Arch {
 /// Internal timers measure how long it takes to compute all distances from `query` to each
 /// data vector.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "simd::")]
 struct Run {
     /// The kernel type to test.
     distance: SimilarityMeasure,
@@ -145,6 +148,7 @@ struct Run {
 
 /// A full-precision SIMD Accelerated kernel.
 #[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "simd::")]
 pub struct SimdOp {
     /// The data type for the left-hand side.
     ///
@@ -246,6 +250,7 @@ impl Input for SimdOp {
 /// Each field specifies the maximum allowed relative increase in the corresponding metric.
 /// For example, a value of `0.10` means a 10% increase is tolerated.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "simd::")]
 struct SimdTolerance {
     min_time_regression: NonNegativeFinite,
 }

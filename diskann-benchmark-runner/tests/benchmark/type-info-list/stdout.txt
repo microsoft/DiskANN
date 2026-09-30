@@ -1,0 +1,9 @@
+All registered types:
+  Option<usize>
+  benchmark::DataType
+  benchmark::test::DimInput
+  benchmark::test::SampleInput
+  benchmark::test::TypeInputRaw
+  bool
+  string
+  usize

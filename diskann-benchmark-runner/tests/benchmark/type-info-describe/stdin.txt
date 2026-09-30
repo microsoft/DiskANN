@@ -1,0 +1,1 @@
+type-info benchmark::test::TypeInputRaw
