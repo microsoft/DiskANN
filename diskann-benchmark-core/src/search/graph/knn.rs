@@ -14,7 +14,10 @@ use diskann::{
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
-use diskann_utils::{future::AsyncFriendly, views::rowmajor::{self, Matrix}};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::{
     recall,
@@ -536,7 +539,11 @@ mod tests {
     fn test_knn_error() {
         let index = search::graph::test_grid_provider();
 
-        let queries = Arc::new(rowmajor::Owned::from_element(1, index.provider().dim(), 0.0f32));
+        let queries = Arc::new(rowmajor::Owned::from_element(
+            1,
+            index.provider().dim(),
+            0.0f32,
+        ));
         let strategy = provider::Strategy::new();
 
         let err = KNN::new(

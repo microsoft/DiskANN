@@ -10,7 +10,10 @@ use diskann::{
     graph::{self, glue},
     provider,
 };
-use diskann_utils::{future::AsyncFriendly, views::rowmajor::{self, Matrix}};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::build::{Build, ids::ToId};
 

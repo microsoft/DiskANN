@@ -12,7 +12,10 @@ use diskann_quantization::{
     alloc::{GlobalAllocator, Poly, ScopedAllocator},
     spherical::{SupportedMetric, iface},
 };
-use diskann_utils::{lazy_format, views::Matrix};
+use diskann_utils::{
+    lazy_format,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::distance::{Distance, DistanceProvider};
 use half::f16;
 use thiserror::Error;
@@ -38,7 +41,7 @@ pub struct Config {
     /// The underlying quantizer for the compressed store.
     quantizer: Poly<dyn iface::Quantizer>,
     /// The start points. These must have dimensions equal to `quantizer.full_dim()`.
-    start_points: Matrix<f32>,
+    start_points: rowmajor::Owned<f32>,
     layout: store::Layout,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
@@ -76,7 +79,7 @@ impl Config {
         quantizer: Poly<dyn iface::Quantizer>,
         capacity: Capacity,
         max_degree: MaxDegree,
-        start_points: Matrix<f32>,
+        start_points: rowmajor::Owned<f32>,
         rerank: Rerank,
     ) -> Result<Self, ConfigError> {
         let quantizer_dim = quantizer.full_dim();
@@ -332,7 +335,7 @@ impl Spherical {
         quantizer: Poly<dyn iface::Quantizer>,
         capacity: Capacity,
         max_degree: MaxDegree,
-        start_points: Matrix<f32>,
+        start_points: rowmajor::Owned<f32>,
         rerank: Rerank,
     ) -> Result<Config, ConfigError> {
         Config::new(quantizer, capacity, max_degree, start_points, rerank)
@@ -372,7 +375,7 @@ impl Spherical {
 
         // Initialize start points.
         let num_start_points = start_points.nrows();
-        for (i, row) in std::iter::zip(this.store.frozen(), start_points.row_iter()) {
+        for (i, row) in std::iter::zip(this.store.frozen(), start_points.rows()) {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -634,10 +637,12 @@ impl repr::internal::RawDistance for &dyn iface::DynDistanceComputer {
 
 #[cfg(test)]
 mod tests {
+    use diskann_utils::views::rowmajor::MatrixMut;
+
     use super::*;
 
     use diskann::{graph::test::synthetic::Grid, neighbor::Neighbor};
-    use diskann_utils::{assert_contains, views::MatrixView};
+    use diskann_utils::assert_contains;
     use hashbrown::HashMap;
 
     use crate::{
@@ -654,7 +659,7 @@ mod tests {
     }
 
     fn train_quantizer(
-        data: MatrixView<'_, f32>,
+        data: rowmajor::Ref<'_, f32>,
         metric: SupportedMetric,
         bits: Bits,
     ) -> Poly<dyn iface::Quantizer> {
@@ -716,7 +721,7 @@ mod tests {
 
         let quantizer = train_quantizer(data.as_view(), metric, bits);
 
-        let mut start_points = Matrix::from_element(2, data.ncols(), 0.0);
+        let mut start_points = rowmajor::Owned::from_element(2, data.ncols(), 0.0);
         start_points.row_mut(0).fill(-2.0);
         start_points.row_mut(1).fill(2.0);
 
@@ -737,7 +742,7 @@ mod tests {
         let mut reference = Reference::new(grid.dim().into());
 
         if fill {
-            for (i, row) in data.row_iter().enumerate() {
+            for (i, row) in data.rows().enumerate() {
                 let guard = repr::Set::set(&spherical, row).unwrap();
                 let id = repr::Guard::id(&guard);
 
@@ -747,7 +752,7 @@ mod tests {
         }
 
         // Insert frozen points.
-        for (slot, point) in spherical.store.frozen().zip(start_points.row_iter()) {
+        for (slot, point) in spherical.store.frozen().zip(start_points.rows()) {
             reference.insert(LogicalId(slot.into_usize()), SlotId(slot), point);
         }
 
@@ -1193,10 +1198,10 @@ mod tests {
 
     #[test]
     fn test_config_dim_mismatch() {
-        let data = Matrix::from_element(2, 5, 1.0f32);
+        let data = rowmajor::Owned::from_element(2, 5, 1.0f32);
         let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
 
-        let start_points = Matrix::from_element(1, 6, 0.0f32); // Wrong number of columns
+        let start_points = rowmajor::Owned::from_element(1, 6, 0.0f32); // Wrong number of columns
         let err = Spherical::config(
             quantizer,
             Capacity::new(10),
@@ -1215,10 +1220,10 @@ mod tests {
 
     #[test]
     fn test_empty_start_points() {
-        let data = Matrix::from_element(2, 5, 1.0f32);
+        let data = rowmajor::Owned::from_element(2, 5, 1.0f32);
         let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
 
-        let start_points = Matrix::from_element(0, 5, 0.0f32); // Empty
+        let start_points = rowmajor::Owned::from_element(0, 5, 0.0f32); // Empty
         let err = Spherical::config(
             quantizer,
             Capacity::new(10),
@@ -1234,10 +1239,10 @@ mod tests {
 
     #[test]
     fn test_build_error_uncompressible_query() {
-        let data = Matrix::from_element(2, 5, 1.0f32);
+        let data = rowmajor::Owned::from_element(2, 5, 1.0f32);
         let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
 
-        let start_points = Matrix::from_element(1, 5, f32::INFINITY); // Wrong number of columns
+        let start_points = rowmajor::Owned::from_element(1, 5, f32::INFINITY); // Wrong number of columns
         let config = Spherical::config(
             quantizer,
             Capacity::new(10),

@@ -10,7 +10,10 @@ use diskann::{
     graph::{self, ext::labeled, glue, search::AdaptiveL},
     provider,
 };
-use diskann_utils::{future::AsyncFriendly, views::rowmajor::{self, Matrix}};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::search::{self, Search, graph::KnnParams, graph::Strategy};
 
@@ -275,7 +278,11 @@ mod tests {
     #[test]
     fn test_inline_error() {
         let index = search::graph::test_grid_provider();
-        let queries = Arc::new(rowmajor::Owned::from_element(2, index.provider().dim(), 0.0f32));
+        let queries = Arc::new(rowmajor::Owned::from_element(
+            2,
+            index.provider().dim(),
+            0.0f32,
+        ));
 
         let labels: Arc<[_]> = (0..queries.nrows() + 1)
             .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })

@@ -11,7 +11,10 @@ use diskann::{
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
-use diskann_utils::{future::AsyncFriendly, views::rowmajor::{self, Matrix}};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::{
     recall,
@@ -332,7 +335,11 @@ mod tests {
     #[test]
     fn test_filtered_range_error() {
         let index = search::graph::test_grid_provider();
-        let queries = Arc::new(rowmajor::Owned::from_element(2, index.provider().dim(), 0.0f32));
+        let queries = Arc::new(rowmajor::Owned::from_element(
+            2,
+            index.provider().dim(),
+            0.0f32,
+        ));
 
         let labels: Arc<[_]> = (0..queries.nrows() + 1)
             .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })
