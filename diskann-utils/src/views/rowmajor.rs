@@ -6,7 +6,9 @@
 use std::{marker::PhantomData, mem::ManuallyDrop, num::NonZeroUsize, ptr::NonNull};
 
 #[cfg(feature = "rayon")]
-use rayon::prelude::{IndexedParallelIterator, ParallelIterator, ParallelSlice, ParallelSliceMut};
+use rayon::prelude::{
+    IndexedParallelIterator, IntoParallelIterator, ParallelIterator, ParallelSliceMut,
+};
 use thiserror::Error;
 
 pub mod iter;
@@ -38,7 +40,7 @@ use crate::{internal, Reborrow, ReborrowMut};
 ///   constructing the following slice is valid:
 ///
 ///   ```text
-///   unsafe { std::slice::from_raw_parts(self.as_ptr().cast_const(), layout.num_elements()) };
+///   unsafe { std::slice::from_raw_parts(data.as_ptr().cast_const(), layout.num_elements()) };
 ///   ```
 ///
 ///   In particular:
@@ -86,10 +88,9 @@ pub unsafe trait Matrix {
         let layout = self.layout();
         debug_assert!(row < layout.nrows());
 
-        // SAFETY: We're allowed to assume the entire span described the the pointer and
-        // layout is valid. This extracts a portion of that span.
-        //
-        // The lifetime is tied to the borrow `self`, so prevents modifications to `self`.
+        // SAFETY: The caller guarantees that `row` is in-bounds. The validated layout
+        // therefore places this row entirely within the initialized span required by the
+        // `Matrix` invariant. The returned lifetime is tied to the borrow of `self`.
         unsafe {
             std::slice::from_raw_parts(self.as_ptr().add(layout.ncols() * row), layout.ncols())
         }
@@ -102,7 +103,8 @@ pub unsafe trait Matrix {
 
     /// Return the underlying data as a slice.
     fn as_slice(&self) -> &[Self::Element] {
-        // SAFETY: Required by the implementors of `Matrix`.
+        // SAFETY: The `Matrix` invariant requires this pointer and length to describe a
+        // properly aligned, initialized span that remains immutable for this borrow.
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.layout().num_elements()) }
     }
 
@@ -151,10 +153,9 @@ pub unsafe trait Matrix {
         debug_assert!(row < layout.nrows());
         debug_assert!(col < layout.ncols());
 
-        // SAFETY: We're allowed to assume the entire span described the the pointer and
-        // layout is valid. This extracts one element of that span.
-        //
-        // The lifetime is tied to the borrow `self`, so prevents modifications to `self`.
+        // SAFETY: The caller guarantees that both indices are in-bounds, so the validated
+        // layout places this element within the initialized span required by the `Matrix`
+        // invariant. The returned lifetime is tied to the borrow of `self`.
         unsafe { &*self.as_ptr().add(row * layout.ncols() + col) }
     }
 
@@ -207,11 +208,13 @@ pub unsafe trait Matrix {
         }
 
         let ncols = self.ncols();
-        // SAFETY: Both bounds are within the matrix, so the offset is within or one past
-        // the allocation. The parent layout guarantees that the multiplication fits.
+        // SAFETY: `rows.start <= self.nrows()`, so the validated parent layout makes the
+        // offset representable and places it within or one past the matrix span. Pointer
+        // arithmetic within that span preserves non-nullness.
         let ptr =
             unsafe { NonNull::new_unchecked(self.as_ptr().add(rows.start * ncols).cast_mut()) };
-        // SAFETY: The selected row count cannot exceed the validated parent layout.
+        // SAFETY: The selected rows are a subset of the validated parent layout, with the
+        // same column count.
         let layout = unsafe { Layout::new_unchecked(rows.end - rows.start, ncols) };
         Some(Ref {
             ptr,
@@ -234,8 +237,8 @@ pub unsafe trait Matrix {
     where
         Self::Element: Clone,
     {
-        // Safety: `self.layout()` is already validated and by the trait requirements,
-        // `self.as_slice()` is required to be exactly `self.layout().len()`.
+        // SAFETY: The `Matrix` invariant makes `self.as_slice().len()` equal to
+        // `self.layout().num_elements()`.
         unsafe { Owned::from_data_unchecked(self.as_slice().into(), self.layout()) }
     }
 
@@ -249,9 +252,8 @@ pub unsafe trait Matrix {
         let layout = self.layout().rebind::<R>()?;
         let data: Box<[_]> = self.as_slice().iter().map(f).collect();
 
-        // SAFETY: The trait requirements require `self.as_slice().len()` to be equal
-        // to `self.layout.len()` and `layout` haws been validated for the destination
-        // type.
+        // SAFETY: Mapping preserves the element count, and `layout` is the source layout
+        // validated for the destination element type.
         Ok(unsafe { Owned::from_data_unchecked(data, layout) })
     }
 
@@ -279,7 +281,7 @@ pub unsafe trait Matrix {
         Self::Element: Clone,
     {
         Owned::from_fn_with_layout(self.layout().transpose(), |RowCol { row, col }| {
-            // SAFETY: By contruction, `col < self.nrows()` and `row < self.ncols()`.
+            // SAFETY: By construction, `col < self.nrows()` and `row < self.ncols()`.
             unsafe { self.element_unchecked(col, row).clone() }
         })
     }
@@ -290,11 +292,16 @@ pub unsafe trait Matrix {
 
     /// Return a parallel iterator over the rows of the matrix.
     #[cfg(feature = "rayon")]
-    fn par_row_iter(&self) -> impl IndexedParallelIterator<Item = &[Self::Element]>
+    fn par_rows(&self) -> impl IndexedParallelIterator<Item = &[Self::Element]>
     where
         Self::Element: Sync,
     {
-        self.as_slice().par_chunks_exact(self.ncols())
+        let r = self.as_view();
+
+        (0..r.nrows()).into_par_iter().map(move |row| {
+            // SAFETY: `row` comes from `0..r.nrows()`.
+            unsafe { r.into_row_unchecked(row) }
+        })
     }
 
     /// Return a parallel iterator that divides the matrix into sub-matrices with (up to)
@@ -318,15 +325,16 @@ pub unsafe trait Matrix {
         Self::Element: Sync,
     {
         assert!(batchsize != 0, "par_window_iter batchsize cannot be zero");
-        let ncols = self.ncols();
-        self.as_slice()
-            .par_chunks(ncols * batchsize)
-            .map(move |data| {
-                let blobsize = data.len();
-                let nrows = blobsize / ncols;
-                assert_eq!(blobsize % ncols, 0);
 
-                unsafe { Ref::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols)) }
+        let r = self.as_view();
+        (0..r.nrows())
+            .into_par_iter()
+            .step_by(batchsize)
+            .map(move |start| {
+                let end = start.saturating_add(batchsize).min(r.nrows());
+
+                // SAFETY: `start` comes from `0..nrows` and `end` is clamped to `nrows`.
+                unsafe { r.into_subview_unchecked(start..end) }
             })
     }
 }
@@ -361,6 +369,10 @@ pub unsafe trait MatrixMut: Matrix {
         let layout = self.layout();
 
         debug_assert!(row < layout.nrows());
+
+        // SAFETY: The caller guarantees that `row` is in-bounds. The validated layout
+        // therefore places this row within the initialized span, and the `MatrixMut`
+        // invariant grants exclusive access for the returned borrow.
         unsafe {
             std::slice::from_raw_parts_mut(
                 self.as_mut_ptr().add(layout.ncols() * row),
@@ -376,6 +388,8 @@ pub unsafe trait MatrixMut: Matrix {
 
     /// Return the underlying data as a mutable slice.
     fn as_mut_slice(&mut self) -> &mut [Self::Element] {
+        // SAFETY: The `MatrixMut` invariant requires this pointer and length to describe
+        // the initialized matrix span and grants exclusive access for this mutable borrow.
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.layout().num_elements()) }
     }
 
@@ -424,6 +438,9 @@ pub unsafe trait MatrixMut: Matrix {
         debug_assert!(row < layout.nrows());
         debug_assert!(col < layout.ncols());
 
+        // SAFETY: The caller guarantees that both indices are in-bounds, so the validated
+        // layout places this element within the initialized matrix span. The `MatrixMut`
+        // invariant grants exclusive access for the returned borrow.
         unsafe { &mut *self.as_mut_ptr().add(row * layout.ncols() + col) }
     }
 
@@ -474,13 +491,21 @@ pub unsafe trait MatrixMut: Matrix {
     //-------//
 
     /// Return a parallel iterator over the rows of the matrix.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.ncols() == 0 && self.nrows() != 0`.
     #[cfg(feature = "rayon")]
-    fn par_row_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [Self::Element]>
+    fn par_rows_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [Self::Element]>
     where
         Self::Element: Send,
     {
         let ncols = self.ncols();
-        self.as_mut_slice().par_chunks_exact_mut(ncols)
+        assert!(
+            ncols != 0 || self.nrows() == 0,
+            "`MatrixMut::par_rows_mut` does not support matrices with rows and zero columns"
+        );
+        self.as_mut_slice().par_chunks_exact_mut(ncols.max(1))
     }
 
     /// Return a parallel iterator that divides the matrix into mutable sub-matrices with
@@ -494,7 +519,7 @@ pub unsafe trait MatrixMut: Matrix {
     ///
     /// # Panics
     ///
-    /// Panics if `batchsize = 0`.
+    /// Panics if `batchsize = 0` or `self.ncols() == 0 && self.nrows() != 0`.
     #[cfg(feature = "rayon")]
     fn par_window_iter_mut(
         &mut self,
@@ -507,14 +532,30 @@ pub unsafe trait MatrixMut: Matrix {
             batchsize != 0,
             "par_window_iter_mut batchsize cannot be zero"
         );
+
         let ncols = self.ncols();
+        assert!(
+            ncols != 0 || self.nrows() == 0,
+            "`MatrixMut::par_window_iter_mut` does not support matrices with rows and zero columns"
+        );
+
+        // Ensure that `batchsize * ncols` does not overflow.
+        let batchsize = batchsize.min(self.nrows());
         self.as_mut_slice()
-            .par_chunks_mut(ncols * batchsize)
+            .par_chunks_mut((ncols * batchsize).max(1))
             .map(move |data| {
                 let blobsize = data.len();
                 let nrows = blobsize / ncols;
                 assert_eq!(blobsize % ncols, 0);
 
+                // SAFETY:
+                //
+                // * `Layout::new_unchecked` is safe because `ncols` is the parent column
+                //   count and `nrows <= self.nrows()`, so this layout cannot exceed the
+                //   validated parent layout.
+                //
+                // * `Mut::from_data_unchecked` is safe because by construction,
+                //   `data.len() == ncols * nrows`.
                 unsafe { Mut::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols)) }
             })
     }
@@ -524,7 +565,7 @@ pub unsafe trait MatrixMut: Matrix {
 // Matrix Layout //
 ///////////////////
 
-/// A validated layout for [`MatrixBase`].
+/// A validated layout for [`Matrix`] or [`MatrixMut`].
 ///
 /// This type guarantees the following invariants:
 ///
@@ -592,9 +633,8 @@ impl<T> Layout<T> {
             // This branch is mainly to communicate to the compiler situations where an
             // erroring branch can be avoided.
             //
-            // SAFETY: `self` already has a validated layout. Since we know
-            // `self.nrows() * self.ncols()` cannot overflow, the only danger is allocation
-            // overflow. If we are staying or decreasing size, no need to revalidate.
+            // SAFETY: `self` is validated, and rebinding to an equally sized or smaller
+            // element type cannot increase its byte span.
             Ok(unsafe { Layout::new_unchecked(self.nrows(), self.ncols()) })
         } else {
             Layout::new(self.nrows(), self.ncols())
@@ -603,9 +643,8 @@ impl<T> Layout<T> {
 
     /// Swap the rows and columns.
     pub fn transpose(&self) -> Layout<T> {
-        // SAFETY: We've already validated the relationship between `self.nrows` and
-        // `self.ncols`. Since multiplication is commutative, swapping rows and cols does
-        // not invalidate the relationship.
+        // SAFETY: Swapping the dimensions preserves both the element count and byte span
+        // of this validated layout.
         unsafe { Layout::new_unchecked(self.ncols, self.nrows) }
     }
 }
@@ -718,6 +757,7 @@ macro_rules! constructors {
 
             let len = data.len();
             if len == layout.num_elements() {
+                // SAFETY: We've checked that `data.len() == layout.num_elements()`.
                 Ok(unsafe { Self::from_data_unchecked(data, layout) })
             } else {
                 Err(TryFromError::mismatch(
@@ -731,13 +771,21 @@ macro_rules! constructors {
 
         /// Construct a row vector directly from `data`.
         pub fn row_vector(data: $data) -> Self {
+            // SAFETY: An existing slice's byte span cannot exceed `isize::MAX`, and
+            // `1 * data.len()` cannot overflow.
             let layout = unsafe { Layout::new_unchecked(1, data.len()) };
+
+            // SAFETY: By construction, `data.len() == layout.num_elements()`.
             unsafe { Self::from_data_unchecked(data, layout) }
         }
 
         /// Construct a column vector directly from `data`.
         pub fn column_vector(data: $data) -> Self {
+            // SAFETY: An existing slice's byte span cannot exceed `isize::MAX`, and
+            // `data.len() * 1` cannot overflow.
             let layout = unsafe { Layout::new_unchecked(data.len(), 1) };
+
+            // SAFETY: By construction, `data.len() == layout.num_elements()`.
             unsafe { Self::from_data_unchecked(data, layout) }
         }
     };
@@ -910,6 +958,7 @@ impl<T> Owned<T> {
             })
             .collect();
 
+        // SAFETY: We constructed `data` to have length exactly `layout.num_elements()`.
         unsafe { Self::from_data_unchecked(data, layout) }
     }
 
@@ -921,6 +970,8 @@ impl<T> Owned<T> {
         T: Clone,
     {
         let data: Box<[T]> = std::iter::repeat_n(element, layout.num_elements()).collect();
+
+        // SAFETY: We constructed `data` to have length exactly `layout.num_elements()`.
         unsafe { Self::from_data_unchecked(data, layout) }
     }
 
@@ -949,15 +1000,22 @@ impl<T> Owned<T> {
     /// ```
     pub fn into_inner(self) -> Box<[T]> {
         let me = ManuallyDrop::new(self);
+
+        // SAFETY: `me.ptr` came from exactly one `Box<[T]>` of this length. Suppressing
+        // `Owned::drop` transfers that allocation back to the reconstructed box.
         unsafe { internal::nonnull_to_box(me.ptr, me.layout.num_elements()) }
     }
 }
 
+// SAFETY: `Owned<T>` has the ownership semantics of `Box<[T]>`, which is `Send` when `T` is.
 unsafe impl<T> Send for Owned<T> where T: Send {}
+// SAFETY: Shared access to `Owned<T>` exposes only shared access to `T`.
 unsafe impl<T> Sync for Owned<T> where T: Sync {}
 
 impl<T> Drop for Owned<T> {
     fn drop(&mut self) {
+        // SAFETY: `self.ptr` came from exactly one `Box<[T]>` of this length, and `drop`
+        // is the unique place that reconstructs it.
         let _ = unsafe { internal::nonnull_to_box(self.ptr, self.layout.num_elements()) };
     }
 }
@@ -967,15 +1025,12 @@ where
     T: Clone,
 {
     fn clone(&self) -> Self {
-        Self {
-            ptr: unsafe {
-                NonNull::new_unchecked(Box::<[T]>::into_raw(self.as_slice().into()).cast())
-            },
-            layout: self.layout,
-        }
+        // SAFETY: The constructed boxed slice has length exactly `self.layout.num_elements()`.
+        unsafe { Owned::from_data_unchecked(self.as_slice().into(), self.layout()) }
     }
 }
 
+// SAFETY: `Owned` keeps a stable pointer and layout to its initialized boxed slice.
 unsafe impl<T> Matrix for Owned<T> {
     type Element = T;
 
@@ -988,6 +1043,7 @@ unsafe impl<T> Matrix for Owned<T> {
     }
 }
 
+// SAFETY: A mutable borrow of `Owned` has exclusive access to its boxed slice.
 unsafe impl<T> MatrixMut for Owned<T> {}
 
 impl<T> PartialEq for Owned<T>
@@ -1025,7 +1081,10 @@ pub struct Ref<'a, T> {
     _lifetime: PhantomData<&'a [T]>,
 }
 
+// SAFETY: `Ref<'_, T>` has the ownership semantics of `&[T]`, which is `Send` when `T` is
+// `Sync`.
 unsafe impl<T> Send for Ref<'_, T> where T: Sync {}
+// SAFETY: `Ref<'_, T>` exposes only shared access to `T`.
 unsafe impl<T> Sync for Ref<'_, T> where T: Sync {}
 
 impl<'a, T> Ref<'a, T> {
@@ -1047,7 +1106,44 @@ impl<'a, T> Ref<'a, T> {
     ///
     /// Unlike [`Matrix::as_slice`], the returned slices inherits the lifetime of the [`Ref`].
     pub fn into_slice(self) -> &'a [T] {
+        // SAFETY: `Ref` represents a valid `&'a [T]` of exactly this length.
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.layout().num_elements()) }
+    }
+
+    /// Get the indicated `row` with the lifetime `'a`.
+    ///
+    /// # Safety
+    ///
+    /// `row < self.nrows()`.
+    unsafe fn into_row_unchecked(self, row: usize) -> &'a [T] {
+        let layout = self.layout();
+        debug_assert!(row < layout.nrows());
+
+        // SAFETY: The caller guarantees that `row` is in-bounds, so the validated layout
+        // places this row within the `&'a [T]` represented by `self`.
+        unsafe {
+            std::slice::from_raw_parts(self.as_ptr().add(layout.ncols() * row), layout.ncols())
+        }
+    }
+
+    /// Return a `Ref` containing the indicated rows with the lifetime `'a`.
+    ///
+    /// # Safety
+    ///
+    /// `rows.start <= rows.end` and `rows.end <= self.nrows()`.
+    unsafe fn into_subview_unchecked(self, rows: std::ops::Range<usize>) -> Ref<'a, T> {
+        debug_assert!(rows.start <= rows.end);
+        debug_assert!(rows.end <= self.nrows());
+
+        let ncols = self.ncols();
+        Self {
+            // SAFETY: The validated range starts within or one past the matrix span, and
+            // the parent layout guarantees that the offset is representable.
+            ptr: unsafe { self.ptr.add(rows.start * ncols) },
+            // SAFETY: This layout is no larger than `self`'s layout.
+            layout: unsafe { Layout::new_unchecked(rows.end - rows.start, ncols) },
+            _lifetime: PhantomData,
+        }
     }
 }
 
@@ -1059,6 +1155,7 @@ impl<T> Clone for Ref<'_, T> {
 
 impl<T> Copy for Ref<'_, T> {}
 
+// SAFETY: `Ref` keeps a stable pointer and layout to the initialized slice it borrows.
 unsafe impl<T> Matrix for Ref<'_, T> {
     type Element = T;
 
@@ -1099,7 +1196,10 @@ pub struct Mut<'a, T> {
     _lifetime: PhantomData<&'a mut [T]>,
 }
 
+// SAFETY: `Mut<'_, T>` has the ownership semantics of `&mut [T]`, which is `Send` when
+// `T` is `Send`.
 unsafe impl<T> Send for Mut<'_, T> where T: Send {}
+// SAFETY: Shared access to `Mut<'_, T>` exposes only shared access to `T`.
 unsafe impl<T> Sync for Mut<'_, T> where T: Sync {}
 
 impl<'a, T> Mut<'a, T> {
@@ -1125,6 +1225,7 @@ impl<'a, T> Mut<'a, T> {
     }
 }
 
+// SAFETY: `Mut` keeps a stable pointer and layout to the initialized slice it borrows.
 unsafe impl<T> Matrix for Mut<'_, T> {
     type Element = T;
 
@@ -1137,6 +1238,7 @@ unsafe impl<T> Matrix for Mut<'_, T> {
     }
 }
 
+// SAFETY: A mutable borrow of `Mut` has exclusive access to its borrowed slice.
 unsafe impl<T> MatrixMut for Mut<'_, T> {}
 
 impl<T> PartialEq for Mut<'_, T>
@@ -1489,7 +1591,7 @@ mod tests {
 
         // par-row-iter
         let seen_rows: Box<[usize]> = m
-            .par_row_iter()
+            .par_rows()
             .enumerate()
             .map(|(i, row)| {
                 let expected: Box<[usize]> = (0..m.ncols()).map(|j| j + i).collect();
@@ -2264,17 +2366,17 @@ mod tests {
         assert_eq!(windows[0].nrows(), 4);
         assert_eq!(windows[0].ncols(), 3);
 
-        // Test par_row_iter
-        let rows: Vec<_> = m.par_row_iter().collect();
+        // Test par_rows
+        let rows: Vec<_> = m.par_rows().collect();
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0], &[0, 1, 2]);
         assert_eq!(rows[3], &[3, 4, 5]);
 
-        // Test par_window_iter_mut and par_row_iter_mut
+        // Test par_window_iter_mut and par_rows_mut
         let mut m2 = Owned::from_element(4, 3, 0);
 
-        // Use par_row_iter_mut to set values
-        m2.par_row_iter_mut().enumerate().for_each(|(i, row)| {
+        // Use par_rows_mut to set values
+        m2.par_rows_mut().enumerate().for_each(|(i, row)| {
             for (j, elem) in row.iter_mut().enumerate() {
                 *elem = i + j;
             }
@@ -2536,7 +2638,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "rayon")]
-    fn test_par_row_iter_comprehensive() {
+    fn test_par_rows_comprehensive() {
         use rayon::prelude::*;
 
         // Create test matrix with predictable pattern
@@ -2545,8 +2647,8 @@ mod tests {
         let data: Vec<i32> = (0..(nrows * ncols) as i32).collect();
         let m = Ref::try_from_data(data.as_slice(), nrows, ncols).unwrap();
 
-        // Test that par_row_iter preserves order and data
-        let collected_rows: Vec<Vec<i32>> = m.par_row_iter().map(|row| row.to_vec()).collect();
+        // Test that par_rows preserves order and data
+        let collected_rows: Vec<Vec<i32>> = m.par_rows().map(|row| row.to_vec()).collect();
 
         assert_eq!(collected_rows.len(), nrows);
 
@@ -2560,7 +2662,7 @@ mod tests {
 
         // Test parallel enumeration
         let enumerated_rows: Vec<(usize, Vec<i32>)> = m
-            .par_row_iter()
+            .par_rows()
             .enumerate()
             .map(|(idx, row)| (idx, row.to_vec()))
             .collect();
@@ -2576,7 +2678,7 @@ mod tests {
         }
 
         // Test parallel reduction operations
-        let sum: i32 = m.par_row_iter().map(|row| row.iter().sum::<i32>()).sum();
+        let sum: i32 = m.par_rows().map(|row| row.iter().sum::<i32>()).sum();
 
         let expected_sum: i32 = data.iter().sum();
         assert_eq!(sum, expected_sum);
@@ -2584,7 +2686,7 @@ mod tests {
         // Test parallel find operations
         let target_row = 3;
         let found_row = m
-            .par_row_iter()
+            .par_rows()
             .enumerate()
             .find_any(|(idx, _)| *idx == target_row)
             .map(|(_, row)| row.to_vec());
@@ -2598,7 +2700,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "rayon")]
-    fn test_par_row_iter_mut_comprehensive() {
+    fn test_par_rows_mut_comprehensive() {
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2607,7 +2709,7 @@ mod tests {
         let mut m = Owned::from_element(nrows, ncols, 0u32);
 
         // Test parallel modification
-        m.par_row_iter_mut().enumerate().for_each(|(row_idx, row)| {
+        m.par_rows_mut().enumerate().for_each(|(row_idx, row)| {
             for (col_idx, elem) in row.iter_mut().enumerate() {
                 *elem = (row_idx * ncols + col_idx) as u32;
             }
@@ -2623,7 +2725,7 @@ mod tests {
 
         // Test parallel accumulation with atomic counter
         let counter = AtomicUsize::new(0);
-        m.par_row_iter_mut().for_each(|row| {
+        m.par_rows_mut().for_each(|row| {
             counter.fetch_add(1, Ordering::Relaxed);
             // Multiply each element by 2
             for elem in row {
@@ -2662,7 +2764,7 @@ mod tests {
         assert_eq!(windows[0].nrows(), 1);
         assert_eq!(windows[0].ncols(), 5);
 
-        let rows: Vec<_> = single_row.par_row_iter().collect();
+        let rows: Vec<_> = single_row.par_rows().collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0], &[1, 2, 3, 4, 5]);
 
@@ -2676,7 +2778,7 @@ mod tests {
         assert_eq!(windows[1].nrows(), 2);
         assert_eq!(windows[2].nrows(), 1); // Last window has remainder
 
-        let rows: Vec<_> = single_col.par_row_iter().collect();
+        let rows: Vec<_> = single_col.par_rows().collect();
         assert_eq!(rows.len(), 5);
         for (i, row) in rows.iter().enumerate() {
             assert_eq!(row, &[i + 1]);
@@ -2690,7 +2792,7 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert_eq!(*windows[0].element(0, 0), 42);
 
-        let rows: Vec<_> = tiny.par_row_iter().collect();
+        let rows: Vec<_> = tiny.par_rows().collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0], &[42]);
     }
@@ -2822,7 +2924,7 @@ mod tests {
 
         // This should compile because u64 is Sync
         let _: Vec<_> = m.par_window_iter(2).collect();
-        let _: Vec<_> = m.par_row_iter().collect();
+        let _: Vec<_> = m.par_rows().collect();
 
         // Test with mutable matrix
         let mut m = Owned::from_element(4, 5, 0u64);
@@ -2836,7 +2938,7 @@ mod tests {
             });
         });
 
-        m.par_row_iter_mut().for_each(|row| {
+        m.par_rows_mut().for_each(|row| {
             for elem in row {
                 *elem += 1;
             }

@@ -421,9 +421,8 @@ mod imp {
 
             // Compress the data.
             #[expect(clippy::disallowed_methods)]
-            data.par_row_iter_mut()
-                .zip(input.par_row_iter())
-                .try_for_each(|(d, i)| -> anyhow::Result<()> {
+            data.par_rows_mut().zip(input.par_rows()).try_for_each(
+                |(d, i)| -> anyhow::Result<()> {
                     let c =
                         diskann_quantization::spherical::DataMut::<NBITS>::from_canonical_back_mut(
                             &mut d[..bytes],
@@ -433,7 +432,8 @@ mod imp {
                         .compress_into_with(i, c, ScopedAllocator::global())?;
                     progress.inc(1);
                     Ok(())
-                })?;
+                },
+            )?;
 
             Ok(Self { bytes, data, plan })
         }

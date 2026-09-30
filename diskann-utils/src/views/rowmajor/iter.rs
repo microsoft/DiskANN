@@ -32,24 +32,23 @@ impl<'a, T> Rows<'a, T> {
     }
 }
 
-// SAFETY: `Rows` is like `&[T]` - `Send` when `T` is `Sync`.
+// SAFETY: `Rows<'_, T>` owns a shared slice borrow, so sending it requires `T: Sync`.
 unsafe impl<T> Send for Rows<'_, T> where T: Sync {}
-// SAFETY: `Rows` is like `&[T]` - `Sync` when `T` is `Sync`.
+// SAFETY: Shared access to `Rows<'_, T>` exposes only shared access to `T`.
 unsafe impl<T> Sync for Rows<'_, T> where T: Sync {}
 
 impl<'a, T> Iterator for Rows<'a, T> {
     type Item = &'a [T];
     fn next(&mut self) -> Option<&'a [T]> {
         self.remaining.checked_sub(1).map(|remaining| {
-            // SAFETY: `Rows` is always constructed from a valid `Ref`. Since we always
-            // give out `ncols` items at a time, if there are rows remaining, it is safe to
-            // construct this slice.
+            // SAFETY: Construction from a valid `Ref` guarantees that each remaining row
+            // contains `ncols` initialized elements beginning at `self.ptr`.
             let item =
                 unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast_const(), self.ncols) };
             self.remaining = remaining;
 
-            // SAFETY: Same logic as above. Since we hand out one row at a time, it is safe
-            // to advance the base pointer by `ncols` as long as there are rows remaining.
+            // SAFETY: Advancing by one row remains within or one past the original matrix
+            // span. The validated parent layout guarantees that the offset is representable.
             self.ptr = unsafe { self.ptr.add(self.ncols) };
             item
         })
@@ -88,15 +87,24 @@ impl<'a, T> RowsMut<'a, T> {
     }
 }
 
+// SAFETY: `RowsMut<'_, T>` owns an exclusive slice borrow, so sending it requires `T: Send`.
 unsafe impl<T> Send for RowsMut<'_, T> where T: Send {}
+// SAFETY: Shared access to `RowsMut<'_, T>` exposes only shared access to `T`.
 unsafe impl<T> Sync for RowsMut<'_, T> where T: Sync {}
 
 impl<'a, T> Iterator for RowsMut<'a, T> {
     type Item = &'a mut [T];
     fn next(&mut self) -> Option<&'a mut [T]> {
         self.remaining.checked_sub(1).map(|remaining| {
+            // SAFETY: Construction from a valid `Mut` guarantees that each remaining row
+            // contains `ncols` initialized elements beginning at `self.ptr`. Advancing the
+            // pointer after every yield makes nonempty returned rows disjoint; zero-length
+            // rows do not access memory and may share an address.
             let item = unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.ncols) };
             self.remaining = remaining;
+
+            // SAFETY: Advancing by one row remains within or one past the original matrix
+            // span. The validated parent layout guarantees that the offset is representable.
             self.ptr = unsafe { self.ptr.add(self.ncols) };
             item
         })
@@ -137,7 +145,9 @@ impl<'a, T> Windows<'a, T> {
     }
 }
 
+// SAFETY: `Windows<'_, T>` owns a shared slice borrow, so sending it requires `T: Sync`.
 unsafe impl<T> Send for Windows<'_, T> where T: Sync {}
+// SAFETY: Shared access to `Windows<'_, T>` exposes only shared access to `T`.
 unsafe impl<T> Sync for Windows<'_, T> where T: Sync {}
 
 impl<'a, T> Iterator for Windows<'a, T> {
@@ -149,6 +159,9 @@ impl<'a, T> Iterator for Windows<'a, T> {
             let next_remaining = self.remaining.saturating_sub(self.batchsize.get());
             let nrows = self.remaining - next_remaining;
 
+            // SAFETY: `self.ptr` starts the remaining suffix of a valid `Ref`, and `nrows`
+            // does not exceed that suffix. Keeping the parent's column count therefore
+            // produces a valid subview and a layout no larger than the parent layout.
             let window = unsafe {
                 Ref {
                     ptr: self.ptr,
@@ -157,9 +170,11 @@ impl<'a, T> Iterator for Windows<'a, T> {
                 }
             };
 
+            // SAFETY: Advancing by the yielded window remains within or one past the
+            // original matrix span. The validated parent layout guarantees that the
+            // multiplication and pointer offset are representable.
             self.ptr = unsafe { self.ptr.add(nrows * self.ncols) };
             self.remaining = next_remaining;
-
             Some(window)
         }
     }

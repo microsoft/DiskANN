@@ -5,9 +5,6 @@
 
 pub mod rowmajor;
 
-/// Various view types (types such as [`MatrixView`] that add semantic meaning to blobs
-/// of data) need both immutable and mutable variants.
-///
 /// This trait can be implemented by wrappers for immutable and mutable slice references,
 /// allowing for a common code path for immutable and mutable view types.
 ///
@@ -27,7 +24,7 @@ pub unsafe trait DenseData {
     fn as_slice(&self) -> &[Self::Elem];
 }
 
-/// A mutable companion to `DenseData`.
+/// A mutable companion to [`DenseData`].
 ///
 /// This trait allows mutable methods on view types to be selectively enabled when data
 /// underlying the type is mutable.

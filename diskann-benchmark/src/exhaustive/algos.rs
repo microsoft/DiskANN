@@ -68,8 +68,8 @@ where
     // this in a properly sized Rayon environment.
     #[expect(clippy::disallowed_methods)]
     let times: Vec<Times> = output
-        .par_row_iter_mut()
-        .zip(queries.par_row_iter())
+        .par_rows_mut()
+        .zip(queries.par_rows())
         .map(|(o, q)| -> anyhow::Result<Times> {
             let mut queue = NeighborPriorityQueue::<u32>::new(results_per_query);
 

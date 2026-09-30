@@ -259,7 +259,7 @@ where
         };
 
         let zipped = queries
-            .par_row_iter()
+            .par_rows()
             .zip(vector_filters.par_iter())
             .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
             .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))

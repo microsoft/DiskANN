@@ -1944,7 +1944,7 @@ mod disk_provider_tests {
 
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
         queries
-            .par_row_iter()
+            .par_rows()
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let mut query_stats = QueryStatistics::default();
@@ -2022,7 +2022,7 @@ mod disk_provider_tests {
             load_query_result(params.storage_provider, params.truth_result_file_path);
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
         queries
-            .par_row_iter()
+            .par_rows()
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
