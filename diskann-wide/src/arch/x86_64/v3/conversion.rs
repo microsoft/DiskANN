@@ -6,7 +6,9 @@
 // x86 intrinsics
 use std::arch::x86_64::*;
 
-use super::{f16x8, f16x16, f32x8, f32x16, i8x16, i16x8, i16x16, i32x8, u8x16, u32x8};
+use super::{
+    f16x8, f16x16, f32x8, f32x16, i8x16, i8x32, i16x8, i16x16, i32x8, u8x16, u8x32, u32x8,
+};
 use crate::{LoHi, SIMDCast, SIMDReinterpret, SplitJoin, helpers};
 
 /////////////////
@@ -100,6 +102,18 @@ impl SIMDReinterpret<i16x16> for u32x8 {
     }
 }
 
+impl SIMDReinterpret<u8x32> for u32x8 {
+    fn reinterpret_simd(self) -> u8x32 {
+        u8x32(self.0)
+    }
+}
+
+impl SIMDReinterpret<i8x32> for u32x8 {
+    fn reinterpret_simd(self) -> i8x32 {
+        i8x32(self.0)
+    }
+}
+
 impl SIMDReinterpret<u8x16> for i16x8 {
     fn reinterpret_simd(self) -> u8x16 {
         u8x16(self.0)
@@ -120,6 +134,22 @@ impl SIMDReinterpret<i16x8> for u8x16 {
 mod test_x86_conversions {
     use super::*;
     use crate::{arch::x86_64::V3, test_utils};
+
+    test_utils::ops::test_reinterpret!(
+        u32x8 => i16x16, 0x763582a914ec0bfd, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x8 => u8x32, 0x69b42dafe0917358, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x8 => i8x32, 0x69b42dafe0917358, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        i16x8 => u8x16, 0x4b96d02e85f713ca, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u8x16 => i16x8, 0xd5302e6b194a87fc, V3::new_checked_uncached()
+    );
 
     // Lossless Conversions
     #[cfg(not(miri))]
