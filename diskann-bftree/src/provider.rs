@@ -38,7 +38,7 @@ use diskann::{
 use diskann_utils::{
     future::{AsyncFriendly, SendFuture},
     lazy_format,
-    views::MatrixView,
+    views::rowmajor::{self, Matrix},
 };
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 
@@ -98,7 +98,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// };
 /// use diskann_bftree::NoStore;
 /// use diskann_vector::distance::Metric;
-/// use diskann_utils::views::Matrix;
+/// use diskann_utils::views::rowmajor::{Owned, Matrix};
 /// use bf_tree::Config;
 /// use std::num::NonZeroUsize;
 ///
@@ -116,7 +116,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
-/// let start_points = Matrix::from_element(1, 4, 0.0f32);
+/// let start_points = Owned::from_element(1, 4, 0.0f32);
 /// let provider = BfTreeProvider::<f32, _>::new(
 ///     parameters,
 ///     start_points.as_view(),
@@ -135,7 +135,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 ///     algorithms::TransformKind,
 ///     spherical::{SphericalQuantizer, SupportedMetric, PreScale},
 /// };
-/// use diskann_utils::views::Matrix;
+/// use diskann_utils::views::rowmajor::{Owned, Matrix};
 /// use diskann_bftree::provider::{
 ///     BfTreeProvider, BfTreeProviderParameters
 /// };
@@ -146,7 +146,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// use rand::SeedableRng;
 ///
 /// let dim = 4;
-/// let data = Matrix::from_element(4, dim, 1.0f32);
+/// let data = Owned::from_element(4, dim, 1.0f32);
 /// let mut rng = StdRng::seed_from_u64(42);
 /// let quantizer = SphericalQuantizer::train(
 ///     data.as_view(), TransformKind::Null,
@@ -171,7 +171,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
-/// let start_points = Matrix::from_element(1, 4, 0.0f32);
+/// let start_points = Owned::from_element(1, 4, 0.0f32);
 /// let provider = BfTreeProvider::<f32, _>::new(
 ///     parameters,
 ///     start_points.as_view(),
@@ -345,7 +345,7 @@ where
     /// * `Self: StartPoint<T>` - The provider must implement the `StartPoint` trait.
     pub fn new<TQ>(
         params: BfTreeProviderParameters,
-        start_points: MatrixView<'_, T>,
+        start_points: rowmajor::Ref<'_, T>,
         quant_precursor: TQ,
     ) -> ANNResult<Self>
     where
@@ -735,7 +735,7 @@ pub trait StartPoint<T> {
     /// This method is internal and should not be called directly by users.
     /// Use `BfTreeProvider::new` instead.
     #[doc(hidden)]
-    fn set_start_points(&self, hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()>;
+    fn set_start_points(&self, hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()>;
 }
 
 ////////////////////
@@ -751,7 +751,7 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
-    fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
+    fn set_start_points(&self, _hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()> {
         let start_point_ids: Vec<I> = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
             return Err(ANNError::message(format!(
@@ -762,7 +762,7 @@ where
         }
 
         let mut scratch = self.neighbor_provider.scratch(&self.locks);
-        for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
+        for (id, v) in std::iter::zip(start_point_ids, start_points.rows()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.as_index(), v)?;
             self.quant_vectors.set_vector_sync(id.as_index(), v)?;
@@ -783,7 +783,7 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
-    fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
+    fn set_start_points(&self, _hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()> {
         let start_point_ids: Vec<I> = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
             return Err(ANNError::message(format!(
@@ -794,7 +794,7 @@ where
         }
 
         let mut scratch = self.neighbor_provider.scratch(&self.locks);
-        for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
+        for (id, v) in std::iter::zip(start_point_ids, start_points.rows()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.as_index(), v)?;
             // Initialize empty neighbor list
@@ -2129,10 +2129,10 @@ mod tests {
         neighbor::BackInserter,
     };
     use diskann_providers::storage::FileStorageProvider;
-    use diskann_utils::views::{Matrix, RowCol};
+    use diskann_utils::views::rowmajor::RowCol;
 
     fn create_quant_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, QuantVectorProvider>>> {
-        let start_point = Matrix::from_element(1, 5, 0.0f32);
+        let start_point = rowmajor::Owned::from_element(1, 5, 0.0f32);
         let dim = 5;
         let logical_max_degree = 6;
         let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
@@ -2212,7 +2212,7 @@ mod tests {
     /// that the `BfTreeProvider<_, _, u64>` path is functional and not merely compilable.
     #[tokio::test]
     async fn test_quantized_index_search_u64_ids() {
-        let start_point = Matrix::from_element(1, 5, 0.0f32);
+        let start_point = rowmajor::Owned::from_element(1, 5, 0.0f32);
         let dim = 5;
         let logical_max_degree = 6;
         let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
@@ -2294,7 +2294,7 @@ mod tests {
     /// full data/quant/neighbor/search stack keys on the complete 8-byte id.
     #[tokio::test]
     async fn test_quantized_index_search_u64_high_ids() {
-        let start_point = Matrix::from_element(1, 5, 0.0f32);
+        let start_point = rowmajor::Owned::from_element(1, 5, 0.0f32);
         let dim = 5;
         let logical_max_degree = 6;
         let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
@@ -2392,11 +2392,11 @@ mod tests {
         let index = create_quant_index();
         let ctx = &DefaultContext;
 
-        let data = Matrix::from_fn(15, 5, |RowCol { row, .. }| row as f32);
+        let data = rowmajor::Owned::from_fn(15, 5, |RowCol { row, .. }| row as f32);
         let ids: Arc<[u32]> = (0u32..15).collect::<Vec<_>>().into();
-        let batch: Arc<Matrix<f32>> = Arc::new(data);
+        let batch: Arc<rowmajor::Owned<f32>> = Arc::new(data);
         index
-            .multi_insert::<Quantized, Matrix<f32>>(Quantized, ctx, batch, ids)
+            .multi_insert::<Quantized, rowmajor::Owned<f32>>(Quantized, ctx, batch, ids)
             .await
             .unwrap();
 
@@ -2475,7 +2475,7 @@ mod tests {
     }
 
     fn create_full_precision_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, NoStore>>> {
-        let start_point = Matrix::from_element(1, 5, 0.0f32);
+        let start_point = rowmajor::Owned::from_element(1, 5, 0.0f32);
         let logical_max_degree = 6;
         let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
         let metric = Metric::L2;
@@ -2632,7 +2632,7 @@ mod tests {
             let logical_max_degree = 32usize;
             let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
             let metric = Metric::L2;
-            let start_point = Matrix::from_element(1, DIM, 0.0f32);
+            let start_point = rowmajor::Owned::from_element(1, DIM, 0.0f32);
 
             let provider: BfTreeProvider<f32, NoStore, I> = BfTreeProvider::new(
                 BfTreeProviderParameters {
@@ -2814,7 +2814,7 @@ mod tests {
         let ctx = &DefaultContext;
         let num_start_points = 2;
         let dim = 5;
-        let start_points = Matrix::try_from(
+        let start_points = rowmajor::Owned::try_from_data(
             vec![0.0f32; dim]
                 .into_iter()
                 .chain(vec![0.5f32; dim])
@@ -2909,7 +2909,7 @@ mod tests {
 
         let num_start_points = 2;
         let dim = 3;
-        let start_points = Matrix::from_element(num_start_points, dim, 0.0f32);
+        let start_points = rowmajor::Owned::from_element(num_start_points, dim, 0.0f32);
 
         let provider = BfTreeProvider::<f32, _>::new(
             BfTreeProviderParameters {
@@ -3046,7 +3046,7 @@ mod tests {
             use_snapshot: true,
         };
 
-        let start_points = Matrix::from_element(num_start_points.into(), dim, 0.0f32);
+        let start_points = rowmajor::Owned::from_element(num_start_points.into(), dim, 0.0f32);
 
         // Create provider
         let provider =
@@ -3178,7 +3178,7 @@ mod tests {
             use_snapshot: true,
         };
 
-        let start_points = Matrix::from_element(num_start_points.into(), dim, 0.0f32);
+        let start_points = rowmajor::Owned::from_element(num_start_points.into(), dim, 0.0f32);
         // Create provider with quantization
         let provider = BfTreeProvider::<f32, QuantVectorProvider>::new(
             params.clone(),
@@ -3297,7 +3297,7 @@ mod tests {
         let mut neighbor_config = Config::default();
         neighbor_config.use_snapshot(true);
 
-        let start_points = Matrix::from_element(num_start_points.into(), dim, 0.0f32);
+        let start_points = rowmajor::Owned::from_element(num_start_points.into(), dim, 0.0f32);
         // In-memory config (no file path needed)
         let provider = BfTreeProvider::<f32, NoStore>::new(
             BfTreeProviderParameters {
@@ -3412,7 +3412,7 @@ mod tests {
         let mut quant_config = Config::default();
         quant_config.use_snapshot(true);
 
-        let start_points = Matrix::from_element(num_start_points.into(), dim, 0.0f32);
+        let start_points = rowmajor::Owned::from_element(num_start_points.into(), dim, 0.0f32);
         let provider = BfTreeProvider::<f32, QuantVectorProvider>::new(
             BfTreeProviderParameters {
                 max_points: num_points,
@@ -3603,7 +3603,7 @@ mod tests {
             use_snapshot: true,
         };
 
-        let start_points = Matrix::from_element(num_start_points.into(), dim, 0.0f32);
+        let start_points = rowmajor::Owned::from_element(num_start_points.into(), dim, 0.0f32);
         let provider =
             BfTreeProvider::<f32, NoStore, u64>::new(params, start_points.as_view(), NoStore)
                 .unwrap();
@@ -3666,7 +3666,7 @@ mod tests {
     async fn test_new_rejects_capacity_exceeding_id_type() {
         let dim = 4usize;
         let num_start_points = NonZeroUsize::new(1).unwrap();
-        let start_points = Matrix::from_element(num_start_points.into(), dim, 0.0f32);
+        let start_points = rowmajor::Owned::from_element(num_start_points.into(), dim, 0.0f32);
 
         let params = BfTreeProviderParameters {
             // Largest index would be u32::MAX + 1, which a u32 id cannot hold.

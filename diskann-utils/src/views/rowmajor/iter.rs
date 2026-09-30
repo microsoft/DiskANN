@@ -32,16 +32,24 @@ impl<'a, T> Rows<'a, T> {
     }
 }
 
+// SAFETY: `Rows` is like `&[T]` - `Send` when `T` is `Sync`.
 unsafe impl<T> Send for Rows<'_, T> where T: Sync {}
+// SAFETY: `Rows` is like `&[T]` - `Sync` when `T` is `Sync`.
 unsafe impl<T> Sync for Rows<'_, T> where T: Sync {}
 
 impl<'a, T> Iterator for Rows<'a, T> {
     type Item = &'a [T];
     fn next(&mut self) -> Option<&'a [T]> {
         self.remaining.checked_sub(1).map(|remaining| {
+            // SAFETY: `Rows` is always constructed from a valid `Ref`. Since we always
+            // give out `ncols` items at a time, if there are rows remaining, it is safe to
+            // construct this slice.
             let item =
                 unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast_const(), self.ncols) };
             self.remaining = remaining;
+
+            // SAFETY: Same logic as above. Since we hand out one row at a time, it is safe
+            // to advance the base pointer by `ncols` as long as there are rows remaining.
             self.ptr = unsafe { self.ptr.add(self.ncols) };
             item
         })
