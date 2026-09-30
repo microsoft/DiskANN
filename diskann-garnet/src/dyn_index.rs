@@ -116,26 +116,37 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     ///
     /// The data slice here must be aligned to `T` or this will panic.
     fn insert(&self, context: &Context, id: &GarnetId, data: &[u8], attrs: &[u8]) -> ANNResult<()> {
-        self.insert(
-            &DynamicQuantization,
-            context,
-            id,
-            (bytemuck::cast_slice::<u8, T>(data), attrs),
-        )
+        self.run(|_| async {
+            let _pending = self.inner.provider().reserve_external_id(id).await?;
+            self.inner
+                .insert(
+                    &DynamicQuantization,
+                    context,
+                    id,
+                    (bytemuck::cast_slice::<u8, T>(data), attrs),
+                )
+                .await
+        })
     }
 
     fn set_attributes(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()> {
-        self.inner
-            .provider()
-            .set_attributes(context, id, data)
-            .map_err(|e| e.into())
+        self.run(|_| async {
+            let provider = self.inner.provider();
+            let _pending = provider.reserve_external_id(id).await?;
+            provider
+                .set_attributes(context, id, data)
+                .map_err(|error| error.into())
+        })
     }
 
     fn delete_attributes(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {
-        self.inner
-            .provider()
-            .delete_attributes(context, id)
-            .map_err(|e| e.into())
+        self.run(|_| async {
+            let provider = self.inner.provider();
+            let _pending = provider.reserve_external_id(id).await?;
+            provider
+                .delete_attributes(context, id)
+                .map_err(|error| error.into())
+        })
     }
 
     fn search_vector(
@@ -189,13 +200,18 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     }
 
     fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {
-        self.inplace_delete(
-            DynamicQuantization,
-            context,
-            id,
-            3,
-            InplaceDeleteMethod::TwoHopAndOneHop,
-        )
+        self.run(|_| async {
+            let _pending = self.inner.provider().reserve_external_id(id).await?;
+            self.inner
+                .inplace_delete(
+                    DynamicQuantization,
+                    context,
+                    id,
+                    3,
+                    InplaceDeleteMethod::TwoHopAndOneHop,
+                )
+                .await
+        })
     }
 
     fn approximate_count(&self) -> u64 {

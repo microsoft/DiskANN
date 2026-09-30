@@ -25,7 +25,7 @@ pub(crate) const TERM_BITMASK: u64 = (1 << 3) - 1;
 #[error("Invalid term {0}")]
 pub(crate) struct InvalidTerm(u32);
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub(crate) enum Term {
     Vector = 0,
     Neighbors = 1,
@@ -176,7 +176,6 @@ impl Callbacks {
         self.log_callback
     }
 
-    #[cfg(test)]
     pub(crate) fn exists_iid(&self, ctx: &Context, id: u32, length_hint: usize) -> bool {
         let key = [4, id];
         // SAFETY: Key bytes are preceded by 4 bytes of space.
@@ -191,19 +190,14 @@ impl Callbacks {
         unsafe { self.exists_raw(ctx, &key_bytes[4..], length_hint) }
     }
 
-    #[expect(
-        dead_code,
-        reason = "currently unused, but may be needed in the future"
-    )]
     pub(crate) fn exists_eid(&self, ctx: &Context, id: &GarnetId, length_hint: usize) -> bool {
         // SAFETY: GarnetId ensures there are 4 bytes preceding the key bytes.
-        unsafe { self.exists_raw(ctx, id, length_hint) }
+        unsafe { self.exists_raw(ctx, id.as_prefixed_key_bytes(), length_hint) }
     }
 
     /// Check for a key's existance in Garnet.
     ///
-    /// NOTE: The key bytes must be preceded by 4 valid bytes that Garnet can write into.
-    /// This invariant must be checked by the caller.
+    /// The key must be prefixed by a four byte length.
     unsafe fn exists_raw(&self, ctx: &Context, key: &[u8], length_hint: usize) -> bool {
         let mut called = false;
         let mut cb = |_, _: &[u8]| {
@@ -282,8 +276,7 @@ impl Callbacks {
 
     /// Read a single key from Garnet.
     ///
-    /// NOTE: The key bytes must be preceded by 4 valid bytes that Garnet can write into.
-    /// This invariant must be checked by the caller.
+    /// The key must be prefixed by a four byte length.
     #[must_use]
     unsafe fn read_single_raw(&self, ctx: &Context, key: &[u8], value: &mut [u8]) -> bool {
         let length_hint = value.len() as u32;
@@ -417,8 +410,7 @@ impl Callbacks {
 
     /// Write a value for a key in Garnet.
     ///
-    /// NOTE: The key bytes must be preceded by 4 valid bytes that Garnet can write into.
-    /// This invariant must be checked by the caller.
+    /// The key is passed without a length prefix.
     #[must_use]
     unsafe fn write_raw(&self, ctx: &Context, key: &[u8], value: &[u8]) -> bool {
         let value_ptr = value.as_ptr();
@@ -513,8 +505,7 @@ impl Callbacks {
     /// The provided function `f` will receive the current value, which it can then modify. If no
     /// value exists, zero-initialized value of length `write_len` will be passed in.
     ///
-    /// The key bytes must be preceded by 4 valid bytes that Garnet can write into.
-    /// This invariant must be checked by the caller.
+    /// The key is passed without a length prefix.
     ///
     /// `f` should not panic.
     #[must_use]
@@ -624,15 +615,13 @@ pub(crate) enum GarnetError {
 
 /// A variable length byte string used as the vector ID in a Garnet vector set.
 ///
-/// A wrapped type is used because the Garnet callbacks expect some padding bytes it can
-/// use to avoid allocation, and this type ensures those bytes exist without interfering
-/// with the "real" ID bytes.
+/// This is cheap to clone as it uses `Arc` internally, and prefixes the data with a 4-byte length
+/// appropriate for use with the read callbacks.
 ///
-/// Dereferencing this type will return a slice to the actual ID bytes, without the padding,
-/// which makes this interchangeable in most respects with using a raw `Box<[u8]>`.
+/// Dereferencing returns only the ID bytes.
 #[derive(Clone, PartialEq)]
 pub(crate) struct GarnetId {
-    inner: Box<[u8]>,
+    inner: Arc<[u8]>,
 }
 
 impl GarnetId {
@@ -649,11 +638,13 @@ impl fmt::Debug for GarnetId {
 
 impl From<&[u8]> for GarnetId {
     fn from(value: &[u8]) -> Self {
-        let mut id = Vec::with_capacity(value.len() + 4);
+        let mut inner = Arc::<[u8]>::new_uninit_slice(value.len() + 4);
+        let buffer = Arc::get_mut(&mut inner).unwrap();
         let len = value.len() as u32;
-        id.extend_from_slice(bytemuck::bytes_of(&len));
-        id.extend_from_slice(value);
-        let inner = id.into();
+        buffer[..4].write_copy_of_slice(bytemuck::bytes_of(&len));
+        buffer[4..].write_copy_of_slice(value);
+        // SAFETY: The prefix and ID copies initialize every byte of the allocation.
+        let inner = unsafe { inner.assume_init() };
 
         Self { inner }
     }
