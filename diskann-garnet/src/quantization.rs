@@ -287,7 +287,11 @@ impl GarnetQuantizer for MinMax8Bit {
         true
     }
 
-    fn train(&self, _metric: Metric, _data: rowmajor::Ref<f32>) -> Result<(), GarnetQuantizerError> {
+    fn train(
+        &self,
+        _metric: Metric,
+        _data: rowmajor::Ref<f32>,
+    ) -> Result<(), GarnetQuantizerError> {
         Ok(())
     }
 

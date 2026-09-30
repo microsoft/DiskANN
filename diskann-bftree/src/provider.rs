@@ -735,7 +735,8 @@ pub trait StartPoint<T> {
     /// This method is internal and should not be called directly by users.
     /// Use `BfTreeProvider::new` instead.
     #[doc(hidden)]
-    fn set_start_points(&self, hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()>;
+    fn set_start_points(&self, hidden: Hidden, start_points: rowmajor::Ref<'_, T>)
+        -> ANNResult<()>;
 }
 
 ////////////////////
@@ -751,7 +752,11 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
-    fn set_start_points(&self, _hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()> {
+    fn set_start_points(
+        &self,
+        _hidden: Hidden,
+        start_points: rowmajor::Ref<'_, T>,
+    ) -> ANNResult<()> {
         let start_point_ids: Vec<I> = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
             return Err(ANNError::message(format!(
@@ -783,7 +788,11 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
-    fn set_start_points(&self, _hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()> {
+    fn set_start_points(
+        &self,
+        _hidden: Hidden,
+        start_points: rowmajor::Ref<'_, T>,
+    ) -> ANNResult<()> {
         let start_point_ids: Vec<I> = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
             return Err(ANNError::message(format!(
