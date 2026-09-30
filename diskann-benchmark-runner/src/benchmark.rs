@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{internal::visibility::Visibility, Checkpoint, Input, Output};
+use crate::{Checkpoint, Input, Output, internal::visibility::Visibility};
 
 ///////////////
 // Benchmark //
@@ -328,7 +328,7 @@ pub(crate) struct FailureScore(pub(crate) u32);
 pub(crate) mod internal {
     use super::*;
 
-    use crate::{input::internal::Any, Features};
+    use crate::{Features, input::internal::Any};
 
     use anyhow::Context;
     use thiserror::Error;
