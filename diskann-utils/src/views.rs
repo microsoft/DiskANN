@@ -292,7 +292,7 @@ where
 }
 
 /// An initializer argument for the closure provided to [`Matrix::from_fn`] and
-/// [`Matrix::try_from_fn`] to remove ambiguity of the row and column being initialiazed.
+/// [`Matrix::try_from_fn`] to remove ambiguity of the row and column being initialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RowCol {
     pub row: usize,
@@ -1038,7 +1038,7 @@ where
         T::Elem: Clone,
     {
         Matrix::from_fn_with_layout(self.layout.transpose(), |RowCol { row, col }| {
-            // SAFETY: By contruction, `col < self.nrows()` and `row < self.ncols()`.
+            // SAFETY: By construction, `col < self.nrows()` and `row < self.ncols()`.
             unsafe { self.element_unchecked(col, row).clone() }
         })
     }
