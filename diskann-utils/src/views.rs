@@ -291,8 +291,9 @@ where
     layout: Layout<E>,
 }
 
-/// An initializer argument for the closure provided to [`Matrix::from_fn`] and
-/// [`Matrix::try_from_fn`] to remove ambiguity of the row and column being initialized.
+/// An initializer argument for the closure provided to [`Matrix::from_fn`],
+/// [`Matrix::try_from_fn`], and [`Matrix::try_from_fn_with_layout`] to remove ambiguity of
+/// the row and column being initialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RowCol {
     pub row: usize,
@@ -312,12 +313,7 @@ impl<T> MatrixBase<Box<[T]>> {
     /// ```
     /// use diskann_utils::views::Matrix;
     ///
-    /// let mut i = 0;
-    /// let mat = Matrix::from_fn(2, 3, |_| {
-    ///     let value = i;
-    ///     i += 1;
-    ///     value
-    /// });
+    /// let mat = Matrix::from_fn(2, 3, |rc| 3 * rc.row + rc.col);
     ///
     /// assert_eq!(mat.row(0), &[0, 1, 2]);
     /// assert_eq!(mat.row(1), &[3, 4, 5]);
@@ -345,12 +341,7 @@ impl<T> MatrixBase<Box<[T]>> {
     /// ```
     /// use diskann_utils::views::Matrix;
     ///
-    /// let mut i = 0;
-    /// let mat = Matrix::try_from_fn(2, 3, |_| {
-    ///     let value = i;
-    ///     i += 1;
-    ///     value
-    /// }).unwrap();
+    /// let mat = Matrix::try_from_fn(2, 3, |rc| 3 * rc.row + rc.col).unwrap();
     ///
     /// assert_eq!(mat.row(0), &[0, 1, 2]);
     /// assert_eq!(mat.row(1), &[3, 4, 5]);
