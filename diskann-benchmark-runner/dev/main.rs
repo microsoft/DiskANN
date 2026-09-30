@@ -25,7 +25,13 @@ fn main() -> anyhow::Result<()> {
 #[derive(Debug, clap::Parser)]
 struct Cli {
     /// Emulate enabling various features for feature gated functionality.
-    #[arg(long, value_delimiter = ',', num_args = 0..)]
+    ///
+    /// Currently available features:
+    /// * `gated-feature-0`
+    /// * `gated-feature-1`
+    /// * `gated-feature-2`
+    /// * `gated-feature-3`
+    #[arg(long, value_delimiter = ',', num_args = 1)]
     features: Vec<String>,
 
     /// The actual application.

@@ -121,6 +121,11 @@ pub enum Commands {
     },
     #[command(subcommand)]
     Check(Check),
+    /// Provide information about all registered types.
+    TypeInfo {
+        /// Provide information for the given type.
+        describe: Option<String>,
+    },
 }
 
 /// Subcommands for regression check operations.
@@ -207,15 +212,27 @@ impl App {
                 if let Some(describe) = describe {
                     if let Some(input) = registry.input(describe) {
                         let repr = jobs::Unprocessed::format_input(input)?;
+
+                        // Render JSON.
                         writeln!(
                             output,
-                            "The example JSON representation for \"{}\" is:",
+                            "The example JSON representation for \"{}\" is:\n",
                             describe
                         )?;
                         writeln!(output, "{}", serde_json::to_string_pretty(&repr)?)?;
 
-                        // // TODO: Make a little nicer.
-                        // writeln!(output, "{}", input.raw_reflection().unwrap().render())?;
+                        // Render Type Info.
+                        match input.raw_reflection() {
+                            Some(reflection) => {
+                                writeln!(output, "\nType Information:\n\n{}", reflection.render())?;
+
+                                writeln!(
+                                    output,
+                                    "More type information available using `type-info`"
+                                )?;
+                            }
+                            None => writeln!(output, "\n\nNo Type Information Available")?,
+                        }
 
                         return Ok(());
                     } else {
@@ -390,6 +407,9 @@ impl App {
             }
             // Extensions
             Commands::Check(check) => return self.check(check, registry, output),
+
+            // Types
+            Commands::TypeInfo { describe } => self.type_info(describe.as_deref(), registry, output)?,
         };
         Ok(())
     }
@@ -485,6 +505,29 @@ impl App {
                 Ok(())
             }
         }
+    }
+
+    fn type_info(
+        &self,
+        describe: Option<&str>,
+        registry: &registry::Registry,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<()> {
+        match describe {
+            Some(type_name) => match registry.type_info(type_name) {
+                Some(reflection) => writeln!(output, "{}", reflection.render())?,
+                None => anyhow::bail!("No type information for \"{}\"", type_name),
+            },
+            None => {
+                let mut all_types: Vec<_> = registry.type_names().collect();
+                all_types.sort_unstable();
+                writeln!(output, "All registered types:")?;
+                for type_name in all_types {
+                    writeln!(output, "  {}", type_name)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -26,6 +26,7 @@ pub(crate) struct TypeInput {
 
 /// This is a test input for testing corner cases in the benchmark runner.
 #[derive(Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(crate) struct TypeInputRaw {
     data_type: DataType,
     dim: usize,
@@ -80,6 +81,7 @@ impl Input for TypeInput {
 ///////////////
 
 #[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct Tolerance {
     /// Should we return an error when `from_raw` is called?
     pub(super) error_when_checked: bool,

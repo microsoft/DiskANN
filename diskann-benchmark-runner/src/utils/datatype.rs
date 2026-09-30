@@ -13,6 +13,7 @@ use crate::Reflect;
 /// See also: [`AsDataType`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "lowercase")]
+#[reflect(prefix = "benchmark::")]
 pub enum DataType {
     Float64,
     Float32,

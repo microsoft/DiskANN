@@ -73,6 +73,11 @@ impl Registry {
         self.name_map.get(type_name).copied()
     }
 
+    /// Return an iterator over all the registered type-names.
+    pub fn type_names(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.name_map.keys().map(|v| &**v)
+    }
+
     //--------------//
     // Registration //
     //--------------//

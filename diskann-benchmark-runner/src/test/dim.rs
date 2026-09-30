@@ -17,6 +17,7 @@ use crate::{
 ///////////
 
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct DimInput {
     dim: Option<usize>,
 }
@@ -56,6 +57,7 @@ impl Input for DimInput {
 ///////////////
 
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct Tolerance {
     succeed: bool,
     error_in_check: bool,

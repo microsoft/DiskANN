@@ -87,6 +87,7 @@ impl Benchmark for AnotherGatedBench {
 //////////////////////////////////////////////////
 
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct SampleInput {
     value: String,
 }
@@ -147,6 +148,7 @@ impl Benchmark for GatedWithIndependentInput {
 // controlling feature set is enabled, standing in for an input whose validation would otherwise
 // pull in a heavy optional dependency.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct PhantomInput {
     value: usize,
 }
