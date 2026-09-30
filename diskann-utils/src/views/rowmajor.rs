@@ -1087,6 +1087,13 @@ impl<'a, T> Mut<'a, T> {
             _lifetime: PhantomData,
         }
     }
+
+    /// Consume `self` and return the underlying data as a mutable slice.
+    pub fn into_mut_slice(self) -> &'a mut [T] {
+        // SAFETY: `self.ptr` and `self.layout` together describe a valid `&'a mut [T]` of
+        // length `self.layout.num_elements()`, per the invariants of `Mut`.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.layout.num_elements()) }
+    }
 }
 
 unsafe impl<T> Matrix for Mut<'_, T> {

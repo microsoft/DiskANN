@@ -10,7 +10,7 @@
 //! offers it to the nearest sets of both points.
 
 use crate::ANNResult;
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use super::{
     check_output_rows, distance_scratch,
@@ -42,8 +42,8 @@ pub(super) struct LeafKernelWorkspace {
 /// distance matrix size overflows `usize`.
 pub(super) fn select_leaf_neighbors<A, M>(
     arch: A,
-    points: MatrixView<'_, f32>,
-    output: MutMatrixView<'_, Candidate>,
+    points: rowmajor::Ref<'_, f32>,
+    output: rowmajor::Mut<'_, Candidate>,
     workspace: &mut LeafKernelWorkspace,
 ) -> ANNResult<()>
 where
@@ -54,7 +54,7 @@ where
     check_output_rows(point_count, output.nrows())?;
     let mut distances =
         distance_scratch(&mut workspace.distance_scratch, point_count, point_count)?;
-    M::compute_distances(points, distances.as_mut_view())?;
+    M::compute_distances(points, distances.as_view_mut())?;
     select_top_k_symmetric(
         arch,
         distances.as_view(),
@@ -96,7 +96,7 @@ mod tests {
         ];
         let values =
             test_support::packed_points(&coordinates, 2, scalar_metric == Metric::CosineNormalized);
-        let points = MatrixView::try_from(values.as_slice(), 5, 2).unwrap();
+        let points = rowmajor::Ref::try_from_data(values.as_slice(), 5, 2).unwrap();
         // Widths above four exceed the other points in the leaf.
         for neighbors in [0, 1, 2, 3, 4, 6] {
             let mut output = vec![Candidate::new(0, -100.0); 5 * neighbors];
@@ -104,7 +104,7 @@ mod tests {
             select_leaf_neighbors::<_, M>(
                 ARCH,
                 points,
-                MutMatrixView::try_from(output.as_mut_slice(), 5, neighbors).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), 5, neighbors).unwrap(),
                 &mut LeafKernelWorkspace::default(),
             )
             .unwrap_or_else(|error| panic!("neighbors={neighbors}: {error}"));
@@ -171,7 +171,7 @@ mod tests {
                         test_support::normalize(&mut values, dimensions);
                     }
                     let points =
-                        MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+                        rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions).unwrap();
                     let tolerance = test_support::dense_tolerance(metric, dimensions);
                     // The oracle sorts every other point by its scalar distance.
                     let oracle: Vec<Vec<(u32, f64)>> = (0..point_count)
@@ -202,7 +202,7 @@ mod tests {
                         select_leaf_neighbors::<A, M>(
                             arch,
                             points,
-                            MutMatrixView::try_from(output.as_mut_slice(), point_count, neighbors)
+                            rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, neighbors)
                                 .unwrap(),
                             &mut LeafKernelWorkspace::default(),
                         )
@@ -258,11 +258,11 @@ mod tests {
         // Grow, shrink, change K, and finish with a singleton wider than its leaf.
         for (count, neighbors) in [(4, 1), (2, 1), (5, 3), (1, 2)] {
             output.resize(count * neighbors, Candidate::new(4, -100.0));
-            let points = MatrixView::try_from(&values[..count], count, 1).unwrap();
+            let points = rowmajor::Ref::try_from_data(&values[..count], count, 1).unwrap();
             select_leaf_neighbors::<_, L2>(
                 ARCH,
                 points,
-                MutMatrixView::try_from(output.as_mut_slice(), count, neighbors).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), count, neighbors).unwrap(),
                 &mut workspace,
             )
             .unwrap();
@@ -292,8 +292,8 @@ mod tests {
 
         let error = select_leaf_neighbors::<_, L2>(
             ARCH,
-            MatrixView::try_from(&values[..], 3, 1).unwrap(),
-            MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
+            rowmajor::Ref::try_from_data(&values[..], 3, 1).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 2, 1).unwrap(),
             &mut LeafKernelWorkspace::default(),
         )
         .unwrap_err();
@@ -318,8 +318,8 @@ mod tests {
 
         select_top_k_symmetric(
             ARCH,
-            MatrixView::try_from(&distances[..], 4, 4).unwrap(),
-            MutMatrixView::try_from(&mut output[..], 4, 2).unwrap(),
+            rowmajor::Ref::try_from_data(&distances[..], 4, 4).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 4, 2).unwrap(),
             &mut kth_distances,
         );
 
