@@ -112,6 +112,18 @@ impl SIMDReinterpret<i8x64> for u32x16 {
     }
 }
 
+impl SIMDReinterpret<u8x64> for u64x8 {
+    fn reinterpret_simd(self) -> u8x64 {
+        u8x64(self.0)
+    }
+}
+
+impl SIMDReinterpret<i8x64> for u64x8 {
+    fn reinterpret_simd(self) -> i8x64 {
+        i8x64(self.0)
+    }
+}
+
 impl SIMDReinterpret<u32x16> for u8x64 {
     fn reinterpret_simd(self) -> u32x16 {
         u32x16(self.0)
@@ -136,18 +148,6 @@ impl SIMDReinterpret<i16x8> for u8x16 {
     }
 }
 
-impl SIMDReinterpret<u8x64> for u64x8 {
-    fn reinterpret_simd(self) -> u8x64 {
-        u8x64(self.0)
-    }
-}
-
-impl SIMDReinterpret<i8x64> for u64x8 {
-    fn reinterpret_simd(self) -> i8x64 {
-        i8x64(self.0)
-    }
-}
-
 ///////////
 // Tests //
 ///////////
@@ -156,6 +156,37 @@ impl SIMDReinterpret<i8x64> for u64x8 {
 mod test_x86_conversions {
     use super::*;
     use crate::{arch::x86_64::V4, test_utils};
+
+    test_utils::ops::test_reinterpret!(
+        u32x8 => i16x16, 0x763582a914ec0bfd, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x16 => i16x32, 0xe96b52d0743af18c, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x16 => u8x64, 0x372ab891f06e5cd4, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x16 => i8x64, 0x951d80aefc476b23, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u64x8 => u8x64, 0x891d3c75ef2064ba, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u64x8 => i8x64, 0x891d3c75ef2064ba, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u8x64 => u32x16, 0x28fc7d6140a953be, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        i8x64 => u32x16, 0xbf6308d2e471a59c, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        i16x8 => u8x16, 0x4b96d02e85f713ca, V4::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u8x16 => i16x8, 0xd5302e6b194a87fc, V4::new_checked_uncached()
+    );
 
     // Lossless Conversions
     #[cfg(not(miri))]

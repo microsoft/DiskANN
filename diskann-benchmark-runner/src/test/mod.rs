@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use crate::{registry, Features};
+use crate::{Features, registry};
 
 mod dim;
 mod gated;

@@ -135,6 +135,22 @@ mod test_x86_conversions {
     use super::*;
     use crate::{arch::x86_64::V3, test_utils};
 
+    test_utils::ops::test_reinterpret!(
+        u32x8 => i16x16, 0x763582a914ec0bfd, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x8 => u8x32, 0x69b42dafe0917358, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x8 => i8x32, 0x69b42dafe0917358, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        i16x8 => u8x16, 0x4b96d02e85f713ca, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u8x16 => i16x8, 0xd5302e6b194a87fc, V3::new_checked_uncached()
+    );
+
     // Lossless Conversions
     #[cfg(not(miri))]
     test_utils::ops::test_lossless_convert!(
