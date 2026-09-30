@@ -5,7 +5,10 @@
 
 use diskann_utils::{
     strided::Strided,
-    views::{self, Matrix},
+    views::{
+        self,
+        rowmajor::{self, Matrix, MatrixMut},
+    },
 };
 #[cfg(feature = "rayon")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -40,15 +43,15 @@ impl LightPQTrainingParameters {
 pub struct SimplePivots {
     dim: usize,
     ncenters: usize,
-    pivots: Vec<Matrix<f32>>,
+    pivots: Vec<rowmajor::Owned<f32>>,
 }
 
-fn flatten<T: Copy + Default>(pivots: &[Matrix<T>], ncenters: usize, dim: usize) -> Matrix<T> {
-    let mut flattened = Matrix::from_element(ncenters, dim, T::default());
+fn flatten<T: Copy + Default>(pivots: &[rowmajor::Owned<T>], ncenters: usize, dim: usize) -> rowmajor::Owned<T> {
+    let mut flattened = rowmajor::Owned::from_element(ncenters, dim, T::default());
     let mut col_start = 0;
     for matrix in pivots {
         assert_eq!(matrix.nrows(), flattened.nrows());
-        for (row_index, row) in matrix.row_iter().enumerate() {
+        for (row_index, row) in matrix.rows().enumerate() {
             let dst = &mut flattened.row_mut(row_index)[col_start..col_start + row.len()];
             dst.copy_from_slice(row);
         }
@@ -59,7 +62,7 @@ fn flatten<T: Copy + Default>(pivots: &[Matrix<T>], ncenters: usize, dim: usize)
 
 impl SimplePivots {
     /// Return the selected pivots for each chunk.
-    pub fn pivots(&self) -> &[Matrix<f32>] {
+    pub fn pivots(&self) -> &[rowmajor::Owned<f32>] {
         &self.pivots
     }
 
@@ -77,7 +80,7 @@ pub trait TrainQuantizer {
 
     fn train<R, C>(
         &self,
-        data: views::MatrixView<f32>,
+        data: views::rowmajor::Ref<f32>,
         schema: crate::views::ChunkOffsetsView<'_>,
         parallelism: Parallelism,
         rng_builder: &R,
@@ -108,7 +111,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
     /// * `NaN` or infinities are observed during the training process.
     fn train<R, C>(
         &self,
-        data: views::MatrixView<f32>,
+        data: views::rowmajor::Ref<f32>,
         schema: crate::views::ChunkOffsetsView<'_>,
         parallelism: Parallelism,
         rng_builder: &R,
@@ -123,7 +126,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
         #[inline(never)]
         fn train(
             trainer: &LightPQTrainingParameters,
-            data: views::MatrixView<f32>,
+            data: views::rowmajor::Ref<f32>,
             schema: crate::views::ChunkOffsetsView<'_>,
             parallelism: Parallelism,
             rng_builder: &(dyn BoxedRngBuilder<usize> + Sync),
@@ -132,7 +135,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
             // Make sure we're provided sane values for our schema.
             assert_eq!(data.ncols(), schema.dim());
 
-            let thunk = |i| -> Result<Matrix<f32>, PQTrainingError> {
+            let thunk = |i| -> Result<rowmajor::Owned<f32>, PQTrainingError> {
                 let range = schema.at(i);
 
                 // Check for cancelation.
@@ -169,7 +172,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 // Allocate scratch data structures.
                 let norms: Vec<f32> = view.rows().map(square_norm).collect();
                 let transpose = BlockTransposed::<f32, 16>::from_strided(view);
-                let mut centers = Matrix::try_from_element(trainer.ncenters, range.len(), 0.0)
+                let mut centers = rowmajor::Owned::try_from_element(trainer.ncenters, range.len(), 0.0)
                     .map_err(|err| PQTrainingError {
                         chunk: i,
                         of: schema.len(),
@@ -182,7 +185,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
 
                 // Initialization
                 kmeans::plusplus::kmeans_plusplus_into_inner(
-                    centers.as_mut_view(),
+                    centers.as_view_mut(),
                     view,
                     transpose.as_view(),
                     &norms,
@@ -210,7 +213,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                     view,
                     &norms,
                     transpose.as_view(),
-                    centers.as_mut_view(),
+                    centers.as_view_mut(),
                     trainer.lloyds_reps,
                 );
                 Ok(centers)
@@ -306,9 +309,9 @@ mod tests {
         let dim: usize = sub_dims.iter().sum();
 
         // Create the sub matrices.
-        let matrices: Vec<Matrix<usize>> = std::iter::zip(sub_dims.iter(), prefix_sum.iter())
+        let matrices: Vec<rowmajor::Owned<usize>> = std::iter::zip(sub_dims.iter(), prefix_sum.iter())
             .map(|(&this_dim, &offset)| {
-                let mut m = Matrix::from_element(nrows, this_dim, 0);
+                let mut m = rowmajor::Owned::from_element(nrows, this_dim, 0);
                 for r in 0..nrows {
                     for c in 0..this_dim {
                         *m.element_mut(r, c) = dim * r + offset + c;
@@ -332,9 +335,9 @@ mod tests {
     }
 
     struct ClusteredDataset {
-        data: Matrix<f32>,
+        data: rowmajor::Owned<f32>,
         // The pre-configured center point for the manufactured clusters.
-        centers: Matrix<f32>,
+        centers: rowmajor::Owned<f32>,
     }
 
     impl DatasetBuilder {
@@ -364,8 +367,8 @@ mod tests {
                 .map(|chunk| {
                     let dim = schema.at(chunk).len();
 
-                    let mut initial = Matrix::from_element(ndata, dim, 0.0);
-                    let mut centers = Matrix::from_element(self.nclusters, 1, 0.0);
+                    let mut initial = rowmajor::Owned::from_element(ndata, dim, 0.0);
+                    let mut centers = rowmajor::Owned::from_element(self.nclusters, 1, 0.0);
 
                     // The starting offset for clusters.
                     let offset = offsets_distribution.sample(rng);
@@ -386,7 +389,7 @@ mod tests {
 
                     // Shuffle the dataset.
                     indices.shuffle(rng);
-                    let mut piece = Matrix::from_element(ndata, dim, 0.0);
+                    let mut piece = rowmajor::Owned::from_element(ndata, dim, 0.0);
                     for (dst, src) in indices.iter().enumerate() {
                         piece.row_mut(dst).copy_from_slice(initial.row(*src));
                     }
@@ -464,7 +467,7 @@ mod tests {
 
             // Start matching pivots to expected centers.
             let mut seen: Vec<bool> = (0..dataset.centers.nrows()).map(|_| false).collect();
-            for row in pivot.row_iter() {
+            for row in pivot.rows() {
                 let mut min_distance = f32::MAX;
                 let mut min_index = 0;
                 for c in 0..dataset.centers.nrows() {
@@ -585,7 +588,7 @@ mod tests {
     // pivots exceeds the number of dataset items.
     #[test]
     fn tests_succeeded_with_too_many_pivots() {
-        let data = Matrix::<f32>::from_element(10, 5, 1.0);
+        let data = rowmajor::Owned::<f32>::from_element(10, 5, 1.0);
         let offsets: Vec<usize> = vec![0, 1, 4, 5];
 
         let trainer = LightPQTrainingParameters::new(2 * data.nrows(), 6);
@@ -612,7 +615,7 @@ mod tests {
             "expected pivot 0 to be the non-zero pivot"
         );
 
-        for (i, row) in flat.row_iter().enumerate() {
+        for (i, row) in flat.rows().enumerate() {
             // skip the first row.
             if i == 0 {
                 continue;
@@ -656,7 +659,7 @@ mod tests {
                 assert!(format(&err).contains("infinity"));
             };
 
-            let mut data = Matrix::<f32>::from_element(nrows, ncols, 1.0);
+            let mut data = rowmajor::Owned::<f32>::from_element(nrows, ncols, 1.0);
 
             // Positive Infinity
             *data.element_mut(r, c) = f32::INFINITY;

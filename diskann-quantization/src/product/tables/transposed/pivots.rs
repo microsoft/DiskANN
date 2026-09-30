@@ -1061,7 +1061,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views};
+    use diskann_utils::{
+        lazy_format,
+        views::{self, rowmajor::Matrix},
+    };
     use diskann_vector::{PureDistanceFunction, distance};
     use rand::{
         SeedableRng,
@@ -1507,7 +1510,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 5 must be less than 5")]
     fn get_panics_on_row() {
-        let data = views::Matrix::from_element(5, 10, 0.0);
+        let data = views::rowmajor::Owned::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(5, 1);
     }
@@ -1515,7 +1518,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 5 must be less than 5")]
     fn get_panics_on_col() {
-        let data = views::Matrix::from_element(10, 5, 0.0);
+        let data = views::rowmajor::Owned::from_element(10, 5, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(1, 5);
     }
@@ -1534,7 +1537,7 @@ mod tests {
 
     fn test_process_into_impl(dim: usize, total: usize, rng: &mut StdRng) {
         let distribution = Uniform::<i32>::new(-10, 10).unwrap();
-        let base = views::Matrix::<f32>::from_fn(total, dim, |_| distribution.sample(rng) as f32);
+        let base = views::rowmajor::Owned::<f32>::from_fn(total, dim, |_| distribution.sample(rng) as f32);
 
         let chunk = Chunk::new(base.as_view().into()).unwrap();
         let mut input = vec![0.0; dim];
@@ -1549,7 +1552,7 @@ mod tests {
             InnerProduct::process_into(&chunk, &input, &mut output);
 
             // Check outputs
-            std::iter::zip(base.row_iter(), output.iter()).for_each(|(row, got)| {
+            std::iter::zip(base.rows(), output.iter()).for_each(|(row, got)| {
                 let expected: f32 = distance::InnerProduct::evaluate(row, input.as_slice());
                 assert_eq!(*got, expected);
             });
@@ -1558,7 +1561,7 @@ mod tests {
             SquaredL2::process_into(&chunk, &input, &mut output);
 
             // Check outputs
-            std::iter::zip(base.row_iter(), output.iter()).for_each(|(row, got)| {
+            std::iter::zip(base.rows(), output.iter()).for_each(|(row, got)| {
                 let expected: f32 = distance::SquaredL2::evaluate(row, input.as_slice());
                 assert_eq!(*got, expected);
             });
@@ -1583,7 +1586,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_process_into_panics_on_from() {
-        let data = views::Matrix::<f32>::from_element(5, 10, 0.0);
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);
@@ -1597,7 +1600,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_process_into_panics_on_into() {
-        let data = views::Matrix::<f32>::from_element(5, 10, 0.0);
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);
