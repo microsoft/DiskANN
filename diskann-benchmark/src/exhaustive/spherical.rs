@@ -417,7 +417,8 @@ mod imp {
             let output_dim = plan.quantizer().output_dim();
             let bytes =
                 diskann_quantization::spherical::DataRef::<NBITS>::canonical_bytes(output_dim);
-            let mut data = diskann_utils::views::rowmajor::Owned::try_from_element(input.nrows(), bytes, 0)?;
+            let mut data =
+                diskann_utils::views::rowmajor::Owned::try_from_element(input.nrows(), bytes, 0)?;
 
             // Compress the data.
             #[expect(clippy::disallowed_methods)]

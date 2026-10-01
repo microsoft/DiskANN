@@ -77,12 +77,15 @@ impl ConvertingLoad for f32 {
         data_type: DataType,
     ) -> anyhow::Result<rowmajor::Owned<f32>> {
         #[inline(never)]
-        fn convert<T, U>(from: diskann_utils::views::rowmajor::Ref<T>) -> anyhow::Result<rowmajor::Owned<U>>
+        fn convert<T, U>(
+            from: diskann_utils::views::rowmajor::Ref<T>,
+        ) -> anyhow::Result<rowmajor::Owned<U>>
         where
             U: Default + Clone + From<T>,
             T: Copy,
         {
-            let mut to = rowmajor::Owned::try_from_element(from.nrows(), from.ncols(), U::default())?;
+            let mut to =
+                rowmajor::Owned::try_from_element(from.nrows(), from.ncols(), U::default())?;
             std::iter::zip(to.as_mut_slice().iter_mut(), from.as_slice().iter())
                 .for_each(|(t, f)| *t = (*f).into());
             Ok(to)
