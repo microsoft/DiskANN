@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::{Init, Matrix};
+use diskann_utils::views::Matrix;
 use half::f16;
 use rand::{Rng, distr::Distribution};
 
@@ -36,7 +36,7 @@ impl TestDistr {
     where
         Self: Distribution<T>,
     {
-        Matrix::new(Init(|| (Self).sample(rng)), nrows, ncols)
+        Matrix::from_fn(nrows, ncols, |_| (Self).sample(rng))
     }
 }
 

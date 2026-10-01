@@ -332,10 +332,10 @@ mod imp {
             quantizer: diskann_providers::model::pq::FixedChunkPQTable,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
-            let mut data = diskann_utils::views::Matrix::try_new(
-                0,
+            let mut data = diskann_utils::views::Matrix::try_from_element(
                 input.nrows(),
                 quantizer.get_num_chunks(),
+                0,
             )?;
 
             // Compress the data.

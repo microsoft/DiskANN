@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::{Init, Matrix};
+use diskann_utils::views::Matrix;
 
 use crate::graph::AdjacencyList;
 
@@ -104,29 +104,16 @@ impl Grid {
         F: FnMut(usize) -> R,
     {
         match self {
-            Self::One => {
-                let mut i = 0;
-                let init = Init(|| {
-                    let this = f(i);
-                    i += 1;
-                    this
-                });
-                Matrix::new(init, size, 1)
-            }
+            Self::One => Matrix::from_fn(size, 1, |rc| f(rc.row)),
             Self::Two => {
                 let mut v = [0; 2];
-                let mut i = 0;
-                let init = Init(|| {
-                    let value = f(v[i]);
-                    i += 1;
-                    if i == 2 {
-                        i = 0;
+                Matrix::from_fn(size.pow(self.dim().into()), 2, |rc| {
+                    let value = f(v[rc.col]);
+                    if rc.col == 1 {
                         increment(&mut v, size);
                     }
                     value
-                });
-
-                Matrix::new(init, size.pow(self.dim().into()), 2)
+                })
             }
             Self::Three => {
                 // The whole we do with the array here is to avoid a `Default` bound on `R`
@@ -134,33 +121,23 @@ impl Grid {
                 //
                 // Is it overkill? Yes. Is it fun? Also yes!
                 let mut v = [0; 3];
-                let mut i = 0;
-                let init = Init(|| {
-                    let value = f(v[i]);
-                    i += 1;
-                    if i == 3 {
-                        i = 0;
+                Matrix::from_fn(size.pow(self.dim().into()), 3, |rc| {
+                    let value = f(v[rc.col]);
+                    if rc.col == 2 {
                         increment(&mut v, size);
                     }
                     value
-                });
-
-                Matrix::new(init, size.pow(self.dim().into()), 3)
+                })
             }
             Self::Four => {
                 let mut v = [0; 4];
-                let mut i = 0;
-                let init = Init(|| {
-                    let value = f(v[i]);
-                    i += 1;
-                    if i == 4 {
-                        i = 0;
+                Matrix::from_fn(size.pow(self.dim().into()), 4, |rc| {
+                    let value = f(v[rc.col]);
+                    if rc.col == 3 {
                         increment(&mut v, size);
                     }
                     value
-                });
-
-                Matrix::new(init, size.pow(self.dim().into()), 4)
+                })
             }
         }
     }

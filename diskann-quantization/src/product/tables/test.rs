@@ -84,7 +84,7 @@ pub(super) fn create_pivot_tables(
     schema: ChunkOffsets,
     num_centers: usize,
 ) -> (Matrix<f32>, ChunkOffsets) {
-    let mut pivots = Matrix::<f32>::new(0.0, num_centers, schema.dim());
+    let mut pivots = Matrix::<f32>::from_element(num_centers, schema.dim(), 0.0);
 
     (0..schema.len()).for_each(|chunk| {
         let range = schema.at(chunk);
@@ -126,8 +126,8 @@ pub(super) fn create_dataset<R: Rng>(
     num_data: usize,
     rng: &mut R,
 ) -> (Matrix<f32>, Matrix<usize>) {
-    let mut data = Matrix::<f32>::new(0.0, num_data, schema.dim());
-    let mut expected = Matrix::<usize>::new(0, num_data, schema.len());
+    let mut data = Matrix::<f32>::from_element(num_data, schema.dim(), 0.0);
+    let mut expected = Matrix::<usize>::from_element(num_data, schema.len(), 0);
 
     let dist = Uniform::new(0, num_centers).unwrap();
     for row_index in 0..data.nrows() {
@@ -171,7 +171,7 @@ pub(super) fn check_pqtable_single_compression_errors<T>(
 
     // Set up `ncenters > 256`.
     {
-        let pivots = Matrix::new(0.0, 257, dim);
+        let pivots = Matrix::from_element(257, dim, 0.0);
         let table = build(pivots, offsets.clone());
 
         let input = vec![f32::default(); dim];
@@ -193,7 +193,7 @@ pub(super) fn check_pqtable_single_compression_errors<T>(
 
     // Setup input dim not equal to expected.
     {
-        let pivots = Matrix::new(0.0, 10, dim);
+        let pivots = Matrix::from_element(10, dim, 0.0);
         let table = build(pivots, offsets.clone());
 
         let input = vec![f32::default(); dim - 1];
@@ -215,7 +215,7 @@ pub(super) fn check_pqtable_single_compression_errors<T>(
 
     // Setup output dim not equal to expected.
     {
-        let pivots = Matrix::new(0.0, 10, dim);
+        let pivots = Matrix::from_element(10, dim, 0.0);
         let table = build(pivots, offsets.clone());
 
         let input = vec![f32::default(); dim];
@@ -308,11 +308,11 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
 
     // Set up `ncenters > 256`.
     {
-        let pivots = Matrix::new(0.0, 257, dim);
+        let pivots = Matrix::from_element(257, dim, 0.0);
         let table = build(pivots, offsets.clone());
 
-        let input = Matrix::new(f32::default(), batchsize, dim);
-        let mut output = Matrix::new(u8::MAX, batchsize, num_chunks);
+        let input = Matrix::from_element(batchsize, dim, f32::default());
+        let mut output = Matrix::from_element(batchsize, num_chunks, u8::MAX);
         let result = table.compress_into(input.as_view(), output.as_mut_view());
         assert!(result.is_err());
         assert_eq!(
@@ -330,11 +330,11 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
 
     // Setup input dim not equal to expected.
     {
-        let pivots = Matrix::new(0.0, 10, dim);
+        let pivots = Matrix::from_element(10, dim, 0.0);
         let table = build(pivots, offsets.clone());
 
-        let input = Matrix::new(f32::default(), batchsize, dim - 1);
-        let mut output = Matrix::new(u8::MAX, batchsize, num_chunks);
+        let input = Matrix::from_element(batchsize, dim - 1, f32::default());
+        let mut output = Matrix::from_element(batchsize, num_chunks, u8::MAX);
         let result = table.compress_into(input.as_view(), output.as_mut_view());
         assert!(result.is_err());
         assert_eq!(
@@ -352,11 +352,11 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
 
     // Setup output dim not equal to expected.
     {
-        let pivots = Matrix::new(0.0, 10, dim);
+        let pivots = Matrix::from_element(10, dim, 0.0);
         let table = build(pivots, offsets.clone());
 
-        let input = Matrix::new(f32::default(), batchsize, dim);
-        let mut output = Matrix::new(u8::MAX, batchsize, num_chunks - 1);
+        let input = Matrix::from_element(batchsize, dim, f32::default());
+        let mut output = Matrix::from_element(batchsize, num_chunks - 1, u8::MAX);
         let result = table.compress_into(input.as_view(), output.as_mut_view());
 
         assert!(result.is_err());
@@ -379,11 +379,11 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
 
     // Num rows are different.
     {
-        let pivots = Matrix::new(0.0, 10, dim);
+        let pivots = Matrix::from_element(10, dim, 0.0);
         let table = build(pivots, offsets.clone());
 
-        let input = Matrix::new(f32::default(), batchsize, dim);
-        let mut output = Matrix::new(u8::MAX, batchsize - 1, num_chunks);
+        let input = Matrix::from_element(batchsize, dim, f32::default());
+        let mut output = Matrix::from_element(batchsize - 1, num_chunks, u8::MAX);
         let result = table.compress_into(input.as_view(), output.as_mut_view());
 
         assert!(result.is_err());
@@ -416,8 +416,8 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
         let table = build(pivots, o);
 
         let num_points = 15;
-        let mut buf = Matrix::<f32>::new(0.0, num_points, offsets.dim());
-        let mut output = Matrix::<u8>::new(0, num_points, offsets.len());
+        let mut buf = Matrix::<f32>::from_element(num_points, offsets.dim(), 0.0);
+        let mut output = Matrix::<u8>::from_element(num_points, offsets.len(), 0);
 
         fn clear<T: Default>(mut x: MutMatrixView<T>) {
             x.as_mut_slice().iter_mut().for_each(|i| *i = T::default());

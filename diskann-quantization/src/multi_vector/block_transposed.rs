@@ -1266,7 +1266,7 @@ mod tests {
 
     #[test]
     fn clone_has_independent_backing_allocation() {
-        let mut data = Matrix::new(0, 5, 3);
+        let mut data = Matrix::from_element(5, 3, 0);
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
@@ -1324,7 +1324,7 @@ mod tests {
 
         // ── Construction ─────────────────────────────────────────
 
-        let mut data = Matrix::new(T::default(), nrows, ncols);
+        let mut data = Matrix::from_element(nrows, ncols, T::default());
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
@@ -1878,7 +1878,7 @@ mod tests {
         ncols: usize,
         gen_element: fn(usize) -> T,
     ) {
-        let mut data = Matrix::new(T::default(), nrows, ncols);
+        let mut data = Matrix::from_element(nrows, ncols, T::default());
         data.as_mut_slice()
             .iter_mut()
             .enumerate()

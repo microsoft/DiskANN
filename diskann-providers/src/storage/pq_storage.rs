@@ -113,7 +113,7 @@ impl PQStorage {
         // Write the centroid of PQ centroid vectors
         let centroid_bytes = match centroid {
             Some(centroid) => write_bin(MatrixView::column_vector(centroid), writer)?,
-            None => write_bin(Matrix::<f32>::new(0.0, dim, 1).as_view(), writer)?,
+            None => write_bin(Matrix::<f32>::from_element(dim, 1, 0.0).as_view(), writer)?,
         };
         cumul_bytes[2] = cumul_bytes[1] + centroid_bytes;
 

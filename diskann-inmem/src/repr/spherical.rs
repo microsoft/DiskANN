@@ -716,7 +716,7 @@ mod tests {
 
         let quantizer = train_quantizer(data.as_view(), metric, bits);
 
-        let mut start_points = Matrix::new(0.0, 2, data.ncols());
+        let mut start_points = Matrix::from_element(2, data.ncols(), 0.0);
         start_points.row_mut(0).fill(-2.0);
         start_points.row_mut(1).fill(2.0);
 
@@ -1193,10 +1193,10 @@ mod tests {
 
     #[test]
     fn test_config_dim_mismatch() {
-        let data = Matrix::new(1.0f32, 2, 5);
+        let data = Matrix::from_element(2, 5, 1.0f32);
         let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
 
-        let start_points = Matrix::new(0.0f32, 1, 6); // Wrong number of columns
+        let start_points = Matrix::from_element(1, 6, 0.0f32); // Wrong number of columns
         let err = Spherical::config(
             quantizer,
             Capacity::new(10),
@@ -1215,10 +1215,10 @@ mod tests {
 
     #[test]
     fn test_empty_start_points() {
-        let data = Matrix::new(1.0f32, 2, 5);
+        let data = Matrix::from_element(2, 5, 1.0f32);
         let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
 
-        let start_points = Matrix::new(0.0f32, 0, 5); // Empty
+        let start_points = Matrix::from_element(0, 5, 0.0f32); // Empty
         let err = Spherical::config(
             quantizer,
             Capacity::new(10),
@@ -1234,10 +1234,10 @@ mod tests {
 
     #[test]
     fn test_build_error_uncompressible_query() {
-        let data = Matrix::new(1.0f32, 2, 5);
+        let data = Matrix::from_element(2, 5, 1.0f32);
         let quantizer = train_quantizer(data.as_view(), SupportedMetric::SquaredL2, Bits::One);
 
-        let start_points = Matrix::new(f32::INFINITY, 1, 5); // Wrong number of columns
+        let start_points = Matrix::from_element(1, 5, f32::INFINITY); // Wrong number of columns
         let config = Spherical::config(
             quantizer,
             Capacity::new(10),

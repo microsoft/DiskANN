@@ -434,7 +434,7 @@ where
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
         let candidate_count = candidates.len();
         let store: &FullPrecisionStore<f32> = accessor.as_full_precision();
-        let mut vectors = match Matrix::try_new(0.0f32, candidate_count, query.len()) {
+        let mut vectors = match Matrix::try_from_element(candidate_count, query.len(), 0.0f32) {
             Ok(vectors) => vectors,
             Err(error) => return std::future::ready(Err(error.into())),
         };

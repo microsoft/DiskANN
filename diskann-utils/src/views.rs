@@ -291,79 +291,163 @@ where
     layout: Layout<E>,
 }
 
-/// A generator for initializing the entries in a matrix via `Matrix::new`.
-pub trait Generator<T> {
-    fn generate(&mut self) -> T;
-}
-
-impl<T> Generator<T> for T
-where
-    T: Clone,
-{
-    fn generate(&mut self) -> T {
-        self.clone()
-    }
-}
-
-/// A matrix initializer that invokes the provided lambda to initialize each element.
-pub struct Init<F>(pub F);
-
-impl<T, F> Generator<T> for Init<F>
-where
-    F: FnMut() -> T,
-{
-    fn generate(&mut self) -> T {
-        (self.0)()
-    }
+/// An initializer argument for the closure provided to [`Matrix::from_fn`],
+/// [`Matrix::try_from_fn`], and [`Matrix::from_fn_with_layout`] to remove ambiguity of
+/// the row and column being initialized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowCol {
+    pub row: usize,
+    pub col: usize,
 }
 
 impl<T> MatrixBase<Box<[T]>> {
-    /// Construct a new [`Matrix`] initialized with the contents of `generator`.
-    ///
-    /// Elements are initialized in memory order.
-    pub fn new_with_layout<U>(mut generator: U, layout: Layout<T>) -> Self
-    where
-        U: Generator<T>,
-    {
-        let data: Box<[T]> = (0..layout.num_elements())
-            .map(|_| generator.generate())
-            .collect();
-        Self { data, layout }
-    }
+    // NOTE: For constructors, keep `from_fn` and `from_element` first.
+    //
+    // Rust suggests methods in their declaration order, so this keeps the most common
+    // methods as top suggestions.
 
-    /// Construct a new [`Matrix`] initialized with the contents of `generator`.
+    /// Construct a new matrix using `init`.
     ///
     /// Elements are initialized in memory order.
     ///
-    /// # Errors
+    /// ```
+    /// use diskann_utils::views::Matrix;
     ///
-    /// Returns an error if `nrows * ncols` overflows `usize::MAX`, or if the allocation size
-    /// exceeds `isize::MAX`.
-    pub fn try_new<U>(generator: U, nrows: usize, ncols: usize) -> Result<Self, LayoutError>
-    where
-        U: Generator<T>,
-    {
-        let layout = Layout::new(nrows, ncols)?;
-        Ok(Self::new_with_layout(generator, layout))
-    }
-
-    /// Construct a new [`Matrix`] initialized with the contents of `generator`.
+    /// let mat = Matrix::from_fn(2, 3, |rc| 3 * rc.row + rc.col);
     ///
-    /// Elements are initialized in memory order.
+    /// assert_eq!(mat.row(0), &[0, 1, 2]);
+    /// assert_eq!(mat.row(1), &[3, 4, 5]);
+    /// ```
     ///
     /// # Panics
     ///
     /// Panics if `nrows * ncols` overflows `usize::MAX`, or if the allocation size exceeds
     /// `isize::MAX`.
     #[track_caller]
-    pub fn new<U>(generator: U, nrows: usize, ncols: usize) -> Self
+    pub fn from_fn<F>(nrows: usize, ncols: usize, init: F) -> Self
     where
-        U: Generator<T>,
+        F: FnMut(RowCol) -> T,
     {
-        match Self::try_new(generator, nrows, ncols) {
+        match Self::try_from_fn(nrows, ncols, init) {
             Ok(matrix) => matrix,
-            Err(error) => panic!("Matrix::new failed with: {error}"),
+            Err(error) => panic!("Matrix::from_fn failed with: {error}"),
         }
+    }
+
+    /// Construct a new matrix using `init`.
+    ///
+    /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::try_from_fn(2, 3, |rc| 3 * rc.row + rc.col).unwrap();
+    ///
+    /// assert_eq!(mat.row(0), &[0, 1, 2]);
+    /// assert_eq!(mat.row(1), &[3, 4, 5]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `nrows * ncols` overflows `usize::MAX`, or if the allocation size
+    /// exceeds `isize::MAX`.
+    pub fn try_from_fn<F>(nrows: usize, ncols: usize, init: F) -> Result<Self, LayoutError>
+    where
+        F: FnMut(RowCol) -> T,
+    {
+        let layout = Layout::new(nrows, ncols)?;
+        Ok(Self::from_fn_with_layout(layout, init))
+    }
+
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::from_element(2, 3, 0u32);
+    ///
+    /// assert_eq!(mat.row(0), &[0, 0, 0]);
+    /// assert_eq!(mat.row(1), &[0, 0, 0]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nrows * ncols` overflows `usize::MAX`, or if the allocation size exceeds
+    /// `isize::MAX`.
+    #[track_caller]
+    pub fn from_element(nrows: usize, ncols: usize, element: T) -> Self
+    where
+        T: Clone,
+    {
+        match Self::try_from_element(nrows, ncols, element) {
+            Ok(matrix) => matrix,
+            Err(error) => panic!("Matrix::from_element failed with: {error}"),
+        }
+    }
+
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::try_from_element(2, 3, 0u32).unwrap();
+    ///
+    /// assert_eq!(mat.row(0), &[0, 0, 0]);
+    /// assert_eq!(mat.row(1), &[0, 0, 0]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `nrows * ncols` overflows `usize::MAX`, or if the allocation size
+    /// exceeds `isize::MAX`.
+    pub fn try_from_element(nrows: usize, ncols: usize, element: T) -> Result<Self, LayoutError>
+    where
+        T: Clone,
+    {
+        let layout = Layout::new(nrows, ncols)?;
+        Ok(Self::from_element_with_layout(layout, element))
+    }
+
+    // Less common constructors.
+
+    /// Construct a new matrix using `init`.
+    ///
+    /// Elements are initialized in memory order.
+    pub fn from_fn_with_layout<F>(layout: Layout<T>, mut init: F) -> Self
+    where
+        F: FnMut(RowCol) -> T,
+    {
+        let mut row = 0;
+        let mut col = 0;
+
+        let data: Box<[T]> = (0..layout.num_elements())
+            .map(|_| {
+                let v = (init)(RowCol { row, col });
+                col += 1;
+                if col == layout.ncols() {
+                    col = 0;
+                    row += 1;
+                }
+                v
+            })
+            .collect();
+
+        Self { data, layout }
+    }
+
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
+    pub fn from_element_with_layout(layout: Layout<T>, element: T) -> Self
+    where
+        T: Clone,
+    {
+        let data: Box<[T]> = std::iter::repeat_n(element, layout.num_elements()).collect();
+        Self { data, layout }
     }
 }
 
@@ -775,7 +859,7 @@ where
     /// ```rust
     /// use diskann_utils::views::Matrix;
     ///
-    /// let mut mat = Matrix::new(0usize, 4, 3);
+    /// let mut mat = Matrix::from_element(4, 3, 0usize);
     ///
     /// // Fill the matrix with some data.
     /// mat.row_iter_mut().enumerate().for_each(|(i, row)| row.fill(i));
@@ -944,27 +1028,10 @@ where
     where
         T::Elem: Clone,
     {
-        let mut row = 0;
-        let mut col = 0;
-
-        let layout = self.layout();
-
-        let f = Init(|| {
-            // SAFETY: `row` and `cols` are always less than `self.nrows()` and `self.ncols()`
-            // respectively.
-            let v = unsafe { self.element_unchecked(row, col) }.clone();
-            row += 1;
-            if row == layout.nrows() {
-                row = 0;
-                col += 1;
-                if col == layout.ncols() {
-                    col = 0;
-                }
-            }
-            v
-        });
-
-        Matrix::new_with_layout(f, layout.transpose())
+        Matrix::from_fn_with_layout(self.layout.transpose(), |RowCol { row, col }| {
+            // SAFETY: By construction, `col < self.nrows()` and `row < self.ncols()`.
+            unsafe { self.element_unchecked(col, row).clone() }
+        })
     }
 }
 
@@ -1299,17 +1366,17 @@ mod tests {
 
     #[test]
     fn fallible_matrix_constructors() {
-        let err = Matrix::try_new(0u32, usize::MAX, usize::MAX).unwrap_err();
+        let err = Matrix::try_from_element(usize::MAX, usize::MAX, 0u32).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("exceeding `usize::MAX`"), "{msg}");
+        assert_contains!(msg, "exceeding `usize::MAX`");
 
-        let err = Matrix::try_new(0u32, isize::MAX as usize, 1).unwrap_err();
+        let err = Matrix::try_from_element(isize::MAX as usize, 1, 0u32).unwrap_err();
         let msg = err.to_string();
         assert_contains!(msg, "exceeds `isize::MAX` bytes");
 
         // Panicking
         let err = std::panic::catch_unwind(|| {
-            Matrix::new(0u32, usize::MAX, usize::MAX);
+            Matrix::from_element(usize::MAX, usize::MAX, 0u32);
         })
         .unwrap_err()
         .downcast::<String>()
@@ -1319,7 +1386,7 @@ mod tests {
         assert_contains!(msg, "exceeding `usize::MAX`");
 
         let err = std::panic::catch_unwind(|| {
-            Matrix::new(0u32, isize::MAX as usize, 1);
+            Matrix::from_element(isize::MAX as usize, 1, 0u32);
         })
         .unwrap_err()
         .downcast::<String>()
@@ -1328,7 +1395,7 @@ mod tests {
         assert_contains!(msg, "exceeds `isize::MAX` bytes");
 
         // Construction fails without invoking the generator.
-        let err = Matrix::try_new(Init(|| panic!("boom")), usize::MAX, usize::MAX).unwrap_err();
+        let err = Matrix::try_from_fn(usize::MAX, usize::MAX, |_| panic!("boom")).unwrap_err();
         let msg = err.to_string();
         assert_contains!(msg, "exceeding `usize::MAX`");
     }
@@ -1568,7 +1635,7 @@ mod tests {
 
     #[test]
     fn matrix_mut_view() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
         assert_eq!(m.nrows(), 4);
         assert_eq!(m.ncols(), 3);
         assert!(m.as_slice().iter().all(|&i| i == 0));
@@ -1622,7 +1689,7 @@ mod tests {
 
     #[test]
     fn matrix_view_construction_elementwise() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
 
         // Construct the test matrix manually.
         for i in 0..m.nrows() {
@@ -1635,7 +1702,7 @@ mod tests {
 
     #[test]
     fn matrix_construction_by_row() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
         assert!(m.as_slice().iter().all(|i| *i == 0));
 
         let ncols = m.ncols();
@@ -1651,7 +1718,7 @@ mod tests {
 
     #[test]
     fn matrix_construction_by_rowiter() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
         assert!(m.as_slice().iter().all(|i| *i == 0));
 
         let ncols = m.ncols();
@@ -1667,7 +1734,7 @@ mod tests {
     #[cfg(all(not(miri), feature = "rayon"))]
     #[test]
     fn matrix_construction_by_par_windows() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
         assert!(m.as_slice().iter().all(|i| *i == 0));
 
         let ncols = m.ncols();
@@ -1691,13 +1758,13 @@ mod tests {
     fn matrix_construction_happens_in_memory_order() {
         let mut i = 0;
         let ncols = 3;
-        let initializer = Init(|| {
+        let initializer = |_| {
             let value = (i % ncols) + (i / ncols);
             i += 1;
             value
-        });
+        };
 
-        let m = Matrix::new(initializer, 4, 3);
+        let m = Matrix::from_fn(4, 3, initializer);
         test_basic_indexing(&m);
     }
 
@@ -1705,21 +1772,21 @@ mod tests {
     #[test]
     #[should_panic(expected = "tried to access row 3 of a matrix with 3 rows")]
     fn test_get_row_panics() {
-        let m = Matrix::<usize>::new(0, 3, 7);
+        let m = Matrix::<usize>::from_element(3, 7, 0);
         m.row(3);
     }
 
     #[test]
     #[should_panic(expected = "tried to access row 3 of a matrix with 3 rows")]
     fn test_get_row_mut_panics() {
-        let mut m = Matrix::<usize>::new(0, 3, 7);
+        let mut m = Matrix::<usize>::from_element(3, 7, 0);
         m.row_mut(3);
     }
 
     #[test]
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
     fn test_element_panics_row() {
-        let m = Matrix::<usize>::new(0, 3, 7);
+        let m = Matrix::<usize>::from_element(3, 7, 0);
         assert!(m.get_element(3, 2).is_none());
         let _ = m.element(3, 2);
     }
@@ -1727,7 +1794,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
     fn test_element_panics_col() {
-        let m = Matrix::<usize>::new(0, 3, 7);
+        let m = Matrix::<usize>::from_element(3, 7, 0);
         assert!(m.get_element(2, 7).is_none());
         let _ = m.element(2, 7);
     }
@@ -1735,7 +1802,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
     fn test_element_mut_panics_row() {
-        let mut m = Matrix::<usize>::new(0, 3, 7);
+        let mut m = Matrix::<usize>::from_element(3, 7, 0);
         assert!(m.get_element_mut(3, 2).is_none());
         *m.element_mut(3, 2) = 1;
     }
@@ -1743,7 +1810,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
     fn test_element_mut_panics_col() {
-        let mut m = Matrix::<usize>::new(0, 3, 7);
+        let mut m = Matrix::<usize>::from_element(3, 7, 0);
         assert!(m.get_element_mut(2, 7).is_none());
         *m.element_mut(2, 7) = 1;
     }
@@ -1752,7 +1819,7 @@ mod tests {
     #[cfg(feature = "rayon")]
     #[should_panic(expected = "par_window_iter batchsize cannot be zero")]
     fn test_par_window_iter_panics() {
-        let m = Matrix::<usize>::new(0, 4, 4);
+        let m = Matrix::<usize>::from_element(4, 4, 0);
         let _ = m.par_window_iter(0);
     }
 
@@ -1760,7 +1827,7 @@ mod tests {
     #[cfg(feature = "rayon")]
     #[should_panic(expected = "par_window_iter_mut batchsize cannot be zero")]
     fn test_par_window_iter_mut_panics() {
-        let mut m = Matrix::<usize>::new(0, 4, 4);
+        let mut m = Matrix::<usize>::from_element(4, 4, 0);
         let _ = m.par_window_iter_mut(0);
     }
 
@@ -1911,24 +1978,6 @@ mod tests {
     }
 
     #[test]
-    fn test_generator_trait_impls() {
-        // Test Generator impl for T where T: Clone
-        let mut gen = 42i32;
-        assert_eq!(gen.generate(), 42);
-        assert_eq!(gen.generate(), 42); // Should be same value since it's cloned
-
-        // Test Generator impl for Init<F>
-        let mut counter = 0;
-        let mut gen = Init(|| {
-            counter += 1;
-            counter
-        });
-        assert_eq!(gen.generate(), 1);
-        assert_eq!(gen.generate(), 2);
-        assert_eq!(gen.generate(), 3);
-    }
-
-    #[test]
     fn test_matrix_from_conversions() {
         let data = make_test_matrix();
         let m = Matrix::try_from(data.into(), 4, 3).unwrap();
@@ -1953,20 +2002,20 @@ mod tests {
     #[test]
     fn test_matrix_construction_edge_cases() {
         // Test 1x1 matrix
-        let m = Matrix::new(42, 1, 1);
+        let m = Matrix::from_element(1, 1, 42);
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 1);
         assert_eq!(*m.element(0, 0), 42);
         assert_eq!(*m.get_element(0, 0).unwrap(), 42);
 
         // Test single row matrix
-        let m = Matrix::new(7, 1, 5);
+        let m = Matrix::from_element(1, 5, 7);
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 5);
         assert!(m.as_slice().iter().all(|&x| x == 7));
 
         // Test single column matrix
-        let m = Matrix::new(9, 5, 1);
+        let m = Matrix::from_element(5, 1, 9);
         assert_eq!(m.nrows(), 5);
         assert_eq!(m.ncols(), 1);
         assert!(m.as_slice().iter().all(|&x| x == 9));
@@ -2172,7 +2221,7 @@ mod tests {
     )]
     #[test]
     fn test_subview_zero_cols() {
-        let m = Matrix::new(0u32, 10, 0);
+        let m = Matrix::from_element(10, 0, 0u32);
 
         // Out-of-bounds indexing
         assert!(m.subview(100..200).is_none());
@@ -2224,7 +2273,7 @@ mod tests {
         assert_eq!(rows[3], &[3, 4, 5]);
 
         // Test par_window_iter_mut and par_row_iter_mut
-        let mut m2 = Matrix::new(0, 4, 3);
+        let mut m2 = Matrix::from_element(4, 3, 0);
 
         // Use par_row_iter_mut to set values
         m2.par_row_iter_mut().enumerate().for_each(|(i, row)| {
@@ -2235,7 +2284,7 @@ mod tests {
         test_basic_indexing(&m2);
 
         // Test par_window_iter_mut with larger batchsize
-        let mut m3 = Matrix::new(0, 4, 3);
+        let mut m3 = Matrix::from_element(4, 3, 0);
         m3.par_window_iter_mut(10)
             .enumerate()
             .for_each(|(_, mut window)| {
@@ -2250,7 +2299,7 @@ mod tests {
 
     #[test]
     fn test_matrix_pointers() {
-        let mut m = Matrix::new(42, 3, 4);
+        let mut m = Matrix::from_element(3, 4, 42);
 
         // Test as_ptr and as_mut_ptr return the same address
         let const_ptr = m.as_ptr();
@@ -2298,7 +2347,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let counter = AtomicUsize::new(0);
-        let m = Matrix::new(Init(|| counter.fetch_add(1, Ordering::SeqCst)), 2, 3);
+        let m = Matrix::from_fn(2, 3, |_| counter.fetch_add(1, Ordering::SeqCst));
 
         // Should be filled in memory order
         assert_eq!(*m.element(0, 0), 0);
@@ -2312,21 +2361,21 @@ mod tests {
     #[test]
     fn test_transpose() {
         {
-            let v = Matrix::new(0, 0, 0);
+            let v = Matrix::from_element(0, 0, 0);
             let t = v.transpose();
             assert_eq!(t.nrows(), 0);
             assert_eq!(t.ncols(), 0);
         }
 
         {
-            let v = Matrix::new(0, 0, 10);
+            let v = Matrix::from_element(0, 10, 0);
             let t = v.transpose();
             assert_eq!(t.nrows(), 10);
             assert_eq!(t.ncols(), 0);
         }
 
         {
-            let v = Matrix::new(0, 10, 0);
+            let v = Matrix::from_element(10, 0, 0);
             let t = v.transpose();
             assert_eq!(t.nrows(), 0);
             assert_eq!(t.ncols(), 10);
@@ -2453,7 +2502,7 @@ mod tests {
                 for batchsize in [1, 2, 3, 7] {
                     let context = lazy_format!("{}x{}, batchsize={}", nrows, ncols, batchsize);
 
-                    let mut m = Matrix::new(0usize, nrows, ncols);
+                    let mut m = Matrix::from_element(nrows, ncols, 0usize);
 
                     // Use par_window_iter_mut to fill matrix
                     m.par_window_iter_mut(batchsize).enumerate().for_each(
@@ -2560,7 +2609,7 @@ mod tests {
 
         let nrows = 6;
         let ncols = 4;
-        let mut m = Matrix::new(0u32, nrows, ncols);
+        let mut m = Matrix::from_element(nrows, ncols, 0u32);
 
         // Test parallel modification
         m.par_row_iter_mut().enumerate().for_each(|(row_idx, row)| {
@@ -2723,7 +2772,7 @@ mod tests {
         // Create a larger matrix to test parallelism benefits
         let nrows = 100;
         let ncols = 10;
-        let mut m = Matrix::new(0usize, nrows, ncols);
+        let mut m = Matrix::from_element(nrows, ncols, 0usize);
 
         // Test that parallel operations can be chained
         let work_counter = AtomicUsize::new(0);
@@ -2784,7 +2833,7 @@ mod tests {
         let _: Vec<_> = m.par_row_iter().collect();
 
         // Test with mutable matrix
-        let mut m = Matrix::new(0u64, 4, 5);
+        let mut m = Matrix::from_element(4, 5, 0u64);
 
         // This should compile because u64 is Send
         m.par_window_iter_mut(2).for_each(|mut window| {

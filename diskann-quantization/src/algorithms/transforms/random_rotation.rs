@@ -5,16 +5,16 @@
 
 use std::num::NonZeroUsize;
 
+use diskann_linalg::{self, Transpose};
 #[cfg(feature = "flatbuffers")]
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
-use diskann_linalg::{self, Transpose};
 use rand::Rng;
 #[cfg(feature = "flatbuffers")]
 use thiserror::Error;
 
 use super::{
-    utils::{check_dims, TransformFailed},
     TargetDim,
+    utils::{TransformFailed, check_dims},
 };
 #[cfg(feature = "flatbuffers")]
 use crate::flatbuffers as fb;
@@ -102,7 +102,8 @@ impl RandomRotation {
                 let indices = rand::seq::index::sample(rng, dim, target_dim);
                 let scaling = (dim as f32 / target_dim as f32).sqrt();
 
-                let mut transform = diskann_utils::views::Matrix::new(0.0f32, target_dim, dim);
+                let mut transform =
+                    diskann_utils::views::Matrix::from_element(target_dim, dim, 0.0f32);
                 std::iter::zip(transform.row_iter_mut(), indices.iter()).for_each(|(ro, ri)| {
                     std::iter::zip(ro.iter_mut(), initial.row(ri).iter()).for_each(|(o, i)| {
                         *o = scaling * (*i);
@@ -111,7 +112,8 @@ impl RandomRotation {
                 transform
             }
             std::cmp::Ordering::Greater => {
-                let mut transform = diskann_utils::views::Matrix::new(0.0f32, target_dim, dim);
+                let mut transform =
+                    diskann_utils::views::Matrix::from_element(target_dim, dim, 0.0f32);
                 std::iter::zip(transform.row_iter_mut(), initial.row_iter())
                     .for_each(|(o, i)| o.copy_from_slice(&i[..dim]));
                 transform
@@ -234,11 +236,11 @@ impl RandomRotation {
 #[cfg(test)]
 mod tests {
     use diskann_utils::lazy_format;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::{
-        algorithms::transforms::{test_utils, Transform, TransformFailed, TransformKind},
+        algorithms::transforms::{Transform, TransformFailed, TransformKind, test_utils},
         alloc::GlobalAllocator,
         test_util::Check,
     };
