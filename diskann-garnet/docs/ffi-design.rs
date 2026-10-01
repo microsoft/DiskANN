@@ -31,7 +31,13 @@ enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2I8,
 }
+
+/// Returns 1 if signed-int8 2-bit spherical quantization (enum value 8) is supported.
+/// Check for this symbol before using that enum value with an older native library.
+#[unsafe(no_mangle)]
+extern "C" fn supports_xspherical2_i8() -> u8;
 
 /// Status returned by `insert`, encoded as a `u8`.
 ///

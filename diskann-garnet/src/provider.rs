@@ -257,9 +257,19 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
                 (Some(quantizer), canonical_bytes, true)
             }
-            VectorQuantType::Bin | VectorQuantType::XBinU8 | VectorQuantType::XBinI8 => {
-                let quantizer =
-                    Box::new(quantization::Spherical1Bit::new(dim)) as Box<dyn GarnetQuantizer>;
+            VectorQuantType::Bin
+            | VectorQuantType::XBinU8
+            | VectorQuantType::XBinI8
+            | VectorQuantType::XSpherical2I8 => {
+                let quantizer: Box<dyn GarnetQuantizer> =
+                    if quant_type == VectorQuantType::XSpherical2I8 {
+                        if TypeId::of::<T>() != TypeId::of::<i8>() {
+                            return Err(GarnetProviderError::InvalidQuantizer);
+                        }
+                        Box::new(quantization::Spherical2Bit::new(dim))
+                    } else {
+                        Box::new(quantization::Spherical1Bit::new(dim))
+                    };
                 let canonical_bytes = quantizer.bytes();
                 let mut all_quantized = false;
 

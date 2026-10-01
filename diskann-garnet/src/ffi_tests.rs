@@ -14,7 +14,7 @@ mod tests {
         card, check_external_id_valid, check_internal_id_valid, create_index, drop_index,
         garnet::{Context, Term},
         insert,
-        quantization::{GarnetQuantizer, Spherical1Bit},
+        quantization::{GarnetQuantizer, Spherical1Bit, Spherical2Bit},
         remove, search_vector, set_attribute,
         test_utils::Store,
     };
@@ -987,6 +987,150 @@ mod tests {
         unsafe {
             drop_index(ctx.get(), index_ptr);
         }
+    }
+
+    #[test]
+    fn spherical_two_bit_int8_preserves_full_vectors_and_recovers() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::XSpherical2I8);
+        let required = Spherical2Bit::new(2).required_vectors();
+        let encoded_bytes = Spherical2Bit::new(2).bytes();
+
+        for id in 0..required {
+            let vector = [(id % 127) as i8 - 63, ((id * 47) % 127) as i8 - 63];
+            let eid = id as u32;
+            let result: InsertResult = unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    bytemuck::bytes_of(&eid).as_ptr(),
+                    mem::size_of::<u32>(),
+                    vector.as_ptr().cast(),
+                    vector.len(),
+                    ptr::null(),
+                    0,
+                )
+                .into()
+            };
+            assert_eq!(
+                result,
+                if id + 1 == required {
+                    InsertResult::SuccessStartTraining
+                } else {
+                    InsertResult::Success
+                }
+            );
+        }
+
+        assert!(unsafe { build_quant_table(ctx.get(), index_ptr) });
+        let vector = [-17i8, 29i8];
+        let eid = required as u32;
+        let result: InsertResult = unsafe {
+            insert(
+                ctx.get(),
+                index_ptr,
+                bytemuck::bytes_of(&eid).as_ptr(),
+                mem::size_of::<u32>(),
+                vector.as_ptr().cast(),
+                vector.len(),
+                ptr::null(),
+                0,
+            )
+            .into()
+        };
+        assert_eq!(result, InsertResult::Success);
+
+        let iid = (required + 1) as u32;
+        let key = bytemuck::bytes_of(&iid);
+        assert_eq!(
+            store.get(ctx.term(Term::Vector).get(), key).unwrap(),
+            bytemuck::cast_slice::<i8, u8>(&vector),
+        );
+        assert_eq!(
+            store
+                .get(ctx.term(Term::Quantized).get(), key)
+                .unwrap()
+                .len(),
+            encoded_bytes
+        );
+
+        assert!(unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 1) });
+        let search = |ptr| {
+            let mut ids = [0u8; 80];
+            let mut distances = [0f32; 10];
+            let mut overflow = ptr::null_mut();
+            let count = unsafe {
+                search_vector(
+                    ctx.get(),
+                    ptr,
+                    vector.as_ptr().cast(),
+                    vector.len(),
+                    0.0,
+                    32,
+                    ptr::null(),
+                    0,
+                    0,
+                    ids.as_mut_ptr(),
+                    ids.len(),
+                    distances.as_mut_ptr(),
+                    distances.len(),
+                    1,
+                    &mut overflow,
+                )
+            };
+            assert!(count > 0, "two-bit int8 search failed: {count}");
+            assert!(overflow.is_null());
+            (
+                ids[..count as usize * 8].to_vec(),
+                distances[..count as usize].to_vec(),
+            )
+        };
+
+        store.clear_read_counts();
+        let before = search(index_ptr);
+        assert!(store.quant_reads() > 0);
+        assert!(store.full_reads() > 0);
+
+        let mut ids = [0u8; 80];
+        let mut distances = [0f32; 10];
+        let mut overflow = ptr::null_mut();
+        store.clear_read_counts();
+        let element_count = unsafe {
+            crate::search_element(
+                ctx.get(),
+                index_ptr,
+                bytemuck::bytes_of(&eid).as_ptr(),
+                mem::size_of::<u32>(),
+                0.0,
+                32,
+                ptr::null(),
+                0,
+                0,
+                ids.as_mut_ptr(),
+                ids.len(),
+                distances.as_mut_ptr(),
+                distances.len(),
+                1,
+                &mut overflow,
+            )
+        };
+        assert!(
+            element_count > 0,
+            "two-bit int8 element search failed: {element_count}"
+        );
+        assert!(overflow.is_null());
+        assert!(store.quant_reads() > 0);
+        assert!(store.full_reads() > 0);
+
+        unsafe { drop_index(ctx.get(), index_ptr) };
+
+        let (recovered, ctx) = create_test_index(&store, VectorQuantType::XSpherical2I8);
+        assert_eq!(
+            store.get(ctx.term(Term::Vector).get(), key).unwrap(),
+            bytemuck::cast_slice::<i8, u8>(&vector),
+        );
+        assert_eq!(before, search(recovered));
+        unsafe { drop_index(ctx.get(), recovered) };
     }
 
     #[test]
