@@ -148,6 +148,18 @@ impl SIMDReinterpret<i16x8> for u8x16 {
     }
 }
 
+impl SIMDReinterpret<u8x64> for u64x8 {
+    fn reinterpret_simd(self) -> u8x64 {
+        u8x64(self.0)
+    }
+}
+
+impl SIMDReinterpret<i8x64> for u64x8 {
+    fn reinterpret_simd(self) -> i8x64 {
+        i8x64(self.0)
+    }
+}
+
 ///////////
 // Tests //
 ///////////

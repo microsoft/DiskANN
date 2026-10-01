@@ -384,10 +384,6 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
     }
 
     /// Return the index of the first band in `self`'s immediate parent [`View`].
-    #[cfg_attr(
-        not(test),
-        expect(unused, reason = "this completes an API but is not used yet")
-    )]
     pub(in crate::matrix_kernels) fn start(&self) -> usize {
         self._start
     }
