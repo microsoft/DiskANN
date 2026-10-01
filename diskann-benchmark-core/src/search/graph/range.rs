@@ -11,7 +11,7 @@ use diskann::{
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::{future::AsyncFriendly, views::rowmajor::{self, Matrix}};
 
 use crate::{
     recall,
@@ -33,7 +33,7 @@ where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
-    queries: Arc<Matrix<T>>,
+    queries: Arc<rowmajor::Owned<T>>,
     strategy: Strategy<S>,
 }
 
@@ -54,7 +54,7 @@ where
     /// the number of rows in `queries`.
     pub fn new(
         index: Arc<graph::DiskANNIndex<DP>>,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         strategy: Strategy<S>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
@@ -234,6 +234,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use diskann_utils::views::rowmajor::MatrixMut;
+
     use super::*;
 
     use diskann::graph::test::provider;
@@ -242,7 +244,7 @@ mod tests {
     fn test_range() {
         let index = search::graph::test_grid_provider();
 
-        let mut queries = Matrix::from_element(5, index.provider().dim(), 0.0f32);
+        let mut queries = rowmajor::Owned::from_element(5, index.provider().dim(), 0.0f32);
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -325,7 +327,7 @@ mod tests {
     fn test_range_error() {
         let index = search::graph::test_grid_provider();
 
-        let queries = Arc::new(Matrix::from_element(2, index.provider().dim(), 0.0f32));
+        let queries = Arc::new(rowmajor::Owned::from_element(2, index.provider().dim(), 0.0f32));
         let strategy = provider::Strategy::new();
 
         let err = Range::new(index, queries.clone(), Strategy::collection([strategy])).unwrap_err();

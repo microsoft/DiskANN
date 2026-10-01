@@ -175,10 +175,6 @@ pub unsafe trait Matrix {
     /// # Panics
     ///
     /// Panics if either `row` or `col` is out-of-bounds.
-    #[expect(
-        clippy::panic,
-        reason = "this is the panicking version of the indexing API"
-    )]
     fn element(&self, row: usize, col: usize) -> &Self::Element {
         assert!(
             row < self.nrows(),
@@ -706,6 +702,10 @@ impl std::error::Error for LayoutError {}
 
 macro_rules! constructors {
     ($element:ident, $data:ty) => {
+        /// Try to construct directly from `data`.
+        ///
+        /// Returns an error if [`Layout::new`] fails for `nrows` and `ncols` or `data.len()`
+        /// is not equal to `nrows * ncols`.
         pub fn try_from_data(
             data: $data,
             nrows: usize,
@@ -729,11 +729,13 @@ macro_rules! constructors {
             }
         }
 
+        /// Construct a row vector directly from `data`.
         pub fn row_vector(data: $data) -> Self {
             let layout = unsafe { Layout::new_unchecked(1, data.len()) };
             unsafe { Self::from_data_unchecked(data, layout) }
         }
 
+        /// Construct a column vector directly from `data`.
         pub fn column_vector(data: $data) -> Self {
             let layout = unsafe { Layout::new_unchecked(data.len(), 1) };
             unsafe { Self::from_data_unchecked(data, layout) }
@@ -753,6 +755,7 @@ pub struct RowCol {
     pub col: usize,
 }
 
+/// A [`Matrix`]/[`MatrixMut`] that owns its data.
 #[derive(Debug)]
 pub struct Owned<T> {
     ptr: NonNull<T>,
@@ -921,6 +924,9 @@ impl<T> Owned<T> {
         unsafe { Self::from_data_unchecked(data, layout) }
     }
 
+    /// # Safety
+    ///
+    /// `b.len()` must equal `layout.num_elements()`.
     unsafe fn from_data_unchecked(b: Box<[T]>, layout: Layout<T>) -> Self {
         debug_assert_eq!(b.len(), layout.num_elements());
         Self {
@@ -929,6 +935,18 @@ impl<T> Owned<T> {
         }
     }
 
+    /// Consume `self`, returning the unmodified contents as a boxed slice.
+    ///
+    /// ```
+    /// use diskann_utils::views::rowmajor::{Matrix, Owned};
+    ///
+    /// let mat = Owned::from_fn(2, 3, |rc| rc.col);
+    /// assert_eq!(mat.row(0), &[0, 1, 2]);
+    /// assert_eq!(mat.row(1), &[0, 1, 2]);
+    ///
+    /// let b: Box<[usize]> = mat.into_inner();
+    /// assert_eq!(&*b, &[0, 1, 2, 0, 1, 2]);
+    /// ```
     pub fn into_inner(self) -> Box<[T]> {
         let me = ManuallyDrop::new(self);
         unsafe { internal::nonnull_to_box(me.ptr, me.layout.num_elements()) }
@@ -999,6 +1017,7 @@ impl<'a, T> ReborrowMut<'a> for Owned<T> {
 // Ref //
 //-----//
 
+/// A [`Matrix`] implementation that references its data.
 #[derive(Debug)]
 pub struct Ref<'a, T> {
     ptr: NonNull<T>,
@@ -1012,6 +1031,9 @@ unsafe impl<T> Sync for Ref<'_, T> where T: Sync {}
 impl<'a, T> Ref<'a, T> {
     constructors!(T, &'a [T]);
 
+    /// # Safety
+    ///
+    /// `b.len()` must equal `layout.num_elements()`.
     unsafe fn from_data_unchecked(b: &'a [T], layout: Layout<T>) -> Self {
         debug_assert_eq!(b.len(), layout.num_elements());
         Self {
@@ -1021,6 +1043,9 @@ impl<'a, T> Ref<'a, T> {
         }
     }
 
+    /// Return the contents of `self` as a slice.
+    ///
+    /// Unlike [`Matrix::as_slice`], the returned slices inherits the lifetime of the [`Ref`].
     pub fn into_slice(self) -> &'a [T] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.layout().num_elements()) }
     }
@@ -1066,6 +1091,7 @@ where
 // Mut //
 //-----//
 
+/// A [`Matrix`]/[`MatrixMut`] implementation that mutably references its data.
 #[derive(Debug)]
 pub struct Mut<'a, T> {
     ptr: NonNull<T>,
@@ -1079,6 +1105,9 @@ unsafe impl<T> Sync for Mut<'_, T> where T: Sync {}
 impl<'a, T> Mut<'a, T> {
     constructors!(T, &'a mut [T]);
 
+    /// # Safety
+    ///
+    /// `b.len()` must equal `layout.num_elements()`.
     unsafe fn from_data_unchecked(b: &'a mut [T], layout: Layout<T>) -> Self {
         debug_assert_eq!(b.len(), layout.num_elements());
         Self {
@@ -1133,821 +1162,11 @@ impl<'a, T> ReborrowMut<'a> for Mut<'_, T> {
     }
 }
 
-// ////////////
-// // Matrix //
-// ////////////
-//
-// /// A view over a dense chunk of memory, interpreting that memory as a 2-dimensional matrix
-// /// laid out in row-major order.
-// ///
-// /// When this type views immutable memory, it is `Copy`.
-// ///
-// /// # Temporary Note
-// ///
-// /// This data structure is in the process of a representation migration. It currently
-// /// needs two type parameters:
-// ///
-// /// * `T`: The type of the container holding the data in the matrix.
-// /// * `E`: The element type of the matrix.
-// ///
-// /// The latter is needed to establish proper covariance with respect to the element type.
-// #[derive(Debug, Clone, Copy, PartialEq)]
-// pub struct MatrixBase<T, E = <T as DenseData>::Elem>
-// where
-//     T: DenseData<Elem = E>,
-// {
-//     data: T,
-//     layout: Layout<E>,
-// }
-//
-// /// An initializer argument for the closure provided to [`Matrix::from_fn`] and
-// /// [`Matrix::try_from_fn`] to remove ambiguity of the row and column being initialiazed.
-// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// pub struct RowCol {
-//     pub row: usize,
-//     pub col: usize,
-// }
-//
-// impl<T> MatrixBase<Box<[T]>> {
-//     // NOTE: For constructors, keep `from_fn` and `from_element` first.
-//     //
-//     // Rust suggests methods in their declaration order, so this keeps the most common
-//     // methods as top suggestions.
-//
-//     /// Construct a new matrix using `init`.
-//     ///
-//     /// Elements are initialized in memory order.
-//     ///
-//     /// ```
-//     /// use diskann_utils::views::Matrix;
-//     ///
-//     /// let mut i = 0;
-//     /// let mat = Matrix::from_fn(2, 3, |_| {
-//     ///     let value = i;
-//     ///     i += 1;
-//     ///     value
-//     /// });
-//     ///
-//     /// assert_eq!(mat.row(0), &[0, 1, 2]);
-//     /// assert_eq!(mat.row(1), &[3, 4, 5]);
-//     /// ```
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `nrows * ncols` overflows `usize::MAX`, or if the allocation size exceeds
-//     /// `isize::MAX`.
-//     #[track_caller]
-//     pub fn from_fn<F>(nrows: usize, ncols: usize, init: F) -> Self
-//     where
-//         F: FnMut(RowCol) -> T,
-//     {
-//         match Self::try_from_fn(nrows, ncols, init) {
-//             Ok(matrix) => matrix,
-//             Err(error) => panic!("Matrix::from_fn failed with: {error}"),
-//         }
-//     }
-//
-//     /// Construct a new matrix using `init`.
-//     ///
-//     /// Elements are initialized in memory order.
-//     ///
-//     /// ```
-//     /// use diskann_utils::views::Matrix;
-//     ///
-//     /// let mut i = 0;
-//     /// let mat = Matrix::try_from_fn(2, 3, |_| {
-//     ///     let value = i;
-//     ///     i += 1;
-//     ///     value
-//     /// }).unwrap();
-//     ///
-//     /// assert_eq!(mat.row(0), &[0, 1, 2]);
-//     /// assert_eq!(mat.row(1), &[3, 4, 5]);
-//     /// ```
-//     ///
-//     /// # Errors
-//     ///
-//     /// Returns an error if `nrows * ncols` overflows `usize::MAX`, or if the allocation size
-//     /// exceeds `isize::MAX`.
-//     pub fn try_from_fn<F>(nrows: usize, ncols: usize, init: F) -> Result<Self, LayoutError>
-//     where
-//         F: FnMut(RowCol) -> T,
-//     {
-//         let layout = Layout::new(nrows, ncols)?;
-//         Ok(Self::from_fn_with_layout(layout, init))
-//     }
-//
-//     /// Construct a new matrix by cloning `element`.
-//     ///
-//     /// Elements are initialized in memory order.
-//     ///
-//     /// ```
-//     /// use diskann_utils::views::Matrix;
-//     ///
-//     /// let mat = Matrix::from_element(2, 3, 0u32);
-//     ///
-//     /// assert_eq!(mat.row(0), &[0, 0, 0]);
-//     /// assert_eq!(mat.row(1), &[0, 0, 0]);
-//     /// ```
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `nrows * ncols` overflows `usize::MAX`, or if the allocation size exceeds
-//     /// `isize::MAX`.
-//     #[track_caller]
-//     pub fn from_element(nrows: usize, ncols: usize, element: T) -> Self
-//     where
-//         T: Clone,
-//     {
-//         match Self::try_from_element(nrows, ncols, element) {
-//             Ok(matrix) => matrix,
-//             Err(error) => panic!("Matrix::from_element failed with: {error}"),
-//         }
-//     }
-//
-//     /// Construct a new matrix by cloning `element`.
-//     ///
-//     /// Elements are initialized in memory order.
-//     ///
-//     /// ```
-//     /// use diskann_utils::views::Matrix;
-//     ///
-//     /// let mat = Matrix::try_from_element(2, 3, 0u32).unwrap();
-//     ///
-//     /// assert_eq!(mat.row(0), &[0, 0, 0]);
-//     /// assert_eq!(mat.row(1), &[0, 0, 0]);
-//     /// ```
-//     ///
-//     /// # Errors
-//     ///
-//     /// Returns an error if `nrows * ncols` overflows `usize::MAX`, or if the allocation size
-//     /// exceeds `isize::MAX`.
-//     pub fn try_from_element(nrows: usize, ncols: usize, element: T) -> Result<Self, LayoutError>
-//     where
-//         T: Clone,
-//     {
-//         let layout = Layout::new(nrows, ncols)?;
-//         Ok(Self::from_element_with_layout(layout, element))
-//     }
-//
-//     // Less common constructors.
-//
-//     /// Construct a new matrix using `init`.
-//     ///
-//     /// Elements are initialized in memory order.
-//     pub fn from_fn_with_layout<F>(layout: Layout<T>, mut init: F) -> Self
-//     where
-//         F: FnMut(RowCol) -> T,
-//     {
-//         let mut row = 0;
-//         let mut col = 0;
-//
-//         let data: Box<[T]> = (0..layout.num_elements())
-//             .map(|_| {
-//                 let v = (init)(RowCol { row, col });
-//                 col += 1;
-//                 if col == layout.ncols() {
-//                     col = 0;
-//                     row += 1;
-//                 }
-//                 v
-//             })
-//             .collect();
-//
-//         Self { data, layout }
-//     }
-//
-//     /// Construct a new matrix by cloning `element`.
-//     ///
-//     /// Elements are initialized in memory order.
-//     pub fn from_element_with_layout(layout: Layout<T>, element: T) -> Self
-//     where
-//         T: Clone,
-//     {
-//         let data: Box<[T]> = std::iter::repeat_n(element, layout.num_elements()).collect();
-//         Self { data, layout }
-//     }
-// }
-//
-// impl<T> MatrixBase<T>
-// where
-//     T: DenseData,
-// {
-//     /// Try to construct a `MatrixBase` over the provided base. If the size of the base
-//     /// is incorrect, return a `TryFromError` containing the base.
-//     ///
-//     /// The length of the base must be equal to `nrows * ncols`.
-//     ///
-//     /// # Errors
-//     ///
-//     /// Returns an error containing `data` if the dimensions do not describe a valid layout
-//     /// or if `data.as_slice().len()` does not equal `nrows * ncols`.
-//     pub fn try_from(data: T, nrows: usize, ncols: usize) -> Result<Self, TryFromError<T>> {
-//         let layout = match Layout::<T::Elem>::new(nrows, ncols) {
-//             Ok(layout) => layout,
-//             Err(err) => return Err(TryFromError::layout(data, err)),
-//         };
-//
-//         let len = data.as_slice().len();
-//         if len != layout.num_elements() {
-//             Err(TryFromError::mismatch(
-//                 data,
-//                 layout.nrows(),
-//                 layout.ncols(),
-//                 len,
-//             ))
-//         } else {
-//             Ok(Self { data, layout })
-//         }
-//     }
-//
-//     /// Construct a matrix without validating that the data length matches the layout.
-//     ///
-//     /// # Safety
-//     ///
-//     /// `data.as_slice().len()` must equal `layout.num_elements()`.
-//     unsafe fn from_data_unchecked(data: T, layout: Layout<T::Elem>) -> Self {
-//         debug_assert_eq!(data.as_slice().len(), layout.num_elements());
-//         Self { data, layout }
-//     }
-//
-//     /// Return the [`Layout`] for this matrix.
-//     pub fn layout(&self) -> Layout<T::Elem> {
-//         self.layout
-//     }
-//
-//     /// Return the number of columns in the matrix.
-//     pub fn ncols(&self) -> usize {
-//         self.layout().ncols()
-//     }
-//
-//     /// Return the number of rows in the matrix.
-//     pub fn nrows(&self) -> usize {
-//         self.layout().nrows()
-//     }
-//
-//     /// Create a new [`Matrix`] by applying the closure `f` to each element.
-//     ///
-//     /// The returned matrix has the same shape as `self`.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if the resulting matrix's byte size would exceed `isize::MAX`.
-//     #[track_caller]
-//     pub fn map<F, R>(&self, f: F) -> Matrix<R>
-//     where
-//         F: FnMut(&T::Elem) -> R,
-//     {
-//         match self.try_map(f) {
-//             Ok(matrix) => matrix,
-//             Err(error) => panic!("Matrix::map failed with: {error}"),
-//         }
-//     }
-//
-//     /// Create a new [`Matrix`] by applying the closure `f` to each element.
-//     ///
-//     /// The returned matrix has the same shape as `self`.
-//     ///
-//     /// # Errors
-//     ///
-//     /// Returns an error if the resulting matrix's byte size would exceed `isize::MAX`.
-//     pub fn try_map<F, R>(&self, f: F) -> Result<Matrix<R>, LayoutError>
-//     where
-//         F: FnMut(&T::Elem) -> R,
-//     {
-//         let layout: Layout<R> = self.layout().rebind::<R>()?;
-//         let data: Box<[_]> = self.as_slice().iter().map(f).collect();
-//
-//         // SAFETY: By construction, `data.len() == layout.num_elements()`.
-//         Ok(unsafe { Matrix::from_data_unchecked(data, layout) })
-//     }
-//
-//     /// Return the underlying data as a slice.
-//     pub fn as_slice(&self) -> &[T::Elem] {
-//         self.data.as_slice()
-//     }
-//
-//     /// Return the underlying data as a mutable slice.
-//     pub fn as_mut_slice(&mut self) -> &mut [T::Elem]
-//     where
-//         T: MutDenseData,
-//     {
-//         self.data.as_mut_slice()
-//     }
-//
-//     /// Return row `row` as a slice.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `row >= self.nrows()`.
-//     pub fn row(&self, row: usize) -> &[T::Elem] {
-//         assert!(
-//             row < self.nrows(),
-//             "tried to access row {row} of a matrix with {} rows",
-//             self.nrows()
-//         );
-//
-//         // SAFETY: `row` is in-bounds.
-//         unsafe { self.row_unchecked(row) }
-//     }
-//
-//     /// Construct a new `MatrixBase` over the raw data.
-//     ///
-//     /// The returned `MatrixBase` will only have a single row with contents equal to `data`.
-//     pub fn row_vector(data: T) -> Self {
-//         let ncols = data.as_slice().len();
-//
-//         // SAFETY: The `Layout` construction is valid because `ncols` comes from the length
-//         // of a slice, so we know the size of that slice cannot exceed `isize::MAX` bytes.
-//         //
-//         // By construction, `data.len() == layout.num_elements()`.
-//         unsafe { Self::from_data_unchecked(data, Layout::new_unchecked(1, ncols)) }
-//     }
-//
-//     /// Construct a new `MatrixBase` over the raw data.
-//     ///
-//     /// The returned `MatrixBase` will only have a single column with contents equal to `data`.
-//     pub fn column_vector(data: T) -> Self {
-//         let nrows = data.as_slice().len();
-//
-//         // SAFETY: The `Layout` construction is valid because `nrows` comes from the length
-//         // of a slice, so we know the size of that slice cannot exceed `isize::MAX` bytes.
-//         //
-//         // By construction, `data.len() == layout.num_elements()`.
-//         unsafe { Self::from_data_unchecked(data, Layout::new_unchecked(nrows, 1)) }
-//     }
-//
-//     /// Return row `row` if `row < self.nrows()`. Otherwise, return `None`.
-//     pub fn get_row(&self, row: usize) -> Option<&[T::Elem]> {
-//         if row < self.nrows() {
-//             // SAFETY: `row` is in-bounds.
-//             Some(unsafe { self.row_unchecked(row) })
-//         } else {
-//             None
-//         }
-//     }
-//
-//     /// Returns the requested row without boundschecking.
-//     ///
-//     /// # Safety
-//     ///
-//     /// The following conditions must hold to avoid undefined behavior:
-//     /// * `row < self.nrows()`.
-//     pub unsafe fn row_unchecked(&self, row: usize) -> &[T::Elem] {
-//         debug_assert!(row < self.nrows());
-//         let ncols = self.ncols();
-//         let start = row * ncols;
-//
-//         debug_assert!(start + ncols <= self.as_slice().len());
-//         // SAFETY: The idempotency requirement of `as_slice` and our audited constructors
-//         // mean that `self.as_slice()` has a length of `self.nrows * self.ncols`.
-//         //
-//         // Therefore, this access is in-bounds.
-//         unsafe { self.as_slice().get_unchecked(start..start + ncols) }
-//     }
-//
-//     /// Return row `row` as a mutable slice.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `row >= self.nrows()`.
-//     pub fn row_mut(&mut self, row: usize) -> &mut [T::Elem]
-//     where
-//         T: MutDenseData,
-//     {
-//         assert!(
-//             row < self.nrows(),
-//             "tried to access row {row} of a matrix with {} rows",
-//             self.nrows()
-//         );
-//
-//         // SAFETY: `row` is in-bounds.
-//         unsafe { self.get_row_unchecked_mut(row) }
-//     }
-//
-//     /// Returns the requested row without boundschecking.
-//     ///
-//     /// # Safety
-//     ///
-//     /// The following conditions must hold to avoid undefined behavior:
-//     /// * `row < self.nrows()`.
-//     pub unsafe fn get_row_unchecked_mut(&mut self, row: usize) -> &mut [T::Elem]
-//     where
-//         T: MutDenseData,
-//     {
-//         debug_assert!(row < self.nrows());
-//         let ncols = self.ncols();
-//         let start = row * ncols;
-//
-//         debug_assert!(start + ncols <= self.as_slice().len());
-//         // SAFETY: The idempotency requirement of `as_mut_slice` and our audited constructors
-//         // mean that `self.as_mut_slice()` has a length of `self.nrows * self.ncols`.
-//         //
-//         // Therefore, this access is in-bounds.
-//         unsafe {
-//             self.data
-//                 .as_mut_slice()
-//                 .get_unchecked_mut(start..start + ncols)
-//         }
-//     }
-//
-//     /// Return a iterator over all rows in the matrix.
-//     ///
-//     /// Rows are yielded sequentially beginning with row 0.
-//     pub fn row_iter(&self) -> impl ExactSizeIterator<Item = &[T::Elem]> {
-//         self.data.as_slice().chunks_exact(self.ncols())
-//     }
-//
-//     /// Return a mutable iterator over all rows in the matrix.
-//     ///
-//     /// Rows are yielded sequentially beginning with row 0.
-//     pub fn row_iter_mut(&mut self) -> impl ExactSizeIterator<Item = &mut [T::Elem]>
-//     where
-//         T: MutDenseData,
-//     {
-//         let ncols = self.ncols();
-//         self.data.as_mut_slice().chunks_exact_mut(ncols)
-//     }
-//
-//     /// Return an iterator that divides the matrix into sub-matrices with (up to)
-//     /// `batchsize` rows with `self.ncols()` columns.
-//     ///
-//     /// It is possible for yielded sub-matrices to have fewer than `batchsize` rows if the
-//     /// number of rows in the parent matrix is not evenly divisible by `batchsize`.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `batchsize = 0`.
-//     pub fn window_iter(&self, batchsize: usize) -> impl Iterator<Item = MatrixView<'_, T::Elem>>
-//     where
-//         T::Elem: Sync,
-//     {
-//         assert!(batchsize != 0, "window_iter batchsize cannot be zero");
-//         let ncols = self.ncols();
-//
-//         self.data
-//             .as_slice()
-//             .chunks(ncols * batchsize)
-//             .map(move |data| {
-//                 let blobsize = data.len();
-//                 let nrows = blobsize / ncols;
-//                 assert_eq!(blobsize % ncols, 0);
-//
-//                 // SAFETY: `self` contains a valid `Layout`. Since `nrows <= self.nrows()`,
-//                 // the resulting `Layout` (it is no bigger than self's layout).
-//                 //
-//                 // Further, we've verified that `data.len() == nrows * ncols`.
-//                 unsafe {
-//                     MatrixView::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols))
-//                 }
-//             })
-//     }
-//
-//     /// Return a parallel iterator that divides the matrix into sub-matrices with (up to)
-//     /// `batchsize` rows with `self.ncols()` columns.
-//     ///
-//     /// This allows workers in parallel algorithms to work on dense subsets of the whole
-//     /// matrix for better locality.
-//     ///
-//     /// It is possible for yielded sub-matrices to have fewer than `batchsize` rows if the
-//     /// number of rows in the parent matrix is not evenly divisible by `batchsize`.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `batchsize = 0`.
-//     #[cfg(feature = "rayon")]
-//     pub fn par_window_iter(
-//         &self,
-//         batchsize: usize,
-//     ) -> impl IndexedParallelIterator<Item = MatrixView<'_, T::Elem>>
-//     where
-//         T::Elem: Sync,
-//     {
-//         assert!(batchsize != 0, "par_window_iter batchsize cannot be zero");
-//         let ncols = self.ncols();
-//         self.data
-//             .as_slice()
-//             .par_chunks(ncols * batchsize)
-//             .map(move |data| {
-//                 let blobsize = data.len();
-//                 let nrows = blobsize / ncols;
-//                 assert_eq!(blobsize % ncols, 0);
-//
-//                 // SAFETY: `self` contains a valid `Layout`. Since `nrows <= self.nrows()`,
-//                 // the resulting `Layout` (it is no bigger than self's layout).
-//                 //
-//                 // Further, we've verified that `data.len() == nrows * ncols`.
-//                 unsafe {
-//                     MatrixView::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols))
-//                 }
-//             })
-//     }
-//
-//     /// Return a parallel iterator that divides the matrix into mutable sub-matrices with
-//     /// (up to) `batchsize` rows with `self.ncols()` columns.
-//     ///
-//     /// This allows workers in parallel algorithms to work on dense subsets of the whole
-//     /// matrix for better locality.
-//     ///
-//     /// It is possible for yielded sub-matrices to have fewer than `batchsize` rows if the
-//     /// number of rows in the parent matrix is not evenly divisible by `batchsize`.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `batchsize = 0`.
-//     #[cfg(feature = "rayon")]
-//     pub fn par_window_iter_mut(
-//         &mut self,
-//         batchsize: usize,
-//     ) -> impl IndexedParallelIterator<Item = MutMatrixView<'_, T::Elem>>
-//     where
-//         T: MutDenseData,
-//         T::Elem: Send,
-//     {
-//         assert!(
-//             batchsize != 0,
-//             "par_window_iter_mut batchsize cannot be zero"
-//         );
-//         let ncols = self.ncols();
-//         self.data
-//             .as_mut_slice()
-//             .par_chunks_mut(ncols * batchsize)
-//             .map(move |data| {
-//                 let blobsize = data.len();
-//                 let nrows = blobsize / ncols;
-//                 assert_eq!(blobsize % ncols, 0);
-//
-//                 // SAFETY: `self` contains a valid `Layout`. Since `nrows <= self.nrows()`,
-//                 // the resulting `Layout` (it is no bigger than self's layout).
-//                 //
-//                 // Further, we've verified that `data.len() == nrows * ncols`.
-//                 unsafe {
-//                     MutMatrixView::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols))
-//                 }
-//             })
-//     }
-//
-//     /// Return a parallel iterator over the rows of the matrix.
-//     #[cfg(feature = "rayon")]
-//     pub fn par_row_iter(&self) -> impl IndexedParallelIterator<Item = &[T::Elem]>
-//     where
-//         T::Elem: Sync,
-//     {
-//         self.as_slice().par_chunks_exact(self.ncols())
-//     }
-//
-//     /// Return a parallel iterator over the rows of the matrix.
-//     #[cfg(feature = "rayon")]
-//     pub fn par_row_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [T::Elem]>
-//     where
-//         T: MutDenseData,
-//         T::Elem: Send,
-//     {
-//         let ncols = self.ncols();
-//         self.as_mut_slice().par_chunks_exact_mut(ncols)
-//     }
-//
-//     /// Consume the matrix, returning the inner representation.
-//     ///
-//     /// This loses the information about the number of rows and columns.
-//     pub fn into_inner(self) -> T {
-//         self.data
-//     }
-//
-//     /// Return a view over the matrix.
-//     pub fn as_view(&self) -> MatrixView<'_, T::Elem> {
-//         // SAFETY: This propagates `self`'s already valid layout and underlying slice.
-//         unsafe { MatrixView::from_data_unchecked(self.as_slice(), self.layout()) }
-//     }
-//
-//     /// Return a mutable view over the matrix.
-//     pub fn as_mut_view(&mut self) -> MutMatrixView<'_, T::Elem>
-//     where
-//         T: MutDenseData,
-//     {
-//         let layout = self.layout();
-//         // SAFETY: This propagates `self`'s already valid layout and underlying slice.
-//         unsafe { MutMatrixView::from_data_unchecked(self.as_mut_slice(), layout) }
-//     }
-//
-//     /// Return a view over the specified rows of the matrix.
-//     ///
-//     /// If the specified range is out of bounds, return `None`.
-//     ///
-//     /// ```rust
-//     /// use diskann_utils::views::Matrix;
-//     ///
-//     /// let mut mat = Matrix::from_element(4, 3, 0usize);
-//     ///
-//     /// // Fill the matrix with some data.
-//     /// mat.row_iter_mut().enumerate().for_each(|(i, row)| row.fill(i));
-//     ///
-//     /// // Creating a subview into an offset portion of the matrix.
-//     /// let subview = mat.subview(1..3).unwrap();
-//     /// assert_eq!(subview.nrows(), 2);
-//     /// assert_eq!(subview.row(0), &[1, 1, 1]);
-//     /// assert_eq!(subview.row(1), &[2, 2, 2]);
-//     ///
-//     /// // A trying to access out-of-bounds returns `None`
-//     /// assert!(mat.subview(3..5).is_none());
-//     /// ```
-//     pub fn subview(&self, rows: std::ops::Range<usize>) -> Option<MatrixView<'_, T::Elem>> {
-//         if rows.start > rows.end || rows.end > self.nrows() {
-//             return None;
-//         }
-//
-//         let ncols = self.ncols();
-//         let lower = rows.start * ncols;
-//         let upper = rows.end * ncols;
-//
-//         if let Some(data) = self.as_slice().get(lower..upper) {
-//             // SAFETY: The successful checked index into `self.as_slice()` attests that
-//             // `rows.len()` is no greater than `self.nrows()`. So the `Layout` is valid.
-//             //
-//             // By construction, `data.len() == rows * self.ncols()`.
-//             Some(unsafe {
-//                 MatrixView::from_data_unchecked(
-//                     data,
-//                     Layout::new_unchecked(rows.len(), self.ncols()),
-//                 )
-//             })
-//         } else {
-//             None
-//         }
-//     }
-//
-//     /// Return a pointer to the base of the matrix.
-//     pub fn as_ptr(&self) -> *const T::Elem {
-//         self.as_slice().as_ptr()
-//     }
-//
-//     /// Return a pointer to the base of the matrix.
-//     pub fn as_mut_ptr(&mut self) -> *mut T::Elem
-//     where
-//         T: MutDenseData,
-//     {
-//         self.as_mut_slice().as_mut_ptr()
-//     }
-//
-//     /// Return a reference to the element at the specified `row` and `col`.
-//     ///
-//     /// # Safety
-//     ///
-//     /// The following conditions must hold to avoid undefined behavior:
-//     ///
-//     /// * `row < self.nrows()`.
-//     /// * `col < self.ncols()`.
-//     pub unsafe fn element_unchecked(&self, row: usize, col: usize) -> &T::Elem {
-//         debug_assert!(row < self.nrows());
-//         debug_assert!(col < self.ncols());
-//         self.as_slice().get_unchecked(row * self.ncols() + col)
-//     }
-//
-//     /// Return a reference to the element at the specified `row` and `col`.
-//     ///
-//     /// If either index is out-of-bounds, return `None`.
-//     pub fn get_element(&self, row: usize, col: usize) -> Option<&T::Elem> {
-//         if row >= self.nrows() || col >= self.ncols() {
-//             None
-//         } else {
-//             // SAFETY: We just verified that `row` and `col` are in-bounds.
-//             Some(unsafe { self.element_unchecked(row, col) })
-//         }
-//     }
-//
-//     /// Return a reference to the element at the specified `row` and `col`.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-//     pub fn element(&self, row: usize, col: usize) -> &T::Elem {
-//         assert!(
-//             row < self.nrows(),
-//             "row {row} is out of bounds (max: {})",
-//             self.nrows()
-//         );
-//         assert!(
-//             col < self.ncols(),
-//             "col {col} is out of bounds (max: {})",
-//             self.ncols()
-//         );
-//
-//         // SAFETY: We have checked that `row` and `col` are in-bounds.
-//         unsafe { self.element_unchecked(row, col) }
-//     }
-//
-//     /// Return a reference to the element at the specified `row` and `col`.
-//     ///
-//     /// # Safety
-//     ///
-//     /// The following conditions must hold to avoid undefined behavior:
-//     ///
-//     /// * `row < self.nrows()`.
-//     /// * `col < self.ncols()`.
-//     pub unsafe fn element_unchecked_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
-//     where
-//         T: MutDenseData,
-//     {
-//         let ncols = self.ncols();
-//         debug_assert!(row < self.nrows());
-//         debug_assert!(col < self.ncols());
-//         self.as_mut_slice().get_unchecked_mut(row * ncols + col)
-//     }
-//
-//     /// Return a mutable reference to the element at the specified `row` and `col`.
-//     ///
-//     /// Returns `None` if `row >= self.nrows()` or `col >= self.ncols()`.
-//     pub fn get_element_mut(&mut self, row: usize, col: usize) -> Option<&mut T::Elem>
-//     where
-//         T: MutDenseData,
-//     {
-//         if row >= self.nrows() || col >= self.ncols() {
-//             None
-//         } else {
-//             // SAFETY: We have checked that `row` and `col` are in-bounds.
-//             Some(unsafe { self.element_unchecked_mut(row, col) })
-//         }
-//     }
-//
-//     /// Return a mutable reference to the element at the specified `row` and `col`.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-//     pub fn element_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
-//     where
-//         T: MutDenseData,
-//     {
-//         assert!(
-//             row < self.nrows(),
-//             "row {row} is out of bounds (max: {})",
-//             self.nrows()
-//         );
-//         assert!(
-//             col < self.ncols(),
-//             "col {col} is out of bounds (max: {})",
-//             self.ncols()
-//         );
-//
-//         // SAFETY: We have checked that `row` and `col` are in-bounds.
-//         unsafe { self.element_unchecked_mut(row, col) }
-//     }
-//
-//     pub fn to_owned(&self) -> Matrix<T::Elem>
-//     where
-//         T::Elem: Clone,
-//     {
-//         // SAFETY: This propagates `self`'s already valid layout and underlying slice.
-//         unsafe { Matrix::from_data_unchecked(self.data.as_slice().into(), self.layout()) }
-//     }
-//
-//     /// Transpose the elements in `self`.
-//     pub fn transpose(&self) -> Matrix<T::Elem>
-//     where
-//         T::Elem: Clone,
-//     {
-//         Matrix::from_fn_with_layout(self.layout.transpose(), |RowCol { row, col }| {
-//             // SAFETY: By contruction, `col < self.nrows()` and `row < self.ncols()`.
-//             unsafe { self.element_unchecked(col, row).clone() }
-//         })
-//     }
-// }
-//
-// /// Represents an owning, 2-dimensional view of a contiguous block of memory,
-// /// interpreted as a matrix in row-major order.
-// pub type Matrix<T> = MatrixBase<Box<[T]>, T>;
-//
-// /// Represents a non-owning, 2-dimensional view of a contiguous block of memory,
-// /// interpreted as a matrix in row-major order.
-// ///
-// /// This type is useful for functions that need to read matrix data without taking ownership.
-// /// By accepting a `MatrixView`, such functions can operate on both owned matrices (by converting them
-// /// to a `MatrixView`) and existing non-owning views.
-// pub type MatrixView<'a, T> = MatrixBase<&'a [T], T>;
-//
-// /// Represents a mutable non-owning, 2-dimensional view of a contiguous block of memory,
-// /// interpreted as a matrix in row-major order.
-// ///
-// /// This type is useful for functions that need to modify matrix data without taking ownership.
-// /// By accepting a `MutMatrixView`, such functions can operate on both owned matrices (by converting them
-// /// to a `MutMatrixView`) and existing non-owning mutable views.
-// pub type MutMatrixView<'a, T> = MatrixBase<&'a mut [T], T>;
-//
-// /// Allow matrix views to be converted directly to slices.
-// impl<'a, T> From<MatrixView<'a, T>> for &'a [T] {
-//     fn from(view: MatrixView<'a, T>) -> Self {
-//         view.data
-//     }
-// }
-//
-// /// Allow mutable matrix views to be converted directly to slices.
-// impl<'a, T> From<MutMatrixView<'a, T>> for &'a [T] {
-//     fn from(view: MutMatrixView<'a, T>) -> Self {
-//         view.data
-//     }
-// }
+//--------//
+// Errors //
+//--------//
 
-/// Errors from [`MatrixBase::try_from`].
+/// Errors from [`Owned::try_from_data`], [`Ref::try_from_data`], and [`Mut::try_from_data`].
 pub struct TryFromError<T> {
     data: T,
     inner: TryFromErrorInner,
@@ -2008,6 +1227,7 @@ impl<T> std::error::Error for TryFromError<T> {
     }
 }
 
+/// A guaranteed `'static` version of [`TryFromError`].
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct TryFromErrorLight(TryFromErrorInner);

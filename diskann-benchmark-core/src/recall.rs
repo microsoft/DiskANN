@@ -10,7 +10,7 @@ use std::{
 
 use diskann_utils::{
     strided::Strided,
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix},
 };
 use thiserror::Error;
 
@@ -81,27 +81,27 @@ pub trait Rows<T> {
     }
 }
 
-impl<T> Rows<T> for Matrix<T> {
+impl<T> Rows<T> for rowmajor::Owned<T> {
     fn nrows(&self) -> usize {
-        Matrix::<T>::nrows(self)
+        Matrix::nrows(self)
     }
     fn row(&self, i: usize) -> &[T] {
-        Matrix::<T>::row(self, i)
+        Matrix::row(self, i)
     }
     fn ncols(&self) -> Option<usize> {
-        Some(Matrix::<T>::ncols(self))
+        Some(Matrix::ncols(self))
     }
 }
 
-impl<T> Rows<T> for MatrixView<'_, T> {
+impl<T> Rows<T> for rowmajor::Ref<'_, T> {
     fn nrows(&self) -> usize {
-        MatrixView::<'_, T>::nrows(self)
+        Matrix::nrows(self)
     }
     fn row(&self, i: usize) -> &[T] {
-        MatrixView::<'_, T>::row(self, i)
+        Matrix::row(self, i)
     }
     fn ncols(&self) -> Option<usize> {
-        Some(MatrixView::<'_, T>::ncols(self))
+        Some(Matrix::ncols(self))
     }
 }
 
@@ -364,7 +364,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     use super::*;
 
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn test_rows() {
         let mut i = 0usize;
-        let mat = Matrix::from_fn(3, 4, |_| {
+        let mat = rowmajor::Owned::from_fn(3, 4, |_| {
             let v = i;
             i += 1;
             v
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_happy_path() {
-        let groundtruth = Matrix::try_from(
+        let groundtruth = rowmajor::Owned::try_from_data(
             vec![
                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, // row 0
                 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, // row 1
@@ -433,7 +433,7 @@ mod tests {
         )
         .unwrap();
 
-        let distances = Matrix::try_from(
+        let distances = rowmajor::Owned::try_from_data(
             vec![
                 0.0, 1.0, 2.0, 3.0, 3.0, 3.0, 3.0, 4.0, 5.0, 6.0, // row 0
                 2.0, 3.0, 3.0, 3.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, // row 1
@@ -447,7 +447,7 @@ mod tests {
         .unwrap();
 
         // Shift row 0 by one and row 1 by two.
-        let our_results = Matrix::try_from(
+        let our_results = rowmajor::Owned::try_from_data(
             vec![
                 100, 0, 1, 2, 5, 6, // row 0
                 100, 101, 7, 8, 9, 10, // row 1
@@ -480,7 +480,7 @@ mod tests {
         let epsilon = 1e-6; // Define a small tolerance
 
         for (i, expected) in expected_no_ties.iter().enumerate() {
-            assert_eq!(expected.components.len(), our_results.nrows());
+            assert_eq!(expected.components.len(), Matrix::nrows(&our_results));
             let recall = knn(
                 &groundtruth,
                 None,
@@ -501,7 +501,7 @@ mod tests {
                 i
             );
 
-            assert_eq!(recall.num_queries, our_results.nrows());
+            assert_eq!(recall.num_queries, Matrix::nrows(&our_results));
             assert_eq!(recall.recall_k, expected.recall_k);
             assert_eq!(recall.recall_n, expected.recall_n);
         }
@@ -525,7 +525,7 @@ mod tests {
         ];
 
         for (i, expected) in expected_with_ties.iter().enumerate() {
-            assert_eq!(expected.components.len(), our_results.nrows());
+            assert_eq!(expected.components.len(), Matrix::nrows(&our_results));
             let recall = knn(
                 &groundtruth,
                 Some(distances.as_view().into()),
@@ -546,7 +546,7 @@ mod tests {
                 i
             );
 
-            assert_eq!(recall.num_queries, our_results.nrows());
+            assert_eq!(recall.num_queries, Matrix::nrows(&our_results));
             assert_eq!(recall.recall_k, expected.recall_k);
             assert_eq!(recall.recall_n, expected.recall_n);
         }
@@ -554,16 +554,16 @@ mod tests {
 
     #[test]
     fn test_error_recall_k_and_n() {
-        let groundtruth = Matrix::<u32>::from_element(10, 10, 0);
-        let results = Matrix::<u32>::from_element(10, 10, 0);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(10, 10, 0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(&groundtruth, None, &results, 11, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::RecallKAndNError(..)));
     }
 
     #[test]
     fn test_error_rows_mismatch() {
-        let groundtruth = Matrix::<u32>::from_element(11, 10, 0);
-        let results = Matrix::<u32>::from_element(10, 10, 0);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(11, 10, 0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::RowsMismatch(..)));
         let err_allow_insufficient_results =
@@ -576,8 +576,8 @@ mod tests {
 
     #[test]
     fn test_error_not_enough_groundtruth() {
-        let groundtruth = Matrix::<u32>::from_element(10, 5, 0);
-        let results = Matrix::<u32>::from_element(10, 10, 0);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(10, 5, 0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::NotEnoughGroundTruth(..)));
         let err_allow_insufficient_results =
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn test_dynamic_groundtruth_valid() {
         let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
-        let results = Matrix::<u32>::from_element(10, 10, 0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         // Should succeed: each row uses this_recall_k = min(5, 10) = 5
         // Should succeed in Flexible mode, but fail in Fixed mode
         let recall_flexible = knn(
@@ -614,7 +614,7 @@ mod tests {
     fn test_dynamic_groundtruth_full_match() {
         let gt_row: Vec<u32> = (1..=5).collect();
         let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
-        let mut results = Matrix::<u32>::from_element(10, 10, 0);
+        let mut results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         for i in 0..10 {
             for (j, v) in (1u32..=10).enumerate() {
                 *results.element_mut(i, j) = v;
@@ -637,7 +637,7 @@ mod tests {
         // groundtruth: [1, 2, 3, 4, 5]; results contain [1, 2, 3, 6, 7, 8, 9, 10, 11, 12]
         let gt_row: Vec<u32> = (1..=5).collect();
         let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
-        let mut results = Matrix::<u32>::from_element(10, 10, 0);
+        let mut results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let res_row: Vec<u32> = vec![1, 2, 3, 6, 7, 8, 9, 10, 11, 12];
         for i in 0..10 {
             for (j, &v) in res_row.iter().enumerate() {
@@ -668,7 +668,7 @@ mod tests {
             groundtruth.push(vec![]);
         }
 
-        let mut results = Matrix::<u32>::from_element(10, 10, 0);
+        let mut results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         for i in 0..10 {
             for (j, v) in (1u32..=10).enumerate() {
                 *results.element_mut(i, j) = v;
@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn test_dynamic_groundtruth_all_zero() {
         let groundtruth: Vec<Vec<u32>> = (0..10).map(|_| vec![]).collect();
-        let results = Matrix::<u32>::from_element(10, 10, 0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
 
         let recall = knn(
             &groundtruth,
@@ -748,9 +748,9 @@ mod tests {
 
     #[test]
     fn test_error_distance_rows_mismatch() {
-        let groundtruth = Matrix::<u32>::from_element(10, 10, 0);
-        let distances = Matrix::<f32>::from_element(9, 10, 0.0);
-        let results = Matrix::<u32>::from_element(10, 10, 0);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(10, 10, 0);
+        let distances = rowmajor::Owned::<f32>::from_element(9, 10, 0.0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(
             &groundtruth,
             Some(distances.as_view().into()),
@@ -765,9 +765,9 @@ mod tests {
 
     #[test]
     fn test_error_distance_cols_mismatch() {
-        let groundtruth = Matrix::<u32>::from_element(10, 10, 0);
-        let distances = Matrix::<f32>::from_element(10, 9, 0.0);
-        let results = Matrix::<u32>::from_element(10, 10, 0);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(10, 10, 0);
+        let distances = rowmajor::Owned::<f32>::from_element(10, 9, 0.0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(
             &groundtruth,
             Some(distances.as_view().into()),
@@ -789,7 +789,7 @@ mod tests {
         let groundtruth: Vec<Vec<u32>> = vec![vec![1, 2, 3], vec![4, 5]];
         // distances: first row has 2 elements (should be 3), second row has 2 (matches)
         let distances: Vec<Vec<f32>> = vec![vec![0.1, 0.2], vec![0.3, 0.4]];
-        let distances = Matrix::try_from(
+        let distances = rowmajor::Owned::try_from_data(
             distances.into_iter().flatten().collect::<Vec<_>>().into(),
             2,
             2,

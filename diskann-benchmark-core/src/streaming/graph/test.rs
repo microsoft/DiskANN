@@ -13,6 +13,8 @@ use diskann::{
     utils::{IntoUsize, ONE},
 };
 
+use diskann_utils::views::rowmajor::Matrix;
+
 use crate::build::{self, graph::SingleInsert};
 
 /// Construct a test index over a 4-dimensional grid with edge-size 4.

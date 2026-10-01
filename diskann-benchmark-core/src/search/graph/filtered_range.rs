@@ -11,7 +11,7 @@ use diskann::{
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::{future::AsyncFriendly, views::rowmajor::{self, Matrix}};
 
 use crate::{
     recall,
@@ -34,7 +34,7 @@ where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
-    queries: Arc<Matrix<T>>,
+    queries: Arc<rowmajor::Owned<T>>,
     strategy: Strategy<S>,
     labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
 }
@@ -56,7 +56,7 @@ where
     /// the number of rows in `queries`.
     pub fn new(
         index: Arc<graph::DiskANNIndex<DP>>,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         strategy: Strategy<S>,
         labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
     ) -> anyhow::Result<Arc<Self>> {
@@ -220,6 +220,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use diskann_utils::views::rowmajor::MatrixMut;
+
     use super::*;
 
     use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
@@ -237,7 +239,7 @@ mod tests {
     fn test_filtered_range() {
         let index = search::graph::test_grid_provider();
 
-        let mut queries = Matrix::from_element(5, index.provider().dim(), 0.0f32);
+        let mut queries = rowmajor::Owned::from_element(5, index.provider().dim(), 0.0f32);
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -330,7 +332,7 @@ mod tests {
     #[test]
     fn test_filtered_range_error() {
         let index = search::graph::test_grid_provider();
-        let queries = Arc::new(Matrix::from_element(2, index.provider().dim(), 0.0f32));
+        let queries = Arc::new(rowmajor::Owned::from_element(2, index.provider().dim(), 0.0f32));
 
         let labels: Arc<[_]> = (0..queries.nrows() + 1)
             .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })
