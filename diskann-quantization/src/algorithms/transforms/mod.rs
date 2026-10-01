@@ -20,9 +20,9 @@ mod double_hadamard;
 mod null;
 mod padding_hadamard;
 
-mod random_rotation;
 crate::utils::features! {
     #![feature = "linalg"]
+    mod random_rotation;
 }
 
 mod utils;
