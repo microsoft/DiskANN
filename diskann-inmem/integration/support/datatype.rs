@@ -8,6 +8,7 @@ use diskann_utils::{
     views::{Matrix, MatrixView, MutMatrixView},
 };
 use diskann_wide::{cast_f16_to_f32, cast_f32_to_f16};
+use diskann_benchmark_runner::Reflect;
 use half::f16;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -16,7 +17,7 @@ use thiserror::Error;
 // DataType //
 //////////////
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum DataType {
     F32,

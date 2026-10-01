@@ -3,12 +3,12 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::{Checker, Input};
+use diskann_benchmark_runner::{Checker, Input, Reflect};
 use serde::{Deserialize, Serialize};
 
 /// A tolerance [`Input`] for [`diskann_benchmark_runner::benchmark::Regression`]s that
 /// do not need any external tolerances.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
 pub(crate) struct Empty;
 
 impl Input for Empty {

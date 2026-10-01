@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use diskann_benchmark_runner::{Registry, RegistryError, utils::fmt::KeyValue};
+use diskann_benchmark_runner::{Registry, RegistryError, Reflect, utils::fmt::KeyValue};
 use rand::{Rng, SeedableRng, distr::Uniform, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 
@@ -56,7 +56,8 @@ pub(super) fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 // Input //
 ///////////
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "store::")]
 pub struct Setup {
     /// Number of reader threads. Must be below `epoch_guard_slots`.
     readers: usize,

@@ -12,8 +12,7 @@ use diskann_benchmark_runner::{
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Checker, Input,
-    Reflect,
+    Checker, Input, Reflect,
 };
 use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, Overflow, Standard};
 use rand::{

@@ -11,7 +11,8 @@ use diskann_benchmark_runner::{
     Checker, Checkpoint, Output, Registry, RegistryError,
     benchmark::{MatchContext, PassFail, Regression, Score},
     files::InputFile,
-    utils::fmt::Indent,
+    utils::{RequiredOption, fmt::Indent},
+    Reflect,
 };
 use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
@@ -43,8 +44,9 @@ mod dto {
 
     use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
     #[serde(rename_all = "kebab-case")]
+    #[reflect(prefix = "graph::")]
     pub(super) enum SerdeMetric {
         L2,
         InnerProduct,
@@ -73,8 +75,9 @@ mod dto {
         }
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
     #[serde(rename_all = "kebab-case")]
+    #[reflect(prefix = "graph::")]
     pub(super) enum Preprocess {
         Halve,
         Floor,
@@ -98,7 +101,8 @@ mod dto {
         }
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "graph::")]
     pub(super) struct Data {
         pub(super) data: InputFile,
         pub(super) queries: InputFile,
@@ -108,12 +112,14 @@ mod dto {
         pub(super) preprocess: Vec<Preprocess>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "graph::")]
     pub(super) enum Representation {
         FullPrecision { data_type: DataType },
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "graph::")]
     pub(super) struct Build {
         pub(super) pruned_degree: usize,
         pub(super) max_degree: usize,
@@ -121,20 +127,22 @@ mod dto {
         pub(super) alpha: f32,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "graph::")]
     pub(super) struct KnnSearch {
         pub(super) knn: usize,
         pub(super) search_l: usize,
-        #[serde(deserialize_with = "Deserialize::deserialize")]
-        pub(super) beam_width: Option<usize>,
+        pub(super) beam_width: RequiredOption<usize>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "graph::")]
     pub(super) struct Search {
         pub(super) knn: Vec<KnnSearch>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "graph::")]
     pub(super) struct Test {
         pub(super) data: Data,
         pub(super) representation: Representation,
@@ -296,7 +304,7 @@ struct Search {
 impl Search {
     fn from_raw(raw: dto::Search) -> anyhow::Result<Self> {
         fn make_knn(raw: &dto::KnnSearch) -> anyhow::Result<(usize, Knn)> {
-            Ok((raw.knn, Knn::new(raw.search_l, raw.beam_width)?))
+            Ok((raw.knn, Knn::new(raw.search_l, raw.beam_width.as_ref().copied())?))
         }
 
         Ok(Self {
@@ -313,7 +321,7 @@ impl Search {
             dto::KnnSearch {
                 knn: *k,
                 search_l: knn.l_value().get(),
-                beam_width: Some(knn.beam_width().get()),
+                beam_width: RequiredOption::some(knn.beam_width().get()),
             }
         }
 
@@ -471,17 +479,17 @@ impl diskann_benchmark_runner::Input for Test {
                     dto::KnnSearch {
                         knn: 10,
                         search_l: 50,
-                        beam_width: None,
+                        beam_width: RequiredOption::none(),
                     },
                     dto::KnnSearch {
                         knn: 10,
                         search_l: 50,
-                        beam_width: Some(3),
+                        beam_width: RequiredOption::some(3),
                     },
                     dto::KnnSearch {
                         knn: 20,
                         search_l: 100,
-                        beam_width: Some(3),
+                        beam_width: RequiredOption::some(3),
                     },
                 ],
             },

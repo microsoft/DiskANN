@@ -10,7 +10,10 @@ use crate::inputs::{
     write_field, Example, PRINT_WIDTH,
 };
 use diskann::graph::config;
-use diskann_benchmark_runner::{utils::{RequiredOption, datatype::DataType}, Checker, Reflect};
+use diskann_benchmark_runner::{
+    utils::{datatype::DataType, RequiredOption},
+    Checker, Reflect,
+};
 use diskann_bftree::BfTreeProviderParameters;
 use serde::{Deserialize, Serialize};
 
@@ -237,7 +240,10 @@ fn bftree_parameters_from(
             .cloned()
             .unwrap_or_default()
             .into_config(),
-        quant_vector_provider_config: quant_store_config.cloned().unwrap_or_default().into_config(),
+        quant_vector_provider_config: quant_store_config
+            .cloned()
+            .unwrap_or_default()
+            .into_config(),
         graph_params: None,
         use_snapshot,
     })
