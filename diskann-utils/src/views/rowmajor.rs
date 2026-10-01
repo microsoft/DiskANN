@@ -381,8 +381,8 @@ pub unsafe trait MatrixMut: Matrix {
     /// Return the base pointer for the matrix.
     ///
     /// The returned pointer must have provenance permitting mutable access to the span
-    /// described by [`Self::layout`] and for a given matrix state, must have the same
-    /// address as [`Self::as_nonnull`].
+    /// described by [`Matrix::layout`] and for a given matrix state, must have the same
+    /// address as [`Matrix::as_nonnull`].
     fn as_nonnull_mut(&mut self) -> NonNull<Self::Element>;
 
     //----------//

@@ -17,7 +17,7 @@ pub(crate) fn mut_slice_to_nonnull<T>(s: &mut [T]) -> NonNull<T> {
 
 pub(crate) fn box_to_nonnull<T>(b: Box<[T]>) -> NonNull<T> {
     let ptr = Box::into_raw(b).cast::<T>();
-    // SAFETY: boxes are guaranteed to have non-null base poihnters.
+    // SAFETY: boxes are guaranteed to have non-null base pointers.
     unsafe { NonNull::new_unchecked(ptr) }
 }
 
