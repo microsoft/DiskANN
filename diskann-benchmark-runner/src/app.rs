@@ -409,7 +409,9 @@ impl App {
             Commands::Check(check) => return self.check(check, registry, output),
 
             // Types
-            Commands::TypeInfo { describe } => self.type_info(describe.as_deref(), registry, output)?,
+            Commands::TypeInfo { describe } => {
+                self.type_info(describe.as_deref(), registry, output)?
+            }
         };
         Ok(())
     }

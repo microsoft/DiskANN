@@ -225,7 +225,7 @@ where
                         build::set_start_points(
                             index.provider(),
                             data.as_view(),
-                            *build.start_point_strategy(),
+                            build.start_point_strategy(),
                         )?;
                         Ok(index)
                     },
@@ -842,9 +842,10 @@ where
 {
     let topk = input.search_phase.as_topk()?;
 
-    let consolidate_threshold: f32 = input
+    let consolidate_threshold: f32 = *input
         .runbook_params
         .consolidate_threshold
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("consolidate_threshold is required for inmem streaming"))?;
 
     let data = datafiles::load_dataset::<T>(datafiles::BinFile(input.build.data()))?;
@@ -864,7 +865,7 @@ where
     build::set_start_points(
         index.provider(),
         data.as_view(),
-        *input.build.start_point_strategy(),
+        input.build.start_point_strategy(),
     )?;
 
     let num_threads_and_tasks = NonZeroUsize::new(input.build.num_threads()).unwrap();

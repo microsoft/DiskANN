@@ -421,7 +421,11 @@ fn process_enum(
                 rename_variant_fields,
             } = attributes::Variant::parse(&v.attrs)?;
 
-            let fields = build_fields(&v.fields, &mut generics, rename_variant_fields)?;
+            let fields = build_fields(
+                &v.fields,
+                &mut generics,
+                rename_variant_fields,
+            )?;
 
             // Rename the variant as needed.
             let name = rename_variant.apply_to_variant(name, rename_all);

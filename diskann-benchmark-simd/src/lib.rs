@@ -56,7 +56,7 @@ impl<T: ?Sized> std::ops::Deref for DisplayWrapper<'_, T> {
 ////////////
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 #[reflect(prefix = "simd::")]
 pub enum SimilarityMeasure {
     SquaredL2,

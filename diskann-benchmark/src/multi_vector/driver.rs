@@ -13,6 +13,7 @@ use diskann_benchmark_runner::{
         percentiles, MicroSeconds,
     },
     Checker, Input,
+    Reflect,
 };
 use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, Overflow, Standard};
 use rand::{
@@ -30,7 +31,8 @@ use crate::utils::DisplayWrapper;
 //////////////////////
 
 /// Tolerance thresholds for multi-vector benchmark regression detection.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "multi_vector::")]
 pub(super) struct MultiVectorTolerance {
     pub(super) min_time_regression: NonNegativeFinite,
 }

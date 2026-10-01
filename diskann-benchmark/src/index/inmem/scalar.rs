@@ -254,7 +254,7 @@ mod imp {
                             inmem::WithBits::<$N>::new(quantizer),
                             common::NoDeletes,
                         )?;
-                        build::set_start_points(index.provider(), data_view, *build.start_point_strategy())?;
+                        build::set_start_points(index.provider(), data_view, build.start_point_strategy())?;
                         Ok(index)
                     };
 

@@ -325,6 +325,12 @@ primitive!(f32, Number, "An 32-bit floating-point number", "f32");
 primitive!(f64, Number, "An 64-bit floating-point number", "f64");
 
 primitive!(
+    std::num::NonZeroU32,
+    Number,
+    "A system dependent, 32-bit unsigned integer",
+    "NonZero<u32>"
+);
+primitive!(
     std::num::NonZeroUsize,
     Number,
     "A system dependent, non-zero, unsigned integer",
@@ -333,6 +339,7 @@ primitive!(
 
 primitive!(bool, Boolean, "A value of \"true\" or \"false\"", "bool");
 primitive!(String, String, "A string", "string");
+primitive!(std::path::PathBuf, String, "A file path", "PathBuf");
 
 impl<T> Reflect for Option<T>
 where
