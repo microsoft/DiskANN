@@ -25,16 +25,19 @@ use crate::{internal, Reborrow, ReborrowMut};
 ///
 /// # Safety
 ///
-/// For the duration of each borrow of `self`, implementations must ensure that:
+/// For any shared reference `matrix: &Self`, the following must hold for the entire lifetime
+/// of that reference:
 ///
-/// * Repeated calls to [`Matrix::as_nonnull`] and [`Matrix::layout`] return the same pointer
-///   and layout.
+/// * Every call to `matrix.as_nonnull()` returns the same pointer.
 ///
-/// * Given:
+/// * Every call to `matrix.layout()` returns the same layout.
+///
+/// * The pointer and layout describe the same valid initialized span throughout that lifetime.
+///   Given:
 ///
 ///   ```text
-///   let data = self.as_nonnull();
-///   let layout = self.layout();
+///   let data = matrix.as_nonnull();
+///   let layout = matrix.layout();
 ///   ```
 ///
 ///   constructing the following slice is valid:
@@ -45,14 +48,16 @@ use crate::{internal, Reborrow, ReborrowMut};
 ///
 ///   In particular:
 ///
-///   - `data` must be properly aligned and the span `[data, data + layout.num_elements())`
-///     must be within a single allocation.
+///   - `data` must be properly aligned, including when `layout.num_elements() == 0`.
 ///
-///   - `data` must point to `layout.num_elements()` consecutive, properly initialized values
-///     of type `Self::Element`.
+///   - If both `layout.num_elements()` and `size_of::<Self::Element>()` are nonzero, the
+///     described span must lie within a single allocation.
 ///
-///   - The memory referenced must not be mutated for the duration of the borrow, except
-///     inside an `UnsafeCell`.
+///   - The span must contain `layout.num_elements()` consecutive, properly initialized
+///     values of type `Self::Element`.
+///
+///   - The referenced memory must not be mutated for the lifetime of `matrix`, except
+///     through an `UnsafeCell`.
 pub unsafe trait Matrix {
     /// The type of the element stored in the matrix.
     type Element;
@@ -350,9 +355,23 @@ pub unsafe trait Matrix {
 /// # Safety
 ///
 /// In addition to the requirements of [`Matrix`], implementations must ensure that for
-/// the duration of each **mutable** borrow of `self`, the entire span described by
-/// [`Matrix::as_nonnull`] and [`Matrix::layout`] may be accessed exclusively through a
-/// mutable reference.
+/// any **mutable** borrow `matrix: &mut Self`, it is valid to construct:
+///
+/// ```text
+/// let data = matrix.as_nonnull();
+/// let layout = matrix.layout();
+///
+/// unsafe {
+///    std::slice::from_raw_parts_mut(data.as_ptr(), layout.num_elements())
+/// }
+/// ```
+///
+/// The resulting slice must have exclusive access to the described elements for its entire
+/// lifetime. No other reference may be used to access those elements during that lifetime.
+///
+/// Implementations may change their pointer or layout through exclusive access, such as when
+/// resizing or reallocating. They must not do so while any reference derived from the previous
+/// pointer and layout remains live.
 pub unsafe trait MatrixMut: Matrix {
     //----------//
     // Provided //
