@@ -176,10 +176,11 @@ where
     }
 }
 
-impl<A, const GROUP: usize, const NR: usize, const PACK: usize> MaxSimKernel<i8>
-    for Prepared<A, BlockTransposed<i8, GROUP, PACK>, NR>
+impl<A, Q, const GROUP: usize, const NR: usize, const PACK: usize> MaxSimKernel<i8>
+    for Prepared<A, BlockTransposed<Q, GROUP, PACK>, NR>
 where
-    A: mk::maxsim::packed_i8_x_unpacked_i8::PrepareB + Architecture,
+    Q: Copy + Send + Sync + std::fmt::Debug,
+    A: mk::maxsim::packed_i8_x_unpacked_i8::PrepareB<AElem = Q> + Architecture,
     for<'a> mk::maxsim::packed_i8_x_unpacked_i8::Driver<'a, A, GROUP, NR, PACK>: mk::Drive,
 {
     fn nrows(&self) -> usize {
@@ -482,7 +483,10 @@ impl<E: Erase<i8>> diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standar
     for BuildAndErase<E>
 {
     fn run(self, arch: V3, query: MatRef<'_, Standard<i8>>) -> E::Output {
-        let prepared = BlockTransposed::<i8, 16, 2>::from_matrix_view(query.as_matrix_view());
+        // `PrepareB for V3` expects the query widened to `i16`.
+        let prepared = BlockTransposed::<i16, 16, 2>::from_matrix_view(
+            query.as_matrix_view().map(|v| i16::from(*v)).as_view(),
+        );
         self.0.erase(Prepared {
             arch,
             prepared,
@@ -496,8 +500,15 @@ impl<E: Erase<i8>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standar
     for BuildAndErase<E>
 {
     fn run(self, arch: V4, query: MatRef<'_, Standard<i8>>) -> E::Output {
-        // V4 retargets to V3 until the VNNI kernel lands.
-        diskann_wide::arch::Target1::<V3, _, _>::run(self, V3::from(arch), query)
+        // `PrepareB for V4` expects the query packed as `x + 128` in `u8`.
+        let prepared = BlockTransposed::<u8, 32, 4>::from_matrix_view(
+            query.as_matrix_view().map(|v| (*v as u8) ^ 0x80).as_view(),
+        );
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
     }
 }
 
@@ -749,8 +760,7 @@ mod tests {
     use diskann_vector::DistanceFunctionMut;
 
     /// Local helper trait — picks a sane test value of `T` from an `f32`
-    /// so both `f32` and `half::f16` parameterizations share the same data
-    /// generator.
+    /// so every element type shares the same data generator.
     trait FromF32 {
         fn from_f32(v: f32) -> Self;
     }
@@ -774,7 +784,7 @@ mod tests {
     }
 
     /// Projects a kernel score onto the `f32` distance the fallback path
-    /// produces, so both parameterizations share the same assertions.
+    /// produces, so every element type shares the same assertions.
     trait ScoreAsF32: MaxSimElement {
         fn score_as_f32(score: Self::Score) -> f32;
     }
@@ -888,27 +898,15 @@ mod tests {
         }
     }
 
-    /// The `i8` reference path is an independent integer implementation
-    /// ([`FallbackKernel::max_sim_kernel_i8`]), so it needs its own guard; the
-    /// `f32`/`f16` reference paths share `max_sim_kernel` with the oracle and
-    /// would only be testing themselves.
-    ///
-    /// Every other ISA is reached via [`MaxSimIsa::Auto`] somewhere in the CI
-    /// matrix. Widen into a full sweep once V4 and Neon gain native `i8`
-    /// kernels instead of retargeting to V3 and Scalar.
-    #[test]
-    fn i8_reference_matches_oracle() {
-        for &(nq, nd, dim) in TEST_CASES {
-            let query_data = make_test_data::<i8>(nq * dim, dim, dim / 2);
-            let doc_data = make_test_data::<i8>(nd * dim, dim, dim);
+    fn check_i8_isas(nq: usize, nd: usize, dim: usize, query_data: &[i8], doc_data: &[i8]) {
+        let query = make_mat(query_data, nq, dim);
+        let doc = make_mat(doc_data, nd, dim);
 
-            let query = make_mat(&query_data, nq, dim);
-            let doc = make_mat(&doc_data, nd, dim);
+        let mut expected = vec![0.0f32; nq];
+        let _ = MaxSim::new(&mut expected).evaluate(QueryMatRef::from(query), doc);
 
-            let mut expected = vec![0.0f32; nq];
-            let _ = MaxSim::new(&mut expected).evaluate(QueryMatRef::from(query), doc);
-
-            let kernel = build_max_sim::<i8, _>(MaxSimIsa::Reference, query, BoxErase).unwrap();
+        for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
+            let kernel = build_max_sim::<i8, _>(isa, query, BoxErase).unwrap();
             let mut scores = scores_buffer::<i8>(nq);
             kernel.compute_max_sim(doc, &mut scores).unwrap();
 
@@ -916,11 +914,31 @@ mod tests {
                 let actual = <i8 as ScoreAsF32>::score_as_f32(scores[i]);
                 assert!(
                     (actual - expected[i]).abs() < 1e-10,
-                    "i8 reference MaxSim[{i}] mismatch for ({nq},{nd},{dim}): \
+                    "i8 {isa} MaxSim[{i}] mismatch for ({nq},{nd},{dim}): \
                      actual={actual}, expected={}",
                     expected[i],
                 );
             }
+        }
+    }
+
+    #[test]
+    fn i8_isas_match_oracle() {
+        for &(nq, nd, dim) in TEST_CASES {
+            let query_data = make_test_data::<i8>(nq * dim, dim, dim / 2);
+            let doc_data = make_test_data::<i8>(nd * dim, dim, dim);
+            check_i8_isas(nq, nd, dim, &query_data, &doc_data);
+        }
+
+        let full_range: &[(usize, usize, usize)] = if cfg!(miri) {
+            &[(5, 4, 64)]
+        } else {
+            &[(33, 13, 64), (70, 1000, 131)]
+        };
+        for &(nq, nd, dim) in full_range {
+            let query_data: Vec<i8> = (0..nq * dim).map(|v| (37 * v) as i8).collect();
+            let doc_data: Vec<i8> = (0..nd * dim).map(|v| (91 * v + 5) as i8).collect();
+            check_i8_isas(nq, nd, dim, &query_data, &doc_data);
         }
     }
 

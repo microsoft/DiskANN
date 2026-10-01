@@ -13,7 +13,7 @@
 //! Each product is bounded by `128 * 128`, so the `i32` accumulator is exact and cannot
 //! overflow for contraction dimensions up to `131_071`.
 
-use diskann_wide::arch::{Architecture, Scalar};
+use diskann_wide::arch::{Architecture, Scalar, Target};
 use diskann_wide::{SIMDDotProduct, SIMDMinMax, SIMDReinterpret, SIMDVector};
 
 use crate::matrix_kernels::{
@@ -28,17 +28,31 @@ use crate::matrix_kernels::{
 use super::packed_f32_x_unpacked_f32::Params;
 
 diskann_wide::alias!(i8x16<A> = i8x16);
+diskann_wide::alias!(i8x64<A> = i8x64);
 diskann_wide::alias!(i16x16<A> = i16x16);
 diskann_wide::alias!(i32x4<A> = i32x4);
 diskann_wide::alias!(i32x8<A> = i32x8);
+diskann_wide::alias!(i32x16<A> = i32x16);
+diskann_wide::alias!(u8x64<A> = u8x64);
 diskann_wide::alias!(u32x4<A> = u32x4);
 diskann_wide::alias!(u32x8<A> = u32x8);
+diskann_wide::alias!(u32x16<A> = u32x16);
 
 /// Pack a `PACK = 2` group into the little-endian `i16` lane pair consumed by the 16-bit dot
 /// products.
 #[inline(always)]
 fn i16_pair([lo, hi]: [i16; 2]) -> u32 {
     u32::from(lo as u16) | (u32::from(hi as u16) << 16)
+}
+
+/// Pack a `PACK = 4` group into the little-endian byte quad consumed by the 8-bit dot
+/// products.
+///
+/// Broadcasting through `u32` lowers to a single `ld1r` on Neon.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[inline(always)]
+fn i8_quad(group: [i8; 4]) -> u32 {
+    u32::from_le_bytes(group.map(|x| x as u8))
 }
 
 //--------//
@@ -54,9 +68,12 @@ fn i16_pair([lo, hi]: [i16; 2]) -> u32 {
 ///
 /// 1. `a.k()` and `b.k()` must be equal to `k`.
 /// 2. `c.len().div_ceil(MR)` must be equal to `a.blocks()`.
-pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize, const PACK: usize> {
+pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize, const PACK: usize>
+where
+    A: PrepareB,
+{
     arch: A,
-    a: packed::View<'a, i8, MR, PACK>,
+    a: packed::View<'a, A::AElem, MR, PACK>,
     b: unpacked::View<'a, i8>,
     c: &'a mut [i32],
     k: DimK,
@@ -77,7 +94,7 @@ where
     /// 2. `c.len().div_ceil(MR)` must be equal to `a.blocks()`.
     pub(crate) unsafe fn new(
         arch: A,
-        a: packed::View<'a, i8, MR, PACK>,
+        a: packed::View<'a, A::AElem, MR, PACK>,
         b: unpacked::View<'a, i8>,
         c: &'a mut [i32],
         k: DimK,
@@ -108,7 +125,7 @@ where
     /// 2. `c.len().div_ceil(MR)` must be equal to `a.blocks()`.
     unsafe fn new_inner(
         arch: A,
-        a: packed::View<'a, i8, MR, PACK>,
+        a: packed::View<'a, A::AElem, MR, PACK>,
         b: unpacked::View<'a, i8>,
         c: &'a mut [i32],
         k: DimK,
@@ -153,16 +170,16 @@ where
                 let last_a_block = self.a.blocks().get() - 1;
 
                 let mut c = MutSlice::new(self.c);
-                let mut b_scratch = Vec::new();
+                let mut b_scratch = A::Scratch::default();
 
-                let on_a_panels = |a_panels: packed::View<'_, i8, MR, PACK>, a_block_base| {
+                let on_a_panels = |a_panels: packed::View<'_, A::AElem, MR, PACK>, a_block_base| {
                     let on_b_panels = |b_panels: unpacked::View<'_, i8>, _| {
                         // SAFETY: By class invariant, `b_panels.k()` is equal to `self.k`.
-                        let b_panels =
+                        let (b_panels, side) =
                             unsafe { self.arch.prepare(b_panels, &mut b_scratch, self.k) };
 
                         let panel_kernel =
-                            |a_panel: packed::Panel<'_, i8, MR, PACK>, a_block_offset| {
+                            |a_panel: packed::Panel<'_, A::AElem, MR, PACK>, a_block_offset| {
                                 // If we are in the very last block and we need to sub-fill, do
                                 // that. Otherwise, reference the output in place.
                                 let a_block = a_block_base + a_block_offset;
@@ -192,14 +209,15 @@ where
                                 // run the kernel
                                 //
                                 // SAFETY: By class invariant, `a_panel.k()` and `b_panels.k()`
-                                // are both equal to `self.k`.
-                                let mut kernel = unsafe {
-                                    PanelKernel::new(self.arch, a_panel, b_panels, c, self.k)
+                                // are both equal to `self.k`, and `side` was returned with
+                                // `b_panels`.
+                                let kernel = unsafe {
+                                    PanelKernel::new(self.arch, a_panel, b_panels, side, c, self.k)
                                 };
 
-                                driver::PanelKernel::panel_kernel(&mut kernel);
-
-                                let c_final = kernel.take();
+                                // Re-enter `arch` so the kernel keeps the target features of
+                                // `A` even if the closures above are not inlined.
+                                let c_final = self.arch.run(kernel);
 
                                 // Put back `C`.
                                 if handling_tail {
@@ -249,7 +267,15 @@ where
 pub(crate) trait PrepareB: Copy {
     type Elem: Copy;
 
+    /// The element type of the packed `a`, which callers convert from `i8` when packing.
+    type AElem: Copy;
+
+    type Scratch: Default;
+
     /// Return `b` as [`Self::Elem`], using `scratch` as storage if a conversion is needed.
+    ///
+    /// Also return the per-column data read by [`ExtraWide::init`], which is empty for
+    /// architectures that do not need any.
     ///
     /// # Safety
     ///
@@ -257,22 +283,24 @@ pub(crate) trait PrepareB: Copy {
     unsafe fn prepare<'a>(
         self,
         b: unpacked::View<'a, i8>,
-        scratch: &'a mut Vec<Self::Elem>,
+        scratch: &'a mut Self::Scratch,
         k: DimK,
-    ) -> unpacked::View<'a, Self::Elem>;
+    ) -> (unpacked::View<'a, Self::Elem>, Slice<'a, i32>);
 }
 
 impl PrepareB for Scalar {
     type Elem = i8;
+    type AElem = i8;
+    type Scratch = ();
 
     #[inline(always)]
     unsafe fn prepare<'a>(
         self,
         b: unpacked::View<'a, i8>,
-        _: &'a mut Vec<i8>,
+        _: &'a mut (),
         _: DimK,
-    ) -> unpacked::View<'a, i8> {
-        b
+    ) -> (unpacked::View<'a, i8>, Slice<'a, i32>) {
+        (b, Slice::new(&[]))
     }
 }
 
@@ -286,8 +314,9 @@ where
     A: PrepareB,
 {
     arch: A,
-    a: packed::Panel<'a, i8, MR, PACK>,
+    a: packed::Panel<'a, A::AElem, MR, PACK>,
     b: unpacked::View<'a, A::Elem>,
+    side: Slice<'a, i32>,
     c: [i32; MR],
     k: DimK,
 }
@@ -300,21 +329,41 @@ where
     ///
     /// # Safety
     ///
-    /// Bounds `a.k()` and `b.k()` must both be equal to `k`.
+    /// Bounds `a.k()` and `b.k()` must both be equal to `k`, and `side` must be returned with
+    /// `b` by [`PrepareB::prepare`].
     pub(super) unsafe fn new(
         arch: A,
-        a: packed::Panel<'a, i8, MR, PACK>,
+        a: packed::Panel<'a, A::AElem, MR, PACK>,
         b: unpacked::View<'a, A::Elem>,
+        side: Slice<'a, i32>,
         c: [i32; MR],
         k: DimK,
     ) -> Self {
         bounds::check_eq!(a.k(), k);
         bounds::check_eq!(b.k(), k);
 
-        Self { arch, a, b, c, k }
+        Self {
+            arch,
+            a,
+            b,
+            side,
+            c,
+            k,
+        }
     }
+}
 
-    pub(super) fn take(self) -> [i32; MR] {
+/// Unlike the closure impl of [`Target`], this is `#[inline(always)]`, so the kernel
+/// reliably inherits the target features of `A`.
+impl<'a, A, const MR: usize, const NR: usize, const PACK: usize> Target<A, [i32; MR]>
+    for PanelKernel<'a, A, MR, NR, PACK>
+where
+    A: PrepareB + Architecture,
+    PanelKernel<'a, A, MR, NR, PACK>: driver::PanelKernel,
+{
+    #[inline(always)]
+    fn run(mut self, _: A) -> [i32; MR] {
+        driver::PanelKernel::panel_kernel(&mut self);
         self.c
     }
 }
@@ -323,9 +372,13 @@ where
 ///
 /// This is needed to ensure the visitor body is inlined to inherit target features.
 #[derive(Debug)]
-struct Visitor<'a, A, const MR: usize, const NR: usize, const PACK: usize> {
+struct Visitor<'a, A, const MR: usize, const NR: usize, const PACK: usize>
+where
+    A: PrepareB,
+{
     arch: A,
-    a: packed::Panel<'a, i8, MR, PACK>,
+    a: packed::Panel<'a, A::AElem, MR, PACK>,
+    side: Slice<'a, i32>,
     c: &'a mut [i32; MR],
     k: DimK,
 }
@@ -337,10 +390,12 @@ where
     for<'a> MicroKernel<'a, A, MR, NR, PACK>: driver::MicroKernel,
 {
     #[inline(always)]
-    fn visit(&mut self, b: unpacked::Panel<'_, A::Elem, NR>, _: usize) {
+    fn visit(&mut self, b: unpacked::Panel<'_, A::Elem, NR>, start: usize) {
         // SAFETY: This is only used on contexts where `self.a.k()`, `b.k()`, and `self.k`
-        // are all equal.
-        let mut micro = unsafe { MicroKernel::new(self.arch, self.a, b, self.c, self.k) };
+        // are all equal, and where `b` is the panel at column `start` of the view returned
+        // with `self.side`.
+        let mut micro =
+            unsafe { MicroKernel::new(self.arch, self.a, b, self.side, start, self.c, self.k) };
         driver::MicroKernel::micro_kernel(&mut micro);
     }
 }
@@ -356,6 +411,7 @@ macro_rules! panel_kernel {
                 let on_b_panels = Visitor {
                     arch: self.arch,
                     a: self.a,
+                    side: self.side,
                     c: &mut self.c,
                     k: self.k,
                 };
@@ -369,12 +425,15 @@ macro_rules! panel_kernel {
                         const { assert!($ns < $nr) };
                         if let Some(b_panel) = b_tail.try_as_panel::<$ns>() {
                             // SAFETY: By class invariant, `self.a.k()` and `self.b.k()`
-                            // are equal to `self.k`.
+                            // are equal to `self.k`, and `self.side` was returned with
+                            // `self.b`, whose column `b_tail.start()` starts `b_panel`.
                             let mut micro = unsafe {
                                 MicroKernel::new(
                                     self.arch,
                                     self.a,
                                     b_panel,
+                                    self.side,
+                                    b_tail.start(),
                                     &mut self.c,
                                     self.k,
                                 )
@@ -397,14 +456,17 @@ panel_kernel!(Scalar, 8, 2, 2, [1]);
 
 /// # Class Invariants
 ///
-/// `a.k()` and `b.k()` are equal to `k`.
+/// `a.k()` and `b.k()` are equal to `k`, and `b` is the panel at column `start` of the view
+/// returned with `side` by [`PrepareB::prepare`].
 struct MicroKernel<'a, A, const MR: usize, const NR: usize, const PACK: usize>
 where
     A: PrepareB,
 {
     arch: A,
-    a: packed::Panel<'a, i8, MR, PACK>,
+    a: packed::Panel<'a, A::AElem, MR, PACK>,
     b: unpacked::Panel<'a, A::Elem, NR>,
+    side: Slice<'a, i32>,
+    start: usize,
     c: &'a mut [i32; MR],
     k: DimK,
 }
@@ -415,18 +477,29 @@ where
 {
     /// # Safety
     ///
-    /// Bounds `a.k()` and `b.k()` must be equal to `k`.
+    /// Bounds `a.k()` and `b.k()` must be equal to `k`, and `b` must be the panel at column
+    /// `start` of the view returned with `side` by [`PrepareB::prepare`].
     unsafe fn new(
         arch: A,
-        a: packed::Panel<'a, i8, MR, PACK>,
+        a: packed::Panel<'a, A::AElem, MR, PACK>,
         b: unpacked::Panel<'a, A::Elem, NR>,
+        side: Slice<'a, i32>,
+        start: usize,
         c: &'a mut [i32; MR],
         k: DimK,
     ) -> Self {
         bounds::check_eq!(a.k(), k);
         bounds::check_eq!(b.k(), k);
 
-        Self { arch, a, b, c, k }
+        Self {
+            arch,
+            a,
+            b,
+            side,
+            start,
+            c,
+            k,
+        }
     }
 }
 
@@ -480,12 +553,15 @@ unsafe fn accumulate_pack<W, const MR: usize, const NR: usize, const PACK: usize
 
 /// # Safety
 ///
-/// Bounds `a.k()` and `b.k()` must be equal to `k`.
+/// Bounds `a.k()` and `b.k()` must be equal to `k`, and `b` must be the panel at column
+/// `start` of the view returned with `side` by [`PrepareB::prepare`].
 #[inline(always)]
 unsafe fn micro_kernel<W, const MR: usize, const NR: usize, const PACK: usize>(
     wide: W,
-    a: packed::Panel<'_, i8, MR, PACK>,
+    a: packed::Panel<'_, W::AElem, MR, PACK>,
     b: unpacked::Panel<'_, W::Elem, NR>,
+    side: Slice<'_, i32>,
+    start: usize,
     c: &mut [i32; MR],
     k: DimK,
 ) where
@@ -499,7 +575,9 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize, const PACK: usize>(
     let ap = a.as_ptr();
     let bp = b.as_ptr();
 
-    let mut acc = [wide.default(); NR];
+    // SAFETY: By preconditions, `start + j` is a column of the view returned with `side`
+    // for every `j < NR`.
+    let mut acc: [W::Acc; NR] = core::array::from_fn(|j| unsafe { wide.init(side, start + j) });
 
     let astride = a.pack_stride();
     let bstride = b.stride(k);
@@ -564,8 +642,14 @@ macro_rules! micro_kernel {
         impl driver::MicroKernel for MicroKernel<'_, $arch, $mr, $nr, $pack> {
             #[inline(always)]
             fn micro_kernel(&mut self) {
-                // SAFETY: By class invariant, `self.a.k()` and `self.b.k()` equal `self.k`.
-                unsafe { micro_kernel(self.arch, self.a, self.b, self.c, self.k) }
+                // SAFETY: By class invariant, `self.a.k()` and `self.b.k()` equal `self.k`,
+                // and `self.b` is the panel at column `self.start` of the view returned with
+                // `self.side`.
+                unsafe {
+                    micro_kernel(
+                        self.arch, self.a, self.b, self.side, self.start, self.c, self.k,
+                    )
+                }
             }
         }
     };
@@ -584,9 +668,14 @@ trait ExtraWide<const ELEMENTS: usize, const PACK: usize>: PrepareB {
     /// # Safety
     ///
     /// `slice.len()` must be exactly `ELEMENTS * PACK`.
-    unsafe fn load(self, slice: Slice<'_, i8>) -> Self::Wide;
+    unsafe fn load(self, slice: Slice<'_, Self::AElem>) -> Self::Wide;
 
-    fn default(self) -> Self::Acc;
+    /// Return the starting accumulator for `column`.
+    ///
+    /// # Safety
+    ///
+    /// `column` must be a column of the view returned with `side` by [`PrepareB::prepare`].
+    unsafe fn init(self, side: Slice<'_, i32>, column: usize) -> Self::Acc;
 
     /// Broadcast the `PACK` elements at `b`, treating those past `valid` as zero.
     ///
@@ -606,7 +695,7 @@ impl ExtraWide<8, 2> for Scalar {
     type Acc = i32x8<Scalar>;
 
     #[inline(always)]
-    fn default(self) -> Self::Acc {
+    unsafe fn init(self, _: Slice<'_, i32>, _: usize) -> Self::Acc {
         SIMDVector::default(self)
     }
 
@@ -651,13 +740,18 @@ impl ExtraWide<8, 2> for Scalar {
 mod x86_64 {
     use super::*;
 
-    use diskann_wide::arch::x86_64::V3;
+    use diskann_wide::{
+        SIMDSumTree,
+        arch::x86_64::{V3, V4},
+    };
 
     use crate::matrix_kernels::util::{Convert, Converter};
 
     panel_kernel!(V3, 16, 6, 2, [1, 2, 3, 4, 5]);
+    panel_kernel!(V4, 32, 6, 4, [1, 2, 3, 4, 5]);
 
     micro_kernel!(V3, 16, 2, { 6, 5, 4, 3, 2, 1 });
+    micro_kernel!(V4, 32, 4, { 6, 5, 4, 3, 2, 1 });
 
     //----------//
     // PrepareB //
@@ -665,6 +759,8 @@ mod x86_64 {
 
     impl PrepareB for V3 {
         type Elem = i16;
+        type AElem = i16;
+        type Scratch = Vec<i16>;
 
         #[inline(always)]
         unsafe fn prepare<'a>(
@@ -672,7 +768,7 @@ mod x86_64 {
             b: unpacked::View<'a, i8>,
             scratch: &'a mut Vec<i16>,
             k: DimK,
-        ) -> unpacked::View<'a, i16> {
+        ) -> (unpacked::View<'a, i16>, Slice<'a, i32>) {
             // SAFETY: Inherited from caller.
             let from = unsafe { b.as_std_slice(k) };
 
@@ -680,8 +776,96 @@ mod x86_64 {
             Converter::new(self).convert(scratch, from);
 
             // SAFETY: `scratch` has length `b.extent() * k`.
-            unsafe { unpacked::View::new(Slice::new(scratch), b.extent(), k) }
+            let b = unsafe { unpacked::View::new(Slice::new(scratch), b.extent(), k) };
+
+            (b, Slice::new(&[]))
         }
+    }
+
+    /// `a` is packed as `x + 128` in `u8` for the unsigned by signed dot product, so each
+    /// accumulator starts at `-128` times the sum of its column of `b` to cancel the shift.
+    impl PrepareB for V4 {
+        type Elem = i8;
+        type AElem = u8;
+        type Scratch = Vec<i32>;
+
+        #[inline(always)]
+        unsafe fn prepare<'a>(
+            self,
+            b: unpacked::View<'a, i8>,
+            scratch: &'a mut Vec<i32>,
+            k: DimK,
+        ) -> (unpacked::View<'a, i8>, Slice<'a, i32>) {
+            // SAFETY: Inherited from caller.
+            let from = unsafe { b.as_std_slice(k) };
+            let k = k.value().get();
+
+            scratch.resize(b.extent().get(), 0);
+
+            let (to_blocks, to_tail) = scratch.as_chunks_mut::<16>();
+            let (from_blocks, from_tail) = from.split_at(16 * k * to_blocks.len());
+
+            // Plain loops rather than closures, which may not inherit the target features.
+            for (to, cols) in std::iter::zip(to_blocks, from_blocks.chunks_exact(16 * k)) {
+                for (to, sum) in std::iter::zip(to, column_sums::<16>(self, cols)) {
+                    *to = -128 * sum;
+                }
+            }
+            for (to, col) in std::iter::zip(to_tail, from_tail.chunks_exact(k)) {
+                let [sum] = column_sums::<1>(self, col);
+                *to = -128 * sum;
+            }
+
+            (b, Slice::new(scratch))
+        }
+    }
+
+    /// Sum each of the `N` equal length columns in `cols`, walking them together so that
+    /// their dot products overlap.
+    #[inline(always)]
+    fn column_sums<const N: usize>(arch: V4, cols: &[i8]) -> [i32; N] {
+        let k = cols.len() / N;
+        let cols = Slice::new(cols);
+
+        let ones = u8x64::<V4>::splat(arch, 1);
+        let mut sums: [i32x16<V4>; N] = [SIMDVector::default(arch); N];
+
+        let full = k / 64;
+        for chunk in 0..full {
+            for (j, sum) in sums.iter_mut().enumerate() {
+                // SAFETY: Since `j < N`, `j * k + 64 * (chunk + 1) <= (j + 1) * k` is at most
+                // `cols.len()`.
+                let x: i8x64<V4> = unsafe {
+                    SIMDVector::load_simd(
+                        arch,
+                        cols.add(Elements::new(j * k + 64 * chunk)).as_ptr(),
+                    )
+                };
+                *sum = sum.dot_simd(ones, x);
+            }
+        }
+
+        let rest = k - 64 * full;
+        if rest != 0 {
+            for (j, sum) in sums.iter_mut().enumerate() {
+                // SAFETY: Since `j < N`, `j * k + 64 * full + rest == (j + 1) * k` is at most
+                // `cols.len()`.
+                let x: i8x64<V4> = unsafe {
+                    SIMDVector::load_simd_first(
+                        arch,
+                        cols.add(Elements::new(j * k + 64 * full)).as_ptr(),
+                        rest,
+                    )
+                };
+                *sum = sum.dot_simd(ones, x);
+            }
+        }
+
+        let mut out = [0; N];
+        for (out, sum) in std::iter::zip(&mut out, &sums) {
+            *out = sum.sum_tree();
+        }
+        out
     }
 
     //-----------//
@@ -694,24 +878,22 @@ mod x86_64 {
         type Acc = [i32x8<V3>; 2];
 
         #[inline(always)]
-        fn default(self) -> Self::Acc {
+        unsafe fn init(self, _: Slice<'_, i32>, _: usize) -> Self::Acc {
             [SIMDVector::default(self), SIMDVector::default(self)]
         }
 
         #[inline(always)]
-        unsafe fn load(self, slice: Slice<'_, i8>) -> Self::Wide {
+        unsafe fn load(self, slice: Slice<'_, i16>) -> Self::Wide {
             bounds::check_eq!(slice.len(), 32);
 
             // SAFETY: Since `slice.len()` must be 32, the pointer offset and 16-wide SIMD loads
             // are valid.
-            let bytes: [i8x16<V3>; 2] = unsafe {
+            unsafe {
                 [
                     SIMDVector::load_simd(self, slice.as_ptr()),
                     SIMDVector::load_simd(self, slice.add(Elements::new(16)).as_ptr()),
                 ]
-            };
-
-            bytes.map(Self::Splat::from)
+            }
         }
 
         #[inline(always)]
@@ -752,6 +934,72 @@ mod x86_64 {
             }
         }
     }
+
+    impl ExtraWide<32, 4> for V4 {
+        type Wide = [u8x64<V4>; 2];
+        type Splat = i8x64<V4>;
+        type Acc = [i32x16<V4>; 2];
+
+        #[inline(always)]
+        unsafe fn init(self, side: Slice<'_, i32>, column: usize) -> Self::Acc {
+            // SAFETY: `prepare` returns one value per column in `side`, and by preconditions
+            // `column` is one of those columns.
+            let start = unsafe { *side.add(Elements::new(column)).as_unit().as_ref() };
+            [SIMDVector::splat(self, start); 2]
+        }
+
+        #[inline(always)]
+        unsafe fn load(self, slice: Slice<'_, u8>) -> Self::Wide {
+            bounds::check_eq!(slice.len(), 128);
+
+            // SAFETY: Since `slice.len()` must be 128, the pointer offset and 64-wide SIMD
+            // loads are valid.
+            unsafe {
+                [
+                    SIMDVector::load_simd(self, slice.as_ptr()),
+                    SIMDVector::load_simd(self, slice.add(Elements::new(64)).as_ptr()),
+                ]
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn splat(self, b: Slice<'_, i8>, valid: usize) -> Self::Splat {
+            // SAFETY: Inherited from caller.
+            let quad = i8_quad(unsafe { group(b, valid) });
+            u32x16::<V4>::splat(self, quad).reinterpret_simd()
+        }
+
+        #[inline(always)]
+        fn dot(a: Self::Wide, b: Self::Splat, acc: Self::Acc) -> Self::Acc {
+            core::array::from_fn(|i| acc[i].dot_simd(a[i], b))
+        }
+
+        #[inline(always)]
+        fn max(lhs: Self::Acc, rhs: Self::Acc) -> Self::Acc {
+            core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
+        }
+
+        #[inline(always)]
+        fn max_into(self, lhs: Self::Acc, into: &mut [i32; 32]) {
+            // SAFETY: Since `into.len()` is 32, the pointer offset and 16-wide SIMD loads are
+            // valid.
+            let previous: Self::Acc = unsafe {
+                [
+                    SIMDVector::load_simd(self, into.as_ptr()),
+                    SIMDVector::load_simd(self, into.as_ptr().add(16)),
+                ]
+            };
+
+            let max = Self::max(lhs, previous);
+
+            // SAFETY: Since `into.len()` is 32, the pointer offset and 16-wide SIMD stores
+            // are valid.
+            unsafe {
+                max[0].store_simd(into.as_mut_ptr());
+                max[1].store_simd(into.as_mut_ptr().add(16));
+            }
+        }
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -766,29 +1014,23 @@ mod aarch64 {
     micro_kernel!(Neon, 8, 4, { 6, 5, 4, 3, 2, 1 });
     micro_kernel!(Neon, 16, 4, { 6, 5, 4, 3, 2, 1 });
 
-    /// Pack a `PACK = 4` group into the little-endian byte quad consumed by `sdot`.
-    ///
-    /// Broadcasting through `u32` lowers to a single `ld1r`.
-    #[inline(always)]
-    fn i8_quad(group: [i8; 4]) -> u32 {
-        u32::from_le_bytes(group.map(|x| x as u8))
-    }
-
     //----------//
     // PrepareB //
     //----------//
 
     impl PrepareB for Neon {
         type Elem = i8;
+        type AElem = i8;
+        type Scratch = ();
 
         #[inline(always)]
         unsafe fn prepare<'a>(
             self,
             b: unpacked::View<'a, i8>,
-            _: &'a mut Vec<i8>,
+            _: &'a mut (),
             _: DimK,
-        ) -> unpacked::View<'a, i8> {
-            b
+        ) -> (unpacked::View<'a, i8>, Slice<'a, i32>) {
+            (b, Slice::new(&[]))
         }
     }
 
@@ -802,7 +1044,7 @@ mod aarch64 {
         type Acc = [i32x4<Neon>; 2];
 
         #[inline(always)]
-        fn default(self) -> Self::Acc {
+        unsafe fn init(self, _: Slice<'_, i32>, _: usize) -> Self::Acc {
             [SIMDVector::default(self), SIMDVector::default(self)]
         }
 
@@ -865,7 +1107,7 @@ mod aarch64 {
         type Acc = [i32x4<Neon>; 4];
 
         #[inline(always)]
-        fn default(self) -> Self::Acc {
+        unsafe fn init(self, _: Slice<'_, i32>, _: usize) -> Self::Acc {
             [SIMDVector::default(self); 4]
         }
 
@@ -929,12 +1171,55 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     #[cfg(target_arch = "x86_64")]
-    use diskann_wide::arch::x86_64::V3;
+    use diskann_wide::arch::x86_64::{V3, V4};
 
     #[cfg(target_arch = "aarch64")]
     use diskann_wide::arch::aarch64::Neon;
 
+    use diskann_utils::views::Matrix;
+
     use crate::{matrix_kernels::maxsim, multi_vector::BlockTransposed};
+
+    /// Convert an element of `a` into [`PrepareB::AElem`] before packing.
+    trait ConvertA: PrepareB<AElem: Default> {
+        fn convert_a(x: i8) -> Self::AElem;
+    }
+
+    impl ConvertA for Scalar {
+        fn convert_a(x: i8) -> i8 {
+            x
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl ConvertA for V3 {
+        fn convert_a(x: i8) -> i16 {
+            i16::from(x)
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl ConvertA for V4 {
+        fn convert_a(x: i8) -> u8 {
+            (x as u8) ^ 0x80
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    impl ConvertA for Neon {
+        fn convert_a(x: i8) -> i8 {
+            x
+        }
+    }
+
+    fn pack_a<A, const MR: usize, const PACK: usize>(
+        a: &Matrix<i8>,
+    ) -> BlockTransposed<A::AElem, MR, PACK>
+    where
+        A: ConvertA,
+    {
+        BlockTransposed::from_matrix_view(a.map(|x| A::convert_a(*x)).as_view())
+    }
 
     /////////////////
     // MicroKernel //
@@ -946,20 +1231,20 @@ mod tests {
         rng: &mut impl rand::Rng,
         ctx: std::fmt::Arguments<'_>,
     ) where
-        A: PrepareB,
+        A: ConvertA,
         for<'a> MicroKernel<'a, A, MR, NR, PACK>: driver::MicroKernel,
     {
         let (ref_a, ref_b, ref_c) = maxsim::test::generate_i8(MR, k.value().get(), NR, rng);
 
         // From the reference problem, `ref_a` needs to be packed and `ref_b` transposed to
         // get them into the desired format.
-        let a_bt = BlockTransposed::<i8, MR, PACK>::from_matrix_view(ref_a.as_view());
+        let a_bt = pack_a::<A, MR, PACK>(&ref_a);
         let ref_b = ref_b.transpose();
 
-        let mut scratch = Vec::new();
+        let mut scratch = A::Scratch::default();
 
         // SAFETY: Test builds will verify the bounds we passed.
-        let b = unsafe {
+        let (b, side) = unsafe {
             arch.prepare(
                 unpacked::View::from_matrix_view(ref_b.as_view()).unwrap(),
                 &mut scratch,
@@ -977,6 +1262,8 @@ mod tests {
                 arch,
                 packed::Panel::new(Slice::new(a_bt.as_slice()), k),
                 unpacked::Panel::new(Slice::new(b.as_std_slice(k)), k),
+                side,
+                0,
                 &mut c,
                 k,
             )
@@ -985,7 +1272,7 @@ mod tests {
         driver::MicroKernel::micro_kernel(&mut kernel);
         assert_eq!(&*ref_c, kernel.c, "{ctx}");
 
-        // Try again - but this time use a value that is much bigger than the what should
+        // Try again - but this time use a value that is much bigger than what should
         // be generated by the test problem.
         //
         // This checks that we don't just overwrite existing contents.
@@ -1047,6 +1334,15 @@ mod tests {
         16 => { 6, 5, 4, 3, 2, 1 },
     );
 
+    #[cfg(target_arch = "x86_64")]
+    test_micro_kernel!(
+        test_micro_kernel_v4,
+        V4::new_checked_miri(),
+        0x2c9e5b7a41f0d863,
+        4,
+        32 => { 6, 5, 4, 3, 2, 1 },
+    );
+
     #[cfg(target_arch = "aarch64")]
     test_micro_kernel!(
         test_micro_kernel_neon,
@@ -1071,7 +1367,7 @@ mod tests {
         rng: &mut impl rand::Rng,
         ctx: std::fmt::Arguments<'_>,
     ) where
-        A: PrepareB,
+        A: ConvertA,
         for<'a> PanelKernel<'a, A, MR, NR, PACK>: driver::PanelKernel,
     {
         for blocks in 0..4 {
@@ -1084,12 +1380,21 @@ mod tests {
                 let (ref_a, ref_b, ref_c) =
                     maxsim::test::generate_i8(MR, k.value().get(), cols, rng);
 
-                let a_bt = BlockTransposed::<i8, MR, PACK>::from_matrix_view(ref_a.as_view());
+                let a_bt = pack_a::<A, MR, PACK>(&ref_a);
                 let ref_b = ref_b.transpose();
 
                 let extent = NonZeroUsize::new(cols).unwrap();
 
-                let mut scratch = Vec::new();
+                let mut scratch = A::Scratch::default();
+
+                // SAFETY: Test builds will verify the bounds we passed.
+                let (b, side) = unsafe {
+                    arch.prepare(
+                        unpacked::View::new(Slice::new(ref_b.as_slice()), extent, k),
+                        &mut scratch,
+                        k,
+                    )
+                };
 
                 let c = [i32::MIN; MR];
 
@@ -1098,11 +1403,8 @@ mod tests {
                     PanelKernel::new(
                         arch,
                         packed::Panel::new(Slice::new(a_bt.as_slice()), k),
-                        arch.prepare(
-                            unpacked::View::new(Slice::new(ref_b.as_slice()), extent, k),
-                            &mut scratch,
-                            k,
-                        ),
+                        b,
+                        side,
                         c,
                         k,
                     )
@@ -1111,7 +1413,7 @@ mod tests {
                 driver::PanelKernel::panel_kernel(&mut kernel);
                 assert_eq!(&*ref_c, kernel.c, "{ctx}");
 
-                // Try again - but this time use a value that is much bigger than the what
+                // Try again - but this time use a value that is much bigger than what
                 // should be generated by the test problem.
                 //
                 // This checks that we don't just overwrite existing contents.
@@ -1172,6 +1474,14 @@ mod tests {
         (16, 6, 2),
     );
 
+    #[cfg(target_arch = "x86_64")]
+    test_panel_kernel!(
+        test_panel_kernel_v4,
+        V4::new_checked_miri(),
+        0x9f3e7ab4c05d1268,
+        (32, 6, 4),
+    );
+
     #[cfg(target_arch = "aarch64")]
     test_panel_kernel!(
         test_panel_kernel_neon,
@@ -1189,10 +1499,20 @@ mod tests {
         arch: A,
         rng: &mut impl rand::Rng,
     ) where
-        A: PrepareB,
+        A: ConvertA,
         for<'a> Driver<'a, A, MR, NR, PACK>: driver::Drive,
     {
-        let cases = maxsim::test::packed_x_unpacked_test_dims(MR, NR);
+        let mut cases = maxsim::test::packed_x_unpacked_test_dims(MR, NR);
+
+        // Sub-views of 17 and 16 columns reach the 16-column blocks in `PrepareB for V4`.
+        cases.push(maxsim::test::TestDims {
+            a_panels_per_tile: 1,
+            total_a_rows: MR + 1,
+            b_cols_per_tile: 17,
+            total_b_cols: 33,
+            k: 5,
+        });
+
         for case in cases {
             let maxsim::test::TestDims {
                 a_panels_per_tile,
@@ -1208,7 +1528,7 @@ mod tests {
                 maxsim::test::generate_i8(total_a_rows, k.value().get(), total_b_cols, rng);
 
             // Massage the input data in the form needed by the kernel.
-            let a_bt = BlockTransposed::<i8, MR, PACK>::from_matrix_view(ref_a.as_view());
+            let a_bt = pack_a::<A, MR, PACK>(&ref_a);
             let b = ref_b.transpose();
 
             let mut c = vec![i32::MAX; a_bt.nrows()];
@@ -1271,6 +1591,14 @@ mod tests {
         (16, 6, 2),
     );
 
+    #[cfg(target_arch = "x86_64")]
+    test_driver!(
+        test_driver_v4,
+        V4::new_checked_miri(),
+        0x63c8ed19f4720ab5,
+        (32, 6, 4),
+    );
+
     #[cfg(target_arch = "aarch64")]
     test_driver!(
         test_driver_neon,
@@ -1279,4 +1607,43 @@ mod tests {
         (8, 6, 4),
         (16, 6, 4),
     );
+
+    //////////////
+    // PrepareB //
+    //////////////
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_prepare_v4() {
+        use crate::matrix_kernels::test_util::TestDistr;
+
+        if let Some(arch) = V4::new_checked_miri() {
+            let mut rng = StdRng::seed_from_u64(0x5d0b8e3f7a1c6942);
+            let mut scratch = Vec::new();
+
+            for k in [1, 63, 64, 65, 128, 131] {
+                for n in [1, 15, 16, 17, 33] {
+                    let b = TestDistr::matrix::<i8>(n, k, &mut rng);
+                    let expected: Vec<i32> = b
+                        .row_iter()
+                        .map(|col| -128 * col.iter().map(|&x| i32::from(x)).sum::<i32>())
+                        .collect();
+
+                    let dim = DimK::new(NonZeroUsize::new(k).unwrap());
+
+                    // SAFETY: Test builds will verify the bounds we passed.
+                    unsafe {
+                        let (view, side) = arch.prepare(
+                            unpacked::View::from_matrix_view(b.as_view()).unwrap(),
+                            &mut scratch,
+                            dim,
+                        );
+
+                        assert_eq!(view.as_std_slice(dim), b.as_slice(), "k = {k}, n = {n}");
+                        assert_eq!(side.as_std_slice(n), &*expected, "k = {k}, n = {n}");
+                    }
+                }
+            }
+        }
+    }
 }

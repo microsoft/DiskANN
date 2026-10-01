@@ -111,6 +111,48 @@ macro_rules! impl_loadstore {
             }
         }
     };
+    ($T:ty, 32, [$wide:ident; 2], $arch:ty) => {
+        impl LoadStore<$T, 32> for $arch {
+            #[inline(always)]
+            fn load(self, src: &[$T]) -> [$T; 32] {
+                use diskann_wide::{LoHi, SIMDVector};
+                diskann_wide::alias!(wide = <$arch>::$wide);
+
+                // SAFETY: Loading the first `src.len().min(16)` elements from `src` is valid.
+                let lo = unsafe { wide::load_simd_first(self, src.as_ptr(), src.len()) }.to_array();
+
+                // SAFETY: This only reads `src.len() - 16` values if `src.len()` exceeds 16.
+                let hi = unsafe {
+                    wide::load_simd_first(
+                        self,
+                        src.as_ptr().wrapping_offset(16),
+                        src.len().saturating_sub(16),
+                    )
+                }
+                .to_array();
+
+                LoHi::new(lo, hi).join()
+            }
+
+            #[inline(always)]
+            fn store(self, v: [$T; 32], dst: &mut [$T]) {
+                use diskann_wide::{LoHi, SIMDVector, SplitJoin};
+                diskann_wide::alias!(wide = <$arch>::$wide);
+
+                let LoHi { lo, hi } = v.split();
+
+                // SAFETY: Storing the first `dst.len().min(16)` elements to `dst` is valid.
+                unsafe { wide::from_array(self, lo).store_simd_first(dst.as_mut_ptr(), dst.len()) };
+
+                if let Some(rest) = dst.len().checked_sub(16) {
+                    // SAFETY: This only writes `dst.len() - 16` values if `dst.len()` exceeds 16.
+                    unsafe {
+                        wide::from_array(self, hi).store_simd_first(dst.as_mut_ptr().add(16), rest)
+                    };
+                }
+            }
+        }
+    };
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -125,47 +167,8 @@ mod x86_64 {
 
     impl_loadstore!(f32, 8, f32x8, V4);
     impl_loadstore!(f32, 16, f32x16, V4);
-
-    impl LoadStore<f32, 32> for V4 {
-        #[inline(always)]
-        fn load(self, src: &[f32]) -> [f32; 32] {
-            use diskann_wide::{LoHi, SIMDVector};
-            diskann_wide::alias!(wide = <V4>::f32x16);
-
-            // SAFETY: Loading the first `src.len().min(16)` elements from `src` is valid.
-            let lo = unsafe { wide::load_simd_first(self, src.as_ptr(), src.len()) }.to_array();
-
-            // SAFETY: This only reads `src.len() - 16` values if `src.len()` exceeds 16.
-            let hi = unsafe {
-                wide::load_simd_first(
-                    self,
-                    src.as_ptr().wrapping_offset(16),
-                    src.len().saturating_sub(16),
-                )
-            }
-            .to_array();
-
-            LoHi::new(lo, hi).join()
-        }
-
-        #[inline(always)]
-        fn store(self, v: [f32; 32], dst: &mut [f32]) {
-            use diskann_wide::{LoHi, SIMDVector, SplitJoin};
-            diskann_wide::alias!(wide = <V4>::f32x16);
-
-            let LoHi { lo, hi } = v.split();
-
-            // SAFETY: Storing the first `dst.len().min(16)` elements to `dst` is valid.
-            unsafe { wide::from_array(self, lo).store_simd_first(dst.as_mut_ptr(), dst.len()) };
-
-            if let Some(rest) = dst.len().checked_sub(16) {
-                // SAFETY: This only writes if `dst.len() - 16` values if `dst.len()` exceeds 16.
-                unsafe {
-                    wide::from_array(self, hi).store_simd_first(dst.as_mut_ptr().add(16), rest)
-                };
-            }
-        }
-    }
+    impl_loadstore!(f32, 32, [f32x16; 2], V4);
+    impl_loadstore!(i32, 32, [i32x16; 2], V4);
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -382,6 +385,7 @@ mod test {
         test_load_store_v4,
         V4::new_checked_miri(),
         f32 => { 8, 16, 32 },
+        i32 => { 32 },
     );
 
     #[cfg(target_arch = "aarch64")]
