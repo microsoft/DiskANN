@@ -555,7 +555,8 @@ where
 
         ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
 
-        let mut candidate_vectors = Matrix::new(0.0f32, candidate_ids.len(), query_f32.len());
+        let mut candidate_vectors =
+            Matrix::try_from_element(candidate_ids.len(), query_f32.len(), 0.0)?;
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
         let mut associated_data = Vec::with_capacity(candidate_ids.len());
 

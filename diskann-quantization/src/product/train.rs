@@ -44,7 +44,7 @@ pub struct SimplePivots {
 }
 
 fn flatten<T: Copy + Default>(pivots: &[Matrix<T>], ncenters: usize, dim: usize) -> Matrix<T> {
-    let mut flattened = Matrix::new(T::default(), ncenters, dim);
+    let mut flattened = Matrix::from_element(ncenters, dim, T::default());
     let mut col_start = 0;
     for matrix in pivots {
         assert_eq!(matrix.nrows(), flattened.nrows());
@@ -169,7 +169,13 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 // Allocate scratch data structures.
                 let norms: Vec<f32> = view.rows().map(square_norm).collect();
                 let transpose = BlockTransposed::<f32, 16>::from_strided(view);
-                let mut centers = Matrix::new(0.0, trainer.ncenters, range.len());
+                let mut centers = Matrix::try_from_element(trainer.ncenters, range.len(), 0.0)
+                    .map_err(|err| PQTrainingError {
+                        chunk: i,
+                        of: schema.len(),
+                        dim: range.len(),
+                        kind: PQTrainingErrorKind::InternalError(Box::new(err)),
+                    })?;
 
                 // Construct the random number generator seeded by the PQ chunk.
                 let mut rng = rng_builder.build_boxed_rng(i);
@@ -302,7 +308,7 @@ mod tests {
         // Create the sub matrices.
         let matrices: Vec<Matrix<usize>> = std::iter::zip(sub_dims.iter(), prefix_sum.iter())
             .map(|(&this_dim, &offset)| {
-                let mut m = Matrix::new(0, nrows, this_dim);
+                let mut m = Matrix::from_element(nrows, this_dim, 0);
                 for r in 0..nrows {
                     for c in 0..this_dim {
                         *m.element_mut(r, c) = dim * r + offset + c;
@@ -358,8 +364,8 @@ mod tests {
                 .map(|chunk| {
                     let dim = schema.at(chunk).len();
 
-                    let mut initial = Matrix::new(0.0, ndata, dim);
-                    let mut centers = Matrix::new(0.0, self.nclusters, 1);
+                    let mut initial = Matrix::from_element(ndata, dim, 0.0);
+                    let mut centers = Matrix::from_element(self.nclusters, 1, 0.0);
 
                     // The starting offset for clusters.
                     let offset = offsets_distribution.sample(rng);
@@ -380,7 +386,7 @@ mod tests {
 
                     // Shuffle the dataset.
                     indices.shuffle(rng);
-                    let mut piece = Matrix::new(0.0, ndata, dim);
+                    let mut piece = Matrix::from_element(ndata, dim, 0.0);
                     for (dst, src) in indices.iter().enumerate() {
                         piece.row_mut(dst).copy_from_slice(initial.row(*src));
                     }
@@ -579,7 +585,7 @@ mod tests {
     // pivots exceeds the number of dataset items.
     #[test]
     fn tests_succeeded_with_too_many_pivots() {
-        let data = Matrix::<f32>::new(1.0, 10, 5);
+        let data = Matrix::<f32>::from_element(10, 5, 1.0);
         let offsets: Vec<usize> = vec![0, 1, 4, 5];
 
         let trainer = LightPQTrainingParameters::new(2 * data.nrows(), 6);
@@ -650,7 +656,7 @@ mod tests {
                 assert!(format(&err).contains("infinity"));
             };
 
-            let mut data = Matrix::<f32>::new(1.0, nrows, ncols);
+            let mut data = Matrix::<f32>::from_element(nrows, ncols, 1.0);
 
             // Positive Infinity
             *data.element_mut(r, c) = f32::INFINITY;

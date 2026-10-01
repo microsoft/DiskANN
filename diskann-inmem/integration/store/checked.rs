@@ -90,6 +90,7 @@ impl dbr::Benchmark for Stress {
             freelist_recycle_capacity: input.setup.freelist_recycle_capacity,
         };
 
+        writeln!(output, "Checked Store Stress Test\n")?;
         writeln!(output, "{}", input)?;
         let stats = super::run_benchmark(checked::Store::new(config), &input.setup)?;
         writeln!(output, "{}", stats)?;

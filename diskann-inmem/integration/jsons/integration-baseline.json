@@ -17,7 +17,7 @@
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
         "representation": {
-          "FullPrecision": {
+          "full-precision": {
             "data_type": "f32"
           }
         },
@@ -138,7 +138,7 @@
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
         "representation": {
-          "FullPrecision": {
+          "full-precision": {
             "data_type": "f16"
           }
         },
@@ -259,7 +259,7 @@
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
         "representation": {
-          "FullPrecision": {
+          "full-precision": {
             "data_type": "u8"
           }
         },
@@ -383,7 +383,7 @@
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
         "representation": {
-          "FullPrecision": {
+          "full-precision": {
             "data_type": "i8"
           }
         },

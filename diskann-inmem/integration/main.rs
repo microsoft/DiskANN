@@ -242,11 +242,105 @@ mod tests {
 
     #[test]
     #[cfg(not(miri))]
-    fn graph_index() {
+    fn graph_index_full() {
         run_regression_example(
             "integration.json",
             "checks.json",
             "integration-baseline.json",
+        );
+    }
+
+    //------------------------//
+    // Spherical Quantization //
+    //------------------------//
+
+    #[test]
+    #[cfg(not(miri))]
+    fn graph_spherical_one_bit_l2() {
+        run_regression_example(
+            "graph/spherical/one-bit-l2.json",
+            "checks.json",
+            "graph/spherical/one-bit-l2-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_spherical_one_bit_ip() {
+        run_regression_example(
+            "graph/spherical/one-bit-ip.json",
+            "checks.json",
+            "graph/spherical/one-bit-ip-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_spherical_one_bit_cosine() {
+        run_regression_example(
+            "graph/spherical/one-bit-cosine.json",
+            "checks.json",
+            "graph/spherical/one-bit-cosine-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_spherical_two_bit_l2() {
+        run_regression_example(
+            "graph/spherical/two-bit-l2.json",
+            "checks.json",
+            "graph/spherical/two-bit-l2-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_spherical_two_bit_ip() {
+        run_regression_example(
+            "graph/spherical/two-bit-ip.json",
+            "checks.json",
+            "graph/spherical/two-bit-ip-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_spherical_two_bit_cosine() {
+        run_regression_example(
+            "graph/spherical/two-bit-cosine.json",
+            "checks.json",
+            "graph/spherical/two-bit-cosine-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_spherical_four_bit_l2() {
+        run_regression_example(
+            "graph/spherical/four-bit-l2.json",
+            "checks.json",
+            "graph/spherical/four-bit-l2-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_spherical_four_bit_ip() {
+        run_regression_example(
+            "graph/spherical/four-bit-ip.json",
+            "checks.json",
+            "graph/spherical/four-bit-ip-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_spherical_four_bit_cosine() {
+        run_regression_example(
+            "graph/spherical/four-bit-cosine.json",
+            "checks.json",
+            "graph/spherical/four-bit-cosine-baseline.json",
         );
     }
 }

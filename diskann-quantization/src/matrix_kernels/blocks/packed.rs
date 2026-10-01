@@ -322,7 +322,7 @@ mod tests {
 
     use diskann_utils::{
         assert_contains,
-        views::{Init, Matrix, MatrixView},
+        views::{Matrix, MatrixView},
     };
 
     use crate::{matrix_kernels::test_util::panic_message_for, multi_vector::BlockTransposed};
@@ -345,14 +345,10 @@ mod tests {
 
         // Values start at one so that zero unambiguously marks a padded slot.
         let mut value = 0.0;
-        let matrix = Matrix::new(
-            Init(|| {
-                value += 1.0;
-                value
-            }),
-            nrows,
-            ncols,
-        );
+        let matrix = Matrix::from_fn(nrows, ncols, |_| {
+            value += 1.0;
+            value
+        });
 
         let bt = BlockTransposed::<f32, SZ, PACK>::from_matrix_view(matrix.as_view());
         let padded = bt.padded_ncols();
@@ -589,15 +585,11 @@ mod tests {
 
     fn test_matrix(nrows: usize, ncols: usize) -> Matrix<f32> {
         let mut value = 0.0;
-        Matrix::new(
-            Init(|| {
-                let current = value;
-                value += 1.0;
-                current
-            }),
-            nrows,
-            ncols,
-        )
+        Matrix::from_fn(nrows, ncols, |_| {
+            let current = value;
+            value += 1.0;
+            current
+        })
     }
 
     fn pack<const SZ: usize>(matrix: MatrixView<'_, f32>) -> Vec<f32> {
