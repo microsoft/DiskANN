@@ -115,11 +115,6 @@ impl<K: Copy + Ord, V: Copy + Ord> Grouped<K, V> {
         &self.keys
     }
 
-    /// Every value, group by group.
-    pub(super) fn values(&self) -> &[V] {
-        self.groups.values()
-    }
-
     /// The values under `key`, or nothing if `key` is absent.
     pub(super) fn get(&self, key: K) -> &[V] {
         self.keys

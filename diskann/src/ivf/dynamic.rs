@@ -5,11 +5,10 @@
 
 //! Contracts for an incrementally maintained IVF index.
 //!
-//! This module is an API skeleton. It defines the boundary between an IVF
-//! algorithm and provider-specific centroid navigation, inverted-list access,
-//! and partition mutation. Concrete accessors are responsible for presenting a
-//! coherent view across those components. The online split/dissolve algorithm
-//! is not implemented here yet.
+//! This module defines the boundary between the IVF algorithm and
+//! provider-specific centroid navigation, inverted-list access, and partition
+//! mutation. Concrete accessors are responsible for presenting a coherent view
+//! across those components.
 
 use std::fmt::Debug;
 
@@ -21,40 +20,13 @@ use crate::{
     utils::VectorId,
 };
 
-/// One centroid/list selected during coarse search.
+/// One centroid/list selected for a query.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SelectedList<L> {
     /// Stable logical list identifier.
     pub id: L,
-    /// Distance from the bound query to this list's centroid.
+    /// Distance from the query to this list's centroid.
     pub distance: f32,
-}
-
-/// The handoff from centroid selection to inverted-list scanning.
-///
-/// A plan must be consumed by the same [`SearchAccessor`] that produced it.
-/// The accessor is responsible for keeping centroid selection and list reads
-/// coherent using provider-specific coordination.
-#[derive(Debug, Clone)]
-pub struct SelectionPlan<L> {
-    selected: Vec<SelectedList<L>>,
-}
-
-impl<ListId> SelectionPlan<ListId> {
-    /// Construct a plan from selected logical lists.
-    pub fn new(selected: Vec<SelectedList<ListId>>) -> Self {
-        Self { selected }
-    }
-
-    /// Lists selected in increasing coarse-distance order.
-    pub fn selected(&self) -> &[SelectedList<ListId>] {
-        &self.selected
-    }
-
-    /// Consume the plan and return the selected lists.
-    pub fn into_selected(self) -> Vec<SelectedList<ListId>> {
-        self.selected
-    }
 }
 
 /// Work performed while scanning the selected lists.
@@ -96,7 +68,8 @@ pub trait CentroidIndex: Send + Sync {
     /// Borrow one authoritative full-precision centroid vector.
     fn centroid(&self, id: Self::ListId) -> Option<&[f32]>;
 
-    /// Select exactly `min(nprobe, self.len())` live centroids for `query`.
+    /// Select exactly `min(nprobe, self.len())` live centroids for `query`, nearest
+    /// first.
     ///
     /// A graph implementation must use exact selection as a recovery path when
     /// graph navigation produces too few live ids.
@@ -104,14 +77,14 @@ pub trait CentroidIndex: Send + Sync {
         &self,
         query: &[f32],
         nprobe: usize,
-    ) -> impl SendFuture<Result<SelectionPlan<Self::ListId>, Self::Error>>;
+    ) -> impl SendFuture<Result<Vec<SelectedList<Self::ListId>>, Self::Error>>;
 }
 
 /// Query-bound access to centroid selection and inverted-list scanning.
 ///
 /// This is the dynamic IVF search algorithm's primary extension point, in the
-/// same spirit as [`crate::graph::SearchAccessor`]. Implementations are free to
-/// batch reads, coalesce blob requests, prefetch, decode quantized payloads, or
+/// same spirit as [`crate::graph::glue::SearchAccessor`]. Implementations are free
+/// to batch reads, coalesce blob requests, prefetch, decode quantized payloads, or
 /// fan work out across tasks.
 pub trait SearchAccessor: HasId + Send + Sync {
     /// Stable logical centroid/list id, fixed to [`ListProvider::ListId`] by the
@@ -121,16 +94,19 @@ pub trait SearchAccessor: HasId + Send + Sync {
     /// Errors from list selection or scanning.
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
-    /// Select exactly the available requested number of lists for the bound query.
+    /// Select up to `nprobe` lists for the bound query, nearest first.
     fn select_lists(
         &mut self,
         nprobe: usize,
-    ) -> impl SendFuture<Result<SelectionPlan<Self::ListId>, Self::Error>>;
+    ) -> impl SendFuture<Result<Vec<SelectedList<Self::ListId>>, Self::Error>>;
 
-    /// Scan every list in `plan`, scoring members against the bound query.
+    /// Scan `lists`, scoring their members against the bound query.
+    ///
+    /// `lists` must come from [`Self::select_lists`] on this accessor, which keeps
+    /// selection and scanning coherent using provider-specific coordination.
     fn scan_lists<F>(
         &mut self,
-        plan: SelectionPlan<Self::ListId>,
+        lists: &[SelectedList<Self::ListId>],
         emit: F,
     ) -> impl SendFuture<Result<ScanStats, Self::Error>>
     where

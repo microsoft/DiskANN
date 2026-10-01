@@ -7,7 +7,7 @@
 
 use diskann_utils::views::Matrix;
 
-use super::{first_repeat, gather::read_rows, index_error};
+use super::{first_repeat, index_error, read_rows};
 use crate::{
     ANNResult,
     error::ErrorExt,
@@ -72,12 +72,10 @@ impl<Id: VectorId, L: VectorId> StagedBatch<Id, L> {
         let centroids = accessor.centroids();
         let mut routes = Vec::with_capacity(ids.len());
         for vector in vectors.row_iter() {
-            let plan = centroids
+            let list = centroids
                 .select(vector, 1)
                 .await
-                .escalate("insert must route every point")?;
-            let list = plan
-                .selected()
+                .escalate("insert must route every point")?
                 .first()
                 .map(|selected| selected.id)
                 .ok_or_else(|| index_error("centroid selection returned no list"))?;

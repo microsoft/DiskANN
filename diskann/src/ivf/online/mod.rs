@@ -12,16 +12,21 @@
 //! mutates the index; the caller applies the planned update.
 
 mod batch;
-mod gather;
 mod kernels;
 mod split;
 
 use std::fmt::{Debug, Display};
 
 pub(super) use batch::StagedBatch;
-pub(super) use split::{Parent, SplitPlan};
+pub(super) use split::SplitPlan;
 
-use crate::{ANNError, ANNErrorKind, ANNResult, ivf::dynamic::CentroidIndex};
+use diskann_utils::views::Matrix;
+
+use crate::{
+    ANNError, ANNErrorKind, ANNResult,
+    error::ErrorExt,
+    ivf::dynamic::{CentroidIndex, MaintenanceAccessor},
+};
 
 #[track_caller]
 pub(super) fn index_error<D>(message: D) -> ANNError
@@ -61,4 +66,33 @@ fn first_repeat<V: Copy + Ord>(values: impl Iterator<Item = V>) -> Option<V> {
         .windows(2)
         .find(|pair| pair[0] == pair[1])
         .map(|pair| pair[0])
+}
+
+/// Read the canonical vector of every point in `ids`; row `i` belongs to `ids[i]`.
+///
+/// # Errors
+///
+/// Fails if the accessor fails, or leaves a row unwritten or non-finite.
+async fn read_rows<A, T>(accessor: &mut A, ids: &[A::Id], dim: usize) -> ANNResult<Matrix<f32>>
+where
+    A: MaintenanceAccessor<T>,
+    T: Send,
+{
+    // Rows the accessor never writes stay NaN, so the finiteness check catches them.
+    let mut rows = Matrix::new(f32::NAN, ids.len(), dim);
+    accessor
+        .read_vectors(ids, rows.as_mut_view())
+        .await
+        .escalate("maintenance must read canonical vectors")?;
+
+    if let Some((id, _)) = ids
+        .iter()
+        .zip(rows.row_iter())
+        .find(|(_, row)| row.iter().any(|x| !x.is_finite()))
+    {
+        return Err(index_error(format!(
+            "no finite canonical vector for point {id}"
+        )));
+    }
+    Ok(rows)
 }

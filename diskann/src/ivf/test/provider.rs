@@ -19,7 +19,7 @@ use crate::{
     ivf::{
         dynamic::{
             Apply, CentroidIndex, ListMetadata, ListProvider, MaintenanceAccessor,
-            MaintenanceStrategy, SelectedList, SelectionPlan,
+            MaintenanceStrategy, SelectedList,
         },
         update::{Appends, Bootstrap, SplitInsert},
     },
@@ -41,8 +41,6 @@ pub(crate) struct Faults {
     pub(crate) skip_vector: bool,
     /// Write NaN into the last row of every `read_vectors` call.
     pub(crate) nan_vector: bool,
-    /// Omit the first member of every list in `read_members`.
-    pub(crate) drop_member: bool,
     /// Return the first staged id again from every later `stage_insert`.
     pub(crate) repeat_stage: bool,
     /// Reserve list ids starting from zero, which may be live.
@@ -69,7 +67,7 @@ impl CentroidIndex for Centroids {
         &self,
         query: &[f32],
         nprobe: usize,
-    ) -> impl SendFuture<Result<SelectionPlan<u32>, ANNError>> {
+    ) -> impl SendFuture<Result<Vec<SelectedList<u32>>, ANNError>> {
         let mut selected: Vec<_> = self
             .0
             .iter()
@@ -80,7 +78,7 @@ impl CentroidIndex for Centroids {
             .collect();
         selected.sort_by(|a, b| a.distance.total_cmp(&b.distance).then(a.id.cmp(&b.id)));
         selected.truncate(nprobe);
-        std::future::ready(Ok(SelectionPlan::new(selected)))
+        std::future::ready(Ok(selected))
     }
 }
 
@@ -260,20 +258,6 @@ impl Accessor<'_> {
             .ok_or_else(|| error(format!("no point {id}")))
     }
 
-    fn members(&self, list: u32) -> Result<&[u32], ANNError> {
-        let members = self
-            .provider
-            .lists
-            .get(&list)
-            .ok_or_else(|| error(format!("list {list} is not live")))?;
-        Ok(
-            match (self.provider.faults.drop_member, members.split_first()) {
-                (true, Some((_, rest))) => rest,
-                _ => members,
-            },
-        )
-    }
-
     fn commit_staged(&mut self) {
         for point in self.staged.drain(..) {
             self.provider.points.push(point);
@@ -337,7 +321,11 @@ impl<'b> MaintenanceAccessor<&'b [f32]> for Accessor<'_> {
     }
 
     async fn read_members(&mut self, list: u32) -> Result<&[u32], ANNError> {
-        self.members(list)
+        self.provider
+            .lists
+            .get(&list)
+            .map(Vec::as_slice)
+            .ok_or_else(|| error(format!("list {list} is not live")))
     }
 
     async fn read_vectors(

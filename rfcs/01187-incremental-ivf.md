@@ -135,8 +135,8 @@ coordinates its provider, centroid index, and inverted-list store.
   ids.
 - **Unified view**: mutually compatible point data, centroid state, reverse
   assignments, and inverted lists presented by one operation accessor.
-- **Selection plan**: selected list ids and their coarse distances. It is
-  consumed by the same search accessor that produced it.
+- **Selected lists**: list ids and their coarse distances, nearest first. A
+  search accessor scans only lists it selected itself.
 - **Canonical vector**: the full-precision, or `f32`-decodable, representation
   used for centroid fitting and exact regional reassignment.
 - **Scan payload**: the representation stored with a list for query scoring. It
@@ -170,7 +170,7 @@ A correct strategy must construct accessors with these properties:
 
 1. All methods on one maintenance accessor operate on one compatible logical
    view until `apply` consumes it.
-2. `SelectionPlan` is passed back to the search accessor that produced it.
+2. A search accessor scans only lists it selected itself.
 3. Successful `apply` does not expose a mixture of old and new component state
    through subsequent index operations.
 4. If an operation fails after making irreversible changes, subsequent index
@@ -193,12 +193,10 @@ diskann/src/ivf/
   dynamic.rs    contracts proposed by this RFC
   update.rs     declarative partition updates consumed by Apply<U>
   grouped.rs    flat grouped layouts shared by updates and planning
-  colocation.rs co-location set contracts, not yet wired into maintenance
   index.rs      DynamicIvfIndex initialize/insert orchestration
   online/       insert planning: staging, split planning, kernels
     batch.rs    staged and routed insert batch
-    gather.rs   validated reads (members and canonical vectors)
-    split.rs    parent admission and the split plan
+    split.rs    the split plan: gather each region, fit children, place points
     kernels.rs  distance, nearest-candidate, and Lloyd kernels
   test/         in-memory provider for index tests
 ```
@@ -229,24 +227,21 @@ This permits a list backend to store only PQ codes while maintenance still reads
 canonical representation, although the destination scan payload may need to be
 encoded again.
 
-### Selection Plan
+### Selected Lists
 
-The plan is intentionally small:
+Selection returns plain values, nearest first:
 
 ```rust
 pub struct SelectedList<ListId> {
     pub id: ListId,
     pub distance: f32,
 }
-
-pub struct SelectionPlan<ListId> {
-    selected: Vec<SelectedList<ListId>>,
-}
 ```
 
-The accessor may privately retain a lock guard, epoch, immutable root, manifest,
-prefetch state, or other read context. None of that state appears in the plan's
-public type. A plan is meaningful only to the accessor that created it.
+A search accessor may privately retain a lock guard, epoch, immutable root,
+manifest, prefetch state, or other read context between selection and scanning.
+None of that state appears in the public type, so selected lists are meaningful
+only to the accessor that selected them.
 
 ### Search Accessor
 
@@ -260,11 +255,11 @@ pub trait SearchAccessor: HasId + Send + Sync {
     fn select_lists(
         &mut self,
         nprobe: usize,
-    ) -> impl SendFuture<Result<SelectionPlan<Self::ListId>, Self::Error>>;
+    ) -> impl SendFuture<Result<Vec<SelectedList<Self::ListId>>, Self::Error>>;
 
     fn scan_lists<F>(
         &mut self,
-        plan: SelectionPlan<Self::ListId>,
+        lists: &[SelectedList<Self::ListId>],
         emit: F,
     ) -> impl SendFuture<Result<ScanStats, Self::Error>>
     where
@@ -307,8 +302,8 @@ Search orchestration is deliberately unaware of consistency mechanics:
 
 ```text
 accessor = strategy.search_accessor(provider, context, query)
-plan = accessor.select_lists(nprobe)
-accessor.scan_lists(plan, |id, distance| top_k.insert(id, distance))
+lists = accessor.select_lists(nprobe)
+accessor.scan_lists(&lists, |id, distance| top_k.insert(id, distance))
 post_process(point statuses and external ids)
 ```
 
@@ -329,7 +324,7 @@ pub trait CentroidIndex: Send + Sync {
         &self,
         query: &[f32],
         nprobe: usize,
-    ) -> impl SendFuture<Result<SelectionPlan<Self::ListId>, Self::Error>>;
+    ) -> impl SendFuture<Result<Vec<SelectedList<Self::ListId>>, Self::Error>>;
 }
 ```
 
@@ -429,8 +424,7 @@ it enters, and builds updates without further checks:
 - caller input: initial centroids must be non-empty, finite, and of the
   provider's dimension;
 - accessor reads: every vector row must be written with finite values (rows
-  start as NaN, so unwritten rows are caught by the same check), and each split
-  parent's members must match its reported size;
+  start as NaN, so unwritten rows are caught by the same check);
 - staging: staged ids must be distinct; and
 - reservations: reserved list ids must be distinct and not live.
 
@@ -455,10 +449,8 @@ the entire mutation before it chooses write order, batching, rollback, or
 recovery behavior.
 
 Co-location set updates are expected to follow the same declarative pattern.
-They are deferred until the insert path and maintenance accessor stabilize:
-`CoLocationSet`, `CoLocationGroup`, and `CoLocationDelta` live in
-`ivf::colocation`, and no update type or `MaintenanceAccessor` references them
-yet.
+They are deferred until the insert path and maintenance accessor stabilize, so
+the co-location types are not part of the code yet.
 
 ### Maintenance Accessor
 
@@ -830,8 +822,7 @@ and search parameters. Durable metadata belongs to concrete provider crates.
 
 - Implement search orchestration with one query-bound accessor.
 - Compare results to brute force over exactly the selected lists.
-- Test that selection plans cannot be used meaningfully outside their producing
-  accessor's configured view.
+- Test that an accessor scans only lists it selected, under its own view.
 
 ### Phase 3: Exact-Centroid GraphIVF
 
@@ -932,9 +923,9 @@ keeps coarse and fine operations together.
 ### Pass The Coarse Accessor Into Fine Scan
 
 Passing `&mut CoarseAccessor` into a fine accessor shares state but couples two
-objects, complicates async lifetimes, and makes selection plans difficult to
-inspect. Keeping the plan as a small value and private state in one accessor is
-simpler.
+objects, complicates async lifetimes, and makes selected lists difficult to
+inspect. Keeping the selection as a small value and private state in one
+accessor is simpler.
 
 ### Imperative List Mutation Methods
 
@@ -991,7 +982,7 @@ useful common shape.
 4. **Update granularity**: updates are grouped by destination list, so bulk
    backends can rewrite each touched list once. Should they also carry a
    per-list summary of added and removed counts for exact pre-sizing?
-5. **Selection plan ownership**: is the documented same-accessor requirement
+5. **Selected-list ownership**: is the documented same-accessor requirement
    sufficient, or should a future private token make misuse dynamically
    detectable?
 

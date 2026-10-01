@@ -5,10 +5,9 @@
 
 //! Incrementally maintained IVF index.
 
-pub mod colocation;
 pub mod dynamic;
 mod grouped;
-pub mod index;
+mod index;
 mod online;
 pub mod update;
 

@@ -13,10 +13,9 @@ use rand::{Rng, rngs::StdRng};
 
 use super::{
     batch::StagedBatch,
-    check_reserved,
-    gather::Members,
-    index_error,
+    check_reserved, index_error,
     kernels::{LloydScratch, lloyd, nearest},
+    read_rows,
 };
 use crate::{
     ANNResult,
@@ -29,13 +28,6 @@ use crate::{
     },
     utils::VectorId,
 };
-
-/// A list admitted for splitting, with its size in the accessor's view.
-#[derive(Debug, Clone, Copy)]
-pub(in crate::ivf) struct Parent<L> {
-    pub(in crate::ivf) list: L,
-    pub(in crate::ivf) len: usize,
-}
 
 /// Everything one split batch needs, gathered before any computation.
 ///
@@ -53,8 +45,10 @@ pub(in crate::ivf) struct SplitPlan<Id, L> {
     regions: Csr<usize>,
     /// Row `n` is the centroid of neighbor `n`.
     neighbor_centroids: Matrix<f32>,
-    /// Existing members of every list, indexed like `lists`.
-    members: Members<Id>,
+    /// Existing members of every list, grouped like `lists`.
+    member_ids: Csr<Id>,
+    /// Row `i` is the canonical vector of `member_ids.values()[i]`.
+    member_vectors: Matrix<f32>,
     /// Reserved ids for the children, two per region.
     child_ids: Vec<L>,
 }
@@ -64,7 +58,7 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
     ///
     /// Reserves two child ids per parent, selects each parent's nearest surviving
     /// lists as its neighbors, and reads the members and canonical vectors of every
-    /// parent and neighbor.
+    /// parent and neighbor. `parents` must be ascending.
     ///
     /// # Errors
     ///
@@ -73,7 +67,7 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
         accessor: &mut A,
         config: &DynamicIvfConfig,
         batch: StagedBatch<Id, L>,
-        parents: Vec<Parent<L>>,
+        parents: Vec<L>,
     ) -> ANNResult<Self>
     where
         A: MaintenanceAccessor<T, Id = Id, ListId = L>,
@@ -87,12 +81,11 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
         check_reserved(accessor.centroids(), &child_ids, count)?;
 
         let dim = accessor.dim();
-        let mut lists: Vec<L> = parents.iter().map(|parent| parent.list).collect();
         let centroids = accessor.centroids();
 
         // Every parent is retired, so no parent is ever a neighbor.
         let mut by_region: Csr<L> = Csr::default();
-        for &parent in &lists {
+        for &parent in &parents {
             let anchor = centroids
                 .centroid(parent)
                 .ok_or_else(|| index_error(format!("split parent {parent} is not live")))?;
@@ -102,10 +95,9 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
                 .escalate("split must find neighbor lists")?;
             by_region.push(
                 selected
-                    .selected()
                     .iter()
                     .map(|selected| selected.id)
-                    .filter(|id| lists.binary_search(id).is_err())
+                    .filter(|id| parents.binary_search(id).is_err())
                     .take(config.reassign_neighbors),
             );
         }
@@ -139,27 +131,30 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
             );
         }
         let regions = neighbors.transpose(distinct.len());
+
+        let num_parents = parents.len();
+        let mut lists = parents;
         lists.extend_from_slice(&distinct);
 
-        let members = Members::read(accessor, &lists).await?;
-        for (region, parent) in parents.iter().enumerate() {
-            let len = members.ids(region).len();
-            if len != parent.len {
-                return Err(index_error(format!(
-                    "split parent {} has {len} members, but its metadata reports {}",
-                    parent.list, parent.len
-                )));
-            }
+        let mut member_ids = Csr::default();
+        for &list in &lists {
+            let members = accessor
+                .read_members(list)
+                .await
+                .escalate("split must read list members")?;
+            member_ids.push(members.iter().copied());
         }
+        let member_vectors = read_rows(accessor, member_ids.values(), dim).await?;
 
         Ok(Self {
             batch,
             lists,
-            parents: parents.len(),
+            parents: num_parents,
             neighbors,
             regions,
             neighbor_centroids,
-            members,
+            member_ids,
+            member_vectors,
             child_ids,
         })
     }
@@ -193,7 +188,7 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
         let mut centers = Matrix::new(0.0f32, 2 * self.parents, dim);
         let mut scratch = LloydScratch::default();
         for region in 0..self.parents {
-            let span = self.members.ids(region).len() + self.staged(region).len();
+            let span = self.member_ids.group(region).len() + self.staged(region).len();
             if span < 2 {
                 return Err(index_error(format!(
                     "split parent {} has fewer than two points",
@@ -223,7 +218,7 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
     /// Returns the existing members' lists, aligned with their positions, and
     /// overwrites the routes of the batch points it places.
     fn place(&self, children: &CentroidBlock<L>, routes: &mut [L]) -> ANNResult<Vec<L>> {
-        let mut destinations = vec![L::default(); self.members.total()];
+        let mut destinations = vec![L::default(); self.member_ids.values().len()];
         let child_ids = children.ids();
         let child_vectors = children.vectors();
         let mut candidates: Vec<(L, &[f32])> = Vec::new();
@@ -267,9 +262,9 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
         routes: &mut [L],
     ) -> ANNResult<()> {
         let no_candidates = || index_error("split placement has no candidate lists");
-        for (destination, vector) in destinations[self.members.range(list)]
+        for (destination, vector) in destinations[self.member_ids.range(list)]
             .iter_mut()
-            .zip(self.members.vectors(list))
+            .zip(self.member_rows(list))
         {
             *destination = nearest(vector, candidates).ok_or_else(no_candidates)?;
         }
@@ -304,8 +299,8 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
         lists.map(move |list| {
             (
                 self.lists[list],
-                self.members.ids(list),
-                &destinations[self.members.range(list)],
+                self.member_ids.group(list),
+                &destinations[self.member_ids.range(list)],
             )
         })
     }
@@ -323,9 +318,16 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
         self.batch.by_route.get(self.lists[list])
     }
 
+    /// Canonical vectors of `list`'s existing members.
+    fn member_rows(&self, list: usize) -> impl Iterator<Item = &[f32]> {
+        self.member_ids
+            .range(list)
+            .map(|row| self.member_vectors.row(row))
+    }
+
     /// Canonical vectors of `list`'s existing members followed by its batch points.
     fn points(&self, list: usize) -> impl Iterator<Item = &[f32]> {
-        self.members.vectors(list).chain(
+        self.member_rows(list).chain(
             self.staged(list)
                 .iter()
                 .map(|&position| self.batch.vectors.row(position)),
@@ -334,9 +336,9 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
 
     /// The `index`-th vector of [`Self::points`].
     fn point(&self, list: usize, index: usize) -> &[f32] {
-        let members = self.members.range(list);
+        let members = self.member_ids.range(list);
         if index < members.len() {
-            self.members.vector(members.start + index)
+            self.member_vectors.row(members.start + index)
         } else {
             self.batch
                 .vectors

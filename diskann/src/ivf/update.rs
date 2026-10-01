@@ -56,11 +56,6 @@ impl<L: VectorId> CentroidBlock<L> {
         self.ids.len()
     }
 
-    /// Dimension of every centroid.
-    pub fn dim(&self) -> usize {
-        self.vectors.ncols()
-    }
-
     /// Centroid ids in row order.
     pub fn ids(&self) -> &[L] {
         &self.ids
@@ -139,16 +134,6 @@ impl<Id: VectorId, L: VectorId> Appends<Id, L> {
     /// Whether no points are appended.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    /// Destination lists, ascending.
-    pub fn lists(&self) -> &[L] {
-        self.by_list.keys()
-    }
-
-    /// Every appended id, grouped by destination list.
-    pub fn ids(&self) -> &[Id] {
-        self.by_list.values()
     }
 
     /// Iterate `(list, ids)` groups in ascending list order.
@@ -250,12 +235,8 @@ impl<Id: VectorId, L: VectorId> Splits<Id, L> {
         self.parents.len()
     }
 
-    /// Retired parent lists, ascending.
-    pub fn parents(&self) -> &[L] {
-        &self.parents
-    }
-
-    /// Every child centroid; rows `2 * i` and `2 * i + 1` replace `self.parents()[i]`.
+    /// Every child centroid; rows `2 * i` and `2 * i + 1` replace the `i`-th split's
+    /// parent.
     pub fn children(&self) -> &CentroidBlock<L> {
         &self.children
     }
@@ -446,7 +427,7 @@ mod tests {
     fn centroid_block_pairs_ids_with_rows() {
         let bootstrap = Bootstrap::new(block(&[4, 2], 3));
         let block = bootstrap.centroids();
-        assert_eq!((block.len(), block.dim()), (2, 3));
+        assert_eq!(block.len(), 2);
         assert_eq!(block.ids(), &[4, 2]);
         assert_eq!(block.vectors().row(1), &[3.0, 4.0, 5.0]);
         assert_eq!(
@@ -463,8 +444,6 @@ mod tests {
     fn appends_group_ids_by_list() {
         let appends = Appends::<u32, u32>::new(&[5, 1, 3, 2], &[7, 9, 7, 9]);
         assert_eq!(appends.len(), 4);
-        assert_eq!(appends.lists(), &[7, 9]);
-        assert_eq!(appends.ids(), &[3, 5, 1, 2]);
         assert_eq!(
             owned(appends.iter()),
             vec![(7, vec![3, 5]), (9, vec![1, 2])]
@@ -480,7 +459,6 @@ mod tests {
             [(10, &[3, 1, 2][..], &[31, 30, 40][..]), (20, &[], &[])],
         );
         assert_eq!(splits.len(), 2);
-        assert_eq!(splits.parents(), &[10, 20]);
         assert_eq!(splits.children().ids(), &[30, 31, 40, 41]);
         assert_eq!(splits.num_evacuated(), 3);
 
@@ -492,6 +470,7 @@ mod tests {
             owned(split[0].evacuations()),
             vec![(30, vec![1]), (31, vec![3]), (40, vec![2])]
         );
+        assert_eq!(split[1].parent(), 20);
         assert_eq!(split[1].children(), [40, 41]);
         assert_eq!(split[1].evacuations().len(), 0);
     }
@@ -526,8 +505,8 @@ mod tests {
         assert_eq!(update.reassignments().len(), 1);
         let (appends, splits, reassignments) = update.into_parts();
         assert_eq!(
-            (appends.lists(), splits.parents(), reassignments.len()),
-            (&[30][..], &[10][..], 1)
+            (appends.len(), splits.len(), reassignments.len()),
+            (1, 1, 1)
         );
     }
 }

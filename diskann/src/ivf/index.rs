@@ -18,7 +18,7 @@ use crate::{
     error::{ErrorExt, IntoANNResult},
     ivf::{
         dynamic::{Apply, CentroidIndex, ListProvider, MaintenanceAccessor, MaintenanceStrategy},
-        online::{Parent, SplitPlan, StagedBatch, check_reserved, index_error},
+        online::{SplitPlan, StagedBatch, check_reserved, index_error},
         update::{Appends, Bootstrap, CentroidBlock, SplitInsert},
     },
 };
@@ -99,11 +99,6 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
     /// Borrow the underlying provider.
     pub fn provider(&self) -> &P {
         &self.provider
-    }
-
-    /// Borrow the split policy.
-    pub fn config(&self) -> &DynamicIvfConfig {
-        &self.config
     }
 
     /// Install the initial centroids.
@@ -253,7 +248,7 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
         config: &DynamicIvfConfig,
         accessor: &mut A,
         batch: &StagedBatch<A::Id, A::ListId>,
-    ) -> ANNResult<Vec<Parent<A::ListId>>>
+    ) -> ANNResult<Vec<A::ListId>>
     where
         A: MaintenanceAccessor<T>,
         T: Send,
@@ -267,7 +262,7 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
                 .len;
             let projected = len + incoming;
             if projected > config.split_threshold {
-                overflowing.push((projected, Parent { list, len }));
+                overflowing.push((projected, list));
             }
         }
 
@@ -275,11 +270,11 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
         let budget = config.max_clusters.map_or(usize::MAX, |max| {
             max.saturating_sub(accessor.centroids().len())
         });
-        overflowing.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.list.cmp(&b.1.list)));
+        overflowing.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         overflowing.truncate(budget);
 
-        let mut parents: Vec<_> = overflowing.into_iter().map(|(_, parent)| parent).collect();
-        parents.sort_unstable_by_key(|parent| parent.list);
+        let mut parents: Vec<_> = overflowing.into_iter().map(|(_, list)| list).collect();
+        parents.sort_unstable();
         Ok(parents)
     }
 }
@@ -518,7 +513,6 @@ mod tests {
             (fault(|f| f.nan_vector = true), "no finite canonical vector"),
             (fault(|f| f.repeat_stage = true), "staging returned point"),
             (fault(|f| f.reuse_lists = true), "reserved live list id"),
-            (fault(|f| f.drop_member = true), "but its metadata reports"),
         ];
         for (faults, expected) in cases {
             // Inserting 0.5 and 8 overflows list 0, so every case reaches the split path.
