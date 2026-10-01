@@ -754,11 +754,9 @@ impl<Q, D> Data<Q, D> {
         let query: Box<[Q]> = (0..run.dim.get())
             .map(|_| StandardUniform.sample(&mut rng))
             .collect();
-        let data = Matrix::<D>::new(
-            diskann_utils::views::Init(|| StandardUniform.sample(&mut rng)),
-            run.num_points.get(),
-            run.dim.get(),
-        );
+        let data = Matrix::<D>::from_fn(run.num_points.get(), run.dim.get(), |_| {
+            StandardUniform.sample(&mut rng)
+        });
 
         Self { query, data }
     }

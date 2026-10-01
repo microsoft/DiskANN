@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn test_try_from_data_errors() {
-        let m = views::Matrix::<usize>::new(0, 10, 10);
+        let m = views::Matrix::<usize>::from_element(10, 10, 0);
         let nrows = m.nrows();
         let ncols = m.ncols();
 
@@ -814,15 +814,11 @@ mod tests {
     // ```
     fn create_test_matrix(nrows: usize, ncols: usize) -> views::Matrix<usize> {
         let mut i = 0;
-        views::Matrix::new(
-            views::Init(|| {
-                let v = i;
-                i += 1;
-                v
-            }),
-            nrows,
-            ncols,
-        )
+        views::Matrix::from_fn(nrows, ncols, |_| {
+            let v = i;
+            i += 1;
+            v
+        })
     }
 
     #[test]
@@ -850,7 +846,7 @@ mod tests {
         assert_eq!(v.as_ptr(), ptr, "base pointer was not preserved");
 
         // Create the expected matrix.
-        let mut expected = views::Matrix::new(0, 5, 2);
+        let mut expected = views::Matrix::from_element(5, 2, 0);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
                 *expected.element_mut(row, col) = *m.element(row, col);
@@ -860,7 +856,7 @@ mod tests {
 
         // Create a strided view over the last two columns.
         let v = Strided::try_from_data(&(m.as_slice()[1..]), m.nrows(), 2, m.ncols()).unwrap();
-        let mut expected = views::Matrix::new(0, 5, 2);
+        let mut expected = views::Matrix::from_element(5, 2, 0);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
                 *expected.element_mut(row, col) = *m.element(row, col + 1);
@@ -903,7 +899,7 @@ mod tests {
     #[test]
     fn test_try_shrink_from() {
         // Exact is okay.
-        let m = views::Matrix::<usize>::new(0, 10, 10);
+        let m = views::Matrix::<usize>::from_element(10, 10, 0);
         let nrows = m.nrows();
         let ncols = m.ncols();
         let s = Strided::try_from_data(m.as_slice(), nrows, ncols, ncols).unwrap();
@@ -922,7 +918,7 @@ mod tests {
     fn test_invalid_stride_is_an_error_not_a_panic() {
         // Constructing a `Strided` with an invalid layout (`cstride < ncols`) returns an
         // `Err` rather than panicking - only unwrapping the result panics.
-        let m = views::Matrix::<usize>::new(0, 4, 4);
+        let m = views::Matrix::<usize>::from_element(4, 4, 0);
         let err = Strided::try_from_data(m.as_slice(), 2, 2, 1).unwrap_err();
         assert!(matches!(err, TryFromError::LayoutError(_)));
     }

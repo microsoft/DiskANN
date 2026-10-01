@@ -514,7 +514,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         };
 
         let rows = quantizer.required_vectors();
-        let mut data = Matrix::<T>::new(T::default(), rows, self.dim);
+        let mut data = Matrix::from_element(rows, self.dim, T::default());
         let mut row_idx = 0usize;
 
         if self

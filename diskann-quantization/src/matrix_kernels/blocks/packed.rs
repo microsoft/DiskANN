@@ -289,7 +289,7 @@ mod tests {
 
     use diskann_utils::{
         assert_contains,
-        views::{Init, Matrix, MatrixView},
+        views::{Matrix, MatrixView},
     };
 
     use crate::matrix_kernels::test_util::panic_message_for;
@@ -488,15 +488,11 @@ mod tests {
 
     fn test_matrix(nrows: usize, ncols: usize) -> Matrix<f32> {
         let mut value = 0.0;
-        Matrix::new(
-            Init(|| {
-                let current = value;
-                value += 1.0;
-                current
-            }),
-            nrows,
-            ncols,
-        )
+        Matrix::from_fn(nrows, ncols, |_| {
+            let current = value;
+            value += 1.0;
+            current
+        })
     }
 
     fn pack<const SZ: usize>(matrix: MatrixView<'_, f32>) -> Vec<f32> {

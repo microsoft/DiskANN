@@ -169,7 +169,7 @@ pub(crate) fn create_test_problem(nrows: usize, ncols: usize, rng: &mut StdRng) 
         })
         .collect();
 
-    let mut data = Matrix::<f32>::new(0.0, nrows, ncols);
+    let mut data = Matrix::<f32>::from_element(nrows, ncols, 0.0);
     for col in 0..ncols {
         offsets.shuffle(rng);
         for (row, offset) in std::iter::zip(data.row_iter_mut(), offsets.iter()) {

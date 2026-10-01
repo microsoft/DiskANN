@@ -44,7 +44,7 @@ pub(super) fn knn(
         groundtruth.nrows(),
     );
 
-    let mut ids = Matrix::new(u64::MAX, queries.nrows(), k);
+    let mut ids = Matrix::from_element(queries.nrows(), k, u64::MAX);
 
     let before = index.counters();
     let mut misc = KnnSearch::new();

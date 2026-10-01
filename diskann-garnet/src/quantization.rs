@@ -403,7 +403,7 @@ mod tests {
             Err(GarnetQuantizerError::NoQuantizer)
         ));
 
-        let mut test_data = Matrix::new(0.0f32, 1000, 2);
+        let mut test_data = Matrix::from_element(1000, 2, 0.0f32);
         for i in 0..1000 {
             test_data
                 .row_mut(i)
@@ -441,7 +441,7 @@ mod tests {
         let test_v = [0.5f32, 0.5];
         let mut test_q = vec![0u8; quantizer.bytes()];
 
-        let mut test_data = Matrix::new(0.0f32, 1, 2);
+        let mut test_data = Matrix::from_element(1, 2, 0.0f32);
         test_data.row_mut(0).copy_from_slice(&[1.0f32, 1.0]);
 
         // Training is a no-op, but succeeds.
