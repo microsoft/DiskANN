@@ -41,7 +41,3 @@ ux-tools = []
 name = "dev"
 path = "dev/main.rs"
 required-features = ["test-app"]
-
-[[bin]]
-name = "temp"
-path = "temp/main.rs"
