@@ -120,7 +120,7 @@ jobs:
         working-directory: baseline
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../diskann_rust/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark
