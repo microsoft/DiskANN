@@ -3,35 +3,50 @@
  * Licensed under the MIT license.
  */
 
-//! Numerical kernels for PiPNN graph construction.
+//! Provider-independent [PiPNN](https://arxiv.org/html/2602.21247v1) graph construction.
 //!
-//! Each kernel computes a distance matrix with metric `M`, then selects the nearest
-//! candidates from it with SIMD architecture `A`:
+//! PiPNN builds a graph without graph search, in three steps. A leaf is a small
+//! cluster of at most `c_max` points; the build selects neighbors only inside
+//! leaves.
 //!
-//! - `partition_kernel` assigns each point to its nearest partition leaders. It
-//!   uses `partition_metric`.
-//! - `leaf_kernel` finds the nearest neighbors of each point in a leaf. It uses
-//!   `leaf_metric`.
-//! - `topk` holds the selection code of both kernels. `simd` sets its vector width.
+//! 1. `partitioning` splits the dataset into overlapping leaves.
+//! 2. `leaf_build` selects the `leaf_k` nearest neighbors of each point inside
+//!    each leaf and merges them into one candidate list per point.
+//! 3. `finalization` prunes each list that is longer than the graph degree with
+//!    Vamana RobustPrune.
 //!
-//! The metric code does not use `A`, because the GEMM and norm routines select
-//! their own SIMD code. Callers choose the metric once per graph build, so each
-//! kernel compiles for one metric and has no run-time metric check.
+//! [`build_graph`] selects the SIMD architecture and the metric once, so the
+//! steps compile for one architecture and one metric. It borrows one contiguous
+//! [`MatrixView`] and returns one adjacency list for each point. Each step takes
+//! ownership of the previous output and frees it when it returns.
+//!
+//! The build does not load providers or select start points. It also does not
+//! quantize, serialize, or search the graph.
 
-#![expect(
-    dead_code,
-    reason = "graph construction integrates these kernels in the next PR"
-)]
-
+mod conversion;
+mod finalization;
+mod leaf_build;
 mod leaf_kernel;
 mod leaf_metric;
 mod partition_kernel;
 mod partition_metric;
+mod partitioning;
 mod simd;
 mod topk;
 
-use crate::{ANNError, ANNResult};
-use diskann_utils::views::MutMatrixView;
+use std::num::NonZeroUsize;
+
+use crate::{
+    ANNError, ANNResult,
+    graph::{AdjacencyList, Config, config::PruneKind},
+    utils::VectorRepr,
+};
+use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_vector::distance::Metric;
+use diskann_wide::arch::{self, Target2};
+use rayon::ThreadPool;
+
+use self::{leaf_metric::LeafMetric, partition_metric::PartitionMetric, simd::Simd};
 
 /// Squared Euclidean distance.
 pub(super) struct L2;
@@ -164,10 +179,237 @@ mod cosine_distance_tests {
     }
 }
 
+/// Error for invalid PiPNN parameters.
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum PiPNNConfigError {
+    #[error("p_samp ({0}) must be in (0, 1]")]
+    SamplingFraction(f64),
+    #[error("fanout must not be empty")]
+    EmptyFanout,
+    #[error("graph prune kind {prune_kind:?} does not match metric {metric:?}")]
+    PruneKind {
+        prune_kind: PruneKind,
+        metric: Metric,
+    },
+}
+
+crate::convert_error!(PiPNNConfigError);
+
+/// PiPNN partition and leaf parameters.
+///
+/// The DiskANN graph [`Config`] supplies the degree, alpha, and prune kind.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PiPNNConfig {
+    /// Maximum number of points in a leaf.
+    pub c_max: NonZeroUsize,
+    /// Fraction of the points of a cluster that a split samples as leaders, in
+    /// `(0, 1]`.
+    pub p_samp: f64,
+    /// Number of nearest leaders that each point joins, for each split level.
+    /// Levels after this schedule use one leader. The schedule must not be empty.
+    pub fanout: Vec<NonZeroUsize>,
+    /// Number of nearest neighbors that each point selects inside a leaf.
+    pub leaf_k: NonZeroUsize,
+    /// Number of independent partitionings of the dataset.
+    pub replicas: NonZeroUsize,
+}
+
+impl PiPNNConfig {
+    /// Check the parameters that the field types do not constrain.
+    pub fn validate(&self) -> Result<(), PiPNNConfigError> {
+        if !(0.0 < self.p_samp && self.p_samp <= 1.0) {
+            return Err(PiPNNConfigError::SamplingFraction(self.p_samp));
+        }
+        if self.fanout.is_empty() {
+            return Err(PiPNNConfigError::EmptyFanout);
+        }
+        Ok(())
+    }
+}
+
+/// PiPNN parameters, graph policy, and the Rayon pool for one graph build.
+#[derive(Debug)]
+pub struct PiPNNBuildContext<'a> {
+    config: PiPNNConfig,
+    graph: &'a Config,
+    metric: Metric,
+    pool: &'a ThreadPool,
+}
+
+impl<'a> PiPNNBuildContext<'a> {
+    /// Check `config` and combine it with the graph policy.
+    ///
+    /// Final pruning applies the prune kind of `graph` to distances of `metric`,
+    /// so the two must match.
+    pub fn new(
+        config: PiPNNConfig,
+        graph: &'a Config,
+        metric: Metric,
+        pool: &'a ThreadPool,
+    ) -> Result<Self, PiPNNConfigError> {
+        config.validate()?;
+        let prune_kind = graph.prune_kind();
+        if prune_kind != metric.into() {
+            return Err(PiPNNConfigError::PruneKind { prune_kind, metric });
+        }
+
+        Ok(Self {
+            config,
+            graph,
+            metric,
+            pool,
+        })
+    }
+}
+
+/// Build one adjacency list for each point of `data`.
+///
+/// The graph links dataset points only; the caller selects start points and
+/// serializes the index. `CosineNormalized` on `u8` or `i8` data builds with
+/// `Cosine`, because converted integer vectors do not have unit norm.
+pub fn build_graph<T>(
+    data: MatrixView<'_, T>,
+    context: &PiPNNBuildContext<'_>,
+) -> ANNResult<Vec<AdjacencyList<u32>>>
+where
+    T: VectorRepr,
+{
+    context
+        .pool
+        .install(|| validate_and_dispatch_build(data, context))
+}
+
+/// Check dataset bounds and select the architecture and metric implementation.
+fn validate_and_dispatch_build<T>(
+    data: MatrixView<'_, T>,
+    context: &PiPNNBuildContext<'_>,
+) -> ANNResult<Vec<AdjacencyList<u32>>>
+where
+    T: VectorRepr,
+{
+    if data.nrows() == 0 {
+        return Err(ANNError::message("PiPNN requires at least one data point"));
+    }
+    if data.ncols() == 0 {
+        return Err(ANNError::message(
+            "PiPNN requires at least one data dimension",
+        ));
+    }
+    if data.nrows() > u32::MAX as usize {
+        return Err(ANNError::message(format!(
+            "PiPNN dataset point count ({}) exceeds the u32 graph ID limit",
+            data.nrows()
+        )));
+    }
+    arch::dispatch2_no_features(BuildGraph, data, context)
+}
+
+/// Runs the build for the architecture that `diskann-wide` selects at run time.
+struct BuildGraph;
+
+impl<A, T> Target2<A, ANNResult<Vec<AdjacencyList<u32>>>, MatrixView<'_, T>, &PiPNNBuildContext<'_>>
+    for BuildGraph
+where
+    A: Simd,
+    T: VectorRepr,
+{
+    fn run(
+        self,
+        arch: A,
+        data: MatrixView<'_, T>,
+        context: &PiPNNBuildContext<'_>,
+    ) -> ANNResult<Vec<AdjacencyList<u32>>> {
+        // Converting raw integer coordinates does not normalize their vectors.
+        let metric = effective_metric::<T>(context.metric);
+        match metric {
+            Metric::L2 => build_graph_for::<A, L2, T>(arch, data, context, metric),
+            Metric::Cosine => build_graph_for::<A, Cosine, T>(arch, data, context, metric),
+            Metric::CosineNormalized => {
+                build_graph_for::<A, CosineNormalized, T>(arch, data, context, metric)
+            }
+            Metric::InnerProduct => {
+                build_graph_for::<A, InnerProduct, T>(arch, data, context, metric)
+            }
+        }
+    }
+}
+
+/// Run the three build steps for architecture `A` and metric `M`.
+fn build_graph_for<A, M, T>(
+    arch: A,
+    data: MatrixView<'_, T>,
+    context: &PiPNNBuildContext<'_>,
+    metric: Metric,
+) -> ANNResult<Vec<AdjacencyList<u32>>>
+where
+    A: Simd,
+    M: LeafMetric + PartitionMetric,
+    T: VectorRepr,
+{
+    let leaves = tracing::info_span!("pipnn.partition")
+        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
+    // The leaf step takes the leaves by value, so their memory is free before
+    // final pruning starts.
+    let leaf_k = context.config.leaf_k.get();
+    let candidates = tracing::info_span!("pipnn.leaf_build")
+        .in_scope(|| leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, leaf_k))?;
+    // Final pruning cuts each candidate list in place.
+    Ok(tracing::info_span!("pipnn.finalization")
+        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric)))
+}
+
+/// Return the metric that the build uses for element type `T`. See [`build_graph`].
+fn effective_metric<T: VectorRepr>(metric: Metric) -> Metric {
+    use std::any::TypeId;
+
+    if metric == Metric::CosineNormalized
+        && (TypeId::of::<T>() == TypeId::of::<u8>() || TypeId::of::<T>() == TypeId::of::<i8>())
+    {
+        Metric::Cosine
+    } else {
+        metric
+    }
+}
+
 #[cfg(test)]
 mod test_support {
     use super::simd::Simd;
     use diskann_vector::distance::Metric;
+
+    // Sort the members of each row but keep the row order. A row position is a
+    // leader column or a graph source, so sorting the rows would hide a wrong
+    // assignment. Repeated members stay visible.
+    pub(super) fn sorted_members_per_row(rows: &[Vec<u32>]) -> Vec<Vec<u32>> {
+        rows.iter()
+            .map(|row| {
+                let mut members = row.clone();
+                members.sort_unstable();
+                members
+            })
+            .collect()
+    }
+
+    pub(super) fn nz(value: usize) -> std::num::NonZeroUsize {
+        std::num::NonZeroUsize::new(value).unwrap()
+    }
+
+    /// Build a Rayon pool with `threads` workers.
+    pub(super) fn thread_pool(threads: usize) -> rayon::ThreadPool {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn membership_comparison_preserves_group_positions_and_duplicate_counts() {
+        let rows = [vec![9, 3, 9], vec![], vec![2, 1], vec![2, 1]];
+
+        assert_eq!(
+            sorted_members_per_row(&rows),
+            [vec![3, 9, 9], vec![], vec![1, 2], vec![1, 2]]
+        );
+    }
 
     /// A test body that runs once for each architecture.
     pub(super) trait ArchCheck {
@@ -318,5 +560,385 @@ mod test_support {
             distance(Metric::CosineNormalized, &actual[..3], &actual[3..]),
             1.0 + f64::from(0.8_f32)
         );
+    }
+}
+
+#[cfg(test)]
+mod construction_tests {
+    use super::*;
+    use crate::graph::config;
+    use half::f16;
+    use test_support::{nz, sorted_members_per_row, thread_pool};
+
+    fn partition_policy() -> PiPNNConfig {
+        PiPNNConfig {
+            c_max: nz(4),
+            p_samp: 1.0,
+            fanout: vec![nz(2)],
+            leaf_k: nz(1),
+            replicas: nz(1),
+        }
+    }
+
+    fn graph_policy(degree: usize, metric: Metric) -> Result<Config, config::ConfigError> {
+        config::Builder::new_with(degree, config::MaxDegree::same(), 16, metric.into(), |b| {
+            b.alpha(1.0);
+        })
+        .build()
+    }
+
+    /// Build the graph of `values` with `threads` workers.
+    fn build<T: VectorRepr>(
+        values: &[T],
+        dimensions: usize,
+        config: PiPNNConfig,
+        degree: usize,
+        metric: Metric,
+        threads: usize,
+    ) -> Vec<Vec<u32>> {
+        let data = MatrixView::try_from(values, values.len() / dimensions, dimensions).unwrap();
+        let graph = graph_policy(degree, metric).unwrap();
+        let pool = thread_pool(threads);
+        let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
+        let graph = build_graph(data, &context).unwrap();
+        graph.into_iter().map(Vec::from).collect()
+    }
+
+    #[test]
+    fn invalid_sampling_fractions_and_an_empty_fanout_are_rejected() {
+        for p_samp in [
+            0.0,
+            -0.5,
+            1.0 + f64::EPSILON,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let config = PiPNNConfig {
+                p_samp,
+                ..partition_policy()
+            };
+
+            let error = config.validate().unwrap_err();
+
+            assert!(
+                matches!(error, PiPNNConfigError::SamplingFraction(value) if value.to_bits() == p_samp.to_bits()),
+                "p_samp {p_samp}: {error}"
+            );
+        }
+        let config = PiPNNConfig {
+            fanout: vec![],
+            ..partition_policy()
+        };
+        assert_eq!(config.validate(), Err(PiPNNConfigError::EmptyFanout));
+    }
+
+    #[test]
+    fn sampling_fraction_endpoints_are_accepted() {
+        for p_samp in [f64::from_bits(1), 1.0] {
+            let config = PiPNNConfig {
+                p_samp,
+                ..partition_policy()
+            };
+
+            assert_eq!(config.validate(), Ok(()), "p_samp {p_samp}");
+        }
+    }
+
+    #[test]
+    fn a_build_context_checks_the_configuration() {
+        let config = PiPNNConfig {
+            fanout: vec![],
+            ..partition_policy()
+        };
+        let graph = graph_policy(2, Metric::L2).unwrap();
+        let pool = thread_pool(1);
+
+        let error = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap_err();
+
+        assert_eq!(error, PiPNNConfigError::EmptyFanout);
+    }
+
+    #[test]
+    fn a_build_context_requires_the_pruning_kind_of_its_metric() {
+        // L2, cosine and normalized cosine share triangle pruning. Inner product
+        // uses occluding pruning.
+        let pool = thread_pool(1);
+        for (graph_metric, metric, compatible) in [
+            (Metric::L2, Metric::Cosine, true),
+            (Metric::L2, Metric::CosineNormalized, true),
+            (Metric::InnerProduct, Metric::InnerProduct, true),
+            (Metric::L2, Metric::InnerProduct, false),
+            (Metric::InnerProduct, Metric::L2, false),
+        ] {
+            let graph = graph_policy(2, graph_metric).unwrap();
+
+            let result = PiPNNBuildContext::new(partition_policy(), &graph, metric, &pool);
+
+            let case = format!("graph {graph_metric:?}, metric {metric:?}");
+            match result {
+                Ok(_) => assert!(compatible, "{case}"),
+                Err(error) => assert_eq!(
+                    (compatible, error),
+                    (
+                        false,
+                        PiPNNConfigError::PruneKind {
+                            prune_kind: graph_metric.into(),
+                            metric
+                        }
+                    ),
+                    "{case}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_dataset_axis_is_rejected_before_building() {
+        let graph = graph_policy(2, Metric::L2).unwrap();
+        let pool = thread_pool(1);
+        let context =
+            PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, &pool).unwrap();
+
+        for (rows, columns, expected_message) in [
+            (0, 2, "at least one data point"),
+            (2, 0, "at least one data dimension"),
+        ] {
+            let data = MatrixView::try_from(&[] as &[f32], rows, columns).unwrap();
+
+            let error = build_graph(data, &context).unwrap_err();
+
+            assert!(error.to_string().contains(expected_message), "{error}");
+        }
+    }
+
+    #[test]
+    fn native_vector_types_build_the_expected_neighbor_graph() {
+        // Nearest choices 0 -> 1, 1 -> 0 and 2 -> 1 become a symmetric chain.
+        fn check<T: VectorRepr>(values: [T; 3]) {
+            let actual = build(&values, 1, partition_policy(), 2, Metric::L2, 2);
+
+            assert_eq!(
+                sorted_members_per_row(&actual),
+                [vec![1], vec![0, 2], vec![1]],
+                "{}",
+                std::any::type_name::<T>()
+            );
+        }
+
+        check([0.0_f32, 1.0, 4.0]);
+        check([0.0_f32, 1.0, 4.0].map(f16::from_f32));
+        check([0_i8, 1, 4]);
+        check([0_u8, 1, 4]);
+    }
+
+    #[test]
+    fn the_requested_metric_determines_leaf_neighbors() {
+        // L2's nearest choices are [2, 2, 0, 2]; cosine pairs similar directions
+        // 0 <-> 1 and 2 <-> 3; dot products give [1, 3, 3, 2].
+        // The second coordinate sits in the last dimension of an embedding.
+        let dimensions = 1537;
+        for (metric, expected) in [
+            (Metric::L2, vec![vec![2], vec![2], vec![0, 1, 3], vec![2]]),
+            (Metric::Cosine, vec![vec![1], vec![0], vec![3], vec![2]]),
+            (
+                Metric::CosineNormalized,
+                vec![vec![1], vec![0], vec![3], vec![2]],
+            ),
+            (
+                Metric::InnerProduct,
+                vec![vec![1], vec![0, 3], vec![3], vec![1, 2]],
+            ),
+        ] {
+            let values = test_support::packed_points(
+                &[[1.0, 0.0], [5.0, 2.0], [1.0, 3.0], [0.0, 9.0]],
+                dimensions,
+                metric == Metric::CosineNormalized,
+            );
+
+            let actual = build(&values, dimensions, partition_policy(), 3, metric, 2);
+
+            assert_eq!(
+                sorted_members_per_row(&actual),
+                sorted_members_per_row(&expected),
+                "{metric:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn splitting_uses_the_requested_metric_to_group_points() {
+        // Four points force splitting at c_max=2. Every point is sampled, so
+        // leader order cannot change memberships. With L2, leader 0 gets {0,2}
+        // and leader 2 gets all four points, which then split into singletons.
+        // Cosine pairs directions {0,1} and {2,3}. Inner product picks leaders
+        // {1,2} for points 0/1 and {2,3} for points 2/3; the oversized leader-2
+        // cluster then splits into those same pairs using fanout one.
+        // Every two-point leaf contributes its only pair; degree three retains
+        // every edge. The graph therefore exposes partition membership directly.
+        let config = PiPNNConfig {
+            c_max: nz(2),
+            ..partition_policy()
+        };
+        for (metric, expected) in [
+            (Metric::L2, vec![vec![2], vec![], vec![0], vec![]]),
+            (Metric::Cosine, vec![vec![1], vec![0], vec![3], vec![2]]),
+            (
+                Metric::CosineNormalized,
+                vec![vec![1], vec![0], vec![3], vec![2]],
+            ),
+            (
+                Metric::InnerProduct,
+                vec![vec![1], vec![0], vec![3], vec![2]],
+            ),
+        ] {
+            let values = test_support::packed_points(
+                &[[1.0, 0.0], [6.0, 1.0], [2.0, 4.0], [0.0, 9.0]],
+                2,
+                metric == Metric::CosineNormalized,
+            );
+
+            let actual = build(&values, 2, config.clone(), 3, metric, 2);
+
+            assert_eq!(
+                sorted_members_per_row(&actual),
+                sorted_members_per_row(&expected),
+                "{metric:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_cosine_requests_on_raw_integers_use_vector_norms() {
+        // Cosine pairs 0 <-> 1 and 2 <-> 3. Unnormalized dot products instead
+        // connect 1 to 3, so treating raw integers as unit vectors changes edges.
+        // The first build checks leaf ranking. The second build selects three
+        // leaf neighbors and checks final pruning to one.
+        fn check<T: VectorRepr>(values: [T; 8]) {
+            for (leaf_k, degree) in [(1, 3), (3, 1)] {
+                let config = PiPNNConfig {
+                    leaf_k: nz(leaf_k),
+                    ..partition_policy()
+                };
+
+                let actual = build(&values, 2, config, degree, Metric::CosineNormalized, 2);
+
+                assert_eq!(
+                    actual,
+                    [vec![1], vec![0], vec![3], vec![2]],
+                    "{}, leaf_k={leaf_k}, degree={degree}",
+                    std::any::type_name::<T>()
+                );
+            }
+        }
+
+        check([1_i8, 0, 4, 1, 1, 2, 0, 9]);
+        check([1_u8, 0, 4, 1, 1, 2, 0, 9]);
+    }
+
+    #[test]
+    fn final_pruning_cuts_merged_candidates_to_the_degree() {
+        let config = PiPNNConfig {
+            leaf_k: nz(2),
+            ..partition_policy()
+        };
+
+        let actual = build(&[0.0_f32, 1.0, 4.0], 1, config, 1, Metric::L2, 2);
+
+        assert_eq!(actual, [vec![1], vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn overlapping_partitions_build_the_same_deduplicated_graph() {
+        // Sampling every point with fanout 2 makes two overlapping copies
+        // of each close pair. Neither replicas nor worker count may duplicate edges.
+        for (workers, replicas) in [(1, 1), (3, 2)] {
+            let config = PiPNNConfig {
+                c_max: nz(2),
+                replicas: nz(replicas),
+                ..partition_policy()
+            };
+
+            let actual = build(
+                &[0.0_f32, 1.0, 10.0, 11.0],
+                1,
+                config,
+                2,
+                Metric::L2,
+                workers,
+            );
+
+            assert_eq!(
+                actual,
+                [vec![1], vec![0], vec![3], vec![2]],
+                "{workers} workers, {replicas} replicas"
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_point_has_one_empty_adjacency_list() {
+        let actual = build(&[3.0_f32], 1, partition_policy(), 2, Metric::L2, 1);
+
+        assert_eq!(actual, [Vec::<u32>::new()]);
+    }
+
+    #[test]
+    fn multi_level_builds_give_valid_rows_for_every_metric() {
+        // With 1,000 points and c_max 32, the build splits over several levels,
+        // makes overlapping leaves, merges their candidates on four workers and
+        // prunes lists above the degree. Each row must be non-empty, within the
+        // degree, and free of duplicates and self edges.
+        let (points, dimensions, degree) = (1000, 16, 8);
+        let config = PiPNNConfig {
+            c_max: nz(32),
+            p_samp: 0.05,
+            fanout: vec![nz(4), nz(2)],
+            leaf_k: nz(2),
+            replicas: nz(1),
+        };
+        for metric in [
+            Metric::L2,
+            Metric::Cosine,
+            Metric::CosineNormalized,
+            Metric::InnerProduct,
+        ] {
+            let mut values = test_support::dense_points(points, dimensions, 1290);
+            if metric == Metric::CosineNormalized {
+                test_support::normalize(&mut values, dimensions);
+            }
+
+            let actual = build(&values, dimensions, config.clone(), degree, metric, 4);
+
+            for (point, neighbors) in actual.iter().enumerate() {
+                let mut distinct = neighbors.clone();
+                distinct.sort_unstable();
+                distinct.dedup();
+                assert!(
+                    !neighbors.is_empty()
+                        && neighbors.len() <= degree
+                        && distinct.len() == neighbors.len()
+                        && !neighbors.contains(&(point as u32)),
+                    "{metric:?}, point {point}: {neighbors:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn copies_of_one_vector_build_leaf_local_edges() {
+        // Every leader is a copy, so each point ties at every split. The build
+        // splits the six copies into two leaves of three points.
+        let actual = build(&[1.0_f32; 6], 1, partition_policy(), 2, Metric::L2, 2);
+
+        for (point, neighbors) in actual.iter().enumerate() {
+            assert!(!neighbors.is_empty(), "point {point}");
+            assert!(
+                neighbors
+                    .iter()
+                    .all(|&neighbor| neighbor / 3 == point as u32 / 3),
+                "point {point}: {neighbors:?}"
+            );
+        }
     }
 }
