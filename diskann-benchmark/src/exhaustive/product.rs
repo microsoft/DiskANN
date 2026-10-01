@@ -35,7 +35,7 @@ mod imp {
         Benchmark, Output,
     };
     use diskann_quantization::{product::train::TrainQuantizer, CompressInto};
-    use diskann_utils::views::rowmajor::{Matrix, MatrixMut};
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use indicatif::{ProgressBar, ProgressStyle};
     use rayon::iter::{IndexedParallelIterator, ParallelIterator};
     use serde::Serialize;
@@ -323,21 +323,18 @@ mod imp {
 
     /// A store for quantized data.
     pub(super) struct Store {
-        data: diskann_utils::views::rowmajor::Owned<u8>,
+        data: rowmajor::Owned<u8>,
         quantizer: diskann_providers::model::pq::FixedChunkPQTable,
     }
 
     impl Store {
         fn new(
-            input: diskann_utils::views::rowmajor::Ref<f32>,
+            input: rowmajor::Ref<f32>,
             quantizer: diskann_providers::model::pq::FixedChunkPQTable,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
-            let mut data = diskann_utils::views::rowmajor::Owned::try_from_element(
-                input.nrows(),
-                quantizer.get_num_chunks(),
-                0,
-            )?;
+            let mut data =
+                rowmajor::Owned::try_from_element(input.nrows(), quantizer.get_num_chunks(), 0)?;
 
             // Compress the data.
             #[expect(clippy::disallowed_methods)]

@@ -149,14 +149,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
-    use diskann_utils::views::rowmajor::MatrixMut;
-
     use super::*;
 
-    use crate::recall::GroundTruthMode;
+    use std::num::NonZeroUsize;
+
     use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
+    use diskann_utils::views::rowmajor::MatrixMut;
+
+    use crate::recall::GroundTruthMode;
 
     // A simple [`QueryLabelProvider`] that rejects odd indices.
     #[derive(Debug)]

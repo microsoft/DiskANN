@@ -223,11 +223,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::rowmajor::MatrixMut;
-
     use super::*;
 
     use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     #[derive(Debug)]
     struct NoOdds;

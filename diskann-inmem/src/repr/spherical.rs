@@ -637,12 +637,10 @@ impl repr::internal::RawDistance for &dyn iface::DynDistanceComputer {
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::rowmajor::MatrixMut;
-
     use super::*;
 
     use diskann::{graph::test::synthetic::Grid, neighbor::Neighbor};
-    use diskann_utils::assert_contains;
+    use diskann_utils::{assert_contains, views::rowmajor::MatrixMut};
     use hashbrown::HashMap;
 
     use crate::{

@@ -10,8 +10,7 @@ use diskann::{
     graph::{Config, DiskANNIndex},
     utils::VectorRepr,
 };
-use diskann_utils::future::AsyncFriendly;
-use diskann_utils::views::rowmajor::Matrix;
+use diskann_utils::{future::AsyncFriendly, views::rowmajor::Matrix};
 
 use crate::model::{
     self,

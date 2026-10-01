@@ -54,7 +54,7 @@ mod imp {
         num::Positive,
         AsFunctor, CompressInto,
     };
-    use diskann_utils::views::rowmajor::{Matrix, MatrixMut};
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_utils::{Reborrow, ReborrowMut};
     use diskann_vector::{PreprocessedDistanceFunction, PureDistanceFunction};
     use indicatif::{ProgressBar, ProgressStyle};
@@ -371,7 +371,7 @@ mod imp {
     pub(super) struct Store<const NBITS: usize> {
         // The number of bytes to take from each row.
         bytes: usize,
-        data: diskann_utils::views::rowmajor::Owned<u8>,
+        data: rowmajor::Owned<u8>,
         quantizer: diskann_quantization::minmax::MinMaxQuantizer,
     }
 
@@ -380,7 +380,7 @@ mod imp {
         Unsigned: Representation<NBITS>,
     {
         fn new(
-            input: diskann_utils::views::rowmajor::Ref<f32>,
+            input: rowmajor::Ref<f32>,
             quantizer: diskann_quantization::minmax::MinMaxQuantizer,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
@@ -390,8 +390,7 @@ mod imp {
             // The APIs below should correctly handle these variables.
             let output_dim = quantizer.output_dim();
             let bytes = Data::<NBITS>::canonical_bytes(output_dim);
-            let mut data =
-                diskann_utils::views::rowmajor::Owned::try_from_element(input.nrows(), bytes, 0)?;
+            let mut data = rowmajor::Owned::try_from_element(input.nrows(), bytes, 0)?;
 
             // Compress the data.
             //

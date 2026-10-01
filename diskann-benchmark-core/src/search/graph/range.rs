@@ -237,11 +237,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::rowmajor::MatrixMut;
-
     use super::*;
 
     use diskann::graph::test::provider;
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     #[test]
     fn test_range() {

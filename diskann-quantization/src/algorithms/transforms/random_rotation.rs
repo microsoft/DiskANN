@@ -6,6 +6,7 @@
 use std::num::NonZeroUsize;
 
 use diskann_linalg::{self, Transpose};
+use diskann_utils::views::rowmajor::{Matrix, MatrixMut};
 #[cfg(feature = "flatbuffers")]
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use rand::Rng;
@@ -18,7 +19,6 @@ use super::{
 };
 #[cfg(feature = "flatbuffers")]
 use crate::flatbuffers as fb;
-use diskann_utils::views::rowmajor::{Matrix, MatrixMut};
 
 //////////////////////
 // Dense Transforms //

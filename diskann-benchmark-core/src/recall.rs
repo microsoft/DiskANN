@@ -364,9 +364,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::rowmajor::MatrixMut;
-
     use super::*;
+
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     fn test_rows_inner(rows: &dyn Rows<usize>, ncols: Option<usize>) {
         assert_eq!(rows.ncols(), ncols);

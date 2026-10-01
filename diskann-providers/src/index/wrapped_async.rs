@@ -664,8 +664,7 @@ mod tests {
         provider::DefaultContext,
         utils::ONE,
     };
-    use diskann_utils::test_data_root;
-    use diskann_utils::views::rowmajor::Matrix;
+    use diskann_utils::{test_data_root, views::rowmajor::Matrix};
     use diskann_vector::distance::Metric;
 
     use super::DiskANNIndex;

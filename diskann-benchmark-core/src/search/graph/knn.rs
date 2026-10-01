@@ -439,13 +439,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
-    use diskann_utils::views::rowmajor::MatrixMut;
-
     use super::*;
 
+    use std::num::NonZeroUsize;
+
     use diskann::graph::test::provider;
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     #[test]
     fn test_knn() {
