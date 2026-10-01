@@ -844,12 +844,7 @@ impl<T> Owned<T> {
     /// ```
     /// use diskann_utils::views::rowmajor::{self, Matrix};
     ///
-    /// let mut i = 0;
-    /// let mat = rowmajor::Owned::from_fn(2, 3, |_| {
-    ///     let value = i;
-    ///     i += 1;
-    ///     value
-    /// });
+    /// let mat = rowmajor::Owned::from_fn(2, 3, |rc| 3 * rc.row + rc.col);
     ///
     /// assert_eq!(mat.row(0), &[0, 1, 2]);
     /// assert_eq!(mat.row(1), &[3, 4, 5]);
@@ -877,12 +872,7 @@ impl<T> Owned<T> {
     /// ```
     /// use diskann_utils::views::rowmajor::{self, Matrix};
     ///
-    /// let mut i = 0;
-    /// let mat = rowmajor::Owned::try_from_fn(2, 3, |_| {
-    ///     let value = i;
-    ///     i += 1;
-    ///     value
-    /// }).unwrap();
+    /// let mat = rowmajor::Owned::try_from_fn(2, 3, |rc| 3 * rc.row + rc.col).unwrap();
     ///
     /// assert_eq!(mat.row(0), &[0, 1, 2]);
     /// assert_eq!(mat.row(1), &[3, 4, 5]);
