@@ -24,6 +24,19 @@ use diskann_wide::{
 };
 use half::f16;
 
+/// Convert one row to `f32`, with the FP16 instructions of the running CPU
+/// for `f16` input. Errors are those of `VectorRepr::as_f32_into`.
+#[inline]
+pub(super) fn as_f32_into<T: VectorRepr>(source: &[T], output: &mut [f32]) -> Result<(), T::Error> {
+    if TypeId::of::<T>() == TypeId::of::<f16>() && source.len() == output.len() {
+        let source: &[f16] = bytemuck::cast_slice(source);
+        arch::dispatch2(SliceCast::<f32, f16>::new(), output, source);
+        Ok(())
+    } else {
+        T::as_f32_into(source, output)
+    }
+}
+
 /// Convert rows `ids` of `data` into consecutive rows of `output`.
 ///
 /// `f16` input selects the CPU's instructions once for the whole batch.
@@ -145,5 +158,70 @@ mod tests {
         assert_eq!(output[3].to_bits(), 0.0_f32.to_bits());
         assert_eq!(output[4].to_bits(), (-0.0_f32).to_bits());
         assert_eq!(output[5], f32::INFINITY);
+    }
+}
+
+#[cfg(test)]
+mod as_f32_into_tests {
+    use super::*;
+
+    #[test]
+    fn fp16_conversion_preserves_bits_at_slice_boundaries() {
+        // IEEE-754 encodings for signed zeros, subnormal and normal limits,
+        // finite fractions, infinities and a quiet NaN with a payload.
+        let half_bits = [
+            0x0000, 0x8000, 0x0001, 0x03ff, 0x0400, 0x3c00, 0xbc00, 0x3555, 0x7bff, 0x7c00, 0xfc00,
+            0x7e01,
+        ];
+        let float_bits = [
+            0x00000000, 0x80000000, 0x33800000, 0x387fc000, 0x38800000, 0x3f800000, 0xbf800000,
+            0x3eaaa000, 0x477fe000, 0x7f800000, 0xff800000, 0x7fc02000,
+        ];
+        // Lengths around the Neon (4), AVX2 (8) and AVX-512 (16) widths, and an
+        // unrolled tail.
+        for length in [0, 3, 4, 7, 8, 9, 16, 17, 65] {
+            let source: Vec<_> = half_bits
+                .into_iter()
+                .cycle()
+                .take(length)
+                .map(f16::from_bits)
+                .collect();
+            let expected: Vec<_> = float_bits.into_iter().cycle().take(length).collect();
+            let mut output = vec![123.0_f32; length];
+
+            as_f32_into(&source, &mut output).unwrap();
+
+            assert_eq!(
+                output.into_iter().map(f32::to_bits).collect::<Vec<_>>(),
+                expected,
+                "length {length}"
+            );
+        }
+    }
+
+    #[test]
+    fn mismatched_fp16_lengths_return_the_vector_repr_error() {
+        let source = [f16::ONE; 8];
+        let mut output = [0.0_f32; 7];
+        let expected = f16::as_f32_into(&source, &mut output).unwrap_err();
+
+        let actual = as_f32_into(&source, &mut output).unwrap_err();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn other_representations_keep_their_conversion() {
+        fn check<T: VectorRepr>(source: [T; 2], expected: [f32; 2]) {
+            let mut output = [f32::NAN; 2];
+
+            as_f32_into(&source, &mut output).unwrap();
+
+            assert_eq!(output, expected, "{}", std::any::type_name::<T>());
+        }
+
+        check([-2.5_f32, 1.25], [-2.5, 1.25]);
+        check([-2_i8, 127], [-2.0, 127.0]);
+        check([0_u8, 255], [0.0, 255.0]);
     }
 }

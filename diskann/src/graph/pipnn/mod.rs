@@ -11,9 +11,13 @@
 //!
 //! 1. `partitioning` splits the dataset into overlapping leaves.
 //! 2. `leaf_build` selects the `leaf_k` nearest neighbors of each point inside
-//!    each leaf and merges them into one candidate list per point.
+//!    each leaf. The direct merge adds them to one candidate list per point.
+//!    With [`HashPruneConfig`], `hash_prune` adds them to one bounded reservoir
+//!    per point instead. A reservoir keeps at most `l_max` candidates, at most
+//!    one for each direction hash.
 //! 3. `finalization` prunes each list that is longer than the graph degree with
-//!    Vamana RobustPrune.
+//!    Vamana RobustPrune. Without `final_prune`, a HashPrune build keeps the
+//!    nearest reservoir entries instead.
 //!
 //! [`build_graph`] selects the SIMD architecture and the metric once, so the
 //! steps compile for one architecture and one metric. It borrows one contiguous
@@ -23,11 +27,14 @@
 //! The build does not load providers or select start points. It also does not
 //! quantize, serialize, or search the graph.
 
+mod bf16;
 mod conversion;
 mod finalization;
+mod hash_prune;
 mod leaf_build;
 mod leaf_kernel;
 mod leaf_metric;
+mod lsh;
 mod partition_kernel;
 mod partition_metric;
 mod partitioning;
@@ -191,6 +198,19 @@ pub enum PiPNNConfigError {
         prune_kind: PruneKind,
         metric: Metric,
     },
+    #[error("num_hash_planes ({0}) must be in [1, {max}]", max = lsh::MAX_PLANES)]
+    HashPlanes(usize),
+    #[error("l_max ({0}) must be in [1, {max}]", max = hash_prune::MAX_RESERVOIR_LEN)]
+    ReservoirLength(usize),
+    #[error(
+        "HashPrune capacity min(l_max={l_max}, hash buckets={hash_buckets}) must be at least \
+         the graph degree ({degree})"
+    )]
+    HashPruneCapacity {
+        l_max: usize,
+        hash_buckets: usize,
+        degree: usize,
+    },
 }
 
 crate::convert_error!(PiPNNConfigError);
@@ -227,10 +247,52 @@ impl PiPNNConfig {
     }
 }
 
+/// HashPrune parameters.
+///
+/// Each edge `source -> target` gets a direction hash with one bit per random
+/// hyperplane. The reservoir of `source` keeps the nearest target for each hash,
+/// up to `l_max` targets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HashPruneConfig {
+    /// Number of random hyperplanes, one hash bit each.
+    pub num_hash_planes: usize,
+    /// Maximum number of candidates in the reservoir of a point.
+    pub l_max: usize,
+    /// Prune the reservoir candidates with Vamana RobustPrune. Without this
+    /// step, each point keeps its nearest candidates up to the graph degree.
+    pub final_prune: bool,
+}
+
+impl HashPruneConfig {
+    /// Check the parameter ranges, and check that a reservoir can hold `degree`
+    /// candidates.
+    ///
+    /// A reservoir holds at most one candidate per hash, so it holds at most
+    /// `2^num_hash_planes` candidates.
+    pub fn validate(&self, degree: usize) -> Result<(), PiPNNConfigError> {
+        if !(1..=lsh::MAX_PLANES).contains(&self.num_hash_planes) {
+            return Err(PiPNNConfigError::HashPlanes(self.num_hash_planes));
+        }
+        if !(1..=hash_prune::MAX_RESERVOIR_LEN).contains(&self.l_max) {
+            return Err(PiPNNConfigError::ReservoirLength(self.l_max));
+        }
+        let hash_buckets = 1 << self.num_hash_planes;
+        if self.l_max.min(hash_buckets) < degree {
+            return Err(PiPNNConfigError::HashPruneCapacity {
+                l_max: self.l_max,
+                hash_buckets,
+                degree,
+            });
+        }
+        Ok(())
+    }
+}
+
 /// PiPNN parameters, graph policy, and the Rayon pool for one graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
     config: PiPNNConfig,
+    hash_prune: Option<HashPruneConfig>,
     graph: &'a Config,
     metric: Metric,
     pool: &'a ThreadPool,
@@ -255,10 +317,18 @@ impl<'a> PiPNNBuildContext<'a> {
 
         Ok(Self {
             config,
+            hash_prune: None,
             graph,
             metric,
             pool,
         })
+    }
+
+    /// Merge the leaf candidates with HashPrune reservoirs.
+    pub fn with_hash_prune(mut self, config: HashPruneConfig) -> Result<Self, PiPNNConfigError> {
+        config.validate(self.graph.pruned_degree().get())?;
+        self.hash_prune = Some(config);
+        Ok(self)
     }
 }
 
@@ -351,8 +421,28 @@ where
     // The leaf step takes the leaves by value, so their memory is free before
     // final pruning starts.
     let leaf_k = context.config.leaf_k.get();
-    let candidates = tracing::info_span!("pipnn.leaf_build")
-        .in_scope(|| leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, leaf_k))?;
+    let candidates = match &context.hash_prune {
+        None => tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+            leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, leaf_k)
+        })?,
+        Some(config) => {
+            let reservoirs =
+                hash_prune::HashPrune::new(data, config.num_hash_planes, config.l_max, 42)?;
+            tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::add_hash_prune_candidates::<A, M, T>(
+                    arch,
+                    data,
+                    leaves,
+                    leaf_k,
+                    &reservoirs,
+                )
+            })?;
+            if !config.final_prune {
+                return Ok(reservoirs.into_nearest_lists(context.graph.pruned_degree().get()));
+            }
+            reservoirs.into_candidate_lists()
+        }
+    };
     // Final pruning cuts each candidate list in place.
     Ok(tracing::info_span!("pipnn.finalization")
         .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric)))
@@ -938,6 +1028,94 @@ mod construction_tests {
                     .iter()
                     .all(|&neighbor| neighbor / 3 == point as u32 / 3),
                 "point {point}: {neighbors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hash_prune_parameters_must_hold_the_graph_degree() {
+        let pool = thread_pool(1);
+        for (num_hash_planes, l_max, degree, expected) in [
+            (0, 64, 2, Err(PiPNNConfigError::HashPlanes(0))),
+            (17, 64, 2, Err(PiPNNConfigError::HashPlanes(17))),
+            (8, 0, 2, Err(PiPNNConfigError::ReservoirLength(0))),
+            (8, 256, 2, Err(PiPNNConfigError::ReservoirLength(256))),
+            (16, 255, 2, Ok(())),
+            (8, 64, 64, Ok(())),
+            (
+                8,
+                63,
+                64,
+                Err(PiPNNConfigError::HashPruneCapacity {
+                    l_max: 63,
+                    hash_buckets: 256,
+                    degree: 64,
+                }),
+            ),
+            // One plane gives two hashes, so a reservoir holds two candidates.
+            (1, 64, 2, Ok(())),
+            (
+                1,
+                64,
+                3,
+                Err(PiPNNConfigError::HashPruneCapacity {
+                    l_max: 64,
+                    hash_buckets: 2,
+                    degree: 3,
+                }),
+            ),
+        ] {
+            let graph = graph_policy(degree, Metric::L2).unwrap();
+            let context =
+                PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, &pool).unwrap();
+            let config = HashPruneConfig {
+                num_hash_planes,
+                l_max,
+                final_prune: true,
+            };
+
+            let actual = context.with_hash_prune(config).map(|_| ());
+
+            assert_eq!(
+                actual, expected,
+                "planes={num_hash_planes}, l_max={l_max}, degree={degree}"
+            );
+        }
+    }
+
+    #[test]
+    fn hash_prune_keeps_the_nearest_neighbor_in_each_direction() {
+        // Two replicas add the same leaf in parallel. On a line, the two
+        // directions from a point have complementary hashes, so each reservoir
+        // keeps the nearest point on each side. Degree two keeps both.
+        let values = [-3.0_f32, 0.0, 1.0];
+        let data = MatrixView::column_vector(&values[..]);
+        let graph = graph_policy(2, Metric::L2).unwrap();
+        let config = PiPNNConfig {
+            c_max: nz(3),
+            fanout: vec![nz(1)],
+            leaf_k: nz(2),
+            replicas: nz(2),
+            ..partition_policy()
+        };
+        for (threads, final_prune) in [(1, true), (4, true), (4, false)] {
+            let pool = thread_pool(threads);
+            let context = PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
+                .unwrap()
+                .with_hash_prune(HashPruneConfig {
+                    num_hash_planes: 8,
+                    l_max: 16,
+                    final_prune,
+                })
+                .unwrap();
+
+            let actual = build_graph(data, &context).unwrap();
+
+            let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
+            assert_eq!(
+                sorted_members_per_row(&actual),
+                [vec![1], vec![0, 2], vec![1]],
+                "{threads} threads, final_prune={final_prune}"
             );
         }
     }
