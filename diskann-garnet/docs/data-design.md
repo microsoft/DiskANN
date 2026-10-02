@@ -30,7 +30,7 @@ The read-modify-write (rmw) method accesses a single key with a callback but all
 
 ### Keys & Contexts
 
-Garnet keys are arbitrary byte strings (e.g. `&[u8]`). The methods described above can use whatever keys they like, with some caveats, to read and write data, however those methods also take a semi-opaque context which gives the operation a scope. For the most part this context is used for internal Garnet bookkeeping and is opaque, but the least significant 3 bits are available for diskann-garnet to use for its own scoping. Keys must be a multiple of 4 bytes in length, except for keys stored under context 3 and context 5 (`Term::Attributes` and `Term::IntMap`) which are special cased in Garnet as they key is the user-provided external ID. There are no alignment requirements on keys.
+Garnet keys are arbitrary byte strings (e.g. `&[u8]`). The methods described above can use whatever keys they like, with some caveats, to read and write data, however those methods also take a semi-opaque context which gives the operation a scope. For the most part this context is used for internal Garnet bookkeeping and is opaque, but the least significant 3 bits are available for diskann-garnet to use for its own scoping. Keys must be a multiple of 4 bytes in length, except for keys stored under context 5 (`Term::IntMap`), which use the user-provided external ID. There are no alignment requirements on keys.
 
 Diskann-garnet uses these bits to distinguish between differnet kinds of index data so that the same key can be used to fetch different kinds of data. For example, vector data might be stored under the same key, the vector ID, as neighbor lists by setting different context bits for the operation.
 
@@ -75,7 +75,7 @@ In a quantized index, these vectors are the most often accessed piece of data an
 
 ### Attributes
 
-*Key*: External ID as bytes; this is variable length byte string that the user assigned.
+Add*Key*: Internal ID as bytes; this key is always 4 bytes.
 *Value*: Attributes given by the user. Variable length.
 
 When vectors are inserted by the Redis Vector Set API, an arbitrary JSON blob of attributes can be attached. These attributes are stored as a utf-8 string and read/written as a whole unit.
@@ -88,13 +88,15 @@ The are several terms in the index used for internal state management of the dis
 
 #### Start Points
 
-Currently only a single start point is supported, and it is given the internal ID of 0. Its vector data is the same as the first vector that was inserted, and it will not be returned by search, and it will not be modified during the lifetime of the index.
+Currently only a single start point is supported, and it is given the internal ID of 0. During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
+
+For a nonempty import, finalization copies the first used imported ID's full vector, quantized vector (if present), and neighbor list to ID 0. ID 0 cannot be imported directly.
 
 Start points have no associated attributes.
 
 #### Metadata
 
-Metadata is currently used for the free space map which manages used and available internal IDs and the quantizer tables.
+Metadata is currently used for the free space map which manages used and available internal IDs, the quantizer tables, and import eligibility.
 
 ##### Free Space Map
 
@@ -107,12 +109,22 @@ The free space map is a series of blocks where each block is a string of 1-bit v
 
 During startup, the index will scan FSM blocks in sequence to restore state. It will update the correct bits in a FSM block whenever the state of an internal ID changes.
 
+Importing a term keyed by an internal ID marks that ID as used, expanding the map and advancing the maximum assigned ID as needed. Finalization claims ID 0 for a nonempty import, using it 
+for the start point.
+
 ##### Quantizer Tables
 
 *Key*: b'_qnt'; this key is always 4 bytes, but only exists if quantization is used.
 *Value*: For BIN-family: 117 + 6D bytes where D is the dimension. For Q8: 68 + 2D bytes.
 
 Note that for the BIN quantizer, a 1 byte flag precedes the quantizer table which indicates whether quantization backfill is complete. That byte is accounted for in the value sizing above.
+
+##### Import Eligibility
+
+*Key*: b'_imp'; this key is always 4 bytes.
+*Value*: A single byte, 0 for disabled and 1 for enabled.
+
+The flag is restored on startup. If absent, imports are enabled only for an unquantized index without a start point. Setting quantizer state on an index without a start point enables imports. Ordinary index operations and import finalization disable them.
 
 #### Internal ID Mapping
 

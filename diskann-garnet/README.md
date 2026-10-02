@@ -40,6 +40,21 @@ Redis always uses cosine distance, but many vector data sets use other metrics. 
 Currently there is a limit of `2^32 - 1` vectors in a single instance due to
 internal IDs being `u32`. This restriction will be lifted in the future.
 
+### Bulk Import
+
+Existing DiskANN graphs can be loaded without rebuilding them through `VADD`:
+
+1. Create an empty set with `XVCREATE`, supplying `QUANT_STATE` for a quantized index.
+2. Load its terms with `XVIMPORT`. Terms may be imported in any order and in parallel.
+3. Wait for all term imports to complete, then call `XVIMPORT key FINISH` before normal use.
+
+At the FFI layer, `can_import` checks eligibility.
+
+Indices created with `XVCREATE` are eligible for import until import finalization is complete.
+
+See the [FFI reference](docs/ffi-design.rs) and [data design](docs/data-design.md)
+for API and term formats.
+
 ## Installing
 
 Garnet depends on diskann-garnet as a NuGet package, which means you can simply

@@ -31,7 +31,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     alloc::AlignToEight,
-    garnet::{FilterCallback, LogCallback},
+    garnet::{FilterCallback, LogCallback, Term},
     provider::{GarnetProvider, GarnetProviderError},
 };
 use crate::{
@@ -545,6 +545,9 @@ pub unsafe extern "C" fn insert(
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
 
+    if id_data.is_null() || id_len == 0 {
+        return InsertResult::Fail.into();
+    }
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -652,14 +655,14 @@ pub unsafe extern "C" fn build_quant_table(context: u64, index_ptr: *const c_voi
 pub unsafe extern "C" fn backfill_quant_vectors(
     context: u64,
     index_ptr: *const c_void,
-    task_index: usize,
+    task_idx: usize,
     task_count: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(context);
     index
         .inner
-        .backfill_quant_vectors(&ctx, task_index, task_count)
+        .backfill_quant_vectors(&ctx, task_idx, task_count)
 }
 
 /// Set the attributes for a vector.
@@ -682,6 +685,10 @@ pub unsafe extern "C" fn set_attribute(
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(context);
+
+    if id_data.is_null() || id_len == 0 {
+        return false;
+    }
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -935,6 +942,10 @@ pub unsafe extern "C" fn search_element(
     overflow: *mut *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
+
+    if id_data.is_null() || id_len == 0 {
+        return -1;
+    }
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
     let ctx = Context::new(ctx);
@@ -1067,6 +1078,10 @@ pub unsafe extern "C" fn remove(
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
+
+    if id_data.is_null() || id_len == 0 {
+        return false;
+    }
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -1079,14 +1094,17 @@ pub unsafe extern "C" fn remove(
 
 /// Return the approximate count of vectors in the index.
 ///
+/// Returns `u64::MAX` if disabling imports fails.
+///
 /// # Safety
 ///
 /// FFI
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn card(_ctx: u64, index_ptr: *const c_void) -> u64 {
+pub unsafe extern "C" fn card(ctx: u64, index_ptr: *const c_void) -> u64 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
 
-    index.inner.approximate_count()
+    index.inner.approximate_count(&ctx).unwrap_or(u64::MAX)
 }
 
 /// Check if a given internal ID is a valid vector.
@@ -1132,6 +1150,10 @@ pub unsafe extern "C" fn check_external_id_valid(
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
+
+    if id_data.is_null() || id_len == 0 {
+        return false;
+    }
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -1195,6 +1217,10 @@ pub unsafe extern "C" fn search_neighbors(
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
+
+    if id_data.is_null() || id_len == 0 {
+        return -1;
+    }
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -1227,6 +1253,156 @@ pub unsafe extern "C" fn search_neighbors(
     }
 
     count as i32
+}
+
+/// Sets the quantizer internal state.
+///
+/// This is intended to be used on an empty, quantized index to set the quantizer state to a
+/// known value. This is called from the `XVCREATE` command.
+///
+/// This ensures quantized vectors will be externally intelligible to another system with
+/// the same quantizer state.
+///
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn set_quant_state(
+    ctx: u64,
+    index_ptr: *const c_void,
+    state: *const u8,
+    state_len: usize,
+) -> bool {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+    if state.is_null() || state_len == 0 {
+        return false;
+    }
+    let state = unsafe { slice::from_raw_parts(state, state_len) };
+
+    index.inner.set_quant_state(&ctx, state)
+}
+
+/// Returns whether the index currently accepts imported terms
+///
+/// # Safety
+///
+/// `index_ptr` must be a live index returned by `create_index`, and `ctx` must identify its storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn can_import(ctx: u64, index_ptr: *const c_void) -> bool {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+
+    index.inner.can_import(&ctx)
+}
+
+/// Imports a term directly in storage.
+///
+/// This is intended for bulk loading of existing DiskANN graphs that are stored outside of Garnet,
+/// allowing for creation of a vector set to happen without calling `VADD` on every vector.
+///
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn import_term(
+    ctx: u64,
+    index_ptr: *const c_void,
+    term_type: u32,
+    id: *const u8,
+    id_len: usize,
+    value: *const u8,
+    value_len: usize,
+) -> bool {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+
+    if id.is_null() || id_len == 0 || value.is_null() || value_len == 0 {
+        return false;
+    }
+    let term = if let Ok(term) = Term::try_from(term_type) {
+        term
+    } else {
+        return false;
+    };
+
+    let id = unsafe { slice::from_raw_parts(id, id_len) };
+    let value = unsafe { slice::from_raw_parts(value, value_len) };
+
+    index.inner.import_term(&ctx, term, id, value)
+}
+
+/// Return type for `finish_import()`.
+///
+/// `Success` is returned if the tasks succeeds, and if the final task, if the finalization
+/// succeeds. `TaskFailed` indicates that the task's portion of the work failed, but can be
+/// retried. `FinishFailed` means the task finished successfully but finalization failed; the
+/// task cannot be retried.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ImportResult {
+    Success,
+    TaskFailed,
+    FinishFailed,
+}
+
+impl From<ImportResult> for u8 {
+    fn from(value: ImportResult) -> Self {
+        match value {
+            ImportResult::Success => 0,
+            ImportResult::TaskFailed => 1,
+            ImportResult::FinishFailed => 2,
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<u8> for ImportResult {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => ImportResult::Success,
+            1 => ImportResult::TaskFailed,
+            2 => ImportResult::FinishFailed,
+            _ => panic!("bad ImportResult ({value})"),
+        }
+    }
+}
+
+/// Finalize import.
+///
+/// After terms are imported, this is used to verify the graph and enable the index.
+///
+/// Returns 0 if the task succeeds and if the final task finalizes the index. Returns 1 when
+/// the task failed, which can be retried. Returns 2 when the task succeeded but index
+/// finalization has failed, which cannot be retried.
+///
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn finish_import(
+    ctx: u64,
+    index_ptr: *const c_void,
+    task_idx: usize,
+    task_count: usize,
+) -> u8 {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+
+    let (result, completed) = index.inner.finish_import(&ctx, task_idx, task_count);
+    if result && completed == Some(true) {
+        index
+            .state
+            .store(IndexState::Ready as usize, Ordering::Release);
+    }
+
+    match (result, completed) {
+        (true, None) | (true, Some(true)) => ImportResult::Success,
+        (false, None) | (false, Some(false)) => ImportResult::TaskFailed,
+        // This variant is a special case that happens when an empty index is finalized.
+        (false, Some(true)) => ImportResult::Success,
+        (true, Some(false)) => ImportResult::FinishFailed,
+    }
+    .into()
 }
 
 #[cfg(test)]
@@ -1417,7 +1593,7 @@ mod tests {
         assert!(!index_ptr.is_null());
         let index = unsafe { &*index_ptr.cast::<Index>() };
         assert_eq!(index.quant_type, quant_type);
-        assert_eq!(index.inner.approximate_count(), 0);
+        assert_eq!(index.inner.approximate_count(&Context::new(0)).unwrap(), 0);
 
         unsafe {
             drop_index(0, index_ptr);
