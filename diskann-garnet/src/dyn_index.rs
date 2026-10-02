@@ -3,10 +3,11 @@
  * Licensed under the MIT license.
  */
 
+use crate::wrapped_async::DiskANNIndex;
 use crate::{
     SearchResults,
     garnet::{Context, GarnetId},
-    provider::{DynamicQuantization, GarnetProvider},
+    provider::{DynamicQuantization, GarnetProvider, poll_immediate},
 };
 use diskann::{
     ANNResult,
@@ -15,7 +16,6 @@ use diskann::{
     provider::DataProvider,
     utils::VectorRepr,
 };
-use diskann_providers::index::wrapped_async::DiskANNIndex;
 
 /// Type-erased version of `DiskANNIndex<GarnetProvider>`.
 /// All vector data is passed as untyped byte slices.
@@ -157,7 +157,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         // Look up internal ID
-        let iid = self.inner.provider().to_internal_id(context, id)?;
+        let iid = poll_immediate(self.inner.provider().to_internal_id(context, id))?;
         let data = self.inner.provider().get_full_vector(context, iid)?;
         let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
         self.search_vector(context, data_bytes, params, output)
@@ -182,7 +182,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         // Look up internal ID
-        let iid = self.inner.provider().to_internal_id(context, id)?;
+        let iid = poll_immediate(self.inner.provider().to_internal_id(context, id))?;
         let data = self.inner.provider().get_full_vector(context, iid)?;
         let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
         self.filtered_search_vector(context, data_bytes, params, output)

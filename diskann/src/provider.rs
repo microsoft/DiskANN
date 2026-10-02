@@ -56,7 +56,7 @@
 //!   The [`HasId`] trait provides a common base-trait for these related concepts, which
 //!   ensures implementers only need to define and constrain it once.
 
-use std::ops::Deref;
+use std::{future::Future, ops::Deref};
 
 use crate::{ANNResult, error::ToRanked, graph::AdjacencyList, utils::VectorId};
 
@@ -73,8 +73,8 @@ pub trait ExecutionContext: Send + Sync + Clone + 'static {
 
     /// Provide a customization point for tasks spawned while under this context.
     ///
-    /// The future `f` is a Future that DiskANN intends to spawn as a task using an spawn
-    /// method such as `tokio::spawn`. DiskANN will pass this future through this function
+    /// The future `f` is a Future that DiskANN intends to spawn as a task using
+    /// [`ExecutionContext::spawn_task`]. DiskANN will pass this future through this function
     /// before creating the task.
     ///
     /// This allows the `ExecutionContext` to nest that Future inside another Future if desired.
@@ -83,11 +83,43 @@ pub trait ExecutionContext: Send + Sync + Clone + 'static {
     ///
     /// The default implementation of this method is the identity, simply passing through
     /// the future unmodified.
-    fn wrap_spawn<F, T>(&self, f: F) -> impl std::future::Future<Output = T> + Send + 'static
+    fn wrap_spawn<F, T>(&self, f: F) -> impl Future<Output = T> + Send + 'static
     where
-        F: std::future::Future<Output = T> + Send + 'static,
+        F: Future<Output = T> + Send + 'static,
     {
         f
+    }
+
+    /// Run `f` as a task under this context, returning a handle that resolves to its output.
+    ///
+    /// DiskANN uses this instead of calling into any specific async runtime directly, so that
+    /// the core algorithm stays runtime agnostic. The returned handle is *not* required to
+    /// have started executing: DiskANN always drives every handle it creates to completion
+    /// (via `futures_util::future::join_all`, which polls all of them concurrently and
+    /// collects results in creation order) before propagating an error, and never relies on a
+    /// handle making progress while it is dropped.
+    ///
+    /// The default implementation runs `f` inline, i.e. the task makes progress only while
+    /// its handle is polled, on whichever thread happens to be driving the caller. This needs
+    /// no runtime at all and is the right choice for a current-thread runtime and for
+    /// thread-per-core runtimes. Implementations backed by a multi-threaded scheduler should
+    /// override this to dispatch eagerly onto that scheduler, which is how batched operations
+    /// get true core parallelism.
+    ///
+    /// Implementors must pass `f` through [`Self::wrap_spawn`] before running it, and should
+    /// report an inability to dispatch as an [`ANNError`] rather than by panicking.
+    ///
+    /// [`ANNError`]: crate::error::ANNError
+    fn spawn_task<F, T>(&self, f: F) -> impl Future<Output = ANNResult<T>> + Send + 'static
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        // `wrapped` must be bound by a `let`: naming `self` inside the `async` block would
+        // capture the borrow of `self` into the generated future, which cannot satisfy the
+        // `'static` bound on this method's return type.
+        let wrapped = self.wrap_spawn(f);
+        async move { Ok(wrapped.await) }
     }
 }
 
@@ -137,18 +169,24 @@ pub trait DataProvider: Sized + Send + Sync + 'static {
     ///
     /// The vector referenced by `gid` must already have been added to the provider via
     /// [`SetElement`]. The mapping is undefined until then.
+    ///
+    /// The translation is async so that implementations whose id mapping is not
+    /// fully in-memory (e.g. spilling cold buckets to secondary storage) can
+    /// resolve it without blocking the executor.
     fn to_internal_id(
         &self,
         context: &Self::Context,
         gid: &Self::ExternalId,
-    ) -> Result<Self::InternalId, Self::Error>;
+    ) -> impl Future<Output = Result<Self::InternalId, Self::Error>> + Send;
 
     /// Translate an internal id to its corresponding external id.
+    ///
+    /// Async for the same reason as [`Self::to_internal_id`].
     fn to_external_id(
         &self,
         context: &Self::Context,
         id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error>;
+    ) -> impl Future<Output = Result<Self::ExternalId, Self::Error>> + Send;
 }
 
 ////////////
@@ -504,6 +542,7 @@ mod tests {
         task,
     };
 
+    use diskann_utils::future::boxit;
     use pin_project::{pin_project, pinned_drop};
 
     use super::*;
@@ -591,18 +630,21 @@ mod tests {
     impl ExecutionContext for TestContext {
         /// Override task spawning to record the number of tasks spawned and the number
         /// of tasks dropped.
-        fn wrap_spawn<F, T>(&self, f: F) -> impl Future<Output = T> + Send + 'static
+        fn spawn_task<F, T>(&self, f: F) -> impl Future<Output = ANNResult<T>> + Send + 'static
         where
             F: Future<Output = T> + Send + 'static,
+            T: Send + 'static,
         {
             // Increment spawn count.
             self.inner.spawned.fetch_add(1, Ordering::AcqRel);
 
             // Create a future that will increment drop count when dropped.
-            SpawnCounter {
+            let counter = SpawnCounter {
                 inner: f,
                 parent: self.clone(),
-            }
+            };
+            let wrapped = self.wrap_spawn(counter);
+            async move { Ok(wrapped.await) }
         }
     }
 
@@ -613,7 +655,7 @@ mod tests {
     /// This is a recursive function. At each level, it spawns `width` new instances of
     /// itself with `depth` decreased by 1.
     ///
-    /// Each spawned instance uses `context.wrap_spawn`.
+    /// Each spawned instance uses `context.spawn_task`.
     ///
     /// This needs to be manually `async` so we can aply the `'static` bound. Since it's
     /// recursive, Rust struggles to properly deduce the hidden type for the opaque return
@@ -635,7 +677,10 @@ mod tests {
             let handles: Box<[_]> = (0..width)
                 .map(|_| {
                     let clone = context.clone();
-                    tokio::spawn(context.wrap_spawn(test_spawning(clone, width, depth - 1)))
+                    // `boxit` performs the type erasure that `tokio::spawn` used to do for
+                    // free: without it, the recursive opaque return type of `spawn_task`
+                    // makes this `async` block infinitely sized (E0733).
+                    context.spawn_task(boxit(test_spawning(clone, width, depth - 1)))
                 })
                 .collect();
 

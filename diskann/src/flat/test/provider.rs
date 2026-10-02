@@ -246,7 +246,7 @@ impl provider::DataProvider for Provider {
     type Error = InvalidId;
     type Guard = NoopGuard<u32>;
 
-    fn to_internal_id(&self, _ctx: &Context, gid: &u32) -> Result<u32, InvalidId> {
+    async fn to_internal_id(&self, _ctx: &Context, gid: &u32) -> Result<u32, InvalidId> {
         if (*gid as usize) < self.items.nrows() {
             Ok(*gid)
         } else {
@@ -254,7 +254,7 @@ impl provider::DataProvider for Provider {
         }
     }
 
-    fn to_external_id(&self, _ctx: &Context, id: u32) -> Result<u32, InvalidId> {
+    async fn to_external_id(&self, _ctx: &Context, id: u32) -> Result<u32, InvalidId> {
         if (id as usize) < self.items.nrows() {
             Ok(id)
         } else {
