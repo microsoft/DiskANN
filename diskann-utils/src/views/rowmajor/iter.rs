@@ -11,7 +11,7 @@ use crate::views::rowmajor::{Layout, Matrix, Mut, Ref};
 // Rows //
 //------//
 
-/// An iterator over rows in a matrix. See: [`Matrix::row_iter`].
+/// An iterator over rows in a matrix. See: [`Matrix::rows`].
 #[derive(Debug)]
 pub struct Rows<'a, T> {
     ptr: NonNull<T>,
@@ -66,7 +66,7 @@ impl<T> std::iter::FusedIterator for Rows<'_, T> {}
 // RowsMut //
 //---------//
 
-/// An iterator over mutable rows in a matrix. See: [`Matrix::row_iter_mut`].
+/// An iterator over mutable rows in a matrix. See: [`crate::views::rowmajor::MatrixMut::rows_mut`].
 #[derive(Debug)]
 pub struct RowsMut<'a, T> {
     ptr: NonNull<T>,
