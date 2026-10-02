@@ -212,6 +212,9 @@ pub(crate) enum Check {
     /// ```
     AbsRel { abs: f32, rel: f32 },
 
+    /// Two values must be exact.
+    Exact,
+
     /// Skip the check entirely.
     #[cfg(not(miri))]
     Skip,
@@ -224,6 +227,10 @@ impl Check {
 
     pub(crate) const fn absrel(abs: f32, rel: f32) -> Self {
         Self::AbsRel { abs, rel }
+    }
+
+    pub(crate) const fn exact() -> Self {
+        Self::Exact
     }
 
     #[cfg(not(miri))]
@@ -274,6 +281,13 @@ impl Check {
                     })
                 }
             }
+            Self::Exact => {
+                if got == expected {
+                    Ok(())
+                } else {
+                    Err(CheckFailed::Exact { got, expected })
+                }
+            }
             #[cfg(not(miri))]
             Self::Skip => Ok(()),
         }
@@ -284,6 +298,8 @@ impl Check {
 pub(crate) enum CheckFailed {
     #[error("not within {ulp} ulp - got {got}, expected {expected}")]
     Ulp { ulp: usize, got: f32, expected: f32 },
+    #[error("not exact got {got}, expected {expected}")]
+    Exact { got: f32, expected: f32 },
     #[error(
         "not within {abs_limit}/{rel_limit} - errors {abs_got}/{rel_got} - \
             got {got}, expected {expected}"

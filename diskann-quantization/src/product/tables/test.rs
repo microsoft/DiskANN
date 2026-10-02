@@ -4,16 +4,311 @@
  */
 
 // A collection of test helpers to ensure uniformity across tables.
+
+use std::num::NonZeroUsize;
+
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_vector::{PureDistanceFunction, distance};
 #[cfg(not(miri))]
 use rand::seq::IndexedRandom;
 use rand::{
     Rng, SeedableRng,
     distr::{Distribution, Uniform},
+    rngs::StdRng,
 };
 
-use crate::traits::CompressInto;
-use crate::views::{self, ChunkOffsets, ChunkOffsetsView};
+use crate::{
+    product::tables::BasicTable,
+    test_util::Check,
+    traits::CompressInto,
+    views::{self, ChunkOffsets, ChunkOffsetsView},
+};
+
+//////////////////////
+// Distance Helpers //
+//////////////////////
+
+/// To test the implementation of distances, we need a way to seed the source pivot table
+/// with known contents.
+///
+/// The layout of the pivot table will look like this:
+///
+///      chunk 0          chunk 1       ...        chunk K
+///
+/// | S    S    ... | S+1   S+1   ... | ... | S+K    S+K    ... |   pivot 0
+/// | S+1  S+1  ... | S+2   S+2   ... | ... | S+K+1  S+K+1  ... |   pivot 1
+/// | S+2  S+2  ... | S+3   S+3   ... | ... | S+K+2  S+K+2  ... |   pivot 2
+/// |     ...       |       ...       | ... |        ...        |     ...
+/// | S+N  S+N  ... | S+N+1 S+N+1 ... | ... | S+K+N  S+K+N  ... |   pivot N
+///
+/// where
+///
+/// * S: The configured start value for chunk 0, pivot 0 (i.e., [`Self::start`])
+/// * K + 1: The number of PQ chunks ([`Self::chunks`]).
+/// * N + 1: The number of PQ Pivots ([`Self::pivots`]).
+#[derive(Debug, Clone)]
+pub(super) struct DistanceTestTable {
+    /// The chunking schemal
+    pub(super) offsets: ChunkOffsets,
+    /// The number of pivots per chunk.
+    pub(super) pivots: usize,
+    /// The starting value for chunk 0, pivot 0.
+    pub(super) start: f32,
+}
+
+/// The position within the chunking scheme.
+#[derive(Debug, Clone, Copy)]
+struct Location {
+    /// The chunk number.
+    chunk: usize,
+    /// The pivot.
+    pivot: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct UniformFloat(Uniform<usize>);
+
+impl UniformFloat {
+    pub(super) fn new(low: usize, high: usize) -> Result<Self, rand::distr::uniform::Error> {
+        Uniform::new(low, high).map(Self)
+    }
+
+    pub(super) fn new_inclusive(
+        low: usize,
+        high: usize,
+    ) -> Result<Self, rand::distr::uniform::Error> {
+        Uniform::new_inclusive(low, high).map(Self)
+    }
+}
+
+impl Distribution<f32> for UniformFloat {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> f32 {
+        self.0.sample(rng) as f32
+    }
+}
+
+impl DistanceTestTable {
+    pub(super) fn new(dim: usize, chunks: usize, pivots: usize, start: f32) -> Self {
+        Self {
+            offsets: ChunkOffsets::partition(
+                NonZeroUsize::new(dim).unwrap(),
+                NonZeroUsize::new(chunks).unwrap(),
+            )
+            .unwrap(),
+            pivots,
+            start,
+        }
+    }
+
+    /// This is mainly a convenience so we don't always have to import `StdRng` and
+    /// `SeedableRng` and all that jazz.
+    pub(super) fn rng(&self, seed: u64) -> StdRng {
+        StdRng::seed_from_u64(seed)
+    }
+
+    pub(super) fn offsets(&self) -> ChunkOffsetsView<'_> {
+        self.offsets.as_view()
+    }
+
+    pub(super) fn chunks(&self) -> usize {
+        self.offsets.len()
+    }
+
+    pub(super) fn dim(&self) -> usize {
+        self.offsets.dim()
+    }
+
+    pub(super) fn pivots(&self) -> usize {
+        self.pivots
+    }
+
+    fn value(&self, loc: Location) -> f32 {
+        (loc.chunk + loc.pivot) as f32 + self.start
+    }
+
+    pub(super) fn basic_table(&self) -> BasicTable {
+        // This creates a base vector like
+        // |  chunk 0  |  chunk 1  |  ... |  chunk K  |
+        // | 0 0 ... 0 | 1 1 ... 1 |  ... | K K ... K |
+        let mut base = Vec::<f32>::new();
+        for i in 0..self.offsets.len() {
+            let v = (i as f32) + self.start;
+            for _ in self.offsets.at(i) {
+                base.push(v);
+            }
+        }
+
+        // Use our base vector to build the rest of the pivot matrix.
+        let pivots = rowmajor::Owned::from_fn(self.pivots(), self.dim(), |rc| {
+            (rc.row as f32) + base[rc.col]
+        });
+
+        BasicTable::new(pivots, self.offsets().to_owned()).unwrap()
+    }
+
+    pub(super) fn expected_vector_into(&self, v: &mut [f32], codes: &[u8]) {
+        assert_eq!(v.len(), self.dim());
+        assert_eq!(codes.len(), self.chunks());
+
+        let mut i = 0;
+        for (chunk, pivot) in codes.iter().copied().enumerate() {
+            let pivot = usize::from(pivot);
+            assert!(pivot < self.pivots());
+            let loc = Location { chunk, pivot };
+
+            for _ in self.offsets.at(chunk) {
+                v[i] = self.value(loc);
+                i += 1;
+            }
+        }
+    }
+
+    pub(super) fn expected_vector(&self, codes: &[u8]) -> Vec<f32> {
+        assert_eq!(codes.len(), self.chunks());
+        let mut v = vec![0.0; self.dim()];
+        self.expected_vector_into(&mut v, codes);
+        v
+    }
+
+    pub(super) fn drive(
+        &self,
+        num_trials: usize,
+        rng: &mut StdRng,
+        f: &mut dyn FnMut(&[u8], &[f32], std::fmt::Arguments<'_>),
+        ctx: std::fmt::Arguments<'_>,
+    ) {
+        // Run two fixed trials - one with all zeros and one with the max setting.
+        //
+        // Then we perform random trials.
+        let mut codes = vec![0u8; self.chunks()];
+        let mut vector = vec![0.0; self.dim()];
+        self.expected_vector_into(&mut vector, &codes);
+        f(&codes, &mut vector, format_args!("{ctx}, all zeros"));
+
+        let max = u8::try_from(self.pivots() - 1).unwrap();
+        codes.iter_mut().for_each(|c| *c = max);
+        self.expected_vector_into(&mut vector, &codes);
+        f(&codes, &mut vector, format_args!("{ctx}, all {max}"));
+
+        // Begin random trials.
+        let dist = Uniform::new(0, self.pivots()).unwrap();
+        for trial in 0..num_trials {
+            codes
+                .iter_mut()
+                .for_each(|c| *c = u8::try_from(dist.sample(rng)).unwrap());
+            self.expected_vector_into(&mut vector, &codes);
+            f(
+                &codes,
+                &mut vector,
+                format_args!("{ctx}, trial {} of {}", trial + 1, num_trials),
+            );
+        }
+    }
+
+    pub(super) fn drive_with_tolerance(
+        &self,
+        num_trials: usize,
+        rng: &mut StdRng,
+        check: Check,
+        reference: &mut dyn FnMut(&[f32]) -> f32,
+        dut: &mut dyn FnMut(&[u8]) -> f32,
+        ctx: std::fmt::Arguments<'_>,
+    ) {
+        let mut f = |codes: &[u8], vector: &[f32], ctx: std::fmt::Arguments<'_>| {
+            let expected = reference(vector);
+            let got = dut(codes);
+
+            if let Err(reason) = check.check(got, expected) {
+                panic!("Check failed: {} -- {}", reason, ctx);
+            }
+        };
+
+        self.drive(num_trials, rng, &mut f, ctx)
+    }
+
+    pub(super) fn check_squared_l2(
+        &self,
+        num_queries: usize,
+        num_trials: usize,
+        rng: &mut StdRng,
+        check: Check,
+        dut: &mut dyn Preprocessed,
+        ctx: std::fmt::Arguments<'_>,
+    ) {
+        let dist = UniformFloat::new(0, self.chunks() + self.pivots()).unwrap();
+        let mut query = vec![0.0f32; self.dim()];
+        for trial in 0..num_queries {
+            query.iter_mut().for_each(|q| *q = dist.sample(rng));
+
+            dut.preprocess(&query);
+            self.drive_with_tolerance(
+                num_trials,
+                rng,
+                check,
+                &mut |vector: &[f32]| distance::SquaredL2::evaluate(&*query, vector),
+                &mut |code| dut.evaluate(code),
+                format_args!("{ctx}, query {} of {}", trial + 1, num_queries),
+            )
+        }
+    }
+
+    pub(super) fn check_inner_product(
+        &self,
+        num_queries: usize,
+        num_trials: usize,
+        rng: &mut StdRng,
+        check: Check,
+        dut: &mut dyn Preprocessed,
+        ctx: std::fmt::Arguments<'_>,
+    ) {
+        let dist = UniformFloat::new(0, self.chunks() + self.pivots()).unwrap();
+        let mut query = vec![0.0f32; self.dim()];
+        for trial in 0..num_queries {
+            query.iter_mut().for_each(|q| *q = dist.sample(rng));
+
+            dut.preprocess(&query);
+            self.drive_with_tolerance(
+                num_trials,
+                rng,
+                check,
+                &mut |vector: &[f32]| distance::InnerProduct::evaluate(&*query, vector),
+                &mut |code| dut.evaluate(code),
+                format_args!("{ctx}, query {} of {}", trial + 1, num_queries),
+            )
+        }
+    }
+
+    pub(super) fn check_cosine(
+        &self,
+        num_queries: usize,
+        num_trials: usize,
+        rng: &mut StdRng,
+        check: Check,
+        dut: &mut dyn Preprocessed,
+        ctx: std::fmt::Arguments<'_>,
+    ) {
+        let dist = UniformFloat::new(0, self.chunks() + self.pivots()).unwrap();
+        let mut query = vec![0.0f32; self.dim()];
+        for trial in 0..num_queries {
+            query.iter_mut().for_each(|q| *q = dist.sample(rng));
+
+            dut.preprocess(&query);
+            self.drive_with_tolerance(
+                num_trials,
+                rng,
+                check,
+                &mut |vector: &[f32]| distance::Cosine::evaluate(&*query, vector),
+                &mut |code| dut.evaluate(code),
+                format_args!("{ctx}, query {} of {}", trial + 1, num_queries),
+            )
+        }
+    }
+}
+
+pub(super) trait Preprocessed {
+    fn preprocess(&mut self, query: &[f32]);
+    fn evaluate(&mut self, code: &[u8]) -> f32;
+}
 
 /////////////////////////
 // Compression Helpers //

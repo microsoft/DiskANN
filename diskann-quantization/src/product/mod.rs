@@ -7,7 +7,7 @@
 
 pub mod train;
 
-mod tables;
+pub mod tables;
 
 /////////////
 // Exports //
