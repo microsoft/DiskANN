@@ -206,11 +206,11 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
 #[inline(always)]
 pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
     #[inline(always)]
-    unsafe fn prefetch_l1(ptr: *const i8) {
+    unsafe fn prefetch_l2(ptr: *const i8) {
         // SAFETY: `prfm` is a non-faulting prefetch hint and does not create Rust references.
         unsafe {
             std::arch::asm!(
-                "prfm pldl1keep, [{ptr}]",
+                "prfm pldl2keep, [{ptr}]",
                 ptr = in(reg) ptr,
                 options(nostack, preserves_flags),
             );
@@ -226,10 +226,10 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
     }
 
     // SAFETY: Inherited from caller.
-    unsafe { prefetch_l1(ptr.add(stride * (lines - 1))) };
+    unsafe { prefetch_l2(ptr.add(stride * (lines - 1))) };
     for i in 0..(lines - 1) {
         // SAFETY: Inherited from caller.
-        unsafe { prefetch_l1(ptr.add(stride * i)) };
+        unsafe { prefetch_l2(ptr.add(stride * i)) };
     }
 }
 
