@@ -104,6 +104,7 @@ mod tests {
         assert!((computed_norm - norm).abs() / norm < tolerance);
     }
 
+    #[cfg(not(miri))]
     #[rstest]
     #[case(1, 0.01)]
     #[case(100, 0.01)]
@@ -181,6 +182,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    #[cfg(not(miri))]
     #[rstest]
     #[case(3.6f32, half::f16::from_f32(3.6f32))]
     #[case(2.3f32, half::f16::from_f32(2.3f32))]
@@ -212,6 +214,7 @@ mod tests {
     ///   - tolerance_sigmas = 1.0 → Very strict, only allows ±1σ deviation (about 68% of buckets would naturally fall within this)
     ///   - tolerance_sigmas = 3.0 → Moderate, allows ±3σ deviation (99.7% would naturally fall within this)
     ///   - tolerance_sigmas = 6.0 → Very lenient, allows ±6σ deviation (99.9997% would naturally fall within this)
+    #[cfg(not(miri))]
     #[rstest]
     #[case(true, 500, 3.0, 42)]
     #[case(true, 500, 3.0, 43)]

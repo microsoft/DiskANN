@@ -235,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn test_f16() {
         let data = example_dataset();
         let mut data_f16 =

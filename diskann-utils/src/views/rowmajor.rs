@@ -380,6 +380,8 @@ pub unsafe trait Matrix {
 pub unsafe trait MatrixMut: Matrix {
     /// Return the base pointer for the matrix.
     ///
+    /// Calling this method must not change the matrix's pointer, layout, or contents.
+    ///
     /// The returned pointer must have provenance permitting mutable access to the span
     /// described by [`Matrix::layout`] and for a given matrix state, must have the same
     /// address as [`Matrix::as_nonnull`].
@@ -1657,13 +1659,13 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "rayon")]
+    #[cfg(all(not(miri), feature = "rayon"))]
     fn assert_parallel_rows_match_scalar(m: Ref<'_, usize>) {
         let rows: Vec<_> = m.par_rows().collect();
         assert_rows_match_scalar(m, rows);
     }
 
-    #[cfg(feature = "rayon")]
+    #[cfg(all(not(miri), feature = "rayon"))]
     fn assert_parallel_windows_match_scalar(m: Ref<'_, usize>, batchsize: usize) {
         let windows: Vec<_> = m.par_window_iter(batchsize).collect();
         assert_windows_match_scalar(m, batchsize, windows);
@@ -2305,7 +2307,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rayon")]
+    #[cfg(all(not(miri), feature = "rayon"))]
     fn parallel_immutable_iterators_match_scalar_indexing() {
         for (nrows, ncols) in [(0, 0), (0, 4), (3, 0), (1, 1), (1, 4), (4, 1), (5, 3)] {
             let m = striped_matrix(nrows, ncols);
@@ -2319,7 +2321,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rayon")]
+    #[cfg(all(not(miri), feature = "rayon"))]
     fn parallel_mutable_iterators_match_scalar_indexing() {
         use rayon::prelude::*;
 
