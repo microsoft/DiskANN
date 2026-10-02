@@ -22,6 +22,7 @@ use diskann_quantization::{
     CompressInto,
 };
 use diskann_utils::io::Metadata;
+use diskann_utils::views::rowmajor::Matrix;
 use half::f16;
 use rand::{rngs::StdRng, SeedableRng};
 
