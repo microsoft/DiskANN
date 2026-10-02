@@ -5,9 +5,10 @@
 
 //! Dynamic IVF index orchestration.
 //!
-//! The index drives one [`MaintenanceAccessor`] per mutation: it plans the update
-//! against the accessor's view and hands the result to [`Apply`]. It never touches
-//! point, centroid, or list storage directly.
+//! The index drives one [`MaintenanceAccessor`] per mutation: it plans an
+//! [`InsertionUpdate`] against the accessor's view and hands it to
+//! [`MaintenanceAccessor::apply`]. It never touches point, centroid, or list storage
+//! directly.
 
 use diskann_utils::{future::SendFuture, views::Matrix};
 use rand::{SeedableRng, rngs::StdRng};
@@ -17,10 +18,13 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::{ErrorExt, IntoANNResult},
     ivf::{
-        dynamic::{Apply, CentroidIndex, ListProvider, MaintenanceAccessor, MaintenanceStrategy},
+        dynamic::{
+            CentroidIndex, MaintenanceAccessor, MaintenanceStrategy, Provider, StageElements,
+        },
         online::{SplitPlan, StagedBatch, check_reserved, index_error},
-        update::{Appends, Bootstrap, CentroidBlock, SplitInsert},
+        update::{CentroidDelta, InsertionUpdate, PointDelta},
     },
+    utils::VectorId,
 };
 
 /// Parameters for the online split policy.
@@ -28,8 +32,6 @@ use crate::{
 pub struct DynamicIvfConfig {
     /// Split a list once an insert batch would grow it beyond this many points.
     pub split_threshold: usize,
-    /// Hard cap on live lists; `None` allows unbounded growth.
-    pub max_clusters: Option<usize>,
     /// Nearby lists reassigned together with each split parent.
     pub reassign_neighbors: usize,
     /// Lloyd iterations used to fit split children.
@@ -65,18 +67,37 @@ pub struct InsertStats {
     pub reassigned: usize,
 }
 
+impl InsertStats {
+    /// Tally an insert's update: every retired list is a split parent.
+    fn of<Id: VectorId, L: VectorId>(update: &InsertionUpdate<Id, L>) -> Self {
+        let mut stats = Self::default();
+        for point in update.points() {
+            match point {
+                PointDelta::Append { .. } => stats.inserted += 1,
+                PointDelta::Move { .. } => stats.reassigned += 1,
+            }
+        }
+        stats.splits = update
+            .centroids()
+            .iter()
+            .filter(|delta| matches!(delta, CentroidDelta::Retire { .. }))
+            .count();
+        stats
+    }
+}
+
 /// An incrementally maintained IVF index.
 ///
 /// Mutations take `&mut self` and lend the provider exclusively to one
 /// [`MaintenanceAccessor`], so they cannot overlap searches through the same value.
 #[derive(Debug)]
-pub struct DynamicIvfIndex<P: ListProvider> {
+pub struct DynamicIvfIndex<P: Provider> {
     provider: P,
     config: DynamicIvfConfig,
     rng: StdRng,
 }
 
-impl<P: ListProvider> DynamicIvfIndex<P> {
+impl<P: Provider> DynamicIvfIndex<P> {
     /// Construct an index over `provider`.
     ///
     /// # Errors
@@ -107,16 +128,14 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
     ///
     /// Fails if `centroids` is empty, non-finite, or of the wrong dimension, the index
     /// already has centroids, or the maintenance accessor fails.
-    pub fn initialize<'a, S, T>(
+    pub fn initialize<'a, S>(
         &'a mut self,
         strategy: &'a S,
         context: &'a P::Context,
         centroids: Matrix<f32>,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        S: MaintenanceStrategy<'a, P, T>,
-        S::MaintenanceAccessor: Apply<Bootstrap<P::ListId>>,
-        T: Send,
+        S: MaintenanceStrategy<'a, P>,
     {
         let provider = &mut self.provider;
 
@@ -150,8 +169,17 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
                 .escalate("initialize must reserve list ids")?;
             check_reserved(accessor.centroids(), &list_ids, count)?;
 
+            let installs = list_ids
+                .into_iter()
+                .zip(centroids.row_iter())
+                .map(|(id, centroid)| CentroidDelta::Install {
+                    id,
+                    centroid: centroid.into(),
+                })
+                .collect();
+
             accessor
-                .apply(Bootstrap::new(CentroidBlock::new(list_ids, centroids)))
+                .apply(InsertionUpdate::new(installs, Vec::new()))
                 .await
                 .escalate("initialize must apply the initial centroids")
         }
@@ -160,8 +188,8 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
     /// Insert a batch, splitting every list the batch pushes past `split_threshold`.
     ///
     /// Routing and split planning run against the accessor's view before any change.
-    /// The batch is then applied as one [`Appends`], or as one [`SplitInsert`] when
-    /// lists split.
+    /// The batch, and any splits it triggers, are then applied as one
+    /// [`InsertionUpdate`].
     ///
     /// # Errors
     ///
@@ -175,10 +203,9 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
         points: &'a [(P::ExternalId, T)],
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
-        S: MaintenanceStrategy<'a, P, T>,
-        S::MaintenanceAccessor:
-            Apply<Appends<P::InternalId, P::ListId>> + Apply<SplitInsert<P::InternalId, P::ListId>>,
-        T: Copy + Send + Sync,
+        S: MaintenanceStrategy<'a, P>,
+        S::MaintenanceAccessor: StageElements<P, T>,
+        T: Sync,
     {
         let provider = &mut self.provider;
         let config = self.config;
@@ -199,83 +226,41 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
                 ));
             }
 
-            let batch = StagedBatch::stage(&mut accessor, points).await?;
-            let parents = Self::select_parents(&config, &mut accessor, &batch).await?;
+            let batch = StagedBatch::stage(&mut accessor, points).await?; // register points with provider -> internal ids + f32 representations of the vectors.
 
-            if parents.is_empty() {
-                let update = batch.into_appends();
-                let inserted = update.len();
-                accessor
-                    .apply(update)
+            // Split every routed list the batch pushes past the threshold. `routed`
+            // visits lists in ascending order, as `SplitPlan::gather` requires.
+            let mut parents = Vec::new();
+            for (list, incoming) in batch.routed() {
+                let len = accessor
+                    .list_size(list)
                     .await
-                    .escalate("insert must apply routed points")?;
-                return Ok(InsertStats {
-                    inserted,
-                    splits: 0,
-                    reassigned: 0,
-                });
+                    .escalate("insert must read routed list sizes")?;
+
+                let projected = len + incoming;
+
+                if projected > config.split_threshold {
+                    parents.push(list);
+                }
             }
 
-            let update = SplitPlan::gather(&mut accessor, &config, batch, parents)
-                .await?
-                .solve(config.two_means_iterations, rng)?;
-            let stats = InsertStats {
-                inserted: update.appends().len(),
-                splits: update.splits().len(),
-                reassigned: update.splits().num_evacuated() + update.reassignments().len(),
+            let update = if parents.is_empty() {
+                batch.into_update()
+            } else {
+                SplitPlan::gather(&mut accessor, &config, batch, parents)
+                    .await?
+                    .solve(config.two_means_iterations, rng)?
             };
+
+            let stats = InsertStats::of(&update);
+
             accessor
                 .apply(update)
                 .await
-                .escalate("insert must apply the split update")?;
+                .escalate("insert must apply its update")?;
+
             Ok(stats)
         }
-    }
-
-    /// Choose the routed lists to split.
-    ///
-    /// Admits every list the batch pushes past `split_threshold`, largest projected
-    /// size first, while the live-list count stays within `max_clusters`. Parents are
-    /// returned in ascending list order.
-    ///
-    /// Takes the configuration rather than `&self` because the provider is lent to
-    /// `accessor` for the whole mutation.
-    ///
-    /// # Errors
-    ///
-    /// Fails if the accessor fails.
-    async fn select_parents<A, T>(
-        config: &DynamicIvfConfig,
-        accessor: &mut A,
-        batch: &StagedBatch<A::Id, A::ListId>,
-    ) -> ANNResult<Vec<A::ListId>>
-    where
-        A: MaintenanceAccessor<T>,
-        T: Send,
-    {
-        let mut overflowing = Vec::new();
-        for (list, incoming) in batch.routed() {
-            let len = accessor
-                .list_metadata(list)
-                .await
-                .escalate("insert must read routed list sizes")?
-                .len;
-            let projected = len + incoming;
-            if projected > config.split_threshold {
-                overflowing.push((projected, list));
-            }
-        }
-
-        // Each split adds one live list.
-        let budget = config.max_clusters.map_or(usize::MAX, |max| {
-            max.saturating_sub(accessor.centroids().len())
-        });
-        overflowing.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        overflowing.truncate(budget);
-
-        let mut parents: Vec<_> = overflowing.into_iter().map(|(_, list)| list).collect();
-        parents.sort_unstable();
-        Ok(parents)
     }
 }
 
@@ -290,7 +275,6 @@ mod tests {
     fn config(split_threshold: usize, reassign_neighbors: usize) -> DynamicIvfConfig {
         DynamicIvfConfig {
             split_threshold,
-            max_clusters: None,
             reassign_neighbors,
             two_means_iterations: 10,
             seed: 7,
@@ -316,7 +300,7 @@ mod tests {
     ) -> DynamicIvfIndex<Provider> {
         let mut index = DynamicIvfIndex::new(provider, config).unwrap();
         index
-            .initialize::<_, &[f32]>(&Strategy, &DefaultContext, centroids)
+            .initialize(&Strategy, &DefaultContext, centroids)
             .await
             .unwrap();
         index
@@ -333,22 +317,22 @@ mod tests {
     async fn initialize_rejects_bad_centroids() {
         let mut index = DynamicIvfIndex::new(Provider::new(2), config(10, 1)).unwrap();
         let wrong_dim = index
-            .initialize::<_, &[f32]>(&Strategy, &DefaultContext, matrix(&[[0.0, 0.0, 0.0]]))
+            .initialize(&Strategy, &DefaultContext, matrix(&[[0.0, 0.0, 0.0]]))
             .await
             .unwrap_err();
         assert!(wrong_dim.to_string().contains("dimension"), "{wrong_dim}");
         let non_finite = index
-            .initialize::<_, &[f32]>(&Strategy, &DefaultContext, matrix(&[[f32::NAN, 0.0]]))
+            .initialize(&Strategy, &DefaultContext, matrix(&[[f32::NAN, 0.0]]))
             .await
             .unwrap_err();
         assert!(non_finite.to_string().contains("finite"), "{non_finite}");
 
         index
-            .initialize::<_, &[f32]>(&Strategy, &DefaultContext, matrix(&[[0.0, 0.0]]))
+            .initialize(&Strategy, &DefaultContext, matrix(&[[0.0, 0.0]]))
             .await
             .unwrap();
         let again = index
-            .initialize::<_, &[f32]>(&Strategy, &DefaultContext, matrix(&[[1.0, 1.0]]))
+            .initialize(&Strategy, &DefaultContext, matrix(&[[1.0, 1.0]]))
             .await
             .unwrap_err();
         assert!(again.to_string().contains("already initialized"), "{again}");
@@ -394,24 +378,6 @@ mod tests {
             vec![vec![1.0, 1.0], vec![2.0, 0.0]]
         );
         assert_eq!(provider.member_vectors(1), vec![vec![9.0, 9.0]]);
-    }
-
-    #[tokio::test]
-    async fn max_clusters_caps_splits() {
-        let mut capped = config(2, 1);
-        capped.max_clusters = Some(2);
-        let mut index = initialized(Provider::new(1), capped, matrix(&[[0.0], [10.0]])).await;
-        let stats = index
-            .insert_batch(
-                &Strategy,
-                &DefaultContext,
-                &batch(0, &[[1.0], [2.0], [3.0]]),
-            )
-            .await
-            .unwrap();
-        assert_eq!(stats.splits, 0);
-        assert_eq!(index.provider().lists(), vec![0, 1]);
-        index.provider().check();
     }
 
     /// Lists A (0), B (20), and C (40) in one dimension. Inserting 0.5, 8, and 9
@@ -512,6 +478,10 @@ mod tests {
             ),
             (fault(|f| f.nan_vector = true), "no finite canonical vector"),
             (fault(|f| f.repeat_stage = true), "staging returned point"),
+            (
+                fault(|f| f.drop_stage = true),
+                "staging returned 1 ids for 2 points",
+            ),
             (fault(|f| f.reuse_lists = true), "reserved live list id"),
         ];
         for (faults, expected) in cases {

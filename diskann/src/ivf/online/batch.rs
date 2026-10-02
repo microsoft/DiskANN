@@ -7,14 +7,14 @@
 
 use diskann_utils::views::Matrix;
 
-use super::{first_repeat, index_error, read_rows};
+use super::{check_rows, first_repeat, index_error};
 use crate::{
     ANNResult,
     error::ErrorExt,
     ivf::{
-        dynamic::{CentroidIndex, MaintenanceAccessor},
+        dynamic::{CentroidIndex, Provider, StageElements},
         grouped::Grouped,
-        update::Appends,
+        update::{InsertionUpdate, PointDelta},
     },
     utils::VectorId,
 };
@@ -32,19 +32,19 @@ pub(in crate::ivf) struct StagedBatch<Id, L> {
 }
 
 impl<Id: VectorId, L: VectorId> StagedBatch<Id, L> {
-    /// Stage every point, read its canonical vector, and route it to its nearest live
-    /// list.
+    /// Stage every point with the accessor and route it to its nearest live list.
     ///
     /// # Errors
     ///
     /// Fails if any accessor call fails or returns inconsistent data.
-    pub(in crate::ivf) async fn stage<A, T>(
+    pub(in crate::ivf) async fn stage<P, A, T>(
         accessor: &mut A,
-        points: &[(A::ExternalId, T)],
+        points: &[(P::ExternalId, T)],
     ) -> ANNResult<Self>
     where
-        A: MaintenanceAccessor<T, Id = Id, ListId = L>,
-        T: Copy + Send + Sync,
+        P: Provider<InternalId = Id, ListId = L>,
+        A: StageElements<P, T>,
+        T: Sync,
     {
         let dim = accessor.dim();
         if dim == 0 {
@@ -53,21 +53,24 @@ impl<Id: VectorId, L: VectorId> StagedBatch<Id, L> {
             ));
         }
 
-        let mut ids = Vec::with_capacity(points.len());
-        for (external, element) in points {
-            ids.push(
-                accessor
-                    .stage_insert(external, *element)
-                    .await
-                    .escalate("insert must stage every point")?,
-            );
+        let mut vectors = Matrix::new(f32::NAN, points.len(), dim);
+        let ids = accessor
+            .stage(points, vectors.as_mut_view())
+            .await
+            .escalate("insert must stage every point")?;
+        if ids.len() != points.len() {
+            return Err(index_error(format!(
+                "staging returned {} ids for {} points",
+                ids.len(),
+                points.len()
+            )));
         }
         if let Some(id) = first_repeat(ids.iter().copied()) {
             return Err(index_error(format!(
                 "staging returned point {id} more than once"
             )));
         }
-        let vectors = read_rows(accessor, &ids, dim).await?;
+        check_rows(&ids, &vectors)?;
 
         let centroids = accessor.centroids();
         let mut routes = Vec::with_capacity(ids.len());
@@ -91,9 +94,15 @@ impl<Id: VectorId, L: VectorId> StagedBatch<Id, L> {
         })
     }
 
-    /// Place every point on its route.
-    pub(in crate::ivf) fn into_appends(self) -> Appends<Id, L> {
-        Appends::new(&self.ids, &self.routes)
+    /// Append every point to its route.
+    pub(in crate::ivf) fn into_update(self) -> InsertionUpdate<Id, L> {
+        let appends = self
+            .ids
+            .iter()
+            .zip(&self.routes)
+            .map(|(&id, &to)| PointDelta::Append { id, to })
+            .collect();
+        InsertionUpdate::new(Vec::new(), appends)
     }
 
     /// Lists that received points, ascending, with the number of points routed to

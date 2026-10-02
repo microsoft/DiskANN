@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Flat grouped layouts shared by the partition updates and the online planner.
+//! Flat grouped layouts used by the online planner.
 
 use std::ops::Range;
 
@@ -105,16 +105,6 @@ impl<K: Copy + Ord, V: Copy + Ord> Grouped<K, V> {
         }
     }
 
-    /// Number of values across all groups.
-    pub(super) fn len(&self) -> usize {
-        self.groups.values.len()
-    }
-
-    /// Group keys, ascending.
-    pub(super) fn keys(&self) -> &[K] {
-        &self.keys
-    }
-
     /// The values under `key`, or nothing if `key` is absent.
     pub(super) fn get(&self, key: K) -> &[V] {
         self.keys
@@ -122,14 +112,9 @@ impl<K: Copy + Ord, V: Copy + Ord> Grouped<K, V> {
             .map_or(&[], |index| self.groups.group(index))
     }
 
-    /// The groups at positions `range`, with their keys.
-    pub(super) fn groups(&self, range: Range<usize>) -> impl ExactSizeIterator<Item = (K, &[V])> {
-        range.map(|index| (self.keys[index], self.groups.group(index)))
-    }
-
     /// Every group with its key, in ascending key order.
     pub(super) fn iter(&self) -> impl ExactSizeIterator<Item = (K, &[V])> {
-        self.groups(0..self.keys.len())
+        (0..self.keys.len()).map(|index| (self.keys[index], self.groups.group(index)))
     }
 }
 
@@ -170,9 +155,12 @@ mod tests {
     #[test]
     fn grouped_get_finds_groups_by_key() {
         let grouped = Grouped::from_pairs(vec![(7, 2), (5, 1), (7, 0)]);
-        assert_eq!(grouped.keys(), &[5, 7]);
+        let groups: Vec<_> = grouped
+            .iter()
+            .map(|(key, values)| (key, values.to_vec()))
+            .collect();
+        assert_eq!(groups, vec![(5, vec![1]), (7, vec![0, 2])]);
         assert_eq!(grouped.get(7), &[0, 2]);
         assert_eq!(grouped.get(6), &[] as &[i32]);
-        assert_eq!(grouped.len(), 3);
     }
 }

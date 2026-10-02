@@ -106,8 +106,8 @@ coordinates its provider, centroid index, and inverted-list store.
    low-level storage calls.
 7. Keep canonical maintenance vectors independent from optimized list scan
    representations such as PQ codes.
-8. Reuse `DataProvider` identity types, execution contexts, ranked errors, and
-   the graph module's strategy/accessor style.
+8. Reuse execution contexts, ranked errors, and the graph module's
+   strategy/accessor style, with one IVF-specific provider trait for identity.
 9. Leave locking, reader visibility, durability, rollback, and recovery to each
    concrete accessor implementation.
 
@@ -127,10 +127,10 @@ coordinates its provider, centroid index, and inverted-list store.
 
 ### Terminology
 
-- **Point id**: the provider's internal vector id. External ids remain owned by
-  `DataProvider`.
+- **Point id**: the provider's internal vector id. External ids and the
+  translation between the two are owned by the provider (`Provider`).
 - **List id**: the stable logical id shared by a centroid and its inverted list.
-  Like the point id, it belongs to the provider (`ListProvider::ListId`), so
+  Like the point id, it belongs to the provider (`Provider::ListId`), so
   every search and maintenance accessor over one provider uses the same list
   ids.
 - **Unified view**: mutually compatible point data, centroid state, reverse
@@ -191,8 +191,8 @@ implementation.
 diskann/src/ivf/
   mod.rs
   dynamic.rs    contracts proposed by this RFC
-  update.rs     declarative partition updates consumed by Apply<U>
-  grouped.rs    flat grouped layouts shared by updates and planning
+  update.rs     declarative partition updates applied by the maintenance accessor
+  grouped.rs    flat grouped layouts used by planning
   index.rs      DynamicIvfIndex initialize/insert orchestration
   online/       insert planning: staging, split planning, kernels
     batch.rs    staged and routed insert batch
@@ -271,32 +271,50 @@ The interface makes no callback-order guarantee. A backend may coalesce disk
 ranges, combine blob requests, process lists concurrently, and merge scored
 points before invoking `emit`.
 
-The strategy follows the graph module's accessor factory pattern. Providers
-declare their list id type once, alongside their point id type:
+The strategy follows the graph module's accessor factory pattern. The provider
+declares the identity types once and translates the ids of visible points; all
+reads and writes go through accessors:
 
 ```rust
-pub trait ListProvider: DataProvider {
+pub trait Provider: Sized + Send + Sync + 'static {
+    type Context: ExecutionContext;
+    type InternalId: VectorId;
+    type ExternalId: PartialEq + Send + Sync + 'static;
     type ListId: VectorId;
+    type Error: ToRanked + Debug + Send + Sync + 'static;
+
+    fn to_internal_id(
+        &self,
+        context: &Self::Context,
+        gid: &Self::ExternalId,
+    ) -> Result<Self::InternalId, Self::Error>;
+
+    fn to_external_id(
+        &self,
+        context: &Self::Context,
+        id: Self::InternalId,
+    ) -> Result<Self::ExternalId, Self::Error>;
 }
 
-pub trait SearchStrategy<'a, Provider, T>: Send + Sync
-where
-    Provider: ListProvider,
-{
-    type SearchAccessor: SearchAccessor<
-        Id = Provider::InternalId,
-        ListId = Provider::ListId,
-    >;
+pub trait SearchStrategy<'a, P: Provider, T>: Send + Sync {
+    type SearchAccessor: SearchAccessor<Id = P::InternalId, ListId = P::ListId>;
     type Error: StandardError;
 
     fn search_accessor(
         &'a self,
-        provider: &'a Provider,
-        context: &'a Provider::Context,
+        provider: &'a P,
+        context: &'a P::Context,
         query: T,
     ) -> Result<Self::SearchAccessor, Self::Error>;
 }
 ```
+
+`ivf::dynamic::Provider` replaces the crate-wide `DataProvider` for this index.
+That trait is shaped around graph insertion, where `SetElement` stores a point
+immediately and a `Guard` later confirms or rolls it back; IVF points instead
+stay staged in an accessor until `apply`, so the guard type and the separate
+list-id trait it would need are not part of the IVF contract. Search returns
+internal ids.
 
 Search orchestration is deliberately unaware of consistency mechanics:
 
@@ -342,79 +360,74 @@ after an unrecoverable partial graph update.
 ### Declarative Partition Updates
 
 The algorithm describes the desired logical result rather than issuing ordered
-storage commands. Each distinct operation is its own type in `ivf::update`:
+storage commands. The insert path's update in `ivf::update` lists primitive
+changes:
 
 ```rust
-// Fresh centroids: one contiguous matrix, row i belongs to ids[i].
-pub struct CentroidBlock<L> { ids: Box<[L]>, vectors: Matrix<f32> }
-
-pub struct Bootstrap<L> { centroids: CentroidBlock<L> }
-
-// (i) Newly staged points placed into lists, grouped by destination.
-pub struct Appends<Id, L> { /* list -> ids */ }
-
-// (ii) Binary splits: rows 2i and 2i+1 of `children` replace parents[i], and
-// every existing member of each parent is evacuated exactly once.
-pub struct Splits<Id, L> {
-    parents: Box<[L]>,
-    children: CentroidBlock<L>,
-    /* (parent, destination) -> ids */
+pub enum CentroidDelta<L> {
+    Install { id: L, centroid: Box<[f32]> },
+    Retire { id: L },
 }
 
-// (iii) Existing points moved between surviving lists.
-pub struct Reassignments<Id, L> { /* Transfer { source, destination } -> ids */ }
+pub enum PointDelta<Id, L> {
+    // A newly staged point joins `to`.
+    Append { id: Id, to: L },
+    // An existing point leaves `from` and joins `to`.
+    Move { id: Id, from: L, to: L },
+}
 
-// An insert batch that splits.
-pub struct SplitInsert<Id, L> {
-    appends: Appends<Id, L>,
-    splits: Splits<Id, L>,
-    reassignments: Reassignments<Id, L>,
+pub struct InsertionUpdate<Id, L> {
+    centroids: Vec<CentroidDelta<L>>,
+    points: Vec<PointDelta<Id, L>>, // sorted by destination, then id
 }
 ```
 
-Fields are private and constructors are private to the IVF module, so only the
-index can create updates. Providers receive them through `Apply` and can only
-read them. This keeps the provider contract one-directional: the algorithm
+Bootstrap and insert batches are both mixes of these deltas. Bootstrap installs
+centroids. An insert appends its points; when it splits, it also installs two
+children per parent, retires the parent, and moves the parent's members and any
+neighbor members whose list changed. Each variant has one meaning in every
+update, so a provider handles four kinds of change rather than every
+combination of operations. The delete path's update is not defined yet; it
+will follow the same delta style.
+
+`InsertionUpdate`'s fields are private and its constructor is private to the
+IVF module, so only the index can create updates. Providers receive them
+through `MaintenanceAccessor::apply` and can only read them. The delta enums are
+necessarily public so providers can match on them, but they do nothing outside
+an update. This keeps the provider contract one-directional: the algorithm
 decides the update, and providers decide how to store it.
 
-The planner builds each update from the items it read from the accessor, such as
-staged ids or a list's members, together with a decision array aligned index for
-index. That makes "every staged point is placed once" and "every parent member
-is evacuated once" properties of how the update is built, so constructors only
-group their input and perform no validation.
+The planner records each decision as a delta: every staged point is appended to
+its final list, and every existing point whose list changed is moved. That
+makes "every staged point is placed once" and "every parent member is moved out
+once" properties of how the update is built, so the constructor only sorts the
+point deltas and performs no validation.
 
-Several invariants are unrepresentable:
+The enums make a move with neither a source nor a destination unrepresentable.
+The planner guarantees the rest by construction, and `InsertionUpdate`
+documents them for providers:
 
-- a move with neither a source nor a destination;
-- centroids of different dimensions;
-- retiring a list without evacuating it, since only `Splits` retires lists;
-- a dissolve inside an insert or a split inside a delete; and
-- a split into anything other than two children.
-
-The planner guarantees the rest by construction, and each update type documents
-them for providers:
-
-- split children are fresh, and no parent receives points, since parents are
-  never placement candidates;
-- a reassignment never has matching source and destination, and never leaves a
-  parent or a new child; and
-- every point appears in exactly one part of an update.
+- installed ids are fresh, and their centroids are finite with the accessor's
+  dimension;
+- retired ids are live, and each list appears in at most one centroid delta;
+- each point appears in at most one point delta, and every staged point is
+  appended;
+- a move's source holds the point and differs from its destination;
+- every destination is live after the update, so no point joins a retired
+  list; and
+- every member of a retired list is moved out.
 
 Children may end up empty.
 
 #### Layout
 
-Point memberships are grouped: group keys are ascending and unique, and each
-group's point ids are ascending in one contiguous slice. `Appends` groups by
-destination list; `Reassignments` groups by transfer in destination-then-source
-order; `Splits` groups each parent's evacuation by destination. A provider can
-therefore append each list's incoming points with one write, drop a split
-parent wholesale instead of removing its points one by one, re-encode residual
-payloads against one centroid per group, and process distinct groups in
-parallel. No point vectors cross the update boundary; child centroids cross
-once, in one matrix that k-means writes in place and that a graph centroid index
-can bulk-insert. Owned buffers move into the update in O(1), and `into_parts`
-lets a provider adopt them.
+Point deltas are sorted by destination, then point id, so each list's incoming
+points, appended and moved alike, form one contiguous run. A provider can
+therefore append each list's incoming points with one write, re-encode residual
+payloads against one centroid per run, and process distinct runs in parallel.
+Because every member of a retired list is moved out, a provider may drop a
+retired list wholesale instead of removing its points one by one. No point
+vectors cross the update boundary, and each installed centroid crosses once.
 
 #### Validating Inputs Instead Of Updates
 
@@ -423,9 +436,9 @@ it enters, and builds updates without further checks:
 
 - caller input: initial centroids must be non-empty, finite, and of the
   provider's dimension;
-- accessor reads: every vector row must be written with finite values (rows
-  start as NaN, so unwritten rows are caught by the same check);
-- staging: staged ids must be distinct; and
+- vector reads and staging: every vector row must be written with finite
+  values (rows start as NaN, so unwritten rows are caught by the same check);
+- staging: one distinct id must be returned per staged point; and
 - reservations: reserved list ids must be distinct and not live.
 
 A provider that violates the accessor contract therefore fails the operation
@@ -436,10 +449,9 @@ before any update is built, rather than receiving an inconsistent update.
 View-dependent facts cannot be checked by the index. It guarantees them by
 building updates only from what the same accessor returned:
 
-- child and bootstrap ids were reserved by this accessor;
-- split parents and destinations are live in the accessor's planning view;
-- every evacuated or reassigned member belonged to its source list in that
-  view; and
+- installed ids were reserved by this accessor;
+- retired lists and destinations are live in the accessor's planning view;
+- every moved point belonged to its source list in that view; and
 - every appended point was staged by this accessor.
 
 A provider may still verify these facts, for example in debug builds.
@@ -454,76 +466,78 @@ the co-location types are not part of the code yet.
 
 ### Maintenance Accessor
 
-The maintenance accessor combines planning reads and mutation staging:
+The maintenance accessor holds planning reads, id reservation, and the final
+`apply`; a separate trait stages new points, so only staging depends on the
+input element type `T`:
 
 ```rust
-pub trait MaintenanceAccessor<T>: HasId + Send + Sized
-where
-    T: Send,
-{
-    type ExternalId: PartialEq + Send + Sync + 'static;
-    type ListId: VectorId;
-    type Centroids: CentroidIndex<
-        ListId = Self::ListId,
-        Error = Self::Error,
-    >;
+pub trait MaintenanceAccessor<P: Provider>: Send + Sized {
+    type Centroids: CentroidIndex<ListId = P::ListId, Error = Self::Error>;
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
     fn dim(&self) -> usize;
     fn centroids(&self) -> &Self::Centroids;
 
-    fn list_metadata(
+    fn list_size(
         &mut self,
-        list: Self::ListId,
-    ) -> impl SendFuture<Result<ListMetadata, Self::Error>>;
+        list: P::ListId,
+    ) -> impl SendFuture<Result<usize, Self::Error>>;
 
     fn read_members(
         &mut self,
-        list: Self::ListId,
-    ) -> impl SendFuture<Result<&[Self::Id], Self::Error>>;
+        list: P::ListId,
+    ) -> impl SendFuture<Result<&[P::InternalId], Self::Error>>;
 
     fn read_vectors(
         &mut self,
-        ids: &[Self::Id],
+        ids: &[P::InternalId],
         out: MutMatrixView<'_, f32>,
     ) -> impl SendFuture<Result<(), Self::Error>>;
-
-    fn stage_insert(
-        &mut self,
-        id: &Self::ExternalId,
-        element: T,
-    ) -> impl SendFuture<Result<Self::Id, Self::Error>>;
 
     fn reserve_list_ids(
         &mut self,
         count: usize,
-    ) -> impl SendFuture<Result<Vec<Self::ListId>, Self::Error>>;
+    ) -> impl SendFuture<Result<Vec<P::ListId>, Self::Error>>;
+
+    fn apply(
+        self,
+        update: InsertionUpdate<P::InternalId, P::ListId>,
+    ) -> impl SendFuture<Result<(), Self::Error>>;
 }
 
-pub trait Apply<U>: Send + Sized {
-    type Error: ToRanked + Debug + Send + Sync + 'static;
-
-    fn apply(self, update: U) -> impl SendFuture<Result<(), Self::Error>>;
+pub trait StageElements<P: Provider, T>: MaintenanceAccessor<P> {
+    fn stage(
+        &mut self,
+        points: &[(P::ExternalId, T)],
+        out: MutMatrixView<'_, f32>,
+    ) -> impl SendFuture<Result<Vec<P::InternalId>, Self::Error>>;
 }
 ```
 
-Reads are shaped by how much data they move. List reads, `list_metadata` and
+The accessor takes its id types from the provider, so they are declared in one
+place.
+
+Reads are shaped by how much data they move. List reads, `list_size` and
 `read_members`, take one list and return its result: an insert batch makes at
 most a few hundred of them, and a list's members are bounded by the split
-threshold. `read_vectors` moves far more data, one vector per staged point and
-region member, so it takes a batch and writes row `i` of the caller's matrix
-with the canonical vector of `ids[i]`, in any order. Providers can therefore
-sort, coalesce, or parallelize those reads. `dim` fixes the length of every
-canonical vector and centroid, so callers can allocate before reading. A read of
-several lists at once, for example a whole co-location group, can be added when
-co-location sets are integrated.
+threshold. `read_vectors` moves far more data, one vector per region member, so
+it takes a batch and writes row `i` of the caller's matrix with the canonical
+vector of `ids[i]`, in any order. Providers can therefore sort, coalesce, or
+parallelize those reads. `dim` fixes the length of every canonical vector and
+centroid, so callers can allocate before reading. A read of several lists at
+once, for example a whole co-location group, can be added when co-location sets
+are integrated.
 
-`stage_insert` owns external/internal id allocation and canonical input storage
-for this operation. `read_vectors` also covers points staged by this accessor,
-exposing the provider's canonical `f32` decoding without making those points
-visible through ordinary provider reads. Reverse-assignment lookups and deletion
-staging will be added with the delete path; the latter records point removal
-while keeping whatever data the accessor needs for dissolve planning.
+`stage` takes the whole insert batch in one call. The provider allocates
+internal ids, rejects duplicate external ids, converts each element to its
+stored representation, and writes the canonical `f32` vector of each point into
+the caller's matrix. Staged points remain invisible, including to
+`to_internal_id`, until the accessor applies an update that places them, and are
+discarded if the accessor is dropped first. `read_vectors` therefore only covers
+visible points. A provider that accepts several input element types implements
+`StageElements` once per type. Reverse-assignment lookups and deletion staging
+will be added with the delete path; the latter records point removal while
+keeping whatever data the accessor needs for dissolve planning.
 
 These methods may delegate to existing provider machinery such as
 `SetElement`, but the generic GraphIVF algorithm does not independently complete
@@ -532,11 +546,10 @@ components using its private mechanism.
 
 `apply` consumes the accessor. This prevents further planning reads through the
 same operation object and provides one generic handoff containing the full
-logical change. A provider implements `Apply<U>` once per update type it
-supports: `Bootstrap`, `Appends`, and `SplitInsert` for the insert path, or only
-`Appends` for a provider that never splits. The index requires exactly the
-`Apply` bounds each operation uses. `apply` is not a generic transaction
-protocol:
+logical change. Bootstrap and inserts both produce an `InsertionUpdate`, so
+`apply` is one accessor method rather than a trait per update type, and the
+index needs no extra bound to apply what it planned. `apply` is not a generic
+transaction protocol:
 
 - `Ok(())` guarantees a coherent resulting index.
 - `Err` does not guarantee rollback or identify a conflict.
@@ -551,33 +564,24 @@ The maintenance accessor is produced by a strategy that borrows the provider
 exclusively:
 
 ```rust
-pub trait MaintenanceStrategy<'a, Provider, T>: Send + Sync
-where
-    Provider: ListProvider,
-    T: Send,
-{
-    type MaintenanceAccessor: MaintenanceAccessor<
-        T,
-        Id = Provider::InternalId,
-        ExternalId = Provider::ExternalId,
-        ListId = Provider::ListId,
-    >;
+pub trait MaintenanceStrategy<'a, P: Provider>: Send + Sync {
+    type MaintenanceAccessor: MaintenanceAccessor<P>;
     type Error: StandardError;
 
     fn maintenance_accessor(
         &'a self,
-        provider: &'a mut Provider,
-        context: &'a Provider::Context,
+        provider: &'a mut P,
+        context: &'a P::Context,
     ) -> Result<Self::MaintenanceAccessor, Self::Error>;
 }
 ```
 
-Search strategies receive `&'a Provider`; maintenance strategies receive
-`&'a mut Provider`. See [Index Borrowing Model](#index-borrowing-model).
+Search strategies receive `&'a P`; maintenance strategies receive `&'a mut P`.
+See [Index Borrowing Model](#index-borrowing-model).
 
-Because both strategies fix their accessors' ids to the provider's, the index
-names updates directly in terms of the provider, for example
-`S::MaintenanceAccessor: Apply<Appends<P::InternalId, P::ListId>>`.
+Because accessors take their ids from the provider, the index adds a bound only
+where it stages: `S::MaintenanceAccessor: StageElements<P, T>` for inserts, and
+none for initialization.
 
 ### Inverted-List Store Boundary
 
@@ -590,14 +594,14 @@ optimization opportunities.
 Search and maintenance accessors are the algorithm-facing inverted-list
 abstraction. Concrete crates may define lower-level reusable list-store traits
 and compose them inside a strategy. The aggregate accessor remains responsible
-for compatibility with the selected centroid index and `DataProvider`.
+for compatibility with the selected centroid index and the provider.
 
 ### Index Borrowing Model
 
 The initial dynamic index uses exclusive mutation:
 
 ```rust
-impl<P: ListProvider> DynamicIvfIndex<P> {
+impl<P: Provider> DynamicIvfIndex<P> {
     pub fn search(&self, /* ... */) -> impl SendFuture<ANNResult<SearchStats>>;
 
     pub fn insert_batch(&mut self, /* ... */)
@@ -611,13 +615,13 @@ impl<P: ListProvider> DynamicIvfIndex<P> {
 Rust then prevents a search future borrowing this index from overlapping a
 mutation future borrowing it mutably. Concurrent searches remain possible.
 
-Mutations forward that exclusivity to the provider: the index lends
-`&mut Provider` to `MaintenanceStrategy::maintenance_accessor`, and the
-resulting accessor holds it until `apply` consumes the accessor or it is
-dropped. An in-memory provider can therefore implement `apply` as direct,
-in-place mutation of plain owned state, with no locks or interior mutability.
-If the provider were lent only as `&Provider`, every provider would need
-interior synchronization even though the index already guarantees exclusivity.
+Mutations forward that exclusivity to the provider: the index lends `&mut P` to
+`MaintenanceStrategy::maintenance_accessor`, and the resulting accessor holds it
+until `apply` consumes the accessor or it is dropped. An in-memory provider can
+therefore implement `apply` as direct, in-place mutation of plain owned state,
+with no locks or interior mutability. If the provider were lent only as `&P`,
+every provider would need interior synchronization even though the index
+already guarantees exclusivity.
 
 This rule covers operations through the index API, not aliases or administrative
 paths exposed independently by a provider, such as state shared through an
@@ -638,8 +642,7 @@ Bootstrap uses the same maintenance interface as later mutations:
    strategy over caller-provided sample data.
 2. Construct a maintenance accessor over an empty provider.
 3. Reserve one stable list id per initial centroid.
-4. Apply a `Bootstrap` holding those centroids as one `CentroidBlock` and no
-   points.
+4. Apply an `InsertionUpdate` installing those centroids, with no point deltas.
 
 Initial sample points are not implicitly assigned. Callers insert them through
 the normal batch path. Reopen skips bootstrap when centroids already exist.
@@ -662,9 +665,10 @@ Note that co-location groups are never accessed during search.
 ### Batch Insert
 
 1. Construct one maintenance accessor for the operation.
-2. Stage every external id and input element, obtaining internal ids.
-   Duplicate or already-live external ids fail according to provider semantics.
-3. Read the staged points' canonical vectors into one matrix.
+2. Stage the batch in one call, obtaining internal ids and the canonical
+   vectors of the staged points. Duplicate or already-live external ids fail
+   according to provider semantics.
+3. Check that the ids are distinct and every vector is finite.
 4. Route all inputs through the accessor's centroid index, and group the batch
    by route.
 5. Read routed-list sizes and compute projected post-insert sizes.
@@ -680,10 +684,10 @@ Note that co-location groups are never accessed during search.
 11. Leave each neighbor's points in place unless a child of a region containing
     that neighbor is closer than the neighbor's centroid, in which case move
     them to the nearest such child.
-12. If nothing splits, build `Appends` from the routes. Otherwise build
-    `Appends` for the staged points' final lists, `Splits` evacuating every
-    parent, and `Reassignments` for moved neighbor members, and combine them
-    into one `SplitInsert`.
+12. Build one `InsertionUpdate`. Append every staged point to its final list,
+    which is its route if nothing splits. For each split, install the two
+    children, retire the parent, and move every parent member and every
+    neighbor member whose list changed.
 13. Consume the accessor with `apply(update)`.
 
 Steps 1 through 8 perform every accessor read; steps 9 through 12 compute on
@@ -719,10 +723,10 @@ in-memory lists. Those choices do not change the semantics of the update.
    in this operation.
 6. Read each victim's remaining members and canonical vectors.
 7. Assign those members exactly among the saved survivor candidates.
-8. Build one delete update containing point deletes, retired victim centroids,
-   and the evacuation of each victim's remaining members. Its types are not
-   defined yet; they follow the same pattern as the insert updates, with an
-   evacuation shared with `Splits`.
+8. Build one update that retires each victim, moves its remaining members to
+   their survivors, and removes the deleted points. Its type is not defined
+   yet; it follows the delta style of `InsertionUpdate`, with a point delta for
+   removal such as `Delete { id, from }`.
 9. Consume the accessor with `apply(update)`.
 
 A dissolve fits no centroid and does not read survivor members. Removing a
@@ -737,7 +741,7 @@ The portable baseline is:
 
 - many concurrent searches through shared index borrows;
 - one mutation through an exclusive index borrow, forwarded to the maintenance
-  accessor as `&mut Provider`; and
+  accessor as `&mut P`; and
 - no search/mutation overlap through the same index value.
 
 Within an operation, providers may parallelize routing, list reads, decoding,
@@ -748,7 +752,7 @@ Concrete implementations may offer more:
 
 | Provider | Possible private unified-view mechanism |
 |---|---|
-| In memory | exclusive `&mut Provider` borrow, one lock guard, copy-on-write root, or epoch |
+| In memory | exclusive `&mut P` borrow, one lock guard, copy-on-write root, or epoch |
 | Local disk | process lock, database transaction, journal, or private manifest swap |
 | Blob storage | immutable objects plus conditional manifest update |
 
@@ -814,7 +818,7 @@ and search parameters. Durable metadata belongs to concrete provider crates.
 
 - Build one provider containing canonical vectors, reverse assignments,
   in-memory lists, and an exact centroid index.
-- Implement maintenance through the exclusive `&mut Provider` borrow with
+- Implement maintenance through the exclusive `&mut P` borrow with
   lock-free, in-place `apply`.
 - Add an invariant checker and provider poisoning for injected partial failures.
 
@@ -933,16 +937,31 @@ Adding `append`, `remove`, `move`, `create_list`, and `retire_list` exposes a
 partial-write schedule to GraphIVF. A complete declarative update lets each
 provider choose a suitable physical implementation.
 
-### One Monolithic Update With Per-Point Moves
+### Optional Endpoints Instead Of Delta Variants
 
-An earlier draft used one `PartitionUpdate` holding a free-form centroid delta
-and a flat list of `PointMove { id, from: Option<L>, to: Option<L> }`. It was
-compact to define but overloaded: one type encoded insert, delete, reassignment,
-split, and dissolve, so every provider had to handle every combination and
-regroup moves by list. Its public fields also allowed invalid values, such as a
-move with neither endpoint, a retired list that was never emptied, or ragged
-centroid dimensions. Separate types that only the index can construct remove
-those states and hand providers data that is already grouped.
+An earlier draft used a single `PartitionUpdate` with a free-form centroid
+delta, a flat list of `PointMove { id, from: Option<L>, to: Option<L> }`, and
+public fields. Optional endpoints made a move with neither endpoint
+representable and left the meaning of each combination implicit. Public fields
+let any code build invalid values, such as a retired list that was never
+emptied or centroids of different dimensions. Unsorted moves made every
+provider regroup them by list. Named delta variants, construction restricted to
+the index, and destination-sorted point deltas remove those problems.
+
+### Per-Operation Update Types
+
+An intermediate design gave each operation its own update type: `Bootstrap`,
+`Appends`, `Splits`, and `Reassignments`, with `SplitInsert` combining the last
+three. Each type stored its points pre-grouped, and a provider implemented an
+`Apply<U>` trait once per type it supported. The types made some structure
+explicit, such as the two children replacing each parent, and let a provider
+that never splits leave out `Apply<SplitInsert>`. However, the insert path alone
+needed eight types and three `Apply` implementations, and a destination list's
+incoming points were spread across several groups. Nothing consumed the extra
+structure, and inserts required every `Apply` bound anyway. Primitive deltas
+express every insert-path change in one type. If a graph centroid index or
+co-location planning needs a split's lineage, `CentroidDelta::Install` can gain
+a parent link.
 
 ### Publicly Constructible Updates
 
@@ -952,7 +971,7 @@ ever needs to build them, that validation duplicated guarantees the planner
 already provides by construction, re-sorted data the planner had already
 grouped, and roughly doubled the size of the update module. Restricting
 construction to the index and validating untrusted inputs where they enter
-removes that duplication. Provider crates exercise their `Apply`
+removes that duplication. Provider crates exercise their `apply`
 implementations through the index instead of hand-built updates.
 
 ### Use `SetElement` Independently
@@ -976,11 +995,11 @@ useful common shape.
    concurrent access immediately?
 2. **Failure health**: should a small common health/poison trait be required, or
    should all post-error behavior remain provider-specific?
-3. **Point staging**: should `stage_insert`, and deletion staging once it is
+3. **Point staging**: should `StageElements`, and deletion staging once it is
    added, remain on the maintenance accessor, or should a future
-   `TransactionalDataProvider` supply them?
-4. **Update granularity**: updates are grouped by destination list, so bulk
-   backends can rewrite each touched list once. Should they also carry a
+   transactional provider trait supply them?
+4. **Update granularity**: point deltas are sorted by destination list, so bulk
+   backends can write each touched list once. Should updates also carry a
    per-list summary of added and removed counts for exact pre-sizing?
 5. **Selected-list ownership**: is the documented same-accessor requirement
    sufficient, or should a future private token make misuse dynamically

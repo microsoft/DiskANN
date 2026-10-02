@@ -6,8 +6,6 @@
 //! Split planning: gather each split's region, fit children, and place every affected
 //! point.
 
-use std::ops::Range;
-
 use diskann_utils::views::Matrix;
 use rand::{Rng, rngs::StdRng};
 
@@ -22,9 +20,9 @@ use crate::{
     error::ErrorExt,
     ivf::{
         DynamicIvfConfig,
-        dynamic::{CentroidIndex, MaintenanceAccessor},
+        dynamic::{CentroidIndex, MaintenanceAccessor, Provider},
         grouped::Csr,
-        update::{Appends, CentroidBlock, Reassignments, SplitInsert, Splits},
+        update::{CentroidDelta, InsertionUpdate, PointDelta},
     },
     utils::VectorId,
 };
@@ -63,15 +61,15 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
     /// # Errors
     ///
     /// Fails if an accessor call fails or the accessor's view is inconsistent.
-    pub(in crate::ivf) async fn gather<A, T>(
+    pub(in crate::ivf) async fn gather<P, A>(
         accessor: &mut A,
         config: &DynamicIvfConfig,
         batch: StagedBatch<Id, L>,
         parents: Vec<L>,
     ) -> ANNResult<Self>
     where
-        A: MaintenanceAccessor<T, Id = Id, ListId = L>,
-        T: Send,
+        P: Provider<InternalId = Id, ListId = L>,
+        A: MaintenanceAccessor<P>,
     {
         let count = 2 * parents.len();
         let child_ids = accessor
@@ -174,12 +172,11 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
         mut self,
         iterations: usize,
         rng: &mut StdRng,
-    ) -> ANNResult<SplitInsert<Id, L>> {
-        let centers = self.fit_children(iterations, rng)?;
-        let children = CentroidBlock::new(std::mem::take(&mut self.child_ids), centers);
+    ) -> ANNResult<InsertionUpdate<Id, L>> {
+        let children = self.fit_children(iterations, rng)?;
         let mut routes = std::mem::take(&mut self.batch.routes);
         let destinations = self.place(&children, &mut routes)?;
-        Ok(self.package(children, &routes, &destinations))
+        Ok(self.package(&children, &routes, &destinations))
     }
 
     /// Fit two children per region; rows `2r` and `2r + 1` split region `r`.
@@ -215,12 +212,12 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
 
     /// Choose a list for every point of every region list.
     ///
-    /// Returns the existing members' lists, aligned with their positions, and
-    /// overwrites the routes of the batch points it places.
-    fn place(&self, children: &CentroidBlock<L>, routes: &mut [L]) -> ANNResult<Vec<L>> {
+    /// Row `r` of `children` is the centroid of child `r`. Returns the existing
+    /// members' lists, aligned with their positions, and overwrites the routes of the
+    /// batch points it places.
+    fn place(&self, children: &Matrix<f32>, routes: &mut [L]) -> ANNResult<Vec<L>> {
         let mut destinations = vec![L::default(); self.member_ids.values().len()];
-        let child_ids = children.ids();
-        let child_vectors = children.vectors();
+        let child = |row: usize| (self.child_ids[row], children.row(row));
         let mut candidates: Vec<(L, &[f32])> = Vec::new();
 
         for region in 0..self.parents {
@@ -228,9 +225,7 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
             for &neighbor in self.neighbors.group(region) {
                 candidates.push(self.neighbor(neighbor));
             }
-            for row in [2 * region, 2 * region + 1] {
-                candidates.push((child_ids[row], child_vectors.row(row)));
-            }
+            candidates.extend([child(2 * region), child(2 * region + 1)]);
             self.assign(region, &candidates, &mut destinations, routes)?;
         }
 
@@ -239,9 +234,7 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
             candidates.clear();
             candidates.push(self.neighbor(neighbor));
             for &region in self.regions.group(neighbor) {
-                for row in [2 * region, 2 * region + 1] {
-                    candidates.push((child_ids[row], child_vectors.row(row)));
-                }
+                candidates.extend([child(2 * region), child(2 * region + 1)]);
             }
             self.assign(
                 self.parents + neighbor,
@@ -275,34 +268,46 @@ impl<Id: VectorId, L: VectorId> SplitPlan<Id, L> {
         Ok(())
     }
 
-    /// Assemble the update from the chosen lists.
+    /// Assemble the update: install the children, retire the parents, append the
+    /// batch, and move every existing point whose list changed.
     fn package(
         &self,
-        children: CentroidBlock<L>,
+        children: &Matrix<f32>,
         routes: &[L],
         destinations: &[L],
-    ) -> SplitInsert<Id, L> {
-        let parents = self.lists[..self.parents].to_vec();
-        SplitInsert::new(
-            Appends::new(&self.batch.ids, routes),
-            Splits::new(parents, children, self.moves(0..self.parents, destinations)),
-            Reassignments::new(self.moves(self.parents..self.lists.len(), destinations)),
-        )
-    }
+    ) -> InsertionUpdate<Id, L> {
+        let installs = self
+            .child_ids
+            .iter()
+            .zip(children.row_iter())
+            .map(|(&id, centroid)| CentroidDelta::Install {
+                id,
+                centroid: centroid.into(),
+            });
+        let retires = self.lists[..self.parents]
+            .iter()
+            .map(|&id| CentroidDelta::Retire { id });
 
-    /// `(list, members, destinations)` for every list in `lists`.
-    fn moves<'s>(
-        &'s self,
-        lists: Range<usize>,
-        destinations: &'s [L],
-    ) -> impl Iterator<Item = (L, &'s [Id], &'s [L])> {
-        lists.map(move |list| {
-            (
-                self.lists[list],
-                self.member_ids.group(list),
-                &destinations[self.member_ids.range(list)],
-            )
-        })
+        let appends = self
+            .batch
+            .ids
+            .iter()
+            .zip(routes)
+            .map(|(&id, &to)| PointDelta::Append { id, to });
+        // A parent is never a destination, so all its members move.
+        let moves = self.lists.iter().enumerate().flat_map(|(list, &from)| {
+            self.member_ids
+                .group(list)
+                .iter()
+                .zip(&destinations[self.member_ids.range(list)])
+                .filter(move |&(_, &to)| to != from)
+                .map(move |(&id, &to)| PointDelta::Move { id, from, to })
+        });
+
+        InsertionUpdate::new(
+            installs.chain(retires).collect(),
+            appends.chain(moves).collect(),
+        )
     }
 
     /// Neighbor `neighbor`'s list id and centroid.

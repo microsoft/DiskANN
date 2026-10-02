@@ -18,12 +18,12 @@ use crate::{
     ANNError, ANNErrorKind,
     ivf::{
         dynamic::{
-            Apply, CentroidIndex, ListMetadata, ListProvider, MaintenanceAccessor,
-            MaintenanceStrategy, SelectedList,
+            self, CentroidIndex, MaintenanceAccessor, MaintenanceStrategy, SelectedList,
+            StageElements,
         },
-        update::{Appends, Bootstrap, SplitInsert},
+        update::{CentroidDelta, InsertionUpdate, PointDelta},
     },
-    provider::{DataProvider, DefaultContext, HasId, NoopGuard},
+    provider::DefaultContext,
 };
 
 fn error(message: impl Into<String>) -> ANNError {
@@ -37,14 +37,32 @@ fn squared(a: &[f32], b: &[f32]) -> f32 {
 /// Inconsistent responses the provider can inject.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Faults {
-    /// Leave the last row of every `read_vectors` call unwritten.
+    /// Leave the last row of every staged or read batch unwritten.
     pub(crate) skip_vector: bool,
-    /// Write NaN into the last row of every `read_vectors` call.
+    /// Write NaN into the last row of every staged or read batch.
     pub(crate) nan_vector: bool,
-    /// Return the first staged id again from every later `stage_insert`.
+    /// Return the first staged id again for every later point of a `stage` call.
     pub(crate) repeat_stage: bool,
+    /// Return one id fewer than the number of points a `stage` call stages.
+    pub(crate) drop_stage: bool,
     /// Reserve list ids starting from zero, which may be live.
     pub(crate) reuse_lists: bool,
+}
+
+/// Write `rows[i]` into row `i` of `out` in reverse order, injecting vector faults
+/// into the last row.
+fn write_rows(faults: Faults, mut out: MutMatrixView<'_, f32>, rows: &[&[f32]]) {
+    for (index, row) in rows.iter().enumerate().rev() {
+        let last = index + 1 == rows.len();
+        if last && faults.skip_vector {
+            continue;
+        }
+        let out = out.row_mut(index);
+        out.copy_from_slice(row);
+        if last && faults.nan_vector {
+            out[0] = f32::NAN;
+        }
+    }
 }
 
 /// Exact centroid catalog.
@@ -210,12 +228,12 @@ impl Provider {
     }
 }
 
-impl DataProvider for Provider {
+impl dynamic::Provider for Provider {
     type Context = DefaultContext;
     type InternalId = u32;
     type ExternalId = u32;
+    type ListId = u32;
     type Error = ANNError;
-    type Guard = NoopGuard<u32>;
 
     fn to_internal_id(&self, _: &DefaultContext, gid: &u32) -> Result<u32, ANNError> {
         self.points
@@ -233,10 +251,6 @@ impl DataProvider for Provider {
     }
 }
 
-impl ListProvider for Provider {
-    type ListId = u32;
-}
-
 /// Maintenance accessor over an exclusively borrowed [`Provider`].
 pub(crate) struct Accessor<'a> {
     provider: &'a mut Provider,
@@ -246,14 +260,9 @@ pub(crate) struct Accessor<'a> {
 
 impl Accessor<'_> {
     fn vector(&self, id: u32) -> Result<&[f32], ANNError> {
-        let id = id as usize;
-        let committed = self.provider.points.len();
-        let point = if id < committed {
-            self.provider.points.get(id)
-        } else {
-            self.staged.get(id - committed)
-        };
-        point
+        self.provider
+            .points
+            .get(id as usize)
             .map(|(_, vector)| &**vector)
             .ok_or_else(|| error(format!("no point {id}")))
     }
@@ -265,40 +274,61 @@ impl Accessor<'_> {
         }
     }
 
-    fn install(&mut self, id: u32, vector: &[f32]) -> Result<(), ANNError> {
+    fn install(&mut self, id: u32, centroid: &[f32]) -> Result<(), ANNError> {
         if self.provider.retired.contains(&id) || self.provider.lists.contains_key(&id) {
             return Err(error(format!("list id {id} is reused")));
         }
-        self.provider.centroids.0.insert(id, vector.into());
+        self.provider.centroids.0.insert(id, centroid.into());
         self.provider.lists.insert(id, Vec::new());
         Ok(())
     }
 
-    fn place(&mut self, list: u32, ids: &[u32]) -> Result<(), ANNError> {
+    /// Retire `list`, dropping its members wholesale.
+    fn retire(&mut self, list: u32) -> Result<(), ANNError> {
+        self.provider
+            .lists
+            .remove(&list)
+            .ok_or_else(|| error(format!("retired list {list} is not live")))?;
+        self.provider.centroids.0.remove(&list);
+        self.provider.retired.insert(list);
+        Ok(())
+    }
+
+    /// Remove `id` from `list`, which retirement may have dropped already.
+    fn leave(&mut self, id: u32, list: u32) -> Result<(), ANNError> {
+        if self.provider.retired.contains(&list) {
+            return Ok(());
+        }
+        let members = self
+            .provider
+            .lists
+            .get_mut(&list)
+            .ok_or_else(|| error(format!("list {list} is not live")))?;
+        let position = members
+            .iter()
+            .position(|&member| member == id)
+            .ok_or_else(|| error(format!("point {id} is not in list {list}")))?;
+        members.remove(position);
+        Ok(())
+    }
+
+    fn place(&mut self, id: u32, list: u32) -> Result<(), ANNError> {
         self.provider
             .lists
             .get_mut(&list)
             .ok_or_else(|| error(format!("list {list} is not live")))?
-            .extend_from_slice(ids);
-        for &id in ids {
-            let slot = self
-                .provider
-                .assignment
-                .get_mut(id as usize)
-                .ok_or_else(|| error(format!("no point {id}")))?;
-            *slot = list;
-        }
+            .push(id);
+        let slot = self
+            .provider
+            .assignment
+            .get_mut(id as usize)
+            .ok_or_else(|| error(format!("no point {id}")))?;
+        *slot = list;
         Ok(())
     }
 }
 
-impl HasId for Accessor<'_> {
-    type Id = u32;
-}
-
-impl<'b> MaintenanceAccessor<&'b [f32]> for Accessor<'_> {
-    type ExternalId = u32;
-    type ListId = u32;
+impl MaintenanceAccessor<Provider> for Accessor<'_> {
     type Centroids = Centroids;
     type Error = ANNError;
 
@@ -310,14 +340,14 @@ impl<'b> MaintenanceAccessor<&'b [f32]> for Accessor<'_> {
         &self.provider.centroids
     }
 
-    async fn list_metadata(&mut self, list: u32) -> Result<ListMetadata, ANNError> {
+    async fn list_size(&mut self, list: u32) -> Result<usize, ANNError> {
         let len = self
             .provider
             .lists
             .get(&list)
             .ok_or_else(|| error(format!("list {list} is not live")))?
             .len();
-        Ok(ListMetadata { len })
+        Ok(len)
     }
 
     async fn read_members(&mut self, list: u32) -> Result<&[u32], ANNError> {
@@ -331,40 +361,14 @@ impl<'b> MaintenanceAccessor<&'b [f32]> for Accessor<'_> {
     async fn read_vectors(
         &mut self,
         ids: &[u32],
-        mut out: MutMatrixView<'_, f32>,
+        out: MutMatrixView<'_, f32>,
     ) -> Result<(), ANNError> {
-        let faults = self.provider.faults;
-        for (row, &id) in ids.iter().enumerate().rev() {
-            let last = row + 1 == ids.len();
-            if last && faults.skip_vector {
-                continue;
-            }
-            let out = out.row_mut(row);
-            out.copy_from_slice(self.vector(id)?);
-            if last && faults.nan_vector {
-                out[0] = f32::NAN;
-            }
-        }
+        let rows = ids
+            .iter()
+            .map(|&id| self.vector(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        write_rows(self.provider.faults, out, &rows);
         Ok(())
-    }
-
-    async fn stage_insert(&mut self, id: &u32, element: &'b [f32]) -> Result<u32, ANNError> {
-        if element.len() != self.provider.dim {
-            return Err(error(format!("point {id} has the wrong dimension")));
-        }
-        let known =
-            |points: &[(u32, Box<[f32]>)]| points.iter().any(|(external, _)| external == id);
-        if known(&self.provider.points) || known(&self.staged) {
-            return Err(error(format!("external id {id} already exists")));
-        }
-        let committed = self.provider.points.len();
-        let internal = if self.provider.faults.repeat_stage && !self.staged.is_empty() {
-            committed
-        } else {
-            committed + self.staged.len()
-        };
-        self.staged.push((*id, element.into()));
-        Ok(internal as u32)
     }
 
     async fn reserve_list_ids(&mut self, count: usize) -> Result<Vec<u32>, ANNError> {
@@ -375,89 +379,61 @@ impl<'b> MaintenanceAccessor<&'b [f32]> for Accessor<'_> {
         self.provider.next_list += count as u32;
         Ok((start..self.provider.next_list).collect())
     }
-}
 
-impl Apply<Bootstrap<u32>> for Accessor<'_> {
-    type Error = ANNError;
-
-    async fn apply(mut self, update: Bootstrap<u32>) -> Result<(), ANNError> {
-        for (id, vector) in update.centroids().iter() {
-            self.install(id, vector)?;
+    async fn apply(mut self, update: InsertionUpdate<u32, u32>) -> Result<(), ANNError> {
+        self.commit_staged();
+        for delta in update.centroids() {
+            match delta {
+                CentroidDelta::Install { id, centroid } => self.install(*id, centroid)?,
+                CentroidDelta::Retire { id } => self.retire(*id)?,
+            }
+        }
+        for &delta in update.points() {
+            match delta {
+                PointDelta::Append { id, to } => self.place(id, to)?,
+                PointDelta::Move { id, from, to } => {
+                    self.leave(id, from)?;
+                    self.place(id, to)?;
+                }
+            }
         }
         Ok(())
     }
 }
 
-impl Apply<Appends<u32, u32>> for Accessor<'_> {
-    type Error = ANNError;
-
-    async fn apply(mut self, update: Appends<u32, u32>) -> Result<(), ANNError> {
-        self.commit_staged();
-        for (list, ids) in update.iter() {
-            self.place(list, ids)?;
-        }
-        Ok(())
-    }
-}
-
-impl Apply<SplitInsert<u32, u32>> for Accessor<'_> {
-    type Error = ANNError;
-
-    async fn apply(mut self, update: SplitInsert<u32, u32>) -> Result<(), ANNError> {
-        self.commit_staged();
-        let (appends, splits, reassignments) = update.into_parts();
-
-        // Install every child first, since any part of the update may target one.
-        for split in splits.iter() {
-            for (child, centroid) in split.children().into_iter().zip(split.centroids()) {
-                self.install(child, centroid)?;
+impl<'b> StageElements<Provider, &'b [f32]> for Accessor<'_> {
+    async fn stage(
+        &mut self,
+        points: &[(u32, &'b [f32])],
+        out: MutMatrixView<'_, f32>,
+    ) -> Result<Vec<u32>, ANNError> {
+        let mut ids = Vec::with_capacity(points.len());
+        for &(external, element) in points {
+            if element.len() != self.provider.dim {
+                return Err(error(format!("point {external} has the wrong dimension")));
             }
+            let known = |points: &[(u32, Box<[f32]>)]| {
+                points.iter().any(|&(existing, _)| existing == external)
+            };
+            if known(&self.provider.points) || known(&self.staged) {
+                return Err(error(format!("external id {external} already exists")));
+            }
+            let committed = self.provider.points.len();
+            let internal = if self.provider.faults.repeat_stage && !self.staged.is_empty() {
+                committed
+            } else {
+                committed + self.staged.len()
+            };
+            self.staged.push((external, element.into()));
+            ids.push(internal as u32);
         }
-        for split in splits.iter() {
-            let parent = split.parent();
-            let mut members = self
-                .provider
-                .lists
-                .remove(&parent)
-                .ok_or_else(|| error(format!("split parent {parent} is not live")))?;
-            self.provider.centroids.0.remove(&parent);
-            self.provider.retired.insert(parent);
 
-            let mut evacuated: Vec<u32> = split
-                .evacuations()
-                .flat_map(|(_, ids)| ids.iter().copied())
-                .collect();
-            members.sort_unstable();
-            evacuated.sort_unstable();
-            if members != evacuated {
-                return Err(error(format!(
-                    "split of {parent} does not evacuate its members"
-                )));
-            }
-            for (list, ids) in split.evacuations() {
-                self.place(list, ids)?;
-            }
+        let rows: Vec<&[f32]> = points.iter().map(|&(_, element)| element).collect();
+        write_rows(self.provider.faults, out, &rows);
+        if self.provider.faults.drop_stage {
+            ids.pop();
         }
-        for (transfer, ids) in reassignments.iter() {
-            let source = self
-                .provider
-                .lists
-                .get_mut(&transfer.source())
-                .ok_or_else(|| error(format!("list {} is not live", transfer.source())))?;
-            let before = source.len();
-            source.retain(|id| !ids.contains(id));
-            if before - source.len() != ids.len() {
-                return Err(error(format!(
-                    "reassigned points are not all in list {}",
-                    transfer.source()
-                )));
-            }
-            self.place(transfer.destination(), ids)?;
-        }
-        for (list, ids) in appends.iter() {
-            self.place(list, ids)?;
-        }
-        Ok(())
+        Ok(ids)
     }
 }
 
@@ -465,7 +441,7 @@ impl Apply<SplitInsert<u32, u32>> for Accessor<'_> {
 #[derive(Debug, Default)]
 pub(crate) struct Strategy;
 
-impl<'a> MaintenanceStrategy<'a, Provider, &[f32]> for Strategy {
+impl<'a> MaintenanceStrategy<'a, Provider> for Strategy {
     type MaintenanceAccessor = Accessor<'a>;
     type Error = ANNError;
 

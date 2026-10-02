@@ -25,7 +25,8 @@ use diskann_utils::views::Matrix;
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::ErrorExt,
-    ivf::dynamic::{CentroidIndex, MaintenanceAccessor},
+    ivf::dynamic::{CentroidIndex, MaintenanceAccessor, Provider},
+    utils::VectorId,
 };
 
 #[track_caller]
@@ -68,31 +69,43 @@ fn first_repeat<V: Copy + Ord>(values: impl Iterator<Item = V>) -> Option<V> {
         .map(|pair| pair[0])
 }
 
-/// Read the canonical vector of every point in `ids`; row `i` belongs to `ids[i]`.
+/// Read the canonical vector of every visible point in `ids`; row `i` belongs to
+/// `ids[i]`.
 ///
 /// # Errors
 ///
 /// Fails if the accessor fails, or leaves a row unwritten or non-finite.
-async fn read_rows<A, T>(accessor: &mut A, ids: &[A::Id], dim: usize) -> ANNResult<Matrix<f32>>
+async fn read_rows<P, A>(
+    accessor: &mut A,
+    ids: &[P::InternalId],
+    dim: usize,
+) -> ANNResult<Matrix<f32>>
 where
-    A: MaintenanceAccessor<T>,
-    T: Send,
+    P: Provider,
+    A: MaintenanceAccessor<P>,
 {
-    // Rows the accessor never writes stay NaN, so the finiteness check catches them.
     let mut rows = Matrix::new(f32::NAN, ids.len(), dim);
     accessor
         .read_vectors(ids, rows.as_mut_view())
         .await
         .escalate("maintenance must read canonical vectors")?;
+    check_rows(ids, &rows)?;
+    Ok(rows)
+}
 
-    if let Some((id, _)) = ids
+/// Check that every row the accessor was asked to write is finite.
+///
+/// Callers fill rows with NaN before handing them to the accessor, so rows it never
+/// writes fail this check too.
+fn check_rows<Id: VectorId>(ids: &[Id], rows: &Matrix<f32>) -> ANNResult<()> {
+    match ids
         .iter()
         .zip(rows.row_iter())
         .find(|(_, row)| row.iter().any(|x| !x.is_finite()))
     {
-        return Err(index_error(format!(
+        Some((id, _)) => Err(index_error(format!(
             "no finite canonical vector for point {id}"
-        )));
+        ))),
+        None => Ok(()),
     }
-    Ok(rows)
 }
