@@ -63,6 +63,7 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
 // Tests //
 ///////////
 
+#[cfg(not(miri))]
 #[cfg(test)]
 mod tests {
     use std::fmt::Display;
@@ -235,7 +236,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(miri))]
     fn test_f16() {
         let data = example_dataset();
         let mut data_f16 =

@@ -159,6 +159,7 @@ impl ComputeMedoid for i8 {
 // Tests //
 ///////////
 
+#[cfg(not(miri))]
 #[cfg(test)]
 mod tests {
     use super::*;
