@@ -140,17 +140,6 @@ impl From<f16x4> for f32x4 {
     }
 }
 
-impl SIMDCast<f32> for u32x4 {
-    type Cast = f32x4;
-
-    #[inline(always)]
-    fn simd_cast(self) -> f32x4 {
-        // SAFETY: Allowed by the implicit `Neon` architecture.
-        let raw = unsafe { vcvtq_f32_u32(self.to_underlying()) };
-        f32x4::from_underlying(self.arch(), raw)
-    }
-}
-
 impl From<u16x4> for f32x4 {
     #[inline(always)]
     fn from(value: u16x4) -> f32x4 {
