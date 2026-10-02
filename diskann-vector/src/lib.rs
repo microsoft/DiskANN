@@ -29,6 +29,9 @@ pub use traits::{
 mod value;
 pub use value::{MathematicalValue, SimilarityScore};
 
+mod score;
+pub use score::{InnerProductScore, Score, SquaredL2Score};
+
 mod unaligned;
 pub use unaligned::{AsUnaligned, UnalignedSlice};
 
