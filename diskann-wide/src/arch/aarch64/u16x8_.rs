@@ -15,7 +15,7 @@ use super::{
     Neon, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask16x8,
-    u16x4,
+    u8x8, u16x4,
 };
 
 // AArch64 intrinsics
@@ -62,6 +62,16 @@ macros::aarch64_define_bitops!(
     (u16, i16, vmovq_n_s16),
 );
 
+impl From<u8x8> for u16x8 {
+    #[inline(always)]
+    fn from(value: u8x8) -> Self {
+        let arch = value.arch();
+
+        // SAFETY: `vmovl_u8` is available on NEON and losslessly widens all eight lanes.
+        Self::from_underlying(arch, unsafe { vmovl_u8(value.to_underlying()) })
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -105,4 +115,7 @@ mod tests {
 
     // Bit ops
     test_utils::ops::test_bitops!(u16x8, 0xd62d8de09f82ed4e, test_neon());
+
+    // Conversions
+    test_utils::ops::test_lossless_convert!(u8x8 => u16x8, 0x84c1c6f05b169a20, test_neon());
 }

@@ -8,7 +8,7 @@ use std::arch::aarch64::*;
 use half::f16;
 
 use crate::{
-    LoHi, SIMDVector, SplitJoin,
+    LoHi, SplitJoin,
     doubled::{self, Doubled},
 };
 
@@ -164,16 +164,6 @@ impl From<i8x32> for i16x32 {
     }
 }
 
-impl From<u8x8> for u16x8 {
-    #[inline(always)]
-    fn from(value: u8x8) -> Self {
-        let arch = value.arch();
-
-        // SAFETY: `vmovl_u8` is available on NEON and losslessly widens all eight lanes.
-        Self::from_underlying(arch, unsafe { vmovl_u8(value.to_underlying()) })
-    }
-}
-
 impl From<u8x8> for f32x8 {
     #[inline(always)]
     fn from(value: u8x8) -> Self {
@@ -185,22 +175,8 @@ impl From<u8x8> for f32x8 {
 impl From<u16x8> for f32x8 {
     #[inline(always)]
     fn from(value: u16x8) -> Self {
-        let arch = value.arch();
-
-        // SAFETY: The widening conversions and integer-to-float conversions operate on
-        // matching lane types and are available with the `Neon` witness.
-        unsafe {
-            Self::new(
-                f32x4::from_underlying(
-                    arch,
-                    vcvtq_f32_u32(vmovl_u16(vget_low_u16(value.to_underlying()))),
-                ),
-                f32x4::from_underlying(
-                    arch,
-                    vcvtq_f32_u32(vmovl_u16(vget_high_u16(value.to_underlying()))),
-                ),
-            )
-        }
+        let LoHi { lo, hi } = value.split().map(From::from);
+        Self(lo, hi)
     }
 }
 
@@ -506,6 +482,7 @@ mod tests {
     test_utils::ops::test_lossless_convert!(u8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x16 => i16x16, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u16x8 => f32x8, 0x84c1c6f05b169a20, test_neon());
 
     test_utils::ops::test_cast!(f16x8 => f32x8, 0xba8fe343fc9dbeff, test_neon());
     test_utils::ops::test_cast!(f16x16 => f32x16, 0xba8fe343fc9dbeff, test_neon());

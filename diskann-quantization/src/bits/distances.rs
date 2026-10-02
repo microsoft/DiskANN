@@ -3565,12 +3565,15 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
         x: &[f32],
         y: USlice<'_, 1>,
     ) -> MathematicalResult<f32> {
-        use std::arch::aarch64::{vcreate_u8, vzip1_u8};
+        use std::arch::aarch64::{
+            vandq_u32, vdupq_n_u8, vdupq_n_u32, vreinterpretq_f32_u32, vreinterpretq_u32_f32,
+            vreinterpretq_u32_u8,
+        };
         // returns number of quantized vectors
         let len = check_lengths!(x, y)?;
 
-        diskann_wide::alias!(u8s_8 = type diskann_wide::arch::aarch64::u8x8);
-        diskann_wide::alias!(f32s_8 = <diskann_wide::arch::aarch64::Neon>::f32x8);
+        diskann_wide::alias!(f32s_4 = <diskann_wide::arch::aarch64::Neon>::f32x4);
+        diskann_wide::alias!(u32s_4 = <diskann_wide::arch::aarch64::Neon>::u32x4);
 
         let px_f32: *const f32 = x.as_ptr();
         let py_u8: *const u8 = y.as_ptr().cast();
@@ -3580,62 +3583,76 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
 
         let y_bytes = len / 8; // number of y bytes over the underlying slice
         if i < y_bytes {
-            let mut s0 = f32s_8::default(arch);
-            let mut s1 = f32s_8::default(arch);
-            let mut s2 = f32s_8::default(arch);
-            let mut s3 = f32s_8::default(arch);
-
-            #[inline(always)]
-            fn load_deinterleaved_32_f32(
-                arch: diskann_wide::arch::aarch64::Neon,
-                ptr: *const f32,
-            ) -> (f32s_8, f32s_8, f32s_8, f32s_8) {
-                // SAFETY: The caller guarantees that `ptr` is valid for 32 consecutive
-                // `f32` values. Each structured load reads 16 values.
-                let lo: [_; 4] = unsafe { arch.vld4q_f32(ptr) };
-                // SAFETY: Same caller guarantee as above; offsetting by 16 stays within the
-                // 32-element readable range.
-                let hi_ptr = unsafe { ptr.add(16) };
-                // SAFETY: Same caller guarantee as above; offsetting by 16 stays within the
-                // 32-element readable range.
-                let hi: [_; 4] = unsafe { arch.vld4q_f32(hi_ptr) };
-                (
-                    f32s_8::new(lo[0], hi[0]),
-                    f32s_8::new(lo[1], hi[1]),
-                    f32s_8::new(lo[2], hi[2]),
-                    f32s_8::new(lo[3], hi[3]),
-                )
-            }
-
-            let mask = u8s_8::splat(arch, 0x01);
-            let shifts = u8s_8::from_array(arch, [0, 1, 2, 3, 4, 5, 6, 7]);
+            let mut s0 = f32s_4::default(arch);
+            let mut s1 = f32s_4::default(arch);
+            let mut s2 = f32s_4::default(arch);
+            let mut s3 = f32s_4::default(arch);
+            let bits0 = u32s_4::from_array(arch, [1, 2, 4, 8]);
+            let bits1 = u32s_4::from_array(arch, [16, 32, 64, 128]);
+            let bits2 = u32s_4::from_array(arch, [256, 512, 1024, 2048]);
+            let bits3 = u32s_4::from_array(arch, [4096, 8192, 16384, 32768]);
+            let bits4 = u32s_4::from_array(arch, [65536, 131072, 262144, 524288]);
+            let bits5 = u32s_4::from_array(arch, [1048576, 2097152, 4194304, 8388608]);
+            let bits6 = u32s_4::from_array(arch, [16777216, 33554432, 67108864, 134217728]);
+            let bits7 = u32s_4::from_array(arch, [268435456, 536870912, 1073741824, 2147483648]);
 
             while i + 4 <= y_bytes {
-                // SAFETY: The loop condition guarantees that four bytes are readable.
+                // SAFETY: `i + 4 <= y_bytes` guarantees that four packed bytes are readable.
                 let y_word = unsafe { py_u8.add(i).cast::<u32>().read_unaligned() };
-                // SAFETY: `vcreate_u8` only moves the provided bits into a NEON register;
-                // `arch` proves that NEON instructions are available.
-                let y_vec = u8s_8::from_underlying(arch, unsafe { vcreate_u8(y_word.into()) });
-                // SAFETY: `arch` proves that the NEON `vzip1_u8` instruction is available.
-                let y_vec_zipped = u8s_8::from_underlying(arch, unsafe {
-                    vzip1_u8(y_vec.to_underlying(), (y_vec >> 4).to_underlying())
-                });
+                // SAFETY: `arch` proves that NEON instructions are available.
+                let y_words = unsafe { vdupq_n_u32(y_word) };
+                let (mask0, mask1, mask2, mask3, mask4, mask5, mask6, mask7) = (
+                    arch.vtstq_u32(y_words, bits0.to_underlying()),
+                    arch.vtstq_u32(y_words, bits1.to_underlying()),
+                    arch.vtstq_u32(y_words, bits2.to_underlying()),
+                    arch.vtstq_u32(y_words, bits3.to_underlying()),
+                    arch.vtstq_u32(y_words, bits4.to_underlying()),
+                    arch.vtstq_u32(y_words, bits5.to_underlying()),
+                    arch.vtstq_u32(y_words, bits6.to_underlying()),
+                    arch.vtstq_u32(y_words, bits7.to_underlying()),
+                );
 
-                let y_vec1: f32s_8 = (y_vec_zipped & mask).into();
-                let y_vec2: f32s_8 = ((y_vec_zipped >> 1) & mask).into();
-                let y_vec3: f32s_8 = ((y_vec_zipped >> 2) & mask).into();
-                let y_vec4: f32s_8 = ((y_vec_zipped >> 3) & mask).into();
+                // SAFETY: `i + 4 <= y_bytes` guarantees 32 logical elements are readable.
+                let x_ptr = unsafe { px_f32.add(8 * i) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x0 = unsafe { f32s_4::load_simd(arch, x_ptr) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x1 = unsafe { f32s_4::load_simd(arch, x_ptr.add(4)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x2 = unsafe { f32s_4::load_simd(arch, x_ptr.add(8)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x3 = unsafe { f32s_4::load_simd(arch, x_ptr.add(12)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x4 = unsafe { f32s_4::load_simd(arch, x_ptr.add(16)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x5 = unsafe { f32s_4::load_simd(arch, x_ptr.add(20)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x6 = unsafe { f32s_4::load_simd(arch, x_ptr.add(24)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x7 = unsafe { f32s_4::load_simd(arch, x_ptr.add(28)) };
 
-                // Four packed bytes represent 32 logical elements, so the loop condition
-                // guarantees that 32 `f32` values are readable from this position.
-                // SAFETY: The loop condition establishes that `8 * i < x.len()`.
-                let x_base = unsafe { px_f32.add(8 * i) };
-                let (x_vec1, x_vec2, x_vec3, x_vec4) = load_deinterleaved_32_f32(arch, x_base);
+                let mask_and = |x: f32s_4, mask| {
+                    // SAFETY: This only reinterprets and masks lane bit patterns, preserving
+                    // valid `f32` encodings while selecting either the original lane or zero.
+                    unsafe {
+                        f32s_4::from_underlying(
+                            arch,
+                            vreinterpretq_f32_u32(vandq_u32(
+                                vreinterpretq_u32_f32(x.to_underlying()),
+                                mask,
+                            )),
+                        )
+                    }
+                };
 
-                s0 = x_vec1.mul_add_simd(y_vec1, s0);
-                s1 = x_vec2.mul_add_simd(y_vec2, s1);
-                s2 = x_vec3.mul_add_simd(y_vec3, s2);
-                s3 = x_vec4.mul_add_simd(y_vec4, s3);
+                s0 = s0 + mask_and(x0, mask0);
+                s1 = s1 + mask_and(x1, mask1);
+                s2 = s2 + mask_and(x2, mask2);
+                s3 = s3 + mask_and(x3, mask3);
+                s0 = s0 + mask_and(x4, mask4);
+                s1 = s1 + mask_and(x5, mask5);
+                s2 = s2 + mask_and(x6, mask6);
+                s3 = s3 + mask_and(x7, mask7);
 
                 i += 4;
             }
@@ -3643,15 +3660,42 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
             while i < y_bytes {
                 // SAFETY: The loop condition guarantees that one byte is readable.
                 let y_word = unsafe { *py_u8.add(i) };
-                // SAFETY: `vcreate_u8` only moves the provided bits into a NEON register;
-                // `arch` proves that NEON instructions are available.
-                let y_words = u8s_8::splat(arch, y_word);
-                let y_vec: f32s_8 = ((y_words >> shifts) & mask).into();
+                // SAFETY: `arch` proves that NEON instructions are available.
+                let y_words = unsafe { vreinterpretq_u32_u8(vdupq_n_u8(y_word)) };
+                let (mask_lo, mask_hi) = (
+                    arch.vtstq_u32(y_words, bits0.to_underlying()),
+                    arch.vtstq_u32(y_words, bits1.to_underlying()),
+                );
 
                 // SAFETY: The loop condition guarantees that 8 logical elements can be read.
-                let x_vec = unsafe { f32s_8::load_simd(arch, px_f32.add(8 * i)) };
+                let x_ptr = unsafe { px_f32.add(8 * i) };
+                // SAFETY: `x_ptr` is valid for 8 consecutive `f32` values.
+                let x0 = unsafe { f32s_4::load_simd(arch, x_ptr) };
+                // SAFETY: `x_ptr` is valid for 8 consecutive `f32` values.
+                let x1 = unsafe { f32s_4::load_simd(arch, x_ptr.add(4)) };
 
-                s0 = x_vec.mul_add_simd(y_vec, s0);
+                // SAFETY: These bitwise operations preserve selected `f32` bit patterns.
+                let (x0, x1) = unsafe {
+                    (
+                        f32s_4::from_underlying(
+                            arch,
+                            vreinterpretq_f32_u32(vandq_u32(
+                                vreinterpretq_u32_f32(x0.to_underlying()),
+                                mask_lo,
+                            )),
+                        ),
+                        f32s_4::from_underlying(
+                            arch,
+                            vreinterpretq_f32_u32(vandq_u32(
+                                vreinterpretq_u32_f32(x1.to_underlying()),
+                                mask_hi,
+                            )),
+                        ),
+                    )
+                };
+
+                s0 = s0 + x0;
+                s1 = s1 + x1;
                 i += 1;
             }
             s = ((s0 + s1) + (s2 + s3)).sum_tree();
@@ -3828,10 +3872,16 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
                 let y_vec = unsafe { u8s_8::load_simd(arch, py_u8.add(i)) };
                 // SAFETY: Eight packed bytes represent 16 logical values, so the loop
                 // condition guarantees 16 readable `f32` values at offset `2 * i`.
-                let [x_vec_1, x_vec_2] = unsafe { arch.vld2q_f32(px_f32.add(2 * i)) };
+                let x_lo_base = unsafe { px_f32.add(2 * i) };
+                // SAFETY: The loop condition guarantees 16 readable `f32` values at `2 * i`,
+                // so the first deinterleaved load (8 values) is in-bounds.
+                let [x_vec_1, x_vec_2] = unsafe { arch.vld2q_f32(x_lo_base) };
                 // SAFETY: Eight packed bytes represent 16 logical values, so the loop
                 // condition guarantees 16 readable `f32` values at offset `2 * i`.
-                let [x_vec_3, x_vec_4] = unsafe { arch.vld2q_f32(px_f32.add(2 * i + 8)) };
+                let x_hi_base = unsafe { px_f32.add(2 * i + 8) };
+                // SAFETY: Same loop bound as above; offsetting by 8 stays within the same
+                // 16-value readable window.
+                let [x_vec_3, x_vec_4] = unsafe { arch.vld2q_f32(x_hi_base) };
 
                 let x_vec_even = f32s_8::new(x_vec_1, x_vec_3);
                 let x_vec_odd = f32s_8::new(x_vec_2, x_vec_4);
