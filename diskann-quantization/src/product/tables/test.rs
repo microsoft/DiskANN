@@ -205,12 +205,12 @@ impl DistanceTestTable {
         }
     }
 
-    pub(super) fn drive_with_tolerance(
+    pub(super) fn drive_unary(
         &self,
         num_trials: usize,
         rng: &mut StdRng,
         check: Check,
-        reference: &mut dyn FnMut(&[f32]) -> f32,
+        reference: &dyn Fn(&[f32]) -> f32,
         dut: &mut dyn FnMut(&[u8]) -> f32,
         ctx: std::fmt::Arguments<'_>,
     ) {
@@ -226,13 +226,14 @@ impl DistanceTestTable {
         self.drive(num_trials, rng, &mut f, ctx)
     }
 
-    pub(super) fn check_squared_l2(
+    pub(super) fn drive_query_like(
         &self,
         num_queries: usize,
         num_trials: usize,
         rng: &mut StdRng,
         check: Check,
-        dut: &mut dyn Preprocessed,
+        f: &dyn Fn(&[f32], &[f32]) -> f32,
+        dut: &mut dyn QueryLike,
         ctx: std::fmt::Arguments<'_>,
     ) {
         let dist = UniformFloat::new(0, self.chunks() + self.pivots()).unwrap();
@@ -241,63 +242,11 @@ impl DistanceTestTable {
             query.iter_mut().for_each(|q| *q = dist.sample(rng));
 
             dut.preprocess(&query);
-            self.drive_with_tolerance(
+            self.drive_unary(
                 num_trials,
                 rng,
                 check,
-                &mut |vector: &[f32]| distance::SquaredL2::evaluate(&*query, vector),
-                &mut |code| dut.evaluate(code),
-                format_args!("{ctx}, query {} of {}", trial + 1, num_queries),
-            )
-        }
-    }
-
-    pub(super) fn check_inner_product(
-        &self,
-        num_queries: usize,
-        num_trials: usize,
-        rng: &mut StdRng,
-        check: Check,
-        dut: &mut dyn Preprocessed,
-        ctx: std::fmt::Arguments<'_>,
-    ) {
-        let dist = UniformFloat::new(0, self.chunks() + self.pivots()).unwrap();
-        let mut query = vec![0.0f32; self.dim()];
-        for trial in 0..num_queries {
-            query.iter_mut().for_each(|q| *q = dist.sample(rng));
-
-            dut.preprocess(&query);
-            self.drive_with_tolerance(
-                num_trials,
-                rng,
-                check,
-                &mut |vector: &[f32]| distance::InnerProduct::evaluate(&*query, vector),
-                &mut |code| dut.evaluate(code),
-                format_args!("{ctx}, query {} of {}", trial + 1, num_queries),
-            )
-        }
-    }
-
-    pub(super) fn check_cosine(
-        &self,
-        num_queries: usize,
-        num_trials: usize,
-        rng: &mut StdRng,
-        check: Check,
-        dut: &mut dyn Preprocessed,
-        ctx: std::fmt::Arguments<'_>,
-    ) {
-        let dist = UniformFloat::new(0, self.chunks() + self.pivots()).unwrap();
-        let mut query = vec![0.0f32; self.dim()];
-        for trial in 0..num_queries {
-            query.iter_mut().for_each(|q| *q = dist.sample(rng));
-
-            dut.preprocess(&query);
-            self.drive_with_tolerance(
-                num_trials,
-                rng,
-                check,
-                &mut |vector: &[f32]| distance::Cosine::evaluate(&*query, vector),
+                &mut |vector: &[f32]| f(&query, vector),
                 &mut |code| dut.evaluate(code),
                 format_args!("{ctx}, query {} of {}", trial + 1, num_queries),
             )
@@ -305,7 +254,20 @@ impl DistanceTestTable {
     }
 }
 
-pub(super) trait Preprocessed {
+pub(super) fn squared_l2(x: &[f32], y: &[f32]) -> f32 {
+    distance::SquaredL2::evaluate(x, y)
+}
+
+pub(super) fn inner_product(x: &[f32], y: &[f32]) -> f32 {
+    distance::InnerProduct::evaluate(x, y)
+}
+
+pub(super) fn cosine(x: &[f32], y: &[f32]) -> f32 {
+    distance::Cosine::evaluate(x, y)
+}
+
+/// A trait modeling query-like style distances with split pre-processing and evaluation.
+pub(super) trait QueryLike {
     fn preprocess(&mut self, query: &[f32]);
     fn evaluate(&mut self, code: &[u8]) -> f32;
 }

@@ -161,6 +161,67 @@ where
     }
 }
 
+/// An element for [`lookup`] that is used for computing cosine similarity.
+///
+/// Each [`DotAndNorm`] consists of a partial dot-product (e.g. the dot-product between a
+/// query chunks and a PQ center) as well as the PQ center's squared norm.
+///
+/// After the lookup operation, the final [`DotAndNorm`] consists of the dot-product between
+/// the query and the effective data vector as well as the total squared norm of the effective
+/// data vector.
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct DotAndNorm {
+    dot: f32,
+    square_norm: f32,
+}
+
+impl DotAndNorm {
+    /// Construct a new [`DotAndNorm`].
+    pub const fn new(dot: f32, square_norm: f32) -> Self {
+        Self { dot, square_norm }
+    }
+
+    /// Return the current value of the dot-product.
+    pub fn dot(&self) -> f32 {
+        self.dot
+    }
+
+    /// Return the current value of the squared norm.
+    pub fn square_norm(&self) -> f32 {
+        self.square_norm
+    }
+
+    /// Finish a cosine computation, using the `query_norm`. This computes:
+    /// ```math
+    /// 1.0 - (self.dot) / (self.square_norm.sqrt() * query_norm)
+    /// ```
+    /// taking care to avoid division by zero.
+    ///
+    /// Note that this returns a [`diskann_vector::SimilarityScore`] for use in similarity
+    /// reranking.
+    pub fn finish_cosine(&self, query_norm: f32) -> diskann_vector::SimilarityScore<f32> {
+        use diskann_vector::SimilarityScore;
+
+        if self.square_norm < f32::MIN_POSITIVE || query_norm < f32::MIN_POSITIVE {
+            SimilarityScore::new(1.0)
+        } else {
+            let v = self.dot / (self.square_norm.sqrt() * query_norm);
+            SimilarityScore::new(1.0 - (-1.0f32).max(1.0f32.min(v)))
+        }
+    }
+}
+
+impl std::ops::Add for DotAndNorm {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            dot: self.dot + rhs.dot,
+            square_norm: self.square_norm + rhs.square_norm,
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////

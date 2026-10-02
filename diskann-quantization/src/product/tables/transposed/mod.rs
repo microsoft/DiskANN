@@ -27,28 +27,55 @@ mod tests {
     use crate::{
         distances,
         product::tables::{
-            lookup,
-            DotAndNorm,
-            test::{DistanceTestTable, Preprocessed},
+            lookup::{self, DotAndNorm},
+            test::{self as table_test, DistanceTestTable, QueryLike},
         },
         test_util::Check,
     };
 
-    // L2
-    #[test]
-    fn test_l2() {
-        let cases = [
-            // dim, chunks, pivots, start, check
-            (1, 1, 1, 0.0, Check::exact()),
-            (3, 3, 2, -1.0, Check::exact()),
-            (7, 3, 15, -7.0, Check::exact()),
-            (8, 4, 16, -8.0, Check::exact()),
-            (13, 5, 17, -11.0, Check::exact()),
-            (32, 4, 32, -16.0, Check::exact()),
-            (37, 7, 33, -20.0, Check::exact()),
-            (17, 5, 256, -128.0, Check::exact()),
+    /// Common cases between all distances.
+    fn cases() -> &'static [Case] {
+        const CASES: &[Case] = &[
+            // dim, chunks, pivots, start
+            Case::new(1, 1, 1, 0.0, Check::exact()),
+            Case::new(3, 3, 2, -1.0, Check::exact()),
+            Case::new(7, 3, 15, -7.0, Check::exact()),
+            Case::new(8, 4, 16, -8.0, Check::exact()),
+            Case::new(13, 5, 17, -11.0, Check::exact()),
+            Case::new(32, 4, 32, -16.0, Check::exact()),
+            Case::new(37, 7, 33, -20.0, Check::exact()),
+            Case::new(17, 5, 256, -128.0, Check::exact()),
         ];
+        CASES
+    }
 
+    #[derive(Debug, Clone, Copy)]
+    struct Case {
+        dim: usize,
+        chunks: usize,
+        pivots: usize,
+        start: f32,
+        check: Check,
+    }
+
+    impl Case {
+        const fn new(dim: usize, chunks: usize, pivots: usize, start: f32, check: Check) -> Self {
+            Self {
+                dim,
+                chunks,
+                pivots,
+                start,
+                check,
+            }
+        }
+    }
+
+    fn run_test(
+        cases: &[Case],
+        create: &dyn Fn(&TransposedTable) -> Box<dyn QueryLike + '_>,
+        reference: &dyn Fn(&[f32], &[f32]) -> f32,
+        ctx: &dyn std::fmt::Display,
+    ) {
         let (num_queries, num_trials) = if cfg!(miri) {
             // The driver will run some directed tests even if there are no regular random
             // trials.
@@ -57,13 +84,47 @@ mod tests {
             (10, 10)
         };
 
+        for Case {
+            dim,
+            chunks,
+            pivots,
+            start,
+            check,
+        } in cases.iter().copied()
+        {
+            let driver = DistanceTestTable::new(dim, chunks, pivots, start);
+            let basic = driver.basic_table();
+            let transposed =
+                TransposedTable::from_parts(basic.view_pivots(), basic.view_offsets().to_owned())
+                    .unwrap();
+
+            let mut dut = create(&transposed);
+
+            driver.drive_query_like(
+                num_queries,
+                num_trials,
+                &mut driver.rng(0xc0ffee),
+                check,
+                reference,
+                &mut *dut,
+                format_args!(
+                    "[{}] transposed table - dim = {}, chunks = {}, pivots = {}",
+                    ctx, dim, chunks, pivots
+                ),
+            );
+        }
+    }
+
+    // L2
+    #[test]
+    fn test_l2() {
         #[derive(Debug)]
         struct Dut<'a> {
             table: &'a TransposedTable,
             lut: rowmajor::Owned<f32>,
         }
 
-        impl Preprocessed for Dut<'_> {
+        impl QueryLike for Dut<'_> {
             fn preprocess(&mut self, query: &[f32]) {
                 self.table
                     .process_into::<distances::SquaredL2, f32>(query, self.lut.as_view_mut())
@@ -74,65 +135,27 @@ mod tests {
             }
         }
 
-        for (dim, chunks, pivots, start, check) in cases {
-            let driver = DistanceTestTable::new(dim, chunks, pivots, start);
-            let basic = driver.basic_table();
-            let transposed =
-                TransposedTable::from_parts(basic.view_pivots(), basic.view_offsets().to_owned())
-                    .unwrap();
-
-            let lut =
-                rowmajor::Owned::from_element(transposed.nchunks(), transposed.ncenters(), 0.0f32);
-
-            let mut dut = Dut {
-                table: &transposed,
-                lut,
-            };
-
-            driver.check_squared_l2(
-                num_queries,
-                num_trials,
-                &mut driver.rng(0xc0ffee),
-                check,
-                &mut dut,
-                format_args!(
-                    "transposed table - dim = {}, chunks = {}, pivots = {}",
-                    dim, chunks, pivots
-                ),
-            );
-        }
+        run_test(
+            cases(),
+            &|table: &TransposedTable| {
+                let lut = rowmajor::Owned::from_element(table.nchunks(), table.ncenters(), 0.0f32);
+                Box::new(Dut { table, lut })
+            },
+            &table_test::squared_l2,
+            &"squared l2",
+        );
     }
 
     // IP
     #[test]
     fn test_ip() {
-        let cases = [
-            // dim, chunks, pivots, start, check
-            (1, 1, 1, 0.0, Check::exact()),
-            (3, 3, 2, -1.0, Check::exact()),
-            (7, 3, 15, -7.0, Check::exact()),
-            (8, 4, 16, -8.0, Check::exact()),
-            (13, 5, 17, -11.0, Check::exact()),
-            (32, 4, 32, -16.0, Check::exact()),
-            (37, 7, 33, -20.0, Check::exact()),
-            (17, 5, 256, -128.0, Check::exact()),
-        ];
-
-        let (num_queries, num_trials) = if cfg!(miri) {
-            // The driver will run some directed tests even if there are no regular random
-            // trials.
-            (1, 0)
-        } else {
-            (10, 10)
-        };
-
         #[derive(Debug)]
         struct Dut<'a> {
             table: &'a TransposedTable,
             lut: rowmajor::Owned<f32>,
         }
 
-        impl Preprocessed for Dut<'_> {
+        impl QueryLike for Dut<'_> {
             fn preprocess(&mut self, query: &[f32]) {
                 self.table
                     .process_into::<distances::InnerProduct, f32>(query, self.lut.as_view_mut())
@@ -143,58 +166,20 @@ mod tests {
             }
         }
 
-        for (dim, chunks, pivots, start, check) in cases {
-            let driver = DistanceTestTable::new(dim, chunks, pivots, start);
-            let basic = driver.basic_table();
-            let transposed =
-                TransposedTable::from_parts(basic.view_pivots(), basic.view_offsets().to_owned())
-                    .unwrap();
-
-            let lut =
-                rowmajor::Owned::from_element(transposed.nchunks(), transposed.ncenters(), 0.0f32);
-
-            let mut dut = Dut {
-                table: &transposed,
-                lut,
-            };
-
-            driver.check_inner_product(
-                num_queries,
-                num_trials,
-                &mut driver.rng(0xc0ffee),
-                check,
-                &mut dut,
-                format_args!(
-                    "transposed table - dim = {}, chunks = {}, pivots = {}",
-                    dim, chunks, pivots
-                ),
-            );
-        }
+        run_test(
+            cases(),
+            &|table: &TransposedTable| {
+                let lut = rowmajor::Owned::from_element(table.nchunks(), table.ncenters(), 0.0f32);
+                Box::new(Dut { table, lut })
+            },
+            &table_test::inner_product,
+            &"inner product",
+        );
     }
 
     // Cosine
     #[test]
     fn test_cosine() {
-        let cases = [
-            // dim, chunks, pivots, start, check
-            (1, 1, 1, 0.0, Check::exact()),
-            (3, 3, 2, -1.0, Check::exact()),
-            (7, 3, 15, -7.0, Check::exact()),
-            (8, 4, 16, -8.0, Check::exact()),
-            (13, 5, 17, -11.0, Check::exact()),
-            (32, 4, 32, -16.0, Check::exact()),
-            (37, 7, 33, -20.0, Check::exact()),
-            (17, 5, 256, -128.0, Check::exact()),
-        ];
-
-        let (num_queries, num_trials) = if cfg!(miri) {
-            // The driver will run some directed tests even if there are no regular random
-            // trials.
-            (1, 0)
-        } else {
-            (10, 10)
-        };
-
         #[derive(Debug)]
         struct Dut<'a> {
             table: &'a TransposedTable,
@@ -202,7 +187,7 @@ mod tests {
             query_norm: f32,
         }
 
-        impl Preprocessed for Dut<'_> {
+        impl QueryLike for Dut<'_> {
             fn preprocess(&mut self, query: &[f32]) {
                 self.query_norm = (FastL2Norm).evaluate(query);
                 self.table
@@ -215,33 +200,22 @@ mod tests {
             }
         }
 
-        for (dim, chunks, pivots, start, check) in cases {
-            let driver = DistanceTestTable::new(dim, chunks, pivots, start);
-            let basic = driver.basic_table();
-            let transposed =
-                TransposedTable::from_parts(basic.view_pivots(), basic.view_offsets().to_owned())
-                    .unwrap();
-
-            let lut =
-                rowmajor::Owned::from_element(transposed.nchunks(), transposed.ncenters(), DotAndNorm::default());
-
-            let mut dut = Dut {
-                table: &transposed,
-                lut,
-                query_norm: 0.0,
-            };
-
-            driver.check_cosine(
-                num_queries,
-                num_trials,
-                &mut driver.rng(0xc0ffee),
-                check,
-                &mut dut,
-                format_args!(
-                    "transposed table - dim = {}, chunks = {}, pivots = {}",
-                    dim, chunks, pivots
-                ),
-            );
-        }
+        run_test(
+            cases(),
+            &|table: &TransposedTable| {
+                let lut = rowmajor::Owned::from_element(
+                    table.nchunks(),
+                    table.ncenters(),
+                    DotAndNorm::default(),
+                );
+                Box::new(Dut {
+                    table,
+                    lut,
+                    query_norm: 0.0f32,
+                })
+            },
+            &table_test::cosine,
+            &"cosine",
+        );
     }
 }

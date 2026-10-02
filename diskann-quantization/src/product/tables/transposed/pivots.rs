@@ -12,7 +12,7 @@ use crate::{
     algorithms::kmeans,
     distances::{Cosine, InnerProduct, SquaredL2},
     multi_vector::BlockTransposed,
-    product::tables::DotAndNorm,
+    product::tables::lookup::DotAndNorm,
 };
 
 // The `Wide` type used as the group granularity for `Chunk`.
@@ -1086,10 +1086,16 @@ impl ProcessInto<DotAndNorm> for Cosine {
             "Check 1 already already proves this"
         );
 
+        // NOTE: This code generated for constructing `DotAndNorm` from the computed
+        // dot products and norms is not particularly efficient.
+        //
+        // It's not terrible, but LLVM refuses to implement a shuffle on its own.
+
         for (block, (into, norms)) in
             std::iter::zip(into_chunks.iter_mut(), norm_chunks.iter()).enumerate()
         {
             let (lo, hi) = chunk.compute_in_block::<InnerProductMathematical, f32>(from, block);
+
             let dot: f32x16 = LoHi { lo, hi }.join();
 
             std::iter::zip(into.iter_mut(), norms.iter())
