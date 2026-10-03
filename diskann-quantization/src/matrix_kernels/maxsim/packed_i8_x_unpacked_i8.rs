@@ -49,7 +49,6 @@ fn i16_pair([lo, hi]: [i16; 2]) -> u32 {
 /// products.
 ///
 /// Broadcasting through `u32` lowers to a single `ld1r` on Neon.
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[inline(always)]
 fn i8_quad(group: [i8; 4]) -> u32 {
     u32::from_le_bytes(group.map(|x| x as u8))
@@ -745,8 +744,6 @@ mod x86_64 {
         arch::x86_64::{V3, V4},
     };
 
-    use crate::matrix_kernels::util::{Convert, Converter};
-
     panel_kernel!(V3, 16, 6, 2, [1, 2, 3, 4, 5]);
     panel_kernel!(V4, 32, 6, 4, [1, 2, 3, 4, 5]);
 
@@ -773,7 +770,9 @@ mod x86_64 {
             let from = unsafe { b.as_std_slice(k) };
 
             scratch.resize(from.len(), 0);
-            Converter::new(self).convert(scratch, from);
+            for (to, from) in std::iter::zip(scratch.iter_mut(), from) {
+                *to = (*from).into();
+            }
 
             // SAFETY: `scratch` has length `b.extent() * k`.
             let b = unsafe { unpacked::View::new(Slice::new(scratch), b.extent(), k) };

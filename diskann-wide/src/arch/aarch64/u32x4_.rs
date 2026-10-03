@@ -182,4 +182,7 @@ mod tests {
 
     // Reductions
     test_utils::ops::test_sumtree!(u32x4, 0xb9ac82ab23a855da, test_neon());
+
+    // Reinterprets
+    test_utils::ops::test_reinterpret!(u32x4 => i8x16, 0xbfad755f32d25e5c, test_neon());
 }
