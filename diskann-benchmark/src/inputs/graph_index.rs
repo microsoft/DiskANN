@@ -7,11 +7,13 @@ use std::num::{NonZero, NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
 use diskann::{
-    graph::{self, config, search::Range, RangeSearchError, StartPointStrategy},
+    graph::{self, config, search::Range, RangeSearchError},
     utils::IntoUsize,
 };
 use diskann_benchmark_core::streaming::executors::bigann;
-use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
+use diskann_benchmark_runner::{
+    files::InputFile, utils::datatype::DataType, utils::RequiredOption, Checker, Reflect,
+};
 use diskann_providers::{
     model::{
         configuration::IndexConfiguration,
@@ -41,7 +43,8 @@ as_input!(DynamicIndexRun);
 // Search //
 ////////////
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Reflect, Clone)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct GraphSearch {
     pub(crate) search_n: usize,
     pub(crate) search_l: Vec<usize>,
@@ -65,7 +68,8 @@ impl GraphSearch {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct GraphRangeSearch {
     pub(crate) initial_search_l: Vec<usize>,
     pub(crate) radius: f32,
@@ -102,7 +106,8 @@ impl GraphRangeSearch {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct TopkSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -156,7 +161,8 @@ impl Example for TopkSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct RangeSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -166,7 +172,8 @@ pub(crate) struct RangeSearchPhase {
     pub(crate) runs: Vec<GraphRangeSearch>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct FilteredRangeSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
@@ -206,7 +213,8 @@ impl RangeSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct BetaSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
@@ -242,7 +250,8 @@ impl BetaSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct MultihopFilterSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
@@ -269,7 +278,8 @@ impl MultihopFilterSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct AdaptiveL {
     pub(crate) sample_count: NonZeroUsize,
     pub(crate) scale_factor: f64,
@@ -283,7 +293,8 @@ impl AdaptiveL {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct InlineFilterSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
@@ -292,8 +303,7 @@ pub(crate) struct InlineFilterSearchPhase {
     pub(crate) data_labels: InputFile,
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) adaptive_l: Option<AdaptiveL>,
+    pub(crate) adaptive_l: RequiredOption<AdaptiveL>,
 }
 
 impl InlineFilterSearchPhase {
@@ -306,7 +316,7 @@ impl InlineFilterSearchPhase {
             run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
-        if let Some(ref adaptive_l) = self.adaptive_l {
+        if let Some(adaptive_l) = self.adaptive_l.as_ref() {
             adaptive_l.validate(checker)?;
         }
 
@@ -314,7 +324,7 @@ impl InlineFilterSearchPhase {
     }
 
     pub(crate) fn adaptive_l(&self) -> Result<Option<graph::search::AdaptiveL>, anyhow::Error> {
-        if let Some(ref adaptive_l) = self.adaptive_l {
+        if let Some(adaptive_l) = self.adaptive_l.as_ref() {
             let adaptive_l = graph::search::AdaptiveL::new(
                 adaptive_l.sample_count.into(),
                 adaptive_l.scale_factor,
@@ -327,8 +337,9 @@ impl InlineFilterSearchPhase {
 }
 
 /// A one-to-one correspondence with [`diskann::graph::config::IntraBatchCandidates`].
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "kebab-case")]
+#[reflect(prefix = "graph::")]
 pub(crate) enum IntraBatchCandidates {
     /// No intra-batch candidates will be considered.
     None,
@@ -359,7 +370,8 @@ impl From<IntraBatchCandidates> for config::IntraBatchCandidates {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct MultiInsert {
     pub(crate) batch_size: NonZeroUsize,
     pub(crate) batch_parallelism: NonZeroUsize,
@@ -379,7 +391,8 @@ impl Example for MultiInsert {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct TopkDeterminantDiversityPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -426,8 +439,9 @@ impl Example for TopkDeterminantDiversityPhase {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Reflect)]
 #[serde(tag = "search-type", rename_all = "kebab-case")]
+#[reflect(prefix = "graph::")]
 pub(crate) enum SearchPhase {
     Topk(TopkSearchPhase),
     Range(RangeSearchPhase),
@@ -596,7 +610,8 @@ impl std::fmt::Display for SearchPhaseKind {
 // Build - Full Precision //
 ////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct IndexLoad {
     pub(crate) data_type: DataType,
     pub(crate) distance: SimilarityMeasure,
@@ -673,17 +688,18 @@ impl std::fmt::Display for IndexLoad {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct InsertRetry {
     num_insert_attempts: NonZeroU32,
     retry_threshold: f32,
     saturate_inserts: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
-#[serde(remote = "StartPointStrategy")]
+#[derive(Debug, Serialize, Deserialize, Reflect, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum StartPointStrategyRef {
+#[reflect(prefix = "graph::")]
+pub enum StartPointStrategy {
     /// Randomly select vector(s) with given norm as starting points with seed provided.
     /// Requires the norm (f32), number of samples (usize), and random seed (u64) to be provided.
     RandomVectors {
@@ -707,7 +723,32 @@ pub enum StartPointStrategyRef {
     FirstVector,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl StartPointStrategy {
+    fn to_diskann(&self) -> graph::StartPointStrategy {
+        match *self {
+            Self::RandomVectors {
+                norm,
+                nsamples,
+                seed,
+            } => graph::StartPointStrategy::RandomVectors {
+                norm,
+                nsamples,
+                seed,
+            },
+            Self::RandomSamples { nsamples, seed } => {
+                graph::StartPointStrategy::RandomSamples { nsamples, seed }
+            }
+            Self::Medoid => graph::StartPointStrategy::Medoid,
+            Self::LatinHyperCube { nsamples, seed } => {
+                graph::StartPointStrategy::LatinHyperCube { nsamples, seed }
+            }
+            Self::FirstVector => graph::StartPointStrategy::FirstVector,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct IndexBuild {
     data_type: DataType,
     data: InputFile,
@@ -715,7 +756,6 @@ pub(crate) struct IndexBuild {
     max_degree: usize,
     l_build: usize,
     insert_retry: Option<InsertRetry>,
-    #[serde(with = "StartPointStrategyRef")]
     start_point_strategy: StartPointStrategy,
     alpha: f32,
     backedge_ratio: f32,
@@ -789,7 +829,7 @@ impl IndexBuild {
     ) -> DefaultProviderParameters {
         DefaultProviderParameters {
             max_points: num_points,
-            frozen_points: NonZero::new(self.start_point_strategy.count()).unwrap(),
+            frozen_points: NonZero::new(self.start_point_strategy().count()).unwrap(),
             metric: self.distance.into(),
             dim,
             max_degree: self.exact_max_degree() as u32,
@@ -804,7 +844,7 @@ impl IndexBuild {
         write_field!(f, "max degree", self.max_degree)?;
         write_field!(f, "L-build", self.l_build)?;
         write_field!(f, "alpha", self.alpha)?;
-        write_field!(f, "start point strategy", self.start_point_strategy)?;
+        write_field!(f, "start point strategy", self.start_point_strategy())?;
         write_field!(f, "backedge ratio", self.backedge_ratio)?;
         match &self.multi_insert {
             None => write_field!(f, "Using Multi Insert", "NO")?,
@@ -814,7 +854,7 @@ impl IndexBuild {
                 write_field!(f, "Intra Batch Candidates", mi.intra_batch_candidates)?;
             }
         }
-        write_field!(f, "start_point_strategy", self.start_point_strategy)?;
+        write_field!(f, "start_point_strategy", self.start_point_strategy())?;
         write_field!(f, "build threads", self.num_threads)?;
         match &self.save_path {
             None => write_field!(f, "Save Path", "None")?,
@@ -864,8 +904,8 @@ impl IndexBuild {
         &self.data
     }
 
-    pub(crate) fn start_point_strategy(&self) -> &StartPointStrategy {
-        &self.start_point_strategy
+    pub(crate) fn start_point_strategy(&self) -> graph::StartPointStrategy {
+        self.start_point_strategy.to_diskann()
     }
 
     pub(crate) fn multi_insert(&self) -> Option<&MultiInsert> {
@@ -906,8 +946,9 @@ impl std::fmt::Display for IndexBuild {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 #[serde(tag = "index-source")] // Use tagged enums for JSON
+#[reflect(prefix = "graph::")]
 pub enum IndexSource {
     Load(IndexLoad),
     Build(IndexBuild),
@@ -936,7 +977,8 @@ impl IndexSource {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct IndexOperation {
     pub(crate) source: IndexSource, // either load or build
     pub(crate) search_phase: SearchPhase,
@@ -978,7 +1020,8 @@ impl std::fmt::Display for IndexOperation {
 // Graph Index Build PQ //
 //////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct IndexPQOperation {
     pub(crate) index_operation: IndexOperation, // either load or build
     pub(crate) num_pq_chunks: usize,
@@ -1068,7 +1111,8 @@ impl std::fmt::Display for IndexPQOperation {
 // Graph Index Build SQ //
 //////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct IndexSQOperation {
     pub(crate) index_operation: IndexOperation,
     pub(crate) num_bits: usize,
@@ -1158,7 +1202,8 @@ impl std::fmt::Display for IndexSQOperation {
 // Graph Index Build Spherical //
 /////////////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct SphericalQuantBuild {
     pub(crate) build: IndexBuild, // spherical does not support saving and loading
     pub(crate) search_phase: SearchPhase,
@@ -1276,8 +1321,9 @@ impl std::fmt::Display for SphericalQuantBuild {
 // Dynamic Runbook Params //
 ////////////////////////////
 
-#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize, Reflect)]
 #[serde(tag = "method", content = "params")]
+#[reflect(prefix = "graph::")]
 pub enum InplaceDeleteMethod {
     #[serde(rename = "visited_and_top_k")]
     VisitedAndTopK { k_value: usize, l_value: usize },
@@ -1300,7 +1346,8 @@ impl From<InplaceDeleteMethod> for graph::InplaceDeleteMethod {
 }
 
 /// Runbook loading and phase type definitions are in utils.datafiles
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct DynamicRunbookParams {
     pub(crate) runbook_path: InputFile,
     pub(crate) dataset_name: String,
@@ -1309,9 +1356,7 @@ pub(crate) struct DynamicRunbookParams {
     pub(crate) ip_delete_num_to_replace: usize,
     /// Threshold for deferred consolidation. Required for soft-delete providers (inmem).
     /// Hard-delete providers (bf-tree) ignore this field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) consolidate_threshold: Option<f32>,
-    #[serde(skip)]
+    pub(crate) consolidate_threshold: RequiredOption<f32>,
     pub(crate) resolved_gt_directory: Option<std::path::PathBuf>,
 }
 
@@ -1324,7 +1369,7 @@ impl DynamicRunbookParams {
         self.runbook_path.resolve(checker)?;
 
         // Validate consolidate_threshold if provided
-        if let Some(threshold) = self.consolidate_threshold {
+        if let Some(&threshold) = self.consolidate_threshold.as_ref() {
             if threshold <= 0.0 {
                 return Err(anyhow::anyhow!(
                     "consolidate_threshold must be greater than 0, but got {}",
@@ -1366,7 +1411,7 @@ impl Example for DynamicRunbookParams {
                 l_value: 64,
             },
             ip_delete_num_to_replace: 3,
-            consolidate_threshold: Some(0.2),
+            consolidate_threshold: RequiredOption::some(0.2),
             resolved_gt_directory: None,
         }
     }
@@ -1377,7 +1422,7 @@ impl DynamicRunbookParams {
     #[cfg(feature = "bftree")]
     pub(crate) fn example_immediate() -> Self {
         Self {
-            consolidate_threshold: None,
+            consolidate_threshold: RequiredOption::none(),
             ..Self::example()
         }
     }
@@ -1410,7 +1455,7 @@ impl std::fmt::Display for DynamicRunbookParams {
             }
         }
         write_field!(f, "IP Delete Num to Replace", self.ip_delete_num_to_replace)?;
-        if let Some(threshold) = self.consolidate_threshold {
+        if let Some(threshold) = self.consolidate_threshold.as_ref() {
             write_field!(f, "Consolidate Threshold", threshold)?;
         }
 
@@ -1422,7 +1467,8 @@ impl std::fmt::Display for DynamicRunbookParams {
 // Graph Index Dynamic //
 ///////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "graph::")]
 pub(crate) struct DynamicIndexRun {
     pub(crate) build: IndexBuild,
     pub(crate) search_phase: SearchPhase,

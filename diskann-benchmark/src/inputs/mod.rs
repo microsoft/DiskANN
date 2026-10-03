@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-pub(crate) mod disk;
+// pub(crate) mod disk;
 pub(crate) mod exhaustive;
 pub(crate) mod filters;
 pub(crate) mod flat;

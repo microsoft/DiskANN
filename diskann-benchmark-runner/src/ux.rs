@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::LazyLock;
+use std::{path::Path, sync::LazyLock};
 
 /// Normalize a string for comparison.
 ///
@@ -89,4 +89,46 @@ pub fn strip_backtrace(s: String) -> String {
     }
 
     lines.join("\n")
+}
+
+//--------------//
+// Crate Shared //
+//--------------//
+
+// Read the entire contents of a file to a string.
+pub(crate) fn read_to_string<P: AsRef<Path>>(path: P, ctx: &str) -> String {
+    match std::fs::read_to_string(path.as_ref()) {
+        Ok(s) => normalize(s),
+        Err(err) => panic!(
+            "failed to read {} {:?} with error: {}",
+            ctx,
+            path.as_ref(),
+            err
+        ),
+    }
+}
+
+const ENV: &str = "DISKANN_TEST";
+
+// Check if `DISKANN_TEST=overwrite` is configured. Return `true` if so - otherwise
+// return `false`.
+//
+// If `DISKANN_TEST` is set but its value is not `overwrite` - panic.
+pub(crate) fn overwrite() -> bool {
+    match std::env::var(ENV) {
+        Ok(v) => {
+            if v == "overwrite" {
+                true
+            } else {
+                panic!(
+                    "Unknown value for {}: \"{}\". Expected \"overwrite\"",
+                    ENV, v
+                );
+            }
+        }
+        Err(std::env::VarError::NotPresent) => false,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("Value for {} is not unicode", ENV);
+        }
+    }
 }

@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+use diskann_benchmark_runner::Reflect;
 use diskann_utils::{
     sampling::medoid::ComputeMedoid,
     views::{Matrix, MatrixView, MutMatrixView},
@@ -16,7 +17,7 @@ use thiserror::Error;
 // DataType //
 //////////////
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum DataType {
     F32,

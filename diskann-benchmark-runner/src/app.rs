@@ -121,6 +121,11 @@ pub enum Commands {
     },
     #[command(subcommand)]
     Check(Check),
+    /// Provide information about all registered types.
+    TypeInfo {
+        /// Provide information for the given type.
+        describe: Option<String>,
+    },
 }
 
 /// Subcommands for regression check operations.
@@ -207,12 +212,28 @@ impl App {
                 if let Some(describe) = describe {
                     if let Some(input) = registry.input(describe) {
                         let repr = jobs::Unprocessed::format_input(input)?;
+
+                        // Render JSON.
                         writeln!(
                             output,
-                            "The example JSON representation for \"{}\" is:",
+                            "The example JSON representation for \"{}\" is:\n",
                             describe
                         )?;
                         writeln!(output, "{}", serde_json::to_string_pretty(&repr)?)?;
+
+                        // Render Type Info.
+                        match input.raw_reflection() {
+                            Some(reflection) => {
+                                writeln!(output, "\nType Information:\n\n{}", reflection.render())?;
+
+                                writeln!(
+                                    output,
+                                    "More type information available using `type-info`"
+                                )?;
+                            }
+                            None => writeln!(output, "\n\nNo Type Information Available")?,
+                        }
+
                         return Ok(());
                     } else {
                         writeln!(output, "No input found for \"{}\"", describe)?;
@@ -386,6 +407,11 @@ impl App {
             }
             // Extensions
             Commands::Check(check) => return self.check(check, registry, output),
+
+            // Types
+            Commands::TypeInfo { describe } => {
+                self.type_info(describe.as_deref(), registry, output)?
+            }
         };
         Ok(())
     }
@@ -482,6 +508,29 @@ impl App {
             }
         }
     }
+
+    fn type_info(
+        &self,
+        describe: Option<&str>,
+        registry: &registry::Registry,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<()> {
+        match describe {
+            Some(type_name) => match registry.type_info(type_name) {
+                Some(reflection) => writeln!(output, "{}", reflection.render())?,
+                None => anyhow::bail!("No type information for \"{}\"", type_name),
+            },
+            None => {
+                let mut all_types: Vec<_> = registry.type_names().collect();
+                all_types.sort_unstable();
+                writeln!(output, "All registered types:")?;
+                for type_name in all_types {
+                    writeln!(output, "  {}", type_name)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 ///////////
@@ -541,8 +590,6 @@ mod tests {
 
     use crate::{registry, test::TestConfig, ux};
 
-    const ENV: &str = "DISKANN_TEST";
-
     // Expected I/O files.
     const STDIN: &str = "stdin.txt";
     const STDOUT: &str = "stdout.txt";
@@ -560,42 +607,6 @@ mod tests {
 
     const ALL_GENERATED_OUTPUTS: [&str; 2] = [OUTPUT_FILE, CHECK_OUTPUT_FILE];
 
-    // Read the entire contents of a file to a string.
-    fn read_to_string<P: AsRef<Path>>(path: P, ctx: &str) -> String {
-        match std::fs::read_to_string(path.as_ref()) {
-            Ok(s) => ux::normalize(s),
-            Err(err) => panic!(
-                "failed to read {} {:?} with error: {}",
-                ctx,
-                path.as_ref(),
-                err
-            ),
-        }
-    }
-
-    // Check if `DISKANN_TEST=overwrite` is configured. Return `true` if so - otherwise
-    // return `false`.
-    //
-    // If `DISKANN_TEST` is set but its value is not `overwrite` - panic.
-    fn overwrite() -> bool {
-        match std::env::var(ENV) {
-            Ok(v) => {
-                if v == "overwrite" {
-                    true
-                } else {
-                    panic!(
-                        "Unknown value for {}: \"{}\". Expected \"overwrite\"",
-                        ENV, v
-                    );
-                }
-            }
-            Err(std::env::VarError::NotPresent) => false,
-            Err(std::env::VarError::NotUnicode(_)) => {
-                panic!("Value for {} is not unicode", ENV);
-            }
-        }
-    }
-
     // Test Runner
     struct Test {
         dir: PathBuf,
@@ -606,7 +617,7 @@ mod tests {
         fn new(dir: &Path) -> Self {
             Self {
                 dir: dir.into(),
-                overwrite: overwrite(),
+                overwrite: ux::overwrite(),
             }
         }
 
@@ -614,7 +625,7 @@ mod tests {
             let path = self.dir.join(STDIN);
 
             // Read the standard input file to a string.
-            let stdin = read_to_string(&path, "standard input");
+            let stdin = ux::read_to_string(&path, "standard input");
 
             let output: Vec<App> = stdin
                 .lines()
@@ -723,7 +734,7 @@ mod tests {
             if self.overwrite {
                 std::fs::write(output, stdout).unwrap();
             } else {
-                let expected = read_to_string(&output, "expected standard output");
+                let expected = ux::read_to_string(&output, "expected standard output");
                 if stdout != expected {
                     panic!("Got:\n--\n{}\n--\nExpected:\n--\n{}\n--", stdout, expected);
                 }
@@ -765,9 +776,9 @@ mod tests {
             } else {
                 match (was_generated, is_expected) {
                     (true, true) => {
-                        let output_contents = read_to_string(generated_path, "generated");
+                        let output_contents = ux::read_to_string(generated_path, "generated");
 
-                        let expected_contents = read_to_string(expected_path, "expected");
+                        let expected_contents = ux::read_to_string(expected_path, "expected");
 
                         if output_contents != expected_contents {
                             panic!(
@@ -777,7 +788,7 @@ mod tests {
                         }
                     }
                     (true, false) => {
-                        let output_contents = read_to_string(generated_path, "generated");
+                        let output_contents = ux::read_to_string(generated_path, "generated");
 
                         panic!(
                             "{} was generated when none was expected. Contents:\n\n{}",

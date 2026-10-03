@@ -37,13 +37,13 @@ as_input!(DiskIndexOperation);
 // Input //
 ///////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub(crate) struct DiskIndexOperation {
     pub(crate) source: DiskIndexSource, // either load or build
     pub(crate) search_phase: DiskSearchPhase,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 #[serde(tag = "disk-index-source")] // Use tagged enums for JSON
 pub(crate) enum DiskIndexSource {
     Load(DiskIndexLoad),

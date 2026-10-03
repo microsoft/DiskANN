@@ -14,7 +14,8 @@ pub(super) fn register(registry: &mut dbr::Registry) -> Result<(), dbr::Registry
 }
 
 /// Configuration for a [`Stress`] run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, dbr::Reflect)]
+#[reflect(prefix = "store::simple::")]
 struct Input {
     /// Shared stress test setup.
     setup: super::Setup,

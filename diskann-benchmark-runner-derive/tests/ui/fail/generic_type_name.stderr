@@ -1,0 +1,5 @@
+error: The `type_name` attribute cannot be applied to types with generics
+ --> tests/ui/fail/generic_type_name.rs:9:23
+  |
+9 | #[reflect(type_name = "Generic")]
+  |                       ^^^^^^^^^

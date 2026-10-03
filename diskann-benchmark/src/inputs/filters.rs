@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::{files::InputFile, Checker};
+use diskann_benchmark_runner::{files::InputFile, Checker, Reflect};
 use serde::{Deserialize, Serialize};
 
 use crate::inputs::{as_input, Example};
@@ -18,7 +18,7 @@ as_input!(MetadataIndexBuild);
 // Metadata-only Index Build //
 ///////////////////////////////
 
-#[derive(Default, Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Default, Debug, Serialize, Deserialize, Reflect, Clone, Copy)]
 pub(crate) enum InvertedIndexKind {
     #[serde(rename = "bftree")]
     #[default]
@@ -32,22 +32,20 @@ impl std::fmt::Display for InvertedIndexKind {
         }
     }
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub(crate) struct FilterParams {
     pub(crate) query_predicates: InputFile,
     pub(crate) data_labels: InputFile,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub(crate) struct MetadataIndexBuild {
     /// Filter parameters describing predicate and label file locations. The
     /// actual label file used to build the inverted index is taken from
     /// `filter_params.data_labels`.
     pub(crate) filter_params: FilterParams,
 
-    /// Which inverted-index implementation to use when building/evaluating
-    /// bitmap filters. If omitted in input files, defaults to `fast`.
-    #[serde(default)]
+    /// Which inverted-index implementation to use when building/evaluating bitmap filters.
     pub(crate) inverted_index_type: InvertedIndexKind,
 }
 

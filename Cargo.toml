@@ -27,6 +27,7 @@ members = [
     "diskann-record",
     "diskann-tools",
     "diskann-bftree",
+    "diskann-benchmark-runner-derive",
 ]
 
 default-members = [
@@ -66,11 +67,11 @@ diskann-inmem = { path = "diskann-inmem", default-features = false, version = "0
 diskann-disk = { path = "diskann-disk", version = "0.59.0" }
 diskann-label-filter = { path = "diskann-label-filter", version = "0.59.0" }
 # Infra
+diskann-benchmark-runner-derive = { path = "diskann-benchmark-runner-derive", version = "0.59.0" }
 diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.59.0" }
 diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.59.0" }
 diskann-tools = { path = "diskann-tools", version = "0.59.0" }
 diskann-bftree = { path = "diskann-bftree", version = "0.59.0" }
-diskann-record = { path = "diskann-record", version = "0.59.0" }
 
 # External dependencies (shared versions)
 anyhow = "1.0.98"

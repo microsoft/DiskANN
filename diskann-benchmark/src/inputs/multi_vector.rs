@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_benchmark_runner::{utils::datatype::DataType, Checker, Input};
+use diskann_benchmark_runner::{utils::datatype::DataType, Checker, Input, Reflect};
 use diskann_quantization::multi_vector::MaxSimIsa;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// JSON-facing shadow of [`MaxSimIsa`]. The library's enum is deliberately
 /// serde-free; this owns the kebab-case JSON shape and converts via `From`.
 /// Stays variant-for-variant in sync with `MaxSimIsa` manually.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub(crate) enum BenchIsa {
@@ -60,7 +60,7 @@ impl From<BenchIsa> for MaxSimIsa {
 }
 
 /// One benchmark configuration: a single shape measurement.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Reflect)]
 pub(crate) struct Run {
     pub(crate) num_query_vectors: NonZeroUsize,
     pub(crate) num_doc_vectors: NonZeroUsize,
@@ -74,7 +74,7 @@ pub(crate) struct Run {
 ///////////////////////
 
 /// A complete multi-vector benchmark job.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub(crate) struct MultiVectorOp {
     pub(crate) element_type: DataType,
     pub(crate) isa: BenchIsa,

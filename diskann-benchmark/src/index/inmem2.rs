@@ -69,14 +69,18 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 mod dto {
     use super::*;
 
-    #[derive(Debug, Serialize, Deserialize)]
+    use diskann_benchmark_runner::Reflect;
+
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct KnnSweep {
         pub(super) search_n: usize,
         pub(super) search_l: Vec<usize>,
         pub(super) recall_k: usize,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct KnnSearch {
         pub(super) queries: InputFile,
         pub(super) groundtruth: InputFile,
@@ -85,14 +89,16 @@ mod dto {
         pub(super) runs: Vec<KnnSweep>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct Data {
         pub(super) data_type: DataType,
         pub(super) data: InputFile,
         pub(super) distance: SimilarityMeasure,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct BuildParams {
         pub(super) pruned_degree: usize,
         pub(super) max_degree: usize,
@@ -128,7 +134,8 @@ mod dto {
     // Streaming //
     //-----------//
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct StreamingKnnSearch {
         pub(super) queries: InputFile,
         pub(super) reps: NonZeroUsize,
@@ -136,7 +143,8 @@ mod dto {
         pub(super) runs: Vec<KnnSweep>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct RunBook {
         pub(super) path: InputFile,
         pub(super) dataset: String,
@@ -149,7 +157,8 @@ mod dto {
     // Top Level Inputs //
     //------------------//
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct StaticBuild {
         pub(super) data: Data,
         pub(super) build: BuildParams,
@@ -157,7 +166,8 @@ mod dto {
         pub(super) quantization: Option<Quantization>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct BigANNStreaming {
         pub(super) data: Data,
         pub(super) build: BuildParams,
