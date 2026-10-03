@@ -37,8 +37,8 @@ Redis always uses cosine distance, but many vector data sets use other metrics. 
 - `XBIN_U8`: binary quantization of 8-bit unsigned integer (using DiskANN's spherical quantizer based on RaBitQ)
 
 
-Currently there is a limit of `2^32 - 2` user vectors in a single instance. Internal
-ID 0 is reserved for the start point, and `u32::MAX` marks ID allocation exhaustion.
+An ndex supports up to `2^32 - 1` user vectors. User IDs range from 0 through
+`u32::MAX - 1`; `u32::MAX` is reserved for the start point.
 
 ### Bulk Import
 

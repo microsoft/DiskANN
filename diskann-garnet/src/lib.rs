@@ -32,7 +32,7 @@ use diskann_vector::distance::Metric;
 use crate::{
     alloc::AlignToEight,
     garnet::{FilterCallback, LogCallback, Term},
-    provider::{GarnetProvider, GarnetProviderError},
+    provider::{DEFAULT_START_POINT_ID, GarnetProvider, GarnetProviderError},
 };
 use crate::{
     dyn_index::DynIndex,
@@ -253,6 +253,7 @@ fn create_index_impl<T: VectorRepr>(
         quant_type,
         metric_type,
         max_degree,
+        DEFAULT_START_POINT_ID,
         callbacks,
         &context,
     )?;

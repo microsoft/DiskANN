@@ -422,11 +422,11 @@ extern "C" fn can_import(context: u64, index_ptr: *const c_void) -> bool;
 /// attributes, 5 for external-to-internal ID mappings, or 6 for
 /// internal-to-external ID mappings. Metadata (4) cannot be imported. IDs and
 /// values must be non-null and non-empty (except for external IDs which may be
-/// empty). Terms may arrive in any order and must use IDs between 1 and
+/// empty). Terms may arrive in any order and must use IDs from 0 through
 /// u32::MAX - 1. Importing a high ID creates every missing FSM block through
-/// that ID. ID 0 is reserved for the start point, which finalization creates
+/// that ID. u32::MAX is reserved for the start point, which finalization creates
 /// outside FSM accounting. External-to-internal mapping values must be a
-/// nonzero native-endian u32. Neighbor terms must have `(max_degree + 1) * 4`
+/// native-endian u32 other than u32::MAX. Neighbor terms must have `(max_degree + 1) * 4`
 /// bytes and a trailing native-endian u32 count no greater than max_degree.
 ///
 /// The first accepted term begins importing. Ordinary operations fail until FINISH succeeds.
