@@ -41,7 +41,7 @@ pub(crate) enum FsmError {
     IdOutOfRange(u32),
 }
 
-/// Guard returned by `next_id()` to ensure correctness when reuse is enabled.
+/// Guard protecting vector writes against quantization phase changes.
 pub(crate) struct ReuseGuard<'a> {
     id: u32,
     barrier: RwLockReadGuard<'a, Barrier>,
@@ -58,6 +58,10 @@ impl<'a> ReuseGuard<'a> {
 
     pub(crate) fn should_quantize(&self) -> bool {
         self.barrier.quantization_enabled
+    }
+
+    pub(crate) fn max_id_for_backfill(&self) -> u32 {
+        self.barrier.max_id_for_backfill
     }
 }
 
@@ -364,6 +368,11 @@ impl FreeSpaceMap {
         self.mark_id_unchecked(ctx, id, true)?;
 
         Ok(ReuseGuard::new(id, barrier))
+    }
+
+    /// Guard writes to an existing ID without changing its allocation state.
+    pub(crate) fn existing_id(&self, id: u32) -> ReuseGuard<'_> {
+        ReuseGuard::new(id, self.barrier.read().unwrap())
     }
 
     /// Return the maximum ID that has been assigned to a vector.
