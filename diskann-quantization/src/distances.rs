@@ -82,6 +82,10 @@ pub struct SquaredL2;
 #[derive(Debug, Clone, Copy)]
 pub struct InnerProduct;
 
+/// Compute the cosine-similarity between vector-like types.
+#[derive(Debug, Clone, Copy)]
+pub struct Cosine;
+
 /// Compute the hamming distance between bit-vectors.
 #[derive(Debug, Clone, Copy)]
 pub struct Hamming;
