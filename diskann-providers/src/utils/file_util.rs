@@ -39,7 +39,6 @@ pub fn file_exists<StorageProvider: StorageReadProvider>(
 /// * Data: [vec1 (len1 * dimension bytes), vec2 (len2 * dimension bytes), ..., vec npts (len npts * dimension bytes)]
 ///
 /// Returns the header information along with the loaded vectors as a vec of vecs
-#[allow(clippy::type_complexity)]
 pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: StorageReadProvider>(
     storage_read_provider: &StorageReader,
     bin_file: &str,
@@ -89,7 +88,7 @@ pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: Stora
     let mut all_vectors: Vec<Matrix<T>> = Vec::with_capacity(num_points);
 
     for &length in &vec_lengths {
-        let mut vectors = Matrix::<T>::new(T::default(), length as usize, dimension);
+        let mut vectors = Matrix::from_element(length as usize, dimension, T::default());
         reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(
             vectors.as_mut_slice(),
         ))?;

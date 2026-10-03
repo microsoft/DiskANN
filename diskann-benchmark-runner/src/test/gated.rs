@@ -16,8 +16,8 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    benchmark::MatchContext, benchmark::Score, Benchmark, Checker, Checkpoint, Input, Output,
-    Reflect,
+    Benchmark, Checker, Checkpoint, Input, Output, Reflect, benchmark::MatchContext,
+    benchmark::Score,
 };
 
 use super::{dim::DimInput, typed::TypeInput};

@@ -51,7 +51,7 @@ where
     C: CreateQuantComputer<Q> + Sync,
 {
     let mut output =
-        diskann_utils::views::Matrix::<u32>::new(u32::MAX, queries.nrows(), results_per_query);
+        diskann_utils::views::Matrix::from_element(queries.nrows(), results_per_query, u32::MAX);
 
     struct Times {
         preprocess: MicroSeconds,
@@ -62,7 +62,7 @@ where
 
     // Lints: Using `ParallelIterator::collect`. It's the caller's responsibility to invoke
     // this in a properly sized Rayon environment.
-    #[allow(clippy::disallowed_methods)]
+    #[expect(clippy::disallowed_methods)]
     let times: Vec<Times> = output
         .par_row_iter_mut()
         .zip(queries.par_row_iter())

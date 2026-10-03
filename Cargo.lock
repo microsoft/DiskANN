@@ -438,6 +438,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "dashmap",
+ "diskann-linalg",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",
@@ -448,6 +449,7 @@ dependencies = [
  "pin-project",
  "rand",
  "relative-path 2.0.1",
+ "rstest",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -616,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-garnet"
-version = "5.0.1"
+version = "5.0.3"
 dependencies = [
  "bytemuck",
  "crossbeam",
@@ -643,6 +645,7 @@ dependencies = [
  "diskann",
  "diskann-benchmark-core",
  "diskann-benchmark-runner",
+ "diskann-quantization",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",

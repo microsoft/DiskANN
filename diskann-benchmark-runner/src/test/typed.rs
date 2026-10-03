@@ -8,9 +8,9 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    Benchmark, Checker, Checkpoint, Input, Output, Reflect,
     benchmark::{MatchContext, PassFail, Regression, Score},
     utils::datatype::{AsDataType, DataType},
-    Benchmark, Checker, Checkpoint, Input, Output, Reflect,
 };
 
 ///////////

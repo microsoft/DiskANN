@@ -5,17 +5,17 @@
 
 use std::{
     any::TypeId,
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
 };
 
-use hashbrown::{hash_set, HashSet};
+use hashbrown::{HashSet, hash_set};
 use thiserror::Error;
 
 use crate::{
-    benchmark::{self, internal::AnnotatedMatch, Benchmark, MatchContext, Regression, Score},
+    Checkpoint, Features, Input, Output, Reflection,
+    benchmark::{self, Benchmark, MatchContext, Regression, Score, internal::AnnotatedMatch},
     input,
     internal::visibility::Visibility,
-    Checkpoint, Features, Input, Output, Reflection,
 };
 
 /// A collection of registered inputs and benchmarks.
@@ -773,7 +773,7 @@ pub(crate) struct RegisteredTolerance<'a> {
 mod tests {
     use super::*;
 
-    use crate::{input, Checker};
+    use crate::{Checker, input};
 
     macro_rules! input {
         ($T:ident, $tag:literal) => {

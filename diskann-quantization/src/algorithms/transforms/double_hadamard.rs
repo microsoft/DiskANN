@@ -257,7 +257,7 @@ where
         //
         // If it is equal to the size of `tmp`, then we only run the first transform. Otherwise,
         // we perform two transforms on the head and tail of `tmp`.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         hadamard_transform(&mut tmp[..split]).unwrap();
 
         // Apply the second transformation.
@@ -267,7 +267,7 @@ where
             .zip(self.signs1.iter())
             .for_each(|(dst, sign)| *dst = f32::from_bits(dst.to_bits() ^ sign));
 
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         hadamard_transform(&mut tmp[intermediate_dim - split..]).unwrap();
 
         match self.subsample.as_ref() {

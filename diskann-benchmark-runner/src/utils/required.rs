@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{reflect::tree, Reflect};
+use crate::{Reflect, reflect::tree};
 
 /// Like `Option<T>`, but requires the containing field to be present in the input JSON.
 ///

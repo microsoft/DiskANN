@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn inline_filter_constructor_with_adaptive_l() {
-        let adaptive = AdaptiveL::new(5, 16.0).expect("valid AdaptiveL");
+        let adaptive = AdaptiveL::new(10, 16.0).expect("valid AdaptiveL");
         let mode = SearchMode::inline_filter(|id| *id == 11, Some(adaptive));
         match &mode {
             SearchMode::InlineFilter {

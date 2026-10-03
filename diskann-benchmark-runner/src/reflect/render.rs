@@ -8,11 +8,11 @@ use std::fmt::{self, Write};
 use crate::utils::fmt::Quote;
 
 use super::{
+    Reflection,
     tree::{
         Aggregate, Enum, EnumRepr, Fields, NamedField, Optional, Sequence, Type, UnnamedField,
         Variant,
     },
-    Reflection,
 };
 
 const INDENT: usize = 2;
@@ -331,7 +331,7 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{ux, Reflect};
+    use crate::{Reflect, ux};
 
     // For these tests, we use a variation of baseline tests where all the expected results
     // are put into a single file, mainly to keep from generating a bunch of files for the

@@ -15,6 +15,7 @@ rand_distr.workspace = true
 rand.workspace = true
 
 [lints]
+clippy.allow_attributes = "warn"
 clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"
 

@@ -18,7 +18,7 @@ use crate::{
 
 // mask8x16
 #[derive(Debug, Clone, Copy)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 #[repr(transparent)]
 pub struct mask8x16(pub(crate) __m128i);
 
@@ -144,7 +144,7 @@ impl From<mask8x16> for BitMask<16, V3> {
 
 // mask8x32
 #[derive(Debug, Clone, Copy)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 #[repr(transparent)]
 pub struct mask8x32(pub(crate) __m256i);
 
@@ -287,7 +287,7 @@ impl From<mask8x32> for BitMask<32, V3> {
 
 // mask32x4
 #[derive(Debug, Clone, Copy)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 #[repr(transparent)]
 pub struct mask32x4(pub(crate) __m128i);
 
@@ -379,7 +379,7 @@ impl From<mask32x4> for BitMask<4, V3> {
 
 // mask32x8
 #[derive(Debug, Clone, Copy)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 #[repr(transparent)]
 pub struct mask32x8(pub(crate) __m256i);
 
@@ -482,7 +482,7 @@ impl From<mask32x8> for BitMask<8, V3> {
 
 // mask64x2
 #[derive(Debug, Clone, Copy)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 #[repr(transparent)]
 pub struct mask64x2(pub(crate) __m128i);
 
@@ -573,7 +573,7 @@ impl From<mask64x2> for BitMask<2, V3> {
 
 // mask64x4
 #[derive(Debug, Clone, Copy)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 #[repr(transparent)]
 pub struct mask64x4(pub(crate) __m256i);
 

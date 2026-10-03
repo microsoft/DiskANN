@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::{internal::visibility::Visibility, Checker, Reflect, Reflection};
+use crate::{Checker, Reflect, Reflection, internal::visibility::Visibility};
 
 /// Inputs to [`Benchmarks`](crate::Benchmark).
 ///

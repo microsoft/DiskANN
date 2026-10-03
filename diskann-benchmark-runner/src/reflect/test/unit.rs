@@ -7,7 +7,7 @@
 
 use std::assert_matches;
 
-use crate::reflect::{tree::Fields, Reflect, Reflection};
+use crate::reflect::{Reflect, Reflection, tree::Fields};
 
 #[test]
 fn test_unit() {

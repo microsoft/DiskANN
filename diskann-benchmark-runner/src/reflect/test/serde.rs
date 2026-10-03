@@ -18,7 +18,7 @@ use hashbrown::HashSet;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::reflect::{tree, Reflect, Reflection, Type};
+use crate::reflect::{Reflect, Reflection, Type, tree};
 
 /// Check that the serialized representation of `s` in JSON matches the [`Reflection`]
 /// generated for this type.

@@ -21,7 +21,7 @@ use diskann_providers::index::wrapped_async::DiskANNIndex;
 /// All vector data is passed as untyped byte slices.
 pub(crate) trait DynIndex: Send + Sync {
     /// Inserts a vector with id into the index
-    fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
+    fn insert(&self, context: &Context, id: &GarnetId, data: &[u8], attrs: &[u8]) -> ANNResult<()>;
 
     /// Sets the attributes for a vector
     fn set_attributes(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
@@ -115,12 +115,12 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     /// Inserts a type erased vector into the index.
     ///
     /// The data slice here must be aligned to `T` or this will panic.
-    fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()> {
+    fn insert(&self, context: &Context, id: &GarnetId, data: &[u8], attrs: &[u8]) -> ANNResult<()> {
         self.insert(
             &DynamicQuantization,
             context,
             id,
-            bytemuck::cast_slice::<u8, T>(data),
+            (bytemuck::cast_slice::<u8, T>(data), attrs),
         )
     }
 

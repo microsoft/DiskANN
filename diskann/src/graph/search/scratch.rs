@@ -7,12 +7,7 @@
 
 //! Scratch space for in-memory index based search
 
-use std::collections::VecDeque;
-
-use crate::{
-    neighbor::{Neighbor, NeighborPriorityQueue},
-    utils::VectorId,
-};
+use crate::{neighbor::NeighborPriorityQueue, utils::VectorId};
 use diskann_utils::object_pool::AsPooled;
 use hashbrown::HashSet;
 
@@ -59,14 +54,6 @@ where
     /// A list of beam search nodes used during search. This is used when beam search is enabled
     /// to temporarily hold beam of nodes in each hop.
     pub beam_nodes: Vec<I>,
-
-    /// A queue of nodes to visit during range search
-    /// Does not need to be ordered by distance
-    pub range_frontier: VecDeque<I>,
-
-    /// A list of nodes that are in range of the query
-    /// Only used during range search
-    pub in_range: Vec<Neighbor<I>>,
 
     /// A tracker for how many hops we have taken during the current search
     pub hops: u32,
@@ -126,8 +113,6 @@ where
             visited,
             id_scratch: Vec::new(),
             beam_nodes: Vec::new(),
-            in_range: Vec::new(),
-            range_frontier: VecDeque::new(),
             hops: 0,
             cmps: 0,
         }
@@ -150,8 +135,6 @@ where
         self.visited.clear();
         self.id_scratch.clear();
         self.beam_nodes.clear();
-        self.in_range.clear();
-        self.range_frontier.clear();
 
         self.hops = 0;
         self.cmps = 0;
@@ -231,6 +214,7 @@ pub(crate) struct SearchScratchParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::neighbor::Neighbor;
 
     #[test]
     pub fn test_new() {

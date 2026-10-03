@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use diskann_benchmark_runner::{Registry, RegistryError, Reflect, utils::fmt::KeyValue};
+use diskann_benchmark_runner::{Reflect, Registry, RegistryError, utils::fmt::KeyValue};
 use rand::{Rng, SeedableRng, distr::Uniform, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 
@@ -44,10 +44,12 @@ const RECLAIM_EVERY: u64 = 16;
 
 mod checked;
 mod intrusive;
+mod simple;
 
 pub(super) fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     intrusive::register(registry)?;
     checked::register(registry)?;
+    simple::register(registry)?;
 
     Ok(())
 }
@@ -424,10 +426,7 @@ struct Shared<T> {
     transitions: AtomicU64,
 }
 
-impl<T> Shared<T>
-where
-    T: Testable,
-{
+impl<T> Shared<T> {
     /// Record an observed invariant violation and signal all workers to stop.
     fn record_violation(&self, message: String) {
         let mut slot = self.violation.lock().unwrap();
@@ -441,7 +440,12 @@ where
             || self.ops.load(Relaxed) >= self.max_ops
             || Instant::now() >= self.deadline
     }
+}
 
+impl<T> Shared<T>
+where
+    T: Testable,
+{
     //---------//
     // Workers //
     //---------//

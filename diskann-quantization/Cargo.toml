@@ -21,6 +21,7 @@ half = { version = "2.6.0", features = ["bytemuck"] }
 diskann-utils = { workspace = true }
 
 [lints.clippy]
+allow_attributes = "warn"
 undocumented_unsafe_blocks = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
@@ -28,6 +29,7 @@ panic = "warn"
 uninlined_format_args = "allow"
 
 [dev-dependencies]
+diskann-utils = { workspace = true, features = ["testing"] }
 cfg-if = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

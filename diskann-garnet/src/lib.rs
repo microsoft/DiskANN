@@ -560,21 +560,16 @@ pub unsafe extern "C" fn insert(
         return InsertResult::Fail.into();
     };
 
+    let attr_data = if attribute_len > 0 && !attribute_data.is_null() {
+        unsafe { slice::from_raw_parts(attribute_data, attribute_len) }
+    } else {
+        &[]
+    };
+
     let old_ready = ctx.quantizer_ready();
 
     // Insert the vector
-    if index.inner.insert(&ctx, &id, &v).is_ok() {
-        // Write attributes to garnet. These are written after insert since
-        // they are keyed on internal id.
-        let attr_data = if attribute_len > 0 && !attribute_data.is_null() {
-            unsafe { slice::from_raw_parts(attribute_data, attribute_len) }
-        } else {
-            &[]
-        };
-        if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
-            return InsertResult::Fail.into();
-        }
-
+    if index.inner.insert(&ctx, &id, &v, attr_data).is_ok() {
         let ready = ctx.quantizer_ready();
         if !old_ready && ready {
             InsertResult::SuccessStartTraining.into()

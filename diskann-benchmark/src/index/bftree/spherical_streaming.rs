@@ -25,11 +25,7 @@ use diskann_providers::{
     model::graph::provider::async_::common::Quantized,
     storage::{FileStorageProvider, SaveWith},
 };
-use diskann_quantization::alloc::{AllocatorError, GlobalAllocator, Poly};
-use diskann_quantization::spherical::{
-    iface::{self as spherical_iface, Quantizer},
-    SphericalQuantizer,
-};
+use diskann_quantization::alloc::GlobalAllocator;
 use diskann_utils::views::{Matrix, MatrixView};
 use rand::SeedableRng;
 
@@ -52,16 +48,6 @@ use crate::{
 
 type BfTreeSQProvider = BfTreeProvider<f32, QuantVectorProvider>;
 type BfTreeSQIndex = Arc<DiskANNIndex<BfTreeSQProvider>>;
-
-fn new_quantizer<const NBITS: usize>(
-    quantizer: SphericalQuantizer,
-) -> Result<Poly<dyn Quantizer>, AllocatorError>
-where
-    spherical_iface::Impl<NBITS>: spherical_iface::Constructible + Quantizer,
-{
-    let imp = spherical_iface::Impl::<NBITS>::new(quantizer)?;
-    diskann_quantization::poly!(Quantizer, imp, GlobalAllocator)
-}
 
 struct BfTreeSQStream {
     index: BfTreeSQIndex,
@@ -262,9 +248,9 @@ fn bftree_sq_streaming_impl(
     )?;
 
     let quantizer_poly = match input.num_bits().get() {
-        1 => new_quantizer::<1>(quantizer)?,
-        2 => new_quantizer::<2>(quantizer)?,
-        4 => new_quantizer::<4>(quantizer)?,
+        1 => quantizer.as_quantizer::<1>()?,
+        2 => quantizer.as_quantizer::<2>()?,
+        4 => quantizer.as_quantizer::<4>()?,
         _ => unreachable!("try_match handles bit validation"),
     };
 

@@ -90,14 +90,14 @@ enum Arch {
     ///
     /// Only usable when compiling for x86-64.
     #[serde(rename = "x86-64-v4")]
-    #[allow(non_camel_case_types)]
+    #[expect(non_camel_case_types)]
     X86_64_V4,
 
     /// Target AVX2.
     ///
     /// Only usable when compiling for x86-64.
     #[serde(rename = "x86-64-v3")]
-    #[allow(non_camel_case_types)]
+    #[expect(non_camel_case_types)]
     X86_64_V3,
     /// Target the Aarch64 Neon instruction set.
     ///
@@ -799,11 +799,9 @@ impl<Q, D> Data<Q, D> {
         let query: Box<[Q]> = (0..run.dim.get())
             .map(|_| StandardUniform.sample(&mut rng))
             .collect();
-        let data = Matrix::<D>::new(
-            diskann_utils::views::Init(|| StandardUniform.sample(&mut rng)),
-            run.num_points.get(),
-            run.dim.get(),
-        );
+        let data = Matrix::<D>::from_fn(run.num_points.get(), run.dim.get(), |_| {
+            StandardUniform.sample(&mut rng)
+        });
 
         Self { query, data }
     }

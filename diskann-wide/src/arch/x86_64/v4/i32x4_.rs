@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDVector},
+    traits::{SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPopcount, SIMDVector},
 };
 
 /////
@@ -59,6 +59,20 @@ impl SIMDMulAdd for i32x4 {
     #[inline(always)]
     fn mul_add_simd(self, rhs: Self, accumulator: Self) -> Self {
         self * rhs + accumulator
+    }
+}
+
+impl SIMDMinMax for i32x4 {
+    #[inline(always)]
+    fn min_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm_min_epi32` requires SSE4.1, which is implied by the V4 architecture.
+        Self(unsafe { _mm_min_epi32(self.0, rhs.0) })
+    }
+
+    #[inline(always)]
+    fn max_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm_max_epi32` requires SSE4.1, which is implied by the V4 architecture.
+        Self(unsafe { _mm_max_epi32(self.0, rhs.0) })
     }
 }
 
@@ -111,6 +125,7 @@ mod test_x86_i32 {
     test_utils::ops::test_mul!(i32x4, 0xf0caa85d919a41a8, V4::new_checked_uncached());
     test_utils::ops::test_fma!(i32x4, 0x1f0340c2109aef6f, V4::new_checked_uncached());
     test_utils::ops::test_abs!(i32x4, 0x60710c0c88537c7d, V4::new_checked_uncached());
+    test_utils::ops::test_minmax!(i32x4, 0x6d7fc8ed6d852187, V4::new_checked_uncached());
 
     test_utils::ops::test_cmp!(i32x4, 0x9a2d73b7295214c6, V4::new_checked_uncached());
 

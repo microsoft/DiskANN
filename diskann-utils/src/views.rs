@@ -3,10 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    fmt,
-    ops::{Index, IndexMut},
-};
+use std::{marker::PhantomData, num::NonZeroUsize};
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::{IndexedParallelIterator, ParallelIterator, ParallelSlice, ParallelSliceMut};
@@ -91,113 +88,366 @@ unsafe impl<T> MutDenseData for Box<[T]> {
     }
 }
 
-////////////
-// Matrix //
-////////////
+///////////////////
+// Matrix Layout //
+///////////////////
 
-/// A view over dense chunk of memory, interpreting that memory as a 2-dimensional matrix
-/// laid out in row-major order.
+/// A validated layout for [`MatrixBase`].
 ///
-/// When this class view immutable memory, it is `Copy`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MatrixBase<T>
-where
-    T: DenseData,
-{
-    data: T,
+/// This type guarantees the following invariants:
+///
+/// * `self.nrows() * self.ncols()` does not exceed `usize::MAX`.
+/// * `self.nrows() * self.ncols() * std::mem::size_of::<T>()` does not exceed `isize::MAX`.
+pub struct Layout<T> {
     nrows: usize,
     ncols: usize,
+    _type: PhantomData<fn() -> T>,
 }
 
-#[derive(Debug, Error)]
-#[non_exhaustive]
-#[error(
-    "tried to construct a matrix view with {nrows} rows and {ncols} columns over a slice \
-     of length {len}"
-)]
-pub struct TryFromErrorLight {
-    len: usize,
-    nrows: usize,
-    ncols: usize,
+impl<T> Layout<T> {
+    /// Construct a new [`Layout`], validating the following:
+    ///
+    /// * `nrows * ncols` does not exceed `usize::MAX`.
+    /// * `nrows * ncols * std::mem::size_of::<T>()` does not exceed `isize::MAX` (the maximum
+    ///   addressable byte span).
+    pub const fn new(nrows: usize, ncols: usize) -> Result<Self, LayoutError> {
+        match LayoutError::check::<T>(nrows, ncols) {
+            Ok(()) => Ok(Self {
+                nrows,
+                ncols,
+                _type: PhantomData,
+            }),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Construct a layout without validating its dimensions.
+    ///
+    /// # Safety
+    ///
+    /// `LayoutError::check::<T>(nrows, ncols)` must succeed.
+    unsafe fn new_unchecked(nrows: usize, ncols: usize) -> Self {
+        debug_assert!(LayoutError::check::<T>(nrows, ncols).is_ok());
+        Self {
+            nrows,
+            ncols,
+            _type: PhantomData,
+        }
+    }
+
+    /// Return the product `self.nrows() * self.ncols()`.
+    pub fn num_elements(&self) -> usize {
+        self.nrows() * self.ncols()
+    }
+
+    /// Return the number of rows.
+    pub fn nrows(&self) -> usize {
+        self.nrows
+    }
+
+    /// Return the number of columns.
+    pub fn ncols(&self) -> usize {
+        self.ncols
+    }
+
+    /// Rebind the element type to `U`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the rebound layout's byte size would exceed `isize::MAX`.
+    pub fn rebind<U>(&self) -> Result<Layout<U>, LayoutError> {
+        if std::mem::size_of::<U>() <= std::mem::size_of::<T>() {
+            // This branch is mainly to communicate to the compiler situations where an
+            // erroring branch can be avoided.
+            //
+            // SAFETY: `self` already has a validated layout. Since we know
+            // `self.nrows() * self.ncols()` cannot overflow, the only danger is allocation
+            // overflow. If we are staying or decreasing size, no need to revalidate.
+            Ok(unsafe { Layout::new_unchecked(self.nrows(), self.ncols()) })
+        } else {
+            Layout::new(self.nrows(), self.ncols())
+        }
+    }
+
+    /// Swap the rows and columns.
+    pub fn transpose(&self) -> Layout<T> {
+        // SAFETY: We've already validated the relationship between `self.nrows` and
+        // `self.ncols`. Since multiplication is commutative, swapping rows and cols does
+        // not invalidate the relationship.
+        unsafe { Layout::new_unchecked(self.ncols, self.nrows) }
+    }
 }
 
-#[derive(Error)]
-#[non_exhaustive]
-#[error(
-    "tried to construct a matrix view with {nrows} rows and {ncols} columns over a slice \
-     of length {}", data.as_slice().len()
-)]
-pub struct TryFromError<T: DenseData> {
-    data: T,
-    nrows: usize,
-    ncols: usize,
+impl<T> Clone for Layout<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-// Manually implement `fmt::Debug` so we don't require `T::Debug`.
-impl<T: DenseData> fmt::Debug for TryFromError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TryFromError")
-            .field("data_len", &self.data.as_slice().len())
+impl<T> Copy for Layout<T> {}
+
+impl<T> std::fmt::Debug for Layout<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layout")
             .field("nrows", &self.nrows)
             .field("ncols", &self.ncols)
+            .field("elsize", &std::mem::size_of::<T>())
             .finish()
     }
 }
 
-impl<T: DenseData> TryFromError<T> {
-    /// Consume the error and return the base data.
-    pub fn into_inner(self) -> T {
-        self.data
+impl<T> PartialEq for Layout<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nrows == other.nrows && self.ncols == other.ncols
     }
+}
 
-    /// Return a variation of `Self` that is guaranteed to be `'static` by removing the
-    /// data that was passed to the original constructor.
-    pub fn as_static(&self) -> TryFromErrorLight {
-        TryFromErrorLight {
-            len: self.data.as_slice().len(),
-            nrows: self.nrows,
-            ncols: self.ncols,
+impl<T> Eq for Layout<T> {}
+
+/// Errors in the invariants guaranteed by [`Layout`].
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutError {
+    nrows: usize,
+    ncols: usize,
+    elsize: Option<NonZeroUsize>,
+}
+
+impl LayoutError {
+    pub(crate) const fn check<T>(nrows: usize, ncols: usize) -> Result<(), Self> {
+        // Guard the element count itself so that `num_elements()` can never overflow.
+        let elsize = std::mem::size_of::<T>();
+        let num_elements = match nrows.checked_mul(ncols) {
+            Some(num_elements) => num_elements,
+            None => {
+                return Err(Self {
+                    nrows,
+                    ncols,
+                    elsize: None,
+                })
+            }
+        };
+
+        if let Some(len) = num_elements.checked_mul(std::mem::size_of::<T>()) {
+            if len <= isize::MAX as usize {
+                return Ok(());
+            }
+        }
+
+        Err(Self {
+            nrows,
+            ncols,
+            elsize: NonZeroUsize::new(elsize),
+        })
+    }
+}
+
+impl std::fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.elsize {
+            Some(elsize) => {
+                write!(
+                    f,
+                    "a matrix of size {}x{} with elements of size {} exceeds `isize::MAX` bytes",
+                    self.nrows, self.ncols, elsize
+                )
+            }
+            None => {
+                write!(
+                    f,
+                    "a matrix of size {}x{} has a length exceeding `usize::MAX`",
+                    self.nrows, self.ncols,
+                )
+            }
         }
     }
 }
 
-/// A generator for initializing the entries in a matrix via `Matrix::new`.
-pub trait Generator<T> {
-    fn generate(&mut self) -> T;
+impl std::error::Error for LayoutError {}
+
+////////////
+// Matrix //
+////////////
+
+/// A view over a dense chunk of memory, interpreting that memory as a 2-dimensional matrix
+/// laid out in row-major order.
+///
+/// When this type views immutable memory, it is `Copy`.
+///
+/// # Temporary Note
+///
+/// This data structure is in the process of a representation migration. It currently
+/// needs two type parameters:
+///
+/// * `T`: The type of the container holding the data in the matrix.
+/// * `E`: The element type of the matrix.
+///
+/// The latter is needed to establish proper covariance with respect to the element type.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MatrixBase<T, E = <T as DenseData>::Elem>
+where
+    T: DenseData<Elem = E>,
+{
+    data: T,
+    layout: Layout<E>,
 }
 
-impl<T> Generator<T> for T
-where
-    T: Clone,
-{
-    fn generate(&mut self) -> T {
-        self.clone()
-    }
-}
-
-/// A matrix initializer that invokes the provided lambda to initialize each element.
-pub struct Init<F>(pub F);
-
-impl<T, F> Generator<T> for Init<F>
-where
-    F: FnMut() -> T,
-{
-    fn generate(&mut self) -> T {
-        (self.0)()
-    }
+/// An initializer argument for the closure provided to [`Matrix::from_fn`],
+/// [`Matrix::try_from_fn`], and [`Matrix::from_fn_with_layout`] to remove ambiguity of
+/// the row and column being initialized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowCol {
+    pub row: usize,
+    pub col: usize,
 }
 
 impl<T> MatrixBase<Box<[T]>> {
-    /// Construct a new Matrix initialized with the contents of the generator.
+    // NOTE: For constructors, keep `from_fn` and `from_element` first.
+    //
+    // Rust suggests methods in their declaration order, so this keeps the most common
+    // methods as top suggestions.
+
+    /// Construct a new matrix using `init`.
     ///
     /// Elements are initialized in memory order.
-    pub fn new<U>(mut generator: U, nrows: usize, ncols: usize) -> Self
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::from_fn(2, 3, |rc| 3 * rc.row + rc.col);
+    ///
+    /// assert_eq!(mat.row(0), &[0, 1, 2]);
+    /// assert_eq!(mat.row(1), &[3, 4, 5]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nrows * ncols` overflows `usize::MAX`, or if the allocation size exceeds
+    /// `isize::MAX`.
+    #[track_caller]
+    pub fn from_fn<F>(nrows: usize, ncols: usize, init: F) -> Self
     where
-        U: Generator<T>,
+        F: FnMut(RowCol) -> T,
     {
-        let data: Box<[T]> = (0..nrows * ncols).map(|_| generator.generate()).collect();
-        debug_assert_eq!(data.len(), nrows * ncols);
-        Self { data, nrows, ncols }
+        match Self::try_from_fn(nrows, ncols, init) {
+            Ok(matrix) => matrix,
+            Err(error) => panic!("Matrix::from_fn failed with: {error}"),
+        }
+    }
+
+    /// Construct a new matrix using `init`.
+    ///
+    /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::try_from_fn(2, 3, |rc| 3 * rc.row + rc.col).unwrap();
+    ///
+    /// assert_eq!(mat.row(0), &[0, 1, 2]);
+    /// assert_eq!(mat.row(1), &[3, 4, 5]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `nrows * ncols` overflows `usize::MAX`, or if the allocation size
+    /// exceeds `isize::MAX`.
+    pub fn try_from_fn<F>(nrows: usize, ncols: usize, init: F) -> Result<Self, LayoutError>
+    where
+        F: FnMut(RowCol) -> T,
+    {
+        let layout = Layout::new(nrows, ncols)?;
+        Ok(Self::from_fn_with_layout(layout, init))
+    }
+
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::from_element(2, 3, 0u32);
+    ///
+    /// assert_eq!(mat.row(0), &[0, 0, 0]);
+    /// assert_eq!(mat.row(1), &[0, 0, 0]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nrows * ncols` overflows `usize::MAX`, or if the allocation size exceeds
+    /// `isize::MAX`.
+    #[track_caller]
+    pub fn from_element(nrows: usize, ncols: usize, element: T) -> Self
+    where
+        T: Clone,
+    {
+        match Self::try_from_element(nrows, ncols, element) {
+            Ok(matrix) => matrix,
+            Err(error) => panic!("Matrix::from_element failed with: {error}"),
+        }
+    }
+
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
+    ///
+    /// ```
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mat = Matrix::try_from_element(2, 3, 0u32).unwrap();
+    ///
+    /// assert_eq!(mat.row(0), &[0, 0, 0]);
+    /// assert_eq!(mat.row(1), &[0, 0, 0]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `nrows * ncols` overflows `usize::MAX`, or if the allocation size
+    /// exceeds `isize::MAX`.
+    pub fn try_from_element(nrows: usize, ncols: usize, element: T) -> Result<Self, LayoutError>
+    where
+        T: Clone,
+    {
+        let layout = Layout::new(nrows, ncols)?;
+        Ok(Self::from_element_with_layout(layout, element))
+    }
+
+    // Less common constructors.
+
+    /// Construct a new matrix using `init`.
+    ///
+    /// Elements are initialized in memory order.
+    pub fn from_fn_with_layout<F>(layout: Layout<T>, mut init: F) -> Self
+    where
+        F: FnMut(RowCol) -> T,
+    {
+        let mut row = 0;
+        let mut col = 0;
+
+        let data: Box<[T]> = (0..layout.num_elements())
+            .map(|_| {
+                let v = (init)(RowCol { row, col });
+                col += 1;
+                if col == layout.ncols() {
+                    col = 0;
+                    row += 1;
+                }
+                v
+            })
+            .collect();
+
+        Self { data, layout }
+    }
+
+    /// Construct a new matrix by cloning `element`.
+    ///
+    /// Elements are initialized in memory order.
+    pub fn from_element_with_layout(layout: Layout<T>, element: T) -> Self
+    where
+        T: Clone,
+    {
+        let data: Box<[T]> = std::iter::repeat_n(element, layout.num_elements()).collect();
+        Self { data, layout }
     }
 }
 
@@ -209,38 +459,89 @@ where
     /// is incorrect, return a `TryFromError` containing the base.
     ///
     /// The length of the base must be equal to `nrows * ncols`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error containing `data` if the dimensions do not describe a valid layout
+    /// or if `data.as_slice().len()` does not equal `nrows * ncols`.
     pub fn try_from(data: T, nrows: usize, ncols: usize) -> Result<Self, TryFromError<T>> {
+        let layout = match Layout::<T::Elem>::new(nrows, ncols) {
+            Ok(layout) => layout,
+            Err(err) => return Err(TryFromError::layout(data, err)),
+        };
+
         let len = data.as_slice().len();
-        if len != nrows * ncols {
-            Err(TryFromError { data, nrows, ncols })
+        if len != layout.num_elements() {
+            Err(TryFromError::mismatch(
+                data,
+                layout.nrows(),
+                layout.ncols(),
+                len,
+            ))
         } else {
-            Ok(Self { data, nrows, ncols })
+            Ok(Self { data, layout })
         }
+    }
+
+    /// Construct a matrix without validating that the data length matches the layout.
+    ///
+    /// # Safety
+    ///
+    /// `data.as_slice().len()` must equal `layout.num_elements()`.
+    unsafe fn from_data_unchecked(data: T, layout: Layout<T::Elem>) -> Self {
+        debug_assert_eq!(data.as_slice().len(), layout.num_elements());
+        Self { data, layout }
+    }
+
+    /// Return the [`Layout`] for this matrix.
+    pub fn layout(&self) -> Layout<T::Elem> {
+        self.layout
     }
 
     /// Return the number of columns in the matrix.
     pub fn ncols(&self) -> usize {
-        self.ncols
+        self.layout().ncols()
     }
 
     /// Return the number of rows in the matrix.
     pub fn nrows(&self) -> usize {
-        self.nrows
+        self.layout().nrows()
     }
 
     /// Create a new [`Matrix`] by applying the closure `f` to each element.
     ///
     /// The returned matrix has the same shape as `self`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting matrix's byte size would exceed `isize::MAX`.
+    #[track_caller]
     pub fn map<F, R>(&self, f: F) -> Matrix<R>
     where
         F: FnMut(&T::Elem) -> R,
     {
-        let data: Box<[_]> = self.as_slice().iter().map(f).collect();
-        Matrix {
-            data,
-            nrows: self.nrows(),
-            ncols: self.ncols(),
+        match self.try_map(f) {
+            Ok(matrix) => matrix,
+            Err(error) => panic!("Matrix::map failed with: {error}"),
         }
+    }
+
+    /// Create a new [`Matrix`] by applying the closure `f` to each element.
+    ///
+    /// The returned matrix has the same shape as `self`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the resulting matrix's byte size would exceed `isize::MAX`.
+    pub fn try_map<F, R>(&self, f: F) -> Result<Matrix<R>, LayoutError>
+    where
+        F: FnMut(&T::Elem) -> R,
+    {
+        let layout: Layout<R> = self.layout().rebind::<R>()?;
+        let data: Box<[_]> = self.as_slice().iter().map(f).collect();
+
+        // SAFETY: By construction, `data.len() == layout.num_elements()`.
+        Ok(unsafe { Matrix::from_data_unchecked(data, layout) })
     }
 
     /// Return the underlying data as a slice.
@@ -258,7 +559,7 @@ where
 
     /// Return row `row` as a slice.
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if `row >= self.nrows()`.
     pub fn row(&self, row: usize) -> &[T::Elem] {
@@ -277,11 +578,12 @@ where
     /// The returned `MatrixBase` will only have a single row with contents equal to `data`.
     pub fn row_vector(data: T) -> Self {
         let ncols = data.as_slice().len();
-        Self {
-            data,
-            nrows: 1,
-            ncols,
-        }
+
+        // SAFETY: The `Layout` construction is valid because `ncols` comes from the length
+        // of a slice, so we know the size of that slice cannot exceed `isize::MAX` bytes.
+        //
+        // By construction, `data.len() == layout.num_elements()`.
+        unsafe { Self::from_data_unchecked(data, Layout::new_unchecked(1, ncols)) }
     }
 
     /// Construct a new `MatrixBase` over the raw data.
@@ -289,11 +591,12 @@ where
     /// The returned `MatrixBase` will only have a single column with contents equal to `data`.
     pub fn column_vector(data: T) -> Self {
         let nrows = data.as_slice().len();
-        Self {
-            data,
-            nrows,
-            ncols: 1,
-        }
+
+        // SAFETY: The `Layout` construction is valid because `nrows` comes from the length
+        // of a slice, so we know the size of that slice cannot exceed `isize::MAX` bytes.
+        //
+        // By construction, `data.len() == layout.num_elements()`.
+        unsafe { Self::from_data_unchecked(data, Layout::new_unchecked(nrows, 1)) }
     }
 
     /// Return row `row` if `row < self.nrows()`. Otherwise, return `None`.
@@ -313,8 +616,8 @@ where
     /// The following conditions must hold to avoid undefined behavior:
     /// * `row < self.nrows()`.
     pub unsafe fn get_row_unchecked(&self, row: usize) -> &[T::Elem] {
-        debug_assert!(row < self.nrows);
-        let ncols = self.ncols;
+        debug_assert!(row < self.nrows());
+        let ncols = self.ncols();
         let start = row * ncols;
 
         debug_assert!(start + ncols <= self.as_slice().len());
@@ -354,8 +657,8 @@ where
     where
         T: MutDenseData,
     {
-        debug_assert!(row < self.nrows);
-        let ncols = self.ncols;
+        debug_assert!(row < self.nrows());
+        let ncols = self.ncols();
         let start = row * ncols;
 
         debug_assert!(start + ncols <= self.as_slice().len());
@@ -403,6 +706,7 @@ where
     {
         assert!(batchsize != 0, "window_iter batchsize cannot be zero");
         let ncols = self.ncols();
+
         self.data
             .as_slice()
             .chunks(ncols * batchsize)
@@ -410,7 +714,14 @@ where
                 let blobsize = data.len();
                 let nrows = blobsize / ncols;
                 assert_eq!(blobsize % ncols, 0);
-                MatrixView { data, nrows, ncols }
+
+                // SAFETY: `self` contains a valid `Layout`. Since `nrows <= self.nrows()`,
+                // the resulting `Layout` (it is no bigger than self's layout).
+                //
+                // Further, we've verified that `data.len() == nrows * ncols`.
+                unsafe {
+                    MatrixView::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols))
+                }
             })
     }
 
@@ -443,7 +754,14 @@ where
                 let blobsize = data.len();
                 let nrows = blobsize / ncols;
                 assert_eq!(blobsize % ncols, 0);
-                MatrixView { data, nrows, ncols }
+
+                // SAFETY: `self` contains a valid `Layout`. Since `nrows <= self.nrows()`,
+                // the resulting `Layout` (it is no bigger than self's layout).
+                //
+                // Further, we've verified that `data.len() == nrows * ncols`.
+                unsafe {
+                    MatrixView::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols))
+                }
             })
     }
 
@@ -480,7 +798,14 @@ where
                 let blobsize = data.len();
                 let nrows = blobsize / ncols;
                 assert_eq!(blobsize % ncols, 0);
-                MutMatrixView { data, nrows, ncols }
+
+                // SAFETY: `self` contains a valid `Layout`. Since `nrows <= self.nrows()`,
+                // the resulting `Layout` (it is no bigger than self's layout).
+                //
+                // Further, we've verified that `data.len() == nrows * ncols`.
+                unsafe {
+                    MutMatrixView::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols))
+                }
             })
     }
 
@@ -506,18 +831,15 @@ where
 
     /// Consume the matrix, returning the inner representation.
     ///
-    /// This loses the information about the number of rows and columnts.
+    /// This loses the information about the number of rows and columns.
     pub fn into_inner(self) -> T {
         self.data
     }
 
     /// Return a view over the matrix.
     pub fn as_view(&self) -> MatrixView<'_, T::Elem> {
-        MatrixBase {
-            data: self.as_slice(),
-            nrows: self.nrows(),
-            ncols: self.ncols(),
-        }
+        // SAFETY: This propagates `self`'s already valid layout and underlying slice.
+        unsafe { MatrixView::from_data_unchecked(self.as_slice(), self.layout()) }
     }
 
     /// Return a mutable view over the matrix.
@@ -525,13 +847,9 @@ where
     where
         T: MutDenseData,
     {
-        let nrows = self.nrows();
-        let ncols = self.ncols();
-        MatrixBase {
-            data: self.as_mut_slice(),
-            nrows,
-            ncols,
-        }
+        let layout = self.layout();
+        // SAFETY: This propagates `self`'s already valid layout and underlying slice.
+        unsafe { MutMatrixView::from_data_unchecked(self.as_mut_slice(), layout) }
     }
 
     /// Return a view over the specified rows of the matrix.
@@ -541,7 +859,7 @@ where
     /// ```rust
     /// use diskann_utils::views::Matrix;
     ///
-    /// let mut mat = Matrix::new(0usize, 4, 3);
+    /// let mut mat = Matrix::from_element(4, 3, 0usize);
     ///
     /// // Fill the matrix with some data.
     /// mat.row_iter_mut().enumerate().for_each(|(i, row)| row.fill(i));
@@ -556,16 +874,24 @@ where
     /// assert!(mat.subview(3..5).is_none());
     /// ```
     pub fn subview(&self, rows: std::ops::Range<usize>) -> Option<MatrixView<'_, T::Elem>> {
-        let ncols = self.ncols();
+        if rows.start > rows.end || rows.end > self.nrows() {
+            return None;
+        }
 
-        let lower = rows.start.checked_mul(ncols)?;
-        let upper = rows.end.checked_mul(ncols)?;
+        let ncols = self.ncols();
+        let lower = rows.start * ncols;
+        let upper = rows.end * ncols;
 
         if let Some(data) = self.as_slice().get(lower..upper) {
-            Some(MatrixBase {
-                data,
-                nrows: rows.len(),
-                ncols: self.ncols(),
+            // SAFETY: The successful checked index into `self.as_slice()` attests that
+            // `rows.len()` is no greater than `self.nrows()`. So the `Layout` is valid.
+            //
+            // By construction, `data.len() == rows * self.ncols()`.
+            Some(unsafe {
+                MatrixView::from_data_unchecked(
+                    data,
+                    Layout::new_unchecked(rows.len(), self.ncols()),
+                )
             })
         } else {
             None
@@ -585,57 +911,116 @@ where
         self.as_mut_slice().as_mut_ptr()
     }
 
-    /// Return the value at the specified `row` and `col`.
+    /// Return a reference to the element at the specified `row` and `col`.
+    ///
+    /// # Safety
+    ///
+    /// The following conditions must hold to avoid undefined behavior:
+    ///
+    /// * `row < self.nrows()`.
+    /// * `col < self.ncols()`.
+    pub unsafe fn element_unchecked(&self, row: usize, col: usize) -> &T::Elem {
+        debug_assert!(row < self.nrows());
+        debug_assert!(col < self.ncols());
+        self.as_slice().get_unchecked(row * self.ncols() + col)
+    }
+
+    /// Return a reference to the element at the specified `row` and `col`.
     ///
     /// If either index is out-of-bounds, return `None`.
-    pub fn try_get(&self, row: usize, col: usize) -> Option<&T::Elem> {
+    pub fn get_element(&self, row: usize, col: usize) -> Option<&T::Elem> {
         if row >= self.nrows() || col >= self.ncols() {
             None
         } else {
             // SAFETY: We just verified that `row` and `col` are in-bounds.
-            Some(unsafe { self.get_unchecked(row, col) })
+            Some(unsafe { self.element_unchecked(row, col) })
         }
     }
 
-    /// Returns a reference to an element without boundschecking.
+    /// Return a reference to the element at the specified `row` and `col`.
     ///
-    /// # Safety
+    /// # Panics
     ///
-    /// The following conditions must hold to avoid undefined behavior:
-    /// * `row < self.nrows()`.
-    /// * `col < self.ncols()`.
-    pub unsafe fn get_unchecked(&self, row: usize, col: usize) -> &T::Elem {
-        debug_assert!(row < self.nrows);
-        debug_assert!(col < self.ncols);
-        self.as_slice().get_unchecked(row * self.ncols + col)
+    /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
+    pub fn element(&self, row: usize, col: usize) -> &T::Elem {
+        assert!(
+            row < self.nrows(),
+            "row {row} is out of bounds (max: {})",
+            self.nrows()
+        );
+        assert!(
+            col < self.ncols(),
+            "col {col} is out of bounds (max: {})",
+            self.ncols()
+        );
+
+        // SAFETY: We have checked that `row` and `col` are in-bounds.
+        unsafe { self.element_unchecked(row, col) }
     }
 
-    /// Returns a mutable reference to an element without boundschecking.
+    /// Return a reference to the element at the specified `row` and `col`.
     ///
     /// # Safety
     ///
     /// The following conditions must hold to avoid undefined behavior:
+    ///
     /// * `row < self.nrows()`.
     /// * `col < self.ncols()`.
-    pub unsafe fn get_unchecked_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
+    pub unsafe fn element_unchecked_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
     where
         T: MutDenseData,
     {
-        let ncols = self.ncols;
-        debug_assert!(row < self.nrows);
-        debug_assert!(col < self.ncols);
+        let ncols = self.ncols();
+        debug_assert!(row < self.nrows());
+        debug_assert!(col < self.ncols());
         self.as_mut_slice().get_unchecked_mut(row * ncols + col)
+    }
+
+    /// Return a mutable reference to the element at the specified `row` and `col`.
+    ///
+    /// Returns `None` if `row >= self.nrows()` or `col >= self.ncols()`.
+    pub fn get_element_mut(&mut self, row: usize, col: usize) -> Option<&mut T::Elem>
+    where
+        T: MutDenseData,
+    {
+        if row >= self.nrows() || col >= self.ncols() {
+            None
+        } else {
+            // SAFETY: We have checked that `row` and `col` are in-bounds.
+            Some(unsafe { self.element_unchecked_mut(row, col) })
+        }
+    }
+
+    /// Return a mutable reference to the element at the specified `row` and `col`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
+    pub fn element_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
+    where
+        T: MutDenseData,
+    {
+        assert!(
+            row < self.nrows(),
+            "row {row} is out of bounds (max: {})",
+            self.nrows()
+        );
+        assert!(
+            col < self.ncols(),
+            "col {col} is out of bounds (max: {})",
+            self.ncols()
+        );
+
+        // SAFETY: We have checked that `row` and `col` are in-bounds.
+        unsafe { self.element_unchecked_mut(row, col) }
     }
 
     pub fn to_owned(&self) -> Matrix<T::Elem>
     where
         T::Elem: Clone,
     {
-        Matrix {
-            data: self.data.as_slice().into(),
-            nrows: self.nrows,
-            ncols: self.ncols,
-        }
+        // SAFETY: This propagates `self`'s already valid layout and underlying slice.
+        unsafe { Matrix::from_data_unchecked(self.data.as_slice().into(), self.layout()) }
     }
 
     /// Transpose the elements in `self`.
@@ -643,31 +1028,16 @@ where
     where
         T::Elem: Clone,
     {
-        let mut row = 0;
-        let mut col = 0;
-
-        let f = Init(|| {
-            // SAFETY: `row` and `cols` are always less than `self.nrows()` and `self.ncols()`
-            // respectively.
-            let v = unsafe { self.get_unchecked(row, col) }.clone();
-            row += 1;
-            if row == self.nrows() {
-                row = 0;
-                col += 1;
-                if col == self.ncols() {
-                    col = 0;
-                }
-            }
-            v
-        });
-
-        Matrix::new(f, self.ncols(), self.nrows())
+        Matrix::from_fn_with_layout(self.layout.transpose(), |RowCol { row, col }| {
+            // SAFETY: By construction, `col < self.nrows()` and `row < self.ncols()`.
+            unsafe { self.element_unchecked(col, row).clone() }
+        })
     }
 }
 
 /// Represents an owning, 2-dimensional view of a contiguous block of memory,
 /// interpreted as a matrix in row-major order.
-pub type Matrix<T> = MatrixBase<Box<[T]>>;
+pub type Matrix<T> = MatrixBase<Box<[T]>, T>;
 
 /// Represents a non-owning, 2-dimensional view of a contiguous block of memory,
 /// interpreted as a matrix in row-major order.
@@ -675,7 +1045,7 @@ pub type Matrix<T> = MatrixBase<Box<[T]>>;
 /// This type is useful for functions that need to read matrix data without taking ownership.
 /// By accepting a `MatrixView`, such functions can operate on both owned matrices (by converting them
 /// to a `MatrixView`) and existing non-owning views.
-pub type MatrixView<'a, T> = MatrixBase<&'a [T]>;
+pub type MatrixView<'a, T> = MatrixBase<&'a [T], T>;
 
 /// Represents a mutable non-owning, 2-dimensional view of a contiguous block of memory,
 /// interpreted as a matrix in row-major order.
@@ -683,7 +1053,7 @@ pub type MatrixView<'a, T> = MatrixBase<&'a [T]>;
 /// This type is useful for functions that need to modify matrix data without taking ownership.
 /// By accepting a `MutMatrixView`, such functions can operate on both owned matrices (by converting them
 /// to a `MutMatrixView`) and existing non-owning mutable views.
-pub type MutMatrixView<'a, T> = MatrixBase<&'a mut [T]>;
+pub type MutMatrixView<'a, T> = MatrixBase<&'a mut [T], T>;
 
 /// Allow matrix views to be converted directly to slices.
 impl<'a, T> From<MatrixView<'a, T>> for &'a [T] {
@@ -699,58 +1069,86 @@ impl<'a, T> From<MutMatrixView<'a, T>> for &'a [T] {
     }
 }
 
-/// Return a reference to the item at entry `(row, col)` in the matrix.
-///
-/// # Panics
-///
-/// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-impl<T> Index<(usize, usize)> for MatrixBase<T>
-where
-    T: DenseData,
-{
-    type Output = T::Elem;
+/// Errors from [`MatrixBase::try_from`].
+pub struct TryFromError<T> {
+    data: T,
+    inner: TryFromErrorInner,
+}
 
-    fn index(&self, (row, col): (usize, usize)) -> &Self::Output {
-        assert!(
-            row < self.nrows(),
-            "row {row} is out of bounds (max: {})",
-            self.nrows()
-        );
-        assert!(
-            col < self.ncols(),
-            "col {col} is out of bounds (max: {})",
-            self.ncols()
-        );
+impl<T> TryFromError<T> {
+    /// Consume the error and return the base data.
+    pub fn into_inner(self) -> T {
+        self.data
+    }
 
-        // SAFETY: We have checked that `row` and `col` are in-bounds.
-        unsafe { self.get_unchecked(row, col) }
+    /// Return a variation of `Self` that is guaranteed to be `'static` by removing the
+    /// data that was passed to the original constructor.
+    pub fn as_static(&self) -> TryFromErrorLight {
+        TryFromErrorLight(self.inner)
+    }
+
+    //--------------//
+    // Constructors //
+    //--------------//
+
+    fn layout(data: T, error: LayoutError) -> Self {
+        Self {
+            data,
+            inner: TryFromErrorInner::Layout(error),
+        }
+    }
+
+    fn mismatch(data: T, nrows: usize, ncols: usize, len: usize) -> Self {
+        Self {
+            data,
+            inner: TryFromErrorInner::Mismatch { nrows, ncols, len },
+        }
     }
 }
 
-/// Return a mutable reference to the item at entry `(row, col)` in the matrix.
-///
-/// # Panics
-///
-/// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-impl<T> IndexMut<(usize, usize)> for MatrixBase<T>
-where
-    T: MutDenseData,
-{
-    fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut Self::Output {
-        assert!(
-            row < self.nrows(),
-            "row {row} is out of bounds (max: {})",
-            self.nrows()
-        );
-        assert!(
-            col < self.ncols(),
-            "col {col} is out of bounds (max: {})",
-            self.ncols()
-        );
-
-        // SAFETY: We have checked that `row` and `col` are in-bounds.
-        unsafe { self.get_unchecked_mut(row, col) }
+impl<T> std::fmt::Debug for TryFromError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TryFromError")
+            .field("data", &"<hidden>")
+            .field("inner", &self.inner)
+            .finish()
     }
+}
+
+impl<T> std::fmt::Display for TryFromError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<T> std::error::Error for TryFromError<T> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.inner {
+            TryFromErrorInner::Layout(error) => Some(error),
+            TryFromErrorInner::Mismatch { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct TryFromErrorLight(TryFromErrorInner);
+
+#[derive(Debug, Error, Clone, Copy)]
+enum TryFromErrorInner {
+    #[error(transparent)]
+    Layout(LayoutError),
+    #[error(
+        "tried to construct a {}x{} matrix over a span of length {}",
+        nrows,
+        ncols,
+        len
+    )]
+    Mismatch {
+        nrows: usize,
+        ncols: usize,
+        len: usize,
+    },
 }
 
 ///////////
@@ -760,13 +1158,37 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lazy_format;
+    use crate::{assert_contains, lazy_format};
 
     /// This function is only callable with copyable types.
     ///
     /// This lets us test for types we expect to be `Copy`.
     fn is_copyable<T: Copy>(_x: T) -> bool {
         true
+    }
+
+    /// This function attests that `MatrixView` is covariant in the view lifetime.
+    fn _matrix_view_is_covariant<'a, 'b>(m: MatrixView<'a, f32>) -> MatrixView<'b, f32>
+    where
+        'a: 'b,
+    {
+        m
+    }
+
+    fn _matrix_view_is_covariant_in_t<'a, 'b, 'm>(
+        m: MatrixView<'m, &'a f32>,
+    ) -> MatrixView<'m, &'b f32>
+    where
+        'a: 'b,
+    {
+        m
+    }
+
+    fn _matrix_is_covariant_in_t<'a, 'b, 'm>(m: &'m Matrix<&'a f32>) -> &'m Matrix<&'b f32>
+    where
+        'a: 'b,
+    {
+        m
     }
 
     /// Test the that provided representation yields a slice with the expected base pointer
@@ -844,24 +1266,138 @@ mod tests {
         }
     }
 
+    //--------//
+    // Layout //
+    //--------//
+
+    #[test]
+    fn test_layout() {
+        // Happy path
+        for rows in 0..5 {
+            for cols in 0..5 {
+                let layout = Layout::<String>::new(rows, cols).unwrap();
+                assert_eq!(layout.nrows(), rows);
+                assert_eq!(layout.ncols(), cols);
+                assert_eq!(layout.num_elements(), rows * cols);
+
+                let transpose = layout.transpose();
+                assert_eq!(transpose.nrows(), cols);
+                assert_eq!(transpose.ncols(), rows);
+                assert_eq!(transpose.num_elements(), rows * cols);
+
+                let rebind = layout.rebind::<u32>().unwrap();
+                assert_eq!(rebind.nrows(), rows);
+                assert_eq!(rebind.ncols(), cols);
+                assert_eq!(rebind.num_elements(), rows * cols);
+
+                is_copyable(layout);
+            }
+        }
+
+        #[expect(unused, reason = "we need this so the size is non-zero")]
+        struct NotDebugOrEq(u32);
+
+        assert_eq!(
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+        );
+
+        assert_eq!(
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+        );
+
+        assert_ne!(
+            Layout::<NotDebugOrEq>::new(10, 20).unwrap(),
+            Layout::<NotDebugOrEq>::new(20, 0).unwrap(),
+        );
+
+        let fmt = format!("{:?}", Layout::<NotDebugOrEq>::new(5, 6).unwrap());
+        assert_eq!(fmt, "Layout { nrows: 5, ncols: 6, elsize: 4 }");
+
+        // Overflowing the element count returns an error.
+        let error = Layout::<u8>::new(usize::MAX, 2).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "a matrix of size {}x2 has a length exceeding `usize::MAX`",
+                usize::MAX
+            )
+        );
+
+        // The largest possible byte span is valid without allocating it.
+        let layout = Layout::<u8>::new(isize::MAX as usize, 1).unwrap();
+        assert_eq!(layout.num_elements(), isize::MAX as usize);
+
+        let transpose = layout.transpose();
+        assert_eq!(transpose.nrows(), 1);
+        assert_eq!(transpose.ncols(), isize::MAX as usize);
+        assert_eq!(transpose.num_elements(), layout.num_elements());
+
+        // One byte beyond the maximum span returns an error.
+        let error = Layout::<u8>::new(isize::MAX as usize + 1, 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "a matrix of size {}x1 with elements of size 1 exceeds `isize::MAX` bytes",
+                isize::MAX as usize + 1
+            )
+        );
+
+        // Rebinding to a larger element type revalidates the byte span.
+        let rebound = Layout::<u8>::new(3, 4).unwrap().rebind::<u16>().unwrap();
+        assert_eq!(rebound.nrows(), 3);
+        assert_eq!(rebound.ncols(), 4);
+        assert_eq!(rebound.num_elements(), 12);
+
+        let error = layout.rebind::<u16>().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "a matrix of size {}x1 with elements of size 2 exceeds `isize::MAX` bytes",
+                isize::MAX
+            )
+        );
+    }
+
     /////////////////
     // Matrix View //
     /////////////////
 
     #[test]
-    fn try_from_error_misc() {
-        let x = TryFromError::<&[f32]> {
-            data: &[],
-            nrows: 1,
-            ncols: 2,
-        };
+    fn fallible_matrix_constructors() {
+        let err = Matrix::try_from_element(usize::MAX, usize::MAX, 0u32).unwrap_err();
+        let msg = err.to_string();
+        assert_contains!(msg, "exceeding `usize::MAX`");
 
-        let debug = format!("{:?}", x);
-        println!("debug = {}", debug);
-        assert!(debug.contains("TryFromError"));
-        assert!(debug.contains("data_len: 0"));
-        assert!(debug.contains("nrows: 1"));
-        assert!(debug.contains("ncols: 2"));
+        let err = Matrix::try_from_element(isize::MAX as usize, 1, 0u32).unwrap_err();
+        let msg = err.to_string();
+        assert_contains!(msg, "exceeds `isize::MAX` bytes");
+
+        // Panicking
+        let err = std::panic::catch_unwind(|| {
+            Matrix::from_element(usize::MAX, usize::MAX, 0u32);
+        })
+        .unwrap_err()
+        .downcast::<String>()
+        .unwrap();
+
+        let msg = err.to_string();
+        assert_contains!(msg, "exceeding `usize::MAX`");
+
+        let err = std::panic::catch_unwind(|| {
+            Matrix::from_element(isize::MAX as usize, 1, 0u32);
+        })
+        .unwrap_err()
+        .downcast::<String>()
+        .unwrap();
+        let msg = err.to_string();
+        assert_contains!(msg, "exceeds `isize::MAX` bytes");
+
+        // Construction fails without invoking the generator.
+        let err = Matrix::try_from_fn(usize::MAX, usize::MAX, |_| panic!("boom")).unwrap_err();
+        let msg = err.to_string();
+        assert_contains!(msg, "exceeding `usize::MAX`");
     }
 
     fn make_test_matrix() -> Vec<usize> {
@@ -888,13 +1424,13 @@ mod tests {
 
                 // Make sure we are in the correct window of the original matrix.
                 let base = i * batchsize;
-                assert_eq!(submatrix[(0, 0)], base);
-                assert_eq!(submatrix[(0, 1)], base + 1);
-                assert_eq!(submatrix[(0, 2)], base + 2);
+                assert_eq!(*submatrix.element(0, 0), base);
+                assert_eq!(*submatrix.element(0, 1), base + 1);
+                assert_eq!(*submatrix.element(0, 2), base + 2);
 
-                assert_eq!(submatrix[(1, 0)], base + 1);
-                assert_eq!(submatrix[(1, 1)], base + 2);
-                assert_eq!(submatrix[(1, 2)], base + 3);
+                assert_eq!(*submatrix.element(1, 0), base + 1);
+                assert_eq!(*submatrix.element(1, 1), base + 2);
+                assert_eq!(*submatrix.element(1, 2), base + 3);
             });
 
         // Try again, but with a batch size of 3 to ensure that we correctly handle cases
@@ -908,25 +1444,25 @@ mod tests {
                     assert_eq!(submatrix.ncols(), m.ncols());
 
                     // Check indexing
-                    assert_eq!(submatrix[(0, 0)], 0);
-                    assert_eq!(submatrix[(0, 1)], 1);
-                    assert_eq!(submatrix[(0, 2)], 2);
+                    assert_eq!(*submatrix.element(0, 0), 0);
+                    assert_eq!(*submatrix.element(0, 1), 1);
+                    assert_eq!(*submatrix.element(0, 2), 2);
 
-                    assert_eq!(submatrix[(1, 0)], 1);
-                    assert_eq!(submatrix[(1, 1)], 2);
-                    assert_eq!(submatrix[(1, 2)], 3);
+                    assert_eq!(*submatrix.element(1, 0), 1);
+                    assert_eq!(*submatrix.element(1, 1), 2);
+                    assert_eq!(*submatrix.element(1, 2), 3);
 
-                    assert_eq!(submatrix[(2, 0)], 2);
-                    assert_eq!(submatrix[(2, 1)], 3);
-                    assert_eq!(submatrix[(2, 2)], 4);
+                    assert_eq!(*submatrix.element(2, 0), 2);
+                    assert_eq!(*submatrix.element(2, 1), 3);
+                    assert_eq!(*submatrix.element(2, 2), 4);
                 } else {
                     assert_eq!(submatrix.nrows(), 1);
                     assert_eq!(submatrix.ncols(), m.ncols());
 
                     // Check indexing
-                    assert_eq!(submatrix[(0, 0)], 3);
-                    assert_eq!(submatrix[(0, 1)], 4);
-                    assert_eq!(submatrix[(0, 2)], 5);
+                    assert_eq!(*submatrix.element(0, 0), 3);
+                    assert_eq!(*submatrix.element(0, 1), 4);
+                    assert_eq!(*submatrix.element(0, 2), 5);
                 }
             });
 
@@ -953,21 +1489,37 @@ mod tests {
         assert_eq!(m.ncols(), 3);
 
         // Basic indexing
-        assert_eq!(m[(0, 0)], 0);
-        assert_eq!(m[(0, 1)], 1);
-        assert_eq!(m[(0, 2)], 2);
+        assert_eq!(*m.element(0, 0), 0);
+        assert_eq!(*m.element(0, 1), 1);
+        assert_eq!(*m.element(0, 2), 2);
 
-        assert_eq!(m[(1, 0)], 1);
-        assert_eq!(m[(1, 1)], 2);
-        assert_eq!(m[(1, 2)], 3);
+        assert_eq!(*m.element(1, 0), 1);
+        assert_eq!(*m.element(1, 1), 2);
+        assert_eq!(*m.element(1, 2), 3);
 
-        assert_eq!(m[(2, 0)], 2);
-        assert_eq!(m[(2, 1)], 3);
-        assert_eq!(m[(2, 2)], 4);
+        assert_eq!(*m.element(2, 0), 2);
+        assert_eq!(*m.element(2, 1), 3);
+        assert_eq!(*m.element(2, 2), 4);
 
-        assert_eq!(m[(3, 0)], 3);
-        assert_eq!(m[(3, 1)], 4);
-        assert_eq!(m[(3, 2)], 5);
+        assert_eq!(*m.element(3, 0), 3);
+        assert_eq!(*m.element(3, 1), 4);
+        assert_eq!(*m.element(3, 2), 5);
+
+        assert_eq!(*m.get_element(0, 0).unwrap(), 0);
+        assert_eq!(*m.get_element(0, 1).unwrap(), 1);
+        assert_eq!(*m.get_element(0, 2).unwrap(), 2);
+
+        assert_eq!(*m.get_element(1, 0).unwrap(), 1);
+        assert_eq!(*m.get_element(1, 1).unwrap(), 2);
+        assert_eq!(*m.get_element(1, 2).unwrap(), 3);
+
+        assert_eq!(*m.get_element(2, 0).unwrap(), 2);
+        assert_eq!(*m.get_element(2, 1).unwrap(), 3);
+        assert_eq!(*m.get_element(2, 2).unwrap(), 4);
+
+        assert_eq!(*m.get_element(3, 0).unwrap(), 3);
+        assert_eq!(*m.get_element(3, 1).unwrap(), 4);
+        assert_eq!(*m.get_element(3, 2).unwrap(), 5);
 
         // Row indexing.
         assert_eq!(m.row(0), &[0, 1, 2]);
@@ -991,13 +1543,13 @@ mod tests {
 
                 // Make sure we are in the correct window of the original matrix.
                 let base = i * batchsize;
-                assert_eq!(submatrix[(0, 0)], base);
-                assert_eq!(submatrix[(0, 1)], base + 1);
-                assert_eq!(submatrix[(0, 2)], base + 2);
+                assert_eq!(*submatrix.element(0, 0), base);
+                assert_eq!(*submatrix.element(0, 1), base + 1);
+                assert_eq!(*submatrix.element(0, 2), base + 2);
 
-                assert_eq!(submatrix[(1, 0)], base + 1);
-                assert_eq!(submatrix[(1, 1)], base + 2);
-                assert_eq!(submatrix[(1, 2)], base + 3);
+                assert_eq!(*submatrix.element(1, 0), base + 1);
+                assert_eq!(*submatrix.element(1, 1), base + 2);
+                assert_eq!(*submatrix.element(1, 2), base + 3);
             });
 
         // Try again, but with a batch size of 3 to ensure that we correctly handle cases
@@ -1011,25 +1563,25 @@ mod tests {
                     assert_eq!(submatrix.ncols(), m.ncols());
 
                     // Check indexing
-                    assert_eq!(submatrix[(0, 0)], 0);
-                    assert_eq!(submatrix[(0, 1)], 1);
-                    assert_eq!(submatrix[(0, 2)], 2);
+                    assert_eq!(*submatrix.element(0, 0), 0);
+                    assert_eq!(*submatrix.element(0, 1), 1);
+                    assert_eq!(*submatrix.element(0, 2), 2);
 
-                    assert_eq!(submatrix[(1, 0)], 1);
-                    assert_eq!(submatrix[(1, 1)], 2);
-                    assert_eq!(submatrix[(1, 2)], 3);
+                    assert_eq!(*submatrix.element(1, 0), 1);
+                    assert_eq!(*submatrix.element(1, 1), 2);
+                    assert_eq!(*submatrix.element(1, 2), 3);
 
-                    assert_eq!(submatrix[(2, 0)], 2);
-                    assert_eq!(submatrix[(2, 1)], 3);
-                    assert_eq!(submatrix[(2, 2)], 4);
+                    assert_eq!(*submatrix.element(2, 0), 2);
+                    assert_eq!(*submatrix.element(2, 1), 3);
+                    assert_eq!(*submatrix.element(2, 2), 4);
                 } else {
                     assert_eq!(submatrix.nrows(), 1);
                     assert_eq!(submatrix.ncols(), m.ncols());
 
                     // Check indexing
-                    assert_eq!(submatrix[(0, 0)], 3);
-                    assert_eq!(submatrix[(0, 1)], 4);
-                    assert_eq!(submatrix[(0, 2)], 5);
+                    assert_eq!(*submatrix.element(0, 0), 3);
+                    assert_eq!(*submatrix.element(0, 1), 4);
+                    assert_eq!(*submatrix.element(0, 2), 5);
                 }
             });
 
@@ -1065,7 +1617,7 @@ mod tests {
         let err = m.unwrap_err();
         assert_eq!(
             err.to_string(),
-            "tried to construct a matrix view with 5 rows and 4 columns over a slice of length 12"
+            "tried to construct a 5x4 matrix over a span of length 12"
         );
 
         // Make sure that we can retrieve the original allocation from the interior.
@@ -1077,13 +1629,13 @@ mod tests {
         assert!(m.is_err());
         assert_eq!(
             m.unwrap_err().to_string(),
-            "tried to construct a matrix view with 5 rows and 4 columns over a slice of length 12"
+            "tried to construct a 5x4 matrix over a span of length 12"
         );
     }
 
     #[test]
     fn matrix_mut_view() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
         assert_eq!(m.nrows(), 4);
         assert_eq!(m.ncols(), 3);
         assert!(m.as_slice().iter().all(|&i| i == 0));
@@ -1100,7 +1652,7 @@ mod tests {
         // Construct the test matrix manually.
         for i in 0..view.nrows() {
             for j in 0..view.ncols() {
-                view[(i, j)] = i + j;
+                *view.element_mut(i, j) = i + j;
             }
         }
 
@@ -1137,12 +1689,12 @@ mod tests {
 
     #[test]
     fn matrix_view_construction_elementwise() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
 
         // Construct the test matrix manually.
         for i in 0..m.nrows() {
             for j in 0..m.ncols() {
-                m[(i, j)] = i + j;
+                *m.element_mut(i, j) = i + j;
             }
         }
         test_basic_indexing(&m);
@@ -1150,7 +1702,7 @@ mod tests {
 
     #[test]
     fn matrix_construction_by_row() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
         assert!(m.as_slice().iter().all(|i| *i == 0));
 
         let ncols = m.ncols();
@@ -1166,7 +1718,7 @@ mod tests {
 
     #[test]
     fn matrix_construction_by_rowiter() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
         assert!(m.as_slice().iter().all(|i| *i == 0));
 
         let ncols = m.ncols();
@@ -1182,7 +1734,7 @@ mod tests {
     #[cfg(all(not(miri), feature = "rayon"))]
     #[test]
     fn matrix_construction_by_par_windows() {
-        let mut m = Matrix::<usize>::new(0, 4, 3);
+        let mut m = Matrix::<usize>::from_element(4, 3, 0);
         assert!(m.as_slice().iter().all(|i| *i == 0));
 
         let ncols = m.ncols();
@@ -1206,13 +1758,13 @@ mod tests {
     fn matrix_construction_happens_in_memory_order() {
         let mut i = 0;
         let ncols = 3;
-        let initializer = Init(|| {
+        let initializer = |_| {
             let value = (i % ncols) + (i / ncols);
             i += 1;
             value
-        });
+        };
 
-        let m = Matrix::new(initializer, 4, 3);
+        let m = Matrix::from_fn(4, 3, initializer);
         test_basic_indexing(&m);
     }
 
@@ -1220,52 +1772,54 @@ mod tests {
     #[test]
     #[should_panic(expected = "tried to access row 3 of a matrix with 3 rows")]
     fn test_get_row_panics() {
-        let m = Matrix::<usize>::new(0, 3, 7);
+        let m = Matrix::<usize>::from_element(3, 7, 0);
         m.row(3);
     }
 
     #[test]
     #[should_panic(expected = "tried to access row 3 of a matrix with 3 rows")]
     fn test_get_row_mut_panics() {
-        let mut m = Matrix::<usize>::new(0, 3, 7);
+        let mut m = Matrix::<usize>::from_element(3, 7, 0);
         m.row_mut(3);
     }
 
     #[test]
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
-    fn test_index_panics_row() {
-        let m = Matrix::<usize>::new(0, 3, 7);
-        assert!(m.try_get(3, 2).is_none());
-        let _ = m[(3, 2)];
+    fn test_element_panics_row() {
+        let m = Matrix::<usize>::from_element(3, 7, 0);
+        assert!(m.get_element(3, 2).is_none());
+        let _ = m.element(3, 2);
     }
 
     #[test]
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
-    fn test_index_panics_col() {
-        let m = Matrix::<usize>::new(0, 3, 7);
-        assert!(m.try_get(2, 7).is_none());
-        let _ = m[(2, 7)];
+    fn test_element_panics_col() {
+        let m = Matrix::<usize>::from_element(3, 7, 0);
+        assert!(m.get_element(2, 7).is_none());
+        let _ = m.element(2, 7);
     }
 
     #[test]
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
-    fn test_index_mut_panics_row() {
-        let mut m = Matrix::<usize>::new(0, 3, 7);
-        m[(3, 2)] = 1;
+    fn test_element_mut_panics_row() {
+        let mut m = Matrix::<usize>::from_element(3, 7, 0);
+        assert!(m.get_element_mut(3, 2).is_none());
+        *m.element_mut(3, 2) = 1;
     }
 
     #[test]
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
-    fn test_index_mut_panics_col() {
-        let mut m = Matrix::<usize>::new(0, 3, 7);
-        m[(2, 7)] = 1;
+    fn test_element_mut_panics_col() {
+        let mut m = Matrix::<usize>::from_element(3, 7, 0);
+        assert!(m.get_element_mut(2, 7).is_none());
+        *m.element_mut(2, 7) = 1;
     }
 
     #[test]
     #[cfg(feature = "rayon")]
     #[should_panic(expected = "par_window_iter batchsize cannot be zero")]
     fn test_par_window_iter_panics() {
-        let m = Matrix::<usize>::new(0, 4, 4);
+        let m = Matrix::<usize>::from_element(4, 4, 0);
         let _ = m.par_window_iter(0);
     }
 
@@ -1273,7 +1827,7 @@ mod tests {
     #[cfg(feature = "rayon")]
     #[should_panic(expected = "par_window_iter_mut batchsize cannot be zero")]
     fn test_par_window_iter_mut_panics() {
-        let mut m = Matrix::<usize>::new(0, 4, 4);
+        let mut m = Matrix::<usize>::from_element(4, 4, 0);
         let _ = m.par_window_iter_mut(0);
     }
 
@@ -1304,23 +1858,52 @@ mod tests {
 
     #[test]
     fn test_try_from_error_light() {
+        // Incorrect slice
         let data = vec![1, 2, 3];
         let err = MatrixView::try_from(data.as_slice(), 2, 3).unwrap_err();
 
-        // Test as_static method
-        let static_err = err.as_static();
-        assert_eq!(static_err.len, 3);
-        assert_eq!(static_err.nrows, 2);
-        assert_eq!(static_err.ncols, 3);
-
-        // Test Display for TryFromErrorLight
-        let display_msg = format!("{}", static_err);
-        assert!(display_msg.contains("tried to construct a matrix view with 2 rows and 3 columns"));
-        assert!(display_msg.contains("slice of length 3"));
-
-        // Test into_inner method
+        // Test `as_static` method
+        let err_static = err.as_static();
+        let msg = err_static.to_string();
+        assert_contains!(
+            msg,
+            "tried to construct a 2x3 matrix over a span of length 3",
+        );
+        // Test `into_inner` method
         let recovered_data = err.into_inner();
         assert_eq!(recovered_data, data.as_slice());
+
+        // Invalid length.
+        let err = MatrixView::try_from(data.as_slice(), 2, usize::MAX).unwrap_err();
+        let msg = err.to_string();
+        assert_contains!(msg, "usize::MAX");
+
+        assert_eq!(data.as_slice(), err.into_inner());
+    }
+
+    #[test]
+    fn test_map_errors() {
+        #[derive(Debug, Clone, Copy)]
+        struct Zst;
+
+        // Create a large ZST slice without taking forever on debug builds.
+        let b = Box::<[Zst]>::new_uninit_slice((isize::MAX as usize) + 1);
+
+        // SAFETY: `b` has zero-sized elements, so all elements are initialized.
+        let b = unsafe { b.assume_init() };
+
+        let m = Matrix::column_vector(b);
+        let err = m.try_map(|_: &Zst| 0u8).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("isize::MAX"), "{msg}");
+
+        // Panicking variant.
+        let err = std::panic::catch_unwind(|| m.map(|_: &Zst| 0u8))
+            .unwrap_err()
+            .downcast::<String>()
+            .unwrap();
+        let msg = err.to_string();
+        assert!(msg.contains("isize::MAX"), "{msg}");
     }
 
     #[test]
@@ -1345,19 +1928,19 @@ mod tests {
 
         // Safety: derives from known size of matrix and access element ids
         unsafe {
-            assert_eq!(*m.get_unchecked(0, 0), 0);
-            assert_eq!(*m.get_unchecked(1, 2), 3);
-            assert_eq!(*m.get_unchecked(3, 1), 4);
+            assert_eq!(*m.element_unchecked(0, 0), 0);
+            assert_eq!(*m.element_unchecked(1, 2), 3);
+            assert_eq!(*m.element_unchecked(3, 1), 4);
         }
 
         // Safety: derives from known size of matrix and access element ids
         unsafe {
-            *m.get_unchecked_mut(0, 0) = 100;
-            *m.get_unchecked_mut(1, 2) = 200;
+            *m.element_unchecked_mut(0, 0) = 100;
+            *m.element_unchecked_mut(1, 2) = 200;
         }
 
-        assert_eq!(m[(0, 0)], 100);
-        assert_eq!(m[(1, 2)], 200);
+        assert_eq!(*m.element(0, 0), 100);
+        assert_eq!(*m.element(1, 2), 200);
 
         // Safety: derives from known size of matrix and access element ids
         unsafe {
@@ -1373,7 +1956,7 @@ mod tests {
             row1[0] = 300;
         }
 
-        assert_eq!(m[(1, 0)], 300);
+        assert_eq!(*m.element(1, 0), 300);
     }
 
     #[test]
@@ -1392,24 +1975,6 @@ mod tests {
 
         // Test the owned matrix works properly
         test_basic_indexing(&owned);
-    }
-
-    #[test]
-    fn test_generator_trait_impls() {
-        // Test Generator impl for T where T: Clone
-        let mut gen = 42i32;
-        assert_eq!(gen.generate(), 42);
-        assert_eq!(gen.generate(), 42); // Should be same value since it's cloned
-
-        // Test Generator impl for Init<F>
-        let mut counter = 0;
-        let mut gen = Init(|| {
-            counter += 1;
-            counter
-        });
-        assert_eq!(gen.generate(), 1);
-        assert_eq!(gen.generate(), 2);
-        assert_eq!(gen.generate(), 3);
     }
 
     #[test]
@@ -1437,20 +2002,20 @@ mod tests {
     #[test]
     fn test_matrix_construction_edge_cases() {
         // Test 1x1 matrix
-        let m = Matrix::new(42, 1, 1);
+        let m = Matrix::from_element(1, 1, 42);
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 1);
-        assert_eq!(m[(0, 0)], 42);
-        assert_eq!(*m.try_get(0, 0).unwrap(), 42);
+        assert_eq!(*m.element(0, 0), 42);
+        assert_eq!(*m.get_element(0, 0).unwrap(), 42);
 
         // Test single row matrix
-        let m = Matrix::new(7, 1, 5);
+        let m = Matrix::from_element(1, 5, 7);
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 5);
         assert!(m.as_slice().iter().all(|&x| x == 7));
 
         // Test single column matrix
-        let m = Matrix::new(9, 5, 1);
+        let m = Matrix::from_element(5, 1, 9);
         assert_eq!(m.nrows(), 5);
         assert_eq!(m.ncols(), 1);
         assert!(m.as_slice().iter().all(|&x| x == 9));
@@ -1465,10 +2030,10 @@ mod tests {
         let m = MatrixView::try_from(data.as_slice(), 2, 1).unwrap();
         assert_eq!(m.nrows(), 2);
         assert_eq!(m.ncols(), 1);
-        assert_eq!(m[(0, 0)], 10);
-        assert_eq!(m[(1, 0)], 20);
-        assert_eq!(*m.try_get(0, 0).unwrap(), 10);
-        assert_eq!(*m.try_get(1, 0).unwrap(), 20);
+        assert_eq!(*m.element(0, 0), 10);
+        assert_eq!(*m.element(1, 0), 20);
+        assert_eq!(*m.get_element(0, 0).unwrap(), 10);
+        assert_eq!(*m.get_element(1, 0).unwrap(), 20);
         assert_eq!(m.row(0), &[10]);
         assert_eq!(m.row(1), &[20]);
 
@@ -1476,10 +2041,10 @@ mod tests {
         let m = MatrixView::try_from(data.as_slice(), 1, 2).unwrap();
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 2);
-        assert_eq!(m[(0, 0)], 10);
-        assert_eq!(m[(0, 1)], 20);
-        assert_eq!(*m.try_get(0, 0).unwrap(), 10);
-        assert_eq!(*m.try_get(0, 1).unwrap(), 20);
+        assert_eq!(*m.element(0, 0), 10);
+        assert_eq!(*m.element(0, 1), 20);
+        assert_eq!(*m.get_element(0, 0).unwrap(), 10);
+        assert_eq!(*m.get_element(0, 1).unwrap(), 20);
         assert_eq!(m.row(0), &[10, 20]);
     }
 
@@ -1502,8 +2067,8 @@ mod tests {
         let m = Matrix::row_vector(vec![10u64, 20].into_boxed_slice());
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 2);
-        assert_eq!(m[(0, 0)], 10);
-        assert_eq!(m[(0, 1)], 20);
+        assert_eq!(*m.element(0, 0), 10);
+        assert_eq!(*m.element(0, 1), 20);
     }
 
     #[test]
@@ -1513,9 +2078,9 @@ mod tests {
         assert_eq!(m.nrows(), 3);
         assert_eq!(m.ncols(), 1);
         assert_eq!(m.as_slice(), &[1, 2, 3]);
-        assert_eq!(m[(0, 0)], 1);
-        assert_eq!(m[(1, 0)], 2);
-        assert_eq!(m[(2, 0)], 3);
+        assert_eq!(*m.element(0, 0), 1);
+        assert_eq!(*m.element(1, 0), 2);
+        assert_eq!(*m.element(2, 0), 3);
         assert_eq!(m.row(0), &[1]);
         assert_eq!(m.row(1), &[2]);
         assert_eq!(m.row(2), &[3]);
@@ -1530,8 +2095,8 @@ mod tests {
         let m = Matrix::column_vector(vec![10u64, 20].into_boxed_slice());
         assert_eq!(m.nrows(), 2);
         assert_eq!(m.ncols(), 1);
-        assert_eq!(m[(0, 0)], 10);
-        assert_eq!(m[(1, 0)], 20);
+        assert_eq!(*m.element(0, 0), 10);
+        assert_eq!(*m.element(1, 0), 20);
     }
 
     #[test]
@@ -1548,12 +2113,17 @@ mod tests {
     }
 
     #[test]
-    fn test_try_get() {
-        let m = Matrix::try_from(vec![1, 2, 3, 4, 5, 6].into(), 2, 3).unwrap();
-        assert_eq!(m.try_get(0, 0), Some(&1));
-        assert_eq!(m.try_get(1, 2), Some(&6));
-        assert_eq!(m.try_get(2, 0), None);
-        assert_eq!(m.try_get(0, 3), None);
+    fn test_get_element() {
+        let mut m = Matrix::try_from(vec![1, 2, 3, 4, 5, 6].into(), 2, 3).unwrap();
+        assert_eq!(m.get_element(0, 0), Some(&1));
+        assert_eq!(m.get_element(1, 2), Some(&6));
+        assert_eq!(m.get_element(2, 0), None);
+        assert_eq!(m.get_element(0, 3), None);
+
+        *m.get_element_mut(1, 2).unwrap() = 7;
+        assert_eq!(m.get_element(1, 2), Some(&7));
+        assert_eq!(m.get_element_mut(2, 0), None);
+        assert_eq!(m.get_element_mut(0, 3), None);
     }
 
     #[test]
@@ -1645,6 +2215,45 @@ mod tests {
         assert!(m.subview(0..usize::MAX).is_none());
     }
 
+    #[expect(
+        clippy::reversed_empty_ranges,
+        reason = "we want to make sure it doesn't work"
+    )]
+    #[test]
+    fn test_subview_zero_cols() {
+        let m = Matrix::from_element(10, 0, 0u32);
+
+        // Out-of-bounds indexing
+        assert!(m.subview(100..200).is_none());
+        assert!(m.subview(200..100).is_none());
+
+        assert!(m.subview(10..11).is_none());
+        assert!(m.subview(11..10).is_none());
+
+        assert!(m.subview(0..11).is_none());
+        assert!(m.subview(11..0).is_none());
+
+        assert!(m.subview(10..0).is_none());
+        assert!(m.subview(5..4).is_none());
+
+        // In-bounds.
+        let v = m.subview(5..10).unwrap();
+        assert_eq!(v.nrows(), 5);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(0..0).unwrap();
+        assert_eq!(v.nrows(), 0);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(10..10).unwrap();
+        assert_eq!(v.nrows(), 0);
+        assert_eq!(v.ncols(), 0);
+
+        let v = m.subview(0..10).unwrap();
+        assert_eq!(v.nrows(), 10);
+        assert_eq!(v.ncols(), 0);
+    }
+
     #[test]
     #[cfg(all(not(miri), feature = "rayon"))]
     fn test_parallel_methods_edge_cases() {
@@ -1664,7 +2273,7 @@ mod tests {
         assert_eq!(rows[3], &[3, 4, 5]);
 
         // Test par_window_iter_mut and par_row_iter_mut
-        let mut m2 = Matrix::new(0, 4, 3);
+        let mut m2 = Matrix::from_element(4, 3, 0);
 
         // Use par_row_iter_mut to set values
         m2.par_row_iter_mut().enumerate().for_each(|(i, row)| {
@@ -1675,7 +2284,7 @@ mod tests {
         test_basic_indexing(&m2);
 
         // Test par_window_iter_mut with larger batchsize
-        let mut m3 = Matrix::new(0, 4, 3);
+        let mut m3 = Matrix::from_element(4, 3, 0);
         m3.par_window_iter_mut(10)
             .enumerate()
             .for_each(|(_, mut window)| {
@@ -1690,7 +2299,7 @@ mod tests {
 
     #[test]
     fn test_matrix_pointers() {
-        let mut m = Matrix::new(42, 3, 4);
+        let mut m = Matrix::from_element(3, 4, 42);
 
         // Test as_ptr and as_mut_ptr return the same address
         let const_ptr = m.as_ptr();
@@ -1738,35 +2347,35 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let counter = AtomicUsize::new(0);
-        let m = Matrix::new(Init(|| counter.fetch_add(1, Ordering::SeqCst)), 2, 3);
+        let m = Matrix::from_fn(2, 3, |_| counter.fetch_add(1, Ordering::SeqCst));
 
         // Should be filled in memory order
-        assert_eq!(m[(0, 0)], 0);
-        assert_eq!(m[(0, 1)], 1);
-        assert_eq!(m[(0, 2)], 2);
-        assert_eq!(m[(1, 0)], 3);
-        assert_eq!(m[(1, 1)], 4);
-        assert_eq!(m[(1, 2)], 5);
+        assert_eq!(*m.element(0, 0), 0);
+        assert_eq!(*m.element(0, 1), 1);
+        assert_eq!(*m.element(0, 2), 2);
+        assert_eq!(*m.element(1, 0), 3);
+        assert_eq!(*m.element(1, 1), 4);
+        assert_eq!(*m.element(1, 2), 5);
     }
 
     #[test]
     fn test_transpose() {
         {
-            let v = Matrix::new(0, 0, 0);
+            let v = Matrix::from_element(0, 0, 0);
             let t = v.transpose();
             assert_eq!(t.nrows(), 0);
             assert_eq!(t.ncols(), 0);
         }
 
         {
-            let v = Matrix::new(0, 0, 10);
+            let v = Matrix::from_element(0, 10, 0);
             let t = v.transpose();
             assert_eq!(t.nrows(), 10);
             assert_eq!(t.ncols(), 0);
         }
 
         {
-            let v = Matrix::new(0, 10, 0);
+            let v = Matrix::from_element(10, 0, 0);
             let t = v.transpose();
             assert_eq!(t.nrows(), 0);
             assert_eq!(t.ncols(), 10);
@@ -1787,21 +2396,20 @@ mod tests {
         // Test Debug implementation for TryFromError
         let data = vec![1, 2, 3];
         let err = Matrix::try_from(data.into(), 2, 3).unwrap_err();
-
         let debug_str = format!("{:?}", err);
-        assert!(debug_str.contains("TryFromError"));
-        assert!(debug_str.contains("data_len: 3"));
-        assert!(debug_str.contains("nrows: 2"));
-        assert!(debug_str.contains("ncols: 3"));
+        assert_contains!(debug_str, "TryFromError");
 
         // Ensure Debug doesn't require T: Debug by using a non-Debug type
-        #[derive(Clone, Debug)]
-        struct NonDebug(#[allow(dead_code)] i32);
+        #[derive(Clone)]
+        struct NonDebug(#[expect(dead_code)] i32);
 
         let non_debug_data: Box<[NonDebug]> = vec![NonDebug(1), NonDebug(2)].into();
-        let non_debug_err = Matrix::try_from(non_debug_data, 1, 3).unwrap_err();
+        let non_debug_err = match Matrix::try_from(non_debug_data, 1, 3) {
+            Ok(_) => panic!("should not have succeeded!"),
+            Err(err) => err,
+        };
         let debug_str = format!("{:?}", non_debug_err);
-        assert!(debug_str.contains("TryFromError"));
+        assert_contains!(debug_str, "TryFromError");
     }
 
     // Comprehensive tests for rayon-specific functionality
@@ -1894,7 +2502,7 @@ mod tests {
                 for batchsize in [1, 2, 3, 7] {
                     let context = lazy_format!("{}x{}, batchsize={}", nrows, ncols, batchsize);
 
-                    let mut m = Matrix::new(0usize, nrows, ncols);
+                    let mut m = Matrix::from_element(nrows, ncols, 0usize);
 
                     // Use par_window_iter_mut to fill matrix
                     m.par_window_iter_mut(batchsize).enumerate().for_each(
@@ -1917,7 +2525,7 @@ mod tests {
                         for col in 0..ncols {
                             let expected = row * ncols + col;
                             assert_eq!(
-                                m[(row, col)],
+                                *m.element(row, col),
                                 expected,
                                 "pos ({}, {}) - {}",
                                 row,
@@ -2001,7 +2609,7 @@ mod tests {
 
         let nrows = 6;
         let ncols = 4;
-        let mut m = Matrix::new(0u32, nrows, ncols);
+        let mut m = Matrix::from_element(nrows, ncols, 0u32);
 
         // Test parallel modification
         m.par_row_iter_mut().enumerate().for_each(|(row_idx, row)| {
@@ -2014,7 +2622,7 @@ mod tests {
         for row in 0..nrows {
             for col in 0..ncols {
                 let expected = (row * ncols + col) as u32;
-                assert_eq!(m[(row, col)], expected, "pos ({}, {})", row, col);
+                assert_eq!(*m.element(row, col), expected, "pos ({}, {})", row, col);
             }
         }
 
@@ -2034,7 +2642,13 @@ mod tests {
         for row in 0..nrows {
             for col in 0..ncols {
                 let expected = ((row * ncols + col) * 2) as u32;
-                assert_eq!(m[(row, col)], expected, "doubled pos ({}, {})", row, col);
+                assert_eq!(
+                    *m.element(row, col),
+                    expected,
+                    "doubled pos ({}, {})",
+                    row,
+                    col
+                );
             }
         }
     }
@@ -2079,7 +2693,7 @@ mod tests {
 
         let windows: Vec<_> = tiny.par_window_iter(1).collect();
         assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0][(0, 0)], 42);
+        assert_eq!(*windows[0].element(0, 0), 42);
 
         let rows: Vec<_> = tiny.par_row_iter().collect();
         assert_eq!(rows.len(), 1);
@@ -2104,7 +2718,7 @@ mod tests {
                         let global_row = window_idx * 2 + row_idx;
                         let expected = global_row * 5 + col_idx;
                         assert_eq!(
-                            window[(row_idx, col_idx)],
+                            *window.element(row_idx, col_idx),
                             expected,
                             "window {}, pos ({}, {})",
                             window_idx,
@@ -2127,7 +2741,7 @@ mod tests {
                     let col = slice_idx % window.ncols();
                     assert_eq!(
                         value,
-                        window[(row, col)],
+                        *window.element(row, col),
                         "window {}, slice_idx {}",
                         window_idx,
                         slice_idx
@@ -2143,7 +2757,7 @@ mod tests {
             for (row_idx, row) in rows_via_iter.iter().enumerate() {
                 assert_eq!(row.len(), window.ncols());
                 for (col_idx, &value) in row.iter().enumerate() {
-                    assert_eq!(value, window[(row_idx, col_idx)]);
+                    assert_eq!(value, *window.element(row_idx, col_idx));
                 }
             }
         });
@@ -2158,7 +2772,7 @@ mod tests {
         // Create a larger matrix to test parallelism benefits
         let nrows = 100;
         let ncols = 10;
-        let mut m = Matrix::new(0usize, nrows, ncols);
+        let mut m = Matrix::from_element(nrows, ncols, 0usize);
 
         // Test that parallel operations can be chained
         let work_counter = AtomicUsize::new(0);
@@ -2186,7 +2800,7 @@ mod tests {
         // Verify correctness
         for row in 0..nrows {
             for col in 0..ncols {
-                assert_eq!(m[(row, col)], row * ncols + col);
+                assert_eq!(*m.element(row, col), row * ncols + col);
             }
         }
 
@@ -2219,7 +2833,7 @@ mod tests {
         let _: Vec<_> = m.par_row_iter().collect();
 
         // Test with mutable matrix
-        let mut m = Matrix::new(0u64, 4, 5);
+        let mut m = Matrix::from_element(4, 5, 0u64);
 
         // This should compile because u64 is Send
         m.par_window_iter_mut(2).for_each(|mut window| {

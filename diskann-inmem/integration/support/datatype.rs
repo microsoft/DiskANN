@@ -3,12 +3,12 @@
  * Licensed under the MIT license.
  */
 
+use diskann_benchmark_runner::Reflect;
 use diskann_utils::{
     sampling::medoid::ComputeMedoid,
     views::{Matrix, MatrixView, MutMatrixView},
 };
 use diskann_wide::{cast_f16_to_f32, cast_f32_to_f16};
-use diskann_benchmark_runner::Reflect;
 use half::f16;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -255,10 +255,6 @@ impl Dataset {
             Self::U8(m) => m.as_slice().into(),
             Self::I8(m) => m.as_slice().into(),
         }
-    }
-
-    pub(crate) fn medoid(&self) -> Dataset {
-        self.as_view().medoid()
     }
 
     pub(crate) fn preprocess(&mut self, op: &Preprocess) {
@@ -618,7 +614,7 @@ mod tests {
     #[test]
     fn dataset_medoid_shape() {
         let ds: Dataset = matrix(&[1.0f32, 2.0, 3.0, 4.0], 2, 2).into();
-        let medoid = ds.medoid();
+        let medoid = ds.as_view().medoid();
         assert_eq!(medoid.nrows(), 1);
         assert_eq!(medoid.ncols(), 2);
     }

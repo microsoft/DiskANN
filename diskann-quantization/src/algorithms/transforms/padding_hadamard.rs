@@ -244,7 +244,7 @@ where
                 //
                 // 1. `output_dim` is a power of 2 by construction.
                 // 2. We've checked that `dst.len() == output_dim`.
-                #[allow(clippy::unwrap_used)]
+                #[expect(clippy::unwrap_used)]
                 hadamard_transform(dst).unwrap();
             }
             Some(indices) => {
@@ -256,7 +256,7 @@ where
                 //
                 // 1. `padded_dim` is a power of 2 by construction.
                 // 2. We've checked that `tmp.len() == padded_dim`.
-                #[allow(clippy::unwrap_used)]
+                #[expect(clippy::unwrap_used)]
                 hadamard_transform(&mut tmp).unwrap();
 
                 let rescale = ((tmp.len() as f32) / (indices.len() as f32)).sqrt();

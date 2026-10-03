@@ -287,9 +287,12 @@ impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
 mod tests {
     use super::*;
 
-    use diskann_utils::views::{Init, Matrix, MatrixView};
+    use diskann_utils::{
+        assert_contains,
+        views::{Matrix, MatrixView},
+    };
 
-    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
+    use crate::matrix_kernels::test_util::panic_message_for;
 
     #[test]
     fn test_visit_panels() {
@@ -418,7 +421,7 @@ mod tests {
             for row in 0..SZ {
                 assert_eq!(
                     packed[col * SZ + row],
-                    reference[(block * SZ + row, col)],
+                    *reference.element(block * SZ + row, col),
                     "{ctx}, block = {block}, row = {row}, col = {col}",
                 );
             }
@@ -485,15 +488,11 @@ mod tests {
 
     fn test_matrix(nrows: usize, ncols: usize) -> Matrix<f32> {
         let mut value = 0.0;
-        Matrix::new(
-            Init(|| {
-                let current = value;
-                value += 1.0;
-                current
-            }),
-            nrows,
-            ncols,
-        )
+        Matrix::from_fn(nrows, ncols, |_| {
+            let current = value;
+            value += 1.0;
+            current
+        })
     }
 
     fn pack<const SZ: usize>(matrix: MatrixView<'_, f32>) -> Vec<f32> {
@@ -503,7 +502,7 @@ mod tests {
         for block in 0..matrix.nrows() / SZ {
             for col in 0..matrix.ncols() {
                 for row in 0..SZ {
-                    packed.push(matrix[(block * SZ + row, col)]);
+                    packed.push(*matrix.element(block * SZ + row, col));
                 }
             }
         }

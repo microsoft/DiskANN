@@ -222,7 +222,7 @@ pub(crate) mod tests {
     {
         // Assume that all the vectors in `data` have the same length.
         // If they don't, `copy_from_slice` will panic, so we're double checking.
-        let mut mat = diskann_utils::views::Matrix::new(To::default(), data.len(), dim);
+        let mut mat = diskann_utils::views::Matrix::from_element(data.len(), dim, To::default());
         std::iter::zip(mat.row_iter_mut(), data).for_each(|(output, input)| {
             assert_eq!(
                 input.len(),
@@ -854,8 +854,12 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: for<'a> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + for<'a> DefaultSearchStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + Clone
+            + for<'a> DefaultSearchStrategy<
+                'a,
+                FullPrecisionProvider<T, DefaultQuant>,
+                &'a [T],
+                SearchAccessor: glue::SearchAccessor,
+            > + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
     {
@@ -980,8 +984,12 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: for<'a> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + for<'a> DefaultSearchStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + Clone
+            + for<'a> DefaultSearchStrategy<
+                'a,
+                FullPrecisionProvider<T, DefaultQuant>,
+                &'a [T],
+                SearchAccessor: glue::SearchAccessor,
+            > + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
     {
@@ -2235,7 +2243,7 @@ pub(crate) mod tests {
         } else {
             let mut i: u32 = 0;
             while let Some(data) = iter.next_n(batchsize) {
-                let mut vectors = Matrix::new(0.0f32, data.len(), start_vectors.ncols());
+                let mut vectors = Matrix::from_element(data.len(), start_vectors.ncols(), 0.0f32);
                 let ids: Arc<[_]> = std::iter::zip(vectors.row_iter_mut(), data.iter())
                     .map(|(dst, (v, _))| {
                         dst.copy_from_slice(v);
@@ -2657,7 +2665,8 @@ pub(crate) mod tests {
         // Randomize the vectors
         let rng = &mut create_rnd_from_seed_in_tests(0x7dc205fcda38d3a3);
         indices.shuffle(rng);
-        let mut queries = diskann_utils::views::Matrix::new(0.0, data.nrows(), data.ncols());
+        let mut queries =
+            diskann_utils::views::Matrix::from_element(data.nrows(), data.ncols(), 0.0);
         std::iter::zip(queries.row_iter_mut(), indices.iter()).for_each(|(row, i)| {
             row.copy_from_slice(data.row(*i));
         });

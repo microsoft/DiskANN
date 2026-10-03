@@ -383,7 +383,7 @@ mod tests {
     };
 
     use super::*;
-    use diskann_utils::views::{self, Matrix, MatrixView};
+    use diskann_utils::views::{Matrix, MatrixView};
 
     /// Retrieve the 8x8 hadamard matrix as a `Matrix`.
     fn get_hadamard_8() -> Matrix<f32> {
@@ -395,19 +395,19 @@ mod tests {
         assert_ne!(dim, 0);
         // Base case.
         if dim == 1 {
-            Matrix::new(1.0, dim, dim)
+            Matrix::from_element(dim, dim, 1.0)
         } else {
             let half = dim / 2;
             let sub = hadamard_by_sylvester(half);
-            let mut m = Matrix::<f32>::new(0.0, dim, dim);
+            let mut m = Matrix::<f32>::from_element(dim, dim, 0.0);
 
             for c in 0..m.ncols() {
                 for r in 0..m.nrows() {
-                    let mut v = sub[(r % half, c % half)];
+                    let mut v = *sub.element(r % half, c % half);
                     if c >= half && r >= half {
                         v = -v;
                     }
-                    m[(c, r)] = v;
+                    *m.element_mut(c, r) = v;
                 }
             }
             m
@@ -425,15 +425,15 @@ mod tests {
     // A naive reference implementation.
     fn matmul(a: MatrixView<f32>, b: MatrixView<f32>) -> Matrix<f32> {
         assert_eq!(a.ncols(), b.nrows());
-        let mut c = Matrix::new(0.0, a.nrows(), b.ncols());
+        let mut c = Matrix::from_element(a.nrows(), b.ncols(), 0.0);
 
         for i in 0..c.nrows() {
             for j in 0..c.ncols() {
                 let mut v = 0.0;
                 for k in 0..a.ncols() {
-                    v = a[(i, k)].mul_add(b[(k, j)], v);
+                    v = a.element(i, k).mul_add(*b.element(k, j), v);
                 }
-                c[(i, j)] = v;
+                *c.element_mut(i, j) = v;
             }
         }
         c
@@ -443,8 +443,7 @@ mod tests {
     fn test_micro_kernel_64() {
         let mut src = {
             let mut rng = StdRng::seed_from_u64(0xde1936d651285fc8);
-            let init = views::Init(|| StandardUniform {}.sample(&mut rng));
-            Matrix::new(init, 64, 1)
+            Matrix::from_fn(64, 1, |_| StandardUniform {}.sample(&mut rng))
         };
 
         let h = hadamard_by_sylvester(64);
@@ -457,8 +456,8 @@ mod tests {
         assert_eq!(src.ncols(), 1);
 
         for j in 0..src.nrows() {
-            let src = src[(j, 0)];
-            let reference = reference[(j, 0)];
+            let src = *src.element(j, 0);
+            let reference = *reference.element(j, 0);
 
             let relative_error = (src - reference).abs() / src.abs().max(reference.abs());
             assert!(
@@ -476,8 +475,7 @@ mod tests {
     fn test_hadamard_transform(dim: usize, seed: u64) {
         let src = {
             let mut rng = StdRng::seed_from_u64(seed);
-            let init = views::Init(|| StandardUniform {}.sample(&mut rng));
-            Matrix::new(init, dim, 1)
+            Matrix::from_fn(dim, 1, |_| StandardUniform {}.sample(&mut rng))
         };
 
         let h = hadamard_by_sylvester(dim);
@@ -535,8 +533,8 @@ mod tests {
             assert_eq!(src_clone.ncols(), 1);
 
             for j in 0..src_clone.nrows() {
-                let src_clone = src_clone[(j, 0)];
-                let reference = reference[(j, 0)];
+                let src_clone = *src_clone.element(j, 0);
+                let reference = *reference.element(j, 0);
 
                 let relative_error =
                     (src_clone - reference).abs() / src_clone.abs().max(reference.abs());

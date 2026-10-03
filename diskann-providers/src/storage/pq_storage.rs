@@ -113,7 +113,7 @@ impl PQStorage {
         // Write the centroid of PQ centroid vectors
         let centroid_bytes = match centroid {
             Some(centroid) => write_bin(MatrixView::column_vector(centroid), writer)?,
-            None => write_bin(Matrix::<f32>::new(0.0, dim, 1).as_view(), writer)?,
+            None => write_bin(Matrix::<f32>::from_element(dim, 1, 0.0).as_view(), writer)?,
         };
         cumul_bytes[2] = cumul_bytes[1] + centroid_bytes;
 
@@ -246,7 +246,7 @@ impl PQStorage {
 
         info!(" Offset data: {:?}", file_offset_data.as_slice());
 
-        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
+        let pivots = read_bin_from::<f32>(&mut reader, *file_offset_data.element(0, 0))?;
         if pivots.nrows() > NUM_PQ_CENTROIDS {
             return Err(ANNError::message(format!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
@@ -256,7 +256,7 @@ impl PQStorage {
             )));
         }
 
-        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)])?;
+        let centroid = read_bin_from::<f32>(&mut reader, *file_offset_data.element(1, 0))?;
         if centroid.nrows() != pivots.ncols() || centroid.ncols() != 1 {
             return Err(ANNError::message(format!(
                 "Error reading pq_pivots file {}. file_dim = {}, file_cols = {} \
@@ -268,7 +268,7 @@ impl PQStorage {
             )));
         }
 
-        let chunk_offsets_m = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])?;
+        let chunk_offsets_m = read_bin_from::<u32>(&mut reader, *file_offset_data.element(2, 0))?;
         if chunk_offsets_m.ncols() != 1 {
             return Err(ANNError::message(format!(
                 "Error reading pq_pivots file at chunk offsets; file has nc={}, but expecting nc=1.",

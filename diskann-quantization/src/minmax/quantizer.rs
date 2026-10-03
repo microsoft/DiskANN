@@ -171,7 +171,7 @@ impl MinMaxQuantizer {
         let mut vec = vec![f32::default(); self.output_dim()];
 
         // We know vec.len() == self.output_dim() and `from.len() == self.dim`
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         self.transform
             .transform_into(
                 &mut vec,
@@ -401,7 +401,7 @@ where
         }
 
         // We know vec.len() == self.output_dim() and `from.len() == self.dim`
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         self.transform
             .transform_into(to.vector_mut(), &from, ScopedAllocator::global())
             .unwrap();

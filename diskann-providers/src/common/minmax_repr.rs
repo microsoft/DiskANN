@@ -150,13 +150,13 @@ where
         >,
     Unsigned: Representation<NBITS>,
 {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     // Lint: We're allowing panics in distance function for now.
     let xref = MinMaxElement::<NBITS>::from_raw(x).unwrap();
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     // Lint: We're allowing panics in distance function for now.
     let yref = MinMaxElement::<NBITS>::from_raw(y).unwrap();
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     // Lint: We're allowing panics in distance function for now.
     T::evaluate(xref, yref).unwrap()
 }

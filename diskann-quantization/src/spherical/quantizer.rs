@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, DataMeta, DataMetaError, DataMut,
-    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric,
+    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric, iface,
 };
 use crate::{
     AsFunctor, CompressIntoWith,
@@ -378,6 +378,18 @@ where
             shifted_norm,
             inner_product_with_centroid,
         })
+    }
+
+    /// Construct an [`iface::Quantizer`] trait object from `self`.
+    pub fn as_quantizer<const NBITS: usize>(
+        self,
+    ) -> Result<Poly<dyn iface::Quantizer>, AllocatorError>
+    where
+        A: 'static,
+        iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
+    {
+        let iface = iface::Impl::<NBITS, A>::new(self)?;
+        crate::poly!({ iface::Quantizer }, iface, GlobalAllocator)
     }
 }
 
@@ -863,8 +875,6 @@ where
 
 struct AsNonZero<const NBITS: usize>;
 impl<const NBITS: usize> AsNonZero<NBITS> {
-    // Lint: Unwrap is being used in a const-context.
-    #[allow(clippy::unwrap_used)]
     const NON_ZERO: NonZeroUsize = NonZeroUsize::new(NBITS).unwrap();
 }
 
@@ -1025,7 +1035,7 @@ fn maximize_cosine_similarity(
 
     // Lint: This is a private method and all the callers have an invariant that they check
     // for non-empty inputs.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     let mut critical_values =
         SliceHeap::new(&mut base).expect("calling code should not allow the slice to be empty");
 
@@ -1196,7 +1206,7 @@ where
             //
             // Further, `c` has beem clamped to `[0, 2^NBITS - 1]` and is thus encodable
             // with the NBITS-bit unsigned representation.
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             into.vector_mut().set(i, c as i64).unwrap();
         });
 
@@ -1223,10 +1233,7 @@ mod tests {
 
     use std::fmt::Display;
 
-    use diskann_utils::{
-        ReborrowMut, lazy_format,
-        views::{self, Matrix},
-    };
+    use diskann_utils::{ReborrowMut, lazy_format, views::Matrix};
     use diskann_vector::{PureDistanceFunction, norm::FastL2NormSquared};
     use diskann_wide::ARCH;
     use rand::{
@@ -2278,7 +2285,7 @@ mod tests {
 
     #[test]
     fn err_dim_cannot_be_zero() {
-        let data = Matrix::new(0.0f32, 10, 0);
+        let data = Matrix::from_element(10, 0, 0.0f32);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2296,7 +2303,7 @@ mod tests {
 
     #[test]
     fn err_norm_must_be_positive() {
-        let data = Matrix::new(0.0f32, 10, 10);
+        let data = Matrix::from_element(10, 10, 0.0f32);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2314,8 +2321,8 @@ mod tests {
 
     #[test]
     fn err_norm_cannot_be_infinity() {
-        let mut data = Matrix::new(0.0f32, 10, 10);
-        data[(2, 5)] = f32::INFINITY;
+        let mut data = Matrix::from_element(10, 10, 0.0f32);
+        *data.element_mut(2, 5) = f32::INFINITY;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
@@ -2334,8 +2341,8 @@ mod tests {
 
     #[test]
     fn err_reciprocal_norm_cannot_be_infinity() {
-        let mut data = Matrix::new(0.0f32, 10, 10);
-        data[(2, 5)] = 2.93863e-39;
+        let mut data = Matrix::from_element(10, 10, 0.0f32);
+        *data.element_mut(2, 5) = 2.93863e-39;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
@@ -2393,7 +2400,7 @@ mod tests {
     #[test]
     fn compression_errors_data() {
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
-        let data = Matrix::<f32>::new(views::Init(|| StandardNormal {}.sample(&mut rng)), 16, 12);
+        let data = Matrix::<f32>::from_fn(16, 12, |_| StandardNormal {}.sample(&mut rng));
 
         let quantizer = SphericalQuantizer::train(
             data.as_view(),
