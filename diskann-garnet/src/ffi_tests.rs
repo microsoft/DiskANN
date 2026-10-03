@@ -24,6 +24,7 @@ mod tests {
         check_internal_id_valid, create_index, drop_index, finish_import,
         garnet::{Context, Term, WriteCallback},
         import_term, insert,
+        provider::DEFAULT_START_POINT_ID,
         quantization::{GarnetQuantizer, MinMax8Bit, Spherical1Bit},
         remove, search_neighbors, search_vector, set_attribute, set_quant_state,
         test_utils::{STORE, Store, q8_state_with_identity_transform},
@@ -157,12 +158,14 @@ mod tests {
             let store = Store::new();
             let (index_ptr, ctx) = create_test_index(&store, quant_type);
 
-            for (id, vector, expected, expected_internal_id) in [
-                (42, [1.0, 2.0], 1, 1u32),
+            for (id, vector, expected, expected_count) in [
+                (42, [1.0, 2.0], 1, 1u64),
                 (42, [2.0, 1.0], 3, 1),
                 (43, [3.0, 4.0], 1, 2),
                 (43, [4.0, 3.0], 3, 2),
             ] {
+                let existing_internal_id =
+                    store.get(ctx.term(Term::IntMap).get(), bytemuck::bytes_of(&id));
                 assert_eq!(
                     u8::from(insert_f32_vector(&ctx, index_ptr, id, &vector)),
                     expected,
@@ -171,18 +174,14 @@ mod tests {
                 let internal_id = store
                     .get(ctx.term(Term::IntMap).get(), bytemuck::bytes_of(&id))
                     .unwrap();
-                assert_eq!(
-                    bytemuck::pod_read_unaligned::<u32>(&internal_id),
-                    expected_internal_id
-                );
+                if let Some(existing_internal_id) = existing_internal_id {
+                    assert_eq!(internal_id, existing_internal_id);
+                }
                 assert_eq!(
                     store.get(ctx.term(Term::Vector).get(), &internal_id),
                     Some(bytemuck::cast_slice::<f32, u8>(&vector).to_vec())
                 );
-                assert_eq!(
-                    unsafe { card(ctx.get(), index_ptr) },
-                    u64::from(expected_internal_id)
-                );
+                assert_eq!(unsafe { card(ctx.get(), index_ptr) }, expected_count);
             }
             assert_eq!(store.int_map_reads(), 4);
 
@@ -400,10 +399,12 @@ mod tests {
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
             let id = 1u32.to_ne_bytes();
+            let zero = 0u32.to_ne_bytes();
             for (internal_id, accepted, expected) in [
-                (0u32, false, None),
+                (DEFAULT_START_POINT_ID, false, None),
+                (0, true, Some(zero.as_slice())),
                 (1, true, Some(id.as_slice())),
-                (0, false, Some(id.as_slice())),
+                (DEFAULT_START_POINT_ID, false, Some(id.as_slice())),
             ] {
                 let value = internal_id.to_ne_bytes();
                 assert_eq!(
@@ -648,7 +649,10 @@ mod tests {
                 assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
                 assert!(
                     store
-                        .get(ctx.term(Term::Vector).get(), &0u32.to_ne_bytes())
+                        .get(
+                            ctx.term(Term::Vector).get(),
+                            &DEFAULT_START_POINT_ID.to_ne_bytes()
+                        )
                         .is_none()
                 );
             }
@@ -661,7 +665,7 @@ mod tests {
                 .get(ctx.term(Term::IntMap).get(), &42u32.to_ne_bytes())
                 .unwrap();
             let internal_id = bytemuck::pod_read_unaligned::<u32>(&mapping);
-            assert!((1..u32::MAX).contains(&internal_id));
+            assert!(internal_id < u32::MAX);
             let (ids, distances) = do_search(&ctx, index_ptr, &[1.0; 2], 1, None);
             assert_eq!(ids, [42]);
             assert_eq!(distances, [0.0]);
@@ -781,23 +785,21 @@ mod tests {
                     )
                 });
             }
-            for rejected_id in [0u32, u32::MAX] {
-                let id = rejected_id.to_ne_bytes();
-                let vector = [0.0f32; 2];
-                let value = bytemuck::cast_slice::<f32, u8>(&vector);
-                assert!(!unsafe {
-                    import_term(
-                        ctx.get(),
-                        index_ptr,
-                        Term::Vector as u32,
-                        id.as_ptr(),
-                        id.len(),
-                        value.as_ptr(),
-                        value.len(),
-                    )
-                });
-                assert!(store.get(ctx.term(Term::Vector).get(), &id).is_none());
-            }
+            let id = DEFAULT_START_POINT_ID.to_ne_bytes();
+            let vector = [0.0f32; 2];
+            let value = bytemuck::cast_slice::<f32, u8>(&vector);
+            assert!(!unsafe {
+                import_term(
+                    ctx.get(),
+                    index_ptr,
+                    Term::Vector as u32,
+                    id.as_ptr(),
+                    id.len(),
+                    value.as_ptr(),
+                    value.len(),
+                )
+            });
+            assert!(store.get(ctx.term(Term::Vector).get(), &id).is_none());
 
             let rejected_id = (max_id + 1).to_ne_bytes();
             let mut bad_neighbors = [0u32; MAX_DEGREE + 1];
@@ -1133,8 +1135,7 @@ mod tests {
         let vector_bytes = bytemuck::cast_slice(&vector);
         let vector_len = 2;
 
-        // First insert will get ID=1
-        let iid = 1u32;
+        let iid = 0u32;
         let iid_bytes = bytemuck::bytes_of(&iid);
 
         // Check internal ID does not exist
@@ -1695,7 +1696,7 @@ mod tests {
         );
 
         // previous insert is unquantized; inserted before training
-        let iid = required_vectors as u32;
+        let iid = required_vectors as u32 - 1;
         assert!(
             store
                 .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
@@ -1703,7 +1704,7 @@ mod tests {
         );
 
         // latest insert is quantized
-        let iid = required_vectors as u32 + 1; // +1 to account for the start vector
+        let iid = required_vectors as u32;
         let qv = store
             .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
             .expect("missing quant vector");
@@ -1714,7 +1715,7 @@ mod tests {
         unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 1) };
 
         // all previous inserts are now quantized
-        for iid in 1..=required_vectors as u32 {
+        for iid in (0..=required_vectors as u32).chain([DEFAULT_START_POINT_ID]) {
             let qv = store
                 .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
                 .expect("missing quant vector");
