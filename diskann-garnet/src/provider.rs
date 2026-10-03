@@ -2382,7 +2382,7 @@ mod tests {
 
     fn train_for_backfill(provider: &GarnetProvider<f32>, ctx: &Context) {
         let quantizer = provider.quantizer.as_ref().unwrap();
-        let mut data = Matrix::new(0.0f32, quantizer.required_vectors(), 2);
+        let mut data = Matrix::from_element(quantizer.required_vectors(), 2, 0.0f32);
         for row in 0..data.nrows() {
             data.row_mut(row)
                 .copy_from_slice(&[(row + 1) as f32, (row % 7 + 1) as f32]);
