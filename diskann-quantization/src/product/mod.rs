@@ -5,9 +5,8 @@
 
 //! Product quantization training and compression.
 
-pub mod train;
-
 pub mod tables;
+pub mod train;
 
 /////////////
 // Exports //

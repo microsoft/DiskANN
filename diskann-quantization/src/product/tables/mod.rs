@@ -4,6 +4,7 @@
  */
 
 mod basic;
+pub mod padded;
 mod transposed;
 
 pub mod lookup;
@@ -16,4 +17,5 @@ pub(super) mod test;
 /////////////
 
 pub use basic::{BasicTable, BasicTableBase, BasicTableView, TableCompressionError};
+pub use padded::PaddedTable;
 pub use transposed::TransposedTable;

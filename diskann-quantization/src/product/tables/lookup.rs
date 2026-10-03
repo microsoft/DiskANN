@@ -4,6 +4,7 @@
  */
 
 use diskann_utils::views::rowmajor::{self, Matrix};
+use thiserror::Error;
 
 /// Policy for processing entries in [`lookup`].
 ///
@@ -42,7 +43,7 @@ pub trait Lookup<T> {
 /// // 2 3
 /// // 4 5
 /// let data = Owned::from_fn(3, 2, |rc| 2 * rc.row + rc.col);
-/// let sum = lookup::lookup(
+/// let sum = lookup::lookup_single(
 ///     lookup::Sum,
 ///     data.as_view(),
 ///     &[0, 1, 0]
@@ -124,12 +125,12 @@ where
 }
 
 /// Errors from [`lookup`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Error, Clone, Copy)]
 #[non_exhaustive]
 pub enum LookupError {
-    /// The number of indices does not match the number of data rows.
+    #[error("number of lookup indices does not match the number of data rows")]
     InvalidLength,
-    /// At least one of the indices exceeds the number of data columns.
+    #[error("at least one of the lookup indices exceeds the number of data columns")]
     OutOfBounds,
 }
 
@@ -230,6 +231,7 @@ impl std::ops::Add for DotAndNorm {
 mod tests {
     use super::*;
 
+    use diskann_utils::assert_contains;
     use rand::{
         SeedableRng,
         distr::{Distribution, Uniform},
@@ -259,6 +261,35 @@ mod tests {
                 };
 
                 let table = rowmajor::Owned::from_fn(nrows, ncols, |rc| (rc.row + rc.col) as f32);
+
+                // If it's possible for a value to be out-of-bounds, make sure we return an
+                // error if anything *is* out-of-bounds.
+                if ncols < 256 {
+                    let nc = u8::try_from(ncols).unwrap();
+                    codes.fill(0);
+                    for r in 0..nrows {
+                        codes[r] = nc;
+                        let err = lookup_single(Sum, table.as_view(), &codes).unwrap_err();
+                        assert_contains!(
+                            err.to_string(),
+                            "at least one of the lookup indices exceeds the number of data columns"
+                        );
+                        codes[r] = 0;
+                    }
+                }
+
+                // Check that too long and too short codes are detected.
+                if nrows > 0 {
+                    let too_short = vec![0; nrows - 1];
+                    let err = lookup_single(Sum, table.as_view(), &too_short).unwrap_err();
+                    assert_contains!(err.to_string(), "number of lookup indices does not match");
+                }
+
+                {
+                    let too_long = vec![0; nrows + 1];
+                    let err = lookup_single(Sum, table.as_view(), &too_long).unwrap_err();
+                    assert_contains!(err.to_string(), "number of lookup indices does not match");
+                }
 
                 // Test all zeros
                 codes.iter_mut().for_each(|c| *c = 0);

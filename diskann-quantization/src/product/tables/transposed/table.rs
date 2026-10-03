@@ -524,7 +524,7 @@ mod test_compression {
         distances::{Cosine, InnerProduct, SquaredL2},
         error::format,
         product::tables::{
-            DotAndNorm,
+            lookup::DotAndNorm,
             test::{create_dataset, create_pivot_tables},
         },
     };

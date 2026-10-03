@@ -105,6 +105,14 @@ where
     pub fn dim(&self) -> usize {
         self.pivots.ncols()
     }
+
+    /// Return `self` as a [`BasicTableView`].
+    pub fn as_view(&self) -> BasicTableView<'_> {
+        BasicTableView {
+            pivots: self.pivots.as_view(),
+            offsets: self.offsets.as_view(),
+        }
+    }
 }
 
 #[derive(Error, Debug)]

@@ -72,13 +72,6 @@ impl UniformFloat {
     pub(super) fn new(low: usize, high: usize) -> Result<Self, rand::distr::uniform::Error> {
         Uniform::new(low, high).map(Self)
     }
-
-    pub(super) fn new_inclusive(
-        low: usize,
-        high: usize,
-    ) -> Result<Self, rand::distr::uniform::Error> {
-        Uniform::new_inclusive(low, high).map(Self)
-    }
 }
 
 impl Distribution<f32> for UniformFloat {
@@ -95,6 +88,22 @@ impl DistanceTestTable {
                 NonZeroUsize::new(chunks).unwrap(),
             )
             .unwrap(),
+            pivots,
+            start,
+        }
+    }
+
+    pub(super) fn from_chunk_dims(chunk_dims: &[usize], pivots: usize, start: f32) -> Self {
+        let mut offsets = Vec::with_capacity(chunk_dims.len() + 1);
+        let mut offset = 0usize;
+        offsets.push(offset);
+        for &dim in chunk_dims {
+            offset = offset.checked_add(dim).unwrap();
+            offsets.push(offset);
+        }
+
+        Self {
+            offsets: ChunkOffsets::new(offsets.into_boxed_slice()).unwrap(),
             pivots,
             start,
         }
@@ -163,13 +172,6 @@ impl DistanceTestTable {
         }
     }
 
-    pub(super) fn expected_vector(&self, codes: &[u8]) -> Vec<f32> {
-        assert_eq!(codes.len(), self.chunks());
-        let mut v = vec![0.0; self.dim()];
-        self.expected_vector_into(&mut v, codes);
-        v
-    }
-
     pub(super) fn drive(
         &self,
         num_trials: usize,
@@ -186,7 +188,7 @@ impl DistanceTestTable {
         f(&codes, &mut vector, format_args!("{ctx}, all zeros"));
 
         let max = u8::try_from(self.pivots() - 1).unwrap();
-        codes.iter_mut().for_each(|c| *c = max);
+        codes.fill(max);
         self.expected_vector_into(&mut vector, &codes);
         f(&codes, &mut vector, format_args!("{ctx}, all {max}"));
 
@@ -252,6 +254,69 @@ impl DistanceTestTable {
             )
         }
     }
+
+    pub(super) fn drive_self_like(
+        &self,
+        num_trials: usize,
+        rng: &mut StdRng,
+        check: Check,
+        f: &dyn Fn(&[f32], &[f32]) -> f32,
+        dut: &mut dyn SelfLike,
+        ctx: std::fmt::Arguments<'_>,
+    ) {
+        let mut run_check = |lhs_code: &[u8],
+                             lhs_vector: &[f32],
+                             rng: &mut StdRng,
+                             ctx: std::fmt::Arguments<'_>| {
+            self.drive(
+                num_trials,
+                rng,
+                &mut |rhs_code: &[u8], rhs_vector: &[f32], ctx: std::fmt::Arguments<'_>| {
+                    let expected = f(&lhs_vector, rhs_vector);
+                    let got = dut.evaluate(&lhs_code, rhs_code);
+
+                    if let Err(reason) = check.check(got, expected) {
+                        panic!("Check failed: {} -- {}", reason, ctx);
+                    }
+                },
+                ctx,
+            );
+        };
+
+        let mut a_code = vec![0u8; self.chunks()];
+        let mut a_vector = vec![0.0; self.dim()];
+        self.expected_vector_into(&mut a_vector, &a_code);
+
+        // Test with all zeros.
+        run_check(
+            &a_code,
+            &a_vector,
+            rng,
+            format_args!("{ctx}, all-zeros lhs"),
+        );
+
+        // Test with all max.
+        let max = u8::try_from(self.pivots() - 1).unwrap();
+        a_code.fill(max);
+        self.expected_vector_into(&mut a_vector, &a_code);
+        run_check(
+            &a_code,
+            &a_vector,
+            rng,
+            format_args!("{ctx}, all-{max} lhs"),
+        );
+
+        // Begin random trials.
+        let dist = Uniform::new(0, self.pivots()).unwrap();
+        for _ in 0..num_trials {
+            a_code
+                .iter_mut()
+                .for_each(|c| *c = u8::try_from(dist.sample(rng)).unwrap());
+            self.expected_vector_into(&mut a_vector, &a_code);
+
+            run_check(&a_code, &a_vector, rng, ctx);
+        }
+    }
 }
 
 pub(super) fn squared_l2(x: &[f32], y: &[f32]) -> f32 {
@@ -270,6 +335,11 @@ pub(super) fn cosine(x: &[f32], y: &[f32]) -> f32 {
 pub(super) trait QueryLike {
     fn preprocess(&mut self, query: &[f32]);
     fn evaluate(&mut self, code: &[u8]) -> f32;
+}
+
+/// A trait modeling self-like style distances with split pre-processing and evaluation.
+pub(super) trait SelfLike {
+    fn evaluate(&mut self, a: &[u8], b: &[u8]) -> f32;
 }
 
 /////////////////////////
