@@ -32,7 +32,7 @@ use diskann_vector::distance::Metric;
 use crate::{
     alloc::AlignToEight,
     garnet::{FilterCallback, LogCallback, Term},
-    provider::{DEFAULT_START_POINT_ID, GarnetProvider, GarnetProviderError},
+    provider::{GarnetProvider, GarnetProviderError},
 };
 use crate::{
     dyn_index::DynIndex,
@@ -239,12 +239,17 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
 
 /// Helper generic function to create the correct type-erased `Arc<Index>`.
 /// This also returns a bool indicating whether quantization is needed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors native index creation parameters"
+)]
 fn create_index_impl<T: VectorRepr>(
     quant_type: VectorQuantType,
     config: config::Config,
     dim: usize,
     metric_type: Metric,
     max_degree: usize,
+    start_point_id: u32,
     callbacks: Callbacks,
     context: Context,
 ) -> Result<(Arc<Index>, bool), GarnetProviderError> {
@@ -253,7 +258,7 @@ fn create_index_impl<T: VectorRepr>(
         quant_type,
         metric_type,
         max_degree,
-        DEFAULT_START_POINT_ID,
+        start_point_id,
         callbacks,
         &context,
     )?;
@@ -294,9 +299,12 @@ fn create_index_impl<T: VectorRepr>(
 /// flag controls whether supplemental control is needed from Garnet to manage quantizers
 /// which require training and backfill.
 ///
+/// The same immutable `start_point_id` must be supplied when reopening the index.
+///
 /// # Safety
 ///
-/// FFI
+/// Callbacks must remain valid for the index lifetime, and `quantization_needed`
+/// must point to writable memory for a bool.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn create_index(
     ctx: u64,
@@ -306,6 +314,7 @@ pub unsafe extern "C" fn create_index(
     metric_type: i32,
     l_build: u32,
     max_degree: u32,
+    start_point_id: u32,
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
@@ -355,6 +364,7 @@ pub unsafe extern "C" fn create_index(
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -371,6 +381,7 @@ pub unsafe extern "C" fn create_index(
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -387,6 +398,7 @@ pub unsafe extern "C" fn create_index(
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -1438,6 +1450,7 @@ mod tests {
     use crate::{
         Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index,
         garnet::{Context, GarnetId, Term},
+        provider::DEFAULT_START_POINT_ID,
         test_utils::Store,
     };
 
@@ -1512,6 +1525,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1598,6 +1612,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1631,6 +1646,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1691,6 +1707,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1761,6 +1778,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1953,6 +1971,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),

@@ -90,7 +90,7 @@ The are several terms in the index used for internal state management of the dis
 
 Only a single start point is supported. Its internal ID is fixed when the provider is created and defaults to `DEFAULT_START_POINT_ID` (`u32::MAX`). During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
 
-For a nonempty import, finalization copies the first used imported ID's full vector, quantized vector (if present), and neighbor list to the configured start-point ID. The start point cannot be imported directly.
+Imports must supply the full vector, neighbor list, and (for quantized indexes) quantized vector at the configured start-point ID. Finalization validates these terms and populates the caches. The neighbor count must fit the configured degree, and each listed neighbor must be a valid ID.
 
 Start points have no associated attributes or ID mappings and are not counted as active vectors.
 
@@ -105,7 +105,7 @@ Metadata is currently used for the free space map which manages used and availab
 
 The free space map is used to keep track of which internal IDs are allocated and in use. Please see the [ID Mapping](#id-mapping) section for more details on why mapped IDs are used.
 
-The free space map is a contiguous sequence of blocks starting at block zero. Each block contains 65,536 one-bit ID states and occupies 8 KiB: `0b0` for free and `0b1` for used. The bit for reserved ID 0 is ignored. Blocks grow on demand during insertion or import, including intermediate blocks.
+The free space map is a contiguous sequence of blocks starting at block zero. Each block contains 65,536 one-bit ID states and occupies 8 KiB: `0b0` for free and `0b1` for used. The bit for the configured start-point ID is ignored. Blocks grow on demand during insertion or import, including intermediate blocks.
 
 During startup, the index scans FSM blocks in sequence to restore state. It updates the corresponding bit whenever a user vector's allocation changes. A failed expansion retains its successfully written prefix, allowing subsequent expansion to continue without erasing earlier claims.
 
@@ -118,7 +118,7 @@ Importing a term keyed by internal ID marks that ID as used unless it is the sta
 
 Note that for the BIN quantizer, a 1 byte flag precedes the quantizer table which indicates whether quantization backfill is complete. That byte is accounted for in the value sizing above.
 
-Quantizer state can only be replaced while no user IDs are occupied in the FSM and no start-point vector exists. Replacement is serialized with imports and normal vector writes using the existing import gate and FSM quantization barrier.
+Quantizer state can only be replaced while no ordinary IDs are occupied in the FSM and no start-point terms exist.
 
 ##### Import Eligibility
 
