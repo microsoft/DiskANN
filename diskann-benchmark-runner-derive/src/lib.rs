@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::collections::HashSet;
+
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::{Data, DeriveInput, Fields, parse_macro_input, parse_quote, spanned::Spanned};
@@ -274,18 +276,19 @@ fn build_fields(
     fields: &syn::Fields,
     generics: &mut syn::Generics,
     rename_all: attributes::RenameAll,
+    enum_repr: Option<&attributes::EnumRepr>,
 ) -> syn::Result<TokenStream> {
     let path = crate_name();
 
     match fields {
         Fields::Named(fields) => {
             add_field_bounds(generics, &fields.named);
-            let list = named_fields(&fields.named, rename_all)?;
+            let list = named_fields(&fields.named, rename_all, enum_repr)?;
             Ok(quote!(#path::tree::Fields::Named(vec![#(#list),*])))
         }
         Fields::Unnamed(fields) => {
             add_field_bounds(generics, &fields.unnamed);
-            let list = unnamed_fields(&fields.unnamed);
+            let list = unnamed_fields(&fields.unnamed, enum_repr)?;
 
             // Unnamed fields of length 1 become new-types instead.
             let ts = if list.len() == 1 {
@@ -304,11 +307,19 @@ fn build_fields(
 fn named_fields<'a, I>(
     fields: I,
     rename_all: attributes::RenameAll,
+    enum_repr: Option<&attributes::EnumRepr>,
 ) -> syn::Result<Vec<TokenStream>>
 where
     I: IntoIterator<Item = &'a syn::Field>,
 {
+    use attributes::EnumRepr;
+
     let path = crate_name();
+
+    // Track the names of fields that have been emitted.
+    // If a rename causes a collision, we return an error.
+    let mut seen = HashSet::<String>::new();
+
     fields
         .into_iter()
         .map(move |f| {
@@ -323,24 +334,77 @@ where
             let doc = format_docstrings(&f.attrs);
             let attributes::Field { rename_field } = attributes::Field::parse(&f.attrs)?;
             let name = rename_field.apply_to_field(name, rename_all);
-            Ok(quote_spanned! { ty.span()=> #path::tree::NamedField::new::<#ty>(#name, #doc) })
+
+            // If we are dealing with an enum - we need to rule out the situation where:
+            //
+            // 1. There is an internally tagged enum.
+            // 2. The tag field conflicts with the name of the struct.
+            if let Some(enum_repr) = enum_repr {
+                match enum_repr {
+                    EnumRepr::External | EnumRepr::Adjacent { .. } => {}
+                    EnumRepr::Internal { tag } => {
+                        if name.value() == tag.value() {
+                            return Err(syn::Error::new_spanned(
+                                name,
+                                "field conflicts with internally tagged discriminant",
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Ensure uniqueness.
+            if seen.insert(name.value()) {
+                Ok(quote_spanned! {
+                    ty.span()=> #path::tree::NamedField::new::<#ty>(#name, #doc)
+                })
+            } else {
+                Err(syn::Error::new_spanned(
+                    &name,
+                    format!("Field name \"{}\" found more than once", name.value()),
+                ))
+            }
         })
         .collect()
 }
 
-fn unnamed_fields<'a, I>(fields: I) -> Vec<TokenStream>
+fn unnamed_fields<P>(
+    fields: &syn::punctuated::Punctuated<syn::Field, P>,
+    enum_repr: Option<&attributes::EnumRepr>,
+) -> syn::Result<Vec<TokenStream>>
 where
-    I: IntoIterator<Item = &'a syn::Field>,
+    P: quote::ToTokens,
 {
+    use attributes::EnumRepr;
+
+    // Rejects non-newtype tuple fields when "internal" tagging is used, since there is no
+    // field to use for the tag.
+    //
+    // Like serde, we support newtypes since we cannot rule out syntactically whether
+    // or not the tag can be embedded in the internal value.
+    if let Some(enum_repr) = enum_repr {
+        match enum_repr {
+            EnumRepr::External | EnumRepr::Adjacent { .. } => {}
+            EnumRepr::Internal { .. } => {
+                if fields.len() != 1 {
+                    return Err(syn::Error::new_spanned(
+                        fields,
+                        "non-newtype tuple structs are not compatible with internal enum tagging",
+                    ));
+                }
+            }
+        }
+    }
+
     let path = crate_name();
-    fields
-        .into_iter()
-        .map(move |f| {
-            let ty = &f.ty;
-            let doc = format_docstrings(&f.attrs);
-            quote_spanned! { ty.span()=> #path::tree::UnnamedField::new::<#ty>(#doc) }
-        })
-        .collect()
+    let ts: Vec<_> = fields.iter().map(move |f| {
+        let ty = &f.ty;
+        let doc = format_docstrings(&f.attrs);
+        quote_spanned! { ty.span()=> #path::tree::UnnamedField::new::<#ty>(#doc) }
+    })
+    .collect();
+
+    Ok(ts)
 }
 
 /// Generate the `Reflect` implementation.
@@ -362,7 +426,7 @@ fn process_struct(
     let type_name = &input.ident;
     let path = crate_name();
 
-    let fields = build_fields(&s.fields, &mut generics, rename_all)?;
+    let fields = build_fields(&s.fields, &mut generics, rename_all, None)?;
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
@@ -406,10 +470,10 @@ fn process_enum(
         enum_repr,
     } = container.as_enum();
 
-    // TODO: For now, we just assume that identifiers are taken as-is.
     let type_name = &input.ident;
     let path = crate_name();
 
+    let mut seen = HashSet::<String>::new();
     let variants = e
         .variants
         .iter()
@@ -421,11 +485,23 @@ fn process_enum(
                 rename_variant_fields,
             } = attributes::Variant::parse(&v.attrs)?;
 
-            let fields = build_fields(&v.fields, &mut generics, rename_variant_fields)?;
+            let fields = build_fields(
+                &v.fields,
+                &mut generics,
+                rename_variant_fields,
+                Some(&enum_repr),
+            )?;
 
             // Rename the variant as needed.
             let name = rename_variant.apply_to_variant(name, rename_all);
-            Ok(quote!(#path::tree::Variant::new(#name, #fields, #doc)))
+            if seen.insert(name.value()) {
+                Ok(quote!(#path::tree::Variant::new(#name, #fields, #doc)))
+            } else {
+                Err(syn::Error::new_spanned(
+                    &name,
+                    format!("Variant name \"{}\" found more than once", name.value()),
+                ))
+            }
         })
         .collect::<syn::Result<Vec<TokenStream>>>()?;
 

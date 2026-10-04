@@ -1,0 +1,5 @@
+error: Field name "value" found more than once
+  --> tests/ui/fail/duplicate_field.rs:11:22
+   |
+11 |     #[serde(rename = "value")]
+   |                      ^^^^^^^

@@ -1,0 +1,11 @@
+error: non-newtype tuple structs are not compatible with internal enum tagging
+  --> tests/ui/fail/unsupported_tuple_variant_internal.rs:13:10
+   |
+13 |     Tuple(),
+   |          ^^
+
+error: non-newtype tuple structs are not compatible with internal enum tagging
+  --> tests/ui/fail/unsupported_tuple_variant_internal.rs:21:10
+   |
+21 |     Tuple(usize, usize),
+   |          ^^^^^^^^^^^^^^
