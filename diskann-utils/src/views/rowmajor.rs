@@ -82,7 +82,7 @@ pub unsafe trait Matrix {
         self.layout().ncols()
     }
 
-    /// Returns the requested row without boundschecking.
+    /// Returns the requested row without bounds checking.
     ///
     /// # Safety
     ///
@@ -146,7 +146,7 @@ pub unsafe trait Matrix {
         iter::Rows::new(self.as_view())
     }
 
-    /// Returns a reference to an element without boundschecking.
+    /// Returns a reference to an element without bounds checking.
     ///
     /// # Safety
     ///
@@ -358,7 +358,7 @@ pub unsafe trait Matrix {
 /// any **mutable** borrow `matrix: &mut Self`, it is valid to construct:
 ///
 /// ```text
-/// let data = matrix.as_nonnull();
+/// let data = matrix.as_nonnull_mut();
 /// let layout = matrix.layout();
 ///
 /// unsafe {
@@ -372,12 +372,26 @@ pub unsafe trait Matrix {
 /// Implementations may change their pointer or layout through exclusive access, such as when
 /// resizing or reallocating. They must not do so while any reference derived from the previous
 /// pointer and layout remains live.
+///
+/// For a given state of `matrix`, the pointers from `matrix.as_nonnull_mut()` and
+/// `matrix.as_nonnull()` must have the same address. However, the pointer obtained from
+/// `matrix.as_nonnull_mut()` must have provenance permitting mutable access to the span
+/// described by `matrix.layout()`.
 pub unsafe trait MatrixMut: Matrix {
+    /// Return the base pointer for the matrix.
+    ///
+    /// Calling this method must not change the matrix's pointer, layout, or contents.
+    ///
+    /// The returned pointer must have provenance permitting mutable access to the span
+    /// described by [`Matrix::layout`] and for a given matrix state, must have the same
+    /// address as [`Matrix::as_nonnull`].
+    fn as_nonnull_mut(&mut self) -> NonNull<Self::Element>;
+
     //----------//
     // Provided //
     //----------//
 
-    /// Returns the requested row without boundschecking.
+    /// Returns the requested row without bounds checking.
     ///
     /// # Safety
     ///
@@ -402,7 +416,7 @@ pub unsafe trait MatrixMut: Matrix {
 
     /// Return a pointer to the base of the matrix.
     fn as_mut_ptr(&mut self) -> *mut Self::Element {
-        self.as_nonnull().as_ptr()
+        self.as_nonnull_mut().as_ptr()
     }
 
     /// Return the underlying data as a mutable slice.
@@ -445,7 +459,7 @@ pub unsafe trait MatrixMut: Matrix {
         iter::RowsMut::new(self.as_view_mut())
     }
 
-    /// Returns a mutable reference to an element without boundschecking.
+    /// Returns a mutable reference to an element without bounds checking.
     ///
     /// # Safety
     ///
@@ -499,7 +513,7 @@ pub unsafe trait MatrixMut: Matrix {
     /// Return a view over the matrix.
     fn as_view_mut(&mut self) -> Mut<'_, Self::Element> {
         Mut {
-            ptr: self.as_nonnull(),
+            ptr: self.as_nonnull_mut(),
             layout: self.layout(),
             _lifetime: PhantomData,
         }
@@ -1053,7 +1067,11 @@ unsafe impl<T> Matrix for Owned<T> {
 }
 
 // SAFETY: A mutable borrow of `Owned` has exclusive access to its boxed slice.
-unsafe impl<T> MatrixMut for Owned<T> {}
+unsafe impl<T> MatrixMut for Owned<T> {
+    fn as_nonnull_mut(&mut self) -> NonNull<T> {
+        self.ptr
+    }
+}
 
 impl<T> PartialEq for Owned<T>
 where
@@ -1250,7 +1268,11 @@ unsafe impl<T> Matrix for Mut<'_, T> {
 }
 
 // SAFETY: A mutable borrow of `Mut` has exclusive access to its borrowed slice.
-unsafe impl<T> MatrixMut for Mut<'_, T> {}
+unsafe impl<T> MatrixMut for Mut<'_, T> {
+    fn as_nonnull_mut(&mut self) -> NonNull<T> {
+        self.ptr
+    }
+}
 
 impl<T> PartialEq for Mut<'_, T>
 where
@@ -1637,13 +1659,13 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "rayon")]
+    #[cfg(all(not(miri), feature = "rayon"))]
     fn assert_parallel_rows_match_scalar(m: Ref<'_, usize>) {
         let rows: Vec<_> = m.par_rows().collect();
         assert_rows_match_scalar(m, rows);
     }
 
-    #[cfg(feature = "rayon")]
+    #[cfg(all(not(miri), feature = "rayon"))]
     fn assert_parallel_windows_match_scalar(m: Ref<'_, usize>, batchsize: usize) {
         let windows: Vec<_> = m.par_window_iter(batchsize).collect();
         assert_windows_match_scalar(m, batchsize, windows);
@@ -2285,7 +2307,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rayon")]
+    #[cfg(all(not(miri), feature = "rayon"))]
     fn parallel_immutable_iterators_match_scalar_indexing() {
         for (nrows, ncols) in [(0, 0), (0, 4), (3, 0), (1, 1), (1, 4), (4, 1), (5, 3)] {
             let m = striped_matrix(nrows, ncols);
@@ -2299,7 +2321,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rayon")]
+    #[cfg(all(not(miri), feature = "rayon"))]
     fn parallel_mutable_iterators_match_scalar_indexing() {
         use rayon::prelude::*;
 

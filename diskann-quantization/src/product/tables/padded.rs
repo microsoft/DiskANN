@@ -601,7 +601,12 @@ where
     O: Op,
 {
     // Check 1
-    if table.simd_width.as_nonzero().get() < O::Vector::LANES {
+    if !table
+        .simd_width
+        .as_nonzero()
+        .get()
+        .is_multiple_of(O::Vector::LANES)
+    {
         return Err(DistanceError::InvalidSimd);
     }
 
@@ -650,161 +655,156 @@ where
 
     let lanes = O::Vector::LANES;
 
-    // The idea behind this loop is that we process two chunks at a time, striding within
-    // the chunks.
+    // Here is our conundrum. Unrolling is nice, but there is an issue if two adjacent chunks
+    // have wildly different lengths.
     //
-    // In general, we cannot assume that we can use full SIMD loads on `a` since we will
-    // eventually get to the end of `a` and must be careful.
+    // So here, we process two chunks at a time. We first tackle the common full-width prefix.
+    // Then we process the tails independently.
     //
-    // However, always doing masked loads is slow. So, we only proceed if there is enough
-    // room in `a` that we can do over-sized loads without going out-of-bounds.
+    // SAFETY INVARIANTS (SI)
     //
-    // Since we store zeros in the padding in the pivots, this will be fine.
+    // 1. `offsets.len() == nchunks + 1`. Offsets are strictly increasing with
+    //    `offsets[0] == 0` and `offsets[nchunks] == a.len()` by the table invariant and
+    //    Check 2.
     //
-    // Once we do not have enough head-room to do this processing, we call back to doing
-    // masked loads.
+    // 2. At the start of each outer iteration, `p` points to the beginning of pivot storage
+    //    for chunk `i`.
+    //
+    // 3. Pivot chunk `i` begins at `pivots.as_ptr().add(i * chunk_stride)`. Within a chunk,
+    //    pivot `j` begins at `chunk_base.add(j * pivot_stride)`. Each chunk and pivot row
+    //    contains `chunk_stride` and `pivot_stride` initialized elements, respectively.
+    //
+    // 4. Each code selects an existing pivot. Check 4 establishes this when the number of
+    //    pivots fits in `u8`; otherwise every possible `u8` is less than
+    //    `pivots_per_chunk`.
+    //
+    // 5. `pivot_stride` is a multiple of the table's SIMD width, and Check 1 establishes
+    //    that width is a multiple of `lanes`. Each pivot row is at least as long as every
+    //    unpadded chunk rounded up to `lanes`.
     while i + 2 <= nchunks {
-        // SAFETY: `i + 1 < offsets.len()`.
-        let o1 = unsafe { *offsets.get_unchecked(i + 1) };
+        // SAFETY: `i + 2 <= nchunks`, so offsets `i` through `i + 2` exist by SI-1.
+        let (o0, o1, o2) = unsafe {
+            (
+                *offsets.get_unchecked(i),
+                *offsets.get_unchecked(i + 1),
+                *offsets.get_unchecked(i + 2),
+            )
+        };
 
-        // Do we have enough head-room between the start of the `a` chunk and the end of `a`
-        // that we can load a whole `pivot_stride` number of elements?
-        //
-        // If not, we're nearing the end of the vector and need to bail.
-        if a.len() - o1 < pivot_stride {
-            break;
-        }
-
-        // SAFETY: Both `i` and `i + 2` are < `offsets.len()`.
-        let (o0, o2) = unsafe { (*offsets.get_unchecked(i), *offsets.get_unchecked(i + 2)) };
-
-        // Get the base pointers for the `a` chunks.
-
-        // SAFETY: All entries in `offsets` are valid offsets into `a` by Check 2.
+        // SAFETY: `o0` and `o1` are in-bounds chunk starts in `a` by SI-1.
         let (a0, a1) = unsafe { (aptr.add(o0), aptr.add(o1)) };
 
-        // SAFETY: `i < b.len()` and Check 4 ensures that all entries of `b` reside in a chunk
-        // block.
+        // SAFETY: By SI-(2,3,4), `p` begins chunk `i` and the code selects an in-bounds
+        // pivot row in that chunk.
         let b0 = unsafe { p.add(pivot_stride * (*b.get_unchecked(i) as usize)) };
 
-        // SAFETY: Same as above with `i + 1 < b.len()`.
+        // SAFETY: `i + 1 < nchunks`; by SI-(2,3,4), this selects an in-bounds pivot row in
+        // the following chunk.
         let b1 = unsafe { p.add(chunk_stride + pivot_stride * (*b.get_unchecked(i + 1) as usize)) };
-
-        // Here is our conundrum.
-        //
-        // We want to process as much as we can using full loads and simple accumulation.
-        // However, the two chunks we are processing could have very different lengths.
-        //
-        // The strategy is to process the prefix of both that allows us to use full-width
-        // loads. Only afterwards do we decend into doing masked loads.
-        //
-        // SAFETY NOTES:
-        //
-        // * A0: The pointer `a0` is valid for `o1 - o0` reads.
-        // * A1: The pointer `a1` is valid for `o2 - o1` reads.
-        // * B: The pointers `b0` and `b1` are valid for at least
-        //   `(o1 - o0).max(o2 - o1).next_multiple_of(lanes)` reads. This is guaranteed by
-        //   the `PaddedTable` invariants.
 
         let full0 = (o1 - o0) / lanes;
         let full1 = (o2 - o1) / lanes;
 
         let common = full0.min(full1);
-        for i in 0..common {
-            // SAFETY: See safety notes A0, A1, and B.
+        for j in 0..common {
+            // SAFETY: `j < full0` and `j < full1`, so both query loads end at or before
+            // their respective chunk boundaries. By SI-(3,4,5), the corresponding pivot
+            // loads remain within their initialized padded rows.
             unsafe {
-                let va = O::Vector::load_simd(arch, a0.add(lanes * i));
-                let vb = O::Vector::load_simd(arch, b0.add(lanes * i));
+                let va = O::Vector::load_simd(arch, a0.add(lanes * j));
+                let vb = O::Vector::load_simd(arch, b0.add(lanes * j));
                 d0 = O::accum(d0, va, vb);
 
-                let va = O::Vector::load_simd(arch, a1.add(lanes * i));
-                let vb = O::Vector::load_simd(arch, b1.add(lanes * i));
+                let va = O::Vector::load_simd(arch, a1.add(lanes * j));
+                let vb = O::Vector::load_simd(arch, b1.add(lanes * j));
                 d1 = O::accum(d1, va, vb);
             }
         }
 
         // Handle whatever happens to be left of `a0`.
-        for i in common..full0 {
-            // SAFETY: See safety notes A0 and B.
+        for j in common..full0 {
+            // SAFETY: `j < full0`, so the query load remains within chunk 0. By SI-(3,4,5),
+            // the corresponding pivot load remains within its padded row.
             unsafe {
-                let va = O::Vector::load_simd(arch, a0.add(lanes * i));
-                let vb = O::Vector::load_simd(arch, b0.add(lanes * i));
+                let va = O::Vector::load_simd(arch, a0.add(lanes * j));
+                let vb = O::Vector::load_simd(arch, b0.add(lanes * j));
                 d0 = O::accum(d0, va, vb);
             }
         }
 
         let a0_remaining = (o1 - o0) - full0 * lanes;
         if a0_remaining != 0 {
-            // SAFETY: See safety note A0.
+            // SAFETY: `full0 * lanes + a0_remaining == o1 - o0` and `a0_remaining < lanes`,
+            // so this reads exactly the initialized remainder.
             let va =
                 unsafe { O::Vector::load_simd_first(arch, a0.add(lanes * full0), a0_remaining) };
-            // SAFETY: See safety note B.
+            // SAFETY: `(full0 + 1) * lanes` is the chunk length rounded up to `lanes`,
+            // which is at most `pivot_stride` by SI-5.
             let vb = unsafe { O::Vector::load_simd(arch, b0.add(lanes * full0)) };
             d0 = O::accum(d0, va, vb);
         }
 
         // Handle whatever happens to be left of `a1`.
-        for i in common..full1 {
-            // SAFETY: See safety notes A1 and B.
+        for j in common..full1 {
+            // SAFETY: Same proof as the remaining full-vector loop for chunk 0.
             unsafe {
-                let va = O::Vector::load_simd(arch, a1.add(lanes * i));
-                let vb = O::Vector::load_simd(arch, b1.add(lanes * i));
+                let va = O::Vector::load_simd(arch, a1.add(lanes * j));
+                let vb = O::Vector::load_simd(arch, b1.add(lanes * j));
                 d1 = O::accum(d1, va, vb);
             }
         }
 
         let a1_remaining = (o2 - o1) - full1 * lanes;
         if a1_remaining != 0 {
-            // SAFETY: See safety note A1.
+            // SAFETY: Same remainder proof as chunk 0.
             let va =
                 unsafe { O::Vector::load_simd_first(arch, a1.add(lanes * full1), a1_remaining) };
-            // SAFETY: See safety note B.
+            // SAFETY: Same padded-row proof as chunk 0.
             let vb = unsafe { O::Vector::load_simd(arch, b1.add(lanes * full1)) };
             d1 = O::accum(d1, va, vb);
         }
 
         i += 2;
 
-        // SAFETY: The `PaddedTable` ensures that there are `nchunks` blocks of `chunk_stride`
-        // elements. The bound on the `while` loop ensures that thisx offset is either within
-        // the allocated pivot table, or ends up at one past the end.
+        // SAFETY: Before incrementing, `p` began chunk `i - 2` by SI-2. The loop bound
+        // established `i <= nchunks`, so advancing two chunk strides reaches chunk `i` or
+        // one-past the final chunk, preserving SI-2.
         p = unsafe { p.add(2 * chunk_stride) };
     }
 
-    while i < nchunks {
-        // SAFETY: `i` and `i + 1` are both `<= nchunks`, and `nchunks + 1 == offsets.len()`.
+    if i < nchunks {
+        debug_assert!(i + 1 == nchunks);
+
+        // SAFETY: `i < nchunks`, so offsets `i` and `i + 1` exist by SI-1.
         let (o0, o1) = unsafe { (*offsets.get_unchecked(i), *offsets.get_unchecked(i + 1)) };
 
-        // SAFETY: All entries in `offsets` are valid offsets into `a` by Check 2.
+        // SAFETY: `o0` is an in-bounds chunk start in `a` by SI-1.
         let a0 = unsafe { aptr.add(o0) };
 
-        // SAFETY: `i < b.len()`
+        // SAFETY: By SI-(2,3,4), this selects an in-bounds pivot row in chunk `i`.
         let b0 = unsafe { p.add(pivot_stride * (*b.get_unchecked(i) as usize)) };
 
         // The number of unprocessed elements.
         let full = (o1 - o0) / lanes;
-        for i in 0..full {
-            // SAFETY: See safety notes A0 and B.
+        for j in 0..full {
+            // SAFETY: `j < full`, so the query load remains within the chunk. By SI-(3,4,5),
+            // the corresponding pivot load remains within its padded row.
             unsafe {
-                let va = O::Vector::load_simd(arch, a0.add(lanes * i));
-                let vb = O::Vector::load_simd(arch, b0.add(lanes * i));
+                let va = O::Vector::load_simd(arch, a0.add(lanes * j));
+                let vb = O::Vector::load_simd(arch, b0.add(lanes * j));
                 d0 = O::accum(d0, va, vb);
             }
         }
 
         let remaining = (o1 - o0) - full * lanes;
         if remaining != 0 {
-            // SAFETY: See safety note A0.
+            // SAFETY: `full * lanes + remaining == o1 - o0` and `remaining < lanes`, so
+            // this reads exactly the initialized remainder.
             let va = unsafe { O::Vector::load_simd_first(arch, a0.add(lanes * full), remaining) };
-            // SAFETY: See safety note B.
+            // SAFETY: `(full + 1) * lanes` is at most `pivot_stride` by SI-5.
             let vb = unsafe { O::Vector::load_simd(arch, b0.add(lanes * full)) };
             d0 = O::accum(d0, va, vb);
         }
-
-        i += 1;
-
-        // SAFETY: See the safety note in the unrolled loop body.
-        p = unsafe { p.add(chunk_stride) };
     }
 
     Ok(O::reduce_pair(d0, d1))
@@ -836,11 +836,18 @@ fn self_distance<O>(
 where
     O: Op,
 {
-    if table.simd_width.as_nonzero().get() < O::Vector::LANES {
+    // Check 1
+    if !table
+        .simd_width
+        .as_nonzero()
+        .get()
+        .is_multiple_of(O::Vector::LANES)
+    {
         return Err(SelfDistanceError::InvalidSimd);
     }
 
     let chunks = table.nchunks();
+    // Check 2
     if a.len() != chunks {
         return Err(SelfDistanceError::Len {
             chunks,
@@ -848,6 +855,7 @@ where
         });
     }
 
+    // Check 3
     if b.len() != chunks {
         return Err(SelfDistanceError::Len {
             chunks,
@@ -855,6 +863,7 @@ where
         });
     }
 
+    // Check 4
     if let Ok(ncenters) = u8::try_from(table.ncenters()) {
         if let Some(max) = a.iter().max()
             && *max >= ncenters
@@ -891,42 +900,81 @@ where
 
     let lanes = O::Vector::LANES;
     let mut i = 0;
+
+    // SAFETY INVARIANTS (SI)
+    //
+    // 1. Both code slices contain exactly `len == table.nchunks()` entries by Checks 2
+    //    and 3.
+    //
+    // 2. At the start of each outer iteration, `p` points to the beginning of pivot storage
+    //    for chunk `i`.
+    //
+    // 3. Pivot chunk `i` begins at `pivots.as_ptr().add(i * chunk_stride)`. Within a chunk,
+    //    pivot `j` begins at `chunk_base.add(j * pivot_stride)`. Each chunk and pivot row
+    //    contains `chunk_stride` and `pivot_stride` initialized elements, respectively.
+    //
+    // 4. Every code selects an existing pivot. Check 4 establishes this when the number of
+    //    pivots fits in `u8`; otherwise every possible `u8` is in bounds.
+    //
+    // 5. `pivot_stride` is a multiple of the table's SIMD width, and Check 1 establishes
+    //    that width is a multiple of `lanes`. Therefore
+    //    `steps * lanes == pivot_stride`.
     while i + 2 <= len {
-        // Pointers to the start of each chunk.
+        // SAFETY: `i + 2 <= len`; by SI-(1,2,3,4), `p` begins chunk `i` and this code
+        // selects an in-bounds pivot row in that chunk.
         let a0 = unsafe { p.add(pivot_stride * (*a.get_unchecked(i) as usize)) };
+
+        // SAFETY: By the same invariants, this selects an in-bounds pivot row in chunk
+        // `i + 1`.
         let a1 = unsafe { p.add(chunk_stride + pivot_stride * (*a.get_unchecked(i + 1) as usize)) };
 
+        // SAFETY: Same proof as `a0`; SI-1 establishes that `b[i]` exists.
         let b0 = unsafe { p.add(pivot_stride * (*b.get_unchecked(i) as usize)) };
+        // SAFETY: Same proof as `a1`.
         let b1 = unsafe { p.add(chunk_stride + pivot_stride * (*b.get_unchecked(i + 1) as usize)) };
 
         for j in 0..steps {
-            // Unroll 0
-            let va = unsafe { O::Vector::load_simd(arch, a0.add(lanes * j)) };
-            let vb = unsafe { O::Vector::load_simd(arch, b0.add(lanes * j)) };
-            d0 = O::accum(d0, va, vb);
+            // SAFETY: `j < steps` and `steps * lanes == pivot_stride` by SI-5, so every
+            // full-vector load remains within its selected initialized pivot row.
+            unsafe {
+                // Unroll 0
+                let va = O::Vector::load_simd(arch, a0.add(lanes * j));
+                let vb = O::Vector::load_simd(arch, b0.add(lanes * j));
+                d0 = O::accum(d0, va, vb);
 
-            // Unroll 1
-            let va = unsafe { O::Vector::load_simd(arch, a1.add(lanes * j)) };
-            let vb = unsafe { O::Vector::load_simd(arch, b1.add(lanes * j)) };
-            d1 = O::accum(d1, va, vb);
+                // Unroll 1
+                let va = O::Vector::load_simd(arch, a1.add(lanes * j));
+                let vb = O::Vector::load_simd(arch, b1.add(lanes * j));
+                d1 = O::accum(d1, va, vb);
+            }
         }
 
         i += 2;
+
+        // SAFETY: Before incrementing, `p` began chunk `i - 2` by SI-2. The loop bound
+        // established `i <= len`, so advancing two chunk strides reaches chunk `i` or
+        // one-past the final chunk, preserving SI-2.
         p = unsafe { p.add(2 * chunk_stride) };
     }
 
-    while i < len {
+    if i < len {
+        debug_assert!(i + 1 == len);
+
+        // SAFETY: By SI-(1,2,3,4), `p` begins chunk `i` and this selects an in-bounds
+        // pivot row.
         let a0 = unsafe { p.add(pivot_stride * (*a.get_unchecked(i) as usize)) };
+        // SAFETY: Same proof for `b[i]`.
         let b0 = unsafe { p.add(pivot_stride * (*b.get_unchecked(i) as usize)) };
 
         for j in 0..steps {
-            let va = unsafe { O::Vector::load_simd(arch, a0.add(lanes * j)) };
-            let vb = unsafe { O::Vector::load_simd(arch, b0.add(lanes * j)) };
-            d0 = O::accum(d0, va, vb);
+            // SAFETY: `j < steps`, so both loads remain within their initialized pivot rows
+            // by SI-5.
+            unsafe {
+                let va = O::Vector::load_simd(arch, a0.add(lanes * j));
+                let vb = O::Vector::load_simd(arch, b0.add(lanes * j));
+                d0 = O::accum(d0, va, vb);
+            }
         }
-
-        i += 1;
-        p = unsafe { p.add(chunk_stride) };
     }
 
     Ok(O::reduce_pair(d0, d1))

@@ -80,6 +80,8 @@ impl Distribution<f32> for UniformFloat {
     }
 }
 
+type DriveFn<'a> = &'a mut (dyn FnMut(&[u8], &[f32], std::fmt::Arguments<'_>) + 'a);
+
 impl DistanceTestTable {
     pub(super) fn new(dim: usize, chunks: usize, pivots: usize, start: f32) -> Self {
         Self {
@@ -176,7 +178,7 @@ impl DistanceTestTable {
         &self,
         num_trials: usize,
         rng: &mut StdRng,
-        f: &mut dyn FnMut(&[u8], &[f32], std::fmt::Arguments<'_>),
+        f: DriveFn<'_>,
         ctx: std::fmt::Arguments<'_>,
     ) {
         // Run two fixed trials - one with all zeros and one with the max setting.
@@ -228,6 +230,7 @@ impl DistanceTestTable {
         self.drive(num_trials, rng, &mut f, ctx)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "this is a test function")]
     pub(super) fn drive_query_like(
         &self,
         num_queries: usize,
@@ -248,7 +251,7 @@ impl DistanceTestTable {
                 num_trials,
                 rng,
                 check,
-                &mut |vector: &[f32]| f(&query, vector),
+                &|vector: &[f32]| f(&query, vector),
                 &mut |code| dut.evaluate(code),
                 format_args!("{ctx}, query {} of {}", trial + 1, num_queries),
             )
@@ -272,8 +275,8 @@ impl DistanceTestTable {
                 num_trials,
                 rng,
                 &mut |rhs_code: &[u8], rhs_vector: &[f32], ctx: std::fmt::Arguments<'_>| {
-                    let expected = f(&lhs_vector, rhs_vector);
-                    let got = dut.evaluate(&lhs_code, rhs_code);
+                    let expected = f(lhs_vector, rhs_vector);
+                    let got = dut.evaluate(lhs_code, rhs_code);
 
                     if let Err(reason) = check.check(got, expected) {
                         panic!("Check failed: {} -- {}", reason, ctx);

@@ -9,7 +9,7 @@ mod disk_index;
 mod exhaustive;
 mod filters;
 mod flat;
-// mod index;
+mod index;
 mod inputs;
 mod multi_vector;
 mod utils;
@@ -54,7 +54,7 @@ impl Cli {
         exhaustive::register_benchmarks(&mut registry)?;
         disk_index::register_benchmarks(&mut registry)?;
         flat::register_benchmarks(&mut registry)?;
-        // index::register_benchmarks(&mut registry)?;
+        index::register_benchmarks(&mut registry)?;
         filters::register_benchmarks(&mut registry)?;
         multi_vector::register_benchmarks(&mut registry)?;
 

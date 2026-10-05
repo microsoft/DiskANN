@@ -64,10 +64,13 @@ pub fn lookup_single<P, T>(
 where
     P: Lookup<T>,
 {
+    // Check 1.
     if indices.len() != data.nrows() {
         return Err(LookupError::InvalidLength);
     }
 
+    // Check 2.
+    //
     // Conversion fails if `data.ncols()` is 256 or greater.
     //
     // In this case, all indices will be in-bounds anyways.
@@ -88,17 +91,25 @@ where
         let mut a3 = policy.default();
 
         while i + 4 <= data.nrows() {
+            // SAFETY: Since `i + 4 <= data.nrows()`, the row index `i` is in-bounds. Check 1
+            // ensures that `i` is also a valid index for `indices`.
+            //
+            // Check 2 guarantees that `indices[i] < data.ncols()`, so the matrix access is
+            // valid.
             let v0 = unsafe { data.element_unchecked(i, (*indices.get_unchecked(i)).into()) };
             a0 = policy.accumulate(v0, a0);
 
+            // SAFETY: Same as above.
             let v1 =
                 unsafe { data.element_unchecked(i + 1, (*indices.get_unchecked(i + 1)).into()) };
             a1 = policy.accumulate(v1, a1);
 
+            // SAFETY: Same as above.
             let v2 =
                 unsafe { data.element_unchecked(i + 2, (*indices.get_unchecked(i + 2)).into()) };
             a2 = policy.accumulate(v2, a2);
 
+            // SAFETY: Same as above.
             let v3 =
                 unsafe { data.element_unchecked(i + 3, (*indices.get_unchecked(i + 3)).into()) };
             a3 = policy.accumulate(v3, a3);
@@ -116,6 +127,8 @@ where
         let remainder = remainder.min(UNROLL - 1);
         for j in 0..remainder {
             let k = i + j;
+
+            // SAFETY: See justification in the main unrolled loop.
             let v = unsafe { data.element_unchecked(k, (*indices.get_unchecked(k)).into()) };
             a = policy.accumulate(v, a);
         }

@@ -136,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn mut_slice_mplements_dense_data_repr() {
+    fn mut_slice_implements_dense_data_repr() {
         for len in 0..10 {
             let context = lazy_format!("len = {}", len);
             let mut data: Vec<f32> = vec![0.0; len];

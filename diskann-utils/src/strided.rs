@@ -184,7 +184,7 @@ impl fmt::Display for LayoutErrorInner {
 
 /// A row-major strided matrix.
 ///
-/// This is a generalization of the `MatrixBase` class as it does not mandate a dense
+/// This is a generalization of the [`Matrix`] trait as it does not mandate a dense
 /// layout in memory.
 ///
 /// ```text
@@ -417,7 +417,7 @@ impl<'a, T> From<rowmajor::Ref<'a, T>> for Strided<'a, T> {
     fn from(matrix: rowmajor::Ref<'a, T>) -> Self {
         let layout = Layout::from(matrix.layout());
 
-        // SAFETY: `MatrixView` guarantees that the length of the base slice for `matrix`
+        // SAFETY: `rowmajor::Ref` guarantees that the length of the base slice for `matrix`
         // is exactly `layout.linear_length()`.
         unsafe { Self::from_data_unchecked(matrix.into_slice(), layout) }
     }

@@ -159,10 +159,12 @@ impl ComputeMedoid for i8 {
 // Tests //
 ///////////
 
+#[cfg(not(miri))]
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use diskann_wide::cast_f32_to_f16;
     use rand::{
         distr::{Distribution, StandardUniform},
         rngs::StdRng,
@@ -284,7 +286,7 @@ mod tests {
         let dist = StandardUniform;
         for dim in 1..20 {
             let x =
-                rowmajor::Owned::<f16>::from_fn(1, dim, |_| f16::from_f32(dist.sample(&mut rng)));
+                rowmajor::Owned::<f16>::from_fn(1, dim, |_| cast_f32_to_f16(dist.sample(&mut rng)));
             assert_eq!(&*f16::compute_medoid(x.as_view()), x.row(0));
         }
 

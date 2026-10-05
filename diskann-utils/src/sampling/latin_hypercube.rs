@@ -63,6 +63,7 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
 // Tests //
 ///////////
 
+#[cfg(not(miri))]
 #[cfg(test)]
 mod tests {
     use std::fmt::Display;
