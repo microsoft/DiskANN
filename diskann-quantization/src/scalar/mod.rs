@@ -62,7 +62,10 @@
 //!     scalar::{self, train, CompensatedVector, CompensatedIP, CompensatedSquaredL2},
 //!     num::Positive,
 //! };
-//! use diskann_utils::{Reborrow, ReborrowMut, views::Matrix};
+//! use diskann_utils::{
+//!     Reborrow, ReborrowMut,
+//!     views::rowmajor::{self, Matrix, MatrixMut},
+//! };
 //! use rand::{rngs::StdRng, SeedableRng, distr::Distribution};
 //! use rand_distr::StandardNormal;
 //! use diskann_vector::{PureDistanceFunction, DistanceFunction, distance};
@@ -74,8 +77,8 @@
 //! // Construct a set of offsets for each dimension.
 //! let offset: Vec<f32> = (0..dim).map(|_| distribution.sample(&mut rng)).collect();
 //! // The output dataset.
-//! let mut data = Matrix::<f32>::from_element(nvectors, dim, 0.0);
-//! for row in data.row_iter_mut() {
+//! let mut data = rowmajor::Owned::<f32>::from_element(nvectors, dim, 0.0);
+//! for row in data.rows_mut() {
 //!     std::iter::zip(row.iter_mut(), offset.iter()).for_each(|(r, i)| {
 //!         let v: f32 = distribution.sample(&mut rng);
 //!         *r = i + v;

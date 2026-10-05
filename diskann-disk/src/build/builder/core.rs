@@ -20,7 +20,7 @@ use diskann_providers::{
     },
 };
 use diskann_quantization::spherical::DataRef;
-use diskann_utils::io::read_bin;
+use diskann_utils::{io::read_bin, views::rowmajor::Matrix};
 use rand::seq::SliceRandom;
 use tracing::info;
 
@@ -997,7 +997,7 @@ pub(crate) mod disk_index_builder_tests {
         // that our simple graph search matches.
         //
         // Because this dataset is small, we can expect exact equality.
-        for (q, query_data) in data.row_iter().enumerate() {
+        for (q, query_data) in data.rows().enumerate() {
             let gt =
                 diskann_providers::test_utils::groundtruth(data.as_view(), query_data, |a, b| {
                     distance.evaluate_similarity(a, b)

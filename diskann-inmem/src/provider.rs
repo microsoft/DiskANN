@@ -819,7 +819,7 @@ mod tests {
         neighbor::Neighbor,
         provider::{DataProvider, Delete},
     };
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use diskann_vector::distance::Metric;
 
     use crate::num::Capacity;
@@ -854,7 +854,7 @@ mod tests {
             Capacity::new(grid.num_points(size)),
             MaxDegree::new(degree),
             Metric::L2,
-            Matrix::row_vector(start.into()),
+            rowmajor::Owned::row_vector(start.into()),
         )
         .unwrap();
 
@@ -876,7 +876,7 @@ mod tests {
 
         let index = DiskANNIndex::new(config, provider, None);
 
-        for (i, data) in data.row_iter().enumerate() {
+        for (i, data) in data.rows().enumerate() {
             index
                 .insert(&Strategy, &Context, &((10 * i + 1) as u64), data)
                 .await

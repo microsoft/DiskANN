@@ -13,7 +13,7 @@
 
 use crate::{ANNError, ANNResult};
 use diskann_linalg::Transpose;
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{
     Norm,
     norm::{FastL2Norm, FastL2NormSquared},
@@ -27,7 +27,7 @@ use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 /// when the leader set is created, and all point stripes share them. Inner product
 /// and normalized cosine store no norms.
 pub(super) struct PartitionLeaders<'a, Norms> {
-    values: MatrixView<'a, f32>,
+    values: rowmajor::Ref<'a, f32>,
     norms: Norms,
 }
 
@@ -43,7 +43,7 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
     ///
     /// Partitioning always samples at least one leader. The kernels do not support
     /// an empty leader set.
-    fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a>;
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a>;
 
     /// Return the number of leaders.
     fn leader_count(leaders: &Self::Leaders<'_>) -> usize;
@@ -56,17 +56,17 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
     /// [`assign_leaders`](super::partition_kernel::assign_leaders) creates it with
     /// this shape. A zero distance can have either sign.
     fn compute_distances(
-        points: MatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
         leaders: &Self::Leaders<'_>,
-        storage: MutMatrixView<'_, f32>,
+        storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()>;
 }
 
 /// Compute the L2 norm of each row. Points and leaders both use this function, so
 /// their norms round the same way.
-fn cosine_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
+fn cosine_norms(vectors: rowmajor::Ref<'_, f32>) -> Vec<f32> {
     vectors
-        .row_iter()
+        .rows()
         .map(|vector| FastL2Norm.evaluate(vector))
         .collect()
 }
@@ -74,11 +74,11 @@ fn cosine_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
 impl PartitionMetric for L2 {
     type Leaders<'a> = PartitionLeaders<'a, Vec<f32>>;
 
-    fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a> {
         PartitionLeaders {
             values,
             norms: values
-                .row_iter()
+                .rows()
                 .map(|leader| FastL2NormSquared.evaluate(leader))
                 .collect(),
         }
@@ -89,14 +89,14 @@ impl PartitionMetric for L2 {
     }
 
     fn compute_distances(
-        points: MatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
         leaders: &Self::Leaders<'_>,
-        mut storage: MutMatrixView<'_, f32>,
+        mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         // The ranking distance is `||l||² - 2(p·l)`: the squared L2 distance without
         // `||p||²`, which is equal for every leader of the point. Start each row with
         // the leader norms, and let GEMM add the dot-product term.
-        for row in storage.row_iter_mut() {
+        for row in storage.rows_mut() {
             row.copy_from_slice(&leaders.norms);
         }
         diskann_linalg::sgemm(
@@ -119,7 +119,7 @@ impl PartitionMetric for L2 {
 impl PartitionMetric for Cosine {
     type Leaders<'a> = PartitionLeaders<'a, Vec<f32>>;
 
-    fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a> {
         PartitionLeaders {
             values,
             norms: cosine_norms(values),
@@ -131,9 +131,9 @@ impl PartitionMetric for Cosine {
     }
 
     fn compute_distances(
-        points: MatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
         leaders: &Self::Leaders<'_>,
-        mut storage: MutMatrixView<'_, f32>,
+        mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         diskann_linalg::sgemm(
             Transpose::None,
@@ -152,7 +152,7 @@ impl PartitionMetric for Cosine {
         let leader_norms = &leaders.norms;
         // Convert each dot to cosine distance. The leader norms come from the leader
         // set, so each stripe computes only its point norms.
-        for (row, &point_norm) in storage.row_iter_mut().zip(point_norms.iter()) {
+        for (row, &point_norm) in storage.rows_mut().zip(point_norms.iter()) {
             for (distance, &leader_norm) in row.iter_mut().zip(leader_norms.iter()) {
                 *distance = cosine_distance(*distance, point_norm, leader_norm);
             }
@@ -164,7 +164,7 @@ impl PartitionMetric for Cosine {
 impl PartitionMetric for InnerProduct {
     type Leaders<'a> = PartitionLeaders<'a, ()>;
 
-    fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a> {
         PartitionLeaders { values, norms: () }
     }
 
@@ -173,9 +173,9 @@ impl PartitionMetric for InnerProduct {
     }
 
     fn compute_distances(
-        points: MatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
         leaders: &Self::Leaders<'_>,
-        mut storage: MutMatrixView<'_, f32>,
+        mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         diskann_linalg::sgemm(
             Transpose::None,
@@ -197,7 +197,7 @@ impl PartitionMetric for InnerProduct {
 impl PartitionMetric for CosineNormalized {
     type Leaders<'a> = <InnerProduct as PartitionMetric>::Leaders<'a>;
 
-    fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a> {
         InnerProduct::create_leaders(values)
     }
 
@@ -206,9 +206,9 @@ impl PartitionMetric for CosineNormalized {
     }
 
     fn compute_distances(
-        points: MatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
         leaders: &Self::Leaders<'_>,
-        storage: MutMatrixView<'_, f32>,
+        storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         // The constant in `1 - dot` does not change nearest-first order.
         InnerProduct::compute_distances(points, leaders, storage)
@@ -233,13 +233,14 @@ mod tests {
         values[129..].fill(0.0);
         values[129] = 4096.0;
         values[130] = 4.0;
-        let leaders = L2::create_leaders(MatrixView::try_from(values.as_slice(), 2, 129).unwrap());
+        let leaders =
+            L2::create_leaders(rowmajor::Ref::try_from_data(values.as_slice(), 2, 129).unwrap());
         let mut output = [f32::NAN; 2];
 
         L2::compute_distances(
-            MatrixView::try_from(&points[..], 1, 129).unwrap(),
+            rowmajor::Ref::try_from_data(&points[..], 1, 129).unwrap(),
             &leaders,
-            MutMatrixView::try_from(&mut output[..], 1, 2).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 1, 2).unwrap(),
         )
         .unwrap();
 
@@ -284,19 +285,25 @@ mod tests {
                         test_support::normalize(&mut point_values, dimensions);
                         test_support::normalize(&mut leader_values, dimensions);
                     }
-                    let points =
-                        MatrixView::try_from(point_values.as_slice(), point_count, dimensions)
-                            .unwrap();
-                    let leader_matrix =
-                        MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions)
-                            .unwrap();
+                    let points = rowmajor::Ref::try_from_data(
+                        point_values.as_slice(),
+                        point_count,
+                        dimensions,
+                    )
+                    .unwrap();
+                    let leader_matrix = rowmajor::Ref::try_from_data(
+                        leader_values.as_slice(),
+                        leader_count,
+                        dimensions,
+                    )
+                    .unwrap();
                     let leaders = M::create_leaders(leader_matrix);
                     let mut output = vec![f32::NAN; point_count * leader_count];
 
                     M::compute_distances(
                         points,
                         &leaders,
-                        MutMatrixView::try_from(output.as_mut_slice(), point_count, leader_count)
+                        rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, leader_count)
                             .unwrap(),
                     )
                     .unwrap_or_else(|error| {
@@ -371,16 +378,19 @@ mod tests {
                 test_support::normalize(&mut leader_values, dimensions);
             }
             let points =
-                MatrixView::try_from(point_values.as_slice(), point_count, dimensions).unwrap();
+                rowmajor::Ref::try_from_data(point_values.as_slice(), point_count, dimensions)
+                    .unwrap();
             let leader_matrix =
-                MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions).unwrap();
+                rowmajor::Ref::try_from_data(leader_values.as_slice(), leader_count, dimensions)
+                    .unwrap();
             let leaders = M::create_leaders(leader_matrix);
             let mut output = vec![f32::NAN; point_count * leader_count];
 
             M::compute_distances(
                 points,
                 &leaders,
-                MutMatrixView::try_from(output.as_mut_slice(), point_count, leader_count).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, leader_count)
+                    .unwrap(),
             )
             .unwrap_or_else(|error| panic!("shape={shape:?}: {error}"));
 
@@ -432,14 +442,14 @@ mod tests {
         #[case] leader_values: &[f32],
         #[case] expected: [f32; 6],
     ) {
-        let leaders = M::create_leaders(MatrixView::try_from(leader_values, 3, 2).unwrap());
+        let leaders = M::create_leaders(rowmajor::Ref::try_from_data(leader_values, 3, 2).unwrap());
         let mut output = [-100.0; 3];
 
         for (point, expected) in point_values.chunks_exact(2).zip(expected.chunks_exact(3)) {
             M::compute_distances(
-                MatrixView::try_from(point, 1, 2).unwrap(),
+                rowmajor::Ref::try_from_data(point, 1, 2).unwrap(),
                 &leaders,
-                MutMatrixView::try_from(&mut output[..], 1, 3).unwrap(),
+                rowmajor::Mut::try_from_data(&mut output[..], 1, 3).unwrap(),
             )
             .unwrap();
 
@@ -452,13 +462,13 @@ mod tests {
         let point_values = [0.0, 0.0, 0.0, 2.0];
         let leader_values = [3.0, 0.0, 0.0, 0.0, 0.0, -4.0];
         let leaders =
-            Cosine::create_leaders(MatrixView::try_from(&leader_values[..], 3, 2).unwrap());
+            Cosine::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 3, 2).unwrap());
         let mut output = [42.0; 6];
 
         Cosine::compute_distances(
-            MatrixView::try_from(&point_values[..], 2, 2).unwrap(),
+            rowmajor::Ref::try_from_data(&point_values[..], 2, 2).unwrap(),
             &leaders,
-            MutMatrixView::try_from(&mut output[..], 2, 3).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 2, 3).unwrap(),
         )
         .unwrap();
 
@@ -475,13 +485,14 @@ mod tests {
     ) {
         let point_values = [1.0, 2.0, 3.0];
         let leader_values = [1.0, 2.0, 3.0, 4.0];
-        let leaders = M::create_leaders(MatrixView::try_from(&leader_values[..], 2, 2).unwrap());
+        let leaders =
+            M::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 2, 2).unwrap());
         let mut output = [17.0; 2];
 
         let error = M::compute_distances(
-            MatrixView::try_from(&point_values[..], 1, 3).unwrap(),
+            rowmajor::Ref::try_from_data(&point_values[..], 1, 3).unwrap(),
             &leaders,
-            MutMatrixView::try_from(&mut output[..], 1, 2).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 1, 2).unwrap(),
         )
         .unwrap_err();
 

@@ -25,7 +25,7 @@
 //! The SIMD loops run inside `run2` or `run3` of architecture `A`, which compiles
 //! them with the target features of `A`.
 
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_wide::{SIMDPartialOrd, SIMDVector};
 
 use super::simd::{LANES, Simd};
@@ -75,8 +75,8 @@ impl Default for Candidate {
 /// of k without a fixed-size nearest set.
 pub(super) fn select_top_k_ids<A: Simd>(
     arch: A,
-    distances: MatrixView<'_, f32>,
-    output: MutMatrixView<'_, u32>,
+    distances: rowmajor::Ref<'_, f32>,
+    output: rowmajor::Mut<'_, u32>,
     scratch: &mut Vec<Candidate>,
 ) {
     debug_assert_eq!(
@@ -114,8 +114,8 @@ pub(super) fn select_top_k_ids<A: Simd>(
 /// after the scan.
 pub(super) fn select_top_k_symmetric<A: Simd>(
     arch: A,
-    distances: MatrixView<'_, f32>,
-    output: MutMatrixView<'_, Candidate>,
+    distances: rowmajor::Ref<'_, f32>,
+    output: rowmajor::Mut<'_, Candidate>,
     kth_distances: &mut Vec<f32>,
 ) {
     let points = output.nrows();
@@ -124,7 +124,7 @@ pub(super) fn select_top_k_symmetric<A: Simd>(
         "a symmetric scan needs one distance row and column per point"
     );
     let k = output.ncols();
-    let slots = output.into_inner();
+    let slots = output.into_mut_slice();
     // Fixed-size nearest sets serve the common `leaf_k` values 1, 2, and 3. On AVX2
     // at k = 3, slices took 1.1x to 2.5x the ranking time of fixed-size sets.
     match k {
@@ -143,17 +143,15 @@ pub(super) fn select_top_k_symmetric<A: Simd>(
 /// the matching output row. All rows reuse the storage of `nearest`.
 fn select_ids_with<A, Nearest>(
     arch: A,
-    distances: MatrixView<'_, f32>,
-    mut output: MutMatrixView<'_, u32>,
+    distances: rowmajor::Ref<'_, f32>,
+    mut output: rowmajor::Mut<'_, u32>,
     nearest: &mut Nearest,
 ) where
     A: Simd,
     Nearest: AsMut<[Candidate]> + ?Sized,
 {
-    // `row_iter` panics on a matrix without columns. `row` returns an empty row,
-    // so every slot of that row becomes `UNASSIGNED`.
-    for (row, ids) in output.row_iter_mut().enumerate() {
-        select_nearest(arch, nearest, distances.row(row));
+    for (ids, distances) in std::iter::zip(output.rows_mut(), distances.rows()) {
+        select_nearest(arch, nearest, distances);
         for (id, candidate) in ids.iter_mut().zip(nearest.as_mut().iter()) {
             *id = candidate.local_idx;
         }
@@ -193,7 +191,7 @@ where
 /// `kth_distances`.
 fn scan_pairs<A, Nearest>(
     arch: A,
-    distances: MatrixView<'_, f32>,
+    distances: rowmajor::Ref<'_, f32>,
     neighborhoods: &mut [Nearest],
     kth_distances: &mut Vec<f32>,
 ) where
@@ -398,8 +396,8 @@ mod tests {
 
         select_top_k_symmetric(
             ARCH,
-            MatrixView::try_from(distances.as_slice(), points, points).unwrap(),
-            MutMatrixView::try_from(output.as_flattened_mut(), points, 2).unwrap(),
+            rowmajor::Ref::try_from_data(distances.as_slice(), points, points).unwrap(),
+            rowmajor::Mut::try_from_data(output.as_flattened_mut(), points, 2).unwrap(),
             &mut kth_distances,
         );
 
@@ -417,8 +415,8 @@ mod tests {
 
         select_top_k_symmetric(
             ARCH,
-            MatrixView::try_from(&distances[..], 2, 2).unwrap(),
-            MutMatrixView::try_from(&mut output[..], 3, 1).unwrap(),
+            rowmajor::Ref::try_from_data(&distances[..], 2, 2).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 3, 1).unwrap(),
             &mut Vec::new(),
         );
     }
@@ -514,8 +512,8 @@ mod tests {
 
                         select_top_k_ids(
                             arch,
-                            MatrixView::try_from(distances.as_slice(), 1, count).unwrap(),
-                            MutMatrixView::try_from(output.as_mut_slice(), 1, k).unwrap(),
+                            rowmajor::Ref::try_from_data(distances.as_slice(), 1, count).unwrap(),
+                            rowmajor::Mut::try_from_data(output.as_mut_slice(), 1, k).unwrap(),
                             &mut Vec::new(),
                         );
 
@@ -669,22 +667,26 @@ mod tests {
                             }
                         })
                         .collect();
-                    let distances =
-                        MatrixView::try_from(distances.as_slice(), point_count, point_count)
-                            .unwrap();
+                    let distances = rowmajor::Ref::try_from_data(
+                        distances.as_slice(),
+                        point_count,
+                        point_count,
+                    )
+                    .unwrap();
                     // k = 1, 2, and 3 use fixed-size nearest sets. The others use slices.
                     for k in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17] {
                         let mut output = vec![Candidate::EMPTY; point_count * k];
                         let mut kth_distances = Vec::new();
                         let mut neighborhoods =
-                            MutMatrixView::try_from(output.as_mut_slice(), point_count, k).unwrap();
+                            rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, k)
+                                .unwrap();
 
                         // When: offer every non-self pair once, through the production
                         // width dispatch.
                         select_top_k_symmetric(
                             arch,
                             distances,
-                            neighborhoods.as_mut_view(),
+                            neighborhoods.as_view_mut(),
                             &mut kth_distances,
                         );
 
@@ -882,14 +884,14 @@ mod tests {
 
         select_top_k_symmetric(
             ARCH,
-            MatrixView::try_from(&distances[..], 3, 3).unwrap(),
-            MutMatrixView::try_from(&mut [][..], 3, 0).unwrap(),
+            rowmajor::Ref::try_from_data(&distances[..], 3, 3).unwrap(),
+            rowmajor::Mut::try_from_data(&mut [][..], 3, 0).unwrap(),
             &mut kth_distances,
         );
         select_top_k_ids(
             ARCH,
-            MatrixView::try_from(&distances[..], 3, 3).unwrap(),
-            MutMatrixView::try_from(&mut [][..], 3, 0).unwrap(),
+            rowmajor::Ref::try_from_data(&distances[..], 3, 3).unwrap(),
+            rowmajor::Mut::try_from_data(&mut [][..], 3, 0).unwrap(),
             &mut Vec::new(),
         );
 
@@ -903,8 +905,8 @@ mod tests {
 
         select_top_k_ids(
             ARCH,
-            MatrixView::try_from(&[][..], 2, 0).unwrap(),
-            MutMatrixView::try_from(&mut output[..], 2, 2).unwrap(),
+            rowmajor::Ref::try_from_data(&[][..], 2, 0).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 2, 2).unwrap(),
             &mut Vec::new(),
         );
 

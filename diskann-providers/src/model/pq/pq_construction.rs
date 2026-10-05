@@ -25,7 +25,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     io::Metadata,
-    views::{MatrixView, MutMatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use rand::{Rng, distr::Distribution};
 use rayon::prelude::*;
@@ -89,7 +89,8 @@ where
     Storage: StorageWriteProvider,
     Random: Rng,
 {
-    MatrixView::try_from(&*train_data, parameters.num_train(), parameters.dim()).bridge_err()?;
+    rowmajor::Ref::try_from_data(&*train_data, parameters.num_train(), parameters.dim())
+        .bridge_err()?;
 
     let centroid = if legacy_center_data {
         let mut centroid: Vec<f32> = vec![0.0; parameters.dim()];
@@ -118,7 +119,7 @@ where
     let full_pivot_data = pool.install(|| -> Result<Vec<f32>, ANNError> {
         let result = trainer
             .train(
-                MatrixView::try_from(train_data, parameters.num_train(), parameters.dim())
+                rowmajor::Ref::try_from_data(train_data, parameters.num_train(), parameters.dim())
                     .bridge_err()?,
                 chunk_offsets.as_view(),
                 diskann_quantization::Parallelism::Rayon,
@@ -217,7 +218,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
 
         let result = trainer
             .train(
-                MatrixView::try_from(
+                rowmajor::Ref::try_from_data(
                     train_data.as_slice(),
                     parameters.num_train(),
                     parameters.dim(),
@@ -288,12 +289,12 @@ pub fn move_train_data_by_centroid(
 /// # Panics
 ///
 /// Panics if `y.len() != x.ncols()`.
-pub fn accum_row_inplace<T>(mut x: MutMatrixView<T>, y: &[T])
+pub fn accum_row_inplace<T>(mut x: rowmajor::Mut<T>, y: &[T])
 where
     T: Copy + std::ops::AddAssign,
 {
     assert_eq!(x.ncols(), y.len());
-    x.row_iter_mut().for_each(|row| {
+    x.rows_mut().for_each(|row| {
         std::iter::zip(row.iter_mut(), y.iter()).for_each(|(a, b)| {
             *a += *b;
         });
@@ -416,12 +417,13 @@ where
         // process `BATCH_SIZE` many dataset vectors at a time.
         const BATCH_SIZE: usize = 128;
 
-        // Wrap the data in `MatrixViews` so we do not need to manually construct view
+        // Wrap the data in `rowmajor::Refs` so we do not need to manually construct view
         // in the compression loop.
         let mut compressed_block =
-            MutMatrixView::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
+            rowmajor::Mut::try_from_data(&mut block_compressed_base, cur_block_size, num_pq_chunks)
                 .bridge_err()?;
-        let base_block = MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
+        let base_block =
+            rowmajor::Ref::try_from_data(block_data, cur_block_size, full_dim).bridge_err()?;
 
         base_block
             .par_window_iter(BATCH_SIZE)
@@ -474,7 +476,7 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: VectorRepr + Sync>(
     }
 
     let table = BasicTableView::new(
-        MatrixView::try_from(pivot_data, parameters.num_centers(), dim).bridge_err()?,
+        rowmajor::Ref::try_from_data(pivot_data, parameters.num_centers(), dim).bridge_err()?,
         ChunkOffsetsView::new(offsets).bridge_err()?,
     )
     .map_err(|err| ANNError::message(diskann_quantization::error::format(&err)))?;
@@ -947,10 +949,12 @@ mod pq_test {
         .unwrap();
 
         let membuf_view =
-            MatrixView::try_from(membuf_pq_data.as_slice(), num_train, num_pq_chunks).unwrap();
+            rowmajor::Ref::try_from_data(membuf_pq_data.as_slice(), num_train, num_pq_chunks)
+                .unwrap();
 
         let original_view =
-            MatrixView::try_from(original_pq_data.as_slice(), num_train, num_pq_chunks).unwrap();
+            rowmajor::Ref::try_from_data(original_pq_data.as_slice(), num_train, num_pq_chunks)
+                .unwrap();
 
         // Pre-emptively construct an offset view to compare mismatched slices.
         // We want to check that the difference in the mismatched chunks is small.
@@ -961,7 +965,8 @@ mod pq_test {
         .unwrap();
         let offset_view = chunk_offsets.as_view();
         let full_data =
-            MatrixView::try_from(full_data_vector.as_slice(), num_train, train_dim).unwrap();
+            rowmajor::Ref::try_from_data(full_data_vector.as_slice(), num_train, train_dim)
+                .unwrap();
         let pivot_view = table.view_pivots();
         let centroid = vec![0.0; train_dim];
 

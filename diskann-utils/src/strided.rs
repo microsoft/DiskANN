@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::{
     internal,
-    views::{self},
+    views::rowmajor::{self, Matrix},
     Reborrow,
 };
 
@@ -80,8 +80,8 @@ impl<T> Clone for Layout<T> {
 
 impl<T> Copy for Layout<T> {}
 
-impl<T> From<views::Layout<T>> for Layout<T> {
-    fn from(layout: views::Layout<T>) -> Self {
+impl<T> From<rowmajor::Layout<T>> for Layout<T> {
+    fn from(layout: rowmajor::Layout<T>) -> Self {
         Self {
             nrows: layout.nrows(),
             ncols: layout.ncols(),
@@ -184,7 +184,7 @@ impl fmt::Display for LayoutErrorInner {
 
 /// A row-major strided matrix.
 ///
-/// This is a generalization of the `MatrixBase` class as it does not mandate a dense
+/// This is a generalization of the [`Matrix`] trait as it does not mandate a dense
 /// layout in memory.
 ///
 /// ```text
@@ -413,13 +413,13 @@ pub enum TryFromError {
     InvalidLength { got: usize, expected: usize },
 }
 
-impl<'a, T> From<views::MatrixView<'a, T>> for Strided<'a, T> {
-    fn from(matrix: views::MatrixView<'a, T>) -> Self {
+impl<'a, T> From<rowmajor::Ref<'a, T>> for Strided<'a, T> {
+    fn from(matrix: rowmajor::Ref<'a, T>) -> Self {
         let layout = Layout::from(matrix.layout());
 
-        // SAFETY: `MatrixView` guarantees that the length of the base slice for `matrix`
+        // SAFETY: `rowmajor::Ref` guarantees that the length of the base slice for `matrix`
         // is exactly `layout.linear_length()`.
-        unsafe { Self::from_data_unchecked(matrix.into_inner(), layout) }
+        unsafe { Self::from_data_unchecked(matrix.into_slice(), layout) }
     }
 }
 
@@ -508,6 +508,8 @@ impl<T> std::iter::FusedIterator for Rows<'_, T> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::views::rowmajor::MatrixMut;
 
     #[test]
     fn test_linear_length() {
@@ -602,7 +604,7 @@ mod tests {
 
     #[test]
     fn test_try_from_data_errors() {
-        let m = views::Matrix::<usize>::from_element(10, 10, 0);
+        let m = rowmajor::Owned::<usize>::from_element(10, 10, 0);
         let nrows = m.nrows();
         let ncols = m.ncols();
 
@@ -755,7 +757,7 @@ mod tests {
     }
 
     // Test that the contents of `dut` match those in the dense 2d matrix.
-    fn test_indexing(dut: Strided<'_, usize>, expected: views::MatrixView<'_, usize>) {
+    fn test_indexing(dut: Strided<'_, usize>, expected: rowmajor::Ref<'_, usize>) {
         assert_eq!(dut.nrows(), expected.nrows());
         assert_eq!(dut.ncols(), expected.ncols());
 
@@ -802,7 +804,7 @@ mod tests {
         }
 
         // Compare via row iterators.
-        assert!(dut.rows().eq(expected.row_iter()));
+        assert!(dut.rows().eq(expected.rows()));
     }
 
     // Create a base Matrix with the following pattern:
@@ -812,9 +814,9 @@ mod tests {
     // 2*ncols 2*ncols+1 2*ncols+2 ... 3*ncols-1
     // ...
     // ```
-    fn create_test_matrix(nrows: usize, ncols: usize) -> views::Matrix<usize> {
+    fn create_test_matrix(nrows: usize, ncols: usize) -> rowmajor::Owned<usize> {
         let mut i = 0;
-        views::Matrix::from_fn(nrows, ncols, |_| {
+        rowmajor::Owned::from_fn(nrows, ncols, |_| {
             let v = i;
             i += 1;
             v
@@ -846,7 +848,7 @@ mod tests {
         assert_eq!(v.as_ptr(), ptr, "base pointer was not preserved");
 
         // Create the expected matrix.
-        let mut expected = views::Matrix::from_element(5, 2, 0);
+        let mut expected = rowmajor::Owned::from_element(5, 2, 0);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
                 *expected.element_mut(row, col) = *m.element(row, col);
@@ -856,7 +858,7 @@ mod tests {
 
         // Create a strided view over the last two columns.
         let v = Strided::try_from_data(&(m.as_slice()[1..]), m.nrows(), 2, m.ncols()).unwrap();
-        let mut expected = views::Matrix::from_element(5, 2, 0);
+        let mut expected = rowmajor::Owned::from_element(5, 2, 0);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
                 *expected.element_mut(row, col) = *m.element(row, col + 1);
@@ -899,7 +901,7 @@ mod tests {
     #[test]
     fn test_try_shrink_from() {
         // Exact is okay.
-        let m = views::Matrix::<usize>::from_element(10, 10, 0);
+        let m = rowmajor::Owned::<usize>::from_element(10, 10, 0);
         let nrows = m.nrows();
         let ncols = m.ncols();
         let s = Strided::try_from_data(m.as_slice(), nrows, ncols, ncols).unwrap();
@@ -918,7 +920,7 @@ mod tests {
     fn test_invalid_stride_is_an_error_not_a_panic() {
         // Constructing a `Strided` with an invalid layout (`cstride < ncols`) returns an
         // `Err` rather than panicking - only unwrapping the result panics.
-        let m = views::Matrix::<usize>::from_element(4, 4, 0);
+        let m = rowmajor::Owned::<usize>::from_element(4, 4, 0);
         let err = Strided::try_from_data(m.as_slice(), 2, 2, 1).unwrap_err();
         assert!(matches!(err, TryFromError::LayoutError(_)));
     }

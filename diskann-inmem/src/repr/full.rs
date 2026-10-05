@@ -38,7 +38,7 @@ mod internal_docs {
 use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize};
 
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
@@ -114,7 +114,7 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
 pub struct Config<T> {
     layout: store::Layout,
     metric: Metric,
-    start_points: Matrix<T>,
+    start_points: rowmajor::Owned<T>,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
 }
@@ -140,7 +140,7 @@ impl<T> Config<T> {
         capacity: Capacity,
         max_degree: MaxDegree,
         metric: Metric,
-        start_points: Matrix<T>,
+        start_points: rowmajor::Owned<T>,
     ) -> Result<Self, ConfigError> {
         let num_start_points: u32 = match start_points.nrows().try_into() {
             Ok(points) => points,
@@ -261,7 +261,7 @@ where
         capacity: Capacity,
         max_degree: MaxDegree,
         metric: Metric,
-        start_points: Matrix<T>,
+        start_points: rowmajor::Owned<T>,
     ) -> Result<Config<T>, ConfigError> {
         Config::new(capacity, max_degree, metric, start_points)
     }
@@ -286,7 +286,7 @@ where
         let store = Store::new(layout, store, intrusive)?;
 
         // Initialize start points.
-        for (i, row) in std::iter::zip(store.frozen(), start_points.row_iter()) {
+        for (i, row) in std::iter::zip(store.frozen(), start_points.rows()) {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -887,7 +887,7 @@ mod tests {
                 capacity,
                 MaxDegree::new(0),
                 Metric::L2,
-                Matrix::column_vector(Box::new(start_points)),
+                rowmajor::Owned::column_vector(Box::new(start_points)),
             )
             .unwrap(),
         )
@@ -1231,7 +1231,7 @@ mod tests {
                 Capacity::new(1),
                 MaxDegree::new(0),
                 metric,
-                Matrix::<T>::row_vector(start_point.clone().into()),
+                rowmajor::Owned::<T>::row_vector(start_point.clone().into()),
             )
             .unwrap(),
         )

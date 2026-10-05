@@ -40,10 +40,10 @@
 //!     spherical::{iface, SupportedMetric, SphericalQuantizer, PreScale},
 //!     num::PowerOfTwo,
 //! };
-//! use diskann_utils::views::Matrix;
+//! use diskann_utils::views::rowmajor::{self, Matrix};
 //!
 //! // For illustration purposes, the dataset consists of just a single vector.
-//! let mut data = Matrix::from_element(1, 4, 1.0);
+//! let mut data = rowmajor::Owned::from_element(1, 4, 1.0);
 //! let quantizer = SphericalQuantizer::train(
 //!     data.as_view(),
 //!     TransformKind::Null,
@@ -2077,7 +2077,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
@@ -2146,7 +2146,7 @@ mod tests {
     }
 
     #[inline(never)]
-    fn test_plan(plan: &dyn Quantizer, nbits: usize, dataset: MatrixView<f32>) {
+    fn test_plan(plan: &dyn Quantizer, nbits: usize, dataset: rowmajor::Ref<f32>) {
         // Perform the bit-specific test.
         if nbits == 1 {
             test_plan_1_bit(plan);
@@ -2366,7 +2366,7 @@ mod tests {
         }
     }
 
-    fn make_impl<const NBITS: usize>(metric: SupportedMetric) -> (Impl<NBITS>, Matrix<f32>)
+    fn make_impl<const NBITS: usize>(metric: SupportedMetric) -> (Impl<NBITS>, rowmajor::Owned<f32>)
     where
         Impl<NBITS>: Constructible,
     {
@@ -2460,7 +2460,7 @@ mod tests {
         test_plan(&plan, 8, data.as_view());
     }
 
-    fn test_dataset() -> Matrix<f32> {
+    fn test_dataset() -> rowmajor::Owned<f32> {
         let data = vec![
             0.28657,
             -0.0318168,
@@ -2592,7 +2592,7 @@ mod tests {
             -0.324718, // row 15
         ];
 
-        Matrix::try_from(data.into(), 16, 8).unwrap()
+        rowmajor::Owned::try_from_data(data.into(), 16, 8).unwrap()
     }
 
     #[cfg(feature = "flatbuffers")]
@@ -2609,7 +2609,7 @@ mod tests {
             quantizer: &dyn Quantizer,
             deserialized: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<'_, f32>,
+            dataset: rowmajor::Ref<'_, f32>,
         ) {
             let scoped_global = ScopedAllocator::global();
 
@@ -2633,7 +2633,7 @@ mod tests {
                 let mut a = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
                 let mut b = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
 
-                for row in dataset.row_iter() {
+                for row in dataset.rows() {
                     quantizer
                         .compress(row, OpaqueMut::new(&mut a), scoped_global)
                         .unwrap();
@@ -2658,14 +2658,14 @@ mod tests {
                 let d_computer = deserialized.distance_computer(GlobalAllocator).unwrap();
                 let d_computer_ref = deserialized.distance_computer_ref();
 
-                for r0 in dataset.row_iter() {
+                for r0 in dataset.rows() {
                     quantizer
                         .compress(r0, OpaqueMut::new(&mut a0), scoped_global)
                         .unwrap();
                     deserialized
                         .compress(r0, OpaqueMut::new(&mut b0), scoped_global)
                         .unwrap();
-                    for r1 in dataset.row_iter() {
+                    for r1 in dataset.rows() {
                         quantizer
                             .compress(r1, OpaqueMut::new(&mut a1), scoped_global)
                             .unwrap();
@@ -2701,7 +2701,7 @@ mod tests {
                         continue;
                     }
 
-                    for r in dataset.row_iter() {
+                    for r in dataset.rows() {
                         let q_computer = quantizer
                             .fused_query_computer(r, layout, false, GlobalAllocator, scoped_global)
                             .unwrap();
@@ -2709,7 +2709,7 @@ mod tests {
                             .fused_query_computer(r, layout, false, GlobalAllocator, scoped_global)
                             .unwrap();
 
-                        for u in dataset.row_iter() {
+                        for u in dataset.rows() {
                             quantizer
                                 .compress(u, OpaqueMut::new(&mut a), scoped_global)
                                 .unwrap();
@@ -2731,7 +2731,7 @@ mod tests {
         fn test_plan_serialization(
             quantizer: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
         ) {
             let global = GlobalAllocator;
 
@@ -3151,11 +3151,14 @@ mod tests {
         // Helpers //
         /////////////
 
-        fn compress_dataset(quantizer: &dyn Quantizer, dataset: MatrixView<f32>) -> Vec<Vec<u8>> {
+        fn compress_dataset(
+            quantizer: &dyn Quantizer,
+            dataset: rowmajor::Ref<f32>,
+        ) -> Vec<Vec<u8>> {
             let scoped_global = ScopedAllocator::global();
             let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
             dataset
-                .row_iter()
+                .rows()
                 .map(|row| {
                     let mut buf = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
                     quantizer
@@ -3168,7 +3171,7 @@ mod tests {
 
         fn compute_layout_distances(
             quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             compressed: &[Vec<u8>],
             allow_rescale: bool,
         ) -> Vec<LayoutDistances> {
@@ -3178,7 +3181,7 @@ mod tests {
                 .filter(|&layout| quantizer.is_supported(layout))
                 .map(|layout| {
                     let distances = dataset
-                        .row_iter()
+                        .rows()
                         .map(|query_row| {
                             let computer = quantizer
                                 .fused_query_computer(
@@ -3209,7 +3212,7 @@ mod tests {
         /// per-layout query distances.
         fn assert_layout_distances(
             quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             compressed: &[Vec<u8>],
             expected: &[LayoutDistances],
             allow_rescale: bool,
@@ -3224,8 +3227,7 @@ mod tests {
                 );
 
                 for (qi, (query_row, expected_distances)) in
-                    std::iter::zip(dataset.row_iter(), layout_distances.distances.iter())
-                        .enumerate()
+                    std::iter::zip(dataset.rows(), layout_distances.distances.iter()).enumerate()
                 {
                     let computer = quantizer
                         .fused_query_computer(
@@ -3260,7 +3262,7 @@ mod tests {
             quantizer: &dyn Quantizer,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
         ) -> Baseline {
             let compressed_vectors = compress_dataset(quantizer, dataset);
 
@@ -3379,7 +3381,7 @@ mod tests {
 
         fn check_baseline(
             baseline: &Baseline,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             expected_transform: DataTransform,
             expected_pre_scale: ScaleConfig,
         ) {
@@ -3497,7 +3499,7 @@ mod tests {
             metric: SupportedMetric,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-        ) -> (Poly<dyn Quantizer>, Matrix<f32>)
+        ) -> (Poly<dyn Quantizer>, rowmajor::Owned<f32>)
         where
             Impl<NBITS>: Constructible + Quantizer,
         {

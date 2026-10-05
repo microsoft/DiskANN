@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use crate::recall;
 
@@ -36,7 +36,7 @@ impl<I> ResultIds<I> {
 /// separately.
 #[derive(Debug)]
 pub(crate) struct Bounded<I> {
-    ids: Matrix<I>,
+    ids: rowmajor::Owned<I>,
     // Must have the same length as `matrix.nrows()`.
     lengths: Vec<usize>,
 }
@@ -52,7 +52,7 @@ impl<I> Bounded<I> {
     /// # Panics
     ///
     /// Panics if the number of rows in `ids` does not match the length of `lengths`.
-    pub(crate) fn new(ids: Matrix<I>, lengths: Vec<usize>) -> Self {
+    pub(crate) fn new(ids: rowmajor::Owned<I>, lengths: Vec<usize>) -> Self {
         assert_eq!(
             ids.nrows(),
             lengths.len(),
@@ -71,7 +71,7 @@ impl<I> Bounded<I> {
     ///
     /// Note that the yielded slices are not guaranteed to have the same length.
     pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = &[I]> {
-        std::iter::zip(self.ids.row_iter(), self.lengths.iter()).map(|(row, len)| {
+        std::iter::zip(self.ids.rows(), self.lengths.iter()).map(|(row, len)| {
             match row.get(..*len) {
                 Some(v) => v,
                 None => row,
@@ -86,7 +86,7 @@ impl<I> recall::Rows<I> for Bounded<I> {
     }
     fn row(&self, index: usize) -> &[I] {
         let length = self.lengths[index];
-        let row = self.ids.row(index);
+        let row = Matrix::row(&self.ids, index);
         match row.get(..length) {
             Some(v) => v,
             None => row,
@@ -231,12 +231,12 @@ where
                 len,
                 num_ids,
             } => {
-                let mut dst = Matrix::from_fn(len, num_ids, |_| I::default());
+                let mut dst = rowmajor::Owned::from_fn(len, num_ids, |_| I::default());
                 let mut lengths = Vec::with_capacity(len);
 
                 let mut output_row = 0;
                 for bounded in matrices {
-                    for row in bounded.ids.row_iter() {
+                    for row in bounded.ids.rows() {
                         dst.row_mut(output_row).clone_from_slice(row);
                         output_row += 1;
                     }
@@ -279,10 +279,10 @@ mod tests {
         let nrows = data.len();
         let ncols = data.iter().map(|v| v.len()).max().unwrap_or(0);
 
-        let mut matrix = Matrix::from_element(nrows, ncols, 0u32);
+        let mut matrix = rowmajor::Owned::from_element(nrows, ncols, 0u32);
         let mut lengths = Vec::with_capacity(nrows);
 
-        for (row, row_data) in std::iter::zip(matrix.row_iter_mut(), data.iter()) {
+        for (row, row_data) in std::iter::zip(matrix.rows_mut(), data.iter()) {
             let len = std::iter::zip(row.iter_mut(), row_data.iter())
                 .map(|(dst, src)| {
                     *dst = *src;
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_bounded_new_valid() {
-        let matrix = Matrix::from_element(3, 5, 0u32);
+        let matrix = rowmajor::Owned::from_element(3, 5, 0u32);
         let lengths = vec![2, 3, 1];
         let bounded = Bounded::new(matrix, lengths);
 
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_bounded_length_clamping() {
-        let matrix = Matrix::from_element(3, 3, 0u32);
+        let matrix = rowmajor::Owned::from_element(3, 3, 0u32);
         let lengths = vec![2, 3, 5]; // Last length exceeds number of columns
         let bounded = Bounded::new(matrix, lengths);
 
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "an internal invariant was not upheld")]
     fn test_bounded_new_mismatched_lengths() {
-        let matrix = Matrix::from_element(3, 5, 0u32);
+        let matrix = rowmajor::Owned::from_element(3, 5, 0u32);
         let lengths = vec![2, 3]; // Only 2 lengths for 3 rows
         Bounded::new(matrix, lengths);
     }

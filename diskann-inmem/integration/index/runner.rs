@@ -13,7 +13,7 @@ use diskann_benchmark_runner::{
     files::InputFile,
     utils::fmt::Indent,
 };
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 
@@ -256,7 +256,7 @@ impl Data {
 struct Bundle {
     data: Dataset,
     queries: Dataset,
-    groundtruth: Matrix<u64>,
+    groundtruth: rowmajor::Owned<u64>,
 }
 
 mod spherical {
@@ -564,7 +564,7 @@ impl Test {
             spherical::Bits::Four => quantizer.as_quantizer::<4>()?,
         };
 
-        let start_point = Matrix::row_vector(Box::from(
+        let start_point = rowmajor::Owned::row_vector(Box::from(
             <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
         ));
 

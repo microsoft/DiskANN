@@ -3,37 +3,37 @@
  * Licensed under the MIT license.
  */
 
-use crate::views::{Matrix, MatrixView};
+use crate::views::rowmajor::{self, Matrix, MatrixMut};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 /// Return multiple rows sampled using Latin Hypercube Sampling in `data` that aproximetely uniformly distributed.
 /// This makes the assumtion that the data is uniformly distributed.
 pub trait SampleLatinHyperCube: Sized + Copy + Default {
     fn sample_latin_hypercube(
-        data: MatrixView<Self>,
+        data: rowmajor::Ref<'_, Self>,
         num_samples: usize,
         seed: Option<u64>,
-    ) -> Matrix<Self>;
+    ) -> rowmajor::Owned<Self>;
 }
 
 impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
     fn sample_latin_hypercube(
-        data: MatrixView<Self>,
+        data: rowmajor::Ref<'_, Self>,
         num_samples: usize,
         seed: Option<u64>,
-    ) -> Matrix<Self> {
+    ) -> rowmajor::Owned<Self> {
         let nrows = data.nrows();
         let ncols = data.ncols();
         if ncols == 0 || nrows == 0 {
-            return Matrix::from_element(num_samples, ncols, T::default());
+            return rowmajor::Owned::from_element(num_samples, ncols, T::default());
         }
 
         let seed = seed.unwrap_or(0xaf2f5fa0b5161acf);
         let mut rng = StdRng::seed_from_u64(seed);
-        let mut result: Matrix<Self> = Matrix::from_element(num_samples, ncols, T::default());
+        let mut result = rowmajor::Owned::from_element(num_samples, ncols, T::default());
 
         // sample a random partitions down the diagonal
-        for (s, res) in result.row_iter_mut().enumerate() {
+        for (s, res) in result.rows_mut().enumerate() {
             for (idx, val) in res.iter_mut().enumerate() {
                 let step = nrows / num_samples;
                 let value = data
@@ -63,11 +63,12 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
 // Tests //
 ///////////
 
+#[cfg(not(miri))]
 #[cfg(test)]
 mod tests {
     use std::fmt::Display;
 
-    use crate::{assert_contains, views::Matrix};
+    use crate::assert_contains;
 
     use diskann_vector::conversion::CastFromSlice;
     use half::f16;
@@ -79,7 +80,7 @@ mod tests {
 
     use super::*;
 
-    fn example_dataset() -> Matrix<f32> {
+    fn example_dataset() -> rowmajor::Owned<f32> {
         let data: Vec<f32> = vec![
             // row 0
             0.203688,
@@ -143,10 +144,10 @@ mod tests {
             0.329328,
         ];
 
-        Matrix::<f32>::try_from(data.into(), 10, 5).unwrap()
+        rowmajor::Owned::<f32>::try_from_data(data.into(), 10, 5).unwrap()
     }
 
-    fn example_dataset_u8() -> Matrix<u8> {
+    fn example_dataset_u8() -> rowmajor::Owned<u8> {
         let data: Vec<u8> = vec![
             52, 215, 218, 204, 192, // row 0
             79, 55, 16, 89, 255, // row 1
@@ -156,11 +157,11 @@ mod tests {
             145, 111, 142, 122, 181, // row 5 -- this is the medoid
         ];
 
-        Matrix::<u8>::try_from(data.into(), 6, 5).unwrap()
+        rowmajor::Owned::<u8>::try_from_data(data.into(), 6, 5).unwrap()
     }
 
     // This is a test for the i8 function. Each entry is between -128 and 127.
-    fn example_dataset_i8() -> Matrix<i8> {
+    fn example_dataset_i8() -> rowmajor::Owned<i8> {
         let data: Vec<i8> = vec![
             -76, 87, 90, 76, 64, // row 0
             -49, -73, -112, -39, 127, // row 1
@@ -170,26 +171,26 @@ mod tests {
             17, -17, 14, -6, 53, // row 5 -- this is the medoid
         ];
 
-        Matrix::<i8>::try_from(data.into(), 6, 5).unwrap()
+        rowmajor::Owned::<i8>::try_from_data(data.into(), 6, 5).unwrap()
     }
 
-    fn test_for_type<T>(data: Matrix<T>)
+    fn test_for_type<T>(data: rowmajor::Owned<T>)
     where
         T: SampleLatinHyperCube + PartialEq + std::fmt::Debug + Display,
         StandardUniform: Distribution<T>,
     {
         // No Rows
-        let x = Matrix::<T>::from_element(0, 10, T::default());
+        let x = rowmajor::Owned::<T>::from_element(0, 10, T::default());
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
-            Matrix::<T>::from_element(1, x.ncols(), T::default())
+            rowmajor::Owned::<T>::from_element(1, x.ncols(), T::default())
         );
 
         // No Cols0
-        let x = Matrix::<T>::from_element(1, 0, T::default());
+        let x = rowmajor::Owned::<T>::from_element(1, 0, T::default());
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
-            Matrix::<T>::from_element(1, x.ncols(), T::default())
+            rowmajor::Owned::<T>::from_element(1, x.ncols(), T::default())
         );
 
         let mut rng: StdRng = StdRng::seed_from_u64(0xaf2f5fa0b5161acf);
@@ -197,16 +198,17 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<T>::from_fn(1, dim, |_| dist.sample(&mut rng));
+            let x = rowmajor::Owned::<T>::from_fn(1, dim, |_| dist.sample(&mut rng));
             assert_eq!(
                 T::sample_latin_hypercube(x.as_view(), 1, None),
-                Matrix::<T>::try_from(x.row(0).to_vec().into_boxed_slice(), 1, dim).unwrap()
+                rowmajor::Owned::<T>::try_from_data(x.row(0).to_vec().into_boxed_slice(), 1, dim)
+                    .unwrap()
             );
         }
 
         // Example dataset
         let starts = T::sample_latin_hypercube(data.as_view(), 2, None);
-        for s in starts.row_iter() {
+        for s in starts.rows() {
             for (col, &val) in s.iter().enumerate() {
                 let col_vals: Vec<T> = (0..data.nrows())
                     .map(|row| {
@@ -236,7 +238,8 @@ mod tests {
     #[test]
     fn test_f16() {
         let data = example_dataset();
-        let mut data_f16 = Matrix::<f16>::from_element(data.nrows(), data.ncols(), f16::default());
+        let mut data_f16 =
+            rowmajor::Owned::<f16>::from_element(data.nrows(), data.ncols(), f16::default());
         data_f16.as_mut_slice().cast_from_slice(data.as_slice());
         test_for_type(data_f16);
     }

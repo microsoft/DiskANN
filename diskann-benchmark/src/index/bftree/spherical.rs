@@ -17,7 +17,7 @@ use diskann_providers::{
     storage::{FileStorageProvider, SaveWith},
 };
 use diskann_quantization::alloc::GlobalAllocator;
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use rand::SeedableRng;
 
 use crate::{
@@ -112,7 +112,7 @@ impl Benchmark for BfTreeSpherical {
         writeln!(output, "{}", input)?;
 
         let build = input.build();
-        let data: Arc<Matrix<f32>> =
+        let data: Arc<rowmajor::Owned<f32>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
         // 1. Train the spherical quantizer.

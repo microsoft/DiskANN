@@ -47,7 +47,7 @@ The repository uses a Cargo workspace with crates organized into functional tier
 
 **Tier 2: Core Libraries**
 - `diskann-linalg/` - Linear algebra operations
-- `diskann-utils/` - Shared utilities (Reborrow, MatrixView traits)
+- `diskann-utils/` - Shared utilities (Reborrow, Matrix traits)
 - `diskann-quantization/` - Vector quantization (PQ, SQ)
 
 **Tier 3: Algorithm & Storage**

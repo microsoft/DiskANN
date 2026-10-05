@@ -38,11 +38,11 @@ use crate::{
 ///         CompensatedIP, CompensatedSquaredL2,
 ///     }
 /// };
-/// use diskann_utils::{views::Matrix, Reborrow, ReborrowMut};
+/// use diskann_utils::{views::rowmajor::{self, Matrix, MatrixMut}, Reborrow, ReborrowMut};
 /// use diskann_vector::DistanceFunction;
 ///
 /// // A small training set consisting of two 5-dimensional vectors.
-/// let mut data = Matrix::<f32>::from_element(2, 5, 0.0);
+/// let mut data = rowmajor::Owned::<f32>::from_element(2, 5, 0.0);
 /// data.row_mut(0).copy_from_slice(&[-1.0, -1.0, -1.0, -1.0, -1.0]);
 /// data.row_mut(1).copy_from_slice(&[1.0, 1.0, 1.0, 1.0, 1.0]);
 ///
@@ -459,7 +459,10 @@ pub enum SQComparisonError {
 mod tests {
     use std::collections::HashSet;
 
-    use diskann_utils::{ReborrowMut, views};
+    use diskann_utils::{
+        ReborrowMut, views,
+        views::rowmajor::{Matrix, MatrixMut},
+    };
 
     use rand::{
         SeedableRng,
@@ -593,7 +596,7 @@ mod tests {
         // Create a shuffled matrix of offset values for each dimension. This ensure that
         // each dimension covers the target dynamic range, but in a different order so
         // we can rule out cross-coupling of dimensions.
-        let dim_offsets: views::Matrix<f32> = {
+        let dim_offsets: views::rowmajor::Owned<f32> = {
             let range_min = -min_encodable - 3.0 * scale;
             let range_max = max_encodable + 3.0 * scale;
             let mut base: Vec<f32> = Vec::new();
@@ -607,7 +610,7 @@ mod tests {
             // Push one more to have one point above `range_max`.
             base.push(i);
 
-            let mut output = views::Matrix::from_element(base.len(), dim, 0.0);
+            let mut output = views::rowmajor::Owned::from_element(base.len(), dim, 0.0);
             (0..dim).for_each(|j| {
                 base.shuffle(rng);
                 for (i, b) in base.iter().enumerate() {

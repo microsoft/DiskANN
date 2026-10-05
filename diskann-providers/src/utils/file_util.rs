@@ -10,7 +10,11 @@ use std::io::Read;
 
 use crate::storage::StorageReadProvider;
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
-use diskann_utils::{io::Metadata, lazy_format, views::Matrix};
+use diskann_utils::{
+    io::Metadata,
+    lazy_format,
+    views::rowmajor::{self, MatrixMut},
+};
 
 /// Read metadata of data file.
 pub fn load_metadata_from_file<ReadProvider: StorageReadProvider>(
@@ -42,7 +46,7 @@ pub fn file_exists<StorageProvider: StorageReadProvider>(
 pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: StorageReadProvider>(
     storage_read_provider: &StorageReader,
     bin_file: &str,
-) -> ANNResult<(Vec<Matrix<T>>, usize, usize, usize)> {
+) -> ANNResult<(Vec<rowmajor::Owned<T>>, usize, usize, usize)> {
     let mut reader = storage_read_provider.open_reader(bin_file)?;
 
     let (num_points, dimension, total_results) = {
@@ -85,10 +89,10 @@ pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: Stora
         )));
     }
 
-    let mut all_vectors: Vec<Matrix<T>> = Vec::with_capacity(num_points);
+    let mut all_vectors: Vec<rowmajor::Owned<T>> = Vec::with_capacity(num_points);
 
     for &length in &vec_lengths {
-        let mut vectors = Matrix::from_element(length as usize, dimension, T::default());
+        let mut vectors = rowmajor::Owned::from_element(length as usize, dimension, T::default());
         reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(
             vectors.as_mut_slice(),
         ))?;
@@ -102,6 +106,7 @@ pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: Stora
 #[cfg(test)]
 mod file_util_test {
     use crate::storage::{StorageWriteProvider, VirtualStorageProvider};
+    use diskann_utils::views::rowmajor::Matrix;
     use vfs::{FileSystem, MemoryFS};
 
     use super::*;

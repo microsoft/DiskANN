@@ -223,7 +223,10 @@ mod tests {
         provider::SetElement,
         utils::{IntoUsize, ONE},
     };
-    use diskann_utils::{test_data_root, views::MatrixView};
+    use diskann_utils::{
+        test_data_root,
+        views::rowmajor::{self, Matrix},
+    };
     use diskann_vector::distance::Metric;
 
     use super::*;
@@ -239,14 +242,14 @@ mod tests {
     async fn build_index<DP, S>(
         index: &Arc<DiskANNIndex<DP>>,
         strategy: S,
-        data: MatrixView<'_, f32>,
+        data: rowmajor::Ref<'_, f32>,
     ) where
         DP: DataProvider<ExternalId = u32> + for<'a> SetElement<&'a [f32]>,
         DP::Context: Default,
         S: for<'a> InsertStrategy<'a, DP, &'a [f32]> + Clone,
     {
         let ctx = &DP::Context::default();
-        for (i, v) in data.row_iter().enumerate() {
+        for (i, v) in data.rows().enumerate() {
             index.insert(&strategy, ctx, &(i as u32), v).await.unwrap();
         }
     }
