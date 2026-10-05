@@ -15,7 +15,7 @@ pub use table::TransposedTable;
 /// These tests check the distance formulation as a result of pre-processing in the transposed
 /// table. They ensure we have an end-to-end working example of full distance calculations.
 ///
-/// The tests are broken into metric specific tests, mainly so they can run more efficiently
+/// The tests are broken into metric-specific tests, mainly so they can run more efficiently
 /// in parallel as there are a decent number of cases that must be covered.
 #[cfg(test)]
 mod tests {

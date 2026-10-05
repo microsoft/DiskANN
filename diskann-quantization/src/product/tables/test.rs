@@ -45,10 +45,10 @@ use crate::{
 ///
 /// * S: The configured start value for chunk 0, pivot 0 (i.e., [`Self::start`])
 /// * K + 1: The number of PQ chunks ([`Self::chunks`]).
-/// * N + 1: The number of PQ Pivots ([`Self::pivots`]).
+/// * N + 1: The number of PQ pivots ([`Self::pivots`]).
 #[derive(Debug, Clone)]
 pub(super) struct DistanceTestTable {
-    /// The chunking schemal
+    /// The chunking schema.
     pub(super) offsets: ChunkOffsets,
     /// The number of pivots per chunk.
     pub(super) pivots: usize,
@@ -334,13 +334,13 @@ pub(super) fn cosine(x: &[f32], y: &[f32]) -> f32 {
     distance::Cosine::evaluate(x, y)
 }
 
-/// A trait modeling query-like style distances with split pre-processing and evaluation.
+/// A trait modeling query-like distances with split pre-processing and evaluation.
 pub(super) trait QueryLike {
     fn preprocess(&mut self, query: &[f32]);
     fn evaluate(&mut self, code: &[u8]) -> f32;
 }
 
-/// A trait modeling self-like style distances with split pre-processing and evaluation.
+/// A trait modeling self-like distances with split pre-processing and evaluation.
 pub(super) trait SelfLike {
     fn evaluate(&mut self, a: &[u8], b: &[u8]) -> f32;
 }

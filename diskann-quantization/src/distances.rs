@@ -82,7 +82,7 @@ pub struct SquaredL2;
 #[derive(Debug, Clone, Copy)]
 pub struct InnerProduct;
 
-/// Compute the cosine-similarity between vector-like types.
+/// Compute the cosine similarity between vector-like types.
 #[derive(Debug, Clone, Copy)]
 pub struct Cosine;
 

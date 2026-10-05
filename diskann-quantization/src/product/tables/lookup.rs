@@ -6,7 +6,7 @@
 use diskann_utils::views::rowmajor::{self, Matrix};
 use thiserror::Error;
 
-/// Policy for processing entries in [`lookup`].
+/// Policy for processing entries in [`lookup_single`].
 ///
 /// The lookup operation may be performed by using multiple independent accumulators, each
 /// processing a subset of the total lookup operation.
@@ -28,7 +28,7 @@ pub trait Lookup<T> {
     /// Combine the results of two independent accumulators.
     fn reduce(&self, a: Self::Accumulator, b: Self::Accumulator) -> Self::Accumulator;
 
-    /// Process final accumulator, returning the result.
+    /// Process the final accumulator, returning the result.
     fn finish(self, acc: Self::Accumulator) -> Self::Output;
 }
 
@@ -73,7 +73,7 @@ where
     //
     // Conversion fails if `data.ncols()` is 256 or greater.
     //
-    // In this case, all indices will be in-bounds anyways.
+    // In this case, all indices will be in bounds anyway.
     if let Ok(ncols) = u8::try_from(data.ncols())
         && let Some(max) = indices.iter().max()
         && *max >= ncols
@@ -137,7 +137,7 @@ where
     Ok(policy.finish(a))
 }
 
-/// Errors from [`lookup`].
+/// Errors from [`lookup_single`].
 #[derive(Debug, Error, Clone, Copy)]
 #[non_exhaustive]
 pub enum LookupError {
@@ -147,7 +147,7 @@ pub enum LookupError {
     OutOfBounds,
 }
 
-/// A simple [`Lookup`] that uses `std::ops::Add` to accumulat results.
+/// A simple [`Lookup`] that uses `std::ops::Add` to accumulate results.
 #[derive(Debug, Clone, Copy)]
 pub struct Sum;
 
@@ -175,10 +175,10 @@ where
     }
 }
 
-/// An element for [`lookup`] that is used for computing cosine similarity.
+/// An element for [`lookup_single`] that is used for computing cosine similarity.
 ///
 /// Each [`DotAndNorm`] consists of a partial dot-product (e.g. the dot-product between a
-/// query chunks and a PQ center) as well as the PQ center's squared norm.
+/// query chunk and a PQ center) as well as the PQ center's squared norm.
 ///
 /// After the lookup operation, the final [`DotAndNorm`] consists of the dot-product between
 /// the query and the effective data vector as well as the total squared norm of the effective
@@ -206,7 +206,7 @@ impl DotAndNorm {
         self.square_norm
     }
 
-    /// Finish a cosine computation, using the `query_norm`. This computes:
+    /// Finish a cosine computation using `query_norm`. This computes:
     /// ```math
     /// 1.0 - (self.dot) / (self.square_norm.sqrt() * query_norm)
     /// ```

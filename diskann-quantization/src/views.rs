@@ -475,6 +475,21 @@ mod tests {
             offsets_view.as_slice().as_ptr(),
             offsets_owned.as_slice().as_ptr()
         );
+
+        // `max_chunk_dim`
+        assert_eq!(offsets.max_chunk_dim().get(), 4);
+    }
+
+    #[test]
+    fn chunk_offset_max_dim() {
+        let offsets = ChunkOffsetsView::new(&[0, 10, 11, 14]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 10);
+
+        let offsets = ChunkOffsetsView::new(&[0, 1, 2, 3]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 1);
+
+        let offsets = ChunkOffsetsView::new(&[0, 1, 2, 5, 20, 21]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 15);
     }
 
     #[test]

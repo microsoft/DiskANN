@@ -85,10 +85,10 @@ use crate::{product::tables::BasicTableView, views::ChunkOffsets};
 /// between two product-quantized vectors.
 #[derive(Debug, Clone)]
 pub struct PaddedTable {
-    /// Invarriants:
+    /// Invariants:
     /// * `pivots.ncols()` is at least as large as the largest chunk in [`Self::offsets`]
     ///   and is always a multiple of `simd_width`.
-    /// * `pivots.nrows() == offsets.len() * pivots_per_chunks`.
+    /// * `pivots.nrows() == offsets.len() * pivots_per_chunk`.
     pivots: rowmajor::Owned<f32>,
     offsets: ChunkOffsets,
     pivots_per_chunk: usize,
@@ -252,7 +252,9 @@ impl VTable {
     /// * `codes.len() != padded.nchunks()`
     /// * Any element in `codes` is equal to or greater than `padded.ncenters()`.
     ///
-    /// In addition, an error may be returned if a [`VTable`] for a different [`PaddedTable`]
+    /// In addition, an error may be returned if `self` was created for a different
+    /// [`PaddedTable`]. Mixing [`VTable`]s in this way is not a safety issue, but is also
+    /// not guaranteed to work.
     #[inline]
     pub fn distance(
         &self,
@@ -263,7 +265,7 @@ impl VTable {
         (self.distance).call(padded, vector, codes)
     }
 
-    /// Compute the distance two compressed vectors.
+    /// Compute the distance between two compressed vectors.
     ///
     /// # Errors
     ///
@@ -273,7 +275,9 @@ impl VTable {
     /// * `b.len() != padded.nchunks()`
     /// * Any element in `a` or `b` is equal to or greater than `padded.ncenters()`.
     ///
-    /// In addition, an error may be returned if a [`VTable`] for a different [`PaddedTable`]
+    /// In addition, an error may be returned if `self` was created for a different
+    /// [`PaddedTable`]. Mixing [`VTable`]s in this way is not a safety issue, but is also
+    /// not guaranteed to work.
     #[inline]
     pub fn self_distance(
         &self,
@@ -311,7 +315,7 @@ impl SIMDWidth {
     }
 }
 
-/// The run time architecture.
+/// The runtime architecture.
 #[derive(Debug, Clone, Copy)]
 enum RuntimeArch {
     Scalar(Scalar),
