@@ -5,6 +5,8 @@
 
 use std::{marker::PhantomData, num::NonZeroUsize, ptr::NonNull};
 
+#[cfg(feature = "rayon")]
+use crate::views::rowmajor::MatrixMut;
 use crate::views::rowmajor::{Layout, Matrix, Mut, Ref};
 
 //------//
@@ -187,3 +189,50 @@ impl<'a, T> Iterator for Windows<'a, T> {
 
 impl<T> ExactSizeIterator for Windows<'_, T> {}
 impl<T> std::iter::FusedIterator for Windows<'_, T> {}
+
+//---------------//
+// ZeroColumnMut //
+//---------------//
+
+#[cfg(feature = "rayon")]
+pub(super) struct ZeroColumnMut<'a, T> {
+    ptr: NonNull<T>,
+    _lifetime: PhantomData<&'a mut [T]>,
+}
+
+// SAFETY: `ZeroColumnMut` has the ownership semantics of an empty `&mut [T]`.
+#[cfg(feature = "rayon")]
+unsafe impl<T: Send> Send for ZeroColumnMut<'_, T> {}
+// SAFETY: Shared access can only create zero-length mutable views, so it cannot expose
+// overlapping access to any element.
+#[cfg(feature = "rayon")]
+unsafe impl<T: Send> Sync for ZeroColumnMut<'_, T> {}
+
+#[cfg(feature = "rayon")]
+impl<'a, T> ZeroColumnMut<'a, T> {
+    pub(super) fn new<M>(matrix: &'a mut M) -> Self
+    where
+        M: MatrixMut<Element = T> + ?Sized,
+    {
+        debug_assert_eq!(matrix.ncols(), 0);
+        Self {
+            ptr: matrix.as_nonnull_mut(),
+            _lifetime: PhantomData,
+        }
+    }
+
+    pub(super) fn row(&self) -> &'a mut [T] {
+        // SAFETY: The matrix pointer is valid for its zero-element layout. The returned
+        // slice preserves that pointer and cannot access or overlap any element.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), 0) }
+    }
+
+    pub(super) fn window(&self, nrows: usize) -> Mut<'a, T> {
+        Mut {
+            ptr: self.ptr,
+            // SAFETY: Every zero-column layout has zero elements.
+            layout: unsafe { Layout::new_unchecked(nrows, 0) },
+            _lifetime: PhantomData,
+        }
+    }
+}

@@ -6,6 +6,8 @@
 use std::{marker::PhantomData, mem::ManuallyDrop, num::NonZeroUsize, ptr::NonNull};
 
 #[cfg(feature = "rayon")]
+use rayon::iter::Either;
+#[cfg(feature = "rayon")]
 use rayon::prelude::{
     IndexedParallelIterator, IntoParallelIterator, ParallelIterator, ParallelSliceMut,
 };
@@ -524,21 +526,19 @@ pub unsafe trait MatrixMut: Matrix {
     //-------//
 
     /// Return a parallel iterator over the rows of the matrix.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `self.ncols() == 0 && self.nrows() != 0`.
     #[cfg(feature = "rayon")]
     fn par_rows_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [Self::Element]>
     where
         Self::Element: Send,
     {
+        let nrows = self.nrows();
         let ncols = self.ncols();
-        assert!(
-            ncols != 0 || self.nrows() == 0,
-            "`MatrixMut::par_rows_mut` does not support matrices with rows and zero columns"
-        );
-        self.as_mut_slice().par_chunks_exact_mut(ncols.max(1))
+        if ncols == 0 {
+            let matrix = iter::ZeroColumnMut::new(self);
+            Either::Left((0..nrows).into_par_iter().map(move |_| matrix.row()))
+        } else {
+            Either::Right(self.as_mut_slice().par_chunks_exact_mut(ncols))
+        }
     }
 
     /// Return a parallel iterator that divides the matrix into mutable sub-matrices with
@@ -552,7 +552,7 @@ pub unsafe trait MatrixMut: Matrix {
     ///
     /// # Panics
     ///
-    /// Panics if `batchsize = 0` or `self.ncols() == 0 && self.nrows() != 0`.
+    /// Panics if `batchsize = 0`.
     #[cfg(feature = "rayon")]
     fn par_window_iter_mut(
         &mut self,
@@ -566,31 +566,42 @@ pub unsafe trait MatrixMut: Matrix {
             "par_window_iter_mut batchsize cannot be zero"
         );
 
+        let nrows = self.nrows();
         let ncols = self.ncols();
-        assert!(
-            ncols != 0 || self.nrows() == 0,
-            "`MatrixMut::par_window_iter_mut` does not support matrices with rows and zero columns"
-        );
+        if ncols == 0 {
+            let matrix = iter::ZeroColumnMut::new(self);
+            return Either::Left(
+                (0..nrows)
+                    .into_par_iter()
+                    .step_by(batchsize)
+                    .map(move |start| {
+                        let window_nrows = batchsize.min(nrows - start);
+                        matrix.window(window_nrows)
+                    }),
+            );
+        }
 
         // Ensure that `batchsize * ncols` does not overflow.
-        let batchsize = batchsize.min(self.nrows());
-        self.as_mut_slice()
-            .par_chunks_mut((ncols * batchsize).max(1))
-            .map(move |data| {
-                let blobsize = data.len();
-                let nrows = blobsize / ncols;
-                assert_eq!(blobsize % ncols, 0);
+        let batchsize = batchsize.min(nrows);
+        Either::Right(
+            self.as_mut_slice()
+                .par_chunks_mut((ncols * batchsize).max(1))
+                .map(move |data| {
+                    let blobsize = data.len();
+                    let nrows = blobsize / ncols;
+                    assert_eq!(blobsize % ncols, 0);
 
-                // SAFETY:
-                //
-                // * `Layout::new_unchecked` is safe because `ncols` is the parent column
-                //   count and `nrows <= self.nrows()`, so this layout cannot exceed the
-                //   validated parent layout.
-                //
-                // * `Mut::from_data_unchecked` is safe because by construction,
-                //   `data.len() == ncols * nrows`.
-                unsafe { Mut::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols)) }
-            })
+                    // SAFETY:
+                    //
+                    // * `Layout::new_unchecked` is safe because `ncols` is the parent column
+                    //   count and `nrows <= self.nrows()`, so this layout cannot exceed the
+                    //   validated parent layout.
+                    //
+                    // * `Mut::from_data_unchecked` is safe because by construction,
+                    //   `data.len() == ncols * nrows`.
+                    unsafe { Mut::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols)) }
+                }),
+        )
     }
 }
 
@@ -2325,7 +2336,7 @@ mod tests {
     fn parallel_mutable_iterators_match_scalar_indexing() {
         use rayon::prelude::*;
 
-        for (nrows, ncols) in [(0, 0), (0, 4), (1, 1), (1, 4), (4, 1), (5, 3)] {
+        for (nrows, ncols) in [(0, 0), (0, 4), (3, 0), (1, 1), (1, 4), (4, 1), (5, 3)] {
             let context = lazy_format!("nrows = {nrows}, ncols = {ncols}");
 
             let original = striped_matrix(nrows, ncols);
@@ -2394,22 +2405,18 @@ mod tests {
 
     #[test]
     #[cfg(feature = "rayon")]
-    #[should_panic(
-        expected = "`MatrixMut::par_rows_mut` does not support matrices with rows and zero columns"
-    )]
-    fn par_rows_mut_rejects_nonempty_zero_column_matrix() {
-        let mut m = striped_matrix(3, 0);
-        let _ = m.par_rows_mut();
-    }
+    fn zero_column_mut_views_can_coexist() {
+        let mut matrix = striped_matrix(3, 0);
+        let ptr = matrix.as_ptr();
+        let zero_column = iter::ZeroColumnMut::new(&mut matrix);
 
-    #[test]
-    #[cfg(feature = "rayon")]
-    #[should_panic(
-        expected = "`MatrixMut::par_window_iter_mut` does not support matrices with rows and zero columns"
-    )]
-    fn par_window_iter_mut_rejects_nonempty_zero_column_matrix() {
-        let mut m = striped_matrix(3, 0);
-        let _ = m.par_window_iter_mut(2);
+        let rows = [zero_column.row(), zero_column.row(), zero_column.row()];
+        let windows = [zero_column.window(2), zero_column.window(1)];
+
+        assert!(rows.iter().all(|row| row.is_empty() && row.as_ptr() == ptr));
+        assert!(windows.iter().all(|window| {
+            window.ncols() == 0 && window.as_slice().is_empty() && window.as_ptr() == ptr
+        }));
     }
 
     #[test]
