@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::{io::read_bin, views::Matrix};
+use diskann_utils::{
+    io::read_bin,
+    views::rowmajor::{self, MatrixMut},
+};
 use half::f16;
 
 use super::datatype::{DataType, Dataset, Preprocess, SliceMut};
@@ -34,22 +37,22 @@ where
 
     let dst = match target {
         DataType::F32 => {
-            let mut dst = Matrix::from_element(data.nrows(), data.ncols(), f32::default());
+            let mut dst = rowmajor::Owned::from_element(data.nrows(), data.ncols(), f32::default());
             SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::F16 => {
-            let mut dst = Matrix::from_element(data.nrows(), data.ncols(), f16::default());
+            let mut dst = rowmajor::Owned::from_element(data.nrows(), data.ncols(), f16::default());
             SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::U8 => {
-            let mut dst = Matrix::from_element(data.nrows(), data.ncols(), u8::default());
+            let mut dst = rowmajor::Owned::from_element(data.nrows(), data.ncols(), u8::default());
             SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::I8 => {
-            let mut dst = Matrix::from_element(data.nrows(), data.ncols(), i8::default());
+            let mut dst = rowmajor::Owned::from_element(data.nrows(), data.ncols(), i8::default());
             SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }

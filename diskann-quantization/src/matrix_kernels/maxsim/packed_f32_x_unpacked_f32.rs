@@ -781,6 +781,7 @@ mod aarch64 {
 mod tests {
     use super::*;
 
+    use diskann_utils::views::rowmajor::Matrix;
     use rand::{SeedableRng, rngs::StdRng};
 
     #[cfg(target_arch = "x86_64")]

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::graph::AdjacencyList;
 
@@ -29,7 +29,7 @@ impl Grid {
     /// Return the generated grid with `f32` elements.
     ///
     /// See [`Self::data_as`] for documentation on the order of generation.
-    pub fn data(self, size: usize) -> Matrix<f32> {
+    pub fn data(self, size: usize) -> rowmajor::Owned<f32> {
         Self::data_as(self, size, |i: usize| i as f32)
     }
 
@@ -47,6 +47,7 @@ impl Grid {
     ///
     /// ```rust
     /// use diskann::graph::test::synthetic::Grid;
+    /// use diskann_utils::views::rowmajor::Matrix;
     ///
     /// fn identity(x: usize) -> usize {
     ///     x
@@ -99,15 +100,15 @@ impl Grid {
     ///
     /// // etc.
     /// ```
-    pub fn data_as<F, R>(self, size: usize, mut f: F) -> Matrix<R>
+    pub fn data_as<F, R>(self, size: usize, mut f: F) -> rowmajor::Owned<R>
     where
         F: FnMut(usize) -> R,
     {
         match self {
-            Self::One => Matrix::from_fn(size, 1, |rc| f(rc.row)),
+            Self::One => rowmajor::Owned::from_fn(size, 1, |rc| f(rc.row)),
             Self::Two => {
                 let mut v = [0; 2];
-                Matrix::from_fn(size.pow(self.dim().into()), 2, |rc| {
+                rowmajor::Owned::from_fn(size.pow(self.dim().into()), 2, |rc| {
                     let value = f(v[rc.col]);
                     if rc.col == 1 {
                         increment(&mut v, size);
@@ -121,7 +122,7 @@ impl Grid {
                 //
                 // Is it overkill? Yes. Is it fun? Also yes!
                 let mut v = [0; 3];
-                Matrix::from_fn(size.pow(self.dim().into()), 3, |rc| {
+                rowmajor::Owned::from_fn(size.pow(self.dim().into()), 3, |rc| {
                     let value = f(v[rc.col]);
                     if rc.col == 2 {
                         increment(&mut v, size);
@@ -131,7 +132,7 @@ impl Grid {
             }
             Self::Four => {
                 let mut v = [0; 4];
-                Matrix::from_fn(size.pow(self.dim().into()), 4, |rc| {
+                rowmajor::Owned::from_fn(size.pow(self.dim().into()), 4, |rc| {
                     let value = f(v[rc.col]);
                     if rc.col == 3 {
                         increment(&mut v, size);
@@ -356,7 +357,7 @@ pub(super) struct Setup {
     start_id: u32,
     start_neighbors: AdjacencyList<u32>,
 
-    data: Matrix<f32>,
+    data: rowmajor::Owned<f32>,
     neighbors: Vec<AdjacencyList<u32>>,
 }
 
@@ -376,7 +377,7 @@ impl Setup {
     pub(super) fn setup(&self) -> impl Iterator<Item = (u32, Vec<f32>, AdjacencyList<u32>)> {
         let mut i = 0u32;
         self.data
-            .row_iter()
+            .rows()
             .zip(self.neighbors.iter())
             .map(move |(data, neighbors)| {
                 let id = i;

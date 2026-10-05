@@ -12,6 +12,7 @@ use diskann::{
     },
     utils::{IntoUsize, ONE},
 };
+use diskann_utils::views::rowmajor::Matrix;
 
 use crate::build::{self, graph::SingleInsert};
 
