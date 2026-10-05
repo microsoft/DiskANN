@@ -526,6 +526,8 @@ pub unsafe trait MatrixMut: Matrix {
     //-------//
 
     /// Return a parallel iterator over the rows of the matrix.
+    ///
+    /// A matrix with zero columns yields one empty mutable slice per row.
     #[cfg(feature = "rayon")]
     fn par_rows_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [Self::Element]>
     where
@@ -549,6 +551,9 @@ pub unsafe trait MatrixMut: Matrix {
     ///
     /// It is possible for yielded sub-matrices to have fewer than `batchsize` rows if the
     /// number of rows in the parent matrix is not evenly divisible by `batchsize`.
+    ///
+    /// A matrix with zero columns yields zero-column sub-matrices containing up to
+    /// `batchsize` rows.
     ///
     /// # Panics
     ///

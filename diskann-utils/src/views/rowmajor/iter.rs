@@ -195,6 +195,10 @@ impl<T> std::iter::FusedIterator for Windows<'_, T> {}
 //---------------//
 
 #[cfg(feature = "rayon")]
+/// Carries an exclusive borrow of a zero-column matrix across Rayon workers.
+///
+/// Multiple views may share the matrix pointer because every view contains zero elements
+/// and therefore exposes no overlapping element access.
 pub(super) struct ZeroColumnMut<'a, T> {
     ptr: NonNull<T>,
     _lifetime: PhantomData<&'a mut [T]>,
