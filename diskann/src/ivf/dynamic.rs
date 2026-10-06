@@ -10,14 +10,15 @@
 //! mutation. Concrete accessors are responsible for presenting a coherent view
 //! across those components.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Deref};
 
 use diskann_utils::{future::SendFuture, views::MutMatrixView};
 
 use crate::{
+    ANNResult,
     error::{StandardError, ToRanked},
-    ivf::update::InsertionUpdate,
-    provider::{ExecutionContext, HasId},
+    ivf::update::Deltas,
+    provider::{ExecutionContext, Guard, NoopGuard},
     utils::VectorId,
 };
 
@@ -78,13 +79,33 @@ pub trait Provider: Sized + Send + Sync + 'static {
     ) -> Result<Self::ExternalId, Self::Error>;
 }
 
+pub trait StageElements<P: Provider, T: Sync> {
+    /// The kind of error yielded by `set_element`.
+    type StageError: ToRanked + std::fmt::Debug + Send + Sync + 'static;
+
+    /// Stage a new point; its id is provisional until `update` commits it.
+    fn stage_point(
+        &mut self,
+        id: &P::ExternalId,
+        element: T,
+        out: &mut [f32],
+    ) -> impl SendFuture<ANNResult<P::InternalId>>;
+
+    /// Stage a new centroid and mint its list id, provisional until `update` commits it.
+    fn stage_centroid(&mut self, centroid: &[f32]) -> impl SendFuture<ANNResult<P::ListId>>;
+}
+
+///////////////
+// Centroids //
+///////////////
+
 /// An in-memory index over the live centroids.
 ///
 /// The centroid catalog is authoritative. Approximate implementations, such as
 /// a graph navigator, must retain enough catalog information to reject retired
 /// ids and recover with exact selection when navigation cannot produce a usable
 /// result. Exact and graph implementations expose the same interface.
-pub trait CentroidIndex: Send + Sync {
+pub trait Centroids: Send + Sync {
     /// Stable logical centroid id, also used as the inverted-list id.
     type ListId: VectorId;
 
@@ -94,13 +115,16 @@ pub trait CentroidIndex: Send + Sync {
     /// Number of live centroids.
     fn len(&self) -> usize;
 
+    /// dimension of full precision centroid vectors.
+    fn dim(&self) -> usize;
+
     /// Whether there are no live centroids.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Borrow one authoritative full-precision centroid vector.
-    fn centroid(&self, id: Self::ListId) -> Option<&[f32]>;
+    fn centroid(&self, id: Self::ListId) -> Option<impl Deref<Target = [f32]>>;
 
     /// Select exactly `min(nprobe, self.len())` live centroids for `query`, nearest
     /// first.
@@ -111,46 +135,97 @@ pub trait CentroidIndex: Send + Sync {
         &self,
         query: &[f32],
         nprobe: usize,
-    ) -> impl SendFuture<Result<Vec<SelectedList<Self::ListId>>, Self::Error>>;
+    ) -> Result<Vec<SelectedList<Self::ListId>>, Self::Error>;
 }
 
-/// Query-bound access to centroid selection and inverted-list scanning.
-///
-/// This is the dynamic IVF search algorithm's primary extension point, in the
-/// same spirit as [`crate::graph::glue::SearchAccessor`]. Implementations are free
-/// to batch reads, coalesce blob requests, prefetch, decode quantized payloads, or
-/// fan work out across tasks.
-pub trait SearchAccessor: HasId + Send + Sync {
-    /// Stable logical centroid/list id, fixed to [`Provider::ListId`] by the
-    /// strategy.
-    type ListId: VectorId;
+//////////////
+// Accessor //
+//////////////
 
-    /// Errors from list selection or scanning.
+pub trait InsertAccessor<P: Provider, T: Sync>: Send + Sized + StageElements<P, T> {
+    /// In-memory centroid catalog and navigator in this accessor's unified view.
+    type Centroids<'a>: Centroids<ListId = P::ListId, Error = Self::Error>
+    where
+        Self: 'a;
+
+    // Scoped reader to read vectors mapped to list ids.
+    type Reader<'a>: Reader<f32, Id = P::ListId>
+    where
+        Self: 'a;
+
+    /// Errors from planning reads, staging, or applying the update.
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
-    /// Select up to `nprobe` lists for the bound query, nearest first.
-    fn select_lists(
-        &mut self,
-        nprobe: usize,
-    ) -> impl SendFuture<Result<Vec<SelectedList<Self::ListId>>, Self::Error>>;
+    /// Borrow the list reader to read vectors from posting lists.
+    fn reader(&self) -> Self::Reader<'_>;
 
-    /// Scan `lists`, scoring their members against the bound query.
+    /// Borrow the centroid index used for routing and maintenance neighborhoods.
+    fn centroids(&self) -> Self::Centroids<'_>;
+
+    fn dim(&self) -> usize;
+
+    /// Read the size of a live list.
+    fn list_size(&self, list: P::ListId) -> Result<usize, Self::Error>;
+
+    /// Read the member ids of a live list.
+    fn get_members(&self, list: P::ListId) -> Result<&[P::InternalId], Self::Error>;
+
+    /// Consume the accessor and write the update
+    fn update(self, value: Deltas<P::InternalId, P::ListId>) -> impl SendFuture<ANNResult<()>>;
+}
+
+pub trait Reader<T = f32>: Send + Sync {
+    /// Error type in case a read fails.
+    type Error: ToRanked + Debug + Send + Sync + 'static;
+
+    /// Id type
+    type Id;
+
+    /// dimension of the output of each Id.
+    fn dim(&self) -> usize;
+
+    /// Write the canonical vector of `ids[i]` into row `i` of `out`, in any order.
     ///
-    /// `lists` must come from [`Self::select_lists`] on this accessor, which keeps
-    /// selection and scanning coherent using provider-specific coordination.
-    fn scan_lists<F>(
-        &mut self,
-        lists: &[SelectedList<Self::ListId>],
-        emit: F,
-    ) -> impl SendFuture<Result<ScanStats, Self::Error>>
-    where
-        F: FnMut(Self::Id, f32) + Send;
+    /// `out` has one row per id and [`Self::dim`] columns, and every row must be
+    /// written.
+    fn read_into(
+        &self,
+        id: Self::Id,
+        out: MutMatrixView<'_, T>,
+    ) -> impl SendFuture<Result<(), Self::Error>>;
+}
+
+//////////////
+// Strategy //
+//////////////
+
+/// Factory for an operation-scoped dynamic IVF maintenance accessor.
+///
+/// The provider is borrowed exclusively for the lifetime of the accessor, so no
+/// search or other mutation can observe it until the accessor is applied or
+/// dropped. Providers may therefore mutate plain in-memory state in
+/// [`InsertAccessor::apply`] without interior synchronization. Providers that
+/// share state outside this borrow (for example through an `Arc`) remain responsible
+/// for coordinating those aliases.
+pub trait MaintenanceStrategy<'a, P: Provider, T: Sync>: Send + Sync {
+    /// Accessor used to plan and stage split/dissolve operations.
+    type MaintenanceAccessor: InsertAccessor<P, T>;
+
+    /// Error constructing the accessor.
+    type Error: StandardError;
+
+    /// Construct one maintenance accessor.
+    fn maintenance_accessor(
+        &'a self,
+        provider: &'a mut P,
+        context: &'a P::Context,
+    ) -> Result<Self::MaintenanceAccessor, Self::Error>;
 }
 
 /// Factory for one dynamic IVF search accessor.
 pub trait SearchStrategy<'a, P: Provider, T>: Send + Sync {
     /// Query-bound accessor used for both coarse and fine search.
-    type SearchAccessor: SearchAccessor<Id = P::InternalId, ListId = P::ListId>;
+    type SearchAccessor: SearchAccessor<ListId = P::ListId, InternalId = P::InternalId>;
 
     /// Error constructing the accessor.
     type Error: StandardError;
@@ -164,111 +239,42 @@ pub trait SearchStrategy<'a, P: Provider, T>: Send + Sync {
     ) -> Result<Self::SearchAccessor, Self::Error>;
 }
 
-/// Operation-scoped reads and writes needed by split/dissolve maintenance.
-///
-/// The accessor is the consistency boundary for one mutation. It must present a
-/// unified view across point data, centroids, and inverted lists for all planning
-/// reads. It also owns any provider-specific lock, epoch, transaction, staging area,
-/// or poison state needed to apply the final update through [`Self::apply`].
-///
-/// List reads take one list and return its result. [`Self::read_vectors`], which
-/// reads far more data, takes a batch so disk and blob providers can reorder,
-/// coalesce, or parallelize I/O.
-pub trait MaintenanceAccessor<P: Provider>: Send + Sized {
-    /// In-memory centroid catalog and navigator in this accessor's unified view.
-    type Centroids: CentroidIndex<ListId = P::ListId, Error = Self::Error>;
+////////////
+// Search //
+////////////
 
-    /// Errors from planning reads, staging, or applying the update.
+/// Query-bound access to centroid selection and inverted-list scanning.
+///
+/// This is the dynamic IVF search algorithm's primary extension point, in the
+/// same spirit as [`crate::graph::glue::SearchAccessor`]. Implementations are free
+/// to batch reads, coalesce blob requests, prefetch, decode quantized payloads, or
+/// fan work out across tasks.
+pub trait SearchAccessor: Send + Sync {
+    /// Stable logical centroid/list id, fixed by the strategy.
+    type ListId;
+
+    type InternalId;
+
+    /// In-memory centroid view.
+    type Centroids<'a>: Centroids<ListId = Self::ListId, Error = Self::Error>
+    where
+        Self: 'a;
+
+    /// Errors from list selection or scanning.
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
-    /// Dimension of every canonical vector and centroid in this accessor's view.
+    /// Borrow the centroid index used for routing.
+    fn centroids(&self) -> Self::Centroids<'_>;
+
+    /// Scan `lists`, scoring their members against the bound query.
     ///
-    /// Fixed for the provider's lifetime, including before the index is initialized.
-    fn dim(&self) -> usize;
-
-    /// Borrow the centroid index used for routing and maintenance neighborhoods.
-    fn centroids(&self) -> &Self::Centroids;
-
-    /// Read the size of a live list.
-    fn list_size(&mut self, list: P::ListId) -> impl SendFuture<Result<usize, Self::Error>>;
-
-    /// Read the member ids of a live list.
-    fn read_members(
+    /// `lists` must come from [`Self::select_lists`] on this accessor, which keeps
+    /// selection and scanning coherent using provider-specific coordination.
+    fn scan_lists<F>(
         &mut self,
-        list: P::ListId,
-    ) -> impl SendFuture<Result<&[P::InternalId], Self::Error>>;
-
-    /// Write the canonical vector of `ids[i]` into row `i` of `out`, in any order.
-    ///
-    /// `out` has one row per id and [`Self::dim`] columns, and every row must be
-    /// written. Covers visible points only; the canonical vectors of staged points
-    /// come from [`StageElements::stage`].
-    fn read_vectors(
-        &mut self,
-        ids: &[P::InternalId],
-        out: MutMatrixView<'_, f32>,
-    ) -> impl SendFuture<Result<(), Self::Error>>;
-
-    /// Reserve fresh logical list ids that will not alias retired ids.
-    /// TO DO: Re-evaluate we even need this.
-    fn reserve_list_ids(
-        &mut self,
-        count: usize,
-    ) -> impl SendFuture<Result<Vec<P::ListId>, Self::Error>>;
-
-    /// Apply `update` and finish the operation, consuming the accessor.
-    ///
-    /// Only the index constructs updates, and it guarantees the invariants documented
-    /// on [`InsertionUpdate`], so implementations may rely on them without re-checking.
-    ///
-    /// Returning `Ok(())` means all components expose one coherent resulting index.
-    /// Rollback, durability, concurrent-reader visibility, and recovery after `Err` are
-    /// intentionally provider-defined.
-    fn apply(
-        self,
-        update: InsertionUpdate<P::InternalId, P::ListId>,
-    ) -> impl SendFuture<Result<(), Self::Error>>;
-}
-
-/// Stages new points of element type `T` for one maintenance operation.
-///
-/// The provider owns id allocation, duplicate detection, and the conversion of `T` to
-/// its stored and canonical representations. Staged points become visible only when
-/// the accessor applies an update that places them, and are discarded if the accessor
-/// is dropped first. A provider that accepts several input types implements this once
-/// per type.
-pub trait StageElements<P: Provider, T>: MaintenanceAccessor<P> {
-    /// Stage `points` and return their internal ids in order, writing the canonical
-    /// vector of `points[i]` into row `i` of `out`.
-    ///
-    /// `out` has one row per point and [`MaintenanceAccessor::dim`] columns, and every
-    /// row must be written.
-    fn stage(
-        &mut self,
-        points: &[(P::ExternalId, T)],
-        out: MutMatrixView<'_, f32>,
-    ) -> impl SendFuture<Result<Vec<P::InternalId>, Self::Error>>;
-}
-
-/// Factory for an operation-scoped dynamic IVF maintenance accessor.
-///
-/// The provider is borrowed exclusively for the lifetime of the accessor, so no
-/// search or other mutation can observe it until the accessor is applied or
-/// dropped. Providers may therefore mutate plain in-memory state in
-/// [`MaintenanceAccessor::apply`] without interior synchronization. Providers that
-/// share state outside this borrow (for example through an `Arc`) remain responsible
-/// for coordinating those aliases.
-pub trait MaintenanceStrategy<'a, P: Provider>: Send + Sync {
-    /// Accessor used to plan and stage split/dissolve operations.
-    type MaintenanceAccessor: MaintenanceAccessor<P>;
-
-    /// Error constructing the accessor.
-    type Error: StandardError;
-
-    /// Construct one maintenance accessor.
-    fn maintenance_accessor(
-        &'a self,
-        provider: &'a mut P,
-        context: &'a P::Context,
-    ) -> Result<Self::MaintenanceAccessor, Self::Error>;
+        lists: &[SelectedList<Self::ListId>],
+        emit: F,
+    ) -> impl SendFuture<Result<ScanStats, Self::Error>>
+    where
+        F: FnMut(Self::InternalId, f32) + Send;
 }
