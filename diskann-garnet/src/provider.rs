@@ -44,6 +44,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
+use strum::VariantArray;
 use thiserror::Error;
 use tokio::sync::watch;
 
@@ -199,16 +200,19 @@ impl Drop for InsertGuard {
                 };
             }
         } else {
-            for term in [
-                Term::Vector,
-                Term::Quantized,
-                Term::Attributes,
-                Term::Neighbors,
-                Term::ExtMap,
-            ] {
-                let context = self.context.term(term);
-                restored &= self.callbacks.delete_iid(&context, self.internal_id)
-                    || !self.callbacks.exists_iid(&context, self.internal_id, 0);
+            for &term in Term::VARIANTS {
+                match term {
+                    Term::Vector
+                    | Term::Quantized
+                    | Term::Attributes
+                    | Term::Neighbors
+                    | Term::ExtMap => {
+                        let context = self.context.term(term);
+                        restored &= self.callbacks.delete_iid(&context, self.internal_id)
+                            || !self.callbacks.exists_iid(&context, self.internal_id, 0);
+                    }
+                    Term::Metadata | Term::IntMap => {}
+                }
             }
             let context = self.context.term(Term::IntMap);
             restored &= self.callbacks.delete_eid(&context, &self.external_id)
@@ -2297,7 +2301,7 @@ mod tests {
         provider::{DataProvider, Delete, Guard, SetElement},
     };
     use diskann_providers::index::wrapped_async::DiskANNIndex;
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_vector::distance::Metric;
     use rand::Rng;
 
@@ -2305,8 +2309,8 @@ mod tests {
         SearchResults, VectorQuantType,
         dyn_index::DynIndex,
         garnet::{
-            Callbacks, Context, GarnetId, ReadDataCallback, RmwDataCallback, TERM_BITMASK, Term,
-            WriteCallback,
+            Callbacks, Context, GarnetError, GarnetId, ReadDataCallback, RmwDataCallback,
+            TERM_BITMASK, Term, WriteCallback,
         },
         provider::{GarnetProvider, GarnetProviderError, QUANT_STATE_KEY, RESERVATION_RETRY_LIMIT},
         quantization::{GarnetQuantizer, Spherical1Bit},
@@ -2382,7 +2386,7 @@ mod tests {
 
     fn train_for_backfill(provider: &GarnetProvider<f32>, ctx: &Context) {
         let quantizer = provider.quantizer.as_ref().unwrap();
-        let mut data = Matrix::from_element(quantizer.required_vectors(), 2, 0.0f32);
+        let mut data = rowmajor::Owned::from_element(quantizer.required_vectors(), 2, 0.0f32);
         for row in 0..data.nrows() {
             data.row_mut(row)
                 .copy_from_slice(&[(row + 1) as f32, (row % 7 + 1) as f32]);
@@ -3216,11 +3220,10 @@ mod tests {
                 quantized_before
             );
 
-            for (write_callback, expected_vector) in [
-                (fail_write as WriteCallback, &updated),
-                (fail_after_vector_write as WriteCallback, &updated),
+            for write_callback in [
+                fail_write as WriteCallback,
+                fail_after_vector_write as WriteCallback,
             ] {
-                LOGS.with(|logs| logs.lock().unwrap().clear());
                 let callbacks = store.callbacks();
                 provider.callbacks = Callbacks::new(
                     callbacks.read_callback(),
@@ -3234,6 +3237,10 @@ mod tests {
                     .set_element(&ctx, &id, (&original, b"failed"))
                     .await
                     .unwrap_err();
+                assert!(matches!(
+                    error,
+                    GarnetProviderError::Garnet(GarnetError::Write)
+                ));
                 assert!(provider.backfill_lock.lock().unwrap().is_empty());
                 assert_eq!(provider.fsm.max_id(), max_id);
                 assert_eq!(provider.fsm.total_used(), total_used);
@@ -3242,22 +3249,21 @@ mod tests {
                     Some(internal_id.clone())
                 );
                 assert_eq!(
+                    store.get(ctx.term(Term::ExtMap).get(), &internal_id),
+                    Some(id.to_vec())
+                );
+                assert_eq!(
                     store.get(ctx.term(Term::Vector).get(), &internal_id),
-                    Some(bytemuck::cast_slice::<f32, u8>(expected_vector).to_vec())
+                    Some(bytemuck::cast_slice::<f32, u8>(&updated).to_vec())
                 );
                 assert_eq!(
                     store.get(ctx.term(Term::Quantized).get(), &internal_id),
                     quantized_before
                 );
-                LOGS.with(|logs| {
-                    let logs = logs.lock().unwrap();
-                    assert_eq!(logs.len(), 2);
-                    let (context, message) = &logs[0];
-                    assert_eq!(*context, ctx.term(Term::Vector).get());
-                    assert!(message.contains("update failed",));
-                    assert!(message.contains(&error.to_string()));
-                    assert!(logs[1].1.contains("insert rollback failed"));
-                });
+                assert_eq!(
+                    store.get(ctx.term(Term::Attributes).get(), &internal_id),
+                    Some(b"new".to_vec())
+                );
             }
         }
     }

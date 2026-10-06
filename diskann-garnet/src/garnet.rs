@@ -25,7 +25,7 @@ pub(crate) const TERM_BITMASK: u64 = (1 << 3) - 1;
 #[error("Invalid term {0}")]
 pub(crate) struct InvalidTerm(u32);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, strum::VariantArray)]
 pub(crate) enum Term {
     Vector = 0,
     Neighbors = 1,
