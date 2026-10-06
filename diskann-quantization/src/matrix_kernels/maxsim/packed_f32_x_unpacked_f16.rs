@@ -237,6 +237,7 @@ mod tests {
 
     use std::num::NonZeroUsize;
 
+    use diskann_utils::views::rowmajor::Matrix;
     use diskann_wide::arch::Scalar;
     use rand::{SeedableRng, rngs::StdRng};
 

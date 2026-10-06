@@ -24,7 +24,7 @@ impl PQScratch {
     fn preprocess_query(&mut self, pq_data: &PQData, metric: Metric) -> ANNResult<()> {
         let table = pq_data.pq_table();
         let expected_len = table.ncenters() * table.nchunks();
-        let dst = diskann_utils::views::MutMatrixView::try_from(
+        let dst = diskann_utils::views::rowmajor::Mut::try_from_data(
             &mut self.aligned_pqtable_dist_scratch[..expected_len],
             table.nchunks(),
             table.ncenters(),

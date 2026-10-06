@@ -322,7 +322,7 @@ mod tests {
 
     use diskann_utils::{
         assert_contains,
-        views::{Matrix, MatrixView},
+        views::rowmajor::{self, Matrix},
     };
 
     use crate::{matrix_kernels::test_util::panic_message_for, multi_vector::BlockTransposed};
@@ -345,7 +345,7 @@ mod tests {
 
         // Values start at one so that zero unambiguously marks a padded slot.
         let mut value = 0.0;
-        let matrix = Matrix::from_fn(nrows, ncols, |_| {
+        let matrix = rowmajor::Owned::from_fn(nrows, ncols, |_| {
             value += 1.0;
             value
         });
@@ -505,7 +505,7 @@ mod tests {
 
     fn assert_panel<const SZ: usize>(
         panel: Panel<'_, f32, SZ>,
-        reference: MatrixView<'_, f32>,
+        reference: rowmajor::Ref<'_, f32>,
         block: usize,
         ctx: std::fmt::Arguments<'_>,
     ) {
@@ -583,16 +583,16 @@ mod tests {
         assert_contains!(message, "equal to 2");
     }
 
-    fn test_matrix(nrows: usize, ncols: usize) -> Matrix<f32> {
+    fn test_matrix(nrows: usize, ncols: usize) -> rowmajor::Owned<f32> {
         let mut value = 0.0;
-        Matrix::from_fn(nrows, ncols, |_| {
+        rowmajor::Owned::from_fn(nrows, ncols, |_| {
             let current = value;
             value += 1.0;
             current
         })
     }
 
-    fn pack<const SZ: usize>(matrix: MatrixView<'_, f32>) -> Vec<f32> {
+    fn pack<const SZ: usize>(matrix: rowmajor::Ref<'_, f32>) -> Vec<f32> {
         assert!(matrix.nrows().is_multiple_of(SZ));
 
         let mut packed = Vec::with_capacity(matrix.as_slice().len());

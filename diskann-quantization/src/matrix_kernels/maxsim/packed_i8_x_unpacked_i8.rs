@@ -1175,7 +1175,7 @@ mod tests {
     #[cfg(target_arch = "aarch64")]
     use diskann_wide::arch::aarch64::Neon;
 
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix};
 
     use crate::{matrix_kernels::maxsim, multi_vector::BlockTransposed};
 
@@ -1212,7 +1212,7 @@ mod tests {
     }
 
     fn pack_a<A, const MR: usize, const PACK: usize>(
-        a: &Matrix<i8>,
+        a: &rowmajor::Owned<i8>,
     ) -> BlockTransposed<A::AElem, MR, PACK>
     where
         A: ConvertA,
@@ -1624,7 +1624,7 @@ mod tests {
                 for n in [1, 15, 16, 17, 33] {
                     let b = TestDistr::matrix::<i8>(n, k, &mut rng);
                     let expected: Vec<i32> = b
-                        .row_iter()
+                        .rows()
                         .map(|col| -128 * col.iter().map(|&x| i32::from(x)).sum::<i32>())
                         .collect();
 

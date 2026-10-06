@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::matrix_kernels::test_util::TestDistr;
 
@@ -13,12 +13,12 @@ pub(super) fn generate_f32(
     k: usize,
     n: usize,
     rng: &mut impl rand::Rng,
-) -> (Matrix<f32>, Matrix<f32>, Vec<f32>) {
+) -> (rowmajor::Owned<f32>, rowmajor::Owned<f32>, Vec<f32>) {
     let ref_a = TestDistr::matrix::<f32>(m, k, rng);
     let ref_b = TestDistr::matrix::<f32>(k, n, rng);
 
     let ref_c: Vec<f32> = ref_a
-        .row_iter()
+        .rows()
         .map(|a_row| {
             let mut max_ip = f32::NEG_INFINITY;
             for b_col in 0..n {
@@ -43,12 +43,12 @@ pub(super) fn generate_i8(
     k: usize,
     n: usize,
     rng: &mut impl rand::Rng,
-) -> (Matrix<i8>, Matrix<i8>, Vec<i32>) {
+) -> (rowmajor::Owned<i8>, rowmajor::Owned<i8>, Vec<i32>) {
     let ref_a = TestDistr::matrix::<i8>(m, k, rng);
     let ref_b = TestDistr::matrix::<i8>(k, n, rng);
 
     let ref_c: Vec<i32> = ref_a
-        .row_iter()
+        .rows()
         .map(|a_row| {
             let mut max_ip = i32::MIN;
             for b_col in 0..n {
