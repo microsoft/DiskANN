@@ -11,21 +11,22 @@ use std::{borrow::Cow, io::Write, num::NonZeroUsize, sync::Arc};
 use diskann::graph::{DiskANNIndex, InplaceDeleteMethod};
 use diskann::utils::ONE;
 use diskann_benchmark_core as benchmark_core;
-use diskann_benchmark_core::{recall::Rows, streaming::executors::bigann};
+use diskann_benchmark_core::{
+    recall::{GroundTruthMode, Rows},
+    streaming::executors::bigann,
+};
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
-    utils::datatype::AsDataType,
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{quant::QuantVectorProvider, BfTreeProvider};
-use diskann_providers::model::graph::provider::async_::common::Quantized;
-use diskann_quantization::alloc::{AllocatorError, GlobalAllocator, Poly};
-use diskann_quantization::spherical::{
-    iface::{self as spherical_iface, Quantizer},
-    SphericalQuantizer,
+use diskann_providers::{
+    model::graph::provider::async_::common::Quantized,
+    storage::{FileStorageProvider, SaveWith},
 };
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_quantization::alloc::GlobalAllocator;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use rand::SeedableRng;
 
 use crate::{
@@ -48,16 +49,6 @@ use crate::{
 type BfTreeSQProvider = BfTreeProvider<f32, QuantVectorProvider>;
 type BfTreeSQIndex = Arc<DiskANNIndex<BfTreeSQProvider>>;
 
-fn new_quantizer<const NBITS: usize>(
-    quantizer: SphericalQuantizer,
-) -> Result<Poly<dyn Quantizer>, AllocatorError>
-where
-    spherical_iface::Impl<NBITS>: spherical_iface::Constructible + Quantizer,
-{
-    let imp = spherical_iface::Impl::<NBITS>::new(quantizer)?;
-    diskann_quantization::poly!(Quantizer, imp, GlobalAllocator)
-}
-
 struct BfTreeSQStream {
     index: BfTreeSQIndex,
     search: TopkSearchPhase,
@@ -68,10 +59,10 @@ struct BfTreeSQStream {
 }
 
 impl BfTreeSQStream {
-    fn insert_(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<BuildStats> {
+    fn insert_(&self, data: rowmajor::Ref<'_, f32>, slots: &[u32]) -> anyhow::Result<BuildStats> {
         let runner = benchmark_core::build::graph::SingleInsert::new(
             self.index.clone(),
-            Arc::new(data.to_owned()),
+            Arc::new(data.to_rowmajor_owned()),
             Quantized,
             benchmark_core::build::ids::Slice::new(slots.into()),
         );
@@ -91,7 +82,7 @@ impl ManagedStream<f32> for BfTreeSQStream {
 
     fn search(
         &self,
-        queries: Arc<Matrix<f32>>,
+        queries: Arc<rowmajor::Owned<f32>>,
         groundtruth: &dyn Rows<u32>,
     ) -> anyhow::Result<Self::Output> {
         let knn = benchmark_core::search::graph::KNN::new(
@@ -104,16 +95,17 @@ impl ManagedStream<f32> for BfTreeSQStream {
             self.search.reps,
             &self.search.num_threads,
             &self.search.runs,
+            GroundTruthMode::Fixed,
         );
         let results = knn::run(&knn, groundtruth, steps)?;
         Ok(StreamStats::Search(results))
     }
 
-    fn insert(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn insert(&self, data: rowmajor::Ref<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Insert(self.insert_(data, slots)?))
     }
 
-    fn replace(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn replace(&self, data: rowmajor::Ref<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Replace(self.insert_(data, slots)?))
     }
 
@@ -159,41 +151,31 @@ impl Benchmark for StreamingSpherical {
     type Input = BfTreeSphericalDynamicRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
-    fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
-        let mut failure_score: Option<u32> = None;
+    fn try_match(&self, input: &Self::Input, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
 
-        if let Err(s) = utils::match_data_type::<f32>(input.data_type()) {
-            failure_score = Some(s.0);
-        }
+        utils::match_data_type::<f32>(&mut score, input.data_type());
         if !matches!(input.num_bits().get(), 1 | 2 | 4) {
-            *failure_score.get_or_insert(0) += 1;
+            score.fail(
+                1,
+                &format_args!("Only 1, 2, or 4 bits supported - got {}", input.num_bits()),
+            );
         }
         if !matches!(input.search_phase(), SearchPhase::Topk(_)) {
-            *failure_score.get_or_insert(0) += 1;
+            score.fail(
+                1,
+                &format_args!(
+                    "Only \"topk\" is supported for search - got \"{}\"",
+                    input.search_phase().kind()
+                ),
+            );
         }
 
-        match failure_score {
-            None => Ok(MatchScore(0)),
-            Some(score) => Err(FailureScore(score)),
-        }
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Self::Input>,
-    ) -> std::fmt::Result {
-        match input {
-            None => {
-                writeln!(f, "- BfTree Streaming with spherical quantization")
-            }
-            Some(input) => {
-                if !f32::is_match(input.data_type()) {
-                    writeln!(f, "- Only `float32` supported, got {}", input.data_type())?;
-                }
-                Ok(())
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "- BfTree Streaming with spherical quantization")
     }
 
     fn run(
@@ -204,18 +186,41 @@ impl Benchmark for StreamingSpherical {
     ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}", input)?;
 
-        super::streaming_utils::run_streaming::<f32, _>(
+        let mut index_for_save: Option<BfTreeSQIndex> = None;
+
+        let results = super::streaming_utils::run_streaming::<f32, _>(
             input.runbook_params(),
-            |max_points| bftree_sq_streaming_impl(input, max_points),
+            |max_points| {
+                let (streamer, index) = bftree_sq_streaming_impl(input, max_points)?;
+                index_for_save = Some(index);
+                Ok(streamer)
+            },
             output,
-        )
+        )?;
+
+        // save the index if requested
+        if let Some(save_path) = input.build().save_path() {
+            let index = index_for_save.expect("index should have been set by make_streamer");
+            crate::utils::tokio::block_on(
+                index
+                    .provider()
+                    .save_with(&FileStorageProvider, &save_path.to_string()),
+            )?;
+        }
+
+        Ok(results)
     }
 }
+
+type BfTreeStreamingPayload = (
+    bigann::WithData<f32, u32, Managed<f32, StreamStats>>,
+    BfTreeSQIndex,
+);
 
 fn bftree_sq_streaming_impl(
     input: &BfTreeSphericalDynamicRun,
     max_points: usize,
-) -> anyhow::Result<bigann::WithData<f32, u32, Managed<f32, StreamStats>>> {
+) -> anyhow::Result<BfTreeStreamingPayload> {
     let topk = match input.search_phase() {
         SearchPhase::Topk(topk) => topk,
         _ => anyhow::bail!("Only TopK is currently supported by the streaming index"),
@@ -243,20 +248,21 @@ fn bftree_sq_streaming_impl(
     )?;
 
     let quantizer_poly = match input.num_bits().get() {
-        1 => new_quantizer::<1>(quantizer)?,
-        2 => new_quantizer::<2>(quantizer)?,
-        4 => new_quantizer::<4>(quantizer)?,
+        1 => quantizer.as_quantizer::<1>()?,
+        2 => quantizer.as_quantizer::<2>()?,
+        4 => quantizer.as_quantizer::<4>()?,
         _ => unreachable!("try_match handles bit validation"),
     };
 
     let config = input.try_as_config()?.build()?;
-    let params = input.bftree_parameters(max_points, data.ncols());
+    let params = input.bftree_parameters(max_points, Matrix::ncols(&data))?;
     let start_points = input
         .build()
         .start_point_strategy()
         .compute(data.as_view())?;
     let provider = BfTreeProvider::new(params, start_points.as_view(), quantizer_poly)?;
     let index = Arc::new(DiskANNIndex::new(config, provider, None));
+    let index_handle = index.clone();
 
     let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
     let managed_stream = BfTreeSQStream {
@@ -283,5 +289,5 @@ fn bftree_sq_streaming_impl(
         )?))
     });
 
-    Ok(layered)
+    Ok((layered, index_handle))
 }

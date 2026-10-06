@@ -8,12 +8,17 @@ use std::sync::Arc;
 use crate::data_model::GraphDataType;
 use diskann::{ANNError, ANNResult};
 
-use crate::utils::aligned_file_reader::traits::AlignedFileReader;
 use hashbrown::HashMap;
 
 use crate::{
     data_model::{Cache, GraphHeader},
-    search::{provider::disk_vertex_provider::DiskVertexProvider, traits::VertexProvider},
+    search::{
+        provider::{
+            aligned_file_reader::traits::AlignedFileReader,
+            disk_vertex_provider::DiskVertexProvider,
+        },
+        traits::VertexProvider,
+    },
 };
 
 pub struct CachedDiskVertexProvider<Data, AlignedReaderType>

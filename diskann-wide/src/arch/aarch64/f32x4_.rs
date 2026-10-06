@@ -1,13 +1,13 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
 use half::f16;
 
 use crate::{
-    Emulated, SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
-    SIMDSumTree, SIMDVector, constant::Const, helpers,
+    AsSIMD, Emulated, SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+    SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
@@ -28,6 +28,7 @@ macros::aarch64_define_register!(f32x4, float32x4_t, mask32x4, f32, 4, Neon);
 macros::aarch64_define_splat!(f32x4, vmovq_n_f32);
 macros::aarch64_define_loadstore!(f32x4, vld1q_f32, internal::load_first::f32x4, vst1q_f32, 4);
 macros::aarch64_splitjoin!(f32x4, f32x2, vget_low_f32, vget_high_f32, vcombine_f32);
+macros::aarch64_zipunzip!(f32x4, f32x2, vzip1_f32, vzip2_f32, vuzp1_f32, vuzp2_f32);
 
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Add, add, vaddq_f32, "neon");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Sub, sub, vsubq_f32, "neon");
@@ -38,26 +39,36 @@ macros::aarch64_define_fma!(f32x4, vfmaq_f32);
 impl SIMDMinMax for f32x4 {
     #[inline(always)]
     fn min_simd(self, rhs: Self) -> Self {
-        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
-        Self(unsafe { vminnmq_f32(self.0, rhs.0) })
+        self.min_simd_standard(rhs)
     }
 
     #[inline(always)]
     fn min_simd_standard(self, rhs: Self) -> Self {
-        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
-        Self(unsafe { vminnmq_f32(self.0, rhs.0) })
+        if cfg!(miri) {
+            self.emulated()
+                .min_simd_standard(rhs.emulated())
+                .as_simd(self.arch())
+        } else {
+            // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
+            Self(unsafe { vminnmq_f32(self.0, rhs.0) })
+        }
     }
 
     #[inline(always)]
     fn max_simd(self, rhs: Self) -> Self {
-        // SAFETY: `vmaxnmq_f32` requires "neon", implied by the `Neon` architecture.
-        Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
+        self.max_simd_standard(rhs)
     }
 
     #[inline(always)]
     fn max_simd_standard(self, rhs: Self) -> Self {
-        // SAFETY: `vmaxnmq_f32` requires "neon", implied by the `Neon` architecture.
-        Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
+        if cfg!(miri) {
+            self.emulated()
+                .max_simd_standard(rhs.emulated())
+                .as_simd(self.arch())
+        } else {
+            // SAFETY: `vmaxnmq_f32` requires "neon", implied by the `Neon` architecture.
+            Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
+        }
     }
 }
 
@@ -191,6 +202,7 @@ mod tests {
     test_utils::ops::test_abs!(f32x4, 0xb8f702ba85375041, test_neon());
     test_utils::ops::test_minmax!(f32x4, 0x6d7fc8ed6d852187, test_neon());
     test_utils::ops::test_splitjoin!(f32x4 => f32x2, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(f32x4 => f32x2, 0x2b5dbfb2cadbd75c, test_neon());
 
     test_utils::ops::test_cmp!(f32x4, 0xc4f468b224622326, test_neon());
     test_utils::ops::test_select!(f32x4, 0xef24013b8578637c, test_neon());

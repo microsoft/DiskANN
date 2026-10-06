@@ -10,7 +10,7 @@ use super::common::{self, ScalarTraits};
 use crate::{
     BitMask, Const, SIMDMask, SIMDMinMax, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector,
     SplitJoin, SupportedLaneCount, ZipUnzip, arch,
-    reference::{ReferenceScalarOps, ReferenceShifts, TreeReduce},
+    reference::{ReferenceIntegerOps, ReferenceScalarOps, TreeReduce},
 };
 
 fn identity<T>(x: T) -> T {
@@ -532,6 +532,48 @@ macro_rules! test_cast {
     }
 }
 
+macro_rules! test_reinterpret {
+    (
+        $from:ident $(< $($fs:tt),+ >)? => $to:ident $(< $($ts:tt),+ >)?,
+        $seed:literal,
+        $arch:expr
+    ) => {
+        paste::paste! {
+            #[test]
+            fn [<reinterpret_ $from:lower $(_$($fs )x+)? _to_ $to:lower $(_$($ts )x+)?>]() {
+                use $crate::{SIMDReinterpret, SIMDVector};
+
+                type From = $from $(< $($fs),+>)?;
+                type To = $to $(< $($ts),+>)?;
+
+                if let Some(arch) = $arch {
+                    let f = move |input: &[<From as SIMDVector>::Scalar]| {
+                        let got: To = From::from_array(arch, input.try_into().unwrap())
+                            .reinterpret_simd();
+                        assert_eq!(
+                            bytemuck::must_cast_slice::<_, u8>(&got.to_array()),
+                            bytemuck::must_cast_slice::<_, u8>(input),
+                            "input: {input:?}",
+                        );
+                    };
+
+                    // Distinct byte positions detect lane/byte reordering.
+                    let mut input = [<From as SIMDVector>::Scalar::default(); From::LANES];
+                    for start in [0u8, 0x7f, 0x80, 0xff] {
+                        for (i, byte) in bytemuck::must_cast_slice_mut::<_, u8>(&mut input)
+                            .iter_mut().enumerate()
+                        {
+                            *byte = start.wrapping_add(i as u8);
+                        }
+                        f(&input);
+                    }
+                    $crate::test_utils::driver::drive_unary(&f, From::LANES, $seed);
+                }
+            }
+        }
+    };
+}
+
 macro_rules! test_abs {
     ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
         paste::paste! {
@@ -553,6 +595,37 @@ macro_rules! test_abs {
                             &got,
                             &|x| { x.expected_abs_() },
                             "absolute value",
+                        )
+                    };
+                    let n: usize = T::LANES;
+                    $crate::test_utils::driver::drive_unary(&f, n, $seed);
+                }
+            }
+        }
+    };
+}
+
+macro_rules! test_popcount {
+    ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<popcount_ $wide:lower $(_$($ps )x+)?>]() {
+                use crate::{SIMDPopcount, SIMDVector, reference::ReferenceIntegerOps};
+
+                type T = $wide $(< $($ps),+>)?;
+
+                if let Some(arch) = $arch {
+                    let f = move |input: &[<T as SIMDVector>::Scalar]| {
+                        let got = <T>::from_array(
+                            arch,
+                            input.try_into().unwrap()
+                        ).popcount_simd().to_array();
+
+                        $crate::test_utils::test_unary_op(
+                            input,
+                            &got,
+                            &|x| x.expected_popcount_(),
+                            "population count",
                         )
                     };
                     let n: usize = T::LANES;
@@ -776,7 +849,7 @@ impl<T> BitOps for T where
 pub(crate) fn test_bitops_impl<V, T, const N: usize, A>(arch: A, a: &[T], b: &[T])
 where
     A: arch::Sealed,
-    T: BitOps + Debug + Copy + Eq + ReferenceShifts + ScalarTraits,
+    T: BitOps + Debug + Copy + Eq + ReferenceIntegerOps + ScalarTraits,
     Const<N>: SupportedLaneCount,
     BitMask<N, A>: SIMDMask<Arch = A>,
     V: SIMDVector<Arch = A, Scalar = T, ConstLanes = Const<N>> + BitOps,
@@ -816,7 +889,7 @@ where
 pub(crate) fn test_scalar_shift_impl<V, T, const N: usize, A>(arch: A, a: &[T], b: &[T])
 where
     A: arch::Sealed,
-    T: BitOps + Debug + Copy + Eq + ReferenceShifts + ScalarTraits,
+    T: BitOps + Debug + Copy + Eq + ReferenceIntegerOps + ScalarTraits,
     Const<N>: SupportedLaneCount,
     BitMask<N, A>: SIMDMask<Arch = A>,
     V: SIMDVector<Arch = A, Scalar = T, ConstLanes = Const<N>>
@@ -1114,6 +1187,8 @@ pub(crate) use test_fma;
 pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;
+pub(crate) use test_popcount;
+pub(crate) use test_reinterpret;
 pub(crate) use test_select;
 pub(crate) use test_splitjoin;
 pub(crate) use test_sub;

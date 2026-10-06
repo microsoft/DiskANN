@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 use std::sync::Arc;
 
 use diskann::{
@@ -7,6 +12,7 @@ use diskann::{
     },
     utils::{IntoUsize, ONE},
 };
+use diskann_utils::views::rowmajor::Matrix;
 
 use crate::build::{self, graph::SingleInsert};
 

@@ -7,14 +7,16 @@ use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "product-exhaustive-search";
 
-crate::utils::stub_impl!("product-quantization", inputs::exhaustive::Product);
-
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
     registry.register(NAME, imp::ProductQ)?;
 
     #[cfg(not(feature = "product-quantization"))]
-    imp::register(NAME, registry)?;
+    registry.register_partially_gated::<crate::inputs::exhaustive::Product>(
+        NAME,
+        diskann_benchmark_runner::Features::new("product-quantization"),
+        "Product quantization exhaustive search",
+    )?;
 
     Ok(())
 }
@@ -28,11 +30,12 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
     use diskann_quantization::{product::train::TrainQuantizer, CompressInto};
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use indicatif::{ProgressBar, ProgressStyle};
     use rayon::iter::{IndexedParallelIterator, ParallelIterator};
     use serde::Serialize;
@@ -192,22 +195,13 @@ mod imp {
         type Input = inputs::exhaustive::Product;
         type Output = Results;
 
-        fn try_match(
-            &self,
-            _input: &inputs::exhaustive::Product,
-        ) -> Result<MatchScore, FailureScore> {
-            Ok(MatchScore(0))
+        fn try_match(&self, _input: &inputs::exhaustive::Product, context: &MatchContext) -> Score {
+            context.success(0)
         }
 
-        fn description(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-            input: Option<&inputs::exhaustive::Product>,
-        ) -> std::fmt::Result {
-            if input.is_none() {
-                writeln!(f, "- Exhaustive search for product quantization",)?;
-                writeln!(f, "- Requires `float32` data")?;
-            }
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(f, "- Exhaustive search for product quantization",)?;
+            writeln!(f, "- Requires `float32` data")?;
             Ok(())
         }
 
@@ -329,28 +323,28 @@ mod imp {
 
     /// A store for quantized data.
     pub(super) struct Store {
-        data: diskann_utils::views::Matrix<u8>,
+        data: rowmajor::Owned<u8>,
         quantizer: diskann_providers::model::pq::FixedChunkPQTable,
     }
 
     impl Store {
         fn new(
-            input: diskann_utils::views::MatrixView<f32>,
+            input: rowmajor::Ref<f32>,
             quantizer: diskann_providers::model::pq::FixedChunkPQTable,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
             let mut data =
-                diskann_utils::views::Matrix::new(0, input.nrows(), quantizer.get_num_chunks());
+                rowmajor::Owned::try_from_element(input.nrows(), quantizer.get_num_chunks(), 0)?;
 
             // Compress the data.
-            #[allow(clippy::disallowed_methods)]
-            data.par_row_iter_mut()
-                .zip(input.par_row_iter())
-                .try_for_each(|(d, i)| -> anyhow::Result<()> {
+            #[expect(clippy::disallowed_methods)]
+            data.par_rows_mut().zip(input.par_rows()).try_for_each(
+                |(d, i)| -> anyhow::Result<()> {
                     quantizer.compress_into(i, d)?;
                     progress.inc(1);
                     Ok(())
-                })?;
+                },
+            )?;
 
             Ok(Self { data, quantizer })
         }
@@ -367,14 +361,12 @@ mod imp {
             Self: 'a;
 
         fn iter(&self) -> impl Iterator<Item = Self::Item<'_>> {
-            self.data.row_iter()
+            self.data.rows()
         }
     }
 
     impl algos::CreateQuantComputer<Store> for Plan {
-        type Computer<'a> = diskann_providers::model::pq::distance::QueryComputer<
-            &'a diskann_providers::model::pq::FixedChunkPQTable,
-        >;
+        type Computer<'a> = diskann_providers::model::pq::distance::QueryComputer<'a>;
 
         fn create_quant_computer<'a>(
             &self,
@@ -382,7 +374,7 @@ mod imp {
             query: &[f32],
         ) -> anyhow::Result<Self::Computer<'a>> {
             Ok(diskann_providers::model::pq::distance::QueryComputer::new(
-                &store.quantizer,
+                (&store.quantizer).into(),
                 self.measure.into(),
                 query,
                 None,

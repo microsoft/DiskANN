@@ -6,6 +6,7 @@
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::StorageReadProvider;
 use diskann_utils::io::read_bin;
+use diskann_utils::views::rowmajor::Matrix;
 use rand::Rng;
 
 use crate::utils::{CMDResult, CMDToolError};
@@ -66,9 +67,9 @@ pub fn compute_relative_contrast<T: VectorRepr, StorageProvider: StorageReadProv
     );
 
     // Reshape flat vectors into 2D vectors
-    let base: Vec<Vec<T>> = base_data.row_iter().map(|x| x.to_vec()).collect();
-    let query: Vec<Vec<T>> = query_data.row_iter().map(|x| x.to_vec()).collect();
-    let gt: Vec<Vec<u32>> = gt_data.row_iter().map(|x| x.to_vec()).collect();
+    let base: Vec<Vec<T>> = base_data.rows().map(|x| x.to_vec()).collect();
+    let query: Vec<Vec<T>> = query_data.rows().map(|x| x.to_vec()).collect();
+    let gt: Vec<Vec<u32>> = gt_data.rows().map(|x| x.to_vec()).collect();
 
     let mut mean_rc = 0.0;
 
@@ -113,7 +114,6 @@ mod relative_contrast_tests {
 
     use super::*;
     use crate::utils::ground_truth::compute_ground_truth_from_datafiles;
-    use diskann_disk::data_model::AdHoc;
     use diskann_vector::Half;
 
     /// Test for compute_relative_contrast function with random data
@@ -166,7 +166,7 @@ mod relative_contrast_tests {
         // Generate ground truth file using compute_ground_truth_from_datafiles
         let gt_file_path = "/ground_truth.bin";
         let recall_at = 5;
-        compute_ground_truth_from_datafiles::<AdHoc<Half>, _>(
+        compute_ground_truth_from_datafiles::<Half, (), _>(
             &storage_provider,
             Metric::L2,
             base_file_path,
@@ -245,7 +245,7 @@ mod relative_contrast_tests {
         // Generate ground truth file using compute_ground_truth_from_datafiles
         let gt_file_path = "/ground_truth.bin";
         let recall_at = 3;
-        compute_ground_truth_from_datafiles::<AdHoc<Half>, _>(
+        compute_ground_truth_from_datafiles::<Half, (), _>(
             &storage_provider,
             Metric::L2,
             base_file_path,

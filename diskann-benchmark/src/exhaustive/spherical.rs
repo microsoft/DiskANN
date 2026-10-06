@@ -7,8 +7,6 @@ use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "spherical-exhaustive-search";
 
-crate::utils::stub_impl!("spherical-quantization", inputs::exhaustive::Spherical);
-
 // Spherical - requires feature "spherical-quantization"
 #[cfg(feature = "spherical-quantization")]
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
@@ -23,7 +21,13 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 // Stub implementation
 #[cfg(not(feature = "spherical-quantization"))]
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    imp::register(NAME, registry)
+    registry.register_partially_gated::<crate::inputs::exhaustive::Spherical>(
+        NAME,
+        diskann_benchmark_runner::Features::new("spherical-quantization"),
+        "Spherical quantization (RabitQ) exhaustive search",
+    )?;
+
+    Ok(())
 }
 
 ////////////////
@@ -35,7 +39,7 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
@@ -46,6 +50,7 @@ mod imp {
         spherical::{DataMut, SphericalQuantizer},
         CompressIntoWith,
     };
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use indicatif::{ProgressBar, ProgressStyle};
     use rand::SeedableRng;
     use rayon::iter::{IndexedParallelIterator, ParallelIterator};
@@ -221,43 +226,32 @@ mod imp {
         fn try_match(
             &self,
             input: &inputs::exhaustive::Spherical,
-        ) -> Result<MatchScore, FailureScore> {
+            context: &MatchContext,
+        ) -> Score {
+            let mut score = context.success(0);
             let num_bits = input.num_bits.get();
-            if num_bits == NBITS {
-                Ok(MatchScore(0))
-            } else {
-                Err(FailureScore(
+            if num_bits != NBITS {
+                score.fail(
                     NBITS.abs_diff(num_bits).try_into().unwrap_or(u32::MAX),
-                ))
+                    &format_args!(
+                        "Expected \"num_bits = {}\", instead got {}",
+                        NBITS,
+                        input.num_bits.get(),
+                    ),
+                );
             }
+
+            score
         }
 
-        fn description(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-            input: Option<&inputs::exhaustive::Spherical>,
-        ) -> std::fmt::Result {
-            match input {
-                None => {
-                    writeln!(
-                        f,
-                        "- Exhaustive search for {}-bit spherical quantization",
-                        NBITS
-                    )?;
-                    writeln!(f, "- Requires `float32` data")?;
-                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
-                }
-                Some(from) => {
-                    if from.num_bits.get() != NBITS {
-                        writeln!(
-                            f,
-                            "- Expected \"num_bits = {}\", instead got {}",
-                            NBITS,
-                            from.num_bits.get(),
-                        )?;
-                    }
-                }
-            }
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(
+                f,
+                "- Exhaustive search for {}-bit spherical quantization",
+                NBITS
+            )?;
+            writeln!(f, "- Requires `float32` data")?;
+            writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
             Ok(())
         }
 
@@ -401,7 +395,7 @@ mod imp {
     pub(super) struct Store<const NBITS: usize> {
         // The number of bytes to take from each row.
         bytes: usize,
-        data: diskann_utils::views::Matrix<u8>,
+        data: rowmajor::Owned<u8>,
         plan: diskann_quantization::spherical::iface::Impl<NBITS>,
     }
 
@@ -412,7 +406,7 @@ mod imp {
             for<'a> CompressIntoWith<&'a [f32], DataMut<'a, NBITS>, ScopedAllocator<'a>>,
     {
         fn new(
-            input: diskann_utils::views::MatrixView<f32>,
+            input: rowmajor::Ref<f32>,
             plan: diskann_quantization::spherical::iface::Impl<NBITS>,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
@@ -423,13 +417,12 @@ mod imp {
             let output_dim = plan.quantizer().output_dim();
             let bytes =
                 diskann_quantization::spherical::DataRef::<NBITS>::canonical_bytes(output_dim);
-            let mut data = diskann_utils::views::Matrix::new(0, input.nrows(), bytes);
+            let mut data = rowmajor::Owned::try_from_element(input.nrows(), bytes, 0)?;
 
             // Compress the data.
-            #[allow(clippy::disallowed_methods)]
-            data.par_row_iter_mut()
-                .zip(input.par_row_iter())
-                .try_for_each(|(d, i)| -> anyhow::Result<()> {
+            #[expect(clippy::disallowed_methods)]
+            data.par_rows_mut().zip(input.par_rows()).try_for_each(
+                |(d, i)| -> anyhow::Result<()> {
                     let c =
                         diskann_quantization::spherical::DataMut::<NBITS>::from_canonical_back_mut(
                             &mut d[..bytes],
@@ -439,7 +432,8 @@ mod imp {
                         .compress_into_with(i, c, ScopedAllocator::global())?;
                     progress.inc(1);
                     Ok(())
-                })?;
+                },
+            )?;
 
             Ok(Self { bytes, data, plan })
         }
@@ -466,7 +460,7 @@ mod imp {
 
         fn iter(&self) -> impl Iterator<Item = Self::Item<'_>> {
             self.data
-                .row_iter()
+                .rows()
                 .map(move |r| diskann_quantization::spherical::iface::Opaque::new(&r[..self.bytes]))
         }
     }

@@ -127,10 +127,11 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
             // are correct.
             let index = setup_grid_search(grid, size);
 
-            let params = Knn::new(10, 10, Some(beam_width)).unwrap();
+            let k_value = 10;
+            let params = Knn::new(10, Some(beam_width)).unwrap();
             let context = test_provider::Context::new();
 
-            let mut neighbors = vec![Neighbor::<u32>::default(); params.k_value().get()];
+            let mut neighbors = vec![Neighbor::<u32>::default(); k_value];
             let graph::index::SearchStats {
                 cmps,
                 hops,
@@ -147,7 +148,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                 .unwrap();
 
             assert!(
-                result_count.into_usize() <= params.k_value().get(),
+                result_count.into_usize() <= k_value,
                 "grid search should not return more than the requested number of neighbors",
             );
 

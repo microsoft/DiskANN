@@ -7,8 +7,6 @@ use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "minmax-exhaustive-search";
 
-crate::utils::stub_impl!("minmax-quantization", inputs::exhaustive::MinMax);
-
 // MinMax - requires feature "minmax-quantization"
 #[cfg(feature = "minmax-quantization")]
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
@@ -23,7 +21,13 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 // Stub implementation
 #[cfg(not(feature = "minmax-quantization"))]
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    imp::register(NAME, registry)
+    registry.register_partially_gated::<crate::inputs::exhaustive::MinMax>(
+        NAME,
+        diskann_benchmark_runner::Features::new("minmax-quantization"),
+        "MinMax quantization exhaustive search",
+    )?;
+
+    Ok(())
 }
 
 /////////////
@@ -35,7 +39,7 @@ mod imp {
     use std::{io::Write, num::NonZeroUsize};
 
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
@@ -50,6 +54,7 @@ mod imp {
         num::Positive,
         AsFunctor, CompressInto,
     };
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_utils::{Reborrow, ReborrowMut};
     use diskann_vector::{PreprocessedDistanceFunction, PureDistanceFunction};
     use indicatif::{ProgressBar, ProgressStyle};
@@ -205,46 +210,30 @@ mod imp {
         type Input = inputs::exhaustive::MinMax;
         type Output = Results;
 
-        fn try_match(
-            &self,
-            input: &inputs::exhaustive::MinMax,
-        ) -> Result<MatchScore, FailureScore> {
+        fn try_match(&self, input: &inputs::exhaustive::MinMax, context: &MatchContext) -> Score {
             let num_bits = input.num_bits.get();
             if num_bits == NBITS {
-                Ok(MatchScore(0))
+                context.success(0)
             } else {
-                Err(FailureScore(
+                context.fail(
                     NBITS.abs_diff(num_bits).try_into().unwrap_or(u32::MAX),
-                ))
+                    &format_args!(
+                        "Expected \"num_bits = {}\", instead got {}",
+                        NBITS,
+                        input.num_bits.get()
+                    ),
+                )
             }
         }
 
-        fn description(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-            input: Option<&inputs::exhaustive::MinMax>,
-        ) -> std::fmt::Result {
-            match input {
-                None => {
-                    writeln!(
-                        f,
-                        "- Exhaustive search for {}-bit minmax quantization",
-                        NBITS
-                    )?;
-                    writeln!(f, "- Requires `float32` data")?;
-                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
-                }
-                Some(from) => {
-                    if from.num_bits.get() != NBITS {
-                        writeln!(
-                            f,
-                            "- Expected \"num_bits = {}\", instead got {}",
-                            NBITS,
-                            from.num_bits.get(),
-                        )?;
-                    }
-                }
-            }
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(
+                f,
+                "- Exhaustive search for {}-bit minmax quantization",
+                NBITS
+            )?;
+            writeln!(f, "- Requires `float32` data")?;
+            writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
             Ok(())
         }
 
@@ -382,7 +371,7 @@ mod imp {
     pub(super) struct Store<const NBITS: usize> {
         // The number of bytes to take from each row.
         bytes: usize,
-        data: diskann_utils::views::Matrix<u8>,
+        data: rowmajor::Owned<u8>,
         quantizer: diskann_quantization::minmax::MinMaxQuantizer,
     }
 
@@ -391,7 +380,7 @@ mod imp {
         Unsigned: Representation<NBITS>,
     {
         fn new(
-            input: diskann_utils::views::MatrixView<f32>,
+            input: rowmajor::Ref<f32>,
             quantizer: diskann_quantization::minmax::MinMaxQuantizer,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
@@ -401,12 +390,12 @@ mod imp {
             // The APIs below should correctly handle these variables.
             let output_dim = quantizer.output_dim();
             let bytes = Data::<NBITS>::canonical_bytes(output_dim);
-            let mut data = diskann_utils::views::Matrix::new(0, input.nrows(), bytes);
+            let mut data = rowmajor::Owned::try_from_element(input.nrows(), bytes, 0)?;
 
             // Compress the data.
             //
             // NOTE: If this gets too slow, we can parallelize it.
-            std::iter::zip(data.row_iter_mut(), input.row_iter()).try_for_each(
+            std::iter::zip(data.rows_mut(), input.rows()).try_for_each(
                 |(d, i)| -> anyhow::Result<()> {
                     let c = diskann_quantization::minmax::DataMutRef::<NBITS>::from_canonical_front_mut(
                         &mut d[..bytes],
@@ -442,7 +431,7 @@ mod imp {
 
         fn iter(&self) -> impl Iterator<Item = Self::Item<'_>> {
             let output_dim = self.quantizer.output_dim();
-            self.data.row_iter().map(move |r| {
+            self.data.rows().map(move |r| {
                 DataRef::<NBITS>::from_canonical_front(&r[..self.bytes], output_dim).unwrap()
             })
         }

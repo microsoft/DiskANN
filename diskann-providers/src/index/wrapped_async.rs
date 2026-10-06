@@ -35,7 +35,7 @@ pub struct DiskANNIndex<DP: DataProvider> {
 
 /// Create a multi-threaded tokio runtime and return it together with its handle.
 fn create_multi_thread_runtime() -> (tokio::runtime::Runtime, tokio::runtime::Handle) {
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     let rt = tokio::runtime::Builder::new_multi_thread()
         .build()
         .expect("failed to create tokio runtime");
@@ -45,7 +45,7 @@ fn create_multi_thread_runtime() -> (tokio::runtime::Runtime, tokio::runtime::Ha
 
 /// Create a current-thread tokio runtime and return it together with its handle.
 fn create_current_thread_runtime() -> (tokio::runtime::Runtime, tokio::runtime::Handle) {
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("failed to create tokio runtime");
@@ -129,7 +129,7 @@ where
     /// Load a prebuilt index from storage with its own multi-threaded `tokio::runtime::Runtime`.
     ///
     /// This is the synchronous equivalent of
-    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`].
     /// A default multi-threaded runtime is created and owned by `Self`.
     /// For a single-threaded runtime use [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime),
     /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle).
@@ -150,7 +150,7 @@ where
     /// Load a prebuilt index from storage with its own single-threaded `tokio::runtime::Runtime`.
     ///
     /// This is the synchronous equivalent of
-    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`].
     /// A default current-thread runtime is created and owned by `Self`.
     /// For a multi-threaded runtime use [`load_with_multi_thread_runtime`](Self::load_with_multi_thread_runtime),
     /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle).
@@ -171,7 +171,7 @@ where
     /// Load a prebuilt index from storage using a provided `tokio::runtime::Handle`.
     ///
     /// This is the synchronous equivalent of
-    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`].
     /// The `tokio::runtime::Runtime` is owned externally and we just keep a `Handle` to it.
     /// For an owned runtime use [`load_with_multi_thread_runtime`](Self::load_with_multi_thread_runtime)
     /// or [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime).
@@ -249,7 +249,6 @@ where
             .block_on(self.inner.drop_adj_list(accessor, vector_id))
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn get_undeleted_neighbors<NA>(
         &self,
         context: &DP::Context,
@@ -352,7 +351,7 @@ where
         l_value: usize,
     ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
-        S: SearchStrategy<'a, DP, T> + 'static,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor> + 'static,
         T: Copy + Send + 'a,
     {
         let inner = self
@@ -374,7 +373,7 @@ where
         init_ids: Option<&'a [DP::InternalId]>,
     ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
-        S: SearchStrategy<'a, DP, T> + 'static,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor> + 'static,
         T: Copy + Send + 'a,
     {
         let inner = self.handle.block_on(
@@ -404,9 +403,84 @@ where
     ) -> ANNResult<noawait::PagedSearch<DP::InternalId>>
     where
         T: for<'a> Reborrow<'a, Target: Copy + Send> + 'static,
-        S: for<'a> SearchStrategy<'a, DP, <T as Reborrow<'a>>::Target> + 'static,
+        S: for<'a> SearchStrategy<
+                'a,
+                DP,
+                <T as Reborrow<'a>>::Target,
+                SearchAccessor: SearchAccessor,
+            > + 'static,
     {
-        noawait::PagedSearch::new(self.inner.clone(), strategy, context, query, l_value)
+        // It would be nice if we could simply forward this to a `noawait::PagedSearch::new`
+        // method. However, the trait bound on `SearchStrategy` is *just* complicated enough
+        // that Rust cannot project the necessary bounds.
+        //
+        // Instead, we inline the implementation here.
+        //
+        // Under the assumption that the implementation of [`graph::search::PagedSearch`]'s
+        // implementations are fully synchronous, we can directly poll this task instead
+        // of going through a runtime since we (theoretically) control the only suspension
+        // point.
+        //
+        // Doing so allows stepping the task state machine to be done with a single function
+        // call to `Future::poll`.
+        //
+        // Obviously, if the "noawait" assumption is broken, then the inner async job may
+        // yield before our control point, but we can detect this situation since no output
+        // will be generated on the output channel.
+        //
+        // We rely on `Drop` to clean up the paged search resources.
+
+        let (input, output) = noawait::channel::<DP::InternalId>();
+        let input_clone = input.clone();
+        let output_clone = output.clone();
+
+        let index = self.inner.clone();
+
+        // Create the search task.
+        let mut searcher: std::pin::Pin<Box<dyn Future<Output = ANNError>>> =
+            Box::pin(async move {
+                // The assumption of `noawait` is that this call will always resolve to
+                // `Poll::Ready`.
+                let mut state = match index
+                    .paged_search(&strategy, &context, query.reborrow(), l_value)
+                    .await
+                {
+                    Ok(state) => state,
+                    Err(err) => return err,
+                };
+
+                loop {
+                    // This is the await point that pauses the future.
+                    //
+                    // Under the "noawait" assumption, this should be the only point where
+                    // this future ever yields `Pending` and is where we expect the future
+                    // to stop every time we poll it.
+                    futures_util::pending!();
+
+                    // We control the invocation of poll and should always ensure that
+                    // input is available.
+                    let k_value = match input_clone.take() {
+                        Some(value) => value,
+                        None => return noawait::InternalInvariantViolated::MissingInput.into(),
+                    };
+
+                    // Step paged search and propagate any errors.
+                    let page = match state.next_page(k_value).await {
+                        Ok(page) => page,
+                        Err(err) => return err,
+                    };
+
+                    // Send output to the caller.
+                    output_clone.replace(Some(page));
+                }
+            });
+
+        // Drive the inner future one step to initialize paged search.
+        if let Some(err) = noawait::step(searcher.as_mut()) {
+            return Err(err);
+        }
+
+        Ok(noawait::PagedSearch::from_raw(input, output, searcher))
     }
 
     pub fn count_reachable_nodes<NA>(
@@ -459,7 +533,7 @@ where
 
 pub mod noawait {
     //! Implementations of a synchronous wrapper around [`diskann::graph::DiskANNIndex`] that
-    //! assume the [`Accessor`] and associated implementations never truly `await` and are
+    //! assume the [`SearchAccessor`] and associated implementations never truly `await` and are
     //! in fact synchronous.
     //!
     //! With this assumption, we can perform lighter-weight communication with the index
@@ -476,14 +550,13 @@ pub mod noawait {
         task::{Context, Poll, Waker},
     };
 
-    use diskann::{ANNErrorKind, utils::VectorId};
-    use diskann_utils::Reborrow;
+    use diskann::utils::VectorId;
     use thiserror::Error;
 
     type Input = Rc<RefCell<Option<usize>>>;
     type Output<I> = Rc<RefCell<Option<Vec<Neighbor<I>>>>>;
 
-    fn channel<I>() -> (Input, Output<I>)
+    pub(super) fn channel<I>() -> (Input, Output<I>)
     where
         I: VectorId,
     {
@@ -492,7 +565,7 @@ pub mod noawait {
         (input, output)
     }
 
-    fn step<I>(fut: Pin<&mut dyn Future<Output = I>>) -> Option<I> {
+    pub(super) fn step<I>(fut: Pin<&mut dyn Future<Output = I>>) -> Option<I> {
         let mut cx = Context::from_waker(Waker::noop());
         match fut.poll(&mut cx) {
             Poll::Ready(v) => Some(v),
@@ -522,91 +595,19 @@ pub mod noawait {
     where
         I: VectorId,
     {
-        /// Construct a new [`PagedSearch`].
+        /// Construct a `PagedSearch` from components.
         ///
-        /// This works by creating a small async task using [`graph::search::PagedSearch`]
-        /// internally. The requested k-nearest neighors are sent using a `Rc<RefCell<_>>`
-        /// channel and the actual neighbors are retrieved from a similar data structure.
-        ///
-        /// Under the assumption that the implementation of [`graph::search::PagedSearch`]'s
-        /// implementations are fully synchronous, we can directly poll this task instead
-        /// of going through a runtime since we (theoretically) control the only suspension
-        /// point.
-        ///
-        /// Doing so allows stepping the task state machine to be done with a single function
-        /// call to `Future::poll`.
-        ///
-        /// Obviously, if the "noawait" assumption is broken, then the inner async job may
-        /// yield before our control point, but we can detect this situation since no output
-        /// will be generated on the output channel.
-        ///
-        /// We rely on `Drop` to clean up the paged search resources.
-        pub(super) fn new<DP, S, T>(
-            index: Arc<diskann::graph::DiskANNIndex<DP>>,
-            strategy: S,
-            context: DP::Context,
-            query: T,
-            l_value: usize,
-        ) -> ANNResult<Self>
-        where
-            DP: DataProvider<InternalId = I>,
-            T: for<'a> Reborrow<'a, Target: Copy + Send> + 'static,
-            S: for<'a> SearchStrategy<'a, DP, <T as Reborrow<'a>>::Target> + 'static,
-        {
-            // Prepare the input and output channels used to communicate with the search task.
-            let (input, output) = channel::<I>();
-            let input_clone = input.clone();
-            let output_clone = output.clone();
-
-            // Create the search task.
-            let mut searcher: Pin<Box<dyn Future<Output = ANNError>>> = Box::pin(async move {
-                // The assumption of `noawait` is that this call will always resolve to
-                // `Poll::Ready`.
-                let mut state = match index
-                    .paged_search(&strategy, &context, query.reborrow(), l_value)
-                    .await
-                {
-                    Ok(state) => state,
-                    Err(err) => return err,
-                };
-
-                loop {
-                    // This is the await point that pauses the future.
-                    //
-                    // Under the "noawait" assumption, this should be the only point where
-                    // this future ever yields `Pending` and is where we expect the future
-                    // to stop every time we poll it.
-                    futures_util::pending!();
-
-                    // We control the invocation of poll and should always ensure that
-                    // input is available.
-                    let k_value = match input_clone.take() {
-                        Some(value) => value,
-                        None => return InternalInvariantViolated::MissingInput.into(),
-                    };
-
-                    // Step paged search and propagate any errors.
-                    let page = match state.next_page(k_value).await {
-                        Ok(page) => page,
-                        Err(err) => return err,
-                    };
-
-                    // Send output to the caller.
-                    output_clone.replace(Some(page));
-                }
-            });
-
-            // Drive the inner future one step to initialize paged search.
-            if let Some(err) = step(searcher.as_mut()) {
-                return Err(err);
-            }
-
-            let this = Self {
+        /// Expects `Input` and `Output` to be properly wired into `searcher`.
+        pub(super) fn from_raw(
+            input: Input,
+            output: Output<I>,
+            searcher: Pin<Box<dyn Future<Output = ANNError>>>,
+        ) -> Self {
+            Self {
                 input: Some(input),
                 output,
                 searcher,
-            };
-            Ok(this)
+            }
         }
 
         /// Retrieve the next results from paged search, returning any errors.
@@ -620,7 +621,6 @@ pub mod noawait {
                 Some(input) => input.replace(Some(k)),
                 None => {
                     return Err(ANNError::message(
-                        ANNErrorKind::Opaque,
                         "paged searcher errored and is no longer runnable",
                     ));
                 }
@@ -645,20 +645,14 @@ pub mod noawait {
     }
 
     #[derive(Debug, Clone, Copy, Error)]
-    enum InternalInvariantViolated {
+    pub(super) enum InternalInvariantViolated {
         #[error("INTERNAL: input channel was not configured")]
         MissingInput,
         #[error("noawait contract violated: future suspended before expected yield point")]
         MissingOutput,
     }
 
-    impl From<InternalInvariantViolated> for ANNError {
-        #[track_caller]
-        #[cold]
-        fn from(err: InternalInvariantViolated) -> Self {
-            Self::new(ANNErrorKind::Opaque, err)
-        }
-    }
+    diskann::convert_error!(InternalInvariantViolated);
 }
 
 #[cfg(test)]
@@ -670,7 +664,7 @@ mod tests {
         provider::DefaultContext,
         utils::ONE,
     };
-    use diskann_utils::test_data_root;
+    use diskann_utils::{test_data_root, views::rowmajor::Matrix};
     use diskann_vector::distance::Metric;
 
     use super::DiskANNIndex;
@@ -729,7 +723,7 @@ mod tests {
 
         let storage = VirtualStorageProvider::new_memory();
         let ctx = DefaultContext;
-        for (i, v) in train_data.row_iter().enumerate() {
+        for (i, v) in train_data.rows().enumerate() {
             index.insert(&FullPrecision, &ctx, &(i as u32), v).unwrap();
         }
 
@@ -773,7 +767,7 @@ mod tests {
         let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
 
         let query = train_data.row(0);
-        let kind = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let kind = graph::search::Knn::new_default(search_l).unwrap();
         let stats = loaded
             .search(kind, &FullPrecision, &DefaultContext, query, &mut output)
             .unwrap();
@@ -834,16 +828,17 @@ mod tests {
 
                 for neighbor in v {
                     assert_ne!(
-                        neighbor.id,
+                        *neighbor.id(),
                         u32::MAX,
                         "paged search should not return start point",
                     );
                     assert_eq!(
-                        neighbor.id, i,
+                        *neighbor.id(),
+                        i,
                         "monotonicity should at least hold for the 1d grid"
                     );
                     assert_eq!(
-                        neighbor.distance,
+                        *neighbor.distance(),
                         (i as f32) * (i as f32),
                         "distance was computed incorrectly!",
                     );

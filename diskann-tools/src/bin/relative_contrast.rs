@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Computes relative contrast for vector search datasets.
+
 use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_providers::utils::random;
@@ -15,7 +17,9 @@ use diskann_vector::Half;
 ///
 /// Description:
 /// This program calculates the relative contrast based on the provided inputs.
-///  (More details is in https://www.ee.columbia.edu/~jh2700/ICML_NNSDifficulty.pdf)
+///  (More details are in the [relative contrast paper].)
+///
+/// [relative contrast paper]: https://www.ee.columbia.edu/~jh2700/ICML_NNSDifficulty.pdf
 /// The required inputs include:
 /// - Raw vector dataset
 /// - Query vector dataset
@@ -93,26 +97,26 @@ fn main() -> CMDResult<()> {
 #[derive(Debug, Parser)]
 struct RelativeContrastArgs {
     /// Data type <int8/uint8/float/fp16>
-    #[arg(long = "data_type", default_value = "fp16")]
+    #[arg(long = "data-type", default_value = "fp16")]
     pub data_type: DataType,
 
     /// Vector data file path
-    #[arg(long = "data_file", short, required = true)]
+    #[arg(long = "data-file", short, required = true)]
     pub data_file: String,
 
     /// Query file in binary format
-    #[arg(long = "query_file", short, required = true)]
+    #[arg(long = "query-file", short, required = true)]
     pub query_file: String,
 
     /// Ground truth file for the queryset
-    #[arg(long = "gt_file", required = true)]
+    #[arg(long = "gt-file", required = true)]
     pub gt_file: String,
 
     /// Number of neighbors to use from ground truth
-    #[arg(long = "recall_at", short = 'K', default_value = "10")]
+    #[arg(long = "recall-at", short = 'K', default_value = "10")]
     pub recall_at: usize,
 
     /// Number of random distances to average per query
-    #[arg(long = "search_list", short = 'L', default_value = "10")]
+    #[arg(long = "search-list", short = 'L', default_value = "10")]
     pub search_list: usize,
 }

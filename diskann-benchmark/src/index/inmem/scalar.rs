@@ -5,9 +5,6 @@
 
 use diskann_benchmark_runner::Registry;
 
-// Create a stub-module if the "scalar-quantization" feature is disabled.
-crate::utils::stub_impl!("scalar-quantization", inputs::graph_index::IndexSQOperation);
-
 pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "scalar-quantization")]
     {
@@ -17,7 +14,7 @@ pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<(
         // generates a full `Benchmark` impl/build path for
         // `ScalarQuantized<NBITS, T>` via the `impl_sq_build!` macro in `mod imp`,
         // which materially impacts compile time. We intentionally keep the registered
-        // set minimal (`f32` at 1, 4, and 8 bits) to cover the common cases used by
+        // set minimal (`f32` at 1, 2, 4, and 8 bits) to cover the common cases used by
         // `example/scalar.json`.
         //
         // To add a new variant (e.g. another bit-width or element type):
@@ -39,14 +36,21 @@ pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<(
             imp::ScalarQuantized::<4, f32>::new().search(Topk),
         )?;
         benchmarks.register(
+            "graph-index-sq-2-bit-f32",
+            imp::ScalarQuantized::<2, f32>::new().search(Topk),
+        )?;
+        benchmarks.register(
             "graph-index-sq-1-bit-f32",
             imp::ScalarQuantized::<1, f32>::new().search(Topk),
         )?;
     }
 
-    // Stub implementation
     #[cfg(not(feature = "scalar-quantization"))]
-    imp::register("graph-index-sq", benchmarks)?;
+    benchmarks.register_partially_gated::<crate::inputs::graph_index::IndexSQOperation>(
+        "graph-index-sq",
+        diskann_benchmark_runner::Features::new("scalar-quantization"),
+        "Scalar-quantized graph index build and search",
+    )?;
 
     Ok(())
 }
@@ -58,7 +62,7 @@ mod imp {
     use anyhow::Context;
     use diskann::utils::VectorRepr;
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
@@ -69,7 +73,7 @@ mod imp {
             graph::provider::async_::{common, inmem},
         },
     };
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
 
     use crate::{
         index::{
@@ -140,95 +144,72 @@ mod imp {
                 type Input = IndexSQOperation;
                 type Output = QuantBuildResult;
 
-                fn try_match(&self, input: &IndexSQOperation) -> Result<MatchScore, FailureScore> {
-                    let mut failure_score: Option<u32> = None;
+                fn try_match(&self, input: &IndexSQOperation, context: &MatchContext) -> Score {
+                    let mut score = context.success(0);
+
                     match input.index_operation.source {
                         IndexSource::Load(_) => {}
                         IndexSource::Build(ref build) => {
                             if build.multi_insert().is_some() {
-                                failure_score = Some(1);
+                                score.fail(1, &"Scalar Quantization does not support multi-insert");
                             }
                         }
                     }
 
-                    if !<$T>::is_match(*input.index_operation.source.data_type()) {
-                        *failure_score.get_or_insert(0) += 1;
+                    let data_type = *input.index_operation.source.data_type();
+                    if !<$T>::is_match(data_type) {
+                        score.fail(
+                            1,
+                            &format_args!(
+                                "Only `{}` data type is supported. Instead, got {}",
+                                <$T>::DATA_TYPE,
+                                data_type
+                            ),
+                        )
                     }
 
                     if !self.quant_search.is_match(&input.index_operation.search_phase) {
-                        *failure_score.get_or_insert(0) += 1;
+                        score.fail(
+                            1,
+                            &format_args!(
+                                "Unsupported search phase: \"{}\" - expected one of {}",
+                                input.index_operation.search_phase.kind(),
+                                self.quant_search.format_kinds(),
+                            )
+                        )
                     }
 
                     if input.num_bits != $N {
-                        *failure_score.get_or_insert(0) += 10 + ($N as usize).abs_diff(input.num_bits) as u32;
+                        score.fail(
+                            10 + ($N as usize).abs_diff(input.num_bits) as u32,
+                            &format_args!(
+                                "Expected {} bits, instead got {}",
+                                $N,
+                                input.num_bits,
+                            )
+                        )
                     }
 
-                    match failure_score {
-                        None => Ok(MatchScore(0)),
-                        Some(score) => Err(FailureScore(score)),
-                    }
+                    score
                 }
 
                 fn description(
                     &self,
                     f: &mut std::fmt::Formatter<'_>,
-                    input: Option<&IndexSQOperation>,
                 ) -> std::fmt::Result {
-                    match input {
-                        None => {
-                            writeln!(
-                                f,
-                                "- Index Build and Search using {} scalar quantized bits",
-                                $N
-                            )?;
-                            writeln!(
-                                f,
-                                "- Requires `{}` data",
-                                <$T>::DATA_TYPE,
-                            )?;
-                            writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                            writeln!(f, "- Does not support multi-insert")?;
-                            writeln!(f, "- Search Kinds: {}", self.quant_search.format_kinds())?;
-                        }
-                        Some(input) => {
-                            if input.num_bits != $N {
-                                writeln!(
-                                    f,
-                                    "- Expected {} bits, instead got {}",
-                                    $N,
-                                    input.num_bits
-                                )?;
-                            }
-
-                            let data_type = *input.index_operation.source.data_type();
-                            if !<$T>::is_match(data_type) {
-                                writeln!(
-                                    f,
-                                    "- Only `{}` data type is supported. Instead, got {}",
-                                    <$T>::DATA_TYPE,
-                                    data_type
-                                )?;
-                            }
-
-                            if let IndexSource::Build(ref build) = input.index_operation.source {
-                                if build.multi_insert().is_some() {
-                                    writeln!(
-                                        f,
-                                        "- Scalar Quantization does not support multi-insert"
-                                    )?;
-                                }
-                            }
-
-                            if !self.quant_search.is_match(&input.index_operation.search_phase) {
-                                writeln!(
-                                    f,
-                                    "- Unsupported search phase: \"{}\" - expected one of {}",
-                                    input.index_operation.search_phase.kind(),
-                                    self.quant_search.format_kinds(),
-                                )?;
-                            }
-                        }
-                    }
+                    writeln!(
+                        f,
+                        "- Index Build and Search using {} scalar quantized bits",
+                        $N
+                    )?;
+                    writeln!(
+                        f,
+                        "- Requires `{}` data",
+                        <$T>::DATA_TYPE,
+                    )?;
+                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
+                    writeln!(f, "- Does not support multi-insert")?;
+                    writeln!(f, "- Search Kinds: {}", self.quant_search.format_kinds())?;
                     Ok(())
                 }
 
@@ -258,7 +239,7 @@ mod imp {
                             (Arc::new(index), None::<BuildStats>, MicroSeconds::new(0))
                         }
                         IndexSource::Build(build) => {
-                            let data: Arc<Matrix<$T>> =
+                            let data: Arc<rowmajor::Owned<$T>> =
                                 Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                         let start = std::time::Instant::now();
@@ -269,7 +250,7 @@ mod imp {
                             )?,
                         )
                         .train(data.as_view());
-                                            let create_index = |data_view: MatrixView<$T>| {
+                                            let create_index = |data_view: rowmajor::Ref<$T>| {
                         let index = diskann_async::new_quant_index::<$T, _, _>(
                             input.try_as_config()?.build()?,
                             input
@@ -336,5 +317,6 @@ mod imp {
     // impl and materially affects compile time.
     impl_sq_build!(8, f32);
     impl_sq_build!(4, f32);
+    impl_sq_build!(2, f32);
     impl_sq_build!(1, f32);
 }

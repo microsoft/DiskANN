@@ -6,7 +6,6 @@
 
 //! Arguments for generate pq pivot
 
-use diskann::ANNError;
 use thiserror::Error;
 
 /// Represents the configuration parameters required to generate pivots for Product Quantization (PQ).
@@ -41,30 +40,39 @@ pub struct GeneratePivotArguments {
     max_k_means_reps: usize,
 }
 
+/// Invalid dimensions or chunk counts supplied to [`GeneratePivotArguments::new`].
 #[derive(Error, Debug, PartialEq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum GeneratePivotArgumentsError {
+    /// The number of PQ chunks exceeds the vector dimension.
     #[error("number of chunks {num_pq_chunks} more than dimension {dim}")]
-    NumChunksMoreThanDim { num_pq_chunks: usize, dim: usize },
+    NumChunksMoreThanDim {
+        /// The requested number of PQ chunks.
+        num_pq_chunks: usize,
+        /// The supplied vector dimension.
+        dim: usize,
+    },
 
+    /// At least one PQ chunk is required.
     #[error("invalid number of chunks 0 reatively to dimension")]
     NumChunksIsZero,
 
+    /// The vector dimension cannot be represented by the BLAS `i32` parameter.
     #[error("vector dimension {0} is greater than i32::MAX_VALUE")]
-    DimGreaterThanI32MaxValue(usize),
+    DimGreaterThanI32MaxValue(
+        /// The supplied vector dimension.
+        usize,
+    ),
 
+    /// The training vector count cannot be represented by the BLAS `i32` parameter.
     #[error("number of vectors {0} is greater than i32::MAX_VALUE")]
-    NumTrainGreaterThanI32MaxValue(usize),
+    NumTrainGreaterThanI32MaxValue(
+        /// The supplied number of training vectors.
+        usize,
+    ),
 }
 
-// Compatibility with ANNError.
-impl From<GeneratePivotArgumentsError> for ANNError {
-    #[track_caller]
-    fn from(value: GeneratePivotArgumentsError) -> Self {
-        ANNError::log_pq_error(value)
-    }
-}
+diskann::convert_error!(GeneratePivotArgumentsError);
 
 impl GeneratePivotArguments {
     /// Constructor
@@ -132,7 +140,7 @@ impl GeneratePivotArguments {
 
 #[cfg(test)]
 mod arguments_test {
-    use diskann::{ANNErrorKind, ANNResult};
+    use diskann::ANNResult;
 
     use super::*;
 
@@ -233,7 +241,6 @@ mod arguments_test {
         let result = compatibility_helper();
 
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), ANNErrorKind::PQError,);
     }
 
     fn compatibility_helper() -> ANNResult<()> {

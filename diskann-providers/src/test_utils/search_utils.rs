@@ -3,8 +3,8 @@
  * Licensed under the MIT license.
  */
 
-use diskann::neighbor::Neighbor;
-use diskann_utils::views::MatrixView;
+use diskann::neighbor::{self, Neighbor};
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 /// Compute the ground truth for a small dataset.
 ///
@@ -13,17 +13,17 @@ use diskann_utils::views::MatrixView;
 ///
 /// This allows filtering by `is_match` to be much more efficient because it decreases
 /// the number of elements that have to be moved.
-pub fn groundtruth<T, F>(data: MatrixView<T>, query: &[T], f: F) -> Vec<Neighbor<u32>>
+pub fn groundtruth<T, F>(data: rowmajor::Ref<T>, query: &[T], f: F) -> Vec<Neighbor<u32>>
 where
     F: Fn(&[T], &[T]) -> f32,
 {
     let mut results: Vec<_> = data
-        .row_iter()
+        .rows()
         .enumerate()
         .map(|(i, row)| Neighbor::new(i as u32, f(row, query)))
         .collect();
 
-    results.sort_unstable_by(|a, b| a.cmp(b).reverse());
+    results.sort_unstable_by(neighbor::ord::reverse(neighbor::ord::fast_distance));
     results
 }
 
@@ -43,10 +43,10 @@ pub fn is_match(
     for i in (0..groundtruth.len()).rev() {
         // Check if the distance matches.
         let gt = groundtruth[i];
-        if (gt.distance - neighbor.distance).abs() > margin {
+        if (gt.distance() - neighbor.distance()).abs() > margin {
             return None;
         }
-        if gt.id == neighbor.id {
+        if gt.id() == neighbor.id() {
             return Some(i);
         }
     }
@@ -70,14 +70,18 @@ pub fn assert_top_k_exactly_match(
     for i in 0..top_k {
         let neighbor = gt[gt.len() - 1 - i];
         assert_eq!(
-            neighbor.distance, distances[i],
+            *neighbor.distance(),
+            distances[i],
             "failed on query {} for result {}",
-            query_id, i
+            query_id,
+            i
         );
         assert_eq!(
-            neighbor.id, ids[i],
+            *neighbor.id(),
+            ids[i],
             "failed on query {} for result {}",
-            query_id, i
+            query_id,
+            i
         );
     }
 }
@@ -96,13 +100,13 @@ pub fn assert_range_results_exactly_match(
 ) {
     let gt_ids = if let Some(inner_radius) = inner_radius {
         gt.iter()
-            .filter(|nbh| nbh.distance >= inner_radius && nbh.distance <= radius)
-            .map(|nbh| nbh.id)
+            .filter(|nbh| *nbh.distance() >= inner_radius && *nbh.distance() <= radius)
+            .map(|nbh| *nbh.id())
             .collect::<Vec<_>>()
     } else {
         gt.iter()
-            .filter(|nbh| nbh.distance <= radius)
-            .map(|nbh| nbh.id)
+            .filter(|nbh| *nbh.distance() <= radius)
+            .map(|nbh| *nbh.id())
             .collect::<Vec<_>>()
     };
     if ids.iter().any(|id| !gt_ids.contains(id)) {

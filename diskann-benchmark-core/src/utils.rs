@@ -5,7 +5,8 @@
 
 use diskann_benchmark_runner::utils::percentiles::AsF64Lossy;
 
-pub(crate) fn average_all<I>(x: I) -> f64
+/// Computes the arithmetic mean of an iterator of values, returning `0.0` when empty.
+pub fn average_all<I>(x: I) -> f64
 where
     I: IntoIterator<Item: AsF64Lossy>,
 {

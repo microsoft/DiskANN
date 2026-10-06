@@ -54,7 +54,7 @@ type CVRef<'a, const NBITS: usize> = CompensatedVectorRef<'a, NBITS>;
 /// A thin wrapper around [`ScalarQuantizer`] that encodes the number of bits desired for
 /// the [`SQStore`] derived from the quantizer.
 ///
-/// This is meant to be used in conjunction with [`CreateQuantProvider`] to serve as a
+/// This is meant to be used in conjunction with [`CreateVectorStore`] to serve as a
 /// precursor for [`DefaultProvider::new_empty`].
 #[derive(Clone)]
 pub struct WithBits<const NBITS: usize> {
@@ -597,7 +597,7 @@ where
 
 /// SearchStrategy for quantized search when a full-precision store exists alongside
 /// the quantized store. This allows reranking using original vectors after
-/// approximate search, so the post-processing step includes a [`Rerank`] stage.
+/// approximate search, so the post-processing step includes a `Rerank` stage.
 impl<'a, const NBITS: usize, D, Ctx, T>
     SearchStrategy<'a, FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &'a [T]> for Quantized
 where
@@ -636,7 +636,7 @@ where
 
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
-/// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
+/// post-processing step just copies candidate IDs forward via `RemoveDeletedIdsAndCopy`.
 impl<'a, const NBITS: usize, D, Ctx, T>
     SearchStrategy<'a, DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &'a [T]> for Quantized
 where
@@ -700,15 +700,32 @@ impl<'a, const NBITS: usize, V, D, Ctx, T>
 where
     T: VectorRepr,
     V: AsyncFriendly,
-    D: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'x> PreprocessedDistanceFunction<CVRef<'x, NBITS>, f32>,
     DistanceComputer: for<'x, 'y> DistanceFunction<CVRef<'x, NBITS>, CVRef<'y, NBITS>, f32>,
-    Quantized: SearchStrategy<'a, DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &'a [T]>,
+    Quantized: SearchStrategy<
+            'a,
+            DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+            &'a [T],
+            SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>,
+            SearchAccessorError = ANNError,
+        >,
 {
+    type SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>;
+    type SearchAccessorError = ANNError;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
@@ -876,19 +893,14 @@ pub enum SQError {
     QuantizerDecodeError(#[from] crate::storage::protos::ProtoConversionError),
 }
 
-impl From<SQError> for ANNError {
-    #[cold]
-    fn from(err: SQError) -> Self {
-        ANNError::log_sq_error(err)
-    }
-}
+diskann::convert_error!(SQError);
 
 #[cfg(test)]
 mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::utils::ONE;
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::views::MatrixView;
+    use diskann_utils::views::rowmajor;
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 
@@ -906,7 +918,7 @@ mod tests {
 
     fn make_store(metric: Metric) -> SQStore<NBITS> {
         let quantizer = ScalarQuantizationParameters::default()
-            .train(MatrixView::try_from(&DATA, NPTS, DIM).unwrap());
+            .train(rowmajor::Ref::try_from_data(&DATA, NPTS, DIM).unwrap());
         SQStore::new(quantizer, /* capacity */ 5, metric, None)
     }
 

@@ -11,15 +11,17 @@ use diskann::{
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::{
     recall,
     search::{self, Search, graph::Strategy},
 };
 
-/// A built-in helper for benchmarking the range search method
-/// [`graph::DiskANNIndex::range_search`].
+/// A built-in helper for benchmarking [`graph::search::Range`] searches.
 ///
 /// This is intended to be used in conjunction with [`search::search`] or
 /// [`search::search_all`] and provides some basic additional metrics for
@@ -34,7 +36,7 @@ where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
-    queries: Arc<Matrix<T>>,
+    queries: Arc<rowmajor::Owned<T>>,
     strategy: Strategy<S>,
 }
 
@@ -55,7 +57,7 @@ where
     /// the number of rows in `queries`.
     pub fn new(
         index: Arc<graph::DiskANNIndex<DP>>,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         strategy: Strategy<S>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
@@ -80,6 +82,7 @@ impl<DP, T, S> Search for Range<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    graph::search::Range: for<'a> graph::Search<'a, DP, S, &'a [T]>,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -91,7 +94,7 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l()))
+        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l().into()))
     }
 
     async fn search<O>(
@@ -237,12 +240,13 @@ mod tests {
     use super::*;
 
     use diskann::graph::test::provider;
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     #[test]
     fn test_range() {
         let index = search::graph::test_grid_provider();
 
-        let mut queries = Matrix::new(0.0f32, 5, index.provider().dim());
+        let mut queries = rowmajor::Owned::from_element(5, index.provider().dim(), 0.0f32);
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -262,7 +266,11 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             range.clone(),
-            graph::search::Range::with_options(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
+            graph::search::Range::builder(10, 2.0)
+                .initial_slack(0.8)
+                .range_slack(1.2)
+                .build()
+                .unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -281,11 +289,19 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::Range::with_options(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
+                graph::search::Range::builder(10, 2.0)
+                    .initial_slack(0.8)
+                    .range_slack(1.2)
+                    .build()
+                    .unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::Range::with_options(None, 15, None, 2.0, None, 0.8, 1.2).unwrap(),
+                graph::search::Range::builder(15, 2.0)
+                    .initial_slack(0.8)
+                    .range_slack(1.2)
+                    .build()
+                    .unwrap(),
                 setup.clone(),
             ),
         ];
@@ -313,7 +329,11 @@ mod tests {
     fn test_range_error() {
         let index = search::graph::test_grid_provider();
 
-        let queries = Arc::new(Matrix::new(0.0f32, 2, index.provider().dim()));
+        let queries = Arc::new(rowmajor::Owned::from_element(
+            2,
+            index.provider().dim(),
+            0.0f32,
+        ));
         let strategy = provider::Strategy::new();
 
         let err = Range::new(index, queries.clone(), Strategy::collection([strategy])).unwrap_err();

@@ -14,7 +14,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::ANNError;
+use crate::convert_error;
 
 ////////////
 // Around //
@@ -370,11 +370,7 @@ pub struct PartitionError {
     task: usize,
 }
 
-impl From<PartitionError> for ANNError {
-    fn from(err: PartitionError) -> Self {
-        Self::log_async_error(err)
-    }
-}
+convert_error!(PartitionError);
 
 #[cfg(test)]
 mod tests {

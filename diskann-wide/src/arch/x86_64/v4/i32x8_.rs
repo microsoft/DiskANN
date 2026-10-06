@@ -17,7 +17,10 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDSelect, SIMDSumTree, SIMDVector},
+    traits::{
+        SIMDAbs, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPopcount, SIMDSelect,
+        SIMDSumTree, SIMDVector,
+    },
 };
 
 /////
@@ -41,6 +44,13 @@ helpers::unsafe_map_binary_op!(i32x8, std::ops::Add, add, _mm256_add_epi32, "avx
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Sub, sub, _mm256_sub_epi32, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Mul, mul, _mm256_mullo_epi32, "avx2");
 helpers::unsafe_map_unary_op!(i32x8, SIMDAbs, abs_simd, _mm256_abs_epi32, "avx2");
+helpers::unsafe_map_unary_op!(
+    i32x8,
+    SIMDPopcount,
+    popcount_simd,
+    _mm256_popcnt_epi32,
+    "avx512vpopcntdq,avx512vl"
+);
 
 helpers::unsafe_map_binary_op!(i32x8, std::ops::BitAnd, bitand, _mm256_and_si256, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::BitOr, bitor, _mm256_or_si256, "avx2");
@@ -61,6 +71,20 @@ impl SIMDMulAdd for i32x8 {
     #[inline(always)]
     fn mul_add_simd(self, rhs: Self, accumulator: Self) -> Self {
         self * rhs + accumulator
+    }
+}
+
+impl SIMDMinMax for i32x8 {
+    #[inline(always)]
+    fn min_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm256_min_epi32` requires AVX2, which is implied by the V4 architecture.
+        Self(unsafe { _mm256_min_epi32(self.0, rhs.0) })
+    }
+
+    #[inline(always)]
+    fn max_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm256_max_epi32` requires AVX2, which is implied by the V4 architecture.
+        Self(unsafe { _mm256_max_epi32(self.0, rhs.0) })
     }
 }
 
@@ -159,6 +183,7 @@ mod test_x86_i32 {
     test_utils::ops::test_mul!(i32x8, 0x0ad0524dc17b747a, V4::new_checked_uncached());
     test_utils::ops::test_fma!(i32x8, 0x277aca15e0552388, V4::new_checked_uncached());
     test_utils::ops::test_abs!(i32x8, 0x62ca26a68c1a238d, V4::new_checked_uncached());
+    test_utils::ops::test_minmax!(i32x8, 0x6d7fc8ed6d852187, V4::new_checked_uncached());
 
     test_utils::ops::test_cmp!(i32x8, 0xdc88c2a44d17c78a, V4::new_checked_uncached());
     test_utils::ops::test_splitjoin!(i32x8 => i32x4, 0x475a19e80c2f3977, V4::new_checked_uncached());
@@ -167,6 +192,7 @@ mod test_x86_i32 {
 
     // Bit ops
     test_utils::ops::test_bitops!(i32x8, 0xc5f7d8d8df0b7b6c, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(i32x8, 0xb24fb02ef70f7345, V4::new_checked_uncached());
 
     // Dot Products
     test_utils::dot_product::test_dot_product!(

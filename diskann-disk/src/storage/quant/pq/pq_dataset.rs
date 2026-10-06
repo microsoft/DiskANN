@@ -5,10 +5,12 @@
 
 use core::fmt::Debug;
 
-use diskann::{ANNError, ANNResult};
+use diskann::ANNResult;
 use diskann_providers::model::FixedChunkPQTable;
-use diskann_quantization::product::TransposedTable;
-use diskann_utils::views::Matrix;
+use diskann_quantization::{error::Format, product::TransposedTable};
+use diskann_utils::views::rowmajor::{self, Matrix};
+
+use crate::error::{diskann_error, ErrorKind};
 
 #[derive(Debug)]
 pub struct PQData {
@@ -16,19 +18,19 @@ pub struct PQData {
     pq_pivot_table: TransposedTable,
 
     // pq compressed vectors, shape `num_points × num_pq_chunks`.
-    pq_compressed_data: Matrix<u8>,
+    pq_compressed_data: rowmajor::Owned<u8>,
 }
 
 impl PQData {
     pub fn new(
         pq_pivot_table: FixedChunkPQTable,
-        pq_compressed_data: Matrix<u8>,
+        pq_compressed_data: rowmajor::Owned<u8>,
     ) -> ANNResult<Self> {
         let pq_pivot_table = TransposedTable::from_parts(
             pq_pivot_table.view_pivots(),
             pq_pivot_table.view_offsets().to_owned(),
         )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
 
         Ok(Self {
             pq_pivot_table,
@@ -57,14 +59,17 @@ impl PQData {
     }
 
     /// Get pq_compressed_data
-    pub fn pq_compressed_data(&self) -> &Matrix<u8> {
+    pub fn pq_compressed_data(&self) -> &rowmajor::Owned<u8> {
         &self.pq_compressed_data
     }
 
     // Get compressed vector with the given vector id from the pq_compressed_data.
     pub fn get_compressed_vector(&self, vector_id: usize) -> ANNResult<&[u8]> {
         self.pq_compressed_data.get_row(vector_id).ok_or_else(|| {
-            ANNError::log_index_error("Vector id is out of boundary in the compressed dataset.")
+            diskann_error!(
+                ErrorKind::IndexError,
+                "Vector id is out of boundary in the compressed dataset."
+            )
         })
     }
 }
@@ -79,8 +84,9 @@ mod tests {
 
         let pq_pivot_table =
             FixedChunkPQTable::new(dim, Box::new([0.0, 0.0, 1.0, 1.0]), Box::new([0, 2])).unwrap();
-        let pq_compressed_data = Matrix::try_from(Box::new([123u8, 111, 255]) as Box<[u8]>, 3, 1)
-            .expect("valid matrix shape");
+        let pq_compressed_data =
+            rowmajor::Owned::try_from_data(Box::new([123u8, 111, 255]) as Box<[u8]>, 3, 1)
+                .expect("valid matrix shape");
 
         PQData::new(pq_pivot_table, pq_compressed_data)
     }

@@ -3,11 +3,14 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashSet, hash::Hash};
+use std::{
+    collections::{BTreeMap, HashSet},
+    hash::Hash,
+};
 
 use diskann_utils::{
-    strided::StridedView,
-    views::{Matrix, MatrixView},
+    strided::Strided,
+    views::rowmajor::{self, Matrix},
 };
 use thiserror::Error;
 
@@ -78,27 +81,27 @@ pub trait Rows<T> {
     }
 }
 
-impl<T> Rows<T> for Matrix<T> {
+impl<T> Rows<T> for rowmajor::Owned<T> {
     fn nrows(&self) -> usize {
-        Matrix::<T>::nrows(self)
+        Matrix::nrows(self)
     }
     fn row(&self, i: usize) -> &[T] {
-        Matrix::<T>::row(self, i)
+        Matrix::row(self, i)
     }
     fn ncols(&self) -> Option<usize> {
-        Some(Matrix::<T>::ncols(self))
+        Some(Matrix::ncols(self))
     }
 }
 
-impl<T> Rows<T> for MatrixView<'_, T> {
+impl<T> Rows<T> for rowmajor::Ref<'_, T> {
     fn nrows(&self) -> usize {
-        MatrixView::<'_, T>::nrows(self)
+        Matrix::nrows(self)
     }
     fn row(&self, i: usize) -> &[T] {
-        MatrixView::<'_, T>::row(self, i)
+        Matrix::row(self, i)
     }
     fn ncols(&self) -> Option<usize> {
-        Some(MatrixView::<'_, T>::ncols(self))
+        Some(Matrix::ncols(self))
     }
 }
 
@@ -142,7 +145,7 @@ pub enum GroundTruthMode {
 /// than `recall_k` candidates.
 pub fn knn<T>(
     groundtruth: &dyn Rows<T>,
-    groundtruth_distances: Option<StridedView<'_, f32>>,
+    groundtruth_distances: Option<Strided<'_, f32>>,
     results: &dyn Rows<T>,
     recall_k: usize,
     recall_n: usize,
@@ -196,8 +199,24 @@ where
         }
     }
 
-    // The actual recall computation for groundtruth
-    let mut recall_values: Vec<f64> = Vec::new();
+    // The actual recall computation for groundtruth.
+    //
+    // To avoid floating-point accumulation error we do not sum per-query `f64`
+    // ratios. Each ratio `r / this_recall_k` is generally not exactly
+    // representable (e.g. `99.0 / 100.0`), and summing thousands of them
+    // compounds the rounding, producing values like `0.9999899999999999` where
+    // the closest `f64` to the true answer is `0.99999`. Instead we accumulate
+    // integer hit counts, grouped by their (per-row) denominator
+    // `this_recall_k`, and divide once per distinct denominator at the end. This
+    // is algebraically identical to the mean of per-query recalls; the result is
+    // still rounded to `f64`, but whenever all scored rows share a denominator
+    // (the common fixed-size-groundtruth case) the rounding is limited to that
+    // single division rather than accumulating across every query.
+    //
+    // A `BTreeMap` (rather than `HashMap`) keeps the final summation order
+    // deterministic across runs, so the reported recall is bit-reproducible.
+    let mut hits_by_k: BTreeMap<usize, u64> = BTreeMap::new();
+    let mut num_scored_queries: usize = 0;
     let mut this_groundtruth = HashSet::new();
     let mut this_results = HashSet::new();
 
@@ -244,17 +263,33 @@ where
             .count()
             .min(this_recall_k);
 
-        let recall = (r as f64) / (this_recall_k as f64);
-
-        recall_values.push(recall);
+        *hits_by_k.entry(this_recall_k).or_insert(0) += r as u64;
+        num_scored_queries += 1;
     }
 
-    // Compute the average recall
-    let total: f64 = recall_values.iter().sum();
-    let average = if recall_values.is_empty() {
+    // Compute the average recall as the mean of the per-query recalls. Grouping
+    // by denominator lets each group be reduced with an integer numerator,
+    // limiting rounding to at most one division per distinct `this_recall_k`.
+    //
+    // `num_scored_queries` is the *global* count of scored queries, not a
+    // per-denominator count: the mean of per-query recalls divides the grand
+    // total by the number of queries, so each query contributes `1 / N`
+    // regardless of its `this_recall_k`. Concretely,
+    // `(1/N) * sum_i (r_i / k_i) == sum_d (hits_by_k[d] / (d * N))`.
+    //
+    // The denominator is formed as a `u128` product so `k * num_scored_queries`
+    // cannot overflow on very large benchmarks; the single division to `f64` is
+    // the only rounding step.
+    let average = if num_scored_queries == 0 {
         0.0
     } else {
-        total / (recall_values.len() as f64)
+        hits_by_k
+            .into_iter()
+            .map(|(k, hits)| {
+                let denom = (k as u128) * (num_scored_queries as u128);
+                (hits as f64) / (denom as f64)
+            })
+            .sum()
     };
 
     Ok(RecallMetrics {
@@ -329,9 +364,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::{self, Matrix};
-
     use super::*;
+
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     fn test_rows_inner(rows: &dyn Rows<usize>, ncols: Option<usize>) {
         assert_eq!(rows.ncols(), ncols);
@@ -344,15 +379,11 @@ mod tests {
     #[test]
     fn test_rows() {
         let mut i = 0usize;
-        let mat = Matrix::new(
-            views::Init(|| {
-                let v = i;
-                i += 1;
-                v
-            }),
-            3,
-            4,
-        );
+        let mat = rowmajor::Owned::from_fn(3, 4, |_| {
+            let v = i;
+            i += 1;
+            v
+        });
 
         test_rows_inner(&mat, Some(4));
         test_rows_inner(&(mat.as_view()), Some(4));
@@ -389,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_happy_path() {
-        let groundtruth = Matrix::try_from(
+        let groundtruth = rowmajor::Owned::try_from_data(
             vec![
                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, // row 0
                 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, // row 1
@@ -402,7 +433,7 @@ mod tests {
         )
         .unwrap();
 
-        let distances = Matrix::try_from(
+        let distances = rowmajor::Owned::try_from_data(
             vec![
                 0.0, 1.0, 2.0, 3.0, 3.0, 3.0, 3.0, 4.0, 5.0, 6.0, // row 0
                 2.0, 3.0, 3.0, 3.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, // row 1
@@ -416,7 +447,7 @@ mod tests {
         .unwrap();
 
         // Shift row 0 by one and row 1 by two.
-        let our_results = Matrix::try_from(
+        let our_results = rowmajor::Owned::try_from_data(
             vec![
                 100, 0, 1, 2, 5, 6, // row 0
                 100, 101, 7, 8, 9, 10, // row 1
@@ -449,7 +480,7 @@ mod tests {
         let epsilon = 1e-6; // Define a small tolerance
 
         for (i, expected) in expected_no_ties.iter().enumerate() {
-            assert_eq!(expected.components.len(), our_results.nrows());
+            assert_eq!(expected.components.len(), Matrix::nrows(&our_results));
             let recall = knn(
                 &groundtruth,
                 None,
@@ -470,7 +501,7 @@ mod tests {
                 i
             );
 
-            assert_eq!(recall.num_queries, our_results.nrows());
+            assert_eq!(recall.num_queries, Matrix::nrows(&our_results));
             assert_eq!(recall.recall_k, expected.recall_k);
             assert_eq!(recall.recall_n, expected.recall_n);
         }
@@ -494,7 +525,7 @@ mod tests {
         ];
 
         for (i, expected) in expected_with_ties.iter().enumerate() {
-            assert_eq!(expected.components.len(), our_results.nrows());
+            assert_eq!(expected.components.len(), Matrix::nrows(&our_results));
             let recall = knn(
                 &groundtruth,
                 Some(distances.as_view().into()),
@@ -515,7 +546,7 @@ mod tests {
                 i
             );
 
-            assert_eq!(recall.num_queries, our_results.nrows());
+            assert_eq!(recall.num_queries, Matrix::nrows(&our_results));
             assert_eq!(recall.recall_k, expected.recall_k);
             assert_eq!(recall.recall_n, expected.recall_n);
         }
@@ -523,16 +554,16 @@ mod tests {
 
     #[test]
     fn test_error_recall_k_and_n() {
-        let groundtruth = Matrix::<u32>::new(0, 10, 10);
-        let results = Matrix::<u32>::new(0, 10, 10);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(10, 10, 0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(&groundtruth, None, &results, 11, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::RecallKAndNError(..)));
     }
 
     #[test]
     fn test_error_rows_mismatch() {
-        let groundtruth = Matrix::<u32>::new(0, 11, 10);
-        let results = Matrix::<u32>::new(0, 10, 10);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(11, 10, 0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::RowsMismatch(..)));
         let err_allow_insufficient_results =
@@ -545,8 +576,8 @@ mod tests {
 
     #[test]
     fn test_error_not_enough_groundtruth() {
-        let groundtruth = Matrix::<u32>::new(0, 10, 5);
-        let results = Matrix::<u32>::new(0, 10, 10);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(10, 5, 0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::NotEnoughGroundTruth(..)));
         let err_allow_insufficient_results =
@@ -560,7 +591,7 @@ mod tests {
     #[test]
     fn test_dynamic_groundtruth_valid() {
         let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
-        let results = Matrix::<u32>::new(0, 10, 10);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         // Should succeed: each row uses this_recall_k = min(5, 10) = 5
         // Should succeed in Flexible mode, but fail in Fixed mode
         let recall_flexible = knn(
@@ -583,10 +614,10 @@ mod tests {
     fn test_dynamic_groundtruth_full_match() {
         let gt_row: Vec<u32> = (1..=5).collect();
         let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
-        let mut results = Matrix::<u32>::new(0, 10, 10);
+        let mut results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         for i in 0..10 {
             for (j, v) in (1u32..=10).enumerate() {
-                results[(i, j)] = v;
+                *results.element_mut(i, j) = v;
             }
         }
         let recall = knn(
@@ -606,11 +637,11 @@ mod tests {
         // groundtruth: [1, 2, 3, 4, 5]; results contain [1, 2, 3, 6, 7, 8, 9, 10, 11, 12]
         let gt_row: Vec<u32> = (1..=5).collect();
         let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
-        let mut results = Matrix::<u32>::new(0, 10, 10);
+        let mut results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let res_row: Vec<u32> = vec![1, 2, 3, 6, 7, 8, 9, 10, 11, 12];
         for i in 0..10 {
             for (j, &v) in res_row.iter().enumerate() {
-                results[(i, j)] = v;
+                *results.element_mut(i, j) = v;
             }
         }
         let recall = knn(
@@ -637,10 +668,10 @@ mod tests {
             groundtruth.push(vec![]);
         }
 
-        let mut results = Matrix::<u32>::new(0, 10, 10);
+        let mut results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         for i in 0..10 {
             for (j, v) in (1u32..=10).enumerate() {
-                results[(i, j)] = v;
+                *results.element_mut(i, j) = v;
             }
         }
 
@@ -660,7 +691,7 @@ mod tests {
     #[test]
     fn test_dynamic_groundtruth_all_zero() {
         let groundtruth: Vec<Vec<u32>> = (0..10).map(|_| vec![]).collect();
-        let results = Matrix::<u32>::new(0, 10, 10);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
 
         let recall = knn(
             &groundtruth,
@@ -677,11 +708,49 @@ mod tests {
         assert!(!recall.average.is_infinite());
     }
 
+    // Regression test for the reported "0.9999899999999999" recall (issue #1171).
+    //
+    // With a fixed denominator, the average of the per-query recalls must be
+    // computed without floating-point accumulation error: a perfect run reports
+    // exactly `1.0`, and a run missing exactly 5 of 500_000 neighbours reports
+    // exactly `0.99999` rather than `0.9999899999999999`.
+    #[test]
+    fn test_fixed_denominator_no_precision_loss() {
+        let k = 100usize;
+        let num_queries = 5000usize;
+
+        // Groundtruth: every row is `0..k`.
+        let gt_row: Vec<u32> = (0..k as u32).collect();
+        let groundtruth: Vec<_> = (0..num_queries).map(|_| gt_row.clone()).collect();
+
+        // Perfect results: every query recovers all `k` neighbours.
+        let perfect: Vec<_> = (0..num_queries).map(|_| gt_row.clone()).collect();
+        let recall = knn(&groundtruth, None, &perfect, k, k, GroundTruthMode::Fixed).unwrap();
+        assert_eq!(recall.average, 1.0);
+
+        // Miss exactly one neighbour on 5 queries (5 misses out of 500_000).
+        let mut near_perfect = perfect.clone();
+        for row in near_perfect.iter_mut().take(5) {
+            // Replace the last groundtruth id with a non-matching one.
+            *row.last_mut().unwrap() = u32::MAX;
+        }
+        let recall = knn(
+            &groundtruth,
+            None,
+            &near_perfect,
+            k,
+            k,
+            GroundTruthMode::Fixed,
+        )
+        .unwrap();
+        assert_eq!(recall.average, 0.99999);
+    }
+
     #[test]
     fn test_error_distance_rows_mismatch() {
-        let groundtruth = Matrix::<u32>::new(0, 10, 10);
-        let distances = Matrix::<f32>::new(0.0, 9, 10);
-        let results = Matrix::<u32>::new(0, 10, 10);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(10, 10, 0);
+        let distances = rowmajor::Owned::<f32>::from_element(9, 10, 0.0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(
             &groundtruth,
             Some(distances.as_view().into()),
@@ -696,9 +765,9 @@ mod tests {
 
     #[test]
     fn test_error_distance_cols_mismatch() {
-        let groundtruth = Matrix::<u32>::new(0, 10, 10);
-        let distances = Matrix::<f32>::new(0.0, 10, 9);
-        let results = Matrix::<u32>::new(0, 10, 10);
+        let groundtruth = rowmajor::Owned::<u32>::from_element(10, 10, 0);
+        let distances = rowmajor::Owned::<f32>::from_element(10, 9, 0.0);
+        let results = rowmajor::Owned::<u32>::from_element(10, 10, 0);
         let err = knn(
             &groundtruth,
             Some(distances.as_view().into()),
@@ -720,7 +789,7 @@ mod tests {
         let groundtruth: Vec<Vec<u32>> = vec![vec![1, 2, 3], vec![4, 5]];
         // distances: first row has 2 elements (should be 3), second row has 2 (matches)
         let distances: Vec<Vec<f32>> = vec![vec![0.1, 0.2], vec![0.3, 0.4]];
-        let distances = Matrix::try_from(
+        let distances = rowmajor::Owned::try_from_data(
             distances.into_iter().flatten().collect::<Vec<_>>().into(),
             2,
             2,

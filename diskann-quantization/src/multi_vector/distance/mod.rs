@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Distance computation for multi-vector representations.
 //!
@@ -45,11 +47,12 @@ mod factory;
 mod fallback;
 mod isa;
 mod kernel;
-mod kernels;
 mod max_sim;
+mod projected_eigen;
 
 pub use factory::{MaxSimElement, build_max_sim};
 pub use fallback::QueryMatRef;
 pub use isa::{MaxSimIsa, NotSupported};
 pub use kernel::{BoxErase, Erase, MaxSimKernel};
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
+pub use projected_eigen::ProjectedEigen;

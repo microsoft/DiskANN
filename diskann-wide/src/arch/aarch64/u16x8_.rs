@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
@@ -15,6 +15,7 @@ use super::{
     Neon, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask16x8,
+    u16x4,
 };
 
 // AArch64 intrinsics
@@ -27,6 +28,8 @@ use std::arch::aarch64::*;
 macros::aarch64_define_register!(u16x8, uint16x8_t, mask16x8, u16, 8, Neon);
 macros::aarch64_define_splat!(u16x8, vmovq_n_u16);
 macros::aarch64_define_loadstore!(u16x8, vld1q_u16, internal::load_first::u16x8, vst1q_u16, 8);
+macros::aarch64_splitjoin!(u16x8, u16x4, vget_low_u16, vget_high_u16, vcombine_u16);
+macros::aarch64_zipunzip!(u16x8, u16x4, vzip1_u16, vzip2_u16, vuzp1_u16, vuzp2_u16);
 
 helpers::unsafe_map_binary_op!(u16x8, std::ops::Add, add, vaddq_u16, "neon");
 helpers::unsafe_map_binary_op!(u16x8, std::ops::Sub, sub, vsubq_u16, "neon");
@@ -95,6 +98,8 @@ mod tests {
     test_utils::ops::test_sub!(u16x8, 0xfc627f10b5f8db8a, test_neon());
     test_utils::ops::test_mul!(u16x8, 0x0f4caa80eceaa523, test_neon());
     test_utils::ops::test_fma!(u16x8, 0xb8f702ba85375041, test_neon());
+    test_utils::ops::test_splitjoin!(u16x8 => u16x4, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(u16x8 => u16x4, 0x65f80210de72407a, test_neon());
 
     test_utils::ops::test_cmp!(u16x8, 0x941757bd5cc641a1, test_neon());
 

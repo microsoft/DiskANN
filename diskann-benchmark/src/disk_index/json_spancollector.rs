@@ -88,7 +88,7 @@ impl SpanExporter for JsonSpanCollector {
         Ok(())
     }
 
-    fn shutdown_with_timeout(&mut self, _timeout: Duration) -> OTelSdkResult {
+    fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
         Ok(())
     }
 }

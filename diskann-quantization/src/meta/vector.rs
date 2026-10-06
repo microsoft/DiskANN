@@ -380,7 +380,7 @@ where
     /// * `std::mem::size_of::<T>()` for the metadata coefficient.
     /// * `Self::slice_bytes(dim)` for the underlying bit-slice.
     ///
-    /// Returns an error if `data.len() != `Self::canonical_bytes`.
+    /// Returns an error if `data.len() != Self::canonical_bytes`.
     pub fn from_canonical_front(data: &'a [u8], dim: usize) -> Result<Self, NotCanonical> {
         let expected = Self::canonical_bytes(dim);
         if data.len() != expected {
@@ -397,7 +397,7 @@ where
     /// * `Self::slice_bytes(dim)` for the underlying bit-slice.
     /// * `std::mem::size_of::<T>()` for the metadata coefficient.
     ///
-    /// Returns an error if `data.len() != `Self::canonical_bytes`.
+    /// Returns an error if `data.len() != Self::canonical_bytes`.
     pub fn from_canonical_back(data: &'a [u8], dim: usize) -> Result<Self, NotCanonical> {
         let expected = Self::canonical_bytes(dim);
         if data.len() != expected {
@@ -474,7 +474,7 @@ where
     /// * `std::mem::size_of::<T>()` for the metadata coefficient.
     /// * `Self::slice_bytes(dim)` for the underlying bit-slice.
     ///
-    /// Returns an error if `data.len() != `Self::canonical_bytes`.
+    /// Returns an error if `data.len() != Self::canonical_bytes`.
     pub fn from_canonical_front_mut(data: &'a mut [u8], dim: usize) -> Result<Self, NotCanonical> {
         let expected = Self::canonical_bytes(dim);
         if data.len() != expected {
@@ -512,7 +512,7 @@ where
     /// * `Self::slice_bytes(dim)` for the underlying bit-slice.
     /// * `std::mem::size_of::<T>()` for the metadata coefficient.
     ///
-    /// Returns an error if `data.len() != `Self::canonical_bytes`.
+    /// Returns an error if `data.len() != Self::canonical_bytes`.
     pub fn from_canonical_back_mut(data: &'a mut [u8], dim: usize) -> Result<Self, NotCanonical> {
         let len = data.len();
         let expected = || Self::canonical_bytes(dim);

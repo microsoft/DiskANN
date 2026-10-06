@@ -8,6 +8,9 @@ pub use search_output_buffer::{
     BufferState, IdDistance, IdDistanceAssociatedData, SearchOutputBuffer,
 };
 
+#[cfg(feature = "pipnn")]
+pub mod pipnn;
+
 pub mod adjacencylist;
 pub use adjacencylist::AdjacencyList;
 
@@ -23,12 +26,11 @@ pub use start_point::{SampleableForStart, StartPointStrategy};
 mod misc;
 pub use misc::{ConsolidateKind, InplaceDeleteMethod};
 
-#[cfg(feature = "experimental_diversity_search")]
-pub use misc::DiverseSearchParams;
-
 pub mod glue;
 pub mod search;
 pub mod workingset;
+
+pub mod ext;
 
 // Re-export the Search trait and error/output types only.
 // Search parameter types (Knn, Range, Diverse, etc.) should be accessed via `graph::search::`.

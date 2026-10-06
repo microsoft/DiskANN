@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! MaxSim and Chamfer distance types for multi-vector representations.
 
@@ -12,6 +14,8 @@ pub enum MaxSimError {
     IndexOutOfBounds(usize, usize),
     #[error("Invalid buffer length {0} for query size {1}")]
     InvalidBufferLength(usize, usize),
+    #[error("doc-vector dim {0} does not equal query-vector dim {1}")]
+    UnequalDim(usize, usize),
 }
 
 ////////////

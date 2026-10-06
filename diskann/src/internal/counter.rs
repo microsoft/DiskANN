@@ -69,6 +69,11 @@ impl<'a> LocalCounter<'a> {
     pub(crate) fn increment_by(&mut self, value: usize) {
         self.value += value
     }
+
+    /// Return the current local count (not yet flushed to parent).
+    pub(crate) fn value(&self) -> usize {
+        self.value
+    }
 }
 
 // Write back the results to the parent counter.

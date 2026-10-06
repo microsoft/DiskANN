@@ -1,0 +1,24 @@
+[package]
+name = "label_format_parser"
+version = "0.1.0"
+description = "query filter AST, parser, and evaluator for serde_json::Value."
+authors = ["haiyang"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+pest = "2.7"
+pest_derive = "2.7"
+rand = "0.8"
+
+[dev-dependencies]
+criterion = "0.5"
+label_format_parser = { path = "." }
+
+[[bench]]
+name = "main"
+harness = false
+
+[workspace]

@@ -1,0 +1,96 @@
+[package]
+name = "diskann-inmem"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+bytemuck = { workspace = true, features = ["must_cast"] }
+crossbeam-queue = "0.3.12"
+dashmap.workspace = true
+diskann = { workspace = true }
+diskann-utils = { workspace = true, default-features = false }
+diskann-vector = { workspace = true }
+diskann-wide = { workspace = true }
+parking_lot = "0.12.5"
+half = { workspace = true }
+hashbrown = { workspace = true }
+thiserror = { workspace = true }
+
+# Optional
+diskann-quantization = { workspace = true, optional = true, default-features = false }
+
+# Integration Test Dependencies
+diskann-benchmark-runner = { workspace = true, optional = true, features = ["ux-tools"] }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+diskann-benchmark-core = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+
+[lints.rust]
+# Some longer-running integration tests are skipped when running code coverage by using
+# `cfg(coverage)`. This prevents us from getting warnings for the `coverage` condition,
+# which is added by `llvm-cov` but is otherwise not a standard condition name.
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(coverage)'] }
+
+[lints.clippy]
+allow_attributes = "allow"
+undocumented_unsafe_blocks = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+uninlined_format_args = "allow"
+
+[dev-dependencies]
+diskann-utils = { workspace = true, features = ["testing"] }
+diskann = { workspace = true, features = ["testing"] }
+rand = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+tempfile = { workspace = true }
+
+[[bin]]
+name = "integration-test"
+path = "integration/main.rs"
+required-features = [
+    "integration-test",
+    "quantization",
+]
+
+[features]
+default = []
+
+# Enable spherical-quantization
+quantization = [
+    "dep:diskann-quantization",
+]
+
+# Enable stress test module
+integration-test = [
+    "dep:diskann-benchmark-runner",
+    "dep:diskann-benchmark-core",
+    "dep:tokio",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:anyhow",
+    "dep:rand",
+    "diskann-utils/testing",
+]
+
+# Note
+#
+# Build docs locally with
+# ```
+# RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc \
+#    --package diskann-inmem \
+#    --features quantization \
+#    --no-deps \
+#    --features quantization
+# ```
+[package.metadata.docs.rs]
+features = ["quantization"]
+rustdoc-args = ["--cfg", "docsrs"]

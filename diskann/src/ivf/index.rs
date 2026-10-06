@@ -11,13 +11,13 @@
 
 use diskann_utils::{
     future::SendFuture,
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use rand::{SeedableRng, rngs::StdRng};
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
     error::{ErrorExt, IntoANNResult},
     ivf::{
         dynamic::{
@@ -53,7 +53,7 @@ pub enum ConfigError {
 impl From<ConfigError> for ANNError {
     #[track_caller]
     fn from(err: ConfigError) -> Self {
-        ANNError::new(ANNErrorKind::IndexConfigError, err)
+        ANNError::new(err)
     }
 }
 
@@ -202,12 +202,11 @@ impl<P: Provider> IVFIndex<P> {
                 .into_ann_result()?;
 
             // stage the input points
-            let mut vectors = Matrix::<f32>::new(f32::NAN, points.len(), accessor.dim());
+            let mut vectors = rowmajor::Owned::from_element(points.len(), accessor.dim(), f32::NAN);
             let mut ids = Vec::with_capacity(points.len());
             let mut routed = hashbrown::HashMap::<P::ListId, Vec<usize>>::new();
 
-            for (position, ((id, v), out)) in points.iter().zip(vectors.row_iter_mut()).enumerate()
-            {
+            for (position, ((id, v), out)) in points.iter().zip(vectors.rows_mut()).enumerate() {
                 //stage the input points first.
                 let id = accessor
                     .stage_point(id, *v, out)
@@ -222,9 +221,7 @@ impl<P: Provider> IVFIndex<P> {
                     .escalate("Unable to select")?
                     .first()
                     .map(|s| s.id)
-                    .ok_or_else(|| {
-                        ANNError::message(ANNErrorKind::IndexError, "Didn't return list")
-                    })?;
+                    .ok_or_else(|| ANNError::message("Didn't return list"))?;
 
                 routed.entry(parent).or_default().push(position);
             }
@@ -276,7 +273,7 @@ impl<P: Provider> IVFIndex<P> {
         config: &Config,
         rng: &mut StdRng,
         ids: &[P::InternalId],
-        vectors: MatrixView<'_, f32>,
+        vectors: rowmajor::Ref<'_, f32>,
         routed: &hashbrown::HashMap<P::ListId, Vec<usize>>,
         parents: &[P::ListId],
     ) -> ANNResult<Deltas<P::InternalId, P::ListId>>
@@ -323,7 +320,7 @@ impl<P: Provider> IVFIndex<P> {
         config: &Config,
         rng: &mut StdRng,
         ids: &[P::InternalId],
-        vectors: MatrixView<'_, f32>,
+        vectors: rowmajor::Ref<'_, f32>,
         parent: P::ListId,
         staged: &[usize],
     ) -> ANNResult<Vec<Delta<P::InternalId, P::ListId>>>
@@ -345,19 +342,19 @@ impl<P: Provider> IVFIndex<P> {
             .to_vec();
 
         // Everything the parent would hold: its current members, then its staged points.
-        let mut points = Matrix::new(f32::NAN, members.len() + staged.len(), dim);
+        let mut points = rowmajor::Owned::from_element(members.len() + staged.len(), dim, f32::NAN);
         {
-            let mut member_vectors = Matrix::new(f32::NAN, members.len(), dim);
+            let mut member_vectors = rowmajor::Owned::from_element(members.len(), dim, f32::NAN);
             accessor
                 .reader()
-                .read_into(parent, member_vectors.as_mut_view())
+                .read_into(parent, member_vectors.as_view_mut())
                 .await
                 .escalate("split must read the parent's vectors")?;
 
             let sources = member_vectors
-                .row_iter()
+                .rows()
                 .chain(staged.iter().map(|&position| vectors.row(position)));
-            for (row, source) in points.row_iter_mut().zip(sources) {
+            for (row, source) in points.rows_mut().zip(sources) {
                 row.copy_from_slice(source);
             }
         }
@@ -371,7 +368,7 @@ impl<P: Provider> IVFIndex<P> {
         let mut child_ids = Vec::new();
 
         // Install both children before anything is placed into them.
-        for centroid in centroids.row_iter() {
+        for centroid in centroids.rows() {
             let id = accessor.stage_centroid(centroid).await?;
             child_ids.push(id);
 

@@ -12,7 +12,7 @@
 
 use std::{fmt::Debug, ops::Deref};
 
-use diskann_utils::{future::SendFuture, views::MutMatrixView};
+use diskann_utils::{future::SendFuture, views::rowmajor};
 
 use crate::{
     ANNResult,
@@ -191,7 +191,7 @@ pub trait Reader<T = f32>: Send + Sync {
     fn read_into(
         &self,
         id: Self::Id,
-        out: MutMatrixView<'_, T>,
+        out: rowmajor::Mut<'_, T>,
     ) -> impl SendFuture<Result<(), Self::Error>>;
 }
 

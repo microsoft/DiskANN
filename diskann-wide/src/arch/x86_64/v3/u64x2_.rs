@@ -15,7 +15,9 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{AsSIMD, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector},
+    traits::{
+        AsSIMD, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector,
+    },
 };
 
 /////
@@ -134,6 +136,20 @@ impl SIMDPartialOrd for u64x2 {
     }
 }
 
+impl SIMDSumTree for u64x2 {
+    #[inline(always)]
+    fn sum_tree(self) -> u64 {
+        let x = self.to_underlying();
+        // SAFETY: `_mm_unpackhi_epi64`, `_mm_add_epi64`, and `_mm_cvtsi128_si64` require
+        // SSE2, implied by V3.
+        unsafe {
+            let hi = _mm_unpackhi_epi64(x, x);
+            let sum = _mm_add_epi64(x, hi);
+            _mm_cvtsi128_si64(sum) as u64
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -173,6 +189,8 @@ mod test_x86_u64 {
     test_utils::ops::test_fma!(u64x2, 0xcb45c9f29a44719f, V3::new_checked_uncached());
 
     test_utils::ops::test_cmp!(u64x2, 0x92486698bb7603e7, V3::new_checked_uncached());
+
+    test_utils::ops::test_sumtree!(u64x2, 0xe1dc2d07ae014508, V3::new_checked_uncached());
 
     // Bit ops
     test_utils::ops::test_bitops!(u64x2, 0xf9566b095125ca45, V3::new_checked_uncached());

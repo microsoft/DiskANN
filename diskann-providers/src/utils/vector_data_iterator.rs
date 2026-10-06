@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::storage::StorageReadProvider;
-use diskann::{ANNError, ANNErrorKind, utils::read_exact_into};
+use diskann::utils::read_exact_into;
 use diskann_utils::io::Metadata;
 use serde::Deserialize;
 use thiserror::Error;
@@ -35,7 +35,8 @@ impl<StorageProvider: StorageReadProvider, T: VectorRepr, A>
     VectorDataIterator<StorageProvider, T, A>
 {
     /// Create the iterator from a vector dataset stream and an associated data stream.
-    /// vector_stream format: | num_points (4 bytes) | dimension (4 bytes) | vector data 1 (dimension * size_of::<T>())) | .. | vector data N |
+    /// vector_stream format: | num_points (4 bytes) | dimension (4 bytes) | vector data 1
+    /// (dimension * `size_of::<T>()`) | .. | vector data N |
     /// associated_data_stream format: | num_points (4 bytes) | associated_data_length | associated data 1 (associated_data_length) | .. | associated data N |
     pub fn new(
         vector_stream: &str,
@@ -87,7 +88,6 @@ impl<StorageProvider: StorageReadProvider, T: VectorRepr, A>
         self.num_points
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn next_n(&mut self, n: usize) -> Option<Vec<(Box<[T]>, A)>>
     where
         A: for<'de> Deserialize<'de> + Default,
@@ -205,17 +205,16 @@ enum SkipElementsError {
     IoError(#[from] std::io::Error),
 }
 
-impl From<SkipElementsError> for ANNError {
-    fn from(err: SkipElementsError) -> Self {
-        ANNError::new(ANNErrorKind::IndexError, err)
-    }
-}
+diskann::convert_error!(SkipElementsError);
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use std::io::Cursor;
 
-    use super::*;
+    use diskann::ANNError;
+
     const TEST_VECTOR_STREAM: &str = "vector";
     const TEST_ASSOCIATED_DATA_STREAM: &str = "associated_data";
     const INCORRECT_TEST_ASSOCIATED_DATA_STREAM: &str = "incorrect_associated_data";
@@ -334,8 +333,6 @@ mod tests {
         };
         let ann_err = ANNError::from(skip_err);
 
-        assert_eq!(ann_err.kind(), ANNErrorKind::IndexError);
-
         let err_msg = ann_err.to_string();
         assert!(err_msg.contains("Tried to skip 10 elements, but only 5 are left"));
 
@@ -354,8 +351,6 @@ mod tests {
             std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected end of file");
         let skip_err = SkipElementsError::IoError(io_err);
         let ann_err = ANNError::from(skip_err);
-
-        assert_eq!(ann_err.kind(), ANNErrorKind::IndexError);
 
         let err_msg = ann_err.to_string();
         assert!(err_msg.contains("IO error while skipping elements"));
@@ -444,7 +439,7 @@ mod tests {
         .unwrap();
 
         // nth(0) should be equivalent to next()
-        #[allow(clippy::iter_nth_zero)]
+        #[expect(clippy::iter_nth_zero)]
         let (vector, associated_data) = iterator.nth(0).unwrap();
         assert_eq!(vector, vec![1_f32, 2_f32].into_boxed_slice());
         assert_eq!(associated_data, 10_u32);

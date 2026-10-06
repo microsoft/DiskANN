@@ -8,7 +8,7 @@
 use std::{future::Future, sync::Mutex};
 
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult, default_post_processor,
+    ANNError, ANNResult, convert_error, default_post_processor,
     error::IntoANNResult,
     graph::{
         AdjacencyList,
@@ -50,45 +50,17 @@ use crate::{
 // Error Promotion //
 /////////////////////
 
-impl From<Bridge<QueryComputerError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<QueryComputerError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<diskann_quantization::spherical::CompressionError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<diskann_quantization::spherical::CompressionError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<diskann_quantization::spherical::iface::QueryDistanceError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<diskann_quantization::spherical::iface::QueryDistanceError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<spherical::UnsupportedMetric>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<spherical::UnsupportedMetric>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
+convert_error!(Bridge<QueryComputerError>);
+convert_error!(Bridge<spherical::CompressionError>);
+convert_error!(Bridge<spherical::iface::QueryDistanceError>);
+convert_error!(Bridge<spherical::UnsupportedMetric>);
 
 /// An allocator error scoped to the spherical store.
 #[derive(Debug, Clone, Copy, Error)]
 #[error(transparent)]
 pub struct AllocatorError(#[from] diskann_quantization::alloc::AllocatorError);
 
-impl From<AllocatorError> for ANNError {
-    #[track_caller]
-    fn from(err: AllocatorError) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
+convert_error!(AllocatorError);
 
 ///////////
 // Error //
@@ -503,9 +475,8 @@ where
 // Strategies //
 ////////////////
 
-/// Unlike [`super::Quantized`], searches over a [`SphericalStore`] support different
-/// [`spherical::iface::QueryLayout`]s. This strategy type allows the user to specify the
-/// desired layout explicitly.
+/// Searches over a [`SphericalStore`] support different [`spherical::iface::QueryLayout`]s.
+/// This strategy type allows the user to specify the desired layout explicitly.
 #[derive(Debug, Clone, Copy)]
 pub struct Quantized {
     layout: spherical::iface::QueryLayout,
@@ -523,7 +494,7 @@ impl Quantized {
         }
     }
 
-    /// Construct a new [`QuantizedStrategy`] for index search using the specified layout.
+    /// Construct a new [`Quantized`] strategy for index search using the specified layout.
     pub fn search(layout: spherical::iface::QueryLayout) -> Self {
         Self {
             layout,
@@ -534,7 +505,7 @@ impl Quantized {
 
 /// SearchStrategy for quantized search when a full-precision store exists alongside
 /// the quantized store. This allows reranking using original vectors after
-/// approximate search, so the post-processing step includes a [`Rerank`] stage.
+/// approximate search, so the post-processing step includes a `Rerank` stage.
 impl<'a, D, Ctx, T> SearchStrategy<'a, FullPrecisionProvider<T, SphericalStore, D, Ctx>, &'a [T]>
     for Quantized
 where
@@ -569,7 +540,7 @@ where
 
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
-/// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
+/// post-processing step just copies candidate IDs forward via `RemoveDeletedIdsAndCopy`.
 impl<'a, D, Ctx, T> SearchStrategy<'a, DefaultProvider<NoStore, SphericalStore, D, Ctx>, &'a [T]>
     for Quantized
 where
@@ -635,9 +606,27 @@ where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
-    Quantized: SearchStrategy<'a, DefaultProvider<V, SphericalStore, D, Ctx>, &'a [T]>,
+    Quantized: SearchStrategy<
+            'a,
+            DefaultProvider<V, SphericalStore, D, Ctx>,
+            &'a [T],
+            SearchAccessor = QuantAccessor<'a, V, D, Ctx>,
+            SearchAccessorError = ANNError,
+        >,
 {
+    type SearchAccessor = QuantAccessor<'a, V, D, Ctx>;
+    type SearchAccessorError = ANNError;
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }
@@ -702,13 +691,7 @@ pub enum RQError {
     FullPrecisionConversionErr(Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl From<RQError> for ANNError {
-    #[cold]
-    #[track_caller]
-    fn from(err: RQError) -> Self {
-        ANNError::log_sq_error(err)
-    }
-}
+diskann::convert_error!(RQError);
 
 ///////////
 // Tests //
@@ -720,7 +703,7 @@ mod tests {
         alloc::GlobalAllocator,
         spherical::{SphericalQuantizer, SupportedMetric},
     };
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use diskann_vector::{
         DistanceFunction, PreprocessedDistanceFunction, PureDistanceFunction,
         distance::{InnerProduct, Metric, SquaredL2},
@@ -735,7 +718,7 @@ mod tests {
     ////////////////
 
     fn make_store<const NBITS: usize>(
-        data: MatrixView<f32>,
+        data: rowmajor::Ref<f32>,
         metric: SupportedMetric,
         rng: &mut StdRng,
     ) -> SphericalStore
@@ -762,12 +745,8 @@ mod tests {
         )
     }
 
-    fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> Matrix<f32> {
-        Matrix::new(
-            diskann_utils::views::Init(|| StandardNormal {}.sample(rng)),
-            nrows,
-            ncols,
-        )
+    fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> rowmajor::Owned<f32> {
+        rowmajor::Owned::from_fn(nrows, ncols, |_| StandardNormal {}.sample(rng))
     }
 
     #[test]
@@ -874,12 +853,12 @@ mod tests {
 
             let max_relative_error = 0.25;
 
-            for (i, r) in data.row_iter().enumerate() {
+            for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
             }
 
-            for (i, a) in data.row_iter().enumerate() {
-                for (j, b) in data.row_iter().enumerate().skip(i + 1) {
+            for (i, a) in data.rows().enumerate() {
+                for (j, b) in data.rows().enumerate().skip(i + 1) {
                     let expected: f32 = SquaredL2::evaluate(a, b);
                     let got: f32 = computer
                         .evaluate_similarity(
@@ -909,15 +888,15 @@ mod tests {
             let store = make_store::<1>(data.as_view(), SupportedMetric::InnerProduct, &mut rng);
             let computer = store.distance_computer().unwrap();
 
-            for (i, r) in data.row_iter().enumerate() {
+            for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
             }
 
             let mut signs_match = 0;
             let mut total = 0;
 
-            for (i, a) in data.row_iter().enumerate() {
-                for (j, b) in data.row_iter().enumerate().skip(i + 1) {
+            for (i, a) in data.rows().enumerate() {
+                for (j, b) in data.rows().enumerate().skip(i + 1) {
                     total += 1;
                     let expected: f32 = InnerProduct::evaluate(a, b);
                     let got: f32 = computer
@@ -954,15 +933,15 @@ mod tests {
             let store = make_store::<1>(data.as_view(), SupportedMetric::SquaredL2, &mut rng);
             let max_relative_error = 0.2;
 
-            for (i, r) in data.row_iter().enumerate() {
+            for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
             }
 
-            for (i, a) in data.row_iter().enumerate() {
+            for (i, a) in data.rows().enumerate() {
                 let computer = store
                     .query_computer(a, spherical::iface::QueryLayout::FourBitTransposed, false)
                     .unwrap();
-                for (j, b) in data.row_iter().enumerate() {
+                for (j, b) in data.rows().enumerate() {
                     if i == j {
                         continue;
                     }
@@ -995,18 +974,18 @@ mod tests {
         {
             let store = make_store::<1>(data.as_view(), SupportedMetric::InnerProduct, &mut rng);
 
-            for (i, r) in data.row_iter().enumerate() {
+            for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
             }
 
             let mut signs_match = 0;
             let mut total = 0;
 
-            for (i, a) in data.row_iter().enumerate() {
+            for (i, a) in data.rows().enumerate() {
                 let computer = store
                     .query_computer(a, spherical::iface::QueryLayout::FourBitTransposed, true)
                     .unwrap();
-                for (j, b) in data.row_iter().enumerate() {
+                for (j, b) in data.rows().enumerate() {
                     if i == j {
                         continue;
                     }
@@ -1048,7 +1027,7 @@ mod tests {
         assert!(matches!(err, RQError::CompressionError(..)));
     }
 
-    fn test_dataset() -> Matrix<f32> {
+    fn test_dataset() -> rowmajor::Owned<f32> {
         let data = vec![
             0.28657,
             -0.0318168,
@@ -1180,6 +1159,6 @@ mod tests {
             -0.324718, // row 15
         ];
 
-        Matrix::try_from(data.into(), 16, 8).unwrap()
+        rowmajor::Owned::try_from_data(data.into(), 16, 8).unwrap()
     }
 }

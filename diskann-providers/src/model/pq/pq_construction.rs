@@ -8,6 +8,7 @@ use std::{
     mem::size_of,
     num::NonZeroUsize,
     sync::atomic::AtomicBool,
+    time::Instant,
     vec,
 };
 
@@ -24,7 +25,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     io::Metadata,
-    views::{MatrixView, MutMatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use rand::{Rng, distr::Distribution};
 use rayon::prelude::*;
@@ -34,7 +35,7 @@ use crate::{
     model::GeneratePivotArguments,
     storage::PQStorage,
     utils::{
-        BridgeErr, ParallelIteratorInPool, RandomProvider, RayonThreadPoolRef, Timer,
+        BridgeErr, ParallelIteratorInPool, RandomProvider, RayonThreadPoolRef,
         create_rnd_provider_from_seed,
     },
 };
@@ -66,6 +67,9 @@ where
 /// file pq_pivots_path as a s num_centers*dim floating point binary file
 /// PQ pivot table layout: {pivot offsets data: METADATA_SIZE}{pivot vector:[dim; num_centroid]}{centroid vector:[dim; 1]}{chunk offsets:[chunk_num+1; 1]}
 ///
+/// Always trains a new codebook and replaces any existing pivot file after training succeeds.
+/// Training and input-shape errors leave any existing file unchanged.
+///
 /// Argument `legacy_center_data` will center the provided data by the dataset mean.
 /// This is to supply backwards compatibility with some `diskann-disk` tests that used this
 /// feature and require exact reproducibility in some tests.
@@ -82,17 +86,11 @@ pub fn generate_pq_pivots<Storage, Random>(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()>
 where
-    Storage: StorageWriteProvider + StorageReadProvider,
+    Storage: StorageWriteProvider,
     Random: Rng,
 {
-    if pq_storage.pivot_data_exist(storage_provider) {
-        let (file_num_centers, file_dim) =
-            pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        if file_dim == parameters.dim() && file_num_centers == parameters.num_centers() {
-            // PQ pivot file exists. Not generating again.
-            return Ok(());
-        }
-    }
+    rowmajor::Ref::try_from_data(&*train_data, parameters.num_train(), parameters.dim())
+        .bridge_err()?;
 
     let centroid = if legacy_center_data {
         let mut centroid: Vec<f32> = vec![0.0; parameters.dim()];
@@ -108,9 +106,9 @@ where
     };
 
     let dim = NonZeroUsize::new(parameters.dim())
-        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+        .ok_or_else(|| ANNError::message("dim must be non-zero"))?;
     let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks())
-        .ok_or_else(|| ANNError::log_pq_error("num_pq_chunks must be non-zero"))?;
+        .ok_or_else(|| ANNError::message("num_pq_chunks must be non-zero"))?;
     let chunk_offsets = ChunkOffsets::partition(dim, num_chunks).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -121,14 +119,14 @@ where
     let full_pivot_data = pool.install(|| -> Result<Vec<f32>, ANNError> {
         let result = trainer
             .train(
-                MatrixView::try_from(train_data, parameters.num_train(), parameters.dim())
+                rowmajor::Ref::try_from_data(train_data, parameters.num_train(), parameters.dim())
                     .bridge_err()?,
                 chunk_offsets.as_view(),
                 diskann_quantization::Parallelism::Rayon,
                 &random_provider,
                 &diskann_quantization::cancel::DontCancel,
             )
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?
+            .map_err(ANNError::new)?
             .flatten();
         Ok(result)
     })?;
@@ -158,7 +156,6 @@ where
 /// The size of the `offsets` vector must be `num_pq_chunks + 1`.
 ///
 /// Result is stored in the `full_pivot_data`, which must be of size `num_centers * dim`.
-#[allow(clippy::too_many_arguments)]
 pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     parameters: &GeneratePivotArguments,
     train_data_slice: &[T],
@@ -169,19 +166,19 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if full_pivot_data.len() != parameters.num_centers() * parameters.dim() {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::message(
             "Error: full_pivot_data size is not num_centers * dim.",
         ));
     }
 
     if offsets.len() != parameters.num_pq_chunks() + 1 {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::message(
             "Error: invalid offsets buffer input size.",
         ));
     }
 
     if *cancellation_token {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::message(
             "Error: Cancellation requested by caller.",
         ));
     }
@@ -194,7 +191,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
 
     // Calculate the chunk offsets, filling the caller-owned buffer.
     let dim = NonZeroUsize::new(parameters.dim())
-        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+        .ok_or_else(|| ANNError::message("dim must be non-zero"))?;
     let chunk_offsets_view = ChunkOffsetsView::partition_into(dim, offsets).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -221,7 +218,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
 
         let result = trainer
             .train(
-                MatrixView::try_from(
+                rowmajor::Ref::try_from_data(
                     train_data.as_slice(),
                     parameters.num_train(),
                     parameters.dim(),
@@ -232,7 +229,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
                 &rng_builder,
                 &cancelation,
             )
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?
+            .map_err(ANNError::new)?
             .flatten();
         Ok(result)
     })?;
@@ -292,12 +289,12 @@ pub fn move_train_data_by_centroid(
 /// # Panics
 ///
 /// Panics if `y.len() != x.ncols()`.
-pub fn accum_row_inplace<T>(mut x: MutMatrixView<T>, y: &[T])
+pub fn accum_row_inplace<T>(mut x: rowmajor::Mut<T>, y: &[T])
 where
     T: Copy + std::ops::AddAssign,
 {
     assert_eq!(x.ncols(), y.len());
-    x.row_iter_mut().for_each(|row| {
+    x.rows_mut().for_each(|row| {
         std::iter::zip(row.iter_mut(), y.iter()).for_each(|(a, b)| {
             *a += *b;
         });
@@ -324,7 +321,7 @@ where
     T: Copy + VectorRepr,
     Storage: StorageWriteProvider + StorageReadProvider,
 {
-    let timer = Timer::new();
+    let timer = Instant::now();
 
     info!("Generating PQ data starting from offset {}", offset);
 
@@ -339,31 +336,30 @@ where
 
     let (num_points, dim) = Metadata::read(uncompressed_data_reader)?.into_dims();
 
-    let mut full_pivot_data: Vec<f32>;
-    let centroid: Vec<f32>;
-    let chunk_offsets: Vec<usize>;
     let full_dim: usize;
+    let table;
 
     if !pq_storage.pivot_data_exist(storage_provider) {
-        return Err(ANNError::log_pq_error(
-            "ERROR: PQ k-means pivot file not found.",
-        ));
+        return Err(ANNError::message("ERROR: PQ k-means pivot file not found."));
     } else {
         (_, full_dim) = pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        (full_pivot_data, centroid, chunk_offsets) = pq_storage.load_existing_pivot_data(
-            &num_pq_chunks,
-            &num_centers,
-            &full_dim,
-            storage_provider,
-        )?;
-    }
+        table = pq_storage.load_pivots(storage_provider)?;
 
-    // Instead of subtracting the center from each data set component, we instead
-    // add it to each center.
-    let mut full_pivot_data_mat =
-        MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
-            .bridge_err()?;
-    accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
+        if table.nchunks() != num_pq_chunks
+            || table.ncenters() != num_centers
+            || table.dim() != full_dim
+        {
+            return Err(ANNError::message(format!(
+                "PQ pivot table mismatch: file has {} chunks, {} centers in {} dimensions but expected {} chunks, {} centers in {} dimensions.",
+                table.nchunks(),
+                table.ncenters(),
+                table.dim(),
+                num_pq_chunks,
+                num_centers,
+                full_dim
+            )));
+        }
+    }
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
         num_points,
@@ -388,13 +384,8 @@ where
     ))?;
 
     // The compression table.
-    let table = TransposedTable::from_parts(
-        full_pivot_data_mat.as_view(),
-        diskann_quantization::views::ChunkOffsetsView::new(&chunk_offsets)
-            .bridge_err()?
-            .to_owned(),
-    )
-    .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+    let table = TransposedTable::from_parts(table.view_pivots(), table.view_offsets().to_owned())
+        .map_err(|err| ANNError::message(diskann_quantization::error::format(&err)))?;
 
     let mut buffer = vec![0.0; full_dim * block_size];
 
@@ -426,20 +417,19 @@ where
         // process `BATCH_SIZE` many dataset vectors at a time.
         const BATCH_SIZE: usize = 128;
 
-        // Wrap the data in `MatrixViews` so we do not need to manually construct view
+        // Wrap the data in `rowmajor::Refs` so we do not need to manually construct view
         // in the compression loop.
         let mut compressed_block =
-            MutMatrixView::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
+            rowmajor::Mut::try_from_data(&mut block_compressed_base, cur_block_size, num_pq_chunks)
                 .bridge_err()?;
-        let base_block = MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
+        let base_block =
+            rowmajor::Ref::try_from_data(block_data, cur_block_size, full_dim).bridge_err()?;
 
         base_block
             .par_window_iter(BATCH_SIZE)
             .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
             .try_for_each_in_pool(pool, |(src, dst)| {
-                table.compress_into(src, dst).map_err(|err| {
-                    ANNError::log_pq_error(diskann_quantization::error::format(&err))
-                })
+                table.compress_into(src, dst).map_err(ANNError::new)
             })?;
 
         let offset = start_index * num_pq_chunks + std::mem::size_of::<i32>() * 2;
@@ -455,76 +445,12 @@ where
     Ok(())
 }
 
-/// Compute the PQ codes for a single vector argument.
+/// Compute PQ codes for a batch of vectors using in-memory pivots.
 ///
-/// Given training data in train_data of dimensions `dim` and
-/// PQ pivots computed earlier, partition the co-ordinates into
-/// `num_pq_chunks`, and find the closest pivots for each point in each chunk.
-/// This API doesn't involve reading/writing to disk and is used for in-memory.
-///
-/// If `centroid` is `Some(_)` subtract the centroid from each point before finding the
-/// closest pivots.
-///
-/// Output `pq_out` which must be pre-allocated and will be used to determine
-/// `num_pq_chunks`.
-///
-/// # Arguments
-/// * `vector_data` - A single vector to be encoded.
-/// * `pivot_data` - A logical 2-dimensional array containing the PQ pivots in row-major
-///   order.
-/// * `num_pivots` - The size of the first dimension of the `pivot_data` matrix.
-/// * `centroid` - An optional centroid to use for zero centering `vector_data`.
-///
-///   If `Some(_)`, then `vector_data` will be transformed by subtracting each component by
-///   its corresponding entry in `centroid`.
-///
-///   If `None`, then no centering will take place.
-/// * `offsets` - A prefix-sum style encoding of the start and stop positions of each
-///   chunk in `pivot_data`.
-/// * `pq_out` - Output buffer for the PQ codes.
-///
-/// # Returns
-/// An `ANNResult<()>` indicating success or failure.
-pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
-    vector_data: &[T],
-    pivot_data: &[f32],
-    num_pivots: usize,
-    offsets: &[usize],
-    pq_out: &mut [u8],
-) -> ANNResult<()> {
-    // Number of dimensions in the vector to encode.
-    let dim = vector_data.len();
-
-    // Create a `BasicTableView` of the pivots.
-    //
-    // This does not allocate memory, but does validate the following invariants:
-    // * `pivot_data.len() == num_pivots * dim`.
-    // * `offsets` begins at zero, ends at `dim`, and is monotonic.
-    let table = BasicTableView::new(
-        MatrixView::try_from(pivot_data, num_pivots, dim).bridge_err()?,
-        diskann_quantization::views::ChunkOffsetsView::new(offsets).bridge_err()?,
-    )
-    .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
-
-    let data = vector_data
-        .iter()
-        .map(|x| (*x).into())
-        .collect::<Vec<f32>>();
-
-    table
-        .compress_into(data.as_slice(), pq_out)
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))
-}
-
-/// Legacy compatibility function for providing an batch data generation.
-///
-/// Compute the PQ codes for a single vector argument.
-///
-/// Given training data in train_data of dimensions `dim` and
-/// PQ pivots computed earlier, partition the co-ordinates into
-/// `num_pq_chunks`, and find the closest pivots for each point in each chunk.
-/// This API doesn't involve reading/writing to disk and is used for in-memory.
-pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>>(
+/// Given vector data with dimensions from `parameters` and PQ pivots computed
+/// earlier, partition the coordinates into `num_pq_chunks` and find the closest
+/// pivot for each vector chunk. This API does not read or write storage.
+pub fn generate_pq_data_from_pivots_from_membuf_batch<T: VectorRepr + Sync>(
     parameters: &GeneratePivotArguments,
     vector_data: &[T],
     pivot_data: &[f32],
@@ -535,39 +461,41 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
     // Perform minimal error checking at this level, mainly on the sizes of `vector_data`
     // and `pq_out`.
     //
-    // More dimentionality checking is deferred to the inner function.
+    // More dimensionality checking is deferred to the table construction.
     let num_train = parameters.num_train();
     let num_pq_chunks = parameters.num_pq_chunks();
     let dim = parameters.dim();
 
     if vector_data.len() != num_train * dim {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::message(
             "Error: Vector data length has the incorrect size!",
         ));
     }
     if pq_out.len() != num_train * num_pq_chunks {
-        return Err(ANNError::log_pq_error(
-            "Error: Invalid PQ buffer input size.",
-        ));
+        return Err(ANNError::message("Error: Invalid PQ buffer input size."));
     }
+
+    let table = BasicTableView::new(
+        rowmajor::Ref::try_from_data(pivot_data, parameters.num_centers(), dim).bridge_err()?,
+        ChunkOffsetsView::new(offsets).bridge_err()?,
+    )
+    .map_err(|err| ANNError::message(diskann_quantization::error::format(&err)))?;
 
     pq_out
         .par_chunks_mut(num_pq_chunks)
         .zip(vector_data.par_chunks(dim))
-        .try_for_each_in_pool(pool, |(pq_slice, vector_slice)| {
-            generate_pq_data_from_pivots_from_membuf(
-                vector_slice,
-                pivot_data,
-                parameters.num_centers(),
-                offsets,
-                pq_slice,
-            )
+        .try_for_each_in_pool(pool, |(pq_slice, vector)| {
+            let data = T::as_f32(vector).map_err(ANNError::new)?;
+            table.compress_into(&*data, pq_slice).map_err(ANNError::new)
         })
 }
 
 #[cfg(test)]
 mod pq_test {
-    use std::{f32, io::Write};
+    use std::{
+        f32,
+        io::{Read, Write},
+    };
 
     use crate::storage::VirtualStorageProvider;
     use approx::assert_relative_eq;
@@ -656,30 +584,30 @@ mod pq_test {
         let mut reader = storage_provider.open_reader(pivot_file_name).unwrap();
         let offsets = read_bin_from::<u64>(&mut reader, 0).unwrap();
         let file_offset_data = offsets.map(|x| x.into_usize());
-        assert_eq!(file_offset_data[(0, 0)], METADATA_SIZE);
+        assert_eq!(*file_offset_data.element(0, 0), METADATA_SIZE);
         assert_eq!(offsets.nrows(), 4);
         assert_eq!(offsets.ncols(), 1);
 
-        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)]).unwrap();
+        let pivots = read_bin_from::<f32>(&mut reader, *file_offset_data.element(0, 0)).unwrap();
 
         assert_eq!(pivots.as_slice().len(), 16);
         assert_eq!(pivots.nrows(), 2);
         assert_eq!(pivots.ncols(), 8);
 
-        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)]).unwrap();
+        let centroid = read_bin_from::<f32>(&mut reader, *file_offset_data.element(1, 0)).unwrap();
         assert_eq!(
-            centroid[(0, 0)],
+            *centroid.element(0, 0),
             (1.0f32 + 2.0f32 + 2.1f32 + 2.2f32 + 100.0f32) / 5.0f32
         );
         assert_eq!(centroid.nrows(), 8);
         assert_eq!(centroid.ncols(), 1);
 
-        let chunk_offsets = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])
+        let chunk_offsets = read_bin_from::<u32>(&mut reader, *file_offset_data.element(2, 0))
             .unwrap()
             .map(|x| x.into_usize());
-        assert_eq!(chunk_offsets[(0, 0)], 0);
-        assert_eq!(chunk_offsets[(1, 0)], 4);
-        assert_eq!(chunk_offsets[(2, 0)], 8);
+        assert_eq!(*chunk_offsets.element(0, 0), 0);
+        assert_eq!(*chunk_offsets.element(1, 0), 4);
+        assert_eq!(*chunk_offsets.element(2, 0), 8);
         assert_eq!(chunk_offsets.nrows(), 3);
         assert_eq!(chunk_offsets.ncols(), 1);
     }
@@ -716,41 +644,104 @@ mod pq_test {
         assert_eq!(full_pivot_data.len(), 16);
     }
 
-    #[test]
-    fn read_pivot_metadata_existing_test() {
-        // no real data except pivot data.
-        const DATA_FILE: &str = "/test/test/fake.bin";
-        const PQ_PIVOT_PATH: &str = "/sift/siftsmall_learn_pq_pivots.bin";
-        const PQ_COMPRESSED_PATH: &str = "/test/test/fake.bin";
+    #[rstest]
+    fn generate_pq_pivots_replaces_existing_codebook(
+        #[values(false, true)] legacy_center_data: bool,
+        #[values(1, 2)] existing_chunks: usize,
+    ) {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/existing_pivots.bin";
+        let reference_path = "/fresh_pivots.bin";
+        let pq_storage = PQStorage::new(pivot_path, "/unused.bin", None);
+        let reference_storage = PQStorage::new(reference_path, "/unused.bin", None);
+        // Matching metadata must not reuse a stale codebook, regardless of its chunk count.
+        let existing_offsets: &[usize] = if existing_chunks == 1 {
+            &[0, 2]
+        } else {
+            &[0, 1, 2]
+        };
+        pq_storage
+            .write_pivot_data(
+                &[-100.0; 4],
+                None,
+                existing_offsets,
+                2,
+                2,
+                &storage_provider,
+            )
+            .unwrap();
+        let read_pivots = |path| {
+            let mut bytes = Vec::new();
+            storage_provider
+                .open_reader(path)
+                .unwrap()
+                .read_to_end(&mut bytes)
+                .unwrap();
+            bytes
+        };
+        let previous_pivots = read_pivots(pivot_path);
+        let training_data = [1.0, 2.0, 2.0, 1.0, 9.0, 10.0, 10.0, 9.0];
+        let pool = create_thread_pool_for_test();
+        for storage in [&reference_storage, &pq_storage] {
+            let mut train_data = training_data;
+            generate_pq_pivots(
+                GeneratePivotArguments::new(4, 2, 2, 2, 5).unwrap(),
+                legacy_center_data,
+                &mut train_data,
+                storage,
+                &storage_provider,
+                crate::utils::create_rnd_provider_from_seed_in_tests(42),
+                pool.as_ref(),
+            )
+            .unwrap();
+        }
 
-        let mut train_data = vec![0.0; 10 * 5];
-        let num_train = 10;
-        let dim = 128;
-        let num_centers = 256;
-        let num_pq_chunks = dim - 1;
-        let max_k_means_reps = 10;
-        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
-        let pq_storage = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
+        let generated_pivots = read_pivots(pivot_path);
+        assert_ne!(generated_pivots, previous_pivots);
+        assert_eq!(generated_pivots, read_pivots(reference_path));
+        assert_eq!(
+            pq_storage.load_pivots(&storage_provider).unwrap().nchunks(),
+            2
+        );
+    }
+
+    #[rstest]
+    fn generate_pq_pivots_invalid_data_preserves_existing_codebook(
+        #[values(false, true)] legacy_center_data: bool,
+    ) {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/preserved_pivots.bin";
+        let pq_storage = PQStorage::new(pivot_path, "/unused.bin", None);
+        pq_storage
+            .write_pivot_data(&[-100.0; 4], None, &[0, 2], 2, 2, &storage_provider)
+            .unwrap();
+        let mut previous_pivots = Vec::new();
+        storage_provider
+            .open_reader(pivot_path)
+            .unwrap()
+            .read_to_end(&mut previous_pivots)
+            .unwrap();
+        let mut invalid_data = [1.0; 7];
         let pool = create_thread_pool_for_test();
         let result = generate_pq_pivots(
-            GeneratePivotArguments::new(
-                num_train,
-                dim,
-                num_centers,
-                num_pq_chunks,
-                max_k_means_reps,
-            )
-            .unwrap(),
-            true,
-            &mut train_data,
+            GeneratePivotArguments::new(4, 2, 2, 2, 5).unwrap(),
+            legacy_center_data,
+            &mut invalid_data,
             &pq_storage,
             &storage_provider,
             crate::utils::create_rnd_provider_from_seed_in_tests(42),
             pool.as_ref(),
         );
 
-        // still succeed without training data
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert_eq!(invalid_data, [1.0; 7]);
+        let mut preserved_pivots = Vec::new();
+        storage_provider
+            .open_reader(pivot_path)
+            .unwrap()
+            .read_to_end(&mut preserved_pivots)
+            .unwrap();
+        assert_eq!(preserved_pivots, previous_pivots);
     }
 
     #[test]
@@ -810,8 +801,8 @@ mod pq_test {
         .unwrap();
         assert_eq!(compressed.nrows(), 5);
         assert_eq!(compressed.ncols(), 2);
-        assert_eq!(compressed[(0, 0)], compressed[(1, 0)]);
-        assert_ne!(compressed[(0, 0)], compressed[(4, 0)]);
+        assert_eq!(compressed.element(0, 0), compressed.element(1, 0));
+        assert_ne!(compressed.element(0, 0), compressed.element(4, 0));
 
         storage_provider.delete(data_file).unwrap();
         storage_provider.delete(pq_pivots_path).unwrap();
@@ -855,26 +846,16 @@ mod pq_test {
         )
         .unwrap();
 
+        let table = FixedChunkPQTable::new(dim, pivot_data.into(), offsets.into()).unwrap();
         let mut pq: Vec<u8> = vec![0; num_pq_chunks];
         for i in 0..num_train {
-            generate_pq_data_from_pivots_from_membuf(
-                &train_data[dim * i..dim * (i + 1)],
-                &pivot_data,
-                num_centers,
-                &offsets,
-                &mut pq,
-            )
-            .unwrap();
+            table
+                .compress_into(&train_data[dim * i..dim * (i + 1)], &mut pq)
+                .unwrap();
         }
 
-        assert!(
-            !offsets.contains(&usize::MAX),
-            "offsets contains max value!"
-        );
-        assert!(
-            !pivot_data.contains(&f32::MAX),
-            "pivot_data contains max value!"
-        );
+        assert!(!table.get_chunk_offsets().contains(&usize::MAX));
+        assert!(!table.get_pq_table().contains(&f32::MAX));
     }
 
     #[rstest]
@@ -936,15 +917,10 @@ mod pq_test {
         // use membuf function to generate pq
 
         // use pivot data generated by original function
-        let (full_pivot_data, centroid, offsets) = pq_storage
-            .load_existing_pivot_data(
-                &num_pq_chunks,
-                &NUM_PQ_CENTROIDS,
-                &train_dim,
-                &storage_provider,
-            )
-            .unwrap();
-
+        let table = pq_storage.load_pivots(&storage_provider).unwrap();
+        assert_eq!(table.nchunks(), num_pq_chunks);
+        assert_eq!(table.ncenters(), NUM_PQ_CENTROIDS);
+        assert_eq!(table.dim(), train_dim);
         let mut membuf_pq_data: Vec<u8> = vec![0; num_pq_chunks * num_train];
 
         // `from_membuf` switched to an implementation optimized for a single vector.
@@ -955,14 +931,12 @@ mod pq_test {
             .par_chunks_mut(num_pq_chunks)
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, membuf_slice)| {
-                generate_pq_data_from_pivots_from_membuf(
-                    &full_data_vector[train_dim * i..train_dim * (i + 1)],
-                    &full_pivot_data,
-                    NUM_PQ_CENTROIDS,
-                    &offsets,
-                    membuf_slice,
-                )
-                .unwrap();
+                table
+                    .compress_into(
+                        &full_data_vector[train_dim * i..train_dim * (i + 1)],
+                        membuf_slice,
+                    )
+                    .unwrap();
             });
 
         // use pq generated by original function as the gt
@@ -975,10 +949,12 @@ mod pq_test {
         .unwrap();
 
         let membuf_view =
-            MatrixView::try_from(membuf_pq_data.as_slice(), num_train, num_pq_chunks).unwrap();
+            rowmajor::Ref::try_from_data(membuf_pq_data.as_slice(), num_train, num_pq_chunks)
+                .unwrap();
 
         let original_view =
-            MatrixView::try_from(original_pq_data.as_slice(), num_train, num_pq_chunks).unwrap();
+            rowmajor::Ref::try_from_data(original_pq_data.as_slice(), num_train, num_pq_chunks)
+                .unwrap();
 
         // Pre-emptively construct an offset view to compare mismatched slices.
         // We want to check that the difference in the mismatched chunks is small.
@@ -989,9 +965,10 @@ mod pq_test {
         .unwrap();
         let offset_view = chunk_offsets.as_view();
         let full_data =
-            MatrixView::try_from(full_data_vector.as_slice(), num_train, train_dim).unwrap();
-        let pivot_view =
-            MatrixView::try_from(full_pivot_data.as_slice(), NUM_PQ_CENTROIDS, train_dim).unwrap();
+            rowmajor::Ref::try_from_data(full_data_vector.as_slice(), num_train, train_dim)
+                .unwrap();
+        let pivot_view = table.view_pivots();
+        let centroid = vec![0.0; train_dim];
 
         // Due to difference in numerical rounding, the results between the two APIs can
         // vary slightly.
@@ -1112,13 +1089,11 @@ mod pq_test {
         );
         assert!(result.is_ok());
 
+        let table = FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into()).unwrap();
         let mut membuf_pq_data: Vec<u8> = vec![0; num_pq_chunks];
         for i in 0..npts {
-            let result = generate_pq_data_from_pivots_from_membuf(
+            let result = table.compress_into(
                 &full_data_vector[(dim * i)..(dim * (i + 1))],
-                &full_pivot_data,
-                NUM_PQ_CENTROIDS,
-                &offsets,
                 &mut membuf_pq_data,
             );
             assert!(result.is_ok());

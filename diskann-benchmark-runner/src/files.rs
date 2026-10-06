@@ -28,7 +28,7 @@ pub struct InputFile {
 }
 
 impl InputFile {
-    /// Create a new new input file from the path-like `path``
+    /// Create a new input file from the path-like `path`.
     pub fn new<P>(path: P) -> Self
     where
         PathBuf: From<P>,
@@ -38,8 +38,13 @@ impl InputFile {
         }
     }
 
+    /// Try to resolve `self` to an existing file.
+    ///
+    /// If `self` is absolute, this will verify that `self` exists. Otherwise, the search
+    /// directories in `checker` will be prepended to `self` and the first existing file
+    /// will be returned.
     pub fn resolve(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        let checked_path = checker.check_path(self);
+        let checked_path = checker.find_input_file(self);
         match checked_path {
             Ok(p) => {
                 self.path = p;
@@ -57,13 +62,19 @@ impl std::ops::Deref for InputFile {
     }
 }
 
+impl std::fmt::Display for InputFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display())
+    }
+}
+
 ///////////
 // Tests //
 ///////////
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{create_dir, File};
+    use std::fs::{File, create_dir};
 
     use super::*;
 

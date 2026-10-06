@@ -7,7 +7,7 @@
 
 use std::{io::Write, num::NonZeroUsize};
 
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::simd;
 use diskann_wide::Architecture;
 use half::f16;
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    benchmark::{MatchContext, PassFail, Regression, Score},
     utils::{
         datatype::{AsDataType, DataType},
         num::{relative_change, NonNegativeFinite},
@@ -78,10 +78,10 @@ impl std::fmt::Display for SimilarityMeasure {
 #[serde(rename_all = "kebab-case")]
 enum Arch {
     #[serde(rename = "x86-64-v4")]
-    #[allow(non_camel_case_types)]
+    #[expect(non_camel_case_types)]
     X86_64_V4,
     #[serde(rename = "x86-64-v3")]
-    #[allow(non_camel_case_types)]
+    #[expect(non_camel_case_types)]
     X86_64_V3,
     Neon,
     Scalar,
@@ -433,10 +433,6 @@ trait AsArch: Sized + 'static {
 
     fn try_new() -> Result<Self, ArchNotSupported>;
 
-    fn is_match(arch: Arch) -> bool {
-        arch == Self::ARCH && Self::is_available()
-    }
-
     fn describe(arch: Arch) -> ArchDescribe {
         if arch != Self::ARCH {
             ArchDescribe::Mismatch {
@@ -527,23 +523,26 @@ where
     type Output = Vec<RunResult>;
 
     // Matching simply requires that we match the inner type.
-    fn try_match(&self, from: &SimdOp) -> Result<MatchScore, FailureScore> {
-        let mut failscore: Option<u32> = None;
-        if !Q::is_match(from.query_type) {
-            *failscore.get_or_insert(0) += 10;
-        }
-        if !D::is_match(from.data_type) {
-            *failscore.get_or_insert(0) += 10;
-        }
-        if !A::is_match(from.arch) {
-            let penalty = if from.arch == A::ARCH { 2 } else { 3 };
-            *failscore.get_or_insert(0) += penalty;
+    fn try_match(&self, from: &SimdOp, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+
+        let desc = Q::describe(from.query_type);
+        if !desc.is_match() {
+            score.fail(10, &format_args!("Mismatched query type: {}", desc));
         }
 
-        match failscore {
-            None => Ok(MatchScore(0)),
-            Some(score) => Err(FailureScore(score)),
+        let desc = D::describe(from.data_type);
+        if !desc.is_match() {
+            score.fail(10, &format_args!("Mismatched data type: {}", desc));
         }
+
+        let desc = A::describe(from.arch);
+        if !desc.is_match() {
+            let penalty = if from.arch == A::ARCH { 2 } else { 3 };
+            score.fail(penalty, &format_args!("Mismatched architecture: {}", desc));
+        }
+
+        score
     }
 
     fn run(
@@ -567,34 +566,10 @@ where
         Ok(results)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&SimdOp>,
-    ) -> std::fmt::Result {
-        match input {
-            None => {
-                writeln!(f, "- Query Type: {}", Q::DATA_TYPE)?;
-                writeln!(f, "- Data Type: {}", D::DATA_TYPE)?;
-                writeln!(f, "- Implementation: {}", A::DISPLAY_NAME)?;
-            }
-            Some(input) => {
-                let desc = Q::describe(input.query_type);
-                if !desc.is_match() {
-                    writeln!(f, "\n    - Mismatched query type: {}", desc)?;
-                }
-
-                let desc = D::describe(input.data_type);
-                if !desc.is_match() {
-                    writeln!(f, "\n    - Mismatched data type: {}", desc)?;
-                }
-
-                let desc = A::describe(input.arch);
-                if !desc.is_match() {
-                    writeln!(f, "\n    - Mismatched architecture: {}", desc)?;
-                }
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "- Query Type: {}", Q::DATA_TYPE)?;
+        writeln!(f, "- Data Type: {}", D::DATA_TYPE)?;
+        writeln!(f, "- Implementation: {}", A::DISPLAY_NAME)?;
         Ok(())
     }
 }
@@ -738,7 +713,7 @@ impl std::fmt::Display for DisplayWrapper<'_, [RunResult]> {
     }
 }
 
-fn run_loops<Q, D, F>(query: &[Q], data: MatrixView<D>, run: &Run, f: F) -> RunResult
+fn run_loops<Q, D, F>(query: &[Q], data: rowmajor::Ref<D>, run: &Run, f: F) -> RunResult
 where
     F: Fn(&[Q], &[D]) -> f32,
 {
@@ -748,7 +723,7 @@ where
     for _ in 0..run.num_measurements.get() {
         let start = std::time::Instant::now();
         for _ in 0..run.loops_per_measurement.get() {
-            std::iter::zip(dst.iter_mut(), data.row_iter()).for_each(|(d, r)| {
+            std::iter::zip(dst.iter_mut(), data.rows()).for_each(|(d, r)| {
                 *d = f(query, r);
             });
             std::hint::black_box(&mut dst);
@@ -766,7 +741,7 @@ where
 
 struct Data<Q, D> {
     query: Box<[Q]>,
-    data: Matrix<D>,
+    data: rowmajor::Owned<D>,
 }
 
 impl<Q, D> Data<Q, D> {
@@ -779,11 +754,9 @@ impl<Q, D> Data<Q, D> {
         let query: Box<[Q]> = (0..run.dim.get())
             .map(|_| StandardUniform.sample(&mut rng))
             .collect();
-        let data = Matrix::<D>::new(
-            diskann_utils::views::Init(|| StandardUniform.sample(&mut rng)),
-            run.num_points.get(),
-            run.dim.get(),
-        );
+        let data = rowmajor::Owned::<D>::from_fn(run.num_points.get(), run.dim.get(), |_| {
+            StandardUniform.sample(&mut rng)
+        });
 
         Self { query, data }
     }

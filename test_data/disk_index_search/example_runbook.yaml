@@ -1,3 +1,30 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2ba3312eec78c693621ec66b4bf6efedcdf19a57ffa54a570945ea3bd4313537
-size 458
+sift-small-256:
+  max_pts: 256
+  1: 
+    operation: "insert"
+    start: 0
+    end: 192
+  2:
+    operation: "search"
+  3:
+    operation: "replace"
+    tags_start: 0
+    tags_end: 64
+    ids_start: 192
+    ids_end: 256
+  4:
+    operation: "search"
+  5:
+    operation: "replace"
+    tags_start: 0
+    tags_end: 64
+    ids_start: 0
+    ids_end: 64
+  6:
+    operation: "search"
+  7: 
+    operation: "delete"
+    start: 64
+    end: 128
+  8:
+    operation: "search"

@@ -1,0 +1,28 @@
+Registered Benchmarks:
+    another-gated-bench:
+        tag "test-input-dim"
+        Another gated benchmark
+    dim-bench:
+        tag "test-input-dim"
+        matches all
+    exact-type-bench-f32-1000:
+        tag "test-input-types"
+        float32, dim=1000
+    fully-gated-bench:
+        tag "phantom-input"
+        A fully gated benchmark
+    gated-bench:
+        tag "test-input-types"
+        A gated benchmark
+    simple-bench:
+        tag "test-input-dim"
+        dim=None only
+    something-else:
+        tag "sample-input"
+        A gated benchmark that always registers its input
+    type-bench-f32:
+        tag "test-input-types"
+        float32
+    type-bench-i8:
+        tag "test-input-types"
+        int8

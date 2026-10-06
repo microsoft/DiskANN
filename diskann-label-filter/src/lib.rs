@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Label storage, parsing, and filtering for DiskANN searches.
+
 // Parser modules
 pub mod parser {
     pub mod ast;

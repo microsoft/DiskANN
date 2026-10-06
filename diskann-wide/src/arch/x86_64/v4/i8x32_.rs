@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDVector},
+    traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDVector},
 };
 
 //////////////////
@@ -59,6 +59,13 @@ impl std::ops::Mul for i8x32 {
 helpers::unsafe_map_binary_op!(i8x32, std::ops::Add, add, _mm256_add_epi8, "avx2");
 helpers::unsafe_map_binary_op!(i8x32, std::ops::Sub, sub, _mm256_sub_epi8, "avx2");
 helpers::unsafe_map_unary_op!(i8x32, SIMDAbs, abs_simd, _mm256_abs_epi8, "avx2");
+helpers::unsafe_map_unary_op!(
+    i8x32,
+    SIMDPopcount,
+    popcount_simd,
+    _mm256_popcnt_epi8,
+    "avx512bitalg,avx512vl"
+);
 
 helpers::unsafe_map_binary_op!(i8x32, std::ops::BitAnd, bitand, _mm256_and_si256, "avx2");
 helpers::unsafe_map_binary_op!(i8x32, std::ops::BitOr, bitor, _mm256_or_si256, "avx2");
@@ -158,4 +165,5 @@ mod test_x86_i8 {
 
     // Bit ops
     test_utils::ops::test_bitops!(i8x32, 0xd62d8de09f82ed4e, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(i8x32, 0xdc54b21bedc25f46, V4::new_checked_uncached());
 }

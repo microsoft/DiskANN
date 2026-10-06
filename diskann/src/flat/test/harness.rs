@@ -3,32 +3,34 @@
  * Licensed under the MIT license.
  */
 
-//! Reusable execution harness for [`crate::flat::FlatIndex`] tests.
+//! Reusable execution harness for [`crate::flat::knn_search`] tests.
 //!
 //! Use [`KnnOracleRun::run`] to drive `knn_search` under a chosen [`OracleProcessor`]
 //! and pair the result with the oracle's expected post-processed output.
 
-use std::{cmp::Ordering, convert::Infallible, num::NonZeroUsize};
+use std::{convert::Infallible, num::NonZeroUsize};
 
+use diskann_utils::views::rowmajor::Matrix;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
 use crate::{
     ANNResult,
+    error::IntoANNResult,
     flat::{
-        FlatIndex, SearchStats,
-        test::provider::{Provider, Strategy, Visitor},
+        SearchStats, knn_search,
+        test::provider::{Provider, Visitor},
     },
     graph::{
         SearchOutputBuffer,
         glue::{CopyIds, SearchPostProcess},
     },
-    neighbor::{BackInserter, Neighbor},
+    neighbor::{self, BackInserter, Neighbor},
     provider::HasId,
     test::tokio::current_thread_runtime,
     utils::VectorRepr,
 };
 
-/// Result of running [`FlatIndex::knn_search`] under the harness alongside the
+/// Result of running [`knn_search`] under the harness alongside the
 /// oracle's expected post-processed output.
 #[derive(Debug, Clone)]
 pub(crate) struct KnnOracleRun {
@@ -46,41 +48,64 @@ pub(crate) struct KnnOracleRun {
 }
 
 impl KnnOracleRun {
-    /// Run [`FlatIndex::knn_search`] once under `oracle`, blocking on a fresh
+    /// Run [`knn_search`] once under `oracle`, blocking on a fresh
     /// single-threaded runtime, and pair the result with the oracle's expected output.
     pub fn run_sync<O: OracleProcessor>(
-        index: &FlatIndex<Provider>,
-        strategy: &Strategy,
+        provider: &Provider,
         oracle: &O,
         query: &[f32],
         k: usize,
     ) -> ANNResult<Self> {
-        current_thread_runtime().block_on(Self::run(index, strategy, oracle, query, k))
+        current_thread_runtime().block_on(Self::run(provider, oracle, query, k))
+    }
+
+    /// Run [`knn_search`] with an already initialized visitor.
+    pub fn run_sync_with_visitor<O: OracleProcessor>(
+        provider: &Provider,
+        mut visitor: Visitor<'_>,
+        oracle: &O,
+        query: &[f32],
+        k: usize,
+    ) -> ANNResult<Self> {
+        current_thread_runtime().block_on(Self::run_with_visitor(
+            provider,
+            &mut visitor,
+            oracle,
+            query,
+            k,
+        ))
     }
 
     /// Async variant of [`KnnOracleRun::run_sync`]. Use this from tests that already
     /// have a Tokio runtime (e.g. `#[tokio::test]`) or that need to drive
     /// `knn_search` concurrently across tasks.
     pub async fn run<O: OracleProcessor>(
-        index: &FlatIndex<Provider>,
-        strategy: &Strategy,
+        provider: &Provider,
         oracle: &O,
         query: &[f32],
         k: usize,
     ) -> ANNResult<Self> {
-        let context = crate::flat::test::provider::Context::new();
+        let mut visitor = Visitor::new(provider, query).into_ann_result()?;
+        Self::run_with_visitor(provider, &mut visitor, oracle, query, k).await
+    }
+
+    async fn run_with_visitor<O: OracleProcessor>(
+        provider: &Provider,
+        visitor: &mut Visitor<'_>,
+        oracle: &O,
+        query: &[f32],
+        k: usize,
+    ) -> ANNResult<Self> {
         let mut buf = vec![Neighbor::<u32>::default(); k];
 
-        let stats = index
-            .knn_search(
-                NonZeroUsize::new(k).expect("flat::test::harness requires k > 0"),
-                strategy,
-                oracle.processor(),
-                &context,
-                query,
-                &mut BackInserter::new(buf.as_mut_slice()),
-            )
-            .await?;
+        let stats = knn_search(
+            visitor,
+            NonZeroUsize::new(k).expect("flat::test::harness requires k > 0"),
+            oracle.processor(),
+            query,
+            &mut BackInserter::new(buf.as_mut_slice()),
+        )
+        .await?;
 
         let mut top_k: Vec<Neighbor<u32>> = buf
             .iter()
@@ -88,10 +113,9 @@ impl KnnOracleRun {
             .take(stats.result_count as usize)
             .collect();
         sort_neighbors(&mut top_k);
-        let top_k_distances = top_k.iter().map(|n| n.distance).collect();
+        let top_k_distances = top_k.iter().map(|n| *n.distance()).collect();
 
-        let ground_truth =
-            oracle.expected(brute_force_topk(index.provider(), Metric::L2, query, k));
+        let ground_truth = oracle.expected(brute_force_topk(provider, Metric::L2, query, k));
 
         Ok(Self {
             top_k: top_k.into_iter().map(Neighbor::as_tuple).collect(),
@@ -111,7 +135,7 @@ pub(crate) trait OracleProcessor {
     /// The post-processor exercised by the search.
     type Processor: for<'a, 'q> SearchPostProcess<Visitor<'a>, &'q [f32], u32> + Send + Sync;
 
-    /// Construct the processor instance fed to [`FlatIndex::knn_search`].
+    /// Construct the processor instance fed to [`knn_search`].
     fn processor(&self) -> Self::Processor;
 
     /// Transform the brute-force top-`k` neighbors into the output the processor is
@@ -154,11 +178,7 @@ where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        let count = output.extend(
-            candidates
-                .filter(|n| n.id % 2 == 0)
-                .map(|n| (n.id, n.distance)),
-        );
+        let count = output.extend(candidates.filter(|n| *n.id() % 2 == 0));
         std::future::ready(Ok(count))
     }
 }
@@ -175,7 +195,7 @@ impl OracleProcessor for EvenIdsOnlyOracle {
     }
 
     fn expected(&self, gt: Vec<Neighbor<u32>>) -> Vec<Neighbor<u32>> {
-        gt.into_iter().filter(|n| n.id % 2 == 0).collect()
+        gt.into_iter().filter(|n| *n.id() % 2 == 0).collect()
     }
 }
 
@@ -191,7 +211,7 @@ pub(crate) fn brute_force_topk(
 
     let mut neighbors: Vec<Neighbor<u32>> = provider
         .items()
-        .row_iter()
+        .rows()
         .enumerate()
         .map(|(id, element)| Neighbor::new(id as u32, computer.evaluate_similarity(element)))
         .collect();
@@ -203,10 +223,5 @@ pub(crate) fn brute_force_topk(
 
 /// Sort a slice of [`Neighbor<u32>`] by `(distance asc, id asc)`.
 fn sort_neighbors(neighbors: &mut [Neighbor<u32>]) {
-    neighbors.sort_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(Ordering::Equal)
-            .then(a.id.cmp(&b.id))
-    });
+    neighbors.sort_by(neighbor::ord::fast_distance_total);
 }

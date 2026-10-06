@@ -5,12 +5,6 @@
 
 use diskann_benchmark_runner::Registry;
 
-// Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!(
-    "spherical-quantization",
-    inputs::graph_index::SphericalQuantBuild
-);
-
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     const NAME: &str = "graph-index-spherical-quantization";
 
@@ -26,6 +20,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<1>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
@@ -36,6 +31,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<2>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
@@ -46,15 +42,19 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<4>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
         )?;
     }
 
-    // Stub implementation
     #[cfg(not(feature = "spherical-quantization"))]
-    imp::register(NAME, registry)?;
+    registry.register_partially_gated::<crate::inputs::graph_index::SphericalQuantBuild>(
+        NAME,
+        diskann_benchmark_runner::Features::new("spherical-quantization"),
+        "Spherical quantized (RabitQ) graph build and search",
+    )?;
 
     Ok(())
 }
@@ -67,8 +67,9 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 mod imp {
     use diskann::graph::{DiskANNIndex, StartPointStrategy};
     use diskann_benchmark_core as benchmark_core;
+    use diskann_benchmark_core::recall::GroundTruthMode;
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
@@ -77,7 +78,7 @@ mod imp {
         model::graph::provider::async_::{common, inmem},
     };
     use diskann_quantization::alloc::GlobalAllocator;
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use rand::SeedableRng;
     use serde::Serialize;
     use std::{io::Write, sync::Arc};
@@ -91,7 +92,7 @@ mod imp {
         },
         inputs::{
             exhaustive,
-            graph_index::{SearchPhase, SphericalQuantBuild},
+            graph_index::{SearchPhase, SearchPhaseKind, SphericalQuantBuild},
         },
         utils::{
             self, datafiles,
@@ -185,85 +186,60 @@ mod imp {
                 type Input = SphericalQuantBuild;
                 type Output = SphericalBuildResult;
 
-                fn try_match(
-                    &self,
-                    input: &SphericalQuantBuild,
-                ) -> Result<MatchScore, FailureScore> {
-                    let mut failure_score: Option<u32> = None;
+                fn try_match(&self, input: &SphericalQuantBuild, context: &MatchContext) -> Score {
+                    let mut score = context.success(0);
+
                     if input.build.multi_insert().is_some() {
-                        failure_score = Some(1);
+                        score.fail(1, &"Spherical Quantization does not support multi-insert");
                     }
 
                     if !f32::is_match(input.build.data_type()) {
-                        *failure_score.get_or_insert(0) += 1;
+                        score.fail(
+                            1,
+                            &format_args!(
+                                "Only `float32` data type is supported. Instead, got {}",
+                                input.build.data_type()
+                            ),
+                        );
                     }
 
                     if !self.search.is_match(&input.search_phase) {
-                        *failure_score.get_or_insert(0) += 1;
+                        score.fail(
+                            1,
+                            &format_args!(
+                                "Unsupported search phase: \"{}\" - expected one of {}",
+                                input.search_phase.kind(),
+                                self.search.format_kinds(),
+                            ),
+                        )
                     }
 
                     let num_bits = input.num_bits.get();
                     if num_bits != $N {
-                        *failure_score.get_or_insert(0) += ($N as usize)
+                        let penalty = ($N as usize)
                             .abs_diff(num_bits)
                             .try_into()
                             .unwrap_or(u32::MAX);
+
+                        score.fail(
+                            penalty,
+                            &format_args!("Expected {} bits, got {}", $N, num_bits),
+                        );
                     }
 
-                    match failure_score {
-                        None => Ok(MatchScore(0)),
-                        Some(score) => Err(FailureScore(score)),
-                    }
+                    score
                 }
 
-                fn description(
-                    &self,
-                    f: &mut std::fmt::Formatter<'_>,
-                    input: Option<&SphericalQuantBuild>,
-                ) -> std::fmt::Result {
-                    match input {
-                        None => {
-                            writeln!(
-                                f,
-                                "- Index Build and Search using {}-bit spherical quantization",
-                                $N
-                            )?;
-                            writeln!(f, "- Requires `float32` data")?;
-                            writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                            writeln!(f, "- Does not support multi-insert")?;
-                            writeln!(f, "- Search Kinds: {}", self.search.format_kinds())?;
-                        }
-                        Some(input) => {
-                            let num_bits = input.num_bits.get();
-                            if num_bits != $N {
-                                writeln!(f, "- Expected {} bits, got {}", $N, num_bits)?;
-                            }
-
-                            if input.build.multi_insert().is_some() {
-                                writeln!(
-                                    f,
-                                    "- Spherical Quantization does not support multi-insert"
-                                )?;
-                            }
-
-                            if !f32::is_match(input.build.data_type()) {
-                                writeln!(
-                                    f,
-                                    "- Only `float32` data type is supported. Instead, got {}",
-                                    input.build.data_type()
-                                )?;
-                            }
-
-                            if !self.search.is_match(&input.search_phase) {
-                                writeln!(
-                                    f,
-                                    "- Unsupported search phase: \"{}\" - expected one of {}",
-                                    input.search_phase.kind(),
-                                    self.search.format_kinds(),
-                                )?;
-                            }
-                        }
-                    }
+                fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    writeln!(
+                        f,
+                        "- Index Build and Search using {}-bit spherical quantization",
+                        $N
+                    )?;
+                    writeln!(f, "- Requires `float32` data")?;
+                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
+                    writeln!(f, "- Does not support multi-insert")?;
+                    writeln!(f, "- Search Kinds: {}", self.search.format_kinds())?;
                     Ok(())
                 }
 
@@ -283,7 +259,7 @@ mod imp {
 
                     let build = &input.build;
 
-                    let data: Arc<Matrix<f32>> =
+                    let data: Arc<rowmajor::Owned<f32>> =
                         Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                     let start = std::time::Instant::now();
@@ -366,11 +342,11 @@ mod imp {
         for search::plugins::Topk
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::Topk::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            SearchPhaseKind::Topk.as_str()
         }
 
         fn run(
@@ -384,13 +360,18 @@ mod imp {
             // compute the maximum value of k used in any search
             let max_k = topk.max_k();
 
-            let queries: Arc<Matrix<f32>> =
+            let queries: Arc<rowmajor::Owned<f32>> =
                 Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
             let groundtruth =
                 datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
-            let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+            let steps = search::knn::SearchSteps::new(
+                topk.reps,
+                &topk.num_threads,
+                &topk.runs,
+                GroundTruthMode::Fixed,
+            );
 
             let knn = benchmark_core::search::graph::KNN::new(
                 index.clone(),
@@ -409,11 +390,11 @@ mod imp {
         for search::plugins::Range
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::Range::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            SearchPhaseKind::Range.as_str()
         }
 
         fn run(
@@ -424,7 +405,7 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let range = phase.as_range()?;
 
-            let queries: Arc<Matrix<f32>> =
+            let queries: Arc<rowmajor::Owned<f32>> =
                 Arc::new(datafiles::load_dataset(datafiles::BinFile(&range.queries))?);
 
             let groundtruth =
@@ -448,14 +429,71 @@ mod imp {
     }
 
     impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
-        for search::plugins::TopkBetaFilter
+        for search::plugins::FilteredRange
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::FilteredRange::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            SearchPhaseKind::FilteredRange.as_str()
+        }
+
+        fn run(
+            &self,
+            index: Arc<DiskANNIndex<SQProvider>>,
+            phase: &SearchPhase,
+            query_layout: &exhaustive::SphericalQuery,
+        ) -> anyhow::Result<AggregatedSearchResults> {
+            let filtered_range = phase.as_filtered_range()?;
+
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&filtered_range.queries),
+            )?);
+
+            let groundtruth =
+                datafiles::load_range_groundtruth(datafiles::BinFile(&filtered_range.groundtruth))?;
+
+            let steps = search::range::RangeSearchSteps::new(
+                filtered_range.reps,
+                &filtered_range.num_threads,
+                &filtered_range.runs,
+            );
+
+            let bit_maps = generate_bitmaps(
+                &filtered_range.query_predicates,
+                &filtered_range.data_labels,
+            )?;
+
+            let labels: Arc<[_]> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect();
+
+            let filtered_range = benchmark_core::search::graph::filtered_range::FilteredRange::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(
+                    inmem::spherical::Quantized::search((*query_layout).into()),
+                ),
+                labels,
+            )?;
+
+            let result = search::range::run_filtered(&filtered_range, &groundtruth, steps)?;
+
+            Ok(AggregatedSearchResults::Range(result))
+        }
+    }
+
+    impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
+        for search::plugins::TopkBetaFilter
+    {
+        fn is_match(&self, phase: &SearchPhase) -> bool {
+            search::plugins::TopkBetaFilter::is_match(phase)
+        }
+
+        fn kind(&self) -> &'static str {
+            SearchPhaseKind::TopkBetaFilter.as_str()
         }
 
         fn run(
@@ -466,9 +504,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let betafilter = phase.as_topk_beta_filter()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &betafilter.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&betafilter.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&betafilter.groundtruth))?;
@@ -477,6 +515,7 @@ mod imp {
                 betafilter.reps,
                 &betafilter.num_threads,
                 &betafilter.runs,
+                GroundTruthMode::Flexible,
             );
 
             let bit_maps = generate_bitmaps(&betafilter.query_predicates, &betafilter.data_labels)?;
@@ -505,11 +544,11 @@ mod imp {
         for search::plugins::TopkMultihopFilter
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::TopkMultihopFilter::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            SearchPhaseKind::TopkMultihopFilter.as_str()
         }
 
         fn run(
@@ -520,15 +559,19 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let multihop = phase.as_topk_multihop_filter()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &multihop.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&multihop.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
-            let steps =
-                search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+            let steps = search::knn::SearchSteps::new(
+                multihop.reps,
+                &multihop.num_threads,
+                &multihop.runs,
+                GroundTruthMode::Flexible,
+            );
 
             let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
 
@@ -555,11 +598,11 @@ mod imp {
         for search::plugins::TopkInlineFilter
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::TopkInlineFilter::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            search::plugins::TopkInlineFilter::as_str()
         }
 
         fn run(
@@ -570,15 +613,19 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let inline = phase.as_topk_inline_filter()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &inline.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&inline.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
-            let steps =
-                search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+            let steps = search::knn::SearchSteps::new(
+                inline.reps,
+                &inline.num_threads,
+                &inline.runs,
+                GroundTruthMode::Flexible,
+            );
 
             let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 

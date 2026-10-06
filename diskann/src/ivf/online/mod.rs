@@ -18,12 +18,12 @@ use std::fmt::{Debug, Display};
 
 pub(super) use split::{TwoMeans, two_means};
 
-use crate::{ANNError, ANNErrorKind};
+use crate::ANNError;
 
 #[track_caller]
 pub(super) fn index_error<D>(message: D) -> ANNError
 where
     D: Display + Debug + Send + Sync + 'static,
 {
-    ANNError::message(ANNErrorKind::IndexError, message)
+    ANNError::message(message)
 }

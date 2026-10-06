@@ -30,7 +30,7 @@ pub struct UnequalLengths;
 
 impl UnequalLengths {
     /// Escalate the unequal length error to a full-blown panic.
-    #[allow(clippy::panic)]
+    #[expect(clippy::panic)]
     #[inline(never)]
     pub fn panic(self, xlen: usize, ylen: usize) -> ! {
         panic!(

@@ -6,21 +6,22 @@
 //! Self-contained test provider for the flat-search module.
 
 use std::{
-    borrow::Cow,
     collections::HashSet,
     fmt::{self, Debug},
     future::Future,
-    sync::Arc,
 };
 
-use diskann_utils::{future::SendFuture, views::Matrix};
+use diskann_utils::{
+    future::SendFuture,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
 use crate::{
-    ANNError, always_escalate,
+    always_escalate, convert_error,
     error::{RankedError, ToRanked, TransientError},
-    flat::{DistancesUnordered, SearchStrategy},
+    flat::DistancesUnordered,
     graph::test::synthetic::Grid,
     internal::counter::{Counter, LocalCounter},
     provider::{self, ExecutionContext, HasId, NoopGuard},
@@ -36,12 +37,7 @@ pub enum ProviderError {
     ZeroDimension,
 }
 
-impl From<ProviderError> for ANNError {
-    #[track_caller]
-    fn from(err: ProviderError) -> ANNError {
-        ANNError::opaque(err)
-    }
-}
+convert_error!(ProviderError);
 
 //////////////
 // Provider //
@@ -50,7 +46,7 @@ impl From<ProviderError> for ANNError {
 /// In-memory test provider for flat search.
 #[derive(Debug)]
 pub struct Provider {
-    items: Matrix<f32>,
+    items: rowmajor::Owned<f32>,
     get_element: Counter,
 }
 
@@ -60,7 +56,7 @@ impl Provider {
     /// # Errors
     ///
     /// Returns an error if the matrix is empty or has zero-width columns.
-    pub fn new(items: Matrix<f32>) -> Result<Self, ProviderError> {
+    pub fn new(items: rowmajor::Owned<f32>) -> Result<Self, ProviderError> {
         if items.nrows() == 0 {
             return Err(ProviderError::Empty);
         }
@@ -104,7 +100,7 @@ impl Provider {
     }
 
     /// Expose the items for brute force.
-    pub fn items(&self) -> &Matrix<f32> {
+    pub fn items(&self) -> &rowmajor::Owned<f32> {
         &self.items
     }
 }
@@ -129,12 +125,6 @@ crate::test::cmp::verbose_eq!(ElementCounter { count });
 #[derive(Debug, Clone, Default)]
 pub struct Context;
 
-impl Context {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl ExecutionContext for Context {
     fn wrap_spawn<F, T>(&self, f: F) -> impl Future<Output = T> + Send + 'static
     where
@@ -154,13 +144,7 @@ impl ExecutionContext for Context {
 pub struct InvalidId(pub u32);
 
 always_escalate!(InvalidId);
-
-impl From<InvalidId> for ANNError {
-    #[track_caller]
-    fn from(err: InvalidId) -> ANNError {
-        ANNError::opaque(err)
-    }
-}
+convert_error!(InvalidId);
 
 /// Transient access error injected by [`Visitor::flaky`].
 ///
@@ -292,28 +276,50 @@ impl provider::DataProvider for Provider {
 /// set of ids.
 pub struct Visitor<'a> {
     provider: &'a Provider,
-    transient_ids: Option<Cow<'a, HashSet<u32>>>,
+    transient_ids: Option<HashSet<u32>>,
     get_element: LocalCounter<'a>,
+    computer: <f32 as VectorRepr>::QueryDistance,
 }
 
 impl<'a> Visitor<'a> {
     /// Construct a visitor with no fault injection.
-    pub fn new(provider: &'a Provider) -> Self {
-        Self {
+    pub fn new(provider: &'a Provider, query: &[f32]) -> Result<Self, VisitorError> {
+        let computer = Self::query_computer(provider, query)?;
+        Ok(Self {
             provider,
             transient_ids: None,
             get_element: provider.get_element.local(),
-        }
+            computer,
+        })
     }
 
     /// Construct a visitor that returns a [`TransientGetError`] for any id in
     /// `transient_ids`. Other ids behave normally.
-    pub fn flaky(provider: &'a Provider, transient_ids: Cow<'a, HashSet<u32>>) -> Self {
-        Self {
+    pub fn flaky(
+        provider: &'a Provider,
+        query: &[f32],
+        transient_ids: impl IntoIterator<Item = u32>,
+    ) -> Result<Self, VisitorError> {
+        let computer = Self::query_computer(provider, query)?;
+        Ok(Self {
             provider,
-            transient_ids: Some(transient_ids),
+            transient_ids: Some(transient_ids.into_iter().collect()),
             get_element: provider.get_element.local(),
+            computer,
+        })
+    }
+
+    fn query_computer(
+        provider: &Provider,
+        query: &[f32],
+    ) -> Result<<f32 as VectorRepr>::QueryDistance, VisitorError> {
+        if query.len() != provider.dim() {
+            return Err(VisitorError {
+                expected: provider.dim(),
+                actual: query.len(),
+            });
         }
+        Ok(f32::query_distance(query, Metric::L2))
     }
 }
 
@@ -330,20 +336,15 @@ impl HasId for Visitor<'_> {
     type Id = u32;
 }
 
-impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
-    type ElementRef<'a> = &'a [f32];
+impl DistancesUnordered for Visitor<'_> {
     type Error = AccessError;
 
-    fn distances_unordered<F>(
-        &mut self,
-        computer: &<f32 as VectorRepr>::QueryDistance,
-        mut f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
+    fn distances_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + FnMut(Self::Id, f32),
     {
         async move {
-            for (i, vector) in self.provider.items.row_iter().enumerate() {
+            for (i, vector) in self.provider.items.rows().enumerate() {
                 let id = i as u32;
                 if let Some(ids) = &self.transient_ids
                     && ids.contains(&id)
@@ -351,7 +352,7 @@ impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
                     return Err(AccessError::Transient(TransientGetError::new(id)));
                 }
                 self.get_element.increment();
-                let dist = computer.evaluate_similarity(vector);
+                let dist = self.computer.evaluate_similarity(vector);
                 f(id, dist);
             }
             Ok(())
@@ -359,89 +360,12 @@ impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
     }
 }
 
-//////////////
-// Strategy //
-//////////////
-
-/// Error from [`Strategy::create_visitor`] or [`Strategy::build_query_computer`]
-/// when dimensions don't match.
+/// Error from visitor construction when dimensions don't match.
 #[derive(Debug, Clone, Error)]
-#[error("dimension mismatch: strategy expects {expected}, got {actual}")]
-pub struct StrategyError {
+#[error("dimension mismatch: provider expects {expected}, got {actual}")]
+pub struct VisitorError {
     pub expected: usize,
     pub actual: usize,
 }
 
-impl From<StrategyError> for ANNError {
-    #[track_caller]
-    fn from(err: StrategyError) -> ANNError {
-        ANNError::opaque(err)
-    }
-}
-
-/// Factory of [`Visitor`]s that validates dimensions and optionally injects
-/// transient errors into the scan.
-#[derive(Clone, Debug)]
-pub struct Strategy {
-    dim: usize,
-    transient_ids: Option<Arc<HashSet<u32>>>,
-}
-
-impl Strategy {
-    /// Construct a strategy expecting vectors of dimension `dim`.
-    pub fn new(dim: usize) -> Self {
-        Self {
-            dim,
-            transient_ids: None,
-        }
-    }
-
-    /// Construct a strategy whose visitors return a transient error on `get_element`
-    /// for every id in `transient_ids`.
-    pub fn with_transient(dim: usize, transient_ids: impl IntoIterator<Item = u32>) -> Self {
-        Self {
-            dim,
-            transient_ids: Some(Arc::new(transient_ids.into_iter().collect())),
-        }
-    }
-}
-
-impl SearchStrategy<Provider, &[f32]> for Strategy {
-    type ElementRef<'a> = &'a [f32];
-    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type QueryComputerError = StrategyError;
-    type Visitor<'a> = Visitor<'a>;
-    type Error = StrategyError;
-
-    fn create_visitor<'a>(
-        &'a self,
-        provider: &'a Provider,
-        _context: &'a Context,
-    ) -> Result<Self::Visitor<'a>, Self::Error> {
-        let actual = provider.dim();
-        if actual != self.dim {
-            return Err(StrategyError {
-                expected: self.dim,
-                actual,
-            });
-        }
-        let visitor = match &self.transient_ids {
-            Some(ids) => Visitor::flaky(provider, Cow::Borrowed(ids)),
-            None => Visitor::new(provider),
-        };
-        Ok(visitor)
-    }
-
-    fn build_query_computer(
-        &self,
-        from: &[f32],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        if from.len() != self.dim {
-            return Err(StrategyError {
-                expected: self.dim,
-                actual: from.len(),
-            });
-        }
-        Ok(f32::query_distance(from, Metric::L2))
-    }
-}
+convert_error!(VisitorError);

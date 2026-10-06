@@ -3,14 +3,13 @@
  * Licensed under the MIT license.
  */
 
+//! Shared utilities for DiskANN crates.
+
 #[cfg(not(target_endian = "little"))]
 compile_error!("diskann-utils assumes little-endian targets");
 
 pub mod reborrow;
 pub use reborrow::{Reborrow, ReborrowMut};
-
-pub mod lifetime;
-pub use lifetime::WithLifetime;
 
 pub mod future;
 
@@ -24,6 +23,15 @@ pub mod views;
 
 mod lazystring;
 pub use lazystring::LazyString;
+
+mod internal;
+
+/// There are *no* external stability guarantees for anything in `testing`.
+///
+/// Use at your own risk.
+#[cfg(any(test, feature = "testing"))]
+#[doc(hidden)]
+pub mod testing;
 
 #[cfg(feature = "testing")]
 #[doc(hidden)]

@@ -9,14 +9,17 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
     utils::datatype::AsDataType,
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
-use diskann_providers::model::graph::provider::async_::common::FullPrecision;
-use diskann_utils::sampling::WithApproximateNorm;
+use diskann_providers::{
+    model::graph::provider::async_::common::FullPrecision,
+    storage::{FileStorageProvider, SaveWith},
+};
+use diskann_utils::views::rowmajor::Matrix;
 
 use crate::{
     index::{
@@ -26,7 +29,7 @@ use crate::{
         search::plugins::{Plugin, Plugins},
     },
     inputs::{bftree::BfTreeFullPrecisionBuild, graph_index::SearchPhase},
-    utils::{self},
+    utils::{self, tokio},
 };
 
 type BfTreeFPProvider<T> = BfTreeProvider<T, NoStore>;
@@ -66,49 +69,31 @@ where
 
 impl<T> Benchmark for BfTreeFullPrecision<T>
 where
-    T: VectorRepr + AsDataType + SampleableForStart + WithApproximateNorm + 'static,
+    T: VectorRepr + AsDataType + SampleableForStart + 'static,
 {
     type Input = BfTreeFullPrecisionBuild;
     type Output = BuildResult;
 
-    fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
-        let score = utils::match_data_type::<T>(input.data_type());
-        if self.plugins.is_match(input.search_phase()) {
-            score
-        } else {
-            match score {
-                Ok(_) => Err(FailureScore(0)),
-                Err(s) => Err(s),
-            }
+    fn try_match(&self, input: &Self::Input, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        utils::match_data_type::<T>(&mut score, input.data_type());
+        if !self.plugins.is_match(input.search_phase()) {
+            score.fail(
+                1,
+                &format_args!(
+                    "Unsupported search phase: \"{}\" - expected one of {}",
+                    input.search_phase().kind(),
+                    self.plugins.format_kinds(),
+                ),
+            );
         }
+
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Self::Input>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(arg) => {
-                let desc = T::describe(arg.build().data_type());
-                if !desc.is_match() {
-                    writeln!(f, "Data/Query Type: {}", desc)?;
-                }
-                if !self.plugins.is_match(arg.search_phase()) {
-                    writeln!(
-                        f,
-                        "Unsupported search phase: \"{}\" - expected one of {}",
-                        arg.search_phase().kind(),
-                        self.plugins.format_kinds(),
-                    )?;
-                }
-                Ok(())
-            }
-            None => {
-                writeln!(f, "Data/Query Type: {}", T::DATA_TYPE)?;
-                writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Data/Query Type: {}", T::DATA_TYPE)?;
+        writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
     }
 
     fn run(
@@ -126,7 +111,7 @@ where
             output,
             |data| {
                 let config = input.try_as_config()?.build()?;
-                let params = input.bftree_parameters(data.nrows(), data.ncols());
+                let params = input.bftree_parameters(data.nrows(), data.ncols())?;
                 let start_points = input.build().start_point_strategy().compute(data)?;
                 let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
                 Ok(Arc::new(DiskANNIndex::new(config, provider, None)))
@@ -135,6 +120,15 @@ where
         )?;
 
         checkpoint.checkpoint(&build_stats)?;
+
+        // save the index if requested
+        if let Some(save_path) = input.build().save_path() {
+            tokio::block_on(
+                index
+                    .provider()
+                    .save_with(&FileStorageProvider, &save_path.to_string()),
+            )?;
+        }
 
         let search_results =
             self.plugins

@@ -10,7 +10,7 @@ use diskann::{
     graph::{Config, DiskANNIndex},
     utils::VectorRepr,
 };
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{future::AsyncFriendly, views::rowmajor::Matrix};
 
 use crate::model::{
     self,
@@ -59,7 +59,7 @@ pub(crate) fn simplified_builder(
 }
 
 pub fn train_pq(
-    data: diskann_utils::views::MatrixView<f32>,
+    data: diskann_utils::views::rowmajor::Ref<f32>,
     num_pq_chunks: usize,
     rng: &mut dyn rand::RngCore,
     pool: crate::utils::RayonThreadPoolRef<'_>,
@@ -158,20 +158,21 @@ pub(crate) mod tests {
     };
 
     use crate::storage::VirtualStorageProvider;
+    use approx::assert_abs_diff_eq;
     use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
             self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
+            ext::labeled::QueryLabelProvider,
             glue::{
-                DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
-                SearchStrategy,
+                self, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
+                MultiInsertStrategy, SearchStrategy,
             },
-            index::QueryLabelProvider,
             search::Range,
             search_output_buffer,
         },
-        neighbor::Neighbor,
+        neighbor::{self, Neighbor},
         provider::{
             DataProvider, DefaultContext, Delete, ExecutionContext, Guard, NeighborAccessor,
             NeighborAccessorMut, SetElement,
@@ -179,7 +180,10 @@ pub(crate) mod tests {
         utils::{IntoUsize, ONE},
     };
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::{test_data_root, views::Matrix};
+    use diskann_utils::{
+        test_data_root,
+        views::rowmajor::{self, Matrix, MatrixMut},
+    };
     use diskann_vector::{
         DistanceFunction, PureDistanceFunction,
         distance::{Metric, SquaredL2},
@@ -211,9 +215,12 @@ pub(crate) mod tests {
     // Tests from the original async index //
     /////////////////////////////////////////
 
-    /// Convert an iterator of vectors into a single Matrix. All elements in `data` must
+    /// Convert an iterator of vectors into a single rowmajor::Owned. All elements in `data` must
     /// have the same length, otherwise this function panics.
-    pub(crate) fn squish<'a, To, T, Itr>(data: Itr, dim: usize) -> diskann_utils::views::Matrix<To>
+    pub(crate) fn squish<'a, To, T, Itr>(
+        data: Itr,
+        dim: usize,
+    ) -> diskann_utils::views::rowmajor::Owned<To>
     where
         To: Clone + Default,
         T: Clone + Into<To> + 'a,
@@ -221,8 +228,9 @@ pub(crate) mod tests {
     {
         // Assume that all the vectors in `data` have the same length.
         // If they don't, `copy_from_slice` will panic, so we're double checking.
-        let mut mat = diskann_utils::views::Matrix::new(To::default(), data.len(), dim);
-        std::iter::zip(mat.row_iter_mut(), data).for_each(|(output, input)| {
+        let mut mat =
+            diskann_utils::views::rowmajor::Owned::from_element(data.len(), dim, To::default());
+        std::iter::zip(mat.rows_mut(), data).for_each(|(output, input)| {
             assert_eq!(
                 input.len(),
                 dim,
@@ -277,7 +285,7 @@ pub(crate) mod tests {
             .unwrap_or_else(|| panic!("{dim}-dimensions is not supported for grid-generation"))
     }
 
-    fn grid_to_vecs<T: Clone>(matrix: &Matrix<T>) -> Vec<Vec<T>> {
+    fn grid_to_vecs<T: Clone>(matrix: &rowmajor::Owned<T>) -> Vec<Vec<T>> {
         (0..matrix.nrows())
             .map(|i| matrix.row(i).to_vec())
             .collect()
@@ -335,7 +343,7 @@ pub(crate) mod tests {
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: DefaultSearchStrategy<'a, DP, Q>,
+        S: DefaultSearchStrategy<'a, DP, Q, SearchAccessor: glue::SearchAccessor>,
         Q: Copy + std::fmt::Debug + Send + Sync + 'a,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -343,8 +351,7 @@ pub(crate) mod tests {
         let mut distances = vec![0.0; parameters.search_k];
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-        let graph_search =
-            graph::search::Knn::new_default(parameters.search_k, parameters.search_l).unwrap();
+        let graph_search = graph::search::Knn::new_default(parameters.search_l).unwrap();
         index
             .search(
                 graph_search,
@@ -380,7 +387,7 @@ pub(crate) mod tests {
         max_candidates: usize,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<'a, DP, Q> + 'static,
+        S: SearchStrategy<'a, DP, Q, SearchAccessor: glue::SearchAccessor> + 'static,
         Q: Copy + std::fmt::Debug + Send + Sync + 'a,
     {
         assert!(max_candidates <= groundtruth.len());
@@ -432,8 +439,12 @@ pub(crate) mod tests {
         quant_strategy: QS,
     ) where
         DP: DataProvider<InternalId = u32, Context: Default>,
-        FS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T]> + Clone + 'static,
-        QS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T]> + Clone + 'static,
+        FS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T], SearchAccessor: glue::SearchAccessor>
+            + Clone
+            + 'static,
+        QS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T], SearchAccessor: glue::SearchAccessor>
+            + Clone
+            + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         // Assume all vectors have the same length.
@@ -617,7 +628,7 @@ pub(crate) mod tests {
         //
         // So, when we compute the corpus used during groundtruth generation, we take all
         // but this last point.
-        let corpus: diskann_utils::views::Matrix<f32> =
+        let corpus: diskann_utils::views::rowmajor::Owned<f32> =
             squish(vectors.iter().take(num_points), dim);
 
         let mut paged_tests = Vec::new();
@@ -694,7 +705,7 @@ pub(crate) mod tests {
         ]);
 
         // A matrix view of all vectors (including the start point at the end).
-        let matrix: Matrix<T> = squish::<T, T, _>(vectors.iter(), dim);
+        let matrix: rowmajor::Owned<T> = squish::<T, T, _>(vectors.iter(), dim);
 
         let table = train_pq(
             matrix.map(|i| (*i).into()).as_view(),
@@ -724,7 +735,7 @@ pub(crate) mod tests {
         {
             let index = init_index();
             let ctx = Default::default();
-            for (i, v) in matrix.row_iter().take(num_points).enumerate() {
+            for (i, v) in matrix.rows().take(num_points).enumerate() {
                 index
                     .insert(&FullPrecision, &ctx, &(i as u32), v)
                     .await
@@ -738,7 +749,7 @@ pub(crate) mod tests {
         {
             let index = init_index();
             let ctx = Default::default();
-            for (i, v) in matrix.row_iter().take(num_points).enumerate() {
+            for (i, v) in matrix.rows().take(num_points).enumerate() {
                 index.insert(&hybrid, &ctx, &(i as u32), v).await.unwrap();
             }
 
@@ -755,17 +766,22 @@ pub(crate) mod tests {
             for (batch, batch_data) in matrix
                 .subview(0..num_points)
                 .unwrap()
-                .window_iter(chunk_size)
+                .window_iter(NonZeroUsize::new(chunk_size).unwrap())
                 .enumerate()
             {
-                let batch_data = Arc::new(batch_data.to_owned());
+                let batch_data = Arc::new(batch_data.to_rowmajor_owned());
                 let start = batch * chunk_size;
                 let batch_ids: Arc<[u32]> = (start..start + batch_data.nrows())
                     .map(|i| i as u32)
                     .collect();
 
                 index
-                    .multi_insert::<_, Matrix<T>>(FullPrecision, &ctx, batch_data, batch_ids)
+                    .multi_insert::<_, rowmajor::Owned<T>>(
+                        FullPrecision,
+                        &ctx,
+                        batch_data,
+                        batch_ids,
+                    )
                     .await
                     .unwrap();
             }
@@ -777,11 +793,11 @@ pub(crate) mod tests {
         {
             let index = init_index();
             let ctx = Default::default();
-            let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_owned());
+            let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_rowmajor_owned());
             let batch_ids: Arc<[u32]> = (0..num_points as u32).collect();
 
             index
-                .multi_insert::<_, Matrix<T>>(hybrid, &ctx, batch, batch_ids)
+                .multi_insert::<_, rowmajor::Owned<T>>(hybrid, &ctx, batch, batch_ids)
                 .await
                 .unwrap();
 
@@ -850,8 +866,12 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: for<'a> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + for<'a> DefaultSearchStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + Clone
+            + for<'a> DefaultSearchStrategy<
+                'a,
+                FullPrecisionProvider<T, DefaultQuant>,
+                &'a [T],
+                SearchAccessor: glue::SearchAccessor,
+            > + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
     {
@@ -871,7 +891,7 @@ pub(crate) mod tests {
 
         let data = T::generate_spherical(num, dim, radius, rng);
         let table = {
-            let train_data: diskann_utils::views::Matrix<f32> = squish(data.iter(), dim);
+            let train_data: diskann_utils::views::rowmajor::Owned<f32> = squish(data.iter(), dim);
             train_pq(
                 train_data.as_view(),
                 2.min(dim),
@@ -912,9 +932,9 @@ pub(crate) mod tests {
 
             let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
                 let expected: Neighbor<u32> = gt[gt.len() - 1 - position];
-                if id != expected.id {
+                if id != *expected.id() {
                     // We can allow it if the distance is the same.
-                    if distance == expected.distance {
+                    if distance == *expected.distance() {
                         Ok(())
                     } else {
                         Err(Box::new(format!(
@@ -922,7 +942,7 @@ pub(crate) mod tests {
                             expected, id
                         )))
                     }
-                } else if distance != expected.distance {
+                } else if distance != *expected.distance() {
                     Err(Box::new(format!(
                         "expected neighbor {:?}, but found {}",
                         expected, distance
@@ -976,8 +996,12 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: for<'a> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + for<'a> DefaultSearchStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + Clone
+            + for<'a> DefaultSearchStrategy<
+                'a,
+                FullPrecisionProvider<T, DefaultQuant>,
+                &'a [T],
+                SearchAccessor: glue::SearchAccessor,
+            > + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
     {
@@ -1062,7 +1086,7 @@ pub(crate) mod tests {
 
         let beta = 0.5;
 
-        let corpus: diskann_utils::views::Matrix<f32> =
+        let corpus: diskann_utils::views::rowmajor::Owned<f32> =
             squish(vectors.iter().take(num_points), dim);
         let query = vec![grid_size as f32; dim];
 
@@ -1081,11 +1105,11 @@ pub(crate) mod tests {
         let gt = {
             let mut gt = groundtruth(corpus.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
             for n in gt.iter_mut() {
-                if filter.is_match(n.id) {
-                    n.distance *= beta;
+                if filter.is_match(*n.id()) {
+                    *n = Neighbor::new(*n.id(), *n.distance() * beta);
                 }
             }
-            gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
+            gt.sort_unstable_by(neighbor::ord::reverse(neighbor::ord::fast_distance));
             gt
         };
 
@@ -1374,6 +1398,7 @@ pub(crate) mod tests {
     }
 
     const SIFTSMALL: &str = "/sift/siftsmall_learn_256pts.fbin";
+    const SIFTSMALL_NORMALIZED: &str = "/sift/siftsmall_learn_256pts_normalized.fbin";
 
     #[rstest]
     #[tokio::test]
@@ -1382,7 +1407,7 @@ pub(crate) mod tests {
         #[values(1, 10)] batchsize: usize,
     ) where
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -1428,12 +1453,12 @@ pub(crate) mod tests {
         // that our simple graph search matches.
         //
         // Because this dataset is small, we can expect exact equality.
-        for (q, query) in data.row_iter().enumerate() {
+        for (q, query) in data.rows().enumerate() {
             let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+                let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                 // Full Precision Search.
                 index
                     .search(
@@ -1451,7 +1476,7 @@ pub(crate) mod tests {
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+                let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                 // Quantized Search
                 index
                     .search(
@@ -1476,7 +1501,7 @@ pub(crate) mod tests {
         #[values((-2.0,-1.0), (-1.0, 0.0), (40000.0,50000.0), (50000.0,75000.0))] radii: (f32, f32),
     ) where
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -1513,7 +1538,7 @@ pub(crate) mod tests {
         // Because this dataset is small, we can expect exact equality expect for the
         // case where we use a lower initial beam, which will trigger more two-round searches.
 
-        for (q, query) in data.row_iter().enumerate() {
+        for (q, query) in data.rows().enumerate() {
             let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             {
                 // Full Precision Search.
@@ -1524,7 +1549,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
 
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                let ids: Vec<u32> = results.iter().map(|n| *n.id()).collect();
                 assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
@@ -1537,7 +1562,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
 
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                let ids: Vec<u32> = results.iter().map(|n| *n.id()).collect();
                 assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
@@ -1545,23 +1570,17 @@ pub(crate) mod tests {
                 // Test with an inner radius
 
                 assert!(inner_radius <= radius);
-                let range_search = Range::with_options(
-                    None,
-                    starting_l_value,
-                    None,
-                    radius,
-                    Some(inner_radius),
-                    1.0,
-                    1.0,
-                )
-                .unwrap();
+                let range_search = Range::builder(starting_l_value, radius)
+                    .inner_radius(Some(inner_radius))
+                    .build()
+                    .unwrap();
                 let mut results: Vec<Neighbor<u32>> = Vec::new();
                 let _ = index
                     .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                let ids: Vec<u32> = results.iter().map(|n| *n.id()).collect();
                 assert_range_results_exactly_match(q, &gt, &ids, radius, Some(inner_radius));
             }
 
@@ -1578,7 +1597,7 @@ pub(crate) mod tests {
                 // check that ids don't have duplicates
                 let mut ids_set = std::collections::HashSet::new();
                 for n in &results {
-                    assert!(ids_set.insert(n.id));
+                    assert!(ids_set.insert(*n.id()));
                 }
             }
         }
@@ -1592,10 +1611,10 @@ pub(crate) mod tests {
         file: &str,
         create_fn: C,
         build_fn: B,
-    ) -> (Arc<DiskANNIndex<DP>>, Arc<Matrix<f32>>)
+    ) -> (Arc<DiskANNIndex<DP>>, Arc<rowmajor::Owned<f32>>)
     where
-        C: FnOnce(Arc<Matrix<f32>>, &[f32]) -> Arc<DiskANNIndex<DP>>,
-        B: AsyncFnOnce(Arc<DiskANNIndex<DP>>, Arc<Matrix<f32>>),
+        C: FnOnce(Arc<rowmajor::Owned<f32>>, &[f32]) -> Arc<DiskANNIndex<DP>>,
+        B: AsyncFnOnce(Arc<DiskANNIndex<DP>>, Arc<rowmajor::Owned<f32>>),
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
             + for<'a> diskann::provider::SetElement<&'a [f32]>,
     {
@@ -1613,14 +1632,16 @@ pub(crate) mod tests {
         (index, data)
     }
 
-    async fn build_using_single_insert<DP>(index: Arc<DiskANNIndex<DP>>, data: Arc<Matrix<f32>>)
-    where
+    async fn build_using_single_insert<DP>(
+        index: Arc<DiskANNIndex<DP>>,
+        data: Arc<rowmajor::Owned<f32>>,
+    ) where
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
             + for<'a> diskann::provider::SetElement<&'a [f32]>,
         Quantized: for<'a> InsertStrategy<'a, DP, &'a [f32]> + Clone + Send + Sync,
     {
         let ctx = &DefaultContext;
-        for (i, vector) in data.row_iter().enumerate() {
+        for (i, vector) in data.rows().enumerate() {
             index
                 .insert(&Quantized, ctx, &(i as u32), vector)
                 .await
@@ -1640,7 +1661,7 @@ pub(crate) mod tests {
                     batchsize: NonZeroUsize::new(1).unwrap(),
                 };
 
-                let create_fn = |data: Arc<Matrix<f32>>, start_point: &[f32]| {
+                let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_point: &[f32]| {
                     let quantizer = ScalarQuantizationParameters::default().train(data.as_view());
                     let (config, params) =
                         parameters.materialize(data.nrows(), data.ncols()).unwrap();
@@ -1686,13 +1707,12 @@ pub(crate) mod tests {
                 // that our simple graph search matches.
                 //
                 // Because this dataset is small, we can expect exact equality.
-                for (q, query) in data.row_iter().enumerate() {
+                for (q, query) in data.rows().enumerate() {
                     let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search =
-                            graph::search::Knn::new_default(top_k, search_l).unwrap();
+                        let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                         // Full Precision Search.
                         index
                             .search(
@@ -1710,8 +1730,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search =
-                            graph::search::Knn::new_default(top_k, search_l).unwrap();
+                        let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                         // Quantized Search
                         index
                             .search(
@@ -1747,7 +1766,7 @@ pub(crate) mod tests {
                     batchsize: NonZeroUsize::new(1).unwrap(),
                 };
 
-                let create_fn = |data: Arc<Matrix<f32>>, start_point: &[f32]| {
+                let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_point: &[f32]| {
                     let quantizer = ScalarQuantizationParameters::default().train(data.as_view());
                     let (config, params) =
                         parameters.materialize(data.nrows(), data.ncols()).unwrap();
@@ -1794,11 +1813,11 @@ pub(crate) mod tests {
                 // that our simple graph search matches.
                 //
                 // Because this dataset is small, we can expect exact equality.
-                for (q, query) in data.row_iter().enumerate() {
+                for (q, query) in data.rows().enumerate() {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search = graph::search::Knn::new_default(top_k, top_k).unwrap();
+                        let graph_search = graph::search::Knn::new_default(top_k).unwrap();
                         // Quantized Search
                         index
                             .search(
@@ -1840,7 +1859,7 @@ pub(crate) mod tests {
 
         let rng = &mut create_rnd_from_seed_in_tests(0x56870bccb0c44b66);
 
-        let create_fn = |data: Arc<Matrix<f32>>, start_point: &[f32]| {
+        let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_point: &[f32]| {
             let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                 data.as_view(),
                 diskann_quantization::algorithms::transforms::TransformKind::PaddingHadamard {
@@ -1870,10 +1889,10 @@ pub(crate) mod tests {
             index
         };
 
-        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<Matrix<f32>>| {
+        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<rowmajor::Owned<f32>>| {
             let ctx = &DefaultContext;
             let strategy = inmem::spherical::Quantized::build();
-            for (i, vector) in data.row_iter().enumerate() {
+            for (i, vector) in data.rows().enumerate() {
                 index
                     .insert(&strategy, ctx, &(i as u32), vector)
                     .await
@@ -1907,12 +1926,12 @@ pub(crate) mod tests {
         // that our simple graph search matches.
         //
         // Because this dataset is small, we can expect exact equality.
-        for (q, query) in data.row_iter().enumerate() {
+        for (q, query) in data.rows().enumerate() {
             let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
 
             // Full Precision Search.
             let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
             index
                 .search(graph_search, &FullPrecision, ctx, query, &mut output)
                 .await
@@ -1924,7 +1943,7 @@ pub(crate) mod tests {
             let strategy = inmem::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
 
             index
                 .search(graph_search, &strategy, ctx, query, &mut output)
@@ -1953,7 +1972,7 @@ pub(crate) mod tests {
         let ctx = &DefaultContext;
         let rng = &mut create_rnd_from_seed_in_tests(0x56870bccb0c44b66);
 
-        let create_fn = |data: Arc<Matrix<f32>>, start_points: &[f32]| {
+        let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_points: &[f32]| {
             let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                 data.as_view(),
                 diskann_quantization::algorithms::transforms::TransformKind::PaddingHadamard {
@@ -1984,10 +2003,10 @@ pub(crate) mod tests {
             Arc::new(index)
         };
 
-        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<Matrix<f32>>| {
+        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<rowmajor::Owned<f32>>| {
             let ctx = &DefaultContext;
             let strategy = inmem::spherical::Quantized::build();
-            for (i, vector) in data.row_iter().enumerate() {
+            for (i, vector) in data.rows().enumerate() {
                 index
                     .insert(&strategy, ctx, &(i as u32), vector)
                     .await
@@ -2022,13 +2041,13 @@ pub(crate) mod tests {
         // that our simple graph search matches.
         //
         // Because this dataset is small, we can expect exact equality.
-        for (q, query) in data.row_iter().enumerate() {
+        for (q, query) in data.rows().enumerate() {
             // Quantized Search
             let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
             let strategy = inmem::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
 
             index
                 .search(graph_search, &strategy, ctx, query, &mut output)
@@ -2057,10 +2076,13 @@ pub(crate) mod tests {
     /// PQ only Build & Search ///
     //////////////////////////////
 
+    #[rstest]
+    #[case(Metric::L2, SIFTSMALL)]
+    #[case(Metric::CosineNormalized, SIFTSMALL_NORMALIZED)]
     #[tokio::test]
-    async fn test_sift_pq_only_build_and_search() {
+    async fn test_sift_pq_only_build_and_search(#[case] metric: Metric, #[case] file: &str) {
         let ctx = &DefaultContext;
-        let create_fn = |data: Arc<Matrix<f32>>, start_points: &[f32]| {
+        let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_points: &[f32]| {
             let pq_table = train_pq(
                 data.as_view(),
                 32,
@@ -2070,8 +2092,7 @@ pub(crate) mod tests {
             .unwrap();
 
             let (config, parameters) =
-                simplified_builder(64, 16, Metric::L2, data.ncols(), data.nrows(), no_modify)
-                    .unwrap();
+                simplified_builder(64, 16, metric, data.ncols(), data.nrows(), no_modify).unwrap();
 
             let index =
                 Arc::new(new_quant_only_index(config, parameters, pq_table, NoDeletes).unwrap());
@@ -2082,7 +2103,7 @@ pub(crate) mod tests {
             index
         };
         let (index, data) =
-            init_and_build_index_from_file(SIFTSMALL, create_fn, build_using_single_insert).await;
+            init_and_build_index_from_file(file, create_fn, build_using_single_insert).await;
 
         let neighbor_accessor = &mut index.provider().neighbors();
         // There should be one more reachable node than points in the dataset to account for
@@ -2109,12 +2130,12 @@ pub(crate) mod tests {
         // that our simple graph search matches.
         //
         // Because this dataset is small, we can expect exact equality.
-        for (q, query) in data.row_iter().enumerate() {
+        for (q, query) in data.rows().enumerate() {
             let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
 
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
@@ -2127,7 +2148,11 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-            assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
+            for i in 0..top_k {
+                let expected = gt[gt.len() - 1 - i];
+                assert_eq!(*expected.id(), ids[i], "failed on query {q} for result {i}");
+                assert_abs_diff_eq!(*expected.distance(), distances[i], epsilon = 1.0e-5);
+            }
         }
     }
 
@@ -2200,13 +2225,13 @@ pub(crate) mod tests {
         parameters: InitParams,
         file: &str,
         start_strategy: StartPointStrategy,
-        train_data: diskann_utils::views::MatrixView<'_, f32>,
+        train_data: diskann_utils::views::rowmajor::Ref<'_, f32>,
     ) where
         DefaultProvider<U, V, D>: DataProvider<ExternalId = u32, Context = DefaultContext>
             + for<'a> SetElement<&'a [f32]>
             + SetStartPoints<[f32]>,
         S: for<'a> InsertStrategy<'a, DefaultProvider<U, V, D>, &'a [f32]>
-            + MultiInsertStrategy<DefaultProvider<U, V, D>, Matrix<f32>>
+            + MultiInsertStrategy<DefaultProvider<U, V, D>, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -2214,11 +2239,11 @@ pub(crate) mod tests {
 
         let mut iter = VectorDataIterator::<_, f32>::new(file, None, &storage).unwrap();
 
-        let start_vectors: Matrix<f32> = start_strategy.compute(train_data).unwrap();
+        let start_vectors: rowmajor::Owned<f32> = start_strategy.compute(train_data).unwrap();
 
         index
             .provider()
-            .set_start_points(start_vectors.row_iter())
+            .set_start_points(start_vectors.rows())
             .unwrap();
 
         let batchsize: usize = parameters.batchsize.into();
@@ -2232,8 +2257,9 @@ pub(crate) mod tests {
         } else {
             let mut i: u32 = 0;
             while let Some(data) = iter.next_n(batchsize) {
-                let mut vectors = Matrix::new(0.0f32, data.len(), start_vectors.ncols());
-                let ids: Arc<[_]> = std::iter::zip(vectors.row_iter_mut(), data.iter())
+                let mut vectors =
+                    rowmajor::Owned::from_element(data.len(), start_vectors.ncols(), 0.0f32);
+                let ids: Arc<[_]> = std::iter::zip(vectors.rows_mut(), data.iter())
                     .map(|(dst, (v, _))| {
                         dst.copy_from_slice(v);
                         let id = i;
@@ -2256,10 +2282,10 @@ pub(crate) mod tests {
         file: &str,
         num_pq_chunks: usize,
         startpoint: StartPointStrategy,
-    ) -> (Arc<TestIndex>, diskann_utils::views::Matrix<f32>)
+    ) -> (Arc<TestIndex>, diskann_utils::views::rowmajor::Owned<f32>)
     where
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
@@ -2306,7 +2332,7 @@ pub(crate) mod tests {
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
             + for<'a> SearchStrategy<'a, TestProvider, &'a [f32]>
             + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -2406,7 +2432,7 @@ pub(crate) mod tests {
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
             + for<'a> SearchStrategy<'a, TestProvider, &'a [f32]>
             + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -2654,12 +2680,13 @@ pub(crate) mod tests {
         // Randomize the vectors
         let rng = &mut create_rnd_from_seed_in_tests(0x7dc205fcda38d3a3);
         indices.shuffle(rng);
-        let mut queries = diskann_utils::views::Matrix::new(0.0, data.nrows(), data.ncols());
-        std::iter::zip(queries.row_iter_mut(), indices.iter()).for_each(|(row, i)| {
+        let mut queries =
+            diskann_utils::views::rowmajor::Owned::from_element(data.nrows(), data.ncols(), 0.0);
+        std::iter::zip(queries.rows_mut(), indices.iter()).for_each(|(row, i)| {
             row.copy_from_slice(data.row(*i));
         });
 
-        for (pos, query) in queries.row_iter().enumerate() {
+        for (pos, query) in queries.rows().enumerate() {
             index
                 .insert(
                     &Hybrid::new(max_fp_vecs_per_prune),
@@ -2689,11 +2716,11 @@ pub(crate) mod tests {
         let mut ids = vec![0; top_k];
         let mut distances = vec![0.0; top_k];
 
-        for (q, query) in queries.row_iter().enumerate() {
+        for (q, query) in queries.rows().enumerate() {
             let gt = groundtruth(queries.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
@@ -2957,20 +2984,22 @@ pub(crate) mod tests {
         let mut result_output_buffer =
             diskann::graph::IdDistance::new(&mut indices, &mut distances);
 
-        let diverse_params = diskann::graph::DiverseSearchParams::new(
+        let diverse_params = diskann::graph::search::DiverseSearchParams::new(
             0, // diverse_attribute_id
             diverse_results_k,
+            return_list_size,
             attribute_provider.clone(),
-        );
+        )
+        .unwrap();
 
         let search_params = diskann::graph::search::Knn::new(
-            return_list_size,
             search_list_size,
             None, // beam_width
         )
         .unwrap();
 
-        let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
+        let diverse_search =
+            diskann::graph::search::Diverse::new(search_params, diverse_params).unwrap();
 
         let result = index
             .search(
@@ -3121,7 +3150,7 @@ pub(crate) mod tests {
         let mut ids = vec![0; top_k];
         let mut distances = vec![0.0; top_k];
         let ctx = DefaultContext;
-        let search_params = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let search_params = graph::search::Knn::new_default(search_l).unwrap();
         for i in 0..query_count {
             let query_vector = &queries[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
 

@@ -8,19 +8,23 @@ use diskann::{
     graph::{DiskANNIndex, InplaceDeleteMethod, SampleableForStart},
     utils::{VectorRepr, ONE},
 };
-use diskann_benchmark_core::{self as benchmark_core, recall::Rows, streaming::executors::bigann};
+use diskann_benchmark_core::{
+    self as benchmark_core,
+    recall::{GroundTruthMode, Rows},
+    streaming::executors::bigann,
+};
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
     utils::datatype::AsDataType,
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
-use diskann_providers::model::graph::provider::async_::common::FullPrecision;
-use diskann_utils::{
-    sampling::WithApproximateNorm,
-    views::{Matrix, MatrixView},
+use diskann_providers::{
+    model::graph::provider::async_::common::FullPrecision,
+    storage::{FileStorageProvider, SaveWith},
 };
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::{
     index::{
@@ -64,10 +68,10 @@ impl<T> BfTreeStream<T>
 where
     T: VectorRepr,
 {
-    fn insert_(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<BuildStats> {
+    fn insert_(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<BuildStats> {
         let runner = benchmark_core::build::graph::SingleInsert::new(
             self.index.clone(),
-            Arc::new(data.to_owned()),
+            Arc::new(data.to_rowmajor_owned()),
             FullPrecision,
             benchmark_core::build::ids::Slice::new(slots.into()),
         );
@@ -90,7 +94,7 @@ where
 
     fn search(
         &self,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         groundtruth: &dyn Rows<u32>,
     ) -> anyhow::Result<Self::Output> {
         let knn = benchmark_core::search::graph::KNN::new(
@@ -103,16 +107,17 @@ where
             self.search.reps,
             &self.search.num_threads,
             &self.search.runs,
+            GroundTruthMode::Fixed,
         );
         let results = knn::run(&knn, groundtruth, steps)?;
         Ok(StreamStats::Search(results))
     }
 
-    fn insert(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn insert(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Insert(self.insert_(data, slots)?))
     }
 
-    fn replace(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn replace(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Replace(self.insert_(data, slots)?))
     }
 
@@ -158,37 +163,31 @@ impl<T> StreamingFullPrecision<T> {
 
 impl<T> Benchmark for StreamingFullPrecision<T>
 where
-    T: VectorRepr + WithApproximateNorm + SampleableForStart + AsDataType + bytemuck::Pod,
+    T: VectorRepr + SampleableForStart + AsDataType + bytemuck::Pod,
 {
     type Input = BfTreeDynamicRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
-    fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
-        let mut failure_score: Option<u32> = None;
+    fn try_match(&self, input: &Self::Input, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
 
-        if let Err(s) = utils::match_data_type::<T>(input.data_type()) {
-            failure_score = Some(s.0);
-        }
+        utils::match_data_type::<T>(&mut score, input.data_type());
 
         if !matches!(input.search_phase(), SearchPhase::Topk(_)) {
-            *failure_score.get_or_insert(0) += 1;
+            score.fail(
+                1,
+                &format_args!(
+                    "Only \"topk\" is supported for search - got \"{}\"",
+                    input.search_phase().kind()
+                ),
+            )
         }
 
-        match failure_score {
-            None => Ok(MatchScore(0)),
-            Some(score) => Err(FailureScore(score)),
-        }
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Self::Input>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(i) => write!(f, "{}", T::describe(i.build().data_type())),
-            None => write!(f, "{}", T::DATA_TYPE),
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", T::DATA_TYPE)
     }
 
     fn run(
@@ -199,20 +198,43 @@ where
     ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}", input)?;
 
-        super::streaming_utils::run_streaming::<T, _>(
+        let mut index_for_save: Option<BfTreeFPIndex<T>> = None;
+
+        let results = super::streaming_utils::run_streaming::<T, _>(
             input.runbook_params(),
-            |max_points| bftree_streaming::<T>(input, max_points),
+            |max_points| {
+                let (streamer, index) = bftree_streaming::<T>(input, max_points)?;
+                index_for_save = Some(index);
+                Ok(streamer)
+            },
             output,
-        )
+        )?;
+
+        // save the index if requested
+        if let Some(save_path) = input.build().save_path() {
+            let index = index_for_save.expect("index should have been set by make_streamer");
+            crate::utils::tokio::block_on(
+                index
+                    .provider()
+                    .save_with(&FileStorageProvider, &save_path.to_string()),
+            )?;
+        }
+
+        Ok(results)
     }
 }
+
+type BfTreeStreamingPayload<T> = (
+    bigann::WithData<T, u32, Managed<T, StreamStats>>,
+    BfTreeFPIndex<T>,
+);
 
 fn bftree_streaming<T>(
     input: &BfTreeDynamicRun,
     max_points: usize,
-) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, StreamStats>>>
+) -> anyhow::Result<BfTreeStreamingPayload<T>>
 where
-    T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
+    T: bytemuck::Pod + VectorRepr + SampleableForStart,
 {
     let topk = match &input.search_phase() {
         SearchPhase::Topk(topk) => topk,
@@ -225,13 +247,14 @@ where
     ))?);
 
     let config = input.try_as_config()?.build()?;
-    let params = input.bftree_parameters(max_points, data.ncols());
+    let params = input.bftree_parameters(max_points, Matrix::ncols(&data))?;
     let start_points = input
         .build()
         .start_point_strategy()
         .compute(data.as_view())?;
     let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
     let index = Arc::new(DiskANNIndex::new(config, provider, None));
+    let index_handle = index.clone();
 
     let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
     let managed_stream = BfTreeStream {
@@ -258,5 +281,5 @@ where
         )?))
     });
 
-    Ok(layered)
+    Ok((layered, index_handle))
 }

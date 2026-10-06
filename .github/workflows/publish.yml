@@ -57,23 +57,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
           fetch-depth: 0
 
-      - name: Read Rust version from rust-toolchain.toml
-        id: rust-version
-        run: |
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
-          echo "channel=$RUST_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Install Rust
+        run: rustup show
 
-      - name: Install Rust ${{ steps.rust-version.outputs.channel }}
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust-version.outputs.channel }}
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Prevent publish from non-main branch
         if: >-

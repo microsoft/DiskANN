@@ -84,10 +84,8 @@ fn parse_query_filter_with_depth(
         if let Some(arr) = obj.get("$and").and_then(|v| v.as_array()) {
             let mut exprs = Vec::new();
             for v in arr {
-                match parse_query_filter_with_depth(v, depth + 1) {
-                    Ok(expr) => exprs.push(expr),
-                    Err(e) => return Err(e),
-                }
+                let expr = parse_query_filter_with_depth(v, depth + 1)?;
+                exprs.push(expr)
             }
             if exprs.is_empty() {
                 return Err(QueryFilterError::ParseFailure(
@@ -100,10 +98,8 @@ fn parse_query_filter_with_depth(
         if let Some(arr) = obj.get("$or").and_then(|v| v.as_array()) {
             let mut exprs = Vec::new();
             for v in arr {
-                match parse_query_filter_with_depth(v, depth + 1) {
-                    Ok(expr) => exprs.push(expr),
-                    Err(e) => return Err(e),
-                }
+                let expr = parse_query_filter_with_depth(v, depth + 1)?;
+                exprs.push(expr)
             }
             if exprs.is_empty() {
                 return Err(QueryFilterError::ParseFailure(

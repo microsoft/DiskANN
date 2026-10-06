@@ -5,15 +5,19 @@
 
 //! A built-in helper for benchmarking K-nearest neighbors.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
+use thiserror::Error;
 
 use diskann::{
-    ANNResult,
+    ANNError, ANNResult,
     graph::{self, glue},
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::{
     recall,
@@ -23,30 +27,40 @@ use crate::{
 };
 
 /// A built-in helper for benchmarking the K-nearest neighbors method
-/// [`graph::DiskANNIndex::search`].
+/// [`graph::DiskANNIndex::search`] with optional post-processing support.
 ///
 /// This is intended to be used in conjunction with [`search::search`] or
 /// [`search::search_all`] and provides some basic additional metrics for
 /// the latter. Result aggregation for [`search::search_all`] is provided
 /// by the [`Aggregator`] type.
 ///
-/// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
+/// The provided implementation of [`Search`] accepts [`KnnParams`]
 /// and returns [`Metrics`] as additional output.
+///
+/// # Type Parameters
+///
+/// - `DP`: The data provider type
+/// - `T`: The query element type
+/// - `S`: The search strategy type
+/// - `PP`: Post-processor selector. Defaults to [`Defaulted`], which uses the
+///   strategy's default post-processor. Use [`KNN::with_postprocessor`] to
+///   supply an explicit post-processor.
 #[derive(Debug)]
-pub struct KNN<DP, T, S>
+pub struct KNN<DP, T, S, PP = Defaulted>
 where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
-    queries: Arc<Matrix<T>>,
+    queries: Arc<rowmajor::Owned<T>>,
     strategy: Strategy<S>,
+    post_processor: PP,
 }
 
-impl<DP, T, S> KNN<DP, T, S>
+impl<DP, T, S> KNN<DP, T, S, Defaulted>
 where
     DP: provider::DataProvider,
 {
-    /// Construct a new [`KNN`] searcher.
+    /// Construct a new [`KNN`] searcher using the strategy's default post-processor.
     ///
     /// If `strategy` is one of the container variants of [`Strategy`], its length
     /// must match the number of rows in `queries`. If this is the case, then the
@@ -59,7 +73,7 @@ where
     /// the number of rows in `queries`.
     pub fn new(
         index: Arc<graph::DiskANNIndex<DP>>,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         strategy: Strategy<S>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
@@ -68,7 +82,95 @@ where
             index,
             queries,
             strategy,
+            post_processor: Defaulted,
         }))
+    }
+}
+
+impl<DP, T, S, PP> KNN<DP, T, S, Forwarded<PP>>
+where
+    DP: provider::DataProvider,
+{
+    /// Construct a new [`KNN`] searcher with an explicit post-processor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the number of elements in `strategy` is not compatible with
+    /// the number of rows in `queries`.
+    pub fn with_postprocessor(
+        index: Arc<graph::DiskANNIndex<DP>>,
+        queries: Arc<rowmajor::Owned<T>>,
+        strategy: Strategy<S>,
+        post_processor: PP,
+    ) -> anyhow::Result<Arc<Self>> {
+        strategy.length_compatible(queries.nrows())?;
+
+        Ok(Arc::new(Self {
+            index,
+            queries,
+            strategy,
+            post_processor: Forwarded(post_processor),
+        }))
+    }
+}
+
+impl<DP, T, S, PP> KNN<DP, T, S, PP>
+where
+    DP: provider::DataProvider,
+{
+    /// Access the index.
+    pub fn index(&self) -> &Arc<graph::DiskANNIndex<DP>> {
+        &self.index
+    }
+}
+
+/// Resolves a post-processor for [`KNN`] given a search strategy.
+///
+/// This trait lets [`KNN`] support both "use the strategy's default post-processor"
+/// ([`Defaulted`]) and "use this explicit post-processor" ([`Forwarded`]) without
+/// duplicating the search loop.
+pub trait AsPostProcessor<'a, S, DP, T>
+where
+    DP: provider::DataProvider,
+    S: glue::SearchStrategy<'a, DP, T>,
+{
+    /// The concrete post-processor used for a single search.
+    type Processor: glue::SearchPostProcess<S::SearchAccessor, T, DP::ExternalId> + Send + Sync;
+
+    /// Construct the post-processor to use for a single search.
+    fn as_post_processor(&'a self, strategy: &'a S) -> Self::Processor;
+}
+
+/// Marker indicating that [`KNN`] should use the strategy's default post-processor.
+#[derive(Debug, Clone, Copy)]
+pub struct Defaulted;
+
+impl<'a, S, DP, T> AsPostProcessor<'a, S, DP, T> for Defaulted
+where
+    DP: provider::DataProvider,
+    S: glue::DefaultPostProcessor<'a, DP, T, DP::ExternalId>,
+{
+    type Processor = S::Processor;
+
+    fn as_post_processor(&'a self, strategy: &'a S) -> Self::Processor {
+        strategy.default_post_processor()
+    }
+}
+
+/// Wraps an explicit post-processor for use with [`KNN::with_postprocessor`].
+#[derive(Debug, Clone, Copy)]
+pub struct Forwarded<PP>(PP);
+
+impl<'a, S, DP, T, PP> AsPostProcessor<'a, S, DP, T> for Forwarded<PP>
+where
+    DP: provider::DataProvider,
+    S: glue::SearchStrategy<'a, DP, T>,
+    PP: glue::SearchPostProcess<S::SearchAccessor, T, DP::ExternalId> + Clone + AsyncFriendly,
+{
+    type Processor = PP;
+
+    fn as_post_processor(&'a self, _strategy: &'a S) -> Self::Processor {
+        self.0.clone()
     }
 }
 
@@ -86,14 +188,17 @@ pub struct Metrics {
     pub hops: u32,
 }
 
-impl<DP, T, S> Search for KNN<DP, T, S>
+impl<DP, T, S, PP> Search for KNN<DP, T, S, PP>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + AsyncFriendly,
+    PP: for<'a> AsPostProcessor<'a, S, DP, &'a [T]> + AsyncFriendly,
+    graph::search::Knn:
+        for<'a> graph::Search<'a, DP, S, &'a [T], Output = graph::index::SearchStats>,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::search::Knn;
+    type Parameters = KnnParams;
     type Output = Metrics;
 
     fn num_queries(&self) -> usize {
@@ -114,12 +219,16 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let knn_search = *parameters;
+        let knn_search = parameters.knn;
+        let strategy = self.strategy.get(index)?;
+        let processor = self.post_processor.as_post_processor(strategy);
+
         let stats = self
             .index
-            .search(
+            .search_with(
                 knn_search,
-                self.strategy.get(index)?,
+                strategy,
+                processor,
                 &context,
                 self.queries.row(index),
                 buffer,
@@ -130,6 +239,51 @@ where
             comparisons: stats.cmps,
             hops: stats.hops,
         })
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum KnnParamsError {
+    #[error("k_value cannot be zero")]
+    KZero,
+    #[error("l_value ({l_value}) must be at least k_value ({k_value})")]
+    LLessThanK { l_value: usize, k_value: usize },
+    #[error("invalid KNN parameters")]
+    InvalidKnnParameters,
+}
+
+impl From<KnnParamsError> for ANNError {
+    #[track_caller]
+    fn from(err: KnnParamsError) -> Self {
+        ANNError::new(err)
+    }
+}
+
+/// A wrapper for the [`graph::search::Knn`] struct that also includes the `k` value.
+#[derive(Debug, Copy, Clone)]
+pub struct KnnParams {
+    k_value: NonZeroUsize,
+    pub knn: graph::search::Knn,
+}
+
+impl KnnParams {
+    /// Construct a new [`KnnParams`].
+    pub fn new(k_value: usize, l_value: usize) -> Result<Self, KnnParamsError> {
+        let k_value = NonZeroUsize::new(k_value).ok_or(KnnParamsError::KZero)?;
+        if l_value < k_value.get() {
+            return Err(KnnParamsError::LLessThanK {
+                l_value,
+                k_value: k_value.get(),
+            });
+        }
+
+        let knn = graph::search::Knn::new(l_value, None)
+            .map_err(|_| KnnParamsError::InvalidKnnParameters)?;
+        Ok(Self { k_value, knn })
+    }
+
+    pub fn k_value(&self) -> NonZeroUsize {
+        self.k_value
     }
 }
 
@@ -144,7 +298,7 @@ pub struct Summary {
     pub setup: search::Setup,
 
     /// The [`Search::Parameters`] used for the batch of runs.
-    pub parameters: graph::search::Knn,
+    pub parameters: KnnParams,
 
     /// The end-to-end latency for each repetition in the batch.
     pub end_to_end_latencies: Vec<MicroSeconds>,
@@ -212,7 +366,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> search::Aggregate<graph::search::Knn, I, Metrics> for Aggregator<'_, I>
+impl<I> search::Aggregate<KnnParams, I, Metrics> for Aggregator<'_, I>
 where
     I: crate::recall::RecallCompatible,
 {
@@ -220,7 +374,7 @@ where
 
     fn aggregate(
         &mut self,
-        run: search::Run<graph::search::Knn>,
+        run: search::Run<KnnParams>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
         // Compute the recall using just the first result.
@@ -285,11 +439,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
     use super::*;
 
+    use std::num::NonZeroUsize;
+
     use diskann::graph::test::provider;
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     #[test]
     fn test_knn() {
@@ -297,7 +452,7 @@ mod tests {
 
         let index = search::graph::test_grid_provider();
 
-        let mut queries = Matrix::new(0.0f32, 5, index.provider().dim());
+        let mut queries = rowmajor::Owned::from_element(5, index.provider().dim(), 0.0f32);
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -317,7 +472,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             knn.clone(),
-            graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
+            KnnParams::new(nearest_neighbors, 10).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -341,11 +496,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
+                KnnParams::new(nearest_neighbors, 10).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors, 15, None).unwrap(),
+                KnnParams::new(nearest_neighbors, 15).unwrap(),
                 setup.clone(),
             ),
         ];
@@ -383,7 +538,11 @@ mod tests {
     fn test_knn_error() {
         let index = search::graph::test_grid_provider();
 
-        let queries = Arc::new(Matrix::new(0.0f32, 1, index.provider().dim()));
+        let queries = Arc::new(rowmajor::Owned::from_element(
+            1,
+            index.provider().dim(),
+            0.0f32,
+        ));
         let strategy = provider::Strategy::new();
 
         let err = KNN::new(

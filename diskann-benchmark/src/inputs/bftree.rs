@@ -55,6 +55,9 @@ pub(crate) struct BfTreeStoreConfig {
     /// If true, only use the in-memory circular buffer (no disk pages).
     #[serde(deserialize_with = "Deserialize::deserialize")]
     pub(crate) cache_only: Option<bool>,
+
+    /// Whether to enable CPR snapshot support for this store.
+    pub(crate) use_snapshot: bool,
 }
 
 impl BfTreeStoreConfig {
@@ -104,6 +107,7 @@ impl BfTreeStoreConfig {
         if let Some(v) = self.cache_only {
             c.cache_only(v);
         }
+        c.use_snapshot(self.use_snapshot);
         c
     }
 
@@ -142,6 +146,7 @@ impl Default for BfTreeStoreConfig {
             cb_copy_on_access_ratio: None,
             read_record_cache: None,
             cache_only: None,
+            use_snapshot: false,
         }
     }
 }
@@ -181,6 +186,33 @@ impl std::fmt::Display for BfTreeStoreConfig {
     }
 }
 
+/// Validate that all present store configs agree on `use_snapshot`.
+///
+/// Returns the agreed-upon value. If no configs are present or none set
+/// `use_snapshot`, returns `false`. If configs disagree, returns an error.
+fn reconcile_use_snapshot(configs: &[(&str, &Option<BfTreeStoreConfig>)]) -> anyhow::Result<bool> {
+    let mut resolved: Option<bool> = None;
+
+    for (name, config) in configs {
+        if let Some(cfg) = config {
+            match resolved {
+                Some(prev) if prev != cfg.use_snapshot => {
+                    anyhow::bail!(
+                        "{name}.use_snapshot ({}) disagrees with a prior store config ({prev})",
+                        cfg.use_snapshot
+                    );
+                }
+                None => {
+                    resolved = Some(cfg.use_snapshot);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(resolved.unwrap_or(false))
+}
+
 /// Shared helper to construct [`BfTreeProviderParameters`] from common fields.
 fn bftree_parameters_from(
     build: &IndexBuild,
@@ -189,10 +221,17 @@ fn bftree_parameters_from(
     vector_store_config: &Option<BfTreeStoreConfig>,
     neighbor_store_config: &Option<BfTreeStoreConfig>,
     quant_store_config: &Option<BfTreeStoreConfig>,
-) -> BfTreeProviderParameters {
-    BfTreeProviderParameters {
+) -> anyhow::Result<BfTreeProviderParameters> {
+    let use_snapshot = reconcile_use_snapshot(&[
+        ("vector_store_config", vector_store_config),
+        ("neighbor_store_config", neighbor_store_config),
+        ("quant_store_config", quant_store_config),
+    ])?;
+
+    let physical_max_degree = (build.max_degree() as f32 * build.graph_slack_factor()) as u32;
+    Ok(BfTreeProviderParameters {
         max_points: num_points,
-        max_degree: build.exact_max_degree() as u32,
+        max_degree: physical_max_degree,
         num_start_points: NonZero::new(build.start_point_strategy().count()).unwrap(),
         dim,
         metric: build.distance().into(),
@@ -206,7 +245,8 @@ fn bftree_parameters_from(
             .into_config(),
         quant_vector_provider_config: quant_store_config.clone().unwrap_or_default().into_config(),
         graph_params: None,
-    }
+        use_snapshot,
+    })
 }
 
 as_input!(BfTreeFullPrecisionBuild);
@@ -227,9 +267,6 @@ impl BfTreeFullPrecisionBuild {
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        // Delegate to IndexBuild's try_as_config which uses the default
-        // MaxDegree::Value(exact_max_degree) with 1.3x slack. The bf_tree
-        // neighbor pages are sized to exact_max_degree to accommodate this.
         self.build.try_as_config()
     }
 
@@ -249,7 +286,7 @@ impl BfTreeFullPrecisionBuild {
         &self,
         num_points: usize,
         dim: usize,
-    ) -> BfTreeProviderParameters {
+    ) -> anyhow::Result<BfTreeProviderParameters> {
         bftree_parameters_from(
             &self.build,
             num_points,
@@ -330,8 +367,6 @@ impl BfTreeDynamicRun {
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        // Delegate to IndexBuild's try_as_config which uses the default
-        // MaxDegree::Value(exact_max_degree) with 1.3x slack.
         self.build.try_as_config()
     }
 
@@ -355,7 +390,7 @@ impl BfTreeDynamicRun {
         &self,
         num_points: usize,
         dim: usize,
-    ) -> BfTreeProviderParameters {
+    ) -> anyhow::Result<BfTreeProviderParameters> {
         bftree_parameters_from(
             &self.build,
             num_points,
@@ -452,7 +487,7 @@ impl BfTreeSphericalBuild {
         &self,
         num_points: usize,
         dim: usize,
-    ) -> BfTreeProviderParameters {
+    ) -> anyhow::Result<BfTreeProviderParameters> {
         bftree_parameters_from(
             &self.build,
             num_points,
@@ -629,7 +664,7 @@ impl BfTreeSphericalDynamicRun {
         &self,
         num_points: usize,
         dim: usize,
-    ) -> BfTreeProviderParameters {
+    ) -> anyhow::Result<BfTreeProviderParameters> {
         bftree_parameters_from(
             &self.build,
             num_points,

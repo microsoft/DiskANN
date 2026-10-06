@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Computes query-filter specificities against base labels.
+
 use clap::Parser;
 use diskann_label_filter::{read_and_parse_queries, read_baselabels};
 use diskann_tools::utils::compute_bitmap::compute_query_bitmaps;
@@ -18,15 +20,15 @@ use std::process;
 )]
 struct Args {
     /// File containing the base labels
-    #[arg(long = "base_label_file", short = 'b')]
+    #[arg(long = "base-file-labels", short = 'b')]
     pub base_label_file: String,
 
     /// File containing the query labels
-    #[arg(long = "query_label_file", short = 'q')]
+    #[arg(long = "query-file-labels", short = 'q')]
     pub query_label_file: String,
 
     /// Output file for specificities (optional)
-    #[arg(long = "specificity_output_file", short = 'o')]
+    #[arg(long = "specificity-output-file", short = 'o')]
     pub specificity_output_file: Option<String>,
 }
 

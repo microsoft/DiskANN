@@ -33,7 +33,6 @@ pub fn create_rnd_from_seed_in_tests(seed: u64) -> StandardRng {
 
 /// Creates a randomly seeded random number generator.
 #[cfg(not(any(test, feature = "testing")))]
-#[allow(clippy::disallowed_methods)]
 pub fn create_rnd() -> StandardRng {
     rand::rngs::StdRng::from_os_rng()
 }

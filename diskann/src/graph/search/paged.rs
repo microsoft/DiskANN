@@ -42,6 +42,19 @@ where
     DP: DataProvider,
     A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
+    /// Return the contained [`SearchAccessor`].
+    ///
+    /// This method is intended to enable per-page metric reporting from the accessor.
+    pub fn accessor(&mut self) -> &mut A {
+        &mut self.accessor
+    }
+}
+
+impl<'a, DP, A> PagedSearch<'a, DP, A>
+where
+    DP: DataProvider,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
+{
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
     /// Results across pages are non-overlapping but not guaranteed to be monotonic with
@@ -56,14 +69,12 @@ where
     ) -> impl SendFuture<ANNResult<Vec<Neighbor<DP::InternalId>>>> {
         async move {
             if k > self.search_param_l {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "k should be less than or equal to search_param_l".to_string(),
+                return ANNResult::Err(ANNError::message(
+                    "k should be less than or equal to search_param_l",
                 ));
             }
             if k == 0 {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "k should be greater than 0".to_string(),
-                ));
+                return ANNResult::Err(ANNError::message("k should be greater than 0"));
             }
 
             let mut result = Vec::with_capacity(k);
@@ -134,7 +145,7 @@ where
     let mut candidates = Vec::with_capacity(page_size);
     for n in best.iter() {
         total += 1;
-        if !start_points.contains(&n.id) {
+        if !start_points.contains(n.id()) {
             candidates.push(n);
             if candidates.len() >= page_size {
                 break;

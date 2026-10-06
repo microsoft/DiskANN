@@ -2,6 +2,9 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
+//! Utilities for DiskANN command-line tools.
+
 #![cfg_attr(
     not(test),
     warn(clippy::panic, clippy::unwrap_used, clippy::expect_used)

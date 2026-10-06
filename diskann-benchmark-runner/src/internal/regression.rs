@@ -99,10 +99,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    benchmark::{internal::CheckedPassFail, PassFail},
+    Checker,
+    benchmark::{PassFail, internal::CheckedPassFail},
     input::internal::Any,
     internal::load_from_disk,
-    jobs, registry, result, Checker,
+    jobs, registry, result,
 };
 
 ////////////
@@ -229,7 +230,7 @@ impl<'a> Checks<'a> {
         // We can now package everything together!
         debug_assert_eq!(input_to_parsed.len(), inputs.jobs().len());
 
-        let checks = std::iter::zip(inputs.into_inner(), input_to_parsed.into_iter())
+        let checks = std::iter::zip(inputs.into_inner(), input_to_parsed)
             .map(|(input, index)| {
                 // This index should always be inbounds.
                 let inner = &parsed.inner[index];
@@ -239,13 +240,7 @@ impl<'a> Checks<'a> {
                 // regression benchmark for this concrete input. This benchmark should exist,
                 // but it's possible that code changes between when the results were generated
                 // and now has led to the input no longer being matchable with anything.
-                let regression = inner
-                    .entry
-                    .regressions
-                    .iter()
-                    .filter_map(|r| r.try_match(&input).ok().map(|score| (*r, score)))
-                    .min_by_key(|(_, score)| *score)
-                    .map(|(r, _)| r)
+                let regression = registry::find_best_match(&input, &inner.entry.regressions)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "Could not match input tag \"{}\" and tolerance tag \"{}\" to \
@@ -258,7 +253,7 @@ impl<'a> Checks<'a> {
                     })?;
 
                 Ok(Check {
-                    regression,
+                    regression: *regression,
                     tolerance: inner.tolerance.clone(),
                     input,
                 })
@@ -537,7 +532,7 @@ pub(crate) struct Job<'a> {
     /// The executor for the actual check we wish to run.
     regression: registry::RegressionBenchmark<'a>,
 
-    /// The [`crate::benchmark::Regression::Tolerance`] associated with `regression`.
+    /// The [`crate::benchmark::Regression::Tolerances`] associated with `regression`.
     tolerance: Rc<Any>,
 
     /// The [`crate::Benchmark::Input`] associated with `benchmark`.

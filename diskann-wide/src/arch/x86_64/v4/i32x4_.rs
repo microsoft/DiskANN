@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDVector},
+    traits::{SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPopcount, SIMDVector},
 };
 
 /////
@@ -32,6 +32,13 @@ helpers::unsafe_map_binary_op!(i32x4, std::ops::Add, add, _mm_add_epi32, "sse2")
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Sub, sub, _mm_sub_epi32, "sse2");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Mul, mul, _mm_mullo_epi32, "sse4.1");
 helpers::unsafe_map_unary_op!(i32x4, SIMDAbs, abs_simd, _mm_abs_epi32, "ssse3");
+helpers::unsafe_map_unary_op!(
+    i32x4,
+    SIMDPopcount,
+    popcount_simd,
+    _mm_popcnt_epi32,
+    "avx512vpopcntdq,avx512vl"
+);
 
 helpers::unsafe_map_binary_op!(i32x4, std::ops::BitAnd, bitand, _mm_and_si128, "sse2");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::BitOr, bitor, _mm_or_si128, "sse2");
@@ -52,6 +59,20 @@ impl SIMDMulAdd for i32x4 {
     #[inline(always)]
     fn mul_add_simd(self, rhs: Self, accumulator: Self) -> Self {
         self * rhs + accumulator
+    }
+}
+
+impl SIMDMinMax for i32x4 {
+    #[inline(always)]
+    fn min_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm_min_epi32` requires SSE4.1, which is implied by the V4 architecture.
+        Self(unsafe { _mm_min_epi32(self.0, rhs.0) })
+    }
+
+    #[inline(always)]
+    fn max_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm_max_epi32` requires SSE4.1, which is implied by the V4 architecture.
+        Self(unsafe { _mm_max_epi32(self.0, rhs.0) })
     }
 }
 
@@ -104,9 +125,11 @@ mod test_x86_i32 {
     test_utils::ops::test_mul!(i32x4, 0xf0caa85d919a41a8, V4::new_checked_uncached());
     test_utils::ops::test_fma!(i32x4, 0x1f0340c2109aef6f, V4::new_checked_uncached());
     test_utils::ops::test_abs!(i32x4, 0x60710c0c88537c7d, V4::new_checked_uncached());
+    test_utils::ops::test_minmax!(i32x4, 0x6d7fc8ed6d852187, V4::new_checked_uncached());
 
     test_utils::ops::test_cmp!(i32x4, 0x9a2d73b7295214c6, V4::new_checked_uncached());
 
     // Bit ops
     test_utils::ops::test_bitops!(i32x4, 0x763fc44f8f7cd40c, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(i32x4, 0x6b756a0a75b4f2d6, V4::new_checked_uncached());
 }

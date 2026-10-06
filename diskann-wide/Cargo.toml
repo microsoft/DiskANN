@@ -11,6 +11,9 @@ edition = "2024"
 clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"
 
+# different from workspace level for slightly better compatibility with the `alias!` macro.
+clippy.allow_attributes = "allow"
+
 [dev-dependencies]
 paste.workspace = true
 rand.workspace = true

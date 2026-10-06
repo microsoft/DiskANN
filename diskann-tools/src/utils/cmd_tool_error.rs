@@ -25,11 +25,7 @@ impl fmt::Debug for CMDToolError {
     }
 }
 
-impl Error for CMDToolError {
-    fn description(&self) -> &str {
-        &self.details
-    }
-}
+impl Error for CMDToolError {}
 
 impl From<std::io::Error> for CMDToolError {
     fn from(err: std::io::Error) -> Self {
@@ -116,17 +112,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cmd_tool_error_description() {
-        let error = CMDToolError {
-            details: "test error".to_string(),
-        };
-        #[allow(deprecated)]
-        {
-            assert_eq!(error.description(), "test error");
-        }
-    }
-
-    #[test]
     fn test_from_io_error() {
         let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let cmd_error: CMDToolError = io_error.into();
@@ -143,11 +128,7 @@ mod tests {
 
     #[test]
     fn test_from_ann_error() {
-        use diskann::ANNErrorKind;
-        let ann_error = diskann::ANNError::new(
-            ANNErrorKind::IndexError,
-            std::io::Error::other("test error"),
-        );
+        let ann_error = diskann::ANNError::new(std::io::Error::other("test error"));
         let cmd_error: CMDToolError = ann_error.into();
         assert!(cmd_error.details.contains("test error"));
     }

@@ -41,15 +41,57 @@ macro_rules! architecture_hook {
         {
             #[inline(always)]
             fn run(arch: A, left: L, right: R) -> T {
-                arch.run2(Self::default(), left, right)
+                arch.run2_inline(Self::default(), left, right)
             }
         }
     };
 }
 
 /// A utility for specializing distance computations for fixed-length slices.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Specialize<const N: usize, F>(std::marker::PhantomData<F>);
+///
+/// When `F` implements [`diskann_wide::arch::Target2`] for [`UnalignedSlice`],
+/// `Specialize<N, F>` will implement [`diskann_wide::arch::FTarget2`] for slices of exactly
+/// length `N`. This can lead to must better generated code, especially when `N` is small.
+///
+/// Passing slices of length not equal to `N` will panic.
+/// ```
+/// use diskann_vector::{AsUnaligned, distance::{Specialize, SquaredL2}};
+/// use diskann_wide::{ARCH, arch::FTarget2};
+///
+/// let x = [1.0f32, 2.0, 3.0];
+/// let y = [2.0f32, 3.0, 4.0];
+///
+/// let result: f32 = Specialize::<3, SquaredL2>::run(
+///     ARCH,
+///     x.as_unaligned(),
+///     y.as_unaligned(),
+/// );
+///
+/// assert_eq!(result, 3.0);
+/// ```
+#[derive(Debug)]
+pub struct Specialize<const N: usize, F>(std::marker::PhantomData<F>);
+
+impl<const N: usize, F> Specialize<N, F> {
+    /// Create a new [`Specialize`].
+    pub const fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<const N: usize, F> Default for Specialize<N, F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize, F> Clone for Specialize<N, F> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<const N: usize, F> Copy for Specialize<N, F> {}
 
 impl<A, T, L, R, const N: usize, F>
     diskann_wide::arch::FTarget2<A, T, UnalignedSlice<'_, L>, UnalignedSlice<'_, R>>
@@ -74,7 +116,7 @@ where
 // Outline the panic formatting and keep the calling convention the same as
 // the top function. This keeps code generation extremely lightweight.
 #[inline(never)]
-#[allow(clippy::panic)]
+#[expect(clippy::panic)]
 fn fail_length_check<L, R>(x: UnalignedSlice<'_, L>, y: UnalignedSlice<'_, R>, len: usize) -> ! {
     let message = if x.len() != len {
         ("first", x.len())
@@ -616,7 +658,7 @@ mod tests {
         max_relative: f32,
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn run_test<L, R, To, Distribution, Callback>(
         under_test: fn(&[L], &[R]) -> To,
         reference: fn(&[L], &[R]) -> To,

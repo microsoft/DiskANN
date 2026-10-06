@@ -119,7 +119,7 @@ pub(crate) trait GetAdjacencyList {
 //////////////////
 
 /// Load data from a `.bin` formatted file at path `path` and use that data to initialize
-/// a `SetData` compatible object `S.
+/// a `SetData` compatible object `S`.
 ///
 /// The number of points and dimension of each vector will be determined from the file
 /// metadata and passed to the closure `create` as `(num_points, dim)`.
@@ -136,7 +136,7 @@ where
     T: VectorRepr,
 {
     let metadata = load_metadata_from_file(provider, path).map_err(|err| {
-        ANNError::log_index_error(format_args!(
+        ANNError::message(format!(
             "failed to load data file \"{}\" due to the following error: {}",
             path, err
         ))
@@ -195,7 +195,7 @@ where
 
         let len = slice.len();
         if len != dim {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "data provider returned a vector with a dimension other than advertised",
             ));
         }
@@ -221,7 +221,7 @@ where
 ///////////////////
 
 /// Load data from a canonical graph formatted file at path `path` and use that data to
-/// initialize a `SetAdjacencyList` compatible object `S.
+/// initialize a `SetAdjacencyList` compatible object `S`.
 ///
 /// The number of points and maximum degree of the stored graph will be determined from the
 /// file and passed to the closure `create` as `(num_points, max_degree, num_start_points)`.

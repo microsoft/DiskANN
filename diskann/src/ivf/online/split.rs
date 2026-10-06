@@ -5,7 +5,7 @@
 
 //! Fitting the two centroids that replace a split list.
 
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use rand::{Rng, rngs::StdRng};
 
 use super::{
@@ -18,7 +18,7 @@ use crate::ANNResult;
 #[derive(Debug)]
 pub(in crate::ivf) struct TwoMeans {
     /// Row `c` is the centroid of child `c`.
-    pub(in crate::ivf) centroids: Matrix<f32>,
+    pub(in crate::ivf) centroids: rowmajor::Owned<f32>,
     /// `children[i]` is the child row `i` of the clustered points joins.
     pub(in crate::ivf) children: Vec<usize>,
 }
@@ -30,7 +30,7 @@ pub(in crate::ivf) struct TwoMeans {
 ///
 /// Fails if `points` holds fewer than two rows.
 pub(in crate::ivf) fn two_means(
-    points: MatrixView<'_, f32>,
+    points: rowmajor::Ref<'_, f32>,
     iterations: usize,
     rng: &mut StdRng,
 ) -> ANNResult<TwoMeans> {
@@ -43,12 +43,12 @@ pub(in crate::ivf) fn two_means(
 
     let first = rng.random_range(0..count);
     let second = (first + rng.random_range(1..count)) % count;
-    let mut centroids = Matrix::new(0.0f32, 2, dim);
+    let mut centroids = rowmajor::Owned::from_element(2, dim, 0.0f32);
     centroids.row_mut(0).copy_from_slice(points.row(first));
     centroids.row_mut(1).copy_from_slice(points.row(second));
 
     lloyd(
-        || points.row_iter(),
+        || points.rows(),
         centroids.as_mut_slice(),
         dim,
         iterations.max(1),
@@ -58,7 +58,7 @@ pub(in crate::ivf) fn two_means(
     let children = {
         let candidates = [(0, centroids.row(0)), (1, centroids.row(1))];
         points
-            .row_iter()
+            .rows()
             // There are always two candidates, so every point joins one of them.
             .map(|point| nearest(point, &candidates).unwrap_or(0))
             .collect()
@@ -76,9 +76,9 @@ mod tests {
 
     use super::*;
 
-    fn matrix<const D: usize>(rows: &[[f32; D]]) -> Matrix<f32> {
+    fn matrix<const D: usize>(rows: &[[f32; D]]) -> rowmajor::Owned<f32> {
         let data: Box<[f32]> = rows.iter().flatten().copied().collect();
-        Matrix::try_from(data, rows.len(), D).unwrap()
+        rowmajor::Owned::try_from_data(data, rows.len(), D).unwrap()
     }
 
     #[test]

@@ -6,7 +6,6 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    error::DiskANNError::StartPointComputeError,
     graph::{DiskANNIndex, StartPointStrategy},
     provider::{self, DataProvider, DefaultContext},
     ANNError, ANNResult,
@@ -23,7 +22,7 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix},
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
@@ -36,19 +35,15 @@ use crate::inputs::graph_index::IndexBuild;
 
 pub(crate) fn set_start_points<DP, T>(
     provider: &DP,
-    data: MatrixView<'_, T>,
+    data: rowmajor::Ref<'_, T>,
     start_strategy: StartPointStrategy,
 ) -> ANNResult<()>
 where
     DP: SetStartPoints<[T]>,
-    T: diskann::graph::SampleableForStart
-        + diskann_utils::sampling::WithApproximateNorm
-        + AsyncFriendly,
+    T: diskann::graph::SampleableForStart + AsyncFriendly,
 {
-    let start_points = start_strategy
-        .compute(data)
-        .map_err(|e| ANNError::new(diskann::ANNErrorKind::DiskANN(StartPointComputeError), e))?;
-    provider.set_start_points(start_points.row_iter())
+    let start_points = start_strategy.compute(data).map_err(ANNError::new)?;
+    provider.set_start_points(start_points.rows())
 }
 
 ///////////
@@ -58,7 +53,7 @@ where
 pub(crate) fn single_or_multi_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     output: &mut dyn Output,
 ) -> anyhow::Result<BuildStats>
@@ -114,7 +109,7 @@ where
 pub(crate) fn only_single_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     output: &mut dyn Output,
 ) -> anyhow::Result<BuildStats>

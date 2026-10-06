@@ -4,16 +4,14 @@
  */
 
 use benchmarks_iai::{contains_bench_iai::*, cosine_iai::*, cosine_normalized_iai::*, l2_iai::*};
-use iai_callgrind::{main, EventKind, LibraryBenchmarkConfig, RegressionConfig};
+use iai_callgrind::{main, Callgrind, EventKind, LibraryBenchmarkConfig};
 mod benchmarks_iai;
 pub(crate) mod utils;
 
 main!(
     config = LibraryBenchmarkConfig::default()
-        .regression(
-            RegressionConfig::default()
-                .limits([(EventKind::Ir, 5.0), (EventKind::EstimatedCycles, 5.0), (EventKind::TotalRW, 5.0), (EventKind::L1hits, 5.0)])
-        );
+        .tool(Callgrind::default().soft_limits([(EventKind::Ir, 5.0), (EventKind::EstimatedCycles, 5.0), (EventKind::TotalRW, 5.0), (EventKind::L1hits, 5.0)]));
+
     library_benchmark_groups =
         benchmark_contains_bench_iai,
         cosine_f16_iai,

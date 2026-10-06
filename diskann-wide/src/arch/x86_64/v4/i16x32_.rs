@@ -17,7 +17,7 @@ use crate::{
     bitmask::BitMask,
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDMulAdd, SIMDVector},
+    traits::{SIMDAbs, SIMDMulAdd, SIMDPopcount, SIMDVector},
 };
 
 ///////////////////
@@ -33,6 +33,13 @@ helpers::unsafe_map_binary_op!(i16x32, std::ops::Add, add, _mm512_add_epi16, "av
 helpers::unsafe_map_binary_op!(i16x32, std::ops::Sub, sub, _mm512_sub_epi16, "avx512bw");
 helpers::unsafe_map_binary_op!(i16x32, std::ops::Mul, mul, _mm512_mullo_epi16, "avx512bw");
 helpers::unsafe_map_unary_op!(i16x32, SIMDAbs, abs_simd, _mm512_abs_epi16, "avx512bw");
+helpers::unsafe_map_unary_op!(
+    i16x32,
+    SIMDPopcount,
+    popcount_simd,
+    _mm512_popcnt_epi16,
+    "avx512bitalg"
+);
 
 helpers::unsafe_map_binary_op!(
     i16x32,
@@ -126,4 +133,5 @@ mod test_x86_i16 {
 
     // Bit ops
     test_utils::ops::test_bitops!(i16x32, 0xba0be356b04d6427, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(i16x32, 0xa787d20c8f94b58b, V4::new_checked_uncached());
 }
