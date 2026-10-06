@@ -30,8 +30,13 @@ workspace = true
 
 [dev-dependencies]
 cfg-if.workspace = true
+criterion.workspace = true
 rand.workspace = true
 rstest.workspace = true
+
+[[bench]]
+name = "bench_main"
+harness = false
 
 
 [features]
