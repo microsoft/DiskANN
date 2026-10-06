@@ -7,6 +7,8 @@
 
 use std::ptr::NonNull;
 
+use diskann_utils::views::rowmajor::{self, Matrix as _};
+
 use super::super::MinMaxQuantizer;
 use super::super::vectors::DataMutRef;
 use crate::CompressInto;
@@ -15,7 +17,7 @@ use crate::minmax::{self, Data};
 use crate::multi_vector::matrix::{
     Defaulted, NewMut, NewOwned, NewRef, Repr, ReprMut, ReprOwned, SliceError,
 };
-use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
+use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef};
 use crate::scalar::InputContainsNaN;
 use crate::utils;
 
@@ -233,7 +235,7 @@ where
 //////////////////
 
 impl<'a, 'b, const NBITS: usize, T>
-    CompressInto<MatRef<'a, Standard<T>>, MatMut<'b, MinMaxMeta<NBITS>>> for MinMaxQuantizer
+    CompressInto<rowmajor::Ref<'a, T>, MatMut<'b, MinMaxMeta<NBITS>>> for MinMaxQuantizer
 where
     T: Copy + Into<f32>,
     Unsigned: Representation<NBITS>,
@@ -259,21 +261,21 @@ where
     /// * The output intrinsic dimension doesn't match `self.output_dim()`.
     fn compress_into(
         &self,
-        from: MatRef<'a, Standard<T>>,
+        from: rowmajor::Ref<'a, T>,
         mut to: MatMut<'b, MinMaxMeta<NBITS>>,
     ) -> Result<(), Self::Error> {
         assert_eq!(
-            from.num_vectors(),
+            from.nrows(),
             to.num_vectors(),
             "input and output must have the same number of vectors: {} != {}",
-            from.num_vectors(),
+            from.nrows(),
             to.num_vectors()
         );
         assert_eq!(
-            from.vector_dim(),
+            from.ncols(),
             self.dim(),
             "input vectors must match quantizer dimension: {} != {}",
-            from.vector_dim(),
+            from.ncols(),
             self.dim()
         );
         assert_eq!(
@@ -533,9 +535,8 @@ mod tests {
                     let input_data = generate_test_data(num_vectors, dim);
 
                     // Multi-vector compression
-                    let input_view =
-                        MatRef::new(Standard::new(num_vectors, dim).unwrap(), &input_data)
-                            .expect("input view creation");
+                    let input_view = rowmajor::Ref::try_from_data(&input_data, num_vectors, dim)
+                        .expect("input view creation");
 
                     let mut multi_mat: Mat<MinMaxMeta<NBITS>> =
                         Mat::new(MinMaxMeta::new(num_vectors, dim), Defaulted)
@@ -589,8 +590,8 @@ mod tests {
             let quantizer = make_quantizer(dim);
             let input_data = generate_test_data(num_vectors, dim);
 
-            let input_view = MatRef::new(Standard::new(num_vectors, dim).unwrap(), &input_data)
-                .expect("input view");
+            let input_view =
+                rowmajor::Ref::try_from_data(&input_data, num_vectors, dim).expect("input view");
 
             let mut mat: Mat<MinMaxMeta<NBITS>> =
                 Mat::new(MinMaxMeta::new(num_vectors, dim), Defaulted).expect("mat creation");
@@ -628,8 +629,7 @@ mod tests {
 
             // Input has 3 vectors
             let input_data = generate_test_data(3, dim);
-            let input_view =
-                MatRef::new(Standard::new(3, dim).unwrap(), &input_data).expect("input view");
+            let input_view = rowmajor::Ref::try_from_data(&input_data, 3, dim).expect("input view");
 
             // Output has 2 vectors (mismatch)
             let mut mat: Mat<MinMaxMeta<NBITS>> =
@@ -646,8 +646,7 @@ mod tests {
 
             // Input has dim=8 (mismatch)
             let input_data = generate_test_data(2, 8);
-            let input_view =
-                MatRef::new(Standard::new(2, 8).unwrap(), &input_data).expect("input view");
+            let input_view = rowmajor::Ref::try_from_data(&input_data, 2, 8).expect("input view");
 
             // Output correctly has dim=4
             let mut mat: Mat<MinMaxMeta<NBITS>> =
@@ -666,8 +665,7 @@ mod tests {
 
             // Input correctly has dim=4
             let input_data = generate_test_data(2, 4);
-            let input_view =
-                MatRef::new(Standard::new(2, 4).unwrap(), &input_data).expect("input view");
+            let input_view = rowmajor::Ref::try_from_data(&input_data, 2, 4).expect("input view");
 
             // Output has intrinsic_dim=8 (mismatch)
             let row_bytes = Data::<NBITS>::canonical_bytes(8);

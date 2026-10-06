@@ -12,15 +12,15 @@
 //!
 //! ```
 //! use diskann_quantization::multi_vector::{
-//!     distance::QueryMatRef,
-//!     Chamfer, Mat, MatMut, MatRef, MaxSim, Standard,
+//!     distance::Query,
+//!     Chamfer, MaxSim,
 //! };
-//! use diskann_utils::ReborrowMut;
+//! use diskann_utils::{ReborrowMut, views::rowmajor::{self, Matrix, MatrixMut}};
 //! use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 //!
 //! // Create an owned matrix (2 vectors, dim 3, initialized to 0.0)
-//! let mut owned = Mat::new(Standard::new(2, 3).unwrap(), 0.0f32).unwrap();
-//! assert_eq!(owned.num_vectors(), 2);
+//! let mut owned = rowmajor::Owned::from_element(2, 3, 0.0f32);
+//! assert_eq!(owned.nrows(), 2);
 //!
 //! // Modify via mutable view
 //! let mut view = owned.reborrow_mut();
@@ -33,11 +33,8 @@
 //! let doc_data = [1.0f32, 0.0, 0.0, 1.0];
 //!
 //! // Wrap query as QueryMatRef for type-safe asymmetric distance
-//! let query: QueryMatRef<_> = MatRef::new(
-//!     Standard::new(2, 2).unwrap(),
-//!     &query_data,
-//! ).unwrap().into();
-//! let doc = MatRef::new(Standard::new(2, 2).unwrap(), &doc_data).unwrap();
+//! let query = Query(rowmajor::Ref::try_from_data(&query_data, 2, 2).unwrap());
+//! let doc = rowmajor::Ref::try_from_data(&doc_data, 2, 2).unwrap();
 //!
 //! // Chamfer distance (sum of max similarities)
 //! let distance = Chamfer::evaluate(query, doc);
@@ -58,9 +55,9 @@ pub(crate) mod matrix;
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
 pub use distance::{
     BoxErase, Chamfer, Erase, MaxSim, MaxSimElement, MaxSimError, MaxSimIsa, MaxSimKernel,
-    NotSupported, ProjectedEigen, QueryMatRef, build_max_sim,
+    NotSupported, ProjectedEigen, Query, build_max_sim,
 };
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
-    Repr, ReprMut, ReprOwned, RowsMut, SliceError, Standard,
+    Repr, ReprMut, ReprOwned, RowsMut, SliceError,
 };

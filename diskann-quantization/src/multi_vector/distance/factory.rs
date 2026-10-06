@@ -8,7 +8,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::views::rowmajor::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::InnerProduct;
 use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 use diskann_wide::Architecture;
@@ -22,8 +22,8 @@ use super::isa::{MaxSimIsa, NotSupported};
 use super::kernel::{Erase, MaxSimKernel};
 use super::max_sim::{MaxSim, MaxSimError};
 use crate::matrix_kernels as mk;
-use crate::multi_vector::distance::QueryMatRef;
-use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
+use crate::multi_vector::BlockTransposed;
+use crate::multi_vector::distance::Query;
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Prepared<A, Q, NR> — concrete kernel for the arch-dispatched paths.
@@ -54,26 +54,19 @@ where
 
     fn compute_max_sim(
         &self,
-        doc: MatRef<'_, Standard<f32>>,
+        doc: rowmajor::Ref<'_, f32>,
         scores: &mut [f32],
     ) -> Result<(), MaxSimError> {
         if scores.len() != self.nrows() {
             return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
         }
 
-        if doc.vector_dim() != self.prepared.ncols() {
-            return Err(MaxSimError::UnequalDim(
-                doc.vector_dim(),
-                self.prepared.ncols(),
-            ));
+        if doc.ncols() != self.prepared.ncols() {
+            return Err(MaxSimError::UnequalDim(doc.ncols(), self.prepared.ncols()));
         }
 
         let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
-            scores.fill(if doc.num_vectors() == 0 {
-                f32::MAX
-            } else {
-                0.0
-            });
+            scores.fill(if doc.nrows() == 0 { f32::MAX } else { 0.0 });
             return Ok(());
         };
 
@@ -82,7 +75,7 @@ where
             return Ok(());
         };
 
-        let Some(b) = mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()) else {
+        let Some(b) = mk::blocks::unpacked::View::from_matrix_view(doc) else {
             scores.fill(f32::MAX);
             return Ok(());
         };
@@ -121,26 +114,19 @@ where
 
     fn compute_max_sim(
         &self,
-        doc: MatRef<'_, Standard<half::f16>>,
+        doc: rowmajor::Ref<'_, half::f16>,
         scores: &mut [f32],
     ) -> Result<(), MaxSimError> {
         if scores.len() != self.nrows() {
             return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
         }
 
-        if doc.vector_dim() != self.prepared.ncols() {
-            return Err(MaxSimError::UnequalDim(
-                doc.vector_dim(),
-                self.prepared.ncols(),
-            ));
+        if doc.ncols() != self.prepared.ncols() {
+            return Err(MaxSimError::UnequalDim(doc.ncols(), self.prepared.ncols()));
         }
 
         let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
-            scores.fill(if doc.num_vectors() == 0 {
-                f32::MAX
-            } else {
-                0.0
-            });
+            scores.fill(if doc.nrows() == 0 { f32::MAX } else { 0.0 });
             return Ok(());
         };
 
@@ -149,7 +135,7 @@ where
             return Ok(());
         };
 
-        let Some(b) = mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()) else {
+        let Some(b) = mk::blocks::unpacked::View::from_matrix_view(doc) else {
             scores.fill(f32::MAX);
             return Ok(());
         };
@@ -180,22 +166,25 @@ where
 //  ReferenceKernel<T> — non-SIMD fallback that wraps MaxSim::evaluate.
 // ─────────────────────────────────────────────────────────────────────────
 
-struct ReferenceKernel<T: Copy> {
-    query: Mat<Standard<T>>,
+struct ReferenceKernel<T> {
+    query: rowmajor::Owned<T>,
 }
 
-impl<T: Copy + std::fmt::Debug> std::fmt::Debug for ReferenceKernel<T> {
+impl<T: std::fmt::Debug> std::fmt::Debug for ReferenceKernel<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReferenceKernel")
-            .field("nrows", &self.query.num_vectors())
+            .field("nrows", &self.query.nrows())
             .finish()
     }
 }
 
-impl<T: Copy> ReferenceKernel<T> {
-    fn new(query: MatRef<'_, Standard<T>>) -> Self {
+impl<T> ReferenceKernel<T>
+where
+    T: Clone,
+{
+    fn new(query: rowmajor::Ref<'_, T>) -> Self {
         Self {
-            query: query.to_owned(),
+            query: query.to_rowmajor_owned(),
         }
     }
 }
@@ -206,28 +195,25 @@ where
     InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
 {
     fn nrows(&self) -> usize {
-        self.query.num_vectors()
+        self.query.nrows()
     }
 
     fn compute_max_sim(
         &self,
-        doc: MatRef<'_, Standard<T>>,
+        doc: rowmajor::Ref<'_, T>,
         scores: &mut [f32],
     ) -> Result<(), MaxSimError> {
         if scores.len() != self.nrows() {
             return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
         }
-        if doc.vector_dim() != self.query.vector_dim() {
-            return Err(MaxSimError::UnequalDim(
-                doc.vector_dim(),
-                self.query.vector_dim(),
-            ));
+        if doc.ncols() != self.query.ncols() {
+            return Err(MaxSimError::UnequalDim(doc.ncols(), self.query.ncols()));
         }
-        if doc.num_vectors() == 0 {
+        if doc.nrows() == 0 {
             scores.fill(f32::MAX);
             return Ok(());
         }
-        let query: QueryMatRef<'_, Standard<T>> = self.query.as_view().into();
+        let query = Query(self.query.as_view());
         let mut max_sim = MaxSim::new(scores);
         max_sim.evaluate(query, doc)
     }
@@ -241,11 +227,11 @@ struct BuildAndErase<E>(E);
 
 // ───── f32 Target1 impls ─────
 
-impl<E: Erase<f32>> diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, Standard<f32>>>
+impl<E: Erase<f32>> diskann_wide::arch::Target1<Scalar, E::Output, rowmajor::Ref<'_, f32>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: Scalar, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(query.as_matrix_view());
+    fn run(self, arch: Scalar, query: rowmajor::Ref<'_, f32>) -> E::Output {
+        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(query);
         self.0.erase(Prepared {
             arch,
             prepared,
@@ -255,11 +241,11 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, St
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<E: Erase<f32>> diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standard<f32>>>
+impl<E: Erase<f32>> diskann_wide::arch::Target1<V3, E::Output, rowmajor::Ref<'_, f32>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: V3, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 16>::from_matrix_view(query.as_matrix_view());
+    fn run(self, arch: V3, query: rowmajor::Ref<'_, f32>) -> E::Output {
+        let prepared = BlockTransposed::<f32, 16>::from_matrix_view(query);
         self.0.erase(Prepared {
             arch,
             prepared,
@@ -269,11 +255,11 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standa
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<E: Erase<f32>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standard<f32>>>
+impl<E: Erase<f32>> diskann_wide::arch::Target1<V4, E::Output, rowmajor::Ref<'_, f32>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: V4, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 32>::from_matrix_view(query.as_matrix_view());
+    fn run(self, arch: V4, query: rowmajor::Ref<'_, f32>) -> E::Output {
+        let prepared = BlockTransposed::<f32, 32>::from_matrix_view(query);
         self.0.erase(Prepared {
             arch,
             prepared,
@@ -283,11 +269,11 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standa
 }
 
 #[cfg(target_arch = "aarch64")]
-impl<E: Erase<f32>> diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Standard<f32>>>
+impl<E: Erase<f32>> diskann_wide::arch::Target1<Neon, E::Output, rowmajor::Ref<'_, f32>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: Neon, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(query.as_matrix_view());
+    fn run(self, arch: Neon, query: rowmajor::Ref<'_, f32>) -> E::Output {
+        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(query);
         self.0.erase(Prepared {
             arch,
             prepared,
@@ -299,15 +285,12 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Stan
 // ───── f16 Target1 impls ─────
 
 impl<E: Erase<half::f16>>
-    diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, Standard<half::f16>>>
+    diskann_wide::arch::Target1<Scalar, E::Output, rowmajor::Ref<'_, half::f16>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: Scalar, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
+    fn run(self, arch: Scalar, query: rowmajor::Ref<'_, half::f16>) -> E::Output {
         let prepared = BlockTransposed::<f32, 8>::from_matrix_view(
-            query
-                .as_matrix_view()
-                .map(|v| diskann_wide::cast_f16_to_f32(*v))
-                .as_view(),
+            query.map(|v| diskann_wide::cast_f16_to_f32(*v)).as_view(),
         );
         self.0.erase(Prepared {
             arch,
@@ -318,16 +301,12 @@ impl<E: Erase<half::f16>>
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<E: Erase<half::f16>>
-    diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standard<half::f16>>>
+impl<E: Erase<half::f16>> diskann_wide::arch::Target1<V3, E::Output, rowmajor::Ref<'_, half::f16>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: V3, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
+    fn run(self, arch: V3, query: rowmajor::Ref<'_, half::f16>) -> E::Output {
         let prepared = BlockTransposed::<f32, 16>::from_matrix_view(
-            query
-                .as_matrix_view()
-                .map(|v| diskann_wide::cast_f16_to_f32(*v))
-                .as_view(),
+            query.map(|v| diskann_wide::cast_f16_to_f32(*v)).as_view(),
         );
         self.0.erase(Prepared {
             arch,
@@ -338,16 +317,12 @@ impl<E: Erase<half::f16>>
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<E: Erase<half::f16>>
-    diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standard<half::f16>>>
+impl<E: Erase<half::f16>> diskann_wide::arch::Target1<V4, E::Output, rowmajor::Ref<'_, half::f16>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: V4, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
+    fn run(self, arch: V4, query: rowmajor::Ref<'_, half::f16>) -> E::Output {
         let prepared = BlockTransposed::<f32, 32>::from_matrix_view(
-            query
-                .as_matrix_view()
-                .map(|v| diskann_wide::cast_f16_to_f32(*v))
-                .as_view(),
+            query.map(|v| diskann_wide::cast_f16_to_f32(*v)).as_view(),
         );
         self.0.erase(Prepared {
             arch,
@@ -358,17 +333,13 @@ impl<E: Erase<half::f16>>
 }
 
 #[cfg(target_arch = "aarch64")]
-impl<E: Erase<half::f16>>
-    diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Standard<half::f16>>>
+impl<E: Erase<half::f16>> diskann_wide::arch::Target1<Neon, E::Output, rowmajor::Ref<'_, half::f16>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: Neon, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
+    fn run(self, arch: Neon, query: rowmajor::Ref<'_, half::f16>) -> E::Output {
         // Neon dispatches to Scalar (no Neon-specific kernel).
         let prepared = BlockTransposed::<f32, 8>::from_matrix_view(
-            query
-                .as_matrix_view()
-                .map(|v| diskann_wide::cast_f16_to_f32(*v))
-                .as_view(),
+            query.map(|v| diskann_wide::cast_f16_to_f32(*v)).as_view(),
         );
         self.0.erase(Prepared {
             arch,
@@ -401,7 +372,7 @@ pub trait MaxSimElement: sealed::Sealed + Sized + Copy + Send + Sync + 'static {
     /// build (e.g. AVX-512 unavailable; aarch64 on x86_64).
     fn build<E: Erase<Self>>(
         isa: MaxSimIsa,
-        query: MatRef<'_, Standard<Self>>,
+        query: rowmajor::Ref<'_, Self>,
         erase: E,
     ) -> Result<E::Output, NotSupported>;
 }
@@ -412,7 +383,7 @@ impl sealed::Sealed for half::f16 {}
 impl MaxSimElement for f32 {
     fn build<E: Erase<f32>>(
         isa: MaxSimIsa,
-        query: MatRef<'_, Standard<f32>>,
+        query: rowmajor::Ref<'_, f32>,
         erase: E,
     ) -> Result<E::Output, NotSupported> {
         match isa {
@@ -463,7 +434,7 @@ impl MaxSimElement for f32 {
 impl MaxSimElement for half::f16 {
     fn build<E: Erase<half::f16>>(
         isa: MaxSimIsa,
-        query: MatRef<'_, Standard<half::f16>>,
+        query: rowmajor::Ref<'_, half::f16>,
         erase: E,
     ) -> Result<E::Output, NotSupported> {
         match isa {
@@ -525,7 +496,7 @@ impl MaxSimElement for half::f16 {
 /// Returns [`NotSupported`] when the requested ISA cannot run on this build.
 pub fn build_max_sim<T: MaxSimElement, E: Erase<T>>(
     isa: MaxSimIsa,
-    query: MatRef<'_, Standard<T>>,
+    query: rowmajor::Ref<'_, T>,
     erase: E,
 ) -> Result<E::Output, NotSupported> {
     T::build(isa, query, erase)
@@ -534,7 +505,7 @@ pub fn build_max_sim<T: MaxSimElement, E: Erase<T>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multi_vector::{BoxErase, Chamfer, MaxSim, QueryMatRef};
+    use crate::multi_vector::{BoxErase, Chamfer, MaxSim, Query};
 
     /// Local helper trait — picks a sane test value of `T` from an `f32`
     /// so both `f32` and `half::f16` parameterizations share the same data
@@ -555,8 +526,8 @@ mod tests {
         }
     }
 
-    fn make_mat<T: Copy>(data: &[T], nrows: usize, ncols: usize) -> MatRef<'_, Standard<T>> {
-        MatRef::new(Standard::new(nrows, ncols).unwrap(), data).unwrap()
+    fn make_mat<T>(data: &[T], nrows: usize, ncols: usize) -> rowmajor::Ref<'_, T> {
+        rowmajor::Ref::try_from_data(data, nrows, ncols).unwrap()
     }
 
     fn make_test_data<T: FromF32>(len: usize, ceil: usize, shift: usize) -> Vec<T> {
@@ -594,7 +565,7 @@ mod tests {
             let query = make_mat(&query_data, nq, dim);
             let doc = make_mat(&doc_data, nd, dim);
 
-            let expected = Chamfer::evaluate(QueryMatRef::from(query), doc);
+            let expected = Chamfer::evaluate(Query(query), doc);
 
             let kernel = build_max_sim::<T, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
             let mut scores = vec![0.0f32; nq];
@@ -621,7 +592,7 @@ mod tests {
             let doc = make_mat(&doc_data, nd, dim);
 
             let mut expected_scores = vec![0.0f32; nq];
-            let _ = MaxSim::new(&mut expected_scores).evaluate(QueryMatRef::from(query), doc);
+            let _ = MaxSim::new(&mut expected_scores).evaluate(Query(query), doc);
 
             let kernel = build_max_sim::<T, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
             let mut actual_scores = vec![0.0f32; nq];

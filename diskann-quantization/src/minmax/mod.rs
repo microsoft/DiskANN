@@ -63,13 +63,16 @@
 //!     algorithms::{transforms::NullTransform, Transform},
 //!     minmax::{MinMaxMeta, MinMaxQuantizer},
 //!     multi_vector::{
-//!         distance::{Chamfer, MaxSim, QueryMatRef},
-//!         Defaulted, Mat, MatRef, Standard,
+//!         distance::{Chamfer, MaxSim, Query},
+//!         Defaulted, Mat,
 //!     },
 //!     num::Positive,
 //!     CompressInto,
 //! };
-//! use diskann_utils::{Reborrow, ReborrowMut};
+//! use diskann_utils::{
+//!     Reborrow, ReborrowMut,
+//!     views::rowmajor::{Ref as MatRef},
+//! };
 //! use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 //!
 //! const NBITS: usize = 8;
@@ -88,9 +91,7 @@
 //!     1.0, 0.0, 0.0, 0.0,  // query vector 0
 //!     0.0, 1.0, 0.0, 0.0,  // query vector 1
 //! ];
-//! let query_input = MatRef::new(
-//!     Standard::new(num_query_vectors, dim).unwrap(), &query_data
-//! ).unwrap();
+//! let query_input = MatRef::try_from_data(&query_data, num_query_vectors, dim).unwrap();
 //!
 //! // Full-precision document multi-vector (3 vectors × 4 dimensions)
 //! let doc_data: Vec<f32> = vec![
@@ -98,9 +99,7 @@
 //!     1.0, 0.0, 0.0, 0.0,  // doc vector 1
 //!     0.0, 0.0, 1.0, 0.0,  // doc vector 2
 //! ];
-//! let doc_input = MatRef::new(
-//!     Standard::new(num_doc_vectors, dim).unwrap(), &doc_data
-//! ).unwrap();
+//! let doc_input = MatRef::try_from_data(&doc_data, num_doc_vectors, dim).unwrap();
 //!
 //! // Create owned matrices for quantized output using Mat::new
 //! let mut query_out: Mat<MinMaxMeta<NBITS>> =
@@ -118,11 +117,11 @@
 //!
 //! // Compute MaxSim: per-query-vector max similarities
 //! let mut scores = vec![0.0f32; num_query_vectors];
-//! MaxSim::new(&mut scores).evaluate(query_mv.into(), doc_mv);
+//! MaxSim::new(&mut scores).evaluate(Query(query_mv), doc_mv);
 //! // scores[i] = min over all doc vectors of distance(query[i], doc[j])
 //!
 //! // Compute Chamfer distance (sum of MaxSim scores)
-//! let chamfer = Chamfer::evaluate(query_mv.into(), doc_mv);
+//! let chamfer = Chamfer::evaluate(Query(query_mv), doc_mv);
 //! ```
 mod multi;
 mod quantizer;

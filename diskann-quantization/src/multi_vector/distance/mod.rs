@@ -13,24 +13,18 @@
 //!
 //! ```
 //! use diskann_quantization::multi_vector::{
-//!     distance::{Chamfer, MaxSim, QueryMatRef},
-//!     MatRef, Standard,
+//!     distance::{Chamfer, MaxSim, Query},
 //! };
 //! use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
+//! use diskann_utils::views::rowmajor::{Ref as MatRef};
 //!
-//! // Query: 2 vectors of dim 3 (wrapped as QueryMatRef)
+//! // Query: 2 vectors of dim 3 (wrapped as Query)
 //! let query_data = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
-//! let query: QueryMatRef<_> = MatRef::new(
-//!     Standard::new(2, 3).unwrap(),
-//!     &query_data,
-//! ).unwrap().into();
+//! let query = Query(MatRef::try_from_data(&query_data, 2, 3).unwrap());
 //!
 //! // Doc: 2 vectors of dim 3
 //! let doc_data = [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0];
-//! let doc = MatRef::new(
-//!     Standard::new(2, 3).unwrap(),
-//!     &doc_data,
-//! ).unwrap();
+//! let doc = MatRef::try_from_data(&doc_data, 2, 3).unwrap();
 //!
 //! // Chamfer distance (sum of max similarities)
 //! let chamfer_dist = Chamfer::evaluate(query, doc);
@@ -51,7 +45,7 @@ mod max_sim;
 mod projected_eigen;
 
 pub use factory::{MaxSimElement, build_max_sim};
-pub use fallback::QueryMatRef;
+pub use fallback::Query;
 pub use isa::{MaxSimIsa, NotSupported};
 pub use kernel::{BoxErase, Erase, MaxSimKernel};
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};

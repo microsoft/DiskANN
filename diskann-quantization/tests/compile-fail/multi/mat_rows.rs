@@ -3,16 +3,19 @@
  * Licensed under the MIT license.
  */
 
-use diskann_quantization::multi_vector::{Mat, Standard};
+use diskann_quantization::{
+    multi_vector::{Mat, Defaulted},
+    minmax::MinMaxMeta,
+};
 
 // Test that `rows` on Mat correctly captures an immutable borrow,
 // preventing mutation of the Mat while the iterator is in scope.
 fn main() {
-    let mut mat: Mat<Standard<f32>> = Mat::new(Standard::new(4, 3).unwrap(), 0.0f32).unwrap();
+    let mut mat = Mat::new(MinMaxMeta::<1>::new(2, 2), Defaulted).unwrap();
     let iter = mat.rows();
     // This should fail: we cannot mutably borrow `mat` while `iter` exists
     let _ = mat.as_view_mut();
     for row in iter {
-        assert_eq!(row[0], 0.0);
+        std::hint::black_box(row);
     }
 }

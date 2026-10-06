@@ -5,10 +5,11 @@
 
 //! Object-safe kernel boundary trait plus BYOTE visitor trait.
 
-use crate::multi_vector::{MatRef, MaxSimError, Standard};
+use crate::multi_vector::MaxSimError;
+use diskann_utils::views::rowmajor;
 
 /// Object-safe interface for computing per-query MaxSim scores.
-pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
+pub trait MaxSimKernel<T>: Send + Sync + std::fmt::Debug {
     /// Number of query rows whose scores this kernel produces.
     fn nrows(&self) -> usize;
 
@@ -22,7 +23,7 @@ pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
     ///   vector dim.
     fn compute_max_sim(
         &self,
-        doc: MatRef<'_, Standard<T>>,
+        doc: rowmajor::Ref<'_, T>,
         scores: &mut [f32],
     ) -> Result<(), MaxSimError>;
 }

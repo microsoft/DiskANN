@@ -18,6 +18,7 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint, Output, Registry,
 };
 use diskann_quantization::multi_vector::{build_max_sim, BoxErase, MaxSimElement, MaxSimIsa};
+use diskann_utils::views::rowmajor::Matrix;
 use rand::distr::{Distribution, StandardUniform};
 
 use super::driver::{

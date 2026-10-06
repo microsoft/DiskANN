@@ -11,7 +11,7 @@ use super::super::vectors::{DataRef, MinMaxIP};
 use super::meta::MinMaxMeta;
 use crate::bits::{Representation, Unsigned};
 use crate::distances::{self, UnequalLengths};
-use crate::multi_vector::distance::QueryMatRef;
+use crate::multi_vector::distance::Query;
 use crate::multi_vector::{Chamfer, MatRef, MaxSim};
 
 //////////////////
@@ -37,7 +37,7 @@ impl MinMaxKernel {
     /// * `f` - Callback invoked with `(query_index, min_distance)` for each query vector
     #[inline(always)]
     pub(crate) fn max_sim_kernel<const NBITS: usize, const MBITS: usize, F>(
-        query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
+        query: Query<MatRef<'_, MinMaxMeta<NBITS>>>,
         doc: MatRef<'_, MinMaxMeta<MBITS>>,
         mut f: F,
     ) -> Result<(), UnequalLengths>
@@ -77,7 +77,7 @@ impl MinMaxKernel {
 ////////////
 
 impl<const NBITS: usize, const MBITS: usize>
-    DistanceFunctionMut<QueryMatRef<'_, MinMaxMeta<NBITS>>, MatRef<'_, MinMaxMeta<MBITS>>>
+    DistanceFunctionMut<Query<MatRef<'_, MinMaxMeta<NBITS>>>, MatRef<'_, MinMaxMeta<MBITS>>>
     for MaxSim<'_>
 where
     Unsigned: Representation<NBITS> + Representation<MBITS>,
@@ -90,7 +90,7 @@ where
     #[inline(always)]
     fn evaluate(
         &mut self,
-        query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
+        query: Query<MatRef<'_, MinMaxMeta<NBITS>>>,
         doc: MatRef<'_, MinMaxMeta<MBITS>>,
     ) {
         assert!(
@@ -113,7 +113,7 @@ where
 /////////////
 
 impl<const NBITS: usize, const MBITS: usize>
-    PureDistanceFunction<QueryMatRef<'_, MinMaxMeta<NBITS>>, MatRef<'_, MinMaxMeta<MBITS>>, f32>
+    PureDistanceFunction<Query<MatRef<'_, MinMaxMeta<NBITS>>>, MatRef<'_, MinMaxMeta<MBITS>>, f32>
     for Chamfer
 where
     Unsigned: Representation<NBITS> + Representation<MBITS>,
@@ -125,7 +125,7 @@ where
 {
     #[inline(always)]
     fn evaluate(
-        query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
+        query: Query<MatRef<'_, MinMaxMeta<NBITS>>>,
         doc: MatRef<'_, MinMaxMeta<MBITS>>,
     ) -> f32 {
         let mut sum = 0.0f32;
@@ -146,9 +146,9 @@ mod tests {
     use crate::algorithms::transforms::NullTransform;
     use crate::bits::{Representation, Unsigned};
     use crate::minmax::{Data, MinMaxQuantizer};
-    use crate::multi_vector::{Defaulted, Mat, Standard};
+    use crate::multi_vector::{Defaulted, Mat};
     use crate::num::Positive;
-    use diskann_utils::ReborrowMut;
+    use diskann_utils::{ReborrowMut, views::rowmajor};
     use std::num::NonZeroUsize;
 
     macro_rules! expand_to_bitrates {
@@ -204,7 +204,7 @@ mod tests {
     where
         Unsigned: Representation<NBITS>,
     {
-        let input_mat = MatRef::new(Standard::<f32>::new(n, dim).unwrap(), input).unwrap();
+        let input_mat = rowmajor::Ref::try_from_data(input, n, dim).unwrap();
         let mut output: Mat<MinMaxMeta<NBITS>> =
             Mat::new(MinMaxMeta::new(n, dim), Defaulted).unwrap();
         quantizer
@@ -256,7 +256,7 @@ mod tests {
             let query_mat = compress_mat::<NBITS>(&quantizer, &query_data, nq, dim);
             let doc_mat = compress_mat::<MBITS>(&quantizer, &doc_data, nd, dim);
 
-            let query: QueryMatRef<_> = query_mat.as_view().into();
+            let query = Query(query_mat.as_view());
             let doc = doc_mat.as_view();
 
             // Test MaxSim matches naive
@@ -303,9 +303,7 @@ mod tests {
         let query_data = vec![0u8; 2 * row_bytes];
         let doc_data = vec![0u8; 3 * row_bytes];
 
-        let query: QueryMatRef<_> = MatRef::new(MinMaxMeta::<8>::new(2, dim), &query_data)
-            .unwrap()
-            .into();
+        let query = Query(MatRef::new(MinMaxMeta::<8>::new(2, dim), &query_data).unwrap());
         let doc = MatRef::new(MinMaxMeta::<8>::new(3, dim), &doc_data).unwrap();
 
         let mut scores = vec![0.0f32; 5]; // Wrong size
