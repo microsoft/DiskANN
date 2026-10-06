@@ -18,6 +18,7 @@
 
 pub(crate) mod packed_f32_x_unpacked_f16;
 pub(crate) mod packed_f32_x_unpacked_f32;
+pub(crate) mod packed_i8_x_unpacked_i8;
 
 #[cfg(test)]
 mod test;
