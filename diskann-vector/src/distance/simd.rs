@@ -1804,19 +1804,7 @@ impl SIMDSchema<Half, Half, Neon> for IP {
         y: Self::Right,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        let mut result = acc.to_underlying();
-        // SAFETY: The target is assumed to support FHM
-        unsafe {
-            std::arch::asm!(
-                "fmlal {result:v}.4s, {x:v}.4h, {y:v}.4h",
-                result = inout(vreg) result,
-                x = in(vreg) x.to_underlying(),
-                y = in(vreg) y.to_underlying(),
-                options(nomem, nostack),
-            );
-        }
-
-        Self::Accumulator::from_underlying(acc.arch(), result)
+        acc.dot_simd(x, y)
     }
 
     #[inline(always)]
