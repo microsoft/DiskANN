@@ -99,7 +99,7 @@ mod imp {
             let offsets =
                 diskann_quantization::views::ChunkOffsets::partition(dim, input.num_pq_chunks)?;
 
-            let base = {
+            let table = {
                 let threadpool = rayon::ThreadPoolBuilder::new()
                     .num_threads(input.compression_threads.get())
                     .build()?;
@@ -113,16 +113,6 @@ mod imp {
                     )?)
                 })?
             };
-
-            // TODO: Training should return a `BasicTable` directly.
-            let table = tables::BasicTable::new(
-                rowmajor::Owned::try_from_data(
-                    base.flatten().into(),
-                    input.num_pq_centers.get(),
-                    data.ncols(),
-                )?,
-                offsets,
-            )?;
 
             let training_time: MicroSeconds = start.elapsed().into();
 

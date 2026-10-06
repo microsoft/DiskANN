@@ -116,7 +116,7 @@ where
         parameters.max_k_means_reps(),
     );
 
-    let full_pivot_data = pool.install(|| -> Result<Vec<f32>, ANNError> {
+    let basic_table = pool.install(|| -> Result<_, ANNError> {
         let result = trainer
             .train(
                 rowmajor::Ref::try_from_data(train_data, parameters.num_train(), parameters.dim())
@@ -126,13 +126,12 @@ where
                 &random_provider,
                 &diskann_quantization::cancel::DontCancel,
             )
-            .map_err(ANNError::new)?
-            .flatten();
+            .map_err(ANNError::new)?;
         Ok(result)
     })?;
 
     pq_storage.write_pivot_data(
-        &full_pivot_data,
+        basic_table.view_pivots().as_slice(),
         centroid.as_deref(),
         chunk_offsets.as_slice(),
         parameters.num_centers(),
@@ -200,7 +199,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     );
 
     let rng_builder = create_rnd_provider_from_seed(rand::distr::StandardUniform {}.sample(rng));
-    let trained = pool.install(|| -> Result<Vec<f32>, ANNError> {
+    let basic_table = pool.install(|| -> Result<_, ANNError> {
         // SAFETY: The pointer for `cancellation_token` is valid for this local lifetime,
         // and we do not otherwise access `cancellation_token`.
         //
@@ -216,7 +215,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
         let atomic_bool: &AtomicBool = unsafe { AtomicBool::from_ptr(cancellation_token) };
         let cancelation = diskann_quantization::cancel::AtomicCancelation::new(atomic_bool);
 
-        let result = trainer
+        let table = trainer
             .train(
                 rowmajor::Ref::try_from_data(
                     train_data.as_slice(),
@@ -229,12 +228,12 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
                 &rng_builder,
                 &cancelation,
             )
-            .map_err(ANNError::new)?
-            .flatten();
-        Ok(result)
+            .map_err(ANNError::new)?;
+
+        Ok(table)
     })?;
 
-    full_pivot_data.copy_from_slice(&trained);
+    full_pivot_data.copy_from_slice(basic_table.view_pivots().as_slice());
     Ok(())
 }
 

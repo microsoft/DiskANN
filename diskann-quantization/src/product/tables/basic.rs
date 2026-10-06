@@ -5,9 +5,12 @@
 
 use crate::traits::CompressInto;
 use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
-use diskann_utils::views::{
-    DenseData,
-    rowmajor::{self, Matrix},
+use diskann_utils::{
+    strided::Strided,
+    views::{
+        DenseData,
+        rowmajor::{self, Matrix},
+    },
 };
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use thiserror::Error;
@@ -112,6 +115,27 @@ where
             pivots: self.pivots.as_view(),
             offsets: self.offsets.as_view(),
         }
+    }
+
+    /// Return a [`Strided`] for the raw pivots of the requested chunk.
+    ///
+    /// Returns `None` if `chunk >= self.nchunks`.
+    pub fn pivots_for(&self, chunk: usize) -> Option<Strided<'_, f32>> {
+        let range = self.offsets.get(chunk)?;
+
+        #[expect(
+            clippy::expect_used,
+            reason = "the BasicTable's invariants mean this panic should be unreachable"
+        )]
+        Some(
+            Strided::try_from_data(
+                &self.pivots.as_slice()[range.start..],
+                self.pivots.nrows(),
+                range.len(),
+                self.pivots.ncols(),
+            )
+            .expect("BasicTable asserts that this layout is valid"),
+        )
     }
 }
 
@@ -304,6 +328,41 @@ mod tests {
 
                 let (pivots, offsets) = create_pivot_tables(schema.to_owned(), num_centers);
                 let table = BasicTable::new(pivots, offsets).unwrap();
+
+                // Check that `pivots_for` works as expected with repsect to the documented
+                // table configuration for `create_pivot_tables`.
+                for chunk in 0..schema.len() {
+                    let strided = table.pivots_for(chunk).unwrap();
+                    assert_eq!(strided.nrows(), num_centers);
+                    assert_eq!(strided.ncols(), schema.at(chunk).len());
+
+                    for (center, row) in strided.rows().enumerate() {
+                        let base = ((center + chunk) % num_centers) as f32;
+                        row.iter().enumerate().for_each(|(dim, b)| {
+                            let offset = if dim.is_multiple_of(2) { 0.25 } else { -0.25 };
+
+                            if dim.is_multiple_of(2) {
+                                assert_eq!(
+                                    *b,
+                                    base + offset,
+                                    "failed: chunk {} of {}, center {} of {}, dim {} of {}",
+                                    chunk,
+                                    schema.len(),
+                                    center,
+                                    num_centers,
+                                    dim,
+                                    row.len(),
+                                );
+                            }
+                        })
+                    }
+                }
+
+                assert!(
+                    table.pivots_for(schema.len()).is_none(),
+                    "out of bounds access should return `None`",
+                );
+
                 let (data, expected) = create_dataset(schema, num_centers, num_data, &mut rng);
 
                 let mut output = vec![0; schema.len()];
