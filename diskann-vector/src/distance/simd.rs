@@ -1804,12 +1804,19 @@ impl SIMDSchema<Half, Half, Neon> for IP {
         y: Self::Right,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        diskann_wide::alias!(f32s = <Neon>::f32x4);
+        let mut result = acc.to_underlying();
+        // SAFETY: The target is assumed to support FHM
+        unsafe {
+            std::arch::asm!(
+                "fmlal {result:v}.4s, {x:v}.4h, {y:v}.4h",
+                result = inout(vreg) result,
+                x = in(vreg) x.to_underlying(),
+                y = in(vreg) y.to_underlying(),
+                options(nomem, nostack),
+            );
+        }
 
-        let x: f32s = x.into();
-        let y: f32s = y.into();
-
-        x.mul_add_simd(y, acc)
+        Self::Accumulator::from_underlying(acc.arch(), result)
     }
 
     #[inline(always)]
