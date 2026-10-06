@@ -62,7 +62,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
     type Error = PQTrainingError;
 
     /// Perform product quantization training on the provided training set and return a
-    /// `SimplePivots` containing the result of kmeans clustering on each partition.
+    /// [`BasicTable`] containing the result of kmeans clustering on each partition.
     ///
     /// # Panics
     ///
@@ -208,7 +208,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 BasicTable::new(packed, schema.to_owned()).map_err(|err| PQTrainingError {
                     chunk: schema.len(),
                     of: schema.len(),
-                    dim: data.nrows(),
+                    dim: data.ncols(),
                     kind: PQTrainingErrorKind::InternalError(Box::new(err)),
                 })?;
 
