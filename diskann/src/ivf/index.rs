@@ -208,17 +208,15 @@ impl<P: Provider> IVFIndex<P> {
 
             for (position, ((id, v), out)) in points.iter().zip(vectors.rows_mut()).enumerate() {
                 //stage the input points first.
-                let id = accessor
-                    .stage_point(id, *v, out)
-                    .await
-                    .escalate("Unable to stage point")?;
+                let id = accessor.stage_point(id, *v, out).await.into_ann_result()?;
                 ids.push(id);
 
-                // route the points to their nearest centroid
+                // route the points to their nearest centroid. Every staged point must be
+                // placed, so a routing failure cannot be skipped.
                 let parent = accessor
                     .centroids()
                     .select(out, 1)
-                    .escalate("Unable to select")?
+                    .escalate("insert must route every staged point")?
                     .first()
                     .map(|s| s.id)
                     .ok_or_else(|| ANNError::message("Didn't return list"))?;
@@ -229,13 +227,12 @@ impl<P: Provider> IVFIndex<P> {
             // filter the routed lists for ones that need splitting.
             let mut parents = Vec::new();
             for (&list, positions) in &routed {
-                let len = accessor.list_size(list).escalate("Unable to get len")?;
+                let len = accessor.list_size(list).into_ann_result()?;
 
                 if len + positions.len() > config.split_threshold {
                     parents.push(list);
                 }
             }
-            parents.sort_unstable();
 
             // for the ones that need splitting - split and re-assign necessary points in neighbors
             let update = Self::split::<_, T>(
@@ -281,6 +278,16 @@ impl<P: Provider> IVFIndex<P> {
         A: InsertAccessor<P, T>,
         T: Sync,
     {
+        // Kidns of deltas -
+        // 1. Staged points that are not part of splitting. -> [`Delta::PointAppends`] -> available before split.
+        // 2. Staged points that are part of splitting. -> [`Delta::PointAppends`] -> needs new centroid, centroid id and assignment.
+        // 3. New centroids -> [`Delta::CentroidDelta::Install`] -> needs clustering resulting from spolit.
+        // 4. Retire centroids -> [`Delta::CentroidDelta::Retire`] -> needs the assignments to new centroids from old one, result from clustering
+        // 5. (Optional) Reassignments
+
+        // Split -
+        // - Get: staged vectors,
+
         let mut deltas = Vec::new();
 
         // Lists that keep their centroid take their staged points as they are.
@@ -328,35 +335,25 @@ impl<P: Provider> IVFIndex<P> {
         A: InsertAccessor<P, T>,
         T: Sync,
     {
-        // let reader = accessor.reader();
-
-        // let num_members = accessor.list_size(parent)?;
-
-        // let mut points = Matrix::new(f32::NAN, num_members + staged,  reader.dim());
-
-        // reader.read_into(parent, points.as_mut_view()).await?;
         let dim = accessor.dim();
-        let members = accessor
-            .get_members(parent)
-            .escalate("split must read the parent's members")?
-            .to_vec();
 
-        // Everything the parent would hold: its current members, then its staged points.
-        let mut points = rowmajor::Owned::from_element(members.len() + staged.len(), dim, f32::NAN);
-        {
-            let mut member_vectors = rowmajor::Owned::from_element(members.len(), dim, f32::NAN);
-            accessor
-                .reader()
-                .read_into(parent, member_vectors.as_view_mut())
-                .await
-                .escalate("split must read the parent's vectors")?;
+        let num_members = accessor.list_size(parent).into_ann_result()?;
 
-            let sources = member_vectors
-                .rows()
-                .chain(staged.iter().map(|&position| vectors.row(position)));
-            for (row, source) in points.rows_mut().zip(sources) {
-                row.copy_from_slice(source);
-            }
+        let mut points = rowmajor::Owned::from_element(num_members + staged.len(), dim, f32::NAN);
+
+        let (head, tail) = points.as_mut_slice().split_at_mut(num_members * dim);
+
+        let head_view = rowmajor::Mut::try_from_data(head, num_members, dim)?;
+
+        accessor
+            .reader()
+            .read_into(parent, head_view)
+            .await
+            .escalate("split must read the parent's vectors")?;
+
+        let mut tail_view = rowmajor::Mut::try_from_data(tail, staged.len(), dim)?;
+        for (row, &position) in tail_view.rows_mut().zip(staged) {
+            row.copy_from_slice(vectors.row(position));
         }
 
         let TwoMeans {
@@ -374,11 +371,11 @@ impl<P: Provider> IVFIndex<P> {
 
             deltas.push(Delta::CentroidDelta {
                 id,
-                delta: CentroidDelta::Install {
-                    centroid: centroid.into(),
-                },
+                delta: CentroidDelta::Install,
             });
         }
+
+        let members = accessor.get_members(parent).into_ann_result()?;
 
         // Retire the parent, moving every member it held onto that member's child.
         let moves = members

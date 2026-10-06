@@ -80,9 +80,6 @@ pub trait Provider: Sized + Send + Sync + 'static {
 }
 
 pub trait StageElements<P: Provider, T: Sync> {
-    /// The kind of error yielded by `set_element`.
-    type StageError: ToRanked + std::fmt::Debug + Send + Sync + 'static;
-
     /// Stage a new point; its id is provisional until `update` commits it.
     fn stage_point(
         &mut self,
@@ -144,7 +141,7 @@ pub trait Centroids: Send + Sync {
 
 pub trait InsertAccessor<P: Provider, T: Sync>: Send + Sized + StageElements<P, T> {
     /// In-memory centroid catalog and navigator in this accessor's unified view.
-    type Centroids<'a>: Centroids<ListId = P::ListId, Error = Self::Error>
+    type Centroids<'a>: Centroids<ListId = P::ListId>
     where
         Self: 'a;
 
@@ -154,7 +151,7 @@ pub trait InsertAccessor<P: Provider, T: Sync>: Send + Sized + StageElements<P, 
         Self: 'a;
 
     /// Errors from planning reads, staging, or applying the update.
-    type Error: ToRanked + Debug + Send + Sync + 'static;
+    type Error: StandardError;
 
     /// Borrow the list reader to read vectors from posting lists.
     fn reader(&self) -> Self::Reader<'_>;
@@ -256,12 +253,12 @@ pub trait SearchAccessor: Send + Sync {
     type InternalId;
 
     /// In-memory centroid view.
-    type Centroids<'a>: Centroids<ListId = Self::ListId, Error = Self::Error>
+    type Centroids<'a>: Centroids<ListId = Self::ListId>
     where
         Self: 'a;
 
     /// Errors from list selection or scanning.
-    type Error: ToRanked + Debug + Send + Sync + 'static;
+    type Error: StandardError;
 
     /// Borrow the centroid index used for routing.
     fn centroids(&self) -> Self::Centroids<'_>;

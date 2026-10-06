@@ -8,13 +8,13 @@ use crate::utils::VectorId;
 /// A change to the set of live lists.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CentroidDelta<Id, L> {
-    /// Install a new centroid for this Id.
-    Install { centroid: Box<[f32]> },
+    /// Install a the staged centroid with this Id.
+    Install,
     /// Retire the Id and move the points in this list to other list Ids.
     Retire { moves: Box<[MoveTo<Id, L>]> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Copy, Eq)]
 pub struct MoveTo<I, L> {
     id: I,
     to: L,
@@ -44,12 +44,12 @@ pub enum Delta<Id, L> {
         id: L,
         delta: CentroidDelta<Id, L>,
     },
-    // Point moves due to re-assignments, keyed by source centroid Id.
+    // Point moves due to re-assignments, grouped by source centroid Id.
     PointMoves {
         from: L,
         moves: Box<[MoveTo<Id, L>]>,
     },
-    // Point insertions from staged points, keyed by destination centroid Id.
+    // Point insertions from staged points, grouped by destination centroid Id.
     PointAppends {
         to: L,
         ids: Box<[Id]>,
