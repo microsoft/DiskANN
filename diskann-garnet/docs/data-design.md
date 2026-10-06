@@ -36,7 +36,7 @@ Diskann-garnet uses these bits to distinguish between differnet kinds of index d
 
 ### Key Data Prefixing
 
-In order to reduce allocations in the data access path in Garnet, Garnet needs some place to scribble state into during operations. It uses a single byte immediately preceding the first key byte for this purpose. This means that any key pointer given to Garnet access methods must contain valid space preceding the real key. For this reason, key data pointers are `*mut u8` and not `*const u8` and care must be taken to ensure the memory preceding that pointer is valid. In diskann-garnet, we precede the key data with at least 4 bytes of scratch space.
+Read callbacks receive keys with four-byte length prefixes. Write, delete, and RMW callbacks receive the key bytes and length separately.
 
 ## Term Types
 

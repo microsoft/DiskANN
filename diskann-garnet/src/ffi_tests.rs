@@ -124,6 +124,64 @@ mod tests {
     }
 
     #[test]
+    fn insert_distinguishes_updates() {
+        for quant_type in [
+            VectorQuantType::NoQuant,
+            VectorQuantType::Bin,
+            VectorQuantType::Q8,
+        ] {
+            let store = Store::new();
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
+
+            for (id, vector, expected, expected_internal_id) in [
+                (42, [1.0, 2.0], 1, 1u32),
+                (42, [2.0, 1.0], 3, 1),
+                (43, [3.0, 4.0], 1, 2),
+                (43, [4.0, 3.0], 3, 2),
+            ] {
+                assert_eq!(
+                    u8::from(insert_f32_vector(&ctx, index_ptr, id, &vector)),
+                    expected,
+                    "unexpected insert status for {quant_type:?} and ID {id}"
+                );
+                let internal_id = store
+                    .get(ctx.term(Term::IntMap).get(), bytemuck::bytes_of(&id))
+                    .unwrap();
+                assert_eq!(
+                    bytemuck::pod_read_unaligned::<u32>(&internal_id),
+                    expected_internal_id
+                );
+                assert_eq!(
+                    store.get(ctx.term(Term::Vector).get(), &internal_id),
+                    Some(bytemuck::cast_slice::<f32, u8>(&vector).to_vec())
+                );
+                assert_eq!(
+                    unsafe { card(ctx.get(), index_ptr) },
+                    u64::from(expected_internal_id)
+                );
+            }
+            assert_eq!(store.int_map_reads(), 4);
+
+            let (ids, distances) = do_search(&ctx, index_ptr, &[2.0, 1.0], 3, None);
+            assert_eq!(ids, [42, 43]);
+            assert_eq!(distances[0], 0.0);
+
+            let id_bytes = bytemuck::bytes_of(&42u32);
+            assert!(unsafe { remove(ctx.get(), index_ptr, id_bytes.as_ptr(), id_bytes.len()) });
+            store.clear_read_counts();
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 42, &[5.0, 6.0]),
+                InsertResult::Success
+            );
+            assert_eq!(store.int_map_reads(), 1);
+
+            unsafe {
+                drop_index(ctx.get(), index_ptr);
+            }
+        }
+    }
+
+    #[test]
     fn add_check_and_remove_vector() {
         let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
@@ -493,16 +551,16 @@ mod tests {
         let mut output_ids = vec![];
         let mut offset = 0;
         for _ in 0..(count as usize) {
-            let mut id_len = 0u32;
-            bytemuck::bytes_of_mut(&mut id_len)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            let id_len = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + mem::size_of::<u32>()],
+            );
             offset += mem::size_of::<u32>();
 
             assert_eq!(id_len, mem::size_of::<u64>() as u32);
 
-            let mut id = 0u64;
-            bytemuck::bytes_of_mut(&mut id)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u64>()]);
+            let id = bytemuck::pod_read_unaligned::<u64>(
+                &output_id_buffer[offset..offset + mem::size_of::<u64>()],
+            );
             offset += mem::size_of::<u64>();
 
             output_ids.push(id);
@@ -603,16 +661,16 @@ mod tests {
         let mut output_ids = vec![];
         let mut offset = 0;
         for _ in 0..(count as usize) {
-            let mut id_len = 0u32;
-            bytemuck::bytes_of_mut(&mut id_len)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            let id_len = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + mem::size_of::<u32>()],
+            );
             offset += mem::size_of::<u32>();
 
             assert_eq!(id_len, mem::size_of::<u64>() as u32);
 
-            let mut id = 0u64;
-            bytemuck::bytes_of_mut(&mut id)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u64>()]);
+            let id = bytemuck::pod_read_unaligned::<u64>(
+                &output_id_buffer[offset..offset + mem::size_of::<u64>()],
+            );
             offset += mem::size_of::<u64>();
 
             output_ids.push(id);
@@ -772,13 +830,13 @@ mod tests {
         let mut ids = vec![];
         let mut offset = 0;
         for _ in 0..count {
-            let mut id_len = 0u32;
-            bytemuck::bytes_of_mut(&mut id_len)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            let id_len = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + mem::size_of::<u32>()],
+            );
             offset += mem::size_of::<u32>();
-            let mut id = 0u32;
-            bytemuck::bytes_of_mut(&mut id)
-                .copy_from_slice(&output_id_buffer[offset..offset + id_len as usize]);
+            let id = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + id_len as usize],
+            );
             offset += id_len as usize;
             ids.push(id);
         }

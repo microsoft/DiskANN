@@ -18,8 +18,8 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider::{
-        DataProvider, Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut,
-        NoopGuard, SetElement,
+        DataProvider, Delete, ElementStatus, Guard, HasId, NeighborAccessor, NeighborAccessorMut,
+        SetElement,
     },
     utils::VectorRepr,
 };
@@ -35,15 +35,18 @@ use std::{
     any::TypeId,
     collections::HashSet,
     future,
+    hash::BuildHasher,
     marker::PhantomData,
     mem,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Range},
     sync::{
-        Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
+use strum::VariantArray;
 use thiserror::Error;
+use tokio::sync::watch;
 
 use crate::{
     SearchResults, VectorQuantType,
@@ -68,6 +71,9 @@ const RERANK_BUFFER_LENGTH: usize = 1024;
 /// Size hint passed to Garnet when batch reading attributes. Attributes are variable
 /// length, so this is only an estimate used to size Garnet's read buffer.
 const ATTRIBUTE_LENGTH_HINT: usize = 1024;
+
+/// Maximum number of reservation retries after waiting for another owner.
+const RESERVATION_RETRY_LIMIT: usize = 5;
 
 #[derive(Clone)]
 struct AdjList(AdjacencyList<u32>);
@@ -112,10 +118,122 @@ pub(crate) enum GarnetProviderError {
     Quantizer(#[from] GarnetQuantizerError),
     #[error("Post processing error: {0}")]
     PostProcessing(Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("External ID reservation retry limit reached")]
+    ReservationRetryLimit,
 }
 
 diskann::convert_error!(GarnetProviderError);
 diskann::always_escalate!(GarnetProviderError);
+
+struct BackfillGuard {
+    ranges: Arc<Mutex<HashSet<Range<u32>>>>,
+    notify: Arc<Condvar>,
+    range: Range<u32>,
+}
+
+impl Drop for BackfillGuard {
+    fn drop(&mut self) {
+        let _ = self.ranges.lock().unwrap().remove(&self.range);
+        self.notify.notify_all();
+    }
+}
+
+pub(crate) struct ExternalIdGuard<'a> {
+    pending: &'a DashMap<u64, watch::Sender<()>, foldhash::fast::RandomState>,
+    id_hash: u64,
+}
+
+impl Drop for ExternalIdGuard<'_> {
+    fn drop(&mut self) {
+        self.pending.remove(&self.id_hash);
+    }
+}
+
+pub(crate) struct InsertGuard {
+    callbacks: Callbacks,
+    context: Context,
+    external_id: GarnetId,
+    internal_id: u32,
+    fsm: Arc<FreeSpaceMap>,
+    original: Option<[(Context, Option<Vec<u8>>); 4]>,
+    completed: bool,
+    _backfill: Option<BackfillGuard>,
+}
+
+impl std::fmt::Debug for InsertGuard {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InsertGuard")
+            .field("internal_id", &self.internal_id)
+            .field("completed", &self.completed)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Guard for InsertGuard {
+    type Id = u32;
+
+    async fn complete(mut self) {
+        self.completed = true;
+    }
+
+    fn id(&self) -> u32 {
+        self.internal_id
+    }
+}
+
+impl Drop for InsertGuard {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+
+        let mut restored = true;
+        if let Some(original) = self.original.take() {
+            for (context, value) in original {
+                restored &= match value {
+                    Some(value) => self.callbacks.write_iid(&context, self.internal_id, &value),
+                    None => {
+                        self.callbacks.delete_iid(&context, self.internal_id)
+                            || !self.callbacks.exists_iid(&context, self.internal_id, 0)
+                    }
+                };
+            }
+        } else {
+            for &term in Term::VARIANTS {
+                match term {
+                    Term::Vector
+                    | Term::Quantized
+                    | Term::Attributes
+                    | Term::Neighbors
+                    | Term::ExtMap => {
+                        let context = self.context.term(term);
+                        restored &= self.callbacks.delete_iid(&context, self.internal_id)
+                            || !self.callbacks.exists_iid(&context, self.internal_id, 0);
+                    }
+                    Term::Metadata | Term::IntMap => {}
+                }
+            }
+            let context = self.context.term(Term::IntMap);
+            restored &= self.callbacks.delete_eid(&context, &self.external_id)
+                || !self
+                    .callbacks
+                    .exists_eid(&context, &self.external_id, mem::size_of::<u32>());
+            if restored {
+                restored = self.fsm.mark_free(&self.context, self.internal_id).is_ok();
+            }
+        }
+        if !restored {
+            self.callbacks.log(
+                &self.context,
+                &format!(
+                    "Error: insert rollback failed for ID {:?}; stored terms may be inconsistent.",
+                    self.external_id,
+                ),
+            );
+        }
+    }
+}
 
 /// The Garnet DataProvider implementation.
 pub(crate) struct GarnetProvider<T: VectorRepr> {
@@ -130,12 +248,17 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     max_degree: usize,
     /// Garnet storage engine callbacks
     callbacks: Callbacks,
+    pending_external_ids: DashMap<u64, watch::Sender<()>, foldhash::fast::RandomState>,
     /// The quantizer the index will use, or None if NOQUANT is used.
     quantizer: Option<Box<dyn GarnetQuantizer>>,
     /// Tracks whether the index is ready to operate fully quantized.
     all_quantized: AtomicBool,
     /// Per job tracker for quantization backfill completion
     backfills_completed: AtomicU64,
+    /// Lock for active backfill and update ranges
+    backfill_lock: Arc<Mutex<HashSet<Range<u32>>>>,
+    /// Signals released range reservations
+    backfill_notify: Arc<Condvar>,
     /// Lock to ensure training only happens once.
     training_lock: Mutex<()>,
     /// Pool of pre-allocated buffers to use for neighbor lists
@@ -156,7 +279,7 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// Small cache for the start points' quantized vector data
     start_point_quant_cache: DashMap<u32, Poly<[u8], AlignToEight>, foldhash::fast::RandomState>,
     /// Free space map to track internal IDs
-    fsm: FreeSpaceMap,
+    fsm: Arc<FreeSpaceMap>,
     _phantom: PhantomData<T>,
 }
 
@@ -302,9 +425,12 @@ impl<T: VectorRepr> GarnetProvider<T> {
             metric_type,
             max_degree,
             callbacks,
+            pending_external_ids: DashMap::with_hasher(foldhash::fast::RandomState::default()),
             quantizer,
             all_quantized: AtomicBool::new(all_quantized),
             backfills_completed: AtomicU64::new(0),
+            backfill_lock: Arc::new(Mutex::new(HashSet::new())),
+            backfill_notify: Arc::new(Condvar::new()),
             training_lock: Mutex::new(()),
             id_buffer_pool,
             filtered_ids_pool,
@@ -314,8 +440,53 @@ impl<T: VectorRepr> GarnetProvider<T> {
             start_point_cache,
             start_point_quant_cache,
             neighbor_cache,
-            fsm,
+            fsm: Arc::new(fsm),
             _phantom: PhantomData,
+        })
+    }
+
+    pub(crate) async fn reserve_external_id(
+        &self,
+        id: &GarnetId,
+    ) -> Result<ExternalIdGuard<'_>, GarnetProviderError> {
+        let id_hash = self.pending_external_ids.hasher().hash_one(&id[..]);
+        for retry in 0..=RESERVATION_RETRY_LIMIT {
+            let mut receiver = match self.pending_external_ids.entry(id_hash) {
+                dashmap::mapref::entry::Entry::Occupied(_) if retry == RESERVATION_RETRY_LIMIT => {
+                    break;
+                }
+                dashmap::mapref::entry::Entry::Occupied(entry) => entry.get().subscribe(),
+                dashmap::mapref::entry::Entry::Vacant(entry) => {
+                    let (sender, _) = watch::channel(());
+                    entry.insert(sender);
+                    return Ok(ExternalIdGuard {
+                        pending: &self.pending_external_ids,
+                        id_hash,
+                    });
+                }
+            };
+            let _ = receiver.changed().await;
+        }
+        Err(GarnetProviderError::ReservationRetryLimit)
+    }
+
+    fn reserve_backfill_range(&self, range: Range<u32>) -> Option<BackfillGuard> {
+        if range.is_empty() {
+            return None;
+        }
+
+        let mut ranges = self.backfill_lock.lock().unwrap();
+        while ranges
+            .iter()
+            .any(|active| active.start < range.end && range.start < active.end)
+        {
+            ranges = self.backfill_notify.wait(ranges).unwrap();
+        }
+        let _ = ranges.insert(range.clone());
+        Some(BackfillGuard {
+            ranges: self.backfill_lock.clone(),
+            notify: self.backfill_notify.clone(),
+            range,
         })
     }
 
@@ -640,6 +811,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         let start_id = (work_count * task_idx) as u32;
         let end_id = (work_count * (task_idx + 1)).min(max_id + 1) as u32;
 
+        let _backfill_guard = self.reserve_backfill_range(start_id..end_id);
         let mut v = vec![T::default(); self.dim];
         let mut f = vec![0f32; self.dim];
         let mut q = vec![0u8; quantizer.bytes()];
@@ -983,7 +1155,7 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
     type InternalId = u32;
     type ExternalId = GarnetId;
     type Error = GarnetProviderError;
-    type Guard = NoopGuard<u32>;
+    type Guard = InsertGuard;
 
     fn to_internal_id(
         &self,
@@ -1021,7 +1193,52 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
         id: &Self::ExternalId,
         element: (&[T], &[u8]),
     ) -> Result<Self::Guard, Self::SetError> {
-        let internal_id = self.fsm.next_id(context)?;
+        let (internal_id, is_update) = match self.to_internal_id(context, id) {
+            Ok(existing_id) => {
+                context.set_insert_is_update();
+                (self.fsm.existing_id(existing_id), true)
+            }
+            Err(_) => (self.fsm.next_id(context)?, false),
+        };
+
+        let backfill_guard = if self.quantizer.is_some()
+            && !self.all_quantized.load(Ordering::Acquire)
+            && (!internal_id.should_quantize()
+                || internal_id.id() <= internal_id.max_id_for_backfill())
+        {
+            let end_id = internal_id
+                .id()
+                .checked_add(1)
+                .ok_or(FsmError::IdOutOfRange(internal_id.id()))?;
+            self.reserve_backfill_range(internal_id.id()..end_id)
+        } else {
+            None
+        };
+
+        let guard = InsertGuard {
+            callbacks: self.callbacks,
+            context: context.clone(),
+            external_id: id.clone(),
+            internal_id: internal_id.id(),
+            fsm: self.fsm.clone(),
+            original: is_update.then(|| {
+                [
+                    Term::Vector,
+                    Term::Quantized,
+                    Term::Attributes,
+                    Term::Neighbors,
+                ]
+                .map(|term| {
+                    let context = context.term(term);
+                    let value = self
+                        .callbacks
+                        .read_varsize_iid::<u8>(&context, internal_id.id());
+                    (context, value)
+                })
+            }),
+            completed: false,
+            _backfill: backfill_guard,
+        };
 
         // Set quantization readiness
         if let Some(quantizer) = &self.quantizer
@@ -1032,7 +1249,8 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
             context.set_quantizer_ready();
         }
 
-        let insert = || -> Result<(), Self::SetError> {
+        let mut error_term = Term::Vector;
+        let mut insert = || -> Result<(), Self::SetError> {
             self.callbacks
                 .write_iid(&context.term(Term::Vector), internal_id.id(), element.0)
                 .then_some(())
@@ -1040,6 +1258,7 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
             if let Some(quantizer) = &self.quantizer
                 && internal_id.should_quantize()
             {
+                error_term = Term::Quantized;
                 let mut quant = self
                     .quant_buffer_pool
                     .get_ref(Undef::new(quantizer.bytes()));
@@ -1053,50 +1272,44 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
                     .ok_or(GarnetError::Write)?;
             }
             if !element.1.is_empty() {
+                error_term = Term::Attributes;
                 self.callbacks
                     .write_iid(&context.term(Term::Attributes), internal_id.id(), element.1)
                     .then_some(())
                     .ok_or(GarnetError::Write)?;
             }
-            self.callbacks
-                .write_iid(&context.term(Term::ExtMap), internal_id.id(), id)
-                .then_some(())
-                .ok_or(GarnetError::Write)?;
-            self.callbacks
-                .write_eid(
-                    &context.term(Term::IntMap),
-                    id,
-                    bytemuck::bytes_of(&internal_id.id()),
-                )
-                .then_some(())
-                .ok_or(GarnetError::Write)?;
+            if !is_update {
+                error_term = Term::ExtMap;
+                self.callbacks
+                    .write_iid(&context.term(Term::ExtMap), internal_id.id(), id)
+                    .then_some(())
+                    .ok_or(GarnetError::Write)?;
+                error_term = Term::IntMap;
+                self.callbacks
+                    .write_eid(
+                        &context.term(Term::IntMap),
+                        id,
+                        bytemuck::bytes_of(&internal_id.id()),
+                    )
+                    .then_some(())
+                    .ok_or(GarnetError::Write)?;
+            }
             Ok(())
         };
 
         match insert() {
             Ok(()) => (),
-            Err(e) => {
-                // Clean up any potential data we inserted, but ignore failures.
-                let _ = self
-                    .callbacks
-                    .delete_iid(&context.term(Term::Vector), internal_id.id());
-                let _ = self
-                    .callbacks
-                    .delete_iid(&context.term(Term::Quantized), internal_id.id());
-                let _ = self
-                    .callbacks
-                    .delete_iid(&context.term(Term::Attributes), internal_id.id());
-                let _ = self
-                    .callbacks
-                    .delete_iid(&context.term(Term::ExtMap), internal_id.id());
-                let _ = self.callbacks.delete_eid(&context.term(Term::IntMap), id);
-
-                self.fsm.mark_free(context, internal_id.id())?;
+            Err(e) if is_update => {
+                self.callbacks.log(
+                    &context.term(error_term),
+                    &format!("Error: update failed for ID {id:?}, term {error_term:?}: {e}."),
+                );
                 return Err(e);
             }
+            Err(e) => return Err(e),
         }
 
-        Ok(NoopGuard::new(internal_id.id()))
+        Ok(guard)
     }
 }
 
@@ -2068,26 +2281,40 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for DynamicQuantiza
 
 #[cfg(test)]
 mod tests {
-    use std::mem;
+    use std::{
+        collections::HashMap,
+        ffi::c_void,
+        hash::BuildHasher,
+        mem,
+        ops::Range,
+        sync::{Arc, Mutex, atomic::Ordering, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
 
+    use dashmap::DashMap;
     use diskann::{
         graph::{
             config::{self, defaults::GRAPH_SLACK_FACTOR},
             search,
         },
-        provider::{Delete, SetElement},
+        provider::{DataProvider, Delete, Guard, SetElement},
     };
     use diskann_providers::index::wrapped_async::DiskANNIndex;
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_vector::distance::Metric;
     use rand::Rng;
 
     use crate::{
         SearchResults, VectorQuantType,
         dyn_index::DynIndex,
-        garnet::{Context, GarnetId, Term},
-        provider::{GarnetProvider, QUANT_STATE_KEY},
+        garnet::{
+            Callbacks, Context, GarnetError, GarnetId, ReadDataCallback, RmwDataCallback,
+            TERM_BITMASK, Term, WriteCallback,
+        },
+        provider::{GarnetProvider, GarnetProviderError, QUANT_STATE_KEY, RESERVATION_RETRY_LIMIT},
         quantization::{GarnetQuantizer, Spherical1Bit},
-        test_utils::Store,
+        test_utils::{LOGS, Store},
     };
 
     #[tokio::test]
@@ -2107,10 +2334,938 @@ mod tests {
         let id = GarnetId::from(bytemuck::bytes_of(&0));
 
         let res = provider.set_element(&ctx, &id, (&[0f32, 0f32], &[])).await;
-        assert!(res.is_ok());
+        res.unwrap().complete().await;
 
         let res = provider.delete(&ctx, &id).await;
         assert!(res.is_ok());
+
+        let guard = provider
+            .set_element(&ctx, &id, (&[0f32, 0f32], &[]))
+            .await
+            .unwrap();
+        store.clear_read_counts();
+        drop(guard);
+        assert_eq!(store.int_map_reads(), 0);
+        assert!(store.get(ctx.term(Term::IntMap).get(), &id).is_none());
+        assert_eq!(provider.fsm.total_used(), 0);
+        LOGS.with(|logs| assert!(logs.lock().unwrap().is_empty()));
+    }
+
+    fn assert_waits_for_range(
+        provider: &GarnetProvider<f32>,
+        range: Range<u32>,
+        should_wait: bool,
+        operation: impl FnOnce() + Send,
+    ) {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let reservation = provider.reserve_backfill_range(range);
+            scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                operation();
+                finished_tx.send(()).unwrap();
+            });
+
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let early_result = finished_rx.recv_timeout(if should_wait {
+                Duration::from_millis(50)
+            } else {
+                Duration::from_secs(5)
+            });
+            drop(reservation);
+            if should_wait {
+                assert_eq!(early_result, Err(mpsc::RecvTimeoutError::Timeout));
+                finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            } else {
+                early_result.unwrap();
+            }
+        });
+        assert!(provider.backfill_lock.lock().unwrap().is_empty());
+    }
+
+    fn train_for_backfill(provider: &GarnetProvider<f32>, ctx: &Context) {
+        let quantizer = provider.quantizer.as_ref().unwrap();
+        let mut data = rowmajor::Owned::from_element(quantizer.required_vectors(), 2, 0.0f32);
+        for row in 0..data.nrows() {
+            data.row_mut(row)
+                .copy_from_slice(&[(row + 1) as f32, (row % 7 + 1) as f32]);
+        }
+        quantizer.train(Metric::L2, data.as_view()).unwrap();
+        let mut state = vec![0u8];
+        state.extend_from_slice(&quantizer.serialize().unwrap());
+        assert!(
+            provider
+                .callbacks
+                .write_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY, &state)
+        );
+        provider.fsm.enable_quantization();
+    }
+
+    #[test]
+    fn backfill_ranges_exclude_overlaps() {
+        let store = Arc::new(DashMap::new());
+        let state = ParallelContext::new(store);
+        let ctx = state.context();
+        let index = create_2d_f32_index_with_callbacks(
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            ParallelContext::callbacks(),
+            &ctx,
+        );
+        let provider = index.inner.provider();
+
+        for (active, requested, should_wait) in [
+            (0..10, 5..6, true),
+            (5..6, 0..10, true),
+            (0..10, 0..10, true),
+            (0..10, 9..20, true),
+            (0..10, 10..20, false),
+            (0..10, 5..5, false),
+        ] {
+            assert_waits_for_range(provider, active, should_wait, || {
+                let _reservation = provider.reserve_backfill_range(requested);
+            });
+        }
+    }
+
+    #[test]
+    fn updates_reserve_backfill_ranges_only_when_needed() {
+        for (quant_type, train, finish, above_boundary, should_wait) in [
+            (VectorQuantType::NoQuant, false, false, false, false),
+            (VectorQuantType::Q8, false, false, false, false),
+            (VectorQuantType::Bin, false, false, false, true),
+            (VectorQuantType::Bin, true, false, false, true),
+            (VectorQuantType::Bin, true, false, true, false),
+            (VectorQuantType::Bin, true, true, false, false),
+        ] {
+            let store = Arc::new(DashMap::new());
+            let state = ParallelContext::new(store.clone());
+            let ctx = state.context();
+            let index = create_2d_f32_index_with_callbacks(
+                quant_type,
+                Metric::L2,
+                ParallelContext::callbacks(),
+                &ctx,
+            );
+            let provider = index.inner.provider();
+            let original = [0.0f32, 1.0];
+            let mut id = GarnetId::from(bytemuck::bytes_of(&42u32));
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            provider.maybe_set_start_point(&ctx, &original).unwrap();
+            let guard = runtime
+                .block_on(provider.set_element(&ctx, &id, (&original, &[])))
+                .unwrap();
+            runtime.block_on(guard.complete());
+            if train {
+                train_for_backfill(provider, &ctx);
+            }
+            if above_boundary {
+                id = GarnetId::from(bytemuck::bytes_of(&43u32));
+                let guard = runtime
+                    .block_on(provider.set_element(&ctx, &id, (&original, &[])))
+                    .unwrap();
+                runtime.block_on(guard.complete());
+            }
+            if finish {
+                assert!(provider.backfill_quant_vectors(&ctx, 0, 1));
+                assert!(provider.all_quantized.load(Ordering::Acquire));
+            }
+            let internal_id = parallel_get(&store, ctx.term(Term::IntMap).get(), &id).unwrap();
+            let internal_id = bytemuck::pod_read_unaligned::<u32>(&internal_id);
+            let update_ctx = state.context();
+            assert_waits_for_range(provider, internal_id..internal_id + 1, should_wait, || {
+                let updated = [1.0f32, 0.0];
+                let guard = runtime
+                    .block_on(provider.set_element(&update_ctx, &id, (&updated, &[])))
+                    .unwrap();
+                runtime.block_on(guard.complete());
+                assert!(update_ctx.insert_is_update());
+                if let Some(quantizer) = &provider.quantizer
+                    && quantizer.is_trained()
+                {
+                    let mut expected = vec![0u8; quantizer.bytes()];
+                    quantizer.compress(&updated, &mut expected).unwrap();
+                    assert_eq!(
+                        parallel_get(
+                            &store,
+                            ctx.term(Term::Quantized).get(),
+                            bytemuck::bytes_of(&internal_id),
+                        ),
+                        Some(expected)
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn backfill_waits_for_overlapping_updates() {
+        for (range, should_wait) in [(1..2, true), (2..3, false)] {
+            let store = Arc::new(DashMap::new());
+            let state = ParallelContext::new(store);
+            let ctx = state.context();
+            let index = create_2d_f32_index_with_callbacks(
+                VectorQuantType::Bin,
+                Metric::L2,
+                ParallelContext::callbacks(),
+                &ctx,
+            );
+            let provider = index.inner.provider();
+            let original = [0.0f32, 1.0];
+            let id = GarnetId::from(bytemuck::bytes_of(&42u32));
+            provider.maybe_set_start_point(&ctx, &original).unwrap();
+            DynIndex::insert(&index, &ctx, &id, bytemuck::cast_slice(&original), &[]).unwrap();
+            train_for_backfill(provider, &ctx);
+            assert_waits_for_range(provider, range, should_wait, || {
+                assert!(provider.backfill_quant_vectors(&ctx, 0, 1));
+            });
+            assert!(provider.all_quantized.load(Ordering::Acquire));
+        }
+    }
+
+    /// Per-insert fault injection and synchronization for tests.
+    #[derive(Default)]
+    struct InsertControl {
+        /// One-shot failure: target term and matching operations to skip.
+        failure: Option<(u64, usize)>,
+        /// One-shot pause: target term, arrival sender, and resume receiver.
+        pause: Option<(u64, mpsc::Sender<()>, mpsc::Receiver<()>)>,
+        /// Store snapshot before the first vector write.
+        before_vector: Option<HashMap<Vec<u8>, Vec<u8>>>,
+    }
+
+    /// Parallel test callback state; the encoded pointer's low three bits hold the term tag.
+    struct ParallelContext {
+        /// Mock storage shared across threads.
+        store: Arc<DashMap<Vec<u8>, Vec<u8>>>,
+        /// Per-insert fault, pause, and snapshot state.
+        control: Mutex<InsertControl>,
+    }
+
+    impl ParallelContext {
+        fn new(store: Arc<DashMap<Vec<u8>, Vec<u8>>>) -> Box<Self> {
+            Box::new(Self {
+                store,
+                control: Mutex::new(InsertControl::default()),
+            })
+        }
+
+        fn context(&self) -> Context {
+            Context::new(std::ptr::from_ref(self).expose_provenance() as u64)
+        }
+
+        unsafe fn from_context<'a>(context: u64) -> &'a Self {
+            let pointer =
+                std::ptr::with_exposed_provenance::<Self>((context & !TERM_BITMASK) as usize);
+            // SAFETY: Callers keep the boxed context alive until all callback operations finish.
+            unsafe { &*pointer }
+        }
+
+        fn callbacks() -> Callbacks {
+            Callbacks::new(
+                parallel_read,
+                controlled_insert_write,
+                parallel_delete,
+                controlled_insert_rmw,
+                parallel_filter,
+                parallel_log,
+            )
+        }
+
+        fn fail_insert_operation(&self, context: u64) -> bool {
+            let mut control = self.control.lock().unwrap();
+            let term = context & TERM_BITMASK;
+            if control
+                .pause
+                .as_ref()
+                .is_some_and(|(pause_term, _, _)| *pause_term == term)
+            {
+                let (_, entered, resume) = control.pause.take().unwrap();
+                let _ = entered.send(());
+                if resume.recv_timeout(Duration::from_secs(10)).is_err() {
+                    return true;
+                }
+            }
+            if term == Term::Vector as u64 && control.before_vector.is_none() {
+                control.before_vector = Some(parallel_snapshot(&self.store));
+            }
+            if let Some((failure_term, skip)) = control.failure.as_mut()
+                && *failure_term == term
+            {
+                if *skip == 0 {
+                    control.failure = None;
+                    return true;
+                }
+                *skip -= 1;
+            }
+            false
+        }
+    }
+
+    fn parallel_key(context: u64, key: &[u8]) -> Vec<u8> {
+        let mut encoded = bytemuck::bytes_of(&(context & TERM_BITMASK)).to_vec();
+        encoded.extend_from_slice(key);
+        encoded
+    }
+
+    fn parallel_get(
+        store: &DashMap<Vec<u8>, Vec<u8>>,
+        context: u64,
+        key: &[u8],
+    ) -> Option<Vec<u8>> {
+        store
+            .get(&parallel_key(context, key))
+            .map(|value| value.clone())
+    }
+
+    fn parallel_snapshot(store: &DashMap<Vec<u8>, Vec<u8>>) -> HashMap<Vec<u8>, Vec<u8>> {
+        store
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
+
+    unsafe extern "C" fn parallel_read(
+        context: u64,
+        count: u32,
+        _length_hint: u32,
+        keys: *const u8,
+        keys_len: usize,
+        callback: ReadDataCallback,
+        callback_context: *mut c_void,
+    ) {
+        let state = unsafe { ParallelContext::from_context(context) };
+        let mut keys = unsafe { std::slice::from_raw_parts(keys, keys_len) };
+        for index in 0..count {
+            let length = bytemuck::pod_read_unaligned::<u32>(&keys[..4]) as usize;
+            let key = &keys[4..4 + length];
+            if let Some(value) = parallel_get(&state.store, context, key) {
+                unsafe { callback(index, callback_context, value.as_ptr(), value.len()) };
+            }
+            keys = &keys[4 + length..];
+        }
+    }
+
+    unsafe extern "C" fn parallel_delete(context: u64, key: *const u8, key_len: usize) -> bool {
+        let state = unsafe { ParallelContext::from_context(context) };
+        let key = unsafe { std::slice::from_raw_parts(key, key_len) };
+        state.store.remove(&parallel_key(context, key)).is_some()
+    }
+
+    unsafe extern "C" fn parallel_filter(_context: u64, _data: *const u8, _length: usize) -> bool {
+        true
+    }
+
+    unsafe extern "C" fn parallel_log(_context: u64, _message: *const u8, _length: usize) {}
+
+    unsafe extern "C" fn controlled_insert_write(
+        context: u64,
+        key: *const u8,
+        key_len: usize,
+        value: *const u8,
+        value_len: usize,
+    ) -> bool {
+        let state = unsafe { ParallelContext::from_context(context) };
+        if state.fail_insert_operation(context) {
+            return false;
+        }
+        let key = unsafe { std::slice::from_raw_parts(key, key_len) };
+        let value = unsafe { std::slice::from_raw_parts(value, value_len) };
+        state
+            .store
+            .insert(parallel_key(context, key), value.to_vec());
+        true
+    }
+
+    unsafe extern "C" fn controlled_insert_rmw(
+        context: u64,
+        key: *const u8,
+        key_len: usize,
+        value_len: usize,
+        callback: RmwDataCallback,
+        callback_context: *mut c_void,
+    ) -> bool {
+        let state = unsafe { ParallelContext::from_context(context) };
+        if state.fail_insert_operation(context) {
+            return false;
+        }
+        let key = unsafe { std::slice::from_raw_parts(key, key_len) };
+        let mut value = state
+            .store
+            .entry(parallel_key(context, key))
+            .or_insert_with(|| vec![0; value_len]);
+        unsafe { callback(callback_context, value.as_mut_ptr(), value.len()) };
+        true
+    }
+
+    fn wait_for_pending_receiver(provider: &GarnetProvider<f32>, id: &GarnetId) -> bool {
+        let id_hash = provider.pending_external_ids.hasher().hash_one(&id[..]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if provider
+                .pending_external_ids
+                .get(&id_hash)
+                .is_some_and(|sender| sender.receiver_count() > 0)
+            {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::yield_now();
+        }
+    }
+
+    fn concurrent_insert_outcomes(first_fails: bool, second_fails: bool) {
+        for quant_type in [
+            VectorQuantType::NoQuant,
+            VectorQuantType::Bin,
+            VectorQuantType::Q8,
+        ] {
+            // failure_term tells where to fail, and skip tells how many to succeed before we fail
+            for (failure_term, skip) in [
+                (Term::Vector, 0),
+                (Term::Quantized, 0),
+                (Term::Attributes, 0),
+                (Term::ExtMap, 0),
+                (Term::IntMap, 0),
+                (Term::Neighbors, 0),
+                (Term::Neighbors, 1),
+            ] {
+                if matches!(failure_term, Term::Quantized) && quant_type != VectorQuantType::Q8 {
+                    continue;
+                }
+                // Set up the index and capture its state before either insert.
+                let store = Arc::new(DashMap::new());
+                let state = ParallelContext::new(store.clone());
+                let ctx = state.context();
+                let callbacks = ParallelContext::callbacks();
+                let index =
+                    create_2d_f32_index_with_callbacks(quant_type, Metric::L2, callbacks, &ctx);
+                let provider = index.inner.provider();
+                let id = GarnetId::from(bytemuck::bytes_of(&42u32));
+                let first_vector = [0.0f32, 1.0];
+                let second_vector = [1.0f32, 0.0];
+                provider.maybe_set_start_point(&ctx, &first_vector).unwrap();
+                let initial_used = provider.fsm.total_used();
+                let mut initial_snapshot = parallel_snapshot(&store);
+                initial_snapshot.retain(|key, _| {
+                    bytemuck::pod_read_unaligned::<u64>(&key[..8]) != Term::Metadata as u64
+                });
+                let (entered_tx, entered_rx) = mpsc::channel();
+                let (resume_tx, resume_rx) = mpsc::channel();
+                let failure = (failure_term as u64, skip);
+
+                // Pause the first insert while it owns the external ID, verify the second
+                // waits for that ID, then resume the first and collect both results.
+                let (first, second) = thread::scope(|scope| {
+                    let first = scope.spawn(|| {
+                        let state = ParallelContext::new(store.clone());
+                        *state.control.lock().unwrap() = InsertControl {
+                            failure: first_fails.then_some(failure),
+                            pause: Some((failure.0, entered_tx, resume_rx)),
+                            before_vector: None,
+                        };
+                        let context = state.context();
+                        let result = DynIndex::insert(
+                            &index,
+                            &context,
+                            &id,
+                            bytemuck::cast_slice(&first_vector),
+                            b"first",
+                        );
+                        (result.is_ok(), context.insert_is_update())
+                    });
+                    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+                    let second = scope.spawn(|| {
+                        let state = ParallelContext::new(store.clone());
+                        let second_failure = if !first_fails
+                            && (failure.0 == Term::ExtMap as u64
+                                || failure.0 == Term::IntMap as u64)
+                        {
+                            (Term::Attributes as u64, 0)
+                        } else {
+                            (failure.0, if first_fails { failure.1 } else { 0 })
+                        };
+                        *state.control.lock().unwrap() = InsertControl {
+                            failure: second_fails.then_some(second_failure),
+                            pause: None,
+                            before_vector: None,
+                        };
+                        let context = state.context();
+                        let result = DynIndex::insert(
+                            &index,
+                            &context,
+                            &id,
+                            bytemuck::cast_slice(&second_vector),
+                            b"second",
+                        );
+                        let snapshot = state.control.lock().unwrap().before_vector.take().unwrap();
+                        ((result.is_ok(), context.insert_is_update()), snapshot)
+                    });
+                    let waiting = wait_for_pending_receiver(provider, &id);
+                    let _ = resume_tx.send(());
+                    let results = (first.join().unwrap(), second.join().unwrap());
+                    assert!(entered.is_ok(), "first insert never acquired ownership");
+                    assert!(waiting, "second insert did not wait for ownership");
+                    results
+                });
+
+                // Verify success/update classification and rollback to the expected state.
+                assert_eq!(
+                    first,
+                    (!first_fails, false),
+                    "first: {quant_type:?}, fault {failure:?}"
+                );
+                assert_eq!(
+                    second.0,
+                    (!second_fails, !first_fails),
+                    "second: {quant_type:?}, fault {failure:?}"
+                );
+                if second_fails {
+                    let mut current_snapshot = parallel_snapshot(&store);
+                    if first_fails {
+                        current_snapshot.retain(|key, _| {
+                            bytemuck::pod_read_unaligned::<u64>(&key[..8]) != Term::Metadata as u64
+                        });
+                        assert_eq!(current_snapshot, initial_snapshot);
+                    } else {
+                        assert_eq!(current_snapshot, second.1);
+                    }
+                }
+                // Check ownership cleanup, live member records, and freed IDs.
+                assert!(provider.pending_external_ids.is_empty());
+                let has_member = !first_fails || !second_fails;
+                assert_eq!(
+                    provider.fsm.total_used(),
+                    initial_used + usize::from(has_member)
+                );
+                let mapping = parallel_get(&store, ctx.term(Term::IntMap).get(), &id);
+                assert_eq!(mapping.is_some(), has_member);
+                let current_id = mapping.as_deref().map(bytemuck::pod_read_unaligned::<u32>);
+                for internal_id in 1..=provider.fsm.max_id() {
+                    let key = bytemuck::bytes_of(&internal_id);
+                    if Some(internal_id) == current_id {
+                        let (vector, attrs) = if second_fails {
+                            (&first_vector, &b"first"[..])
+                        } else {
+                            (&second_vector, &b"second"[..])
+                        };
+                        assert_eq!(provider.get_full_vector(&ctx, internal_id).unwrap(), vector);
+                        assert_eq!(
+                            parallel_get(&store, ctx.term(Term::Attributes).get(), key),
+                            Some(attrs.to_vec())
+                        );
+                        assert_eq!(
+                            parallel_get(&store, ctx.term(Term::ExtMap).get(), key),
+                            Some(id.to_vec())
+                        );
+                        if let Some(quantizer) = &provider.quantizer
+                            && quantizer.is_trained()
+                        {
+                            let mut expected = vec![0; quantizer.bytes()];
+                            quantizer.compress(vector, &mut expected).unwrap();
+                            assert_eq!(
+                                parallel_get(&store, ctx.term(Term::Quantized).get(), key),
+                                Some(expected)
+                            );
+                        }
+                    } else {
+                        assert!(provider.fsm.is_free(&ctx, internal_id).unwrap());
+                        for term in [
+                            Term::Vector,
+                            Term::Quantized,
+                            Term::Attributes,
+                            Term::Neighbors,
+                            Term::ExtMap,
+                        ] {
+                            assert!(parallel_get(&store, ctx.term(term).get(), key).is_none());
+                        }
+                    }
+                }
+
+                // Insert again, which will update or insert depending on the first two.
+                let retry_context = state.context();
+                DynIndex::insert(
+                    &index,
+                    &retry_context,
+                    &id,
+                    bytemuck::cast_slice(&first_vector),
+                    b"retry",
+                )
+                .unwrap();
+                assert_eq!(retry_context.insert_is_update(), has_member);
+                assert_eq!(provider.fsm.total_used(), initial_used + 1);
+                assert!(provider.pending_external_ids.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_inserts_both_succeed() {
+        concurrent_insert_outcomes(false, false);
+    }
+
+    #[test]
+    fn concurrent_inserts_first_fails() {
+        concurrent_insert_outcomes(true, false);
+    }
+
+    #[test]
+    fn concurrent_inserts_second_fails() {
+        concurrent_insert_outcomes(false, true);
+    }
+
+    #[test]
+    fn concurrent_inserts_both_fail() {
+        concurrent_insert_outcomes(true, true);
+    }
+
+    #[tokio::test]
+    async fn pending_external_ids_serialize_and_wake_waiters() {
+        use std::{future::Future, pin::pin, task::Poll};
+
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let provider = GarnetProvider::<f32>::new(
+            2,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            10,
+            store.callbacks(),
+            &ctx,
+        )
+        .unwrap();
+        let id = GarnetId::from(&b"same"[..]);
+        let other_id = GarnetId::from(&b"other"[..]);
+        let id_hash = provider.pending_external_ids.hasher().hash_one(&id[..]);
+        let receiver_count = || {
+            provider
+                .pending_external_ids
+                .get(&id_hash)
+                .unwrap()
+                .receiver_count()
+        };
+        // Reserve one ID and register two waiters; a different ID remains available.
+        let owner = provider.reserve_external_id(&id).await.unwrap();
+        assert_eq!(receiver_count(), 0);
+        let mut second = pin!(provider.reserve_external_id(&id));
+        let mut third = pin!(provider.reserve_external_id(&id));
+        let mut task = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(second.as_mut().poll(&mut task).is_pending());
+        assert!(third.as_mut().poll(&mut task).is_pending());
+        assert_eq!(receiver_count(), 2);
+        drop(provider.reserve_external_id(&other_id).await.unwrap());
+
+        // Release owners in turn; only one waiter can hold the ID at a time.
+        drop(owner);
+        let Poll::Ready(Ok(second_owner)) = second.as_mut().poll(&mut task) else {
+            panic!("second waiter did not acquire the released ID");
+        };
+        assert!(third.as_mut().poll(&mut task).is_pending());
+        assert_eq!(receiver_count(), 1);
+        drop(second_owner);
+        drop(third.await.unwrap());
+        assert!(provider.pending_external_ids.is_empty());
+
+        // Cancelling a waiter removes its subscription without releasing the owner's ID.
+        let owner = provider.reserve_external_id(&id).await.unwrap();
+        let mut cancelled = Box::pin(provider.reserve_external_id(&id));
+        assert!(cancelled.as_mut().poll(&mut task).is_pending());
+        assert_eq!(receiver_count(), 1);
+        drop(cancelled);
+        assert_eq!(receiver_count(), 0);
+        drop(owner);
+        drop(provider.reserve_external_id(&id).await.unwrap());
+        assert!(provider.pending_external_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn external_id_reservation_retry_limit() {
+        use std::{future::Future, pin::pin, task::Poll};
+
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let provider = GarnetProvider::<f32>::new(
+            2,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            10,
+            store.callbacks(),
+            &ctx,
+        )
+        .unwrap();
+        let id = GarnetId::from(&b"contended"[..]);
+        let id_hash = provider.pending_external_ids.hasher().hash_one(&id[..]);
+        let mut task = std::task::Context::from_waker(std::task::Waker::noop());
+
+        // Exercise both acquisition and continued contention on the final allowed retry.
+        for acquire_on_last_retry in [false, true] {
+            let mut owner = provider.reserve_external_id(&id).await.unwrap();
+            let mut waiter = pin!(provider.reserve_external_id(&id));
+            assert!(waiter.as_mut().poll(&mut task).is_pending());
+
+            // Reacquire the ID before polling the waiter to force repeated contention.
+            for _ in 1..RESERVATION_RETRY_LIMIT {
+                drop(owner);
+                owner = provider.reserve_external_id(&id).await.unwrap();
+                assert!(waiter.as_mut().poll(&mut task).is_pending());
+            }
+
+            drop(owner);
+            if acquire_on_last_retry {
+                let Poll::Ready(Ok(guard)) = waiter.as_mut().poll(&mut task) else {
+                    panic!("last reservation retry did not acquire the released ID");
+                };
+                drop(guard);
+            } else {
+                // Exhaustion removes the waiter but leaves the current owner's reservation.
+                let owner = provider.reserve_external_id(&id).await.unwrap();
+                assert!(matches!(
+                    waiter.as_mut().poll(&mut task),
+                    Poll::Ready(Err(GarnetProviderError::ReservationRetryLimit))
+                ));
+                assert_eq!(
+                    provider
+                        .pending_external_ids
+                        .get(&id_hash)
+                        .unwrap()
+                        .receiver_count(),
+                    0
+                );
+                drop(owner);
+            }
+            assert!(provider.pending_external_ids.is_empty());
+        }
+    }
+
+    #[test]
+    fn member_mutations_wait_for_insert_owner() {
+        enum Mutation {
+            SetAttributes,
+            DeleteAttributes,
+            Remove,
+        }
+
+        for mutation in [
+            Mutation::SetAttributes,
+            Mutation::DeleteAttributes,
+            Mutation::Remove,
+        ] {
+            // Create an existing member with attributes for each mutation.
+            let store = Arc::new(DashMap::new());
+            let state = ParallelContext::new(store.clone());
+            let ctx = state.context();
+            let index = create_2d_f32_index_with_callbacks(
+                VectorQuantType::NoQuant,
+                Metric::L2,
+                ParallelContext::callbacks(),
+                &ctx,
+            );
+            let provider = index.inner.provider();
+            let id = GarnetId::from(bytemuck::bytes_of(&42u32));
+            let vector = [0.0f32, 1.0];
+            provider.maybe_set_start_point(&ctx, &vector).unwrap();
+            DynIndex::insert(&index, &ctx, &id, bytemuck::cast_slice(&vector), b"before").unwrap();
+            let internal_id = provider.to_internal_id(&ctx, &id).unwrap();
+
+            // Hold the ID reservation and verify the mutation waits until it is released.
+            let owner = index.run(|_| provider.reserve_external_id(&id)).unwrap();
+            thread::scope(|scope| {
+                let task = scope.spawn(|| match mutation {
+                    Mutation::SetAttributes => {
+                        DynIndex::set_attributes(&index, &ctx, &id, b"after")
+                    }
+                    Mutation::DeleteAttributes => DynIndex::delete_attributes(&index, &ctx, &id),
+                    Mutation::Remove => DynIndex::remove(&index, &ctx, &id),
+                });
+                let waiting = wait_for_pending_receiver(provider, &id);
+                drop(owner);
+                task.join().unwrap().unwrap();
+                assert!(waiting, "member mutation did not wait for insert ownership");
+            });
+
+            // Check the mutation's effect on attributes and membership, then reservation cleanup.
+            let attrs = parallel_get(
+                &store,
+                ctx.term(Term::Attributes).get(),
+                bytemuck::bytes_of(&internal_id),
+            );
+            assert_eq!(
+                attrs,
+                match mutation {
+                    Mutation::SetAttributes => Some(b"after".to_vec()),
+                    _ => None,
+                }
+            );
+            assert_eq!(
+                provider.to_internal_id(&ctx, &id).is_ok(),
+                !matches!(mutation, Mutation::Remove)
+            );
+            assert!(provider.pending_external_ids.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn update_reuses_id_and_preserves_entry_on_write_failure() {
+        unsafe extern "C" fn fail_write(
+            _context: u64,
+            _key: *const u8,
+            _key_len: usize,
+            _value: *const u8,
+            _value_len: usize,
+        ) -> bool {
+            false
+        }
+
+        unsafe extern "C" fn fail_after_vector_write(
+            context: u64,
+            key: *const u8,
+            key_len: usize,
+            value: *const u8,
+            value_len: usize,
+        ) -> bool {
+            context & TERM_BITMASK == Term::Vector as u64
+                && unsafe {
+                    (Store::attach().callbacks().write_callback())(
+                        context, key, key_len, value, value_len,
+                    )
+                }
+        }
+
+        for quant_type in [
+            VectorQuantType::NoQuant,
+            VectorQuantType::Bin,
+            VectorQuantType::Q8,
+        ] {
+            let store = Store::new();
+            let ctx = Context::new(0);
+            let mut provider =
+                GarnetProvider::<f32>::new(2, quant_type, Metric::L2, 10, store.callbacks(), &ctx)
+                    .unwrap();
+            let id = GarnetId::from(bytemuck::bytes_of(&42u32));
+            let original = [0.0f32, 1.0];
+            provider.maybe_set_start_point(&ctx, &original).unwrap();
+            provider
+                .set_element(&ctx, &id, (&original, b"old"))
+                .await
+                .unwrap()
+                .complete()
+                .await;
+            let internal_id = store.get(ctx.term(Term::IntMap).get(), &id).unwrap();
+            let max_id = provider.fsm.max_id();
+            let total_used = provider.fsm.total_used();
+
+            let updated = [1.0f32, 0.0];
+            provider
+                .set_element(&ctx, &id, (&updated, b"new"))
+                .await
+                .unwrap()
+                .complete()
+                .await;
+            assert!(ctx.insert_is_update());
+            assert_eq!(provider.fsm.max_id(), max_id);
+            assert_eq!(provider.fsm.total_used(), total_used);
+            assert_eq!(
+                store.get(ctx.term(Term::IntMap).get(), &id),
+                Some(internal_id.clone())
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::ExtMap).get(), &internal_id),
+                Some(id.to_vec())
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::Vector).get(), &internal_id),
+                Some(bytemuck::cast_slice::<f32, u8>(&updated).to_vec())
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::Attributes).get(), &internal_id),
+                Some(b"new".to_vec())
+            );
+            if let Some(quantizer) = &provider.quantizer
+                && quantizer.is_trained()
+            {
+                let mut expected = vec![0u8; quantizer.bytes()];
+                quantizer.compress(&updated, &mut expected).unwrap();
+                assert_eq!(
+                    store.get(ctx.term(Term::Quantized).get(), &internal_id),
+                    Some(expected)
+                );
+            }
+
+            let quantized_before = store.get(ctx.term(Term::Quantized).get(), &internal_id);
+            let guard = provider
+                .set_element(&ctx, &id, (&original, b"discarded"))
+                .await
+                .unwrap();
+            store.clear_read_counts();
+            drop(guard);
+            assert_eq!(store.full_reads(), 0);
+            if quantized_before.is_some() {
+                assert_eq!(store.quant_reads(), 0);
+            }
+            assert_eq!(
+                store.get(ctx.term(Term::Vector).get(), &internal_id),
+                Some(bytemuck::cast_slice::<f32, u8>(&updated).to_vec())
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::Attributes).get(), &internal_id),
+                Some(b"new".to_vec())
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::Quantized).get(), &internal_id),
+                quantized_before
+            );
+
+            for write_callback in [
+                fail_write as WriteCallback,
+                fail_after_vector_write as WriteCallback,
+            ] {
+                let callbacks = store.callbacks();
+                provider.callbacks = Callbacks::new(
+                    callbacks.read_callback(),
+                    write_callback,
+                    callbacks.delete_callback(),
+                    callbacks.rmw_callback(),
+                    callbacks.filter_callback(),
+                    callbacks.log_callback(),
+                );
+                let error = provider
+                    .set_element(&ctx, &id, (&original, b"failed"))
+                    .await
+                    .unwrap_err();
+                assert!(matches!(
+                    error,
+                    GarnetProviderError::Garnet(GarnetError::Write)
+                ));
+                assert!(provider.backfill_lock.lock().unwrap().is_empty());
+                assert_eq!(provider.fsm.max_id(), max_id);
+                assert_eq!(provider.fsm.total_used(), total_used);
+                assert_eq!(
+                    store.get(ctx.term(Term::IntMap).get(), &id),
+                    Some(internal_id.clone())
+                );
+                assert_eq!(
+                    store.get(ctx.term(Term::ExtMap).get(), &internal_id),
+                    Some(id.to_vec())
+                );
+                assert_eq!(
+                    store.get(ctx.term(Term::Vector).get(), &internal_id),
+                    Some(bytemuck::cast_slice::<f32, u8>(&updated).to_vec())
+                );
+                assert_eq!(
+                    store.get(ctx.term(Term::Quantized).get(), &internal_id),
+                    quantized_before
+                );
+                assert_eq!(
+                    store.get(ctx.term(Term::Attributes).get(), &internal_id),
+                    Some(b"new".to_vec())
+                );
+            }
+        }
     }
 
     fn create_2d_f32_index(
@@ -2119,8 +3274,17 @@ mod tests {
         store: &Store,
         ctx: &Context,
     ) -> DiskANNIndex<GarnetProvider<f32>> {
+        create_2d_f32_index_with_callbacks(quant_type, metric, store.callbacks(), ctx)
+    }
+
+    fn create_2d_f32_index_with_callbacks(
+        quant_type: VectorQuantType,
+        metric: Metric,
+        callbacks: Callbacks,
+        ctx: &Context,
+    ) -> DiskANNIndex<GarnetProvider<f32>> {
         let provider =
-            GarnetProvider::<f32>::new(2, quant_type, metric, 10, store.callbacks(), ctx).unwrap();
+            GarnetProvider::<f32>::new(2, quant_type, metric, 10, callbacks, ctx).unwrap();
 
         let config = config::Builder::new(
             (10.0 / GRAPH_SLACK_FACTOR) as usize,
