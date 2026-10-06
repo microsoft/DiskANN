@@ -79,11 +79,7 @@
 
 use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
-use diskann_utils::{
-    Reborrow, ReborrowMut,
-    strided::Strided,
-    views::{MatrixView, MutMatrixView},
-};
+use diskann_utils::{Reborrow, ReborrowMut, strided::Strided, views::rowmajor};
 
 use super::matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
@@ -879,7 +875,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
         unsafe { self.as_ptr().add(self.data.repr().block_offset(block)) }
     }
 
-    /// Return a view over a full block as a [`MatrixView`].
+    /// Return a view over a full block as a [`rowmajor::Ref`].
     ///
     /// The returned view has `padded_ncols / PACK` rows and `GROUP * PACK`
     /// columns. For `PACK == 1` this simplifies to `ncols` rows and `GROUP`
@@ -889,14 +885,14 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
     ///
     /// Panics if `block >= self.full_blocks()`.
     #[expect(clippy::expect_used)]
-    pub fn block(&self, block: usize) -> MatrixView<'a, T> {
+    pub fn block(&self, block: usize) -> rowmajor::Ref<'a, T> {
         assert!(block < self.full_blocks());
         let offset = self.data.repr().block_offset(block);
         let stride = self.data.repr().block_stride();
         // SAFETY: `block < full_blocks()` (asserted above) guarantees
         // `offset + stride` is within the backing allocation.
         let data: &[T] = unsafe { std::slice::from_raw_parts(self.as_ptr().add(offset), stride) };
-        MatrixView::try_from(
+        rowmajor::Ref::try_from_data(
             data,
             BlockLayout::<GROUP, PACK>::groups(self.ncols()),
             GROUP * PACK,
@@ -910,7 +906,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
     /// The returned view has the same dimensions as [`block()`](Self::block):
     /// `padded_ncols / PACK` rows and `GROUP * PACK` columns.
     #[expect(clippy::expect_used)]
-    pub fn remainder_block(&self) -> Option<MatrixView<'a, T>> {
+    pub fn remainder_block(&self) -> Option<rowmajor::Ref<'a, T>> {
         if self.remainder() == 0 {
             None
         } else {
@@ -921,7 +917,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
             let data: &[T] =
                 unsafe { std::slice::from_raw_parts(self.as_ptr().add(offset), stride) };
             Some(
-                MatrixView::try_from(
+                rowmajor::Ref::try_from_data(
                     data,
                     BlockLayout::<GROUP, PACK>::groups(self.ncols()),
                     GROUP * PACK,
@@ -985,8 +981,8 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[expect(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
-    delegate_to_ref!(pub fn block(&self, block: usize) -> MatrixView<'_, T>);
-    delegate_to_ref!(pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
+    delegate_to_ref!(pub fn block(&self, block: usize) -> rowmajor::Ref<'_, T>);
+    delegate_to_ref!(pub fn remainder_block(&self) -> Option<rowmajor::Ref<'_, T>>);
     delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
 
     /// Group size (blocking factor `GROUP`).
@@ -1036,12 +1032,12 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     /// # Panics
     ///
     /// Panics if `block >= self.full_blocks()`.
-    pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
+    pub fn block_mut(&mut self, block: usize) -> rowmajor::Mut<'_, T> {
         self.reborrow_mut().block_mut_inner(block)
     }
 
     #[expect(clippy::expect_used)]
-    fn block_mut_inner(mut self, block: usize) -> MutMatrixView<'a, T> {
+    fn block_mut_inner(mut self, block: usize) -> rowmajor::Mut<'a, T> {
         let repr = *self.data.repr();
         assert!(block < repr.full_blocks());
         let offset = repr.block_offset(block);
@@ -1054,18 +1050,18 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
                 stride,
             )
         };
-        MutMatrixView::try_from(data, groups, GROUP * PACK)
+        rowmajor::Mut::try_from_data(data, groups, GROUP * PACK)
             .expect("base data should have been sized correctly")
     }
 
     /// Return a mutable view over the remainder block, or `None` if there is no
     /// remainder.
-    pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
+    pub fn remainder_block_mut(&mut self) -> Option<rowmajor::Mut<'_, T>> {
         self.reborrow_mut().remainder_block_mut_inner()
     }
 
     #[expect(clippy::expect_used)]
-    fn remainder_block_mut_inner(mut self) -> Option<MutMatrixView<'a, T>> {
+    fn remainder_block_mut_inner(mut self) -> Option<rowmajor::Mut<'a, T>> {
         let repr = *self.data.repr();
         if repr.remainder() == 0 {
             None
@@ -1081,7 +1077,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
                 )
             };
             Some(
-                MutMatrixView::try_from(data, groups, GROUP * PACK)
+                rowmajor::Mut::try_from_data(data, groups, GROUP * PACK)
                     .expect("base data should have been sized correctly"),
             )
         }
@@ -1125,8 +1121,8 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[expect(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
-    delegate_to_ref!(pub fn block(&self, block: usize) -> MatrixView<'_, T>);
-    delegate_to_ref!(pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
+    delegate_to_ref!(pub fn block(&self, block: usize) -> rowmajor::Ref<'_, T>);
+    delegate_to_ref!(pub fn remainder_block(&self) -> Option<rowmajor::Ref<'_, T>>);
     delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
 
     /// Group size (blocking factor `GROUP`).
@@ -1159,12 +1155,12 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     }
 
     /// See [`BlockTransposedMut::block_mut`].
-    pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
+    pub fn block_mut(&mut self, block: usize) -> rowmajor::Mut<'_, T> {
         self.as_view_mut().block_mut_inner(block)
     }
 
     /// See [`BlockTransposedMut::remainder_block_mut`].
-    pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
+    pub fn remainder_block_mut(&mut self) -> Option<rowmajor::Mut<'_, T>> {
         self.as_view_mut().remainder_block_mut_inner()
     }
 
@@ -1273,8 +1269,8 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
         mat
     }
 
-    /// Construct a block-transposed matrix by copying data from a [`MatrixView`].
-    pub fn from_matrix_view(v: MatrixView<'_, T>) -> Self {
+    /// Construct a block-transposed matrix by copying data from a [`rowmajor::Ref`].
+    pub fn from_matrix_view(v: rowmajor::Ref<'_, T>) -> Self {
         Self::from_strided(v.into())
     }
 }
@@ -1318,7 +1314,10 @@ mod tests {
     //!     parameters to `test_full_api` (`Send`/`Sync`, panic paths,
     //!     non-unit strides, concurrent mutation, etc.).
 
-    use diskann_utils::{lazy_format, views::Matrix};
+    use diskann_utils::{
+        lazy_format,
+        views::rowmajor::{Matrix, MatrixMut},
+    };
 
     use super::*;
     use crate::utils::div_round_up;
@@ -1390,7 +1389,7 @@ mod tests {
 
     #[test]
     fn clone_has_independent_backing_allocation() {
-        let mut data = Matrix::new(0, 5, 3);
+        let mut data = rowmajor::Owned::from_element(5, 3, 0);
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
@@ -1448,7 +1447,7 @@ mod tests {
 
         // ── Construction ─────────────────────────────────────────
 
-        let mut data = Matrix::new(T::default(), nrows, ncols);
+        let mut data = rowmajor::Owned::from_element(nrows, ncols, T::default());
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
@@ -2002,7 +2001,7 @@ mod tests {
         ncols: usize,
         gen_element: fn(usize) -> T,
     ) {
-        let mut data = Matrix::new(T::default(), nrows, ncols);
+        let mut data = rowmajor::Owned::from_element(nrows, ncols, T::default());
         data.as_mut_slice()
             .iter_mut()
             .enumerate()

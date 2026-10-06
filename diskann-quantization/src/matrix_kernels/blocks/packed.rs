@@ -365,7 +365,7 @@ mod tests {
 
     use diskann_utils::{
         assert_contains,
-        views::{Init, Matrix, MatrixView},
+        views::rowmajor::{self, Matrix},
     };
 
     use crate::matrix_kernels::test_util::panic_message_for;
@@ -524,7 +524,7 @@ mod tests {
 
     fn assert_panel<const SZ: usize, const PACK: usize>(
         panel: Panel<'_, f32, SZ, PACK>,
-        reference: MatrixView<'_, f32>,
+        reference: rowmajor::Ref<'_, f32>,
         block: usize,
         ctx: std::fmt::Arguments<'_>,
     ) {
@@ -606,17 +606,13 @@ mod tests {
         assert_contains!(message, "equal to 2");
     }
 
-    fn test_matrix(nrows: usize, ncols: usize) -> Matrix<f32> {
+    fn test_matrix(nrows: usize, ncols: usize) -> rowmajor::Owned<f32> {
         let mut value = 0.0;
-        Matrix::new(
-            Init(|| {
-                let current = value;
-                value += 1.0;
-                current
-            }),
-            nrows,
-            ncols,
-        )
+        rowmajor::Owned::from_fn(nrows, ncols, |_| {
+            let current = value;
+            value += 1.0;
+            current
+        })
     }
 
     /// Sentinel for padded columns in manually packed test data.
@@ -624,7 +620,7 @@ mod tests {
 
     /// Pack `matrix` by enumerating the documented layout order directly:
     /// block, then group, then band, then lane.
-    fn pack<const SZ: usize, const PACK: usize>(matrix: MatrixView<'_, f32>) -> Vec<f32> {
+    fn pack<const SZ: usize, const PACK: usize>(matrix: rowmajor::Ref<'_, f32>) -> Vec<f32> {
         assert!(matrix.nrows().is_multiple_of(SZ));
         let k = matrix.ncols();
 

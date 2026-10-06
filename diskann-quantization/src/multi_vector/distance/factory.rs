@@ -8,6 +8,7 @@
 
 use std::num::NonZeroUsize;
 
+use diskann_utils::views::rowmajor::Matrix;
 use diskann_vector::distance::InnerProduct;
 use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 use diskann_wide::Architecture;

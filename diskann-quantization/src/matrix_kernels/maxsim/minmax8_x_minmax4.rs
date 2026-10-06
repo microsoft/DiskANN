@@ -814,7 +814,7 @@ mod aarch64 {
 mod tests {
     use std::num::NonZeroUsize;
 
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
     use super::layout::{EvenOdd64Layout, PackedQuery};
     use super::*;
@@ -828,7 +828,7 @@ mod tests {
         DimK::new(NonZeroUsize::new(value).unwrap())
     }
 
-    fn canonical(b: &Matrix<u8>, dim: usize) -> MinMax4Rows<'_> {
+    fn canonical(b: &rowmajor::Owned<u8>, dim: usize) -> MinMax4Rows<'_> {
         MinMax4Rows::new(MatRef::new(MinMaxMeta::<4>::new(b.nrows(), dim), b.as_slice()).unwrap())
             .unwrap()
     }
@@ -868,9 +868,9 @@ mod tests {
         check_decoded_b(Scalar::new());
     }
 
-    fn documents(rows: usize, dim: usize) -> Matrix<u8> {
+    fn documents(rows: usize, dim: usize) -> rowmajor::Owned<u8> {
         let stride = Data::<4>::canonical_bytes(dim);
-        let mut bytes = Matrix::new(0_u8, rows, stride);
+        let mut bytes = rowmajor::Owned::from_element(rows, stride, 0_u8);
         for (i, bytes) in bytes.as_mut_slice().chunks_exact_mut(stride).enumerate() {
             let mut row = DataMutRef::<4>::from_canonical_front_mut(bytes, dim).unwrap();
             row.set_meta(MinMaxCompensation {

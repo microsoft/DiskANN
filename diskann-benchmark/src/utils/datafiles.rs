@@ -10,7 +10,7 @@ use bit_set::BitSet;
 use diskann::utils::IntoUsize;
 use diskann_benchmark_runner::utils::datatype::DataType;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use serde::{Deserialize, Serialize};
 
 pub(crate) struct BinFile<'a>(pub(crate) &'a Path);
@@ -18,7 +18,7 @@ pub(crate) struct BinFile<'a>(pub(crate) &'a Path);
 /// Load a dataset or query set in `.bin` form from disk and return the result as a
 /// row-major matrix.
 #[inline(never)]
-pub(crate) fn load_dataset<T>(path: BinFile<'_>) -> anyhow::Result<Matrix<T>>
+pub(crate) fn load_dataset<T>(path: BinFile<'_>) -> anyhow::Result<rowmajor::Owned<T>>
 where
     T: Copy + bytemuck::Pod,
 {
@@ -29,13 +29,13 @@ where
     Ok(data)
 }
 
-/// Helper trait to load a `Matrix<Self>` from source files that potentially have a different
+/// Helper trait to load a `rowmajor::Owned<Self>` from source files that potentially have a different
 /// type.
 pub(crate) trait ConvertingLoad: Sized {
     /// Return an error if the provided `data_type` cannot be loaded and converted to `Self`.
     fn check_converting_load(data_type: DataType) -> anyhow::Result<()>;
 
-    /// Attempt to load the data at `path` as a `Matrix<Self>` assuming the on-disk
+    /// Attempt to load the data at `path` as a `rowmajor::Owned<Self>` assuming the on-disk
     /// representation has the encoding specified by `data_type`.
     ///
     /// If `data_type` is not compatible with `Self`, return an error.
@@ -44,7 +44,10 @@ pub(crate) trait ConvertingLoad: Sized {
         feature = "minmax-quantization",
         feature = "product-quantization"
     ))]
-    fn converting_load(path: BinFile<'_>, data_type: DataType) -> anyhow::Result<Matrix<Self>>;
+    fn converting_load(
+        path: BinFile<'_>,
+        data_type: DataType,
+    ) -> anyhow::Result<rowmajor::Owned<Self>>;
 }
 
 impl ConvertingLoad for f32 {
@@ -69,23 +72,29 @@ impl ConvertingLoad for f32 {
         feature = "minmax-quantization",
         feature = "product-quantization"
     ))]
-    fn converting_load(path: BinFile<'_>, data_type: DataType) -> anyhow::Result<Matrix<f32>> {
+    fn converting_load(
+        path: BinFile<'_>,
+        data_type: DataType,
+    ) -> anyhow::Result<rowmajor::Owned<f32>> {
         #[inline(never)]
-        fn convert<T, U>(from: diskann_utils::views::MatrixView<T>) -> Matrix<U>
+        fn convert<T, U>(
+            from: diskann_utils::views::rowmajor::Ref<T>,
+        ) -> anyhow::Result<rowmajor::Owned<U>>
         where
             U: Default + Clone + From<T>,
             T: Copy,
         {
-            let mut to = Matrix::new(U::default(), from.nrows(), from.ncols());
+            let mut to =
+                rowmajor::Owned::try_from_element(from.nrows(), from.ncols(), U::default())?;
             std::iter::zip(to.as_mut_slice().iter_mut(), from.as_slice().iter())
                 .for_each(|(t, f)| *t = (*f).into());
-            to
+            Ok(to)
         }
         match data_type {
             DataType::Float32 => load_dataset::<f32>(path),
-            DataType::Float16 => Ok(convert(load_dataset::<half::f16>(path)?.as_view())),
-            DataType::UInt8 => Ok(convert(load_dataset::<u8>(path)?.as_view())),
-            DataType::Int8 => Ok(convert(load_dataset::<i8>(path)?.as_view())),
+            DataType::Float16 => convert(load_dataset::<half::f16>(path)?.as_view()),
+            DataType::UInt8 => convert(load_dataset::<u8>(path)?.as_view()),
+            DataType::Int8 => convert(load_dataset::<i8>(path)?.as_view()),
             _ => Err(anyhow::anyhow!(
                 "data type {:?} is not supported for loading `f32` data",
                 data_type
@@ -95,7 +104,10 @@ impl ConvertingLoad for f32 {
 }
 
 /// Load a groundtruth set from disk and return the  result as a row-major matrix.
-pub(crate) fn load_groundtruth(path: BinFile<'_>, k: Option<usize>) -> anyhow::Result<Matrix<u32>> {
+pub(crate) fn load_groundtruth(
+    path: BinFile<'_>,
+    k: Option<usize>,
+) -> anyhow::Result<rowmajor::Owned<u32>> {
     let provider = diskann_providers::storage::FileStorageProvider;
     let mut file = provider
         .open_reader(&path.0.to_string_lossy())
@@ -111,7 +123,7 @@ pub(crate) fn load_groundtruth(path: BinFile<'_>, k: Option<usize>) -> anyhow::R
         (num_points, dim)
     };
 
-    let mut groundtruth = Matrix::<u32>::new(0, num_points, dim);
+    let mut groundtruth = rowmajor::Owned::<u32>::from_element(num_points, dim, 0);
     let groundtruth_slice: &mut [u8] = bytemuck::cast_slice_mut(groundtruth.as_mut_slice());
     file.read_exact(groundtruth_slice)?;
 

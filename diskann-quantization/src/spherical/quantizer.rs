@@ -5,7 +5,10 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{ReborrowMut, views::MatrixView};
+use diskann_utils::{
+    ReborrowMut,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::{
     MathematicalValue, Norm, PureDistanceFunction, distance::InnerProduct, norm::FastL2Norm,
 };
@@ -228,7 +231,7 @@ where
     /// If argument `pre_scale` is given, then all vectors compressed by this quantizer will
     /// first be scaled by this value. Note that if given, `pre_scale` **must** be positive.
     pub fn train<T, R>(
-        data: MatrixView<T>,
+        data: rowmajor::Ref<T>,
         transform: TransformKind,
         metric: SupportedMetric,
         pre_scale: PreScale,
@@ -243,7 +246,7 @@ where
         // cut down on excess monomorphization.
         #[inline(never)]
         fn train<T, A>(
-            data: MatrixView<T>,
+            data: rowmajor::Ref<T>,
             transform: TransformKind,
             metric: SupportedMetric,
             pre_scale: PreScale,
@@ -1233,10 +1236,7 @@ mod tests {
 
     use std::fmt::Display;
 
-    use diskann_utils::{
-        ReborrowMut, lazy_format,
-        views::{self, Matrix},
-    };
+    use diskann_utils::{ReborrowMut, lazy_format, views::rowmajor::MatrixMut};
     use diskann_vector::{PureDistanceFunction, norm::FastL2NormSquared};
     use diskann_wide::ARCH;
     use rand::{
@@ -2288,7 +2288,7 @@ mod tests {
 
     #[test]
     fn err_dim_cannot_be_zero() {
-        let data = Matrix::new(0.0f32, 10, 0);
+        let data = rowmajor::Owned::from_element(10, 0, 0.0f32);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2306,7 +2306,7 @@ mod tests {
 
     #[test]
     fn err_norm_must_be_positive() {
-        let data = Matrix::new(0.0f32, 10, 10);
+        let data = rowmajor::Owned::from_element(10, 10, 0.0f32);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2324,7 +2324,7 @@ mod tests {
 
     #[test]
     fn err_norm_cannot_be_infinity() {
-        let mut data = Matrix::new(0.0f32, 10, 10);
+        let mut data = rowmajor::Owned::from_element(10, 10, 0.0f32);
         *data.element_mut(2, 5) = f32::INFINITY;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
@@ -2344,7 +2344,7 @@ mod tests {
 
     #[test]
     fn err_reciprocal_norm_cannot_be_infinity() {
-        let mut data = Matrix::new(0.0f32, 10, 10);
+        let mut data = rowmajor::Owned::from_element(10, 10, 0.0f32);
         *data.element_mut(2, 5) = 2.93863e-39;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
@@ -2403,7 +2403,7 @@ mod tests {
     #[test]
     fn compression_errors_data() {
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
-        let data = Matrix::<f32>::new(views::Init(|| StandardNormal {}.sample(&mut rng)), 16, 12);
+        let data = rowmajor::Owned::<f32>::from_fn(16, 12, |_| StandardNormal {}.sample(&mut rng));
 
         let quantizer = SphericalQuantizer::train(
             data.as_view(),

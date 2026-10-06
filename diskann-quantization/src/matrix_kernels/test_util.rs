@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::{Init, Matrix};
+use diskann_utils::views::rowmajor;
 use half::f16;
 use rand::{Rng, distr::Distribution};
 
@@ -32,11 +32,15 @@ where
 pub(super) struct TestDistr;
 
 impl TestDistr {
-    pub(super) fn matrix<T>(nrows: usize, ncols: usize, rng: &mut impl rand::Rng) -> Matrix<T>
+    pub(super) fn matrix<T>(
+        nrows: usize,
+        ncols: usize,
+        rng: &mut impl rand::Rng,
+    ) -> rowmajor::Owned<T>
     where
         Self: Distribution<T>,
     {
-        Matrix::new(Init(|| (Self).sample(rng)), nrows, ncols)
+        rowmajor::Owned::from_fn(nrows, ncols, |_| (Self).sample(rng))
     }
 }
 

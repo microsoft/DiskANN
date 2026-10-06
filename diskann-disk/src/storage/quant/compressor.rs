@@ -4,7 +4,7 @@
  */
 
 use diskann::{utils::VectorRepr, ANNResult};
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::rowmajor;
 
 /// A quantizer constructed once and shared across compression batches.
 pub trait QuantCompressor<T>: Sized + Sync
@@ -19,6 +19,6 @@ where
     /// Returns an error if construction fails.
     fn new(context: &Self::CompressorContext) -> ANNResult<Self>;
 
-    fn compress(&self, vector: MatrixView<f32>, output: MutMatrixView<u8>) -> ANNResult<()>;
+    fn compress(&self, vector: rowmajor::Ref<f32>, output: rowmajor::Mut<u8>) -> ANNResult<()>;
     fn compressed_bytes(&self) -> usize;
 }

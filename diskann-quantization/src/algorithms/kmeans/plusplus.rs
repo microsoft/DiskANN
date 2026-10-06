@@ -7,7 +7,7 @@ use std::{collections::HashSet, fmt};
 
 use diskann_utils::{
     strided::Strided,
-    views::{MatrixView, MutMatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use diskann_wide::{SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 use rand::{
@@ -379,7 +379,7 @@ impl KMeansPlusPlusError {
 }
 
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
-    mut points: MutMatrixView<'_, f32>,
+    mut points: rowmajor::Mut<'_, f32>,
     data: Strided<'_, f32>,
     transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
@@ -498,8 +498,8 @@ where
 }
 
 pub fn kmeans_plusplus_into(
-    centers: MutMatrixView<'_, f32>,
-    data: MatrixView<'_, f32>,
+    centers: rowmajor::Mut<'_, f32>,
+    data: rowmajor::Ref<'_, f32>,
     rng: &mut dyn RngCore,
 ) -> Result<(), KMeansPlusPlusError> {
     assert_eq!(
@@ -511,7 +511,7 @@ pub fn kmeans_plusplus_into(
     const GROUPSIZE: usize = 16;
     let mut norms: Vec<f32> = vec![0.0; data.nrows()];
 
-    for (n, d) in std::iter::zip(norms.iter_mut(), data.row_iter()) {
+    for (n, d) in std::iter::zip(norms.iter_mut(), data.rows()) {
         *n = square_norm(d);
     }
 
@@ -521,21 +521,21 @@ pub fn kmeans_plusplus_into(
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views::Matrix};
+    use diskann_utils::lazy_format;
     use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
     use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::*;
     use crate::utils;
 
-    fn is_in(needle: &[f32], haystack: MatrixView<'_, f32>) -> bool {
+    fn is_in(needle: &[f32], haystack: rowmajor::Ref<'_, f32>) -> bool {
         assert_eq!(needle.len(), haystack.ncols());
-        haystack.row_iter().any(|row| row == needle)
+        haystack.rows().any(|row| row == needle)
     }
 
     fn check_post_conditions(
-        centers: MatrixView<'_, f32>,
-        data: MatrixView<'_, f32>,
+        centers: rowmajor::Ref<'_, f32>,
+        data: rowmajor::Ref<'_, f32>,
         err: &KMeansPlusPlusError,
     ) {
         assert_eq!(err.expected, centers.nrows());
@@ -581,8 +581,8 @@ mod tests {
     /// ...
     /// K-1, K,   K+1, K+3 ... N+K-2
     /// ```
-    fn set_default_values(mut x: MutMatrixView<'_, f32>) {
-        for (i, row) in x.row_iter_mut().enumerate() {
+    fn set_default_values(mut x: rowmajor::Mut<'_, f32>) {
+        for (i, row) in x.rows_mut().enumerate() {
             for (j, r) in row.iter_mut().enumerate() {
                 *r = (i + j) as f32;
             }
@@ -609,14 +609,14 @@ mod tests {
             dim
         );
 
-        let mut data = Matrix::<f32>::new(0.0, num_points, dim);
-        set_default_values(data.as_mut_view());
+        let mut data = rowmajor::Owned::<f32>::from_element(num_points, dim, 0.0);
+        set_default_values(data.as_view_mut());
 
-        let square_norms: Vec<f32> = data.row_iter().map(square_norm).collect();
+        let square_norms: Vec<f32> = data.rows().map(square_norm).collect();
 
         // The sample points we are computing the distances against.
         let num_samples = 3;
-        let mut samples = Matrix::<f32>::new(0.0, num_samples, dim);
+        let mut samples = rowmajor::Owned::<f32>::from_element(num_samples, dim, 0.0);
         let mut distances = vec![f32::INFINITY; num_points];
         let distribution = Uniform::<u32>::new(0, (num_points + dim) as u32).unwrap();
         let transpose = BlockTransposed::<f32, N>::from_matrix_view(data.as_view());
@@ -642,7 +642,7 @@ mod tests {
             );
 
             // Make sure all the distances are correct.
-            for (n, (d, data)) in std::iter::zip(distances.iter(), data.row_iter()).enumerate() {
+            for (n, (d, data)) in std::iter::zip(distances.iter(), data.rows()).enumerate() {
                 let mut min_distance = f32::INFINITY;
                 for j in 0..=i {
                     let distance = SquaredL2::evaluate(samples.row(j), data);
@@ -725,17 +725,17 @@ mod tests {
         assert_eq!(values.len(), ndata);
 
         values.shuffle(rng);
-        let mut data = Matrix::new(0.0, ndata, dim);
-        for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
+        let mut data = rowmajor::Owned::from_element(ndata, dim, 0.0);
+        for (r, v) in std::iter::zip(data.rows_mut(), values.iter()) {
             r.fill(*v);
         }
 
-        let mut centers = Matrix::new(f32::INFINITY, ncenters, dim);
-        kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), rng).unwrap();
+        let mut centers = rowmajor::Owned::from_element(ncenters, dim, f32::INFINITY);
+        kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), rng).unwrap();
 
         // Make sure that each value was selected for a center.
         let mut seen = HashSet::<usize>::new();
-        for c in centers.row_iter() {
+        for c in centers.rows() {
             let first = c[0];
             assert!(c.iter().all(|i| *i == first));
 
@@ -803,17 +803,17 @@ mod tests {
         assert_eq!(values.len(), ndata);
 
         values.shuffle(rng);
-        let mut data = Matrix::new(0.0, ndata, dim);
-        for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
+        let mut data = rowmajor::Owned::from_element(ndata, dim, 0.0);
+        for (r, v) in std::iter::zip(data.rows_mut(), values.iter()) {
             r.fill(*v);
         }
 
-        let mut centers = Matrix::new(f32::INFINITY, ncenters, dim);
-        kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), rng).unwrap();
+        let mut centers = rowmajor::Owned::from_element(ncenters, dim, f32::INFINITY);
+        kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), rng).unwrap();
 
         // Make sure that each value was selected for a center.
         let mut seen = HashSet::<usize>::new();
-        for (i, c) in centers.row_iter().enumerate() {
+        for (i, c) in centers.rows().enumerate() {
             let first = c[0];
             let v: usize = first.round() as usize;
             assert_eq!(
@@ -828,7 +828,7 @@ mod tests {
 
             // Make sure the center is equal to one of the data points.
             let mut found = false;
-            for r in data.row_iter() {
+            for r in data.rows() {
                 if r == c {
                     found = true;
                     break;
@@ -868,12 +868,12 @@ mod tests {
     // Failure modes
     #[test]
     fn fail_empty_dataset() {
-        let data = Matrix::new(0.0, 0, 5);
-        let mut centers = Matrix::new(0.0, 10, data.ncols());
+        let data = rowmajor::Owned::from_element(0, 5, 0.0);
+        let mut centers = rowmajor::Owned::from_element(10, data.ncols(), 0.0);
 
         let mut rng = StdRng::seed_from_u64(0xa9eae150d30845a1);
 
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
             result.is_err(),
             "kmeans++ on an empty dataset with non-empty centers should be an error"
@@ -889,10 +889,10 @@ mod tests {
 
     #[test]
     fn both_empty_is_okay() {
-        let data = Matrix::new(0.0, 0, 5);
-        let mut centers = Matrix::new(0.0, 0, data.ncols());
+        let data = rowmajor::Owned::from_element(0, 5, 0.0);
+        let mut centers = rowmajor::Owned::from_element(0, data.ncols(), 0.0);
         let mut rng = StdRng::seed_from_u64(0x6f7031afd9b5aa18);
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
             result.is_ok(),
             "selecting 0 points from an empty dataset is okay"
@@ -905,13 +905,13 @@ mod tests {
         let ncenters = 10;
         let dim = 5;
 
-        let mut data = Matrix::new(0.0, ndata, dim);
-        set_default_values(data.as_mut_view());
-        let mut centers = Matrix::new(f32::INFINITY, ncenters, data.ncols());
+        let mut data = rowmajor::Owned::from_element(ndata, dim, 0.0);
+        set_default_values(data.as_view_mut());
+        let mut centers = rowmajor::Owned::from_element(ncenters, data.ncols(), f32::INFINITY);
 
         let mut rng = StdRng::seed_from_u64(0xa9eae150d30845a1);
 
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
             result.is_err(),
             "kmeans++ on an empty dataset with non-empty centers should be an error"
@@ -943,13 +943,13 @@ mod tests {
         assert!(values.len() >= ndata);
 
         values.shuffle(&mut rng);
-        let mut data = Matrix::new(0.0, ndata, dim);
-        for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
+        let mut data = rowmajor::Owned::from_element(ndata, dim, 0.0);
+        for (r, v) in std::iter::zip(data.rows_mut(), values.iter()) {
             r.fill(*v);
         }
 
-        let mut centers = Matrix::new(f32::INFINITY, ncenters, dim);
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let mut centers = rowmajor::Owned::from_element(ncenters, dim, f32::INFINITY);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
             result.is_err(),
             "dataset should not have enough unique points"
@@ -965,16 +965,16 @@ mod tests {
 
     #[test]
     fn fail_intinity_check() {
-        let mut data = Matrix::new(0.0, 10, 1);
-        set_default_values(data.as_mut_view());
+        let mut data = rowmajor::Owned::from_element(10, 1, 0.0);
+        set_default_values(data.as_view_mut());
 
         // A very large value that will overflow to infinity when computing the norm.
         *data.element_mut(6, 0) = -3.4028235e38;
-        let mut centers = Matrix::new(0.0, 2, 1);
+        let mut centers = rowmajor::Owned::from_element(2, 1, 0.0);
 
         let mut rng = StdRng::seed_from_u64(0xc0449b2aa4e12f05);
 
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(result.is_err(), "result should complain about infinity");
         let err = result.unwrap_err();
         assert_eq!(err.selected, 1);
@@ -987,16 +987,16 @@ mod tests {
 
     #[test]
     fn fail_nan_check() {
-        let mut data = Matrix::new(0.0, 10, 1);
-        set_default_values(data.as_mut_view());
+        let mut data = rowmajor::Owned::from_element(10, 1, 0.0);
+        set_default_values(data.as_view_mut());
 
         // A very large value that will overflow to infinity when computing the norm.
         *data.element_mut(6, 0) = f32::NAN;
-        let mut centers = Matrix::new(0.0, 2, 1);
+        let mut centers = rowmajor::Owned::from_element(2, 1, 0.0);
 
         let mut rng = StdRng::seed_from_u64(0x55808c6c728c8473);
 
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(result.is_err(), "result should complain about NaN");
         let err = result.unwrap_err();
         assert_eq!(err.selected, 1);
@@ -1017,7 +1017,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints];
-        let data = Matrix::new(0.0, npoints, dim);
+        let data = rowmajor::Owned::from_element(npoints, dim, 0.0);
         let norms = vec![0.0; npoints];
         let this = vec![0.0; dim + 1]; // Incorrect
         let this_square_norm = 0.0;
@@ -1036,7 +1036,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints + 1]; // Incorrect
-        let data = Matrix::new(0.0, npoints, dim);
+        let data = rowmajor::Owned::from_element(npoints, dim, 0.0);
         let norms = vec![0.0; npoints];
         let this = vec![0.0; dim];
         let this_square_norm = 0.0;
@@ -1055,7 +1055,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints];
-        let data = Matrix::new(0.0, npoints, dim);
+        let data = rowmajor::Owned::from_element(npoints, dim, 0.0);
         let norms = vec![0.0; npoints + 1]; // Incorrect
         let this = vec![0.0; dim];
         let this_square_norm = 0.0;
@@ -1077,10 +1077,10 @@ mod tests {
         expected = "centers output matrix should have the same dimensionality as the dataset"
     )]
     fn kmeans_plusplus_into_panics_dim_mismatch() {
-        let mut centers = Matrix::new(0.0, 2, 10);
-        let data = Matrix::new(0.0, 2, 9);
+        let mut centers = rowmajor::Owned::from_element(2, 10, 0.0);
+        let data = rowmajor::Owned::from_element(2, 9, 0.0);
         kmeans_plusplus_into(
-            centers.as_mut_view(),
+            centers.as_view_mut(),
             data.as_view(),
             &mut rand::rngs::ThreadRng::default(),
         )

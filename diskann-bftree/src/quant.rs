@@ -237,21 +237,16 @@ pub(crate) fn create_test_quantizer(dim: usize) -> Poly<dyn Quantizer> {
         algorithms::TransformKind,
         spherical::{PreScale, SphericalQuantizer, SupportedMetric},
     };
-    use diskann_utils::views::Init;
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Create training data with spread-out values.
     let nrows = 8;
     let mut counter = 0.0f32;
-    let data = Matrix::new(
-        Init(move || {
-            counter += 0.5;
-            counter
-        }),
-        nrows,
-        dim,
-    );
+    let data = rowmajor::Owned::from_fn(nrows, dim, move |_| {
+        counter += 0.5;
+        counter
+    });
 
     let mut rng = StdRng::seed_from_u64(42);
     SphericalQuantizer::train(
