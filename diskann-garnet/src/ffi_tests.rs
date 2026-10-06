@@ -16,7 +16,7 @@ mod tests {
 
     use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_vector::distance::Metric;
-    use rand::{Rng, seq::SliceRandom};
+    use rand::seq::SliceRandom;
 
     use crate::{
         ImportResult, Index, IndexState, InsertResult, Overflow, VectorQuantType,
@@ -25,7 +25,7 @@ mod tests {
         garnet::{Context, Term, WriteCallback},
         import_term, insert,
         provider::DEFAULT_START_POINT_ID,
-        quantization::{GarnetQuantizer, MinMax8Bit, Spherical1Bit},
+        quantization::{GarnetQuantizer, MinMax8Bit, Spherical1Bit, Spherical2Bit, Spherical4Bit},
         remove, search_neighbors, search_vector, set_attribute, set_quant_state,
         test_utils::{STORE, Store, q8_state_with_identity_transform},
     };
@@ -552,17 +552,29 @@ mod tests {
     }
 
     #[test]
-    fn import_terms_and_finish_bin() {
-        let quantizer = Spherical1Bit::new(Metric::L2, 2);
-        let mut training_data =
-            rowmajor::Owned::from_element(quantizer.required_vectors(), 2, 0.0f32);
-        for row in 0..quantizer.required_vectors() {
-            training_data.row_mut(row).fill((row % 100 + 1) as f32);
+    fn import_terms_and_finish_spherical() {
+        let quantizers: [(VectorQuantType, Box<dyn GarnetQuantizer>); 3] = [
+            (
+                VectorQuantType::Bin,
+                Box::new(Spherical1Bit::new(Metric::L2, 2)),
+            ),
+            (
+                VectorQuantType::XSpherical2,
+                Box::new(Spherical2Bit::new(Metric::L2, 2)),
+            ),
+            (
+                VectorQuantType::XSpherical4,
+                Box::new(Spherical4Bit::new(Metric::L2, 2)),
+            ),
+        ];
+        let mut training = rowmajor::Owned::from_element(1000, 2, 0.0f32);
+        for row in 0..1000 {
+            training.row_mut(row).fill((row % 100 + 1) as f32);
         }
-        quantizer
-            .train(Metric::L2, training_data.as_view())
-            .unwrap();
-        check_import_terms_and_finish(VectorQuantType::Bin, Some(&quantizer));
+        for (quant_type, quantizer) in quantizers {
+            quantizer.train(Metric::L2, training.as_view()).unwrap();
+            check_import_terms_and_finish(quant_type, Some(&*quantizer));
+        }
     }
 
     #[test]
@@ -1715,106 +1727,238 @@ mod tests {
     }
 
     #[test]
-    fn basic_quant_bootstrap_lifecycle_bin() {
-        let store = Store::new();
-        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Bin);
-        let index = unsafe { &*index_ptr.cast::<Index>() };
-
-        let quantizer = Spherical1Bit::new(Metric::L2, 2);
-        let required_vectors = quantizer.required_vectors();
-
-        let mut rng = rand::rng();
-
-        // pre-quantization phase
-
-        assert_eq!(index.inner.approximate_count(&ctx).unwrap(), 0);
-        for id in 0..required_vectors - 1 {
-            let v = [rng.random(), rng.random()];
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, id as u32, &v),
-                InsertResult::Success
-            );
+    fn spherical_lifecycle_all_types() {
+        for metric in [Metric::L2, Metric::Cosine, Metric::InnerProduct] {
+            for quant_type in [
+                VectorQuantType::Bin,
+                VectorQuantType::XSpherical2,
+                VectorQuantType::XSpherical4,
+            ] {
+                check_spherical_lifecycle(quant_type, metric, |id| {
+                    [(id % 127) as f32 - 63.5, ((id * 47) % 127) as f32 - 63.5]
+                });
+            }
+            for quant_type in [
+                VectorQuantType::XBinI8,
+                VectorQuantType::XSpherical2I8,
+                VectorQuantType::XSpherical4I8,
+            ] {
+                check_spherical_lifecycle(quant_type, metric, |id| {
+                    [(id % 127) as i8 - 63, ((id * 47) % 127) as i8 - 63]
+                });
+            }
+            for quant_type in [
+                VectorQuantType::XBinU8,
+                VectorQuantType::XSpherical2U8,
+                VectorQuantType::XSpherical4U8,
+            ] {
+                check_spherical_lifecycle(quant_type, metric, |id| {
+                    [(id % 127) as u8 + 128, ((id * 47) % 127) as u8 + 1]
+                });
+            }
         }
-        assert_eq!(
-            index.inner.approximate_count(&ctx).unwrap() as usize,
-            required_vectors - 1
-        );
+    }
 
-        // transition phase
+    #[test]
+    fn spherical_rejects_unsupported_metric() {
+        for quant_type in [
+            VectorQuantType::Bin,
+            VectorQuantType::XBinI8,
+            VectorQuantType::XBinU8,
+            VectorQuantType::XSpherical2,
+            VectorQuantType::XSpherical2I8,
+            VectorQuantType::XSpherical2U8,
+            VectorQuantType::XSpherical4,
+            VectorQuantType::XSpherical4I8,
+            VectorQuantType::XSpherical4U8,
+        ] {
+            let store = Store::new();
+            let (index_ptr, _) =
+                create_test_index_with_metric(&store, quant_type, Metric::CosineNormalized as i32);
+            assert!(index_ptr.is_null());
+        }
+    }
 
-        let v = [rng.random(), rng.random()];
+    fn check_spherical_lifecycle<T: bytemuck::Pod>(
+        quant_type: VectorQuantType,
+        metric: Metric,
+        vector_for: impl Fn(usize) -> [T; 2],
+    ) {
+        let quantizer: Box<dyn GarnetQuantizer> = match quant_type {
+            VectorQuantType::Bin | VectorQuantType::XBinI8 | VectorQuantType::XBinU8 => {
+                Box::new(Spherical1Bit::new(metric, 2))
+            }
+            VectorQuantType::XSpherical2
+            | VectorQuantType::XSpherical2I8
+            | VectorQuantType::XSpherical2U8 => Box::new(Spherical2Bit::new(metric, 2)),
+            VectorQuantType::XSpherical4
+            | VectorQuantType::XSpherical4I8
+            | VectorQuantType::XSpherical4U8 => Box::new(Spherical4Bit::new(metric, 2)),
+            _ => panic!("not a spherical quantizer: {quant_type:?}"),
+        };
+        let required = quantizer.required_vectors();
+        let quantized_bytes = quantizer.bytes();
+        let store = Store::new();
+        let (mut index_ptr, ctx) = create_test_index_with_metric(&store, quant_type, metric as i32);
+        assert!(!index_ptr.is_null(), "{quant_type:?}, {metric:?}");
+        let insert_vector = |index_ptr, id: usize| {
+            let vector = vector_for(id);
+            let external_id = (id as u32).to_ne_bytes();
+            InsertResult::from(unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    external_id.as_ptr(),
+                    external_id.len(),
+                    bytemuck::cast_slice(&vector).as_ptr(),
+                    vector.len(),
+                    ptr::null(),
+                    0,
+                )
+            })
+        };
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
+        for id in 0..required - 1 {
+            assert_eq!(insert_vector(index_ptr, id), InsertResult::Success);
+        }
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, required as u64 - 1);
         assert_eq!(
-            insert_f32_vector(&ctx, index_ptr, required_vectors as u32 - 1, &v),
+            insert_vector(index_ptr, required - 1),
             InsertResult::SuccessStartTraining
         );
 
-        // signal to train the quantizer
+        let search = |index_ptr, element_query| {
+            let query = vector_for(0);
+            let external_id = 0u32.to_ne_bytes();
+            let mut ids = [0u8; 80];
+            let mut distances = [0f32; 10];
+            let mut overflow = ptr::null_mut();
+            let count = unsafe {
+                if element_query {
+                    crate::search_element(
+                        ctx.get(),
+                        index_ptr,
+                        external_id.as_ptr(),
+                        external_id.len(),
+                        0.0,
+                        32,
+                        ptr::null(),
+                        0,
+                        0,
+                        ids.as_mut_ptr(),
+                        ids.len(),
+                        distances.as_mut_ptr(),
+                        distances.len(),
+                        1,
+                        &mut overflow,
+                    )
+                } else {
+                    search_vector(
+                        ctx.get(),
+                        index_ptr,
+                        bytemuck::cast_slice(&query).as_ptr(),
+                        query.len(),
+                        0.0,
+                        32,
+                        ptr::null(),
+                        0,
+                        0,
+                        ids.as_mut_ptr(),
+                        ids.len(),
+                        distances.as_mut_ptr(),
+                        distances.len(),
+                        1,
+                        &mut overflow,
+                    )
+                }
+            };
+            assert_eq!(count, 10, "{quant_type:?}, {metric:?}");
+            assert!(overflow.is_null());
+            assert!(distances.iter().all(|distance| distance.is_finite()));
+            (ids, distances)
+        };
 
-        let res = unsafe { build_quant_table(ctx.get(), index_ptr) };
-        assert!(res, "quantizer training failed");
+        for phase in 0..3 {
+            if phase == 1 {
+                assert!(unsafe { build_quant_table(ctx.get(), index_ptr) });
+                assert_eq!(insert_vector(index_ptr, required), InsertResult::Success);
+                assert!(
+                    store
+                        .get(
+                            ctx.term(Term::Quantized).get(),
+                            &(required as u32 - 1).to_ne_bytes()
+                        )
+                        .is_none()
+                );
+                assert_eq!(
+                    store
+                        .get(
+                            ctx.term(Term::Quantized).get(),
+                            &(required as u32).to_ne_bytes()
+                        )
+                        .unwrap()
+                        .len(),
+                    quantized_bytes
+                );
+                assert!(unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 4) });
+            } else if phase == 2 {
+                assert_eq!(
+                    insert_vector(index_ptr, required + 1),
+                    InsertResult::Success
+                );
+                for partition in 0..4 {
+                    assert!(unsafe { backfill_quant_vectors(ctx.get(), index_ptr, partition, 4) });
+                }
+            }
 
-        // new inserts will be quantized
-
-        let v = [rng.random(), rng.random()];
-        assert_eq!(
-            insert_f32_vector(&ctx, index_ptr, required_vectors as u32, &v),
-            InsertResult::Success
-        );
-
-        // previous insert is unquantized; inserted before training
-        let iid = required_vectors as u32 - 1;
-        assert!(
-            store
-                .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
-                .is_none()
-        );
-
-        // latest insert is quantized
-        let iid = required_vectors as u32;
-        let qv = store
-            .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
-            .expect("missing quant vector");
-        assert_eq!(qv.len(), quantizer.bytes());
-
-        // backfill quant vectors
-
-        unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 1) };
-
-        // all previous inserts are now quantized
-        for iid in (0..=required_vectors as u32).chain([DEFAULT_START_POINT_ID]) {
-            let qv = store
-                .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
-                .expect("missing quant vector");
-            assert_eq!(qv.len(), quantizer.bytes());
+            let mut before = Vec::new();
+            for element_query in [false, true] {
+                store.clear_read_counts();
+                before.push(search(index_ptr, element_query));
+                assert!(store.full_reads() > 0);
+                if phase == 2 {
+                    assert!(store.quant_reads() > 0);
+                }
+            }
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            (index_ptr, _) = create_test_index_with_metric(&store, quant_type, metric as i32);
+            assert!(!index_ptr.is_null());
+            for (element_query, expected) in [false, true].into_iter().zip(before) {
+                assert_eq!(search(index_ptr, element_query), expected);
+            }
         }
 
-        // do a search
-        let qv = [0.5f32, 0.5];
-        let (ids, _dists) = do_search(&ctx, index_ptr, &qv, 10, None);
-        assert!(!ids.is_empty(), "no results found");
-
-        // delete some vectors
-        let mut to_delete = (0..required_vectors as u32).collect::<Vec<_>>();
-        to_delete.shuffle(&mut rng);
+        for id in 0..required + 2 {
+            let internal_id = (id as u32).to_ne_bytes();
+            assert_eq!(
+                store
+                    .get(ctx.term(Term::Vector).get(), &internal_id)
+                    .unwrap(),
+                bytemuck::cast_slice::<T, u8>(&vector_for(id)),
+                "original vector changed for {quant_type:?}, id={id}"
+            );
+        }
+        for id in (0..required as u32 + 2).chain([DEFAULT_START_POINT_ID]) {
+            assert_eq!(
+                store
+                    .get(ctx.term(Term::Quantized).get(), &id.to_ne_bytes())
+                    .unwrap()
+                    .len(),
+                quantized_bytes
+            );
+        }
+        let mut to_delete = (0..required as u32).collect::<Vec<_>>();
+        to_delete.shuffle(&mut rand::rng());
         for id in to_delete.into_iter().take(100) {
-            assert!(unsafe {
-                remove(
-                    ctx.get(),
-                    index_ptr,
-                    bytemuck::bytes_of(&id).as_ptr(),
-                    mem::size_of::<u32>(),
-                )
-            });
+            let removed_id = id.to_ne_bytes();
+            assert!(unsafe { remove(ctx.get(), index_ptr, removed_id.as_ptr(), removed_id.len()) });
         }
-
-        // do another search
-        let qv = [0.5f32, 0.5];
-        let (ids, _dists) = do_search(&ctx, index_ptr, &qv, 10, None);
-        assert!(!ids.is_empty(), "no results found");
-
-        unsafe {
-            drop_index(ctx.get(), index_ptr);
-        }
+        assert_eq!(
+            unsafe { card(ctx.get(), index_ptr) },
+            required as u64 + 2 - 100
+        );
+        search(index_ptr, false);
+        unsafe { drop_index(ctx.get(), index_ptr) };
     }
 
     #[test]

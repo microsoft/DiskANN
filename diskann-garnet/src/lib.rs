@@ -113,6 +113,12 @@ pub enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2,
+    XSpherical2I8,
+    XSpherical2U8,
+    XSpherical4,
+    XSpherical4I8,
+    XSpherical4U8,
 }
 
 /// Helper struct to manage the FFI buffers for handling search results
@@ -269,9 +275,15 @@ fn create_index_impl<T: VectorRepr>(
     };
 
     let quant_needed = match quant_type {
-        VectorQuantType::Bin | VectorQuantType::XBinI8 | VectorQuantType::XBinU8 => {
-            provider.quantization_needed()
-        }
+        VectorQuantType::Bin
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => provider.quantization_needed(),
         _ => false,
     };
 
@@ -357,7 +369,10 @@ pub unsafe extern "C" fn create_index(
 
     match quant_type {
         VectorQuantType::Invalid => ptr::null(),
-        VectorQuantType::XNoQuantU8 | VectorQuantType::XBinU8 => {
+        VectorQuantType::XNoQuantU8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4U8 => {
             if let Ok((index, quant_needed)) = create_index_impl::<u8>(
                 quant_type,
                 config,
@@ -374,7 +389,10 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::XNoQuantI8 | VectorQuantType::XBinI8 => {
+        VectorQuantType::XNoQuantI8
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical4I8 => {
             if let Ok((index, quant_needed)) = create_index_impl::<i8>(
                 quant_type,
                 config,
@@ -391,7 +409,11 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => {
             if let Ok((index, quant_needed)) = create_index_impl::<f32>(
                 quant_type,
                 config,
@@ -466,11 +488,19 @@ fn interpret_vector<'a>(
     let vector_len_bytes = match quant_type {
         VectorQuantType::Invalid => return None,
 
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => vector_len * 4,
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => vector_len * 4,
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
         | VectorQuantType::XBinU8
-        | VectorQuantType::XBinI8 => vector_len,
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => vector_len,
     };
 
     let v = unsafe { slice::from_raw_parts(*vector_data, vector_len_bytes) };
@@ -478,7 +508,11 @@ fn interpret_vector<'a>(
     let v = match quant_type {
         VectorQuantType::Invalid => return None,
 
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => {
             if v.as_ptr().align_offset(mem::align_of::<f32>()) == 0 {
                 // pointer is correctly aligned to interpret as f32
                 PolyCow::from(v)
@@ -496,7 +530,11 @@ fn interpret_vector<'a>(
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
         | VectorQuantType::XBinU8
-        | VectorQuantType::XBinI8 => PolyCow::from(v),
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => PolyCow::from(v),
     };
 
     Some(v)
@@ -1665,6 +1703,28 @@ mod tests {
         check_create_index(VectorQuantType::XBinU8);
         check_create_index(VectorQuantType::XNoQuantI8);
         check_create_index(VectorQuantType::XBinI8);
+    }
+
+    #[test]
+    fn spherical_quantizer_abi_and_creation() {
+        for (quantizer, value) in [
+            (VectorQuantType::NoQuant, 1),
+            (VectorQuantType::Bin, 2),
+            (VectorQuantType::Q8, 3),
+            (VectorQuantType::XNoQuantU8, 4),
+            (VectorQuantType::XNoQuantI8, 5),
+            (VectorQuantType::XBinI8, 6),
+            (VectorQuantType::XBinU8, 7),
+            (VectorQuantType::XSpherical2, 8),
+            (VectorQuantType::XSpherical2I8, 9),
+            (VectorQuantType::XSpherical2U8, 10),
+            (VectorQuantType::XSpherical4, 11),
+            (VectorQuantType::XSpherical4I8, 12),
+            (VectorQuantType::XSpherical4U8, 13),
+        ] {
+            assert_eq!(quantizer as i32, value);
+            check_create_index(quantizer);
+        }
     }
 
     #[test]
