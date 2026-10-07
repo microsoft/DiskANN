@@ -1077,13 +1077,13 @@ impl ProcessInto<DotAndNorm> for Cosine {
         debug_assert_eq!(
             norm_chunks.len(),
             into_chunks.len(),
-            "Check 1 already already proves this"
+            "Check 1 already proves this"
         );
 
         debug_assert_eq!(
             norm_remainder.len(),
             into_remainder.len(),
-            "Check 1 already already proves this"
+            "Check 1 already proves this"
         );
 
         // NOTE: This code generated for constructing `DotAndNorm` from the computed
