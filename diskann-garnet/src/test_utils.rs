@@ -19,6 +19,7 @@ thread_local! {
     pub static LOGS: Mutex<Vec<(u64, String)>> = const { Mutex::new(Vec::new()) };
     pub static FULL_READS: AtomicUsize = const { AtomicUsize::new(0) };
     pub static QUANT_READS: AtomicUsize = const { AtomicUsize::new(0) };
+    pub static INT_MAP_READS: AtomicUsize = const { AtomicUsize::new(0) };
 }
 
 /// Mock storage for testing.
@@ -58,6 +59,7 @@ impl Store {
         });
         FULL_READS.with(|fr| fr.store(0, Ordering::Release));
         QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
+        INT_MAP_READS.with(|reads| reads.store(0, Ordering::Release));
     }
 
     pub fn set(&self, context: u64, key: &[u8], value: &[u8]) {
@@ -102,6 +104,7 @@ impl Store {
     pub fn clear_read_counts(&self) {
         FULL_READS.with(|fr| fr.store(0, Ordering::Release));
         QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
+        INT_MAP_READS.with(|reads| reads.store(0, Ordering::Release));
     }
 
     pub fn full_reads(&self) -> usize {
@@ -110,6 +113,10 @@ impl Store {
 
     pub fn quant_reads(&self) -> usize {
         QUANT_READS.with(|qr| qr.load(Ordering::Acquire))
+    }
+
+    pub fn int_map_reads(&self) -> usize {
+        INT_MAP_READS.with(|reads| reads.load(Ordering::Acquire))
     }
 
     pub fn log(&self, context: u64, msg: &str) {
@@ -129,13 +136,14 @@ unsafe extern "C" fn test_read(
     cb: ReadDataCallback,
     cb_ctx: *mut c_void,
 ) {
+    if ctx & TERM_BITMASK == Term::IntMap as u64 {
+        INT_MAP_READS.with(|reads| reads.fetch_add(1, Ordering::AcqRel));
+    }
     let ids = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
     let mut pos = 0usize;
     for idx in 0..count {
-        let mut len = 0u32;
-        let len_bytes = bytemuck::bytes_of_mut(&mut len);
-        len_bytes.copy_from_slice(&ids[pos..pos + 4]);
+        let len = bytemuck::pod_read_unaligned::<u32>(&ids[pos..pos + 4]);
 
         pos += 4;
 
