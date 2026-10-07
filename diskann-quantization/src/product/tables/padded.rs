@@ -45,10 +45,7 @@
 
 use std::{marker::PhantomData, num::NonZeroUsize};
 
-use diskann_utils::{
-    strided,
-    views::rowmajor::{self, Matrix, MatrixMut},
-};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::distance::Metric as VectorMetric;
 use diskann_wide::{
     SIMDFloat, SIMDSumTree, SIMDVector,
@@ -131,20 +128,8 @@ impl PaddedTable {
 
         // Copy the pivots.
         (0..offsets.len()).for_each(|i| {
-            let range = offsets.at(i);
-
-            #[expect(
-                clippy::expect_used,
-                reason = "the layout should be pre-validated by `BasicTable`"
-            )]
-            let view = strided::Strided::try_from_data(
-                &(pivots.as_slice()[range.start..]),
-                pivots.nrows(),
-                range.len(),
-                offsets.dim(),
-            )
-            .expect("the check on `pivot_dim` and `offsets_dim` should cause this to never error");
-
+            #[expect(clippy::expect_used, reason = "`i` should be in-bounds")]
+            let view = basic.pivots_for(i).expect("`i` should be in-bounds");
             view.rows().for_each(|src| {
                 copy_from_slice_subset(padded.row_mut(row), src);
                 row += 1;
