@@ -5,6 +5,8 @@
 
 //! These are modeled after the attributes documented in <https://serde.rs/attributes.html>.
 
+use proc_macro2::Span;
+
 #[must_use]
 fn is_serde_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("serde")
@@ -29,6 +31,15 @@ fn set_unique(opt: &mut Option<syn::LitStr>, value: syn::LitStr, attr: &str) -> 
         *opt = Some(value);
         Ok(())
     }
+}
+
+fn reject_reflect_attributes(attrs: &[syn::Attribute]) -> syn::Result<()> {
+    for attr in attrs.iter().filter(|a| is_reflect_attr(*a)) {
+        attr.parse_nested_meta(|meta| {
+            Err(meta.error("Reflect does not support field-level attributes"))
+        })?
+    }
+    Ok(())
 }
 
 /// Attributes applicable to struct definitions.
@@ -306,15 +317,25 @@ pub(crate) struct RenameOnce {
 }
 
 impl RenameOnce {
+    /// Return the source span for the rename attribute, or `None` if no attribute was present.
+    pub(crate) fn span(&self) -> Option<proc_macro2::Span> {
+        match self.rename.as_ref() {
+            None => None,
+            Some(lit) => Some(lit.span()),
+        }
+    }
+
     /// Apply the configured rename to `variant`. If no rename is configured, apply `or_else`.
-    pub(crate) fn apply_to_variant(self, variant: syn::LitStr, or_else: RenameAll) -> syn::LitStr {
+    pub(crate) fn apply_to_variant(&self, variant: syn::LitStr, or_else: RenameAll) -> syn::LitStr {
         self.rename
+            .clone()
             .map_or_else(|| or_else.apply_to_variant(variant), identity)
     }
 
     /// Apply the configured rename to `field`. If no rename is configured, apply `or_else`.
-    pub(crate) fn apply_to_field(self, field: syn::LitStr, or_else: RenameAll) -> syn::LitStr {
+    pub(crate) fn apply_to_field(&self, field: syn::LitStr, or_else: RenameAll) -> syn::LitStr {
         self.rename
+            .clone()
             .map_or_else(|| or_else.apply_to_field(field), identity)
     }
 }
@@ -395,6 +416,9 @@ impl Variant {
             })?;
         }
 
+        // Reject any `reflect` attributes.
+        reject_reflect_attributes(attrs)?;
+
         Ok(me)
     }
 }
@@ -425,6 +449,9 @@ impl Field {
                 Err(meta.error("unsupported Serde attribute for Reflect"))
             })?;
         }
+
+        // Reject any `reflect` attributes.
+        reject_reflect_attributes(attrs)?;
 
         Ok(me)
     }

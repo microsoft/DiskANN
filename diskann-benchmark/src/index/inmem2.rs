@@ -26,6 +26,7 @@ use diskann_benchmark_runner::{
     utils::{
         datatype::{AsDataType, DataType},
         fmt::{Delimit, KeyValue, Quote},
+        RequiredOption,
     },
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
@@ -111,13 +112,13 @@ mod dto {
     // Quantization //
     //--------------//
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
     #[serde(rename_all = "kebab-case")]
     pub(super) enum Quantization {
         Spherical(Spherical),
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
     #[serde(rename_all = "kebab-case")]
     pub(super) enum SphericalBits {
         One,
@@ -125,7 +126,7 @@ mod dto {
         Four,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
     pub(super) struct Spherical {
         pub(super) bits: SphericalBits,
     }
@@ -163,7 +164,7 @@ mod dto {
         pub(super) data: Data,
         pub(super) build: BuildParams,
         pub(super) search: KnnSearch,
-        pub(super) quantization: Option<Quantization>,
+        pub(super) quantization: RequiredOption<Quantization>,
     }
 
     #[derive(Debug, Serialize, Deserialize, Reflect)]
@@ -517,7 +518,7 @@ impl StaticBuild {
         let data = Data::from_raw(data, checker.as_deref_mut())?;
         let build = BuildParams::from_raw(build, data.distance)?;
         let search = KnnSearch::from_raw(search, checker)?;
-        let quantization = Quantization::from_raw(quantization);
+        let quantization = Quantization::from_raw(quantization.into_inner());
 
         Ok(Self {
             data,
@@ -610,7 +611,7 @@ impl Input for StaticBuild {
                     recall_k: 10,
                 }],
             },
-            quantization: None,
+            quantization: RequiredOption::none(),
         }
     }
 }

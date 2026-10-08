@@ -10,6 +10,7 @@ use quote::{quote, quote_spanned};
 use syn::{Data, DeriveInput, Fields, parse_macro_input, parse_quote, spanned::Spanned};
 
 mod attributes;
+mod repr;
 
 fn crate_name() -> syn::Path {
     syn::parse_quote!(::diskann_benchmark_runner::reflect)
@@ -397,12 +398,14 @@ where
     }
 
     let path = crate_name();
-    let ts: Vec<_> = fields.iter().map(move |f| {
-        let ty = &f.ty;
-        let doc = format_docstrings(&f.attrs);
-        quote_spanned! { ty.span()=> #path::tree::UnnamedField::new::<#ty>(#doc) }
-    })
-    .collect();
+    let ts: Vec<_> = fields
+        .iter()
+        .map(move |f| {
+            let ty = &f.ty;
+            let doc = format_docstrings(&f.attrs);
+            quote_spanned! { ty.span()=> #path::tree::UnnamedField::new::<#ty>(#doc) }
+        })
+        .collect();
 
     Ok(ts)
 }
