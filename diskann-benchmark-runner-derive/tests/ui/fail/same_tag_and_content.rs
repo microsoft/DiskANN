@@ -6,9 +6,9 @@
 use diskann_benchmark_runner::Reflect;
 
 #[derive(Reflect)]
-struct DuplicateFieldRename {
-    #[serde(rename = "first", rename = "second")]
-    value: usize,
+#[serde(tag = "first", content = "first")]
+enum DuplicateTag {
+    Unit,
 }
 
 fn main() {}

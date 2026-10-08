@@ -28,10 +28,7 @@ impl<'a> Struct<'a> {
     ) -> syn::Result<Self> {
         let attributes::Struct { rename_all } = attrs;
         let fields = Fields::parse(&s.fields, rename_all)?;
-        Ok(Self {
-            doc,
-            fields,
-        })
+        Ok(Self { doc, fields })
     }
 
     pub(crate) fn for_each_type<F>(&self, f: F)
@@ -103,27 +100,35 @@ impl<'a> Enum<'a> {
                 match &v.fields {
                     Fields::Named(named) => {
                         for field in named.iter() {
-                            if tag == field.name.value()
-                            {
+                            if tag == field.name.value() {
                                 return Err(syn::Error::new_spanned(
                                     &field.name,
-                                    "field conflicts with internal discriminant tag",
+                                    format!(
+                                        "field \"{}\", conflicts with internal discriminant tag",
+                                        tag
+                                    ),
                                 ));
                             }
                         }
                     }
-                    Fields::Unnamed(unnamed) => if unnamed.len() != 1 {
+                    Fields::Unnamed(unnamed) => {
+                        if unnamed.len() != 1 {
                             return Err(syn::Error::new_spanned(
                                 &v.name,
-                                "non-newtype tuple type variants are now allowed with internal tagging",
+                                "non-newtype tuple type variants are not allowed with internal tagging",
                             ));
                         }
+                    }
                     Fields::Unit => {}
                 }
             }
         }
 
-        Ok(Self { doc, enum_repr, variants })
+        Ok(Self {
+            doc,
+            enum_repr,
+            variants,
+        })
     }
 
     pub(crate) fn for_each_type<F>(&self, mut f: F)
@@ -257,10 +262,13 @@ impl<'a> Fields<'a> {
                 }
 
                 Self::Named(named)
-            },
+            }
             syn::Fields::Unnamed(fields) => {
-                if rename_all != attributes::RenameAll::None {
-                    todo!("propagate the span correctly");
+                if let Some(span) = rename_all.span_if_present() {
+                    return Err(syn::Error::new(
+                        span,
+                        "`rename_all` cannot be applied to tuple structs",
+                    ));
                 }
 
                 Self::Unnamed(
@@ -268,14 +276,16 @@ impl<'a> Fields<'a> {
                         .unnamed
                         .iter()
                         .map(UnnamedField::parse)
-                        .collect::<syn::Result<_>>()?
+                        .collect::<syn::Result<_>>()?,
                 )
-            },
+            }
             syn::Fields::Unit => {
-                if rename_all != attributes::RenameAll::None {
-                    todo!("propagate the span correctly");
+                if let Some(span) = rename_all.span_if_present() {
+                    return Err(syn::Error::new(
+                        span,
+                        "`rename_all` cannot be applied to unit structs",
+                    ));
                 }
-
                 Self::Unit
             }
         };
@@ -355,4 +365,3 @@ impl<'a> Variant<'a> {
         quote!(#path::tree::Variant::new(#name, #fields, #doc))
     }
 }
-

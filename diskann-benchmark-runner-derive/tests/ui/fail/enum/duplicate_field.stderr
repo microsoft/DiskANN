@@ -1,0 +1,11 @@
+error: field name "value" seen more than once
+  --> tests/ui/fail/enum/duplicate_field.rs:13:26
+   |
+13 |         #[serde(rename = "value")]
+   |                          ^^^^^^^
+
+error: field name "foo-bar" seen more than once
+  --> tests/ui/fail/enum/duplicate_field.rs:25:9
+   |
+25 |         foo_bar: usize,
+   |         ^^^^^^^

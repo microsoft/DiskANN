@@ -1,0 +1,11 @@
+error: field name "value" seen more than once
+  --> tests/ui/fail/struct/duplicate_field.rs:12:22
+   |
+12 |     #[serde(rename = "value")]
+   |                      ^^^^^^^
+
+error: field name "foo-bar" seen more than once
+  --> tests/ui/fail/struct/duplicate_field.rs:22:5
+   |
+22 |     foo_bar: usize,
+   |     ^^^^^^^

@@ -1,10 +1,10 @@
-error: non-newtype tuple type variants are now allowed with internal tagging
+error: non-newtype tuple type variants are not allowed with internal tagging
   --> tests/ui/fail/unsupported_tuple_variant_internal.rs:13:5
    |
 13 |     Tuple(),
    |     ^^^^^
 
-error: non-newtype tuple type variants are now allowed with internal tagging
+error: non-newtype tuple type variants are not allowed with internal tagging
   --> tests/ui/fail/unsupported_tuple_variant_internal.rs:21:5
    |
 21 |     Tuple(usize, usize),

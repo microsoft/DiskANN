@@ -5,6 +5,8 @@
 
 //! These are modeled after the attributes documented in <https://serde.rs/attributes.html>.
 
+use proc_macro2::Span;
+
 #[must_use]
 fn is_serde_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("serde")
@@ -31,11 +33,9 @@ fn set_unique(opt: &mut Option<syn::LitStr>, value: syn::LitStr, attr: &str) -> 
     }
 }
 
-fn reject_reflect_attributes(attrs: &[syn::Attribute]) -> syn::Result<()> {
+fn reject_reflect_attributes(attrs: &[syn::Attribute], error: &str) -> syn::Result<()> {
     for attr in attrs.iter().filter(|a| is_reflect_attr(*a)) {
-        attr.parse_nested_meta(|meta| {
-            Err(meta.error("Reflect does not support field-level attributes"))
-        })?
+        attr.parse_nested_meta(|meta| Err(meta.error(error)))?
     }
     Ok(())
 }
@@ -71,7 +71,7 @@ pub(crate) struct Container {
 
 impl Container {
     pub(crate) fn parse(attrs: &[syn::Attribute]) -> syn::Result<Self> {
-        let mut rename_all = RenameAll::None;
+        let mut rename_all = RenameAll::default();
         let mut tag = Option::None;
         let mut content = Option::None;
         let mut type_name = TypeName::None;
@@ -82,7 +82,7 @@ impl Container {
                 // serde(rename_all = "...")
                 if meta.path.is_ident("rename_all") {
                     let value: syn::LitStr = meta.value()?.parse()?;
-                    rename_all.parse_once(value)?;
+                    rename_all.parse_once(&value)?;
                     return Ok(());
                 }
 
@@ -177,7 +177,16 @@ impl EnumRepr {
         match (tag, content) {
             (None, None) => Ok(EnumRepr::External),
             (Some(tag), None) => Ok(EnumRepr::Internal { tag }),
-            (Some(tag), Some(content)) => Ok(EnumRepr::Adjacent { tag, content }),
+            (Some(tag), Some(content)) => {
+                if tag.value() == content.value() {
+                    Err(syn::Error::new_spanned(
+                        &content,
+                        "Externally tagged \"content\" conflicts with \"tag\"",
+                    ))
+                } else {
+                    Ok(EnumRepr::Adjacent { tag, content })
+                }
+            }
             (None, Some(content)) => Err(syn::Error::new_spanned(
                 content,
                 "serde attribute `content` provided without a `tag`",
@@ -204,9 +213,71 @@ impl EnumRepr {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct RenameAll {
+    inner: RenameRule,
+    span: Option<Span>,
+}
+
+impl RenameAll {
+    /// Attempt to parse `s`, returning an error if `self` is already parsed.
+    fn parse_once(&mut self, s: &syn::LitStr) -> syn::Result<()> {
+        if self.inner != RenameRule::None {
+            Err(syn::Error::new_spanned(
+                s,
+                "serde attribute `rename_all` found multiple times",
+            ))
+        } else {
+            let value = s.value();
+            match RenameRule::parse(&value) {
+                Some(inner) => {
+                    self.inner = inner;
+                    self.span = Some(s.span());
+                    Ok(())
+                }
+                None => Err(syn::Error::new_spanned(
+                    s,
+                    format!(
+                        "unsupported serde `rename_all` rule \"{}\" - expected one of {}",
+                        value,
+                        RenameRule::supported()
+                    ),
+                )),
+            }
+        }
+    }
+
+    /// Return the [`Span`] for the rename all rule - returning `None` if no rename-all
+    /// rule is in effect.
+    pub(crate) fn span_if_present(&self) -> Option<Span> {
+        self.span
+    }
+
+    /// Apply the rename rule to `variant`.
+    pub(crate) fn apply_to_variant(&self, variant: syn::LitStr) -> syn::LitStr {
+        if self.inner == RenameRule::None {
+            variant
+        } else {
+            syn::LitStr::new(
+                &self.inner.apply_to_variant_str(&variant.value()),
+                variant.span(),
+            )
+        }
+    }
+
+    /// Apply the rename rule to `field`.
+    pub(crate) fn apply_to_field(&self, field: syn::LitStr) -> syn::LitStr {
+        if self.inner == RenameRule::None {
+            field
+        } else {
+            syn::LitStr::new(&self.inner.apply_to_field_str(&field.value()), field.span())
+        }
+    }
+}
+
 /// Supported subset of `serde(rename_all = "...")`
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
-pub(crate) enum RenameAll {
+pub(crate) enum RenameRule {
     #[default]
     None,
     Lower,
@@ -214,7 +285,7 @@ pub(crate) enum RenameAll {
     Kebab,
 }
 
-impl RenameAll {
+impl RenameRule {
     fn supported() -> &'static str {
         "\"lowercase\", \"snake_case\", or \"kebab-case\""
     }
@@ -225,32 +296,6 @@ impl RenameAll {
             "snake_case" => Some(Self::Snake),
             "kebab-case" => Some(Self::Kebab),
             _ => None,
-        }
-    }
-
-    /// Attempt to parse `s`, returning an error if `self` is already parsed.
-    fn parse_once(&mut self, s: syn::LitStr) -> syn::Result<()> {
-        if *self != Self::None {
-            Err(syn::Error::new_spanned(
-                s,
-                "serde attribute `rename_all` found multiple times",
-            ))
-        } else {
-            let value = s.value();
-            match Self::parse(&value) {
-                Some(me) => {
-                    *self = me;
-                    Ok(())
-                }
-                None => Err(syn::Error::new_spanned(
-                    s,
-                    format!(
-                        "unsupported serde `rename_all` rule \"{}\" - expected one of {}",
-                        value,
-                        Self::supported()
-                    ),
-                )),
-            }
         }
     }
 
@@ -277,15 +322,6 @@ impl RenameAll {
         }
     }
 
-    /// Apply the rename rule to `variant`.
-    pub(crate) fn apply_to_variant(&self, variant: syn::LitStr) -> syn::LitStr {
-        if *self == Self::None {
-            variant
-        } else {
-            syn::LitStr::new(&self.apply_to_variant_str(&variant.value()), variant.span())
-        }
-    }
-
     /// These methods are taken from the `serde_derive` internals as they need to match.
     ///
     /// Since Rust field are generally in lower snake case, there's less work to do.
@@ -295,15 +331,6 @@ impl RenameAll {
         match self {
             Self::None | Self::Lower | Self::Snake => field.to_owned(),
             Self::Kebab => field.replace('_', "-"),
-        }
-    }
-
-    /// Apply the rename rule to `field`.
-    pub(crate) fn apply_to_field(&self, field: syn::LitStr) -> syn::LitStr {
-        if *self == Self::None {
-            field
-        } else {
-            syn::LitStr::new(&self.apply_to_field_str(&field.value()), field.span())
         }
     }
 }
@@ -399,7 +426,7 @@ impl Variant {
                 // serde(rename_all = "...")
                 if meta.path.is_ident("rename_all") {
                     let value: syn::LitStr = meta.value()?.parse()?;
-                    me.rename_variant_fields.parse_once(value)?;
+                    me.rename_variant_fields.parse_once(&value)?;
                     return Ok(());
                 }
 
@@ -415,7 +442,7 @@ impl Variant {
         }
 
         // Reject any `reflect` attributes.
-        reject_reflect_attributes(attrs)?;
+        reject_reflect_attributes(attrs, "Reflect does not support variant-level attributes")?;
 
         Ok(me)
     }
@@ -449,7 +476,7 @@ impl Field {
         }
 
         // Reject any `reflect` attributes.
-        reject_reflect_attributes(attrs)?;
+        reject_reflect_attributes(attrs, "Reflect does not support field-level attributes")?;
 
         Ok(me)
     }
@@ -464,47 +491,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_rename_all_parse() {
-        assert!(RenameAll::parse("none").is_none());
-        assert_eq!(RenameAll::parse("lowercase").unwrap(), RenameAll::Lower);
-        assert_eq!(RenameAll::parse("snake_case").unwrap(), RenameAll::Snake);
-        assert_eq!(RenameAll::parse("kebab-case").unwrap(), RenameAll::Kebab);
+    fn test_rename_rule_parse() {
+        assert!(RenameRule::parse("none").is_none());
+        assert_eq!(RenameRule::parse("lowercase").unwrap(), RenameRule::Lower);
+        assert_eq!(RenameRule::parse("snake_case").unwrap(), RenameRule::Snake);
+        assert_eq!(RenameRule::parse("kebab-case").unwrap(), RenameRule::Kebab);
 
-        assert!(RenameAll::parse("foo").is_none());
-        assert!(RenameAll::parse("bar").is_none());
+        assert!(RenameRule::parse("foo").is_none());
+        assert!(RenameRule::parse("bar").is_none());
     }
 
     #[test]
     fn test_apply_to_variant() {
         assert_eq!(
-            RenameAll::None.apply_to_variant_str("MiXeDUpper_Case"),
+            RenameRule::None.apply_to_variant_str("MiXeDUpper_Case"),
             "MiXeDUpper_Case"
         );
 
         assert_eq!(
-            RenameAll::Lower.apply_to_variant_str("MiXeDUpper_Case"),
+            RenameRule::Lower.apply_to_variant_str("MiXeDUpper_Case"),
             "mixedupper_case"
         );
         assert_eq!(
-            RenameAll::Lower.apply_to_variant_str("all_lower"),
+            RenameRule::Lower.apply_to_variant_str("all_lower"),
             "all_lower"
         );
 
         assert_eq!(
-            RenameAll::Snake.apply_to_variant_str("MixedUpperCase"),
+            RenameRule::Snake.apply_to_variant_str("MixedUpperCase"),
             "mixed_upper_case"
         );
         assert_eq!(
-            RenameAll::Snake.apply_to_variant_str("X86_64_V4"),
+            RenameRule::Snake.apply_to_variant_str("X86_64_V4"),
             "x86_64__v4"
         );
 
         assert_eq!(
-            RenameAll::Kebab.apply_to_variant_str("MixedUpperCase"),
+            RenameRule::Kebab.apply_to_variant_str("MixedUpperCase"),
             "mixed-upper-case"
         );
         assert_eq!(
-            RenameAll::Kebab.apply_to_variant_str("X86_64_V4"),
+            RenameRule::Kebab.apply_to_variant_str("X86_64_V4"),
             "x86-64--v4"
         );
     }
@@ -512,19 +539,19 @@ mod tests {
     #[test]
     fn test_apply_to_field() {
         assert_eq!(
-            RenameAll::None.apply_to_field_str("a_standard_field"),
+            RenameRule::None.apply_to_field_str("a_standard_field"),
             "a_standard_field"
         );
         assert_eq!(
-            RenameAll::Lower.apply_to_field_str("a_standard_field"),
+            RenameRule::Lower.apply_to_field_str("a_standard_field"),
             "a_standard_field"
         );
         assert_eq!(
-            RenameAll::Snake.apply_to_field_str("a_standard_field"),
+            RenameRule::Snake.apply_to_field_str("a_standard_field"),
             "a_standard_field"
         );
         assert_eq!(
-            RenameAll::Kebab.apply_to_field_str("a_standard_field"),
+            RenameRule::Kebab.apply_to_field_str("a_standard_field"),
             "a-standard-field"
         );
     }

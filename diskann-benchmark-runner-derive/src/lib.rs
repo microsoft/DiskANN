@@ -4,7 +4,7 @@
  */
 
 use proc_macro2::TokenStream;
-use quote::{quote};
+use quote::quote;
 use syn::{Data, DeriveInput, parse_macro_input, parse_quote};
 
 mod attributes;
@@ -126,7 +126,8 @@ fn add_generic_bounds(generics: &mut syn::Generics) {
 
 /// Add a bound `T: Reflect`.
 fn add_type_bound(generics: &mut syn::Generics, path: &syn::Path, ty: &syn::Type) {
-    generics.make_where_clause()
+    generics
+        .make_where_clause()
         .predicates
         .push(parse_quote!(#ty: #path::Reflect))
 }
