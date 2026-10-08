@@ -53,14 +53,19 @@ impl Params {
         //
         // Make sure we process at least one B-panel at a time. Otherwise performance falls
         // off a cliff.
-        let b_budget = cache.l1().get().saturating_sub(a_panel.value()).max(1);
-        let b_cols_in_l1 = value_or_one(nr * (b_budget.div_ceil(nr * b_col.value())));
+        let b_cols_in_l1 = b_cols_in_l1(cache, a_panel, b_col, nr);
 
         Self {
             a_panels_in_l2,
             b_cols_in_l1,
         }
     }
+}
+
+/// Fit a B tile beside one A panel, always retaining at least one B panel.
+pub(super) fn b_cols_in_l1(cache: Cache, a_panel: Bytes, b_col: Bytes, nr: usize) -> NonZeroUsize {
+    let b_budget = cache.l1().get().saturating_sub(a_panel.value()).max(1);
+    value_or_one(nr * b_budget.div_ceil(nr * b_col.value()))
 }
 
 //--------//

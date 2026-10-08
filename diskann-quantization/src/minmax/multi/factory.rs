@@ -17,7 +17,7 @@ use super::MinMaxMeta;
 use super::kernel::{MinMaxErase, MinMaxMaxSimKernel};
 use crate::matrix_kernels as mk;
 use crate::matrix_kernels::maxsim::minmax8_x_minmax4::{
-    Driver, QueryCompensation, layout::PackedQuery, reader::MinMax4Rows,
+    Driver, layout::PackedQuery, reader::MinMax4Rows,
 };
 use crate::multi_vector::{MatRef, MaxSimError, MaxSimIsa, NotSupported};
 
@@ -25,28 +25,13 @@ use crate::multi_vector::{MatRef, MaxSimError, MaxSimIsa, NotSupported};
 struct Prepared<A, const PACK: usize, const MR: usize, const NR: usize> {
     arch: A,
     prepared: PackedQuery<MR, PACK>,
-    compensation: Vec<QueryCompensation<MR>>,
-    dim: usize,
 }
 
 impl<A, const PACK: usize, const MR: usize, const NR: usize> Prepared<A, PACK, MR, NR> {
     fn new(arch: A, query: MatRef<'_, MinMaxMeta<8>>) -> Self {
-        let dim = query.repr().intrinsic_dim();
-        let mut prepared = PackedQuery::new(query.num_vectors(), dim);
-        let mut compensation = vec![QueryCompensation::default(); query.num_vectors().div_ceil(MR)];
-        for (i, row) in query.rows().enumerate() {
-            let meta = row.meta();
-            let block = &mut compensation[i / MR];
-            block.scale[i % MR] = meta.a;
-            block.bias[i % MR] = meta.b;
-            block.scaled_sum[i % MR] = meta.n;
-            prepared.set_row(i, row.vector().as_slice());
-        }
         Self {
             arch,
-            prepared,
-            compensation,
-            dim,
+            prepared: PackedQuery::new(query),
         }
     }
 }
@@ -69,18 +54,18 @@ where
         if scores.len() != self.nrows() {
             return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
         }
-        if doc.repr().intrinsic_dim() != self.dim {
+        if doc.repr().intrinsic_dim() != self.prepared.dim() {
             return Err(MaxSimError::UnequalDim(
                 doc.repr().intrinsic_dim(),
-                self.dim,
+                self.prepared.dim(),
             ));
         }
-        let Some(b) = MinMax4Rows::new(doc) else {
+        if doc.num_vectors() == 0 {
             scores.fill(f32::MAX);
             return Ok(());
-        };
+        }
 
-        if self.dim == 0 {
+        if self.prepared.dim() == 0 {
             scores.fill(0.0);
             return Ok(());
         }
@@ -90,8 +75,7 @@ where
         let mut driver = Driver::new(
             self.arch,
             a,
-            &self.compensation,
-            b,
+            MinMax4Rows::new(doc),
             scores,
             mk::Cache::detect(),
         );
@@ -130,7 +114,7 @@ impl_builder!(V4, 8, 16, 8);
 /// Owns a block-transposed query in the shared 64-dimensional even/odd order, padded to 64.
 /// Packing width is selected with the backend. Canonical MinMax4 documents are borrowed.
 /// Each document tile is decoded once into temporary scratch and reused across all query
-/// cache tiles and panels. Tile sizes use the same byte-based cache model as the f32 kernels.
+/// panels. Document tile sizes use the same byte-based L1 budget as the f32 kernels.
 ///
 /// # Errors
 ///
@@ -200,7 +184,7 @@ mod tests {
     use crate::CompressInto;
     use crate::algorithms::{Transform, transforms::NullTransform};
     use crate::bits::{Representation, Unsigned};
-    use crate::minmax::{MinMaxCompensation, MinMaxQuantizer};
+    use crate::minmax::MinMaxQuantizer;
     use crate::multi_vector::{BoxErase, Defaulted, Mat, MaxSim, QueryMatRef, Standard};
     use crate::num::Positive;
 
@@ -211,59 +195,6 @@ mod tests {
         MaxSimIsa::Neon,
         MaxSimIsa::Auto,
     ];
-
-    fn check_packing<const PACK: usize, const MR: usize>() {
-        for rows in [0, 1, MR - 1, MR, MR + 1, 2 * MR + 1] {
-            for dim in 0..=17 {
-                let mut query = Mat::new(MinMaxMeta::<8>::new(rows, dim), Defaulted).unwrap();
-                for (i, mut row) in query.reborrow_mut().rows_mut().enumerate() {
-                    row.set_meta(MinMaxCompensation {
-                        a: i as f32 + 1.0,
-                        b: -(i as f32) - 2.0,
-                        n: i as f32 + 3.0,
-                        dim: dim as u32,
-                        ..Default::default()
-                    });
-                    for d in 0..dim {
-                        row.vector_mut()
-                            .set(d, ((i * 17 + d + 1) % 256) as i64)
-                            .unwrap();
-                    }
-                }
-                let packed = Prepared::<_, PACK, MR, 6>::new(Scalar::new(), query.as_view());
-                assert_eq!(packed.prepared.nrows(), rows);
-                assert_eq!(packed.dim, dim);
-                assert_eq!(packed.compensation.len(), rows.div_ceil(MR));
-                for (block, meta) in packed.compensation.iter().enumerate() {
-                    for lane in 0..MR {
-                        let row = block * MR + lane;
-                        for (value, offset, sign) in [
-                            (meta.scale[lane], 1.0, 1.0),
-                            (meta.bias[lane], 2.0, -1.0),
-                            (meta.scaled_sum[lane], 3.0, 1.0),
-                        ] {
-                            assert_eq!(
-                                value,
-                                if row < rows {
-                                    sign * (row as f32 + offset)
-                                } else {
-                                    0.0
-                                }
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn query_packing_and_compensation() {
-        check_packing::<4, 8>();
-        check_packing::<4, 16>();
-        #[cfg(target_arch = "x86_64")]
-        check_packing::<8, 16>();
-    }
 
     fn compress<const BITS: usize>(
         values: &[f32],
@@ -290,7 +221,7 @@ mod tests {
         query: MatRef<'_, MinMaxMeta<8>>,
         docs: MatRef<'_, MinMaxMeta<4>>,
     ) {
-        let kernel = build_minmax_max_sim(isa, query, BoxErase);
+        let kernel: Result<_, NotSupported> = build_minmax_max_sim(isa, query, BoxErase);
         if !isa.is_available() {
             assert_eq!(kernel.unwrap_err().isa, isa);
             return;

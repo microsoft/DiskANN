@@ -7,7 +7,7 @@
 
 use diskann_wide::{Architecture, arch::Scalar};
 
-use super::layout::EvenOdd64Layout;
+use super::layout::EvenOdd;
 
 pub(super) trait Decoder: Architecture {
     /// Write all 32 low nibbles followed by all 32 high nibbles, in input byte order.
@@ -28,35 +28,31 @@ pub(super) trait Decoder: Architecture {
         reason = "chunk lengths match the fixed layout block sizes"
     )]
     #[inline]
-    fn decode(self, packed: &[u8], layout: EvenOdd64Layout, output: &mut [u8]) {
+    fn decode(self, packed: &[u8], dim: usize, output: &mut [u8]) {
+        assert_eq!(packed.len(), dim.div_ceil(2), "packed code length mismatch");
         assert_eq!(
-            packed.len(),
-            layout.dim().div_ceil(2),
-            "packed code length mismatch"
+            output.len(),
+            EvenOdd::padded(dim),
+            "decoded row length mismatch"
         );
-        assert_eq!(output.len(), layout.padded(), "decoded row length mismatch");
-        let full = layout.dim() / EvenOdd64Layout::BLOCK;
-        for (source, dest) in packed[..full * EvenOdd64Layout::PACKED_BYTES]
+        let full = dim / EvenOdd::BLOCK;
+        for (source, dest) in packed[..full * EvenOdd::PACKED_BYTES]
             .as_chunks::<32>()
             .0
             .iter()
-            .zip(
-                output[..full * EvenOdd64Layout::BLOCK]
-                    .as_chunks_mut::<64>()
-                    .0,
-            )
+            .zip(output[..full * EvenOdd::BLOCK].as_chunks_mut::<64>().0)
         {
             self.decode_block(source, dest);
         }
-        if !layout.dim().is_multiple_of(EvenOdd64Layout::BLOCK) {
-            let source = &packed[full * EvenOdd64Layout::PACKED_BYTES..];
-            let output: &mut [u8; 64] = (&mut output[full * EvenOdd64Layout::BLOCK..])
+        if !dim.is_multiple_of(EvenOdd::BLOCK) {
+            let source = &packed[full * EvenOdd::PACKED_BYTES..];
+            let output: &mut [u8; 64] = (&mut output[full * EvenOdd::BLOCK..])
                 .try_into()
                 .expect("one tail block");
             self.decode_tail(source, output);
-            if !layout.dim().is_multiple_of(2) {
+            if !dim.is_multiple_of(2) {
                 // The final high nibble is outside D even when its byte is in bounds.
-                output[EvenOdd64Layout::PACKED_BYTES + source.len() - 1] = 0;
+                output[EvenOdd::PACKED_BYTES + source.len() - 1] = 0;
             }
         }
     }
@@ -67,7 +63,7 @@ impl Decoder for Scalar {
     fn decode_block(self, packed: &[u8; 32], output: &mut [u8; 64]) {
         for (i, &value) in packed.iter().enumerate() {
             output[i] = value & 0x0F;
-            output[EvenOdd64Layout::PACKED_BYTES + i] = value >> 4;
+            output[EvenOdd::PACKED_BYTES + i] = value >> 4;
         }
     }
 }
@@ -165,18 +161,18 @@ mod tests {
                     .map(|i| pattern.unwrap_or_else(|| (i.wrapping_mul(73) ^ (i / 32)) as u8))
                     .collect();
                 let codes = &bytes[1..];
-                let layout = EvenOdd64Layout::new(dim);
-                let mut output = vec![0xfe; layout.padded() + 2];
-                arch.decode(codes, layout, &mut output[1..layout.padded() + 1]);
-                let mut expected = vec![0; layout.padded()];
+                let k = dim.next_multiple_of(EvenOdd::BLOCK);
+                let mut output = vec![0xfe; k + 2];
+                arch.decode(codes, dim, &mut output[1..k + 1]);
+                let mut expected = vec![0; k];
                 for d in 0..dim {
-                    expected[EvenOdd64Layout::position(d)] = (codes[d / 2] >> (4 * (d % 2))) & 15;
+                    expected[EvenOdd::position(d)] = (codes[d / 2] >> (4 * (d % 2))) & 15;
                 }
-                assert_eq!(&output[1..layout.padded() + 1], expected, "dim={dim}");
+                assert_eq!(&output[1..k + 1], expected, "dim={dim}");
                 assert_eq!(output[0], 0xfe);
-                assert_eq!(output[layout.padded() + 1], 0xfe);
-                let mut scalar = vec![0xfd; layout.padded()];
-                Scalar::new().decode(codes, layout, &mut scalar);
+                assert_eq!(output[k + 1], 0xfe);
+                let mut scalar = vec![0xfd; k];
+                Scalar::new().decode(codes, dim, &mut scalar);
                 assert_eq!(scalar, expected);
             }
         }
@@ -209,12 +205,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "packed code length mismatch")]
     fn rejects_inexact_input() {
-        Scalar::new().decode(&[0; 6], EvenOdd64Layout::new(9), &mut [0; 64]);
+        Scalar::new().decode(&[0; 6], 9, &mut [0; 64]);
     }
 
     #[test]
     #[should_panic(expected = "decoded row length mismatch")]
     fn rejects_inexact_output() {
-        Scalar::new().decode(&[0; 5], EvenOdd64Layout::new(9), &mut [0; 63]);
+        Scalar::new().decode(&[0; 5], 9, &mut [0; 63]);
     }
 }
