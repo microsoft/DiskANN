@@ -491,14 +491,15 @@ fn interpret_vector<'a>(
 
 /// Return type for `insert()`.
 ///
-/// `Fail` and `Success` are obvious. `SuccessStartTraining` is used when enough vectors have
-/// been inserted to start training the quantizer. That return value signals to Garnet that
-/// `build_quant_table` should be called.
+/// `Success` indicates a new vector and `SuccessUpdate` indicates an existing vector.
+/// `SuccessStartTraining` is returned when enough vectors have been inserted to start
+/// training the quantizer, signaling to Garnet that `build_quant_table` should be called.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum InsertResult {
     Fail,
     Success,
     SuccessStartTraining,
+    SuccessUpdate,
 }
 
 impl From<InsertResult> for u8 {
@@ -507,6 +508,7 @@ impl From<InsertResult> for u8 {
             InsertResult::Fail => 0,
             InsertResult::Success => 1,
             InsertResult::SuccessStartTraining => 2,
+            InsertResult::SuccessUpdate => 3,
         }
     }
 }
@@ -517,6 +519,7 @@ impl From<u8> for InsertResult {
         match value {
             1 => InsertResult::Success,
             2 => InsertResult::SuccessStartTraining,
+            3 => InsertResult::SuccessUpdate,
             _ => InsertResult::Fail,
         }
     }
@@ -524,9 +527,8 @@ impl From<u8> for InsertResult {
 
 /// Insert a vector into the index.
 ///
-/// Returns a status corresponding to the `InsertResult` enum. Aside from failure and success,
-/// there is a third value that signals that the completed insert has reached the threshold to
-/// begin quantization.
+/// Returns a status corresponding to the `InsertResult` enum, distinguishing new inserts from
+/// updates and when an insert allows quantization training to begin.
 ///
 /// # Safety
 ///
@@ -573,6 +575,8 @@ pub unsafe extern "C" fn insert(
         let ready = ctx.quantizer_ready();
         if !old_ready && ready {
             InsertResult::SuccessStartTraining.into()
+        } else if ctx.insert_is_update() {
+            InsertResult::SuccessUpdate.into()
         } else {
             InsertResult::Success.into()
         }
@@ -770,9 +774,9 @@ impl Overflow {
             if id_index + prefix_len > ids.len() {
                 break;
             }
-            let mut len = 0u32;
-            bytemuck::bytes_of_mut(&mut len)
-                .copy_from_slice(&self.id_buffer[self.id_index..self.id_index + prefix_len]);
+            let len = bytemuck::pod_read_unaligned::<u32>(
+                &self.id_buffer[self.id_index..self.id_index + prefix_len],
+            );
 
             // We check there is room before advancing the indices
             if id_index + prefix_len + len as usize > ids.len() {
@@ -1110,8 +1114,7 @@ pub unsafe extern "C" fn check_internal_id_valid(
         return false;
     }
 
-    let mut id: u32 = 0;
-    bytemuck::bytes_of_mut(&mut id).copy_from_slice(internal_id_bytes);
+    let id = bytemuck::pod_read_unaligned::<u32>(internal_id_bytes);
 
     index.inner.internal_id_exists(&ctx, id)
 }
@@ -1282,14 +1285,12 @@ mod tests {
 
         let mut pos = 0usize;
         for (i, d) in dists.iter().enumerate() {
-            let mut size = 0u32;
-            bytemuck::bytes_of_mut(&mut size).copy_from_slice(&ids[pos..pos + 4]);
+            let size = bytemuck::pod_read_unaligned::<u32>(&ids[pos..pos + 4]);
             pos += 4;
 
             assert_eq!(size, 4);
 
-            let mut id = 0u32;
-            bytemuck::bytes_of_mut(&mut id).copy_from_slice(&ids[pos..pos + 4]);
+            let id = bytemuck::pod_read_unaligned::<u32>(&ids[pos..pos + 4]);
             pos += 4;
 
             assert_eq!(id, i as u32 + 1);
