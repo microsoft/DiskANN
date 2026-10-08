@@ -7,7 +7,6 @@
 use thiserror::Error;
 
 use super::vectors::{DataMutRef, FullQueryMut, MinMaxCompensation, MinMaxIP, MinMaxL2Squared};
-use core::f32;
 
 use crate::{
     AsFunctor, CompressInto,
