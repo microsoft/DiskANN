@@ -7,7 +7,8 @@
 //!
 //! The index drives one [`InsertAccessor`] per mutation: it plans a
 //! [`Deltas`](super::update::Deltas) against the accessor's view and hands it to
-//! [`InsertAccessor::update`]. It never touches point, centroid, or list storage directly.
+//! [`InsertAccessor::update`]. Gathering and update construction use only the accessor;
+//! splitting and assignment operate on an in-memory region.
 
 use diskann_utils::{
     future::SendFuture,
@@ -20,9 +21,10 @@ use crate::{
     ANNError, ANNResult,
     error::{ErrorExt, IntoANNResult},
     ivf::{
-        dynamic::{Centroids, InsertAccessor, MaintenanceStrategy, Provider, Stage},
-        split::plan_split_update,
-        update::{self, Deltas},
+        traits::{Centroids, InsertAccessor, MaintenanceStrategy, Provider, Reader, Stage},
+        online::index_error,
+        split::{Assign, NearestCentroid, Region, SourceList, Split, TwoMeansSplit},
+        update::{self, CentroidDelta, Delta, Deltas, MoveTo},
     },
 };
 
@@ -64,6 +66,18 @@ pub struct InsertStats {
     pub splits: usize,
     /// Previously indexed points moved by regional reassignment.
     pub reassigned: usize,
+}
+
+/// A staged point and its borrowed canonical vector, ready for regional gathering.
+pub(super) struct StagedPoint<'a, I> {
+    pub(super) id: I,
+    pub(super) vector: &'a [f32],
+}
+
+/// Staged points routed to one existing list, in insertion order.
+pub(super) struct ListInsertion<'a, I, L> {
+    pub(super) list: L,
+    pub(super) staged: Vec<StagedPoint<'a, I>>,
 }
 
 /// An incrementally maintained IVF index.
@@ -184,17 +198,13 @@ impl<P: Provider> IVFIndex<P> {
                 .maintenance_accessor(provider, context)
                 .into_ann_result()?;
 
-            // stage the input points
             let mut vectors = rowmajor::Owned::from_element(points.len(), accessor.dim(), f32::NAN);
-            let mut ids = Vec::with_capacity(points.len());
-            let mut routed = hashbrown::HashMap::<P::ListId, Vec<usize>>::new();
+            let mut routed =
+                hashbrown::HashMap::<P::ListId, Vec<StagedPoint<'_, P::InternalId>>>::new();
 
-            for (position, ((id, v), out)) in points.iter().zip(vectors.rows_mut()).enumerate() {
-                //stage the input points first.
+            for ((id, v), out) in points.iter().zip(vectors.rows_mut()) {
                 let id = accessor.stage_point(id, *v, out).await.into_ann_result()?;
-                ids.push(id);
 
-                // route the points to their nearest centroid.
                 let parent = accessor
                     .centroids()
                     .select(out, 1)
@@ -203,38 +213,198 @@ impl<P: Provider> IVFIndex<P> {
                     .map(|s| s.id)
                     .ok_or_else(|| ANNError::message("Didn't return list"))?;
 
-                routed.entry(parent).or_default().push(position);
+                routed
+                    .entry(parent)
+                    .or_default()
+                    .push(StagedPoint { id, vector: out });
             }
 
-            // filter the routed lists for ones that need splitting.
-            let mut parents = Vec::new();
-            for (&list, positions) in &routed {
+            let mut split_inputs = Vec::with_capacity(routed.len());
+            let mut deltas = Vec::with_capacity(routed.len());
+            for (list, staged) in routed {
                 let len = accessor.list_size(list).into_ann_result()?;
 
-                if len + positions.len() > config.split_threshold {
-                    parents.push(list);
+                if len + staged.len() > config.split_threshold {
+                    split_inputs.push(ListInsertion { list, staged });
+                } else {
+                    deltas.push(update::Delta::PointAppends {
+                        to: list,
+                        ids: staged.into_iter().map(|point| point.id).collect(),
+                    });
                 }
             }
 
-            // Fit every split's children before assigning points and building the update.
-            let update = plan_split_update::<P, _, T>(
-                &mut accessor,
-                config.two_means_iterations,
-                rng,
-                &ids,
-                vectors.as_view(),
-                &routed,
-                &parents,
-            )
-            .await?;
+            if !split_inputs.is_empty() {
+                let mut region = Self::gather_region::<_, T>(&mut accessor, &split_inputs).await?;
+                let parents: Vec<_> = split_inputs.iter().map(|input| input.list).collect();
+                TwoMeansSplit {
+                    iterations: config.two_means_iterations,
+                }
+                .split(&mut region, &parents, rng)?;
+                let assignments = NearestCentroid.assign(&region)?;
+                deltas.extend(
+                    Self::build_deltas::<_, T>(&mut accessor, &region, &assignments).await?,
+                );
+            }
 
             accessor
-                .update(update)
+                .update(Deltas::new(deltas))
                 .await
                 .escalate("insert must apply its update")?;
 
             Ok(InsertStats::default())
         }
+    }
+
+    /// Gather committed members and staged points into their final region rows.
+    pub(super) async fn gather_region<A, T>(
+        accessor: &mut A,
+        inputs: &[ListInsertion<'_, P::InternalId, P::ListId>],
+    ) -> ANNResult<Region<P::InternalId, P::ListId>>
+    where
+        A: InsertAccessor<P, T>,
+        T: Sync,
+    {
+        let mut lists = Vec::with_capacity(inputs.len());
+        let mut rows = 0;
+        for input in inputs {
+            let id = input.list;
+            let member_count = accessor.get_members(id).into_ann_result()?.len();
+            let end = rows + member_count + input.staged.len();
+            lists.push(SourceList {
+                id,
+                rows: rows..end,
+                member_count,
+            });
+            rows = end;
+        }
+
+        let dim = accessor.dim();
+        let mut point_ids = Vec::with_capacity(rows);
+        let mut points = rowmajor::Owned::try_from_element(rows, dim, 0.0)?;
+        let mut centroids = rowmajor::Owned::try_from_element(inputs.len(), dim, 0.0)?;
+        let mut centroid_ids = Vec::with_capacity(inputs.len());
+
+        for (index, (list, input)) in lists.iter().zip(inputs).enumerate() {
+            point_ids.extend_from_slice(accessor.get_members(list.id).into_ann_result()?);
+
+            let member_end = list.rows.start + list.member_count;
+            accessor
+                .reader()
+                .read_into(
+                    list.id,
+                    points
+                        .subview_mut(list.rows.start..member_end)
+                        .ok_or_else(|| {
+                            index_error("member rows lie outside the region's point matrix")
+                        })?,
+                )
+                .await
+                .escalate("split must read the requested list's vectors")?;
+            let mut tail = points
+                .subview_mut(member_end..list.rows.end)
+                .ok_or_else(|| index_error("staged rows lie outside the region's point matrix"))?;
+            for (point, out) in input.staged.iter().zip(tail.rows_mut()) {
+                point_ids.push(point.id);
+                out.copy_from_slice(point.vector);
+            }
+
+            let catalog = accessor.centroids();
+            let centroid = catalog
+                .centroid(list.id)
+                .ok_or_else(|| index_error(format!("centroid {} is unavailable", list.id)))?;
+            centroids.row_mut(index).copy_from_slice(&centroid);
+            centroid_ids.push(Some(list.id));
+        }
+
+        Ok(Region {
+            lists,
+            point_ids,
+            points,
+            centroid_ids,
+            centroids,
+        })
+    }
+
+    /// Stage proposed centroids and translate aligned assignments into partition deltas.
+    pub(super) async fn build_deltas<A, T>(
+        accessor: &mut A,
+        region: &Region<P::InternalId, P::ListId>,
+        assignments: &[usize],
+    ) -> ANNResult<Vec<Delta<P::InternalId, P::ListId>>>
+    where
+        A: InsertAccessor<P, T>,
+        T: Sync,
+    {
+        let mut deltas = Vec::with_capacity(2 * region.centroid_ids.len() + region.lists.len());
+        let mut destinations = Vec::with_capacity(region.centroid_ids.len());
+        for (id, centroid) in region.centroid_ids.iter().zip(region.centroids.rows()) {
+            let id = match id {
+                Some(id) => *id,
+                None => {
+                    let id = accessor.stage_centroid(centroid).await?;
+                    deltas.push(Delta::CentroidDelta {
+                        id,
+                        delta: CentroidDelta::Install,
+                    });
+                    id
+                }
+            };
+            destinations.push(id);
+        }
+
+        let mut append_counts = vec![0; destinations.len()];
+
+        for (index, list) in region.lists.iter().enumerate() {
+            let retired = !region.centroid_ids.contains(&Some(list.id));
+            let mut moves = Vec::with_capacity(list.member_count);
+            for (&id, &to) in region
+                .member_ids(index)
+                .iter()
+                .zip(&assignments[list.rows.start..list.rows.start + list.member_count])
+            {
+                let to = destinations[to];
+                if to != list.id {
+                    moves.push(MoveTo::new(id, to));
+                }
+            }
+            if retired {
+                deltas.push(Delta::CentroidDelta {
+                    id: list.id,
+                    delta: CentroidDelta::Retire {
+                        moves: moves.into_boxed_slice(),
+                    },
+                });
+            } else if !moves.is_empty() {
+                deltas.push(Delta::PointMoves {
+                    from: list.id,
+                    moves: moves.into_boxed_slice(),
+                });
+            }
+            for &to in &assignments[list.rows.start + list.member_count..list.rows.end] {
+                append_counts[to] += 1;
+            }
+        }
+
+        let mut appends: Vec<_> = append_counts.into_iter().map(Vec::with_capacity).collect();
+        for (index, list) in region.lists.iter().enumerate() {
+            for (&id, &to) in region
+                .staged_ids(index)
+                .iter()
+                .zip(&assignments[list.rows.start + list.member_count..list.rows.end])
+            {
+                appends[to].push(id);
+            }
+        }
+        for (to, ids) in destinations.into_iter().zip(appends) {
+            if !ids.is_empty() {
+                deltas.push(Delta::PointAppends {
+                    to,
+                    ids: ids.into_boxed_slice(),
+                });
+            }
+        }
+        Ok(deltas)
     }
 }
 

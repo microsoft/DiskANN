@@ -5,7 +5,7 @@
 
 //! Incrementally maintained IVF index.
 
-pub mod dynamic;
+pub mod traits;
 mod index;
 mod online;
 mod split;

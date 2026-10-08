@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Gather one region, replace parent centroids, assign points, and build an update.
+//! In-memory regions and strategies for centroid splitting and point assignment.
 //!
 //! Source membership stays fixed while splitting changes the candidate centroids.
 //! Strategies and providers are trusted to preserve row alignment and valid destinations.
@@ -11,35 +11,29 @@
 use std::ops::Range;
 
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
-use hashbrown::HashMap;
 use rand::rngs::StdRng;
 
 use crate::{
     ANNResult,
-    error::{ErrorExt, IntoANNResult},
-    ivf::{
-        dynamic::{Centroids, InsertAccessor, Provider, Reader},
-        online::{LloydScratch, assign_nearest, fit_two_means, index_error},
-        update::{CentroidDelta, Delta, Deltas, MoveTo},
-    },
+    ivf::online::{LloydScratch, assign_nearest, fit_two_means, index_error},
     utils::VectorId,
 };
 
 /// Original membership, independent of the region's eventual destinations.
-struct SourceList<L> {
-    id: L,
-    rows: Range<usize>,
+pub(super) struct SourceList<L> {
+    pub(super) id: L,
+    pub(super) rows: Range<usize>,
     /// Committed members precede staged points within `rows`.
-    member_count: usize,
+    pub(super) member_count: usize,
 }
 
-struct Region<I, L> {
-    lists: Vec<SourceList<L>>,
-    point_ids: Vec<I>,
-    points: rowmajor::Owned<f32>,
+pub(super) struct Region<I, L> {
+    pub(super) lists: Vec<SourceList<L>>,
+    pub(super) point_ids: Vec<I>,
+    pub(super) points: rowmajor::Owned<f32>,
     /// `None` denotes a proposed centroid whose list ID has not been staged.
-    centroid_ids: Vec<Option<L>>,
-    centroids: rowmajor::Owned<f32>,
+    pub(super) centroid_ids: Vec<Option<L>>,
+    pub(super) centroids: rowmajor::Owned<f32>,
 }
 
 impl<I, L> Region<I, L> {
@@ -49,29 +43,29 @@ impl<I, L> Region<I, L> {
             .ok_or_else(|| index_error("source rows lie outside the region's point matrix"))
     }
 
-    fn member_ids(&self, index: usize) -> &[I] {
+    pub(super) fn member_ids(&self, index: usize) -> &[I] {
         let list = &self.lists[index];
         &self.point_ids[list.rows.start..list.rows.start + list.member_count]
     }
 
-    fn staged_ids(&self, index: usize) -> &[I] {
+    pub(super) fn staged_ids(&self, index: usize) -> &[I] {
         let list = &self.lists[index];
         &self.point_ids[list.rows.start + list.member_count..list.rows.end]
     }
 }
 
 /// Replace parent centroids without changing source point storage or row order.
-trait Split<I, L>: Send + Sync {
+pub(super) trait Split<I, L>: Send + Sync {
     fn split(&self, region: &mut Region<I, L>, parents: &[L], rng: &mut StdRng) -> ANNResult<()>;
 }
 
 /// Return one valid candidate-centroid row per point, in the region's row order.
-trait Assign<I, L>: Send + Sync {
+pub(super) trait Assign<I, L>: Send + Sync {
     fn assign(&self, region: &Region<I, L>) -> ANNResult<Box<[usize]>>;
 }
 
-struct TwoMeansSplit {
-    iterations: usize,
+pub(super) struct TwoMeansSplit {
+    pub(super) iterations: usize,
 }
 
 impl<I, L: VectorId> Split<I, L> for TwoMeansSplit {
@@ -125,198 +119,12 @@ impl<I, L: VectorId> Split<I, L> for TwoMeansSplit {
     }
 }
 
-struct NearestCentroid;
+pub(super) struct NearestCentroid;
 
 impl<I, L> Assign<I, L> for NearestCentroid {
     fn assign(&self, region: &Region<I, L>) -> ANNResult<Box<[usize]>> {
         assign_nearest(region.points.as_view(), region.centroids.as_view())
     }
-}
-
-async fn gather_region<P, A, T>(
-    accessor: &mut A,
-    list_ids: &[P::ListId],
-    staged_ids: &[P::InternalId],
-    staged_vectors: rowmajor::Ref<'_, f32>,
-    routed: &HashMap<P::ListId, Vec<usize>>,
-) -> ANNResult<Region<P::InternalId, P::ListId>>
-where
-    P: Provider,
-    A: InsertAccessor<P, T>,
-    T: Sync,
-{
-    let mut lists = Vec::with_capacity(list_ids.len());
-    let mut rows = 0;
-    for &id in list_ids {
-        let member_count = accessor.get_members(id).into_ann_result()?.len();
-        let staged_count = routed.get(&id).map_or(0, Vec::len);
-        let end = rows + member_count + staged_count;
-        lists.push(SourceList {
-            id,
-            rows: rows..end,
-            member_count,
-        });
-        rows = end;
-    }
-
-    let dim = staged_vectors.ncols();
-    let mut point_ids = Vec::with_capacity(rows);
-    let mut points = rowmajor::Owned::try_from_element(rows, dim, 0.0)?;
-    let mut centroids = rowmajor::Owned::try_from_element(list_ids.len(), dim, 0.0)?;
-    let mut centroid_ids = Vec::with_capacity(list_ids.len());
-    for (index, list) in lists.iter().enumerate() {
-        point_ids.extend_from_slice(accessor.get_members(list.id).into_ann_result()?);
-        let staged = routed.get(&list.id).map_or(&[][..], Vec::as_slice);
-        point_ids.extend(staged.iter().map(|&position| staged_ids[position]));
-
-        let values = &mut points.as_mut_slice()[list.rows.start * dim..list.rows.end * dim];
-        let (members, tail) = values.split_at_mut(list.member_count * dim);
-        accessor
-            .reader()
-            .read_into(
-                list.id,
-                rowmajor::Mut::try_from_data(members, list.member_count, dim)?,
-            )
-            .await
-            .escalate("split must read the requested list's vectors")?;
-        let mut tail = rowmajor::Mut::try_from_data(tail, staged.len(), dim)?;
-        for (&position, out) in staged.iter().zip(tail.rows_mut()) {
-            out.copy_from_slice(staged_vectors.row(position));
-        }
-
-        let catalog = accessor.centroids();
-        let centroid = catalog
-            .centroid(list.id)
-            .ok_or_else(|| index_error(format!("centroid {} is unavailable", list.id)))?;
-        centroids.row_mut(index).copy_from_slice(&centroid);
-        centroid_ids.push(Some(list.id));
-    }
-    Ok(Region {
-        lists,
-        point_ids,
-        points,
-        centroid_ids,
-        centroids,
-    })
-}
-
-async fn build_deltas<P, A, T>(
-    accessor: &mut A,
-    region: &Region<P::InternalId, P::ListId>,
-    assignments: &[usize],
-) -> ANNResult<Vec<Delta<P::InternalId, P::ListId>>>
-where
-    P: Provider,
-    A: InsertAccessor<P, T>,
-    T: Sync,
-{
-    let mut deltas = Vec::with_capacity(2 * region.centroid_ids.len() + region.lists.len());
-    let mut destinations = Vec::with_capacity(region.centroid_ids.len());
-    for (id, centroid) in region.centroid_ids.iter().zip(region.centroids.rows()) {
-        let id = match id {
-            Some(id) => *id,
-            None => {
-                let id = accessor.stage_centroid(centroid).await?;
-                deltas.push(Delta::CentroidDelta {
-                    id,
-                    delta: CentroidDelta::Install,
-                });
-                id
-            }
-        };
-        destinations.push(id);
-    }
-
-    let mut append_counts = vec![0; destinations.len()];
-    for (index, list) in region.lists.iter().enumerate() {
-        let retired = !region.centroid_ids.contains(&Some(list.id));
-        let mut moves = Vec::with_capacity(list.member_count);
-        for (&id, &to) in region
-            .member_ids(index)
-            .iter()
-            .zip(&assignments[list.rows.start..list.rows.start + list.member_count])
-        {
-            let to = destinations[to];
-            if to != list.id {
-                moves.push(MoveTo::new(id, to));
-            }
-        }
-        if retired {
-            deltas.push(Delta::CentroidDelta {
-                id: list.id,
-                delta: CentroidDelta::Retire {
-                    moves: moves.into_boxed_slice(),
-                },
-            });
-        } else if !moves.is_empty() {
-            deltas.push(Delta::PointMoves {
-                from: list.id,
-                moves: moves.into_boxed_slice(),
-            });
-        }
-        for &to in &assignments[list.rows.start + list.member_count..list.rows.end] {
-            append_counts[to] += 1;
-        }
-    }
-
-    let mut appends: Vec<_> = append_counts.into_iter().map(Vec::with_capacity).collect();
-    for (index, list) in region.lists.iter().enumerate() {
-        for (&id, &to) in region
-            .staged_ids(index)
-            .iter()
-            .zip(&assignments[list.rows.start + list.member_count..list.rows.end])
-        {
-            appends[to].push(id);
-        }
-    }
-    for (to, ids) in destinations.into_iter().zip(appends) {
-        if !ids.is_empty() {
-            deltas.push(Delta::PointAppends {
-                to,
-                ids: ids.into_boxed_slice(),
-            });
-        }
-    }
-    Ok(deltas)
-}
-
-/// Split all parents in one region; append points routed outside it unchanged.
-///
-/// Every regional point can choose any child, but no retiring parent.
-pub(super) async fn plan_split_update<P, A, T>(
-    accessor: &mut A,
-    two_means_iterations: usize,
-    rng: &mut StdRng,
-    ids: &[P::InternalId],
-    vectors: rowmajor::Ref<'_, f32>,
-    routed: &HashMap<P::ListId, Vec<usize>>,
-    parents: &[P::ListId],
-) -> ANNResult<Deltas<P::InternalId, P::ListId>>
-where
-    P: Provider,
-    A: InsertAccessor<P, T>,
-    T: Sync,
-{
-    let mut deltas = if parents.is_empty() {
-        Vec::with_capacity(routed.len())
-    } else {
-        let mut region = gather_region::<P, A, T>(accessor, parents, ids, vectors, routed).await?;
-        TwoMeansSplit {
-            iterations: two_means_iterations,
-        }
-        .split(&mut region, parents, rng)?;
-        let assignments = NearestCentroid.assign(&region)?;
-        build_deltas::<P, A, T>(accessor, &region, &assignments).await?
-    };
-    for (&list, positions) in routed {
-        if !parents.contains(&list) && !positions.is_empty() {
-            deltas.push(Delta::PointAppends {
-                to: list,
-                ids: positions.iter().map(|&position| ids[position]).collect(),
-            });
-        }
-    }
-    Ok(Deltas::new(deltas))
 }
 
 #[cfg(test)]
@@ -326,6 +134,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    use hashbrown::HashMap;
     use rand::{Rng, SeedableRng};
 
     use super::*;
@@ -333,7 +142,12 @@ mod tests {
         ANNError,
         ivf::{
             Config, IVFIndex,
-            dynamic::{MaintenanceStrategy, SelectedList, Stage},
+            traits::{
+                Centroids, InsertAccessor, MaintenanceStrategy, Provider, Reader, SelectedList,
+                Stage,
+            },
+            index::{ListInsertion, StagedPoint},
+            update::{CentroidDelta, Delta, Deltas},
         },
         provider::DefaultContext,
     };
@@ -377,9 +191,30 @@ mod tests {
         rowmajor::Owned::try_from_data(values.into(), values.len(), 1).unwrap()
     }
 
-    fn routes() -> HashMap<u32, Vec<usize>> {
-        [(10, vec![3, 0]), (20, vec![1]), (30, vec![2])]
-            .into_iter()
+    fn inputs<'a>(
+        vectors: &'a rowmajor::Owned<f32>,
+        lists: &[u32],
+    ) -> Vec<ListInsertion<'a, u32, u32>> {
+        lists
+            .iter()
+            .map(|&list| {
+                let points: &[(u32, usize)] = match list {
+                    10 => &[(503, 3), (500, 0)],
+                    20 => &[(501, 1)],
+                    30 => &[(502, 2)],
+                    _ => unreachable!(),
+                };
+                ListInsertion {
+                    list,
+                    staged: points
+                        .iter()
+                        .map(|&(id, row)| StagedPoint {
+                            id,
+                            vector: vectors.row(row),
+                        })
+                        .collect(),
+                }
+            })
             .collect()
     }
 
@@ -496,7 +331,7 @@ mod tests {
     impl Stage<TestProvider, f32> for TestAccessor {
         async fn stage_point(&mut self, id: &u32, element: f32, out: &mut [f32]) -> ANNResult<u32> {
             out[0] = element;
-            Ok(*id)
+            Ok(*id + 10_000)
         }
 
         async fn stage_centroid(&mut self, centroid: &[f32]) -> ANNResult<u32> {
@@ -575,15 +410,30 @@ mod tests {
         value
     }
 
+    async fn split_update(
+        accessor: &mut TestAccessor,
+        inputs: &[ListInsertion<'_, u32, u32>],
+    ) -> ANNResult<Vec<Delta<u32, u32>>> {
+        let mut region =
+            IVFIndex::<TestProvider>::gather_region::<_, f32>(accessor, inputs).await?;
+        let parents: Vec<_> = inputs.iter().map(|input| input.list).collect();
+        TwoMeansSplit { iterations: 10 }.split(
+            &mut region,
+            &parents,
+            &mut StdRng::seed_from_u64(7),
+        )?;
+        let assignments = NearestCentroid.assign(&region)?;
+        IVFIndex::<TestProvider>::build_deltas::<_, f32>(accessor, &region, &assignments).await
+    }
+
     fn appends(update: &Deltas<u32, u32>) -> HashMap<u32, Vec<u32>> {
-        update
-            .deltas()
-            .iter()
-            .filter_map(|delta| match delta {
-                Delta::PointAppends { to, ids } => Some((*to, ids.to_vec())),
-                _ => None,
-            })
-            .collect()
+        let mut appends = HashMap::new();
+        for delta in update.deltas() {
+            if let Delta::PointAppends { to, ids } = delta {
+                assert!(appends.insert(*to, ids.to_vec()).is_none());
+            }
+        }
+        appends
     }
 
     fn retired(update: &Deltas<u32, u32>, parent: u32) -> Vec<(u32, u32)> {
@@ -605,12 +455,13 @@ mod tests {
     #[tokio::test]
     async fn gather_preserves_list_and_staged_order_in_one_buffer() {
         let mut accessor = TestAccessor::new();
-        let region = require_send(gather_region::<TestProvider, _, f32>(
+        let vectors = matrix(&[1.0, 11.0, 100.0, 3.0]);
+        let inputs = inputs(&vectors, &[10, 20, 30]);
+        assert_eq!(inputs[0].staged[0].vector.as_ptr(), vectors.row(3).as_ptr());
+        assert_eq!(inputs[0].staged[1].vector.as_ptr(), vectors.row(0).as_ptr());
+        let region = require_send(IVFIndex::<TestProvider>::gather_region::<_, f32>(
             &mut accessor,
-            &[10, 20, 30],
-            &[500, 501, 502, 503],
-            matrix(&[1.0, 11.0, 100.0, 3.0]).as_view(),
-            &routes(),
+            &inputs,
         ))
         .await
         .unwrap();
@@ -658,12 +509,21 @@ mod tests {
         .into_iter()
         .collect();
         let staged = rowmajor::Owned::try_from_data(Box::new([1.0, 2.0, 3.0, 4.0]), 2, 2).unwrap();
-        let region = gather_region::<TestProvider, _, f32>(
+        let region = IVFIndex::<TestProvider>::gather_region::<_, f32>(
             &mut accessor,
-            &[10],
-            &[500, 501],
-            staged.as_view(),
-            &[(10, vec![1, 0])].into_iter().collect(),
+            &[ListInsertion {
+                list: 10,
+                staged: vec![
+                    StagedPoint {
+                        id: 501,
+                        vector: staged.row(1),
+                    },
+                    StagedPoint {
+                        id: 500,
+                        vector: staged.row(0),
+                    },
+                ],
+            }],
         )
         .await
         .unwrap();
@@ -674,21 +534,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gather_fills_disjoint_multidimensional_subviews_in_list_order() {
+        let mut accessor = TestAccessor::new();
+        accessor.lists = [
+            (
+                10,
+                TestList {
+                    members: Box::new([100, 101]),
+                    vectors: rowmajor::Owned::try_from_data(Box::new([1.0, 2.0, 3.0, 4.0]), 2, 2)
+                        .unwrap(),
+                    centroid: Box::new([2.0, 3.0]),
+                },
+            ),
+            (
+                20,
+                TestList {
+                    members: Box::new([200]),
+                    vectors: rowmajor::Owned::try_from_data(Box::new([5.0, 6.0]), 1, 2).unwrap(),
+                    centroid: Box::new([5.0, 6.0]),
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let staged = rowmajor::Owned::try_from_data(Box::new([7.0, 8.0, 9.0, 10.0]), 2, 2).unwrap();
+        let region = require_send(IVFIndex::<TestProvider>::gather_region::<_, f32>(
+            &mut accessor,
+            &[
+                ListInsertion {
+                    list: 10,
+                    staged: vec![
+                        StagedPoint {
+                            id: 501,
+                            vector: staged.row(1),
+                        },
+                        StagedPoint {
+                            id: 500,
+                            vector: staged.row(0),
+                        },
+                    ],
+                },
+                ListInsertion {
+                    list: 20,
+                    staged: Vec::new(),
+                },
+            ],
+        ))
+        .await
+        .unwrap();
+
+        assert_eq!(region.lists[0].rows, 0..4);
+        assert_eq!(region.lists[1].rows, 4..5);
+        assert_eq!(region.point_ids, [100, 101, 501, 500, 200]);
+        assert_eq!(
+            region.points.as_slice(),
+            &[1.0, 2.0, 3.0, 4.0, 9.0, 10.0, 7.0, 8.0, 5.0, 6.0],
+        );
+        assert_eq!(region.centroids.as_slice(), &[2.0, 3.0, 5.0, 6.0]);
+        assert!(region.staged_ids(1).is_empty());
+        assert_eq!(*accessor.reads.lock().unwrap(), [10, 20]);
+    }
+
+    #[tokio::test]
     async fn split_can_retire_an_empty_list_and_assign_only_staged_points() {
         let mut accessor = TestAccessor::new();
         accessor.lists.get_mut(&10).unwrap().members = Box::new([]);
         accessor.lists.get_mut(&10).unwrap().vectors = matrix(&[]);
-        let update = plan_split_update::<TestProvider, _, f32>(
-            &mut accessor,
-            10,
-            &mut StdRng::seed_from_u64(7),
-            &[500, 501],
-            matrix(&[0.0, 10.0]).as_view(),
-            &[(10, vec![1, 0])].into_iter().collect(),
-            &[10],
-        )
-        .await
-        .unwrap();
+        let vectors = matrix(&[0.0, 10.0]);
+        let update = Deltas::new(
+            split_update(
+                &mut accessor,
+                &[ListInsertion {
+                    list: 10,
+                    staged: vec![
+                        StagedPoint {
+                            id: 501,
+                            vector: vectors.row(1),
+                        },
+                        StagedPoint {
+                            id: 500,
+                            vector: vectors.row(0),
+                        },
+                    ],
+                }],
+            )
+            .await
+            .unwrap(),
+        );
         assert!(retired(&update, 10).is_empty());
         assert_eq!(accessor.staged.len(), 2);
         let appended = appends(&update);
@@ -703,12 +635,10 @@ mod tests {
     #[tokio::test]
     async fn split_replaces_parents_preserves_points_and_numerical_behavior() {
         let mut accessor = TestAccessor::new();
-        let mut region = gather_region::<TestProvider, _, f32>(
+        let vectors = matrix(&[1.0, 11.0, 100.0, 3.0]);
+        let mut region = IVFIndex::<TestProvider>::gather_region::<_, f32>(
             &mut accessor,
-            &[10, 20, 30],
-            &[500, 501, 502, 503],
-            matrix(&[1.0, 11.0, 100.0, 3.0]).as_view(),
-            &routes(),
+            &inputs(&vectors, &[10, 20, 30]),
         )
         .await
         .unwrap();
@@ -748,12 +678,18 @@ mod tests {
         accessor.lists.get_mut(&10).unwrap().members = Box::new([100, 101, 102]);
         accessor.lists.get_mut(&10).unwrap().vectors = matrix(&[0.0, 10.0, 100.0]);
         accessor.lists.get_mut(&20).unwrap().vectors = matrix(&[1.0, 2.0]);
-        let mut region = gather_region::<TestProvider, _, f32>(
+        let mut region = IVFIndex::<TestProvider>::gather_region::<_, f32>(
             &mut accessor,
-            &[10, 20],
-            &[],
-            matrix(&[]).as_view(),
-            &HashMap::new(),
+            &[
+                ListInsertion {
+                    list: 10,
+                    staged: Vec::new(),
+                },
+                ListInsertion {
+                    list: 20,
+                    staged: Vec::new(),
+                },
+            ],
         )
         .await
         .unwrap();
@@ -768,7 +704,7 @@ mod tests {
         );
         assert_eq!(region.centroids.row(assigned[0]), &[1.0]);
         let update = Deltas::new(
-            build_deltas::<TestProvider, _, f32>(&mut accessor, &region, &assigned)
+            IVFIndex::<TestProvider>::build_deltas::<_, f32>(&mut accessor, &region, &assigned)
                 .await
                 .unwrap(),
         );
@@ -779,19 +715,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn planner_moves_all_parent_members_and_appends_every_staged_point() {
+    async fn regional_deltas_move_parent_members_and_append_only_regional_staged_points() {
         let mut accessor = TestAccessor::new();
-        let update = require_send(plan_split_update::<TestProvider, _, f32>(
-            &mut accessor,
-            10,
-            &mut StdRng::seed_from_u64(7),
-            &[500, 501, 502, 503],
-            matrix(&[1.0, 11.0, 100.0, 3.0]).as_view(),
-            &routes(),
-            &[10, 20],
-        ))
-        .await
-        .unwrap();
+        let vectors = matrix(&[1.0, 11.0, 100.0, 3.0]);
+        let update = Deltas::new(
+            require_send(split_update(&mut accessor, &inputs(&vectors, &[10, 20])))
+                .await
+                .unwrap(),
+        );
         assert_eq!(accessor.staged.len(), 4);
         assert_eq!(*accessor.reads.lock().unwrap(), [10, 20]);
         for (parent, ids) in [(10, [100, 101]), (20, [200, 201])] {
@@ -800,10 +731,10 @@ mod tests {
             assert!(moves.iter().all(|(_, to)| *to >= 1000));
         }
         let appended = appends(&update);
-        assert_eq!(appended[&30], [502]);
+        assert!(!appended.contains_key(&30));
         let mut ids: Vec<_> = appended.values().flatten().copied().collect();
         ids.sort_unstable();
-        assert_eq!(ids, [500, 501, 502, 503]);
+        assert_eq!(ids, [500, 501, 503]);
         let destination = appended.values().find(|ids| ids.contains(&503)).unwrap();
         assert_eq!(destination, &[503]);
     }
@@ -826,12 +757,10 @@ mod tests {
     #[tokio::test]
     async fn custom_split_supports_three_children_and_neighbor_reassignment() {
         let mut accessor = TestAccessor::new();
-        let mut region = gather_region::<TestProvider, _, f32>(
+        let vectors = matrix(&[1.0, 11.0, 100.0, 3.0]);
+        let mut region = IVFIndex::<TestProvider>::gather_region::<_, f32>(
             &mut accessor,
-            &[10, 30],
-            &[500, 501, 502, 503],
-            matrix(&[1.0, 11.0, 100.0, 3.0]).as_view(),
-            &routes(),
+            &inputs(&vectors, &[10, 30]),
         )
         .await
         .unwrap();
@@ -840,7 +769,7 @@ mod tests {
             .unwrap();
         let assigned = NearestCentroid.assign(&region).unwrap();
         let update = Deltas::new(
-            build_deltas::<TestProvider, _, f32>(&mut accessor, &region, &assigned)
+            IVFIndex::<TestProvider>::build_deltas::<_, f32>(&mut accessor, &region, &assigned)
                 .await
                 .unwrap(),
         );
@@ -868,12 +797,10 @@ mod tests {
     #[tokio::test]
     async fn surviving_neighbor_members_and_staged_points_can_stay_put() {
         let mut accessor = TestAccessor::new();
-        let mut region = gather_region::<TestProvider, _, f32>(
+        let vectors = matrix(&[1.0, 11.0, 100.0, 3.0]);
+        let mut region = IVFIndex::<TestProvider>::gather_region::<_, f32>(
             &mut accessor,
-            &[10, 30],
-            &[500, 501, 502, 503],
-            matrix(&[1.0, 11.0, 100.0, 3.0]).as_view(),
-            &routes(),
+            &inputs(&vectors, &[10, 30]),
         )
         .await
         .unwrap();
@@ -882,7 +809,7 @@ mod tests {
             .unwrap();
         let assigned = NearestCentroid.assign(&region).unwrap();
         let update = Deltas::new(
-            build_deltas::<TestProvider, _, f32>(&mut accessor, &region, &assigned)
+            IVFIndex::<TestProvider>::build_deltas::<_, f32>(&mut accessor, &region, &assigned)
                 .await
                 .unwrap(),
         );
@@ -905,12 +832,10 @@ mod tests {
             }
         }
         let mut accessor = TestAccessor::new();
-        let mut region = gather_region::<TestProvider, _, f32>(
+        let vectors = matrix(&[1.0, 11.0, 100.0, 3.0]);
+        let mut region = IVFIndex::<TestProvider>::gather_region::<_, f32>(
             &mut accessor,
-            &[10, 30],
-            &[500, 501, 502, 503],
-            matrix(&[1.0, 11.0, 100.0, 3.0]).as_view(),
-            &routes(),
+            &inputs(&vectors, &[10, 30]),
         )
         .await
         .unwrap();
@@ -918,7 +843,7 @@ mod tests {
             .split(&mut region, &[10], &mut StdRng::seed_from_u64(7))
             .unwrap();
         let update = Deltas::new(
-            build_deltas::<TestProvider, _, f32>(
+            IVFIndex::<TestProvider>::build_deltas::<_, f32>(
                 &mut accessor,
                 &region,
                 &LastCentroid.assign(&region).unwrap(),
@@ -931,43 +856,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_splits_and_empty_batches_skip_reads_and_centroid_staging() {
-        for (ids, vectors, routed) in [
-            (
-                vec![500, 501, 502, 503],
-                matrix(&[1.0, 11.0, 100.0, 3.0]),
-                routes(),
-            ),
-            (Vec::new(), matrix(&[]), HashMap::new()),
-        ] {
-            let mut accessor = TestAccessor::new();
-            let update = plan_split_update::<TestProvider, _, f32>(
-                &mut accessor,
-                10,
-                &mut StdRng::seed_from_u64(7),
-                &ids,
-                vectors.as_view(),
-                &routed,
-                &[],
-            )
-            .await
-            .unwrap();
-            assert!(accessor.reads.lock().unwrap().is_empty());
-            assert_eq!(accessor.stage_calls.get(), 0);
-            assert_eq!(update.deltas().len(), routed.len());
-            if !ids.is_empty() {
-                assert_eq!(
-                    appends(&update),
-                    [(10, vec![503, 500]), (20, vec![501]), (30, vec![502]),]
-                        .into_iter()
-                        .collect()
-                );
-            }
-        }
+    async fn empty_region_inputs_skip_reads_and_centroid_staging() {
+        let mut accessor = TestAccessor::new();
+        let region = require_send(IVFIndex::<TestProvider>::gather_region::<_, f32>(
+            &mut accessor,
+            &[],
+        ))
+        .await
+        .unwrap();
+        assert!(region.lists.is_empty());
+        assert!(region.point_ids.is_empty());
+        assert_eq!(region.points.nrows(), 0);
+        assert_eq!(region.centroids.nrows(), 0);
+        assert!(accessor.reads.lock().unwrap().is_empty());
+        assert_eq!(accessor.stage_calls.get(), 0);
     }
 
     #[tokio::test]
     async fn gathering_errors_propagate_before_centroid_staging() {
+        let vectors = matrix(&[1.0, 11.0, 100.0, 3.0]);
         for failure in ["members", "reader", "centroid"] {
             let mut accessor = TestAccessor::new();
             match failure {
@@ -982,17 +889,9 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            let err = plan_split_update::<TestProvider, _, f32>(
-                &mut accessor,
-                10,
-                &mut StdRng::seed_from_u64(7),
-                &[500, 501, 502, 503],
-                matrix(&[1.0, 11.0, 100.0, 3.0]).as_view(),
-                &routes(),
-                &[10, 20],
-            )
-            .await
-            .unwrap_err();
+            let err = split_update(&mut accessor, &inputs(&vectors, &[10, 20]))
+                .await
+                .unwrap_err();
             let expected = match failure {
                 "members" => "fixture list 20 is missing",
                 "reader" => "fixture read failed",
@@ -1009,26 +908,24 @@ mod tests {
         let mut accessor = TestAccessor::new();
         accessor.lists.get_mut(&10).unwrap().members = Box::new([100]);
         accessor.lists.get_mut(&10).unwrap().vectors = matrix(&[0.0]);
-        let err = plan_split_update::<TestProvider, _, f32>(
+        let err = split_update(
             &mut accessor,
-            10,
-            &mut StdRng::seed_from_u64(7),
-            &[],
-            matrix(&[]).as_view(),
-            &HashMap::new(),
-            &[10],
+            &[ListInsertion {
+                list: 10,
+                staged: Vec::new(),
+            }],
         )
         .await
         .unwrap_err();
         assert!(err.to_string().contains("at least two points"), "{err}");
         assert_eq!(accessor.stage_calls.get(), 0);
 
-        let mut region = gather_region::<TestProvider, _, f32>(
+        let mut region = IVFIndex::<TestProvider>::gather_region::<_, f32>(
             &mut accessor,
-            &[10],
-            &[],
-            matrix(&[]).as_view(),
-            &HashMap::new(),
+            &[ListInsertion {
+                list: 10,
+                staged: Vec::new(),
+            }],
         )
         .await
         .unwrap();
@@ -1038,24 +935,17 @@ mod tests {
         assert!(err.to_string().contains("at least one centroid"), "{err}");
 
         accessor.fail_stage = Some(1);
-        let err = plan_split_update::<TestProvider, _, f32>(
-            &mut accessor,
-            10,
-            &mut StdRng::seed_from_u64(7),
-            &[500, 501, 502, 503],
-            matrix(&[1.0, 11.0, 100.0, 3.0]).as_view(),
-            &routes(),
-            &[10, 20],
-        )
-        .await
-        .unwrap_err();
+        let vectors = matrix(&[1.0, 11.0, 100.0, 3.0]);
+        let err = split_update(&mut accessor, &inputs(&vectors, &[10, 20]))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("fixture staging failed"), "{err}");
         assert_eq!(accessor.staged.len(), 1);
     }
 
     #[tokio::test]
     async fn insert_batch_applies_splits_and_unsplit_appends_together() {
-        for threshold in [2, 100] {
+        for threshold in [2, 3, 100] {
             let accessor = TestAccessor::new();
             let applied = Arc::clone(&accessor.applied);
             let reads = Arc::clone(&accessor.reads);
@@ -1082,20 +972,53 @@ mod tests {
             let appended = appends(&updates[0]);
             let mut ids: Vec<_> = appended.values().flatten().copied().collect();
             ids.sort_unstable();
-            assert_eq!(ids, [500, 501, 502, 503]);
-            assert_eq!(appended[&30], [502]);
-            if threshold == 2 {
+            assert_eq!(ids, [10500, 10501, 10502, 10503]);
+            assert_eq!(appended[&30], [10502]);
+            if threshold < 100 {
                 assert_eq!(retired(&updates[0], 10).len(), 2);
-                assert_eq!(retired(&updates[0], 20).len(), 2);
                 let mut read_ids = reads.lock().unwrap().clone();
                 read_ids.sort_unstable();
-                assert_eq!(read_ids, [10, 20]);
+                if threshold == 2 {
+                    assert_eq!(retired(&updates[0], 20).len(), 2);
+                    assert_eq!(read_ids, [10, 20]);
+                } else {
+                    assert_eq!(appended[&20], [10501]);
+                    assert_eq!(read_ids, [10]);
+                }
             } else {
-                assert_eq!(appended[&10], [500, 503]);
-                assert_eq!(appended[&20], [501]);
+                assert_eq!(appended[&10], [10500, 10503]);
+                assert_eq!(appended[&20], [10501]);
                 assert!(reads.lock().unwrap().is_empty());
+                assert_eq!(updates[0].deltas().len(), 3);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn regional_failure_does_not_commit_already_planned_ordinary_appends() {
+        let mut accessor = TestAccessor::new();
+        accessor.fail_read = Some(10);
+        let applied = Arc::clone(&accessor.applied);
+        let strategy = TestStrategy(Mutex::new(Some(accessor)));
+        let mut index = IVFIndex::new(
+            TestProvider,
+            Config {
+                split_threshold: 3,
+                reassign_neighbors: 1,
+                two_means_iterations: 10,
+                seed: 7,
+            },
+        )
+        .unwrap();
+        let err = require_send(index.insert_batch(
+            &strategy,
+            &DefaultContext,
+            &[(500, 1.0), (501, 11.0), (502, 100.0), (503, 3.0)],
+        ))
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("fixture read failed"), "{err}");
+        assert!(applied.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
