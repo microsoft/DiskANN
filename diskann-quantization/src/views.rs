@@ -211,6 +211,29 @@ where
     pub fn as_slice(&self) -> &[usize] {
         self.offsets.as_slice()
     }
+
+    /// Return the maximum chunk dimension.
+    pub fn max_chunk_dim(&self) -> NonZeroUsize {
+        let mut max = NonZeroUsize::MIN;
+        let mut itr = self.offsets.as_slice().iter();
+
+        let Some(mut previous) = itr.next() else {
+            // NOTE: this is unreachable since we maintain the invariant that the number
+            // of chunks is at least 1.
+            return max;
+        };
+
+        for next in itr {
+            // This cannot underflow because offsets are verified to be strictly monotonic.
+            if let Some(dim) = NonZeroUsize::new(next - previous) {
+                max = max.max(dim);
+            }
+
+            previous = next;
+        }
+
+        max
+    }
 }
 
 pub type ChunkOffsetsView<'a> = ChunkOffsetsBase<&'a [usize]>;
@@ -452,6 +475,21 @@ mod tests {
             offsets_view.as_slice().as_ptr(),
             offsets_owned.as_slice().as_ptr()
         );
+
+        // `max_chunk_dim`
+        assert_eq!(offsets.max_chunk_dim().get(), 4);
+    }
+
+    #[test]
+    fn chunk_offset_max_dim() {
+        let offsets = ChunkOffsetsView::new(&[0, 10, 11, 14]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 10);
+
+        let offsets = ChunkOffsetsView::new(&[0, 1, 2, 3]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 1);
+
+        let offsets = ChunkOffsetsView::new(&[0, 1, 2, 5, 20, 21]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 15);
     }
 
     #[test]

@@ -38,13 +38,13 @@ impl PQScratch {
             // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
             // as L2 until a more thorough evaluation can be made.
             Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
-                table.process_into::<diskann_quantization::distances::SquaredL2>(
+                table.process_into::<diskann_quantization::distances::SquaredL2, _>(
                     &self.query_scratch,
                     dst,
                 );
             }
             Metric::InnerProduct => {
-                table.process_into::<diskann_quantization::distances::InnerProduct>(
+                table.process_into::<diskann_quantization::distances::InnerProduct, _>(
                     &self.query_scratch,
                     dst,
                 );

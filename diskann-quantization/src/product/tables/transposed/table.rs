@@ -285,9 +285,9 @@ impl TransposedTable {
     /// * `query.len() != self.dim()`.
     /// * `partisl.nrows() != self.nchunks()`.
     /// * `partisl.ncols() != self.ncenters()`.
-    pub fn process_into<T>(&self, query: &[f32], mut partials: rowmajor::Mut<'_, f32>)
+    pub fn process_into<T, U>(&self, query: &[f32], mut partials: rowmajor::Mut<'_, U>)
     where
-        T: pivots::ProcessInto,
+        T: pivots::ProcessInto<U>,
     {
         // Check Requirements
         assert_eq!(
@@ -506,7 +506,9 @@ where
 mod test_compression {
     use std::collections::HashSet;
 
-    use diskann_vector::{PureDistanceFunction, distance};
+    use diskann_vector::{
+        MathematicalValue, Norm, PureDistanceFunction, distance, norm::FastL2NormSquared,
+    };
     use rand::{
         Rng, SeedableRng,
         distr::{Distribution, StandardUniform, Uniform},
@@ -519,9 +521,12 @@ mod test_compression {
         check_pqtable_batch_compression_errors, check_pqtable_single_compression_errors,
     };
     use crate::{
-        distances::{InnerProduct, SquaredL2},
+        distances::{Cosine, InnerProduct, SquaredL2},
         error::format,
-        product::tables::test::{create_dataset, create_pivot_tables},
+        product::tables::{
+            lookup::DotAndNorm,
+            test::{create_dataset, create_pivot_tables},
+        },
     };
     use diskann_utils::lazy_format;
 
@@ -866,12 +871,13 @@ mod test_compression {
 
             let mut output =
                 views::rowmajor::Owned::<f32>::from_element(num_chunks, num_centers, 0.0);
+
             let query: Vec<_> = (0..dim)
                 .map(|_| value_distribution.sample(rng) as f32)
                 .collect();
 
             // Inner Product
-            table.process_into::<InnerProduct>(&query, output.as_view_mut());
+            table.process_into::<InnerProduct, f32>(&query, output.as_view_mut());
 
             for chunk in 0..num_chunks {
                 let range = offsets.at(chunk);
@@ -892,7 +898,7 @@ mod test_compression {
             }
 
             // Squared L2
-            table.process_into::<SquaredL2>(&query, output.as_view_mut());
+            table.process_into::<SquaredL2, f32>(&query, output.as_view_mut());
 
             for chunk in 0..num_chunks {
                 let range = offsets.at(chunk);
@@ -903,6 +909,46 @@ mod test_compression {
                     assert_eq!(
                         *output.element(chunk, center),
                         expected,
+                        "failed on (chunk, center) = ({}, {}) - offsets = {:?} - trial = {}",
+                        chunk,
+                        center,
+                        offsets,
+                        trial,
+                    );
+                }
+            }
+
+            // Cosine
+            let mut output = views::rowmajor::Owned::<DotAndNorm>::from_element(
+                num_chunks,
+                num_centers,
+                DotAndNorm::default(),
+            );
+
+            table.process_into::<Cosine, DotAndNorm>(&query, output.as_view_mut());
+            for chunk in 0..num_chunks {
+                let range = offsets.at(chunk);
+                let query_chunk = &query[range.clone()];
+
+                for center in 0..num_centers {
+                    let data_chunk = &pivots.row(center)[range.clone()];
+                    let expected_dot: MathematicalValue<f32> =
+                        distance::InnerProduct::evaluate(query_chunk, data_chunk);
+
+                    assert_eq!(
+                        output.element(chunk, center).dot(),
+                        expected_dot.into_inner(),
+                        "failed on (chunk, center) = ({}, {}) - offsets = {:?} - trial = {}",
+                        chunk,
+                        center,
+                        offsets,
+                        trial,
+                    );
+
+                    let expected_norm: f32 = (FastL2NormSquared).evaluate(data_chunk);
+                    assert_eq!(
+                        output.element(chunk, center).square_norm(),
+                        expected_norm,
                         "failed on (chunk, center) = ({}, {}) - offsets = {:?} - trial = {}",
                         chunk,
                         center,
@@ -945,7 +991,7 @@ mod test_compression {
         let query = vec![0.0; table.dim() - 1];
         let mut partials =
             views::rowmajor::Owned::from_element(table.nchunks(), table.ncenters(), 0.0);
-        table.process_into::<InnerProduct>(&query, partials.as_view_mut());
+        table.process_into::<InnerProduct, f32>(&query, partials.as_view_mut());
     }
 
     #[test]
@@ -960,7 +1006,7 @@ mod test_compression {
         // partials has the wrong numbers of rows.
         let mut partials =
             views::rowmajor::Owned::from_element(table.nchunks() - 1, table.ncenters(), 0.0);
-        table.process_into::<InnerProduct>(&query, partials.as_view_mut());
+        table.process_into::<InnerProduct, f32>(&query, partials.as_view_mut());
     }
 
     #[test]
@@ -975,6 +1021,6 @@ mod test_compression {
         // partials has the wrong numbers of rows.
         let mut partials =
             views::rowmajor::Owned::from_element(table.nchunks(), table.ncenters() - 1, 0.0);
-        table.process_into::<InnerProduct>(&query, partials.as_view_mut());
+        table.process_into::<InnerProduct, f32>(&query, partials.as_view_mut());
     }
 }
