@@ -5,7 +5,7 @@
 
 //! MinMax8 by MinMax4 MaxSim over the existing packed/unpacked panel views.
 //!
-//! A uses the shared 64-dimensional even/odd layout with explicit byte packing.
+//! A uses the shared column-order contract with MinMax8's 64-dimensional even/odd policy.
 //! The driver expands each canonical MinMax4 B tile once, then reuses it across A's panels.
 //! Integer contraction consumes padded K-dimensional panels without knowing the original
 //! dimension or metadata. MinMax reduction uses the original D and opaque accumulators.
@@ -24,7 +24,7 @@ use crate::{
         blocks::packed,
         bounds::{self, Bound},
         driver,
-        num::{Bytes, Elements},
+        num::Elements,
         ptr::MutSlice,
         util,
     },
@@ -39,21 +39,17 @@ use reader::{BPanel, BScratch, BTile, MinMax4Rows};
 /// B-first traversal over byte-valued panels; `k` always counts padded dimensions.
 pub(crate) struct Driver<'a, A, const PACK: usize, const MR: usize, const NR: usize> {
     arch: A,
-    a: PackedQueryView<'a, MR, PACK>,
+    a: PackedQueryView<'a, MR, PACK, NR>,
     b: MinMax4Rows<'a>,
-    scratch: BScratch,
+    scratch: BScratch<'a>,
     c: &'a mut [f32],
     b_rows: std::num::NonZeroUsize,
 }
 
 impl<'a, A, const PACK: usize, const MR: usize, const NR: usize> Driver<'a, A, PACK, MR, NR> {
-    #[expect(
-        clippy::expect_used,
-        reason = "working-set overflow fails before allocating scratch"
-    )]
     pub(crate) fn new(
         arch: A,
-        a: PackedQueryView<'a, MR, PACK>,
+        a: PackedQueryView<'a, MR, PACK, NR>,
         b: MinMax4Rows<'a>,
         c: &'a mut [f32],
         cache: Cache,
@@ -61,26 +57,16 @@ impl<'a, A, const PACK: usize, const MR: usize, const NR: usize> Driver<'a, A, P
         const { assert!(NR > 0) };
         assert_eq!(b.dim(), a.dim(), "document dimension mismatch");
         assert_eq!(c.len(), a.nrows(), "output length mismatch");
-        let b_bytes = a
-            .k()
-            .value()
-            .get()
-            .checked_add(std::mem::size_of::<MinMaxCompensation>())
-            .expect("document row size overflow");
-        NR.checked_mul(b_bytes)
-            .expect("document panel size overflow");
-        let b_bytes = Bytes::new(b_bytes);
-        let requested = b_cols_in_l1(cache, a.panel_bytes(), b_bytes, NR).get();
+        let layout = a.layout();
+        let requested = b_cols_in_l1(cache, a.panel_bytes(), layout.decoded_row_bytes(), NR).get();
         let b_rows = crate::matrix_kernels::num::value_or_one(
-            requested
-                .min(b.rows())
-                .min(isize::MAX as usize / b_bytes.value()),
+            requested.min(b.rows()).min(layout.max_b_rows()),
         );
         Self {
             arch,
             a,
             b,
-            scratch: BScratch::new(a.dim(), a.k(), b_rows),
+            scratch: BScratch::new(layout, b_rows),
             c,
             b_rows,
         }
@@ -234,7 +220,7 @@ where
         let query = arch.load::<HALF>(unsafe { a.group(group) });
         for (j, acc) in acc.iter_mut().enumerate() {
             // SAFETY: K is a multiple of PACK and j < NR, so this whole group is in bounds.
-            let doc = unsafe { b.group::<PACK>(a.k(), j, group) };
+            let doc = unsafe { b.group::<PACK>(j, group) };
             *acc = arch.dot::<HALF>(query, arch.splat(doc), *acc);
         }
     }
@@ -624,25 +610,18 @@ mod aarch64 {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
     use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
-    use super::layout::EvenOdd;
-    use super::layout::tests::query as packed_query;
+    use super::layout::{
+        BLOCK, Layout,
+        tests::{position, query as packed_query},
+    };
     use super::*;
     use crate::{
-        matrix_kernels::{
-            num::{DimK, value_or_one},
-            test_util::panic_message_for,
-        },
+        matrix_kernels::{num::value_or_one, test_util::panic_message_for},
         minmax::{Data, DataMutRef, DataRef, MinMaxMeta},
         multi_vector::{MatRef, block_transposed::BlockLayout},
     };
-
-    fn dimension(value: usize) -> DimK {
-        DimK::new(NonZeroUsize::new(value).unwrap())
-    }
 
     fn canonical(b: &rowmajor::Owned<u8>, dim: usize) -> MinMax4Rows<'_> {
         MinMax4Rows::new(MatRef::new(MinMaxMeta::<4>::new(b.nrows(), dim), b.as_slice()).unwrap())
@@ -655,8 +634,8 @@ mod tests {
                     continue;
                 }
                 let b = documents(rows, dim);
-                let mut scratch =
-                    BScratch::new(dim, dimension(EvenOdd::padded(dim)), value_or_one(rows));
+                let layout = Layout::new::<8, 4, 6>(dim).unwrap();
+                let mut scratch = BScratch::new(layout.nonempty().unwrap(), value_or_one(rows));
                 let decoded = scratch.decode(arch, canonical(&b, dim));
                 let k = decoded.k().value().get();
                 let (values, metadata) = decoded.as_slices();
@@ -667,7 +646,7 @@ mod tests {
                     assert_eq!(meta.n, (row % 5) as f32 * 0.5);
                     let mut expected = vec![0; k];
                     for d in 0..dim {
-                        expected[EvenOdd::position(d)] = ((row * 7 + d * 3 + 1) % 16) as u8;
+                        expected[position(d)] = ((row * 7 + d * 3 + 1) % 16) as u8;
                     }
                     assert_eq!(&values[row * k..(row + 1) * k], expected);
                 }
@@ -703,7 +682,7 @@ mod tests {
 
     #[test]
     fn invalid_driver_bounds_are_detected() {
-        let values = packed_query::<8, 4>(8, 9, |_, _| 0, |_| MinMaxCompensation::default());
+        let values = packed_query::<8, 4, 6>(8, 9, |_, _| 0, |_| MinMaxCompensation::default());
         let docs = documents(2, 9);
         for (dim, output_rows) in [(8, 8), (9, 0), (9, 9)] {
             let _ = panic_message_for(|| {
@@ -729,8 +708,8 @@ mod tests {
             (2, dim - 1, "document dimension mismatch"),
         ] {
             let message = panic_message_for(|| {
-                let mut scratch =
-                    BScratch::new(dim, dimension(EvenOdd::padded(dim)), value_or_one(rows));
+                let layout = Layout::new::<8, 4, 6>(dim).unwrap();
+                let mut scratch = BScratch::new(layout.nonempty().unwrap(), value_or_one(rows));
                 let docs = if doc_dim == dim {
                     &docs
                 } else {
@@ -743,17 +722,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "scratch padded dimension mismatch")]
-    fn scratch_rejects_inconsistent_dimensions() {
-        BScratch::new(9, dimension(128), value_or_one(1));
+    #[should_panic(expected = "scratch exceeds validated byte budget")]
+    fn scratch_rejects_excessive_rows() {
+        let layout = Layout::new::<8, 4, 6>(9).unwrap();
+        let layout = layout.nonempty().unwrap();
+        BScratch::new(layout, value_or_one(layout.max_b_rows() + 1));
     }
 
     #[test]
     #[should_panic(expected = "panel dimension mismatch")]
     fn panel_rejects_distinct_dimensions_with_same_padding() {
-        let query = packed_query::<8, 4>(1, 9, |_, _| 0, |_| MinMaxCompensation::default());
+        let query = packed_query::<8, 4, 6>(1, 9, |_, _| 0, |_| MinMaxCompensation::default());
         let docs = documents(1, 8);
-        let mut scratch = BScratch::new(8, dimension(64), value_or_one(1));
+        let layout = Layout::new::<8, 4, 6>(8).unwrap();
+        let mut scratch = BScratch::new(layout.nonempty().unwrap(), value_or_one(1));
         let decoded = scratch.decode(Scalar::new(), canonical(&docs, 8));
         let query = query.as_view().unwrap();
         assert_eq!(query.k(), decoded.k());
@@ -767,8 +749,8 @@ mod tests {
         let dim = 9;
         let docs = documents(23, dim);
         for capacity in [1, 5, 6, 7, 12, 13, 24] {
-            let mut scratch =
-                BScratch::new(dim, dimension(EvenOdd::padded(dim)), value_or_one(capacity));
+            let layout = Layout::new::<8, 4, 6>(dim).unwrap();
+            let mut scratch = BScratch::new(layout.nonempty().unwrap(), value_or_one(capacity));
             let mut row = 0;
             canonical(&docs, dim).visit_tiles(value_or_one(capacity), |tile| {
                 let decoded = scratch.decode(Scalar::new(), tile);
@@ -808,14 +790,14 @@ mod tests {
         A: Decoder + ExtraWide<PACK, MR> + util::LoadStore<f32, MR>,
         for<'a> Driver<'a, A, PACK, MR, NR>: driver::Drive,
     {
-        let k = dim.next_multiple_of(EvenOdd::BLOCK);
+        let k = dim.next_multiple_of(BLOCK);
         let query_meta = |row: usize| MinMaxCompensation {
             a: (row % 3 + 1) as f32 * 0.5,
             b: (row % 5) as f32 - 2.0,
             n: (row % 7) as f32,
             ..Default::default()
         };
-        let a = packed_query::<MR, PACK>(
+        let a = packed_query::<MR, PACK, NR>(
             rows,
             dim,
             |row, d| ((row * 17 + d * 3 + 1) % 256) as u8,
@@ -1055,7 +1037,7 @@ mod tests {
                 .iter()
                 .flat_map(|&groups| (0..PACK).map(move |r| groups * PACK - r));
             for dim in ks {
-                let k = dim.next_multiple_of(EvenOdd::BLOCK);
+                let k = dim.next_multiple_of(BLOCK);
                 let a_value = |row: usize, d: usize| ((row * 17 + d * 23 + 255) % 256) as u8;
                 let b_value = |row: usize, d: usize| ((row * 7 + d * 3 + 15) % 16) as u8;
                 // Deliberately construct panels without query storage, the layout
@@ -1064,20 +1046,22 @@ mod tests {
                 let mut a = vec![0xff; BlockLayout::<MR, PACK>::block_len(k)];
                 for row in 0..MR {
                     for d in 0..dim {
-                        a[BlockLayout::<MR, PACK>::linear_index(row, EvenOdd::position(d), k)] =
+                        a[BlockLayout::<MR, PACK>::linear_index(row, position(d), k)] =
                             a_value(row, d);
                     }
                 }
                 let mut b = vec![0; 3 * k];
                 for row in 0..3 {
                     for d in 0..dim {
-                        b[row * k + EvenOdd::position(d)] = b_value(row, d);
+                        b[row * k + position(d)] = b_value(row, d);
                     }
                 }
                 let query_meta = QueryCompensation::default();
                 let doc_meta = [MinMaxCompensation::default(); 3];
-                let ap = layout::tests::panel::<MR, PACK>(&a, &query_meta, dim);
-                let bp = BPanel::from_test_values(&b, &doc_meta, dimension(k));
+                let geometry = Layout::new::<MR, PACK, 3>(dim).unwrap();
+                let geometry = geometry.nonempty().unwrap();
+                let ap = layout::tests::panel::<MR, PACK>(&a, &query_meta, geometry);
+                let bp = BPanel::from_test_values(&b, &doc_meta, geometry);
                 for half in [false, true] {
                     // SAFETY: The panels above have K columns and B holds nibbles.
                     let acc = unsafe {

@@ -19,20 +19,22 @@ use crate::matrix_kernels as mk;
 use crate::matrix_kernels::maxsim::minmax8_x_minmax4::{
     Driver, layout::PackedQuery, reader::MinMax4Rows,
 };
-use crate::multi_vector::{MatRef, MaxSimError, MaxSimIsa, NotSupported};
+use crate::multi_vector::{MatRef, MaxSimError, MaxSimIsa, NotSupported, Overflow};
+
+const MAX_DIM: usize = u32::MAX as usize / (u8::MAX as usize * 15);
 
 #[derive(Debug)]
 struct Prepared<A, const PACK: usize, const MR: usize, const NR: usize> {
     arch: A,
-    prepared: PackedQuery<MR, PACK>,
+    prepared: PackedQuery<MR, PACK, NR>,
 }
 
 impl<A, const PACK: usize, const MR: usize, const NR: usize> Prepared<A, PACK, MR, NR> {
-    fn new(arch: A, query: MatRef<'_, MinMaxMeta<8>>) -> Self {
-        Self {
+    fn new(arch: A, query: MatRef<'_, MinMaxMeta<8>>) -> Result<Self, Overflow> {
+        Ok(Self {
             arch,
-            prepared: PackedQuery::new(query),
-        }
+            prepared: PackedQuery::new(query)?,
+        })
     }
 }
 
@@ -88,14 +90,23 @@ struct BuildAndErase<E>(E);
 
 macro_rules! impl_builder {
     ($arch:ty, $pack:literal, $mr:literal, $nr:literal) => {
-        impl<E> diskann_wide::arch::Target1<$arch, E::Output, MatRef<'_, MinMaxMeta<8>>>
-            for BuildAndErase<E>
+        impl<E>
+            diskann_wide::arch::Target1<
+                $arch,
+                Result<E::Output, Overflow>,
+                MatRef<'_, MinMaxMeta<8>>,
+            > for BuildAndErase<E>
         where
             E: MinMaxErase<8, 4>,
         {
-            fn run(self, arch: $arch, query: MatRef<'_, MinMaxMeta<8>>) -> E::Output {
-                self.0
-                    .erase(Prepared::<_, $pack, $mr, $nr>::new(arch, query))
+            fn run(
+                self,
+                arch: $arch,
+                query: MatRef<'_, MinMaxMeta<8>>,
+            ) -> Result<E::Output, Overflow> {
+                Ok(self
+                    .0
+                    .erase(Prepared::<_, $pack, $mr, $nr>::new(arch, query)?))
             }
         }
     };
@@ -118,7 +129,9 @@ impl_builder!(V4, 8, 16, 8);
 ///
 /// # Errors
 ///
-/// Returns [`NotSupported`] if the requested architecture is unavailable.
+/// Returns [`NotSupported`] if the requested architecture is unavailable or the intrinsic
+/// dimension exceeds 1,122,867 and could overflow the unsigned integer accumulator.
+/// Also rejects packed-query or decoded-panel extents that exceed the allocation limit.
 pub fn build_minmax_max_sim<E>(
     isa: MaxSimIsa,
     query: MatRef<'_, MinMaxMeta<8>>,
@@ -127,19 +140,22 @@ pub fn build_minmax_max_sim<E>(
 where
     E: MinMaxErase<8, 4>,
 {
-    match isa {
-        MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
-            BuildAndErase(erase),
-            query,
-        )),
-        MaxSimIsa::Scalar => Ok(Scalar::new().run1(BuildAndErase(erase), query)),
+    if query.repr().intrinsic_dim() > MAX_DIM {
+        return Err(NotSupported {
+            isa,
+            reason: "MinMax8 dimension exceeds the u32 accumulator limit (1,122,867)",
+        });
+    }
+    let result = match isa {
+        MaxSimIsa::Auto => diskann_wide::arch::dispatch1_no_features(BuildAndErase(erase), query),
+        MaxSimIsa::Scalar => Scalar::new().run1(BuildAndErase(erase), query),
         #[cfg(target_arch = "x86_64")]
         MaxSimIsa::X86_64_V3 => {
             let arch = V3::new_checked().ok_or(NotSupported {
                 isa,
                 reason: "AVX2/FMA unavailable on this CPU",
             })?;
-            Ok(arch.run1(BuildAndErase(erase), query))
+            arch.run1(BuildAndErase(erase), query)
         }
         #[cfg(target_arch = "x86_64")]
         MaxSimIsa::X86_64_V4 => {
@@ -147,31 +163,41 @@ where
                 isa,
                 reason: "AVX-512 unavailable on this CPU",
             })?;
-            Ok(arch.run1(BuildAndErase(erase), query))
+            arch.run1(BuildAndErase(erase), query)
         }
         #[cfg(not(target_arch = "x86_64"))]
-        MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-            isa,
-            reason: "x86_64 target only",
-        }),
+        MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => {
+            return Err(NotSupported {
+                isa,
+                reason: "x86_64 target only",
+            });
+        }
         #[cfg(target_arch = "aarch64")]
         MaxSimIsa::Neon => {
             let arch = Neon::new_checked().ok_or(NotSupported {
                 isa,
                 reason: "Neon unavailable on this CPU",
             })?;
-            Ok(arch.run1(BuildAndErase(erase), query))
+            arch.run1(BuildAndErase(erase), query)
         }
         #[cfg(not(target_arch = "aarch64"))]
-        MaxSimIsa::Neon => Err(NotSupported {
-            isa,
-            reason: "aarch64 target only",
-        }),
-        MaxSimIsa::Reference => Err(NotSupported {
-            isa,
-            reason: "reference kernel unavailable",
-        }),
-    }
+        MaxSimIsa::Neon => {
+            return Err(NotSupported {
+                isa,
+                reason: "aarch64 target only",
+            });
+        }
+        MaxSimIsa::Reference => {
+            return Err(NotSupported {
+                isa,
+                reason: "reference kernel unavailable",
+            });
+        }
+    };
+    result.map_err(|_| NotSupported {
+        isa,
+        reason: "MinMax8 packed-query or decoded-panel size exceeds the allocation limit",
+    })
 }
 
 #[cfg(test)]
@@ -410,6 +436,53 @@ mod tests {
         let err =
             build_minmax_max_sim(MaxSimIsa::Reference, query.as_view(), BoxErase).unwrap_err();
         assert_eq!(err.isa, MaxSimIsa::Reference);
+    }
+
+    #[test]
+    fn accumulator_dimension_limit() {
+        let query = Mat::new(MinMaxMeta::<8>::new(0, MAX_DIM + 1), Defaulted).unwrap();
+        for isa in ISAS {
+            let error = build_minmax_max_sim(isa, query.as_view(), BoxErase).unwrap_err();
+            assert_eq!(error.isa, isa);
+            assert!(error.reason.contains("accumulator limit"));
+        }
+        for dim in [MAX_DIM - 1, MAX_DIM] {
+            let query = Mat::new(MinMaxMeta::<8>::new(0, dim), Defaulted).unwrap();
+            let kernel =
+                build_minmax_max_sim(MaxSimIsa::Scalar, query.as_view(), BoxErase).unwrap();
+            assert_eq!(kernel.nrows(), 0);
+        }
+    }
+
+    #[test]
+    fn maximum_codes_at_accumulator_limit() {
+        use crate::minmax::{Data, DataMutRef, MinMaxCompensation};
+
+        let compensation = |code: f32| MinMaxCompensation {
+            a: 1.0,
+            b: 0.0,
+            n: MAX_DIM as f32 * code,
+            norm_squared: MAX_DIM as f32 * code * code,
+            dim: MAX_DIM as u32,
+        };
+        let mut query_bytes = vec![u8::MAX; Data::<8>::canonical_bytes(MAX_DIM)];
+        DataMutRef::<8>::from_canonical_front_mut(&mut query_bytes, MAX_DIM)
+            .unwrap()
+            .set_meta(compensation(255.0));
+        let mut doc_bytes = vec![u8::MAX; Data::<4>::canonical_bytes(MAX_DIM)];
+        DataMutRef::<4>::from_canonical_front_mut(&mut doc_bytes, MAX_DIM)
+            .unwrap()
+            .set_meta(compensation(15.0));
+        let query = MatRef::new(MinMaxMeta::<8>::new(1, MAX_DIM), &query_bytes).unwrap();
+        let docs = MatRef::new(MinMaxMeta::<4>::new(1, MAX_DIM), &doc_bytes).unwrap();
+        let sum = MAX_DIM as u64 * 255 * 15;
+        assert!(sum > i32::MAX as u64 && sum <= u32::MAX as u64);
+        for isa in ISAS.into_iter().filter(|isa| isa.is_available()) {
+            let kernel = build_minmax_max_sim(isa, query, BoxErase).unwrap();
+            let mut scores = [0.0];
+            kernel.compute_max_sim(docs, &mut scores).unwrap();
+            assert_eq!(scores, [-(sum as f32)], "{isa:?}");
+        }
     }
 
     #[test]

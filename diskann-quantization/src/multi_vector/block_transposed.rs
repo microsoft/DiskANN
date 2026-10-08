@@ -88,6 +88,97 @@ use super::matrix::{
 use crate::bits::{AsMutPtr, AsPtr, MutSlicePtr, SlicePtr};
 use crate::utils;
 
+/// A stateless, invertible permutation within complete blocks of columns.
+pub(crate) trait ColumnOrder: Copy {
+    const BLOCK: usize;
+    fn physical_col(logical: usize) -> usize;
+    fn logical_col(physical: usize) -> usize;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Identity;
+
+impl Identity {
+    const fn position(col: usize) -> usize {
+        col
+    }
+}
+
+impl ColumnOrder for Identity {
+    const BLOCK: usize = 1;
+    fn physical_col(logical: usize) -> usize {
+        Self::position(logical)
+    }
+    fn logical_col(physical: usize) -> usize {
+        physical
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EvenOdd<const BLOCK: usize>;
+
+impl<const BLOCK: usize> ColumnOrder for EvenOdd<BLOCK> {
+    const BLOCK: usize = {
+        assert!(BLOCK > 0 && BLOCK.is_multiple_of(2));
+        BLOCK
+    };
+    fn physical_col(logical: usize) -> usize {
+        let block = Self::BLOCK;
+        logical / block * block + logical % 2 * (block / 2) + logical % block / 2
+    }
+    fn logical_col(physical: usize) -> usize {
+        let block = Self::BLOCK;
+        let within = physical % block;
+        physical / block * block + 2 * (within % (block / 2)) + usize::from(within >= block / 2)
+    }
+}
+
+/// Validated column geometry, including padding needed to complete the permutation.
+/// Both mappings include padding coordinates; block packing is applied by [`BlockLayout`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ColumnLayout<O> {
+    logical: usize,
+    padded: usize,
+    _order: PhantomData<O>,
+}
+
+impl<O: ColumnOrder> ColumnLayout<O> {
+    pub(crate) fn new(logical: usize) -> Result<Self, Overflow> {
+        const { assert!(O::BLOCK > 0) };
+        let padded = logical
+            .checked_next_multiple_of(O::BLOCK)
+            .ok_or_else(|| Overflow::for_type::<u8>(1, logical))?;
+        Ok(Self {
+            logical,
+            padded,
+            _order: PhantomData,
+        })
+    }
+
+    pub(crate) fn ncols(self) -> usize {
+        self.logical
+    }
+    pub(crate) fn padded_ncols(self) -> usize {
+        self.padded
+    }
+    pub(crate) fn physical_col(self, logical: usize) -> usize {
+        debug_assert!(logical < self.padded);
+        O::physical_col(logical)
+    }
+    pub(crate) fn logical_col(self, physical: usize) -> usize {
+        debug_assert!(physical < self.padded);
+        O::logical_col(physical)
+    }
+    pub(crate) fn packed_index<const GROUP: usize, const PACK: usize>(
+        self,
+        row: usize,
+        col: usize,
+    ) -> usize {
+        debug_assert!(col < self.padded);
+        BlockLayout::<GROUP, PACK>::ordered_index::<O>(row, col, self.padded)
+    }
+}
+
 /// Index arithmetic for the block-transposed layout.
 ///
 /// This is the single source of truth for the layout described in the module
@@ -145,7 +236,15 @@ impl<const GROUP: usize, const PACK: usize> BlockLayout<GROUP, PACK> {
     /// The linear index of logical `(row, col)` in a matrix with `ncols` logical columns.
     #[inline]
     pub(crate) const fn linear_index(row: usize, col: usize, ncols: usize) -> usize {
-        (row / GROUP) * Self::block_len(ncols) + (row % GROUP) * PACK + Self::col_offset(col)
+        (row / GROUP) * Self::block_len(ncols)
+            + (row % GROUP) * PACK
+            + Self::col_offset(Identity::position(col))
+    }
+
+    /// Compose column order and block packing in one shared address calculation.
+    #[inline]
+    fn ordered_index<O: ColumnOrder>(row: usize, col: usize, ncols: usize) -> usize {
+        Self::linear_index(row, O::physical_col(col), ncols)
     }
 
     /// The logical `(row, col)` stored at linear index `index`, the inverse of
@@ -1338,6 +1437,42 @@ mod tests {
     }
 
     // ── Index arithmetic ─────────────────────────────────────────────
+
+    #[test]
+    fn column_layout_interleavings() {
+        check_column_layout::<Identity, 8, 4>();
+        check_column_layout::<EvenOdd<32>, 8, 4>();
+        check_column_layout::<EvenOdd<64>, 16, 8>();
+        assert!(ColumnLayout::<EvenOdd<64>>::new(usize::MAX).is_err());
+    }
+
+    fn check_column_layout<O: ColumnOrder, const GROUP: usize, const PACK: usize>() {
+        for dim in 0..=129 {
+            if cfg!(miri)
+                && ![0, 1, O::BLOCK - 1, O::BLOCK, O::BLOCK + 1, 2 * O::BLOCK + 1].contains(&dim)
+            {
+                continue;
+            }
+            let columns = ColumnLayout::<O>::new(dim).unwrap();
+            let k = columns.padded_ncols();
+            assert_eq!(columns.ncols(), dim);
+            assert!(k.is_multiple_of(O::BLOCK));
+            for col in 0..k {
+                let physical = columns.physical_col(col);
+                assert!(physical < k);
+                assert_eq!(columns.logical_col(physical), col);
+                for row in 0..2 * GROUP + 1 {
+                    if cfg!(miri) && ![0, GROUP - 1, GROUP, GROUP + 1, 2 * GROUP].contains(&row) {
+                        continue;
+                    }
+                    let index = columns.packed_index::<GROUP, PACK>(row, col);
+                    let (actual_row, actual_col) =
+                        BlockLayout::<GROUP, PACK>::logical_index(index, k);
+                    assert_eq!((actual_row, actual_col), (row, physical));
+                }
+            }
+        }
+    }
 
     #[test]
     fn block_layout_matches_physical_order() {
