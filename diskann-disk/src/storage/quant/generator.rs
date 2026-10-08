@@ -136,7 +136,7 @@ where
             // process `BATCH_SIZE` many dataset vectors at a time.
             const BATCH_SIZE: usize = 128;
 
-            // Wrap the data in `rowmajor::Mut` so we do not need to manually construct view
+            // Wrap the data in `rowmajor::Mut` so we do not need to manually construct a view
             // in the compression loop.
             let mut compressed_block = views::rowmajor::Mut::try_from_data(
                 block_compressed_base,

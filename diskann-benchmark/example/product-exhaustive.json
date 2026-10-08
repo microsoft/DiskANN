@@ -27,7 +27,8 @@
         "compression_threads": 1,
         "seed": 7831252621480178695,
         "num_pq_chunks": 16,
-        "num_pq_centers": 16
+        "num_pq_centers": 16,
+        "table_style": "transposed"
       }
     }
   ]
