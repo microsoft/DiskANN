@@ -5,9 +5,9 @@
 
 //! Dynamic IVF index orchestration.
 //!
-//! The index drives one [`InsertAccessor`] per mutation: it plans a [`Deltas`] against
-//! the accessor's view and hands it to [`InsertAccessor::update`]. It never touches
-//! point, centroid, or list storage directly.
+//! The index drives one [`InsertAccessor`] per mutation: it plans a
+//! [`Deltas`](super::update::Deltas) against the accessor's view and hands it to
+//! [`InsertAccessor::update`]. It never touches point, centroid, or list storage directly.
 
 use diskann_utils::{
     future::SendFuture,
@@ -20,11 +20,9 @@ use crate::{
     ANNError, ANNResult,
     error::{ErrorExt, IntoANNResult},
     ivf::{
-        dynamic::{
-            Centroids, InsertAccessor, MaintenanceStrategy, Provider, Reader, StageElements,
-        },
-        online::{TwoMeans, index_error, two_means},
-        update::{CentroidDelta, Delta, Deltas, MoveTo},
+        dynamic::{Centroids, InsertAccessor, MaintenanceStrategy, Provider, Stage},
+        split::plan_split_update,
+        update::{self, Deltas},
     },
 };
 
@@ -104,79 +102,64 @@ impl<P: Provider> IVFIndex<P> {
         &self.provider
     }
 
-    // /// Install the initial centroids.
-    // ///
-    // /// # Errors
-    // ///
-    // /// Fails if `centroids` is empty, non-finite, or of the wrong dimension, the index
-    // /// already has centroids, or the maintenance accessor fails.
-    // pub fn initialize<'a, S>(
-    //     &'a mut self,
-    //     strategy: &'a S,
-    //     context: &'a P::Context,
-    //     centroids: Matrix<f32>,
-    // ) -> impl SendFuture<ANNResult<()>>
-    // where
-    //     S: MaintenanceStrategy<'a, P>,
-    // {
-    //     let provider = &mut self.provider;
+    /// Install the initial centroids.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `centroids` is empty, non-finite, or of the wrong dimension, the index
+    /// already has centroids, or the maintenance accessor fails.
+    pub fn initialize<'a, S, T>(
+        &'a mut self,
+        strategy: &'a S,
+        context: &'a P::Context,
+        centroids: rowmajor::Ref<'_, f32>,
+    ) -> impl SendFuture<ANNResult<()>>
+    where
+        S: MaintenanceStrategy<'a, P, T>,
+        T: Sync,
+    {
+        let provider = &mut self.provider;
 
-    //     async move {
-    //         let count = centroids.nrows();
-    //         if count == 0 {
-    //             return Err(index_error("initialize requires at least one centroid"));
-    //         }
-    //         if centroids.as_slice().iter().any(|x| !x.is_finite()) {
-    //             return Err(index_error("initial centroids must be finite"));
-    //         }
+        async move {
+            let count = centroids.nrows();
+            if count == 0 {
+                return Err(ANNError::message("Cannot initialize with zero centroids."));
+            }
 
-    //         let mut accessor = strategy
-    //             .maintenance_accessor(provider, context)
-    //             .into_ann_result()?;
+            let mut accessor = strategy
+                .maintenance_accessor(provider, context)
+                .into_ann_result()?;
 
-    //         if !accessor.centroids().is_empty() {
-    //             return Err(index_error("dynamic IVF index is already initialized"));
-    //         }
-    //         let dim = accessor.dim();
-    //         if dim == 0 || centroids.ncols() != dim {
-    //             return Err(index_error(format!(
-    //                 "initial centroids have dimension {}, expected {dim}",
-    //                 centroids.ncols()
-    //             )));
-    //         }
+            let mut installs = Vec::with_capacity(centroids.nrows());
 
-    //         let list_ids = accessor
-    //             .reserve_list_ids(count)
-    //             .await
-    //             .escalate("initialize must reserve list ids")?;
-    //         check_reserved(&accessor.centroids(), &list_ids, count)?;
+            for c in centroids.rows() {
+                let id = accessor.stage_centroid(c).await?;
+                installs.push(update::Delta::CentroidDelta {
+                    id,
+                    delta: update::CentroidDelta::Install,
+                });
+            }
 
-    //         let installs = list_ids
-    //             .into_iter()
-    //             .zip(centroids.row_iter())
-    //             .map(|(id, centroid)| CentroidDelta::Install {
-    //                 id,
-    //                 centroid: centroid.into(),
-    //             })
-    //             .collect();
+            accessor
+                .update(Deltas::<P::InternalId, _>::new(installs))
+                .await
+                .escalate("initialize must apply the initial centroids")?;
 
-    //         accessor
-    //             .apply(InsertionUpdate::new(installs, Vec::new()))
-    //             .await
-    //             .escalate("initialize must apply the initial centroids")
-    //     }
-    // }
+            Ok(())
+        }
+    }
 
     /// Insert a batch, splitting every list the batch pushes past `split_threshold`.
     ///
-    /// Routing and split planning run against the accessor's view before any change.
-    /// The batch, and any splits it triggers, are then applied as one
-    /// [`InsertionUpdate`].
+    /// All split parents form one region. Their points are assigned across all fitted
+    /// children, never back to retiring parents. Other staged points keep their routes.
+    /// The batch and its splits are then applied as one
+    /// [`Deltas`](super::update::Deltas).
     ///
     /// # Errors
     ///
     /// Fails if the index is not initialized, the provider returns inconsistent
-    /// data, or any accessor call fails. State after an `apply` failure is
+    /// data, or any accessor call fails. State after an `update` failure is
     /// provider-defined.
     pub fn insert_batch<'a, S, T>(
         &'a mut self,
@@ -211,8 +194,7 @@ impl<P: Provider> IVFIndex<P> {
                 let id = accessor.stage_point(id, *v, out).await.into_ann_result()?;
                 ids.push(id);
 
-                // route the points to their nearest centroid. Every staged point must be
-                // placed, so a routing failure cannot be skipped.
+                // route the points to their nearest centroid.
                 let parent = accessor
                     .centroids()
                     .select(out, 1)
@@ -234,10 +216,10 @@ impl<P: Provider> IVFIndex<P> {
                 }
             }
 
-            // for the ones that need splitting - split and re-assign necessary points in neighbors
-            let update = Self::split::<_, T>(
+            // Fit every split's children before assigning points and building the update.
+            let update = plan_split_update::<P, _, T>(
                 &mut accessor,
-                &config,
+                config.two_means_iterations,
                 rng,
                 &ids,
                 vectors.as_view(),
@@ -253,159 +235,6 @@ impl<P: Provider> IVFIndex<P> {
 
             Ok(InsertStats::default())
         }
-    }
-
-    /// Build the update for one insert batch: split every list in `parents` and append
-    /// every staged point to the list that ends up holding it.
-    ///
-    /// Batch position `i` is the staged point `ids[i]`, whose full-precision vector is
-    /// row `i` of `vectors`. `routed` maps every routed list to the batch positions
-    /// routed to it, and `parents` names the subset of those lists that overflow.
-    ///
-    /// # Errors
-    ///
-    /// Fails if an accessor call fails or a split list holds fewer than two points.
-    async fn split<A, T>(
-        accessor: &mut A,
-        config: &Config,
-        rng: &mut StdRng,
-        ids: &[P::InternalId],
-        vectors: rowmajor::Ref<'_, f32>,
-        routed: &hashbrown::HashMap<P::ListId, Vec<usize>>,
-        parents: &[P::ListId],
-    ) -> ANNResult<Deltas<P::InternalId, P::ListId>>
-    where
-        A: InsertAccessor<P, T>,
-        T: Sync,
-    {
-        // Kidns of deltas -
-        // 1. Staged points that are not part of splitting. -> [`Delta::PointAppends`] -> available before split.
-        // 2. Staged points that are part of splitting. -> [`Delta::PointAppends`] -> needs new centroid, centroid id and assignment.
-        // 3. New centroids -> [`Delta::CentroidDelta::Install`] -> needs clustering resulting from spolit.
-        // 4. Retire centroids -> [`Delta::CentroidDelta::Retire`] -> needs the assignments to new centroids from old one, result from clustering
-        // 5. (Optional) Reassignments
-
-        // Split -
-        // - Get: staged vectors,
-
-        let mut deltas = Vec::new();
-
-        // Lists that keep their centroid take their staged points as they are.
-        for (&list, positions) in routed {
-            if parents.contains(&list) {
-                continue;
-            }
-            deltas.push(Delta::PointAppends {
-                to: list,
-                ids: positions.iter().map(|&position| ids[position]).collect(),
-            });
-        }
-
-        // Overflowing lists are replaced by two children, which take their staged
-        // points instead.
-        for &parent in parents {
-            let staged: &[usize] = routed.get(&parent).map_or(&[], Vec::as_slice);
-            deltas.extend(
-                Self::split_list::<_, T>(accessor, config, rng, ids, vectors, parent, staged)
-                    .await?,
-            );
-        }
-
-        Ok(Deltas::new(deltas))
-    }
-
-    /// Plan one list's split: fit two children over every point the list would hold,
-    /// then place each of those points on the nearer child and retire the parent.
-    ///
-    /// `staged` holds the batch positions routed to `parent`.
-    ///
-    /// # Errors
-    ///
-    /// Fails if an accessor call fails or the list holds fewer than two points.
-    async fn split_list<A, T>(
-        accessor: &mut A,
-        config: &Config,
-        rng: &mut StdRng,
-        ids: &[P::InternalId],
-        vectors: rowmajor::Ref<'_, f32>,
-        parent: P::ListId,
-        staged: &[usize],
-    ) -> ANNResult<Vec<Delta<P::InternalId, P::ListId>>>
-    where
-        A: InsertAccessor<P, T>,
-        T: Sync,
-    {
-        let dim = accessor.dim();
-
-        let num_members = accessor.list_size(parent).into_ann_result()?;
-
-        let mut points = rowmajor::Owned::from_element(num_members + staged.len(), dim, f32::NAN);
-
-        let (head, tail) = points.as_mut_slice().split_at_mut(num_members * dim);
-
-        let head_view = rowmajor::Mut::try_from_data(head, num_members, dim)?;
-
-        accessor
-            .reader()
-            .read_into(parent, head_view)
-            .await
-            .escalate("split must read the parent's vectors")?;
-
-        let mut tail_view = rowmajor::Mut::try_from_data(tail, staged.len(), dim)?;
-        for (row, &position) in tail_view.rows_mut().zip(staged) {
-            row.copy_from_slice(vectors.row(position));
-        }
-
-        let TwoMeans {
-            centroids,
-            children,
-        } = two_means(points.as_view(), config.two_means_iterations, rng)?;
-
-        let mut deltas = Vec::new();
-        let mut child_ids = Vec::new();
-
-        // Install both children before anything is placed into them.
-        for centroid in centroids.rows() {
-            let id = accessor.stage_centroid(centroid).await?;
-            child_ids.push(id);
-
-            deltas.push(Delta::CentroidDelta {
-                id,
-                delta: CentroidDelta::Install,
-            });
-        }
-
-        let members = accessor.get_members(parent).into_ann_result()?;
-
-        // Retire the parent, moving every member it held onto that member's child.
-        let moves = members
-            .iter()
-            .zip(&children)
-            .map(|(&id, &child)| MoveTo::new(id, child_ids[child]))
-            .collect();
-
-        deltas.push(Delta::CentroidDelta {
-            id: parent,
-            delta: CentroidDelta::Retire { moves },
-        });
-
-        // Append the staged points routed here onto their child.
-        for (child, &list) in child_ids.iter().enumerate() {
-            let appended: Box<[_]> = staged
-                .iter()
-                .zip(&children[members.len()..])
-                .filter(|&(_, &group)| group == child)
-                .map(|(&position, _)| ids[position])
-                .collect();
-            if !appended.is_empty() {
-                deltas.push(Delta::PointAppends {
-                    to: list,
-                    ids: appended,
-                });
-            }
-        }
-
-        Ok(deltas)
     }
 }
 

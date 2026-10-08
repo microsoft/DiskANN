@@ -8,6 +8,7 @@
 pub mod dynamic;
 mod index;
 mod online;
+mod split;
 pub mod update;
 
 pub use index::{Config, ConfigError, IVFIndex, InsertStats};

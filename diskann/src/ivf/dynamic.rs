@@ -18,7 +18,7 @@ use crate::{
     ANNResult,
     error::{StandardError, ToRanked},
     ivf::update::Deltas,
-    provider::{ExecutionContext, Guard, NoopGuard},
+    provider::ExecutionContext,
     utils::VectorId,
 };
 
@@ -79,7 +79,7 @@ pub trait Provider: Sized + Send + Sync + 'static {
     ) -> Result<Self::ExternalId, Self::Error>;
 }
 
-pub trait StageElements<P: Provider, T: Sync> {
+pub trait Stage<P: Provider, T: Sync> {
     /// Stage a new point; its id is provisional until `update` commits it.
     fn stage_point(
         &mut self,
@@ -104,7 +104,7 @@ pub trait StageElements<P: Provider, T: Sync> {
 /// result. Exact and graph implementations expose the same interface.
 pub trait Centroids: Send + Sync {
     /// Stable logical centroid id, also used as the inverted-list id.
-    type ListId: VectorId;
+    type Id: VectorId;
 
     /// Errors encountered while reading or navigating the centroid index.
     type Error: ToRanked + Debug + Send + Sync + 'static;
@@ -121,7 +121,7 @@ pub trait Centroids: Send + Sync {
     }
 
     /// Borrow one authoritative full-precision centroid vector.
-    fn centroid(&self, id: Self::ListId) -> Option<impl Deref<Target = [f32]>>;
+    fn centroid(&self, id: Self::Id) -> Option<impl Deref<Target = [f32]>>;
 
     /// Select exactly `min(nprobe, self.len())` live centroids for `query`, nearest
     /// first.
@@ -132,16 +132,16 @@ pub trait Centroids: Send + Sync {
         &self,
         query: &[f32],
         nprobe: usize,
-    ) -> Result<Vec<SelectedList<Self::ListId>>, Self::Error>;
+    ) -> Result<Vec<SelectedList<Self::Id>>, Self::Error>;
 }
 
 //////////////
 // Accessor //
 //////////////
 
-pub trait InsertAccessor<P: Provider, T: Sync>: Send + Sized + StageElements<P, T> {
+pub trait InsertAccessor<P: Provider, T: Sync>: Send + Sized + Stage<P, T> {
     /// In-memory centroid catalog and navigator in this accessor's unified view.
-    type Centroids<'a>: Centroids<ListId = P::ListId>
+    type Centroids<'a>: Centroids<Id = P::ListId>
     where
         Self: 'a;
 
@@ -164,7 +164,7 @@ pub trait InsertAccessor<P: Provider, T: Sync>: Send + Sized + StageElements<P, 
     /// Read the size of a live list.
     fn list_size(&self, list: P::ListId) -> Result<usize, Self::Error>;
 
-    /// Read the member ids of a live list.
+    /// Read the member ids of a live list, in the reader's vector-row order.
     fn get_members(&self, list: P::ListId) -> Result<&[P::InternalId], Self::Error>;
 
     /// Consume the accessor and write the update
@@ -181,10 +181,11 @@ pub trait Reader<T = f32>: Send + Sync {
     /// dimension of the output of each Id.
     fn dim(&self) -> usize;
 
-    /// Write the canonical vector of `ids[i]` into row `i` of `out`, in any order.
+    /// Read every canonical vector for `id`, preserving its member order in `out`.
     ///
-    /// `out` has one row per id and [`Self::dim`] columns, and every row must be
-    /// written.
+    /// For an insert accessor's list reader, row `i` corresponds to member `i`
+    /// returned by [`InsertAccessor::get_members`] in the same accessor view.
+    /// `out` has one row per member and [`Self::dim`] columns; every row must be written.
     fn read_into(
         &self,
         id: Self::Id,
@@ -201,7 +202,7 @@ pub trait Reader<T = f32>: Send + Sync {
 /// The provider is borrowed exclusively for the lifetime of the accessor, so no
 /// search or other mutation can observe it until the accessor is applied or
 /// dropped. Providers may therefore mutate plain in-memory state in
-/// [`InsertAccessor::apply`] without interior synchronization. Providers that
+/// [`InsertAccessor::update`] without interior synchronization. Providers that
 /// share state outside this borrow (for example through an `Arc`) remain responsible
 /// for coordinating those aliases.
 pub trait MaintenanceStrategy<'a, P: Provider, T: Sync>: Send + Sync {
@@ -253,7 +254,7 @@ pub trait SearchAccessor: Send + Sync {
     type InternalId;
 
     /// In-memory centroid view.
-    type Centroids<'a>: Centroids<ListId = Self::ListId>
+    type Centroids<'a>: Centroids<Id = Self::ListId>
     where
         Self: 'a;
 

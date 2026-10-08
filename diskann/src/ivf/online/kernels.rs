@@ -26,7 +26,7 @@ pub(super) fn nearest<L: Copy>(point: &[f32], candidates: &[(L, &[f32])]) -> Opt
 
 /// Scratch buffers for [`lloyd`], reusable across calls.
 #[derive(Debug, Default)]
-pub(super) struct LloydScratch {
+pub(in crate::ivf) struct LloydScratch {
     sums: Vec<f32>,
     counts: Vec<usize>,
 }
