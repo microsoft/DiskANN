@@ -383,23 +383,23 @@ mod tests {
     };
 
     use super::*;
-    use diskann_utils::views::{self, Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
-    /// Retrieve the 8x8 hadamard matrix as a `Matrix`.
-    fn get_hadamard_8() -> Matrix<f32> {
+    /// Retrieve the 8x8 hadamard matrix as a `rowmajor::Owned`.
+    fn get_hadamard_8() -> rowmajor::Owned<f32> {
         let v: Box<[f32]> = HADAMARD_8.iter().flatten().copied().collect();
-        Matrix::try_from(v, 8, 8).unwrap()
+        rowmajor::Owned::try_from_data(v, 8, 8).unwrap()
     }
 
-    fn hadamard_by_sylvester(dim: usize) -> Matrix<f32> {
+    fn hadamard_by_sylvester(dim: usize) -> rowmajor::Owned<f32> {
         assert_ne!(dim, 0);
         // Base case.
         if dim == 1 {
-            Matrix::new(1.0, dim, dim)
+            rowmajor::Owned::from_element(dim, dim, 1.0)
         } else {
             let half = dim / 2;
             let sub = hadamard_by_sylvester(half);
-            let mut m = Matrix::<f32>::new(0.0, dim, dim);
+            let mut m = rowmajor::Owned::<f32>::from_element(dim, dim, 0.0);
 
             for c in 0..m.ncols() {
                 for r in 0..m.nrows() {
@@ -423,9 +423,9 @@ mod tests {
     }
 
     // A naive reference implementation.
-    fn matmul(a: MatrixView<f32>, b: MatrixView<f32>) -> Matrix<f32> {
+    fn matmul(a: rowmajor::Ref<f32>, b: rowmajor::Ref<f32>) -> rowmajor::Owned<f32> {
         assert_eq!(a.ncols(), b.nrows());
-        let mut c = Matrix::new(0.0, a.nrows(), b.ncols());
+        let mut c = rowmajor::Owned::from_element(a.nrows(), b.ncols(), 0.0);
 
         for i in 0..c.nrows() {
             for j in 0..c.ncols() {
@@ -443,8 +443,7 @@ mod tests {
     fn test_micro_kernel_64() {
         let mut src = {
             let mut rng = StdRng::seed_from_u64(0xde1936d651285fc8);
-            let init = views::Init(|| StandardUniform {}.sample(&mut rng));
-            Matrix::new(init, 64, 1)
+            rowmajor::Owned::from_fn(64, 1, |_| StandardUniform {}.sample(&mut rng))
         };
 
         let h = hadamard_by_sylvester(64);
@@ -476,8 +475,7 @@ mod tests {
     fn test_hadamard_transform(dim: usize, seed: u64) {
         let src = {
             let mut rng = StdRng::seed_from_u64(seed);
-            let init = views::Init(|| StandardUniform {}.sample(&mut rng));
-            Matrix::new(init, dim, 1)
+            rowmajor::Owned::from_fn(dim, 1, |_| StandardUniform {}.sample(&mut rng))
         };
 
         let h = hadamard_by_sylvester(dim);

@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::matrix_kernels::{
     bounds::{self, Bound},
@@ -35,18 +35,18 @@ pub(crate) struct View<'a, T> {
 }
 
 impl<'a, T> View<'a, T> {
-    /// Construct a [`View`] from a [`MatrixView`].
+    /// Construct a [`View`] from a [`rowmajor::Ref`].
     ///
-    /// Since [`MatrixView`]s are interpreted as "row-major", the value `k` will be derived
+    /// Since [`rowmajor::Ref`]s are interpreted as "row-major", the value `k` will be derived
     /// from `v.ncols()` and the extent will be taken from `v.nrows()`.
     ///
     /// Returns `None` if either dimension is zero.
-    pub(crate) fn from_matrix_view(v: MatrixView<'a, T>) -> Option<Self> {
+    pub(crate) fn from_matrix_view(v: rowmajor::Ref<'a, T>) -> Option<Self> {
         let extent = NonZeroUsize::new(v.nrows())?;
         let k = DimK::new(NonZeroUsize::new(v.ncols())?);
 
-        // SAFETY: The `MatrixView` ensures that the inner slice has size `extent * k`.
-        Some(unsafe { Self::new(Slice::new(v.into_inner()), extent, k) })
+        // SAFETY: The `rowmajor::Ref` ensures that the inner slice has size `extent * k`.
+        Some(unsafe { Self::new(Slice::new(v.into_slice()), extent, k) })
     }
 
     /// Construct a new [`View`] over `ptr`.
@@ -350,7 +350,7 @@ impl<T, const EXTENT: usize> Panel<'_, T, EXTENT> {
 #[derive(Debug, Clone, Copy)]
 pub(in crate::matrix_kernels) struct Remainder<'a, T, const CAPACITY: usize> {
     ptr: Slice<'a, T>,
-    _start: usize,
+    start: usize,
     extent: NonZeroUsize,
     k: Bound,
 }
@@ -370,7 +370,7 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
 
         Self {
             ptr,
-            _start: start,
+            start,
             extent,
             k,
         }
@@ -384,12 +384,8 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
     }
 
     /// Return the index of the first band in `self`'s immediate parent [`View`].
-    #[cfg_attr(
-        not(test),
-        expect(unused, reason = "this completes an API but is not used yet")
-    )]
     pub(in crate::matrix_kernels) fn start(&self) -> usize {
-        self._start
+        self.start
     }
 
     /// Return the number of elements in each "band" of `self`.
@@ -419,10 +415,7 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use diskann_utils::{
-        assert_contains,
-        views::{Init, Matrix},
-    };
+    use diskann_utils::assert_contains;
 
     use crate::matrix_kernels::test_util::panic_message_for;
 
@@ -446,12 +439,13 @@ mod test {
     ) {
         let mat = {
             let mut i = 0.0;
-            let init = Init(|| {
+            let init = |_| {
                 let v = i;
                 i += 1.0;
                 v
-            });
-            Matrix::new(init, nrows.get(), ncols.get())
+            };
+
+            rowmajor::Owned::from_fn(nrows.get(), ncols.get(), init)
         };
 
         let view = View::from_matrix_view(mat.as_view()).unwrap();
@@ -473,7 +467,7 @@ mod test {
 
     fn visit_panels<const N: usize>(
         dut: View<'_, f32>,
-        reference: MatrixView<'_, f32>,
+        reference: rowmajor::Ref<'_, f32>,
         ctx: std::fmt::Arguments<'_>,
     ) {
         let mut count = 0;
@@ -549,12 +543,13 @@ mod test {
     ) {
         let mat = {
             let mut i = 0.0;
-            let init = Init(|| {
+            let init = |_| {
                 let v = i;
                 i += 1.0;
                 v
-            });
-            Matrix::new(init, nrows.get(), ncols.get())
+            };
+
+            rowmajor::Owned::from_fn(nrows.get(), ncols.get(), init)
         };
 
         let view = View::from_matrix_view(mat.as_view()).unwrap();

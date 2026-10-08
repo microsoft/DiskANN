@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use rand::{
     distr::{Distribution, Uniform},
     rngs::StdRng,
@@ -105,7 +105,7 @@ pub(crate) fn compute_absolute_error(got: f32, expected: f32) -> f32 {
 }
 
 pub(crate) struct TestProblem {
-    pub(crate) data: Matrix<f32>,
+    pub(crate) data: rowmajor::Owned<f32>,
     pub(crate) means: Vec<f64>,
     pub(crate) variances: Vec<f64>,
     pub(crate) mean_norm: f64,
@@ -169,17 +169,17 @@ pub(crate) fn create_test_problem(nrows: usize, ncols: usize, rng: &mut StdRng) 
         })
         .collect();
 
-    let mut data = Matrix::<f32>::new(0.0, nrows, ncols);
+    let mut data = rowmajor::Owned::<f32>::from_element(nrows, ncols, 0.0);
     for col in 0..ncols {
         offsets.shuffle(rng);
-        for (row, offset) in std::iter::zip(data.row_iter_mut(), offsets.iter()) {
+        for (row, offset) in std::iter::zip(data.rows_mut(), offsets.iter()) {
             row[col] = means[col] + scales[col] * offset;
         }
     }
 
     // Compute the mean norm directly.
     let mean_norm = data
-        .row_iter()
+        .rows()
         .map(|row| {
             row.iter()
                 .map(|&i| {
@@ -212,6 +212,9 @@ pub(crate) enum Check {
     /// ```
     AbsRel { abs: f32, rel: f32 },
 
+    /// Two values must be exact.
+    Exact,
+
     /// Skip the check entirely.
     #[cfg(not(miri))]
     Skip,
@@ -224,6 +227,10 @@ impl Check {
 
     pub(crate) const fn absrel(abs: f32, rel: f32) -> Self {
         Self::AbsRel { abs, rel }
+    }
+
+    pub(crate) const fn exact() -> Self {
+        Self::Exact
     }
 
     #[cfg(not(miri))]
@@ -274,6 +281,13 @@ impl Check {
                     })
                 }
             }
+            Self::Exact => {
+                if got == expected {
+                    Ok(())
+                } else {
+                    Err(CheckFailed::Exact { got, expected })
+                }
+            }
             #[cfg(not(miri))]
             Self::Skip => Ok(()),
         }
@@ -284,6 +298,8 @@ impl Check {
 pub(crate) enum CheckFailed {
     #[error("not within {ulp} ulp - got {got}, expected {expected}")]
     Ulp { ulp: usize, got: f32, expected: f32 },
+    #[error("not exact got {got}, expected {expected}")]
+    Exact { got: f32, expected: f32 },
     #[error(
         "not within {abs_limit}/{rel_limit} - errors {abs_got}/{rel_got} - \
             got {got}, expected {expected}"

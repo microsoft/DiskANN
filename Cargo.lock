@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "diskann"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-core"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "diskann",
@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-runner"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-simd"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "diskann-benchmark-runner",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-bftree"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "bf-tree",
  "bytemuck",
@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-disk"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "approx",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-garnet"
-version = "5.0.3"
+version = "6.0.0"
 dependencies = [
  "bytemuck",
  "crossbeam",
@@ -616,13 +616,14 @@ dependencies = [
  "diskann-vector",
  "foldhash",
  "rand",
+ "strum",
  "thiserror 2.0.21",
  "tokio",
 ]
 
 [[package]]
 name = "diskann-inmem"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -648,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-label-filter"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -671,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-linalg"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "approx",
  "cfg-if",
@@ -685,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-providers"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "approx",
  "arc-swap",
@@ -719,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-quantization"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -740,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-record"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -750,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-tools"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -783,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-utils"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -799,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-vector"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "approx",
  "bytemuck",
@@ -814,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-wide"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -2321,6 +2322,27 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "syn"

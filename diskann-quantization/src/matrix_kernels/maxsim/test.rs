@@ -3,28 +3,58 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::matrix_kernels::test_util::TestDistr;
 
 /// Generate a test MaxSim problem `[M x K] . [K x N]` where both matrices are row-major.
-pub(super) fn generate(
+pub(super) fn generate_f32(
     m: usize,
     k: usize,
     n: usize,
     rng: &mut impl rand::Rng,
-) -> (Matrix<f32>, Matrix<f32>, Vec<f32>) {
+) -> (rowmajor::Owned<f32>, rowmajor::Owned<f32>, Vec<f32>) {
     let ref_a = TestDistr::matrix::<f32>(m, k, rng);
     let ref_b = TestDistr::matrix::<f32>(k, n, rng);
 
     let ref_c: Vec<f32> = ref_a
-        .row_iter()
+        .rows()
         .map(|a_row| {
             let mut max_ip = f32::NEG_INFINITY;
             for b_col in 0..n {
                 let mut ip = 0.0;
                 for (k, a) in a_row.iter().enumerate() {
                     ip = a.mul_add(*ref_b.element(k, b_col), ip);
+                }
+                max_ip = max_ip.max(ip);
+            }
+
+            max_ip
+        })
+        .collect();
+
+    (ref_a, ref_b, ref_c)
+}
+
+/// Generate a test integer MaxSim problem `[M x K] . [K x N]` where both matrices are
+/// row-major.
+pub(super) fn generate_i8(
+    m: usize,
+    k: usize,
+    n: usize,
+    rng: &mut impl rand::Rng,
+) -> (rowmajor::Owned<i8>, rowmajor::Owned<i8>, Vec<i32>) {
+    let ref_a = TestDistr::matrix::<i8>(m, k, rng);
+    let ref_b = TestDistr::matrix::<i8>(k, n, rng);
+
+    let ref_c: Vec<i32> = ref_a
+        .rows()
+        .map(|a_row| {
+            let mut max_ip = i32::MIN;
+            for b_col in 0..n {
+                let mut ip = 0;
+                for (k, a) in a_row.iter().enumerate() {
+                    ip += i32::from(*a) * i32::from(*ref_b.element(k, b_col));
                 }
                 max_ip = max_ip.max(ip);
             }

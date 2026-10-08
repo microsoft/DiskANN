@@ -6,16 +6,18 @@
 use std::fmt;
 
 use diskann_utils::strided::Strided;
-use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
+use diskann_wide::{LoHi, SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 
 use crate::{
     algorithms::kmeans,
-    distances::{InnerProduct, SquaredL2},
+    distances::{Cosine, InnerProduct, SquaredL2},
     multi_vector::BlockTransposed,
+    product::tables::lookup::DotAndNorm,
 };
 
 // The `Wide` type used as the group granularity for `Chunk`.
 diskann_wide::alias!(f32s = f32x8);
+diskann_wide::alias!(f32x16 = f32x16);
 diskann_wide::alias!(u32s = u32x8);
 
 /// Error types returned by Chunk construction.
@@ -185,6 +187,11 @@ impl Chunk {
     /// number of blocks, resulting in the last block containing fewer groups.
     pub(super) fn remainder(&self) -> usize {
         self.data.remainder()
+    }
+
+    /// Return an iterator over the square norms.
+    pub(super) fn square_norm_chunks(&self) -> (&[[f32; 16]], &[f32]) {
+        self.square_norms.as_chunks::<16>()
     }
 
     /// Retrieve the value originally stored in `(row, col)` of the input matrix.
@@ -982,7 +989,7 @@ impl ComputeKernel for InnerProductMathematical {
 /// * [`SquaredL2`]: Compute the squared l2 distance between `from` and all pivots.
 /// * [`InnerProduct`]: Compute the inner product (as a [`diskann_vector::SimilarityScore`])
 ///   between `from` and all pivots.
-pub trait ProcessInto {
+pub trait ProcessInto<T> {
     /// Do the specified operation.
     ///
     /// # Panics
@@ -992,10 +999,10 @@ pub trait ProcessInto {
     ///   of dimensions as the pivots stored in `chunk`.
     /// * `into.len() != chunk.num_centers()`: This routine will produce one result per
     ///   pivot and `into` must be sized accordingly.
-    fn process_into(chunk: &Chunk, from: &[f32], into: &mut [f32]);
+    fn process_into(chunk: &Chunk, from: &[f32], into: &mut [T]);
 }
 
-impl<T> ProcessInto for T
+impl<T> ProcessInto<f32> for T
 where
     T: ComputeKernel,
 {
@@ -1055,14 +1062,71 @@ where
     }
 }
 
+impl ProcessInto<DotAndNorm> for Cosine {
+    fn process_into(chunk: &Chunk, from: &[f32], into: &mut [DotAndNorm]) {
+        assert_eq!(from.len(), chunk.dimension(), "incorrect input vector dim");
+        assert_eq!(
+            into.len(),
+            chunk.num_centers(),
+            "incorrect output vector dim"
+        );
+
+        let (norm_chunks, norm_remainder) = chunk.square_norm_chunks();
+        let (into_chunks, into_remainder) = into.as_chunks_mut::<16>();
+
+        debug_assert_eq!(
+            norm_chunks.len(),
+            into_chunks.len(),
+            "Check 1 already proves this"
+        );
+
+        debug_assert_eq!(
+            norm_remainder.len(),
+            into_remainder.len(),
+            "Check 1 already proves this"
+        );
+
+        // NOTE: This code generated for constructing `DotAndNorm` from the computed
+        // dot products and norms is not particularly efficient.
+        //
+        // It's not terrible, but LLVM refuses to implement a shuffle on its own.
+
+        for (block, (into, norms)) in
+            std::iter::zip(into_chunks.iter_mut(), norm_chunks.iter()).enumerate()
+        {
+            let (lo, hi) = chunk.compute_in_block::<InnerProductMathematical, f32>(from, block);
+
+            let dot: f32x16 = LoHi { lo, hi }.join();
+
+            std::iter::zip(into.iter_mut(), norms.iter())
+                .zip(dot.to_array())
+                .for_each(|((i, n), dot)| *i = DotAndNorm::new(dot, *n));
+        }
+
+        // Process the remainder.
+        if !into_remainder.is_empty() {
+            let (lo, hi) =
+                chunk.compute_in_block::<InnerProductMathematical, f32>(from, chunk.full_blocks());
+            let dot: f32x16 = LoHi { lo, hi }.join();
+
+            std::iter::zip(into_remainder.iter_mut(), norm_remainder.iter())
+                .zip(dot.to_array())
+                .for_each(|((i, n), dot)| *i = DotAndNorm::new(dot, *n));
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views};
-    use diskann_vector::{PureDistanceFunction, distance};
+    use diskann_utils::{
+        lazy_format,
+        views::{self, rowmajor::Matrix},
+    };
+    use diskann_vector::{Norm, PureDistanceFunction, SimilarityScore, distance, norm::FastL2Norm};
     use rand::{
         SeedableRng,
         distr::{Distribution, Uniform},
@@ -1507,7 +1571,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 5 must be less than 5")]
     fn get_panics_on_row() {
-        let data = views::Matrix::new(0.0, 5, 10);
+        let data = views::rowmajor::Owned::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(5, 1);
     }
@@ -1515,7 +1579,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 5 must be less than 5")]
     fn get_panics_on_col() {
-        let data = views::Matrix::new(0.0, 10, 5);
+        let data = views::rowmajor::Owned::from_element(10, 5, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(1, 5);
     }
@@ -1535,33 +1599,47 @@ mod tests {
     fn test_process_into_impl(dim: usize, total: usize, rng: &mut StdRng) {
         let distribution = Uniform::<i32>::new(-10, 10).unwrap();
         let base =
-            views::Matrix::<f32>::new(views::Init(|| distribution.sample(rng) as f32), total, dim);
+            views::rowmajor::Owned::<f32>::from_fn(total, dim, |_| distribution.sample(rng) as f32);
 
         let chunk = Chunk::new(base.as_view().into()).unwrap();
         let mut input = vec![0.0; dim];
-        let mut output = vec![0.0; total];
+
+        let mut output_f32 = vec![0.0; total];
+        let mut output_dot = vec![DotAndNorm::default(); total];
 
         for _ in 0..PROCESS_INTO_TRIALS {
             input
                 .iter_mut()
                 .for_each(|i| *i = distribution.sample(rng) as f32);
 
+            let input_norm = (FastL2Norm).evaluate(&*input);
+
             // Inner Product
-            InnerProduct::process_into(&chunk, &input, &mut output);
+            InnerProduct::process_into(&chunk, &input, &mut output_f32);
 
             // Check outputs
-            std::iter::zip(base.row_iter(), output.iter()).for_each(|(row, got)| {
+            std::iter::zip(base.rows(), output_f32.iter()).for_each(|(row, got)| {
                 let expected: f32 = distance::InnerProduct::evaluate(row, input.as_slice());
                 assert_eq!(*got, expected);
             });
 
             // Squared L2
-            SquaredL2::process_into(&chunk, &input, &mut output);
+            SquaredL2::process_into(&chunk, &input, &mut output_f32);
 
             // Check outputs
-            std::iter::zip(base.row_iter(), output.iter()).for_each(|(row, got)| {
+            std::iter::zip(base.rows(), output_f32.iter()).for_each(|(row, got)| {
                 let expected: f32 = distance::SquaredL2::evaluate(row, input.as_slice());
                 assert_eq!(*got, expected);
+            });
+
+            // Cosine
+            Cosine::process_into(&chunk, &input, &mut output_dot);
+
+            // Check outputs
+            std::iter::zip(base.rows(), output_dot.iter()).for_each(|(row, got)| {
+                let expected: f32 = distance::Cosine::evaluate(row, input.as_slice());
+                let got: SimilarityScore<f32> = got.finish_cosine(input_norm);
+                assert_eq!(got.into_inner(), expected);
             });
         }
     }
@@ -1584,7 +1662,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_process_into_panics_on_from() {
-        let data = views::Matrix::<f32>::new(0.0, 5, 10);
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);
@@ -1596,9 +1674,23 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "incorrect input vector dim"]
+    fn test_process_into_cosine_panics_on_from() {
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
+        let chunk = Chunk::new(data.as_view().into()).unwrap();
+        assert_eq!(chunk.dimension(), 10);
+        assert_eq!(chunk.num_centers(), 5);
+
+        // Query is too large.
+        let query: Vec<f32> = vec![0.0; chunk.dimension() + 1];
+        let mut dst = vec![DotAndNorm::default(); chunk.num_centers()];
+        Cosine::process_into(&chunk, query.as_slice(), dst.as_mut_slice());
+    }
+
+    #[test]
     #[should_panic]
     fn test_process_into_panics_on_into() {
-        let data = views::Matrix::<f32>::new(0.0, 5, 10);
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);
@@ -1607,5 +1699,19 @@ mod tests {
         // Dst is too big.
         let mut dst = vec![0.0; chunk.num_centers() + 1];
         InnerProduct::process_into(&chunk, query.as_slice(), dst.as_mut_slice());
+    }
+
+    #[test]
+    #[should_panic = "incorrect output vector dim"]
+    fn test_process_into_cosine_panics_on_into() {
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
+        let chunk = Chunk::new(data.as_view().into()).unwrap();
+        assert_eq!(chunk.dimension(), 10);
+        assert_eq!(chunk.num_centers(), 5);
+
+        let query: Vec<f32> = vec![0.0; chunk.dimension()];
+        // Dst is too big.
+        let mut dst = vec![DotAndNorm::default(); chunk.num_centers() + 1];
+        Cosine::process_into(&chunk, query.as_slice(), dst.as_mut_slice());
     }
 }

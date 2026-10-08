@@ -12,7 +12,7 @@ use diskann::{
 use diskann_quantization::{product::BasicTable, views::ChunkOffsetsBase};
 use diskann_utils::{
     io::{Metadata, read_bin, write_bin},
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use rand::Rng;
 use tracing::info;
@@ -107,13 +107,16 @@ impl PQStorage {
         writer.seek(SeekFrom::Start(cumul_bytes[0] as u64))?;
 
         // Write PQ centroid vectors
-        let pivot_view = MatrixView::try_from(full_pivot_data, num_centers, dim)?;
+        let pivot_view = rowmajor::Ref::try_from_data(full_pivot_data, num_centers, dim)?;
         cumul_bytes[1] = cumul_bytes[0] + write_bin(pivot_view, writer)?;
 
         // Write the centroid of PQ centroid vectors
         let centroid_bytes = match centroid {
-            Some(centroid) => write_bin(MatrixView::column_vector(centroid), writer)?,
-            None => write_bin(Matrix::<f32>::new(0.0, dim, 1).as_view(), writer)?,
+            Some(centroid) => write_bin(rowmajor::Ref::column_vector(centroid), writer)?,
+            None => write_bin(
+                rowmajor::Owned::<f32>::from_element(dim, 1, 0.0).as_view(),
+                writer,
+            )?,
         };
         cumul_bytes[2] = cumul_bytes[1] + centroid_bytes;
 
@@ -121,14 +124,14 @@ impl PQStorage {
         let chunk_offsets_u32: Vec<u32> = chunk_offsets.iter().map(|&x| x as u32).collect();
         cumul_bytes[3] = cumul_bytes[2]
             + write_bin(
-                MatrixView::column_vector(chunk_offsets_u32.as_slice()),
+                rowmajor::Ref::column_vector(chunk_offsets_u32.as_slice()),
                 writer,
             )?;
 
         // Seek back to offset 0 and write the offset table.
         let cumul_bytes_u64: Vec<u64> = cumul_bytes.iter().map(|&x| x as u64).collect();
         write_bin_from(
-            MatrixView::column_vector(cumul_bytes_u64.as_slice()),
+            rowmajor::Ref::column_vector(cumul_bytes_u64.as_slice()),
             writer,
             0,
         )?;
@@ -170,7 +173,7 @@ impl PQStorage {
             self.read_pivot_file(&self.pivot_data_path, storage_provider)?;
 
         if centroid.as_slice().iter().any(|c| *c != 0.0) {
-            accum_row_inplace(pivots.as_mut_view(), centroid.as_slice())
+            accum_row_inplace(pivots.as_view_mut(), centroid.as_slice())
         }
 
         Self::pivot_data_into_basic_table(&self.pivot_data_path, pivots, chunk_offsets)
@@ -184,7 +187,7 @@ impl PQStorage {
         num_points_to_load: usize,
         num_pq_chunks: usize,
         storage_provider: &Storage,
-    ) -> ANNResult<Matrix<u8>> {
+    ) -> ANNResult<rowmajor::Owned<u8>> {
         info!(
             "Loading compressed from pq compressed data file {}...",
             pq_compressed_data,
@@ -215,7 +218,11 @@ impl PQStorage {
         &self,
         pq_pivots: &str,
         storage_provider: &Storage,
-    ) -> ANNResult<(Matrix<f32>, Matrix<f32>, Matrix<usize>)> {
+    ) -> ANNResult<(
+        rowmajor::Owned<f32>,
+        rowmajor::Owned<f32>,
+        rowmajor::Owned<usize>,
+    )> {
         if !storage_provider.exists(pq_pivots) {
             return Err(ANNError::message(format!(
                 "ERROR: PQ k-means pivot file not found: {pq_pivots}."
@@ -282,8 +289,8 @@ impl PQStorage {
 
     fn pivot_data_into_basic_table(
         pq_pivots: &str,
-        pivots: Matrix<f32>,
-        chunk_offsets: Matrix<usize>,
+        pivots: rowmajor::Owned<f32>,
+        chunk_offsets: rowmajor::Owned<usize>,
     ) -> ANNResult<BasicTable> {
         let offsets = ChunkOffsetsBase::new(chunk_offsets.into_inner()).map_err(|err| {
             ANNError::message(format!(
@@ -504,26 +511,30 @@ mod pq_storage_tests {
             let pivots = [0.0, 1.0, 2.0, 3.0];
             cumul_bytes[1] = cumul_bytes[0]
                 + write_bin(
-                    MatrixView::try_from(pivots.as_slice(), 2, 2).unwrap(),
+                    rowmajor::Ref::try_from_data(pivots.as_slice(), 2, 2).unwrap(),
                     &mut writer,
                 )
                 .unwrap();
 
             let centroid = [0.0, 0.0];
             cumul_bytes[2] = cumul_bytes[1]
-                + write_bin(MatrixView::column_vector(centroid.as_slice()), &mut writer).unwrap();
+                + write_bin(
+                    rowmajor::Ref::column_vector(centroid.as_slice()),
+                    &mut writer,
+                )
+                .unwrap();
 
             let chunk_offsets = [0_u32, 2_u32];
             cumul_bytes[3] = cumul_bytes[2]
                 + write_bin(
-                    MatrixView::try_from(chunk_offsets.as_slice(), 1, 2).unwrap(),
+                    rowmajor::Ref::try_from_data(chunk_offsets.as_slice(), 1, 2).unwrap(),
                     &mut writer,
                 )
                 .unwrap();
 
             let offsets: Vec<u64> = cumul_bytes.iter().map(|&offset| offset as u64).collect();
             write_bin_from(
-                MatrixView::column_vector(offsets.as_slice()),
+                rowmajor::Ref::column_vector(offsets.as_slice()),
                 &mut writer,
                 0,
             )
@@ -568,7 +579,11 @@ mod pq_storage_tests {
         {
             let mut writer = storage_provider.create_for_write(pivot_path).unwrap();
             let offsets = [METADATA_SIZE as u64, 0, 0];
-            write_bin(MatrixView::column_vector(offsets.as_slice()), &mut writer).unwrap();
+            write_bin(
+                rowmajor::Ref::column_vector(offsets.as_slice()),
+                &mut writer,
+            )
+            .unwrap();
         }
 
         assert!(

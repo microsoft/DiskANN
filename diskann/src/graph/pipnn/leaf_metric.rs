@@ -10,7 +10,7 @@
 //! triangle, which holds each pair below the diagonal.
 
 use crate::{ANNError, ANNResult};
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{
     Norm,
     norm::{FastL2Norm, FastL2NormSquared},
@@ -31,23 +31,23 @@ pub(super) trait LeafMetric: Send + Sync + 'static {
     ///
     /// `storage` has one row and one column per point.
     fn compute_distances(
-        points: MatrixView<'_, f32>,
-        storage: MutMatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
+        storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()>;
 }
 
 impl LeafMetric for L2 {
     fn compute_distances(
-        points: MatrixView<'_, f32>,
-        mut storage: MutMatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
+        mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         // The expanded L2 formula is `||x||² + ||y||² - 2(x·y)`.
         let squared_norms: Vec<f32> = points
-            .row_iter()
+            .rows()
             .map(|point| FastL2NormSquared.evaluate(point))
             .collect();
         // Initialize the norm terms before GEMM adds the dot-product term.
-        for (source, row) in storage.row_iter_mut().enumerate() {
+        for (source, row) in storage.rows_mut().enumerate() {
             let source_norm = squared_norms[source];
             for (distance, &target_norm) in row[..=source].iter_mut().zip(&squared_norms) {
                 *distance = source_norm + target_norm;
@@ -66,8 +66,8 @@ impl LeafMetric for L2 {
 
 impl LeafMetric for Cosine {
     fn compute_distances(
-        points: MatrixView<'_, f32>,
-        mut storage: MutMatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
+        mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         diskann_linalg::sgemm_aat_lower(
             points.nrows(),
@@ -78,11 +78,11 @@ impl LeafMetric for Cosine {
         )
         .map_err(ANNError::new)?;
         let norms: Vec<f32> = points
-            .row_iter()
+            .rows()
             .map(|point| FastL2Norm.evaluate(point))
             .collect();
         // Convert each lower-triangle dot to the bounded cosine distance.
-        for (source, row) in storage.row_iter_mut().enumerate() {
+        for (source, row) in storage.rows_mut().enumerate() {
             let source_norm = norms[source];
             for (distance, &target_norm) in row[..=source].iter_mut().zip(&norms) {
                 *distance = cosine_distance(*distance, source_norm, target_norm);
@@ -94,8 +94,8 @@ impl LeafMetric for Cosine {
 
 impl LeafMetric for InnerProduct {
     fn compute_distances(
-        points: MatrixView<'_, f32>,
-        mut storage: MutMatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
+        mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         diskann_linalg::sgemm_aat_lower(
             points.nrows(),
@@ -110,14 +110,14 @@ impl LeafMetric for InnerProduct {
 
 impl LeafMetric for CosineNormalized {
     fn compute_distances(
-        points: MatrixView<'_, f32>,
-        mut storage: MutMatrixView<'_, f32>,
+        points: rowmajor::Ref<'_, f32>,
+        mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
-        InnerProduct::compute_distances(points, storage.as_mut_view())?;
+        InnerProduct::compute_distances(points, storage.as_view_mut())?;
         // Keep the constant of `1 - dot`. Near neighbors then have distances near
         // zero, where floating-point spacing is finest. Later stages quantize these
         // distances, so the constant keeps more near neighbors distinguishable.
-        for (source, row) in storage.row_iter_mut().enumerate() {
+        for (source, row) in storage.rows_mut().enumerate() {
             row[..=source]
                 .iter_mut()
                 .for_each(|distance| *distance += 1.0);
@@ -142,13 +142,13 @@ mod tests {
         values[128] = 0.0;
         values[129..].fill(0.0);
         values[257] = 1.0;
-        let points = MatrixView::try_from(values.as_slice(), 2, 129).unwrap();
+        let points = rowmajor::Ref::try_from_data(values.as_slice(), 2, 129).unwrap();
         let mut output = [f32::NAN; 4];
         let expected = 16_777_344.0; // 4096^2 + 128.
 
         L2::compute_distances(
             points,
-            MutMatrixView::try_from(&mut output[..], 2, 2).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 2, 2).unwrap(),
         )
         .unwrap();
 
@@ -184,12 +184,13 @@ mod tests {
                     test_support::normalize(&mut values, dimensions);
                 }
                 let points =
-                    MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+                    rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions)
+                        .unwrap();
                 let mut output = vec![f32::NAN; point_count * point_count];
 
                 M::compute_distances(
                     points,
-                    MutMatrixView::try_from(output.as_mut_slice(), point_count, point_count)
+                    rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, point_count)
                         .unwrap(),
                 )
                 .unwrap_or_else(|error| {
@@ -244,12 +245,14 @@ mod tests {
             if scalar_metric == Metric::CosineNormalized {
                 test_support::normalize(&mut values, dimensions);
             }
-            let points = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+            let points =
+                rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions).unwrap();
             let mut output = vec![f32::NAN; point_count * point_count];
 
             M::compute_distances(
                 points,
-                MutMatrixView::try_from(output.as_mut_slice(), point_count, point_count).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, point_count)
+                    .unwrap(),
             )
             .unwrap_or_else(|error| panic!("shape={shape:?}: {error}"));
 
@@ -292,12 +295,12 @@ mod tests {
         #[case] values: &[f32],
         #[case] expected: [f32; 6],
     ) {
-        let points = MatrixView::try_from(values, 3, 2).unwrap();
+        let points = rowmajor::Ref::try_from_data(values, 3, 2).unwrap();
         let mut output = [42.0; 9];
 
         M::compute_distances(
             points,
-            MutMatrixView::try_from(&mut output[..], 3, 3).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 3, 3).unwrap(),
         )
         .unwrap();
 
@@ -314,12 +317,12 @@ mod tests {
     #[case::squared_norm_underflows(f32::MIN_POSITIVE)]
     fn cosine_gives_unit_distance_to_points_with_small_norms(#[case] coordinate: f32) {
         let values = [coordinate, 0.0, 0.0, 2.0];
-        let points = MatrixView::try_from(&values[..], 2, 2).unwrap();
+        let points = rowmajor::Ref::try_from_data(&values[..], 2, 2).unwrap();
         let mut output = [42.0; 4];
 
         Cosine::compute_distances(
             points,
-            MutMatrixView::try_from(&mut output[..], 2, 2).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 2, 2).unwrap(),
         )
         .unwrap();
 
@@ -339,8 +342,8 @@ mod tests {
         let mut output = [42.0; 9];
 
         M::compute_distances(
-            MatrixView::try_from(&values[..], 3, 2).unwrap(),
-            MutMatrixView::try_from(&mut output[..], 3, 3).unwrap(),
+            rowmajor::Ref::try_from_data(&values[..], 3, 2).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 3, 3).unwrap(),
         )
         .unwrap();
 
