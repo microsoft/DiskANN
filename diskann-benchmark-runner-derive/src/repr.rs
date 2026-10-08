@@ -23,8 +23,8 @@ pub(crate) struct Struct<'a> {
 impl<'a> Struct<'a> {
     pub(crate) fn parse(
         s: &'a syn::DataStruct,
-        doc: TokenStream,
         attrs: attributes::Struct,
+        doc: TokenStream,
     ) -> syn::Result<Self> {
         let attributes::Struct { rename_all } = attrs;
         let fields = Fields::parse(&s.fields, rename_all)?;
@@ -34,7 +34,7 @@ impl<'a> Struct<'a> {
         })
     }
 
-    pub(crate) fn for_each_type<F, R>(&self, mut f: F)
+    pub(crate) fn for_each_type<F>(&self, f: F)
     where
         F: FnMut(&syn::Type),
     {
@@ -57,7 +57,7 @@ impl<'a> Struct<'a> {
 // Enum //
 //////////
 
-struct Enum<'a> {
+pub(crate) struct Enum<'a> {
     doc: TokenStream,
     enum_repr: attributes::EnumRepr,
     variants: Vec<Variant<'a>>,
@@ -75,7 +75,7 @@ impl<'a> Enum<'a> {
         } = attr;
 
         // Parse all variants.
-        let mut variants = enum_
+        let variants = enum_
             .variants
             .iter()
             .map(|v| Variant::parse(v, rename_all))
@@ -93,11 +93,6 @@ impl<'a> Enum<'a> {
             }
         }
 
-        let internal_tag = match &enum_repr {
-            attributes::EnumRepr::Internal { tag } => Some(tag.value()),
-            attributes::EnumRepr::External | attributes::EnumRepr::Adjacent { .. } => None,
-        };
-
         // Ensure that:
         //
         // 1. No field name conflicts with the tag.
@@ -108,9 +103,7 @@ impl<'a> Enum<'a> {
                 match &v.fields {
                     Fields::Named(named) => {
                         for field in named.iter() {
-                            // Check if the field name conflicts with the internal tag.
-                            if let Some(tag) = internal_tag.as_ref()
-                                && tag == &field.name.value()
+                            if tag == field.name.value()
                             {
                                 return Err(syn::Error::new_spanned(
                                     &field.name,
@@ -133,7 +126,7 @@ impl<'a> Enum<'a> {
         Ok(Self { doc, enum_repr, variants })
     }
 
-    pub(crate) fn for_each_type<F, R>(&self, mut f: F)
+    pub(crate) fn for_each_type<F>(&self, mut f: F)
     where
         F: FnMut(&syn::Type),
     {
@@ -154,7 +147,7 @@ impl<'a> Enum<'a> {
         let variants = self.variants.iter().map(|v| v.emit(path));
         let doc = &self.doc;
         quote! {
-            #path::type::enum_(
+            #path::Type::enum_(
                 #enum_repr,
                 [#(#variants),*],
                 #doc
@@ -231,7 +224,7 @@ impl<'a> NamedField<'a> {
         let doc = &self.doc;
         let name = &self.name;
         quote_spanned! {
-            ty.span()=> #path::tree::NamedFields::new::<#ty>(#name, #doc)
+            ty.span()=> #path::tree::NamedField::new::<#ty>(#name, #doc)
         }
     }
 }
@@ -348,7 +341,7 @@ impl<'a> Variant<'a> {
         })
     }
 
-    fn for_each_type<F>(&self, mut f: F)
+    fn for_each_type<F>(&self, f: F)
     where
         F: FnMut(&syn::Type),
     {

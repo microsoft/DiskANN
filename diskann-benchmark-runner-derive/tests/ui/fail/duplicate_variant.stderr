@@ -1,4 +1,4 @@
-error: Variant name "foo" found more than once
+error: Variant name "foo" seen more than once
   --> tests/ui/fail/duplicate_variant.rs:12:22
    |
 12 |     #[serde(rename = "foo")]

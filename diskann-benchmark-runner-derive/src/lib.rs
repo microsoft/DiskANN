@@ -3,11 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use std::collections::HashSet;
-
 use proc_macro2::TokenStream;
-use quote::{quote, quote_spanned};
-use syn::{Data, DeriveInput, Fields, parse_macro_input, parse_quote, spanned::Spanned};
+use quote::{quote};
+use syn::{Data, DeriveInput, parse_macro_input, parse_quote};
 
 mod attributes;
 mod repr;
@@ -126,35 +124,11 @@ fn add_generic_bounds(generics: &mut syn::Generics) {
     }
 }
 
-/// Add a bound `T: Reflect` for each type in the field.
-///
-/// For example, if a struct definition looks like this:
-/// ```
-/// struct Foo {
-///     bar: usize,
-/// }
-/// ```
-/// This will add bounds like this
-/// ```text
-/// impl Reflect for Foo
-/// where
-///     usize: Reflect
-/// {
-///    ...
-/// }
-/// ```
-fn add_field_bounds<'a, I>(generics: &mut syn::Generics, fields: I)
-where
-    I: IntoIterator<Item = &'a syn::Field>,
-{
-    let path = crate_name();
-    for field in fields {
-        let ty = &field.ty;
-        generics
-            .make_where_clause()
-            .predicates
-            .push(parse_quote!(#ty: #path::Reflect));
-    }
+/// Add a bound `T: Reflect`.
+fn add_type_bound(generics: &mut syn::Generics, path: &syn::Path, ty: &syn::Type) {
+    generics.make_where_clause()
+        .predicates
+        .push(parse_quote!(#ty: #path::Reflect))
 }
 
 /// Generate the expression for a type name.
@@ -273,149 +247,14 @@ fn generate_type_name_body(
     }
 }
 
-fn build_fields(
-    fields: &syn::Fields,
-    generics: &mut syn::Generics,
-    rename_all: attributes::RenameAll,
-    enum_repr: Option<&attributes::EnumRepr>,
-) -> syn::Result<TokenStream> {
-    let path = crate_name();
-
-    match fields {
-        Fields::Named(fields) => {
-            add_field_bounds(generics, &fields.named);
-            let list = named_fields(&fields.named, rename_all, enum_repr)?;
-            Ok(quote!(#path::tree::Fields::Named(vec![#(#list),*])))
-        }
-        Fields::Unnamed(fields) => {
-            add_field_bounds(generics, &fields.unnamed);
-            let list = unnamed_fields(&fields.unnamed, enum_repr)?;
-
-            // Unnamed fields of length 1 become new-types instead.
-            let ts = if list.len() == 1 {
-                let new_type = &list[0];
-                quote!(#path::tree::Fields::NewType(#new_type))
-            } else {
-                quote!(#path::tree::Fields::Unnamed(vec![#(#list),*]))
-            };
-
-            Ok(ts)
-        }
-        Fields::Unit => Ok(quote!(#path::tree::Fields::Unit)),
-    }
-}
-
-fn named_fields<'a, I>(
-    fields: I,
-    rename_all: attributes::RenameAll,
-    enum_repr: Option<&attributes::EnumRepr>,
-) -> syn::Result<Vec<TokenStream>>
-where
-    I: IntoIterator<Item = &'a syn::Field>,
-{
-    use attributes::EnumRepr;
-
-    let path = crate_name();
-
-    // Track the names of fields that have been emitted.
-    // If a rename causes a collision, we return an error.
-    let mut seen = HashSet::<String>::new();
-
-    fields
-        .into_iter()
-        .map(move |f| {
-            let ty = &f.ty;
-            let ident = f
-                .ident
-                .as_ref()
-                .expect("named fields should have identifiers");
-
-            let name = syn::LitStr::new(strip_raw_prefix(&ident.to_string()), ident.span());
-
-            let doc = format_docstrings(&f.attrs);
-            let attributes::Field { rename_field } = attributes::Field::parse(&f.attrs)?;
-            let name = rename_field.apply_to_field(name, rename_all);
-
-            // If we are dealing with an enum - we need to rule out the situation where:
-            //
-            // 1. There is an internally tagged enum.
-            // 2. The tag field conflicts with the name of the struct.
-            if let Some(enum_repr) = enum_repr {
-                match enum_repr {
-                    EnumRepr::External | EnumRepr::Adjacent { .. } => {}
-                    EnumRepr::Internal { tag } => {
-                        if name.value() == tag.value() {
-                            return Err(syn::Error::new_spanned(
-                                name,
-                                "field conflicts with internally tagged discriminant",
-                            ));
-                        }
-                    }
-                }
-            }
-
-            // Ensure uniqueness.
-            if seen.insert(name.value()) {
-                Ok(quote_spanned! {
-                    ty.span()=> #path::tree::NamedField::new::<#ty>(#name, #doc)
-                })
-            } else {
-                Err(syn::Error::new_spanned(
-                    &name,
-                    format!("Field name \"{}\" found more than once", name.value()),
-                ))
-            }
-        })
-        .collect()
-}
-
-fn unnamed_fields<P>(
-    fields: &syn::punctuated::Punctuated<syn::Field, P>,
-    enum_repr: Option<&attributes::EnumRepr>,
-) -> syn::Result<Vec<TokenStream>>
-where
-    P: quote::ToTokens,
-{
-    use attributes::EnumRepr;
-
-    // Rejects non-newtype tuple fields when "internal" tagging is used, since there is no
-    // field to use for the tag.
-    //
-    // Like serde, we support newtypes since we cannot rule out syntactically whether
-    // or not the tag can be embedded in the internal value.
-    if let Some(enum_repr) = enum_repr {
-        match enum_repr {
-            EnumRepr::External | EnumRepr::Adjacent { .. } => {}
-            EnumRepr::Internal { .. } => {
-                if fields.len() != 1 {
-                    return Err(syn::Error::new_spanned(
-                        fields,
-                        "non-newtype tuple structs are not compatible with internal enum tagging",
-                    ));
-                }
-            }
-        }
-    }
-
-    let path = crate_name();
-    let ts: Vec<_> = fields
-        .iter()
-        .map(move |f| {
-            let ty = &f.ty;
-            let doc = format_docstrings(&f.attrs);
-            quote_spanned! { ty.span()=> #path::tree::UnnamedField::new::<#ty>(#doc) }
-        })
-        .collect();
-
-    Ok(ts)
-}
-
 /// Generate the `Reflect` implementation.
 fn process_struct(
     input: &DeriveInput,
     s: &syn::DataStruct,
     common: DeriveCommon,
 ) -> syn::Result<TokenStream> {
+    let type_name = &input.ident;
+
     let DeriveCommon {
         doc,
         mut generics,
@@ -423,23 +262,18 @@ fn process_struct(
         container,
     } = common;
 
-    // Validate that the attributes we parsed are compatible with a `struct` definition.
-    let attributes::Struct { rename_all } = container.try_as_struct()?;
+    let s = repr::Struct::parse(s, container.try_as_struct()?, doc)?;
 
-    let type_name = &input.ident;
     let path = crate_name();
-
-    let fields = build_fields(&s.fields, &mut generics, rename_all, None)?;
+    s.for_each_type(|ty| add_type_bound(&mut generics, &path, ty));
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let emit = s.emit(&path);
 
     let ts = quote! {
         impl #impl_generics #path::Reflect for #type_name #ty_generics #where_clause {
             fn ty() -> #path::Type {
-                #path::Type::aggregate(
-                    #fields,
-                    #doc,
-                )
+                #emit
             }
 
             fn format_type_name(f: &mut dyn ::std::fmt::Write) -> ::std::fmt::Result {
@@ -460,6 +294,8 @@ fn process_enum(
     e: &syn::DataEnum,
     common: DeriveCommon,
 ) -> syn::Result<TokenStream> {
+    let type_name = &input.ident;
+
     let DeriveCommon {
         doc,
         mut generics,
@@ -467,68 +303,18 @@ fn process_enum(
         container,
     } = common;
 
-    // Validate that the attributes we parsed are compatible with an `enum` definition.
-    let attributes::Enum {
-        rename_all,
-        enum_repr,
-    } = container.as_enum();
+    let e = repr::Enum::parse(e, container.as_enum(), doc)?;
 
-    let type_name = &input.ident;
     let path = crate_name();
-
-    let mut seen = HashSet::<String>::new();
-    let variants = e
-        .variants
-        .iter()
-        .map(|v| -> syn::Result<TokenStream> {
-            let doc = format_docstrings(&v.attrs);
-            let name = syn::LitStr::new(strip_raw_prefix(&v.ident.to_string()), v.ident.span());
-            let attributes::Variant {
-                rename_variant,
-                rename_variant_fields,
-            } = attributes::Variant::parse(&v.attrs)?;
-
-            let fields = build_fields(
-                &v.fields,
-                &mut generics,
-                rename_variant_fields,
-                Some(&enum_repr),
-            )?;
-
-            // Rename the variant as needed.
-            let name = rename_variant.apply_to_variant(name, rename_all);
-            if seen.insert(name.value()) {
-                Ok(quote!(#path::tree::Variant::new(#name, #fields, #doc)))
-            } else {
-                Err(syn::Error::new_spanned(
-                    &name,
-                    format!("Variant name \"{}\" found more than once", name.value()),
-                ))
-            }
-        })
-        .collect::<syn::Result<Vec<TokenStream>>>()?;
-
-    // Build the enum representation.
-    let enum_repr = match enum_repr {
-        attributes::EnumRepr::External => quote!(#path::tree::EnumRepr::External),
-        attributes::EnumRepr::Internal { tag } => {
-            quote!(#path::tree::EnumRepr::Internal { tag: #tag })
-        }
-        attributes::EnumRepr::Adjacent { tag, content } => {
-            quote!(#path::tree::EnumRepr::Adjacent { tag: #tag, content: #content })
-        }
-    };
+    e.for_each_type(|ty| add_type_bound(&mut generics, &path, ty));
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
+    let emit = e.emit(&path);
     let ts = quote! {
         impl #impl_generics #path::Reflect for #type_name #ty_generics #where_clause {
             fn ty() -> #path::Type {
-                #path::Type::enum_(
-                    #enum_repr,
-                    [#(#variants),*],
-                    #doc,
-                )
+                #emit
             }
 
             fn format_type_name(f: &mut dyn ::std::fmt::Write) -> ::std::fmt::Result {

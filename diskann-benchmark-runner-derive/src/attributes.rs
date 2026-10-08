@@ -5,8 +5,6 @@
 
 //! These are modeled after the attributes documented in <https://serde.rs/attributes.html>.
 
-use proc_macro2::Span;
-
 #[must_use]
 fn is_serde_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("serde")

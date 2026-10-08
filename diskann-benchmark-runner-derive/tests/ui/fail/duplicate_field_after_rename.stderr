@@ -1,4 +1,4 @@
-error: Field name "foo-bar" found more than once
+error: field name "foo-bar" seen more than once
   --> tests/ui/fail/duplicate_field_after_rename.rs:15:5
    |
 15 |     foo_bar: usize,
