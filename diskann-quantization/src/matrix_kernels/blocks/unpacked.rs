@@ -350,7 +350,7 @@ impl<T, const EXTENT: usize> Panel<'_, T, EXTENT> {
 #[derive(Debug, Clone, Copy)]
 pub(in crate::matrix_kernels) struct Remainder<'a, T, const CAPACITY: usize> {
     ptr: Slice<'a, T>,
-    _start: usize,
+    start: usize,
     extent: NonZeroUsize,
     k: Bound,
 }
@@ -370,7 +370,7 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
 
         Self {
             ptr,
-            _start: start,
+            start,
             extent,
             k,
         }
@@ -385,7 +385,7 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
 
     /// Return the index of the first band in `self`'s immediate parent [`View`].
     pub(in crate::matrix_kernels) fn start(&self) -> usize {
-        self._start
+        self.start
     }
 
     /// Return the number of elements in each "band" of `self`.

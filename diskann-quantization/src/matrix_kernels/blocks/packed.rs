@@ -228,6 +228,8 @@ impl<T, const SZ: usize, const PACK: usize> View<'_, T, SZ, PACK> {
 
 /// A single block of `SZ` bands and `k` logical columns laid out according to [`BlockLayout`].
 ///
+/// Each pack contains `PACK` consecutive columns from every band, spanning `SZ * PACK` elements.
+///
 /// # Class Invariants
 ///
 /// The bound `ptr.len()` must be equal to `BlockLayout::<SZ, PACK>::block_len(k)`.
@@ -294,6 +296,19 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
                     .truncate(Elements::new(SZ * PACK)),
             )
         }
+    }
+
+    /// Return the number of elements spanned by one pack.
+    pub(in crate::matrix_kernels) const fn pack_stride(&self) -> Elements<T> {
+        Elements::new(BlockLayout::<SZ, PACK>::group_offset(1))
+    }
+
+    /// Return the number of packs in `self`.
+    ///
+    /// `k` must be equal to the contraction dimension tracked by [`Self::k`].
+    pub(in crate::matrix_kernels) fn packs(&self, k: DimK) -> usize {
+        bounds::check_eq!(self.k, k.value());
+        BlockLayout::<SZ, PACK>::groups(k.value().get())
     }
 }
 
@@ -368,7 +383,71 @@ mod tests {
         views::rowmajor::{self, Matrix},
     };
 
-    use crate::matrix_kernels::test_util::panic_message_for;
+    use crate::{matrix_kernels::test_util::panic_message_for, multi_vector::BlockTransposed};
+
+    /// Pin the physical element order against the source matrix, rather than inferring it
+    /// from the layout documentation. Kernels index panel memory with this offset formula.
+    #[test]
+    fn test_pack_layout() {
+        for ncols in 1..20 {
+            assert_pack_layout::<1, 1>(3, ncols);
+            assert_pack_layout::<4, 1>(9, ncols);
+            assert_pack_layout::<8, 2>(20, ncols);
+            assert_pack_layout::<8, 4>(20, ncols);
+            assert_pack_layout::<16, 4>(33, ncols);
+        }
+    }
+
+    fn assert_pack_layout<const SZ: usize, const PACK: usize>(nrows: usize, ncols: usize) {
+        let ctx = format_args!("SZ = {SZ}, PACK = {PACK}, nrows = {nrows}, ncols = {ncols}");
+
+        // Values start at one so that zero unambiguously marks a padded slot.
+        let mut value = 0.0;
+        let matrix = rowmajor::Owned::from_fn(nrows, ncols, |_| {
+            value += 1.0;
+            value
+        });
+
+        let bt = BlockTransposed::<f32, SZ, PACK>::from_matrix_view(matrix.as_view());
+        let padded = bt.padded_ncols();
+
+        let view = View::<f32, SZ, PACK>::from_block_transposed(bt.as_view()).unwrap();
+        assert_eq!(view.blocks().get(), nrows.div_ceil(SZ), "{ctx}");
+        assert_eq!(view.k().value(), ncols, "{ctx}");
+
+        let dim_k = DimK::from_bound(view.k());
+        let mut blocks = 0;
+
+        view.checked_visit_panels(|panel, block| {
+            assert_eq!(block, blocks, "{ctx}");
+            assert_eq!(panel.packs(dim_k), padded / PACK, "{ctx}");
+            assert_eq!(panel.pack_stride().value(), SZ * PACK, "{ctx}");
+
+            let flat = panel.checked_as_std_slice();
+            assert_eq!(flat.len(), SZ * padded, "{ctx}");
+
+            for col in 0..padded {
+                for row in 0..SZ {
+                    let global_row = block * SZ + row;
+                    let expected = if col < ncols && global_row < nrows {
+                        *matrix.element(global_row, col)
+                    } else {
+                        0.0
+                    };
+
+                    let offset = (col / PACK) * SZ * PACK + row * PACK + (col % PACK);
+                    assert_eq!(
+                        flat[offset], expected,
+                        "{ctx}, block = {block}, row = {row}, col = {col}",
+                    );
+                }
+            }
+
+            blocks += 1;
+        });
+
+        assert_eq!(blocks, nrows.div_ceil(SZ), "{ctx}");
+    }
 
     #[test]
     fn test_visit_panels() {
