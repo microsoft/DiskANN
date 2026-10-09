@@ -3,16 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use proc_macro2::TokenStream;
-use quote::quote;
-use syn::{Data, DeriveInput, parse_macro_input, parse_quote};
+use syn::{DeriveInput, parse_macro_input};
 
-mod attributes;
-mod repr;
-
-fn crate_name() -> syn::Path {
-    syn::parse_quote!(::diskann_benchmark_runner::reflect)
-}
+mod reflect;
 
 /// Derive macro for the `Reflect` trait.
 ///
@@ -45,12 +38,7 @@ fn crate_name() -> syn::Path {
 pub fn derive_reflect(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    expand(&input)
+    reflect::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
-}
-
-fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
-    let input = repr::Input::parse(input)?;
-    Ok(input.emit(&crate_name()))
 }

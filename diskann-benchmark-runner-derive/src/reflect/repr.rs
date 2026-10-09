@@ -9,7 +9,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn::{parse_quote, spanned::Spanned};
 
-use crate::attributes;
+use super::attributes;
 
 pub(crate) struct Input<'a> {
     type_name: &'a syn::Ident,
