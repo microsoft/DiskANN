@@ -3,13 +3,14 @@
  * Licensed under the MIT license.
  */
 
-//! JSONL parsing and dense Bitslice label-index construction.
+//! JSONL parsing and label-index construction.
 
 use crate::{
+    bloom::{append_label_rows, BloomFilterConfig, BLOOM_FORMAT},
     error::EncodedLabelIndexError,
     format::{
-        validate_label, write_u32, write_u64, BITSLICE_FORMAT, LABEL_INDEX_MAGIC,
-        LABEL_INDEX_VERSION, MAX_LABEL_COUNT,
+        validate_label, write_u32, write_u64, BITSLICE_FORMAT, COUNTED_BLOOM_INDEX_VERSION,
+        LABEL_INDEX_MAGIC, LABEL_INDEX_VERSION, MAX_LABEL_COUNT,
     },
 };
 use serde_json::{Map, Value};
@@ -23,6 +24,7 @@ use std::{
 struct ScannedLabels {
     labels: Vec<String>,
     label_ids: HashMap<String, u32>,
+    counts: Vec<u32>,
     num_vectors: u32,
 }
 
@@ -43,6 +45,7 @@ pub fn encode_label_index_jsonl(
         labels,
         label_ids,
         num_vectors,
+        ..
     } = scan_label_jsonl(input_path)?;
     let words_per_label = (num_vectors as usize).div_ceil(64);
     let total_words = labels.len().checked_mul(words_per_label).ok_or_else(|| {
@@ -69,12 +72,60 @@ pub fn encode_label_index_jsonl(
     )
 }
 
+/// Encode a JSONL label file as a versioned transposed Bloom index.
+///
+/// The accepted JSONL forms are identical to [`encode_label_index_jsonl`]. Each label hashes to
+/// `config.hash_count()` distinct rows in a fixed `config.bit_count()`-row vector bitmap.
+pub fn encode_bloom_label_index_jsonl(
+    input_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    config: BloomFilterConfig,
+) -> Result<(), EncodedLabelIndexError> {
+    let input_path = input_path.as_ref();
+    let ScannedLabels {
+        labels,
+        label_ids,
+        counts,
+        num_vectors,
+    } = scan_label_jsonl(input_path)?;
+    let words_per_row = (num_vectors as usize).div_ceil(64);
+    let total_words = (config.bit_count() as usize)
+        .checked_mul(words_per_row)
+        .ok_or_else(|| EncodedLabelIndexError::Invalid("Bloom output size overflow".to_string()))?;
+    let mut bits = Vec::new();
+    bits.try_reserve_exact(total_words)
+        .map_err(|_| EncodedLabelIndexError::Invalid("cannot reserve Bloom output".to_string()))?;
+    bits.resize(total_words, 0);
+
+    let label_rows = build_bloom_label_rows(&labels, config)?;
+    populate_bloom_bits(
+        input_path,
+        &label_ids,
+        num_vectors,
+        words_per_row,
+        config,
+        &label_rows,
+        &mut bits,
+    )?;
+    write_bloom_label_index(
+        output_path.as_ref(),
+        num_vectors,
+        &labels,
+        &counts,
+        words_per_row,
+        config,
+        &bits,
+    )
+}
+
 fn scan_label_jsonl(input_path: &Path) -> Result<ScannedLabels, EncodedLabelIndexError> {
     let reader = BufReader::new(File::open(input_path)?);
     let mut labels = Vec::<String>::new();
     let mut label_ids = HashMap::<String, u32>::new();
+    let mut counts = Vec::<u32>::new();
     let mut max_doc_id = None::<u32>;
     let mut seen_doc_ids = HashSet::<u32>::new();
+    let mut seen_labels = HashSet::<u32>::new();
 
     for document in read_documents(reader) {
         let (doc_id, document_labels) = document?;
@@ -85,20 +136,32 @@ fn scan_label_jsonl(input_path: &Path) -> Result<ScannedLabels, EncodedLabelInde
         }
         max_doc_id = Some(max_doc_id.map_or(doc_id, |current| current.max(doc_id)));
 
+        seen_labels.clear();
         for label in document_labels {
-            if label_ids.contains_key(&label) {
-                continue;
+            let label_id = if let Some(&label_id) = label_ids.get(&label) {
+                label_id
+            } else {
+                if labels.len() >= MAX_LABEL_COUNT {
+                    return Err(EncodedLabelIndexError::Invalid(format!(
+                        "label count exceeds limit {MAX_LABEL_COUNT}"
+                    )));
+                }
+                let label_id = u32::try_from(labels.len()).map_err(|_| {
+                    EncodedLabelIndexError::Invalid("label count exceeds u32".to_string())
+                })?;
+                label_ids.insert(label.clone(), label_id);
+                labels.push(label);
+                counts.push(0);
+                label_id
+            };
+            if seen_labels.insert(label_id) {
+                let count = &mut counts[label_id as usize];
+                *count = count.checked_add(1).ok_or_else(|| {
+                    EncodedLabelIndexError::Invalid(format!(
+                        "vector count for label ID {label_id} exceeds u32"
+                    ))
+                })?;
             }
-            if labels.len() >= MAX_LABEL_COUNT {
-                return Err(EncodedLabelIndexError::Invalid(format!(
-                    "label count exceeds limit {MAX_LABEL_COUNT}"
-                )));
-            }
-            let label_id = u32::try_from(labels.len()).map_err(|_| {
-                EncodedLabelIndexError::Invalid("label count exceeds u32".to_string())
-            })?;
-            label_ids.insert(label.clone(), label_id);
-            labels.push(label);
         }
     }
 
@@ -110,6 +173,7 @@ fn scan_label_jsonl(input_path: &Path) -> Result<ScannedLabels, EncodedLabelInde
     Ok(ScannedLabels {
         labels,
         label_ids,
+        counts,
         num_vectors,
     })
 }
@@ -144,6 +208,67 @@ fn populate_bits(
             })? as usize;
             let word = label_id * words_per_label + doc_id as usize / 64;
             bits[word] |= 1u64 << (doc_id % 64);
+        }
+    }
+    Ok(())
+}
+
+fn build_bloom_label_rows(
+    labels: &[String],
+    config: BloomFilterConfig,
+) -> Result<Vec<u32>, EncodedLabelIndexError> {
+    let total_rows = labels
+        .len()
+        .checked_mul(config.hash_count() as usize)
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("Bloom label-row table size overflow".to_string())
+        })?;
+    let mut label_rows = Vec::new();
+    label_rows.try_reserve_exact(total_rows).map_err(|_| {
+        EncodedLabelIndexError::Invalid("cannot reserve Bloom label-row table".to_string())
+    })?;
+    for label in labels {
+        append_label_rows(label, config, &mut label_rows);
+    }
+    Ok(label_rows)
+}
+
+fn populate_bloom_bits(
+    input_path: &Path,
+    label_ids: &HashMap<String, u32>,
+    num_vectors: u32,
+    words_per_row: usize,
+    config: BloomFilterConfig,
+    label_rows: &[u32],
+    bits: &mut [u64],
+) -> Result<(), EncodedLabelIndexError> {
+    let reader = BufReader::new(File::open(input_path)?);
+    let mut seen_doc_ids = HashSet::<u32>::new();
+    let hash_count = config.hash_count() as usize;
+
+    for document in read_documents(reader) {
+        let (doc_id, document_labels) = document?;
+        if doc_id >= num_vectors {
+            return Err(EncodedLabelIndexError::Invalid(format!(
+                "doc_id {doc_id} exceeds the vector count discovered during encoding"
+            )));
+        }
+        if !seen_doc_ids.insert(doc_id) {
+            return Err(EncodedLabelIndexError::Invalid(format!(
+                "duplicate doc_id {doc_id} in label JSONL"
+            )));
+        }
+        for label in document_labels {
+            let label_id = label_ids.get(&label).copied().ok_or_else(|| {
+                EncodedLabelIndexError::Invalid(format!(
+                    "label '{label}' appeared after the encoding dictionary was built"
+                ))
+            })? as usize;
+            let row_offset = label_id * hash_count;
+            for &row in &label_rows[row_offset..row_offset + hash_count] {
+                let word = row as usize * words_per_row + doc_id as usize / 64;
+                bits[word] |= 1u64 << (doc_id % 64);
+            }
         }
     }
     Ok(())
@@ -300,6 +425,75 @@ fn write_label_index(
     write_u64(&mut writer, words_per_label as u64)?;
     for word in bits {
         write_u64(&mut writer, *word)?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_bloom_label_index(
+    path: &Path,
+    num_vectors: u32,
+    labels: &[String],
+    counts: &[u32],
+    words_per_row: usize,
+    config: BloomFilterConfig,
+    bits: &[u64],
+) -> Result<(), EncodedLabelIndexError> {
+    if labels.len() > MAX_LABEL_COUNT {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "label count {} exceeds limit {MAX_LABEL_COUNT}",
+            labels.len()
+        )));
+    }
+    if num_vectors == 0 {
+        return Err(EncodedLabelIndexError::Invalid(
+            "label-index vector count cannot be zero".to_string(),
+        ));
+    }
+    if counts.len() != labels.len()
+        || counts
+            .iter()
+            .any(|&count| count == 0 || count > num_vectors)
+    {
+        return Err(EncodedLabelIndexError::Invalid(
+            "Bloom label counts must match the dictionary and vector count".to_string(),
+        ));
+    }
+    let expected_words = (config.bit_count() as usize)
+        .checked_mul(words_per_row)
+        .ok_or_else(|| EncodedLabelIndexError::Invalid("Bloom output size overflow".to_string()))?;
+    if bits.len() != expected_words {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "Bloom payload has {} words; expected {expected_words}",
+            bits.len()
+        )));
+    }
+
+    let mut writer = BufWriter::new(File::create(path)?);
+    writer.write_all(&LABEL_INDEX_MAGIC)?;
+    write_u32(&mut writer, COUNTED_BLOOM_INDEX_VERSION)?;
+    write_u32(&mut writer, BLOOM_FORMAT)?;
+    write_u64(&mut writer, u64::from(num_vectors))?;
+    write_u64(&mut writer, labels.len() as u64)?;
+
+    for label in labels {
+        validate_label(label)?;
+        let bytes = label.as_bytes();
+        let len = u32::try_from(bytes.len()).map_err(|_| {
+            EncodedLabelIndexError::Invalid(format!("label '{label}' is too long to encode"))
+        })?;
+        write_u32(&mut writer, len)?;
+        writer.write_all(bytes)?;
+    }
+
+    write_u32(&mut writer, config.bit_count())?;
+    write_u32(&mut writer, config.hash_count())?;
+    write_u64(&mut writer, words_per_row as u64)?;
+    for word in bits {
+        write_u64(&mut writer, *word)?;
+    }
+    for &count in counts {
+        write_u32(&mut writer, count)?;
     }
     writer.flush()?;
     Ok(())

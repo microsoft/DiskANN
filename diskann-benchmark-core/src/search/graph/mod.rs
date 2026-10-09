@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+pub mod hybrid;
 pub mod inline;
 pub mod knn;
 pub mod multihop;
@@ -10,6 +11,7 @@ pub mod range;
 
 pub mod strategy;
 
+pub use hybrid::Hybrid;
 pub use inline::InlineFilterSearch;
 pub use knn::{KNN, KnnParams};
 pub use multihop::MultiHop;

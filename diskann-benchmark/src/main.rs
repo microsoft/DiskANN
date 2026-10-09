@@ -13,6 +13,11 @@ mod multi_vector;
 mod utils;
 
 use diskann_benchmark_runner as runner;
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 
 fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
@@ -29,8 +34,187 @@ struct Cli {
     #[arg(long, action)]
     quiet: bool,
 
+    #[command(subcommand)]
+    command: CliCommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum CliCommand {
+    /// Build and save a full-precision u8 memory graph without running searches.
+    BuildMemoryAnn(BuildMemoryAnn),
     #[command(flatten)]
-    app: runner::App,
+    Runner(runner::app::Commands),
+}
+
+#[derive(Debug, clap::Args)]
+struct BuildMemoryAnn {
+    /// Maximum graph degree (R).
+    #[arg(long)]
+    r: usize,
+    /// Build search list length (L).
+    #[arg(long)]
+    l: usize,
+    /// DiskANN u8 matrix file containing the input embeddings.
+    #[arg(long)]
+    input: PathBuf,
+    /// Number of threads used while building the memory graph.
+    #[arg(long)]
+    threads: usize,
+    /// Saved graph prefix; defaults to index.rR_lL beside the input file.
+    #[arg(long)]
+    output: Option<PathBuf>,
+    /// Validate inputs without building the graph.
+    #[arg(long)]
+    dry_run: bool,
+    /// Permit a slow debug build, intended only for small tests.
+    #[arg(long)]
+    allow_debug: bool,
+}
+
+impl BuildMemoryAnn {
+    fn absolute(path: &Path) -> anyhow::Result<PathBuf> {
+        if path.is_absolute() {
+            Ok(path.to_path_buf())
+        } else {
+            Ok(std::env::current_dir()?.join(path))
+        }
+    }
+
+    fn with_suffix(prefix: &Path, suffix: &str) -> PathBuf {
+        let mut path = prefix.as_os_str().to_os_string();
+        path.push(suffix);
+        path.into()
+    }
+
+    fn build_paths(&self) -> anyhow::Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
+        use anyhow::{ensure, Context};
+
+        ensure!(
+            self.r > 0 && self.l > 0 && self.threads > 0,
+            "R, L, and threads must be positive"
+        );
+        let input = Self::absolute(&self.input)?;
+        let mut file = File::open(&input)
+            .with_context(|| format!("cannot open input embedding file {}", input.display()))?;
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header)?;
+        let points = u32::from_le_bytes(header[..4].try_into()?);
+        let dimensions = u32::from_le_bytes(header[4..].try_into()?);
+        ensure!(
+            points > 0 && dimensions > 0,
+            "embedding header must have nonzero rows and dimensions"
+        );
+        let size = u64::from(points)
+            .checked_mul(u64::from(dimensions))
+            .and_then(|size| size.checked_add(8))
+            .ok_or_else(|| anyhow::anyhow!("embedding file size overflow"))?;
+        ensure!(
+            file.metadata()?.len() == size,
+            "embedding file {} must have {size} bytes for {points} x {dimensions} u8 values",
+            input.display()
+        );
+
+        let prefix = match &self.output {
+            Some(output) => Self::absolute(output)?,
+            None => input.with_file_name(format!("index.r{}_l{}", self.r, self.l)),
+        };
+        ensure!(
+            prefix.parent().is_some_and(Path::is_dir) && !prefix.is_dir(),
+            "output prefix {} must have an existing parent directory and cannot be a directory",
+            prefix.display()
+        );
+        let metadata = diskann_providers::storage::AsyncIndexMetadata::new(
+            prefix.to_string_lossy().to_string(),
+        );
+        for graph_file in [
+            prefix.clone(),
+            PathBuf::from(metadata.data_path()),
+            PathBuf::from(metadata.additional_points_id_path()),
+        ] {
+            ensure!(
+                !graph_file.exists(),
+                "saved graph file already exists: {}",
+                graph_file.display()
+            );
+        }
+        let runbook = Self::with_suffix(&prefix, ".build.runbook.json");
+        let results = Self::with_suffix(&prefix, ".build.results.json");
+        ensure!(
+            !results.exists(),
+            "result file already exists: {}",
+            results.display()
+        );
+        Ok((input, prefix, runbook, results))
+    }
+
+    fn run(
+        &self,
+        registry: &runner::Registry,
+        mut output: &mut dyn runner::Output,
+    ) -> anyhow::Result<()> {
+        use anyhow::{ensure, Context};
+
+        let (input, prefix, runbook, results) = self.build_paths()?;
+        let config = serde_json::json!({
+            "search_directories": [input.parent().ok_or_else(|| anyhow::anyhow!("input has no parent"))?],
+            "jobs": [{
+                "type": "graph-index-build-only",
+                "content": {
+                    "data_type": "uint8",
+                    "data": input,
+                    "distance": "squared_l2",
+                    "max_degree": self.r,
+                    "l_build": self.l,
+                    "alpha": 1.2,
+                    "backedge_ratio": 1.0,
+                    "num_threads": self.threads,
+                    "start_point_strategy": "medoid",
+                    "save_path": prefix,
+                },
+            }],
+        });
+
+        if runbook.exists() {
+            let previous: serde_json::Value = serde_json::from_reader(File::open(&runbook)?)?;
+            ensure!(
+                previous == config,
+                "existing build runbook {} has different parameters",
+                runbook.display()
+            );
+        } else {
+            let partial = Self::with_suffix(&runbook, ".part");
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&partial)
+                .with_context(|| format!("cannot create partial runbook {}", partial.display()))?;
+            serde_json::to_writer_pretty(&mut file, &config)?;
+            file.write_all(b"\n")?;
+            file.flush()?;
+            drop(file);
+            fs::rename(&partial, &runbook)?;
+        }
+        writeln!(
+            output,
+            "{} R{} / L{} graph with {} threads; index prefix: {}",
+            if self.dry_run {
+                "Validating"
+            } else {
+                "Building"
+            },
+            self.r,
+            self.l,
+            self.threads,
+            prefix.display()
+        )?;
+        runner::App::from_commands(runner::app::Commands::Run {
+            input_file: runbook,
+            output_file: results,
+            dry_run: self.dry_run,
+            allow_debug: self.allow_debug,
+        })
+        .run(registry, output)
+    }
 }
 
 // This controls printing of a banner warning if the benchmark tool is compiled for the
@@ -44,7 +228,7 @@ impl Cli {
         <Self as clap::Parser>::parse()
     }
 
-    fn run(&self, output: &mut dyn runner::Output) -> anyhow::Result<()> {
+    fn run(self, output: &mut dyn runner::Output) -> anyhow::Result<()> {
         self.check_target(output)?;
 
         // Collect benchmarks.
@@ -56,14 +240,19 @@ impl Cli {
         filters::register_benchmarks(&mut registry)?;
         multi_vector::register_benchmarks(&mut registry)?;
 
-        self.app.run(&registry, output)
+        match self.command {
+            CliCommand::BuildMemoryAnn(builder) => builder.run(&registry, output),
+            CliCommand::Runner(command) => {
+                runner::App::from_commands(command).run(&registry, output)
+            }
+        }
     }
 
     #[cfg(test)]
     fn from_commands(commands: runner::app::Commands, quiet: bool) -> Self {
         Self {
             quiet,
-            app: runner::App::from_commands(commands),
+            command: CliCommand::Runner(commands),
         }
     }
 
@@ -190,6 +379,75 @@ mod tests {
         }
         let buffer = std::fs::File::create(path).unwrap();
         serde_json::to_writer_pretty(buffer, value).unwrap();
+    }
+
+    #[test]
+    fn build_memory_ann_accepts_direct_parameters_and_reuses_matching_runbook() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("vectors.u8bin");
+        let mut data = [2u32.to_le_bytes(), 2u32.to_le_bytes()].concat();
+        data.extend_from_slice(&[1, 2, 3, 4]);
+        std::fs::write(&input, data).unwrap();
+        let prefix = dir.path().join("saved-graph");
+        let builder = |threads| BuildMemoryAnn {
+            r: 24,
+            l: 80,
+            input: input.clone(),
+            threads,
+            output: Some(prefix.clone()),
+            dry_run: true,
+            allow_debug: false,
+        };
+        for _ in 0..2 {
+            Cli {
+                quiet: true,
+                command: CliCommand::BuildMemoryAnn(builder(3)),
+            }
+            .run(&mut Memory::new())
+            .unwrap();
+        }
+
+        let runbook = BuildMemoryAnn::with_suffix(&prefix, ".build.runbook.json");
+        let raw = value_from_file(&runbook);
+        let source = &raw["jobs"][0]["content"];
+        assert_eq!(source["max_degree"], 24);
+        assert_eq!(source["l_build"], 80);
+        assert_eq!(source["num_threads"], 3);
+        assert_eq!(source["data"], input.to_string_lossy().as_ref());
+        assert_eq!(source["save_path"], prefix.to_string_lossy().as_ref());
+        assert!(!prefix.exists());
+
+        let error = builder(4).run(&runner::Registry::new(), &mut Memory::new());
+        assert!(error
+            .unwrap_err()
+            .to_string()
+            .contains("different parameters"));
+        std::fs::write(&prefix, b"existing index").unwrap();
+        let error = builder(3).build_paths().unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("saved graph file already exists"));
+    }
+
+    #[test]
+    fn build_memory_ann_rejects_invalid_vector_file_and_zero_parameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("truncated.u8bin");
+        std::fs::write(&input, [2u32.to_le_bytes(), 2u32.to_le_bytes()].concat()).unwrap();
+        let builder = |r, l, threads| BuildMemoryAnn {
+            r,
+            l,
+            input: input.clone(),
+            threads,
+            output: None,
+            dry_run: true,
+            allow_debug: false,
+        };
+        assert!(builder(0, 80, 3).build_paths().is_err());
+        assert!(builder(24, 0, 3).build_paths().is_err());
+        assert!(builder(24, 80, 0).build_paths().is_err());
+        let error = builder(24, 80, 3).build_paths().unwrap_err();
+        assert!(error.to_string().contains("must have 12 bytes"));
     }
 
     // The directory containing the benchmark executable.

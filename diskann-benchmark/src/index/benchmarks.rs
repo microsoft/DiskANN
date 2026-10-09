@@ -47,8 +47,8 @@ use crate::{
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
     inputs::graph_index::{
-        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, MultihopFilterSearchPhase,
-        SearchPhase,
+        DynamicIndexRun, HybridBloomSearchPhase, IndexBuild, IndexBuildOnly, IndexOperation,
+        IndexSource, MultihopFilterSearchPhase, SearchPhase,
     },
     utils::{
         self,
@@ -92,7 +92,14 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
     registry.register(
         "graph-index-full-precision-u8",
-        FullPrecision::<u8>::new().search(plugins::Topk),
+        FullPrecision::<u8>::new()
+            .search(plugins::Topk)
+            .search(plugins::TopkMultihopEncodedBitsliceDnf)
+            .search(plugins::TopkHybridEncodedBloom),
+    )?;
+    registry.register(
+        "graph-index-build-only-u8",
+        FullPrecisionBuildOnly::<u8>::new(),
     )?;
     registry.register(
         "graph-index-full-precision-i8",
@@ -173,6 +180,86 @@ where
     }
 }
 
+fn build_full_precision<T>(
+    input: &IndexBuild,
+    output: &mut dyn Output,
+) -> anyhow::Result<(Index<FullPrecisionProvider<T>>, BuildStats)>
+where
+    T: VectorRepr + SampleableForStart + AsDataType,
+{
+    run_build(
+        input,
+        common::FullPrecision,
+        None,
+        output,
+        |data| {
+            let index = diskann_async::new_index::<T, _>(
+                input.try_as_config()?.build()?,
+                input.inmem_parameters(data.nrows(), data.ncols()),
+                common::NoDeletes,
+            )?;
+            build::set_start_points(
+                index.provider(),
+                data.as_view(),
+                *input.start_point_strategy(),
+            )?;
+            Ok(index)
+        },
+        single_or_multi_insert,
+    )
+}
+
+struct FullPrecisionBuildOnly<T> {
+    _element: std::marker::PhantomData<T>,
+}
+
+impl<T> FullPrecisionBuildOnly<T> {
+    fn new() -> Self {
+        Self {
+            _element: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> Benchmark for FullPrecisionBuildOnly<T>
+where
+    T: VectorRepr + SampleableForStart + AsDataType,
+{
+    type Input = IndexBuildOnly;
+    type Output = BuildStats;
+
+    fn try_match(&self, input: &IndexBuildOnly, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        utils::match_data_type::<T>(&mut score, input.build.data_type());
+        score
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Build and save a full-precision {} memory graph",
+            T::DATA_TYPE
+        )
+    }
+
+    fn run(
+        &self,
+        input: &IndexBuildOnly,
+        checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<BuildStats> {
+        writeln!(output, "{}", input)?;
+        let (index, stats) = build_full_precision::<T>(&input.build, output)?;
+        let save_path = input.build.save_path().ok_or_else(|| {
+            anyhow::anyhow!("validated graph-index-build-only input has no save_path")
+        })?;
+        utils::tokio::block_on(save_index(index, save_path))?;
+        checkpoint.checkpoint(&stats)?;
+        writeln!(output, "\n{}\nSaved graph at {}", stats, save_path)?;
+        Ok(stats)
+    }
+}
+
 impl<T> Benchmark for FullPrecision<T>
 where
     T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
@@ -211,26 +298,7 @@ where
         writeln!(output, "{}", input)?;
         let (index, build_stats) = match &input.source {
             IndexSource::Build(build) => {
-                let (index, build_stats) = run_build(
-                    build,
-                    common::FullPrecision,
-                    None,
-                    output,
-                    |data| {
-                        let index = diskann_async::new_index::<T, _>(
-                            build.try_as_config()?.build()?,
-                            build.inmem_parameters(data.nrows(), data.ncols()),
-                            common::NoDeletes,
-                        )?;
-                        build::set_start_points(
-                            index.provider(),
-                            data.as_view(),
-                            *build.start_point_strategy(),
-                        )?;
-                        Ok(index)
-                    },
-                    single_or_multi_insert,
-                )?;
+                let (index, build_stats) = build_full_precision::<T>(build, output)?;
 
                 // save the index if requested
                 if let Some(save_path) = build.save_path() {
@@ -413,6 +481,75 @@ impl<S> Strategy<S> {
     }
 }
 
+fn run_with_query_results<S, F>(
+    make_runner: F,
+    groundtruth: &dyn benchmark_core::recall::Rows<u32>,
+    steps: search::knn::SearchSteps<'_>,
+    query_results_path: Option<&str>,
+) -> anyhow::Result<Vec<crate::index::result::SearchResults>>
+where
+    S: benchmark_core::search::Search<
+        Id = u32,
+        Parameters = benchmark_core::search::graph::KnnParams,
+        Output = benchmark_core::search::graph::knn::Metrics,
+    >,
+    F: FnMut() -> anyhow::Result<Arc<S>>,
+{
+    let mut query_results = query_results_path
+        .map(|path| {
+            let partial = std::path::Path::new(path).with_extension("jsonl.part");
+            std::fs::File::create(&partial)
+                .map(|file| (path, partial, std::io::BufWriter::new(file)))
+        })
+        .transpose()?;
+    let result = search::knn::run_fresh_multihop(
+        make_runner,
+        groundtruth,
+        steps,
+        &mut |l, threads, results| {
+            if let Some((_, _, writer)) = query_results.as_mut() {
+                use std::io::Write;
+                let ids = results.ids().as_rows();
+                for query_id in 0..ids.nrows() {
+                    let metrics = &results.output()[query_id];
+                    let mut row = serde_json::json!({
+                        "search_l": l,
+                        "threads": threads,
+                        "query_id": query_id,
+                        "ids": ids.row(query_id),
+                        "latency_us": results.latencies()[query_id].as_micros(),
+                        "comparisons": metrics.comparisons,
+                        "hops": metrics.hops,
+                    });
+                    if let Some(timings) = metrics.hybrid_timings {
+                        let micros = |duration: std::time::Duration| {
+                            u64::try_from(duration.as_micros())
+                                .map_err(|_| anyhow::anyhow!("hybrid phase time exceeds u64"))
+                        };
+                        row["hybrid_phase_us"] = serde_json::json!({
+                            "candidate_scan": micros(timings.candidate_scan)?,
+                            "distance_evaluation": micros(timings.distance_evaluation)?,
+                            "topk_selection": micros(timings.topk_selection)?,
+                            "post_processing": micros(timings.post_processing)?,
+                            "candidate_count": timings.candidate_count,
+                        });
+                    }
+                    serde_json::to_writer(&mut *writer, &row)?;
+                    writer.write_all(b"\n")?;
+                }
+            }
+            Ok(())
+        },
+    )?;
+    if let Some((path, partial, mut writer)) = query_results {
+        use std::io::Write;
+        writer.flush()?;
+        drop(writer);
+        std::fs::rename(partial, path)?;
+    }
+    Ok(result)
+}
+
 fn run_multihop_encoded<DP, S>(
     index: Arc<DiskANNIndex<DP>>,
     phase: &MultihopFilterSearchPhase,
@@ -440,7 +577,7 @@ where
         GroundTruthMode::Flexible,
     );
 
-    // `data_labels` points at the persisted dense label-index file, not the raw labels JSONL.
+    // `data_labels` points at a persisted Bitslice or Bloom index, not raw labels JSONL.
     // Loading the index and parsing/validating DNF predicates stay outside timing. Each timed
     // repetition/search-L rebuilds fresh lazy providers so the first `is_match` includes label-ID
     // compilation.
@@ -460,7 +597,67 @@ where
         )
     };
 
-    let result = search::knn::run_fresh_multihop(make_multihop, &groundtruth, steps)?;
+    let result = run_with_query_results(
+        make_multihop,
+        &groundtruth,
+        steps,
+        phase.query_results_path.as_deref(),
+    )?;
+    Ok(AggregatedSearchResults::Topk(result))
+}
+
+fn run_hybrid_encoded(
+    index: Arc<DiskANNIndex<FullPrecisionProvider<u8>>>,
+    phase: &HybridBloomSearchPhase,
+    strategy: &Strategy<common::FullPrecision>,
+) -> anyhow::Result<AggregatedSearchResults> {
+    let phase_base = &phase.multihop;
+    let queries = Arc::new(datafiles::load_dataset::<u8>(datafiles::BinFile(
+        &phase_base.queries,
+    ))?);
+    let groundtruth =
+        datafiles::load_range_groundtruth(datafiles::BinFile(&phase_base.groundtruth))?;
+    let steps = search::knn::SearchSteps::new(
+        phase_base.reps,
+        &phase_base.num_threads,
+        &phase_base.runs,
+        GroundTruthMode::Flexible,
+    );
+
+    let label_index = utils::filters::load_encoded_label_index(&phase_base.data_labels)?;
+    anyhow::ensure!(
+        index.provider().capacity() == label_index.num_vectors() as usize,
+        "Bloom vector count does not match the graph's base vectors"
+    );
+    anyhow::ensure!(
+        queries.nrows() > 0,
+        "hybrid search requires at least one query"
+    );
+    let accessor = inmem::FullAccessor::new(index.provider(), queries.row(0));
+    anyhow::ensure!(
+        inmem::GetFullPrecision::as_full_precision(&accessor).dim() == queries.ncols(),
+        "hybrid queries do not match the graph's vector dimension"
+    );
+    let plans = utils::filters::prepare_flat_encoded_queries(
+        label_index.as_ref(),
+        &phase_base.query_predicates,
+    )?;
+    let make_hybrid = || {
+        benchmark_core::search::graph::Hybrid::new(
+            index.clone(),
+            queries.clone(),
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            plans.clone().into(),
+            u64::from(phase.brute_force_threshold.get()),
+        )
+    };
+
+    let result = run_with_query_results(
+        make_hybrid,
+        &groundtruth,
+        steps,
+        phase_base.query_results_path.as_deref(),
+    )?;
     Ok(AggregatedSearchResults::Topk(result))
 }
 
@@ -563,7 +760,11 @@ where
             GroundTruthMode::Fixed,
         );
 
-        let results = search::knn::run(&knn, &groundtruth, steps)?;
+        let results = if let Some(path) = topk.query_results_path.as_deref() {
+            run_with_query_results(|| Ok(knn.clone()), &groundtruth, steps, Some(path))?
+        } else {
+            search::knn::run(&knn, &groundtruth, steps)?
+        };
         Ok(AggregatedSearchResults::Topk(results))
     }
 }
@@ -780,6 +981,27 @@ where
             phase.as_topk_multihop_encoded_bitslice_dnf()?,
             strategy,
         )
+    }
+}
+
+impl search::Plugin<FullPrecisionProvider<u8>, SearchPhase, Strategy<common::FullPrecision>>
+    for plugins::TopkHybridEncodedBloom
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<FullPrecisionProvider<u8>>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<common::FullPrecision>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        run_hybrid_encoded(index, phase.as_topk_hybrid_encoded_bloom()?, strategy)
     }
 }
 

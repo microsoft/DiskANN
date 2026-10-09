@@ -233,6 +233,26 @@ where
     type Id = u32;
 }
 
+impl<T, Q, Ctx> glue::RandomAccessQueryDistance for FullAccessor<'_, T, Q, NoDeletes, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    fn distance_to_id(&mut self, id: u32) -> ANNResult<f32> {
+        let index = id.into_usize();
+        if index >= self.provider.capacity() {
+            return Err(ANNError::message(
+                "exhaustive search vector ID exceeds the provider's base vectors",
+            ));
+        }
+        // SAFETY: The ID is a base vector in bounds. As with graph expansion,
+        // in-memory searches require no concurrent modification of this vector.
+        let vector = unsafe { self.provider.base_vectors.get_vector_sync(index) };
+        Ok(self.computer.evaluate_similarity(vector))
+    }
+}
+
 impl<T, Q, D, Ctx> glue::SearchAccessor for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,

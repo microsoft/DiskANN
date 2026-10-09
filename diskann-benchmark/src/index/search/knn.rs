@@ -81,6 +81,11 @@ pub(crate) fn run_fresh_multihop<I, S, F>(
     mut make_runner: F,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
     steps: SearchSteps<'_>,
+    on_first_result: &mut impl FnMut(
+        usize,
+        usize,
+        &core_search::SearchResults<I, core_search::graph::knn::Metrics>,
+    ) -> anyhow::Result<()>,
 ) -> anyhow::Result<Vec<SearchResults>>
 where
     I: benchmark_core::recall::RecallCompatible,
@@ -106,12 +111,12 @@ where
                 let mut raw = Vec::with_capacity(steps.reps.get());
 
                 for _ in 0..steps.reps.get() {
-                    raw.push(core_search::search(
-                        make_runner()?,
-                        parameters,
-                        *threads,
-                        &runtime,
-                    )?);
+                    let result =
+                        core_search::search(make_runner()?, parameters, *threads, &runtime)?;
+                    if raw.is_empty() {
+                        on_first_result(*search_l, threads.get(), &result)?;
+                    }
+                    raw.push(result);
                 }
 
                 let mut aggregator = core_search::graph::knn::Aggregator::new(

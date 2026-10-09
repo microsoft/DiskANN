@@ -234,8 +234,7 @@ impl TopkInlineFilter {
     }
 }
 
-/// A multi-hop encoded-filter plugin backed by a pre-encoded bitslice label index and a flat
-/// OR-of-AND query plan compiled during benchmark setup.
+/// A multi-hop filter backed by a persisted Bitslice or Bloom index and flat DNF query plan.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TopkMultihopEncodedBitsliceDnf;
 
@@ -243,5 +242,15 @@ impl TopkMultihopEncodedBitsliceDnf {
     /// Returns [`SearchPhaseKind::TopkMultihopEncodedBitsliceDnf`].
     pub(crate) fn kind() -> SearchPhaseKind {
         SearchPhaseKind::TopkMultihopEncodedBitsliceDnf
+    }
+}
+
+/// Count-routed Bloom-only scan for sparse filters and multi-hop graph search for broad filters.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkHybridEncodedBloom;
+
+impl TopkHybridEncodedBloom {
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkHybridEncodedBloom
     }
 }

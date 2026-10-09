@@ -1181,6 +1181,13 @@ impl provider::HasId for Accessor<'_> {
     type Id = u32;
 }
 
+impl glue::RandomAccessQueryDistance for Accessor<'_> {
+    fn distance_to_id(&mut self, id: u32) -> ANNResult<f32> {
+        self.get_distance(id)
+            .escalate("exhaustive search candidates must be accessible")
+    }
+}
+
 //------//
 // glue //
 //------//

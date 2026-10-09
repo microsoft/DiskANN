@@ -42,6 +42,7 @@ use crate::{
     provider::DataProvider,
 };
 
+mod hybrid_filter_search;
 mod inline_filter_search;
 mod knn_search;
 pub(crate) mod multihop_filter_search;
@@ -65,6 +66,7 @@ pub(crate) mod scratch;
 /// - [`Range`] - Range-based search within a distance radius
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
 /// - [`MultihopFilterSearch`] - Label-filtered search with multi-hop expansion
+/// - [`HybridFilterSearch`] - Count-routed multihop or exhaustive filtered search
 /// - [`InlineFilterSearch`] - Inline filtered search with optional adaptive L sizing
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
 pub trait Search<'a, DP, S, T>
@@ -112,6 +114,9 @@ where
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
+pub use hybrid_filter_search::{
+    HybridFilterSearch, HybridFilterSearchError, HybridPhaseTimings, HybridSearchStats,
+};
 pub use inline_filter_search::{AdaptiveL, InlineFilterSearch};
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_filter_search::MultihopFilterSearch;
