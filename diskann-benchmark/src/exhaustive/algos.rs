@@ -5,6 +5,7 @@
 
 use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
 use diskann_benchmark_runner::utils::MicroSeconds;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::PreprocessedDistanceFunction;
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 
@@ -33,7 +34,7 @@ where
 
 #[derive(Debug, Clone)]
 pub(super) struct LinearSearch {
-    pub(super) ids: diskann_utils::views::Matrix<u32>,
+    pub(super) ids: rowmajor::Owned<u32>,
     pub(super) preprocess: Vec<MicroSeconds>,
     pub(super) search: Vec<MicroSeconds>,
     pub(super) total: MicroSeconds,
@@ -41,7 +42,7 @@ pub(super) struct LinearSearch {
 
 pub(super) fn linear_search<Q, C>(
     store: &Q,
-    queries: diskann_utils::views::MatrixView<f32>,
+    queries: rowmajor::Ref<f32>,
     builder: &C,
     results_per_query: usize,
     progress: &indicatif::ProgressBar,
@@ -50,8 +51,7 @@ where
     Q: QuantStore + Sync,
     C: CreateQuantComputer<Q> + Sync,
 {
-    let mut output =
-        diskann_utils::views::Matrix::from_element(queries.nrows(), results_per_query, u32::MAX);
+    let mut output = rowmajor::Owned::from_element(queries.nrows(), results_per_query, u32::MAX);
 
     struct Times {
         preprocess: MicroSeconds,
@@ -64,8 +64,8 @@ where
     // this in a properly sized Rayon environment.
     #[expect(clippy::disallowed_methods)]
     let times: Vec<Times> = output
-        .par_row_iter_mut()
-        .zip(queries.par_row_iter())
+        .par_rows_mut()
+        .zip(queries.par_rows())
         .map(|(o, q)| -> anyhow::Result<Times> {
             let mut queue = NeighborPriorityQueue::<u32>::new(results_per_query);
 

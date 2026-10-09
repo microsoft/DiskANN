@@ -13,7 +13,10 @@ use crate::{
 };
 use diskann_utils::{
     strided::Strided,
-    views::{self, MatrixView, MutMatrixView},
+    views::{
+        self,
+        rowmajor::{self, Matrix, MatrixMut},
+    },
 };
 use thiserror::Error;
 
@@ -71,7 +74,7 @@ impl TransposedTable {
     /// * `pivots.nrows() == 0`: The pivot table cannot be empty.
     #[expect(clippy::expect_used)]
     pub fn from_parts(
-        pivots: views::MatrixView<f32>,
+        pivots: views::rowmajor::Ref<f32>,
         offsets: ChunkOffsets,
     ) -> Result<Self, TransposedTableError> {
         let pivot_dim = pivots.ncols();
@@ -154,7 +157,7 @@ impl TransposedTable {
     #[expect(clippy::expect_used)]
     pub fn compress_batch<T, F, DelegateError>(
         &self,
-        data: views::MatrixView<'_, T>,
+        data: views::rowmajor::Ref<'_, T>,
         mut compression_delegate: F,
     ) -> Result<(), CompressError<DelegateError>>
     where
@@ -187,7 +190,7 @@ impl TransposedTable {
             let range = self.offsets.at(i);
             if let Some(chunk_dim) = NonZeroUsize::new(range.len()) {
                 // Construct a view for the packing buffer for this chunk.
-                let mut packing_view = views::MutMatrixView::try_from(
+                let mut packing_view = views::rowmajor::Mut::try_from_data(
                     &mut packing_buffer[..SUB_BATCH_SIZE * chunk_dim.get()],
                     SUB_BATCH_SIZE,
                     chunk_dim.get(),
@@ -205,7 +208,7 @@ impl TransposedTable {
                         // The control on our loop bounds mean we should never be in a situation
                         // where this would occur, so we'd rather hit the indexing panic early.
                         let mut linear_start = row_start * ncols + range.start;
-                        packing_view.row_iter_mut().for_each(|row| {
+                        packing_view.rows_mut().for_each(|row| {
                             pack(row, &slice[linear_start..linear_start + chunk_dim.get()]);
                             linear_start += dim_nonzero.get();
                         });
@@ -282,9 +285,9 @@ impl TransposedTable {
     /// * `query.len() != self.dim()`.
     /// * `partisl.nrows() != self.nchunks()`.
     /// * `partisl.ncols() != self.ncenters()`.
-    pub fn process_into<T>(&self, query: &[f32], mut partials: MutMatrixView<'_, f32>)
+    pub fn process_into<T, U>(&self, query: &[f32], mut partials: rowmajor::Mut<'_, U>)
     where
-        T: pivots::ProcessInto,
+        T: pivots::ProcessInto<U>,
     {
         // Check Requirements
         assert_eq!(
@@ -304,7 +307,7 @@ impl TransposedTable {
         );
 
         // Loop over each chunk.
-        std::iter::zip(self.pivots.iter(), partials.row_iter_mut())
+        std::iter::zip(self.pivots.iter(), partials.rows_mut())
             .enumerate()
             .for_each(|(i, (pivot, out))| {
                 let range = self.offsets.at(i);
@@ -422,7 +425,7 @@ pub enum TableBatchCompressionError {
     InfinityOrNaN(usize, usize),
 }
 
-impl<T> CompressInto<MatrixView<'_, T>, MutMatrixView<'_, u8>> for TransposedTable
+impl<T> CompressInto<rowmajor::Ref<'_, T>, rowmajor::Mut<'_, u8>> for TransposedTable
 where
     T: Copy + Into<f32>,
 {
@@ -464,8 +467,8 @@ where
     /// This function is single-threaded.
     fn compress_into(
         &self,
-        from: MatrixView<'_, T>,
-        mut to: MutMatrixView<'_, u8>,
+        from: rowmajor::Ref<'_, T>,
+        mut to: rowmajor::Mut<'_, u8>,
     ) -> Result<(), Self::Error> {
         if self.ncenters() > 256 {
             return Err(Self::Error::CannotCompressToByte(self.ncenters()));
@@ -503,7 +506,9 @@ where
 mod test_compression {
     use std::collections::HashSet;
 
-    use diskann_vector::{PureDistanceFunction, distance};
+    use diskann_vector::{
+        MathematicalValue, Norm, PureDistanceFunction, distance, norm::FastL2NormSquared,
+    };
     use rand::{
         Rng, SeedableRng,
         distr::{Distribution, StandardUniform, Uniform},
@@ -516,9 +521,12 @@ mod test_compression {
         check_pqtable_batch_compression_errors, check_pqtable_single_compression_errors,
     };
     use crate::{
-        distances::{InnerProduct, SquaredL2},
+        distances::{Cosine, InnerProduct, SquaredL2},
         error::format,
-        product::tables::test::{create_dataset, create_pivot_tables},
+        product::tables::{
+            lookup::DotAndNorm,
+            test::{create_dataset, create_pivot_tables},
+        },
     };
     use diskann_utils::lazy_format;
 
@@ -530,7 +538,7 @@ mod test_compression {
     // disagree.
     #[test]
     fn error_on_mismatch_dim() {
-        let pivots = views::Matrix::from_element(3, 5, 0.0);
+        let pivots = views::rowmajor::Owned::from_element(3, 5, 0.0);
         let offsets = ChunkOffsets::new(Box::new([0, 1, 6])).unwrap();
         let result = TransposedTable::from_parts(pivots.as_view(), offsets);
         assert!(result.is_err(), "dimensions are not equal");
@@ -544,7 +552,7 @@ mod test_compression {
     // disagree.
     #[test]
     fn error_on_empty() {
-        let pivots = views::Matrix::from_element(0, 5, 0.0);
+        let pivots = views::rowmajor::Owned::from_element(0, 5, 0.0);
         let offsets = ChunkOffsets::new(Box::new([0, 1, 5])).unwrap();
         let result = TransposedTable::from_parts(pivots.as_view(), offsets);
         assert!(result.is_err(), "dimensions are not equal");
@@ -564,7 +572,7 @@ mod test_compression {
         for dim in [5, 10, 12] {
             // Sweep over enough totals to ensure the inner chunks have a non-trivial layout.
             for total in [1, 2, 3, 7, 8, 9, 10] {
-                let pivots = views::Matrix::from_fn(total, dim, |_| -> f32 {
+                let pivots = views::rowmajor::Owned::from_fn(total, dim, |_| -> f32 {
                     StandardUniform {}.sample(&mut rng)
                 });
                 let offsets = ChunkOffsets::new(Box::new([0, 1, 3, dim])).unwrap();
@@ -682,9 +690,10 @@ mod test_compression {
                     assert_eq!(called.len(), num_data * schema.len());
 
                     // Trait Interface.
-                    let mut output = views::Matrix::from_element(num_data, schema.len(), 0);
+                    let mut output =
+                        views::rowmajor::Owned::from_element(num_data, schema.len(), 0);
                     table
-                        .compress_into(data.as_view(), output.as_mut_view())
+                        .compress_into(data.as_view(), output.as_view_mut())
                         .unwrap();
 
                     assert_eq!(output.nrows(), expected.nrows());
@@ -705,7 +714,7 @@ mod test_compression {
                     // Trait inteface - single step.
                     let mut output = vec![0; schema.len()];
                     for (i, (row, expected)) in
-                        std::iter::zip(data.row_iter(), expected.row_iter()).enumerate()
+                        std::iter::zip(data.rows(), expected.rows()).enumerate()
                     {
                         table.compress_into(row, output.as_mut_slice()).unwrap();
                         for (d, (o, e)) in
@@ -739,7 +748,7 @@ mod test_compression {
 
         // should panic
         let _ = table.compress_batch(
-            views::MatrixView::try_from(data.as_slice(), 1, 5).unwrap(),
+            views::rowmajor::Ref::try_from_data(data.as_slice(), 1, 5).unwrap(),
             |_, _| -> Result<(), Infallible> { panic!("this shouldn't be called") },
         );
     }
@@ -765,7 +774,7 @@ mod test_compression {
         let (data, _) = create_dataset(schema, num_centers, num_data, &mut rng);
 
         let data_view =
-            views::MatrixView::try_from(data.as_slice(), num_data, schema.dim()).unwrap();
+            views::rowmajor::Ref::try_from_data(data.as_slice(), num_data, schema.dim()).unwrap();
         let distribution = rand_distr::StandardUniform {};
 
         for row in 0..data_view.nrows() {
@@ -807,7 +816,7 @@ mod test_compression {
     #[cfg(not(miri))]
     fn test_table_single_compression_errors() {
         check_pqtable_single_compression_errors(
-            &|pivots: views::Matrix<f32>, offsets| {
+            &|pivots: views::rowmajor::Owned<f32>, offsets| {
                 TransposedTable::from_parts(pivots.as_view(), offsets).unwrap()
             },
             &"TranposedTable",
@@ -818,7 +827,7 @@ mod test_compression {
     #[cfg(not(miri))]
     fn test_table_batch_compression_errors() {
         check_pqtable_batch_compression_errors(
-            &|pivots: views::Matrix<f32>, offsets| {
+            &|pivots: views::rowmajor::Owned<f32>, offsets| {
                 TransposedTable::from_parts(pivots.as_view(), offsets).unwrap()
             },
             &"TranposedTable",
@@ -854,19 +863,21 @@ mod test_compression {
 
             let offsets = ChunkOffsets::new(offsets.into()).unwrap();
             let dim = offsets.dim();
-            let pivots = views::Matrix::<f32>::from_fn(num_centers, dim, |_| {
+            let pivots = views::rowmajor::Owned::<f32>::from_fn(num_centers, dim, |_| {
                 value_distribution.sample(rng) as f32
             });
 
             let table = TransposedTable::from_parts(pivots.as_view(), offsets.clone()).unwrap();
 
-            let mut output = views::Matrix::<f32>::from_element(num_chunks, num_centers, 0.0);
+            let mut output =
+                views::rowmajor::Owned::<f32>::from_element(num_chunks, num_centers, 0.0);
+
             let query: Vec<_> = (0..dim)
                 .map(|_| value_distribution.sample(rng) as f32)
                 .collect();
 
             // Inner Product
-            table.process_into::<InnerProduct>(&query, output.as_mut_view());
+            table.process_into::<InnerProduct, f32>(&query, output.as_view_mut());
 
             for chunk in 0..num_chunks {
                 let range = offsets.at(chunk);
@@ -887,7 +898,7 @@ mod test_compression {
             }
 
             // Squared L2
-            table.process_into::<SquaredL2>(&query, output.as_mut_view());
+            table.process_into::<SquaredL2, f32>(&query, output.as_view_mut());
 
             for chunk in 0..num_chunks {
                 let range = offsets.at(chunk);
@@ -898,6 +909,46 @@ mod test_compression {
                     assert_eq!(
                         *output.element(chunk, center),
                         expected,
+                        "failed on (chunk, center) = ({}, {}) - offsets = {:?} - trial = {}",
+                        chunk,
+                        center,
+                        offsets,
+                        trial,
+                    );
+                }
+            }
+
+            // Cosine
+            let mut output = views::rowmajor::Owned::<DotAndNorm>::from_element(
+                num_chunks,
+                num_centers,
+                DotAndNorm::default(),
+            );
+
+            table.process_into::<Cosine, DotAndNorm>(&query, output.as_view_mut());
+            for chunk in 0..num_chunks {
+                let range = offsets.at(chunk);
+                let query_chunk = &query[range.clone()];
+
+                for center in 0..num_centers {
+                    let data_chunk = &pivots.row(center)[range.clone()];
+                    let expected_dot: MathematicalValue<f32> =
+                        distance::InnerProduct::evaluate(query_chunk, data_chunk);
+
+                    assert_eq!(
+                        output.element(chunk, center).dot(),
+                        expected_dot.into_inner(),
+                        "failed on (chunk, center) = ({}, {}) - offsets = {:?} - trial = {}",
+                        chunk,
+                        center,
+                        offsets,
+                        trial,
+                    );
+
+                    let expected_norm: f32 = (FastL2NormSquared).evaluate(data_chunk);
+                    assert_eq!(
+                        output.element(chunk, center).square_norm(),
+                        expected_norm,
                         "failed on (chunk, center) = ({}, {}) - offsets = {:?} - trial = {}",
                         chunk,
                         center,
@@ -932,41 +983,44 @@ mod test_compression {
     #[should_panic(expected = "query has the wrong number of dimensions")]
     fn test_process_into_panics_query() {
         let offsets = ChunkOffsets::new(Box::new([0, 1, 5])).unwrap();
-        let data = views::Matrix::<f32>::from_element(3, 5, 0.0);
+        let data = views::rowmajor::Owned::<f32>::from_element(3, 5, 0.0);
         let table = TransposedTable::from_parts(data.as_view(), offsets).unwrap();
         assert_eq!(table.dim(), 5);
 
         // query has the wrong length.
         let query = vec![0.0; table.dim() - 1];
-        let mut partials = views::Matrix::from_element(table.nchunks(), table.ncenters(), 0.0);
-        table.process_into::<InnerProduct>(&query, partials.as_mut_view());
+        let mut partials =
+            views::rowmajor::Owned::from_element(table.nchunks(), table.ncenters(), 0.0);
+        table.process_into::<InnerProduct, f32>(&query, partials.as_view_mut());
     }
 
     #[test]
     #[should_panic(expected = "output has the wrong number of rows")]
     fn test_process_into_panics_partials_rows() {
         let offsets = ChunkOffsets::new(Box::new([0, 1, 5])).unwrap();
-        let data = views::Matrix::<f32>::from_element(3, 5, 0.0);
+        let data = views::rowmajor::Owned::<f32>::from_element(3, 5, 0.0);
         let table = TransposedTable::from_parts(data.as_view(), offsets).unwrap();
         assert_eq!(table.dim(), 5);
 
         let query = vec![0.0; table.dim()];
         // partials has the wrong numbers of rows.
-        let mut partials = views::Matrix::from_element(table.nchunks() - 1, table.ncenters(), 0.0);
-        table.process_into::<InnerProduct>(&query, partials.as_mut_view());
+        let mut partials =
+            views::rowmajor::Owned::from_element(table.nchunks() - 1, table.ncenters(), 0.0);
+        table.process_into::<InnerProduct, f32>(&query, partials.as_view_mut());
     }
 
     #[test]
     #[should_panic(expected = "output has the wrong number of columns")]
     fn test_process_into_panics_partials_cols() {
         let offsets = ChunkOffsets::new(Box::new([0, 1, 5])).unwrap();
-        let data = views::Matrix::<f32>::from_element(3, 5, 0.0);
+        let data = views::rowmajor::Owned::<f32>::from_element(3, 5, 0.0);
         let table = TransposedTable::from_parts(data.as_view(), offsets).unwrap();
         assert_eq!(table.dim(), 5);
 
         let query = vec![0.0; table.dim()];
         // partials has the wrong numbers of rows.
-        let mut partials = views::Matrix::from_element(table.nchunks(), table.ncenters() - 1, 0.0);
-        table.process_into::<InnerProduct>(&query, partials.as_mut_view());
+        let mut partials =
+            views::rowmajor::Owned::from_element(table.nchunks(), table.ncenters() - 1, 0.0);
+        table.process_into::<InnerProduct, f32>(&query, partials.as_view_mut());
     }
 }

@@ -36,11 +36,13 @@ enum VectorQuantType {
 /// Status returned by `insert`, encoded as a `u8`.
 ///
 /// `SuccessStartTraining` signals that the insert crossed the threshold at which the quantizer
-/// can be trained, and that Garnet should call `build_quant_table`.
+/// can be trained, and that Garnet should call `build_quant_table`. Otherwise, `Success` is returned for a newly
+/// inserted vector, and `SuccessUpdate` for an updated one.
 enum InsertResult {
     Fail = 0,
     Success = 1,
     SuccessStartTraining = 2,
+    SuccessUpdate = 3,
 }
 
 /// Read one or more keys from Garnet.
@@ -155,8 +157,8 @@ extern "C" fn drop_index(context: u64, index_ptr: *const c_void);
 
 /// Insert a vector into an index.
 ///
-/// Returns an `InsertResult` discriminant. `Fail` may result from the vector already being in
-/// the index, or from writes failing.
+/// Returns an `InsertResult` discriminant, distinguishing inserts from updates unless quantizer
+/// training becomes ready. `Fail` may result from invalid input or writes failing.
 ///
 /// vector_len is a count of elements, not bytes; the element type follows from the index's
 /// `quant_type`. The pointer need not be aligned for that element type.

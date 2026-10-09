@@ -11,7 +11,10 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     lazy_format,
-    views::{self, MatrixBase, MatrixView},
+    views::{
+        self,
+        rowmajor::{self, Matrix},
+    },
 };
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;
@@ -136,7 +139,7 @@ impl FixedChunkPQTable {
     pub fn new(dim: usize, pq_table: Box<[f32]>, chunk_offsets: Box<[usize]>) -> ANNResult<Self> {
         let len = pq_table.len();
         let table = BasicTable::new(
-            MatrixBase::try_from(pq_table, len / dim, dim).bridge_err()?,
+            rowmajor::Owned::try_from_data(pq_table, len / dim, dim).bridge_err()?,
             ChunkOffsetsBase::new(chunk_offsets).bridge_err()?,
         )
         .map_err(ANNError::new)?;
@@ -168,7 +171,7 @@ impl FixedChunkPQTable {
         }
 
         let offsets: &[usize] = self.table.view_offsets().into();
-        let table: &[f32] = self.table.view_pivots().into();
+        let table: &[f32] = self.table.view_pivots().into_slice();
 
         for centroid_index in 0..num_centers {
             let table_start = dim * centroid_index;
@@ -301,7 +304,7 @@ impl FixedChunkPQTable {
 
         let mut accumulator = distance::simd::Resumable::new(T::init(ARCH));
 
-        let pq_table: &[f32] = self.table.view_pivots().into();
+        let pq_table: &[f32] = self.table.view_pivots().into_slice();
         let chunk_offsets: &[usize] = self.table.view_offsets().into();
 
         let mut start = chunk_offsets[0];
@@ -386,7 +389,7 @@ impl FixedChunkPQTable {
         assert_eq!(base_vec.len(), self.get_num_chunks());
         assert_eq!(out.len(), self.get_dim());
         let chunk_offsets: &[usize] = self.table.view_offsets().into();
-        let pq_table: &[f32] = self.table.view_pivots().into();
+        let pq_table: &[f32] = self.table.view_pivots().into_slice();
         let dim = self.get_dim();
 
         base_vec.iter().enumerate().for_each(|(i, b)| {
@@ -406,7 +409,7 @@ impl FixedChunkPQTable {
 
     /// Returns an immutable reference to the `pq_table`.
     pub fn get_pq_table(&self) -> &[f32] {
-        self.table.view_pivots().into()
+        self.table.view_pivots().into_slice()
     }
 
     /// Returns an immutable reference to the `chunk_offsets`.
@@ -419,8 +422,8 @@ impl FixedChunkPQTable {
         self.table.dim()
     }
 
-    /// Return the pivots as a `MatrixView`.
-    pub fn view_pivots(&self) -> views::MatrixView<'_, f32> {
+    /// Return the pivots as a `rowmajor::Ref`.
+    pub fn view_pivots(&self) -> views::rowmajor::Ref<'_, f32> {
         self.table.view_pivots()
     }
 
@@ -497,8 +500,9 @@ fn pq_dist_lookup(
         );
     }
 
-    let coordinates = MatrixView::<u8>::try_from(pq_coordinates, n_pts, pq_nchunks).bridge_err()?;
-    let distances = MatrixView::try_from(
+    let coordinates =
+        rowmajor::Ref::<u8>::try_from_data(pq_coordinates, n_pts, pq_nchunks).bridge_err()?;
+    let distances = rowmajor::Ref::try_from_data(
         &pq_dists[..NUM_PQ_CENTROIDS * pq_nchunks],
         pq_nchunks,
         NUM_PQ_CENTROIDS,
@@ -589,8 +593,8 @@ unsafe fn add_distance_for_a_tile(
     tile_size: usize,
     cur_tile_size: usize,
     dists_out: &mut [f32],
-    coordinates: MatrixView<'_, u8>,
-    distances: MatrixView<'_, f32>,
+    coordinates: rowmajor::Ref<'_, u8>,
+    distances: rowmajor::Ref<'_, f32>,
 ) {
     dists_out.iter_mut().enumerate().for_each(|(point, d)| {
         for offset in 0..cur_tile_size {
@@ -603,7 +607,7 @@ unsafe fn add_distance_for_a_tile(
 
             // SAFETY: From above, `chunk` is less than `coordinatges.ncols()`, which must
             // be equal to `distances.nrows()` by the pre-conditions for this function.
-            let row = unsafe { distances.get_row_unchecked(chunk) };
+            let row = unsafe { distances.row_unchecked(chunk) };
 
             // SAFETY: It's safe to query `row` with `centroid` since
             // it's less than 256(`NUM_PQ_CENTROIDS`) given that it's a u8.
@@ -777,7 +781,7 @@ mod fixed_chunk_pq_table_test {
     fn conversion_rejects_too_many_centers() {
         let dim = 5;
         let table = BasicTable::new(
-            MatrixBase::try_from(
+            rowmajor::Owned::try_from_data(
                 vec![0.0; dim * (NUM_PQ_CENTROIDS + 1)].into_boxed_slice(),
                 NUM_PQ_CENTROIDS + 1,
                 dim,
@@ -831,10 +835,13 @@ mod fixed_chunk_pq_table_test {
         .unwrap();
 
         // Calculate the expected output naively
-        let pq_data = MatrixView::try_from(&pq_data, n_pts, num_pq_chunks).unwrap();
-        let distances =
-            MatrixView::try_from(&query_centroid_l2_distance, num_pq_chunks, NUM_PQ_CENTROIDS)
-                .unwrap();
+        let pq_data = rowmajor::Ref::try_from_data(&pq_data, n_pts, num_pq_chunks).unwrap();
+        let distances = rowmajor::Ref::try_from_data(
+            &query_centroid_l2_distance,
+            num_pq_chunks,
+            NUM_PQ_CENTROIDS,
+        )
+        .unwrap();
         let mut expected_pd_distance = vec![0.0; n_nbrs];
         expected_pd_distance
             .iter_mut()

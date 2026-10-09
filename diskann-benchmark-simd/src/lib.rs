@@ -7,7 +7,7 @@
 
 use std::{io::Write, num::NonZeroUsize};
 
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::simd;
 use diskann_wide::Architecture;
 use half::f16;
@@ -758,7 +758,7 @@ impl std::fmt::Display for DisplayWrapper<'_, [RunResult]> {
     }
 }
 
-fn run_loops<Q, D, F>(query: &[Q], data: MatrixView<D>, run: &Run, f: F) -> RunResult
+fn run_loops<Q, D, F>(query: &[Q], data: rowmajor::Ref<D>, run: &Run, f: F) -> RunResult
 where
     F: Fn(&[Q], &[D]) -> f32,
 {
@@ -768,7 +768,7 @@ where
     for _ in 0..run.num_measurements.get() {
         let start = std::time::Instant::now();
         for _ in 0..run.loops_per_measurement.get() {
-            std::iter::zip(dst.iter_mut(), data.row_iter()).for_each(|(d, r)| {
+            std::iter::zip(dst.iter_mut(), data.rows()).for_each(|(d, r)| {
                 *d = f(query, r);
             });
             std::hint::black_box(&mut dst);
@@ -786,7 +786,7 @@ where
 
 struct Data<Q, D> {
     query: Box<[Q]>,
-    data: Matrix<D>,
+    data: rowmajor::Owned<D>,
 }
 
 impl<Q, D> Data<Q, D> {
@@ -799,7 +799,7 @@ impl<Q, D> Data<Q, D> {
         let query: Box<[Q]> = (0..run.dim.get())
             .map(|_| StandardUniform.sample(&mut rng))
             .collect();
-        let data = Matrix::<D>::from_fn(run.num_points.get(), run.dim.get(), |_| {
+        let data = rowmajor::Owned::<D>::from_fn(run.num_points.get(), run.dim.get(), |_| {
             StandardUniform.sample(&mut rng)
         });
 

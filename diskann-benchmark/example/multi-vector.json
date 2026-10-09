@@ -42,6 +42,28 @@
           { "num_query_vectors": 8,  "num_doc_vectors": 32, "dim": 128, "loops_per_measurement": 2, "num_measurements": 1 }
         ]
       }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "int8",
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 8,  "num_doc_vectors": 32, "dim": 128, "loops_per_measurement": 2, "num_measurements": 1 },
+          { "num_query_vectors": 32, "num_doc_vectors": 16, "dim": 256, "loops_per_measurement": 2, "num_measurements": 1 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "int8",
+        "isa": "reference",
+        "runs": [
+          { "num_query_vectors": 8,  "num_doc_vectors": 32, "dim": 128, "loops_per_measurement": 2, "num_measurements": 1 },
+          { "num_query_vectors": 64, "num_doc_vectors": 32, "dim": 264, "loops_per_measurement": 2, "num_measurements": 1 }
+        ]
+      }
     }
   ]
 }

@@ -39,7 +39,7 @@ use diskann_quantization::{
     alloc::{GlobalAllocator, Poly},
     spherical::iface,
 };
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
 use half::f16;
 use serde::{Deserialize, Serialize};
@@ -447,7 +447,7 @@ impl Spherical {
 
     fn train(
         &self,
-        data: MatrixView<'_, f32>,
+        data: rowmajor::Ref<'_, f32>,
         metric: Metric,
     ) -> anyhow::Result<Poly<dyn iface::Quantizer>> {
         use diskann_quantization::{algorithms::transforms, spherical};
@@ -691,7 +691,7 @@ where
         writeln!(output, "{input}\n")?;
 
         // Load data.
-        let data: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+        let data: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
             &input.data.data,
         ))?);
 
@@ -740,9 +740,9 @@ where
         checkpoint.checkpoint(&total_build_time)?;
 
         // Search.
-        let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-            &input.search.queries,
-        ))?);
+        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
         let max_k = input.search.maximum_recall_k();
         let groundtruth = datafiles::load_groundtruth(
             datafiles::BinFile(&input.search.groundtruth),
@@ -838,9 +838,9 @@ impl Benchmark for SphericalBuild {
         let spherical = input.quantization.as_spherical().unwrap();
 
         // Load data.
-        let data: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-            &input.data.data,
-        ))?);
+        let data: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.data.data),
+        )?);
 
         let dim = data.ncols();
         let num_points = data.nrows();
@@ -890,9 +890,9 @@ impl Benchmark for SphericalBuild {
         checkpoint.checkpoint(&total_build_time)?;
 
         // Search.
-        let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-            &input.search.queries,
-        ))?);
+        let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
         let max_k = input.search.maximum_recall_k();
         let groundtruth = datafiles::load_groundtruth(
             datafiles::BinFile(&input.search.groundtruth),
@@ -1215,10 +1215,11 @@ where
         let max_points = runbook.max_points();
 
         // Load the dataset (consumed by `WithData`) and queries.
-        let dataset: Matrix<T> = datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
-        let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-            &input.search.queries,
-        ))?);
+        let dataset: rowmajor::Owned<T> =
+            datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
+        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
 
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(dataset.as_view())?;
@@ -1307,7 +1308,7 @@ where
 {
     fn insert_(
         &mut self,
-        data: MatrixView<'_, T>,
+        data: rowmajor::Ref<'_, T>,
         ids: Range<usize>,
     ) -> anyhow::Result<BuildStats> {
         anyhow::ensure!(
@@ -1319,7 +1320,7 @@ where
 
         let runner = build_core::graph::SingleInsert::new(
             self.index.clone(),
-            Arc::new(data.to_owned()),
+            Arc::new(data.to_rowmajor_owned()),
             Strategy,
             build_core::ids::Range::<u32>::new(ids.start as u32..ids.end as u32),
         );
@@ -1342,7 +1343,7 @@ where
 
     fn search(
         &mut self,
-        (queries, groundtruth): (Arc<Matrix<T>>, &dyn recall::Rows<u32>),
+        (queries, groundtruth): (Arc<rowmajor::Owned<T>>, &dyn recall::Rows<u32>),
     ) -> anyhow::Result<Self::Output> {
         let knn = benchmark_core::search::graph::KNN::new(
             self.index.clone(),
@@ -1363,7 +1364,7 @@ where
 
     fn insert(
         &mut self,
-        (data, ids): (MatrixView<'_, T>, Range<usize>),
+        (data, ids): (rowmajor::Ref<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
         self.insert_(data, ids).map(StreamStats::Insert)
     }
@@ -1391,7 +1392,7 @@ where
 
     fn replace(
         &mut self,
-        (data, ids): (MatrixView<'_, T>, Range<usize>),
+        (data, ids): (rowmajor::Ref<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
         use diskann::provider::Delete;
 

@@ -204,8 +204,26 @@ impl From<&TransformKind> for diskann_quantization::algorithms::transforms::Tran
 // Product Quantization Methods //
 //////////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
+#[serde(rename_all = "kebab-case")]
 #[reflect(prefix = "product::")]
+pub(crate) enum PQTableStyle {
+    FixedChunk,
+    Padded,
+    Transposed,
+}
+
+impl PQTableStyle {
+    fn as_str(&self) -> &'static str {
+        match self {
+            PQTableStyle::FixedChunk => "fixed-chunk",
+            PQTableStyle::Padded => "padded",
+            PQTableStyle::Transposed => "transposed",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub(crate) struct Product {
     pub(crate) data: InputFile,
     pub(crate) data_type: DataType,
@@ -215,6 +233,7 @@ pub(crate) struct Product {
     pub(crate) seed: u64,
     pub(crate) num_pq_chunks: NonZeroUsize,
     pub(crate) num_pq_centers: NonZeroUsize,
+    pub(crate) table_style: PQTableStyle,
 }
 
 impl Product {
@@ -256,6 +275,7 @@ impl Example for Product {
             seed: 0x6cae32c479ac3407,
             num_pq_chunks: NUM_PQ_CHUNKS,
             num_pq_centers: NUM_PQ_CENTERS,
+            table_style: PQTableStyle::FixedChunk,
         }
     }
 }
@@ -269,6 +289,7 @@ impl std::fmt::Display for Product {
         write_field!(f, "seed", self.seed)?;
         write_field!(f, "PQ Chunks", self.num_pq_chunks.get())?;
         write_field!(f, "PQ Centers", self.num_pq_centers.get())?;
+        write_field!(f, "Table Style", self.table_style.as_str())?;
         Ok(())
     }
 }

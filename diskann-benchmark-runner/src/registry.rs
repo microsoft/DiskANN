@@ -277,10 +277,8 @@ impl Registry {
             Entry::Occupied(o) => {
                 if o.get().as_any().type_id() == input.as_any().type_id() {
                     Ok(())
-                } else if let Some(existing) = o
-                    .get()
-                    .as_any()
-                    .downcast_ref::<input::internal::Gated>()
+                } else if let Some(existing) =
+                    o.get().as_any().downcast_ref::<input::internal::Gated>()
                 {
                     Err(RegistryError::input_conflict(
                         tag,
@@ -298,21 +296,14 @@ impl Registry {
         }
     }
 
-    fn register_gated_input(
-        &mut self,
-        input: input::internal::Gated,
-    ) -> Result<(), RegistryError> {
+    fn register_gated_input(&mut self, input: input::internal::Gated) -> Result<(), RegistryError> {
         match self.inputs.entry(input.tag()) {
             Entry::Vacant(v) => {
                 v.insert(Box::new(input));
                 Ok(())
             }
             Entry::Occupied(o) => {
-                if let Some(existing) = o
-                    .get()
-                    .as_any()
-                    .downcast_ref::<input::internal::Gated>()
-                {
+                if let Some(existing) = o.get().as_any().downcast_ref::<input::internal::Gated>() {
                     if existing.features() != input.features() {
                         Err(RegistryError::input_conflict(
                             input.tag(),
@@ -540,7 +531,7 @@ impl RegistryError {
 
     fn type_name_conflict(conflict: crate::internal::typemap::Conflict) -> Self {
         Self {
-            inner: RegistryErrorInner::TypeNameConflict(conflict)
+            inner: RegistryErrorInner::TypeNameConflict(conflict),
         }
     }
 }
@@ -559,7 +550,7 @@ enum RegistryErrorInner {
         new: Kind,
     },
     #[error(transparent)]
-    TypeNameConflict(crate::internal::typemap::Conflict)
+    TypeNameConflict(crate::internal::typemap::Conflict),
 }
 
 #[derive(Debug)]

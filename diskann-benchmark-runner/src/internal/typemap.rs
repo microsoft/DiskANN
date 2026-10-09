@@ -96,8 +96,11 @@ pub(crate) struct Conflict {
 
 impl std::fmt::Display for Conflict {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "A different type with the type name \"{}\" was already registered", self.type_name)
-
+        write!(
+            f,
+            "A different type with the type name \"{}\" was already registered",
+            self.type_name
+        )
     }
 }
 
