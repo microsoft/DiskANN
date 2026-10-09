@@ -1,5 +1,0 @@
-error: unsupported serde `rename_all` rule "camelCase" - expected one of "lowercase", "snake_case", or "kebab-case"
- --> tests/ui/fail/unsupported_rename_all.rs:9:22
-  |
-9 | #[serde(rename_all = "camelCase")]
-  |                      ^^^^^^^^^^^

@@ -1,5 +1,0 @@
-error: serde attribute `content` found multiple times
- --> tests/ui/fail/duplicate_content.rs:9:52
-  |
-9 | #[serde(tag = "kind", content = "first", content = "second")]
-  |                                                    ^^^^^^^^

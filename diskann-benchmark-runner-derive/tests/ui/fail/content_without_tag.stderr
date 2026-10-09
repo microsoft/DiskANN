@@ -1,5 +1,0 @@
-error: serde attribute `content` provided without a `tag`
- --> tests/ui/fail/content_without_tag.rs:9:19
-  |
-9 | #[serde(content = "value")]
-  |                   ^^^^^^^

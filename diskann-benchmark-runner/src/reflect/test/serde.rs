@@ -621,6 +621,20 @@ fn enum_externally_tagged() {
 }
 
 #[test]
+fn acronym_heavy_variant_name() {
+    #[derive(Serialize, Reflect)]
+    #[serde(rename_all = "snake_case")]
+    enum Enum {
+        XMLHttpRequest,
+    }
+
+    check_enums(
+        &[Enum::XMLHttpRequest],
+        format_args!("acronym-heavy variant names"),
+    );
+}
+
+#[test]
 fn enum_internally_tagged() {
     #[derive(Serialize, Reflect)]
     struct NewTypePayload {

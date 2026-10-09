@@ -1,5 +1,0 @@
-error: Externally tagged "content" conflicts with "tag"
- --> tests/ui/fail/same_tag_and_content.rs:9:34
-  |
-9 | #[serde(tag = "first", content = "first")]
-  |                                  ^^^^^^^

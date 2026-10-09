@@ -1,5 +1,0 @@
-error: serde attributes `tag` and `content` provided on a non-enum
- --> tests/ui/fail/tag_content_on_struct.rs:9:15
-  |
-9 | #[serde(tag = "kind", content = "value")]
-  |               ^^^^^^

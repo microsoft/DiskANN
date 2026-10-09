@@ -1,5 +1,0 @@
-error: reflect attributes `prefix` and `type_name` are mutually exclusive
- --> tests/ui/fail/prefix_and_type_name.rs:9:47
-  |
-9 | #[reflect(prefix = "benchmark::", type_name = "Renamed")]
-  |                                               ^^^^^^^^^

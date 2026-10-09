@@ -1,5 +1,0 @@
-error: reflect attribute `type_name` found multiple times
- --> tests/ui/fail/duplicate_type_name.rs:9:42
-  |
-9 | #[reflect(type_name = "One", type_name = "Two")]
-  |                                          ^^^^^

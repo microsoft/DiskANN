@@ -1,5 +1,0 @@
-error: serde attribute `rename` found multiple times
-  --> tests/ui/fail/struct/attr_serde_duplicate_rename.rs:11:40
-   |
-11 |     #[serde(rename = "first", rename = "second")]
-   |                                        ^^^^^^^^

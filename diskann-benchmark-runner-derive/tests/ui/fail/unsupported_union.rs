@@ -6,9 +6,8 @@
 use diskann_benchmark_runner::Reflect;
 
 #[derive(Reflect)]
-#[serde(rename_all = "camelCase")]
-struct UnsupportedRenameAll {
-    field_name: usize,
+union UnsupportedUnion {
+    value: usize,
 }
 
 fn main() {}

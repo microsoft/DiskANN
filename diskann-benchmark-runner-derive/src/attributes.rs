@@ -5,7 +5,8 @@
 
 //! These are modeled after the attributes documented in <https://serde.rs/attributes.html>.
 
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenStream};
+use quote::quote;
 
 #[must_use]
 fn is_serde_attr(attr: &syn::Attribute) -> bool {
@@ -35,9 +36,53 @@ fn set_unique(opt: &mut Option<syn::LitStr>, value: syn::LitStr, attr: &str) -> 
 
 fn reject_reflect_attributes(attrs: &[syn::Attribute], error: &str) -> syn::Result<()> {
     for attr in attrs.iter().filter(|a| is_reflect_attr(*a)) {
-        attr.parse_nested_meta(|meta| Err(meta.error(error)))?
+        return Err(syn::Error::new_spanned(attr, error));
     }
     Ok(())
+}
+
+pub(crate) struct Doc {
+    doc: Option<String>,
+}
+
+impl Doc {
+    /// Parse and concatenate with newlines all doc attributes.
+    pub(crate) fn parse(attrs: &[syn::Attribute]) -> Self {
+        let mut doc: Option<String> = None;
+        attrs.iter().for_each(|a| {
+            if a.path().is_ident("doc")
+                && let syn::Meta::NameValue(name) = &a.meta
+                && let syn::Expr::Lit(literal) = &name.value
+                && let syn::Lit::Str(s) = &literal.lit
+            {
+                let value = s.value();
+
+                // Doc attributes are automatically prefixed with a single space.
+                //
+                // This removes that.
+                let processed = value.strip_prefix(" ").unwrap_or(&value);
+                match doc.as_mut() {
+                    None => doc = Some(processed.into()),
+                    Some(doc) => {
+                        doc.push('\n');
+                        doc.push_str(&processed);
+                    }
+                }
+            }
+        });
+
+        Self { doc }
+    }
+
+    /// Emite the parsed docs as a borrowed `Option<Cow<'static, str>>`.
+    pub(crate) fn emit(&self) -> TokenStream {
+        match self.doc.as_deref() {
+            None => quote!(::std::option::Option::None),
+            Some(doc) => quote! {
+                ::std::option::Option::Some(::std::borrow::Cow::Borrowed(#doc))
+            },
+        }
+    }
 }
 
 /// Attributes applicable to struct definitions.
@@ -181,7 +226,7 @@ impl EnumRepr {
                 if tag.value() == content.value() {
                     Err(syn::Error::new_spanned(
                         &content,
-                        "Externally tagged \"content\" conflicts with \"tag\"",
+                        "adjacently tagged `content` conflicts with `tag`",
                     ))
                 } else {
                     Ok(EnumRepr::Adjacent { tag, content })

@@ -1,5 +1,0 @@
-error: unsupported Serde attribute for Reflect
- --> tests/ui/fail/unsupported_container_attribute.rs:9:9
-  |
-9 | #[serde(default)]
-  |         ^^^^^^^

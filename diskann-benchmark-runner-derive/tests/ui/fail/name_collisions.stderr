@@ -1,0 +1,29 @@
+error: Variant name "foo" seen more than once
+  --> tests/ui/fail/name_collisions.rs:12:22
+   |
+12 |     #[serde(rename = "foo")]
+   |                      ^^^^^
+
+error: field name "value" seen more than once
+  --> tests/ui/fail/name_collisions.rs:19:22
+   |
+19 |     #[serde(rename = "value")]
+   |                      ^^^^^^^
+
+error: field name "foo-bar" seen more than once
+  --> tests/ui/fail/name_collisions.rs:28:5
+   |
+28 |     foo_bar: usize,
+   |     ^^^^^^^
+
+error: field name "value" seen more than once
+  --> tests/ui/fail/name_collisions.rs:35:26
+   |
+35 |         #[serde(rename = "value")]
+   |                          ^^^^^^^
+
+error: field name "foo-bar" seen more than once
+  --> tests/ui/fail/name_collisions.rs:46:9
+   |
+46 |         foo_bar: usize,
+   |         ^^^^^^^

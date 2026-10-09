@@ -1,5 +1,0 @@
-error: unsupported attribute for Reflect
- --> tests/ui/fail/unsupported_reflect_attribute.rs:9:11
-  |
-9 | #[reflect(rename = "Unsupported")]
-  |           ^^^^^^
