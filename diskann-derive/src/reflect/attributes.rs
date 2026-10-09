@@ -18,6 +18,11 @@ fn is_reflect_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("reflect")
 }
 
+#[must_use]
+fn is_doc_attr(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("doc")
+}
+
 fn identity<T>(x: T) -> T {
     x
 }
@@ -35,43 +40,38 @@ fn set_unique(opt: &mut Option<syn::LitStr>, value: syn::LitStr, attr: &str) -> 
 }
 
 fn reject_reflect_attributes(attrs: &[syn::Attribute], error: &str) -> syn::Result<()> {
-    for attr in attrs.iter().filter(|a| is_reflect_attr(*a)) {
+    if let Some(attr) = attrs.iter().find(|a| is_reflect_attr(a)) {
         return Err(syn::Error::new_spanned(attr, error));
     }
     Ok(())
 }
 
+#[derive(Default)]
 pub(crate) struct Doc {
     doc: Option<String>,
 }
 
 impl Doc {
     /// Parse and concatenate with newlines all doc attributes.
-    pub(crate) fn parse(attrs: &[syn::Attribute]) -> Self {
-        let mut doc: Option<String> = None;
-        attrs.iter().for_each(|a| {
-            if a.path().is_ident("doc")
-                && let syn::Meta::NameValue(name) = &a.meta
-                && let syn::Expr::Lit(literal) = &name.value
-                && let syn::Lit::Str(s) = &literal.lit
-            {
-                let value = s.value();
+    pub(crate) fn append(&mut self, meta: &syn::Meta) {
+        if let syn::Meta::NameValue(name) = meta
+            && let syn::Expr::Lit(literal) = &name.value
+            && let syn::Lit::Str(s) = &literal.lit
+        {
+            let value = s.value();
 
-                // Doc attributes are automatically prefixed with a single space.
-                //
-                // This removes that.
-                let processed = value.strip_prefix(" ").unwrap_or(&value);
-                match doc.as_mut() {
-                    None => doc = Some(processed.into()),
-                    Some(doc) => {
-                        doc.push('\n');
-                        doc.push_str(&processed);
-                    }
+            // Doc attributes are automatically prefixed with a single space.
+            //
+            // This removes that.
+            let processed = value.strip_prefix(" ").unwrap_or(&value);
+            match self.doc.as_mut() {
+                None => self.doc = Some(processed.into()),
+                Some(doc) => {
+                    doc.push('\n');
+                    doc.push_str(processed);
                 }
             }
-        });
-
-        Self { doc }
+        }
     }
 
     /// Emite the parsed docs as a borrowed `Option<Cow<'static, str>>`.
@@ -91,6 +91,9 @@ pub(crate) struct Struct {
     ///
     /// [`Field`] specific renames take precedence.
     pub(crate) rename_all: RenameAll,
+
+    /// The documentation for this struct.
+    pub(crate) doc: Doc,
 }
 
 /// Attributes applicable to enum definitions.
@@ -102,16 +105,20 @@ pub(crate) struct Enum {
 
     /// Enum's representation.
     pub(crate) enum_repr: EnumRepr,
+
+    /// The documentation for this struct.
+    pub(crate) doc: Doc,
 }
 
 /// Attributes on the top-level [`syn::DeriveInput`].
 ///
-/// Uses should go through [`Container::as_enum`] or [`Container::try_as_struct`] to ensure
+/// Uses should go through [`Container::into_enum`] or [`Container::try_as_struct`] to ensure
 /// the attributes are appropriate for the actual type.
 pub(crate) struct Container {
     rename_all: RenameAll,
     enum_repr: EnumRepr,
     type_name: TypeName,
+    doc: Doc,
 }
 
 impl Container {
@@ -120,9 +127,10 @@ impl Container {
         let mut tag = Option::None;
         let mut content = Option::None;
         let mut type_name = TypeName::None;
+        let mut doc = Doc::default();
 
         // Parse serde attributes.
-        for attr in attrs.iter().filter(|a| is_serde_attr(*a)) {
+        for attr in attrs.iter().filter(|a| is_serde_attr(a)) {
             attr.parse_nested_meta(|meta| {
                 // serde(rename_all = "...")
                 if meta.path.is_ident("rename_all") {
@@ -150,7 +158,7 @@ impl Container {
         }
 
         // Parse reflect attributes
-        for attr in attrs.iter().filter(|a| is_reflect_attr(*a)) {
+        for attr in attrs.iter().filter(|a| is_reflect_attr(a)) {
             attr.parse_nested_meta(|meta| {
                 // reflect(prefix = "...")
                 if meta.path.is_ident("prefix") {
@@ -170,10 +178,16 @@ impl Container {
             })?;
         }
 
+        // Parse docs
+        for attr in attrs.iter().filter(|a| is_doc_attr(a)) {
+            doc.append(&attr.meta);
+        }
+
         Ok(Self {
             rename_all,
             enum_repr: EnumRepr::from_parsed(tag, content)?,
             type_name,
+            doc,
         })
     }
 
@@ -182,14 +196,16 @@ impl Container {
         self.enum_repr.assert_struct_compatible()?;
         Ok(Struct {
             rename_all: self.rename_all,
+            doc: self.doc,
         })
     }
 
     /// Verify the parsed attributes are compatible with an enum definition.
-    pub(crate) fn as_enum(self) -> Enum {
+    pub(crate) fn into_enum(self) -> Enum {
         Enum {
             rename_all: self.rename_all,
             enum_repr: self.enum_repr,
+            doc: self.doc,
         }
     }
 
@@ -389,10 +405,7 @@ pub(crate) struct RenameOnce {
 impl RenameOnce {
     /// Return the source span for the rename attribute, or `None` if no attribute was present.
     pub(crate) fn span(&self) -> Option<proc_macro2::Span> {
-        match self.rename.as_ref() {
-            None => None,
-            Some(lit) => Some(lit.span()),
-        }
+        self.rename.as_ref().map(|lit| lit.span())
     }
 
     /// Apply the configured rename to `variant`. If no rename is configured, apply `or_else`.
@@ -460,13 +473,14 @@ impl TypeName {
 pub(crate) struct Variant {
     pub(crate) rename_variant: RenameOnce,
     pub(crate) rename_variant_fields: RenameAll,
+    pub(crate) doc: Doc,
 }
 
 impl Variant {
     pub(crate) fn parse(attrs: &[syn::Attribute]) -> syn::Result<Self> {
         let mut me = Self::default();
 
-        for attr in attrs.iter().filter(|a| is_serde_attr(*a)) {
+        for attr in attrs.iter().filter(|a| is_serde_attr(a)) {
             attr.parse_nested_meta(|meta| {
                 // serde(rename_all = "...")
                 if meta.path.is_ident("rename_all") {
@@ -489,6 +503,11 @@ impl Variant {
         // Reject any `reflect` attributes.
         reject_reflect_attributes(attrs, "Reflect does not support variant-level attributes")?;
 
+        // Parse docs
+        for attr in attrs.iter().filter(|a| is_doc_attr(a)) {
+            me.doc.append(&attr.meta);
+        }
+
         Ok(me)
     }
 }
@@ -501,13 +520,14 @@ impl Variant {
 #[derive(Default)]
 pub(crate) struct Field {
     pub(crate) rename_field: RenameOnce,
+    pub(crate) doc: Doc,
 }
 
 impl Field {
     pub(crate) fn parse(attrs: &[syn::Attribute]) -> syn::Result<Self> {
         let mut me = Self::default();
 
-        for attr in attrs.iter().filter(|a| is_serde_attr(*a)) {
+        for attr in attrs.iter().filter(|a| is_serde_attr(a)) {
             attr.parse_nested_meta(|meta| {
                 // serde(rename = "...")
                 if meta.path.is_ident("rename") {
@@ -522,6 +542,11 @@ impl Field {
 
         // Reject any `reflect` attributes.
         reject_reflect_attributes(attrs, "Reflect does not support field-level attributes")?;
+
+        // Parse docs
+        for attr in attrs.iter().filter(|a| is_doc_attr(a)) {
+            me.doc.append(&attr.meta);
+        }
 
         Ok(me)
     }

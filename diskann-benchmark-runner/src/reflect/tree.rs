@@ -71,6 +71,14 @@ impl Type {
         }
     }
 
+    /// Return the primitive JSON kind (if there is one).
+    pub(super) fn json_kind(&self) -> Option<&str> {
+        match self {
+            Self::Primitive(p) => Some(p.kind().json_kind()),
+            Self::Aggregate(_) | Self::Enum(_) | Self::Sequence(_) | Self::Optional(_) => None,
+        }
+    }
+
     /// Return `true` if there is field level information of some kind to render.
     pub(super) fn has_body(&self) -> bool {
         match self {
@@ -112,6 +120,17 @@ pub enum PrimitiveKind {
     Boolean,
     Number,
     String,
+}
+
+impl PrimitiveKind {
+    pub(crate) fn json_kind(&self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Boolean => "bool",
+            Self::Number => "number",
+            Self::String => "string",
+        }
+    }
 }
 
 /// A primitive type that maps closely to a native JSON type.

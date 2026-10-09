@@ -25,10 +25,8 @@ impl<'a> Input<'a> {
         let type_name = &input.ident;
         let format_type_name = TypeName::parse(type_name, &input.generics, attrs.type_name())?;
 
-        let doc = attributes::Doc::parse(&input.attrs);
-
         // Parse the type tree for the container.
-        let container = Container::parse(&input.data, attrs, doc, input.span())?;
+        let container = Container::parse(&input.data, attrs, input.span())?;
         let generics = Generics::parse(&input.generics, &container);
 
         Ok(Self {
@@ -100,17 +98,10 @@ enum Container<'a> {
 }
 
 impl<'a> Container<'a> {
-    fn parse(
-        data: &'a syn::Data,
-        attrs: attributes::Container,
-        doc: attributes::Doc,
-        span: Span,
-    ) -> syn::Result<Self> {
+    fn parse(data: &'a syn::Data, attrs: attributes::Container, span: Span) -> syn::Result<Self> {
         match data {
-            syn::Data::Struct(s) => {
-                Ok(Self::Struct(Struct::parse(s, attrs.try_as_struct()?, doc)?))
-            }
-            syn::Data::Enum(e) => Ok(Self::Enum(Enum::parse(e, attrs.as_enum(), doc)?)),
+            syn::Data::Struct(s) => Ok(Self::Struct(Struct::parse(s, attrs.try_as_struct()?)?)),
+            syn::Data::Enum(e) => Ok(Self::Enum(Enum::parse(e, attrs.into_enum())?)),
             syn::Data::Union(_) => Err(syn::Error::new(
                 span,
                 "Reflect cannot be derived for unions",
@@ -254,12 +245,8 @@ pub(crate) struct Struct<'a> {
 }
 
 impl<'a> Struct<'a> {
-    pub(crate) fn parse(
-        s: &'a syn::DataStruct,
-        attrs: attributes::Struct,
-        doc: attributes::Doc,
-    ) -> syn::Result<Self> {
-        let attributes::Struct { rename_all } = attrs;
+    pub(crate) fn parse(s: &'a syn::DataStruct, attrs: attributes::Struct) -> syn::Result<Self> {
+        let attributes::Struct { rename_all, doc } = attrs;
         let fields = Fields::parse(&s.fields, rename_all)?;
         Ok(Self { doc, fields })
     }
@@ -294,14 +281,11 @@ pub(crate) struct Enum<'a> {
 }
 
 impl<'a> Enum<'a> {
-    pub(crate) fn parse(
-        enum_: &'a syn::DataEnum,
-        attr: attributes::Enum,
-        doc: attributes::Doc,
-    ) -> syn::Result<Self> {
+    pub(crate) fn parse(enum_: &'a syn::DataEnum, attr: attributes::Enum) -> syn::Result<Self> {
         let attributes::Enum {
             rename_all,
             enum_repr,
+            doc,
         } = attr;
 
         // Parse all variants.
@@ -410,7 +394,7 @@ impl<'a> UnnamedField<'a> {
             "expected `syn` to not attach names to `FieldsNamed` entries"
         );
 
-        let attributes::Field { rename_field } = attributes::Field::parse(&field.attrs)?;
+        let attributes::Field { rename_field, doc } = attributes::Field::parse(&field.attrs)?;
 
         // Rejact renames on unnamed fields.
         if let Some(span) = rename_field.span() {
@@ -420,10 +404,7 @@ impl<'a> UnnamedField<'a> {
             ));
         }
 
-        Ok(Self {
-            doc: attributes::Doc::parse(&field.attrs),
-            ty: &field.ty,
-        })
+        Ok(Self { doc, ty: &field.ty })
     }
 
     fn emit(&self, path: &syn::Path) -> TokenStream {
@@ -447,11 +428,11 @@ impl<'a> NamedField<'a> {
             .expect("named fields should have identifiers");
 
         let name = syn::LitStr::new(strip_raw_prefix(&ident.to_string()), ident.span());
-        let attributes::Field { rename_field } = attributes::Field::parse(&field.attrs)?;
+        let attributes::Field { rename_field, doc } = attributes::Field::parse(&field.attrs)?;
         let name = rename_field.apply_to_field(name, rename_all);
 
         Ok(Self {
-            doc: attributes::Doc::parse(&field.attrs),
+            doc,
             name,
             ty: &field.ty,
         })
@@ -567,6 +548,7 @@ impl<'a> Variant<'a> {
         let attributes::Variant {
             rename_variant,
             rename_variant_fields,
+            doc,
         } = attributes::Variant::parse(&variant.attrs)?;
 
         let fields = Fields::parse(&variant.fields, rename_variant_fields)?;
@@ -577,11 +559,7 @@ impl<'a> Variant<'a> {
         );
         let name = rename_variant.apply_to_variant(name, rename_all);
 
-        Ok(Self {
-            doc: attributes::Doc::parse(&variant.attrs),
-            name,
-            fields,
-        })
+        Ok(Self { doc, name, fields })
     }
 
     fn for_each_type<F>(&self, f: F)

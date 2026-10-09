@@ -5,7 +5,7 @@
 
 //! Command-line benchmarks for DiskANN.
 
-// mod disk_index;
+mod disk_index;
 mod exhaustive;
 mod filters;
 mod flat;
@@ -54,7 +54,7 @@ impl Cli {
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
         exhaustive::register_benchmarks(&mut registry)?;
-        // disk_index::register_benchmarks(&mut registry)?;
+        disk_index::register_benchmarks(&mut registry)?;
         flat::register_benchmarks(&mut registry)?;
         index::register_benchmarks(&mut registry)?;
         filters::register_benchmarks(&mut registry)?;

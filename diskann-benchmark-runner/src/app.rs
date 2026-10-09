@@ -617,7 +617,7 @@ mod tests {
         fn new(dir: &Path) -> Self {
             Self {
                 dir: dir.into(),
-                overwrite: ux::overwrite(),
+                overwrite: ux::test::overwrite(),
             }
         }
 
@@ -625,7 +625,7 @@ mod tests {
             let path = self.dir.join(STDIN);
 
             // Read the standard input file to a string.
-            let stdin = ux::read_to_string(&path, "standard input");
+            let stdin = ux::test::read_to_string(&path, "standard input");
 
             let output: Vec<App> = stdin
                 .lines()
@@ -734,7 +734,7 @@ mod tests {
             if self.overwrite {
                 std::fs::write(output, stdout).unwrap();
             } else {
-                let expected = ux::read_to_string(&output, "expected standard output");
+                let expected = ux::test::read_to_string(&output, "expected standard output");
                 if stdout != expected {
                     panic!("Got:\n--\n{}\n--\nExpected:\n--\n{}\n--", stdout, expected);
                 }
@@ -776,9 +776,9 @@ mod tests {
             } else {
                 match (was_generated, is_expected) {
                     (true, true) => {
-                        let output_contents = ux::read_to_string(generated_path, "generated");
+                        let output_contents = ux::test::read_to_string(generated_path, "generated");
 
-                        let expected_contents = ux::read_to_string(expected_path, "expected");
+                        let expected_contents = ux::test::read_to_string(expected_path, "expected");
 
                         if output_contents != expected_contents {
                             panic!(
@@ -788,7 +788,7 @@ mod tests {
                         }
                     }
                     (true, false) => {
-                        let output_contents = ux::read_to_string(generated_path, "generated");
+                        let output_contents = ux::test::read_to_string(generated_path, "generated");
 
                         panic!(
                             "{} was generated when none was expected. Contents:\n\n{}",

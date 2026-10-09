@@ -66,7 +66,7 @@ impl<'a> Renderer<'a> {
         D: std::fmt::Display,
     {
         let indent = INDENT * self.indent;
-        write!(self.output, "{: >indent$}{}\n", "", display)
+        writeln!(self.output, "{: >indent$}{}", "", display)
     }
 
     fn blank(&mut self) -> fmt::Result {
@@ -147,9 +147,14 @@ impl<'a> Renderer<'a> {
     //-------//
 
     pub(super) fn render_subject(&mut self, reflection: Reflection) -> fmt::Result {
-        self.line(reflection.type_name())?;
+        let tagged = Tagged::new(reflection);
+        if let Some(kind) = tagged.ty().json_kind() {
+            self.line(format_args!("{} (json {})", reflection.type_name(), kind))?;
+        } else {
+            self.line(reflection.type_name())?;
+        }
+
         self.indent(|r| {
-            let tagged = Tagged::new(reflection);
             let wrote_doc = r.render_doc(tagged.ty().doc())?;
 
             if wrote_doc && r.will_render(tagged.ty()) {
@@ -310,7 +315,7 @@ impl<'a> Renderer<'a> {
                 r.blank()?;
             }
 
-            r.render_fields(&variant.fields())
+            r.render_fields(variant.fields())
         })
     }
 }
@@ -355,8 +360,8 @@ mod tests {
         description: String,
     }
 
-    const CASE_SEPARATOR: &'static str = "========";
-    const OUTPUT_SEPARATOR: &'static str = "--------";
+    const CASE_SEPARATOR: &str = "========";
+    const OUTPUT_SEPARATOR: &str = "--------";
 
     #[derive(Debug)]
     struct Case {
@@ -394,12 +399,12 @@ mod tests {
     }
 
     impl State {
-        fn to_rendered(&mut self) {
+        fn set_to_rendered(&mut self) {
             assert_eq!(*self, Self::Content);
             *self = Self::Rendered;
         }
 
-        fn to_done(&mut self) {
+        fn set_to_done(&mut self) {
             assert_eq!(*self, Self::Rendered);
             *self = Self::Done;
         }
@@ -414,25 +419,22 @@ mod tests {
         where
             B: std::io::BufRead,
         {
-            match lines.next() {
-                Some(ln) => assert_eq!(ln.unwrap(), CASE_SEPARATOR),
-                None => return None,
-            };
+            assert_eq!(lines.next()?.unwrap(), CASE_SEPARATOR);
 
             let mut content = String::new();
             let mut rendered = String::new();
 
             let mut state = State::default();
 
-            while let Some(ln) = lines.next() {
+            for ln in lines {
                 let ln: &str = &ln.unwrap();
                 match ln {
                     CASE_SEPARATOR => {
-                        state.to_done();
+                        state.set_to_done();
                         break;
                     }
                     OUTPUT_SEPARATOR => {
-                        state.to_rendered();
+                        state.set_to_rendered();
                     }
                     ln => match state {
                         State::Content => content.push_str(ln),
@@ -605,6 +607,6 @@ mod tests {
             Case::new::<Config>("config", "a sample struct config."),
         ];
 
-        run_tests_inner(&cases, &baseline_path(), ux::overwrite());
+        run_tests_inner(&cases, &baseline_path(), ux::test::overwrite());
     }
 }

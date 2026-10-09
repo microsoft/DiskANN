@@ -186,7 +186,7 @@ fn check_fields(fields: &tree::Fields, s: &Value, ctx: Context<'_>) {
 
                 check_reflection(
                     f.field(),
-                    &val,
+                    val,
                     context!(ctx, val, "named field \"{}\"", f.name()),
                 );
             }
@@ -297,7 +297,7 @@ fn extract_tag_and_content<'a>(
                 );
 
                 let kv = m.iter().next().unwrap();
-                (&kv.0, Some(Cow::Borrowed(&kv.1)))
+                (kv.0, Some(Cow::Borrowed(kv.1)))
             }
             _ => panic!("invalid representation\n\n{}", ctx),
         },
@@ -367,7 +367,7 @@ fn check_enum(e: &tree::Enum, s: &Value, ctx: Context<'_>) {
             );
             return;
         }
-        (tree::EnumRepr::External, Some(c)) => &c,
+        (tree::EnumRepr::External, Some(c)) => c,
         (tree::EnumRepr::Internal { .. }, None) => unreachable!("internal always returns content"),
         (tree::EnumRepr::Internal { .. }, Some(c)) => {
             if variant.fields().is_unit() {
@@ -386,7 +386,7 @@ fn check_enum(e: &tree::Enum, s: &Value, ctx: Context<'_>) {
             );
             return;
         }
-        (tree::EnumRepr::Adjacent { .. }, Some(c)) => &c,
+        (tree::EnumRepr::Adjacent { .. }, Some(c)) => c,
     };
 
     check_fields(

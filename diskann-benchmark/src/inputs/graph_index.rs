@@ -724,7 +724,7 @@ pub enum StartPointStrategy {
 }
 
 impl StartPointStrategy {
-    fn to_diskann(&self) -> graph::StartPointStrategy {
+    fn as_diskann(&self) -> graph::StartPointStrategy {
         match *self {
             Self::RandomVectors {
                 norm,
@@ -905,7 +905,7 @@ impl IndexBuild {
     }
 
     pub(crate) fn start_point_strategy(&self) -> graph::StartPointStrategy {
-        self.start_point_strategy.to_diskann()
+        self.start_point_strategy.as_diskann()
     }
 
     pub(crate) fn multi_insert(&self) -> Option<&MultiInsert> {

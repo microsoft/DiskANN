@@ -4,7 +4,7 @@
   "description": "a simple test"
 }
 --------
-usize
+usize (json number)
   A system dependent unsigned integer
 ========
 ========
