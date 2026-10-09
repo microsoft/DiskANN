@@ -3,9 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    collections::{HashMap, hash_map::Entry},
-};
+use std::collections::{HashMap, hash_map::Entry};
 
 use thiserror::Error;
 
@@ -117,7 +115,7 @@ impl Registry {
         features: Features,
         description: impl Into<String>,
     ) -> Result<(), RegistryError> {
-        self.register_gated_input(crate::input::internal::Gated::new(tag, features.clone()))?;
+        self.register_gated_input(input::internal::Gated::new(tag, features.clone()))?;
 
         self.benchmarks.push(RegisteredBenchmark {
             name: name.into(),
@@ -251,39 +249,49 @@ impl Registry {
     where
         T: Input + 'static,
     {
-        let tag = T::tag();
-        let wrapper = crate::input::internal::Wrapper::<T>::new();
+        self.register_input_inner(
+            Box::new(input::internal::Wrapper::<T>::new()),
+            &[Reflection::new::<T::Raw>()],
+        )
+    }
+
+    fn register_input_inner(
+        &mut self,
+        input: Box<dyn input::internal::DynInput>,
+        types: &[Reflection],
+    ) -> Result<(), RegistryError> {
+        let tag = input.tag();
         match self.inputs.entry(tag) {
             Entry::Vacant(v) => {
                 // Before we insert - try to add all the reflection types. If this fails,
                 // then we haven't committed the input to the registry.
-                match self.types.register::<T::Raw>() {
+                match self.types.register(types) {
                     Ok(transaction) => transaction.complete(),
-                    Err(err) => return Err(RegistryError::type_name_conflict(err.into_type_name())),
+                    Err(err) => {
+                        return Err(RegistryError::type_name_conflict(err));
+                    }
                 }
-                v.insert(Box::new(wrapper));
+                v.insert(input);
                 Ok(())
             }
             Entry::Occupied(o) => {
-                use input::internal::DynInput;
-
-                if o.get().as_any().is::<crate::input::internal::Wrapper<T>>() {
+                if o.get().as_any().type_id() == input.as_any().type_id() {
                     Ok(())
                 } else if let Some(existing) = o
                     .get()
                     .as_any()
-                    .downcast_ref::<crate::input::internal::Gated>()
+                    .downcast_ref::<input::internal::Gated>()
                 {
                     Err(RegistryError::input_conflict(
                         tag,
                         Kind::Gated(existing.features().to_string()),
-                        Kind::Available(wrapper.type_name()),
+                        Kind::Available(input.type_name()),
                     ))
                 } else {
                     Err(RegistryError::input_conflict(
                         tag,
                         Kind::Available(o.get().type_name()),
-                        Kind::Available(wrapper.type_name()),
+                        Kind::Available(input.type_name()),
                     ))
                 }
             }
@@ -292,7 +300,7 @@ impl Registry {
 
     fn register_gated_input(
         &mut self,
-        input: crate::input::internal::Gated,
+        input: input::internal::Gated,
     ) -> Result<(), RegistryError> {
         match self.inputs.entry(input.tag()) {
             Entry::Vacant(v) => {
@@ -303,7 +311,7 @@ impl Registry {
                 if let Some(existing) = o
                     .get()
                     .as_any()
-                    .downcast_ref::<crate::input::internal::Gated>()
+                    .downcast_ref::<input::internal::Gated>()
                 {
                     if existing.features() != input.features() {
                         Err(RegistryError::input_conflict(
@@ -346,7 +354,13 @@ impl Registry {
     where
         T: Regression,
     {
-        self.register_input::<T::Input>()?;
+        self.register_input_inner(
+            Box::new(input::internal::Wrapper::<T::Input>::new()),
+            &[
+                Reflection::new::<<T::Input as Input>::Raw>(),
+                Reflection::new::<<T::Tolerances as Input>::Raw>(),
+            ],
+        )?;
 
         let registered = benchmark::internal::Wrapper::<T, _>::new(
             benchmark,
@@ -524,9 +538,9 @@ impl RegistryError {
         }
     }
 
-    fn type_name_conflict(type_name: String) -> Self {
+    fn type_name_conflict(conflict: crate::internal::typemap::Conflict) -> Self {
         Self {
-            inner: RegistryErrorInner::TypeNameConflict { type_name },
+            inner: RegistryErrorInner::TypeNameConflict(conflict)
         }
     }
 }
@@ -544,11 +558,8 @@ enum RegistryErrorInner {
         existing: Kind,
         new: Kind,
     },
-    #[error(
-        "A different type with the type name \"{}\" was already registered",
-        type_name
-    )]
-    TypeNameConflict { type_name: String },
+    #[error(transparent)]
+    TypeNameConflict(crate::internal::typemap::Conflict)
 }
 
 #[derive(Debug)]
@@ -738,7 +749,7 @@ mod tests {
     fn test_gated_to_real_conflict() {
         let mut registry = Registry::new();
         registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_gated_input(input::internal::Gated::new(
                 "type-a",
                 Features::new("feature"),
             ))
@@ -752,7 +763,7 @@ mod tests {
 
         {
             let a = registry._input(A::tag()).unwrap();
-            assert!(a.as_any().is::<crate::input::internal::Gated>());
+            assert!(a.as_any().is::<input::internal::Gated>());
         }
 
         let err = registry.register_input::<A>().unwrap_err();
@@ -772,7 +783,7 @@ mod tests {
         registry.register_input::<B>().unwrap();
 
         let err = registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_gated_input(input::internal::Gated::new(
                 "type-a",
                 Features::new("feature"),
             ))
@@ -791,7 +802,7 @@ mod tests {
         let mut registry = Registry::new();
 
         registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_gated_input(input::internal::Gated::new(
                 "type-a",
                 Features::new("feature"),
             ))
@@ -799,7 +810,7 @@ mod tests {
 
         // If we register with the same feature set, there is no error.
         registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_gated_input(input::internal::Gated::new(
                 "type-a",
                 Features::new("feature"),
             ))
@@ -807,7 +818,7 @@ mod tests {
 
         // If we register with a different feature-set, that is an error.
         let err = registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_gated_input(input::internal::Gated::new(
                 "type-a",
                 Features::any(["feature", "another"]),
             ))
@@ -821,298 +832,3 @@ mod tests {
         );
     }
 }
-
-// #[cfg(test)]
-// mod test_type_catalog {
-//     use super::*;
-//
-//     use serde::{Deserialize, Serialize};
-//
-//     use crate::{Checker, Reflect};
-//
-//     // The types `A`, `B`, `C`, etc. are the valid types for testing registration.
-//
-//     #[derive(Reflect)]
-//     #[expect(unused, reason = "testing")]
-//     struct A {
-//         a: usize,
-//         b: Option<String>,
-//     }
-//
-//     #[derive(Reflect)]
-//     #[expect(unused, reason = "testing")]
-//     struct B(A, f32);
-//
-//     #[derive(Reflect)]
-//     #[expect(unused, reason = "testing")]
-//     struct C {
-//         a: f64,
-//         b: isize,
-//     }
-//
-//     #[derive(Reflect)]
-//     #[expect(unused, reason = "testing")]
-//     enum D {
-//         V0(A),
-//         V1 { first: B, second: B },
-//         V2,
-//         V3(Vec<Option<C>>),
-//     }
-//
-//     // The type tree `Bad0`, `Bad1`, etc. are the types we use to test the erroring path.
-//     //
-//     // The idea is that somewhere at the bottom of this path is a type with a type-name
-//     // that conflicts with one of the "good" types above.
-//     #[derive(Reflect)]
-//     #[reflect(type_name = "usize")]
-//     struct Bad0;
-//
-//     #[derive(Reflect)]
-//     #[expect(unused, reason = "testing")]
-//     struct Bad1 {
-//         a: usize,
-//         b: D,
-//         c: i32,
-//         d: Option<Bad0>,
-//     }
-//
-//     #[derive(Reflect)]
-//     #[expect(unused, reason = "testing")]
-//     struct Bad2(u32, Vec<Bad1>);
-//
-//     #[derive(Reflect)]
-//     #[expect(unused, reason = "testing")]
-//     enum Bad3 {
-//         Unit,
-//         S(String),
-//         B { field: Bad2 },
-//     }
-//
-//     fn type_name_for<T>() -> String
-//     where
-//         T: Reflect,
-//     {
-//         Reflection::new::<T>().type_name().to_string()
-//     }
-//
-//     fn assert_is_present<T>(registry: &Registry)
-//     where
-//         T: Reflect,
-//     {
-//         let type_name = type_name_for::<T>();
-//         let r = registry.type_info(&type_name).unwrap();
-//
-//         assert_eq!(r.type_id(), TypeId::of::<T>());
-//         assert_eq!(r.type_name().to_string(), type_name);
-//     }
-//
-//     fn assert_is_absent<T>(registry: &Registry)
-//     where
-//         T: Reflect,
-//     {
-//         let type_name = type_name_for::<T>();
-//         if let Some(r) = registry.type_info(&type_name) {
-//             assert_ne!(
-//                 r.type_id(),
-//                 Reflection::new::<T>().type_id(),
-//                 "Did not expect \"{}\" to be registered",
-//                 std::any::type_name::<T>(),
-//             );
-//         }
-//     }
-//
-//     // We expect the following types to be present.
-//     //
-//     // * usize
-//     // * String
-//     // * Option<String>
-//     // * f32
-//     // * f64
-//     // * isize
-//     // * A
-//     // * B
-//     // * C
-//     // * Option<C>
-//     // * Vec<Option<C>>
-//     // * D
-//     //
-//     // The following types should *not* be present.
-//     //
-//     // * i32
-//     // * Bad0
-//     // * Option<Bad0>
-//     // * Bad1
-//     // * u32
-//     // * Vec<Bad1>
-//     // * Bad2
-//     // * Bad3
-//     fn check_types_are_present(r: &Registry) {
-//         assert_is_present::<usize>(r);
-//         assert_is_present::<String>(r);
-//         assert_is_present::<Option<String>>(r);
-//         assert_is_present::<f32>(r);
-//         assert_is_present::<f64>(r);
-//         assert_is_present::<isize>(r);
-//         assert_is_present::<A>(r);
-//         assert_is_present::<B>(r);
-//         assert_is_present::<C>(r);
-//         assert_is_present::<Option<C>>(r);
-//         assert_is_present::<Vec<Option<C>>>(r);
-//         assert_is_present::<D>(r);
-//
-//         assert_is_absent::<i32>(r);
-//         assert_is_absent::<Bad0>(r);
-//         assert_is_absent::<Option<Bad0>>(r);
-//         assert_is_absent::<Bad1>(r);
-//         assert_is_absent::<u32>(r);
-//         assert_is_absent::<Vec<Bad1>>(r);
-//         assert_is_absent::<Bad2>(r);
-//         assert_is_absent::<Bad3>(r);
-//     }
-//
-//     // Register the entire type-tree at once.
-//     #[test]
-//     fn test_registration_all() {
-//         let mut registry = Registry::new();
-//         registry.test_register_reflection::<D>().unwrap();
-//         check_types_are_present(&registry);
-//
-//         // Registering again should be fine.
-//         registry.test_register_reflection::<D>().unwrap();
-//         check_types_are_present(&registry);
-//     }
-//
-//     // Register portions of the type-tree.
-//     #[test]
-//     fn test_incremental_registration() {
-//         let mut registry = Registry::new();
-//         registry.test_register_reflection::<String>().unwrap();
-//         registry.test_register_reflection::<usize>().unwrap();
-//         registry.test_register_reflection::<B>().unwrap();
-//         registry.test_register_reflection::<D>().unwrap();
-//
-//         check_types_are_present(&registry);
-//
-//         registry.test_register_reflection::<B>().unwrap();
-//         check_types_are_present(&registry);
-//     }
-//
-//     // Immediate errors do not leave invalid state in the registry.
-//     #[test]
-//     fn test_errors_are_recoverable() {
-//         let mut registry = Registry::new();
-//
-//         // Registering the "bad" type should eventually hit a naming conflict.
-//         // Everything should be rolled back and adding the "good" type should still work.
-//         let err = registry.test_register_reflection::<Bad3>().unwrap_err();
-//         let msg = err.to_string();
-//         assert_eq!(
-//             msg,
-//             "A different type with the type name \"usize\" was already registered"
-//         );
-//
-//         assert!(
-//             registry.name_map.is_empty(),
-//             "invalid registration should not commit registered items"
-//         );
-//
-//         assert!(
-//             registry.type_ids.is_empty(),
-//             "invalid registration should not commit registered items"
-//         );
-//
-//         // After this, we should succeed in adding more types correctly.
-//         registry.test_register_reflection::<D>().unwrap();
-//         check_types_are_present(&registry);
-//
-//         // Again, bad registration should not corrupt the
-//         registry.test_register_reflection::<Bad3>().unwrap_err();
-//         check_types_are_present(&registry);
-//     }
-//
-//     // Test that type registration happens before input registration, and that if type
-//     // registration fails, the input is not registered.
-//     #[test]
-//     fn test_input_registration_aborts_correct() {
-//         #[derive(Serialize, Deserialize, Reflect, Debug)]
-//         struct GoodInput {
-//             a: usize,
-//             b: isize,
-//         }
-//
-//         impl Input for GoodInput {
-//             type Raw = Self;
-//             fn tag() -> &'static str {
-//                 "good-input"
-//             }
-//             fn from_raw(_raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
-//                 unimplemented!("this struct is for test only");
-//             }
-//             fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-//                 unimplemented!("this struct is for test only");
-//             }
-//             fn example() -> Self::Raw {
-//                 unimplemented!("this struct is for test only");
-//             }
-//         }
-//
-//         #[derive(Serialize, Deserialize, Reflect, Debug)]
-//         #[reflect(type_name = "isize")]
-//         struct Boom;
-//
-//         #[derive(Serialize, Deserialize, Reflect, Debug)]
-//         struct BadInput {
-//             /// This type should not be registered on failure.
-//             a: f32,
-//             b: Boom,
-//             /// Put another `f32` on the other side of `Boom` so no matter the expansion
-//             /// order, a `f32` is registered before `Boom`.
-//             c: f32,
-//         }
-//
-//         impl Input for BadInput {
-//             type Raw = Self;
-//             fn tag() -> &'static str {
-//                 "bad-input"
-//             }
-//             fn from_raw(_raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
-//                 unimplemented!("this struct is for test only");
-//             }
-//             fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-//                 unimplemented!("this struct is for test only");
-//             }
-//             fn example() -> Self::Raw {
-//                 unimplemented!("this struct is for test only");
-//             }
-//         }
-//
-//         let mut registry = Registry::new();
-//         registry.register_input::<GoodInput>().unwrap();
-//
-//         assert!(registry.input("good-input").is_some());
-//         assert!(registry.input("bad-input").is_none());
-//
-//         assert_is_present::<usize>(&registry);
-//         assert_is_present::<isize>(&registry);
-//         assert_is_present::<GoodInput>(&registry);
-//
-//         assert_is_absent::<f32>(&registry);
-//         assert_is_absent::<BadInput>(&registry);
-//
-//         // This should hit a type-conflict.
-//         registry.register_input::<BadInput>().unwrap_err();
-//
-//         assert!(registry.input("good-input").is_some());
-//         assert!(
-//             registry.input("bad-input").is_none(),
-//             "bad input should not be registered on failure"
-//         );
-//
-//         assert_is_present::<usize>(&registry);
-//         assert_is_present::<isize>(&registry);
-//         assert_is_present::<GoodInput>(&registry);
-//
-//         assert_is_absent::<f32>(&registry);
-//         assert_is_absent::<BadInput>(&registry);
-//     }
-// }

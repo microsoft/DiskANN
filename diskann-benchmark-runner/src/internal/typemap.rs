@@ -10,8 +10,9 @@ use std::{
 
 use hashbrown::{HashSet, hash_set};
 
-use crate::{Reflect, Reflection};
+use crate::Reflection;
 
+/// Collection of [`Reflection`] types.
 #[derive(Debug)]
 pub(crate) struct TypeMap {
     /// Registered types for documentation.
@@ -42,52 +43,46 @@ impl TypeMap {
         self.name_map.keys().map(|v| &**v)
     }
 
-    /// Register the reflection type `T`.
-    pub(crate) fn register<T>(&mut self) -> Result<Transaction<'_>, Conflict>
-    where
-        T: Reflect,
-    {
-        self.register_reflection(Reflection::new::<T>())
-    }
-
-    pub(crate) fn register_reflection(
+    pub(crate) fn register(
         &mut self,
-        reflection: Reflection
+        reflections: &[Reflection],
     ) -> Result<Transaction<'_>, Conflict> {
         let mut t = Transaction::new(self);
 
-        reflection.visit_with(|r: Reflection| -> Result<bool, Conflict> {
-            let type_id = r.type_id();
+        reflections.iter().try_for_each(|r| {
+            r.visit_with(|r: Reflection| -> Result<bool, Conflict> {
+                let type_id = r.type_id();
 
-            // If the type doesn't exist - try to add it via type-name.
-            // Only if all that succeeds to we commit the type-id.
-            if let hash_set::Entry::Vacant(vacant_type_id) = t.map.type_ids.entry(type_id) {
-                let type_name = r.type_name().to_string();
-                match t.map.name_map.entry(type_name) {
-                    // Everything checks out, we're good to go.
-                    Entry::Vacant(vacant_type_name) => {
-                        vacant_type_name.insert(r);
-                        vacant_type_id.insert();
-                        t.added.push(type_id);
-                    }
-                    Entry::Occupied(occupied_type_name) => {
-                        // This branch is only reachable if `type_id` did not exist
-                        // in `type_ids`, which means it never could have entered into
-                        // `name_map` anyways.
-                        debug_assert_ne!(occupied_type_name.get().type_id(), type_id);
+                // If the type doesn't exist - try to add it via type-name.
+                // Only if all that succeeds to we commit the type-id.
+                if let hash_set::Entry::Vacant(vacant_type_id) = t.map.type_ids.entry(type_id) {
+                    let type_name = r.type_name().to_string();
+                    match t.map.name_map.entry(type_name) {
+                        // Everything checks out, we're good to go.
+                        Entry::Vacant(vacant_type_name) => {
+                            vacant_type_name.insert(r);
+                            vacant_type_id.insert();
+                            t.added.push(type_id);
+                        }
+                        Entry::Occupied(occupied_type_name) => {
+                            // This branch is only reachable if `type_id` did not exist
+                            // in `type_ids`, which means it never could have entered into
+                            // `name_map` anyways.
+                            debug_assert_ne!(occupied_type_name.get().type_id(), type_id);
 
-                        return Err(Conflict {
-                            type_name: occupied_type_name.key().clone(),
-                        });
+                            return Err(Conflict {
+                                type_name: occupied_type_name.key().clone(),
+                            });
+                        }
                     }
+
+                    // Continue exploring.
+                    Ok(true)
+                } else {
+                    // Already seen this node. No need to recurse.
+                    Ok(false)
                 }
-
-                // Continue exploring.
-                Ok(true)
-            } else {
-                // Already seen this node. No need to recurse.
-                Ok(false)
-            }
+            })
         })?;
 
         Ok(t)
@@ -99,11 +94,14 @@ pub(crate) struct Conflict {
     type_name: String,
 }
 
-impl Conflict {
-    pub(crate) fn into_type_name(self) -> String {
-        self.type_name
+impl std::fmt::Display for Conflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "A different type with the type name \"{}\" was already registered", self.type_name)
+
     }
 }
+
+impl std::error::Error for Conflict {}
 
 #[derive(Debug)]
 #[must_use = "transactions must be explicitly completed - otherwise they automatically abort"]
@@ -116,7 +114,7 @@ impl<'a> Transaction<'a> {
     fn new(map: &'a mut TypeMap) -> Self {
         Self {
             map,
-            added: Vec::new()
+            added: Vec::new(),
         }
     }
 
@@ -138,8 +136,9 @@ impl<'a> Transaction<'a> {
             added_type_ids.insert(type_id);
         }
 
-        self.map.name_map.retain(|_, v| !added_type_ids.contains(&v.type_id()));
-
+        self.map
+            .name_map
+            .retain(|_, v| !added_type_ids.contains(&v.type_id()));
     }
 
     pub(crate) fn complete(mut self) {
@@ -221,6 +220,13 @@ mod tests {
         Unit,
         S(String),
         B { field: Bad2 },
+    }
+
+    fn register<T>(map: &mut TypeMap) -> Result<Transaction<'_>, Conflict>
+    where
+        T: Reflect,
+    {
+        map.register(&[Reflection::new::<T>()])
     }
 
     fn type_name_for<T>() -> String
@@ -309,11 +315,11 @@ mod tests {
     #[test]
     fn test_registration_all() {
         let mut map = TypeMap::new();
-        map.register::<D>().unwrap().complete();
+        register::<D>(&mut map).unwrap().complete();
         check_types_are_present(&map);
 
         // Registering again should be fine.
-        map.register::<D>().unwrap().complete();
+        register::<D>(&mut map).unwrap().complete();
         check_types_are_present(&map);
     }
 
@@ -321,14 +327,14 @@ mod tests {
     #[test]
     fn test_incremental_registration() {
         let mut map = TypeMap::new();
-        map.register::<String>().unwrap().complete();
-        map.register::<usize>().unwrap().complete();
-        map.register::<B>().unwrap().complete();
-        map.register::<D>().unwrap().complete();
+        register::<String>(&mut map).unwrap().complete();
+        register::<usize>(&mut map).unwrap().complete();
+        register::<B>(&mut map).unwrap().complete();
+        register::<D>(&mut map).unwrap().complete();
 
         check_types_are_present(&map);
 
-        map.register::<B>().unwrap().complete();
+        register::<B>(&mut map).unwrap().complete();
         check_types_are_present(&map);
     }
 
@@ -339,12 +345,12 @@ mod tests {
 
         // Registering the "bad" type should eventually hit a naming conflict.
         // Everything should be rolled back and adding the "good" type should still work.
-        let err = map.register::<Bad3>().unwrap_err();
-        // let msg = err.to_string();
-        // assert_eq!(
-        //     msg,
-        //     "A different type with the type name \"usize\" was already registered"
-        // );
+        let err = register::<Bad3>(&mut map).unwrap_err();
+        let msg = err.to_string();
+        assert_eq!(
+            msg,
+            "A different type with the type name \"usize\" was already registered"
+        );
 
         assert!(
             map.name_map.is_empty(),
@@ -357,11 +363,11 @@ mod tests {
         );
 
         // After this, we should succeed in adding more types correctly.
-        map.register::<D>().unwrap().complete();
+        register::<D>(&mut map).unwrap().complete();
         check_types_are_present(&map);
 
         // Again, bad registration should not corrupt the
-        map.register::<Bad3>().unwrap_err();
+        register::<Bad3>(&mut map).unwrap_err();
         check_types_are_present(&map);
     }
 

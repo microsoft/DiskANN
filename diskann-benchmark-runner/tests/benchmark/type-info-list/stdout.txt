@@ -3,6 +3,7 @@ All registered types:
   benchmark::DataType
   benchmark::test::DimInput
   benchmark::test::SampleInput
+  benchmark::test::Tolerance
   benchmark::test::TypeInputRaw
   bool
   string

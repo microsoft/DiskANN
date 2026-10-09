@@ -4,6 +4,7 @@ All registered types:
   benchmark::test::DimInput
   benchmark::test::PhantomInput
   benchmark::test::SampleInput
+  benchmark::test::Tolerance
   benchmark::test::TypeInputRaw
   bool
   string

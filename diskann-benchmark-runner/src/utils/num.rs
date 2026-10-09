@@ -57,6 +57,7 @@ pub enum RelativeChangeError {
 
 /// A finite floating-point value that is greater than or equal to zero.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Reflect)]
+#[reflect(prefix = "benchmark::")]
 pub struct NonNegativeFinite(f64);
 
 impl NonNegativeFinite {

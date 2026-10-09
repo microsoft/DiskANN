@@ -11,7 +11,9 @@ use std::collections::HashSet;
 
 #[cfg(feature = "disk-index")]
 use diskann::graph;
-use diskann_benchmark_runner::{files::InputFile, Reflect, reflect, utils::datatype::DataType, Checker};
+use diskann_benchmark_runner::{
+    files::InputFile, reflect, utils::datatype::DataType, Checker, Reflect,
+};
 #[cfg(feature = "disk-index")]
 use diskann_disk::search::search_mode::SearchMode;
 #[cfg(feature = "disk-index")]

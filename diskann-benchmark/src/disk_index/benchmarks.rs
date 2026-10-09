@@ -15,7 +15,7 @@ use diskann_benchmark_runner::{
         fmt::Table,
         num::{relative_change, NonNegativeFinite},
     },
-    Benchmark, Checker, Checkpoint, Input, Registry, Reflect,
+    Benchmark, Checker, Checkpoint, Input, Reflect, Registry,
 };
 use diskann_providers::storage::FileStorageProvider;
 use half::f16;
