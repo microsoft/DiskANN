@@ -23,7 +23,10 @@ use diskann::{
     },
     utils::VectorRepr,
 };
-use diskann_quantization::alloc::{AllocatorError, Poly};
+use diskann_quantization::{
+    alloc::{AllocatorError, Poly},
+    spherical::SupportedMetric,
+};
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
     views::rowmajor::{self, Matrix, MatrixMut},
@@ -417,9 +420,46 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
                 (Some(quantizer), canonical_bytes, true)
             }
-            VectorQuantType::Bin | VectorQuantType::XBinU8 | VectorQuantType::XBinI8 => {
-                let quantizer = Box::new(quantization::Spherical1Bit::new(metric_type, dim))
-                    as Box<dyn GarnetQuantizer>;
+            VectorQuantType::Bin
+            | VectorQuantType::XBinU8
+            | VectorQuantType::XBinI8
+            | VectorQuantType::XSpherical2
+            | VectorQuantType::XSpherical2I8
+            | VectorQuantType::XSpherical2U8
+            | VectorQuantType::XSpherical4
+            | VectorQuantType::XSpherical4I8
+            | VectorQuantType::XSpherical4U8 => {
+                SupportedMetric::try_from(metric_type)
+                    .map_err(|_| GarnetProviderError::InvalidQuantizer)?;
+
+                let valid_type = match quant_type {
+                    VectorQuantType::XSpherical2 | VectorQuantType::XSpherical4 => {
+                        TypeId::of::<T>() == TypeId::of::<f32>()
+                    }
+                    VectorQuantType::XSpherical2I8 | VectorQuantType::XSpherical4I8 => {
+                        TypeId::of::<T>() == TypeId::of::<i8>()
+                    }
+                    VectorQuantType::XSpherical2U8 | VectorQuantType::XSpherical4U8 => {
+                        TypeId::of::<T>() == TypeId::of::<u8>()
+                    }
+                    _ => true,
+                };
+                if !valid_type {
+                    return Err(GarnetProviderError::InvalidQuantizer);
+                }
+                let quantizer: Box<dyn GarnetQuantizer> = match quant_type {
+                    VectorQuantType::XSpherical2
+                    | VectorQuantType::XSpherical2I8
+                    | VectorQuantType::XSpherical2U8 => {
+                        Box::new(quantization::Spherical2Bit::new(metric_type, dim))
+                    }
+                    VectorQuantType::XSpherical4
+                    | VectorQuantType::XSpherical4I8
+                    | VectorQuantType::XSpherical4U8 => {
+                        Box::new(quantization::Spherical4Bit::new(metric_type, dim))
+                    }
+                    _ => Box::new(quantization::Spherical1Bit::new(metric_type, dim)),
+                };
                 let canonical_bytes = quantizer.bytes();
                 let mut all_quantized = false;
 
