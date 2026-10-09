@@ -1358,17 +1358,20 @@ macro_rules! dispatch_map {
 
 dispatch_map!(1, AsFull, Scalar);
 dispatch_map!(2, AsFull, Scalar);
+dispatch_map!(3, AsFull, Scalar);
 dispatch_map!(4, AsFull, Scalar);
 dispatch_map!(8, AsFull, Scalar);
 
 dispatch_map!(1, AsData<1>, Scalar);
 dispatch_map!(2, AsData<2>, Scalar);
+dispatch_map!(3, AsData<3>, Scalar);
 dispatch_map!(4, AsData<4>, Scalar);
 dispatch_map!(8, AsData<8>, Scalar);
 
 // Special Cases
 dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Scalar);
 dispatch_map!(2, AsQuery<2>, Scalar);
+dispatch_map!(3, AsQuery<3>, Scalar);
 dispatch_map!(4, AsQuery<4>, Scalar);
 dispatch_map!(8, AsQuery<8>, Scalar);
 
@@ -1381,32 +1384,38 @@ cfg_if::cfg_if! {
         // V3
         dispatch_map!(1, AsFull, V3);
         dispatch_map!(2, AsFull, V3);
+        dispatch_map!(3, AsFull, V3);
         dispatch_map!(4, AsFull, V3);
         dispatch_map!(8, AsFull, V3);
 
         dispatch_map!(1, AsData<1>, V3);
         dispatch_map!(2, AsData<2>, V3);
+        dispatch_map!(3, AsData<3>, V3);
         dispatch_map!(4, AsData<4>, V3);
         dispatch_map!(8, AsData<8>, V3);
 
         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V3);
         dispatch_map!(2, AsQuery<2>, V3);
+        dispatch_map!(3, AsQuery<3>, V3);
         dispatch_map!(4, AsQuery<4>, V3);
         dispatch_map!(8, AsQuery<8>, V3);
 
         // V4
         dispatch_map!(1, AsFull, V4, downcast_to_v3);
         dispatch_map!(2, AsFull, V4, downcast_to_v3);
+        dispatch_map!(3, AsFull, V4, downcast_to_v3);
         dispatch_map!(4, AsFull, V4, downcast_to_v3);
         dispatch_map!(8, AsFull, V4, downcast_to_v3);
 
         dispatch_map!(1, AsData<1>, V4, downcast_to_v3);
         dispatch_map!(2, AsData<2>, V4); // specialized
+        dispatch_map!(3, AsData<3>, V4);
         dispatch_map!(4, AsData<4>, V4); // specialized
         dispatch_map!(8, AsData<8>, V4, downcast_to_v3);
 
         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V4, downcast_to_v3);
         dispatch_map!(2, AsQuery<2>, V4); // specialized
+        dispatch_map!(3, AsQuery<3>, V4);
         dispatch_map!(4, AsQuery<4>, V4); // specialized
         dispatch_map!(8, AsQuery<8>, V4, downcast_to_v3);
     } else if #[cfg(target_arch = "aarch64")] {
@@ -1416,16 +1425,19 @@ cfg_if::cfg_if! {
 
         dispatch_map!(1, AsFull, Neon, downcast);
         dispatch_map!(2, AsFull, Neon, downcast);
+        dispatch_map!(3, AsFull, Neon, downcast);
         dispatch_map!(4, AsFull, Neon, downcast);
         dispatch_map!(8, AsFull, Neon, downcast);
 
         dispatch_map!(1, AsData<1>, Neon, downcast);
         dispatch_map!(2, AsData<2>, Neon);
+        dispatch_map!(3, AsData<3>, Neon);
         dispatch_map!(4, AsData<4>, Neon);
         dispatch_map!(8, AsData<8>, Neon, downcast);
 
         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Neon, downcast);
         dispatch_map!(2, AsQuery<2>, Neon);
+        dispatch_map!(3, AsQuery<3>, Neon);
         dispatch_map!(4, AsQuery<4>, Neon);
         dispatch_map!(8, AsQuery<8>, Neon, downcast);
     }
@@ -1980,7 +1992,7 @@ macro_rules! plan {
     }
 }
 
-plan!(2, 4, 8);
+plan!(2, 3, 4, 8);
 
 ////////////////
 // Flatbuffer //
@@ -2065,6 +2077,7 @@ where
     match nbits {
         1 => unpack_bits::<1, _, _>(proto, alloc),
         2 => unpack_bits::<2, _, _>(proto, alloc),
+        3 => unpack_bits::<3, _, _>(proto, alloc),
         4 => unpack_bits::<4, _, _>(proto, alloc),
         8 => unpack_bits::<8, _, _>(proto, alloc),
         n => Err(DeserializationError::UnsupportedBitWidth(n)),
@@ -2425,6 +2438,24 @@ mod tests {
     }
 
     #[test]
+    fn test_plan_3bit_l2() {
+        let (plan, data) = make_impl::<3>(SupportedMetric::SquaredL2);
+        test_plan(&plan, 3, data.as_view());
+    }
+
+    #[test]
+    fn test_plan_3bit_ip() {
+        let (plan, data) = make_impl::<3>(SupportedMetric::InnerProduct);
+        test_plan(&plan, 3, data.as_view());
+    }
+
+    #[test]
+    fn test_plan_3bit_cosine() {
+        let (plan, data) = make_impl::<3>(SupportedMetric::Cosine);
+        test_plan(&plan, 3, data.as_view());
+    }
+
+    #[test]
     fn test_plan_4bit_l2() {
         let (plan, data) = make_impl::<4>(SupportedMetric::SquaredL2);
         test_plan(&plan, 4, data.as_view());
@@ -2773,6 +2804,20 @@ mod tests {
                         Err(DeserializationError::UnsupportedBitWidth(2)),
                     ));
                 }
+                3 => {
+                    test_deserialization_inner(
+                        quantizer,
+                        &Impl::<3, _>::try_deserialize(&serialized, global).unwrap(),
+                        nbits,
+                        dataset,
+                    );
+
+                    // Verify that we can't reload with a different bit-width.
+                    assert!(matches!(
+                        Impl::<1, _>::try_deserialize(&serialized, global),
+                        Err(DeserializationError::UnsupportedBitWidth(3)),
+                    ));
+                }
                 4 => {
                     test_deserialization_inner(
                         quantizer,
@@ -2870,10 +2915,24 @@ mod tests {
         }
 
         #[test]
+        fn test_plan_3bit_l2() {
+            let (plan, data) = make_impl::<3>(SupportedMetric::SquaredL2);
+            test_plan_panic_boundary(&plan);
+            test_plan_serialization(&plan, 3, data.as_view());
+        }
+
+        #[test]
         fn test_plan_2bit_ip() {
             let (plan, data) = make_impl::<2>(SupportedMetric::InnerProduct);
             test_plan_panic_boundary(&plan);
             test_plan_serialization(&plan, 2, data.as_view());
+        }
+
+        #[test]
+        fn test_plan_3bit_ip() {
+            let (plan, data) = make_impl::<3>(SupportedMetric::InnerProduct);
+            test_plan_panic_boundary(&plan);
+            test_plan_serialization(&plan, 3, data.as_view());
         }
 
         #[test]
@@ -2916,6 +2975,13 @@ mod tests {
             let (plan, data) = make_impl::<2>(SupportedMetric::Cosine);
             test_plan_panic_boundary(&plan);
             test_plan_serialization(&plan, 2, data.as_view());
+        }
+
+        #[test]
+        fn test_plan_3bit_cosine() {
+            let (plan, data) = make_impl::<3>(SupportedMetric::Cosine);
+            test_plan_panic_boundary(&plan);
+            test_plan_serialization(&plan, 3, data.as_view());
         }
 
         #[test]

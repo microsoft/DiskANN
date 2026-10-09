@@ -679,6 +679,24 @@ impl FinishCompressing for DataMut<'_, 2> {
     }
 }
 
+impl FinishCompressing for DataMut<'_, 3> {
+    fn finish_compressing(
+        &mut self,
+        preprocessed: &Preprocessed<'_>,
+        transformed: &[f32],
+        transformed_norm: f32,
+        allocator: ScopedAllocator<'_>,
+    ) -> Result<(), CompressionError> {
+        compress_via_maximum_cosine(
+            self.reborrow_mut(),
+            preprocessed,
+            transformed,
+            transformed_norm,
+            allocator,
+        )
+    }
+}
+
 impl FinishCompressing for DataMut<'_, 4> {
     fn finish_compressing(
         &mut self,
@@ -2264,6 +2282,7 @@ mod tests {
 
             test_quantizer::<4, 1, BitTranspose>(&setup, &mut rng);
             test_quantizer::<2, 2, Dense>(&setup, &mut rng);
+            test_quantizer::<3, 3, Dense>(&setup, &mut rng);
             test_quantizer::<4, 4, Dense>(&setup, &mut rng);
             test_quantizer::<8, 8, Dense>(&setup, &mut rng);
 
@@ -2277,6 +2296,7 @@ mod tests {
             };
             test_quantizer::<4, 1, BitTranspose>(&setup, &mut rng);
             test_quantizer::<2, 2, Dense>(&setup, &mut rng);
+            test_quantizer::<3, 3, Dense>(&setup, &mut rng);
             test_quantizer::<4, 4, Dense>(&setup, &mut rng);
             test_quantizer::<8, 8, Dense>(&setup, &mut rng);
         }
