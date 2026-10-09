@@ -10,7 +10,7 @@ use std::{
     fmt::{self, Write},
 };
 
-pub use diskann_benchmark_runner_derive::Reflect;
+pub use diskann_derive::Reflect;
 
 mod render;
 pub mod tree;

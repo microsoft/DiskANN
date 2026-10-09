@@ -519,7 +519,7 @@ version = "0.59.0"
 dependencies = [
  "anyhow",
  "clap",
- "diskann-benchmark-runner-derive",
+ "diskann-derive",
  "half",
  "hashbrown 0.16.1",
  "indicatif",
@@ -527,17 +527,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
-]
-
-[[package]]
-name = "diskann-benchmark-runner-derive"
-version = "0.59.0"
-dependencies = [
- "diskann-benchmark-runner",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "trybuild",
 ]
 
 [[package]]
@@ -577,6 +566,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
+]
+
+[[package]]
+name = "diskann-derive"
+version = "0.59.0"
+dependencies = [
+ "diskann-benchmark-runner",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "trybuild",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 [package]
-name = "diskann-benchmark-runner-derive"
+name = "diskann-derive"
 version.workspace = true
 description.workspace = true
 authors.workspace = true

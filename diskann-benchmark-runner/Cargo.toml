@@ -10,7 +10,7 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-diskann-benchmark-runner-derive = { workspace = true }
+diskann-derive = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 indicatif = "0.18.3"
