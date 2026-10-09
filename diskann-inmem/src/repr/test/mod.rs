@@ -10,6 +10,12 @@ use crate::{
     repr,
 };
 
+#[cfg(feature = "quantization")]
+use diskann::neighbor::Neighbor;
+
+#[cfg(feature = "quantization")]
+use crate::num::IdLimit;
+
 /// A test distance that simply sums scalar floating point values.
 #[derive(Debug)]
 pub(super) struct TestDistance;
@@ -169,4 +175,152 @@ impl ReferenceLookup for LogicalId {
                 .expect("reference is in an inconsistent state"),
         )
     }
+}
+
+//-------------//
+// Expand Beam //
+//-------------//
+
+/// Performs the following set of tests:
+///
+/// * [`ExpandBeam::id_limit`] is equal to `id_limit`.
+///
+/// * [`ExpandBeam::evaluate`]: For each id in `ids` - attempt to evaluate the distance
+///   through [`ExpandBeam::evaluate`]. If the id is present in `distances`, assert that
+///   the value in `distances` agrees with the result of the `ExpandBeam` method.
+///
+///   Otherwise, assert that `ExpandBeam` returns `None`.
+///
+/// * [`ExpandBeam::expand_beam`]: Provide all `ids` to `expand_beam`. Verify that ids not
+///   present in `distances` get removed and all remaining ids are present and have a
+///   distance value equal to the corresponding entry in `distances`.
+#[cfg(feature = "quantization")]
+pub(super) fn test_expand_beam(
+    accessor: &dyn repr::ExpandBeam,
+    id_limit: IdLimit,
+    distances: HashMap<SlotId, f32>,
+    ids: &[SlotId],
+    ctx: &dyn std::fmt::Display,
+) {
+    assert_eq!(accessor.id_limit(), id_limit, "{ctx}");
+
+    for slot_id in ids {
+        if let Some(distance) = distances.get(slot_id) {
+            assert_eq!(
+                accessor.evaluate(slot_id.value()).unwrap(),
+                Some(*distance),
+                "failed on slot id {} -- {}",
+                slot_id,
+                ctx,
+            );
+        } else {
+            assert!(
+                accessor.evaluate(slot_id.value()).unwrap().is_none(),
+                "failed on slot id {} -- {}",
+                slot_id,
+                ctx
+            );
+        }
+    }
+
+    // Test via `expand_beam`.
+    let list: Vec<u32> = ids.iter().map(|slot_id| slot_id.value()).collect();
+    let mut buffer = vec![Neighbor::default(); list.len()];
+    let len = repr::safe_expand_beam(accessor, &list, &mut buffer).unwrap();
+
+    let expected: Vec<Neighbor<u32>> = ids
+        .iter()
+        .filter_map(|slot_id| {
+            distances
+                .get(slot_id)
+                .map(|distance| Neighbor::new(slot_id.value(), *distance))
+        })
+        .collect();
+
+    assert_eq!(
+        expected.len(),
+        len,
+        "`expand_beam` returned the incorrect number of items -- {}",
+        ctx,
+    );
+
+    for (i, (got, expected)) in std::iter::zip(buffer.iter(), expected.iter()).enumerate() {
+        assert_eq!(
+            got.id(),
+            expected.id(),
+            "failed on entry {} of {} -- {}",
+            i,
+            len,
+            ctx
+        );
+        assert_eq!(
+            got.distance(),
+            expected.distance(),
+            "failed on entry {} of {} -- {}",
+            i,
+            len,
+            ctx,
+        );
+    }
+}
+
+//-------//
+// Prune //
+//-------//
+
+/// Test that the [`repr::Prune`] computes distances according to the ground truth in
+/// `distances`.
+///
+/// This assumes that `distances` contains all valid (i.e., between undeleted) entries
+/// in `ids` - including self distances.
+///
+/// For example, if `ids` contains `[0, 1, 2, 3(deleted)]`, then `distances` should contain
+/// the keys:
+///
+/// (0, 0), (0, 1), (0, 2)
+/// (1, 0), (1, 1), (1, 2)
+/// (2, 0), (2, 1), (2, 2)
+#[cfg(feature = "quantization")]
+pub(super) fn test_prune(
+    accessor: &mut dyn repr::Prune,
+    distances: HashMap<(SlotId, SlotId), f32>,
+    ids: &[SlotId],
+    ctx: &dyn std::fmt::Display,
+) {
+    let num_present_ids = ids
+        .iter()
+        .filter(|&&slot_id| distances.contains_key(&(slot_id, slot_id)))
+        .count();
+
+    let mut items: HashMap<u32, Option<repr::PruneKey>> =
+        ids.iter().map(|slot_id| (slot_id.value(), None)).collect();
+
+    let count = accessor.prepare(items.iter_mut()).unwrap();
+    assert_eq!(count, num_present_ids, "{ctx}");
+
+    let mut visited = 0;
+    for slot_id0 in ids.iter() {
+        if let Some(key0) = items[&slot_id0.value()] {
+            for slot_id1 in ids.iter() {
+                if let Some(key1) = items[&slot_id1.value()] {
+                    let d = accessor.evaluate(key0, key1);
+                    let expected = distances[&(*slot_id0, *slot_id1)];
+                    assert_eq!(
+                        d, expected,
+                        "failed for {} x {} -- {}",
+                        slot_id0, slot_id1, ctx
+                    );
+
+                    visited += 1;
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        visited,
+        distances.len(),
+        "not all distances were visited -- {}",
+        ctx
+    );
 }
