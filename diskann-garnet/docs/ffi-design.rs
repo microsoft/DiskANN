@@ -127,6 +127,8 @@ type LogCallback = unsafe extern "C" fn(context: u64, message: *const u8, messag
 /// reduce_dim == 0 to indicate no reduction requested. Dimensionality reduction is not
 /// implemented, so this parameter is currently ignored.
 ///
+/// start_point_id is fixed for the index lifetime and must be supplied again on reopen.
+///
 /// metric_type is passed as a raw i32. Valid values are:
 /// - 0: Cosine
 /// - 1: InnerProduct
@@ -148,6 +150,7 @@ extern "C" fn create_index(
     metric_type: i32,
     l_build: u32,
     max_degree: u32,
+    start_point_id: u32,
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
@@ -418,10 +421,9 @@ extern "C" fn can_import(context: u64, index_ptr: *const c_void) -> bool;
 /// term_type is 0 for vectors, 1 for neighbors, 2 for quantized vectors, 3 for attributes,
 /// 5 for external-to-internal ID mappings, or 6 for internal-to-external ID mappings.
 /// Metadata (4) cannot be imported. IDs and values must be non-null and non-empty.
-/// Terms may arrive in any order and must use IDs between 1 and u32::MAX - 1.
-/// Importing a high ID creates every missing FSM block through that ID. ID 0 is reserved
-/// for the start point, which finalization creates outside FSM accounting.
-/// External-to-internal mapping values must be a nonzero native-endian u32.
+/// Terms may arrive in any order. Ordinary vector IDs must be between 0 and u32::MAX - 1.
+/// External-to-internal mapping values must be a u32 different from the configured start_point_id.
+/// At start_point_id, only vector, neighbor, and quantized-vector terms are accepted.
 /// Neighbor terms must have `(max_degree + 1) * 4` bytes and a trailing native-endian u32 count
 /// no greater than max_degree.
 ///

@@ -88,13 +88,11 @@ The are several terms in the index used for internal state management of the dis
 
 #### Start Points
 
-Currently only a single start point is supported, and it is given the internal ID of 0. During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
+Only a single start point is supported. Its internal ID is fixed when the provider is created and defaults to `DEFAULT_START_POINT_ID` (`u32::MAX`). During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
 
-For a nonempty import, finalization copies the first used imported ID's full vector, quantized vector (if present), and neighbor list to ID 0. ID 0 cannot be imported directly.
+Imports must supply the full vector, neighbor list, and (for quantized indexes) quantized vector at the configured start-point ID. Finalization validates these terms and populates the caches. The neighbor count must fit the configured degree, and each listed neighbor must be a valid ID.
 
-Start points have no associated attributes.
-
-ID 0 is reserved outside the free space map. The FSM never allocates, counts, visits, or reuses it; the provider maintains the start point's validity separately.
+Start points have no associated attributes or ID mappings and are not counted as active vectors.
 
 #### Metadata
 
@@ -107,11 +105,11 @@ Metadata is currently used for the free space map which manages used and availab
 
 The free space map is used to keep track of which internal IDs are allocated and in use. Please see the [ID Mapping](#id-mapping) section for more details on why mapped IDs are used.
 
-The free space map is a contiguous sequence of blocks starting at block zero. Each block contains 65,536 one-bit ID states and occupies 8 KiB: `0b0` for free and `0b1` for used. The bit for reserved ID 0 is ignored. Blocks grow on demand during insertion or import, including intermediate blocks.
+The free space map is a contiguous sequence of blocks starting at block zero. Each block contains 65,536 one-bit ID states and occupies 8 KiB: `0b0` for free and `0b1` for used. The bit for the configured start-point ID is ignored. Blocks grow on demand during insertion or import, including intermediate blocks.
 
 During startup, the index scans FSM blocks in sequence to restore state. It updates the corresponding bit whenever a user vector's allocation changes. A failed expansion retains its successfully written prefix, allowing subsequent expansion to continue without erasing earlier claims.
 
-Importing a term keyed by an internal ID claims that ID before writing the term and advances the maximum assigned ID as needed. A failed claim writes no term; a failed term write leaves the ID claimed for a retry. Repeated claims do not increase the used count. Gaps below the maximum ID are available for reuse once reuse is enabled; quantization backfill keeps reuse disabled until it finishes.
+Importing a term keyed by internal ID marks that ID as used unless it is the start point's ID, expanding the map and advancing the maximum assigned ID as needed. The start point is tracked separately from the FSM.
 
 ##### Quantizer Tables
 
@@ -120,7 +118,7 @@ Importing a term keyed by an internal ID claims that ID before writing the term 
 
 Note that for the BIN quantizer, a 1 byte flag precedes the quantizer table which indicates whether quantization backfill is complete. That byte is accounted for in the value sizing above.
 
-Quantizer state can only be replaced while no user IDs are occupied in the FSM and no start-point vector exists. Replacement is serialized with imports and normal vector writes using the existing import gate and FSM quantization barrier.
+Quantizer state can only be replaced while no ordinary IDs are occupied in the FSM and no start-point terms exist.
 
 ##### Import Eligibility
 
@@ -134,7 +132,9 @@ If absent, imports are enabled only for an unquantized index without a start poi
 *Key*: Internal ID as bytes; this key is always 4 bytes in length.
 *Value*: External ID; this is variable length byte string that the user assigned.
 
-Each internal ID corresponds to an external ID, which is a byte string of arbitrary length. The external IDs are stored unmodified and read/written as a whole.
+Each internal ID, except the start point, corresponds to an external ID, which
+is a byte string of arbitrary length. The external IDs are stored unmodified and
+read/written as a whole.
 
 Lookup of an external ID will happen during post processing when we return results to Garnet.
 
@@ -149,7 +149,7 @@ Lookup of an internal ID will happen for things such as delete.
 
 ## ID Mapping
 
-Garnet vector set IDs are arbitrary length byte strings natively. These are quite inefficient for indexing so we map each external ID to a `u32` internal ID. User vector IDs range from 1 through `u32::MAX - 1`, supporting at most 2^32 - 2 vectors. ID 0 is reserved for the start point, and `u32::MAX` is the exhausted next-ID value rather than an assignable ID.
+Garnet vector set IDs are arbitrary length byte strings natively. These are quite inefficient for indexing so we map each external ID to a `u32` internal ID. One internal ID is reserved for the start point and cannot be allocated to inserted vectors.
 
 When the DiskANN algorithm performs searches and other operations it works with internal IDs only. The external IDs are only used when returning data to the user (which has no concept of the internal IDs) or when asked to perform operations like delete on specific vectors which will be identified by their external ID. In order to convert back and forth for these occasions, lookup tables must be kept for the mapping.
 
