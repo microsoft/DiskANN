@@ -35,6 +35,9 @@ Redis always uses cosine distance, but many vector data sets use other metrics. 
 - `XNOQUANT_U8`: full precision 8-bit unsigned integer
 - `XBIN_I8`: binary quantization of 8-bit signed integer (using DiskANN's spherical quantizer based on RaBitQ)
 - `XBIN_U8`: binary quantization of 8-bit unsigned integer (using DiskANN's spherical quantizer based on RaBitQ)
+- `XSpherical2I8` (native-only quantizer enum value 8): 2-bit spherical quantization of signed 8-bit integers. At 256 dimensions, each quantized vector occupies 70 bytes in addition to the retained original vector.
+
+Native callers must probe for `supports_xspherical2_i8()` before passing enum value 8 to `create_index`; an older native library without this symbol does not support the quantizer. Existing `search_vector` and `search_element` calls rerank quantized candidates using the retained full-precision vectors.
 
 
 Currently there is a limit of `2^32 - 1` vectors in a single instance due to

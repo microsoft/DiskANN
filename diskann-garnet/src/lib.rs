@@ -113,6 +113,14 @@ pub enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2I8,
+}
+
+/// Probe for signed-int8 vectors with 2-bit spherical quantization before passing enum value 8.
+/// Stock 5.0.3 does not export this symbol; callers must treat its absence as unsupported.
+#[unsafe(no_mangle)]
+pub extern "C" fn supports_xspherical2_i8() -> u8 {
+    1
 }
 
 /// Helper struct to manage the FFI buffers for handling search results
@@ -263,9 +271,10 @@ fn create_index_impl<T: VectorRepr>(
     };
 
     let quant_needed = match quant_type {
-        VectorQuantType::Bin | VectorQuantType::XBinI8 | VectorQuantType::XBinU8 => {
-            provider.quantization_needed()
-        }
+        VectorQuantType::Bin
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XSpherical2I8 => provider.quantization_needed(),
         _ => false,
     };
 
@@ -363,7 +372,7 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::XNoQuantI8 | VectorQuantType::XBinI8 => {
+        VectorQuantType::XNoQuantI8 | VectorQuantType::XBinI8 | VectorQuantType::XSpherical2I8 => {
             if let Ok((index, quant_needed)) = create_index_impl::<i8>(
                 quant_type,
                 config,
@@ -457,7 +466,8 @@ fn interpret_vector<'a>(
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
         | VectorQuantType::XBinU8
-        | VectorQuantType::XBinI8 => vector_len,
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8 => vector_len,
     };
 
     let v = unsafe { slice::from_raw_parts(*vector_data, vector_len_bytes) };
@@ -483,7 +493,8 @@ fn interpret_vector<'a>(
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
         | VectorQuantType::XBinU8
-        | VectorQuantType::XBinI8 => PolyCow::from(v),
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8 => PolyCow::from(v),
     };
 
     Some(v)
@@ -1257,6 +1268,13 @@ mod tests {
     }
 
     #[test]
+    fn spherical2_support_and_quantizer_abi() {
+        assert_eq!(VectorQuantType::XBinU8 as i32, 7);
+        assert_eq!(VectorQuantType::XSpherical2I8 as i32, 8);
+        assert_eq!(crate::supports_xspherical2_i8(), 1);
+    }
+
+    #[test]
     fn search_results() {
         let mut ids = vec![0u8; 40]; // 20 bytes for 5 IDs; 20 bytes for 5 length prefixes
         let mut dists = vec![0.0f32; 5];
@@ -1457,6 +1475,7 @@ mod tests {
         check_create_index(VectorQuantType::XBinU8);
         check_create_index(VectorQuantType::XNoQuantI8);
         check_create_index(VectorQuantType::XBinI8);
+        check_create_index(VectorQuantType::XSpherical2I8);
     }
 
     #[test]
