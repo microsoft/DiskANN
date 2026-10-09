@@ -836,7 +836,7 @@ impl IndexBuild {
             let parent = save_path
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or_else(|| std::path::Path::new("."));
+                .unwrap_or(".".as_ref());
             let resolved_path = checker.register_output_dir(parent)?;
             let full_path = resolved_path.join(save_filename);
             self.save_path = Some(full_path.to_string_lossy().to_string());
