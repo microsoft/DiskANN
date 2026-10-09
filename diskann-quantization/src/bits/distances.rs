@@ -81,7 +81,7 @@
 //! |               |               | `       ` |           |               |           |           |
 //! | `&[f32]`      | `USlice<1>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
 //! | `&[f32]`      | `USlice<2>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
-//! | `&[f32]`      | `USlice<3>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<3>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
 //! | `&[f32]`      | `USlice<4>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
 //! | `&[f32]`      | `USlice<5>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `&[f32]`      | `USlice<6>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
@@ -3454,6 +3454,120 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<f32>, &[f32], US
     }
 }
 
+/// Decode eight consecutive codes from each 24-bit group. Interior loads overlap by one
+/// byte; the final group is loaded separately so no padding or readable metadata is needed.
+#[cfg(target_arch = "x86_64")]
+impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<f32>, &[f32], USlice<'_, 3>>
+    for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::x86_64::V3,
+        x: &[f32],
+        y: USlice<'_, 3>,
+    ) -> MathematicalResult<f32> {
+        // SAFETY: V3 guarantees AVX2 and FMA.
+        unsafe { full_ip_3bit_long(arch, x, y) }
+    }
+}
+
+// Keep the four-accumulator loop out of line to limit caller register pressure.
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn full_ip_3bit_long(
+    arch: diskann_wide::arch::x86_64::V3,
+    x: &[f32],
+    y: USlice<'_, 3>,
+) -> MathematicalResult<f32> {
+    full_ip_3bit(arch, x, y)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn full_ip_3bit(
+    arch: diskann_wide::arch::x86_64::V3,
+    x: &[f32],
+    y: USlice<'_, 3>,
+) -> MathematicalResult<f32> {
+    let len = check_lengths!(x, y)?;
+    diskann_wide::alias!(f32s = <diskann_wide::arch::x86_64::V3>::f32x8);
+    diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
+
+    let shifts = i32s::from_array(arch, [0, 3, 6, 9, 12, 15, 18, 21]);
+    let mask = i32s::splat(arch, 7);
+    let decode =
+        |word: u32| -> f32s { ((i32s::splat(arch, word as i32) >> shifts) & mask).simd_cast() };
+    let px = x.as_ptr();
+    let py = y.as_ptr();
+    let mut s0 = f32s::default(arch);
+    let mut s1 = f32s::default(arch);
+    let mut s2 = f32s::default(arch);
+    let mut s3 = f32s::default(arch);
+    let mut i = 0;
+
+    while len - i > 32 {
+        // SAFETY: At least 33 dimensions remain: 32 query values and 13 packed
+        // bytes are readable. The last window covers bytes [9, 13).
+        unsafe {
+            let packed = py.add(3 * (i / 8));
+            let c0 = decode(packed.cast::<u32>().read_unaligned());
+            let c1 = decode(packed.add(3).cast::<u32>().read_unaligned());
+            let c2 = decode(packed.add(6).cast::<u32>().read_unaligned());
+            let c3 = decode(packed.add(9).cast::<u32>().read_unaligned());
+            s0 = f32s::load_simd(arch, px.add(i)).mul_add_simd(c0, s0);
+            s1 = f32s::load_simd(arch, px.add(i + 8)).mul_add_simd(c1, s1);
+            s2 = f32s::load_simd(arch, px.add(i + 16)).mul_add_simd(c2, s2);
+            s3 = f32s::load_simd(arch, px.add(i + 24)).mul_add_simd(c3, s3);
+        }
+        i += 32;
+    }
+    // Leave at least one dimension after each pair: its byte makes the second
+    // overlapping u32 load valid, even when the packed slice has no trailing storage.
+    while len - i > 16 {
+        // SAFETY: At least 17 dimensions remain: 16 query values and 7 packed bytes
+        // are readable. The two windows cover bytes [0, 4) and [3, 7).
+        unsafe {
+            let packed = py.add(3 * (i / 8));
+            let c0 = decode(packed.cast::<u32>().read_unaligned());
+            let c1 = decode(packed.add(3).cast::<u32>().read_unaligned());
+            s0 = f32s::load_simd(arch, px.add(i)).mul_add_simd(c0, s0);
+            s1 = f32s::load_simd(arch, px.add(i + 8)).mul_add_simd(c1, s1);
+        }
+        i += 16;
+    }
+    if len - i > 8 {
+        // SAFETY: At least 9 dimensions remain, so 8 query values and 4 packed
+        // bytes are readable at these offsets.
+        unsafe {
+            let codes = decode(py.add(3 * (i / 8)).cast::<u32>().read_unaligned());
+            s0 = f32s::load_simd(arch, px.add(i)).mul_add_simd(codes, s0);
+        }
+        i += 8;
+    }
+    let tail = len - i;
+    if tail != 0 {
+        let finish = |word| {
+            // SAFETY: There are `tail` query values remaining; inactive lanes are zero.
+            let query = unsafe { f32s::load_simd_first(arch, px.add(i), tail) };
+            s0 = query.mul_add_simd(decode(word), s0);
+        };
+        // SAFETY: The remaining 1..=8 codes occupy ceil(3 * tail / 8) bytes.
+        // Each helper reads precisely that many bytes, with no alignment requirement.
+        unsafe {
+            let packed = py.add(3 * (i / 8)).cast::<u32>();
+            match tail {
+                1..=2 => load_one(packed, finish),
+                3..=5 => load_two(packed, finish),
+                _ => load_three(packed, finish),
+            }
+        }
+    }
+    let sum = (s0 + s1) + (s2 + s3);
+    Ok(MV::new(sum.sum_tree()))
+}
+
 /// The strategy here is similar to the 1 and 2-bit strategies. However, instead of using
 /// `_mm256_permutevar_ps`, we now go directly for 32-bit integer to 32-bit floating point.
 ///
@@ -3583,7 +3697,7 @@ macro_rules! ip_retarget {
 }
 
 #[cfg(target_arch = "x86_64")]
-ip_retarget!(diskann_wide::arch::x86_64::V3, 3, 5, 6, 7, 8);
+ip_retarget!(diskann_wide::arch::x86_64::V3, 5, 6, 7, 8);
 
 #[cfg(target_arch = "x86_64")]
 ip_retarget!(diskann_wide::arch::x86_64::V4, 1, 2, 3, 4, 5, 6, 7, 8);
@@ -4149,6 +4263,56 @@ mod tests {
     // Full //
     //////////
 
+    fn test_full_distance_tails<const NBITS: usize>(
+        evaluate_ip: &dyn Fn(&[f32], USlice<'_, NBITS>) -> MathematicalResult<f32>,
+        context: &str,
+    ) where
+        Unsigned: Representation<NBITS>,
+    {
+        // Cover unaligned, exact-sized inputs, dirty padding, and repeated main-loop
+        // iterations, including boundaries around SIMD block sizes and long vectors.
+        for dim in (0usize..=577).chain([
+            767, 768, 769, 1023, 1024, 1025, 1535, 1536, 1537, 2047, 2048, 2049,
+        ]) {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+            let query: Vec<f32> = (0..dim)
+                .map(|i| ((i * 17 % 31) as f32 - 15.0) / 7.0)
+                .collect();
+            for prefix in 0..8 {
+                let bytes = USlice::<NBITS>::bytes_for(dim);
+                let mut allocation = vec![u8::MAX; prefix + bytes].into_boxed_slice();
+                let mut packed = crate::bits::MutBitSlice::<NBITS, Unsigned>::new(
+                    &mut allocation[prefix..],
+                    dim,
+                )
+                .unwrap();
+                let mut expected = 0.0f64;
+                let mut magnitude = 0.0f64;
+                for (i, &q) in query.iter().enumerate() {
+                    let code = ((i * 5 + prefix) % (1 << NBITS)) as u8;
+                    packed.set(i, code.into()).unwrap();
+                    let term = f64::from(q) * f64::from(code);
+                    expected += term;
+                    magnitude += term.abs();
+                }
+                let packed = packed.reborrow();
+                let got = evaluate_ip(&query, packed).unwrap().into_inner();
+                assert!(
+                    (f64::from(got) - expected).abs() <= 2e-6 * magnitude.max(1.0),
+                    "nbits={NBITS}, dim={dim}, prefix={prefix}, got={got}, expected={expected}, context={context}"
+                );
+                if dim > 0 {
+                    assert!(
+                        evaluate_ip(&query[..dim - 1], packed).is_err(),
+                        "nbits={NBITS}, dim={dim}, context={context}"
+                    );
+                }
+            }
+        }
+    }
+
     fn test_full_distances<const NBITS: usize>(
         dim_max: usize,
         trials_per_dim: usize,
@@ -4212,6 +4376,8 @@ mod tests {
                 assert_eq!(got.into_inner(), scalar.into_inner());
             }
         }
+
+        test_full_distance_tails(evaluate_ip, context);
 
         // Error Checking
         let x = vec![0.0; 10];
@@ -4292,6 +4458,7 @@ mod tests {
     test_full!(test_full_distance_1bit, 1, 0xe20e26e926d4b853);
     test_full!(test_full_distance_2bit, 2, 0xae9542700aecbf68);
     test_full!(test_full_distance_3bit, 3, 0xfffd04b26bb6068c);
+
     test_full!(test_full_distance_4bit, 4, 0x86db49fd1a1704ba);
     test_full!(test_full_distance_5bit, 5, 0x3a35dc7fa7931c41);
     test_full!(test_full_distance_6bit, 6, 0x1f69de79e418d336);

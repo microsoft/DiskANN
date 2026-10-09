@@ -1255,15 +1255,25 @@ mod tests {
                     rng,
                 );
 
-                let kernel_result = {
-                    let xy: MV<f32> = diskann_vector::distance::InnerProduct::evaluate(
-                        &*x.reconstructed,
-                        &*y.reconstructed,
-                    );
-                    x.norm * y.norm * xy.into_inner() / (x.self_ip.unwrap() * y.self_ip.unwrap())
-                };
+                // Reconstruct from the stored f16 coefficients so cancellation does not
+                // turn metadata rounding into an apparent distance-kernel error.
+                let offset = ((1usize << NBITS) - 1) as f64 / 2.0;
+                let dot: f64 = (0..dim)
+                    .map(|i| {
+                        (x.compressed.vector().get(i).unwrap() as f64 - offset)
+                            * (y.compressed.vector().get(i).unwrap() as f64 - offset)
+                    })
+                    .sum();
+                let xm = x.compressed.meta();
+                let ym = y.compressed.meta();
+                let kernel_result = dot
+                    * f64::from(xm.inner_product_correction.to_f32())
+                    * f64::from(ym.inner_product_correction.to_f32());
 
-                let reference_ip = kernel_result + x.center_ip + y.center_ip + c_square_norm;
+                let reference_ip = (kernel_result
+                    + f64::from(xm.metric_specific.to_f32())
+                    + f64::from(ym.metric_specific.to_f32())
+                    + f64::from(c_square_norm)) as f32;
                 let ip = CompensatedIP::new(&center, center.len());
                 let got_ip: distances::MathematicalResult<f32> =
                     ARCH.run2(ip, x.compressed.reborrow(), y.compressed.reborrow());
@@ -1315,15 +1325,24 @@ mod tests {
                     Data::<NBITS, _>::generate_reference(&center, SupportedMetric::SquaredL2, rng);
 
                 // Compute the expected value for the quantity `|X'| |Y'| <x, y>`.
-                let kernel_result = {
-                    let xy: MV<f32> = diskann_vector::distance::InnerProduct::evaluate(
-                        &*x.reconstructed,
-                        &*y.reconstructed,
-                    );
-                    x.norm * y.norm * xy.into_inner() / (x.self_ip.unwrap() * y.self_ip.unwrap())
-                };
+                // Reconstruct from the stored f16 coefficients so cancellation does not
+                // turn metadata rounding into an apparent distance-kernel error.
+                let offset = ((1usize << NBITS) - 1) as f64 / 2.0;
+                let dot: f64 = (0..dim)
+                    .map(|i| {
+                        (x.compressed.vector().get(i).unwrap() as f64 - offset)
+                            * (y.compressed.vector().get(i).unwrap() as f64 - offset)
+                    })
+                    .sum();
+                let xm = x.compressed.meta();
+                let ym = y.compressed.meta();
+                let kernel_result = dot
+                    * f64::from(xm.inner_product_correction.to_f32())
+                    * f64::from(ym.inner_product_correction.to_f32());
 
-                let reference_l2 = x.norm * x.norm + y.norm * y.norm - 2.0 * kernel_result;
+                let reference_l2 = (f64::from(xm.metric_specific.to_f32())
+                    + f64::from(ym.metric_specific.to_f32())
+                    - 2.0 * kernel_result) as f32;
                 let l2 = CompensatedSquaredL2::new(dim);
                 let got_l2: distances::MathematicalResult<f32> =
                     ARCH.run2(l2, x.compressed.reborrow(), y.compressed.reborrow());
@@ -1412,15 +1431,25 @@ mod tests {
                     Data::<D, _>::generate_reference(&center, SupportedMetric::InnerProduct, rng);
 
                 // The expected scaled dot-product between the normalized vectors.
-                let xy = {
-                    let xy: MV<f32> = diskann_vector::distance::InnerProduct::evaluate(
-                        &*x.reconstructed,
-                        &*y.reconstructed,
-                    );
-                    x.norm * y.norm * xy.into_inner() / y.self_ip.unwrap()
-                };
+                // Use the encoded query/data metadata in the reference, as in the
+                // symmetric test, including the data coefficient's f16 rounding.
+                let xm = x.compressed.meta();
+                let ym = y.compressed.meta();
+                let offset = ((1usize << D) - 1) as f64 / 2.0;
+                let dot: f64 = (0..dim)
+                    .map(|i| {
+                        (x.compressed.vector().get(i).unwrap() as f64 + f64::from(xm.offset))
+                            * (y.compressed.vector().get(i).unwrap() as f64 - offset)
+                    })
+                    .sum();
+                let xy = dot
+                    * f64::from(xm.inner_product_correction)
+                    * f64::from(ym.inner_product_correction.to_f32());
 
-                let reference_ip = -(xy + x.center_ip + y.center_ip + c_square_norm);
+                let reference_ip = -(xy
+                    + f64::from(xm.metric_specific)
+                    + f64::from(ym.metric_specific.to_f32())
+                    + f64::from(c_square_norm)) as f32;
                 let ip = CompensatedIP::new(&center, center.len());
                 let got_ip: distances::Result<f32> =
                     ARCH.run2(ip, x.compressed.reborrow(), y.compressed.reborrow());
@@ -1468,14 +1497,23 @@ mod tests {
                 let y = Data::<D, _>::generate_reference(&center, SupportedMetric::SquaredL2, rng);
 
                 // The expected scaled dot-product between the normalized vectors.
-                let xy = {
-                    let xy: MV<f32> = diskann_vector::distance::InnerProduct::evaluate(
-                        &*x.reconstructed,
-                        &*y.reconstructed,
-                    );
-                    x.norm * y.norm * xy.into_inner() / y.self_ip.unwrap()
-                };
-                let reference_l2 = x.norm * x.norm + y.norm * y.norm - 2.0 * xy;
+                // Use the encoded query/data metadata in the reference, as in the
+                // symmetric test, including the data coefficient's f16 rounding.
+                let xm = x.compressed.meta();
+                let ym = y.compressed.meta();
+                let offset = ((1usize << D) - 1) as f64 / 2.0;
+                let dot: f64 = (0..dim)
+                    .map(|i| {
+                        (x.compressed.vector().get(i).unwrap() as f64 + f64::from(xm.offset))
+                            * (y.compressed.vector().get(i).unwrap() as f64 - offset)
+                    })
+                    .sum();
+                let xy = dot
+                    * f64::from(xm.inner_product_correction)
+                    * f64::from(ym.inner_product_correction.to_f32());
+                let reference_l2 = (f64::from(xm.metric_specific)
+                    + f64::from(ym.metric_specific.to_f32())
+                    - 2.0 * xy) as f32;
                 let l2 = CompensatedSquaredL2::new(dim);
                 let got_l2: distances::Result<f32> =
                     ARCH.run2(l2, x.compressed.reborrow(), y.compressed.reborrow());
@@ -1677,6 +1715,20 @@ mod tests {
     }
 
     #[test]
+    fn test_symmetric_distances_3bit() {
+        let mut rng = StdRng::seed_from_u64(0x68f8f52057f94399);
+        for dim in 1..MAX_DIM {
+            test_compensated_distance::<3>(
+                dim,
+                TRIALS_PER_DIM,
+                Approx::new(3.5e-3, 2.0e-3),
+                Approx::new(2.0e-3, 5.0e-4),
+                &mut rng,
+            );
+        }
+    }
+
+    #[test]
     fn test_symmetric_distances_4bit() {
         let mut rng = StdRng::seed_from_u64(0xb88d76ac4c58e923);
         for dim in 1..MAX_DIM {
@@ -1733,6 +1785,20 @@ mod tests {
     }
 
     #[test]
+    fn test_mixed_distances_3x3() {
+        let mut rng = StdRng::seed_from_u64(0x508554264eb7a51b);
+        for dim in 1..MAX_DIM {
+            test_mixed_compensated_distance::<3, 3, Dense>(
+                dim,
+                TRIALS_PER_DIM,
+                Approx::new(4.0e-3, 3.0e-3),
+                Approx::new(3.0e-4, 8.3e-2),
+                &mut rng,
+            );
+        }
+    }
+
+    #[test]
     fn test_mixed_distances_8x8() {
         let mut rng = StdRng::seed_from_u64(0x8acd8e4224c76c43);
         for dim in 1..MAX_DIM {
@@ -1766,6 +1832,20 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xa3ad61d3d03a0c5a);
         for dim in 1..MAX_DIM {
             test_full_distances::<2>(
+                dim,
+                TRIALS_PER_DIM,
+                Approx::new(2.0e-3, 1.1e-3),
+                Approx::new(7.0e-4, 1.0e-3),
+                &mut rng,
+            );
+        }
+    }
+
+    #[test]
+    fn test_full_distances_3bit() {
+        let mut rng = StdRng::seed_from_u64(0xa3ad61d3d03a0c5a);
+        for dim in 1..MAX_DIM {
+            test_full_distances::<3>(
                 dim,
                 TRIALS_PER_DIM,
                 Approx::new(2.0e-3, 1.1e-3),
