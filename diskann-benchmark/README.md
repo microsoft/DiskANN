@@ -260,6 +260,10 @@ is running. This incremental saving allows benchmarks to be interrupted without 
 In addition to the machine-readable JSON output files, a (hopefully) helpful summary of the
 results will be printed to `stdout`.
 
+With `--features multi-vector`, select MinMax8 queries/MinMax4 documents using
+`type: "multi-vector-op"`, `element_type: "float32"` and `format: "minmax8"`;
+see `example\multi-vector-minmax8.json` and `perf_test_inputs\multi-vector-minmax8*.json`.
+
 ### Streaming Runs
 Running the benchmark on a streaming workload is similar to other registered benchmarks,
 relying on the file formats and streaming runbooks of `big-ann-benchmarks`
@@ -504,4 +508,3 @@ for a successful or unsuccessful match with the enclosed value. Doing these two 
 error reporting in the event of a dispatch fail much easier for the user to understand and fix.
 
 Refer to implementations within the benchmarking framework for what some of this may look like.
-

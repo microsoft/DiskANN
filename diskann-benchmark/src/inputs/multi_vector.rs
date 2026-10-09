@@ -69,6 +69,31 @@ pub(crate) struct Run {
     pub(crate) num_measurements: NonZeroUsize,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum MultiVectorFormat {
+    #[default]
+    Dense,
+    /// MinMax8 queries and MinMax4 documents, quantized from f32 fixtures.
+    #[serde(rename = "minmax8")]
+    MinMax8,
+}
+
+impl MultiVectorFormat {
+    fn is_dense(&self) -> bool {
+        matches!(self, Self::Dense)
+    }
+}
+
+impl std::fmt::Display for MultiVectorFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Dense => "dense",
+            Self::MinMax8 => "minmax8",
+        })
+    }
+}
+
 ///////////////////////
 // Multi-Vector Op   //
 ///////////////////////
@@ -77,6 +102,8 @@ pub(crate) struct Run {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct MultiVectorOp {
     pub(crate) element_type: DataType,
+    #[serde(default, skip_serializing_if = "MultiVectorFormat::is_dense")]
+    pub(crate) format: MultiVectorFormat,
     pub(crate) isa: BenchIsa,
     pub(crate) runs: Vec<Run>,
 }
@@ -95,6 +122,13 @@ impl Input for MultiVectorOp {
     }
 
     fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        if raw.format == MultiVectorFormat::MinMax8 {
+            anyhow::ensure!(
+                raw.element_type == DataType::Float32,
+                "MinMax8 requires float32 source vectors"
+            );
+            anyhow::ensure!(!raw.runs.is_empty(), "MinMax8 requires at least one run");
+        }
         Ok(raw)
     }
 
@@ -127,6 +161,7 @@ impl Input for MultiVectorOp {
 
         Self {
             element_type: DataType::Float32,
+            format: MultiVectorFormat::Dense,
             isa: BenchIsa::Auto,
             runs,
         }
@@ -144,6 +179,7 @@ impl std::fmt::Display for MultiVectorOp {
         writeln!(f, "Multi-Vector Operation\n")?;
         write_field!(f, "tag", Self::tag())?;
         write_field!(f, "element type", self.element_type)?;
+        write_field!(f, "format", self.format)?;
         write_field!(f, "isa", self.isa)?;
         write_field!(f, "number of runs", self.runs.len())?;
         Ok(())
