@@ -40,9 +40,13 @@ pub trait Input: Sized + std::fmt::Debug + 'static {
 
 /// A registered input. See [`crate::Registry::input`].
 #[derive(Clone, Copy)]
-pub struct Registered<'a>(pub(crate) &'a dyn internal::DynInput);
+pub struct Registered<'a>(&'a dyn internal::DynInput);
 
-impl Registered<'_> {
+impl<'a> Registered<'a> {
+    pub(crate) fn new(input: &'a internal::Input) -> Self {
+        Self(&*input.0)
+    }
+
     /// Return the input tag of the registered input.
     ///
     /// See: [`Input::tag`].
@@ -123,9 +127,7 @@ pub(crate) fn order_inputs(a: &Registered<'_>, b: &Registered<'_>) -> std::cmp::
 }
 
 pub(crate) mod internal {
-    use super::*;
-
-    use crate::Features;
+    use crate::{Checker, Features, input::Visibility};
 
     /// Runtime representation of a deserialized [`Input`].
     #[derive(Debug)]
@@ -136,7 +138,7 @@ pub(crate) mod internal {
     impl Any {
         pub(crate) fn new<T>(input: T) -> Self
         where
-            T: Input,
+            T: super::Input,
         {
             Self {
                 any: Box::new(input),
@@ -178,10 +180,10 @@ pub(crate) mod internal {
 
     impl<T> RuntimeAny for T
     where
-        T: Input,
+        T: super::Input,
     {
         fn tag(&self) -> &'static str {
-            <Self as Input>::tag()
+            <Self as super::Input>::tag()
         }
 
         fn as_any(&self) -> &dyn std::any::Any {
@@ -189,32 +191,67 @@ pub(crate) mod internal {
         }
 
         fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-            <Self as Input>::serialize(self)
+            <Self as super::Input>::serialize(self)
         }
     }
 
     // Wrapper for user-supplied inputs.
 
     #[derive(Debug)]
-    pub(crate) struct Wrapper<T>(std::marker::PhantomData<T>);
+    pub(crate) struct Input(pub(super) Box<dyn DynInput>);
 
-    impl<T> Wrapper<T> {
-        pub(crate) const INSTANCE: Self = Self::new();
+    impl Input {
+        pub(crate) fn new<T>() -> Self
+        where
+            T: super::Input,
+        {
+            Self(Box::new(Wrapper::<T>::new()))
+        }
 
-        pub(crate) const fn new() -> Self {
-            Self(std::marker::PhantomData)
+        pub(crate) fn gated(tag: &'static str, features: Features) -> Self {
+            Self(Box::new(Gated { tag, features }))
+        }
+
+        pub(crate) fn tag(&self) -> &'static str {
+            self.0.tag()
+        }
+
+        pub(crate) fn try_deserialize(
+            &self,
+            serialized: &serde_json::Value,
+            checker: &mut Checker,
+        ) -> anyhow::Result<Any> {
+            self.0.try_deserialize(serialized, checker)
+        }
+
+        pub(crate) fn visibility(&self) -> Visibility<'_> {
+            self.0.visibility()
+        }
+
+        pub(crate) fn as_any(&self) -> &dyn std::any::Any {
+            self.0.as_any()
+        }
+
+        pub(crate) fn type_name(&self) -> &'static str {
+            self.0.type_name()
+        }
+
+        // Test
+        #[cfg(test)]
+        pub(crate) fn is_concrete<T>(&self) -> bool
+        where
+            T: 'static,
+        {
+            self.as_any().is::<Wrapper<T>>()
+        }
+
+        #[cfg(test)]
+        pub(crate) fn is_gated(&self) -> bool {
+            self.as_any().is::<Gated>()
         }
     }
 
-    impl<T> Clone for Wrapper<T> {
-        fn clone(&self) -> Self {
-            *self
-        }
-    }
-
-    impl<T> Copy for Wrapper<T> {}
-
-    pub(crate) trait DynInput {
+    pub(super) trait DynInput: std::fmt::Debug {
         fn tag(&self) -> &'static str;
         fn try_deserialize(
             &self,
@@ -231,9 +268,24 @@ pub(crate) mod internal {
         fn type_name(&self) -> &'static str;
     }
 
+    /// A wrapper around [`super::Input`] types.
+    struct Wrapper<T>(std::marker::PhantomData<T>);
+
+    impl<T> Wrapper<T> {
+        const fn new() -> Self {
+            Self(std::marker::PhantomData)
+        }
+    }
+
+    impl<T> std::fmt::Debug for Wrapper<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Wrapper<{}>", std::any::type_name::<T>())
+        }
+    }
+
     impl<T> DynInput for Wrapper<T>
     where
-        T: Input,
+        T: super::Input,
     {
         fn tag(&self) -> &'static str {
             T::tag()
@@ -264,23 +316,9 @@ pub(crate) mod internal {
     /// flag. Including it internally allows us to provide better error messages if we
     /// discover this `tag` in the wild so we can point users towards its associated `features`.
     #[derive(Debug)]
-    pub(crate) struct Gated {
+    struct Gated {
         tag: &'static str,
         features: Features,
-    }
-
-    impl Gated {
-        pub(crate) fn new(tag: &'static str, features: Features) -> Self {
-            Self { tag, features }
-        }
-
-        pub(crate) fn tag(&self) -> &'static str {
-            self.tag
-        }
-
-        pub(crate) fn features(&self) -> &Features {
-            &self.features
-        }
     }
 
     impl DynInput for Gated {

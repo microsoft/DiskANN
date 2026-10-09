@@ -420,7 +420,9 @@ impl App {
                                     "".to_string(),
                                     serde_json::Value::Object(Default::default()),
                                 ),
-                                jobs::Unprocessed::format_input(registered.tolerance)?,
+                                jobs::Unprocessed::format_input(crate::input::Registered::new(
+                                    &registered.tolerance,
+                                ))?,
                             );
 
                             write!(

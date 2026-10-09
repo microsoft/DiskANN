@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    rc::Rc,
+};
 
 use thiserror::Error;
 
@@ -17,7 +20,7 @@ use crate::{
 /// A collection of registered inputs and benchmarks.
 pub struct Registry {
     // Inputs keyed by their tag type.
-    inputs: HashMap<&'static str, Box<dyn input::internal::DynInput>>,
+    inputs: HashMap<&'static str, input::internal::Input>,
     benchmarks: Vec<RegisteredBenchmark>,
 }
 
@@ -37,11 +40,11 @@ impl Registry {
     /// * [`register`](Self::register)
     /// * [`register_regression`](Self::register_regression)
     pub fn input(&self, tag: &str) -> Option<input::Registered<'_>> {
-        self._input(tag).map(input::Registered)
+        self.inputs.get(tag).map(input::Registered::new)
     }
 
     pub(crate) fn inputs(&self) -> impl ExactSizeIterator<Item = input::Registered<'_>> {
-        self.inputs.values().map(|v| input::Registered(&**v))
+        self.inputs.values().map(input::Registered::new)
     }
 
     //--------------//
@@ -61,7 +64,7 @@ impl Registry {
     where
         T: Benchmark,
     {
-        self.register_input::<T::Input>()?;
+        self.register_input(input::internal::Input::new::<T::Input>())?;
 
         self.benchmarks.push(RegisteredBenchmark {
             name: name.into(),
@@ -91,7 +94,7 @@ impl Registry {
         features: Features,
         description: impl Into<String>,
     ) -> Result<(), RegistryError> {
-        self.register_gated_input(crate::input::internal::Gated::new(tag, features.clone()))?;
+        self.register_input(input::internal::Input::gated(tag, features.clone()))?;
 
         self.benchmarks.push(RegisteredBenchmark {
             name: name.into(),
@@ -122,7 +125,7 @@ impl Registry {
     where
         I: Input,
     {
-        self.register_input::<I>()?;
+        self.register_input(input::internal::Input::new::<I>())?;
 
         self.benchmarks.push(RegisteredBenchmark {
             name: name.into(),
@@ -217,78 +220,54 @@ impl Registry {
         find_best_match(job, self.benchmarks())
     }
 
-    fn _input(&self, tag: &str) -> Option<&dyn input::internal::DynInput> {
-        self.inputs.get(tag).map(|v| &**v)
-    }
+    // fn _input(&self, tag: &str) -> Option<&dyn input::internal::DynInput> {
+    //     self.inputs.get(tag).map(|v| &**v)
+    // }
 
-    fn register_input<T>(&mut self) -> Result<(), RegistryError>
-    where
-        T: Input + 'static,
-    {
-        let tag = T::tag();
-        let wrapper = crate::input::internal::Wrapper::<T>::new();
+    fn register_input(&mut self, input: input::internal::Input) -> Result<(), RegistryError> {
+        let tag = input.tag();
         match self.inputs.entry(tag) {
             Entry::Vacant(v) => {
-                v.insert(Box::new(wrapper));
+                v.insert(input);
                 Ok(())
             }
             Entry::Occupied(o) => {
-                use input::internal::DynInput;
+                use Visibility::{Available, Gated};
 
-                if o.get().as_any().is::<crate::input::internal::Wrapper<T>>() {
-                    Ok(())
-                } else if let Some(existing) = o
-                    .get()
-                    .as_any()
-                    .downcast_ref::<crate::input::internal::Gated>()
-                {
-                    Err(RegistryError {
-                        tag,
-                        existing: Kind::Gated(existing.features().to_string()),
-                        new: Kind::Available(wrapper.type_name()),
-                    })
-                } else {
-                    Err(RegistryError {
-                        tag,
-                        existing: Kind::Available(o.get().type_name()),
-                        new: Kind::Available(wrapper.type_name()),
-                    })
-                }
-            }
-        }
-    }
-
-    fn register_gated_input(
-        &mut self,
-        input: crate::input::internal::Gated,
-    ) -> Result<(), RegistryError> {
-        match self.inputs.entry(input.tag()) {
-            Entry::Vacant(v) => {
-                v.insert(Box::new(input));
-                Ok(())
-            }
-            Entry::Occupied(o) => {
-                if let Some(existing) = o
-                    .get()
-                    .as_any()
-                    .downcast_ref::<crate::input::internal::Gated>()
-                {
-                    if existing.features() != input.features() {
-                        Err(RegistryError {
-                            tag: input.tag(),
-                            existing: Kind::Gated(existing.features().to_string()),
-                            new: Kind::Gated(input.features().to_string()),
-                        })
-                    } else {
-                        Ok(())
+                let o = o.get();
+                match (o.visibility(), input.visibility()) {
+                    (Available, Available) => {
+                        if o.as_any().type_id() == input.as_any().type_id() {
+                            Ok(())
+                        } else {
+                            Err(RegistryError {
+                                tag,
+                                existing: Kind::Available(o.type_name()),
+                                new: Kind::Available(input.type_name()),
+                            })
+                        }
                     }
-                } else {
-                    let type_name = o.get().type_name();
-                    Err(RegistryError {
-                        tag: input.tag(),
-                        existing: Kind::Available(type_name),
-                        new: Kind::Gated(input.features().to_string()),
-                    })
+                    (Available, Gated { features }) => Err(RegistryError {
+                        tag,
+                        existing: Kind::Available(o.type_name()),
+                        new: Kind::Gated(features.to_string()),
+                    }),
+                    (Gated { features }, Available) => Err(RegistryError {
+                        tag,
+                        existing: Kind::Gated(features.to_string()),
+                        new: Kind::Available(input.type_name()),
+                    }),
+                    (Gated { features: existing }, Gated { features: new }) => {
+                        if existing == new {
+                            Ok(())
+                        } else {
+                            Err(RegistryError {
+                                tag,
+                                existing: Kind::Gated(existing.to_string()),
+                                new: Kind::Gated(new.to_string()),
+                            })
+                        }
+                    }
                 }
             }
         }
@@ -314,7 +293,7 @@ impl Registry {
     where
         T: Regression,
     {
-        self.register_input::<T::Input>()?;
+        self.register_input(input::internal::Input::new::<T::Input>())?;
 
         let registered = benchmark::internal::Wrapper::<T, _>::new(
             benchmark,
@@ -348,7 +327,7 @@ impl Registry {
                     Entry::Occupied(occupied) => occupied.into_mut().regressions.push(packaged),
                     Entry::Vacant(vacant) => {
                         vacant.insert(RegisteredTolerance {
-                            tolerance: input::Registered(t),
+                            tolerance: Rc::new(t),
                             regressions: vec![packaged],
                         });
                     }
@@ -594,7 +573,7 @@ impl CommonTryMatch for RegressionBenchmark<'_> {
 #[derive(Debug, Clone)]
 pub(crate) struct RegisteredTolerance<'a> {
     /// The tolerance parser.
-    pub(crate) tolerance: input::Registered<'a>,
+    pub(crate) tolerance: Rc<input::internal::Input>,
 
     /// A single tolerance input can apply to multiple benchmarks. This field records all
     /// such benchmarks that are available in the registry that use this tolerance.
@@ -642,30 +621,36 @@ mod tests {
     #[test]
     fn test_tag_conflicts() {
         let mut registry = Registry::new();
-        registry.register_input::<A>().unwrap();
-        registry.register_input::<B>().unwrap();
+        registry
+            .register_input(input::internal::Input::new::<A>())
+            .unwrap();
+        registry
+            .register_input(input::internal::Input::new::<B>())
+            .unwrap();
 
         let mut tags: Vec<_> = registry.inputs().map(|i| i.tag()).collect();
         tags.sort();
         assert_eq!(tags.as_slice(), ["type-a", "type-b"]);
 
         {
-            let a = registry._input(A::tag()).unwrap();
-            assert!(a.as_any().is::<input::internal::Wrapper<A>>());
+            let a = registry.inputs.get(A::tag()).unwrap();
+            assert!(a.is_concrete::<A>());
 
             let name = a.type_name();
             assert!(name.contains("A"), "{}", name);
         }
 
         {
-            let b = registry._input(B::tag()).unwrap();
-            assert!(b.as_any().is::<input::internal::Wrapper<B>>());
+            let b = registry.inputs.get(B::tag()).unwrap();
+            assert!(b.is_concrete::<B>());
 
             let name = b.type_name();
             assert!(name.contains("B"), "{}", name);
         }
 
-        let err = registry.register_input::<A2>().unwrap_err();
+        let err = registry
+            .register_input(input::internal::Input::new::<A2>())
+            .unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("A different input with tag \"type-a\" was already registered"),
@@ -678,24 +663,28 @@ mod tests {
     fn test_gated_to_real_conflict() {
         let mut registry = Registry::new();
         registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_input(input::internal::Input::gated(
                 "type-a",
                 Features::new("feature"),
             ))
             .unwrap();
 
-        registry.register_input::<B>().unwrap();
+        registry
+            .register_input(input::internal::Input::new::<B>())
+            .unwrap();
 
         let mut tags: Vec<_> = registry.inputs().map(|i| i.tag()).collect();
         tags.sort();
         assert_eq!(tags.as_slice(), ["type-a", "type-b"]);
 
         {
-            let a = registry._input(A::tag()).unwrap();
-            assert!(a.as_any().is::<crate::input::internal::Gated>());
+            let a = registry.inputs.get(A::tag()).unwrap();
+            assert!(a.is_gated());
         }
 
-        let err = registry.register_input::<A>().unwrap_err();
+        let err = registry
+            .register_input(input::internal::Input::new::<A>())
+            .unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("A different input with tag \"type-a\" was already registered"),
@@ -708,11 +697,15 @@ mod tests {
     fn test_real_to_gated_conflict() {
         let mut registry = Registry::new();
 
-        registry.register_input::<A>().unwrap();
-        registry.register_input::<B>().unwrap();
+        registry
+            .register_input(input::internal::Input::new::<A>())
+            .unwrap();
+        registry
+            .register_input(input::internal::Input::new::<B>())
+            .unwrap();
 
         let err = registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_input(input::internal::Input::gated(
                 "type-a",
                 Features::new("feature"),
             ))
@@ -731,7 +724,7 @@ mod tests {
         let mut registry = Registry::new();
 
         registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_input(input::internal::Input::gated(
                 "type-a",
                 Features::new("feature"),
             ))
@@ -739,7 +732,7 @@ mod tests {
 
         // If we register with the same feature set, there is no error.
         registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_input(input::internal::Input::gated(
                 "type-a",
                 Features::new("feature"),
             ))
@@ -747,7 +740,7 @@ mod tests {
 
         // If we register with a different feature-set, that is an error.
         let err = registry
-            .register_gated_input(crate::input::internal::Gated::new(
+            .register_input(input::internal::Input::gated(
                 "type-a",
                 Features::any(["feature", "another"]),
             ))
