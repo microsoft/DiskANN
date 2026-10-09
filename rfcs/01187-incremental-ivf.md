@@ -4,36 +4,55 @@
 |---|---|
 | **Authors** | Aditya Krishnan |
 | **Created** | 2026-08-19 |
-| **Updated** | 2026-08-24 |
+| **Updated** | 2026-10-08 |
 | **Status** | Draft |
 
 ## Summary
 
-Add an accessor-based architecture for incrementally maintained inverted-file
-(IVF) indexes, along with co-location sets of centroids to assist with ordering 
-spatially similar posting lists on slower storage mediums. The architecture 
-separates the GraphIVF algorithm from point storage, centroid navigation, and 
-inverted-list access without prescribing a cross-component snapshot or commit 
-protocol.
+The implementation in [the IVF module](../diskann/src/ivf/mod.rs) follows the
+graph index's coarse accessor boundaries. The index owns routing policy,
+overflow selection, two-means fitting, and regional assignment. Providers supply:
 
-The generic API has two principal extension points:
+1. Centroid selection through a coarse accessor.
+2. Logical list operations: sizes, appends, complete membership replacement,
+   creation with a centroid and members, and retirement.
+3. One scoped build accessor that supplies borrowed working sets and publishes
+   the operation with `finish`.
 
-1. A query-bound search accessor selects centroids and scans the corresponding
-   lists.
-2. An operation-scoped maintenance accessor presents one unified view of point
-   data, centroids, reverse assignments, inverted lists, and co-location sets 
-   while planning and applying a split or dissolve.
+Typed point preparation belongs to the insertion strategy, not to the core
+build accessor. Preparation reserves internal IDs and supplies a shared,
+contiguous canonical batch. Pending appends participate in operation-local
+membership reads and sizes. Working-set filling resolves both stored and
+prepared points, so clustering has no staged-point boundaries or provenance
+classification.
 
-Each concrete strategy or aggregate provider is responsible for coordinating
-its components. It may use exclusive borrowing, locks, epochs, immutable roots,
-database transactions, manifests, or provider-specific recovery internally.
-Those mechanisms are deliberately absent from the generic IVF traits.
+Insertion provisionally appends points, gathers all oversized parents into one
+working set, fits two children per parent, and assigns all regional members
+against all child centroids. Parent centroids are not candidates. The algorithm
+creates the resulting child lists, retires the parents, and finishes once.
+Ordinary appends and splitting are published together, never as separate commits.
+Each parent is split once per insertion; this is not a recursive size-balancing
+operation.
 
-The first implementation serializes mutation through `&mut self`. This prevents
-search and mutation from overlapping through the same index value and gives an
-in-memory provider a straightforward implementation path. More concurrent or
-durable providers may implement stronger private guarantees without changing
-the algorithm-facing interface.
+Working sets borrow vector coordinates. Only fitted centroid coordinates and
+assignment/member metadata need new storage. Providers can reuse the canonical
+batch and the optional pending-membership helper, or implement their own caches
+and private transactions. No delta transport is required by the algorithm;
+incremental storage providers may derive sparse changes internally.
+
+Mutations remain serialized through `&mut self`. Pending list writes and point
+mappings are not visible outside the operation. Successful `finish` must publish
+a coherent partition; recovery after failed publication is provider-defined.
+Providers with externally shared state must coordinate those aliases themselves.
+
+The current implementation includes initialization and batched insert/split.
+Search, neighborhood reassignment policies, deletion/dissolve, and colocation
+remain future work. See [the current contracts](../diskann/src/ivf/traits.rs) for
+the implemented API.
+
+The remainder of this RFC records the previous delta-oriented design and its
+longer-term goals. Its API sketches, source layout, and `apply`-based algorithms
+are superseded by the scoped construction interface described above.
 
 ## Motivation
 
@@ -183,7 +202,7 @@ These rules are semantic requirements and are not encoded by public version
 tokens. Reusable provider contract tests are therefore an important part of the
 implementation.
 
-## Proposal
+## Previous Proposal (Superseded)
 
 ### Source Layout
 
@@ -632,7 +651,7 @@ it, but doing so requires a new concurrency contract and should be deliberate.
 Such a relaxation would add a separate shared-borrow maintenance strategy
 rather than weaken the exclusive one.
 
-## Algorithms
+## Previous Algorithms (Superseded)
 
 ### Bootstrap
 
@@ -933,9 +952,11 @@ accessor is simpler.
 
 ### Imperative List Mutation Methods
 
-Adding `append`, `remove`, `move`, `create_list`, and `retire_list` exposes a
-partial-write schedule to GraphIVF. A complete declarative update lets each
-provider choose a suitable physical implementation.
+Immediate, independently published list mutations expose a partial-write schedule
+to GraphIVF. The current design instead uses logical list operations inside one
+build accessor: they change private operation state and publish only at `finish`.
+This keeps get/set-style operations without requiring an algorithm-facing delta
+protocol or prescribing the provider's physical write order.
 
 ### Optional Endpoints Instead Of Delta Variants
 
