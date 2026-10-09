@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::{Checker, internal::visibility::Visibility};
+use crate::Checker;
 
 /// Inputs to [`Benchmarks`](crate::Benchmark).
 ///
@@ -38,101 +38,13 @@ pub trait Input: Sized + std::fmt::Debug + 'static {
     fn example() -> Self::Raw;
 }
 
-/// A registered input. See [`crate::Registry::input`].
-#[derive(Clone, Copy)]
-pub struct Registered<'a>(&'a dyn internal::DynInput);
-
-impl<'a> Registered<'a> {
-    pub(crate) fn new(input: &'a internal::Input) -> Self {
-        Self(&*input.0)
-    }
-
-    /// Return the input tag of the registered input.
-    ///
-    /// See: [`Input::tag`].
-    pub fn tag(&self) -> &'static str {
-        self.0.tag()
-    }
-
-    /// Try to deserialize raw JSON into the dynamic type of the input.
-    ///
-    /// See: [`Input::from_raw`].
-    pub(crate) fn try_deserialize(
-        &self,
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<internal::Any> {
-        self.0.try_deserialize(serialized, checker)
-    }
-
-    /// Return an example JSON for the dynamic type of the input.
-    ///
-    /// See: [`Input::example`].
-    pub fn example(&self) -> anyhow::Result<serde_json::Value> {
-        self.0.example()
-    }
-
-    /// Return the visibility of the attached input.
-    pub(crate) fn visibility(&self) -> Visibility<'_> {
-        self.0.visibility()
-    }
-
-    /// Return a `std::fmt::Display` implementation that pretty-prints the input tag as well
-    /// as any visibility modifiers.
-    pub(crate) fn display(&self) -> Display<'_> {
-        Display(self.0)
-    }
-}
-
-impl std::fmt::Debug for Registered<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("input::Registered")
-            .field("tag", &self.tag())
-            .finish()
-    }
-}
-
-/// Return item from [`Registered::display`].
-pub(crate) struct Display<'a>(&'a dyn internal::DynInput);
-
-impl std::fmt::Debug for Display<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("input::Display")
-            .field("tag", &self.0.tag())
-            .finish()
-    }
-}
-
-impl std::fmt::Display for Display<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.tag())?;
-        match self.0.visibility() {
-            Visibility::Available => {}
-            Visibility::Gated { features } => {
-                write!(f, " (requires the {})", features)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Orders [`Registered`] inputs in the following order:
-///
-/// 1. Available items in alphabetical order.
-/// 2. Unavailable (gated) items in alphabetical order.
-pub(crate) fn order_inputs(a: &Registered<'_>, b: &Registered<'_>) -> std::cmp::Ordering {
-    a.visibility()
-        .cmp(&b.visibility())
-        .then_with(|| a.tag().cmp(b.tag()))
-}
-
 pub(crate) mod internal {
-    use crate::{Checker, Features, input::Visibility};
+    use crate::{Checker, Features, internal::visibility::Visibility};
 
     /// Runtime representation of a deserialized [`Input`].
     #[derive(Debug)]
     pub(crate) struct Any {
-        any: Box<dyn RuntimeAny>,
+        any: Box<dyn DynAny>,
     }
 
     impl Any {
@@ -172,13 +84,13 @@ pub(crate) mod internal {
         }
     }
 
-    trait RuntimeAny: std::fmt::Debug {
+    trait DynAny: std::fmt::Debug {
         fn tag(&self) -> &'static str;
         fn as_any(&self) -> &dyn std::any::Any;
         fn serialize(&self) -> anyhow::Result<serde_json::Value>;
     }
 
-    impl<T> RuntimeAny for T
+    impl<T> DynAny for T
     where
         T: super::Input,
     {
@@ -197,7 +109,7 @@ pub(crate) mod internal {
 
     /// Crate interface for working with inputs.
     #[derive(Debug)]
-    pub(crate) struct Input(pub(super) Box<dyn DynInput>);
+    pub(crate) struct Input(Box<dyn DynInput>);
 
     impl Input {
         /// Construct a new, non-gated `Input` for `T`.
@@ -225,6 +137,10 @@ pub(crate) mod internal {
             self.0.try_deserialize(serialized, checker)
         }
 
+        pub(crate) fn example(&self) -> anyhow::Result<serde_json::Value> {
+            self.0.example()
+        }
+
         pub(crate) fn visibility(&self) -> Visibility<'_> {
             self.0.visibility()
         }
@@ -235,6 +151,12 @@ pub(crate) mod internal {
 
         pub(crate) fn type_name(&self) -> &'static str {
             self.0.type_name()
+        }
+
+        /// Return a `std::fmt::Display` implementation that pretty-prints the input tag as
+        /// well as any visibility modifiers.
+        pub(crate) fn display(&self) -> Display<'_> {
+            Display(self)
         }
 
         // Test
@@ -252,7 +174,41 @@ pub(crate) mod internal {
         }
     }
 
-    pub(super) trait DynInput: std::fmt::Debug {
+    /// Orders inputs in the following order:
+    ///
+    /// 1. Available items in alphabetical order.
+    /// 2. Unavailable (gated) items in alphabetical order.
+    pub(crate) fn order(a: &Input, b: &Input) -> std::cmp::Ordering {
+        a.visibility()
+            .cmp(&b.visibility())
+            .then_with(|| a.tag().cmp(b.tag()))
+    }
+
+    /// Return item from [`Input::display`].
+    pub(crate) struct Display<'a>(&'a Input);
+
+    impl std::fmt::Debug for Display<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("input::Display")
+                .field("tag", &self.0.tag())
+                .finish()
+        }
+    }
+
+    impl std::fmt::Display for Display<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0.tag())?;
+            match self.0.visibility() {
+                Visibility::Available => {}
+                Visibility::Gated { features } => {
+                    write!(f, " (requires the {})", features)?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    trait DynInput: std::fmt::Debug {
         fn tag(&self) -> &'static str;
         fn try_deserialize(
             &self,

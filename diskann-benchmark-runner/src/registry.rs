@@ -39,12 +39,12 @@ impl Registry {
     ///
     /// * [`register`](Self::register)
     /// * [`register_regression`](Self::register_regression)
-    pub fn input(&self, tag: &str) -> Option<input::Registered<'_>> {
-        self.inputs.get(tag).map(input::Registered::new)
+    pub(crate) fn input(&self, tag: &str) -> Option<&input::internal::Input> {
+        self.inputs.get(tag)
     }
 
-    pub(crate) fn inputs(&self) -> impl ExactSizeIterator<Item = input::Registered<'_>> {
-        self.inputs.values().map(input::Registered::new)
+    pub(crate) fn inputs(&self) -> impl ExactSizeIterator<Item = &input::internal::Input> {
+        self.inputs.values()
     }
 
     //--------------//
@@ -219,10 +219,6 @@ impl Registry {
     fn find_best_match(&self, job: &input::internal::Any) -> Option<&RegisteredBenchmark> {
         find_best_match(job, self.benchmarks())
     }
-
-    // fn _input(&self, tag: &str) -> Option<&dyn input::internal::DynInput> {
-    //     self.inputs.get(tag).map(|v| &**v)
-    // }
 
     fn register_input(&mut self, input: input::internal::Input) -> Result<(), RegistryError> {
         let tag = input.tag();

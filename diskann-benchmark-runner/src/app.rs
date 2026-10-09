@@ -248,7 +248,7 @@ impl App {
                     })
                     .collect();
 
-                inputs.sort_by(crate::input::order_inputs);
+                inputs.sort_by(|a, b| crate::input::internal::order(a, b));
 
                 for i in inputs.iter() {
                     writeln!(output, "    {}", i.display())?;
@@ -420,9 +420,7 @@ impl App {
                                     "".to_string(),
                                     serde_json::Value::Object(Default::default()),
                                 ),
-                                jobs::Unprocessed::format_input(crate::input::Registered::new(
-                                    &registered.tolerance,
-                                ))?,
+                                jobs::Unprocessed::format_input(&registered.tolerance)?,
                             );
 
                             write!(
