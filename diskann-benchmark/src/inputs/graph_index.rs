@@ -827,15 +827,17 @@ impl IndexBuild {
         self.data.resolve(checker)?;
 
         // We allow overwriting of already existing save paths, since users like to do this
-        // The save path must either (1) be an absolute path, in which case we check that its parent directory exists
-        // or (2) it must be a file written to the output directory, in which case we concatenate the path and
-        // ensure the parent directory exists or (3) if it has no parent, it is written to the output directory
+        // Reserve the prefix's parent directory until index saving uses owned output directories.
         if let Some(save_path) = &self.save_path {
             let save_path = std::path::Path::new(save_path).to_path_buf();
             let save_filename = save_path
                 .file_name()
                 .unwrap_or_else(|| save_path.as_os_str());
-            let resolved_path = checker.register_output(save_path.parent())?;
+            let parent = save_path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or(".".as_ref());
+            let resolved_path = checker.register_output_dir(parent)?;
             let full_path = resolved_path.join(save_filename);
             self.save_path = Some(full_path.to_string_lossy().to_string());
         }

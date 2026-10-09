@@ -47,8 +47,16 @@ impl Jobs {
                 .iter()
                 .map(PathBuf::from)
                 .collect(),
-            partial.output_directory.as_ref().map(PathBuf::from),
-        );
+            partial
+                .output_directory
+                .as_ref()
+                .map(|path| {
+                    std::path::absolute(path).with_context(|| {
+                        format!("while making output directory \"{}\" absolute", path)
+                    })
+                })
+                .transpose()?,
+        )?;
 
         let num_jobs = partial.jobs.len();
         let jobs: anyhow::Result<Vec<input::internal::Any>> = partial
@@ -121,7 +129,7 @@ impl Unprocessed {
 pub(crate) struct Partial {
     /// Directories to search for input files.
     search_directories: Vec<String>,
-    /// Directory to search for/write output files
+    /// Output root. Relative paths are anchored to the working directory during parsing.
     output_directory: Option<String>,
     jobs: Vec<Unprocessed>,
 }

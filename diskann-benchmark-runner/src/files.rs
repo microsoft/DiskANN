@@ -121,13 +121,13 @@ mod tests {
         {
             let absolute = path.join("file_a.txt");
             let mut file = InputFile::new(absolute.clone());
-            let mut checker = Checker::new(Vec::new(), None);
+            let mut checker = Checker::new(Vec::new(), None).unwrap();
             file.resolve(&mut checker).unwrap();
             assert_eq!(file.path, absolute);
 
             let absolute = path.join("dir0/file_b.txt");
             let mut file = InputFile::new(absolute.clone());
-            let mut checker = Checker::new(Vec::new(), None);
+            let mut checker = Checker::new(Vec::new(), None).unwrap();
             file.resolve(&mut checker).unwrap();
             assert_eq!(file.path, absolute);
         }
@@ -136,7 +136,7 @@ mod tests {
         {
             let absolute = path.join("dir0/file_c.txt");
             let mut file = InputFile::new(absolute.clone());
-            let mut checker = Checker::new(Vec::new(), None);
+            let mut checker = Checker::new(Vec::new(), None).unwrap();
             let err = file.resolve(&mut checker).unwrap_err();
             let message = err.to_string();
             assert!(message.contains("input file with absolute path"));
@@ -148,7 +148,8 @@ mod tests {
             let mut checker = Checker::new(
                 vec![path.join("dir1/dir0"), path.join("dir1"), path.join("dir0")],
                 None,
-            );
+            )
+            .unwrap();
 
             // Directories are searched in order.
             let mut file = InputFile::new("file_c.txt");
