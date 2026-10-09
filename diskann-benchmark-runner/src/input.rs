@@ -195,12 +195,12 @@ pub(crate) mod internal {
         }
     }
 
-    // Wrapper for user-supplied inputs.
-
+    /// Crate interface for working with inputs.
     #[derive(Debug)]
     pub(crate) struct Input(pub(super) Box<dyn DynInput>);
 
     impl Input {
+        /// Construct a new, non-gated `Input` for `T`.
         pub(crate) fn new<T>() -> Self
         where
             T: super::Input,
@@ -208,6 +208,7 @@ pub(crate) mod internal {
             Self(Box::new(Wrapper::<T>::new()))
         }
 
+        /// Create a gated input.
         pub(crate) fn gated(tag: &'static str, features: Features) -> Self {
             Self(Box::new(Gated { tag, features }))
         }
