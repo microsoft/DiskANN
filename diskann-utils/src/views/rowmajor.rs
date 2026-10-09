@@ -6,9 +6,7 @@
 use std::{marker::PhantomData, mem::ManuallyDrop, num::NonZeroUsize, ptr::NonNull};
 
 #[cfg(feature = "rayon")]
-use rayon::prelude::{
-    IndexedParallelIterator, IntoParallelIterator, ParallelIterator, ParallelSliceMut,
-};
+use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use thiserror::Error;
 
 pub mod iter;
@@ -546,20 +544,18 @@ pub unsafe trait MatrixMut: Matrix {
 
     /// Return a parallel iterator over the rows of the matrix.
     ///
-    /// # Panics
-    ///
-    /// Panics if `self.ncols() == 0 && self.nrows() != 0`.
+    /// A matrix with zero columns yields one empty mutable slice per row.
     #[cfg(feature = "rayon")]
     fn par_rows_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [Self::Element]>
     where
         Self::Element: Send,
     {
-        let ncols = self.ncols();
-        assert!(
-            ncols != 0 || self.nrows() == 0,
-            "`MatrixMut::par_rows_mut` does not support matrices with rows and zero columns"
-        );
-        self.as_mut_slice().par_chunks_exact_mut(ncols.max(1))
+        let matrix = iter::ParMut::new(self);
+        (0..matrix.nrows()).into_par_iter().map(move |row| {
+            // SAFETY: The range produces each in-bounds row exactly once. Distinct rows
+            // have disjoint element ranges; zero-column rows contain no elements.
+            unsafe { matrix.row_disjoint_unchecked(row) }
+        })
     }
 
     /// Return a parallel iterator that divides the matrix into mutable sub-matrices with
@@ -571,9 +567,12 @@ pub unsafe trait MatrixMut: Matrix {
     /// It is possible for yielded sub-matrices to have fewer than `batchsize` rows if the
     /// number of rows in the parent matrix is not evenly divisible by `batchsize`.
     ///
+    /// A matrix with zero columns yields zero-column sub-matrices containing up to
+    /// `batchsize` rows.
+    ///
     /// # Panics
     ///
-    /// Panics if `batchsize = 0` or `self.ncols() == 0 && self.nrows() != 0`.
+    /// Panics if `batchsize = 0`.
     #[cfg(feature = "rayon")]
     fn par_window_iter_mut(
         &mut self,
@@ -587,30 +586,17 @@ pub unsafe trait MatrixMut: Matrix {
             "par_window_iter_mut batchsize cannot be zero"
         );
 
-        let ncols = self.ncols();
-        assert!(
-            ncols != 0 || self.nrows() == 0,
-            "`MatrixMut::par_window_iter_mut` does not support matrices with rows and zero columns"
-        );
+        let matrix = iter::ParMut::new(self);
+        let nrows = matrix.nrows();
+        (0..nrows)
+            .into_par_iter()
+            .step_by(batchsize)
+            .map(move |start| {
+                let end = start.saturating_add(batchsize).min(nrows);
 
-        // Ensure that `batchsize * ncols` does not overflow.
-        let batchsize = batchsize.min(self.nrows());
-        self.as_mut_slice()
-            .par_chunks_mut((ncols * batchsize).max(1))
-            .map(move |data| {
-                let blobsize = data.len();
-                let nrows = blobsize / ncols;
-                assert_eq!(blobsize % ncols, 0);
-
-                // SAFETY:
-                //
-                // * `Layout::new_unchecked` is safe because `ncols` is the parent column
-                //   count and `nrows <= self.nrows()`, so this layout cannot exceed the
-                //   validated parent layout.
-                //
-                // * `Mut::from_data_unchecked` is safe because by construction,
-                //   `data.len() == ncols * nrows`.
-                unsafe { Mut::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols)) }
+                // SAFETY: `start` comes from an in-bounds range and `end` is clamped to
+                // `nrows`. Stepping by `batchsize` makes the yielded ranges disjoint.
+                unsafe { matrix.window_disjoint_unchecked(start..end) }
             })
     }
 }
@@ -2368,7 +2354,7 @@ mod tests {
     fn parallel_mutable_iterators_match_scalar_indexing() {
         use rayon::prelude::*;
 
-        for (nrows, ncols) in [(0, 0), (0, 4), (1, 1), (1, 4), (4, 1), (5, 3)] {
+        for (nrows, ncols) in [(0, 0), (0, 4), (3, 0), (1, 1), (1, 4), (4, 1), (5, 3)] {
             let context = lazy_format!("nrows = {nrows}, ncols = {ncols}");
 
             let original = striped_matrix(nrows, ncols);
@@ -2433,26 +2419,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    #[cfg(feature = "rayon")]
-    #[should_panic(
-        expected = "`MatrixMut::par_rows_mut` does not support matrices with rows and zero columns"
-    )]
-    fn par_rows_mut_rejects_nonempty_zero_column_matrix() {
-        let mut m = striped_matrix(3, 0);
-        let _ = m.par_rows_mut();
-    }
-
-    #[test]
-    #[cfg(feature = "rayon")]
-    #[should_panic(
-        expected = "`MatrixMut::par_window_iter_mut` does not support matrices with rows and zero columns"
-    )]
-    fn par_window_iter_mut_rejects_nonempty_zero_column_matrix() {
-        let mut m = striped_matrix(3, 0);
-        let _ = m.par_window_iter_mut(2);
     }
 
     #[test]

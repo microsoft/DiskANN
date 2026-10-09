@@ -788,6 +788,7 @@ version = "0.60.0"
 dependencies = [
  "bytemuck",
  "cfg-if",
+ "criterion",
  "diskann-vector",
  "diskann-wide",
  "half",

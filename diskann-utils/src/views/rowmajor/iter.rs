@@ -5,6 +5,8 @@
 
 use std::{marker::PhantomData, num::NonZeroUsize, ptr::NonNull};
 
+#[cfg(feature = "rayon")]
+use crate::views::rowmajor::MatrixMut;
 use crate::views::rowmajor::{Layout, Matrix, Mut, Ref};
 
 //------//
@@ -187,3 +189,150 @@ impl<'a, T> Iterator for Windows<'a, T> {
 
 impl<T> ExactSizeIterator for Windows<'_, T> {}
 impl<T> std::iter::FusedIterator for Windows<'_, T> {}
+
+//--------//
+// ParMut //
+//--------//
+
+#[cfg(feature = "rayon")]
+/// Carries an exclusive matrix borrow across Rayon workers.
+pub(super) struct ParMut<'a, T> {
+    ptr: NonNull<T>,
+    layout: Layout<T>,
+    _lifetime: PhantomData<&'a mut [T]>,
+}
+
+// SAFETY: `ParMut` owns an exclusive slice borrow, so sending it requires `T: Send`.
+#[cfg(feature = "rayon")]
+unsafe impl<T: Send> Send for ParMut<'_, T> {}
+// SAFETY: The only methods that produce mutable views are unsafe and require callers to
+// ensure disjointness. Sending those views between workers requires `T: Send`.
+#[cfg(feature = "rayon")]
+unsafe impl<T: Send> Sync for ParMut<'_, T> {}
+
+#[cfg(feature = "rayon")]
+impl<'a, T> ParMut<'a, T> {
+    pub(super) fn new<M>(matrix: &'a mut M) -> Self
+    where
+        M: MatrixMut<Element = T> + ?Sized,
+    {
+        let layout = matrix.layout();
+        let ptr = matrix.as_nonnull_mut();
+        Self {
+            ptr,
+            layout,
+            _lifetime: PhantomData,
+        }
+    }
+
+    pub(super) fn nrows(&self) -> usize {
+        self.layout.nrows()
+    }
+
+    /// # Safety
+    ///
+    /// * `row < self.nrows()`.
+    /// * No other live reference derived from this `ParMut` may overlap any element of
+    ///   row `row`. Zero-column rows never overlap, even when their addresses match.
+    pub(super) unsafe fn row_disjoint_unchecked(&self, row: usize) -> &'a mut [T] {
+        debug_assert!(row < self.layout.nrows());
+        let ncols = self.layout.ncols();
+
+        // SAFETY: The caller guarantees that `row` is in-bounds and does not overlap any
+        // other live view. The validated parent layout makes the offset representable and
+        // places the row within the initialized matrix span.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr().add(row * ncols), ncols) }
+    }
+
+    /// # Safety
+    ///
+    /// * `rows.start <= rows.end <= self.nrows()`.
+    /// * No other live reference derived from this `ParMut` may overlap any element in
+    ///   `rows`. Zero-column windows never overlap.
+    pub(super) unsafe fn window_disjoint_unchecked(
+        &self,
+        rows: std::ops::Range<usize>,
+    ) -> Mut<'a, T> {
+        debug_assert!(rows.start <= rows.end);
+        debug_assert!(rows.end <= self.layout.nrows());
+
+        let ncols = self.layout.ncols();
+        let nrows = rows.end - rows.start;
+
+        // SAFETY: The caller guarantees an ordered, in-bounds range. The validated parent
+        // layout makes the offset representable and places it within or one past the matrix.
+        let ptr = unsafe { self.ptr.add(rows.start * ncols) };
+
+        Mut {
+            ptr,
+            // SAFETY: This window has no more rows than the validated parent and keeps its
+            // column count, so its element count and byte span cannot exceed the parent.
+            layout: unsafe { Layout::new_unchecked(nrows, ncols) },
+            _lifetime: PhantomData,
+        }
+    }
+}
+
+#[cfg(all(test, feature = "rayon"))]
+mod tests {
+    use super::ParMut;
+    use crate::views::rowmajor::{Matrix, MatrixMut, Owned};
+
+    #[test]
+    fn par_mut_zero_column_views_can_coexist() {
+        let mut matrix = Owned::from_element(usize::MAX, 0, 0);
+        let ptr = matrix.as_ptr();
+        let matrix = ParMut::new(&mut matrix);
+
+        // SAFETY: Empty views do not overlap any elements, even when their addresses match.
+        let rows = unsafe {
+            [
+                matrix.row_disjoint_unchecked(0),
+                matrix.row_disjoint_unchecked(1),
+                matrix.row_disjoint_unchecked(usize::MAX - 1),
+            ]
+        };
+        // SAFETY: Empty windows do not overlap any elements, including the live row views
+        // whose logical rows fall within these windows.
+        let windows = unsafe {
+            [
+                matrix.window_disjoint_unchecked(0..2),
+                matrix.window_disjoint_unchecked(2..usize::MAX),
+            ]
+        };
+
+        assert!(rows.iter().all(|row| row.is_empty() && row.as_ptr() == ptr));
+        assert!(windows.iter().all(|window| {
+            window.ncols() == 0 && window.as_slice().is_empty() && window.as_ptr() == ptr
+        }));
+    }
+
+    #[test]
+    fn par_mut_disjoint_nonempty_views_can_coexist() {
+        let mut matrix = Owned::from_fn(6, 2, |rc| rc.row * 100 + rc.col);
+        {
+            let matrix = ParMut::new(&mut matrix);
+
+            // SAFETY: These rows and windows are in-bounds and pairwise disjoint.
+            let (row0, row1, mut window2, mut window4) = unsafe {
+                (
+                    matrix.row_disjoint_unchecked(0),
+                    matrix.row_disjoint_unchecked(1),
+                    matrix.window_disjoint_unchecked(2..4),
+                    matrix.window_disjoint_unchecked(4..6),
+                )
+            };
+            row0[0] = 10;
+            row1[1] = 11;
+            *window2.element_mut(0, 0) = 20;
+            *window2.element_mut(1, 1) = 31;
+            *window4.element_mut(0, 0) = 40;
+            *window4.element_mut(1, 1) = 51;
+        }
+
+        assert_eq!(
+            matrix.as_slice(),
+            &[10, 1, 100, 11, 20, 201, 300, 31, 40, 401, 500, 51]
+        );
+    }
+}
