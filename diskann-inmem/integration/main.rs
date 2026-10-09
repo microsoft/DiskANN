@@ -343,4 +343,38 @@ mod tests {
             "graph/spherical/four-bit-cosine-baseline.json",
         );
     }
+
+    //----------------------//
+    // Product Quantization //
+    //----------------------//
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_product_l2() {
+        run_regression_example(
+            "graph/product/l2.json",
+            "checks.json",
+            "graph/product/l2-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_product_ip() {
+        run_regression_example(
+            "graph/product/ip.json",
+            "checks.json",
+            "graph/product/ip-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn graph_product_cosine() {
+        run_regression_example(
+            "graph/product/cosine.json",
+            "checks.json",
+            "graph/product/cosine-baseline.json",
+        );
+    }
 }
