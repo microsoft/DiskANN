@@ -124,6 +124,9 @@
 //! // Compute Chamfer distance (sum of MaxSim scores)
 //! let chamfer = Chamfer::evaluate(query_mv.into(), doc_mv);
 //! ```
+//!
+//! For repeated MinMax8-query by MinMax4-document evaluation, [`build_minmax_max_sim`]
+//! prepares the query once and keeps document scratch local to each call.
 mod multi;
 mod quantizer;
 mod recompress;
@@ -133,7 +136,7 @@ mod vectors;
 // Exports //
 /////////////
 
-pub use multi::{MinMaxKernel, MinMaxMeta};
+pub use multi::{MinMaxErase, MinMaxKernel, MinMaxMaxSimKernel, MinMaxMeta, build_minmax_max_sim};
 pub use quantizer::{L2Loss, MinMaxQuantizer};
 pub use recompress::{RecompressError, Recompressor};
 pub use vectors::{

@@ -8,22 +8,25 @@
 //! A single generic [`Kernel<T>`] carrier covers every element type accepted
 //! by [`MaxSimElement`]; `try_match` also rejects ISAs unavailable on the
 //! host so unsupported jobs fail at job-selection rather than mid-run.
+//! MinMax8/MinMax4 uses a separate carrier with the same input and result format.
 
 use std::io::Write;
 use std::marker::PhantomData;
 
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, PassFail, Regression, Score},
-    utils::{datatype::AsDataType, num::relative_change},
+    utils::datatype::AsDataType,
     Benchmark, Checkpoint, Output, Registry,
 };
+use diskann_quantization::minmax::build_minmax_max_sim;
 use diskann_quantization::multi_vector::{build_max_sim, BoxErase, MaxSimElement, MaxSimIsa};
 use rand::distr::{Distribution, StandardUniform};
 
 use super::driver::{
-    run_with_kernel, CheckResult, Comparison, Data, MultiVectorTolerance, RunResult,
+    run_with_compute, run_with_kernel, CheckResult, Data, MinMax8Data, MultiVectorTolerance,
+    RunResult,
 };
-use crate::inputs::multi_vector::MultiVectorOp;
+use crate::inputs::multi_vector::{MultiVectorFormat, MultiVectorOp};
 use crate::utils::DisplayWrapper;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -49,6 +52,9 @@ where
 
     fn try_match(&self, from: &MultiVectorOp, context: &MatchContext) -> Score {
         let mut score = context.success(0);
+        if from.format != MultiVectorFormat::Dense {
+            score.fail(1, &"expected dense vector format");
+        }
         crate::utils::match_data_type::<T>(&mut score, from.element_type);
         let isa: MaxSimIsa = from.isa.into();
         if !isa.is_available() {
@@ -68,7 +74,7 @@ where
         for run in input.runs.iter() {
             let data = Data::<T>::new(run)?;
             let kernel = build_max_sim::<T, _>(input.isa.into(), data.queries.as_view(), BoxErase)?;
-            results.push(run_with_kernel(run, data.docs.as_view(), &*kernel));
+            results.push(run_with_kernel(run, data.docs.as_view(), &*kernel)?);
         }
         writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
         Ok(results)
@@ -95,48 +101,74 @@ where
         before: &Vec<RunResult>,
         after: &Vec<RunResult>,
     ) -> anyhow::Result<PassFail<CheckResult, CheckResult>> {
-        anyhow::ensure!(
-            before.len() == after.len(),
-            "before has {} runs but after has {}",
-            before.len(),
-            after.len(),
-        );
+        CheckResult::compare(tolerance, before, after)
+    }
+}
 
-        let mut passed = true;
-        let checks: Vec<Comparison> = std::iter::zip(before.iter(), after.iter())
-            .enumerate()
-            .map(|(i, (b, a))| {
-                anyhow::ensure!(b.run == a.run, "run {i} mismatched");
+#[derive(Debug)]
+pub(super) struct MinMax8Kernel;
 
-                let computations_per_latency = b.computations_per_latency() as f64;
-                let before_min = b.percentiles.minimum.as_f64() * 1000.0 / computations_per_latency;
-                let after_min = a.percentiles.minimum.as_f64() * 1000.0 / computations_per_latency;
+impl Benchmark for MinMax8Kernel {
+    type Input = MultiVectorOp;
+    type Output = Vec<RunResult>;
 
-                let comparison = Comparison {
-                    run: b.run.clone(),
-                    tolerance: *tolerance,
-                    before_min,
-                    after_min,
-                };
+    fn try_match(&self, from: &MultiVectorOp, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        if from.format != MultiVectorFormat::MinMax8 {
+            score.fail(1, &"expected minmax8 vector format");
+        }
+        crate::utils::match_data_type::<f32>(&mut score, from.element_type);
+        let isa: MaxSimIsa = from.isa.into();
+        if isa == MaxSimIsa::Reference {
+            score.fail(1, &"MinMax8 has no reference kernel; use scalar");
+        } else if !isa.is_available() {
+            score.fail(1, &format_args!("ISA unavailable on this CPU: {}", isa));
+        }
+        score
+    }
 
-                match relative_change(before_min, after_min) {
-                    Ok(change) => {
-                        if change > tolerance.min_time_regression.get() {
-                            passed = false;
-                        }
-                    }
-                    Err(_) => passed = false,
-                };
+    fn run(
+        &self,
+        input: &MultiVectorOp,
+        _: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<Self::Output> {
+        writeln!(output, "{}", input)?;
+        let mut results = Vec::with_capacity(input.runs.len());
+        for run in &input.runs {
+            let data = MinMax8Data::new(run)?;
+            let kernel = build_minmax_max_sim(input.isa.into(), data.queries.as_view(), BoxErase)?;
+            let mut scores = vec![0.0; run.num_query_vectors.get()];
+            kernel.compute_max_sim(data.docs.as_view(), &mut scores)?;
+            std::hint::black_box(&mut scores);
+            results.push(run_with_compute(run, || {
+                kernel.compute_max_sim(data.docs.as_view(), &mut scores)?;
+                std::hint::black_box(&mut scores);
+                Ok(())
+            })?);
+        }
+        writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
+        Ok(results)
+    }
 
-                Ok(comparison)
-            })
-            .collect::<anyhow::Result<Vec<Comparison>>>()?;
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "- Query: MinMax8; Document: MinMax4")
+    }
+}
 
-        Ok(if passed {
-            PassFail::Pass(CheckResult { checks })
-        } else {
-            PassFail::Fail(CheckResult { checks })
-        })
+impl Regression for MinMax8Kernel {
+    type Tolerances = MultiVectorTolerance;
+    type Pass = CheckResult;
+    type Fail = CheckResult;
+
+    fn check(
+        &self,
+        tolerance: &MultiVectorTolerance,
+        _input: &MultiVectorOp,
+        before: &Vec<RunResult>,
+        after: &Vec<RunResult>,
+    ) -> anyhow::Result<PassFail<CheckResult, CheckResult>> {
+        CheckResult::compare(tolerance, before, after)
     }
 }
 
@@ -148,5 +180,6 @@ pub(super) fn register(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register_regression("multi-vector-op-f32", Kernel::<f32>::new())?;
     registry.register_regression("multi-vector-op-f16", Kernel::<half::f16>::new())?;
     registry.register_regression("multi-vector-op-i8", Kernel::<i8>::new())?;
+    registry.register_regression("multi-vector-op-minmax8", MinMax8Kernel)?;
     Ok(())
 }

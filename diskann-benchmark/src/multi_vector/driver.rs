@@ -7,6 +7,7 @@
 //! data fixtures, result types. None of the contents are kernel-aware.
 
 use diskann_benchmark_runner::{
+    benchmark::PassFail,
     utils::{
         fmt::Table,
         num::{relative_change, NonNegativeFinite},
@@ -15,8 +16,15 @@ use diskann_benchmark_runner::{
     Checker, Input,
 };
 use diskann_quantization::multi_vector::{
-    Mat, MatRef, MaxSimElement, MaxSimKernel, Overflow, Standard,
+    Defaulted, Mat, MatRef, MaxSimElement, MaxSimKernel, Overflow, Standard,
 };
+use diskann_quantization::{
+    algorithms::{transforms::NullTransform, Transform},
+    minmax::{MinMaxMeta, MinMaxQuantizer},
+    num::Positive,
+    CompressInto,
+};
+use diskann_utils::ReborrowMut;
 use rand::{
     distr::{Distribution, StandardUniform},
     rngs::StdRng,
@@ -92,6 +100,32 @@ where
     }
 }
 
+pub(super) struct MinMax8Data {
+    pub(super) queries: Mat<MinMaxMeta<8>>,
+    pub(super) docs: Mat<MinMaxMeta<4>>,
+}
+
+impl MinMax8Data {
+    pub(super) fn new(run: &Run) -> anyhow::Result<Self> {
+        let data = Data::<f32>::new(run)?;
+        let quantizer = MinMaxQuantizer::new(
+            Transform::Null(NullTransform::new(run.dim)),
+            Positive::new(1.0).unwrap(),
+        );
+        let mut queries = Mat::new(
+            MinMaxMeta::<8>::try_new(run.num_query_vectors.get(), run.dim.get())?,
+            Defaulted,
+        )?;
+        let mut docs = Mat::new(
+            MinMaxMeta::<4>::try_new(run.num_doc_vectors.get(), run.dim.get())?,
+            Defaulted,
+        )?;
+        quantizer.compress_into(data.queries.as_view(), queries.reborrow_mut())?;
+        quantizer.compress_into(data.docs.as_view(), docs.reborrow_mut())?;
+        Ok(Self { queries, docs })
+    }
+}
+
 //////////////////////
 // Timing harness   //
 //////////////////////
@@ -100,27 +134,35 @@ pub(super) fn run_with_kernel<T: MaxSimElement>(
     run: &Run,
     doc: MatRef<'_, Standard<T>>,
     kernel: &dyn MaxSimKernel<T>,
-) -> RunResult {
+) -> anyhow::Result<RunResult> {
     let mut scores = vec![T::Score::default(); run.num_query_vectors.get()];
+    run_with_compute(run, || {
+        kernel.compute_max_sim(doc, &mut scores)?;
+        std::hint::black_box(&mut scores);
+        Ok(())
+    })
+}
+
+pub(super) fn run_with_compute(
+    run: &Run,
+    mut compute: impl FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<RunResult> {
     let mut latencies = Vec::with_capacity(run.num_measurements.get());
 
     for _ in 0..run.num_measurements.get() {
         let start = std::time::Instant::now();
         for _ in 0..run.loops_per_measurement.get() {
-            kernel
-                .compute_max_sim(doc, &mut scores)
-                .expect("scores.len() == kernel.nrows() by construction");
-            std::hint::black_box(&mut scores);
+            compute()?;
         }
         latencies.push(start.elapsed().into());
     }
 
     let percentiles = percentiles::compute_percentiles(&mut latencies).unwrap();
-    RunResult {
+    Ok(RunResult {
         run: run.clone(),
         latencies,
         percentiles,
-    }
+    })
 }
 
 //////////////////////
@@ -213,6 +255,55 @@ pub(super) struct Comparison {
 #[derive(Debug, Serialize)]
 pub(super) struct CheckResult {
     pub(super) checks: Vec<Comparison>,
+}
+
+impl CheckResult {
+    pub(super) fn compare(
+        tolerance: &MultiVectorTolerance,
+        before: &[RunResult],
+        after: &[RunResult],
+    ) -> anyhow::Result<PassFail<Self, Self>> {
+        anyhow::ensure!(
+            before.len() == after.len(),
+            "before has {} runs but after has {}",
+            before.len(),
+            after.len(),
+        );
+
+        let mut passed = true;
+        let checks = std::iter::zip(before, after)
+            .enumerate()
+            .map(|(i, (b, a))| {
+                anyhow::ensure!(b.run == a.run, "run {i} mismatched");
+
+                let computations_per_latency = b.computations_per_latency() as f64;
+                let before_min = b.percentiles.minimum.as_f64() * 1000.0 / computations_per_latency;
+                let after_min = a.percentiles.minimum.as_f64() * 1000.0 / computations_per_latency;
+
+                let comparison = Comparison {
+                    run: b.run.clone(),
+                    tolerance: *tolerance,
+                    before_min,
+                    after_min,
+                };
+                match relative_change(before_min, after_min) {
+                    Ok(change) => {
+                        if change > tolerance.min_time_regression.get() {
+                            passed = false;
+                        }
+                    }
+                    Err(_) => passed = false,
+                };
+                Ok(comparison)
+            })
+            .collect::<anyhow::Result<Vec<Comparison>>>()?;
+
+        Ok(if passed {
+            PassFail::Pass(Self { checks })
+        } else {
+            PassFail::Fail(Self { checks })
+        })
+    }
 }
 
 impl std::fmt::Display for CheckResult {

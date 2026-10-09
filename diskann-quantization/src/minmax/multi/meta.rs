@@ -11,11 +11,11 @@ use super::super::MinMaxQuantizer;
 use super::super::vectors::DataMutRef;
 use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
-use crate::minmax::{self, Data};
+use crate::minmax::{self, Data, MinMaxCompensation};
 use crate::multi_vector::matrix::{
     Defaulted, NewMut, NewOwned, NewRef, Repr, ReprMut, ReprOwned, SliceError,
 };
-use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
+use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Overflow, Standard};
 use crate::scalar::InputContainsNaN;
 use crate::utils;
 
@@ -32,6 +32,8 @@ use crate::utils;
 pub struct MinMaxMeta<const NBITS: usize> {
     nrows: usize,
     intrinsic_dim: usize,
+    row_bytes: usize,
+    bytes: usize,
 }
 
 impl<const NBITS: usize> MinMaxMeta<NBITS>
@@ -39,11 +41,40 @@ where
     Unsigned: Representation<NBITS>,
 {
     /// Creates new MinMax metadata with the given number of rows and intrinsic dimension.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the canonical geometry or allocation extent is not representable.
+    /// Use [`Self::try_new`] to handle this error.
+    #[expect(
+        clippy::expect_used,
+        reason = "the fallible constructor is available to callers"
+    )]
     pub fn new(nrows: usize, intrinsic_dim: usize) -> Self {
-        Self {
+        Self::try_new(nrows, intrinsic_dim).expect("invalid canonical MinMax matrix dimensions")
+    }
+
+    /// Validate the canonical row size and allocation extent before constructing metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Overflow`] if canonical size arithmetic overflows or the buffer exceeds
+    /// `isize::MAX` bytes.
+    pub fn try_new(nrows: usize, intrinsic_dim: usize) -> Result<Self, Overflow> {
+        let overflow = || Overflow::for_type::<u8>(nrows, intrinsic_dim);
+        intrinsic_dim.checked_mul(NBITS).ok_or_else(overflow)?;
+        let row_bytes = Data::<NBITS>::slice_bytes(intrinsic_dim)
+            .checked_add(std::mem::size_of::<MinMaxCompensation>())
+            .ok_or_else(overflow)?;
+        let bytes = nrows.checked_mul(row_bytes).ok_or_else(overflow)?;
+        Overflow::check_byte_budget::<u8>(row_bytes, 1, intrinsic_dim)?;
+        Overflow::check_byte_budget::<u8>(bytes, nrows, intrinsic_dim)?;
+        Ok(Self {
             nrows,
             intrinsic_dim,
-        }
+            row_bytes,
+            bytes,
+        })
     }
 
     /// Returns the `intrinsic_dim`
@@ -54,11 +85,12 @@ where
     /// Returns the number of bytes from a canonical repr of
     /// a minmax quantized vector, see [minmax::Data::canonical_bytes]
     pub fn ncols(&self) -> usize {
-        Data::<NBITS>::canonical_bytes(self.intrinsic_dim)
+        self.row_bytes
     }
 
-    fn bytes(&self) -> usize {
-        std::mem::size_of::<u8>() * self.nrows() * self.ncols()
+    /// Total canonical buffer size, validated at construction.
+    pub fn bytes(&self) -> usize {
+        self.bytes
     }
 }
 
@@ -82,9 +114,7 @@ where
     /// - [`crate::minmax::MinMaxCompensation`] does not require alignment
     ///   since it is always accessed by copying bytes first before casting.
     fn layout(&self) -> Result<std::alloc::Layout, LayoutError> {
-        Ok(std::alloc::Layout::array::<u8>(
-            self.nrows() * self.ncols(),
-        )?)
+        Ok(std::alloc::Layout::array::<u8>(self.bytes())?)
     }
 
     /// Returns an immutable reference to the i-th row.
@@ -309,6 +339,24 @@ mod tests {
     const TEST_DIMS: &[usize] = &[1, 2, 3, 4, 7, 8, 16, 31, 32, 64];
     /// Test vector counts for multi-vector matrices.
     const TEST_NVECS: &[usize] = &[1, 2, 3, 5, 10];
+
+    #[test]
+    fn minmax8_byte_extents_are_validated() {
+        for dim in [0, 1, 7, 8, 9, 64] {
+            let row_bytes = Data::<8>::canonical_bytes(dim);
+            let max_rows = isize::MAX as usize / row_bytes;
+            for rows in [0, 1, max_rows] {
+                let meta = MinMaxMeta::<8>::try_new(rows, dim).unwrap();
+                assert_eq!(meta.ncols(), row_bytes);
+                assert_eq!(meta.bytes(), rows * row_bytes);
+                assert_eq!(meta.layout().unwrap().size(), meta.bytes());
+            }
+            assert!(MinMaxMeta::<8>::try_new(max_rows + 1, dim).is_err());
+            assert!(MinMaxMeta::<8>::try_new(usize::MAX, dim).is_err());
+        }
+        assert!(MinMaxMeta::<8>::try_new(0, usize::MAX).is_err());
+        assert!(MinMaxMeta::<8>::try_new(1, usize::MAX).is_err());
+    }
 
     /// Macro to generate a single test that runs a generic function for all bitrates (1, 2, 4, 8).
     macro_rules! expand_to_bitrates {
