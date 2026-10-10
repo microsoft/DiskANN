@@ -11,7 +11,10 @@ use diskann::{
 };
 use diskann_utils::{future::AsyncFriendly, lazy_format};
 
-use super::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
+use super::{
+    AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, NativeStaticLoadContext,
+    SaveWith,
+};
 use crate::model::{
     configuration::IndexConfiguration,
     graph::provider::async_::{
@@ -34,6 +37,9 @@ where
     where
         P: StorageWriteProvider,
     {
+        if self.data_provider.is_native_static() {
+            return Err(ANNError::message("native static graphs are read-only"));
+        }
         let start_id = get_and_validate_single_starting_point(&self.data_provider)?;
 
         self.data_provider
@@ -59,6 +65,9 @@ where
     where
         P: StorageWriteProvider,
     {
+        if self.data_provider.is_native_static() {
+            return Err(ANNError::message("native static graphs are read-only"));
+        }
         let start_id = get_and_validate_single_starting_point(&self.data_provider)?;
 
         self.data_provider
@@ -104,6 +113,56 @@ where
             index_config.config.clone(),
             data_provider,
             NonZeroUsize::new(num_threads),
+        ))
+    }
+}
+
+/// Select the read-only native static layout with N graph records and N data vectors.
+///
+/// Its serialized `frozen=1` header is a compatibility marker, not an extra
+/// physical vector. The ordinary [`IndexConfiguration`] loader continues to
+/// interpret an appended start point as frozen.
+pub struct NativeStaticIndexConfiguration {
+    config: IndexConfiguration,
+}
+
+impl NativeStaticIndexConfiguration {
+    /// Select the native static layout for an existing index configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the configuration's frozen-point count is exactly one.
+    pub fn new(config: IndexConfiguration) -> ANNResult<Self> {
+        if config.num_frozen_pts.get() != 1 {
+            return Err(ANNError::message(
+                "native static graph requires exactly one serialized fake frozen point",
+            ));
+        }
+        Ok(Self { config })
+    }
+}
+
+impl<'a, DP> LoadWith<(&'a str, NativeStaticIndexConfiguration)> for DiskANNIndex<DP>
+where
+    DP: DataProvider<InternalId = u32> + LoadWith<NativeStaticLoadContext, Error = ANNError>,
+{
+    type Error = ANNError;
+
+    async fn load_with<P>(
+        provider: &P,
+        (path, config): &(&'a str, NativeStaticIndexConfiguration),
+    ) -> ANNResult<Self>
+    where
+        P: StorageReadProvider,
+    {
+        let context = NativeStaticLoadContext {
+            inner: create_load_context(path, &config.config, false)?,
+        };
+        let data_provider = DP::load_with(provider, &context).await?;
+        Ok(Self::new(
+            config.config.config.clone(),
+            data_provider,
+            NonZeroUsize::new(config.config.num_threads),
         ))
     }
 }
@@ -215,12 +274,12 @@ fn get_and_validate_single_starting_point<U, V, D>(
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroUsize, sync::Arc};
+    use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
     use crate::storage::VirtualStorageProvider;
     use diskann::{
         graph::{AdjacencyList, config, glue::InsertStrategy},
-        provider::SetElement,
+        provider::{DefaultContext, SetElement},
         utils::{IntoUsize, ONE},
     };
     use diskann_utils::{test_data_root, views::MatrixView};
@@ -232,6 +291,7 @@ mod tests {
         model::graph::provider::async_::{
             SimpleNeighborProviderAsync,
             common::{FullPrecision, NoDeletes, NoStore, TableBasedDeletes},
+            inmem::SetStartPoints,
         },
         utils::create_rnd_from_seed_in_tests,
     };
@@ -249,6 +309,176 @@ mod tests {
         for (i, v) in data.row_iter().enumerate() {
             index.insert(&strategy, ctx, &(i as u32), v).await.unwrap();
         }
+    }
+
+    #[test]
+    fn native_static_configuration_rejects_extra_frozen_points() {
+        let graph_config =
+            config::Builder::new(32, config::MaxDegree::same(), 100, Metric::L2.into())
+                .build()
+                .unwrap();
+        for frozen in [1, 2] {
+            let index_config = IndexConfiguration::new(
+                Metric::L2,
+                64,
+                256,
+                NonZeroUsize::new(frozen).unwrap(),
+                1,
+                graph_config.clone(),
+            );
+            assert_eq!(
+                NativeStaticIndexConfiguration::new(index_config).is_ok(),
+                frozen == 1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_static_load_keeps_last_vector_and_medoid_searchable() {
+        let path = "/native_static";
+        let storage = VirtualStorageProvider::new_memory();
+        let graph = SimpleNeighborProviderAsync::new(2, 1, 2, 1.0);
+        graph.set_neighbors_sync(0, &[1]).unwrap();
+        graph.set_neighbors_sync(1, &[0, 2]).unwrap();
+        graph.set_neighbors_sync(2, &[1]).unwrap();
+        graph.save_direct(&storage, 1, path).unwrap();
+        {
+            let mut data = storage.create_for_write("/native_static.data").unwrap();
+            data.write_all(&3_u32.to_le_bytes()).unwrap();
+            data.write_all(&2_u32.to_le_bytes()).unwrap();
+            data.write_all(&[0_u8, 0, 4, 4, 8, 8]).unwrap();
+        }
+
+        let config = IndexConfiguration::new(
+            Metric::L2,
+            2,
+            3,
+            ONE,
+            1,
+            config::Builder::new(32, config::MaxDegree::same(), 100, Metric::L2.into())
+                .build()
+                .unwrap(),
+        );
+        let legacy = DiskANNIndex::<inmem::FullPrecisionProvider<u8>>::load_with(
+            &storage,
+            &(path, config.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(legacy.provider().capacity(), 2);
+
+        let mut invalid_frozen = create_load_context(path, &config, false).unwrap();
+        invalid_frozen.num_frozen_points = NonZeroUsize::new(2).unwrap();
+        assert!(
+            inmem::FullPrecisionProvider::<u8>::load_with(
+                &storage,
+                &NativeStaticLoadContext {
+                    inner: invalid_frozen,
+                },
+            )
+            .await
+            .is_err()
+        );
+
+        let index = DiskANNIndex::<inmem::FullPrecisionProvider<u8>>::load_with(
+            &storage,
+            &(
+                path,
+                NativeStaticIndexConfiguration::new(config.clone()).unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(index.provider().capacity(), 3);
+        assert_eq!(index.provider().total_points(), 3);
+        assert_eq!(index.provider().starting_points().unwrap(), vec![1]);
+        assert!(index.provider().is_native_static());
+        assert!((index.provider().is_not_frozen())(1));
+        assert!((index.provider().is_not_frozen())(2));
+
+        for (query, expected_id) in [([8_u8, 8], 2), ([4, 4], 1)] {
+            let mut ids = [u32::MAX; 1];
+            let mut distances = [f32::NAN; 1];
+            let mut output =
+                diskann::graph::search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let result = index
+                .search(
+                    diskann::graph::search::Knn::new_default(3).unwrap(),
+                    &FullPrecision,
+                    &DefaultContext,
+                    &query,
+                    &mut output,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.result_count, 1);
+            assert_eq!(ids[0], expected_id);
+        }
+
+        assert!(
+            index
+                .provider()
+                .set_element(&DefaultContext, &2, &[8_u8, 8])
+                .await
+                .is_err()
+        );
+        assert!(
+            index
+                .provider()
+                .set_start_points(std::iter::once(&[0_u8, 0][..]))
+                .is_err()
+        );
+        assert!(
+            index
+                .provider()
+                .neighbors()
+                .set_neighbors_sync(2, &[0])
+                .is_err()
+        );
+        assert!(
+            index
+                .provider()
+                .neighbors()
+                .append_vector_sync(2, &[0])
+                .is_err()
+        );
+        assert!(
+            index
+                .provider()
+                .neighbors()
+                .save_direct(&storage, 1, "/blocked_graph")
+                .is_err()
+        );
+        assert!(!storage.exists("/blocked_graph"));
+        assert!(
+            index
+                .provider()
+                .save_with(&storage, &(1, AsyncIndexMetadata::new("/blocked_provider")))
+                .await
+                .is_err()
+        );
+        assert!(!storage.exists("/blocked_provider"));
+        assert!(
+            index
+                .save_with(&storage, &AsyncIndexMetadata::new("/blocked_index"))
+                .await
+                .is_err()
+        );
+        assert!(!storage.exists("/blocked_index"));
+
+        storage
+            .open_writer(path)
+            .unwrap()
+            .write_all(&0_u32.to_le_bytes())
+            .unwrap();
+        let err = DiskANNIndex::<inmem::FullPrecisionProvider<u8>>::load_with(
+            &storage,
+            &(path, NativeStaticIndexConfiguration::new(config).unwrap()),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(err.to_string().contains("complete file"));
     }
 
     // Our test strategy here is to basically build one main index using quantization

@@ -22,6 +22,7 @@ pub struct SimpleNeighborProviderAsync {
     graph: AlignedMemoryVectorStore<u32>,
     locks: Vec<RwLock<()>>,
     num_start_points: usize,
+    read_only: bool,
 
     pub num_get_calls: TestCallCount,
 }
@@ -44,8 +45,14 @@ impl SimpleNeighborProviderAsync {
             graph,
             locks,
             num_start_points,
+            read_only: false,
             num_get_calls: TestCallCount::default(),
         }
+    }
+
+    /// Prevent mutations after loading a native static graph.
+    pub(crate) fn mark_read_only(&mut self) {
+        self.read_only = true;
     }
 
     /// Return the neighbor list for `index` as a slice.
@@ -64,6 +71,9 @@ impl SimpleNeighborProviderAsync {
     }
 
     pub fn set_neighbors_sync(&self, id: usize, neighbors: &[u32]) -> ANNResult<()> {
+        if self.read_only {
+            return Err(ANNError::message("native static graphs are read-only"));
+        }
         assert!(
             neighbors.len() < self.graph.dim(),
             "neighbors ({}) exceeded max adjacency list size ({})",
@@ -104,6 +114,9 @@ impl SimpleNeighborProviderAsync {
     }
 
     pub fn append_vector_sync(&self, id: usize, new_neighbor_ids: &[u32]) -> ANNResult<()> {
+        if self.read_only {
+            return Err(ANNError::message("native static graphs are read-only"));
+        }
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
         #[allow(clippy::unwrap_used)]
         let _guard = self.locks[id].write().unwrap();
@@ -184,6 +197,9 @@ impl SimpleNeighborProviderAsync {
     where
         P: StorageWriteProvider,
     {
+        if self.read_only {
+            return Err(ANNError::message("native static graphs are read-only"));
+        }
         storage::bin::save_graph(self, provider, start_point, path)
     }
 }
@@ -228,6 +244,9 @@ impl SaveWith<(u32, u32, DiskGraphOnly)> for SimpleNeighborProviderAsync {
     where
         P: StorageWriteProvider,
     {
+        if self.read_only {
+            return Err(ANNError::message("native static graphs are read-only"));
+        }
         let graph = DiskAdaptor {
             provider: self,
             inmem_start_point: *imem_start_point,
