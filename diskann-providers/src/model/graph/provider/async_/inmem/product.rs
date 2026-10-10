@@ -278,12 +278,6 @@ where
         std::future::ready(Ok(self.provider.num_start_points()))
     }
 
-    fn is_not_start_point(
-        &self,
-    ) -> impl Future<Output = ANNResult<impl Fn(u32) -> bool + Send + Sync + 'static>> + Send {
-        std::future::ready(Ok(self.provider.is_not_frozen()))
-    }
-
     fn start_point_distances<F>(
         &mut self,
         mut f: F,

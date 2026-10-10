@@ -18,12 +18,12 @@ use crate::{
 
 pub use diskann::graph::strategy::{FullPrecision, Quantized};
 
-/// Represents physical frozen points and, for native static graphs, an in-range search seed.
-/// The frozen range includes `start` and excludes `end`.
+/// Represents a range of start points for an index.
+/// The range includes `start` and excludes `end`.
+/// `start` is the first valid point, and `end - 1` is the last valid point.
 pub struct StartPoints {
     start: u32,
     end: u32,
-    in_range_seed: Option<u32>,
 }
 
 impl StartPoints {
@@ -38,43 +38,7 @@ impl StartPoints {
                     ));
                 }
             },
-            in_range_seed: None,
         })
-    }
-
-    /// Use a real vector as the search seed without treating it as a frozen point.
-    pub fn native_static(valid_points: u32, seed: u32) -> ANNResult<Self> {
-        if seed >= valid_points {
-            return Err(ANNError::message(
-                "static graph medoid is outside its vector range",
-            ));
-        }
-        Ok(Self {
-            start: valid_points,
-            end: valid_points,
-            in_range_seed: Some(seed),
-        })
-    }
-
-    /// Return the logical search seeds, including an in-range static medoid.
-    pub fn search_ids(&self) -> Vec<u32> {
-        match self.in_range_seed {
-            Some(seed) => vec![seed],
-            None => self.range().collect(),
-        }
-    }
-
-    /// Return the number of search seeds, which may differ from the frozen count.
-    pub fn search_seed_count(&self) -> usize {
-        if self.in_range_seed.is_some() {
-            1
-        } else {
-            self.len()
-        }
-    }
-
-    pub fn is_native_static(&self) -> bool {
-        self.in_range_seed.is_some()
     }
 
     pub fn range(&self) -> std::ops::Range<u32> {
@@ -524,17 +488,5 @@ mod tests {
                 msg
             );
         }
-    }
-
-    #[test]
-    fn native_static_has_in_range_seed_without_frozen_vectors() {
-        let starts = StartPoints::native_static(256, 52).unwrap();
-        assert_eq!(starts.search_ids(), vec![52]);
-        assert_eq!(starts.search_seed_count(), 1);
-        assert!(starts.is_native_static());
-        assert!(starts.range().is_empty());
-        assert_eq!(starts.start(), 256);
-        assert_eq!(starts.end(), 256);
-        assert!(StartPoints::native_static(256, 256).is_err());
     }
 }

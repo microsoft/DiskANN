@@ -6,7 +6,6 @@
 use std::{fmt::Debug, future::Future, num::NonZeroUsize};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{
     ANNError, ANNResult,
     graph::AdjacencyList,
@@ -27,10 +26,7 @@ use crate::{
             SetElementHelper, VectorStore,
         },
     },
-    storage::{
-        AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith,
-        NativeStaticLoadContext, SaveWith, bin::GetAdjacencyList,
-    },
+    storage::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith},
 };
 
 /////////////////////
@@ -78,8 +74,7 @@ use crate::{
 /// * [`FullPrecision`]: The strategies implemented by [`FullPrecision`] only retrieve data
 ///   from the full-precision portion of the index. No quantized vectors are used.
 ///
-///   During search, physical frozen points are filtered from results, while a
-///   native static graph's in-range medoid remains searchable.
+///   During search, start points are filtered from the final results.
 ///
 /// * [`Quantized`]: The strategies implemented by [`Quantized`] can use a mix of quantized
 ///   and full-precision vectors.
@@ -328,7 +323,7 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
 
     /// Return a vector of starting points.
     pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
-        Ok(self.start_points.search_ids())
+        Ok(self.start_points.range().collect())
     }
 
     /// An iterator over all ids including start points (even if they are deleted).
@@ -342,18 +337,7 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
     }
 
     pub fn num_start_points(&self) -> usize {
-        self.start_points.search_seed_count()
-    }
-
-    /// Whether this read-only graph uses a real vector as its search seed.
-    pub fn is_native_static(&self) -> bool {
-        self.start_points.is_native_static()
-    }
-
-    /// Exclude physical frozen vectors, but not an in-range static medoid.
-    pub(crate) fn is_not_frozen(&self) -> impl Fn(u32) -> bool + Send + Sync + 'static {
-        let frozen = self.start_points.range();
-        move |id| !frozen.contains(&id)
+        self.start_points.len()
     }
 
     /// Return the total capacity of the provider, **excluding** start points.
@@ -416,9 +400,6 @@ where
     where
         Itr: ExactSizeIterator<Item = &'a [T]> + 'a,
     {
-        if self.is_native_static() {
-            return Err(ANNError::message("native static graphs are read-only"));
-        }
         let start_points = self.start_points.range();
         let num_start_points = start_points.len();
         let itr_len = itr.len();
@@ -463,9 +444,6 @@ where
     where
         P: StorageWriteProvider,
     {
-        if self.is_native_static() {
-            return Err(ANNError::message("native static graphs are read-only"));
-        }
         self.base_vectors.save_with(provider, &auxiliary.1).await?;
         self.aux_vectors.save_with(provider, &auxiliary.1).await?;
         self.neighbor_provider
@@ -493,9 +471,6 @@ where
     where
         P: StorageWriteProvider,
     {
-        if self.is_native_static() {
-            return Err(ANNError::message("native static graphs are read-only"));
-        }
         self.neighbor_provider
             .save_with(provider, auxiliary)
             .await?;
@@ -551,61 +526,6 @@ where
             start_points,
             context: std::marker::PhantomData,
         })
-    }
-}
-
-impl<U, V, Ctx> LoadWith<NativeStaticLoadContext> for DefaultProvider<U, V, NoDeletes, Ctx>
-where
-    U: VectorStore + LoadWith<AsyncQuantLoadContext>,
-    V: VectorStore + AsyncFriendly + LoadWith<AsyncQuantLoadContext>,
-    ANNError: From<U::Error> + From<V::Error>,
-    Ctx: ExecutionContext,
-{
-    type Error = ANNError;
-
-    async fn load_with<P>(provider: &P, ctx: &NativeStaticLoadContext) -> ANNResult<Self>
-    where
-        P: StorageReadProvider,
-    {
-        if ctx.inner.num_frozen_points.get() != 1 {
-            return Err(ANNError::message(
-                "native static graph requires exactly one serialized fake frozen point",
-            ));
-        }
-        let mut loaded =
-            <Self as LoadWith<AsyncQuantLoadContext>>::load_with(provider, &ctx.inner).await?;
-        let base_count = loaded.base_vectors.total();
-        let aux_count = loaded.aux_vectors.total();
-        let vector_count = std::cmp::max(base_count, aux_count);
-        if vector_count == 0
-            || vector_count > u32::MAX as usize
-            || loaded.neighbor_provider.total() != vector_count
-            || (base_count != 0 && base_count != vector_count)
-            || (aux_count != 0 && aux_count != vector_count)
-        {
-            return Err(ANNError::message(
-                "native static graph and vector stores must have the same nonzero u32 vector count",
-            ));
-        }
-
-        let mut graph = provider.open_reader(ctx.inner.metadata.prefix())?;
-        let file_size = graph.read_u64::<LittleEndian>()?;
-        let _max_degree = graph.read_u32::<LittleEndian>()?;
-        let medoid = graph.read_u32::<LittleEndian>()?;
-        let serialized_frozen = graph.read_u64::<LittleEndian>()?;
-        if file_size < 24
-            || file_size != provider.get_length(ctx.inner.metadata.prefix())?
-            || serialized_frozen != 1
-            || u64::from(medoid) >= vector_count as u64
-        {
-            return Err(ANNError::message(
-                "native static graph requires a complete file, an in-range medoid, and a serialized frozen=1 header",
-            ));
-        }
-
-        loaded.start_points = StartPoints::native_static(vector_count as u32, medoid)?;
-        loaded.neighbor_provider.mark_read_only();
-        Ok(loaded)
     }
 }
 
@@ -787,11 +707,6 @@ where
         id: &u32,
         element: &[T],
     ) -> impl Future<Output = Result<Self::Guard, Self::SetError>> + Send {
-        if self.is_native_static() {
-            return std::future::ready(Err(ANNError::message(
-                "native static graphs are read-only",
-            )));
-        }
         // First try adding to the aux vector store
         if let Err(err) = self.aux_vectors.set_element(id, element) {
             return std::future::ready(Err(err));

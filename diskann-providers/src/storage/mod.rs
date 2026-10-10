@@ -14,10 +14,7 @@ mod virtual_storage_provider;
 pub use virtual_storage_provider::VirtualStorageProvider;
 
 mod api;
-pub use api::{
-    AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, NativeStaticLoadContext,
-    SaveWith,
-};
+pub use api::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
 
 pub(crate) mod bin;
 
@@ -43,6 +40,6 @@ pub use path_utility::{
 
 pub mod index_storage;
 pub use index_storage::{
-    NativeStaticIndexConfiguration, create_load_context, load_fp_index, load_index_with_deletes,
-    load_pq_index, load_pq_index_with_deletes,
+    create_load_context, load_fp_index, load_index_with_deletes, load_pq_index,
+    load_pq_index_with_deletes,
 };

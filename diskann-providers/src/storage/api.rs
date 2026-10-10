@@ -158,9 +158,3 @@ pub struct AsyncQuantLoadContext {
     /// controls the prefetch cache line level for the index.
     pub prefetch_cache_line_level: Option<PrefetchCacheLineLevel>,
 }
-
-/// Load a native static graph with an in-range medoid and no physical frozen vector.
-pub struct NativeStaticLoadContext {
-    /// Standard vector and graph load settings.
-    pub inner: AsyncQuantLoadContext,
-}
