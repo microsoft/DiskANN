@@ -519,6 +519,7 @@ dependencies = [
  "anyhow",
  "clap",
  "diskann-derive",
+ "diskann-utils",
  "half",
  "hashbrown 0.16.1",
  "indicatif",

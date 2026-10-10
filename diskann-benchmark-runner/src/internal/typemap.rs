@@ -163,9 +163,7 @@ impl Drop for Transaction<'_> {
 mod tests {
     use super::*;
 
-    use serde::{Deserialize, Serialize};
-
-    use crate::{Checker, Reflect};
+    use crate::Reflect;
 
     // The types `A`, `B`, `C`, etc. are the valid types for testing registration.
 
@@ -326,6 +324,32 @@ mod tests {
         check_types_are_present(&map);
     }
 
+    // Multiple total types can be registered in one call.
+    #[test]
+    fn test_register_multiple() {
+        let mut map = TypeMap::new();
+        map.register(&[Reflection::new::<usize>(), Reflection::new::<f32>()])
+            .unwrap()
+            .complete();
+
+        assert_is_present::<usize>(&map);
+        assert_is_present::<f32>(&map);
+    }
+
+    // Roll-back undoes multiple types.
+    #[test]
+    fn test_multiple_roll_back() {
+        let mut map = TypeMap::new();
+
+        // Drop aborts the transaction
+        let _ = map
+            .register(&[Reflection::new::<usize>(), Reflection::new::<f32>()])
+            .unwrap();
+
+        assert!(map.name_map.is_empty());
+        assert!(map.type_ids.is_empty());
+    }
+
     // Register portions of the type-tree.
     #[test]
     fn test_incremental_registration() {
@@ -365,98 +389,19 @@ mod tests {
             "invalid registration should not commit registered items"
         );
 
+        let err = map
+            .register(&[Reflection::new::<usize>(), Reflection::new::<Bad3>()])
+            .unwrap_err();
+        assert_eq!(err.to_string(), msg);
+        assert!(map.name_map.is_empty());
+        assert!(map.type_ids.is_empty());
+
         // After this, we should succeed in adding more types correctly.
         register::<D>(&mut map).unwrap().complete();
         check_types_are_present(&map);
 
-        // Again, bad registration should not corrupt the
+        // Again, bad registration should not corrupt the map.
         register::<Bad3>(&mut map).unwrap_err();
         check_types_are_present(&map);
     }
-
-    // // Test that type registration happens before input registration, and that if type
-    // // registration fails, the input is not registered.
-    // #[test]
-    // fn test_input_registration_aborts_correct() {
-    //     #[derive(Serialize, Deserialize, Reflect, Debug)]
-    //     struct GoodInput {
-    //         a: usize,
-    //         b: isize,
-    //     }
-
-    //     impl Input for GoodInput {
-    //         type Raw = Self;
-    //         fn tag() -> &'static str {
-    //             "good-input"
-    //         }
-    //         fn from_raw(_raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
-    //             unimplemented!("this struct is for test only");
-    //         }
-    //         fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-    //             unimplemented!("this struct is for test only");
-    //         }
-    //         fn example() -> Self::Raw {
-    //             unimplemented!("this struct is for test only");
-    //         }
-    //     }
-
-    //     #[derive(Serialize, Deserialize, Reflect, Debug)]
-    //     #[reflect(type_name = "isize")]
-    //     struct Boom;
-
-    //     #[derive(Serialize, Deserialize, Reflect, Debug)]
-    //     struct BadInput {
-    //         /// This type should not be registered on failure.
-    //         a: f32,
-    //         b: Boom,
-    //         /// Put another `f32` on the other side of `Boom` so no matter the expansion
-    //         /// order, a `f32` is registered before `Boom`.
-    //         c: f32,
-    //     }
-
-    //     impl Input for BadInput {
-    //         type Raw = Self;
-    //         fn tag() -> &'static str {
-    //             "bad-input"
-    //         }
-    //         fn from_raw(_raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
-    //             unimplemented!("this struct is for test only");
-    //         }
-    //         fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-    //             unimplemented!("this struct is for test only");
-    //         }
-    //         fn example() -> Self::Raw {
-    //             unimplemented!("this struct is for test only");
-    //         }
-    //     }
-
-    //     let mut map = TypeMap::new();
-    //     map.register_input::<GoodInput>().unwrap();
-
-    //     assert!(map.input("good-input").is_some());
-    //     assert!(map.input("bad-input").is_none());
-
-    //     assert_is_present::<usize>(&map);
-    //     assert_is_present::<isize>(&map);
-    //     assert_is_present::<GoodInput>(&map);
-
-    //     assert_is_absent::<f32>(&map);
-    //     assert_is_absent::<BadInput>(&map);
-
-    //     // This should hit a type-conflict.
-    //     map.register_input::<BadInput>().unwrap_err();
-
-    //     assert!(map.input("good-input").is_some());
-    //     assert!(
-    //         map.input("bad-input").is_none(),
-    //         "bad input should not be registered on failure"
-    //     );
-
-    //     assert_is_present::<usize>(&map);
-    //     assert_is_present::<isize>(&map);
-    //     assert_is_present::<GoodInput>(&map);
-
-    //     assert_is_absent::<f32>(&map);
-    //     assert_is_absent::<BadInput>(&map);
-    // }
 }
