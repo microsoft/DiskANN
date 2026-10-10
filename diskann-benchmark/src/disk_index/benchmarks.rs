@@ -15,7 +15,7 @@ use diskann_benchmark_runner::{
         fmt::Table,
         num::{relative_change, NonNegativeFinite},
     },
-    Benchmark, Checker, Checkpoint, Input, Registry,
+    Benchmark, Checker, Checkpoint, Input, Reflect, Registry,
 };
 use diskann_providers::storage::FileStorageProvider;
 use half::f16;
@@ -130,7 +130,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 /// or decrease (for "higher is better" metrics) before a regression is flagged.
 ///
 /// For example, `recall_regression: 0.01` means recall must not drop by more than 1%.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "disk::")]
 pub(super) struct DiskIndexTolerance {
     /// Max allowed relative increase in build time (e.g., 0.10 = 10%).
     build_time_regression: NonNegativeFinite,

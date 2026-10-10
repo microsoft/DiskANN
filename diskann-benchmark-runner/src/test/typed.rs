@@ -8,7 +8,7 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Benchmark, Checker, Checkpoint, Input, Output,
+    Benchmark, Checker, Checkpoint, Input, Output, Reflect,
     benchmark::{MatchContext, PassFail, Regression, Score},
     utils::datatype::{AsDataType, DataType},
 };
@@ -24,11 +24,13 @@ pub(crate) struct TypeInput {
     error_when_checked: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+/// This is a test input for testing corner cases in the benchmark runner.
+#[derive(Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(crate) struct TypeInputRaw {
     data_type: DataType,
     dim: usize,
-    // Should we return an error when deserializing?
+    /// Should we return an error when deserializing?
     error_when_checked: bool,
 }
 
@@ -78,9 +80,10 @@ impl Input for TypeInput {
 // Tolerance //
 ///////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct Tolerance {
-    // Should we return an error when `from_raw` is called?
+    /// Should we return an error when `from_raw` is called?
     pub(super) error_when_checked: bool,
 }
 

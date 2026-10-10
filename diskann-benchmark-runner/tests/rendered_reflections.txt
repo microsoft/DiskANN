@@ -1,0 +1,164 @@
+========
+{
+  "name": "usize",
+  "description": "a simple test"
+}
+--------
+usize (json number)
+  A system dependent unsigned integer
+========
+========
+{
+  "name": "source",
+  "description": "a configurable source enum"
+}
+--------
+render::Source
+  Representation: externally tagged
+
+  Options:
+    "build"
+      Build from scratch.
+
+      "data_type": render::SimpleDataType
+        The type of the input data.
+
+        Representation: externally tagged
+
+        Options:
+          "float32"
+          "float16"
+
+      "file": string
+        Input data in the `.bin` binary format.
+
+      "output": Option<string>
+        Output file.
+
+        If provided, saved data will go here.
+
+        May be `null`.
+
+    "from_previous"
+      Run from a previously generated output.
+
+      "data_type": render::AnnotatedDataType
+        Representation: externally tagged
+
+        Options:
+          "float32"
+            Use high-precision.
+
+          "float16"
+            Use lower precision.
+
+          "int8"
+
+      "file": string
+        The previously generated output.
+========
+========
+{
+  "name": "source wrapper",
+  "description": "render a newtype wrapper"
+}
+--------
+SourceWrapper
+  A new-type wrapper around `Source`.
+
+    Representation: externally tagged
+
+    Options:
+      "build"
+        Build from scratch.
+
+        "data_type": render::SimpleDataType
+          The type of the input data.
+
+          Representation: externally tagged
+
+          Options:
+            "float32"
+            "float16"
+
+        "file": string
+          Input data in the `.bin` binary format.
+
+        "output": Option<string>
+          Output file.
+
+          If provided, saved data will go here.
+
+          May be `null`.
+
+      "from_previous"
+        Run from a previously generated output.
+
+        "data_type": render::AnnotatedDataType
+          Representation: externally tagged
+
+          Options:
+            "float32"
+              Use high-precision.
+
+            "float16"
+              Use lower precision.
+
+            "int8"
+
+        "file": string
+          The previously generated output.
+========
+========
+{
+  "name": "config",
+  "description": "a sample struct config."
+}
+--------
+Config
+  A top level config.
+
+  "source": SourceWrapper
+      Representation: externally tagged
+
+      Options:
+        "build"
+          Build from scratch.
+
+          "data_type": render::SimpleDataType
+            The type of the input data.
+
+          "file": string
+            Input data in the `.bin` binary format.
+
+          "output": Option<string>
+            Output file.
+
+            If provided, saved data will go here.
+
+        "from_previous"
+          Run from a previously generated output.
+
+          "data_type": render::AnnotatedDataType
+
+          "file": string
+            The previously generated output.
+
+  "param1": string
+    This does one thing.
+
+  "param2": Vec<render::AnnotatedDataType>
+    This does another.
+
+    Elements: render::AnnotatedDataType
+      Representation: externally tagged
+
+      Options:
+        "float32"
+          Use high-precision.
+
+        "float16"
+          Use lower precision.
+
+        "int8"
+========

@@ -10,7 +10,9 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+diskann-derive = { workspace = true }
 half = { workspace = true }
+hashbrown = { workspace = true }
 indicatif = "0.18.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -25,6 +27,7 @@ expect_used = "warn"
 panic = "warn"
 
 [dev-dependencies]
+diskann-utils = { workspace = true, default-features = false, features = ["testing"] }
 tempfile.workspace = true
 
 [features]

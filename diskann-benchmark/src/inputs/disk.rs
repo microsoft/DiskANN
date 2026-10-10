@@ -11,7 +11,9 @@ use std::collections::HashSet;
 
 #[cfg(feature = "disk-index")]
 use diskann::graph;
-use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
+use diskann_benchmark_runner::{
+    files::InputFile, reflect, utils::datatype::DataType, Checker, Reflect,
+};
 #[cfg(feature = "disk-index")]
 use diskann_disk::search::search_mode::SearchMode;
 #[cfg(feature = "disk-index")]
@@ -188,6 +190,19 @@ impl DiskIndexOperation {
         }
         self.search_phase.validate(checker)?;
         Ok(())
+    }
+}
+
+impl Reflect for DiskIndexOperation {
+    fn ty() -> reflect::tree::Type {
+        reflect::tree::Type::aggregate(
+            reflect::tree::Fields::Unit,
+            Some("The disk index is currently incompatible with type information, so none is available.".into())
+        )
+    }
+
+    fn format_type_name(f: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        write!(f, "disk::DiskIndexOperation")
     }
 }
 

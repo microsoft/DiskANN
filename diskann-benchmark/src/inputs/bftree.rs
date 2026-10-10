@@ -10,7 +10,10 @@ use crate::inputs::{
     write_field, Example, PRINT_WIDTH,
 };
 use diskann::graph::config;
-use diskann_benchmark_runner::{utils::datatype::DataType, Checker};
+use diskann_benchmark_runner::{
+    utils::{datatype::DataType, RequiredOption},
+    Checker, Reflect,
+};
 use diskann_bftree::BfTreeProviderParameters;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +23,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// Required fields control memory sizing before data spills to disk.
 /// Optional fields tune internal behavior and default to bf_tree's defaults.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "bftree::")]
 pub(crate) struct BfTreeStoreConfig {
     /// Size of the circular buffer (in-memory write cache) in bytes.
     pub(crate) cb_size_byte: usize,
@@ -29,32 +33,25 @@ pub(crate) struct BfTreeStoreConfig {
     pub(crate) leaf_page_size: usize,
 
     /// Maximum record size that can be stored in the circular buffer.
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) cb_max_record_size: Option<usize>,
+    pub(crate) cb_max_record_size: RequiredOption<usize>,
 
     /// Minimum record size for the circular buffer.
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) cb_min_record_size: Option<usize>,
+    pub(crate) cb_min_record_size: RequiredOption<usize>,
 
     /// Probability (0-100) of promoting a read record to the front of the buffer.
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) read_promotion_rate: Option<usize>,
+    pub(crate) read_promotion_rate: RequiredOption<usize>,
 
     /// Probability (0-100) of promoting a scanned record to the front of the buffer.
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) scan_promotion_rate: Option<usize>,
+    pub(crate) scan_promotion_rate: RequiredOption<usize>,
 
     /// Ratio of buffer used before copy-on-access kicks in.
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) cb_copy_on_access_ratio: Option<f64>,
+    pub(crate) cb_copy_on_access_ratio: RequiredOption<f64>,
 
     /// Whether to cache full pages on read.
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) read_record_cache: Option<bool>,
+    pub(crate) read_record_cache: RequiredOption<bool>,
 
     /// If true, only use the in-memory circular buffer (no disk pages).
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) cache_only: Option<bool>,
+    pub(crate) cache_only: RequiredOption<bool>,
 
     /// Whether to enable CPR snapshot support for this store.
     pub(crate) use_snapshot: bool,
@@ -86,26 +83,26 @@ impl BfTreeStoreConfig {
         let mut c = bf_tree::Config::default();
         c.cb_size_byte(self.cb_size_byte);
         c.leaf_page_size(self.leaf_page_size);
-        if let Some(v) = self.cb_max_record_size {
-            c.cb_max_record_size(v);
+        if let Some(v) = self.cb_max_record_size.as_ref() {
+            c.cb_max_record_size(*v);
         }
-        if let Some(v) = self.cb_min_record_size {
-            c.cb_min_record_size(v);
+        if let Some(v) = self.cb_min_record_size.as_ref() {
+            c.cb_min_record_size(*v);
         }
-        if let Some(v) = self.read_promotion_rate {
-            c.read_promotion_rate(v);
+        if let Some(v) = self.read_promotion_rate.as_ref() {
+            c.read_promotion_rate(*v);
         }
-        if let Some(v) = self.scan_promotion_rate {
-            c.scan_promotion_rate(v);
+        if let Some(v) = self.scan_promotion_rate.as_ref() {
+            c.scan_promotion_rate(*v);
         }
-        if let Some(v) = self.cb_copy_on_access_ratio {
-            c.cb_copy_on_access_ratio(v);
+        if let Some(v) = self.cb_copy_on_access_ratio.as_ref() {
+            c.cb_copy_on_access_ratio(*v);
         }
-        if let Some(v) = self.read_record_cache {
-            c.read_record_cache(v);
+        if let Some(v) = self.read_record_cache.as_ref() {
+            c.read_record_cache(*v);
         }
-        if let Some(v) = self.cache_only {
-            c.cache_only(v);
+        if let Some(v) = self.cache_only.as_ref() {
+            c.cache_only(*v);
         }
         c.use_snapshot(self.use_snapshot);
         c
@@ -139,13 +136,13 @@ impl Default for BfTreeStoreConfig {
         Self {
             cb_size_byte: 32 * 1024 * 1024, // 32MB
             leaf_page_size: 4096,
-            cb_max_record_size: None,
-            cb_min_record_size: None,
-            read_promotion_rate: None,
-            scan_promotion_rate: None,
-            cb_copy_on_access_ratio: None,
-            read_record_cache: None,
-            cache_only: None,
+            cb_max_record_size: RequiredOption::none(),
+            cb_min_record_size: RequiredOption::none(),
+            read_promotion_rate: RequiredOption::none(),
+            scan_promotion_rate: RequiredOption::none(),
+            cb_copy_on_access_ratio: RequiredOption::none(),
+            read_record_cache: RequiredOption::none(),
+            cache_only: RequiredOption::none(),
             use_snapshot: false,
         }
     }
@@ -161,25 +158,25 @@ impl std::fmt::Display for BfTreeStoreConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_field!(f, "cb_size_byte", self.cb_size_byte)?;
         write_field!(f, "leaf_page_size", self.leaf_page_size)?;
-        if let Some(v) = self.cb_max_record_size {
+        if let Some(v) = self.cb_max_record_size.as_ref() {
             write_field!(f, "cb_max_record_size", v)?;
         }
-        if let Some(v) = self.cb_min_record_size {
+        if let Some(v) = self.cb_min_record_size.as_ref() {
             write_field!(f, "cb_min_record_size", v)?;
         }
-        if let Some(v) = self.read_promotion_rate {
+        if let Some(v) = self.read_promotion_rate.as_ref() {
             write_field!(f, "read_promotion_rate", v)?;
         }
-        if let Some(v) = self.scan_promotion_rate {
+        if let Some(v) = self.scan_promotion_rate.as_ref() {
             write_field!(f, "scan_promotion_rate", v)?;
         }
-        if let Some(v) = self.cb_copy_on_access_ratio {
+        if let Some(v) = self.cb_copy_on_access_ratio.as_ref() {
             write_field!(f, "cb_copy_on_access_ratio", v)?;
         }
-        if let Some(v) = self.read_record_cache {
+        if let Some(v) = self.read_record_cache.as_ref() {
             write_field!(f, "read_record_cache", v)?;
         }
-        if let Some(v) = self.cache_only {
+        if let Some(v) = self.cache_only.as_ref() {
             write_field!(f, "cache_only", v)?;
         }
         Ok(())
@@ -190,7 +187,7 @@ impl std::fmt::Display for BfTreeStoreConfig {
 ///
 /// Returns the agreed-upon value. If no configs are present or none set
 /// `use_snapshot`, returns `false`. If configs disagree, returns an error.
-fn reconcile_use_snapshot(configs: &[(&str, &Option<BfTreeStoreConfig>)]) -> anyhow::Result<bool> {
+fn reconcile_use_snapshot(configs: &[(&str, Option<&BfTreeStoreConfig>)]) -> anyhow::Result<bool> {
     let mut resolved: Option<bool> = None;
 
     for (name, config) in configs {
@@ -218,9 +215,9 @@ fn bftree_parameters_from(
     build: &IndexBuild,
     num_points: usize,
     dim: usize,
-    vector_store_config: &Option<BfTreeStoreConfig>,
-    neighbor_store_config: &Option<BfTreeStoreConfig>,
-    quant_store_config: &Option<BfTreeStoreConfig>,
+    vector_store_config: Option<&BfTreeStoreConfig>,
+    neighbor_store_config: Option<&BfTreeStoreConfig>,
+    quant_store_config: Option<&BfTreeStoreConfig>,
 ) -> anyhow::Result<BfTreeProviderParameters> {
     let use_snapshot = reconcile_use_snapshot(&[
         ("vector_store_config", vector_store_config),
@@ -236,14 +233,17 @@ fn bftree_parameters_from(
         dim,
         metric: build.distance().into(),
         vector_provider_config: vector_store_config
-            .clone()
+            .cloned()
             .unwrap_or_default()
             .into_config(),
         neighbor_list_provider_config: neighbor_store_config
-            .clone()
+            .cloned()
             .unwrap_or_default()
             .into_config(),
-        quant_vector_provider_config: quant_store_config.clone().unwrap_or_default().into_config(),
+        quant_vector_provider_config: quant_store_config
+            .cloned()
+            .unwrap_or_default()
+            .into_config(),
         graph_params: None,
         use_snapshot,
     })
@@ -251,14 +251,13 @@ fn bftree_parameters_from(
 
 as_input!(BfTreeFullPrecisionBuild);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "bftree::")]
 pub(crate) struct BfTreeFullPrecisionBuild {
     build: IndexBuild,
     search_phase: SearchPhase,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    vector_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    neighbor_store_config: Option<BfTreeStoreConfig>,
+    vector_store_config: RequiredOption<BfTreeStoreConfig>,
+    neighbor_store_config: RequiredOption<BfTreeStoreConfig>,
 }
 
 impl BfTreeFullPrecisionBuild {
@@ -291,19 +290,19 @@ impl BfTreeFullPrecisionBuild {
             &self.build,
             num_points,
             dim,
-            &self.vector_store_config,
-            &self.neighbor_store_config,
-            &None,
+            self.vector_store_config.as_ref(),
+            self.neighbor_store_config.as_ref(),
+            None,
         )
     }
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.build.validate(checker)?;
         self.search_phase.validate(checker)?;
-        if let Some(cfg) = &mut self.neighbor_store_config {
+        if let Some(cfg) = self.neighbor_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
-        if let Some(cfg) = &mut self.vector_store_config {
+        if let Some(cfg) = self.vector_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
@@ -318,8 +317,8 @@ impl Example for BfTreeFullPrecisionBuild {
         Self {
             build,
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            vector_store_config: None,
-            neighbor_store_config: None,
+            vector_store_config: RequiredOption::none(),
+            neighbor_store_config: RequiredOption::none(),
         }
     }
 }
@@ -335,11 +334,11 @@ impl std::fmt::Display for BfTreeFullPrecisionBuild {
         writeln!(f)?;
         self.build.summarize_fields(f)?;
 
-        if let Some(ref cfg) = self.vector_store_config {
+        if let Some(cfg) = self.vector_store_config.as_ref() {
             writeln!(f, "\n  Vector Store:")?;
             write!(f, "{}", cfg)?;
         }
-        if let Some(ref cfg) = self.neighbor_store_config {
+        if let Some(cfg) = self.neighbor_store_config.as_ref() {
             writeln!(f, "\n  Neighbor Store:")?;
             write!(f, "{}", cfg)?;
         }
@@ -350,15 +349,14 @@ impl std::fmt::Display for BfTreeFullPrecisionBuild {
 
 as_input!(BfTreeDynamicRun);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "bftree::")]
 pub(crate) struct BfTreeDynamicRun {
     build: IndexBuild,
     search_phase: SearchPhase,
     runbook_params: DynamicRunbookParams,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    vector_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    neighbor_store_config: Option<BfTreeStoreConfig>,
+    vector_store_config: RequiredOption<BfTreeStoreConfig>,
+    neighbor_store_config: RequiredOption<BfTreeStoreConfig>,
 }
 
 impl BfTreeDynamicRun {
@@ -395,20 +393,20 @@ impl BfTreeDynamicRun {
             &self.build,
             num_points,
             dim,
-            &self.vector_store_config,
-            &self.neighbor_store_config,
-            &None,
+            self.vector_store_config.as_ref(),
+            self.neighbor_store_config.as_ref(),
+            None,
         )
     }
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.build.validate(checker)?;
         self.search_phase.validate(checker)?;
         self.runbook_params.validate(checker)?;
-        if let Some(cfg) = &mut self.vector_store_config {
+        if let Some(cfg) = self.vector_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
-        if let Some(cfg) = &mut self.neighbor_store_config {
+        if let Some(cfg) = self.neighbor_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
@@ -424,8 +422,8 @@ impl Example for BfTreeDynamicRun {
             build,
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
             runbook_params: DynamicRunbookParams::example_immediate(),
-            vector_store_config: None,
-            neighbor_store_config: None,
+            vector_store_config: RequiredOption::none(),
+            neighbor_store_config: RequiredOption::none(),
         }
     }
 }
@@ -441,11 +439,11 @@ impl std::fmt::Display for BfTreeDynamicRun {
         writeln!(f)?;
         self.build.summarize_fields(f)?;
 
-        if let Some(ref cfg) = self.vector_store_config {
+        if let Some(cfg) = self.vector_store_config.as_ref() {
             writeln!(f, "\n  Vector Store:")?;
             write!(f, "{}", cfg)?;
         }
-        if let Some(ref cfg) = self.neighbor_store_config {
+        if let Some(cfg) = self.neighbor_store_config.as_ref() {
             writeln!(f, "\n  Neighbor Store:")?;
             write!(f, "{}", cfg)?;
         }
@@ -458,7 +456,8 @@ impl std::fmt::Display for BfTreeDynamicRun {
 
 as_input!(BfTreeSphericalBuild);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "bftree::")]
 pub(crate) struct BfTreeSphericalBuild {
     build: IndexBuild,
     search_phase: SearchPhase,
@@ -466,12 +465,9 @@ pub(crate) struct BfTreeSphericalBuild {
     transform_kind: exhaustive::TransformKind,
     num_bits: NonZeroUsize,
     pre_scale: Option<exhaustive::PreScale>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    vector_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    neighbor_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    quant_store_config: Option<BfTreeStoreConfig>,
+    vector_store_config: RequiredOption<BfTreeStoreConfig>,
+    neighbor_store_config: RequiredOption<BfTreeStoreConfig>,
+    quant_store_config: RequiredOption<BfTreeStoreConfig>,
 }
 
 impl BfTreeSphericalBuild {
@@ -492,9 +488,9 @@ impl BfTreeSphericalBuild {
             &self.build,
             num_points,
             dim,
-            &self.vector_store_config,
-            &self.neighbor_store_config,
-            &self.quant_store_config,
+            self.vector_store_config.as_ref(),
+            self.neighbor_store_config.as_ref(),
+            self.quant_store_config.as_ref(),
         )
     }
 
@@ -529,15 +525,15 @@ impl BfTreeSphericalBuild {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.build.validate(checker)?;
         self.search_phase.validate(checker)?;
-        if let Some(cfg) = &mut self.vector_store_config {
+        if let Some(cfg) = self.vector_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
-        if let Some(cfg) = &mut self.neighbor_store_config {
+        if let Some(cfg) = self.neighbor_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
-        if let Some(cfg) = &mut self.quant_store_config {
+        if let Some(cfg) = self.quant_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
@@ -560,9 +556,9 @@ impl Example for BfTreeSphericalBuild {
             transform_kind: exhaustive::TransformKind::Null,
             num_bits: NonZeroUsize::new(1).unwrap(),
             pre_scale: None,
-            vector_store_config: None,
-            neighbor_store_config: None,
-            quant_store_config: None,
+            vector_store_config: RequiredOption::none(),
+            neighbor_store_config: RequiredOption::none(),
+            quant_store_config: RequiredOption::none(),
         }
     }
 }
@@ -581,15 +577,15 @@ impl std::fmt::Display for BfTreeSphericalBuild {
         writeln!(f)?;
         self.build.summarize_fields(f)?;
 
-        if let Some(ref cfg) = self.vector_store_config {
+        if let Some(cfg) = self.vector_store_config.as_ref() {
             writeln!(f, "\n  Vector Store:")?;
             write!(f, "{}", cfg)?;
         }
-        if let Some(ref cfg) = self.neighbor_store_config {
+        if let Some(cfg) = self.neighbor_store_config.as_ref() {
             writeln!(f, "\n  Neighbor Store:")?;
             write!(f, "{}", cfg)?;
         }
-        if let Some(ref cfg) = self.quant_store_config {
+        if let Some(cfg) = self.quant_store_config.as_ref() {
             writeln!(f, "\n  Quant Store:")?;
             write!(f, "{}", cfg)?;
         }
@@ -602,7 +598,8 @@ impl std::fmt::Display for BfTreeSphericalBuild {
 
 as_input!(BfTreeSphericalDynamicRun);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "bftree::")]
 pub(crate) struct BfTreeSphericalDynamicRun {
     build: IndexBuild,
     search_phase: SearchPhase,
@@ -611,12 +608,9 @@ pub(crate) struct BfTreeSphericalDynamicRun {
     transform_kind: exhaustive::TransformKind,
     num_bits: NonZeroUsize,
     pre_scale: Option<exhaustive::PreScale>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    vector_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    neighbor_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    quant_store_config: Option<BfTreeStoreConfig>,
+    vector_store_config: RequiredOption<BfTreeStoreConfig>,
+    neighbor_store_config: RequiredOption<BfTreeStoreConfig>,
+    quant_store_config: RequiredOption<BfTreeStoreConfig>,
 }
 
 impl BfTreeSphericalDynamicRun {
@@ -669,9 +663,9 @@ impl BfTreeSphericalDynamicRun {
             &self.build,
             num_points,
             dim,
-            &self.vector_store_config,
-            &self.neighbor_store_config,
-            &self.quant_store_config,
+            self.vector_store_config.as_ref(),
+            self.neighbor_store_config.as_ref(),
+            self.quant_store_config.as_ref(),
         )
     }
 
@@ -679,15 +673,15 @@ impl BfTreeSphericalDynamicRun {
         self.build.validate(checker)?;
         self.search_phase.validate(checker)?;
         self.runbook_params.validate(checker)?;
-        if let Some(cfg) = &mut self.vector_store_config {
+        if let Some(cfg) = self.vector_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
-        if let Some(cfg) = &mut self.neighbor_store_config {
+        if let Some(cfg) = self.neighbor_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
-        if let Some(cfg) = &mut self.quant_store_config {
+        if let Some(cfg) = self.quant_store_config.as_mut() {
             cfg.fill_defaults();
             cfg.validate()?;
         }
@@ -711,9 +705,9 @@ impl Example for BfTreeSphericalDynamicRun {
             transform_kind: exhaustive::TransformKind::Null,
             num_bits: NonZeroUsize::new(1).unwrap(),
             pre_scale: None,
-            vector_store_config: None,
-            neighbor_store_config: None,
-            quant_store_config: None,
+            vector_store_config: RequiredOption::none(),
+            neighbor_store_config: RequiredOption::none(),
+            quant_store_config: RequiredOption::none(),
         }
     }
 }
@@ -732,15 +726,15 @@ impl std::fmt::Display for BfTreeSphericalDynamicRun {
         writeln!(f)?;
         self.build.summarize_fields(f)?;
 
-        if let Some(ref cfg) = self.vector_store_config {
+        if let Some(cfg) = self.vector_store_config.as_ref() {
             writeln!(f, "\n  Vector Store:")?;
             write!(f, "{}", cfg)?;
         }
-        if let Some(ref cfg) = self.neighbor_store_config {
+        if let Some(cfg) = self.neighbor_store_config.as_ref() {
             writeln!(f, "\n  Neighbor Store:")?;
             write!(f, "{}", cfg)?;
         }
-        if let Some(ref cfg) = self.quant_store_config {
+        if let Some(cfg) = self.quant_store_config.as_ref() {
             writeln!(f, "\n  Quant Store:")?;
             write!(f, "{}", cfg)?;
         }

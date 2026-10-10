@@ -6,7 +6,7 @@
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
-use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
+use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker, Reflect};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -25,7 +25,7 @@ as_input!(FlatSearch);
 ///////////
 
 /// Input specification for a flat-index (brute-force kNN) benchmark.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub(crate) struct FlatSearch {
     /// Path to the dataset vectors (`.bin` format).
     pub(crate) data: InputFile,
@@ -91,7 +91,7 @@ impl Example for FlatSearch {
 ///////////////////
 
 /// Parameters controlling the search phase of a flat benchmark.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub(crate) struct SearchPhase {
     /// Path to the query vectors (`.bin` format).
     pub(crate) queries: InputFile,

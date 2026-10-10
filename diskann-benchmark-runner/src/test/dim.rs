@@ -8,7 +8,7 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Benchmark, Checker, Checkpoint, Input, Output,
+    Benchmark, Checker, Checkpoint, Input, Output, Reflect,
     benchmark::{MatchContext, PassFail, Regression, Score},
 };
 
@@ -16,7 +16,8 @@ use crate::{
 // Input //
 ///////////
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct DimInput {
     dim: Option<usize>,
 }
@@ -55,7 +56,8 @@ impl Input for DimInput {
 // Tolerance //
 ///////////////
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct Tolerance {
     succeed: bool,
     error_in_check: bool,

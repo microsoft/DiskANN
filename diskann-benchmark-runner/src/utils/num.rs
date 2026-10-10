@@ -8,6 +8,8 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::Reflect;
+
 /// Compute the relative change from `before` to `after`.
 ///
 /// This helper is intentionally opinionated for benchmark-style metrics:
@@ -54,7 +56,8 @@ pub enum RelativeChangeError {
 }
 
 /// A finite floating-point value that is greater than or equal to zero.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Reflect)]
+#[reflect(prefix = "benchmark::")]
 pub struct NonNegativeFinite(f64);
 
 impl NonNegativeFinite {

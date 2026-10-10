@@ -6,7 +6,7 @@
 use std::num::NonZeroUsize;
 
 use anyhow::{anyhow, Context};
-use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
+use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker, Reflect};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -33,7 +33,8 @@ as_input!(MinMax);
 // Search //
 ////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "exhaustive::")]
 pub(crate) struct SearchValues {
     pub(crate) recall_k: Vec<usize>,
     pub(crate) recall_n: Vec<usize>,
@@ -85,7 +86,8 @@ impl SearchValues {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "exhaustive::")]
 pub(crate) struct SearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -124,8 +126,9 @@ impl Example for SearchPhase {
 ////////////////////////////////
 // Transforms related methods //
 ///////////////////////////////
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "snake_case")]
+#[reflect(prefix = "transform::")]
 pub(crate) enum TargetDim {
     Same,
     Natural,
@@ -152,8 +155,9 @@ impl From<TargetDim> for diskann_quantization::algorithms::transforms::TargetDim
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "snake_case")]
+#[reflect(prefix = "transform::")]
 pub(crate) enum TransformKind {
     PaddingHadamard(TargetDim),
     RandomRotation(TargetDim),
@@ -200,8 +204,9 @@ impl From<&TransformKind> for diskann_quantization::algorithms::transforms::Tran
 // Product Quantization Methods //
 //////////////////////////////////
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "kebab-case")]
+#[reflect(prefix = "product::")]
 pub(crate) enum PQTableStyle {
     FixedChunk,
     Padded,
@@ -218,7 +223,7 @@ impl PQTableStyle {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
 pub(crate) struct Product {
     pub(crate) data: InputFile,
     pub(crate) data_type: DataType,
@@ -293,8 +298,9 @@ impl std::fmt::Display for Product {
 // Spherical-quantization-based methods //
 //////////////////////////////////////////
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "snake_case")]
+#[reflect(prefix = "spherical::")]
 pub(crate) enum SphericalQuery {
     SameAsData,
     FourBitTransposed,
@@ -354,8 +360,9 @@ pub(super) fn check_compatibility(num_bits: usize, query: SphericalQuery) -> any
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "snake_case")]
+#[reflect(prefix = "spherical::")]
 pub(crate) enum PreScale {
     None,
     Some(f32),
@@ -399,7 +406,8 @@ impl PreScale {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "exhaustive::spherical::")]
 pub(crate) struct Spherical {
     pub(crate) data: InputFile,
     pub(crate) data_type: DataType,
@@ -482,8 +490,9 @@ impl std::fmt::Display for Spherical {
 // MinMax-quantization-based methods //
 ///////////////////////////////////////
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "snake_case")]
+#[reflect(prefix = "minmax::")]
 pub(crate) enum MinMaxQuery {
     SameAsData,
     FullPrecision,
@@ -501,7 +510,8 @@ impl std::fmt::Display for MinMaxQuery {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "minmax::exhaustive::")]
 pub(crate) struct MinMax {
     pub(crate) data: InputFile,
     pub(crate) data_type: DataType,

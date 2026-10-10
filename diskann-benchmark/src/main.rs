@@ -49,6 +49,8 @@ impl Cli {
     fn run(&self, output: &mut dyn runner::Output) -> anyhow::Result<()> {
         self.check_target(output)?;
 
+        let now = std::time::Instant::now();
+
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
         exhaustive::register_benchmarks(&mut registry)?;
@@ -57,6 +59,8 @@ impl Cli {
         index::register_benchmarks(&mut registry)?;
         filters::register_benchmarks(&mut registry)?;
         multi_vector::register_benchmarks(&mut registry)?;
+
+        println!("registration took {}us", now.elapsed().as_micros());
 
         self.app.run(&registry, output)
     }
