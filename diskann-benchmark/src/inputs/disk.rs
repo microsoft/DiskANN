@@ -234,9 +234,20 @@ impl DiskIndexBuild {
             anyhow::bail!("build_ram_limit_gb must be strictly positive");
         }
 
-        // Relative save path with respect to output directory is not supported.
-        if checker.output_directory().is_some() {
-            anyhow::bail!("relative save_path with respect to output_directory is not supported");
+        // Resolve a relative `save_path` against the checker's output directory,
+        // so disk index artifacts land in the configured output directory instead
+        // of the current working directory.
+        if Path::new(&self.save_path).is_relative() {
+            let Some(output_dir) = checker.output_directory() else {
+                anyhow::bail!(
+                    "relative save_path \"{}\" specified but no output directory was provided",
+                    self.save_path
+                );
+            };
+            self.save_path = output_dir
+                .join(&self.save_path)
+                .to_string_lossy()
+                .into_owned();
         }
 
         // We allow overwriting of already existing save paths, since users like to do this.
