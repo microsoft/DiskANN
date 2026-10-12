@@ -55,6 +55,11 @@ where
     // supplied Rayon pool.
     let data =
         read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
+    // The same seed controls leader sampling and the medoid sample below.
+    let config = PiPNNConfig {
+        seed: builder.index_configuration.random_seed,
+        ..config
+    };
     let context = PiPNNBuildContext::new(
         config,
         &builder.index_configuration.config,
