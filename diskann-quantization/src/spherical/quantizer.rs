@@ -944,25 +944,31 @@ where
 //   Additionally, ordering is reverse so that `BinaryHeap` models a min-heap instead
 //   of a max-heap.
 #[derive(Debug, Clone, Copy)]
-struct Pair {
+struct Pair<const INTEGER_ORDER: bool> {
     value: f32,
     position: u32,
 }
 
-impl PartialEq for Pair {
+impl<const INTEGER_ORDER: bool> PartialEq for Pair<INTEGER_ORDER> {
     fn eq(&self, other: &Self) -> bool {
         self.value.eq(&other.value)
     }
 }
 
-impl Eq for Pair {}
-impl PartialOrd for Pair {
+impl<const INTEGER_ORDER: bool> Eq for Pair<INTEGER_ORDER> {}
+impl<const INTEGER_ORDER: bool> PartialOrd for Pair<INTEGER_ORDER> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl Ord for Pair {
+impl<const INTEGER_ORDER: bool> Ord for Pair<INTEGER_ORDER> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if INTEGER_ORDER {
+            // Keys are positive_numerator / abs(component), or f32::MAX.
+            // With non-NaN inputs they have a clear sign bit (including +0 and
+            // +infinity), so unsigned bit order exactly matches float order.
+            return other.value.to_bits().cmp(&self.value.to_bits());
+        }
         other
             .value
             .partial_cmp(&self.value)
@@ -1010,7 +1016,23 @@ fn maximize_cosine_similarity(
     // This means the initial inner product between `v` and the rounded term is simply
     // `0.5 * sum(abs.(v))`. The absolute value is used because the latice element is
     // always in the direction of the components in `v`.
-    let mut current_ip = 0.5 * v.iter().map(|i| i.abs() as f64).sum::<f64>();
+    let current_ip = 0.5 * v.iter().map(|i| i.abs() as f64).sum::<f64>();
+    // The sum of nonnegative magnitudes is NaN exactly when an input is NaN.
+    // Reuse that result to select the comparison once, outside the heap loop.
+    // Preserve unordered-as-equal behavior for exceptional transform outputs.
+    if current_ip.is_nan() {
+        maximize_cosine_similarity_inner::<false>(v, num_bits, allocator, current_ip)
+    } else {
+        maximize_cosine_similarity_inner::<true>(v, num_bits, allocator, current_ip)
+    }
+}
+
+fn maximize_cosine_similarity_inner<const INTEGER_ORDER: bool>(
+    v: &[f32],
+    num_bits: NonZeroUsize,
+    allocator: ScopedAllocator<'_>,
+    mut current_ip: f64,
+) -> Result<f32, AllocatorError> {
     let mut current_square_norm = 0.25 * (v.len() as f64);
 
     // Book keeping for the current value of the rounded vector.
@@ -1028,7 +1050,7 @@ fn maximize_cosine_similarity(
     let mut base = Poly::from_iter(
         v.iter().enumerate().map(|(position, value)| {
             let value = one_and_change / value.abs();
-            Pair {
+            Pair::<INTEGER_ORDER> {
                 value,
                 position: position as u32,
             }
@@ -1255,6 +1277,136 @@ mod tests {
     };
 
     // Test cosine-similarity maximizer
+    #[test]
+    fn critical_value_order_matches_float_heap() {
+        let mut rng = StdRng::seed_from_u64(0x6e12_9024);
+        // Include ties, subnormals, both sides of exponent boundaries, and the
+        // sentinel relative to infinity. Positions must not break value ties.
+        let mut values = vec![
+            0.0,
+            f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            f32::from_bits(1.0f32.to_bits() - 1),
+            1.0,
+            1.0,
+            f32::from_bits(1.0f32.to_bits() + 1),
+            f32::MAX,
+            f32::INFINITY,
+        ];
+        values.extend(
+            (0..256).map(|_| f32::from_bits(rng.random_range(0..=f32::INFINITY.to_bits()))),
+        );
+        for &a in &values {
+            for &b in &values {
+                let actual = Pair::<true> {
+                    value: a,
+                    position: 0,
+                }
+                .cmp(&Pair::<true> {
+                    value: b,
+                    position: 1,
+                });
+                assert_eq!(actual, b.partial_cmp(&a).unwrap());
+            }
+        }
+        let mut actual: Vec<_> = values
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| Pair::<true> {
+                value,
+                position: i as u32,
+            })
+            .collect();
+        let mut expected: Vec<_> = values
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| Pair::<false> {
+                value,
+                position: i as u32,
+            })
+            .collect();
+        let mut actual = SliceHeap::new(&mut actual).unwrap();
+        let mut expected = SliceHeap::new(&mut expected).unwrap();
+        for step in 0..=512 {
+            for (a, b) in actual.as_slice().iter().zip(expected.as_slice()) {
+                assert_eq!(
+                    (a.value.to_bits(), a.position),
+                    (b.value.to_bits(), b.position)
+                );
+            }
+            if step < 512 {
+                let value = values[rng.random_range(0..values.len())];
+                actual.update_root(|p| p.value = value);
+                expected.update_root(|p| p.value = value);
+            }
+        }
+    }
+
+    #[test]
+    fn integer_order_preserves_scale_search() {
+        let mut rng = StdRng::seed_from_u64(0x8ad2_9745);
+        for dim in [1, 2, 7, 64, 65, 128, 255, 768, 1536] {
+            let random: Vec<f32> = (0..dim).map(|_| StandardNormal.sample(&mut rng)).collect();
+            let mut inputs = vec![
+                random,
+                vec![0.0; dim],
+                vec![-0.0; dim],
+                vec![1.0; dim],
+                (0..dim)
+                    .map(|i| if i % 2 == 0 { -0.5 } else { 0.5 })
+                    .collect(),
+                (0..dim).map(|i| f32::from_bits((i % 16) as u32)).collect(),
+            ];
+            for special in [
+                f32::MAX,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NAN,
+                f32::from_bits(0xffc0_0001),
+            ] {
+                let mut v = inputs[0].clone();
+                v[dim / 2] = special;
+                inputs.push(v);
+            }
+            for bits in [2, 4, 8] {
+                let bits = NonZeroUsize::new(bits).unwrap();
+                for v in &inputs {
+                    let initial_ip = 0.5 * v.iter().map(|i| i.abs() as f64).sum::<f64>();
+                    let expected = maximize_cosine_similarity_inner::<false>(
+                        v,
+                        bits,
+                        ScopedAllocator::global(),
+                        initial_ip,
+                    )
+                    .unwrap();
+                    let actual =
+                        maximize_cosine_similarity(v, bits, ScopedAllocator::global()).unwrap();
+                    assert_eq!(
+                        actual.to_bits(),
+                        expected.to_bits(),
+                        "dim={dim}, bits={bits}"
+                    );
+                }
+            }
+        }
+        // The comparison dispatch must preserve allocation failure at either of
+        // the two scratch allocations, including on the unordered path.
+        for v in [[1.0, 0.5], [f32::NAN, 0.5]] {
+            for budget in 0..=2 {
+                let result = maximize_cosine_similarity(
+                    &v,
+                    NonZeroUsize::new(4).unwrap(),
+                    ScopedAllocator::new(&test_util::LimitedAllocator::new(budget)),
+                );
+                if budget < 2 {
+                    assert_eq!(result, Err(AllocatorError));
+                } else {
+                    assert!(result.is_ok());
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_cosine_similarity_maximizer() {
         let mut rng = StdRng::seed_from_u64(0x070d9ff8cf5e0f8c);

@@ -243,9 +243,23 @@ where
     ) -> Result<(), TransformFailed> {
         check_dims(dst, src, self.input_dim(), self.output_dim())?;
 
-        // Copy and flip signs
+        if let Some(indices) = self.subsample.as_ref() {
+            let mut tmp = Poly::broadcast(0.0f32, self.intermediate_dim(), allocator)?;
+            self.transform_full(&mut tmp, src);
+            let rescale = ((tmp.len() as f32) / (indices.len() as f32)).sqrt();
+            dst.iter_mut()
+                .zip(indices.iter())
+                .for_each(|(d, s)| *d = tmp[*s as usize] * rescale);
+        } else {
+            // The destination already has room for the full transform.
+            self.transform_full(dst, src);
+        }
+        Ok(())
+    }
+
+    fn transform_full(&self, tmp: &mut [f32], src: &[f32]) {
         let intermediate_dim = self.intermediate_dim();
-        let mut tmp = Poly::broadcast(0.0f32, intermediate_dim, allocator)?;
+        tmp[src.len()..].fill(0.0);
 
         std::iter::zip(tmp.iter_mut(), src.iter())
             .zip(self.signs0.iter())
@@ -269,21 +283,6 @@ where
 
         #[expect(clippy::unwrap_used)]
         hadamard_transform(&mut tmp[intermediate_dim - split..]).unwrap();
-
-        match self.subsample.as_ref() {
-            None => {
-                dst.copy_from_slice(&tmp);
-            }
-            Some(indices) => {
-                let rescale = ((tmp.len() as f32) / (indices.len() as f32)).sqrt();
-                debug_assert_eq!(dst.len(), indices.len());
-                dst.iter_mut()
-                    .zip(indices.iter())
-                    .for_each(|(d, s)| *d = tmp[*s as usize] * rescale);
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -396,6 +395,62 @@ mod tests {
     };
 
     test_utils::delegate_transformer!(DoubleHadamard<GlobalAllocator>);
+
+    // Original allocation/copy pipeline, kept independent of transform_full so
+    // regressions in sign application, padding, or transform order are detected.
+    fn reference_transform(t: &DoubleHadamard<GlobalAllocator>, src: &[f32]) -> Vec<f32> {
+        let mut tmp = vec![0.0; t.output_dim()];
+        for i in 0..src.len() {
+            tmp[i] = f32::from_bits(src[i].to_bits() ^ t.signs0[i]);
+        }
+        let split = 1usize << (usize::BITS - tmp.len().leading_zeros() - 1);
+        hadamard_transform(&mut tmp[..split]).unwrap();
+        for (v, sign) in tmp.iter_mut().zip(t.signs1.iter()) {
+            *v = f32::from_bits(v.to_bits() ^ sign);
+        }
+        let tail = tmp.len() - split;
+        hadamard_transform(&mut tmp[tail..]).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn transform_matches_original_with_reused_destination() {
+        let mut rng = StdRng::seed_from_u64(742);
+        for (input, output) in [(7, 7), (7, 64), (64, 64)] {
+            let transform = DoubleHadamard::new(
+                NonZeroUsize::new(input).unwrap(),
+                TargetDim::Override(NonZeroUsize::new(output).unwrap()),
+                &mut rng,
+                GlobalAllocator,
+            )
+            .unwrap();
+            // Offset the destination and overwrite it twice, including padded values.
+            let mut dst = vec![f32::NAN; output + 2];
+            for zero in [false, true] {
+                let src: Vec<_> = (0..input)
+                    .map(|i| {
+                        if zero {
+                            if i % 2 == 0 { 0.0 } else { -0.0 }
+                        } else {
+                            (i as f32 - input as f32 / 2.0) * 0.25
+                        }
+                    })
+                    .collect();
+                let reference = reference_transform(&transform, &src);
+                transform
+                    .transform_into(
+                        &mut dst[1..=output],
+                        &src,
+                        ScopedAllocator::new(&crate::test_util::AlwaysFails),
+                    )
+                    .unwrap();
+                for (a, b) in dst[1..=output].iter().zip(reference.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits());
+                }
+                assert!(dst[0].is_nan() && dst[output + 1].is_nan());
+            }
+        }
+    }
 
     #[test]
     fn test_double_hadamard() {
