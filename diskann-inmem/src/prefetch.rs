@@ -173,24 +173,22 @@ unsafe impl<const BYTES: usize> Prefetch for Unrolled<BYTES> {
 /// The memory range `[ptr, ptr.add(len))` must be valid.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
-pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
+unsafe fn prefetch_cache_line(ptr: *const i8) {
     use std::arch::x86_64::*;
+    // SAFETY: Inherited from caller and intrinsic is cfg-gated to supported targets.
+    unsafe { _mm_prefetch(ptr, _MM_HINT_T0) };
+}
 
-    // Fetch the final location (the one containing the tag) first.
-    let stride = Bytes::CACHELINE.value();
-    let ptr = ptr.cast::<i8>();
-    let lines = len.div_ceil(stride);
-    if lines == 0 {
-        return;
-    }
-
-    // SAFETY: Inherited from caller.
-    unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
-    for i in 0..(lines - 1) {
-        // SAFETY: Inherited from caller.
-        unsafe {
-            _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
-        }
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn prefetch_cache_line(ptr: *const i8) {
+    // SAFETY: `prfm` is a non-faulting prefetch hint and does not create Rust references.
+    unsafe {
+        std::arch::asm!(
+            "prfm pldl2keep, [{ptr}]",
+            ptr = in(reg) ptr,
+            options(nostack, preserves_flags),
+        );
     }
 }
 
@@ -202,21 +200,12 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
 /// # Safety
 ///
 /// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "avx2"),
+    target_arch = "aarch64",
+))]
 #[inline(always)]
 pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
-    #[inline(always)]
-    unsafe fn prefetch_l2(ptr: *const i8) {
-        // SAFETY: `prfm` is a non-faulting prefetch hint and does not create Rust references.
-        unsafe {
-            std::arch::asm!(
-                "prfm pldl2keep, [{ptr}]",
-                ptr = in(reg) ptr,
-                options(nostack, preserves_flags),
-            );
-        }
-    }
-
     // Fetch the final location (the one containing the tag) first.
     let stride = Bytes::CACHELINE.value();
     let ptr = ptr.cast::<i8>();
@@ -226,10 +215,10 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
     }
 
     // SAFETY: Inherited from caller.
-    unsafe { prefetch_l2(ptr.add(stride * (lines - 1))) };
+    unsafe { prefetch_cache_line(ptr.add(stride * (lines - 1))) };
     for i in 0..(lines - 1) {
         // SAFETY: Inherited from caller.
-        unsafe { prefetch_l2(ptr.add(stride * i)) };
+        unsafe { prefetch_cache_line(ptr.add(stride * i)) };
     }
 }
 
