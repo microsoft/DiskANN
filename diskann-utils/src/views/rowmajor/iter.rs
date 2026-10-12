@@ -324,10 +324,13 @@ mod tests {
             };
             row0[0] = 10;
             row1[1] = 11;
-            *window2.element_mut(0, 0) = 20;
-            *window2.element_mut(1, 1) = 31;
-            *window4.element_mut(0, 0) = 40;
-            *window4.element_mut(1, 1) = 51;
+
+            let mut window2_rows: Vec<_> = window2.rows_mut().collect();
+            let mut window4_rows: Vec<_> = window4.rows_mut().collect();
+            window2_rows[0][0] = 20;
+            window2_rows[1][1] = 31;
+            window4_rows[0][0] = 40;
+            window4_rows[1][1] = 51;
         }
 
         assert_eq!(
