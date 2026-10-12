@@ -28,7 +28,7 @@ use diskann_utils::{
     object_pool::{AsPooled, ObjectPool},
     views::{MatrixView, MutMatrixView},
 };
-use rand::{SeedableRng, prelude::IndexedRandom};
+use rand::{Rng, SeedableRng, prelude::IndexedRandom, rngs::StdRng};
 use rayon::prelude::*;
 
 use super::{
@@ -40,19 +40,10 @@ use super::{
     topk::UNASSIGNED,
 };
 
-/// Seed of the first replica. The value is arbitrary. A fixed seed gives the
-/// same leaves in every build.
+/// Seed of the first replica; replica `r` uses `PARTITION_SEED + r`. The value
+/// is arbitrary. A fixed seed gives the same leaves in every build, and
+/// `StdRng::seed_from_u64` gives independent streams for adjacent seeds.
 const PARTITION_SEED: u64 = 1_000;
-/// Seed step between replicas. Any nonzero step gives each replica its own
-/// leaders. The value is arbitrary.
-const REPLICA_SEED_STEP: u64 = 7_919;
-/// Multiplier of the step that derives a child seed from its parent seed.
-///
-/// This is the multiplier of Knuth's MMIX 64-bit linear congruential generator.
-/// It is odd, so multiplication modulo 2^64 maps different parent seeds to
-/// different products. `StdRng::seed_from_u64` mixes the child seed again, so
-/// the step must only keep seeds distinct.
-const CHILD_SEED_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 /// Maximum number of leaders in one split. The PiPNN paper uses the same hard
 /// cap ("typically 1000", Section 4.1). A split costs
 /// `points x leaders x dimensions` multiply-adds. Without the cap, the first
@@ -89,7 +80,8 @@ struct PendingPartition {
     point_ids: Vec<u32>,
     /// Position in the fanout schedule.
     level: usize,
-    /// Seed of the parent split. The next split mixes it with the cluster size.
+    /// Seed of the random stream of this cluster's split. The parent split
+    /// draws it, so every split samples its leaders from its own stream.
     seed: u64,
 }
 
@@ -141,7 +133,7 @@ where
     let mut leaves = Vec::new();
     let stripe_buffers = StripeBufferPool::new((), 0, None);
     for replica in 0..config.replicas.get() {
-        let seed = replica_seed(replica);
+        let seed = PARTITION_SEED + replica as u64;
         let mut replica_leaves =
             partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
         leaves.append(&mut replica_leaves);
@@ -211,7 +203,7 @@ where
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
-    let split_seed = mix_seed(partition.seed, partition.point_ids.len() as u64);
+    let mut rng = StdRng::seed_from_u64(partition.seed);
     let fanout = config
         .fanout
         .get(partition.level)
@@ -225,13 +217,13 @@ where
             pending: vec![PendingPartition {
                 point_ids: partition.point_ids,
                 level: partition.level + 1,
-                seed: split_seed,
+                seed: rng.random(),
             }],
             leaves: Vec::new(),
         });
     }
 
-    let leaders = sample_leaders(&partition.point_ids, leader_count, split_seed);
+    let leaders = sample_leaders(&partition.point_ids, leader_count, &mut rng);
     let clusters = assign_to_leaders::<A, M, T>(
         arch,
         data,
@@ -262,7 +254,7 @@ where
             pending.push(PendingPartition {
                 point_ids: cluster,
                 level: partition.level + 1,
-                seed: split_seed,
+                seed: rng.random(),
             });
         }
     }
@@ -270,9 +262,8 @@ where
 }
 
 /// Sample `count` distinct leaders from the points of a cluster.
-fn sample_leaders(points: &[u32], count: usize, seed: u64) -> Vec<u32> {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    points.choose_multiple(&mut rng, count).copied().collect()
+fn sample_leaders(points: &[u32], count: usize, rng: &mut StdRng) -> Vec<u32> {
+    points.choose_multiple(rng, count).copied().collect()
 }
 
 /// Return the number of leaders for a cluster of `points` points.
@@ -280,17 +271,6 @@ fn sample_leaders(points: &[u32], count: usize, seed: u64) -> Vec<u32> {
 /// A split needs two leaders. `LEADER_CAP` bounds the cost of one split.
 fn sampled_leader_count(points: usize, sampling_fraction: f64) -> usize {
     ((points as f64 * sampling_fraction).ceil() as usize).clamp(2, LEADER_CAP)
-}
-
-fn replica_seed(replica: usize) -> u64 {
-    PARTITION_SEED.wrapping_add((replica as u64).wrapping_mul(REPLICA_SEED_STEP))
-}
-
-// Derive a child seed from the parent seed and the cluster size. Wrapping
-// arithmetic gives the same mapping in debug and release builds on all
-// supported platforms.
-fn mix_seed(seed: u64, salt: u64) -> u64 {
-    seed.wrapping_mul(CHILD_SEED_MULTIPLIER).wrapping_add(salt)
 }
 
 /// Assign each point to its `fanout` nearest leaders and group the points by
@@ -508,13 +488,13 @@ mod tests {
             let ids: Vec<_> = (0..point_count).map(|id| 10 + 3 * id).collect();
 
             let count = sampled_leader_count(ids.len(), fraction);
-            let mut leaders = sample_leaders(&ids, count, 1290);
+            let mut leaders = sample_leaders(&ids, count, &mut StdRng::seed_from_u64(1290));
 
             assert_eq!(leaders.len(), expected_count, "{case}");
             let distinct: HashSet<_> = leaders.iter().collect();
             assert_eq!(distinct.len(), expected_count, "{case}");
             assert!(leaders.iter().all(|id| ids.contains(id)), "{case}");
-            let mut repeated = sample_leaders(&ids, count, 1290);
+            let mut repeated = sample_leaders(&ids, count, &mut StdRng::seed_from_u64(1290));
             leaders.sort_unstable();
             repeated.sort_unstable();
             assert_eq!(leaders, repeated, "{case}");
