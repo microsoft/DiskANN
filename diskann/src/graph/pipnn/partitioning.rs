@@ -40,10 +40,6 @@ use super::{
     topk::UNASSIGNED,
 };
 
-/// Seed of the first replica; replica `r` uses `PARTITION_SEED + r`. The value
-/// is arbitrary. A fixed seed gives the same leaves in every build, and
-/// `StdRng::seed_from_u64` gives independent streams for adjacent seeds.
-const PARTITION_SEED: u64 = 1_000;
 /// Maximum number of leaders in one split. The PiPNN paper uses the same hard
 /// cap ("typically 1000", Section 4.1). A split costs
 /// `points x leaders x dimensions` multiply-adds. Without the cap, the first
@@ -132,8 +128,11 @@ where
 {
     let mut leaves = Vec::new();
     let stripe_buffers = StripeBufferPool::new((), 0, None);
+    // Replica `r` uses seed `base + r`. `StdRng::seed_from_u64` gives
+    // independent streams for adjacent seeds.
+    let base_seed = config.seed.unwrap_or_else(rand::random);
     for replica in 0..config.replicas.get() {
-        let seed = PARTITION_SEED + replica as u64;
+        let seed = base_seed.wrapping_add(replica as u64);
         let mut replica_leaves =
             partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
         leaves.append(&mut replica_leaves);
@@ -459,6 +458,7 @@ mod tests {
             fanout: vec![nz(2)],
             leaf_k: nz(1),
             replicas: nz(1),
+            seed: Some(1290),
         }
     }
 

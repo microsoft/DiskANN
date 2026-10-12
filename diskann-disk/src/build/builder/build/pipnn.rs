@@ -55,8 +55,13 @@ where
     // supplied Rayon pool.
     let data =
         read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
+    // The same seed controls leader sampling and the medoid sample below.
+    let config = diskann::graph::pipnn::PiPNNConfig {
+        seed: builder.index_configuration.random_seed,
+        ..parameters.into()
+    };
     let mut context = PiPNNBuildContext::new(
-        parameters.into(),
+        config,
         &builder.index_configuration.config,
         builder.index_configuration.dist_metric,
         pool.as_rayon(),

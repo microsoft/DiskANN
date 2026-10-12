@@ -95,6 +95,8 @@ impl From<&PiPNNParameters> for diskann::graph::pipnn::PiPNNConfig {
             fanout: config.fanout.clone(),
             leaf_k: config.k,
             replicas: config.replicas,
+            // The disk builder sets the seed from `IndexConfiguration::random_seed`.
+            seed: None,
         }
     }
 }
