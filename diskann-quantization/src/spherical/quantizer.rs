@@ -146,8 +146,8 @@ where
         self.mean_norm
     }
 
-    /// Return the pre-scaling parameter for data. This value is multiplied to every
-    /// compressed vector to adjust its dynamic range.
+    /// Return the pre-scaling parameter for data. Non-cosine metrics multiply every
+    /// compressed vector by this value to adjust its dynamic range. Cosine ignores it.
     ///
     /// A value of 1.0 means that no scaling is occurring.
     pub fn pre_scale(&self) -> Positive<f32> {
@@ -157,9 +157,9 @@ where
     /// Compute the effective squared L2 distance of `centroid` relative to the
     /// quantizer's internal shift.
     ///
-    /// Metric-specific adjustments are applied consistently with vector compression,
-    /// so this generally differs from the direct squared L2 distance between
-    /// `centroid` and [`Self::shift`].
+    /// Metric-specific pre-scaling is applied consistently with vector compression.
+    /// Cosine expects a centroid computed from normalized vectors and compares it
+    /// directly without additional normalization or pre-scaling.
     ///
     /// # Errors
     ///
@@ -176,10 +176,7 @@ where
         }
 
         let multiplier = match self.metric {
-            SupportedMetric::Cosine => {
-                let norm = (FastL2Norm).evaluate(centroid);
-                if norm == 0.0 { 1.0 } else { 1.0 / norm }
-            }
+            SupportedMetric::Cosine => 1.0,
             SupportedMetric::SquaredL2 | SupportedMetric::InnerProduct => {
                 self.pre_scale.into_inner()
             }
@@ -250,10 +247,13 @@ where
             }
         };
 
-        // Transform the centroid by the pre-scale.
-        centroid
-            .iter_mut()
-            .for_each(|v| *v *= pre_scale.into_inner());
+        // Cosine preprocessing normalizes each vector, so pre-scaling does not affect
+        // cosine vectors or their centroid.
+        if metric != SupportedMetric::Cosine {
+            centroid
+                .iter_mut()
+                .for_each(|v| *v *= pre_scale.into_inner());
+        }
 
         Ok(SphericalQuantizer {
             shift: centroid,
@@ -281,8 +281,9 @@ where
     /// Additionally, vectors compressed when using the [`SupportedMetric::Cosine`] distance
     /// will be implicitly normalized before being compressed to enable better compression.
     ///
-    /// If argument `pre_scale` is given, then all vectors compressed by this quantizer will
-    /// first be scaled by this value. Note that if given, `pre_scale` **must** be positive.
+    /// If argument `pre_scale` is given, non-cosine vectors compressed by this quantizer
+    /// will first be scaled by this value. Cosine ignores `pre_scale`. Note that if given,
+    /// `pre_scale` **must** be positive.
     pub fn train<T, R>(
         data: MatrixView<T>,
         transform: TransformKind,
@@ -1992,8 +1993,6 @@ mod tests {
                 .map(|i| if vnorm == 0.0 { 0.0 } else { *i / vnorm })
                 .collect();
 
-            assert_centroid_distance_matches_preprocess(&quantizer, v);
-
             quantizer
                 .compress_into_with(v, b.reborrow_mut(), scoped_global)
                 .unwrap();
@@ -2638,6 +2637,26 @@ mod tests {
             quantizer.centroid_squared_distance(&[f32::MAX, f32::MAX]),
             Err(CentroidDistanceError::NonFiniteDistance)
         );
+    }
+
+    #[test]
+    fn cosine_centroid_squared_distance_ignores_pre_scale() {
+        let quantizer = SphericalQuantizer::generate(
+            Poly::from_iter([0.5f32, 0.5].into_iter(), GlobalAllocator).unwrap(),
+            1.0,
+            TransformKind::Null,
+            SupportedMetric::Cosine,
+            Some(2.0),
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+
+        assert_eq!(quantizer.shift(), &[0.5, 0.5]);
+
+        let actual = quantizer.centroid_squared_distance(&[0.6, 0.4]).unwrap();
+        let expected = 0.02;
+        assert!((actual - expected).abs() <= 1.0e-6);
     }
 }
 
