@@ -4,7 +4,7 @@
 |---|---|
 | **Authors** | Aditya Krishnan |
 | **Created** | 2026-08-19 |
-| **Updated** | 2026-10-08 |
+| **Updated** | 2026-10-12 |
 | **Status** | Draft |
 
 ## Summary
@@ -14,8 +14,8 @@ graph index's coarse accessor boundaries. The index owns routing policy,
 overflow selection, two-means fitting, and regional assignment. Providers supply:
 
 1. Centroid selection through a coarse accessor.
-2. Logical list operations: sizes, appends, complete membership replacement,
-   creation with a centroid and members, and retirement.
+2. Logical list operations: append members and return the resulting size, create
+   a list, set a list's complete membership, and retire a list.
 3. One scoped build accessor that supplies borrowed working sets and publishes
    the operation with `finish`.
 
@@ -24,15 +24,30 @@ build accessor. Preparation reserves internal IDs and supplies a shared,
 contiguous canonical batch. Pending appends participate in operation-local
 membership reads and sizes. Working-set filling resolves both stored and
 prepared points, so clustering has no staged-point boundaries or provenance
-classification.
+classification. Working sets also borrow each source centroid, allowing a
+gathered region to include retained neighbors as well as split targets.
 
 Insertion provisionally appends points, gathers all oversized parents into one
 working set, fits two children per parent, and assigns all regional members
 against all child centroids. Parent centroids are not candidates. The algorithm
-creates the resulting child lists, retires the parents, and finishes once.
+applies the resulting partitioning by creating new lists, setting retained-list
+memberships, and retiring split parents, then finishes once.
 Ordinary appends and splitting are published together, never as separate commits.
 Each parent is split once per insertion; this is not a recursive size-balancing
-operation.
+operation. Initialization creates empty lists with the supplied centroids.
+
+A partitioning contains a contiguous centroid matrix and a complete member group
+per destination. Each destination optionally names an existing source list to
+retain; unnamed destinations receive fresh list IDs through `create_list`.
+The algorithm explicitly retires split parents after applying destination
+memberships. Retained lists keep their identities and centroids while
+receiving their complete new memberships. The result covers every regional member
+exactly once, including pending appends; lists outside the region are unchanged.
+
+Split targets are a subset of the gathered sources. Numerical fitting replaces
+only their centroids, and assignment considers the fitted children and any
+retained source centroids. The default insertion path still gathers only split
+parents; choosing neighboring lists is not implemented.
 
 Working sets borrow vector coordinates. Only fitted centroid coordinates and
 assignment/member metadata need new storage. Providers can reuse the canonical
@@ -46,7 +61,7 @@ a coherent partition; recovery after failed publication is provider-defined.
 Providers with externally shared state must coordinate those aliases themselves.
 
 The current implementation includes initialization and batched insert/split.
-Search, neighborhood reassignment policies, deletion/dissolve, and colocation
+Search, neighborhood-selection policies, deletion/dissolve, and colocation
 remain future work. See [the current contracts](../diskann/src/ivf/traits.rs) for
 the implemented API.
 

@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use super::{
     clustering,
+    partition::Partitioning,
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
     },
@@ -72,10 +73,7 @@ impl<P: Provider> IVFIndex<P> {
 
     /// Install initial empty lists and their centroids in one build operation.
     ///
-    /// # Errors
-    ///
-    /// Fails for an already initialized index, or a provider error.
-    /// Failed publication is provider-defined.
+    /// TO DO: needs 
     pub fn initialize<'a, S>(
         &'a mut self,
         strategy: &'a S,
@@ -100,24 +98,12 @@ impl<P: Provider> IVFIndex<P> {
             }
 
             for centroid in centroids.rows() {
-                // TO DO: Need to probably introduce an initialization strategy
                 accessor.lists().create_list(centroid, Vec::new()).await?;
             }
             accessor.finish().await
         }
     }
 
-    /// Route and provisionally append a batch, split oversized lists, then publish.
-    ///
-    /// All split parents form one working set. Their members choose among every
-    /// fitted child, never among retiring parent centroids. Other appends keep their
-    /// routes. Point coordinates are borrowed throughout fitting and assignment.
-    ///
-    /// # Errors
-    ///
-    /// Fails before publication if the index is uninitialized or preparation,
-    /// routing, filling, fitting, or list mutation fails. State after a failed
-    /// `finish` is provider-defined. An empty batch is a no-op.
     pub fn insert_batch<'a, S, T>(
         &'a mut self,
         strategy: &'a S,
@@ -151,32 +137,28 @@ impl<P: Provider> IVFIndex<P> {
                 let list = selected
                     .first()
                     .ok_or_else(|| ANNError::message("IVF routing returned no live centroid"))?
-                    .id;
+                    .0;
+
                 routed.entry(list).or_default().push(point.id);
             }
 
-            // Stable list order also makes seeded fitting independent of hash order.
             let mut parents = Vec::with_capacity(routed.len());
+
             for (list, members) in routed {
-                let mut lists = accessor.lists();
-                lists.append_members(list, members).await?;
-                if lists.list_size(list).await? > config.split_threshold {
+                let size = accessor.lists().append_members(list, members).await?;
+                if size > config.split_threshold {
                     parents.push(list);
                 }
             }
+
             let splits = parents.len();
             if !parents.is_empty() {
-                let children = {
+                let replacement = {
                     let dim = accessor.dim();
                     let view = accessor.fill(&parents).await?;
-                    clustering::split(&view, dim, config.two_means_iterations, rng)?
+                    clustering::split(&view, &parents, dim, config.two_means_iterations, rng)?
                 };
-                for (centroid, members) in children.centroids.rows().zip(children.members) {
-                    accessor.lists().create_list(centroid, members).await?;
-                }
-                for parent in parents {
-                    accessor.lists().retire_list(parent).await?;
-                }
+                Self::apply_partitioning(&mut accessor.lists(), &parents, replacement).await?;
             }
 
             accessor.finish().await?;
@@ -187,4 +169,30 @@ impl<P: Provider> IVFIndex<P> {
             })
         }
     }
+
+    /// Apply destination memberships before retiring the replaced lists.
+    pub(super) async fn apply_partitioning<A>(
+    accessor: &mut A,
+    retired: &[A::ListId],
+    partitioning: Partitioning<A::InternalId, A::ListId>,
+) -> ANNResult<()>
+where
+    A: ListAccessor,
+{
+    for (centroid, partition) in partitioning.centroids.rows().zip(partitioning.partitions) {
+        match partition.id {
+            Some(id) => accessor.set_members(id, partition.members).await?,
+            None => {
+                accessor.create_list(centroid, partition.members).await?;
+            }
+        }
+    }
+    for &id in retired {
+        accessor.retire_list(id).await?;
+    }
+    Ok(())
 }
+}
+
+
+

@@ -17,12 +17,14 @@ pub struct PointRef<'a, I> {
     pub vector: &'a [f32],
 }
 
-/// The complete operation-local membership of one list.
+/// One source list's centroid and complete operation-local membership.
 ///
-/// Only reference metadata is owned; point coordinates are borrowed.
+/// Only reference metadata is owned; point and centroid coordinates are borrowed.
+/// A working set may include both split targets and retained neighboring lists.
 #[derive(Debug)]
 pub struct ListView<'a, I, L> {
     pub id: L,
+    pub centroid: &'a [f32],
     pub points: Vec<PointRef<'a, I>>,
 }
 

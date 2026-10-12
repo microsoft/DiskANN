@@ -12,13 +12,16 @@
 //! Appends and replacements remain private to one build operation until it
 //! finishes. This lets clustering treat prepared and stored points identically.
 //! Providers choose their own storage, publication, and failure-recovery mechanisms.
+//! A [`partition::Partitioning`] describes new and retained destinations. The index
+//! creates new lists, sets retained memberships, and retires split parents.
 //!
 //! This first implementation supports initialization and batch insertion with
-//! two-means splitting. Search, neighborhood reassignment, deletion, and colocation
+//! two-means splitting. Neighborhood selection, search, deletion, and colocation
 //! are not implemented.
 
 mod clustering;
 mod index;
+pub mod partition;
 pub mod pending;
 pub mod traits;
 pub mod workingset;

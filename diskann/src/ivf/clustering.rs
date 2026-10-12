@@ -9,33 +9,48 @@ use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{Rng, rngs::StdRng};
 
-use super::workingset::{ListView, PointRef};
+use super::{
+    partition::{Partition, Partitioning},
+    workingset::{ListView, PointRef},
+};
 use crate::{ANNError, ANNResult};
 
-pub(super) struct Children<I> {
-    pub centroids: rowmajor::Owned<f32>,
-    pub members: Vec<Vec<I>>,
-}
-
-/// Fit two children per source, then assign every point across all children.
-pub(super) fn split<I: Copy, L>(
+/// Replace each parent with two children, retaining the other source centroids.
+///
+/// `parents` is a distinct subset of `lists`. All regional points choose among
+/// the children and retained centroids, never among retiring parent centroids.
+pub(super) fn split<I: Copy, L: Copy + Eq>(
     lists: &[ListView<'_, I, L>],
+    parents: &[L],
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
-) -> ANNResult<Children<I>> {
+) -> ANNResult<Partitioning<I, L>> {
     if lists.is_empty() || dim == 0 {
         return Err(ANNError::message(
             "IVF splitting needs a nonempty working set and positive dimension",
         ));
     }
-    let mut centroids = rowmajor::Owned::try_from_element(2 * lists.len(), dim, 0.0)?;
+    let destinations = lists.len() + parents.len();
+    let mut centroids = rowmajor::Owned::try_from_element(destinations, dim, 0.0)?;
+    let mut partitions = Vec::with_capacity(destinations);
     let mut sums = vec![0.0; 2 * dim];
-    for (list, centers) in lists
-        .iter()
-        .zip(centroids.as_mut_slice().chunks_exact_mut(2 * dim))
-    {
-        fit_two_means(&list.points, centers, dim, iterations, rng, &mut sums)?;
+    for list in lists {
+        let row = partitions.len();
+        if parents.contains(&list.id) {
+            let centers = &mut centroids.as_mut_slice()[row * dim..(row + 2) * dim];
+            fit_two_means(&list.points, centers, dim, iterations, rng, &mut sums)?;
+            partitions.extend((0..2).map(|_| Partition {
+                id: None,
+                members: Vec::new(),
+            }));
+        } else {
+            centroids.row_mut(row).copy_from_slice(list.centroid);
+            partitions.push(Partition {
+                id: Some(list.id),
+                members: Vec::new(),
+            });
+        }
     }
 
     let count = lists.iter().map(|list| list.points.len()).sum();
@@ -46,11 +61,16 @@ pub(super) fn split<I: Copy, L>(
         assignments.push(to);
         sizes[to] += 1;
     }
-    let mut members: Vec<Vec<I>> = sizes.into_iter().map(Vec::with_capacity).collect();
-    for (point, to) in lists.iter().flat_map(|list| &list.points).zip(assignments) {
-        members[to].push(point.id);
+    for (partition, size) in partitions.iter_mut().zip(sizes) {
+        partition.members = Vec::with_capacity(size);
     }
-    Ok(Children { centroids, members })
+    for (point, to) in lists.iter().flat_map(|list| &list.points).zip(assignments) {
+        partitions[to].members.push(point.id);
+    }
+    Ok(Partitioning {
+        centroids,
+        partitions,
+    })
 }
 
 fn fit_two_means<I>(

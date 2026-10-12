@@ -14,10 +14,10 @@ use rand::{SeedableRng, rngs::StdRng};
 
 use super::{
     Config, IVFIndex, InsertStats, clustering,
+    index::apply_partitioning,
     pending::{Membership, PendingLists},
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
-        SelectedList,
     },
     workingset::{Batch, ListView, PointRef, WorkingSet},
 };
@@ -38,6 +38,8 @@ struct Store {
     finishes: usize,
     fills: usize,
     fail_fill: bool,
+    fail_create: bool,
+    fail_retire: bool,
     fail_finish: bool,
 }
 
@@ -101,13 +103,9 @@ impl CoarseAccessor for Coarse<'_> {
             .count()
     }
 
-    fn select(
-        &mut self,
-        query: &[f32],
-        nprobe: usize,
-    ) -> impl SendFuture<ANNResult<Vec<SelectedList<u32>>>> {
+    fn select(&self, query: &[f32], nprobe: usize) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
         async move {
-            let mut selected: Vec<_> = self
+            let mut selected: Vec<(u32, f32)> = self
                 .stored
                 .iter()
                 .map(|(&id, list)| (id, list.centroid.as_slice()))
@@ -117,16 +115,9 @@ impl CoarseAccessor for Coarse<'_> {
                         .map(|(&id, vector)| (id, vector.as_slice())),
                 )
                 .filter(|(id, _)| !self.pending.is_retired(*id))
-                .map(|(id, vector)| SelectedList {
-                    id,
-                    distance: SquaredL2::evaluate(query, vector),
-                })
+                .map(|(id, vector)| (id, SquaredL2::evaluate(query, vector)))
                 .collect();
-            selected.sort_by(|a, b| {
-                a.distance
-                    .total_cmp(&b.distance)
-                    .then_with(|| a.id.cmp(&b.id))
-            });
+            selected.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
             selected.truncate(nprobe);
             Ok(selected)
         }
@@ -139,18 +130,38 @@ impl ListAccessor for Lists<'_, '_> {
     type InternalId = u32;
     type ListId = u32;
 
-    fn list_size(&mut self, list: u32) -> impl SendFuture<ANNResult<usize>> {
+    fn append_members(
+        &mut self,
+        list: u32,
+        members: Vec<u32>,
+    ) -> impl SendFuture<ANNResult<usize>> {
         async move {
-            self.0
-                .pending
-                .list_size(list, self.0.stored_members(list)?.len())
+            let stored_size = self.0.stored_members(list)?.len();
+            self.0.pending.append(list, members)?;
+            self.0.pending.list_size(list, stored_size)
         }
     }
 
-    fn append_members(&mut self, list: u32, members: Vec<u32>) -> impl SendFuture<ANNResult<()>> {
+    fn create_list(
+        &mut self,
+        centroid: &[f32],
+        members: Vec<u32>,
+    ) -> impl SendFuture<ANNResult<u32>> {
         async move {
-            self.0.stored_members(list)?;
-            self.0.pending.append(list, members)
+            if self.0.store.fail_create {
+                return Err(ANNError::message("injected create_list failure"));
+            }
+            if centroid.len() != self.0.store.dim || !centroid.iter().all(|value| value.is_finite())
+            {
+                return Err(ANNError::message("invalid centroid"));
+            }
+            let id = self.0.next_list;
+            self.0.next_list = id
+                .checked_add(1)
+                .ok_or_else(|| ANNError::message("list ID overflow"))?;
+            self.0.created.insert(id, centroid.to_vec());
+            self.0.pending.set(id, members)?;
+            Ok(id)
         }
     }
 
@@ -161,25 +172,11 @@ impl ListAccessor for Lists<'_, '_> {
         }
     }
 
-    fn create_list(
-        &mut self,
-        centroid: &[f32],
-        members: Vec<u32>,
-    ) -> impl SendFuture<ANNResult<u32>> {
-        async move {
-            if centroid.len() != self.0.store.dim {
-                return Err(ANNError::message("wrong centroid dimension"));
-            }
-            let id = self.0.next_list;
-            self.0.next_list += 1;
-            self.0.created.insert(id, centroid.to_vec());
-            self.0.pending.set(id, members)?;
-            Ok(id)
-        }
-    }
-
     fn retire_list(&mut self, list: u32) -> impl SendFuture<ANNResult<()>> {
         async move {
+            if self.0.store.fail_retire {
+                return Err(ANNError::message("injected retire_list failure"));
+            }
             self.0.stored_members(list)?;
             self.0.pending.retire(list)
         }
@@ -235,7 +232,22 @@ impl<'p> BuildAccessor for Build<'p> {
                         .ok_or_else(|| ANNError::message(format!("missing point {id}")))?;
                     points.push(PointRef { id, vector });
                 }
-                view.push(ListView { id: list, points });
+                let centroid = self
+                    .created
+                    .get(&list)
+                    .map(Vec::as_slice)
+                    .or_else(|| {
+                        self.store
+                            .lists
+                            .get(&list)
+                            .map(|stored| stored.centroid.as_slice())
+                    })
+                    .ok_or_else(|| ANNError::message(format!("missing centroid {list}")))?;
+                view.push(ListView {
+                    id: list,
+                    centroid,
+                    points,
+                });
             }
             Ok(view)
         }
@@ -522,13 +534,16 @@ async fn working_set_borrows_stored_and_prepared_rows() {
         let points = [(5, &[1.0, 1.0][..]), (6, &[3.0, 1.0][..])];
         let batch = Strategy.prepare(&mut build, &points).await.unwrap();
         let old_pointer = build.store.points[&10_000].as_ptr();
-        build
-            .lists()
-            .append_members(1, vec![10_006, 10_005])
-            .await
-            .unwrap();
-        assert_eq!(build.lists().list_size(1).await.unwrap(), 4);
-        {
+        let centroid_pointer = build.store.lists[&1].centroid.as_ptr();
+        assert_eq!(
+            build
+                .lists()
+                .append_members(1, vec![10_006, 10_005])
+                .await
+                .unwrap(),
+            4
+        );
+        let replacement = {
             let view = require_send(build.fill(&[1])).await.unwrap();
             assert_eq!(
                 view[0]
@@ -538,6 +553,7 @@ async fn working_set_borrows_stored_and_prepared_rows() {
                     .collect::<Vec<_>>(),
                 [10_000, 10_001, 10_006, 10_005]
             );
+            assert_eq!(view[0].centroid.as_ptr(), centroid_pointer);
             assert_eq!(view[0].points[0].vector.as_ptr(), old_pointer);
             assert!(std::ptr::eq(
                 view[0].points[2].vector,
@@ -547,18 +563,14 @@ async fn working_set_borrows_stored_and_prepared_rows() {
                 view[0].points[3].vector,
                 batch.get(10_005).unwrap()
             ));
-        }
-        build
-            .lists()
-            .set_members(1, vec![10_000, 10_005])
+            clustering::split(&view, &[1], 2, 5, &mut StdRng::seed_from_u64(7)).unwrap()
+        };
+        require_send(apply_partitioning(&mut build.lists(), &[1], replacement))
             .await
             .unwrap();
-        assert_eq!(build.lists().list_size(1).await.unwrap(), 2);
-        assert_eq!(build.fill(&[1]).await.unwrap()[0].points.len(), 2);
-        build.lists().retire_list(1).await.unwrap();
-        assert!(build.lists().list_size(1).await.is_err());
         assert!(build.fill(&[1]).await.is_err());
         assert!(build.lists().append_members(1, vec![10_001]).await.is_err());
+        assert!(build.lists().set_members(1, Vec::new()).await.is_err());
     }
     assert_eq!(store.lists[&1].members, [10_000, 10_001]);
     assert!(!store.points.contains_key(&10_005));
@@ -567,10 +579,17 @@ async fn working_set_borrows_stored_and_prepared_rows() {
 
 #[tokio::test]
 async fn failed_planning_or_publication_is_not_reported_as_success() {
-    for fail_fill in [true, false] {
+    for (fail_fill, fail_create, fail_retire, fail_finish) in [
+        (true, false, false, false),
+        (false, true, false, false),
+        (false, false, true, false),
+        (false, false, false, true),
+    ] {
         let mut store = seeded();
         store.fail_fill = fail_fill;
-        store.fail_finish = !fail_fill;
+        store.fail_create = fail_create;
+        store.fail_retire = fail_retire;
+        store.fail_finish = fail_finish;
         let mut index = index(store, 2);
         let points = [(5, &[1.0, 1.0][..])];
         let error = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
@@ -578,6 +597,10 @@ async fn failed_planning_or_publication_is_not_reported_as_success() {
             .unwrap_err();
         let expected = if fail_fill {
             "injected fill failure"
+        } else if fail_create {
+            "injected create_list failure"
+        } else if fail_retire {
+            "injected retire_list failure"
         } else {
             "injected finish failure"
         };
@@ -649,6 +672,61 @@ async fn invalid_initialization_and_uninitialized_insertion_fail() {
     assert_eq!(index.provider().finishes, 1);
 }
 
+#[tokio::test]
+async fn list_mutations_retain_neighbors_and_reassign_both_directions() {
+    let mut store = seeded();
+    store.points.insert(10_001, vec![10.0, 0.0]);
+    store.points.insert(10_002, vec![5.0, 0.0]);
+    store.points.insert(10_003, vec![10.1, 0.0]);
+    store.lists.get_mut(&2).unwrap().centroid = vec![5.0, 0.0];
+    let mut build = Strategy
+        .build_accessor(&mut store, &DefaultContext)
+        .unwrap();
+    let points = [(5, &[5.0, 0.0][..])];
+    Strategy.prepare(&mut build, &points).await.unwrap();
+    assert_eq!(
+        build.lists().append_members(1, vec![10_005]).await.unwrap(),
+        3
+    );
+
+    let sources = [1, 2];
+    let replacement = {
+        let view = build.fill(&sources).await.unwrap();
+        clustering::split(&view, &[1], 2, 5, &mut StdRng::seed_from_u64(7)).unwrap()
+    };
+    assert_eq!(replacement.partitions.len(), 3);
+    let retained = replacement
+        .partitions
+        .iter()
+        .find(|partition| partition.id == Some(2))
+        .unwrap();
+    assert_eq!(retained.members, [10_005, 10_002]);
+    assert!(
+        replacement
+            .partitions
+            .iter()
+            .any(|partition| { partition.id.is_none() && partition.members.contains(&10_003) })
+    );
+    require_send(apply_partitioning(&mut build.lists(), &[1], replacement))
+        .await
+        .unwrap();
+    require_send(build.finish()).await.unwrap();
+
+    assert_eq!(store.finishes, 1);
+    assert!(!store.lists.contains_key(&1));
+    assert_eq!(store.lists[&2].centroid, [5.0, 0.0]);
+    assert_eq!(store.lists[&2].members, [10_005, 10_002]);
+    assert_eq!(store.lists[&3].members, [10_004]);
+    assert_eq!(store.lists.len(), 4);
+    let mut members: Vec<_> = store
+        .lists
+        .values()
+        .flat_map(|list| list.members.iter().copied())
+        .collect();
+    members.sort_unstable();
+    assert_eq!(members, (10_000..10_006).collect::<Vec<_>>());
+}
+
 #[test]
 fn assignment_can_cross_parent_boundaries() {
     let left = [[-100.0], [-99.0], [-10.0], [-9.0], [-0.1]];
@@ -656,6 +734,7 @@ fn assignment_can_cross_parent_boundaries() {
     let view = vec![
         ListView {
             id: 1u32,
+            centroid: &[-50.0],
             points: left
                 .iter()
                 .enumerate()
@@ -667,6 +746,7 @@ fn assignment_can_cross_parent_boundaries() {
         },
         ListView {
             id: 2,
+            centroid: &[50.0],
             points: right
                 .iter()
                 .enumerate()
@@ -677,11 +757,12 @@ fn assignment_can_cross_parent_boundaries() {
                 .collect(),
         },
     ];
-    let children = clustering::split(&view, 1, 10, &mut StdRng::seed_from_u64(7)).unwrap();
+    let replacement =
+        clustering::split(&view, &[1, 2], 1, 10, &mut StdRng::seed_from_u64(7)).unwrap();
     assert!(
-        children.members[2..]
+        replacement.partitions[2..]
             .iter()
-            .any(|members| members.contains(&4))
+            .any(|partition| partition.members.contains(&4))
     );
 }
 
@@ -690,6 +771,7 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
     let rows = [[f32::MAX], [f32::MAX], [f32::MAX]];
     let view = vec![ListView {
         id: 1u32,
+        centroid: &[f32::MAX],
         points: rows
             .iter()
             .enumerate()
@@ -699,8 +781,8 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
             })
             .collect(),
     }];
-    let zero = clustering::split(&view, 1, 0, &mut StdRng::seed_from_u64(7)).unwrap();
-    let one = clustering::split(&view, 1, 1, &mut StdRng::seed_from_u64(7)).unwrap();
+    let zero = clustering::split(&view, &[1], 1, 0, &mut StdRng::seed_from_u64(7)).unwrap();
+    let one = clustering::split(&view, &[1], 1, 1, &mut StdRng::seed_from_u64(7)).unwrap();
     assert_eq!(zero.centroids.as_slice(), one.centroids.as_slice());
     assert!(
         zero.centroids
@@ -708,6 +790,6 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
             .iter()
             .all(|value| value.is_finite())
     );
-    assert_eq!(zero.members[0], [0, 1, 2]);
-    assert!(zero.members[1].is_empty());
+    assert_eq!(zero.partitions[0].members, [0, 1, 2]);
+    assert!(zero.partitions[1].members.is_empty());
 }

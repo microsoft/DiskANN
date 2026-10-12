@@ -60,41 +60,49 @@ pub trait CoarseAccessor: Send {
 
     /// Select `min(nprobe, len())` live lists, nearest first.
     fn select(
-        &mut self,
+        &self,
         query: &[f32],
         nprobe: usize,
-    ) -> impl SendFuture<ANNResult<Vec<SelectedList<Self::ListId>>>>;
+    ) -> impl SendFuture<ANNResult<Vec<(Self::ListId, f32)>>>;
 }
 
-/// Logical list mutations
+/// Logical list mutations, private to the enclosing build operation.
+///
+/// Reads and working-set fills include pending writes. Publication occurs only
+/// when the build accessor finishes.
 pub trait ListAccessor: Send {
     type InternalId: VectorId;
     type ListId: VectorId;
 
-    fn list_size(&mut self, list: Self::ListId) -> impl SendFuture<ANNResult<usize>>;
-
-    /// Append members to a list.
+    /// Append members and return the resulting operation-local list size.
     fn append_members(
         &mut self,
         list: Self::ListId,
         members: Vec<Self::InternalId>,
-    ) -> impl SendFuture<ANNResult<()>>;
-
-    /// Replace the complete membership of a list.
-    fn set_members(
-        &mut self,
-        list: Self::ListId,
-        members: Vec<Self::InternalId>,
-    ) -> impl SendFuture<ANNResult<()>>;
+    ) -> impl SendFuture<ANNResult<usize>>;
 
     /// Reserve a fresh list ID and stage its centroid and complete membership.
+    ///
+    /// The centroid must be finite and have the canonical dimension. Empty
+    /// memberships are valid, including during initialization.
     fn create_list(
         &mut self,
         centroid: &[f32],
         members: Vec<Self::InternalId>,
     ) -> impl SendFuture<ANNResult<Self::ListId>>;
 
-    /// Stage retirement. All mutations to `list` should be applied first before retiring.
+    /// Replace a live list's complete membership, leaving its centroid unchanged.
+    ///
+    /// This supersedes earlier pending membership changes to the list.
+    fn set_members(
+        &mut self,
+        list: Self::ListId,
+        members: Vec<Self::InternalId>,
+    ) -> impl SendFuture<ANNResult<()>>;
+
+    /// Stage retirement of a live list and its centroid.
+    ///
+    /// All its members must be placed elsewhere before the build operation finishes.
     fn retire_list(&mut self, list: Self::ListId) -> impl SendFuture<ANNResult<()>>;
 }
 
@@ -116,7 +124,9 @@ pub trait BuildAccessor: Send + Sized {
 
     /// Make every requested list's complete current membership available.
     ///
-    /// Lists appear in request order.
+    /// Lists appear in request order, with their canonical centroids and every
+    /// member, including pending appends. Coordinates have the canonical dimension
+    /// and are finite. Missing required data is an error, not a partial working set.
     /// TO DO: Make [`WorkingSet`] an associated type here.
     fn fill(
         &mut self,
