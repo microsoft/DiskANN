@@ -63,16 +63,16 @@ const LEADER_CAP: usize = 1_000;
 /// up to 27%. A rule from the detected cache size did not do better, because a
 /// virtual machine reports a last-level cache that other tenants also use.
 const ASSIGNMENT_STRIPE_POINTS: usize = 256;
-/// Clusters with at least this many points scatter in parallel. Such clusters
-/// occur at the first levels, where few splits run at the same time. A serial
-/// scatter of 10M points at fanout 10 takes 0.59 s, and a parallel scatter
-/// takes 0.15 s on 16 threads (AMD EPYC 7763). The serial time does not
-/// decrease with more threads, so its share of the build increases on larger
-/// machines. Below this size, a serial scatter takes a few milliseconds.
-const PARALLEL_SCATTER_MIN_POINTS: usize = 100_000;
+/// Clusters with at least this many points group their points by leader in
+/// parallel. Such clusters occur at the first levels, where few splits run at
+/// the same time. Serial grouping of 10M points at fanout 10 takes 0.59 s, and
+/// parallel grouping takes 0.15 s on 16 threads (AMD EPYC 7763). The serial time
+/// does not decrease with more threads, so its share of the build increases on
+/// larger machines. Below this size, serial grouping takes a few milliseconds.
+const PARALLEL_GROUPING_MIN_POINTS: usize = 100_000;
 
 /// A cluster with more than `c_max` points that waits for its split.
-struct PendingPartition {
+struct Cluster {
     point_ids: Vec<u32>,
     /// Position in the fanout schedule.
     level: usize,
@@ -82,8 +82,8 @@ struct PendingPartition {
 }
 
 /// The result of one split: leaves, and clusters for the next level.
-struct PartitionSplit {
-    pending: Vec<PendingPartition>,
+struct ClusterSplit {
+    next_level: Vec<Cluster>,
     leaves: Vec<Vec<u32>>,
 }
 
@@ -145,7 +145,7 @@ where
 /// The loop ends. The fanout schedule is finite, and each split sends its
 /// clusters one level deeper. After the schedule, fanout is 1, so each point
 /// joins one child. A child is then smaller than its parent, or it holds every
-/// point and [`split_partition`] cuts it into leaves.
+/// point and [`split_cluster`] cuts it into leaves.
 fn partition_replica<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -165,7 +165,7 @@ where
     }
 
     let mut leaves = Vec::new();
-    let mut pending = vec![PendingPartition {
+    let mut pending = vec![Cluster {
         point_ids: initial_point_ids,
         level: 0,
         seed,
@@ -174,14 +174,12 @@ where
         // Indexed parallel collection keeps the parent order.
         let splits: ANNResult<Vec<_>> = pending
             .into_par_iter()
-            .map(|partition| {
-                split_partition::<A, M, T>(arch, data, config, partition, stripe_buffers)
-            })
+            .map(|cluster| split_cluster::<A, M, T>(arch, data, config, cluster, stripe_buffers))
             .collect();
 
         let mut next_level = Vec::new();
         for mut split in splits? {
-            next_level.append(&mut split.pending);
+            next_level.append(&mut split.next_level);
             leaves.append(&mut split.leaves);
         }
         pending = next_level;
@@ -190,74 +188,74 @@ where
 }
 
 /// Split one cluster into leaves and clusters for the next level.
-fn split_partition<A, M, T>(
+fn split_cluster<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     config: &PiPNNConfig,
-    partition: PendingPartition,
+    cluster: Cluster,
     stripe_buffers: &StripeBufferPool,
-) -> ANNResult<PartitionSplit>
+) -> ANNResult<ClusterSplit>
 where
     A: Simd,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
-    let mut rng = StdRng::seed_from_u64(partition.seed);
+    let mut rng = StdRng::seed_from_u64(cluster.seed);
     let fanout = config
         .fanout
-        .get(partition.level)
+        .get(cluster.level)
         .map_or(1, |fanout| fanout.get());
     let c_max = config.c_max.get();
-    let leader_count = sampled_leader_count(partition.point_ids.len(), config.p_samp);
+    let leader_count = sampled_leader_count(cluster.point_ids.len(), config.p_samp);
     if fanout > 1 && fanout >= leader_count {
         // Every point would join every leader, and each child would repeat this
         // cluster. Split the cluster at the next level instead.
-        return Ok(PartitionSplit {
-            pending: vec![PendingPartition {
-                point_ids: partition.point_ids,
-                level: partition.level + 1,
+        return Ok(ClusterSplit {
+            next_level: vec![Cluster {
+                point_ids: cluster.point_ids,
+                level: cluster.level + 1,
                 seed: rng.random(),
             }],
             leaves: Vec::new(),
         });
     }
 
-    let leaders = sample_leaders(&partition.point_ids, leader_count, &mut rng);
-    let clusters = assign_to_leaders::<A, M, T>(
+    let leaders = sample_leaders(&cluster.point_ids, leader_count, &mut rng);
+    let children = assign_to_leaders::<A, M, T>(
         arch,
         data,
-        &partition.point_ids,
+        &cluster.point_ids,
         &leaders,
         fanout,
         stripe_buffers,
     )?;
 
-    let mut pending = Vec::new();
+    let mut next_level = Vec::new();
     let mut leaves = Vec::new();
-    for cluster in clusters {
-        if cluster.is_empty() {
+    for child in children {
+        if child.is_empty() {
             continue;
         }
-        if cluster.len() <= c_max {
-            leaves.push(cluster);
-        } else if fanout == 1 && cluster.len() == partition.point_ids.len() {
+        if child.len() <= c_max {
+            leaves.push(child);
+        } else if fanout == 1 && child.len() == cluster.point_ids.len() {
             // Every point chose this leader, so the split made no progress. This
             // happens when all sampled leaders are copies of one vector: each
             // point is equally near to all of them. Another split can stall the
-            // same way, so cut the cluster into equal leaves in point order. The
+            // same way, so cut the child into equal leaves in point order. The
             // cut groups points arbitrarily, which can lower recall but keeps
             // the graph valid.
-            let leaf_len = cluster.len().div_ceil(cluster.len().div_ceil(c_max));
-            leaves.extend(cluster.chunks(leaf_len).map(<[u32]>::to_vec));
+            let leaf_len = child.len().div_ceil(child.len().div_ceil(c_max));
+            leaves.extend(child.chunks(leaf_len).map(<[u32]>::to_vec));
         } else {
-            pending.push(PendingPartition {
-                point_ids: cluster,
-                level: partition.level + 1,
+            next_level.push(Cluster {
+                point_ids: child,
+                level: cluster.level + 1,
                 seed: rng.random(),
             });
         }
     }
-    Ok(PartitionSplit { pending, leaves })
+    Ok(ClusterSplit { next_level, leaves })
 }
 
 /// Sample `count` distinct leaders from the points of a cluster.
@@ -318,7 +316,7 @@ where
             )
         })?;
 
-    Ok(scatter_assignments(
+    Ok(group_by_leader(
         point_ids,
         &assignments,
         fanout,
@@ -368,24 +366,23 @@ where
 ///
 /// Both paths keep the input order of the points inside each child, because the
 /// next split samples its leaders by position.
-fn scatter_assignments(
+fn group_by_leader(
     points: &[u32],
     assignments: &[u32],
     fanout: usize,
     leaders: usize,
 ) -> Vec<Vec<u32>> {
-    if points.len() < PARALLEL_SCATTER_MIN_POINTS {
-        return scatter_serial(points, assignments, fanout, leaders);
+    if points.len() < PARALLEL_GROUPING_MIN_POINTS {
+        return group_by_leader_serial(points, assignments, fanout, leaders);
     }
 
-    let stripe_points = points.len().div_ceil(rayon::current_num_threads());
-    let stripe_assignment_count = stripe_points * fanout;
-    // Scatter each stripe of points on its own. Indexed collection keeps the
-    // stripe order.
+    let chunk_points = points.len().div_ceil(rayon::current_num_threads());
+    // Group each chunk of points on its own. Indexed collection keeps the chunk
+    // order.
     let locals: Vec<_> = points
-        .par_chunks(stripe_points)
-        .zip(assignments.par_chunks(stripe_assignment_count))
-        .map(|(points, assignments)| scatter_serial(points, assignments, fanout, leaders))
+        .par_chunks(chunk_points)
+        .zip(assignments.par_chunks(chunk_points * fanout))
+        .map(|(points, assignments)| group_by_leader_serial(points, assignments, fanout, leaders))
         .collect();
 
     let mut sizes = vec![0usize; leaders];
@@ -395,7 +392,7 @@ fn scatter_assignments(
         }
     }
 
-    // Join the stripe parts of each child in stripe order.
+    // Join the chunk parts of each child in chunk order.
     sizes
         .into_par_iter()
         .enumerate()
@@ -409,7 +406,7 @@ fn scatter_assignments(
         .collect()
 }
 
-fn scatter_serial(
+fn group_by_leader_serial(
     points: &[u32],
     assignments: &[u32],
     fanout: usize,
@@ -465,11 +462,11 @@ mod tests {
     fn split<M: PartitionMetric>(
         data: MatrixView<'_, f32>,
         config: &PiPNNConfig,
-        parent: PendingPartition,
-    ) -> PartitionSplit {
+        parent: Cluster,
+    ) -> ClusterSplit {
         let buffers = StripeBufferPool::new((), 0, None);
         thread_pool(2)
-            .install(|| split_partition::<_, M, _>(ARCH, data, config, parent, &buffers))
+            .install(|| split_cluster::<_, M, _>(ARCH, data, config, parent, &buffers))
             .unwrap()
     }
 
@@ -582,7 +579,7 @@ mod tests {
 
         let mut chosen = vec![Vec::new(); point_count];
         for (column, cluster) in clusters.iter().enumerate() {
-            // `ids` is descending, and scatter keeps the input order.
+            // `ids` is descending, and grouping keeps the input order.
             assert!(cluster.is_sorted_by(|a, b| a > b), "leader {column}");
             for &id in cluster {
                 chosen[id as usize].push(column);
@@ -648,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn scatter_groups_points_by_leader_and_drops_unassigned_slots() {
+    fn grouping_by_leader_drops_unassigned_slots() {
         let pattern = [
             [2, 0],
             [UNASSIGNED, 1],
@@ -657,13 +654,13 @@ mod tests {
         ];
         let pool = thread_pool(3);
 
-        // Counts around the parallel threshold cover both scatter paths and
+        // Counts around the parallel threshold cover both grouping paths and
         // parallel chunks of unequal length.
         for point_count in [
             7,
-            PARALLEL_SCATTER_MIN_POINTS - 1,
-            PARALLEL_SCATTER_MIN_POINTS,
-            PARALLEL_SCATTER_MIN_POINTS + 1,
+            PARALLEL_GROUPING_MIN_POINTS - 1,
+            PARALLEL_GROUPING_MIN_POINTS,
+            PARALLEL_GROUPING_MIN_POINTS + 1,
         ] {
             let ids: Vec<_> = (0..point_count).map(|i| 1_000_000 - i as u32).collect();
             let assignments: Vec<_> = (0..point_count).flat_map(|i| pattern[i % 4]).collect();
@@ -674,7 +671,7 @@ mod tests {
                 vec![],
             ];
 
-            let actual = pool.install(|| scatter_assignments(&ids, &assignments, 2, 4));
+            let actual = pool.install(|| group_by_leader(&ids, &assignments, 2, 4));
 
             assert_eq!(
                 sorted_members_per_row(&actual),
@@ -694,7 +691,7 @@ mod tests {
             (0, vec![vec![0, 1], vec![0, 1], vec![2, 3], vec![2, 3]]),
             (1, vec![vec![0], vec![1], vec![2], vec![3]]),
         ] {
-            let parent = PendingPartition {
+            let parent = Cluster {
                 point_ids: vec![0, 1, 2, 3],
                 level,
                 seed: 1290,
@@ -707,7 +704,7 @@ mod tests {
                 sorted_leaf_memberships(&expected),
                 "level {level}"
             );
-            assert!(actual.pending.is_empty(), "level {level}");
+            assert!(actual.next_level.is_empty(), "level {level}");
         }
     }
 
@@ -719,7 +716,7 @@ mod tests {
             c_max: nz(1),
             ..splitting_config()
         };
-        let parent = PendingPartition {
+        let parent = Cluster {
             point_ids: vec![0, 1, 2, 3],
             level: 0,
             seed: 1290,
@@ -728,9 +725,9 @@ mod tests {
         let actual = split::<L2>(data, &config, parent);
 
         assert!(actual.leaves.is_empty());
-        assert!(actual.pending.iter().all(|child| child.level == 1));
+        assert!(actual.next_level.iter().all(|child| child.level == 1));
         let ids: Vec<_> = actual
-            .pending
+            .next_level
             .into_iter()
             .map(|child| child.point_ids)
             .collect();
@@ -750,7 +747,7 @@ mod tests {
             fanout: vec![nz(1)],
             ..splitting_config()
         };
-        let parent = PendingPartition {
+        let parent = Cluster {
             point_ids: (0..5).collect(),
             level: 0,
             seed: 1290,
@@ -762,7 +759,7 @@ mod tests {
             sorted_leaf_memberships(&actual.leaves),
             [vec![0, 1], vec![2, 3], vec![4]]
         );
-        assert!(actual.pending.is_empty());
+        assert!(actual.next_level.is_empty());
     }
 
     #[test]
@@ -772,7 +769,7 @@ mod tests {
         // is overlap, not a stalled split.
         let values = [0.0_f32, 10.0, 4.0];
         let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
-        let parent = PendingPartition {
+        let parent = Cluster {
             point_ids: vec![0, 1, 2],
             level: 0,
             seed: 1290,
@@ -784,7 +781,7 @@ mod tests {
             sorted_leaf_memberships(&actual.leaves),
             [vec![0, 2], vec![1]]
         );
-        let [child] = &actual.pending[..] else {
+        let [child] = &actual.next_level[..] else {
             panic!("expected one pending cluster");
         };
         assert_eq!(
@@ -803,7 +800,7 @@ mod tests {
             p_samp: 0.01,
             ..splitting_config()
         };
-        let parent = PendingPartition {
+        let parent = Cluster {
             point_ids: vec![0, 1, 2, 3],
             level: 0,
             seed: 1290,
@@ -812,7 +809,7 @@ mod tests {
         let actual = split::<L2>(data, &config, parent);
 
         assert!(actual.leaves.is_empty());
-        let [child] = &actual.pending[..] else {
+        let [child] = &actual.next_level[..] else {
             panic!("expected one pending cluster");
         };
         assert_eq!(
