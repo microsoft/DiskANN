@@ -40,10 +40,19 @@ use super::{
     topk::UNASSIGNED,
 };
 
-/// Seed of the first replica. Fixed seeds give the same leaves in every build.
+/// Seed of the first replica. The value is arbitrary. A fixed seed gives the
+/// same leaves in every build.
 const PARTITION_SEED: u64 = 1_000;
-/// Seed step between replicas, so each replica samples different leaders.
+/// Seed step between replicas. Any nonzero step gives each replica its own
+/// leaders. The value is arbitrary.
 const REPLICA_SEED_STEP: u64 = 7_919;
+/// Multiplier of the step that derives a child seed from its parent seed.
+///
+/// This is the multiplier of Knuth's MMIX 64-bit linear congruential generator.
+/// It is odd, so multiplication modulo 2^64 maps different parent seeds to
+/// different products. `StdRng::seed_from_u64` mixes the child seed again, so
+/// the step must only keep seeds distinct.
+const CHILD_SEED_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 /// Maximum number of leaders in one split. The PiPNN paper uses the same hard
 /// cap ("typically 1000", Section 4.1). A split costs
 /// `points x leaders x dimensions` multiply-adds. Without the cap, the first
@@ -277,12 +286,11 @@ fn replica_seed(replica: usize) -> u64 {
     PARTITION_SEED.wrapping_add((replica as u64).wrapping_mul(REPLICA_SEED_STEP))
 }
 
-// This LCG step derives a child seed from the parent seed and the cluster size.
-// The multiplier is Knuth's MMIX constant. Wrapping arithmetic gives the same
-// mapping in debug and release builds on all supported platforms.
+// Derive a child seed from the parent seed and the cluster size. Wrapping
+// arithmetic gives the same mapping in debug and release builds on all
+// supported platforms.
 fn mix_seed(seed: u64, salt: u64) -> u64 {
-    seed.wrapping_mul(6_364_136_223_846_793_005)
-        .wrapping_add(salt)
+    seed.wrapping_mul(CHILD_SEED_MULTIPLIER).wrapping_add(salt)
 }
 
 /// Assign each point to its `fanout` nearest leaders and group the points by
