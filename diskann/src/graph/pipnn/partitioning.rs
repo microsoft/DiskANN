@@ -50,17 +50,23 @@ const REPLICA_SEED_STEP: u64 = 7_919;
 /// split of 10M points at `p_samp = 0.005` samples 50,000 leaders and does 50
 /// times the work.
 const LEADER_CAP: usize = 1_000;
-/// Size target of the distance block of one stripe, `points x leaders x 4`
-/// bytes. GEMM writes the block and the top-k scan reads it back, so the block
-/// must stay in the L2 cache of the core. On an AMD EPYC 7763 (512 KiB L2 per
-/// core), this value gave the shortest partition time for 10M points: 128 KiB
-/// was about 7% slower and 2 MiB about 5% slower. Current server cores have
-/// 512 KiB to 2 MiB of L2 cache.
-const ASSIGNMENT_CACHE_TARGET_BYTES: usize = 512 * 1024;
-/// Maximum number of points in one stripe. With few leaders, the cache target
-/// alone allows very tall stripes. This bound keeps the gathered points of one
-/// worker at `1024 x dimensions x 4` bytes or less.
-const MAX_ASSIGNMENT_STRIPE_POINTS: usize = 1_024;
+/// Number of points in one assignment stripe. A stripe gathers its points as
+/// `f32` and computes their distances to all leaders, so it moves
+/// `points x (leaders + dimensions) x 4` bytes through the cache.
+///
+/// Each stripe repeats fixed work, such as one GEMM call over the leader matrix,
+/// so 16-point stripes took 1.3 to 2 times as long as the best height. Tall
+/// stripes slow down when the stripes of all workers exceed the last-level
+/// cache. The L2 cache is not the limit: one worker ran 16 MiB stripes at full
+/// speed on a CPU with 512 KiB of L2 per core.
+///
+/// Sweeps on Zen 3, Zen 4, Emerald Rapids and Ice Lake CPUs covered f32, f16 and
+/// u8 data, 128 to 1,536 dimensions, 64 to 1,000 leaders and 1 to 16 workers.
+/// 256 points stayed within 11% of the best height, and within 1.4% on average.
+/// With 8 leaders and 1,536 dimensions, where the gather dominates, the loss was
+/// up to 27%. A rule from the detected cache size did not do better, because a
+/// virtual machine reports a last-level cache that other tenants also use.
+const ASSIGNMENT_STRIPE_POINTS: usize = 256;
 /// Clusters with at least this many points scatter in parallel. Such clusters
 /// occur at the first levels, where few splits run at the same time. A serial
 /// scatter of 10M points at fanout 10 takes 0.59 s, and a parallel scatter
@@ -307,13 +313,12 @@ where
     let leader_count = M::leader_count(&leaders);
 
     let mut assignments = vec![0u32; point_ids.len() * fanout];
-    let stripe_points = assignment_stripe_point_count(leader_count);
     // This runs in the pool of the build context (see `build_graph`). A lease
     // for each stripe takes one lock, which costs far less than the GEMM and
     // ranking of the stripe.
     assignments
-        .par_chunks_mut(stripe_points * fanout)
-        .zip(point_ids.par_chunks(stripe_points))
+        .par_chunks_mut(ASSIGNMENT_STRIPE_POINTS * fanout)
+        .zip(point_ids.par_chunks(ASSIGNMENT_STRIPE_POINTS))
         .try_for_each(|(stripe_assignments, stripe_ids)| {
             assign_point_stripe::<A, M, T>(
                 arch,
@@ -440,14 +445,6 @@ fn scatter_serial(
     clusters
 }
 
-/// Return the number of points in one assignment stripe.
-///
-/// `LEADER_CAP` keeps this count at 131 points or more.
-fn assignment_stripe_point_count(leader_count: usize) -> usize {
-    (ASSIGNMENT_CACHE_TARGET_BYTES / (leader_count * size_of::<f32>()))
-        .min(MAX_ASSIGNMENT_STRIPE_POINTS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,10 +542,10 @@ mod tests {
 
     #[test]
     fn multiple_stripes_and_their_partial_tail_preserve_all_assignments() {
-        // More than two maximum-sized stripes, with three points left over.
+        // Two full stripes, with three points left over.
         // Each dense row selects two of the three centers at 10, 0 and 4.
         // Every row selects 4; its other center is 10 for x=10 and 0 otherwise.
-        let point_count = 2 * MAX_ASSIGNMENT_STRIPE_POINTS + 3;
+        let point_count = 2 * ASSIGNMENT_STRIPE_POINTS + 3;
         let dimensions = 384;
         let values: Vec<_> = (0..point_count)
             .flat_map(|point| std::iter::repeat_n([0.0_f32, 4.0, 10.0][point % 3], dimensions))
@@ -579,8 +576,8 @@ mod tests {
 
     #[test]
     fn stripes_assign_each_point_to_its_nearest_leaders() {
-        // 300 leaders give stripes of 436 points, so 3,000 points use several
-        // stripes, a partial tail, several workers and full SIMD leader groups.
+        // 3,000 points fill 11 stripes and a partial tail on several workers.
+        // 300 leaders fill whole SIMD leader groups.
         // Dense fixtures keep the f32 scores exact, so the check needs no
         // tolerance. It accepts any order of tied leaders.
         let (point_count, dimensions, fanout) = (3000, 32, 3);
