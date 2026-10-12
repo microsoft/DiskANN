@@ -212,6 +212,9 @@ pub struct PiPNNConfig {
     pub leaf_k: NonZeroUsize,
     /// Number of independent partitionings of the dataset.
     pub replicas: NonZeroUsize,
+    /// Seed of leader sampling. The same seed gives the same leaves. `None`
+    /// draws a seed from the operating system, so each build samples new leaves.
+    pub seed: Option<u64>,
 }
 
 impl PiPNNConfig {
@@ -577,6 +580,7 @@ mod construction_tests {
             fanout: vec![nz(2)],
             leaf_k: nz(1),
             replicas: nz(1),
+            seed: Some(1290),
         }
     }
 
@@ -896,6 +900,7 @@ mod construction_tests {
             fanout: vec![nz(4), nz(2)],
             leaf_k: nz(2),
             replicas: nz(1),
+            seed: Some(1290),
         };
         for metric in [
             Metric::L2,
