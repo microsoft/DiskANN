@@ -9,10 +9,11 @@ use std::{fmt::Debug, sync::Arc};
 
 use diskann_utils::future::SendFuture;
 
-use super::workingset::{Batch, WorkingSet};
+use super::workingset::Batch;
 use crate::{
     ANNResult,
     error::{StandardError, ToRanked},
+    ivf::workingset::RegionSet,
     provider::ExecutionContext,
     utils::VectorId,
 };
@@ -41,15 +42,13 @@ pub trait Provider: Sized + Send + Sync + 'static {
     ) -> Result<Self::ExternalId, Self::Error>;
 }
 
-/// A live list selected by centroid distance.
-#[derive(Debug, Clone, Copy)]
-pub struct SelectedList<L> {
-    pub id: L,
-    pub distance: f32,
+pub trait HasIds {
+    type InternalId: VectorId;
+    type ListId: VectorId;
 }
 
 /// Centroid selection within one build operation.
-pub trait CoarseAccessor: Send {
+pub trait Router: Send {
     type ListId: VectorId;
 
     fn len(&self) -> usize;
@@ -66,75 +65,36 @@ pub trait CoarseAccessor: Send {
     ) -> impl SendFuture<ANNResult<Vec<(Self::ListId, f32)>>>;
 }
 
-/// Logical list mutations, private to the enclosing build operation.
-///
-/// Reads and working-set fills include pending writes. Publication occurs only
-/// when the build accessor finishes.
-pub trait ListAccessor: Send {
-    type InternalId: VectorId;
-    type ListId: VectorId;
+pub trait BuildAccessor: Send + Sized + HasIds {
+    /// Owned regional edits. The default records no regional changes.
+    type Update: Send;
 
-    /// Append members and return the resulting operation-local list size.
-    fn append_members(
-        &mut self,
-        list: Self::ListId,
-        members: Vec<Self::InternalId>,
-    ) -> impl SendFuture<ANNResult<usize>>;
-
-    /// Reserve a fresh list ID and stage its centroid and complete membership.
-    ///
-    /// The centroid must be finite and have the canonical dimension. Empty
-    /// memberships are valid, including during initialization.
-    fn create_list(
-        &mut self,
-        centroid: &[f32],
-        members: Vec<Self::InternalId>,
-    ) -> impl SendFuture<ANNResult<Self::ListId>>;
-
-    /// Replace a live list's complete membership, leaving its centroid unchanged.
-    ///
-    /// This supersedes earlier pending membership changes to the list.
-    fn set_members(
-        &mut self,
-        list: Self::ListId,
-        members: Vec<Self::InternalId>,
-    ) -> impl SendFuture<ANNResult<()>>;
-
-    /// Stage retirement of a live list and its centroid.
-    ///
-    /// All its members must be placed elsewhere before the build operation finishes.
-    fn retire_list(&mut self, list: Self::ListId) -> impl SendFuture<ANNResult<()>>;
-}
-
-pub trait BuildAccessor: Send + Sized {
-    type InternalId: VectorId;
-    type ListId: VectorId;
-
-    type Coarse<'a>: CoarseAccessor<ListId = Self::ListId>
+    type Router<'a>: Router<ListId = Self::ListId>
     where
         Self: 'a;
-    type Lists<'a>: ListAccessor<InternalId = Self::InternalId, ListId = Self::ListId>
+
+    type Region<'a>: RegionSet<Self::InternalId, Self::ListId, Update = Self::Update>
     where
         Self: 'a;
 
     /// Positive dimension of all canonical points and centroids.
     fn dim(&self) -> usize;
-    fn coarse(&mut self) -> Self::Coarse<'_>;
-    fn lists(&mut self) -> Self::Lists<'_>;
 
-    /// Make every requested list's complete current membership available.
-    ///
-    /// Lists appear in request order, with their canonical centroids and every
-    /// member, including pending appends. Coordinates have the canonical dimension
-    /// and are finite. Missing required data is an error, not a partial working set.
-    /// TO DO: Make [`WorkingSet`] an associated type here.
-    fn fill(
+    fn router(&mut self) -> Self::Router<'_>;
+
+    /// Append members and return the resulting operation-local list size.
+    fn append_to(
         &mut self,
-        lists: &[Self::ListId],
-    ) -> impl SendFuture<ANNResult<WorkingSet<'_, Self::InternalId, Self::ListId>>>;
+        list: Self::ListId,
+        members: &[Self::InternalId],
+    ) -> impl SendFuture<ANNResult<usize>>;
 
-    /// Publish the operation's point mappings, centroids, and memberships together.
-    fn finish(self) -> impl SendFuture<ANNResult<()>>;
+    /// Make every requested list's complete operation-local membership, vectors
+    /// and centroids available for computation.
+    fn fill(&mut self, lists: &[Self::ListId]) -> impl SendFuture<ANNResult<Self::Region<'_>>>;
+
+    /// Publish accessor-side appends and owned regional edits together.
+    fn finish(&mut self, update: Option<Self::Update>) -> impl SendFuture<ANNResult<()>>;
 }
 
 pub trait BuildStrategy<'a, P: Provider>: Send + Sync {

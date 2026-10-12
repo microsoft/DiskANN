@@ -7,19 +7,14 @@
 
 use std::collections::BTreeMap;
 
-use diskann_utils::{
-    future::SendFuture,
-    views::rowmajor::{self, Matrix},
-};
+use diskann_utils::future::SendFuture;
 use rand::{SeedableRng, rngs::StdRng};
 use thiserror::Error;
 
 use super::{
     clustering,
-    partition::Partitioning,
-    traits::{
-        BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
-    },
+    traits::{BuildAccessor, BuildStrategy, InsertStrategy, Provider, Router},
+    workingset::RegionSet,
 };
 use crate::{ANNError, ANNResult, error::IntoANNResult};
 
@@ -71,39 +66,6 @@ impl<P: Provider> IVFIndex<P> {
         &self.provider
     }
 
-    /// Install initial empty lists and their centroids in one build operation.
-    ///
-    /// TO DO: needs
-    pub fn initialize<'a, S>(
-        &'a mut self,
-        strategy: &'a S,
-        context: &'a P::Context,
-        centroids: rowmajor::Ref<'_, f32>,
-    ) -> impl SendFuture<ANNResult<()>>
-    where
-        S: BuildStrategy<'a, P>,
-    {
-        async move {
-            if centroids.nrows() == 0 || centroids.ncols() == 0 {
-                return Err(ANNError::message(
-                    "IVF initialization needs nonempty centroids",
-                ));
-            }
-            let mut accessor = strategy
-                .build_accessor(&mut self.provider, context)
-                .into_ann_result()?;
-
-            if !accessor.coarse().is_empty() {
-                return Err(ANNError::message("the IVF index is already initialized"));
-            }
-
-            for centroid in centroids.rows() {
-                accessor.lists().create_list(centroid, Vec::new()).await?;
-            }
-            accessor.finish().await
-        }
-    }
-
     pub fn insert_batch<'a, S, T>(
         &'a mut self,
         strategy: &'a S,
@@ -125,71 +87,53 @@ impl<P: Provider> IVFIndex<P> {
             let mut accessor = strategy
                 .build_accessor(provider, context)
                 .into_ann_result()?;
-            if accessor.coarse().is_empty() {
+            if accessor.router().is_empty() {
                 return Err(ANNError::message("the IVF index is not initialized"));
             }
             let batch = strategy.prepare(&mut accessor, points).await?;
 
             let mut routed = BTreeMap::<P::ListId, Vec<P::InternalId>>::new();
 
-            for point in batch.points() {
-                let selected = accessor.coarse().select(point.vector, 1).await?;
-                let list = selected
-                    .first()
-                    .ok_or_else(|| ANNError::message("IVF routing returned no live centroid"))?
-                    .0;
+            {
+                let router = accessor.router();
 
-                routed.entry(list).or_default().push(point.id);
+                for point in batch.points() {
+                    let selected = router.select(point.vector, 1).await?;
+                    let list = selected
+                        .first()
+                        .ok_or_else(|| ANNError::message("IVF routing returned no live centroid"))?
+                        .0;
+
+                    routed.entry(list).or_default().push(point.id);
+                }
             }
 
             let mut parents = Vec::with_capacity(routed.len());
 
+            // append the points to their respective list ids and determine which need to be split.
             for (list, members) in routed {
-                let size = accessor.lists().append_members(list, members).await?;
+                let size = accessor.append_to(list, &members).await?;
                 if size > config.split_threshold {
                     parents.push(list);
                 }
             }
 
             let splits = parents.len();
-            if !parents.is_empty() {
-                let replacement = {
-                    let dim = accessor.dim();
-                    let view = accessor.fill(&parents).await?;
-                    clustering::split(&view, &parents, dim, config.two_means_iterations, rng)?
-                };
-                Self::apply_partitioning(&mut accessor.lists(), &parents, replacement).await?;
-            }
+            let update = if !parents.is_empty() {
+                let dim = accessor.dim();
+                let mut view = accessor.fill(&parents).await?;
+                clustering::split(&mut view, &parents, dim, config.two_means_iterations, rng)?;
+                Some(view.into_update())
+            } else {
+                None
+            };
 
-            accessor.finish().await?;
+            accessor.finish(update).await?;
 
             Ok(InsertStats {
                 inserted: points.len(),
                 splits,
             })
         }
-    }
-
-    /// Apply destination memberships before retiring the replaced lists.
-    pub(super) async fn apply_partitioning<A>(
-        accessor: &mut A,
-        retired: &[A::ListId],
-        partitioning: Partitioning<A::InternalId, A::ListId>,
-    ) -> ANNResult<()>
-    where
-        A: ListAccessor,
-    {
-        for (centroid, partition) in partitioning.centroids.rows().zip(partitioning.partitions) {
-            match partition.id {
-                Some(id) => accessor.set_members(id, partition.members).await?,
-                None => {
-                    accessor.create_list(centroid, partition.members).await?;
-                }
-            }
-        }
-        for &id in retired {
-            accessor.retire_list(id).await?;
-        }
-        Ok(())
     }
 }

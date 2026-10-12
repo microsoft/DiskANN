@@ -11,61 +11,90 @@ use rand::{Rng, rngs::StdRng};
 
 use super::{
     partition::{Partition, Partitioning},
-    workingset::{ListView, PointRef},
+    workingset::RegionSet,
 };
 use crate::{ANNError, ANNResult};
 
-/// Replace each parent with two children, retaining the other source centroids.
+/// Fit two children per parent, assign their members across all children, and record edits.
 ///
-/// `parents` is a distinct subset of `lists`. All regional points choose among
-/// the children and retained centroids, never among retiring parent centroids.
-pub(super) fn split<I: Copy, L: Copy + Eq>(
-    lists: &[ListView<'_, I, L>],
+/// Parents are distinct filled sources. Other filled lists are not read or edited.
+/// Computation completes before any edits are recorded. A recording error may
+/// leave partial pending edits, which the caller must discard rather than publish.
+pub(super) fn split<I: Copy, L: Copy, R: RegionSet<I, L>>(
+    region: &mut R,
+    parents: &[L],
+    dim: usize,
+    iterations: usize,
+    rng: &mut StdRng,
+) -> ANNResult<()> {
+    let result = compute_split(&*region, parents, dim, iterations, rng)?;
+    for (centroid, partition) in result.centroids.rows().zip(result.partitions) {
+        match partition.id {
+            Some(id) => region.set_members(id, &partition.members)?,
+            None => region.create(centroid, &partition.members)?,
+        }
+    }
+    for &parent in parents {
+        region.retire(parent)?;
+    }
+    Ok(())
+}
+
+fn compute_split<I: Copy, L: Copy, R: RegionSet<I, L>>(
+    region: &R,
     parents: &[L],
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
 ) -> ANNResult<Partitioning<I, L>> {
-    if lists.is_empty() || dim == 0 {
+    if parents.is_empty() || dim == 0 {
         return Err(ANNError::message(
-            "IVF splitting needs a nonempty working set and positive dimension",
+            "IVF splitting needs parents and a positive dimension",
         ));
     }
-    let destinations = lists.len() + parents.len();
-    let mut centroids = rowmajor::Owned::try_from_element(destinations, dim, 0.0)?;
-    let mut partitions = Vec::with_capacity(destinations);
-    let mut sums = vec![0.0; 2 * dim];
-    for list in lists {
-        let row = partitions.len();
-        if parents.contains(&list.id) {
-            let centers = &mut centroids.as_mut_slice()[row * dim..(row + 2) * dim];
-            fit_two_means(&list.points, centers, dim, iterations, rng, &mut sums)?;
-            partitions.extend((0..2).map(|_| Partition {
-                id: None,
-                members: Vec::new(),
-            }));
-        } else {
-            centroids.row_mut(row).copy_from_slice(list.centroid);
-            partitions.push(Partition {
-                id: Some(list.id),
-                members: Vec::new(),
-            });
-        }
+    let mut inputs = Vec::with_capacity(parents.len());
+    for &parent in parents {
+        let view = region
+            .get_view(parent)
+            .ok_or_else(|| ANNError::message("IVF split parent is missing from the region"))?;
+        let vectors = region.get_vectors(parent).ok_or_else(|| {
+            ANNError::message("IVF split parent vectors are missing from the region")
+        })?;
+        inputs.push((view.members, vectors));
     }
 
-    let count = lists.iter().map(|list| list.points.len()).sum();
+    let mut centroids = rowmajor::Owned::try_from_element(2 * parents.len(), dim, 0.0)?;
+    let mut sums = vec![0.0; 2 * dim];
+    for ((_, vectors), centers) in inputs
+        .iter()
+        .zip(centroids.as_mut_slice().chunks_exact_mut(2 * dim))
+    {
+        fit_two_means(vectors.as_view(), centers, dim, iterations, rng, &mut sums)?;
+    }
+
+    let count = inputs.iter().map(|(members, _)| members.len()).sum();
     let mut assignments = Vec::with_capacity(count);
     let mut sizes = vec![0; centroids.nrows()];
-    for point in lists.iter().flat_map(|list| &list.points) {
-        let to = nearest(point.vector, centroids.as_slice(), dim);
-        assignments.push(to);
-        sizes[to] += 1;
+    for (_, vectors) in &inputs {
+        for vector in vectors.rows() {
+            let to = nearest(vector, centroids.as_slice(), dim);
+            assignments.push(to);
+            sizes[to] += 1;
+        }
     }
-    for (partition, size) in partitions.iter_mut().zip(sizes) {
-        partition.members = Vec::with_capacity(size);
-    }
-    for (point, to) in lists.iter().flat_map(|list| &list.points).zip(assignments) {
-        partitions[to].members.push(point.id);
+    let mut partitions: Vec<Partition<I, L>> = sizes
+        .into_iter()
+        .map(|size| Partition {
+            id: None,
+            members: Vec::with_capacity(size),
+        })
+        .collect();
+    for (id, to) in inputs
+        .iter()
+        .flat_map(|(members, _)| members.iter().copied())
+        .zip(assignments)
+    {
+        partitions[to].members.push(id);
     }
     Ok(Partitioning {
         centroids,
@@ -73,29 +102,29 @@ pub(super) fn split<I: Copy, L: Copy + Eq>(
     })
 }
 
-fn fit_two_means<I>(
-    points: &[PointRef<'_, I>],
+fn fit_two_means(
+    points: rowmajor::Ref<'_, f32>,
     centers: &mut [f32],
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
     sums: &mut [f64],
 ) -> ANNResult<()> {
-    if points.len() < 2 {
+    if points.nrows() < 2 {
         return Err(ANNError::message("an IVF split needs at least two points"));
     }
-    let first = rng.random_range(0..points.len());
-    let second = (first + rng.random_range(1..points.len())) % points.len();
-    centers[..dim].copy_from_slice(points[first].vector);
-    centers[dim..].copy_from_slice(points[second].vector);
+    let first = rng.random_range(0..points.nrows());
+    let second = (first + rng.random_range(1..points.nrows())) % points.nrows();
+    centers[..dim].copy_from_slice(points.row(first));
+    centers[dim..].copy_from_slice(points.row(second));
 
     for _ in 0..iterations.max(1) {
         sums.fill(0.0);
         let mut counts = [0; 2];
-        for point in points {
-            let to = nearest(point.vector, centers, dim);
+        for point in points.rows() {
+            let to = nearest(point, centers, dim);
             counts[to] += 1;
-            for (sum, &value) in sums[to * dim..(to + 1) * dim].iter_mut().zip(point.vector) {
+            for (sum, &value) in sums[to * dim..(to + 1) * dim].iter_mut().zip(point) {
                 // A finite mean must not overflow while accumulating its inputs.
                 *sum += f64::from(value);
             }

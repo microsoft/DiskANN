@@ -6,18 +6,19 @@
 //! Incremental IVF construction.
 //!
 //! The index routes points, splits oversized lists, and assigns their members to
-//! replacement centroids. Providers supply centroid selection, logical list
-//! operations, and borrowed working sets through [`traits::BuildAccessor`].
+//! replacement centroids. Providers supply routing and operation-local appends
+//! through [`traits::BuildAccessor`], and borrowed inputs and private regional
+//! edits through [`workingset::RegionSet`].
 //!
-//! Appends and replacements remain private to one build operation until it
-//! finishes. This lets clustering treat prepared and stored points identically.
+//! Clustering finishes reading its inputs before recording child creation and
+//! parent retirement. Consuming the region releases its input borrows and yields
+//! an owned update; the accessor publishes it together with ordinary appends once.
 //! Providers choose their own storage, publication, and failure-recovery mechanisms.
-//! A [`partition::Partitioning`] describes new and retained destinations. The index
-//! creates new lists, sets retained memberships, and retires split parents.
 //!
-//! This first implementation supports initialization and batch insertion with
-//! two-means splitting. Neighborhood selection, search, deletion, and colocation
-//! are not implemented.
+//! This first implementation supports batch insertion into an already initialized
+//! provider, with two-means splitting of the explicitly requested parents.
+//! Initialization, neighborhood reassignment, search, deletion, and colocation are
+//! not implemented.
 
 mod clustering;
 mod index;

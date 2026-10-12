@@ -20,18 +20,45 @@ pub struct PointRef<'a, I> {
 /// One source list's centroid and complete operation-local membership.
 ///
 /// Only reference metadata is owned; point and centroid coordinates are borrowed.
-/// A working set may include both split targets and retained neighboring lists.
+/// A region may include both split targets and neighboring lists.
 #[derive(Debug)]
 pub struct ListView<'a, I, L> {
     pub id: L,
     pub centroid: &'a [f32],
-    pub points: Vec<PointRef<'a, I>>,
+    pub members: &'a [I],
 }
 
-/// Lists supplied by a build accessor, in the order requested by `fill`.
-pub type WorkingSet<'a, I, L> = Vec<ListView<'a, I, L>>;
+/// Provider-defined source data and private edits for one build operation.
+///
+/// Recorded edits remain private until their extracted update is published.
+/// Discard the region if computation or edit recording fails.
+pub trait RegionSet<I, L>: Send {
+    /// Owned edits, independent of the region's temporary input borrows.
+    type Update: Send;
 
-/// Canonical rows shared between routing and a build accessor's working-set seed.
+    /// Borrow a filled source's centroid and complete operation-local membership.
+    fn get_view(&self, i: L) -> Option<ListView<'_, I, L>>;
+
+    /// Borrow canonical rows in the same order as the source's member IDs.
+    ///
+    /// There is one row per member, including pending accessor appends. Coordinates
+    /// have the accessor's canonical dimension and are finite.
+    fn get_vectors(&self, i: L) -> Option<rowmajor::Ref<'_, f32>>;
+
+    /// Record a complete membership replacement.
+    fn set_members(&mut self, i: L, ids: &[I]) -> ANNResult<()>;
+    
+    /// Record retirement of a source list and its centroid.
+    fn retire(&mut self, i: L) -> ANNResult<()>;
+
+    /// Record a new centroid and its complete membership.
+    fn create(&mut self, centroid: &[f32], members: &[I]) -> ANNResult<()>;
+
+    /// Release input borrows and transfer the recorded edits for publication.
+    fn into_update(self) -> Self::Update;
+}
+
+/// Canonical rows shared between routing and an operation's build accessor.
 ///
 /// IDs must be unique. The contiguous matrix is owned once; iteration and lookup
 /// borrow its rows without copying coordinates.

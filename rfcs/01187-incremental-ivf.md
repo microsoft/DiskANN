@@ -13,57 +13,63 @@ The implementation in [the IVF module](../diskann/src/ivf/mod.rs) follows the
 graph index's coarse accessor boundaries. The index owns routing policy,
 overflow selection, two-means fitting, and regional assignment. Providers supply:
 
-1. Centroid selection through a coarse accessor.
-2. Logical list operations: append members and return the resulting size, create
-   a list, set a list's complete membership, and retire a list.
-3. One scoped build accessor that supplies borrowed working sets and publishes
-   the operation with `finish`.
+1. Centroid selection through a `Router`.
+2. A scoped `BuildAccessor` that stages ordinary appends, returns their resulting
+   sizes, fills requested sources, and publishes the operation.
+3. An editable `RegionSet` that borrows source data and records list creation,
+   membership replacement or append, and retirement.
 
 Typed point preparation belongs to the insertion strategy, not to the core
 build accessor. Preparation reserves internal IDs and supplies a shared,
 contiguous canonical batch. Pending appends participate in operation-local
-membership reads and sizes. Working-set filling resolves both stored and
+membership reads and sizes. Region filling resolves both stored and
 prepared points, so clustering has no staged-point boundaries or provenance
-classification. Working sets also borrow each source centroid, allowing a
-gathered region to include retained neighbors as well as split targets.
+classification. Each source supplies its centroid, member IDs, and a borrowed
+matrix with one canonical vector row per member in the same order.
 
 Insertion provisionally appends points, gathers all oversized parents into one
-working set, fits two children per parent, and assigns all regional members
-against all child centroids. Parent centroids are not candidates. The algorithm
-applies the resulting partitioning by creating new lists, setting retained-list
-memberships, and retiring split parents, then finishes once.
-Ordinary appends and splitting are published together, never as separate commits.
+region, fits two children per parent, and assigns the requested parents' members
+against all child centroids. All children are fitted before final assignment, and
+parent centroids are not candidates. The algorithm computes complete centroid
+and member groups before recording child creation and parent retirement in the
+region. Ordinary appends and splitting are published together, never as separate
+commits.
 Each parent is split once per insertion; this is not a recursive size-balancing
-operation. Initialization creates empty lists with the supplied centroids.
+operation.
 
-A partitioning contains a contiguous centroid matrix and a complete member group
-per destination. Each destination optionally names an existing source list to
-retain; unnamed destinations receive fresh list IDs through `create_list`.
-The algorithm explicitly retires split parents after applying destination
-memberships. Retained lists keep their identities and centroids while
-receiving their complete new memberships. The result covers every regional member
-exactly once, including pending appends; lists outside the region are unchanged.
+Consuming `RegionSet::into_update` releases its temporary input borrows and moves
+its private edits into the accessor's owned `Update`. The index passes that value
+to `BuildAccessor::finish`, which publishes it together with accessor-side
+appends. An insertion without splitting passes the default, empty regional update.
+The algorithm does not inspect the provider's update representation or require
+new child IDs during computation.
 
-Split targets are a subset of the gathered sources. Numerical fitting replaces
-only their centroids, and assignment considers the fitted children and any
-retained source centroids. The default insertion path still gathers only split
-parents; choosing neighboring lists is not implemented.
+The built-in split reads and edits only explicitly requested parents, even when
+a region contains additional sources. It covers every parent member exactly once,
+including pending appends; other lists are unchanged. Source enumeration and
+neighborhood reassignment are deferred.
 
-Working sets borrow vector coordinates. Only fitted centroid coordinates and
-assignment/member metadata need new storage. Providers can reuse the canonical
-batch and the optional pending-membership helper, or implement their own caches
-and private transactions. No delta transport is required by the algorithm;
+Numerical computation borrows vector matrices and member slices, without building
+per-point reference tables or copying vector coordinates. A provider with
+scattered storage may pack rows during filling to satisfy the matrix interface.
+Fitted centroids and assignment/member metadata need new storage. Providers can
+reuse the canonical batch and optional pending-membership helper, or implement
+their own caches and private transactions. The owned update is provider-defined;
 incremental storage providers may derive sparse changes internally.
 
 Mutations remain serialized through `&mut self`. Pending list writes and point
-mappings are not visible outside the operation. Successful `finish` must publish
-a coherent partition; recovery after failed publication is provider-defined.
-Providers with externally shared state must coordinate those aliases themselves.
+mappings are not visible outside the operation. Failed computation records no
+regional edits. Failed edit recording may leave partial private edits, so the
+caller must discard the operation rather than publish it. Successful `finish`
+must publish a coherent partition; recovery after failed publication is
+provider-defined. Providers with externally shared state must coordinate those
+aliases themselves.
 
-The current implementation includes initialization and batched insert/split.
-Search, neighborhood-selection policies, deletion/dissolve, and colocation
-remain future work. See [the current contracts](../diskann/src/ivf/traits.rs) for
-the implemented API.
+The current implementation supports batched insert/split into a provider that
+already has centroids. Initialization, search, neighborhood-selection policies,
+deletion/dissolve, and colocation remain future work. See
+[the current contracts](../diskann/src/ivf/traits.rs) and
+[the region interface](../diskann/src/ivf/workingset.rs) for the implemented API.
 
 The remainder of this RFC records the previous delta-oriented design and its
 longer-term goals. Its API sketches, source layout, and `apply`-based algorithms
@@ -968,10 +974,12 @@ accessor is simpler.
 ### Imperative List Mutation Methods
 
 Immediate, independently published list mutations expose a partial-write schedule
-to GraphIVF. The current design instead uses logical list operations inside one
-build accessor: they change private operation state and publish only at `finish`.
-This keeps get/set-style operations without requiring an algorithm-facing delta
-protocol or prescribing the provider's physical write order.
+to GraphIVF. The current design instead stages ordinary appends in the build
+accessor and regional list edits in a `RegionSet`. Consuming the region produces
+an owned update, and the accessor publishes both kinds of changes only at
+`finish`. This keeps get/set-style operations without requiring an
+algorithm-facing delta protocol or prescribing the provider's physical write
+order.
 
 ### Optional Endpoints Instead Of Delta Variants
 
