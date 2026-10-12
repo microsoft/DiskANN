@@ -73,7 +73,7 @@ impl<P: Provider> IVFIndex<P> {
 
     /// Install initial empty lists and their centroids in one build operation.
     ///
-    /// TO DO: needs 
+    /// TO DO: needs
     pub fn initialize<'a, S>(
         &'a mut self,
         strategy: &'a S,
@@ -172,27 +172,24 @@ impl<P: Provider> IVFIndex<P> {
 
     /// Apply destination memberships before retiring the replaced lists.
     pub(super) async fn apply_partitioning<A>(
-    accessor: &mut A,
-    retired: &[A::ListId],
-    partitioning: Partitioning<A::InternalId, A::ListId>,
-) -> ANNResult<()>
-where
-    A: ListAccessor,
-{
-    for (centroid, partition) in partitioning.centroids.rows().zip(partitioning.partitions) {
-        match partition.id {
-            Some(id) => accessor.set_members(id, partition.members).await?,
-            None => {
-                accessor.create_list(centroid, partition.members).await?;
+        accessor: &mut A,
+        retired: &[A::ListId],
+        partitioning: Partitioning<A::InternalId, A::ListId>,
+    ) -> ANNResult<()>
+    where
+        A: ListAccessor,
+    {
+        for (centroid, partition) in partitioning.centroids.rows().zip(partitioning.partitions) {
+            match partition.id {
+                Some(id) => accessor.set_members(id, partition.members).await?,
+                None => {
+                    accessor.create_list(centroid, partition.members).await?;
+                }
             }
         }
+        for &id in retired {
+            accessor.retire_list(id).await?;
+        }
+        Ok(())
     }
-    for &id in retired {
-        accessor.retire_list(id).await?;
-    }
-    Ok(())
 }
-}
-
-
-
