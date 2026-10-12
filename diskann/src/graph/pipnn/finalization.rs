@@ -54,12 +54,13 @@ impl PruneWorkspace {
                     distance.evaluate_similarity(source_vector, data.row(candidate as usize)),
                 )
             }));
-        // RobustPrune stores candidate positions as `u16`, so keep the `u16::MAX`
-        // nearest candidates. Vamana limits its candidate pool the same way.
+        // Like Vamana, prune only the `max_occlusion_size` nearest candidates. The
+        // graph configuration keeps this size within the `u16` positions of
+        // RobustPrune.
         //
         // Sort before mapping: changing the element type can change the unstable
         // sort's order for equal distances, and therefore RobustPrune's choices.
-        let sorted = SortedNeighbors::new(&mut self.candidates, u16::MAX as usize);
+        let sorted = SortedNeighbors::new(&mut self.candidates, graph.max_occlusion_size().get());
         let mapped = sorted.map_in(&mut self.mapped_candidates, |&candidate| {
             (candidate as usize != source).then_some(candidate)
         });
@@ -239,17 +240,39 @@ mod tests {
     }
 
     #[test]
-    fn a_list_above_the_u16_position_limit_keeps_its_nearest_candidates() {
-        let count = u16::MAX as usize + 1;
-        let values: Vec<_> = (0..=count).map(|i| i as f32).collect();
-        let data = MatrixView::try_from(values.as_slice(), count + 1, 1).unwrap();
-        let graph = pruning_config(1, Metric::L2, 1.0).unwrap();
+    fn pruning_reads_only_the_max_occlusion_size_nearest_candidates() {
+        // Source 0 is at x=0. Candidates 2 and 3 lie on one side and candidate 1
+        // on the other, so 2 occludes 3 but not 1. A pool of two candidates
+        // drops 1, the farthest.
+        let values = [0.0_f32, -3.0, 1.0, 2.0];
+        let data = MatrixView::try_from(&values[..], 4, 1).unwrap();
         let distance = f32::distance(Metric::L2, Some(1));
-        let candidates = AdjacencyList::from_iter_untrusted(1..=count as u32);
+        for (max_occlusion_size, expected) in [(2, &[2][..]), (3, &[2, 1][..])] {
+            let graph = config::Builder::new_with(
+                2,
+                config::MaxDegree::same(),
+                16,
+                Metric::L2.into(),
+                |b| {
+                    b.alpha(1.0).max_occlusion_size(max_occlusion_size);
+                },
+            )
+            .build()
+            .unwrap();
 
-        let actual = PruneWorkspace::default().prune(data, 0, candidates, &graph, &distance);
+            let actual = PruneWorkspace::default().prune(
+                data,
+                0,
+                candidates_in_order(&[1, 2, 3]),
+                &graph,
+                &distance,
+            );
 
-        assert_eq!(&*actual, [1]);
+            assert_eq!(
+                &*actual, expected,
+                "max_occlusion_size {max_occlusion_size}"
+            );
+        }
     }
 
     #[test]
