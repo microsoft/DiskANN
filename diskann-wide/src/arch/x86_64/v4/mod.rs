@@ -580,6 +580,43 @@ impl Architecture for V4 {
     }
 }
 
+///////////////////////
+// Custom Intrinsics //
+///////////////////////
+
+impl V4 {
+    /// Multiply unsigned bytes from `x` by signed bytes from `y`, then add adjacent
+    /// products with saturation to `i16::MIN..=i16::MAX`.
+    ///
+    /// Each output lane corresponds to one adjacent input pair, in order.
+    /// There is no accumulator.
+    ///
+    /// See: [`std::arch::x86_64::_mm256_maddubs_epi16`].
+    #[inline(always)]
+    pub fn mm256_maddubs_epi16(self, x: u8x32, y: i8x32) -> i16x16 {
+        #[cfg(miri)]
+        {
+            let x = x.to_array();
+            let y = y.to_array();
+            i16x16::from_array(
+                self,
+                core::array::from_fn(|i| {
+                    let sum = i32::from(x[2 * i]) * i32::from(y[2 * i])
+                        + i32::from(x[2 * i + 1]) * i32::from(y[2 * i + 1]);
+                    sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+                }),
+            )
+        }
+        #[cfg(not(miri))]
+        {
+            // SAFETY: V4 provides AVX2.
+            i16x16::from_underlying(self, unsafe {
+                std::arch::x86_64::_mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
+            })
+        }
+    }
+}
+
 // Conversions
 impl From<V4> for Scalar {
     fn from(_: V4) -> Scalar {
@@ -590,5 +627,39 @@ impl From<V4> for Scalar {
 impl From<V4> for V3 {
     fn from(arch: V4) -> V3 {
         arch.retarget()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils;
+
+    #[test]
+    fn test_mm256_maddubs_epi16() {
+        let arch = if cfg!(miri) {
+            V4::new_checked_miri()
+        } else {
+            V4::new_checked_uncached()
+        };
+        if let Some(arch) = arch {
+            let check = move |x: &[u8], y: &[i8]| {
+                let got = arch
+                    .mm256_maddubs_epi16(
+                        u8x32::from_array(arch, x.try_into().unwrap()),
+                        i8x32::from_array(arch, y.try_into().unwrap()),
+                    )
+                    .to_array();
+                let expected: [i16; 16] = core::array::from_fn(|i| {
+                    let even = i16::from(x[2 * i]) * i16::from(y[2 * i]);
+                    let odd = i16::from(x[2 * i + 1]) * i16::from(y[2 * i + 1]);
+                    even.saturating_add(odd)
+                });
+                assert_eq!(got, expected, "x = {x:?}, y = {y:?}");
+            };
+            check(&[u8::MAX; 32], &[i8::MAX; 32]);
+            check(&[u8::MAX; 32], &[i8::MIN; 32]);
+            test_utils::driver::drive_binary(&check, (32, 32), 0x7fc14e39a2d06b85);
+        }
     }
 }
