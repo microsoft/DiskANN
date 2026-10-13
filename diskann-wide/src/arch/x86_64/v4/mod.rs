@@ -244,6 +244,23 @@ impl V4 {
         }
     }
 
+    /// This constructor should be used when testing miri compatibility within the
+    /// `diskann-wide` traits.
+    ///
+    /// In test mode - we have to use `uncached` so we don't race with the tests that
+    /// manually set the architecture number.
+    #[cfg(test)]
+    pub(crate) fn new_checked_miri_uncached() -> Option<Self> {
+        if cfg!(miri) {
+            V3::new_checked_uncached().map(|_| {
+                // SAFETY: With Miri enabled, AVX-512 emulation is used.
+                unsafe { Self::new() }
+            })
+        } else {
+            Self::new_checked_uncached()
+        }
+    }
+
     /// Retarget for a more conservative architecture.
     pub fn retarget(self) -> V3 {
         // SAFETY: `V4` is a superset of `V3` - so an instance of `V4` asserts the presence of `V3`.
