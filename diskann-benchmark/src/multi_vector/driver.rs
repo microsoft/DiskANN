@@ -6,6 +6,7 @@
 //! Shared benchmark infrastructure for multi-vector kernels: timing harness,
 //! data fixtures, result types. None of the contents are kernel-aware.
 
+use anyhow::Context;
 use diskann_benchmark_runner::{
     utils::{
         fmt::Table,
@@ -15,8 +16,16 @@ use diskann_benchmark_runner::{
     Checker, Input,
 };
 use diskann_quantization::multi_vector::{
-    Mat, MatRef, MaxSimElement, MaxSimKernel, Overflow, Standard,
+    Defaulted, Mat, MatRef, MaxSimElement, MaxSimKernel, Overflow, Standard,
 };
+use diskann_quantization::{
+    algorithms::{transforms::NullTransform, Transform},
+    bits::{Representation, Unsigned},
+    minmax::{MinMaxMeta, MinMaxQuantizer},
+    num::Positive,
+    CompressInto,
+};
+use diskann_utils::ReborrowMut;
 use rand::{
     distr::{Distribution, StandardUniform},
     rngs::StdRng,
@@ -79,15 +88,56 @@ where
     StandardUniform: Distribution<T>,
 {
     pub(super) fn new(run: &Run) -> Result<Self, Overflow> {
+        let query_repr = Standard::new(run.num_query_vectors.get(), run.dim.get())?;
+        let doc_repr = Standard::new(run.num_doc_vectors.get(), run.dim.get())?;
         let mut rng = StdRng::seed_from_u64(0x12345);
-        let queries = Mat::from_fn(
-            Standard::new(run.num_query_vectors.get(), run.dim.get())?,
-            || StandardUniform.sample(&mut rng),
+        let queries = Mat::from_fn(query_repr, || StandardUniform.sample(&mut rng));
+        let docs = Mat::from_fn(doc_repr, || StandardUniform.sample(&mut rng));
+        Ok(Self { queries, docs })
+    }
+}
+
+// MinMaxMeta::new does not check canonical allocation extents.
+fn checked_minmax_meta<const BITS: usize>(
+    rows: usize,
+    dim: usize,
+) -> anyhow::Result<MinMaxMeta<BITS>>
+where
+    Unsigned: Representation<BITS>,
+{
+    anyhow::ensure!(
+        u32::try_from(dim).is_ok(),
+        "MinMax dimension exceeds u32::MAX"
+    );
+    dim.checked_mul(BITS)
+        .and_then(|bits| bits.checked_add(7))
+        .context("MinMax row size overflow")?;
+    let repr = MinMaxMeta::new(rows, dim);
+    let bytes = rows
+        .checked_mul(repr.ncols())
+        .context("MinMax matrix size overflow")?;
+    std::alloc::Layout::array::<u8>(bytes).context("MinMax allocation exceeds the byte limit")?;
+    Ok(repr)
+}
+
+pub(super) struct MinMax8Data {
+    pub(super) queries: Mat<MinMaxMeta<8>>,
+    pub(super) docs: Mat<MinMaxMeta<4>>,
+}
+
+impl MinMax8Data {
+    pub(super) fn new(run: &Run) -> anyhow::Result<Self> {
+        let query_repr = checked_minmax_meta::<8>(run.num_query_vectors.get(), run.dim.get())?;
+        let doc_repr = checked_minmax_meta::<4>(run.num_doc_vectors.get(), run.dim.get())?;
+        let data = Data::<f32>::new(run)?;
+        let quantizer = MinMaxQuantizer::new(
+            Transform::Null(NullTransform::new(run.dim)),
+            Positive::new(1.0).unwrap(),
         );
-        let docs = Mat::from_fn(
-            Standard::new(run.num_doc_vectors.get(), run.dim.get())?,
-            || StandardUniform.sample(&mut rng),
-        );
+        let mut queries = Mat::new(query_repr, Defaulted)?;
+        let mut docs = Mat::new(doc_repr, Defaulted)?;
+        quantizer.compress_into(data.queries.as_view(), queries.reborrow_mut())?;
+        quantizer.compress_into(data.docs.as_view(), docs.reborrow_mut())?;
         Ok(Self { queries, docs })
     }
 }
@@ -100,27 +150,35 @@ pub(super) fn run_with_kernel<T: MaxSimElement>(
     run: &Run,
     doc: MatRef<'_, Standard<T>>,
     kernel: &dyn MaxSimKernel<T>,
-) -> RunResult {
+) -> anyhow::Result<RunResult> {
     let mut scores = vec![T::Score::default(); run.num_query_vectors.get()];
+    run_with_compute(run, || {
+        kernel.compute_max_sim(doc, &mut scores)?;
+        std::hint::black_box(&mut scores);
+        Ok(())
+    })
+}
+
+pub(super) fn run_with_compute(
+    run: &Run,
+    mut compute: impl FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<RunResult> {
     let mut latencies = Vec::with_capacity(run.num_measurements.get());
 
     for _ in 0..run.num_measurements.get() {
         let start = std::time::Instant::now();
         for _ in 0..run.loops_per_measurement.get() {
-            kernel
-                .compute_max_sim(doc, &mut scores)
-                .expect("scores.len() == kernel.nrows() by construction");
-            std::hint::black_box(&mut scores);
+            compute()?;
         }
         latencies.push(start.elapsed().into());
     }
 
     let percentiles = percentiles::compute_percentiles(&mut latencies).unwrap();
-    RunResult {
+    Ok(RunResult {
         run: run.clone(),
         latencies,
         percentiles,
-    }
+    })
 }
 
 //////////////////////

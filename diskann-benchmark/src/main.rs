@@ -1006,6 +1006,8 @@ mod tests {
 
     #[test]
     fn multi_vector_integration() {
+        use crate::inputs::multi_vector::MultiVectorOp;
+
         let path = example_directory().join("multi-vector.json");
         let tempdir = tempfile::tempdir().unwrap();
         let output_path = tempdir.path().join("output.json");
@@ -1014,6 +1016,10 @@ mod tests {
         let modified_input_path = tempdir.path().join("input.json");
 
         let mut raw = value_from_file(&path);
+        for job in raw["jobs"].as_array().unwrap() {
+            let operation: MultiVectorOp = serde_json::from_value(job["content"].clone()).unwrap();
+            assert_eq!(serde_json::to_value(operation).unwrap(), job["content"]);
+        }
         prefix_search_directories(&mut raw, &root_directory());
         save_to_file(&modified_input_path, &raw);
 
@@ -1040,6 +1046,26 @@ mod tests {
 
         // Check that the results file is generated.
         assert!(output_path.exists());
+
+        let input = value_from_file(input_path);
+        let output = value_from_file(output_path);
+        let jobs = input["jobs"].as_array().unwrap();
+        let results = output.as_array().unwrap();
+        assert_eq!(results.len(), jobs.len());
+        for (result, job) in std::iter::zip(results, jobs) {
+            assert_eq!(result["input"], *job);
+            let runs = job["content"]["runs"].as_array().unwrap();
+            let measurements = result["results"].as_array().unwrap();
+            assert_eq!(measurements.len(), runs.len());
+            for (measurement, run) in std::iter::zip(measurements, runs) {
+                assert_eq!(measurement["run"], *run);
+                assert_eq!(
+                    measurement["latencies"].as_array().unwrap().len() as u64,
+                    run["num_measurements"].as_u64().unwrap(),
+                );
+                assert!(measurement["percentiles"].is_object());
+            }
+        }
     }
 
     #[cfg(not(feature = "multi-vector"))]
@@ -1084,6 +1110,158 @@ mod tests {
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
         );
+    }
+
+    #[test]
+    fn minmax8_isa_performance_inputs_have_matching_shapes() {
+        use crate::inputs::multi_vector::{BenchIsa, ElementType, MultiVectorOp};
+
+        let directory = project_directory().join("perf_test_inputs");
+        let portable = value_from_file(&directory.join("multi-vector-minmax8.json"));
+        let baseline: MultiVectorOp =
+            serde_json::from_value(portable["jobs"][0]["content"].clone()).unwrap();
+        assert_eq!(baseline.runs.len(), 12);
+        let primary = &baseline.runs[0];
+        assert_eq!(
+            (
+                primary.num_query_vectors.get(),
+                primary.num_doc_vectors.get(),
+                primary.dim.get(),
+                primary.loops_per_measurement.get(),
+                primary.num_measurements.get(),
+            ),
+            (16, 64, 256, 100, 50),
+        );
+        for (file, isa) in [
+            ("multi-vector-minmax8.json", BenchIsa::Auto),
+            ("multi-vector-minmax8-neon.json", BenchIsa::Neon),
+            ("multi-vector-minmax8-v4.json", BenchIsa::X86_64_V4),
+        ] {
+            let input = value_from_file(&directory.join(file));
+            let jobs = input["jobs"].as_array().unwrap();
+            assert_eq!(jobs.len(), 2, "{file}");
+            for (job, expected_isa) in std::iter::zip(jobs, [isa, BenchIsa::Scalar]) {
+                assert_eq!(job["type"], MultiVectorOp::tag(), "{file}");
+                let operation: MultiVectorOp =
+                    serde_json::from_value(job["content"].clone()).unwrap();
+                assert_eq!(operation.element_type, ElementType::MinMax8, "{file}");
+                assert_eq!(operation.isa, expected_isa, "{file}");
+                assert_eq!(operation.runs, baseline.runs, "{file}");
+                assert_eq!(serde_json::to_value(operation).unwrap(), job["content"]);
+            }
+        }
+    }
+
+    #[test]
+    fn multi_vector_rejects_invalid_element_selection() {
+        for (element_type, format, expected_error) in [
+            ("float32", Some("minmax8"), "unknown field `format`"),
+            ("minmax4", None, "unknown variant `minmax4`"),
+        ] {
+            let tempdir = tempfile::tempdir().unwrap();
+            let input_path = tempdir.path().join("input.json");
+            let output_path = tempdir.path().join("output.json");
+            let mut raw = value_from_file(
+                &project_directory()
+                    .join("perf_test_inputs")
+                    .join("multi-vector-minmax8.json"),
+            );
+            raw["jobs"].as_array_mut().unwrap().truncate(1);
+            raw["jobs"][0]["content"]["element_type"] = serde_json::json!(element_type);
+            if let Some(format) = format {
+                raw["jobs"][0]["content"]["format"] = serde_json::json!(format);
+            }
+            save_to_file(&input_path, &raw);
+            let command = Commands::Run {
+                input_file: input_path,
+                output_file: output_path.clone(),
+                dry_run: false,
+                allow_debug: true,
+            };
+            let error = Cli::from_commands(command, true)
+                .run(&mut Memory::new())
+                .unwrap_err();
+            assert!(format!("{error:#}").contains(expected_error), "{error:#}");
+            assert!(!output_path.exists());
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "multi-vector")]
+    fn minmax8_rejects_empty_runs() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let input_path = tempdir.path().join("input.json");
+        let output_path = tempdir.path().join("output.json");
+        let mut raw = value_from_file(
+            &project_directory()
+                .join("perf_test_inputs")
+                .join("multi-vector-minmax8.json"),
+        );
+        raw["jobs"].as_array_mut().unwrap().truncate(1);
+        raw["jobs"][0]["content"]["runs"] = serde_json::json!([]);
+        save_to_file(&input_path, &raw);
+        let command = Commands::Run {
+            input_file: input_path,
+            output_file: output_path.clone(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let error = Cli::from_commands(command, true)
+            .run(&mut Memory::new())
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("MinMax8 requires at least one run"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    #[cfg(feature = "multi-vector")]
+    fn minmax8_rejects_unsupported_isa() {
+        use crate::inputs::multi_vector::BenchIsa;
+        use diskann_quantization::multi_vector::MaxSimIsa;
+
+        for isa in [
+            BenchIsa::Reference,
+            BenchIsa::X86_64_V3,
+            BenchIsa::X86_64_V4,
+            BenchIsa::Neon,
+        ] {
+            if !matches!(isa, BenchIsa::Reference) && MaxSimIsa::from(isa).is_available() {
+                continue;
+            }
+            let tempdir = tempfile::tempdir().unwrap();
+            let input_path = tempdir.path().join("input.json");
+            let output_path = tempdir.path().join("output.json");
+            let path = match isa {
+                BenchIsa::Neon => project_directory()
+                    .join("perf_test_inputs")
+                    .join("multi-vector-minmax8-neon.json"),
+                BenchIsa::X86_64_V4 => project_directory()
+                    .join("perf_test_inputs")
+                    .join("multi-vector-minmax8-v4.json"),
+                _ => project_directory()
+                    .join("perf_test_inputs")
+                    .join("multi-vector-minmax8.json"),
+            };
+            let mut raw = value_from_file(&path);
+            raw["jobs"].as_array_mut().unwrap().truncate(1);
+            raw["jobs"][0]["content"]["isa"] = serde_json::to_value(isa).unwrap();
+            save_to_file(&input_path, &raw);
+            let command = Commands::Run {
+                input_file: input_path,
+                output_file: output_path.clone(),
+                dry_run: false,
+                allow_debug: true,
+            };
+            let mut output = Memory::new();
+            assert!(Cli::from_commands(command, true).run(&mut output).is_err());
+            let output = String::from_utf8(output.into_inner()).unwrap();
+            if matches!(isa, BenchIsa::Reference) {
+                assert!(output.contains("MinMax8 has no reference kernel; use scalar"));
+            } else {
+                assert!(output.contains("ISA unavailable on this CPU"));
+            }
+            assert!(!output_path.exists());
+        }
     }
 
     #[test]

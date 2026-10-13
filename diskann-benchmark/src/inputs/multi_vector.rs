@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_benchmark_runner::{utils::datatype::DataType, Checker, Input};
+use diskann_benchmark_runner::{Checker, Input};
 use diskann_quantization::multi_vector::MaxSimIsa;
 use serde::{Deserialize, Serialize};
 
@@ -69,14 +69,36 @@ pub(crate) struct Run {
     pub(crate) num_measurements: NonZeroUsize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ElementType {
+    Float32,
+    Float16,
+    Int8,
+    /// MinMax8 queries and MinMax4 documents, quantized from f32 fixtures.
+    MinMax8,
+}
+
+impl std::fmt::Display for ElementType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Float32 => "float32",
+            Self::Float16 => "float16",
+            Self::Int8 => "int8",
+            Self::MinMax8 => "minmax8",
+        })
+    }
+}
+
 ///////////////////////
 // Multi-Vector Op   //
 ///////////////////////
 
 /// A complete multi-vector benchmark job.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MultiVectorOp {
-    pub(crate) element_type: DataType,
+    pub(crate) element_type: ElementType,
     pub(crate) isa: BenchIsa,
     pub(crate) runs: Vec<Run>,
 }
@@ -95,6 +117,9 @@ impl Input for MultiVectorOp {
     }
 
     fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        if raw.element_type == ElementType::MinMax8 {
+            anyhow::ensure!(!raw.runs.is_empty(), "MinMax8 requires at least one run");
+        }
         Ok(raw)
     }
 
@@ -126,7 +151,7 @@ impl Input for MultiVectorOp {
         ];
 
         Self {
-            element_type: DataType::Float32,
+            element_type: ElementType::Float32,
             isa: BenchIsa::Auto,
             runs,
         }
