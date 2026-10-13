@@ -45,7 +45,7 @@ use std::num::NonZeroUsize;
 
 use crate::{
     ANNError, ANNResult,
-    graph::{AdjacencyList, Config, config::PruneKind},
+    graph::{AdjacencyList, Config},
     utils::VectorRepr,
 };
 use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -193,11 +193,6 @@ pub enum PiPNNConfigError {
     SamplingFraction(f64),
     #[error("fanout must not be empty")]
     EmptyFanout,
-    #[error("graph prune kind {prune_kind:?} does not match metric {metric:?}")]
-    PruneKind {
-        prune_kind: PruneKind,
-        metric: Metric,
-    },
     #[error("num_hash_planes ({0}) must be in [1, {max}]", max = lsh::MAX_PLANES)]
     HashPlanes(usize),
     #[error("l_max ({0}) must be in [1, {max}]", max = hash_prune::MAX_RESERVOIR_LEN)]
@@ -321,8 +316,8 @@ pub struct PiPNNBuildContext<'a> {
 impl<'a> PiPNNBuildContext<'a> {
     /// Check `config` and combine it with the graph policy.
     ///
-    /// Final pruning applies the prune kind of `graph` to distances of `metric`,
-    /// so the two must match.
+    /// Final pruning uses the prune kind of `graph`, as Vamana does. Build
+    /// `graph` with the prune kind of `metric` (`metric.into()`).
     pub fn new(
         config: PiPNNConfig,
         graph: &'a Config,
@@ -330,11 +325,6 @@ impl<'a> PiPNNBuildContext<'a> {
         pool: &'a ThreadPool,
     ) -> Result<Self, PiPNNConfigError> {
         config.validate()?;
-        let prune_kind = graph.prune_kind();
-        if prune_kind != metric.into() {
-            return Err(PiPNNConfigError::PruneKind { prune_kind, metric });
-        }
-
         Ok(Self {
             config,
             hash_prune: None,
@@ -768,40 +758,6 @@ mod construction_tests {
         let error = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap_err();
 
         assert_eq!(error, PiPNNConfigError::EmptyFanout);
-    }
-
-    #[test]
-    fn a_build_context_requires_the_pruning_kind_of_its_metric() {
-        // L2, cosine and normalized cosine share triangle pruning. Inner product
-        // uses occluding pruning.
-        let pool = thread_pool(1);
-        for (graph_metric, metric, compatible) in [
-            (Metric::L2, Metric::Cosine, true),
-            (Metric::L2, Metric::CosineNormalized, true),
-            (Metric::InnerProduct, Metric::InnerProduct, true),
-            (Metric::L2, Metric::InnerProduct, false),
-            (Metric::InnerProduct, Metric::L2, false),
-        ] {
-            let graph = graph_policy(2, graph_metric).unwrap();
-
-            let result = PiPNNBuildContext::new(partition_policy(), &graph, metric, &pool);
-
-            let case = format!("graph {graph_metric:?}, metric {metric:?}");
-            match result {
-                Ok(_) => assert!(compatible, "{case}"),
-                Err(error) => assert_eq!(
-                    (compatible, error),
-                    (
-                        false,
-                        PiPNNConfigError::PruneKind {
-                            prune_kind: graph_metric.into(),
-                            metric
-                        }
-                    ),
-                    "{case}"
-                ),
-            }
-        }
     }
 
     #[test]
