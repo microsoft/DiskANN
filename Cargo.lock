@@ -518,7 +518,7 @@ version = "0.60.0"
 dependencies = [
  "anyhow",
  "clap",
- "diskann-derive",
+ "diskann-macros",
  "diskann-utils",
  "half",
  "hashbrown 0.16.1",
@@ -566,17 +566,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
-]
-
-[[package]]
-name = "diskann-derive"
-version = "0.60.0"
-dependencies = [
- "diskann-benchmark-runner",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "trybuild",
 ]
 
 [[package]]
@@ -696,6 +685,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "diskann-macros"
+version = "0.60.0"
+dependencies = [
+ "diskann-benchmark-runner",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "trybuild",
 ]
 
 [[package]]

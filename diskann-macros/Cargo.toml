@@ -1,5 +1,5 @@
 [package]
-name = "diskann-derive"
+name = "diskann-macros"
 version.workspace = true
 description.workspace = true
 authors.workspace = true

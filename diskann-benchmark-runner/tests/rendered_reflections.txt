@@ -66,6 +66,7 @@ render::Source
 SourceWrapper
   A new-type wrapper around `Source`.
 
+  render::Source
     Representation: externally tagged
 
     Options:
@@ -111,6 +112,15 @@ SourceWrapper
 ========
 ========
 {
+  "name": "id",
+  "description": "render a primitive newtype wrapper"
+}
+--------
+Id
+  usize
+========
+========
+{
   "name": "config",
   "description": "a sample struct config."
 }
@@ -119,6 +129,7 @@ Config
   A top level config.
 
   "source": SourceWrapper
+    render::Source
       Representation: externally tagged
 
       Options:

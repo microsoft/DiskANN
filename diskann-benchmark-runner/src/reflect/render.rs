@@ -282,12 +282,13 @@ impl<'a> Renderer<'a> {
         let tagged = Tagged::new(field.field());
         let will_render_body = self.will_render(tagged.ty());
 
-        if let Some(index) = index {
-            self.line(format_args!(
+        match index {
+            Some(index) => self.line(format_args!(
                 "{}: {}",
                 index,
                 tagged.reflection().type_name()
-            ))?;
+            ))?,
+            None => self.line(tagged.reflection().type_name())?,
         }
 
         let rendered_doc = self.indent(|r| r.render_doc(field.doc()))?;
@@ -587,6 +588,10 @@ mod tests {
     #[expect(unused, reason = "testing")]
     struct SourceWrapper(Source);
 
+    #[derive(Reflect)]
+    #[expect(unused, reason = "testing")]
+    struct Id(usize);
+
     /// A top level config.
     #[derive(Reflect)]
     #[expect(unused, reason = "testing")]
@@ -604,6 +609,7 @@ mod tests {
             Case::new::<usize>("usize", "a simple test"),
             Case::new::<Source>("source", "a configurable source enum"),
             Case::new::<SourceWrapper>("source wrapper", "render a newtype wrapper"),
+            Case::new::<Id>("id", "render a primitive newtype wrapper"),
             Case::new::<Config>("config", "a sample struct config."),
         ];
 
