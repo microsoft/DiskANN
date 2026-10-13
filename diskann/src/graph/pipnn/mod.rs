@@ -218,19 +218,36 @@ crate::convert_error!(PiPNNConfigError);
 /// PiPNN partition and leaf parameters.
 ///
 /// The DiskANN graph [`Config`] supplies the degree, alpha, and prune kind.
+///
+/// The default configuration is `c_max = 512`, `p_samp = 0.005`,
+/// `fanout = [10, 3]`, `leaf_k = 2` and `replicas = 1`. Each point then joins
+/// about 30 leaves, the product of the fanout values. Larger `c_max`, fanout
+/// values, `leaf_k` and `replicas` all give each point more or nearer candidates,
+/// which raises recall and makes the build slower.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PiPNNConfig {
-    /// Maximum number of points in a leaf.
+    /// Maximum number of points in a leaf. A larger leaf holds more of the true
+    /// neighbors of its points, so the selected neighbors are nearer. The leaf
+    /// distance work grows with the square of the leaf size.
     pub c_max: NonZeroUsize,
     /// Fraction of the points of a cluster that a split samples as leaders, in
-    /// `(0, 1]`.
+    /// `(0, 1]`. More leaders give smaller children and fewer split levels, but
+    /// each split costs `points x leaders x dimensions` multiply-adds. A split
+    /// samples at most 1,000 leaders.
     pub p_samp: f64,
     /// Number of nearest leaders that each point joins, for each split level.
     /// Levels after this schedule use one leader. The schedule must not be empty.
+    /// Larger values make leaves overlap more, so each point gets candidates
+    /// from more leaves. The number of leaves and the leaf build time grow with
+    /// the product of the values.
     pub fanout: Vec<NonZeroUsize>,
-    /// Number of nearest neighbors that each point selects inside a leaf.
+    /// Number of nearest neighbors that each point selects inside a leaf. Each
+    /// selected pair adds a candidate in both directions. A larger value gives
+    /// more candidates and makes final pruning slower.
     pub leaf_k: NonZeroUsize,
-    /// Number of independent partitionings of the dataset.
+    /// Number of independent partitionings of the dataset. Each replica repeats
+    /// the partition and leaf work with new leaders, which adds candidates and
+    /// build time.
     pub replicas: NonZeroUsize,
     /// Seed of leader sampling. The same seed gives the same leaves. `None`
     /// draws a seed from the operating system, so each build samples new leaves.
