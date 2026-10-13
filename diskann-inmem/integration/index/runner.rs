@@ -300,15 +300,6 @@ mod quantization {
             }
         }
     }
-
-    impl From<Rerank> for inmem::repr::product::Rerank {
-        fn from(rerank: Rerank) -> Self {
-            match rerank {
-                Rerank::None => inmem::repr::product::Rerank::None,
-                Rerank::F16 => inmem::repr::product::Rerank::F16,
-            }
-        }
-    }
 }
 
 mod spherical {
@@ -605,7 +596,7 @@ impl Test {
         ));
 
         // Step 3: Create the config.
-        let config = diskann_inmem::repr::Spherical::config(
+        let config = inmem::repr::Spherical::config(
             quantizer,
             Capacity::new(data.nrows()),
             MaxDegree::new(self.build.config.max_degree().get()),
@@ -654,14 +645,17 @@ impl Test {
             <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
         ));
 
-        // Step 2: Create the config.
-        let config = diskann_inmem::repr::Product::config(
-            table,
-            self.data.metric.into(),
+        // Step 2: Create the quantizer.
+        let product =
+            inmem::repr::generic::product::Product::new(table, self.data.metric.into(), None)?;
+
+        // Step 3: Create the config.
+        let config = inmem::repr::generic::Quantized::config(
+            product,
             Capacity::new(data.nrows()),
             MaxDegree::new(self.build.config.max_degree().get()),
             start_point,
-            rerank.into(),
+            quantizer_rerank(rerank, self.data.metric),
         )?;
 
         let index_config = self.build.config.clone();
@@ -675,6 +669,15 @@ where
     DiskANNIndex<DP>: Index,
 {
     Arc::new(DiskANNIndex::new(config, provider, None))
+}
+
+fn quantizer_rerank(rerank: quantization::Rerank, metric: Metric) -> inmem::repr::generic::Rerank {
+    match rerank {
+        quantization::Rerank::None => inmem::repr::generic::Rerank::None,
+        quantization::Rerank::F16 => inmem::repr::generic::Rerank::F16 {
+            metric: metric.into(),
+        },
+    }
 }
 
 ///////////////

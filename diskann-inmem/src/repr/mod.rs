@@ -28,19 +28,15 @@ pub use full::{Full, FullPrecision};
 
 #[cfg(feature = "quantization")]
 #[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
-pub mod product;
-
-#[cfg(feature = "quantization")]
-#[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
-pub use product::Product;
-
-#[cfg(feature = "quantization")]
-#[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
 pub mod spherical;
 
 #[cfg(feature = "quantization")]
 #[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
 pub use spherical::Spherical;
+
+#[cfg(feature = "quantization")]
+#[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
+pub mod generic;
 
 #[cfg(test)]
 mod test;

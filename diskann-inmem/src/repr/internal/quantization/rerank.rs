@@ -33,6 +33,19 @@ pub(in crate::repr) enum Rerank {
     F16,
 }
 
+impl Rerank {
+    #[expect(
+        clippy::expect_used,
+        reason = "the arithmetic should not overflow for the feasible `dim` values"
+    )]
+    fn bytes_for(&self, dim: usize) -> Bytes {
+        match self {
+            Self::None => Bytes::new(0),
+            Self::F16 => Bytes::new(dim.checked_mul(2).expect("f16 is smaller than the f32")),
+        }
+    }
+}
+
 /// Internal representation of [`Rerank`].
 ///
 /// This is used for computing distances among the raw values in the auxiliary store.
@@ -50,35 +63,24 @@ impl Reranker {
         metric: Metric,
         dim: usize,
     ) -> (Self, Option<simple::Config>) {
-        let this = match rerank {
-            Rerank::None => Self::None,
+        match rerank {
+            Rerank::None => Self::disabled(),
             Rerank::F16 => {
                 let distance = <f32 as DistanceProvider<f16>>::distance_comparer(
                     metric.as_vector_metric(),
                     Some(dim),
                 );
 
-                Self::F16(distance)
+                let this = Self::F16(distance);
+                let config = Simple::config(rerank.bytes_for(dim));
+                (this, Some(config))
             }
-        };
-
-        let config = match &this {
-            Self::None => None,
-            Self::F16(_) => Some(Simple::config(this.bytes_for(dim))),
-        };
-
-        (this, config)
+        }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "the arithmetic should not overflow for the feasible `dim` values"
-    )]
-    fn bytes_for(&self, dim: usize) -> Bytes {
-        match self {
-            Self::None => Bytes::new(0),
-            Self::F16(_) => Bytes::new(dim.checked_mul(2).expect("f16 is smaller than the f32")),
-        }
+    /// Construct a disabled [`Reranker`] and corresponding [`store::slots::SlotsConfig`].
+    pub(in crate::repr) fn disabled() -> (Self, Option<simple::Config>) {
+        (Self::None, None)
     }
 
     /// Create a [`repr::PostProcess`].
