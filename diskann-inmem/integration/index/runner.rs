@@ -630,7 +630,7 @@ impl Test {
         // Step 1: Train a generic quantizer.
         let trainer = product::train::LightPQTrainingParameters::new(256, 2);
         let Some(dim) = NonZeroUsize::new(data.ncols()) else {
-            anyhow::bail!("cannot compress a zero dimensional dataset");
+            anyhow::bail!("cannot compress a zero-dimensional dataset");
         };
 
         let table = trainer.train(

@@ -21,14 +21,14 @@ use crate::{
     },
 };
 
-/// Choose how data is going to be reranked.
+/// Choose how data is reranked.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::repr) enum Rerank {
-    /// No reranking will be performed and no space for higher precision vectors will be
+    /// No reranking will be performed and no space for higher-precision vectors will be
     /// allocated.
     None,
 
-    /// Use 16-bit floating point numbers to store the higher precision representation.
+    /// Use 16-bit floating-point numbers to store the higher-precision representation.
     /// These will be used automatically during search to rerank candidates.
     F16,
 }
@@ -41,7 +41,7 @@ impl Rerank {
     fn bytes_for(&self, dim: usize) -> Bytes {
         match self {
             Self::None => Bytes::new(0),
-            Self::F16 => Bytes::new(dim.checked_mul(2).expect("f16 is smaller than the f32")),
+            Self::F16 => Bytes::new(dim.checked_mul(2).expect("f16 is smaller than f32")),
         }
     }
 }
@@ -56,7 +56,7 @@ pub(in crate::repr) enum Reranker {
 }
 
 impl Reranker {
-    /// Construct a new [`Reranker`] and a [`store::slots::SlotsConfig`]  for the auxiliary
+    /// Construct a new [`Reranker`] and a [`store::slots::SlotsConfig`] for the auxiliary
     /// store.
     pub(in crate::repr) fn new_with_config(
         rerank: Rerank,
@@ -88,7 +88,7 @@ impl Reranker {
     /// This assumes that `simple` has the same dimensions as `self`'s contained distance
     /// computation and that `guard` belongs to `simple`.
     ///
-    /// # Pre-conditions
+    /// # Preconditions
     ///
     /// This requires that `slots` is the [`store::slots::Slots`] created from the
     /// configuration returned in [`Self::new_with_config`].
@@ -118,7 +118,7 @@ impl Reranker {
 
     /// Store the vector `v` into the raw buffer `buf`.
     ///
-    /// # Pre-conditions
+    /// # Preconditions
     ///
     /// `buf` must be consistent with the configuration returned from [`Self::new_with_config`],
     /// and may only be `None` if that configuration was `None`.
@@ -143,8 +143,8 @@ impl Reranker {
 
 /// Test that [`repr::PostProcess`] reranks correctly.
 ///
-/// Pass all `ids` to [`repr::PostProcess::post_process`]. Verify that all ids not
-/// present in `distances` have been removed and the remaining ids are present, sorted,
+/// Pass all `ids` to [`repr::PostProcess::post_process`]. Verify that all IDs not
+/// present in `distances` have been removed and the remaining IDs are present, sorted,
 /// and have distance values matching those in `distances`.
 #[cfg(test)]
 pub(in crate::repr) fn test_rerank(
@@ -177,7 +177,7 @@ pub(in crate::repr) fn test_rerank(
 
         assert!(
             current >= previous,
-            "distances is not monotonically increasing, previous = {}, current = {} -- {}",
+            "distances are not monotonically increasing, previous = {}, current = {} -- {}",
             previous,
             current,
             ctx,
@@ -215,7 +215,7 @@ mod tests {
 
     const TEST_DIM: usize = 1;
 
-    /// Create a reranker of dim 5 for the given config and metric.
+    /// Create a reranker with the test dimension for the given configuration and metric.
     fn make_store(rerank: Rerank, metric: Metric) -> (Reranker, Store<Optional<Simple>>) {
         let (reranker, config) = Reranker::new_with_config(rerank, metric, TEST_DIM);
 

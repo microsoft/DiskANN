@@ -33,11 +33,11 @@ pub mod product;
 /// Plug-in for a generalized quantizer compatible with [`Quantized`].
 ///
 /// This is applicable for quantizers that have a single, non-split, flat representation for
-/// quantized vectors with a fixed number of bytes and the same distance for insertion searches
-/// and standard serving searches.
+/// quantized vectors with a fixed number of bytes and the same distance computation for insertion
+/// searches and standard serving searches.
 ///
 /// Distance functors provided by [`Self::distance`] and [`Self::query_distance`] will be
-/// inlined into a higher level kernel, allowing implementations to specialize distances.
+/// inlined into a higher-level kernel, allowing implementations to specialize distances.
 pub trait Quantizer: std::fmt::Debug + Send + Sync + 'static {
     /// The number of bytes required for each quantized vector.
     ///
@@ -50,6 +50,11 @@ pub trait Quantizer: std::fmt::Debug + Send + Sync + 'static {
     fn dim(&self) -> usize;
 
     /// Quantize full-precision data into the byte buffer.
+    ///
+    /// Implementations may assume that
+    ///
+    /// * `quantized.len() == self.bytes().value()`.
+    /// * `data.len() == self.dim()`.
     fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()>;
 
     /// Return the distance computer.
@@ -67,7 +72,7 @@ pub trait Quantizer: std::fmt::Debug + Send + Sync + 'static {
         V: QueryDistanceVisitor<'a>;
 }
 
-/// Return the distance between two raw byte-slices.
+/// Return the distance between two raw byte slices.
 ///
 /// Implementations may not assume any particular alignment of `x` or `y`.
 pub trait Distance: std::fmt::Debug + Send + Sync {
@@ -82,7 +87,7 @@ pub trait DistanceVisitor<'a> {
         D: Distance + 'a;
 }
 
-/// Return the distance between an interned query and a raw byte-slice.
+/// Return the distance between a prepared query and a raw byte slice.
 ///
 /// Implementations may not assume any particular alignment of `x`.
 pub trait QueryDistance: std::fmt::Debug + Send + Sync {
@@ -97,6 +102,7 @@ pub trait QueryDistanceVisitor<'a> {
         D: QueryDistance + 'a;
 }
 
+/// Configuration for [`Quantized`].
 #[derive(Debug)]
 pub struct Config {
     /// The underlying quantizer for the compressed store.
@@ -114,18 +120,18 @@ impl Config {
     /// * `quantizer`: The [`Quantizer`] that will be used to quantize data and compute
     ///   distances.
     ///
-    /// * `capacity`: The number points to allocate space for.
+    /// * `capacity`: The number of points to allocate space for.
     ///
     /// * `max_degree`: The maximum degree of the internal graph.
     ///
     /// * `start_points`: The points to use as frozen start points in the index.
     ///
-    /// * `rerank`: Whether or not reranking is enabled and if so, the representation of the
-    ///   higher precision vectors.
+    /// * `rerank`: Whether reranking is enabled and, if so, the representation of the
+    ///   higher-precision vectors.
     ///
     /// # Errors
     ///
-    /// Errors under the following conditions:
+    /// Returns an error under the following conditions:
     ///
     /// * `start_points.ncols() != quantizer.dim()`: The dimensionality of the start points
     ///   must agree with the quantizer.
@@ -258,18 +264,18 @@ enum ConfigErrorInner {
     },
     #[error("at least one start point must be provided")]
     EmptyStartPoints,
-    #[error("{} start points exceeds u32::MAX", num_start_points)]
+    #[error("{} start points exceed u32::MAX", num_start_points)]
     TooManyStartPoints { num_start_points: usize },
 }
 
-/// Choose how data is going to be reranked.
+/// Choose how data is reranked.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Rerank {
-    /// No reranking will be performed and no space for higher precision vectors will be
+    /// No reranking will be performed and no space for higher-precision vectors will be
     /// allocated.
     None,
 
-    /// Use 16-bit floating point numbers to store the higher precision representation.
+    /// Use 16-bit floating-point numbers to store the higher-precision representation.
     /// These will be used automatically during search to rerank candidates.
     F16 {
         /// The distance metric used during the reranking phase.
@@ -425,9 +431,9 @@ impl Quantized {
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
         let AccessorArgs { rerank_if_enabled } = args;
 
-        // NOTE: `ProcessInto` panics on query dim mismatch.
+        // NOTE: `ProcessInto` panics on a query dimension mismatch.
         //
-        // To avoid hitting that - validate the query dim early.
+        // To avoid that panic, validate the query dimension early.
         let dim = self.dim();
         let query_dim = query.len();
         if query_dim != dim {
@@ -440,8 +446,8 @@ impl Quantized {
         }
 
         let (expand_beam, post_process) = self.store.guard(|cons, guard| -> ANNResult<_> {
-            // This will result in some wasted work if `expand_beam` errors - but hopefully
-            // that is a relatively rare occurance.
+            // This will result in some wasted work if `expand_beam` errors, but that should
+            // be a relatively rare occurrence.
             let post_process = rerank_if_enabled
                 .then(|| {
                     self.reranker
@@ -748,7 +754,7 @@ mod tests {
         repr::test::{Reference, test_expand_beam, test_prune},
     };
 
-    /// A very simple test quantizer that tries it's best to convert `f32` to `i8`.
+    /// A simple test quantizer that tries its best to convert `f32` to `i8`.
     #[derive(Debug, Clone, Copy)]
     struct Round {
         dim: usize,
@@ -781,7 +787,7 @@ mod tests {
         }
         fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()> {
             assert_eq!(quantized.len(), self.dim);
-            assert_eq!(quantized.len(), self.dim);
+            assert_eq!(data.len(), self.dim);
 
             for d in data.iter() {
                 if !d.is_finite() {
@@ -849,7 +855,7 @@ mod tests {
     // This allows cosine distances to return reasonable results as the data is distributed
     // around the origin.
     //
-    // To keep computation mostly tractable, we only use a 2d grid with 9 points. So the
+    // To keep computation mostly tractable, we only use a 2D grid with 9 points. The
     // coordinates are as follows:
     //
     // 0:  [-1, -1]
@@ -909,7 +915,7 @@ mod tests {
         (quantized, reference)
     }
 
-    /// Here - we don't test the whole `expand_beam` loop. That would be a waste of time and
+    /// Here, we don't test the whole `expand_beam` loop. That would be a waste of time and
     /// is already tested by other code.
     ///
     /// Instead we use:
@@ -945,7 +951,7 @@ mod tests {
         let i2 = LogicalId(10);
         let s2 = reference.slot_id_for(i2);
 
-        // Perform Deletes //
+        // Delete values.
         let i3_deleted = LogicalId(8);
         let s3_deleted = reference.slot_id_for(i3_deleted);
 
@@ -958,12 +964,12 @@ mod tests {
         repr::Representation::retire(quantized, s4_deleted.value()).unwrap();
         reference.delete(i4_deleted);
 
-        // Extract Values.
+        // Extract values.
         let v0 = &reference[i0];
         let v1 = &reference[i1];
         let v2 = &reference[i2];
 
-        // For computing distances, we rely on the PQ representation being exact.
+        // The Round quantizer is exact for these integral values.
         let f = <f32 as DistanceProvider<f32>>::distance_comparer(
             metric.as_internal_metric().as_vector_metric(),
             None,
@@ -1186,7 +1192,7 @@ mod tests {
         .unwrap_err();
 
         let msg = err.to_string();
-        assert_contains!(msg, "start points exceeds u32::MAX");
+        assert_contains!(msg, "start points exceed u32::MAX");
     }
 
     #[test]

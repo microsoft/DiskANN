@@ -32,10 +32,10 @@ pub struct Product {
 impl Product {
     /// Construct a new [`Product`] quantizer.
     ///
-    /// Lookup tables will be used to accelerate distance computations. Argument `cache_size`
+    /// Lookup tables will be used to accelerate distance computations. The `cache_size` argument
     /// controls the number of such tables that will be held for reuse to reduce allocations.
     /// This should generally be set to the number of worker threads for best performance.
-    /// Setting to `None` will disable distance table reuse.
+    /// Setting it to `None` will disable distance-table reuse.
     pub fn new(
         table: tables::BasicTable,
         metric: Metric,
@@ -406,7 +406,7 @@ mod tests {
     // This allows cosine distances to return reasonable results as the data is distributed
     // around the origin.
     //
-    // To keep computation mostly tractable, we only use a 2d grid with 9 points. So the
+    // To keep computation mostly tractable, we only use a 2D grid with 9 points. The
     // coordinates are as follows:
     //
     // 0:  [-1, -1]
@@ -546,7 +546,7 @@ mod tests {
         assert_eq!(
             quantized::Quantizer::dim(&product),
             2,
-            "tests tests are written with this assumption"
+            "tests are written with this assumption"
         );
 
         // Error for invalid `data` dim.
@@ -595,7 +595,7 @@ mod tests {
             assert_eq!(
                 quantized::Quantizer::bytes(&product),
                 Bytes::new(2),
-                "tests tests are written with this assumption"
+                "tests are written with this assumption"
             );
 
             let distance = quantized::Quantizer::distance(&product, Boxit);
@@ -615,7 +615,7 @@ mod tests {
             assert_eq!(
                 quantized::Quantizer::bytes(&product),
                 Bytes::new(2),
-                "tests tests are written with this assumption"
+                "tests are written with this assumption"
             );
 
             // Invalid query
