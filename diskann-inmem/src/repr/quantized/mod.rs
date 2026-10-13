@@ -30,7 +30,7 @@ use crate::{
 // Built-in quantizers
 pub mod product;
 
-/// Plug-in for a generlized quantizer compatible with [`Quantized`].
+/// Plug-in for a generalized quantizer compatible with [`Quantized`].
 ///
 /// This is applicable for quantizers that have a single, non-split, flat representation for
 /// quantized vectors with a fixed number of bytes and the same distance for insertion searches

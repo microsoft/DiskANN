@@ -647,10 +647,10 @@ impl Test {
 
         // Step 2: Create the quantizer.
         let product =
-            inmem::repr::generic::product::Product::new(table, self.data.metric.into(), None)?;
+            inmem::repr::quantized::product::Product::new(table, self.data.metric.into(), None)?;
 
         // Step 3: Create the config.
-        let config = inmem::repr::generic::Quantized::config(
+        let config = inmem::repr::quantized::Quantized::config(
             product,
             Capacity::new(data.nrows()),
             MaxDegree::new(self.build.config.max_degree().get()),
@@ -671,10 +671,13 @@ where
     Arc::new(DiskANNIndex::new(config, provider, None))
 }
 
-fn quantizer_rerank(rerank: quantization::Rerank, metric: Metric) -> inmem::repr::generic::Rerank {
+fn quantizer_rerank(
+    rerank: quantization::Rerank,
+    metric: Metric,
+) -> inmem::repr::quantized::Rerank {
     match rerank {
-        quantization::Rerank::None => inmem::repr::generic::Rerank::None,
-        quantization::Rerank::F16 => inmem::repr::generic::Rerank::F16 {
+        quantization::Rerank::None => inmem::repr::quantized::Rerank::None,
+        quantization::Rerank::F16 => inmem::repr::quantized::Rerank::F16 {
             metric: metric.into(),
         },
     }

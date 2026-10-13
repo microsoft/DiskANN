@@ -36,7 +36,11 @@ pub use spherical::Spherical;
 
 #[cfg(feature = "quantization")]
 #[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
-pub mod generic;
+pub mod quantized;
+
+#[cfg(feature = "quantization")]
+#[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
+pub use quantized::Quantized;
 
 #[cfg(test)]
 mod test;

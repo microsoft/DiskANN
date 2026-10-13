@@ -1077,7 +1077,7 @@ impl Benchmark for ProductBuild {
         writeln!(output, "Loaded {num_points} points, dim={dim}")?;
 
         let table = product.train(data.as_view(), input.build.num_threads)?;
-        let quantizer = repr::generic::product::Product::new(
+        let quantizer = repr::quantized::product::Product::new(
             table,
             input.data.distance.into(),
             Some(input.build.num_threads),
@@ -1085,12 +1085,12 @@ impl Benchmark for ProductBuild {
 
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-        let config = repr::generic::Quantized::config(
+        let config = repr::quantized::Quantized::config(
             quantizer,
             Capacity::new(num_points),
             MaxDegree::new(input.build.config.max_degree().get()),
             start,
-            repr::generic::Rerank::F16 {
+            repr::quantized::Rerank::F16 {
                 metric: input.data.distance.into(),
             },
         )?;

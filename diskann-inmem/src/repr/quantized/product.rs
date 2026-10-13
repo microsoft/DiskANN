@@ -13,7 +13,7 @@ use diskann_utils::{
     views::rowmajor::{self, Matrix, MatrixMut},
 };
 
-use crate::{num::Bytes, repr::generic};
+use crate::{num::Bytes, repr::quantized};
 
 #[derive(Debug)]
 pub struct Product {
@@ -55,7 +55,7 @@ impl Product {
     }
 }
 
-impl generic::Quantizer for Product {
+impl quantized::Quantizer for Product {
     fn bytes(&self) -> Bytes {
         Bytes::new(self.transposed.nchunks())
     }
@@ -84,14 +84,14 @@ impl generic::Quantizer for Product {
 
     fn distance<'a, V>(&'a self, visitor: V) -> V::Output
     where
-        V: generic::DistanceVisitor<'a>,
+        V: quantized::DistanceVisitor<'a>,
     {
         visitor.visit(Distance::new(&self.padded, self.metric))
     }
 
     fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
     where
-        V: generic::QueryDistanceVisitor<'a>,
+        V: quantized::QueryDistanceVisitor<'a>,
     {
         use diskann_vector::{Norm, norm::FastL2Norm};
 
@@ -153,12 +153,12 @@ impl From<diskann_vector::distance::Metric> for Metric {
     }
 }
 
-impl From<generic::Metric> for Metric {
-    fn from(m: generic::Metric) -> Self {
+impl From<quantized::Metric> for Metric {
+    fn from(m: quantized::Metric) -> Self {
         match m {
-            generic::Metric::SquaredL2 => Self::SquaredL2,
-            generic::Metric::InnerProduct => Self::InnerProduct,
-            generic::Metric::Cosine => Self::Cosine,
+            quantized::Metric::SquaredL2 => Self::SquaredL2,
+            quantized::Metric::InnerProduct => Self::InnerProduct,
+            quantized::Metric::Cosine => Self::Cosine,
         }
     }
 }
@@ -243,7 +243,7 @@ impl object_pool::AsPooled<DistanceTableArgs> for DistanceTable {
 #[derive(Debug)]
 struct QueryComputer<'a>(object_pool::PooledRef<'a, DistanceTable>);
 
-impl generic::QueryDistance for QueryComputer<'_> {
+impl quantized::QueryDistance for QueryComputer<'_> {
     fn eval(&self, x: &[u8]) -> ANNResult<f32> {
         let distance = match &*self.0 {
             DistanceTable::SquaredL2(table) | DistanceTable::InnerProduct(table) => {
@@ -281,7 +281,7 @@ impl<'a> Distance<'a> {
     }
 }
 
-impl generic::Distance for Distance<'_> {
+impl quantized::Distance for Distance<'_> {
     fn eval(&self, x: &[u8], y: &[u8]) -> ANNResult<f32> {
         self.vtable
             .self_distance(self.table, x, y)

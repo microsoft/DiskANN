@@ -237,4 +237,4 @@ macro_rules! index {
 
 index!({ T } repr::Full<T> where T: repr::FullPrecision + FromSlice + AsDataType);
 index!(repr::Spherical);
-index!(repr::generic::Quantized);
+index!(repr::Quantized);
