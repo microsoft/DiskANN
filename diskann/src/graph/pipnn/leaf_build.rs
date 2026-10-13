@@ -40,16 +40,21 @@ struct LeafBuffers {
 impl LeafBuffers {
     /// Grow the buffers for a leaf of `point_count` points and return the
     /// effective `k` of the leaf.
+    ///
+    /// The buffers never shrink. A smaller leaf uses a prefix, so a later large
+    /// leaf does not fill the same slots again.
     fn prepare(&mut self, point_count: usize, dimension_count: usize, requested_k: usize) -> usize {
         // A point has at most `point_count - 1` other points in its leaf. Wider rows
         // would hold only empty slots.
         let leaf_k = requested_k.min(point_count.saturating_sub(1));
-        grow(&mut self.point_values, point_count * dimension_count, 0.0);
-        grow(
-            &mut self.neighbors,
-            point_count * leaf_k,
-            Candidate::default(),
-        );
+        let value_count = point_count * dimension_count;
+        if self.point_values.len() < value_count {
+            self.point_values.resize(value_count, 0.0);
+        }
+        let neighbor_count = point_count * leaf_k;
+        if self.neighbors.len() < neighbor_count {
+            self.neighbors.resize(neighbor_count, Candidate::default());
+        }
         leaf_k
     }
 
@@ -161,12 +166,6 @@ fn add_symmetric_neighbors(
             local_adjacency[source].push(point_ids[target]);
             local_adjacency[target].push(point_ids[source]);
         }
-    }
-}
-
-fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
-    if values.len() < len {
-        values.resize(len, value);
     }
 }
 
