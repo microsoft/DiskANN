@@ -735,6 +735,8 @@ mod inner {
 mod tests {
     use super::*;
 
+    use std::assert_matches;
+
     use diskann::graph::test::synthetic::Grid;
     use diskann_utils::{assert_contains, views::rowmajor::MatrixMut};
     use diskann_vector::distance::DistanceProvider;
@@ -746,37 +748,97 @@ mod tests {
         repr::test::{Reference, test_expand_beam, test_prune},
     };
 
-    fn train_quantizer(
-        data: rowmajor::Ref<'_, f32>,
-        chunks: usize,
-        centers: usize,
-        metric: Metric,
-    ) -> product::Product {
-        use diskann_quantization::{
-            Parallelism,
-            cancel::DontCancel,
-            product::train::{self, TrainQuantizer},
-            random,
-            views::ChunkOffsets,
-        };
+    /// A very simple test quantizer that tries it's best to convert `f32` to `i8`.
+    #[derive(Debug, Clone, Copy)]
+    struct Round {
+        dim: usize,
+        distance: diskann_vector::distance::Distance<i8, i8>,
+    }
 
-        let trainer = train::LightPQTrainingParameters::new(centers, 2);
-        let basic = trainer
-            .train(
-                data,
-                ChunkOffsets::partition(
-                    NonZeroUsize::new(data.ncols()).unwrap(),
-                    NonZeroUsize::new(chunks).unwrap(),
-                )
-                .unwrap()
-                .as_view(),
-                Parallelism::Sequential,
-                &random::StdRngBuilder::new(0),
-                &DontCancel,
-            )
-            .unwrap();
+    impl Round {
+        fn new(dim: usize, metric: Metric) -> Self {
+            use diskann_vector::distance::{DistanceProvider, Metric as VMetric};
 
-        product::Product::new(basic, metric.into(), NonZeroUsize::new(1)).unwrap()
+            let vmetric = match metric {
+                Metric::SquaredL2 => VMetric::L2,
+                Metric::InnerProduct => VMetric::InnerProduct,
+                Metric::Cosine => VMetric::Cosine,
+            };
+
+            Self {
+                dim,
+                distance: <i8 as DistanceProvider<i8>>::distance_comparer(vmetric, None),
+            }
+        }
+    }
+
+    impl Quantizer for Round {
+        fn bytes(&self) -> Bytes {
+            Bytes::new(self.dim)
+        }
+        fn dim(&self) -> usize {
+            self.dim
+        }
+        fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()> {
+            assert_eq!(quantized.len(), self.dim);
+            assert_eq!(quantized.len(), self.dim);
+
+            for d in data.iter() {
+                if !d.is_finite() {
+                    return Err(ANNError::message("a value of infinity or NaN was observed"));
+                }
+            }
+
+            std::iter::zip(quantized.iter_mut(), data.iter())
+                .for_each(|(q, d)| *q = ((*d) as i8) as u8);
+            Ok(())
+        }
+        fn distance<'a, V>(&'a self, visitor: V) -> V::Output
+        where
+            V: DistanceVisitor<'a>,
+        {
+            visitor.visit(RoundDistance(*self))
+        }
+        fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
+        where
+            V: QueryDistanceVisitor<'a>,
+        {
+            let distance = RoundQueryDistance {
+                round: *self,
+                query: query.iter().map(|v| (*v) as i8).collect(),
+            };
+            Ok(visitor.visit(distance))
+        }
+    }
+
+    #[derive(Debug)]
+    struct RoundDistance(Round);
+
+    impl Distance for RoundDistance {
+        fn eval(&self, x: &[u8], y: &[u8]) -> ANNResult<f32> {
+            assert_eq!(x.len(), self.0.dim);
+            assert_eq!(y.len(), self.0.dim);
+            Ok(self.0.distance.call(
+                bytemuck::must_cast_slice::<u8, i8>(x),
+                bytemuck::must_cast_slice::<u8, i8>(y),
+            ))
+        }
+    }
+
+    #[derive(Debug)]
+    struct RoundQueryDistance {
+        round: Round,
+        query: Vec<i8>,
+    }
+
+    impl QueryDistance for RoundQueryDistance {
+        fn eval(&self, x: &[u8]) -> ANNResult<f32> {
+            assert_eq!(x.len(), self.round.dim);
+            Ok(self
+                .round
+                .distance
+                .call(&self.query, bytemuck::must_cast_slice::<u8, i8>(x)))
+        }
     }
 
     /// See the description in [`make_test_repr`].
@@ -806,32 +868,15 @@ mod tests {
     fn make_test_repr(metric: Metric, rerank: Rerank, fill: bool) -> (Quantized, Reference) {
         let grid = Grid::Two;
         let mut data = grid.data(3);
-        let offset = 1.5;
+        let offset = 1.0;
         data.as_mut_slice().iter_mut().for_each(|v| *v -= offset);
 
         let mut start_points = rowmajor::Owned::from_element(2, data.ncols(), 0.0);
         start_points.row_mut(0).fill(-2.0);
         start_points.row_mut(1).fill(2.0);
 
-        // Train with 2 chunks and 5 centers. This should be sufficient to exactly represent
-        // all the points in the grid.
-        //
-        // To ensure the results are exact, we append the start points to the training data.
-        let product = {
-            let train_data =
-                rowmajor::Owned::from_fn(data.nrows() + start_points.nrows(), data.ncols(), |rc| {
-                    if let Some(start_point_row) = rc.row.checked_sub(data.nrows()) {
-                        *start_points.element(start_point_row, rc.col)
-                    } else {
-                        *data.element(rc.row, rc.col)
-                    }
-                });
-
-            train_quantizer(train_data.as_view(), 2, 5, metric)
-        };
-
         let config = Quantized::config(
-            product,
+            Round::new(data.ncols(), metric),
             Capacity::new(data.nrows()),
             MaxDegree::new(0),
             start_points.clone(),
@@ -1036,10 +1081,10 @@ mod tests {
     /// to these parameters has a multiplicative effect on runtime.
     ///
     /// This mainly matters for Miri tests. Currently, the Miri test for this function takes
-    /// about 30 seconds. If it starts to take much longer, this test should be split into
+    /// about 10 seconds. If it starts to take much longer, this test should be split into
     /// multiple entry points for parallelism.
     #[test]
-    fn test_product() {
+    fn test_quantized() {
         #[derive(Debug, Clone, Copy)]
         enum RerankKind {
             None,
@@ -1056,10 +1101,10 @@ mod tests {
                     RerankKind::F16 => Rerank::F16 { metric },
                 };
 
-                let (spherical, mut reference) = make_test_repr(metric, rerank, true);
+                let (quantized, mut reference) = make_test_repr(metric, rerank, true);
 
                 test_distances(
-                    &spherical,
+                    &quantized,
                     &mut reference,
                     metric,
                     rerank,
@@ -1069,18 +1114,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_metric() {
+        use diskann_vector::distance::Metric as VMetric;
+
+        assert_matches!(Metric::from(VMetric::L2), Metric::SquaredL2);
+        assert_matches!(Metric::from(VMetric::InnerProduct), Metric::InnerProduct);
+        assert_matches!(Metric::from(VMetric::Cosine), Metric::Cosine);
+        assert_matches!(Metric::from(VMetric::CosineNormalized), Metric::Cosine);
+    }
+
     //-------------//
     // Error Paths //
     //-------------//
 
     #[test]
     fn test_config_dim_mismatch() {
-        let data = rowmajor::Owned::from_element(2, 5, 1.0f32);
-        let product = train_quantizer(data.as_view(), 2, 2, Metric::SquaredL2);
+        let dim = 5;
+        let round = Round::new(dim, Metric::SquaredL2);
 
-        let start_points = rowmajor::Owned::from_element(1, 6, 0.0f32); // Wrong number of columns
+        let start_points = rowmajor::Owned::from_element(1, dim + 1, 0.0f32); // Wrong number of columns
         let err = Quantized::config(
-            product,
+            round,
             Capacity::new(10),
             MaxDegree::new(0),
             start_points,
@@ -1097,12 +1152,12 @@ mod tests {
 
     #[test]
     fn test_empty_start_points() {
-        let data = rowmajor::Owned::from_element(2, 5, 1.0f32);
-        let product = train_quantizer(data.as_view(), 2, 2, Metric::SquaredL2);
+        let dim = 5;
+        let round = Round::new(dim, Metric::SquaredL2);
 
-        let start_points = rowmajor::Owned::from_element(0, 5, 0.0f32); // Empty
+        let start_points = rowmajor::Owned::from_element(0, dim, 0.0f32); // Empty
         let err = Quantized::config(
-            product,
+            round,
             Capacity::new(10),
             MaxDegree::new(0),
             start_points,
@@ -1111,15 +1166,35 @@ mod tests {
         .unwrap_err();
 
         let msg = err.to_string();
-        assert_contains!(msg, "at least one start point must be provided",);
+        assert_contains!(msg, "at least one start point must be provided");
+    }
+
+    #[test]
+    fn test_too_many_start_points() {
+        let dim = 0;
+        let round = Round::new(0, Metric::SquaredL2);
+
+        // Too big.
+        let start_points = rowmajor::Owned::from_element((u32::MAX as usize) + 1, dim, 0.0f32);
+        let err = Quantized::config(
+            round,
+            Capacity::new(10),
+            MaxDegree::new(0),
+            start_points,
+            Rerank::None,
+        )
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert_contains!(msg, "start points exceeds u32::MAX");
     }
 
     #[test]
     fn test_build_error_uncompressible_query() {
-        let data = rowmajor::Owned::from_element(2, 5, 1.0f32);
-        let product = train_quantizer(data.as_view(), 2, 2, Metric::SquaredL2);
+        let dim = 5;
+        let product = Round::new(5, Metric::SquaredL2);
 
-        let start_points = rowmajor::Owned::from_element(1, 5, f32::INFINITY); // Wrong number of columns
+        let start_points = rowmajor::Owned::from_element(1, dim, f32::INFINITY);
         let config = Quantized::config(
             product,
             Capacity::new(10),
