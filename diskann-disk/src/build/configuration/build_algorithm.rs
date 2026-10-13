@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 /// PiPNN parameters in the JSON build configuration.
 ///
 /// The common index configuration supplies graph degree, alpha, metric, thread
-/// count, and memory limit.
+/// count, and memory limit. [`diskann::graph::pipnn::PiPNNConfig`] describes
+/// the effect of each parameter.
 #[cfg(feature = "pipnn")]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -34,9 +35,11 @@ pub struct PiPNNParameters {
 #[cfg(feature = "pipnn")]
 impl Default for PiPNNParameters {
     fn default() -> Self {
-        const C_MAX: NonZeroUsize = NonZeroUsize::new(256).unwrap();
-        const FANOUT: [NonZeroUsize; 2] =
-            [NonZeroUsize::new(8).unwrap(), NonZeroUsize::new(3).unwrap()];
+        const C_MAX: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+        const FANOUT: [NonZeroUsize; 2] = [
+            NonZeroUsize::new(10).unwrap(),
+            NonZeroUsize::new(3).unwrap(),
+        ];
         const K: NonZeroUsize = NonZeroUsize::new(2).unwrap();
         Self {
             c_max: C_MAX,
