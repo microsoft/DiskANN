@@ -27,8 +27,8 @@ use crate::{
     },
 };
 
-// // Built-in quantizers
-// pub mod product;
+// Built-in quantizers
+pub mod product;
 
 /// Plug-in for a generalized quantizer compatible with [`Quantized`].
 ///
