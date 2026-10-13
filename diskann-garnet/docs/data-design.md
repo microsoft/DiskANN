@@ -120,14 +120,20 @@ Importing a term keyed by an internal ID claims that ID before writing the term 
 
 Note that for the BIN quantizer, a 1 byte flag precedes the quantizer table which indicates whether quantization backfill is complete. That byte is accounted for in the value sizing above.
 
-Quantizer state can only be replaced while no user IDs are occupied in the FSM and no start-point vector exists. Replacement is serialized with imports and normal vector writes using the existing import gate and FSM quantization barrier.
+Quantizer state can only be replaced before importing begins, while no user IDs are occupied in the FSM and no start-point vector exists. Setup takes the import-transition mutex before the FSM quantization barrier. Initial setup from `Disabled` requires exclusive caller access before publishing the index: ordinary operations in that state do not take the transition mutex.
 
-##### Import Eligibility
+##### Import Status
 
 *Key*: b'_imp'; this key is always 4 bytes.
-*Value*: A single byte, 0 for disabled and 1 for enabled.
+*Value*: A single byte: 0 for `Disabled`, 1 for `Ready`, or 2 for `Importing`.
 
-If absent, imports are enabled only for an unquantized index without a start point. Successfully setting quantizer state on an empty, quantized index enables imports. Ordinary index operations and import finalization disable them.
+When no saved status exists, an empty index starts `Ready` if it is unquantized or has supplied quantizer state, and `Disabled` otherwise. The initial status is persisted before writing Q8's generated default table, so that table cannot enable imports on reopen. Successfully supplying quantizer state during creation publishes `Ready` after setup completes. A saved status is restored rather than inferred from the absence of a start point.
+
+The first ordinary operation transitions `Ready` to `Disabled`; the first accepted imported term transitions `Ready` to `Importing`. More terms can then arrive in parallel, but ordinary operations fail until all verification tasks and finalization succeed. The last successful task transitions `Importing` to `Disabled`. Empty finalization also waits for every task and does not create a start point. Failed verification or finalization leaves an active import `Importing`.
+
+Status transitions persist the new byte before publishing it with an atomic compare-exchange, under a transition-only mutex. A failed metadata write does not publish the new in-memory status. Ordinary operations in `Disabled` only load the atomic status; admitted term writes and verification workers do not hold the transition mutex. Callers must finish all term writes before starting finalization.
+
+The former Boolean format did not distinguish ready indexes from unfinished imports; finish those imports before upgrading.
 
 #### Internal ID Mapping
 

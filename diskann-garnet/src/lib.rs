@@ -1277,7 +1277,8 @@ pub unsafe extern "C" fn search_neighbors(
 /// This ensures quantized vectors will be externally intelligible to another system with
 /// the same quantizer state.
 ///
-/// Returns true on success or false if the index is non-empty.
+/// Returns false if importing has begun, the index is non-empty, or setup fails. On failure,
+/// discard the vector set: the quantizer and persisted metadata may already have changed.
 ///
 /// # Safety
 ///
@@ -1302,7 +1303,7 @@ pub unsafe extern "C" fn set_quant_state(
     index.inner.set_quant_state(&ctx, state)
 }
 
-/// Returns whether the index currently accepts imported terms
+/// Returns whether the index accepts imported terms.
 ///
 /// # Safety
 ///
@@ -1322,6 +1323,7 @@ pub unsafe extern "C" fn can_import(ctx: u64, index_ptr: *const c_void) -> bool 
 ///
 /// This is intended for bulk loading of existing DiskANN graphs that are stored outside of Garnet,
 /// allowing for creation of a vector set to happen without calling `VADD` on every vector.
+/// Ordinary index operations will fail once importing begins until finalization succeeds.
 ///
 /// # Safety
 ///

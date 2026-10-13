@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{num::NonZero, sync::RwLock};
+use std::num::NonZero;
 
 use diskann::utils::VectorRepr;
 use diskann_quantization::{
@@ -19,6 +19,7 @@ use diskann_quantization::{
 };
 use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
+use parking_lot::RwLock;
 use thiserror::Error;
 
 use crate::provider::{GarnetDistanceComputer, GarnetQueryComputer};
@@ -111,7 +112,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn is_trained(&self) -> bool {
-        self.inner.read().unwrap().is_some()
+        self.inner.read().is_some()
     }
 
     fn train(
@@ -133,7 +134,7 @@ impl GarnetQuantizer for Spherical1Bit {
         )
         .map_err(|e| GarnetQuantizerError::Training(Box::new(e)))?;
 
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         *inner = Some(
             spherical::iface::Impl::<1>::new(quantizer)
                 .map_err(|e| GarnetQuantizerError::Alloc(Box::new(e)))?,
@@ -143,7 +144,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError> {
-        let guard = self.inner.read().unwrap();
+        let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             spherical::iface::Quantizer::<GlobalAllocator>::compress(
                 quantizer,
@@ -159,7 +160,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn distance_computer(&self) -> Result<GarnetDistanceComputer, GarnetQuantizerError> {
-        let guard = self.inner.read().unwrap();
+        let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             let computer = quantizer
                 .distance_computer(GlobalAllocator)
@@ -171,7 +172,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError> {
-        let guard = self.inner.read().unwrap();
+        let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             let computer = quantizer
                 .fused_query_computer(
@@ -189,7 +190,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
-        let guard = self.inner.read().unwrap();
+        let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             quantizer
                 .serialize(GlobalAllocator)
@@ -204,7 +205,7 @@ impl GarnetQuantizer for Spherical1Bit {
             return Err(GarnetQuantizerError::UnsupportedSerialization);
         }
 
-        let mut guard = self.inner.write().unwrap();
+        let mut guard = self.inner.write();
         if guard.is_some() {
             Err(GarnetQuantizerError::UnsupportedSerialization)
         } else {
@@ -318,7 +319,6 @@ impl GarnetQuantizer for MinMax8Bit {
             .map_err(|e| GarnetQuantizerError::Compression(Box::new(e)))?;
         self.inner
             .read()
-            .unwrap()
             .compress_into(v, into)
             .map_err(|e| GarnetQuantizerError::Compression(Box::new(e)))?;
         Ok(())
@@ -335,7 +335,7 @@ impl GarnetQuantizer for MinMax8Bit {
     }
 
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         let computer = GarnetQueryComputer::new(MinMax8BitQueryComputer::new(
             &inner,
             query,
@@ -348,7 +348,6 @@ impl GarnetQuantizer for MinMax8Bit {
     fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
         self.inner
             .read()
-            .unwrap()
             .serialize(GlobalAllocator)
             .map_err(|e| GarnetQuantizerError::Alloc(Box::new(e)))
     }
@@ -358,7 +357,7 @@ impl GarnetQuantizer for MinMax8Bit {
             return Err(GarnetQuantizerError::UnsupportedSerialization);
         }
 
-        let mut guard = self.inner.write().unwrap();
+        let mut guard = self.inner.write();
         let quantizer = MinMaxQuantizer::try_deserialize(state)
             .map_err(|error| GarnetQuantizerError::Deserialization(Box::new(error)))?;
         if quantizer.dim() == self.dim && quantizer.output_dim() == self.dim {

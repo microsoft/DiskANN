@@ -19,10 +19,8 @@
 //! counter which tracks the next new ID.
 
 use crossbeam::queue::ArrayQueue;
-use std::sync::{
-    Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use thiserror::Error;
 
 use crate::garnet::{Callbacks, Context, GarnetError, Term};
@@ -151,7 +149,7 @@ impl FreeSpaceMap {
             this.load_state(ctx)?;
         } else {
             // Allocate first block.
-            let mut id_minter = this.id_minter.write().unwrap();
+            let mut id_minter = this.id_minter.write();
             this.expand_to(&mut id_minter, ctx, 1)?;
         }
 
@@ -204,12 +202,12 @@ impl FreeSpaceMap {
             }
         }
 
-        let mut id_minter = self.id_minter.write().unwrap();
+        let mut id_minter = self.id_minter.write();
         id_minter.max_block = max_block_id - 1;
 
         id_minter.next_id = last_used_id + 1;
 
-        let barrier = self.barrier.get_mut().unwrap();
+        let barrier = self.barrier.get_mut();
         if barrier.quantization_enabled {
             barrier.max_id_for_backfill = id_minter.next_id.saturating_sub(1);
         }
@@ -277,7 +275,7 @@ impl FreeSpaceMap {
     /// data changed or not.
     fn mark_id(&self, ctx: &Context, id: u32, used: bool) -> Result<bool, FsmError> {
         {
-            let id_minter = self.id_minter.read().unwrap();
+            let id_minter = self.id_minter.read();
             if id == 0 || id >= id_minter.next_id {
                 return Err(FsmError::IdOutOfRange(id));
             }
@@ -290,7 +288,7 @@ impl FreeSpaceMap {
     pub(crate) fn is_free(&self, ctx: &Context, id: u32) -> Result<bool, FsmError> {
         // Don't hold the lock longer than we have to.
         let max_block = {
-            let id_minter = self.id_minter.read().unwrap();
+            let id_minter = self.id_minter.read();
             if id == 0 || id >= id_minter.next_id {
                 return Err(FsmError::IdOutOfRange(id));
             }
@@ -327,7 +325,7 @@ impl FreeSpaceMap {
     pub(crate) fn next_id(&self, ctx: &Context) -> Result<ReuseGuard<'_>, FsmError> {
         // A read barrier is acquired for the whole function. This prevents ID
         // minting during quantization phase changes.
-        let barrier = self.barrier.read().unwrap();
+        let barrier = self.barrier.read();
 
         if self.reuse_enabled.load(Ordering::Acquire) && self.has_free_ids.load(Ordering::Acquire) {
             // We retry reusing a freed ID until there are none or we get one and marking it used
@@ -363,7 +361,7 @@ impl FreeSpaceMap {
         }
 
         // Mint a new ID and mark it used.
-        let mut id_minter = self.id_minter.write().unwrap();
+        let mut id_minter = self.id_minter.write();
         let id = id_minter.next_id;
         let next_id = id.checked_add(1).ok_or(FsmError::IdOutOfRange(id))?;
         self.expand_to(&mut id_minter, ctx, id)?;
@@ -375,7 +373,7 @@ impl FreeSpaceMap {
 
     /// Guard writes to an existing ID without changing its allocation state.
     pub(crate) fn existing_id(&self, id: u32) -> ReuseGuard<'_> {
-        ReuseGuard::new(id, self.barrier.read().unwrap())
+        ReuseGuard::new(id, self.barrier.read())
     }
 
     /// Claim an imported ID, creating any missing blocks and advancing the maximum ID.
@@ -387,7 +385,7 @@ impl FreeSpaceMap {
             return Ok(());
         }
         let next_id = id.checked_add(1).ok_or(FsmError::IdOutOfRange(id))?;
-        let mut id_minter = self.id_minter.write().unwrap();
+        let mut id_minter = self.id_minter.write();
         let grows = id >= id_minter.next_id;
 
         if grows {
@@ -410,7 +408,7 @@ impl FreeSpaceMap {
     ///
     /// This ID may be free if that ID has been deleted since the ID was created.
     pub(crate) fn max_id(&self) -> u32 {
-        let id_minter = self.id_minter.read().unwrap();
+        let id_minter = self.id_minter.read();
         id_minter.next_id.saturating_sub(1)
     }
 
@@ -440,7 +438,7 @@ impl FreeSpaceMap {
     /// Scan the FSM blocks to fill up fast_free_list.
     fn refill_fast_free_list(&self, ctx: &Context) -> Result<bool, FsmError> {
         // NOTE: We take a lock to prevent multiple refills happening simultaneously.
-        let _guard = self.refill_lock.lock().unwrap();
+        let _guard = self.refill_lock.lock();
 
         // If we had to wait to acquire the lock, it's possible some else refilled the list first, so check it again.
         if !self.fast_free_list.is_empty() {
@@ -448,7 +446,7 @@ impl FreeSpaceMap {
         }
 
         let (max_block, next_id) = {
-            let id_minter = self.id_minter.read().unwrap();
+            let id_minter = self.id_minter.read();
             (id_minter.max_block, id_minter.next_id)
         };
 
@@ -543,7 +541,7 @@ impl FreeSpaceMap {
     where
         F: FnMut(u32) -> bool,
     {
-        let max_block = { self.id_minter.read().unwrap().max_block };
+        let max_block = { self.id_minter.read().max_block };
         let mut block = vec![0u8; BLOCK_SIZE_BYTES];
 
         for block_id in 0..=max_block {
@@ -584,7 +582,7 @@ impl FreeSpaceMap {
     /// Prepare a quantization change while under the barrier, then enable it on success.
     /// `prepare` must not acquire the FSM barrier.
     pub(crate) fn enable_quantization_if(&self, prepare: impl FnOnce() -> bool) -> bool {
-        let mut guard = self.barrier.write().unwrap();
+        let mut guard = self.barrier.write();
         if !prepare() {
             return false;
         }
@@ -600,7 +598,7 @@ impl FreeSpaceMap {
 
     /// Return the max ID for purposes of backfilling quantized vectors.
     pub(crate) fn max_id_for_backfill(&self) -> u32 {
-        self.barrier.read().unwrap().max_id_for_backfill
+        self.barrier.read().max_id_for_backfill
     }
 }
 
@@ -928,7 +926,7 @@ mod tests {
         assert_eq!(fsm.total_used(), 0);
         assert_eq!(fsm.next_id(&ctx).unwrap().id(), 1);
 
-        fsm.id_minter.write().unwrap().next_id = u32::MAX;
+        fsm.id_minter.write().next_id = u32::MAX;
         assert!(matches!(
             fsm.next_id(&ctx),
             Err(FsmError::IdOutOfRange(u32::MAX))

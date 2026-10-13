@@ -31,6 +31,7 @@ use diskann_utils::{
 use diskann_vector::{
     DistanceFunction, PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric,
 };
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use std::{
     any::TypeId,
     collections::HashSet,
@@ -40,8 +41,8 @@ use std::{
     mem,
     ops::{Deref, DerefMut, Range},
     sync::{
-        Arc, Condvar, Mutex, RwLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
 };
 use strum::VariantArray;
@@ -65,10 +66,53 @@ use crate::{
 /// bytes are the serialized quant table.
 const QUANT_STATE_KEY: u32 = u32::from_be_bytes(*b"_qnt");
 
-/// Import enable state is persisted under this key in Garnet as a metadata term.
-///
-/// It is bool stored as a single byte.
-const IMPORT_ENABLED_KEY: u32 = u32::from_be_bytes(*b"_imp");
+/// Persisted [`ImportStatus`] discriminant, stored as a single metadata byte.
+const IMPORT_STATUS_KEY: u32 = u32::from_be_bytes(*b"_imp");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum ImportStatus {
+    Disabled = 0,
+    Ready = 1,
+    Importing = 2,
+}
+
+impl TryFrom<u8> for ImportStatus {
+    type Error = GarnetProviderError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Disabled),
+            1 => Ok(Self::Ready),
+            2 => Ok(Self::Importing),
+            _ => Err(GarnetProviderError::InvalidImportStatus(value)),
+        }
+    }
+}
+
+struct AtomicImportStatus(AtomicU8);
+
+impl AtomicImportStatus {
+    const fn new(status: ImportStatus) -> Self {
+        Self(AtomicU8::new(status as u8))
+    }
+
+    fn load(&self) -> ImportStatus {
+        ImportStatus::try_from(self.0.load(Ordering::Acquire))
+            .expect("atomic import status must contain a valid discriminant")
+    }
+
+    fn compare_exchange(&self, current: ImportStatus, new: ImportStatus) -> bool {
+        self.0
+            .compare_exchange(
+                current as u8,
+                new as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
 
 /// Starting capacity of the pre-allocated rerank buffers.
 const RERANK_BUFFER_LENGTH: usize = 1024;
@@ -119,6 +163,8 @@ pub(crate) enum GarnetProviderError {
     AllocFailed(#[from] AllocatorError),
     #[error("Invalid quantizer for vector data")]
     InvalidQuantizer,
+    #[error("Invalid import status: {0}")]
+    InvalidImportStatus(u8),
     #[error("Quantizer error: {0}")]
     Quantizer(#[from] GarnetQuantizerError),
     #[error("Post processing error: {0}")]
@@ -138,7 +184,7 @@ struct BackfillGuard {
 
 impl Drop for BackfillGuard {
     fn drop(&mut self) {
-        let _ = self.ranges.lock().unwrap().remove(&self.range);
+        let _ = self.ranges.lock().remove(&self.range);
         self.notify.notify_all();
     }
 }
@@ -266,10 +312,12 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     backfill_notify: Arc<Condvar>,
     /// Lock to ensure training only happens once.
     training_lock: Mutex<()>,
-    /// Lock to gate term importing
-    import_enabled: RwLock<bool>,
+    /// Signals whether imports are allowed, in progress, or disabled.
+    import_status: AtomicImportStatus,
+    /// Serializes state transition for imports.
+    import_transition: Mutex<()>,
     /// Per job tracker for import verification
-    imports_completed: AtomicU64,
+    imports_completed: OnceLock<Vec<AtomicBool>>,
     /// Pool of pre-allocated buffers to use for neighbor lists
     id_buffer_pool: ObjectPool<AdjList>,
     /// Pool of pre-allocated buffers to use for IDs
@@ -342,6 +390,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
             neighbor_cache.insert(0, neighbors);
         }
 
+        let mut has_quant_state = false;
+        let mut default_quant_state = None;
         let (quantizer, canonical_bytes, all_quantized) = match quant_type {
             VectorQuantType::NoQuant
             | VectorQuantType::XNoQuantU8
@@ -355,6 +405,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let quantizer = if let Some(quant_state) =
                     callbacks.read_varsize_iid::<u8>(&context.term(Term::Metadata), QUANT_STATE_KEY)
                 {
+                    has_quant_state = true;
                     quantization::MinMax8Bit::new_from_bytes(metric_type, &quant_state)?
                 } else {
                     if start_point_cache.contains_key(&0) {
@@ -363,13 +414,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     }
                     let quantizer = quantization::MinMax8Bit::new(dim, metric_type)?;
 
-                    if !callbacks.write_iid(
-                        &context.term(Term::Metadata),
-                        QUANT_STATE_KEY,
-                        &quantizer.serialize()?,
-                    ) {
-                        return Err(GarnetError::Write.into());
-                    }
+                    default_quant_state = Some(quantizer.serialize()?);
 
                     quantizer
                 };
@@ -400,6 +445,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     if total_quant_state.len() <= 1 {
                         return Err(GarnetProviderError::InvalidQuantizer);
                     }
+                    has_quant_state = true;
 
                     all_quantized = total_quant_state[0] != 0;
 
@@ -430,15 +476,38 @@ impl<T: VectorRepr> GarnetProvider<T> {
             quantizer.is_none() || all_quantized,
         )?;
 
-        let mut import_enabled = (start_point_cache.is_empty() && quantizer.is_none()) as u8;
-        let _ = callbacks.read_single_iid(
+        let mut persisted_status = [0u8];
+        let import_status = if callbacks.read_single_iid(
             &context.term(Term::Metadata),
-            IMPORT_ENABLED_KEY,
-            bytemuck::bytes_of_mut(&mut import_enabled),
-        );
+            IMPORT_STATUS_KEY,
+            &mut persisted_status,
+        ) {
+            ImportStatus::try_from(persisted_status[0])?
+        } else {
+            let status = if start_point_cache.is_empty()
+                && fsm.total_used() == 0
+                && (quantizer.is_none() || has_quant_state)
+            {
+                ImportStatus::Ready
+            } else {
+                ImportStatus::Disabled
+            };
+            if !callbacks.write_iid(
+                &context.term(Term::Metadata),
+                IMPORT_STATUS_KEY,
+                &[status as u8],
+            ) {
+                return Err(GarnetError::Write.into());
+            }
+            status
+        };
 
-        // import_enabled is true if this is a completely fresh index. A fresh index has no start point.
-        let import_enabled = RwLock::new(import_enabled != 0);
+        // Persist quantizer state
+        if let Some(state) = default_quant_state
+            && !callbacks.write_iid(&context.term(Term::Metadata), QUANT_STATE_KEY, &state)
+        {
+            return Err(GarnetError::Write.into());
+        }
 
         Ok(Self {
             dim,
@@ -452,8 +521,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
             backfill_lock: Arc::new(Mutex::new(HashSet::new())),
             backfill_notify: Arc::new(Condvar::new()),
             training_lock: Mutex::new(()),
-            import_enabled,
-            imports_completed: AtomicU64::new(0),
+            import_status: AtomicImportStatus::new(import_status),
+            import_transition: Mutex::new(()),
+            imports_completed: OnceLock::new(),
             id_buffer_pool,
             filtered_ids_pool,
             filtered_decisions_pool,
@@ -497,12 +567,12 @@ impl<T: VectorRepr> GarnetProvider<T> {
             return None;
         }
 
-        let mut ranges = self.backfill_lock.lock().unwrap();
+        let mut ranges = self.backfill_lock.lock();
         while ranges
             .iter()
             .any(|active| active.start < range.end && range.start < active.end)
         {
-            ranges = self.backfill_notify.wait(ranges).unwrap();
+            self.backfill_notify.wait(&mut ranges);
         }
         let _ = ranges.insert(range.clone());
         Some(BackfillGuard {
@@ -696,9 +766,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
     /// ensure that training happens only once.
     pub(crate) fn train_quantizer(&self, context: &Context) -> bool {
         // Ensure we don't kick off training twice.
-        let _training_guard = match self.training_lock.try_lock() {
-            Ok(g) => g,
-            Err(_) => return false,
+        let Some(_training_guard) = self.training_lock.try_lock() else {
+            return false;
         };
 
         let quantizer = match &self.quantizer {
@@ -999,9 +1068,13 @@ impl<T: VectorRepr> GarnetProvider<T> {
             return false;
         };
 
-        // Exclude imports before taking the FSM barrier, which excludes normal vector writes.
-        let mut import_enabled = self.import_enabled.write().unwrap();
-        self.fsm.enable_quantization_if(|| {
+        // Lock order: import transition, then the FSM barrier excluding vector writes.
+        let transition = self.import_transition.lock();
+        let current = self.import_status.load();
+        if current == ImportStatus::Importing {
+            return false;
+        }
+        let prepared = self.fsm.enable_quantization_if(|| {
             if self.fsm.total_used() != 0
                 || self.callbacks.exists_iid(
                     &context.term(Term::Vector),
@@ -1032,23 +1105,17 @@ impl<T: VectorRepr> GarnetProvider<T> {
             ) {
                 return false;
             }
-            if !self
-                .callbacks
-                .write_iid(&context.term(Term::Metadata), IMPORT_ENABLED_KEY, &[1u8])
-            {
-                return false;
-            }
 
             self.fsm.enable_reuse();
             self.all_quantized.store(true, Ordering::Release);
-            *import_enabled = true;
             true
-        })
+        });
+        prepared && self.publish_import_status(context, current, ImportStatus::Ready, &transition)
     }
 
     /// Returns whether imports are enabled
     pub(crate) fn can_import(&self, _context: &Context) -> bool {
-        *self.import_enabled.read().unwrap()
+        self.import_status.load() != ImportStatus::Disabled
     }
 
     /// Disables imports.
@@ -1057,24 +1124,60 @@ impl<T: VectorRepr> GarnetProvider<T> {
     ///
     /// This is called on most calls that use the index so that imports can only happen on
     /// empty indices.
+    #[inline]
     pub(crate) fn disable_import(&self, context: &Context) -> bool {
-        if !*self.import_enabled.read().unwrap() {
-            return true;
+        match self.import_status.load() {
+            ImportStatus::Disabled => true,
+            ImportStatus::Importing => false,
+            ImportStatus::Ready => {
+                self.transition_import_status(context, ImportStatus::Ready, ImportStatus::Disabled)
+            }
         }
+    }
 
-        let mut guard = self.import_enabled.write().unwrap();
-        if !*guard {
-            return true;
+    /// Start or continue an import.
+    ///
+    /// Returns false if imports are disabled, and true if imports are allowed.
+    fn begin_import(&self, context: &Context) -> bool {
+        match self.import_status.load() {
+            ImportStatus::Importing => true,
+            ImportStatus::Disabled => false,
+            ImportStatus::Ready => {
+                self.transition_import_status(context, ImportStatus::Ready, ImportStatus::Importing)
+            }
         }
+    }
 
-        if !self
-            .callbacks
-            .write_iid(&context.term(Term::Metadata), IMPORT_ENABLED_KEY, &[0u8])
-        {
-            return false;
+    /// Change import status.
+    ///
+    /// Returns true if the desired `new` status is reached; false otherwise.
+    fn transition_import_status(
+        &self,
+        context: &Context,
+        current: ImportStatus,
+        new: ImportStatus,
+    ) -> bool {
+        let transition = self.import_transition.lock();
+        let observed = self.import_status.load();
+        if observed != current {
+            return observed == new;
         }
-        *guard = false;
-        true
+        self.publish_import_status(context, current, new, &transition)
+    }
+
+    /// Persist import status and set the import_status flag.
+    fn publish_import_status(
+        &self,
+        context: &Context,
+        current: ImportStatus,
+        new: ImportStatus,
+        _transition: &MutexGuard<'_, ()>,
+    ) -> bool {
+        self.callbacks.write_iid(
+            &context.term(Term::Metadata),
+            IMPORT_STATUS_KEY,
+            &[new as u8],
+        ) && self.import_status.compare_exchange(current, new)
     }
 
     pub(crate) fn import_term(
@@ -1084,11 +1187,6 @@ impl<T: VectorRepr> GarnetProvider<T> {
         id: &[u8],
         value: &[u8],
     ) -> bool {
-        let guard = self.import_enabled.read().unwrap();
-        if !*guard {
-            return false;
-        }
-
         match term {
             Term::Vector | Term::Neighbors | Term::Quantized | Term::Attributes | Term::ExtMap => {
                 if id.len() == 4 {
@@ -1122,6 +1220,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
                         return false;
                     }
 
+                    if !self.begin_import(context) {
+                        return false;
+                    }
+
                     // Reserve the ID before storing data.
                     if self.fsm.claim_id(context, iid).is_err() {
                         return false;
@@ -1144,6 +1246,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     return false;
                 }
 
+                if !self.begin_import(context) {
+                    return false;
+                }
+
                 let eid = GarnetId::from(id);
                 self.callbacks.write_eid(&context.term(term), &eid, value)
             }
@@ -1152,38 +1258,61 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
     /// Finalizes the import.
     ///
-    /// Returns a pair of bools, the first of which is whether the task suceeded, and the second
-    /// is whether this was the last task to complete.
+    /// Callers must finish all term writes before starting verification tasks. The last
+    /// successful task publishes `Disabled` only after finalization and persistence.
+    /// An empty import returns `(false, Some(true))` to leave start points uninitialized.
     pub(crate) fn finish_import(
         &self,
         context: &Context,
         task_idx: usize,
         task_count: usize,
     ) -> (bool, Option<bool>) {
-        if !self.disable_import(context) {
+        let log_failure = |message: std::fmt::Arguments<'_>| {
+            self.callbacks.log(
+                context,
+                &format!("Error: finish import task {task_idx}/{task_count}: {message}"),
+            );
+        };
+        if !self.begin_import(context) {
+            log_failure(format_args!("imports not enabled"));
             return (false, None);
         }
 
-        if self.fsm.max_id() == 0 {
-            return (false, Some(true));
-        }
+        let max_id = self.fsm.max_id();
 
         let (start_id, end_id) =
-            if let Some((start, end)) = self.task_range(task_idx, task_count, self.fsm.max_id()) {
+            if let Some((start, end)) = self.task_range(task_idx, task_count, max_id) {
                 (start, end)
             } else {
-                self.callbacks
-                    .log(context, "Error: finish_import: Bad task split.");
+                log_failure(format_args!("invalid task split"));
 
                 return (false, None);
             };
+
+        let imports_completed = self
+            .imports_completed
+            .get_or_init(|| (0..task_count).map(|_| AtomicBool::new(false)).collect());
+        if imports_completed.len() != task_count {
+            log_failure(format_args!(
+                "task count changed; expected {}",
+                imports_completed.len()
+            ));
+            return (false, None);
+        }
+        let task_completed = &imports_completed[task_idx];
+        if task_completed.load(Ordering::Acquire) {
+            return (true, None);
+        }
 
         for id in start_id.max(1)..end_id {
             // For every ID that is used, check all terms exist for that ID
             match self.fsm.is_free(context, id) {
                 Ok(true) => continue,
                 Ok(false) => (),
-                Err(_e) => return (false, None),
+                Err(error) => {
+                    log_failure(format_args!("FSM check failed: id={id}, {error}"));
+                    return (false, None);
+                }
             }
 
             if !self.callbacks.exists_iid(
@@ -1191,6 +1320,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 id,
                 self.dim * mem::size_of::<T>(),
             ) {
+                log_failure(format_args!("missing vector: id={id}"));
                 return (false, None);
             }
             if self.is_quantized()
@@ -1200,6 +1330,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     self.quantizer().map(|q| q.bytes()).unwrap_or(0),
                 )
             {
+                log_failure(format_args!("missing quantized vector: id={id}"));
                 return (false, None);
             }
             if !self.callbacks.exists_iid(
@@ -1207,6 +1338,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 id,
                 (self.max_degree + 1) * mem::size_of::<u32>(),
             ) {
+                log_failure(format_args!("missing neighbors: id={id}"));
                 return (false, None);
             }
             let eid = match self
@@ -1214,24 +1346,48 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 .read_varsize_iid(&context.term(Term::ExtMap), id)
             {
                 Some(v) => GarnetId::from(v.as_slice()),
-                None => return (false, None),
+                None => {
+                    log_failure(format_args!("missing external-ID mapping: id={id}"));
+                    return (false, None);
+                }
             };
             if !self
                 .callbacks
                 .exists_eid(&context.term(Term::IntMap), &eid, mem::size_of::<u32>())
             {
+                log_failure(format_args!("missing internal-ID mapping: id={id}"));
                 return (false, None);
             }
         }
 
-        // `imports_completed` tracks how many of the worker threads have finished their
-        // verification. When they all are done, all index terms exist, but we still need
-        // to set up the start points and caches.
-        let import_finished =
-            self.imports_completed.fetch_add(1, Ordering::AcqRel) + 1 == task_count as u64;
+        // Mark each task once and elect the finalizer under the same lock, so neither
+        // duplicate calls nor concurrent completions can finalize the import twice.
+        let import_finished = {
+            let _transition = self.import_transition.lock();
+            if task_completed.load(Ordering::Acquire) {
+                return (true, None);
+            }
+            task_completed.store(true, Ordering::Release);
+            imports_completed
+                .iter()
+                .all(|completed| completed.load(Ordering::Acquire))
+        };
 
         let mut finish_result = None;
         if import_finished {
+            if max_id == 0 {
+                return if self.transition_import_status(
+                    context,
+                    ImportStatus::Importing,
+                    ImportStatus::Disabled,
+                ) {
+                    (false, Some(true))
+                } else {
+                    log_failure(format_args!("status update failed"));
+                    (true, Some(false))
+                };
+            }
+
             let mut first_id = u32::MAX;
             if self
                 .fsm
@@ -1241,28 +1397,39 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 })
                 .is_err()
             {
+                log_failure(format_args!("FSM scan failed"));
                 return (true, Some(false));
             }
 
             if first_id == u32::MAX {
+                log_failure(format_args!("no imported vectors"));
                 return (true, Some(false));
             }
 
             let mut v = match Poly::broadcast(0u8, self.dim * mem::size_of::<T>(), AlignToEight) {
                 Ok(v) => v,
-                Err(_e) => return (true, Some(false)),
+                Err(error) => {
+                    log_failure(format_args!("start point allocation failed: {error}"));
+                    return (true, Some(false));
+                }
             };
             if !self
                 .callbacks
                 .read_single_iid(&context.term(Term::Vector), first_id, &mut v)
             {
+                log_failure(format_args!("start point read failed: id={first_id}"));
                 return (true, Some(false));
             }
             let qv = if let Some(quantizer) = &self.quantizer {
                 let qv_len = quantizer.bytes();
                 let mut qv = match Poly::broadcast(0u8, qv_len, AlignToEight) {
                     Ok(v) => v,
-                    Err(_e) => return (true, Some(false)),
+                    Err(error) => {
+                        log_failure(format_args!(
+                            "quantized start point allocation failed: {error}"
+                        ));
+                        return (true, Some(false));
+                    }
                 };
 
                 if !self.callbacks.read_single_iid(
@@ -1270,6 +1437,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     first_id,
                     &mut qv,
                 ) {
+                    log_failure(format_args!(
+                        "quantized start point read failed: id={first_id}"
+                    ));
                     return (true, Some(false));
                 }
 
@@ -1282,39 +1452,51 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 .callbacks
                 .read_single_iid(&context.term(Term::Neighbors), first_id, &mut ns)
             {
+                log_failure(format_args!(
+                    "start point neighbors read failed: id={first_id}"
+                ));
                 return (true, Some(false));
             }
             let ns_len = ns[self.max_degree] as usize;
 
             // Insert the start point
             if !self.callbacks.write_iid(&context.term(Term::Vector), 0, &v) {
+                log_failure(format_args!("start point write failed"));
                 return (true, Some(false));
             }
             // NOTE: unwrap will succeed because it is gated on the quantizer.
-            if self.quantizer.is_some()
-                && !self.callbacks.write_iid(
-                    &context.term(Term::Quantized),
-                    0,
-                    qv.as_ref().unwrap(),
-                )
+            if let Some(qv) = &qv
+                && !self
+                    .callbacks
+                    .write_iid(&context.term(Term::Quantized), 0, qv)
             {
+                log_failure(format_args!("startpoint quantized write failed"));
                 return (true, Some(false));
             }
             if !self
                 .callbacks
                 .write_iid(&context.term(Term::Neighbors), 0, &ns)
             {
+                log_failure(format_args!("start point neighbors write failed"));
                 return (true, Some(false));
             }
 
             self.start_point_cache.insert(0, v);
-            if self.quantizer.is_some() {
+            if let Some(qv) = qv {
                 // NOTE: unwrap will succeed because it is gated on the quantizer
-                self.start_point_quant_cache.insert(0, qv.unwrap());
+                self.start_point_quant_cache.insert(0, qv);
             }
             self.neighbor_cache.insert(0, ns[0..ns_len].to_vec());
 
-            finish_result = Some(true);
+            let finalized = self.transition_import_status(
+                context,
+                ImportStatus::Importing,
+                ImportStatus::Disabled,
+            );
+            if !finalized {
+                log_failure(format_args!("status update failed"));
+            }
+            finish_result = Some(finalized);
         }
 
         (true, finish_result)
@@ -2637,7 +2819,7 @@ mod tests {
         hash::BuildHasher,
         mem,
         ops::Range,
-        sync::{Arc, Mutex, atomic::Ordering, mpsc},
+        sync::{Arc, atomic::Ordering, mpsc},
         thread,
         time::{Duration, Instant},
     };
@@ -2653,6 +2835,7 @@ mod tests {
     use diskann_providers::index::wrapped_async::DiskANNIndex;
     use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_vector::distance::Metric;
+    use parking_lot::Mutex;
     use rand::Rng;
 
     use crate::{
@@ -2698,7 +2881,7 @@ mod tests {
         assert_eq!(store.int_map_reads(), 0);
         assert!(store.get(ctx.term(Term::IntMap).get(), &id).is_none());
         assert_eq!(provider.fsm.total_used(), 0);
-        LOGS.with(|logs| assert!(logs.lock().unwrap().is_empty()));
+        LOGS.with(|logs| assert!(logs.lock().is_empty()));
     }
 
     fn assert_waits_for_range(
@@ -2731,7 +2914,7 @@ mod tests {
                 early_result.unwrap();
             }
         });
-        assert!(provider.backfill_lock.lock().unwrap().is_empty());
+        assert!(provider.backfill_lock.lock().is_empty());
     }
 
     fn train_for_backfill(provider: &GarnetProvider<f32>, ctx: &Context) {
@@ -2926,7 +3109,7 @@ mod tests {
         }
 
         fn fail_insert_operation(&self, context: u64) -> bool {
-            let mut control = self.control.lock().unwrap();
+            let mut control = self.control.lock();
             let term = context & TERM_BITMASK;
             if control
                 .pause
@@ -3052,6 +3235,181 @@ mod tests {
     }
 
     #[test]
+    fn import_admission_serializes_initial_transition() {
+        for (import_first, import_second) in [(false, true), (true, false), (false, false)] {
+            let store = Arc::new(DashMap::new());
+            let first_context = ParallelContext::new(store.clone());
+            let second_context = ParallelContext::new(store.clone());
+            let ctx = first_context.context();
+            let index = create_2d_f32_index_with_callbacks(
+                VectorQuantType::NoQuant,
+                Metric::L2,
+                ParallelContext::callbacks(),
+                &ctx,
+            );
+            let provider = index.inner.provider();
+            let ordinary_vector = [1.0f32, 2.0];
+            let imported_vector = [3.0f32, 4.0];
+            let operate = |context: &Context, importing: bool| {
+                if importing {
+                    provider.import_term(
+                        context,
+                        Term::Vector,
+                        &7u32.to_ne_bytes(),
+                        bytemuck::cast_slice(&imported_vector),
+                    )
+                } else {
+                    DynIndex::maybe_set_start_point(
+                        &index,
+                        context,
+                        bytemuck::cast_slice(&ordinary_vector),
+                    )
+                    .is_ok()
+                }
+            };
+            let before = parallel_snapshot(&store);
+            let (paused_tx, paused_rx) = mpsc::channel();
+            let (resume_tx, resume_rx) = mpsc::channel();
+            first_context.control.lock().pause =
+                Some((Term::Metadata as u64, paused_tx, resume_rx));
+            let (started_tx, started_rx) = mpsc::channel();
+            let (finished_tx, finished_rx) = mpsc::channel();
+
+            thread::scope(|scope| {
+                let first = scope.spawn(|| {
+                    if !import_first && !import_second {
+                        // Start with a read so the two callers do not race start-point writes.
+                        matches!(DynIndex::approximate_count(&index, &ctx), Ok(0))
+                    } else {
+                        operate(&ctx, import_first)
+                    }
+                });
+                paused_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let second = scope.spawn(|| {
+                    started_tx.send(()).unwrap();
+                    let result = operate(&second_context.context(), import_second);
+                    finished_tx.send(result).unwrap();
+                });
+                started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let early_result = finished_rx.recv_timeout(Duration::from_millis(50));
+                let still_eligible = provider.can_import(&ctx);
+                let while_paused = parallel_snapshot(&store);
+                resume_tx.send(()).unwrap();
+                let first_result = first.join().unwrap();
+                let second_result = match early_result {
+                    Ok(result) => result,
+                    Err(_) => finished_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                };
+                second.join().unwrap();
+
+                assert_eq!(early_result, Err(mpsc::RecvTimeoutError::Timeout));
+                assert!(still_eligible);
+                assert_eq!(while_paused, before);
+                assert!(first_result);
+                assert_eq!(second_result, import_first == import_second);
+            });
+
+            assert_eq!(provider.can_import(&ctx), import_first);
+            assert_eq!(provider.fsm.total_used(), usize::from(import_first));
+            assert_eq!(
+                parallel_get(&store, ctx.term(Term::Vector).get(), &0u32.to_ne_bytes()),
+                (!import_first).then(|| bytemuck::cast_slice(&ordinary_vector).to_vec())
+            );
+            assert_eq!(
+                parallel_get(&store, ctx.term(Term::Vector).get(), &7u32.to_ne_bytes()),
+                import_first.then(|| bytemuck::cast_slice(&imported_vector).to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn admitted_import_terms_proceed_in_parallel() {
+        for term in [Term::Vector, Term::IntMap] {
+            let store = Arc::new(DashMap::new());
+            let first_context = ParallelContext::new(store.clone());
+            let second_context = ParallelContext::new(store.clone());
+            let ctx = first_context.context();
+            let index = create_2d_f32_index_with_callbacks(
+                VectorQuantType::Q8,
+                Metric::L2,
+                ParallelContext::callbacks(),
+                &ctx,
+            );
+            let provider = index.inner.provider();
+            let quant_state = provider.quantizer().unwrap().serialize().unwrap();
+            assert!(provider.set_quant_state(&ctx, &quant_state));
+            let (first_id, first_value, second_id, second_value) = match term {
+                Term::Vector => (
+                    7u32.to_ne_bytes().to_vec(),
+                    bytemuck::cast_slice(&[1.0f32, 2.0]).to_vec(),
+                    8u32.to_ne_bytes().to_vec(),
+                    bytemuck::cast_slice(&[3.0f32, 4.0]).to_vec(),
+                ),
+                Term::IntMap => (
+                    b"first".to_vec(),
+                    7u32.to_ne_bytes().to_vec(),
+                    b"second".to_vec(),
+                    8u32.to_ne_bytes().to_vec(),
+                ),
+                _ => unreachable!(),
+            };
+            let (paused_tx, paused_rx) = mpsc::channel();
+            let (resume_tx, resume_rx) = mpsc::channel();
+            first_context.control.lock().pause = Some((term as u64, paused_tx, resume_rx));
+            let (finished_tx, finished_rx) = mpsc::channel();
+
+            thread::scope(|scope| {
+                let first =
+                    scope.spawn(|| provider.import_term(&ctx, term, &first_id, &first_value));
+                paused_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let second = scope.spawn(|| {
+                    let context = second_context.context();
+                    let imported = provider.import_term(&context, term, &second_id, &second_value);
+                    let replaced = provider.set_quant_state(&context, &quant_state);
+                    let ordinary = DynIndex::maybe_set_start_point(
+                        &index,
+                        &context,
+                        bytemuck::cast_slice(&[5.0f32, 6.0]),
+                    )
+                    .is_ok();
+                    finished_tx.send((imported, replaced, ordinary)).unwrap();
+                });
+                let second_result = finished_rx.recv_timeout(Duration::from_secs(5));
+                let first_while_paused = parallel_get(&store, ctx.term(term).get(), &first_id);
+                let second_while_paused = parallel_get(&store, ctx.term(term).get(), &second_id);
+                resume_tx.send(()).unwrap();
+                assert!(first.join().unwrap());
+                second.join().unwrap();
+
+                assert_eq!(second_result, Ok((true, false, false)));
+                assert_eq!(first_while_paused, None);
+                assert_eq!(second_while_paused, Some(second_value.clone()));
+            });
+
+            assert!(provider.can_import(&ctx));
+            assert_eq!(
+                provider.fsm.total_used(),
+                if matches!(term, Term::Vector) { 2 } else { 0 }
+            );
+            assert_eq!(
+                parallel_get(&store, ctx.term(term).get(), &first_id),
+                Some(first_value)
+            );
+            assert_eq!(
+                parallel_get(&store, ctx.term(term).get(), &second_id),
+                Some(second_value)
+            );
+            assert!(
+                parallel_get(&store, ctx.term(Term::Vector).get(), &0u32.to_ne_bytes()).is_none()
+            );
+            assert_eq!(
+                provider.quantizer().unwrap().serialize().unwrap(),
+                quant_state
+            );
+        }
+    }
+
+    #[test]
     fn quant_state_replacement_serializes_first_write() {
         for setter_first in [false, true] {
             for importing in [false, true] {
@@ -3101,7 +3459,7 @@ mod tests {
                 } else {
                     Term::Vector
                 };
-                first_context.control.lock().unwrap().pause =
+                first_context.control.lock().pause =
                     Some((pause_term as u64, paused_tx, resume_rx));
                 let (started_tx, started_rx) = mpsc::channel();
                 let (finished_tx, finished_rx) = mpsc::channel();
@@ -3190,14 +3548,14 @@ mod tests {
                 .unwrap()
                 .compress(&[1.0, 2.0], &mut quantized)
                 .unwrap();
-            context.control.lock().unwrap().failure = Some((failure_term as u64, 0));
+            context.control.lock().failure = Some((failure_term as u64, 0));
             assert!(!provider.import_term(&ctx, Term::Quantized, &id, &quantized));
             assert!(parallel_get(&store, ctx.term(Term::Quantized).get(), &id).is_none());
             let empty = matches!(failure_term, Term::Metadata);
             assert_eq!(provider.fsm.total_used(), usize::from(!empty));
             drop(index);
 
-            // Recover a failed claim or a claimed ID whose term write failed.
+            // Recover a failed admission or a claimed ID whose term write failed.
             let index = create_2d_f32_index_with_callbacks(
                 VectorQuantType::Q8,
                 Metric::L2,
@@ -3297,7 +3655,7 @@ mod tests {
                 let (first, second) = thread::scope(|scope| {
                     let first = scope.spawn(|| {
                         let state = ParallelContext::new(store.clone());
-                        *state.control.lock().unwrap() = InsertControl {
+                        *state.control.lock() = InsertControl {
                             failure: first_fails.then_some(failure),
                             pause: Some((failure.0, entered_tx, resume_rx)),
                             before_vector: None,
@@ -3323,7 +3681,7 @@ mod tests {
                         } else {
                             (failure.0, if first_fails { failure.1 } else { 0 })
                         };
-                        *state.control.lock().unwrap() = InsertControl {
+                        *state.control.lock() = InsertControl {
                             failure: second_fails.then_some(second_failure),
                             pause: None,
                             before_vector: None,
@@ -3336,7 +3694,7 @@ mod tests {
                             bytemuck::cast_slice(&second_vector),
                             b"second",
                         );
-                        let snapshot = state.control.lock().unwrap().before_vector.take().unwrap();
+                        let snapshot = state.control.lock().before_vector.take().unwrap();
                         ((result.is_ok(), context.insert_is_update()), snapshot)
                     });
                     let waiting = wait_for_pending_receiver(provider, &id);
@@ -3774,7 +4132,7 @@ mod tests {
                     error,
                     GarnetProviderError::Garnet(GarnetError::Write)
                 ));
-                assert!(provider.backfill_lock.lock().unwrap().is_empty());
+                assert!(provider.backfill_lock.lock().is_empty());
                 assert_eq!(provider.fsm.max_id(), max_id);
                 assert_eq!(provider.fsm.total_used(), total_used);
                 assert_eq!(

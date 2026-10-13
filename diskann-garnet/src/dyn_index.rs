@@ -114,14 +114,15 @@ pub(crate) trait DynIndex: Send + Sync {
     /// Returns true on success and false otherwise.
     fn set_quant_state(&self, context: &Context, state: &[u8]) -> bool;
 
-    /// Returns whether import are enabled
+    /// Returns whether imported terms are accepted, without changing the import status.
     fn can_import(&self, context: &Context) -> bool;
 
     /// Import an index term.
     fn import_term(&self, context: &Context, term: Term, id: &[u8], value: &[u8]) -> bool;
 
     /// Finalize an import.
-    /// Returns a pair of bools: first is task success and second indicates all tasks complete.
+    /// Returns task success and the optional finalization outcome. An empty import returns
+    /// `(false, Some(true))` so the FFI keeps start points uninitialized.
     fn finish_import(
         &self,
         context: &Context,
@@ -204,8 +205,13 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
         let data = self.inner.provider().get_full_vector(context, iid)?;
-        let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
-        self.search_vector(context, data_bytes, params, output)
+        self.search(
+            params,
+            &DynamicQuantization,
+            context,
+            data.as_slice(),
+            output,
+        )
     }
 
     fn filtered_search_vector(
@@ -235,8 +241,13 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
         let data = self.inner.provider().get_full_vector(context, iid)?;
-        let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
-        self.filtered_search_vector(context, data_bytes, params, output)
+        self.search(
+            params,
+            &DynamicQuantization,
+            context,
+            data.as_slice(),
+            output,
+        )
     }
 
     fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {

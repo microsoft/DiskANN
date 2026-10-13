@@ -396,8 +396,10 @@ extern "C" fn search_neighbors(
 
 /// Set serialized quantizer state on an empty, quantized index, for XVCREATE.
 ///
-/// Pass serialized quantizer bytes. The metric and dimension must match. This can only be called
-/// before any data is present in the index.
+/// Pass serialized quantizer bytes. The metric and dimension must match. Importing must not have
+/// begun and the index must contain no data. Initial setup on an import-disabled index requires
+/// exclusive access before publishing it to concurrent commands. Success enables importing;
+/// Q8's automatically generated default state does not.
 ///
 /// Returns true on success and false otherwise. On failure, discard the vector set: in-memory
 /// state and persisted metadata may already have changed.
@@ -409,7 +411,8 @@ extern "C" fn set_quant_state(
     state_len: usize,
 ) -> bool;
 
-/// Return whether the index accepts imported terms.
+/// Return whether the index accepts imported terms, both before and during import.
+/// This query does not begin or disable importing.
 #[unsafe(no_mangle)]
 extern "C" fn can_import(context: u64, index_ptr: *const c_void) -> bool;
 
@@ -426,6 +429,9 @@ extern "C" fn can_import(context: u64, index_ptr: *const c_void) -> bool;
 /// nonzero native-endian u32. Neighbor terms must have `(max_degree + 1) * 4`
 /// bytes and a trailing native-endian u32 count no greater than max_degree.
 ///
+/// The first accepted term begins importing. Ordinary operations fail until FINISH succeeds.
+/// A failed term write keeps the import in progress; callers may repair or retry that term.
+///
 /// Returns true on success and false otherwise.
 #[unsafe(no_mangle)]
 extern "C" fn import_term(
@@ -440,7 +446,11 @@ extern "C" fn import_term(
 
 /// Verify imported terms and finalize the index, for XVIMPORT ... FINISH.
 ///
-/// Each task receives its own task_idx in 0..task_count. The last successful task finalizes the index.
+/// Finish all term writes before starting these tasks; no term writes may overlap verification.
+/// Each task receives its own task_idx in 0..task_count. Do not repeat successful tasks. The last
+/// successful task finalizes the index and enables ordinary operations. Until then, including
+/// after a failed verification or finalization, ordinary operations remain blocked. An empty
+/// import also waits for every task and closes without creating a start point.
 ///
 /// Returns an `ImportResult` discriminant.
 #[unsafe(no_mangle)]

@@ -301,8 +301,14 @@ mod tests {
                 );
             }
         }
-        assert_eq!(store.get(ctx.term(Term::IntMap).get(), b""), Some(id.to_vec()));
-        assert_eq!(store.get(ctx.term(Term::ExtMap).get(), &id), Some(Vec::new()));
+        assert_eq!(
+            store.get(ctx.term(Term::IntMap).get(), b""),
+            Some(id.to_vec())
+        );
+        assert_eq!(
+            store.get(ctx.term(Term::ExtMap).get(), &id),
+            Some(Vec::new())
+        );
         unsafe { drop_index(ctx.get(), index_ptr) };
     }
 
@@ -315,8 +321,16 @@ mod tests {
                 unsafe { can_import(ctx.get(), index_ptr) },
                 quant_type == VectorQuantType::NoQuant
             );
-            if quant_type == VectorQuantType::Q8 {
-                let quantizer = MinMax8Bit::new(2, Metric::L2).unwrap();
+            // Reopening must preserve both initial Ready and unconfigured Q8 Disabled.
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            index_ptr = create_test_index(&store, quant_type).0;
+            assert_eq!(
+                unsafe { can_import(ctx.get(), index_ptr) },
+                quant_type == VectorQuantType::NoQuant
+            );
+            let quantizer = (quant_type == VectorQuantType::Q8)
+                .then(|| MinMax8Bit::new(2, Metric::L2).unwrap());
+            if let Some(quantizer) = &quantizer {
                 let state = quantizer.serialize().unwrap();
                 assert!(unsafe {
                     set_quant_state(ctx.get(), index_ptr, state.as_ptr(), state.len())
@@ -324,8 +338,9 @@ mod tests {
             }
 
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
-            // A duplicate call to make sure calling can_import doesn't
-            // itself diable imports.
+            // Reopening and repeated eligibility queries must preserve Ready.
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            index_ptr = create_test_index(&store, quant_type).0;
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
             let id = 1u32.to_ne_bytes();
@@ -336,17 +351,7 @@ mod tests {
             ] {
                 let value = internal_id.to_ne_bytes();
                 assert_eq!(
-                    unsafe {
-                        import_term(
-                            ctx.get(),
-                            index_ptr,
-                            Term::IntMap as u32,
-                            id.as_ptr(),
-                            id.len(),
-                            value.as_ptr(),
-                            value.len(),
-                        )
-                    },
+                    import_test_term(&ctx, index_ptr, Term::IntMap, &id, &value),
                     accepted
                 );
                 assert_eq!(
@@ -354,34 +359,35 @@ mod tests {
                     expected
                 );
             }
-            if quant_type == VectorQuantType::Q8 {
-                let state = q8_state_with_identity_transform(2);
-                for reopen in [false, true] {
-                    if reopen {
-                        unsafe { drop_index(ctx.get(), index_ptr) };
-                        index_ptr = create_test_index(&store, quant_type).0;
-                    }
-                    assert!(unsafe {
+            for reopen in [false, true] {
+                if reopen {
+                    unsafe { drop_index(ctx.get(), index_ptr) };
+                    index_ptr = create_test_index(&store, quant_type).0;
+                }
+                assert!(unsafe { can_import(ctx.get(), index_ptr) });
+                assert_ordinary_operations_blocked(&ctx, index_ptr);
+                if quant_type == VectorQuantType::Q8 {
+                    let state = q8_state_with_identity_transform(2);
+                    let key = u32::from_be_bytes(*b"_qnt").to_ne_bytes();
+                    let original = store.get(ctx.term(Term::Metadata).get(), &key);
+                    assert!(!unsafe {
                         set_quant_state(ctx.get(), index_ptr, state.as_ptr(), state.len())
                     });
-                    assert_eq!(
-                        store.get(ctx.term(Term::IntMap).get(), &id),
-                        Some(id.to_vec())
-                    );
+                    assert_eq!(store.get(ctx.term(Term::Metadata).get(), &key), original);
                 }
+                assert_eq!(
+                    store.get(ctx.term(Term::IntMap).get(), &id),
+                    Some(id.to_vec())
+                );
             }
             let attributes = b"attributes";
-            assert!(unsafe {
-                import_term(
-                    ctx.get(),
-                    index_ptr,
-                    Term::Attributes as u32,
-                    id.as_ptr(),
-                    id.len(),
-                    attributes.as_ptr(),
-                    attributes.len(),
-                )
-            });
+            assert!(import_test_term(
+                &ctx,
+                index_ptr,
+                Term::Attributes,
+                &id,
+                attributes
+            ));
             if quant_type == VectorQuantType::Q8 {
                 let state = q8_state_with_identity_transform(2);
                 assert!(!unsafe {
@@ -393,11 +399,38 @@ mod tests {
                 unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
                 u8::from(ImportResult::TaskFailed)
             );
-            assert!(!unsafe { can_import(ctx.get(), index_ptr) });
+            assert!(unsafe { can_import(ctx.get(), index_ptr) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
             unsafe { drop_index(ctx.get(), index_ptr) };
 
             let (index_ptr, ctx) = create_test_index(&store, quant_type);
+            assert!(unsafe { can_import(ctx.get(), index_ptr) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+            assert_eq!(
+                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
+                u8::from(ImportResult::TaskFailed)
+            );
+
+            // Repair the incomplete vector and retry validation on this handle.
+            import_single_vector(
+                &ctx,
+                index_ptr,
+                quantizer
+                    .as_ref()
+                    .map(|quantizer| quantizer as &dyn GarnetQuantizer),
+            );
+            assert_eq!(
+                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
+                u8::from(ImportResult::Success)
+            );
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
+            assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
+            assert!(unsafe {
+                check_internal_id_valid(ctx.get(), index_ptr, id.as_ptr(), id.len())
+            });
+            assert!(unsafe {
+                check_external_id_valid(ctx.get(), index_ptr, id.as_ptr(), id.len())
+            });
             unsafe { drop_index(ctx.get(), index_ptr) };
         }
 
@@ -415,6 +448,13 @@ mod tests {
             }
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+            assert!(!unsafe { can_import(ctx.get(), index_ptr) });
+            assert_eq!(
+                unsafe { card(ctx.get(), index_ptr) },
+                u64::from(insert_vector)
+            );
             unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
@@ -446,64 +486,123 @@ mod tests {
 
     #[test]
     fn import_terms_and_finish_multi_worker() {
-        check_import_terms_and_finish_with(
-            VectorQuantType::NoQuant,
-            None,
-            None,
-            |ctx, index_ptr| {
-                const TASK_COUNT: usize = 104;
-                let index = unsafe { &*index_ptr.cast::<Index>() };
-                assert_eq!(
-                    unsafe { finish_import(ctx.get(), index_ptr, 0, TASK_COUNT) },
-                    0
-                );
-                let snapshot = STORE.with(Clone::clone);
-                let barrier = Barrier::new(4);
-                thread::scope(|scope| {
-                    for worker in 0..4 {
-                        let snapshot = snapshot.clone();
-                        let barrier = &barrier;
-                        scope.spawn(move || {
-                            STORE.with(|store| {
-                                for (key, value) in snapshot {
-                                    store.insert(key, value);
-                                }
-                            });
-                            barrier.wait();
-                            for task_idx in (worker + 1..TASK_COUNT - 1).step_by(4) {
-                                assert_eq!(
-                                    unsafe {
-                                        finish_import(
-                                            ctx.get(),
-                                            ptr::from_ref(index).cast(),
-                                            task_idx,
-                                            TASK_COUNT,
-                                        )
-                                    },
-                                    0
-                                );
+        check_import_terms_and_finish_with(VectorQuantType::NoQuant, None, |ctx, index_ptr| {
+            const TASK_COUNT: usize = 104;
+            let index = unsafe { &*index_ptr.cast::<Index>() };
+            assert_eq!(
+                unsafe { finish_import(ctx.get(), index_ptr, 0, TASK_COUNT) },
+                0
+            );
+            assert!(unsafe { can_import(ctx.get(), index_ptr) });
+            assert_ordinary_operations_blocked(ctx, index_ptr);
+            let snapshot = STORE.with(Clone::clone);
+            let barrier = Barrier::new(4);
+            thread::scope(|scope| {
+                for worker in 0..4 {
+                    let snapshot = snapshot.clone();
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        STORE.with(|store| {
+                            for (key, value) in snapshot {
+                                store.insert(key, value);
                             }
                         });
-                    }
-                });
-                assert_eq!(
-                    index.state.load(Ordering::Acquire),
-                    IndexState::NoStartPoints as usize
-                );
-                assert_eq!(
-                    unsafe { finish_import(ctx.get(), index_ptr, TASK_COUNT - 1, TASK_COUNT) },
-                    0
-                );
-                assert_eq!(
-                    index.state.load(Ordering::Acquire),
-                    IndexState::Ready as usize
-                );
-            },
-        );
+                        barrier.wait();
+                        for task_idx in (worker + 1..TASK_COUNT - 1).step_by(4) {
+                            assert_eq!(
+                                unsafe {
+                                    finish_import(
+                                        ctx.get(),
+                                        ptr::from_ref(index).cast(),
+                                        task_idx,
+                                        TASK_COUNT,
+                                    )
+                                },
+                                0
+                            );
+                        }
+                    });
+                }
+            });
+            assert!(unsafe { can_import(ctx.get(), index_ptr) });
+            assert_ordinary_operations_blocked(ctx, index_ptr);
+            assert_eq!(
+                index.state.load(Ordering::Acquire),
+                IndexState::NoStartPoints as usize
+            );
+            assert_eq!(
+                unsafe { finish_import(ctx.get(), index_ptr, TASK_COUNT - 1, TASK_COUNT) },
+                0
+            );
+            assert_eq!(
+                index.state.load(Ordering::Acquire),
+                IndexState::Ready as usize
+            );
+            assert!(!unsafe { can_import(ctx.get(), index_ptr) });
+            assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 100);
+        });
     }
 
     #[test]
     fn import_terms_and_finish_persistence_failure() {
+        static FAIL_WRITE: AtomicBool = AtomicBool::new(false);
+        static STATUS_ONLY: AtomicBool = AtomicBool::new(false);
+        unsafe extern "C" fn write(
+            context: u64,
+            key: *const u8,
+            key_len: usize,
+            value: *const u8,
+            value_len: usize,
+        ) -> bool {
+            let is_final_status = context == Context::new(0).term(Term::Metadata).get()
+                && unsafe { std::slice::from_raw_parts(key, key_len) }
+                    == u32::from_be_bytes(*b"_imp").to_ne_bytes()
+                && unsafe { std::slice::from_raw_parts(value, value_len) } == [0];
+            if (!STATUS_ONLY.load(Ordering::Acquire) || is_final_status)
+                && FAIL_WRITE.swap(false, Ordering::AcqRel)
+            {
+                return false;
+            }
+            unsafe {
+                (Store::attach().callbacks().write_callback())(
+                    context, key, key_len, value, value_len,
+                )
+            }
+        }
+
+        // Fail either start-point persistence or the final Disabled publication.
+        // Neither failure is retryable on this handle, unlike task validation.
+        for status_only in [false, true] {
+            let store = Store::new();
+            let (mut index_ptr, ctx) = create_test_index_with_write_callback(
+                &store,
+                VectorQuantType::NoQuant,
+                Metric::L2 as i32,
+                write,
+            );
+            assert!(!index_ptr.is_null());
+            import_single_vector(&ctx, index_ptr, None);
+            STATUS_ONLY.store(status_only, Ordering::Release);
+            FAIL_WRITE.store(true, Ordering::Release);
+            assert_eq!(
+                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
+                u8::from(ImportResult::FinishFailed)
+            );
+            assert!(!FAIL_WRITE.load(Ordering::Acquire));
+            for reopen in [false, true] {
+                if reopen {
+                    unsafe { drop_index(ctx.get(), index_ptr) };
+                    index_ptr = create_test_index(&store, VectorQuantType::NoQuant).0;
+                }
+                assert!(unsafe { can_import(ctx.get(), index_ptr) });
+                assert_ordinary_operations_blocked(&ctx, index_ptr);
+            }
+            unsafe { drop_index(ctx.get(), index_ptr) };
+        }
+    }
+
+    #[test]
+    fn import_admission_persistence_failure() {
         static FAIL_WRITE: AtomicBool = AtomicBool::new(false);
         unsafe extern "C" fn write(
             context: u64,
@@ -520,41 +619,57 @@ mod tests {
                 }
         }
 
-        check_import_terms_and_finish_with(
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index_with_write_callback(
+            &store,
             VectorQuantType::NoQuant,
-            None,
-            Some(write),
-            |ctx, index_ptr| {
-                FAIL_WRITE.store(true, Ordering::Release);
-                assert_eq!(unsafe { card(ctx.get(), index_ptr) }, u64::MAX);
-                FAIL_WRITE.store(true, Ordering::Release);
-                assert_eq!(
-                    unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                    u8::from(ImportResult::TaskFailed)
-                );
-                let index = unsafe { &*index_ptr.cast::<Index>() };
-                assert_eq!(
-                    index.state.load(Ordering::Acquire),
-                    IndexState::NoStartPoints as usize
-                );
-                assert_eq!(
-                    unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                    u8::from(ImportResult::Success)
-                );
-                assert_eq!(
-                    Store::attach().get(
-                        ctx.term(Term::Metadata).get(),
-                        &u32::from_be_bytes(*b"_imp").to_ne_bytes()
-                    ),
-                    Some(vec![0u8])
-                );
-            },
+            Metric::L2 as i32,
+            write,
         );
+        assert!(!index_ptr.is_null());
+        let snapshot = STORE.with(Clone::clone);
+        FAIL_WRITE.store(true, Ordering::Release);
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, u64::MAX);
+        assert!(!FAIL_WRITE.load(Ordering::Acquire));
+        assert!(unsafe { can_import(ctx.get(), index_ptr) });
+
+        let id = 1u32.to_ne_bytes();
+        FAIL_WRITE.store(true, Ordering::Release);
+        assert!(!import_test_term(&ctx, index_ptr, Term::IntMap, &id, &id));
+        assert!(!FAIL_WRITE.load(Ordering::Acquire));
+        assert!(unsafe { can_import(ctx.get(), index_ptr) });
+
+        FAIL_WRITE.store(true, Ordering::Release);
+        assert_eq!(
+            unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
+            u8::from(ImportResult::TaskFailed)
+        );
+        assert!(!FAIL_WRITE.load(Ordering::Acquire));
+        assert!(unsafe { can_import(ctx.get(), index_ptr) });
+        STORE.with(|store| {
+            assert_eq!(store.len(), snapshot.len());
+            for entry in snapshot.iter() {
+                assert_eq!(store.get(entry.key()).as_deref(), Some(entry.value()));
+            }
+        });
+
+        assert_eq!(
+            unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
+            u8::from(ImportResult::Success)
+        );
+        assert!(!unsafe { can_import(ctx.get(), index_ptr) });
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
+        unsafe { drop_index(ctx.get(), index_ptr) };
     }
 
     #[test]
     fn finish_empty_import_and_reopen() {
-        for quant_type in [VectorQuantType::NoQuant, VectorQuantType::Q8] {
+        for (quant_type, task_count) in [
+            (VectorQuantType::NoQuant, 1),
+            (VectorQuantType::NoQuant, 4),
+            (VectorQuantType::Q8, 1),
+            (VectorQuantType::Q8, 4),
+        ] {
             let store = Store::new();
             let (mut index_ptr, ctx) = create_test_index(&store, quant_type);
             if quant_type == VectorQuantType::Q8 {
@@ -564,10 +679,22 @@ mod tests {
                     set_quant_state(ctx.get(), index_ptr, state.as_ptr(), state.len())
                 });
             }
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::Success)
-            );
+            for task_idx in 0..task_count {
+                assert!(unsafe { can_import(ctx.get(), index_ptr) });
+                assert_eq!(
+                    unsafe { finish_import(ctx.get(), index_ptr, task_idx, task_count) },
+                    u8::from(ImportResult::Success)
+                );
+                assert!(
+                    store
+                        .get(ctx.term(Term::Vector).get(), &0u32.to_ne_bytes())
+                        .is_none()
+                );
+                if task_idx + 1 < task_count {
+                    assert!(unsafe { can_import(ctx.get(), index_ptr) });
+                    assert_ordinary_operations_blocked(&ctx, index_ptr);
+                }
+            }
             for reopen in [false, true] {
                 if reopen {
                     unsafe { drop_index(ctx.get(), index_ptr) };
@@ -598,11 +725,92 @@ mod tests {
         }
     }
 
+    #[must_use]
+    fn import_test_term(
+        ctx: &Context,
+        index_ptr: *const c_void,
+        term: Term,
+        id: &[u8],
+        value: &[u8],
+    ) -> bool {
+        unsafe {
+            import_term(
+                ctx.get(),
+                index_ptr,
+                term as u32,
+                id.as_ptr(),
+                id.len(),
+                value.as_ptr(),
+                value.len(),
+            )
+        }
+    }
+
+    #[track_caller]
+    fn import_single_vector(
+        ctx: &Context,
+        index_ptr: *const c_void,
+        quantizer: Option<&dyn GarnetQuantizer>,
+    ) {
+        let id = 1u32.to_ne_bytes();
+        let vector = [1.0f32, 2.0];
+        assert!(import_test_term(
+            ctx,
+            index_ptr,
+            Term::Vector,
+            &id,
+            bytemuck::cast_slice(&vector),
+        ));
+        if let Some(quantizer) = quantizer {
+            let mut quantized = vec![0u8; quantizer.bytes()];
+            quantizer.compress(&vector, &mut quantized).unwrap();
+            assert!(import_test_term(
+                ctx,
+                index_ptr,
+                Term::Quantized,
+                &id,
+                &quantized
+            ));
+        }
+        assert!(import_test_term(
+            ctx,
+            index_ptr,
+            Term::Neighbors,
+            &id,
+            bytemuck::cast_slice(&[0u32; 21]),
+        ));
+        assert!(import_test_term(ctx, index_ptr, Term::IntMap, &id, &id));
+        assert!(import_test_term(ctx, index_ptr, Term::ExtMap, &id, &id));
+        assert!(import_test_term(
+            ctx,
+            index_ptr,
+            Term::Attributes,
+            &id,
+            b"original"
+        ));
+    }
+
+    fn assert_ordinary_operations_blocked(ctx: &Context, index_ptr: *const c_void) {
+        let snapshot = STORE.with(Clone::clone);
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, u64::MAX);
+        assert_eq!(
+            insert_f32_vector(ctx, index_ptr, 42, &[3.0, 4.0]),
+            InsertResult::Fail
+        );
+        assert!(unsafe { can_import(ctx.get(), index_ptr) });
+        STORE.with(|store| {
+            assert_eq!(store.len(), snapshot.len());
+            for entry in snapshot.iter() {
+                assert_eq!(store.get(entry.key()).as_deref(), Some(entry.value()));
+            }
+        });
+    }
+
     fn check_import_terms_and_finish(
         quant_type: VectorQuantType,
         quantizer: Option<&dyn GarnetQuantizer>,
     ) {
-        check_import_terms_and_finish_with(quant_type, quantizer, None, |ctx, index_ptr| {
+        check_import_terms_and_finish_with(quant_type, quantizer, |ctx, index_ptr| {
             assert_eq!(
                 unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
                 u8::from(ImportResult::Success)
@@ -613,7 +821,6 @@ mod tests {
     fn check_import_terms_and_finish_with(
         quant_type: VectorQuantType,
         quantizer: Option<&dyn GarnetQuantizer>,
-        write_callback: Option<WriteCallback>,
         finalize: impl Fn(&Context, *const c_void),
     ) {
         const VECTOR_COUNT: usize = 100;
@@ -633,12 +840,11 @@ mod tests {
             .enumerate()
             .map(|(vector_index, &id)| {
                 let vector = [vector_index as f32 + 1.0; 2];
-                let mut vector_terms =
-                    vec![(Term::Vector as u32, bytemuck::cast_slice(&vector).to_vec())];
+                let mut vector_terms = vec![(Term::Vector, bytemuck::cast_slice(&vector).to_vec())];
                 if let Some(quantizer) = quantizer {
                     let mut quantized = vec![0u8; quantizer.bytes()];
                     quantizer.compress(&vector, &mut quantized).unwrap();
-                    vector_terms.push((Term::Quantized as u32, quantized));
+                    vector_terms.push((Term::Quantized, quantized));
                 }
                 let mut neighbors = [0u32; MAX_DEGREE + 1];
                 let neighbor_count = if vector_index == 0 { MAX_DEGREE } else { 5 };
@@ -651,13 +857,10 @@ mod tests {
                 let external_id = (vector_index as u32 + 1).to_ne_bytes();
 
                 vector_terms.extend([
-                    (
-                        Term::Neighbors as u32,
-                        bytemuck::cast_slice(&neighbors).to_vec(),
-                    ),
-                    (Term::Attributes as u32, id_bytes.to_vec()),
-                    (Term::IntMap as u32, id_bytes.to_vec()),
-                    (Term::ExtMap as u32, external_id.to_vec()),
+                    (Term::Neighbors, bytemuck::cast_slice(&neighbors).to_vec()),
+                    (Term::Attributes, id_bytes.to_vec()),
+                    (Term::IntMap, id_bytes.to_vec()),
+                    (Term::ExtMap, external_id.to_vec()),
                 ]);
                 vector_terms
             })
@@ -666,33 +869,17 @@ mod tests {
 
         for by_term in [true, false] {
             let store = Store::new();
-            let (index_ptr, ctx) = create_test_index_with_write_callback(
-                &store,
-                quant_type,
-                Metric::L2 as i32,
-                write_callback.unwrap_or_else(|| store.callbacks().write_callback()),
-            );
-            assert!(!index_ptr.is_null());
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
             let index = unsafe { &*index_ptr.cast::<Index>() };
             assert_eq!(index.inner.max_degree(), MAX_DEGREE);
             if let Some(quant_state) = &quant_state {
                 let id = 1u32.to_ne_bytes();
                 for (term, value) in &terms[0] {
                     assert!(
-                        !unsafe {
-                            import_term(
-                                ctx.get(),
-                                index_ptr,
-                                *term,
-                                id.as_ptr(),
-                                id.len(),
-                                value.as_ptr(),
-                                value.len(),
-                            )
-                        },
-                        "import accepted without preset quant state: quant_type={quant_type:?}, by_term={by_term}, term={term}"
+                        !import_test_term(&ctx, index_ptr, *term, &id, value),
+                        "import accepted without preset quant state: quant_type={quant_type:?}, by_term={by_term}, term={term:?}"
                     );
-                    assert!(store.get(ctx.get() | u64::from(*term), &id).is_none());
+                    assert!(store.get(ctx.get() | *term as u64, &id).is_none());
                 }
                 assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
                 assert!(!unsafe {
@@ -714,17 +901,7 @@ mod tests {
                 let id = rejected_id.to_ne_bytes();
                 let vector = [0.0f32; 2];
                 let value = bytemuck::cast_slice::<f32, u8>(&vector);
-                assert!(!unsafe {
-                    import_term(
-                        ctx.get(),
-                        index_ptr,
-                        Term::Vector as u32,
-                        id.as_ptr(),
-                        id.len(),
-                        value.as_ptr(),
-                        value.len(),
-                    )
-                });
+                assert!(!import_test_term(&ctx, index_ptr, Term::Vector, &id, value));
                 assert!(store.get(ctx.term(Term::Vector).get(), &id).is_none());
             }
 
@@ -732,17 +909,13 @@ mod tests {
             let mut bad_neighbors = [0u32; MAX_DEGREE + 1];
             bad_neighbors[MAX_DEGREE] = MAX_DEGREE as u32 + 1;
             let value = bytemuck::cast_slice(&bad_neighbors);
-            assert!(!unsafe {
-                import_term(
-                    ctx.get(),
-                    index_ptr,
-                    Term::Neighbors as u32,
-                    rejected_id.as_ptr(),
-                    rejected_id.len(),
-                    value.as_ptr(),
-                    value.len(),
-                )
-            });
+            assert!(!import_test_term(
+                &ctx,
+                index_ptr,
+                Term::Neighbors,
+                &rejected_id,
+                value
+            ));
             assert!(
                 store
                     .get(ctx.term(Term::Neighbors).get(), &rejected_id)
@@ -761,25 +934,15 @@ mod tests {
                     )
                 };
                 let (term, value) = &terms[vector_index][term_index];
-                let id = if *term == Term::IntMap as u32 {
+                let id = if matches!(term, Term::IntMap) {
                     vector_index as u32 + 1
                 } else {
                     internal_ids[vector_index]
                 }
                 .to_ne_bytes();
                 assert!(
-                    unsafe {
-                        import_term(
-                            ctx.get(),
-                            index_ptr,
-                            *term,
-                            id.as_ptr(),
-                            id.len(),
-                            value.as_ptr(),
-                            value.len(),
-                        )
-                    },
-                    "import failed: by_term={by_term}, internal_id={}, term={term}",
+                    import_test_term(&ctx, index_ptr, *term, &id, value),
+                    "import failed: by_term={by_term}, internal_id={}, term={term:?}",
                     internal_ids[vector_index]
                 );
                 if position == 0
@@ -799,31 +962,22 @@ mod tests {
             }
 
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
             finalize(&ctx, index_ptr);
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
             for rejected_id in [1u32, 101] {
                 let id = rejected_id.to_ne_bytes();
                 for (term, value) in &terms[1] {
-                    let term_context = ctx.get() | u64::from(*term);
+                    let term_context = ctx.get() | *term as u64;
                     let before = store.get(term_context, &id);
                     assert!(
-                        !unsafe {
-                            import_term(
-                                ctx.get(),
-                                index_ptr,
-                                *term,
-                                id.as_ptr(),
-                                id.len(),
-                                value.as_ptr(),
-                                value.len(),
-                            )
-                        },
-                        "import accepted after finish_import: by_term={by_term}, id={rejected_id}, term={term}"
+                        !import_test_term(&ctx, index_ptr, *term, &id, value),
+                        "import accepted after finish_import: by_term={by_term}, id={rejected_id}, term={term:?}"
                     );
                     assert_eq!(
                         store.get(term_context, &id),
                         before,
-                        "rejected import changed storage: by_term={by_term}, id={rejected_id}, term={term}"
+                        "rejected import changed storage: by_term={by_term}, id={rejected_id}, term={term:?}"
                     );
                 }
             }
