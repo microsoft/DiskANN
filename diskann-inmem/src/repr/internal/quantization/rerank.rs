@@ -5,6 +5,7 @@
 
 use diskann_vector::distance::{Distance, DistanceProvider};
 use half::f16;
+use thiserror::Error;
 
 use crate::{
     counters::LocalCounters,
@@ -34,17 +35,36 @@ pub(in crate::repr) enum Rerank {
 }
 
 impl Rerank {
-    #[expect(
-        clippy::expect_used,
-        reason = "the arithmetic should not overflow for the feasible `dim` values"
-    )]
-    fn bytes_for(&self, dim: usize) -> Bytes {
+    fn bytes_for(&self, dim: usize) -> Result<Bytes, Overflow> {
         match self {
-            Self::None => Bytes::new(0),
-            Self::F16 => Bytes::new(dim.checked_mul(2).expect("f16 is smaller than f32")),
+            Self::None => Ok(Bytes::new(0)),
+            Self::F16 => match dim.checked_mul(2) {
+                Some(bytes) => Ok(Bytes::new(bytes)),
+                None => Err(Overflow { kind: *self, dim }),
+            },
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::F16 => "f16",
         }
     }
 }
+
+#[derive(Debug, Error)]
+#[error(
+    "\"{}\" reranker cannot support dimension {} without overflowing",
+    self.kind.as_str(),
+    self.dim
+)]
+pub(in crate::repr) struct Overflow {
+    kind: Rerank,
+    dim: usize,
+}
+
+diskann::convert_error!(Overflow);
 
 /// Internal representation of [`Rerank`].
 ///
@@ -62,9 +82,9 @@ impl Reranker {
         rerank: Rerank,
         metric: Metric,
         dim: usize,
-    ) -> (Self, Option<simple::Config>) {
+    ) -> Result<(Self, Option<simple::Config>), Overflow> {
         match rerank {
-            Rerank::None => Self::disabled(),
+            Rerank::None => Ok(Self::disabled()),
             Rerank::F16 => {
                 let distance = <f32 as DistanceProvider<f16>>::distance_comparer(
                     metric.as_vector_metric(),
@@ -72,8 +92,8 @@ impl Reranker {
                 );
 
                 let this = Self::F16(distance);
-                let config = Simple::config(rerank.bytes_for(dim));
-                (this, Some(config))
+                let config = Simple::config(rerank.bytes_for(dim)?);
+                Ok((this, Some(config)))
             }
         }
     }
@@ -205,6 +225,7 @@ mod tests {
     use std::assert_matches;
 
     use diskann::utils::IntoUsize;
+    use diskann_utils::assert_contains;
 
     use crate::{
         counters::Counters,
@@ -217,7 +238,7 @@ mod tests {
 
     /// Create a reranker with the test dimension for the given configuration and metric.
     fn make_store(rerank: Rerank, metric: Metric) -> (Reranker, Store<Optional<Simple>>) {
-        let (reranker, config) = Reranker::new_with_config(rerank, metric, TEST_DIM);
+        let (reranker, config) = Reranker::new_with_config(rerank, metric, TEST_DIM).unwrap();
 
         let store = Store::new(
             store::Layout::new(Capacity::new(10), MaxDegree::new(0), 0),
@@ -227,6 +248,12 @@ mod tests {
         .unwrap();
 
         (reranker, store)
+    }
+
+    #[test]
+    fn test_dim_overflows() {
+        let err = (Rerank::F16).bytes_for(usize::MAX).unwrap_err().to_string();
+        assert_contains!(err, "\"f16\" reranker cannot support dimension");
     }
 
     #[test]

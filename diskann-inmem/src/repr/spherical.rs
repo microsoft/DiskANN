@@ -254,7 +254,7 @@ impl Spherical {
             rerank,
             quantizer.metric().into(),
             full_dim,
-        );
+        )?;
 
         let slots = cons::Config::new(
             Intrusive::config(Bytes::new(quantizer.bytes())),
