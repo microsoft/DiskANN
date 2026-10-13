@@ -157,6 +157,8 @@ fn add_symmetric_neighbors(
 ) {
     for (source, source_neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in source_neighbors {
+            // Skip the empty slots that the kernel leaves for NaN and infinite
+            // distances.
             if !neighbor.is_assigned() {
                 continue;
             }
