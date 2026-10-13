@@ -999,28 +999,20 @@ mod construction_tests {
         // With 1,000 points and c_max 32, the build splits over several levels,
         // makes overlapping leaves, merges their candidates on four workers and
         // prunes lists above the degree. Each row must be non-empty, within the
-        // degree, and free of duplicates and self edges.
-        let (points, dimensions, degree) = (1000, 16, 8);
-        let config = PiPNNConfig {
-            c_max: nz(32),
-            p_samp: 0.05,
-            fanout: vec![nz(4), nz(2)],
-            leaf_k: nz(2),
-            replicas: nz(1),
-            seed: Some(1290),
-        };
-        for metric in [
-            Metric::L2,
-            Metric::Cosine,
-            Metric::CosineNormalized,
-            Metric::InnerProduct,
-        ] {
-            let mut values = test_support::dense_points(points, dimensions, 1290);
-            if metric == Metric::CosineNormalized {
-                test_support::normalize(&mut values, dimensions);
-            }
+        // degree, and free of duplicates and self edges. The f16 build checks
+        // that every step reads f16 rows, which the smaller builds never split.
+        fn check<T: VectorRepr>(values: &[T], metric: Metric) {
+            let (dimensions, degree) = (16, 8);
+            let config = PiPNNConfig {
+                c_max: nz(32),
+                p_samp: 0.05,
+                fanout: vec![nz(4), nz(2)],
+                leaf_k: nz(2),
+                replicas: nz(1),
+                seed: Some(1290),
+            };
 
-            let actual = build(&values, dimensions, config.clone(), degree, metric, 4);
+            let actual = build(values, dimensions, config, degree, metric, 4);
 
             for (point, neighbors) in actual.iter().enumerate() {
                 let mut distinct = neighbors.clone();
@@ -1031,9 +1023,27 @@ mod construction_tests {
                         && neighbors.len() <= degree
                         && distinct.len() == neighbors.len()
                         && !neighbors.contains(&(point as u32)),
-                    "{metric:?}, point {point}: {neighbors:?}"
+                    "{metric:?}, {}, point {point}: {neighbors:?}",
+                    std::any::type_name::<T>()
                 );
             }
+        }
+
+        for metric in [
+            Metric::L2,
+            Metric::Cosine,
+            Metric::CosineNormalized,
+            Metric::InnerProduct,
+        ] {
+            let mut values = test_support::dense_points(1000, 16, 1290);
+            if metric == Metric::CosineNormalized {
+                test_support::normalize(&mut values, 16);
+            }
+            check(&values, metric);
+            check(
+                &values.iter().map(|&x| f16::from_f32(x)).collect::<Vec<_>>(),
+                metric,
+            );
         }
     }
 

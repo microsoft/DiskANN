@@ -370,6 +370,7 @@ mod tests {
         test_support::{dense_points, sorted_members_per_row, thread_pool},
     };
     use diskann_wide::ARCH;
+    use half::f16;
     use std::collections::BTreeSet;
 
     fn build(values: &[f32], leaves: Vec<Vec<u32>>, k: usize, workers: usize) -> Vec<Vec<u32>> {
@@ -451,59 +452,86 @@ mod tests {
 
     #[test]
     fn candidates_match_the_leaf_kernel_on_each_leaf() {
-        // The reference runs the leaf kernel on each leaf alone, so the tie order
-        // is the same. Sixty overlapping leaves of 17 to 40 points run on four
-        // workers with reused buffers and fill whole SIMD groups. k = 2 uses a
-        // fixed top-k width, and k = 5 uses the runtime width.
-        let (point_count, dimensions) = (500, 24);
-        let values = dense_points(point_count, dimensions, 1290);
-        let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+        // The kernel tests cover metrics, dimensions, widths and architectures.
+        // This test covers what leaf build adds: the gather of each element type,
+        // k cut to the leaf size, buffers reused across leaf shapes, and the merge
+        // of overlapping leaves on four workers.
+        let dimensions = 24;
+        let values = dense_points(500, dimensions, 1290);
+        let half: Vec<_> = values.iter().map(|&x| f16::from_f32(x)).collect();
+        // Dense points are multiples of 1/8 in [-2, 14], so eight times them fits
+        // `i8`, and an offset of 16 makes them fit `u8`.
+        let signed: Vec<_> = values.iter().map(|&x| (8.0 * x) as i8).collect();
+        let unsigned: Vec<_> = values.iter().map(|&x| (8.0 * x + 16.0) as u8).collect();
+        // Leaves of 1 to 40 points put each k above, equal to and below the other
+        // points of a leaf.
+        for k in 1..=10 {
+            check_against_kernel(&values, dimensions, k);
+            check_against_kernel(&half, dimensions, k);
+            check_against_kernel(&signed, dimensions, k);
+            check_against_kernel(&unsigned, dimensions, k);
+        }
+    }
+
+    /// Compare `build_leaf_candidates` with the leaf kernel run on each leaf
+    /// alone. The kernel sees the same rows in the same order, so ties break the
+    /// same way and the check is exact.
+    fn check_against_kernel<T: VectorRepr>(values: &[T], dimensions: usize, k: usize) {
+        let point_count = values.len() / dimensions;
+        let data = MatrixView::try_from(values, point_count, dimensions).unwrap();
+        // Sixty overlapping leaves of 1 to 40 points.
         let leaves: Vec<Vec<u32>> = (0..60u32)
             .map(|leaf| {
-                let ids: BTreeSet<_> = (0..17 + leaf % 24)
+                let ids: BTreeSet<_> = (0..1 + leaf % 40)
                     .map(|i| (leaf * 7 + i * 13) % point_count as u32)
                     .collect();
                 ids.into_iter().collect()
             })
             .collect();
 
-        for k in [2, 5] {
-            let mut expected = vec![BTreeSet::new(); point_count];
-            for leaf in &leaves {
-                let rows: Vec<f32> = leaf
-                    .iter()
-                    .flat_map(|&id| &values[id as usize * dimensions..][..dimensions])
-                    .copied()
-                    .collect();
-                let width = k.min(leaf.len() - 1);
-                let mut output = vec![Candidate::default(); leaf.len() * width];
-                select_leaf_neighbors::<_, L2>(
-                    ARCH,
-                    MatrixView::try_from(rows.as_slice(), leaf.len(), dimensions).unwrap(),
-                    MutMatrixView::try_from(output.as_mut_slice(), leaf.len(), width).unwrap(),
-                    &mut LeafKernelWorkspace::default(),
-                )
-                .unwrap();
-                for (source, row) in output.chunks_exact(width).enumerate() {
-                    for neighbor in row.iter().filter(|neighbor| neighbor.is_assigned()) {
-                        let (source, target) = (leaf[source], leaf[neighbor.local_idx as usize]);
-                        expected[source as usize].insert(target);
-                        expected[target as usize].insert(source);
-                    }
+        let mut expected = vec![BTreeSet::new(); point_count];
+        for leaf in &leaves {
+            let width = k.min(leaf.len() - 1);
+            if width == 0 {
+                continue;
+            }
+            // Convert with `VectorRepr`, not with the gather under test.
+            let mut rows = vec![0.0; leaf.len() * dimensions];
+            for (&id, row) in leaf.iter().zip(rows.chunks_exact_mut(dimensions)) {
+                T::as_f32_into(data.row(id as usize), row).unwrap();
+            }
+            let mut output = vec![Candidate::default(); leaf.len() * width];
+            select_leaf_neighbors::<_, L2>(
+                ARCH,
+                MatrixView::try_from(rows.as_slice(), leaf.len(), dimensions).unwrap(),
+                MutMatrixView::try_from(output.as_mut_slice(), leaf.len(), width).unwrap(),
+                &mut LeafKernelWorkspace::default(),
+            )
+            .unwrap();
+            for (source, row) in output.chunks_exact(width).enumerate() {
+                for neighbor in row.iter().filter(|neighbor| neighbor.is_assigned()) {
+                    let (source, target) = (leaf[source], leaf[neighbor.local_idx as usize]);
+                    expected[source as usize].insert(target);
+                    expected[target as usize].insert(source);
                 }
             }
-            let expected: Vec<Vec<u32>> = expected
-                .into_iter()
-                .map(|ids| ids.into_iter().collect())
-                .collect();
-
-            let actual = thread_pool(4)
-                .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves.clone(), k))
-                .unwrap();
-
-            let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
-            assert_eq!(sorted_members_per_row(&actual), expected, "k={k}");
         }
+        let expected: Vec<Vec<u32>> = expected
+            .into_iter()
+            .map(|ids| ids.into_iter().collect())
+            .collect();
+
+        let actual = thread_pool(4)
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, k))
+            .unwrap();
+
+        let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
+        assert_eq!(
+            sorted_members_per_row(&actual),
+            expected,
+            "{}, k={k}",
+            std::any::type_name::<T>()
+        );
     }
 
     #[test]
