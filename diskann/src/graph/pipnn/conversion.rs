@@ -12,6 +12,14 @@
 //! On an AMD EPYC 7763, software conversion made gathers 4.6 to 22 times slower
 //! (128 to 1536 dimensions). With the `x86-64-v3` target, both paths are within
 //! 10% of each other.
+//!
+//! Other element types use `VectorRepr::as_f32_into` for every target. `f32`
+//! rows are copied. The baseline x86-64 target has SSE2 instructions that
+//! convert `u8` and `i8` to `f32`, so the compiler vectorizes that loop without
+//! the `x86-64-v3` flag. The baseline target has no `f16` conversion
+//! instruction; F16C starts at `x86-64-v3`. On the AMD EPYC 7763, the baseline
+//! target converted `u8` and `i8` at most 1.8 times slower than `x86-64-v3`, and
+//! `f16` 16.5 times slower (rows in L2).
 
 use std::any::TypeId;
 
