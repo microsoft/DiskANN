@@ -441,6 +441,17 @@ where
         })
     }
 
+    /// Construct an [`iface::Impl`] `self`.
+    pub fn as_quantizer_impl<const NBITS: usize>(
+        self,
+    ) -> Result<iface::Impl<NBITS, A>, AllocatorError>
+    where
+        A: 'static,
+        iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
+    {
+        iface::Impl::<NBITS, A>::new(self)
+    }
+
     /// Construct an [`iface::Quantizer`] trait object from `self`.
     pub fn as_quantizer<const NBITS: usize>(
         self,
@@ -449,7 +460,7 @@ where
         A: 'static,
         iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
     {
-        let iface = iface::Impl::<NBITS, A>::new(self)?;
+        let iface = self.as_quantizer_impl()?;
         crate::poly!({ iface::Quantizer }, iface, GlobalAllocator)
     }
 }

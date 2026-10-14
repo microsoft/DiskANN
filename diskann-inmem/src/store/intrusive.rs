@@ -158,7 +158,7 @@ impl Intrusive {
         Reader {
             buffer: &self.buffer,
             unpadded: self.unpadded,
-            guard,
+            _guard: guard,
         }
     }
 
@@ -263,12 +263,7 @@ impl slots::Slots for Intrusive {
 pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
     unpadded: Bytes,
-
-    #[cfg_attr(
-        not(feature = "quantization"),
-        expect(unused, reason = "quantization uses this to share the guard")
-    )]
-    guard: epoch::Guard<'a>,
+    _guard: epoch::Guard<'a>,
 }
 
 impl<'a> Reader<'a> {
@@ -401,12 +396,6 @@ impl<'a> Reader<'a> {
     /// Return the number of bytes plus the atomic tag.
     pub(crate) fn bytes_plus_tag(&self) -> Bytes {
         self.unpadded
-    }
-
-    /// Return a reference to the contained [`epoch::Guard`].
-    #[cfg(feature = "quantization")]
-    pub(crate) fn guard(&self) -> &epoch::Guard<'a> {
-        &self.guard
     }
 }
 
