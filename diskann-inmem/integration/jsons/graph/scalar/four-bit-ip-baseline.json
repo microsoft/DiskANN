@@ -60,18 +60,18 @@
           "counters": {
             "append_neighbors": 0,
             "distance": 0,
-            "get_neighbors": 5219,
-            "get_vector": 49096,
-            "query_distance": 49096,
+            "get_neighbors": 5208,
+            "get_vector": 49130,
+            "query_distance": 49130,
             "set_neighbors": 0,
             "set_vector": 0
           },
           "misc": {
-            "cmps": 49096,
-            "hops": 5219
+            "cmps": 49130,
+            "hops": 5208
           },
           "recall": {
-            "average": 0.764,
+            "average": 0.769,
             "num_queries": 100,
             "recall_k": 10,
             "recall_n": 10
@@ -81,18 +81,18 @@
           "counters": {
             "append_neighbors": 0,
             "distance": 0,
-            "get_neighbors": 5250,
-            "get_vector": 49283,
-            "query_distance": 49283,
+            "get_neighbors": 5240,
+            "get_vector": 49346,
+            "query_distance": 49346,
             "set_neighbors": 0,
             "set_vector": 0
           },
           "misc": {
-            "cmps": 49283,
-            "hops": 5250
+            "cmps": 49346,
+            "hops": 5240
           },
           "recall": {
-            "average": 0.764,
+            "average": 0.769,
             "num_queries": 100,
             "recall_k": 10,
             "recall_n": 10
@@ -102,18 +102,18 @@
           "counters": {
             "append_neighbors": 0,
             "distance": 0,
-            "get_neighbors": 10227,
-            "get_vector": 76057,
-            "query_distance": 76057,
+            "get_neighbors": 10228,
+            "get_vector": 75966,
+            "query_distance": 75966,
             "set_neighbors": 0,
             "set_vector": 0
           },
           "misc": {
-            "cmps": 76057,
-            "hops": 10227
+            "cmps": 75966,
+            "hops": 10228
           },
           "recall": {
-            "average": 0.764,
+            "average": 0.769,
             "num_queries": 100,
             "recall_k": 10,
             "recall_n": 10

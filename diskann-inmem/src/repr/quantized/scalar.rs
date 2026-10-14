@@ -15,9 +15,13 @@ use diskann_quantization::{
         CompensatedSquaredL2 as CSquaredL2,
     },
 };
+use diskann_vector::{Norm, norm::FastL2Norm};
 use thiserror::Error;
 
-use crate::{num::Bytes, repr::quantized};
+use crate::{
+    num::Bytes,
+    repr::{internal::Calf, quantized},
+};
 
 // Help bring the ridiculous names under control.
 type VectorRef<'a, const N: usize> = scalar::CompensatedVectorRef<'a, N>;
@@ -102,7 +106,12 @@ impl<const N: usize> Scalar<N> {
         }
     }
 
-    fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
+    fn query_distance<'a, V>(
+        &'a self,
+        query: &'a [f32],
+        visitor: V,
+        kind: QueryDistanceKind,
+    ) -> ANNResult<V::Output>
     where
         V: quantized::QueryDistanceVisitor<'a>,
         Unsigned: Representation<N>,
@@ -118,8 +127,28 @@ impl<const N: usize> Scalar<N> {
 
         let mut q = Vector::new_boxed(self.dim());
 
+        // TODO: `diskann-quantization` needs to expose an asymmetric distance API.
+        //
+        // We really shouldn't have to handle this externally.
+        let query = (|| match kind {
+            QueryDistanceKind::Query => {
+                if matches!(self.metric, Metric::InnerProduct)
+                    && let Some(mean_norm) = self.quantizer.mean_norm()
+                {
+                    let norm = (FastL2Norm).evaluate(query);
+                    if norm != 0.0 {
+                        let scale = mean_norm / norm;
+                        let rescaled = query.iter().map(|q| q * scale).collect();
+                        return Calf::Owned(rescaled);
+                    }
+                }
+                Calf::Borrowed(query)
+            }
+            QueryDistanceKind::Insert => Calf::Borrowed(query),
+        })();
+
         self.quantizer
-            .compress_into(query, q.reborrow_mut())
+            .compress_into(&*query, q.reborrow_mut())
             .map_err(ANNError::new)?;
 
         let visited = match self.metric {
@@ -139,6 +168,12 @@ impl<const N: usize> Scalar<N> {
 
         Ok(visited)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum QueryDistanceKind {
+    Insert,
+    Query,
 }
 
 /// Metrics supported by the [`Scalar`] quantizer.
@@ -246,7 +281,17 @@ macro_rules! quantizer {
             where
                 V: quantized::QueryDistanceVisitor<'a>,
             {
-                <Scalar<$N>>::query_distance(self, query, visitor)
+                <Scalar<$N>>::query_distance(self, query, visitor, QueryDistanceKind::Query)
+            }
+            fn insert_distance<'a, V>(
+                &'a self,
+                query: &'a [f32],
+                visitor: V,
+            ) -> ANNResult<V::Output>
+            where
+                V: quantized::QueryDistanceVisitor<'a>,
+            {
+                <Scalar<$N>>::query_distance(self, query, visitor, QueryDistanceKind::Insert)
             }
         }
     };
@@ -355,6 +400,7 @@ mod tests {
 
     const DIM: usize = 5;
     const TRIALS: usize = 10;
+    const SCALE: f32 = 10.0;
 
     #[derive(Debug, Clone, Copy)]
     struct Bits(usize);
@@ -390,6 +436,7 @@ mod tests {
     fn test_scalar(
         quantizer: &dyn DynQuantizer,
         bits: usize,
+        metric: Metric,
         rng: &mut StdRng,
         ntrials: usize,
         ctx: &dyn std::fmt::Display,
@@ -407,8 +454,16 @@ mod tests {
         let mut y = vec![0.0f32; dim];
         let mut by = vec![0u8; bytes];
 
+        let mut x_scaled = vec![0.0f32; dim];
+
         for trial in 0..ntrials {
-            x.iter_mut().for_each(|x| *x = bits.value(dist.sample(rng)));
+            // One the first trial, use `0` for `x` to make sure we don't try to scale a
+            // zeroed vector.
+            if trial == 0 {
+                x.fill(0.0);
+            } else {
+                x.iter_mut().for_each(|x| *x = bits.value(dist.sample(rng)));
+            }
             y.iter_mut().for_each(|y| *y = bits.value(dist.sample(rng)));
 
             quantizer.quantize(&mut bx, &x).unwrap();
@@ -418,13 +473,39 @@ mod tests {
             let distance = quantizer.distance();
             let from_distance = distance.eval(&bx, &by).unwrap();
 
+            let insert_distance = quantizer.insert_distance(&x).unwrap();
+            let from_insert_distance = insert_distance.eval(&by).unwrap();
+
+            assert_eq!(
+                from_distance, from_insert_distance,
+                "x = {:?}, bx = {:?}, y = {:?}, by = {:?}, trial = {} -- {}",
+                x, bx, y, by, trial, ctx,
+            );
+
+            // Check scaling.
+            //
+            // This mimics the scaling logic.
+            match metric {
+                Metric::InnerProduct => {
+                    let norm = (FastL2Norm).evaluate(&*x);
+                    let norm = if norm == 0.0 { 1.0 } else { norm };
+                    let scale = SCALE / norm;
+                    std::iter::zip(x_scaled.iter_mut(), x.iter())
+                        .for_each(|(xs, x)| *xs = (*x) * scale)
+                }
+                Metric::SquaredL2 | Metric::CosineNormalized => x_scaled.copy_from_slice(&x),
+            };
+
+            let insert_distance = quantizer.insert_distance(&x_scaled).unwrap();
+            let from_insert_distance = insert_distance.eval(&by).unwrap();
+
             let query_distance = quantizer.query_distance(&x).unwrap();
             let from_query_distance = query_distance.eval(&by).unwrap();
 
             assert_eq!(
-                from_distance, from_query_distance,
-                "x = {:?}, bx = {:?}, y = {:?}, by = {:?}, trial = {} -- {}",
-                x, bx, y, by, trial, ctx,
+                from_insert_distance, from_query_distance,
+                "x = {:?}, bx = {:?}, x_scaled = {:?}, y = {:?}, by = {:?}, trial = {} -- {}",
+                x, bx, x_scaled, y, by, trial, ctx,
             );
         }
 
@@ -497,6 +578,33 @@ mod tests {
             let b = vec![0u8; bytes];
             assert!(d.eval(&b).is_ok());
         }
+
+        // Insert Distance
+        {
+            let x = vec![0.0f32; dim - 1];
+            let err = quantizer.insert_distance(&x).unwrap_err().to_string();
+            assert_contains!(err, "expected dim 5");
+
+            let x = vec![0.0f32; dim + 1];
+            let err = quantizer.insert_distance(&x).unwrap_err().to_string();
+            assert_contains!(err, "expected dim 5");
+
+            let x = vec![f32::NAN; dim];
+            let err = quantizer.insert_distance(&x).unwrap_err().to_string();
+            assert_contains!(err, "NaN");
+
+            let x = vec![0.0f32; dim];
+            let d = quantizer.insert_distance(&x).unwrap();
+
+            let b = vec![0u8; bytes - 1];
+            assert!(d.eval(&b).is_err());
+
+            let b = vec![0u8; bytes + 1];
+            assert!(d.eval(&b).is_err());
+
+            let b = vec![0u8; bytes];
+            assert!(d.eval(&b).is_ok());
+        }
     }
 
     /// This quantizer is set up to encode data in the range `[-1, 1)`.
@@ -507,7 +615,7 @@ mod tests {
         scalar::ScalarQuantizer::new(
             (bits.buckets() as f32) / 2.0,
             vec![-bits.shift(); DIM],
-            None,
+            Some(SCALE),
         )
     }
 
@@ -518,25 +626,40 @@ mod tests {
         let bits = Bits(N);
         let mut rng = StdRng::seed_from_u64(0xcbd17799cff736a7);
 
+        let quantizer = Scalar::<N>::new(test_quantizer(bits), Metric::SquaredL2);
+        assert_eq!(quantizer.nbits(), N);
+        assert_eq!(quantizer.metric(), Metric::SquaredL2);
+
         test_scalar(
-            &Scalar::<N>::new(test_quantizer(bits), Metric::SquaredL2),
-            N,
+            &quantizer,
+            quantizer.nbits(),
+            quantizer.metric(),
             &mut rng,
             TRIALS,
             &"squared-l2",
         );
 
+        let quantizer = Scalar::<N>::new(test_quantizer(bits), Metric::InnerProduct);
+        assert_eq!(quantizer.nbits(), N);
+        assert_eq!(quantizer.metric(), Metric::InnerProduct);
+
         test_scalar(
-            &Scalar::<N>::new(test_quantizer(bits), Metric::InnerProduct),
-            N,
+            &quantizer,
+            quantizer.nbits(),
+            quantizer.metric(),
             &mut rng,
             TRIALS,
             &"inner-product",
         );
 
+        let quantizer = Scalar::<N>::new(test_quantizer(bits), Metric::CosineNormalized);
+        assert_eq!(quantizer.nbits(), N);
+        assert_eq!(quantizer.metric(), Metric::CosineNormalized);
+
         test_scalar(
-            &Scalar::<N>::new(test_quantizer(bits), Metric::CosineNormalized),
-            N,
+            &quantizer,
+            quantizer.nbits(),
+            quantizer.metric(),
             &mut rng,
             TRIALS,
             &"cosine-normalized",
@@ -583,24 +706,69 @@ mod tests {
         run_test::<8>();
     }
 
+    #[test]
+    fn test_no_scaling() {
+        let bits = Bits(8);
+
+        let quantizer = Scalar::<8>::new(
+            scalar::ScalarQuantizer::new(
+                (bits.buckets() as f32) / 2.0,
+                vec![-bits.shift(); DIM],
+                None,
+            ),
+            Metric::InnerProduct,
+        );
+
+        let dyn_quantizer: &dyn DynQuantizer = &quantizer;
+
+        let dim = dyn_quantizer.dim();
+        let bytes = dyn_quantizer.bytes().value();
+
+        let x = vec![-1.0, -0.5, -0.5, 0.5, 1.0];
+        let y = vec![-1.0f32; dim];
+        let mut by = vec![0u8; bytes];
+
+        dyn_quantizer.quantize(&mut by, &y).unwrap();
+
+        let insert_distance = dyn_quantizer.insert_distance(&x).unwrap();
+        let from_insert_distance = insert_distance.eval(&by).unwrap();
+
+        let query_distance = dyn_quantizer.query_distance(&x).unwrap();
+        let from_query_distance = query_distance.eval(&by).unwrap();
+
+        assert_eq!(from_insert_distance, from_query_distance);
+    }
+
     //--------//
     // Metric //
     //--------//
 
     #[test]
     fn test_metric() {
-        use diskann_vector::distance::{Metric as VMetric};
+        use diskann_vector::distance::Metric as VMetric;
 
         // VMetric -> Metric
         assert_eq!(Metric::try_from(VMetric::L2).unwrap(), Metric::SquaredL2);
-        assert_eq!(Metric::try_from(VMetric::InnerProduct).unwrap(), Metric::InnerProduct);
-        assert_eq!(Metric::try_from(VMetric::CosineNormalized).unwrap(), Metric::CosineNormalized);
+        assert_eq!(
+            Metric::try_from(VMetric::InnerProduct).unwrap(),
+            Metric::InnerProduct
+        );
+        assert_eq!(
+            Metric::try_from(VMetric::CosineNormalized).unwrap(),
+            Metric::CosineNormalized
+        );
         let err = Metric::try_from(VMetric::Cosine).unwrap_err();
-        assert_contains!(err.to_string(), "Metric::Cosine is not supported for scalar quantization");
+        assert_contains!(
+            err.to_string(),
+            "Metric::Cosine is not supported for scalar quantization"
+        );
 
         // Metric -> VMetric
         assert_eq!(VMetric::from(Metric::SquaredL2), VMetric::L2);
         assert_eq!(VMetric::from(Metric::InnerProduct), VMetric::InnerProduct);
-        assert_eq!(VMetric::from(Metric::CosineNormalized), VMetric::CosineNormalized);
+        assert_eq!(
+            VMetric::from(Metric::CosineNormalized),
+            VMetric::CosineNormalized
+        );
     }
 }
