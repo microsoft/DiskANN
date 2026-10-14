@@ -140,6 +140,7 @@ mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
     pub(super) enum ScalarBits {
         One,
         Two,
@@ -650,7 +651,10 @@ struct Scalar {
 
 impl Scalar {
     fn from_raw(raw: dto::Scalar) -> anyhow::Result<Self> {
-        let dto::Scalar { bits, standard_deviations } = raw;
+        let dto::Scalar {
+            bits,
+            standard_deviations,
+        } = raw;
 
         Ok(Self {
             bits: ScalarBits::from_raw(bits),
@@ -658,11 +662,9 @@ impl Scalar {
         })
     }
 
-    fn train(
-        &self,
-        data: rowmajor::Ref<'_, f32>,
-    ) -> anyhow::Result<dq::scalar::ScalarQuantizer> {
-        let trainer = dq::scalar::train::ScalarQuantizationParameters::new(self.standard_deviations);
+    fn train(&self, data: rowmajor::Ref<'_, f32>) -> anyhow::Result<dq::scalar::ScalarQuantizer> {
+        let trainer =
+            dq::scalar::train::ScalarQuantizationParameters::new(self.standard_deviations);
         let quantizer = trainer.train(data);
         Ok(quantizer)
     }
@@ -670,7 +672,10 @@ impl Scalar {
 
 impl std::fmt::Display for Scalar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { bits, standard_deviations } = self;
+        let Self {
+            bits,
+            standard_deviations,
+        } = self;
 
         let std = standard_deviations.into_inner();
 
@@ -681,7 +686,6 @@ impl std::fmt::Display for Scalar {
         write!(f, "{}", kv)
     }
 }
-
 
 //-------------//
 // StaticBuild //
@@ -1325,7 +1329,7 @@ impl Benchmark for ScalarBuild {
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<()> {
-        use repr::{Quantized, quantized::scalar::Scalar};
+        use repr::{quantized::scalar::Scalar, Quantized};
 
         writeln!(output, "{input}\n")?;
 
@@ -1344,7 +1348,7 @@ impl Benchmark for ScalarBuild {
 
         // Compute the medoid of the dataset as the single start point.
 
-        let metric =  repr::quantized::scalar::Metric::try_from(input.data.distance)?;
+        let metric = repr::quantized::scalar::Metric::try_from(input.data.distance)?;
 
         let capacity = Capacity::new(num_points);
         let max_degree = MaxDegree::new(input.build.config.max_degree().get());
@@ -1359,28 +1363,28 @@ impl Benchmark for ScalarBuild {
                 capacity,
                 max_degree,
                 start,
-                rerank
+                rerank,
             )?,
             ScalarBits::Two => Quantized::config(
                 Scalar::<2>::new(quantizer, metric),
                 capacity,
                 max_degree,
                 start,
-                rerank
+                rerank,
             )?,
             ScalarBits::Four => Quantized::config(
                 Scalar::<4>::new(quantizer, metric),
                 capacity,
                 max_degree,
                 start,
-                rerank
+                rerank,
             )?,
             ScalarBits::Eight => Quantized::config(
                 Scalar::<8>::new(quantizer, metric),
                 capacity,
                 max_degree,
                 start,
-                rerank
+                rerank,
             )?,
         };
 
@@ -1448,7 +1452,6 @@ impl Benchmark for ScalarBuild {
         Ok(())
     }
 }
-
 
 fn _knn(
     runner: &dyn crate::index::search::knn::Knn<u32>,

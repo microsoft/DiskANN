@@ -757,7 +757,7 @@ impl Test {
         };
 
         // Step 1: Train a generic quantizer.
-        let std = Positive::<f64>::new(1.5).expect("1.5 is positive");
+        let std = Positive::<f64>::new(1.5)?;
         let trainer = qscalar::train::ScalarQuantizationParameters::new(std);
         let quantizer = trainer.train(data);
 
