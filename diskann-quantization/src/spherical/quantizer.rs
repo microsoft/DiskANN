@@ -940,10 +940,9 @@ where
 //   Informally, "what's the smallest scaling factor so `v[position]` gets rounded to
 //   the next value.
 //
-// 2. Imposes a total ordering on `f32` values so it can be used in a `BinaryHeap`.
-//   Additionally, ordering is reverse so that `BinaryHeap` models a min-heap instead
-//   of a max-heap.
-/// Critical values are nonnegative and non-NaN, so unsigned bit order matches numeric order.
+// 2. Imposes a total ordering on nonnegative, non-NaN critical values using unsigned
+//   bit order, which matches numeric order for these values. Additionally, ordering
+//   is reversed so that `BinaryHeap` models a min-heap instead of a max-heap.
 #[derive(Debug, Clone, Copy)]
 struct Pair {
     value: f32,
@@ -1343,7 +1342,11 @@ mod tests {
 
             // We expect to either get the best value found via exhaustive search, or some
             // scalar multiple of it (since that will have the same cosine similarity).
-            let passed = if best == clamped || best_similarity == clamped_cosine.into_inner() {
+            let passed = if best == clamped
+                || (best_similarity == clamped_cosine.into_inner()
+                    && std::iter::zip(target, std::iter::zip(best, clamped))
+                        .all(|(input, (expected, actual))| input == 0.0 || expected == actual))
+            {
                 true
             } else {
                 let ratio: Vec<f32> = std::iter::zip(best, clamped)

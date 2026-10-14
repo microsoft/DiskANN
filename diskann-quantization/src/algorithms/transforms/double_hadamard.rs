@@ -391,7 +391,7 @@ mod tests {
     use crate::{
         algorithms::transforms::{Transform, TransformKind, test_utils},
         alloc::GlobalAllocator,
-        test_util::{AlwaysFails, Check, LimitedAllocator},
+        test_util::{Check, LimitedAllocator},
     };
 
     test_utils::delegate_transformer!(DoubleHadamard<GlobalAllocator>);
@@ -485,37 +485,6 @@ mod tests {
                         &mut rng,
                         ctx,
                     );
-
-                    let mut src = vec![1.0; input];
-                    let mut dst = vec![f32::NAN; output + 2];
-                    for value in [1.0, 0.0, -0.0] {
-                        src.fill(value);
-                        let result = transformer.transform_into(
-                            &mut dst[1..=output],
-                            &src,
-                            ScopedAllocator::new(&AlwaysFails),
-                        );
-                        if preserves_norms {
-                            result.unwrap();
-                        } else {
-                            assert_eq!(
-                                result,
-                                Err(TransformFailed::AllocatorError(AllocatorError))
-                            );
-                            transformer
-                                .transform_into(
-                                    &mut dst[1..=output],
-                                    &src,
-                                    ScopedAllocator::new(&LimitedAllocator::new(1)),
-                                )
-                                .unwrap();
-                        }
-                        assert!(dst[1..=output].iter().all(|value| value.is_finite()));
-                        if value == 0.0 {
-                            assert!(dst[1..=output].iter().all(|value| *value == 0.0));
-                        }
-                        assert!(dst[0].is_nan() && dst[output + 1].is_nan());
-                    }
                 }
 
                 // Abstract Transformer
@@ -537,6 +506,37 @@ mod tests {
                         ctx,
                     )
                 }
+            }
+
+            let mut allocation_rng = rng.clone();
+            let transformer =
+                DoubleHadamard::new(input_nz, target, &mut allocation_rng, GlobalAllocator)
+                    .unwrap();
+            let mut src = vec![1.0; input];
+            let mut dst = vec![f32::NAN; output + 2];
+            for value in [1.0, 0.0, -0.0] {
+                src.fill(value);
+                if !preserves_norms {
+                    let allocator = LimitedAllocator::new(0);
+                    assert_eq!(
+                        transformer.transform_into(
+                            &mut dst[1..=output],
+                            &src,
+                            ScopedAllocator::new(&allocator),
+                        ),
+                        Err(TransformFailed::AllocatorError(AllocatorError))
+                    );
+                }
+                let allocator = LimitedAllocator::new(usize::from(!preserves_norms));
+                transformer
+                    .transform_into(&mut dst[1..=output], &src, ScopedAllocator::new(&allocator))
+                    .unwrap();
+                assert_eq!(allocator.remaining(), 0);
+                assert!(dst[1..=output].iter().all(|value| value.is_finite()));
+                if value == 0.0 {
+                    assert!(dst[1..=output].iter().all(|value| *value == 0.0));
+                }
+                assert!(dst[0].is_nan() && dst[output + 1].is_nan());
             }
         }
     }
