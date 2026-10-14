@@ -54,6 +54,22 @@ where
     fn is_match(&self, i: I) -> bool;
 }
 
+/// A label provider that can enumerate candidates for exhaustive filtered search.
+///
+/// The bound is conservative for true matches and may be much smaller than the number
+/// of candidates when membership is approximate. `visit_candidates` must yield each
+/// candidate at most once, exclude frozen graph start points, and include every true match.
+pub trait CandidateLabelProvider<I>: QueryLabelProvider<I>
+where
+    I: VectorId,
+{
+    /// Return a conservative true-match bound, or `None` when counts are unavailable.
+    fn match_upper_bound(&self) -> Option<u64>;
+
+    /// Visit every candidate ID, including any approximate-filter false positives.
+    fn visit_candidates(&self, visit: impl FnMut(I));
+}
+
 // Move this external to the `QueryLabelProvider` call so the indirect call has a slightly
 // simpler signature. Does it matter? Probably not.
 fn decide<T, I>(provider: &T, i: I) -> Decision<I>
@@ -182,6 +198,16 @@ where
     L: QueryLabelProvider<A::Id> + ?Sized,
 {
     type Id = A::Id;
+}
+
+impl<A, L> glue::RandomAccessQueryDistance for FilteredAccessor<'_, A, L>
+where
+    A: glue::RandomAccessQueryDistance,
+    L: QueryLabelProvider<A::Id> + ?Sized,
+{
+    fn distance_to_id(&mut self, id: Self::Id) -> ANNResult<f32> {
+        self.inner.distance_to_id(id)
+    }
 }
 
 impl<'a, A, L> glue::FilteredAccessor for FilteredAccessor<'a, A, L>

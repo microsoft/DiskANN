@@ -253,6 +253,15 @@ pub trait SearchAccessor: HasId + Send + Sync {
     }
 }
 
+/// Compute a query distance for an arbitrary indexed ID without traversing graph edges.
+///
+/// Accessors supporting exhaustive search opt into this trait. Invalid IDs must
+/// return an error rather than accessing a vector out of bounds.
+pub trait RandomAccessQueryDistance: HasId + Send + Sync {
+    /// Compute the same distance used by this accessor's graph search strategy.
+    fn distance_to_id(&mut self, id: Self::Id) -> ANNResult<f32>;
+}
+
 /// Mark that an ID has been accepted for purposes of filtering.
 ///
 /// See: [`Decision`], [`FilteredAccessor::expand_beam_accept_only`]

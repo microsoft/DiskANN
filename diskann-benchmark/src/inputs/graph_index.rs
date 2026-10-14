@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use std::num::{NonZero, NonZeroU32, NonZeroUsize};
+use std::{
+    num::{NonZero, NonZeroU32, NonZeroUsize},
+    path::Path,
+};
 
 use anyhow::{anyhow, Context};
 use diskann::{
@@ -17,6 +20,7 @@ use diskann_providers::{
         configuration::IndexConfiguration,
         graph::provider::{async_::inmem::DefaultProviderParameters, DeterminantDiversityParams},
     },
+    storage::AsyncIndexMetadata,
     utils::load_metadata_from_file,
 };
 use serde::{Deserialize, Serialize};
@@ -36,6 +40,7 @@ as_input!(IndexPQOperation);
 as_input!(IndexSQOperation);
 as_input!(SphericalQuantBuild);
 as_input!(DynamicIndexRun);
+as_input!(IndexBuildOnly);
 
 ////////////
 // Search //
@@ -46,6 +51,43 @@ pub(crate) struct GraphSearch {
     pub(crate) search_n: usize,
     pub(crate) search_l: Vec<usize>,
     pub(crate) recall_k: usize,
+}
+
+#[cfg(test)]
+mod hybrid_tests {
+    use super::*;
+
+    #[test]
+    fn hybrid_phase_deserializes_flat_filter_runbook_and_threshold() {
+        let mut input = serde_json::json!({
+            "search-type": "topk-hybrid-encoded-bloom",
+            "queries": "queries.u8bin",
+            "query_predicates": "filters.api.jsonl",
+            "groundtruth": "truth.rangeres",
+            "data_labels": "labels.bloom.bin",
+            "reps": 1,
+            "num_threads": [1],
+            "runs": [{"search_n": 10, "search_l": [150], "recall_k": 10}]
+        });
+        let default: SearchPhase = serde_json::from_value(input.clone()).unwrap();
+        let SearchPhase::TopkHybridEncodedBloom(default) = default else {
+            panic!("hybrid search phase was not selected");
+        };
+        assert_eq!(default.brute_force_threshold.get(), 200_000);
+
+        input["brute_force_threshold"] = serde_json::json!(123);
+        let configured: SearchPhase = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(
+            configured
+                .as_topk_hybrid_encoded_bloom()
+                .unwrap()
+                .brute_force_threshold
+                .get(),
+            123
+        );
+        input["brute_force_threshold"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<SearchPhase>(input).is_err());
+    }
 }
 
 impl GraphSearch {
@@ -109,6 +151,9 @@ pub(crate) struct TopkSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
+    /// Optional querywise results for the first repetition of each search L.
+    #[serde(default)]
+    pub(crate) query_results_path: Option<String>,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
@@ -122,6 +167,7 @@ impl TopkSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
         self.groundtruth.resolve(checker)?;
+        validate_query_results_path(self.query_results_path.as_deref())?;
         for (i, run) in self.runs.iter_mut().enumerate() {
             run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
@@ -152,6 +198,7 @@ impl Example for TopkSearchPhase {
             queries: InputFile::new("path/to/queries"),
             groundtruth: InputFile::new("path/to/groundtruth"),
             reps: REPS,
+            query_results_path: None,
             num_threads: THREAD_COUNTS.to_vec(),
             runs,
         }
@@ -224,6 +271,9 @@ pub(crate) struct MultihopFilterSearchPhase {
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
     pub(crate) data_labels: InputFile,
+    /// Optional querywise results for the first repetition of each encoded-filter search L.
+    #[serde(default)]
+    pub(crate) query_results_path: Option<String>,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
@@ -235,6 +285,7 @@ impl MultihopFilterSearchPhase {
         self.query_predicates.resolve(checker)?;
         self.data_labels.resolve(checker)?;
         self.groundtruth.resolve(checker)?;
+        validate_query_results_path(self.query_results_path.as_deref())?;
         for (i, run) in self.runs.iter_mut().enumerate() {
             run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
@@ -242,6 +293,43 @@ impl MultihopFilterSearchPhase {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct HybridBloomSearchPhase {
+    #[serde(flatten)]
+    pub(crate) multihop: MultihopFilterSearchPhase,
+    #[serde(default = "default_hybrid_threshold")]
+    pub(crate) brute_force_threshold: NonZeroU32,
+}
+
+fn default_hybrid_threshold() -> NonZeroU32 {
+    NonZeroU32::new(200_000).expect("the default hybrid threshold is nonzero")
+}
+
+impl HybridBloomSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.multihop.validate(checker)
+    }
+}
+
+fn validate_query_results_path(path: Option<&str>) -> anyhow::Result<()> {
+    if let Some(path) = path {
+        let output = Path::new(path);
+        if !output.is_absolute() || !output.parent().is_some_and(Path::is_dir) {
+            return Err(anyhow!(
+                "query_results_path must be an absolute path with an existing parent: {}",
+                output.display()
+            ));
+        }
+        if output.exists() || output.with_extension("jsonl.part").exists() {
+            return Err(anyhow!(
+                "query result output or partial file already exists: {}",
+                output.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -408,9 +496,9 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultihopFilterSearchPhase),
-    /// For these encoded-label-index modes, `data_labels` points at a pre-encoded
-    /// `diskann-label-index` artifact instead of the raw labels JSONL.
+    /// `data_labels` points at a persisted Bitslice or Bloom label index, not raw JSONL.
     TopkMultihopEncodedBitsliceDnf(MultihopFilterSearchPhase),
+    TopkHybridEncodedBloom(HybridBloomSearchPhase),
     TopkInlineFilter(InlineFilterSearchPhase),
     TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
@@ -442,6 +530,7 @@ impl SearchPhase {
             Self::TopkMultihopEncodedBitsliceDnf(_) => {
                 SearchPhaseKind::TopkMultihopEncodedBitsliceDnf
             }
+            Self::TopkHybridEncodedBloom(_) => SearchPhaseKind::TopkHybridEncodedBloom,
             Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
             Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
         }
@@ -501,6 +590,18 @@ impl SearchPhase {
         }
     }
 
+    pub(crate) fn as_topk_hybrid_encoded_bloom(
+        &self,
+    ) -> Result<&HybridBloomSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkHybridEncodedBloom(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkHybridEncodedBloom,
+                self.kind(),
+            )),
+        }
+    }
+
     pub(crate) fn as_topk_inline_filter(
         &self,
     ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
@@ -534,6 +635,7 @@ impl SearchPhase {
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopEncodedBitsliceDnf(phase) => phase.validate(checker),
+            SearchPhase::TopkHybridEncodedBloom(phase) => phase.validate(checker),
             SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
             SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
@@ -547,6 +649,7 @@ pub(crate) enum SearchPhaseKind {
     TopkBetaFilter,
     TopkMultihopFilter,
     TopkMultihopEncodedBitsliceDnf,
+    TopkHybridEncodedBloom,
     TopkInlineFilter,
     TopkDeterminantDiversity,
 }
@@ -559,6 +662,7 @@ impl SearchPhaseKind {
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
             Self::TopkMultihopEncodedBitsliceDnf => "topk-multihop-encoded-bitslice-dnf",
+            Self::TopkHybridEncodedBloom => "topk-hybrid-encoded-bloom",
             Self::TopkInlineFilter => "topk-inline-filter",
             Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }
@@ -885,6 +989,56 @@ impl std::fmt::Display for IndexBuild {
     }
 }
 
+/// Build and persist an in-memory full-precision graph without running searches.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct IndexBuildOnly {
+    #[serde(flatten)]
+    pub(crate) build: IndexBuild,
+}
+
+impl IndexBuildOnly {
+    pub(crate) const fn tag() -> &'static str {
+        "graph-index-build-only"
+    }
+
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        if self.build.save_path().is_none() {
+            return Err(anyhow!("graph-index-build-only requires a save_path"));
+        }
+        self.build.validate(checker)?;
+        let save_path = self
+            .build
+            .save_path()
+            .ok_or_else(|| anyhow!("validated graph-index-build-only input has no save_path"))?;
+        let metadata = AsyncIndexMetadata::new(save_path.to_string());
+        for file in [
+            save_path.to_string(),
+            metadata.data_path(),
+            metadata.additional_points_id_path(),
+        ] {
+            if Path::new(&file).exists() {
+                return Err(anyhow!("saved graph file already exists: {file}"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Example for IndexBuildOnly {
+    fn example() -> Self {
+        let mut build = IndexBuild::example();
+        build.data_type = DataType::UInt8;
+        build.save_path = Some("path/to/saved-index".to_string());
+        Self { build }
+    }
+}
+
+impl std::fmt::Display for IndexBuildOnly {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.build.fmt(f)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "index-source")] // Use tagged enums for JSON
 pub enum IndexSource {
@@ -929,6 +1083,13 @@ impl IndexOperation {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.source.validate(checker)?;
         self.search_phase.validate(checker)?;
+        if let SearchPhase::TopkMultihopFilter(phase) = &self.search_phase {
+            if phase.query_results_path.is_some() {
+                return Err(anyhow!(
+                    "query_results_path is supported only by encoded-label multihop search"
+                ));
+            }
+        }
 
         Ok(())
     }

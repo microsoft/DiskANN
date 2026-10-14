@@ -183,6 +183,19 @@ pub struct Metrics {
     pub comparisons: u32,
     /// The number of candidates expanded during search.
     pub hops: u32,
+    /// Timings for a hybrid exhaustive query; absent for ordinary graph searches.
+    pub hybrid_timings: Option<graph::search::HybridPhaseTimings>,
+}
+
+impl Metrics {
+    /// Construct per-query search metrics.
+    pub const fn new(comparisons: u32, hops: u32) -> Self {
+        Self {
+            comparisons,
+            hops,
+            hybrid_timings: None,
+        }
+    }
 }
 
 impl<DP, T, S, PP> Search for KNN<DP, T, S, PP>
@@ -232,10 +245,7 @@ where
             )
             .await?;
 
-        Ok(Metrics {
-            comparisons: stats.cmps,
-            hops: stats.hops,
-        })
+        Ok(Metrics::new(stats.cmps, stats.hops))
     }
 }
 

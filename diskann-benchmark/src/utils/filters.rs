@@ -3,9 +3,12 @@
  * Licensed under the MIT license.
  */
 
+use anyhow::Context;
 use bit_set::BitSet;
 use std::{
     fmt::{self, Debug},
+    fs::File,
+    io::{BufRead, BufReader},
     sync::{Arc, OnceLock},
 };
 
@@ -32,6 +35,7 @@ use diskann_providers::model::graph::provider::layers::BetaFilter;
 use diskann_tools::utils::ground_truth::read_labels_and_compute_bitmap;
 
 use diskann_label_filter::read_and_parse_queries;
+use serde::Deserialize;
 use serde_json::Value;
 
 pub struct QueryBitmapEvaluator {
@@ -94,6 +98,49 @@ where
 }
 
 pub(crate) type ValidatedEncodedQuerySource = Box<[String]>;
+
+#[derive(Deserialize)]
+struct FlatEncodedQueryRow {
+    query_id: u64,
+    #[serde(default)]
+    vector_id: Option<u64>,
+    form: String,
+    clauses: Vec<String>,
+}
+
+/// Compile row-aligned flat DNF/CNF clauses for the count-routed hybrid search.
+pub(crate) fn prepare_flat_encoded_queries(
+    index: &EncodedLabelIndex,
+    query_predicates: &InputFile,
+) -> anyhow::Result<Vec<Arc<EncodedLabelQuery<'static>>>> {
+    let source = BufReader::new(
+        File::open(&**query_predicates)
+            .with_context(|| format!("failed to open {}", query_predicates.display()))?,
+    );
+    let mut plans = Vec::new();
+    for (query_id, line) in source.lines().enumerate() {
+        let row: FlatEncodedQueryRow = serde_json::from_str(&line?)
+            .with_context(|| format!("invalid flat filter JSONL row {query_id}"))?;
+        let expected = u64::try_from(query_id)?;
+        if row.query_id != expected || row.vector_id.is_some_and(|id| id != expected) {
+            anyhow::bail!("flat filter row {query_id} has a mismatched query or vector ID");
+        }
+        let form = match row.form.as_str() {
+            "DNF" => FilterExpressionType::DNF,
+            "CNF" => FilterExpressionType::CNF,
+            other => anyhow::bail!("flat filter row {query_id} has unknown form '{other}'"),
+        };
+        validate_flat_encoded_labels(index, &row.clauses, form)?;
+        let plan = index.query(&row.clauses, form).map_err(|error| {
+            anyhow::anyhow!("failed to compile flat filter row {query_id}: {error}")
+        })?;
+        plans.push(Arc::new(plan));
+    }
+    if plans.is_empty() {
+        anyhow::bail!("flat filter input has no query rows");
+    }
+    Ok(plans)
+}
 
 /// Per-query lazy encoded-label provider used by the encoded multihop benchmarks.
 ///
@@ -250,8 +297,21 @@ fn validate_encoded_benchmark_labels(
     index: &EncodedLabelIndex,
     clauses: &[String],
 ) -> anyhow::Result<()> {
+    validate_flat_encoded_labels(index, clauses, FilterExpressionType::DNF)
+}
+
+fn validate_flat_encoded_labels(
+    index: &EncodedLabelIndex,
+    clauses: &[String],
+    form: FilterExpressionType,
+) -> anyhow::Result<()> {
+    let delimiter = match form {
+        FilterExpressionType::DNF => '&',
+        FilterExpressionType::CNF => '|',
+    };
     for clause in clauses {
-        for label in clause.split('&') {
+        for label in clause.split(delimiter) {
+            let label = label.trim();
             if !index.contains_label(label) {
                 anyhow::bail!(
                     "encoded benchmark query references label '{label}' absent from the label index"
@@ -359,7 +419,9 @@ mod tests {
     use super::*;
     use std::{fs::File, io::Write};
 
-    use diskann_label_index::encode_label_index_jsonl;
+    use diskann_label_index::{
+        encode_bloom_label_index_jsonl, encode_label_index_jsonl, BloomFilterConfig,
+    };
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -460,6 +522,41 @@ mod tests {
     }
 
     #[test]
+    fn flat_encoded_queries_support_dnf_and_multi_clause_cnf() {
+        let (dir, index, _) = encoded_fixture();
+        let path = dir.path().join("flat-queries.jsonl");
+        write_lines(
+            &path,
+            &[
+                r#"{"query_id":0,"vector_id":0,"form":"CNF","clauses":["brand=A|promo","color=red|color=blue"]}"#,
+                r#"{"query_id":1,"vector_id":1,"form":"DNF","clauses":["brand=B&color=red","brand=C&color=green"]}"#,
+            ],
+        );
+        let plans = prepare_flat_encoded_queries(&index, &InputFile::new(path)).unwrap();
+        assert_eq!(test_query_matches(&plans[0], 4), vec![0, 1]);
+        assert_eq!(test_query_matches(&plans[1], 4), vec![2, 3]);
+    }
+
+    #[test]
+    fn flat_encoded_queries_reject_invalid_input() {
+        let (dir, index, _) = encoded_fixture();
+        let path = dir.path().join("flat-invalid.jsonl");
+        for invalid in [
+            r#"{"query_id":1,"form":"DNF","clauses":["brand=A"]}"#,
+            r#"{"query_id":0,"vector_id":1,"form":"DNF","clauses":["brand=A"]}"#,
+            r#"{"query_id":0,"form":"UNKNOWN","clauses":["brand=A"]}"#,
+            r#"{"query_id":0,"form":"DNF","clauses":["brand=absent"]}"#,
+            r#"{"query_id":0,"form":"CNF","clauses":[]}"#,
+        ] {
+            write_lines(&path, &[invalid]);
+            assert!(
+                prepare_flat_encoded_queries(&index, &InputFile::new(path.clone())).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn test_lazy_encoded_dnf_provider_matches_eager_query() {
         let (_dir, bitslice_index, query_file) = encoded_fixture();
         let sources = prepare_encoded_query_sources(bitslice_index.as_ref(), &query_file).unwrap();
@@ -471,6 +568,33 @@ mod tests {
                 test_query_matches(provider, 4),
                 eager_encoded_matches(bitslice_index.as_ref(), source, 4)
             );
+        }
+    }
+
+    #[test]
+    fn test_lazy_encoded_provider_accepts_bloom_index() {
+        let (dir, dense_index, query_file) = encoded_fixture();
+        let bloom_path = dir.path().join("labels.bloom.bin");
+        encode_bloom_label_index_jsonl(
+            dir.path().join("labels.jsonl"),
+            &bloom_path,
+            BloomFilterConfig::new(128, 4).unwrap(),
+        )
+        .unwrap();
+        let bloom_index = load_encoded_label_index(&InputFile::new(bloom_path)).unwrap();
+        let dense_sources =
+            prepare_encoded_query_sources(dense_index.as_ref(), &query_file).unwrap();
+        let bloom_sources =
+            prepare_encoded_query_sources(bloom_index.as_ref(), &query_file).unwrap();
+        let providers = make_encoded_query_providers(bloom_index, &bloom_sources);
+
+        for (provider, source) in providers.iter().zip(&dense_sources) {
+            let exact = compile_encoded_query(dense_index.as_ref(), source).unwrap();
+            for vector_id in 0..4 {
+                if exact.is_match(vector_id) {
+                    assert!(provider.is_match(vector_id));
+                }
+            }
         }
     }
 
