@@ -284,7 +284,7 @@ impl DiskIndexWriter {
         let num_nbrs: u32 = Self::get_neighbors_number(state)?;
 
         // sanity checks on num_nbrs
-        debug_assert!(num_nbrs > 0);
+        debug_assert!(num_nbrs > 0 || state.num_pts == 1);
         debug_assert!(num_nbrs <= state.max_degree);
 
         let num_nbrs_start = state.dims as usize * mem::size_of::<Data::VectorDataType>();
