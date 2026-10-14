@@ -613,23 +613,20 @@ impl V4 {
     pub fn mm256_maddubs_epi16(self, x: u8x32, y: i8x32) -> i16x16 {
         #[cfg(miri)]
         {
-            let x = x.to_array();
-            let y = y.to_array();
-            i16x16::from_array(
-                self,
-                core::array::from_fn(|i| {
-                    let sum = i32::from(x[2 * i]) * i32::from(y[2 * i])
-                        + i32::from(x[2 * i + 1]) * i32::from(y[2 * i + 1]);
-                    sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
-                }),
-            )
+            // V4 aliases are Emulated under Miri, so bridge through arrays to V3.
+            let arch = self.retarget();
+            let x = super::v3::u8x32::from_array(arch, x.to_array());
+            let y = super::v3::i8x32::from_array(arch, y.to_array());
+            i16x16::from_array(self, arch.mm256_maddubs_epi16(x, y).to_array())
         }
         #[cfg(not(miri))]
         {
-            // SAFETY: V4 provides AVX2.
-            i16x16::from_underlying(self, unsafe {
-                std::arch::x86_64::_mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
-            })
+            i16x16::from_underlying(
+                self,
+                self.retarget()
+                    .mm256_maddubs_epi16(x.retarget(), y.retarget())
+                    .to_underlying(),
+            )
         }
     }
 }
@@ -650,28 +647,24 @@ impl From<V4> for V3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils;
+    use crate::{arch::x86_64::v3, test_utils};
 
     #[test]
     fn test_mm256_maddubs_epi16() {
-        let arch = if cfg!(miri) {
-            V4::new_checked_miri()
-        } else {
-            V4::new_checked_uncached()
-        };
-        if let Some(arch) = arch {
+        if let Some(arch) = V4::new_checked_miri_uncached() {
+            let arch_v3 = arch.retarget();
             let check = move |x: &[u8], y: &[i8]| {
+                let x: [u8; 32] = x.try_into().unwrap();
+                let y: [i8; 32] = y.try_into().unwrap();
                 let got = arch
+                    .mm256_maddubs_epi16(u8x32::from_array(arch, x), i8x32::from_array(arch, y))
+                    .to_array();
+                let expected = arch_v3
                     .mm256_maddubs_epi16(
-                        u8x32::from_array(arch, x.try_into().unwrap()),
-                        i8x32::from_array(arch, y.try_into().unwrap()),
+                        v3::u8x32::from_array(arch_v3, x),
+                        v3::i8x32::from_array(arch_v3, y),
                     )
                     .to_array();
-                let expected: [i16; 16] = core::array::from_fn(|i| {
-                    let even = i16::from(x[2 * i]) * i16::from(y[2 * i]);
-                    let odd = i16::from(x[2 * i + 1]) * i16::from(y[2 * i + 1]);
-                    even.saturating_add(odd)
-                });
                 assert_eq!(got, expected, "x = {x:?}, y = {y:?}");
             };
             check(&[u8::MAX; 32], &[i8::MAX; 32]);
