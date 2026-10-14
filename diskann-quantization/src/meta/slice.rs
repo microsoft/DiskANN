@@ -108,7 +108,7 @@ use crate::{
 ///
 /// The canonical layout needs the following properties:
 ///
-/// * `T: bytemuck::Pod` and `M: bytemuck::Pod: For safely storing and retrieving.
+/// * `T: bytemuck::Pod` and `M: bytemuck::Pod`: For safely storing and retrieving.
 /// * The length for a vector with `N` dimensions must be equal to the value returned
 ///   from [`SliceRef::canonical_bytes`].
 /// * The **alignment** of the base pointer must be equal to [`SliceRef::canonical_align()`].
@@ -351,7 +351,7 @@ where
     /// Returns an error if:
     ///
     /// * `data` is not aligned to `Self::canonical_align()`.
-    /// * `data.len() != `Self::canonical_bytes(dim)`.
+    /// * `data.len() != Self::canonical_bytes(dim)`.
     pub fn from_canonical(data: &'a [u8], dim: usize) -> Result<Self, NotCanonical> {
         let expected_align = Self::canonical_align().raw();
         let expected_len = Self::canonical_bytes(dim);
@@ -416,7 +416,7 @@ where
     /// Returns an error if:
     ///
     /// * `data` is not aligned to `Self::canonical_align()`.
-    /// * `data.len() != `Self::canonical_bytes(dim)`.
+    /// * `data.len() != Self::canonical_bytes(dim)`.
     pub fn from_canonical_mut(data: &'a mut [u8], dim: usize) -> Result<Self, NotCanonical> {
         let expected_align = Self::canonical_align().raw();
         let expected_len = Self::canonical_bytes(dim);

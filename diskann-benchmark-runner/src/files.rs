@@ -28,7 +28,7 @@ pub struct InputFile {
 }
 
 impl InputFile {
-    /// Create a new new input file from the path-like `path``
+    /// Create a new input file from the path-like `path`.
     pub fn new<P>(path: P) -> Self
     where
         PathBuf: From<P>,
@@ -74,7 +74,7 @@ impl std::fmt::Display for InputFile {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{create_dir, File};
+    use std::fs::{File, create_dir};
 
     use super::*;
 

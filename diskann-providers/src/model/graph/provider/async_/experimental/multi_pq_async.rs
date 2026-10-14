@@ -7,13 +7,17 @@ use std::sync::{Arc, Mutex};
 
 use arc_swap::{ArcSwap, Guard};
 use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::VectorRepr};
+use diskann_quantization::CompressInto;
 use diskann_utils::lazy_format;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
-use crate::model::{
-    FixedChunkPQTable,
-    pq::{distance::multi, generate_pq_data_from_pivots_from_membuf},
+use crate::{
+    model::{
+        FixedChunkPQTable,
+        pq::distance::{Shared, multi},
+    },
+    utils::BridgeErr,
 };
 
 /// The discriminant type for PQ vector versions.
@@ -70,8 +74,10 @@ impl TestMultiPQProviderAsync {
 
     pub fn multi_table(&self) -> Result<MultiTable<'_>, multi::EqualVersionsError> {
         match &self.table_old {
-            None => Ok(MultiTable::one(&self.table_new, 1)),
-            Some(table_old) => MultiTable::two(&self.table_new, table_old, 2, 1),
+            None => Ok(MultiTable::one(Shared::Ref(&self.table_new), 1)),
+            Some(table_old) => {
+                MultiTable::two(Shared::Ref(&self.table_new), Shared::Ref(table_old), 2, 1)
+            }
         }
     }
 
@@ -155,17 +161,9 @@ impl TestMultiPQProviderAsync {
         };
 
         let mut quant_vector: Vec<u8> = vec![0; table.get_num_chunks()];
-        if generate_pq_data_from_pivots_from_membuf(
-            &vector_f32,
-            table.get_pq_table(),
-            table.get_num_centers(),
-            table.get_chunk_offsets(),
-            &mut quant_vector,
-        )
-        .is_err()
-        {
-            return Err(ANNError::message("Error in generating PQ data."));
-        }
+        table
+            .compress_into(vector_f32.as_slice(), &mut quant_vector)
+            .bridge_err()?;
 
         let new = Arc::new(VersionedPQVector::new(quant_vector, version));
         self.quant_vectors[id].swap(new);

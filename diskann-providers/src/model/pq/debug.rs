@@ -4,7 +4,7 @@
  */
 
 use diskann::utils::IntoUsize;
-use diskann_utils::views;
+use diskann_utils::views::{self, rowmajor::Matrix};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 
 pub struct MismatchRecord {
@@ -48,18 +48,18 @@ impl std::fmt::Display for MismatchRecord {
 /// on the sizes of the provided arguments, but can be helpful for writing test routines
 /// and as such is still marked as public.
 pub fn compare_pq<T, U>(
-    data: views::MatrixView<'_, T>,
+    data: views::rowmajor::Ref<'_, T>,
     schema: diskann_quantization::views::ChunkOffsetsView<'_>,
-    pivots: views::MatrixView<'_, f32>,
+    pivots: views::rowmajor::Ref<'_, f32>,
     center: &[f32],
-    a: views::MatrixView<'_, U>,
-    b: views::MatrixView<'_, U>,
+    a: views::rowmajor::Ref<'_, U>,
+    b: views::rowmajor::Ref<'_, U>,
 ) -> Vec<MismatchRecord>
 where
     T: Copy + Into<f32>,
     U: Copy + IntoUsize,
 {
-    std::iter::zip(a.row_iter(), b.row_iter())
+    std::iter::zip(a.rows(), b.rows())
         .enumerate()
         .flat_map(|(row, (a_row, b_row))| {
             std::iter::zip(a_row.iter(), b_row.iter())

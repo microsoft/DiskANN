@@ -31,9 +31,12 @@ impl<IT> RoaringAttributeStore<IT>
 where
     IT: VectorId + IntoUsize,
 {
-    #[allow(
-        dead_code,
-        reason = "This will be invoked by callers when they create a document provider."
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "This will be invoked by callers when they create a document provider."
+        )
     )]
     pub fn new() -> Self {
         Self {

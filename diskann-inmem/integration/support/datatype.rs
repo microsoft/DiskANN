@@ -5,8 +5,9 @@
 
 use diskann_utils::{
     sampling::medoid::ComputeMedoid,
-    views::{Matrix, MatrixView, MutMatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
+use diskann_wide::{cast_f16_to_f32, cast_f32_to_f16};
 use half::f16;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -146,8 +147,8 @@ where
 }
 
 fn f32_to_f16(x: f32) -> Result<f16, ()> {
-    let y = f16::from_f32(x);
-    let z = f32::from(y);
+    let y = cast_f32_to_f16(x);
+    let z = cast_f16_to_f32(y);
     if z != x { Err(()) } else { Ok(y) }
 }
 
@@ -164,11 +165,11 @@ fn f32_to_i8(x: f32) -> Result<i8, ()> {
 }
 
 fn f16_to_u8(x: f16) -> Result<u8, ()> {
-    f32_to_u8(x.into())
+    f32_to_u8(cast_f16_to_f32(x))
 }
 
 fn f16_to_i8(x: f16) -> Result<i8, ()> {
-    f32_to_i8(x.into())
+    f32_to_i8(cast_f16_to_f32(x))
 }
 
 impl<'a> SliceMut<'a> {
@@ -192,14 +193,14 @@ impl<'a> SliceMut<'a> {
 
         match (self, rhs) {
             (SliceMut::F32(dst), Slice::F32(src)) => dst.copy_from_slice(src),
-            (SliceMut::F32(dst), Slice::F16(src)) => map(dst, src, |x| x.into()),
+            (SliceMut::F32(dst), Slice::F16(src)) => map(dst, src, cast_f16_to_f32),
             (SliceMut::F32(dst), Slice::U8(src)) => map(dst, src, |x| x.into()),
             (SliceMut::F32(dst), Slice::I8(src)) => map(dst, src, |x| x.into()),
 
             (SliceMut::F16(dst), Slice::F32(src)) => try_map(dst, src, f32_to_f16)?,
             (SliceMut::F16(dst), Slice::F16(src)) => dst.copy_from_slice(src),
-            (SliceMut::F16(dst), Slice::U8(src)) => map(dst, src, |x| x.into()),
-            (SliceMut::F16(dst), Slice::I8(src)) => map(dst, src, |x| x.into()),
+            (SliceMut::F16(dst), Slice::U8(src)) => map(dst, src, |x| cast_f32_to_f16(x.into())),
+            (SliceMut::F16(dst), Slice::I8(src)) => map(dst, src, |x| cast_f32_to_f16(x.into())),
 
             (SliceMut::U8(dst), Slice::F32(src)) => try_map(dst, src, f32_to_u8)?,
             (SliceMut::U8(dst), Slice::F16(src)) => try_map(dst, src, f16_to_u8)?,
@@ -222,10 +223,10 @@ impl<'a> SliceMut<'a> {
 
 #[derive(Debug)]
 pub(crate) enum Dataset {
-    F32(Matrix<f32>),
-    F16(Matrix<f16>),
-    U8(Matrix<u8>),
-    I8(Matrix<i8>),
+    F32(rowmajor::Owned<f32>),
+    F16(rowmajor::Owned<f16>),
+    U8(rowmajor::Owned<u8>),
+    I8(rowmajor::Owned<i8>),
 }
 
 impl Dataset {
@@ -255,16 +256,12 @@ impl Dataset {
         }
     }
 
-    pub(crate) fn medoid(&self) -> Dataset {
-        self.as_view().medoid()
-    }
-
     pub(crate) fn preprocess(&mut self, op: &Preprocess) {
         match self {
-            Self::F32(m) => op.apply(m.as_mut_view()),
-            Self::F16(m) => op.apply(m.as_mut_view()),
-            Self::U8(m) => op.apply(m.as_mut_view()),
-            Self::I8(m) => op.apply(m.as_mut_view()),
+            Self::F32(m) => op.apply(m.as_view_mut()),
+            Self::F16(m) => op.apply(m.as_view_mut()),
+            Self::U8(m) => op.apply(m.as_view_mut()),
+            Self::I8(m) => op.apply(m.as_view_mut()),
         }
     }
 }
@@ -281,11 +278,11 @@ pub(crate) enum Preprocess {
 }
 
 trait Apply<T> {
-    fn apply(&self, m: MutMatrixView<'_, T>);
+    fn apply(&self, m: rowmajor::Mut<'_, T>);
 }
 
 impl Apply<f32> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, f32>) {
+    fn apply(&self, mut m: rowmajor::Mut<'_, f32>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v *= 0.5),
             Self::Floor => m.as_mut_slice().iter_mut().for_each(|v| *v = v.floor()),
@@ -294,7 +291,7 @@ impl Apply<f32> for Preprocess {
 }
 
 impl Apply<f16> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, f16>) {
+    fn apply(&self, mut m: rowmajor::Mut<'_, f16>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| {
                 *v = f16::from_f32(f32::from(*v) * 0.5);
@@ -307,7 +304,7 @@ impl Apply<f16> for Preprocess {
 }
 
 impl Apply<u8> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, u8>) {
+    fn apply(&self, mut m: rowmajor::Mut<'_, u8>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v /= 2),
             Self::Floor => {}
@@ -316,7 +313,7 @@ impl Apply<u8> for Preprocess {
 }
 
 impl Apply<i8> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, i8>) {
+    fn apply(&self, mut m: rowmajor::Mut<'_, i8>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v /= 2),
             Self::Floor => {}
@@ -330,10 +327,10 @@ impl Apply<i8> for Preprocess {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum DatasetView<'a> {
-    F32(MatrixView<'a, f32>),
-    F16(MatrixView<'a, f16>),
-    U8(MatrixView<'a, u8>),
-    I8(MatrixView<'a, i8>),
+    F32(rowmajor::Ref<'a, f32>),
+    F16(rowmajor::Ref<'a, f16>),
+    U8(rowmajor::Ref<'a, u8>),
+    I8(rowmajor::Ref<'a, i8>),
 }
 
 impl<'a> DatasetView<'a> {
@@ -375,10 +372,10 @@ impl<'a> DatasetView<'a> {
 
     pub(crate) fn medoid(&self) -> Dataset {
         match self {
-            Self::F32(v) => Matrix::row_vector(Box::from(f32::compute_medoid(*v))).into(),
-            Self::F16(v) => Matrix::row_vector(Box::from(f16::compute_medoid(*v))).into(),
-            Self::U8(v) => Matrix::row_vector(Box::from(u8::compute_medoid(*v))).into(),
-            Self::I8(v) => Matrix::row_vector(Box::from(i8::compute_medoid(*v))).into(),
+            Self::F32(v) => rowmajor::Owned::row_vector(Box::from(f32::compute_medoid(*v))).into(),
+            Self::F16(v) => rowmajor::Owned::row_vector(Box::from(f16::compute_medoid(*v))).into(),
+            Self::U8(v) => rowmajor::Owned::row_vector(Box::from(u8::compute_medoid(*v))).into(),
+            Self::I8(v) => rowmajor::Owned::row_vector(Box::from(i8::compute_medoid(*v))).into(),
         }
     }
 
@@ -440,8 +437,8 @@ macro_rules! define {
             }
         }
 
-        impl From<Matrix<$T>> for Dataset {
-            fn from(m: Matrix<$T>) -> Self {
+        impl From<rowmajor::Owned<$T>> for Dataset {
+            fn from(m: rowmajor::Owned<$T>) -> Self {
                 Self::$variant(m)
             }
         }
@@ -461,11 +458,11 @@ define!(i8, I8);
 mod tests {
     use super::*;
 
-    fn matrix<T>(data: &[T], nrows: usize, ncols: usize) -> Matrix<T>
+    fn matrix<T>(data: &[T], nrows: usize, ncols: usize) -> rowmajor::Owned<T>
     where
         T: Copy,
     {
-        Matrix::try_from(Box::from(data), nrows, ncols).unwrap()
+        rowmajor::Owned::try_from_data(Box::from(data), nrows, ncols).unwrap()
     }
 
     //----------//
@@ -544,7 +541,7 @@ mod tests {
         SliceMut::from(dst.as_mut_slice())
             .convert_lossless(Slice::from(src))
             .unwrap();
-        assert_eq!(dst, [f16::from_f32(-5.0), f16::from_f32(7.0)]);
+        assert_eq!(dst, [cast_f32_to_f16(-5.0), cast_f32_to_f16(7.0)]);
     }
 
     #[test]
@@ -616,7 +613,7 @@ mod tests {
     #[test]
     fn dataset_medoid_shape() {
         let ds: Dataset = matrix(&[1.0f32, 2.0, 3.0, 4.0], 2, 2).into();
-        let medoid = ds.medoid();
+        let medoid = ds.as_view().medoid();
         assert_eq!(medoid.nrows(), 1);
         assert_eq!(medoid.ncols(), 2);
     }

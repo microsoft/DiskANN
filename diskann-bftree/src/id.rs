@@ -34,7 +34,7 @@ pub trait BfTreeId: VectorId {
     /// assert a 64-bit `usize`, since on a 32-bit target a `u64` id above
     /// `u32::MAX` would silently truncate. Because associated consts are only
     /// evaluated when monomorphized, referencing this in a generic id path (see
-    /// [`validate_id_capacity`]) turns the truncation into a compile error *only*
+    /// `validate_id_capacity`) turns the truncation into a compile error *only*
     /// for `u64` providers on 32-bit targets, leaving the default `u32` path
     /// (even on 32-bit) unaffected.
     const INDEX_CONVERSION_LOSSLESS: () = ();

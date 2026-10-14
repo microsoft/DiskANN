@@ -15,7 +15,7 @@
 //! The decisions around using a tagged [`ErrorKind`] are to keep test code within
 //! `diskann-disk` relatively static during refactors of central [`diskann::ANNError`].
 //!
-//! The [`crate::diskann_error!`] marco should be used to get most of the benefits from
+//! The internal `diskann_error!` macro should be used to get most of the benefits from
 //! [`diskann::ANNError`] by:
 //!
 //! * Constructing a tagged [`Error`] in an efficient way.

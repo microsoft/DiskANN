@@ -32,7 +32,7 @@ use diskann_providers::{
     utils::{create_thread_pool, ParallelIteratorInPool},
 };
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 
@@ -294,7 +294,8 @@ where
     let mut logger = PerfLogger::new("search_disk_index", true);
 
     // Load the query file
-    let queries: Matrix<T> = datafiles::load_dataset(datafiles::BinFile(&search_params.queries))?;
+    let queries: rowmajor::Owned<T> =
+        datafiles::load_dataset(datafiles::BinFile(&search_params.queries))?;
     let num_queries = queries.nrows();
 
     // Load the vector filters
@@ -378,7 +379,7 @@ where
         };
 
         let zipped = queries
-            .par_row_iter()
+            .par_rows()
             .enumerate()
             .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
             .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))

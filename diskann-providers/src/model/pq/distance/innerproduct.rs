@@ -10,7 +10,10 @@ use diskann_utils::object_pool::{self, ObjectPool, PoolOption};
 use diskann_vector::PreprocessedDistanceFunction;
 
 use super::common::get_lookup_table_size;
-use crate::model::pq::fixed_chunk_pq_table::{FixedChunkPQTable, pq_dist_lookup_single};
+use crate::model::pq::{
+    distance::Shared,
+    fixed_chunk_pq_table::{FixedChunkPQTable, pq_dist_lookup_single},
+};
 
 ////////
 // IP //
@@ -38,13 +41,13 @@ pub struct TableIP<'a> {
     num_centers: usize,
 
     /// The parent table for the pivots and other meta-data regarding the PQ Schema.
-    parent: &'a FixedChunkPQTable,
+    parent: Shared<'a, FixedChunkPQTable>,
 }
 
 impl<'a> TableIP<'a> {
     /// Caller must ensure `query.len() == parent.get_dim()` (validated by `QueryComputer::new`).
     pub(crate) fn new(
-        parent: &'a FixedChunkPQTable,
+        parent: Shared<'a, FixedChunkPQTable>,
         query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
     ) -> ANNResult<Self> {
@@ -54,10 +57,10 @@ impl<'a> TableIP<'a> {
     }
 
     fn new_unpopulated(
-        parent: &'a FixedChunkPQTable,
+        parent: Shared<'a, FixedChunkPQTable>,
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
     ) -> Self {
-        let vec_size = get_lookup_table_size(parent);
+        let vec_size = get_lookup_table_size(&parent);
         Self {
             lookup_table: match pool {
                 Some(p) => PoolOption::pooled(&p, object_pool::Undef::new(vec_size)),
@@ -135,7 +138,7 @@ mod tests {
                     // Basic `TableIP`
                     test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
-                            TableIP::new(table, query, None).unwrap()
+                            TableIP::new(Shared::Ref(table), query, None).unwrap()
                         },
                         &table,
                         num_trials,
@@ -160,7 +163,7 @@ mod tests {
 
         let table = test_utils::seed_pivot_table(config);
         let query = vec![0.0; config.dim];
-        let computer = TableIP::new(&table, &query, None).unwrap();
+        let computer = TableIP::new(Shared::Ref(&table), &query, None).unwrap();
 
         let code = vec![0, 0, 0, 0];
         computer.evaluate_similarity(&code);
@@ -178,7 +181,7 @@ mod tests {
 
         let table = test_utils::seed_pivot_table(config);
         let query = vec![0.0; config.dim];
-        let computer = TableIP::new(&table, &query, None).unwrap();
+        let computer = TableIP::new(Shared::Ref(&table), &query, None).unwrap();
 
         // Entry `4` is out-of-bounds.
         let code = vec![0, 4, 0];

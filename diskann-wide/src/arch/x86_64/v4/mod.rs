@@ -75,7 +75,7 @@ use crate::{
 macro_rules! maybe_miri {
     ($mod:ident, $type:ident, $T:ty, $N:literal) => {
         #[cfg(miri)]
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         pub type $type = crate::Emulated<$T, $N, V4>;
 
         #[cfg(not(miri))]
@@ -156,6 +156,9 @@ maybe_miri!(u64x2_, u64x2, u64, 2);
 
 pub mod u64x4_;
 maybe_miri!(u64x4_, u64x4, u64, 4);
+
+pub mod u64x8_;
+maybe_miri!(u64x8_, u64x8, u64, 8);
 
 // Conversions between intrinsics
 mod conversion;
@@ -238,6 +241,23 @@ impl V4 {
             })
         } else {
             Self::new_checked()
+        }
+    }
+
+    /// This constructor should be used when testing miri compatibility within the
+    /// `diskann-wide` traits.
+    ///
+    /// In test mode - we have to use `uncached` so we don't race with the tests that
+    /// manually set the architecture number.
+    #[cfg(test)]
+    pub(crate) fn new_checked_miri_uncached() -> Option<Self> {
+        if cfg!(miri) {
+            V3::new_checked_uncached().map(|_| {
+                // SAFETY: With Miri enabled, AVX-512 emulation is used.
+                unsafe { Self::new() }
+            })
+        } else {
+            Self::new_checked_uncached()
         }
     }
 
@@ -537,7 +557,7 @@ impl Architecture for V4 {
         T0: AddLifetime,
         F: for<'a> FTarget1<Self, R, T0::Of<'a>>,
     {
-        let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, _, _>;
+        let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, T0, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V4` architecture. Additionally, since `V4` is a `Copy` zero-sized type,
@@ -552,7 +572,7 @@ impl Architecture for V4 {
         F: for<'a, 'b> FTarget2<Self, R, T0::Of<'a>, T1::Of<'b>>,
     {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>) -> R =
-            Self::run_function_with_2::<F, _, _, _>;
+            Self::run_function_with_2::<F, T0, T1, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V4` architecture. Additionally, since `V4` is a `Copy` zero-sized type,
@@ -568,7 +588,7 @@ impl Architecture for V4 {
         F: for<'a, 'b, 'c> FTarget3<Self, R, T0::Of<'a>, T1::Of<'b>, T2::Of<'c>>,
     {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>, T2::Of<'_>) -> R =
-            Self::run_function_with_3::<F, _, _, _, _>;
+            Self::run_function_with_3::<F, T0, T1, T2, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V4` architecture. Additionally, since `V4` is a `Copy` zero-sized type,

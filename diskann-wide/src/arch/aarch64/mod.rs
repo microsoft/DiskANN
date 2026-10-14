@@ -1,7 +1,9 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
+use std::arch::aarch64::*;
 
 use crate::{
     Architecture, SIMDVector,
@@ -34,8 +36,14 @@ pub use u8x8_::u8x8;
 pub mod u8x16_;
 pub use u8x16_::u8x16;
 
+pub mod u16x4_;
+pub use u16x4_::u16x4;
+
 pub mod u16x8_;
 pub use u16x8_::u16x8;
+
+pub mod u32x2_;
+pub use u32x2_::u32x2;
 
 pub mod u32x4_;
 pub use u32x4_::u32x4;
@@ -50,8 +58,14 @@ pub use i8x8_::i8x8;
 pub mod i8x16_;
 pub use i8x16_::i8x16;
 
+pub mod i16x4_;
+pub use i16x4_::i16x4;
+
 pub mod i16x8_;
 pub use i16x8_::i16x8;
+
+pub mod i32x2_;
+pub use i32x2_::i32x2;
 
 pub mod i32x4_;
 pub use i32x4_::i32x4;
@@ -83,6 +97,7 @@ pub use double::u32x8;
 pub use double::u32x16;
 
 pub use double::u64x4;
+pub use double::u64x8;
 
 // Internal helpers
 mod macros;
@@ -345,7 +360,7 @@ impl arch::Architecture for Neon {
         T0: AddLifetime,
         F: for<'a> FTarget1<Self, R, T0::Of<'a>>,
     {
-        let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, _, _>;
+        let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, T0, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
@@ -360,7 +375,7 @@ impl arch::Architecture for Neon {
         F: for<'a, 'b> FTarget2<Self, R, T0::Of<'a>, T1::Of<'b>>,
     {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>) -> R =
-            Self::run_function_with_2::<F, _, _, _>;
+            Self::run_function_with_2::<F, T0, T1, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
@@ -376,12 +391,54 @@ impl arch::Architecture for Neon {
         F: for<'a, 'b, 'c> FTarget3<Self, R, T0::Of<'a>, T1::Of<'b>, T2::Of<'c>>,
     {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>, T2::Of<'_>) -> R =
-            Self::run_function_with_3::<F, _, _, _, _>;
+            Self::run_function_with_3::<F, T0, T1, T2, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
         // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide3(f) }
+    }
+}
+
+///////////////////////
+// Custom Intrinsics //
+///////////////////////
+
+impl Neon {
+    /// Compute the absolute difference between each lane of `x` and `y`.
+    ///
+    /// See: [`vabdq_u8`]
+    #[inline(always)]
+    pub fn vabdq_u8(self, x: u8x16, y: u8x16) -> u8x16 {
+        if cfg!(miri) {
+            let x = x.to_array();
+            let y = y.to_array();
+            u8x16::from_array(self, core::array::from_fn(|i| x[i].abs_diff(y[i])))
+        } else {
+            // SAFETY: Neon allows us to use `vabdq_u8`.
+            u8x16::from_underlying(self, unsafe { vabdq_u8(x.0, y.0) })
+        }
+    }
+
+    /// Compute the absolute difference between each lane of `x` and `y`.
+    ///
+    /// See: [`vabdq_s8`]
+    ///
+    /// # Note
+    ///
+    /// Unlike [`std::arch::aarch64::vabdq_s8`] - this function returns the results as
+    /// **unsigned** integers. This is consistent with [`i8::abs_diff`] and can correctly
+    /// encode all possible results.
+    #[inline(always)]
+    pub fn vabdq_s8(self, x: i8x16, y: i8x16) -> u8x16 {
+        if cfg!(miri) {
+            let x = x.to_array();
+            let y = y.to_array();
+            u8x16::from_array(self, core::array::from_fn(|i| x[i].abs_diff(y[i])))
+        } else {
+            // SAFETY: Neon allows us to use `vabdq_s8`.
+            u8x16::from_underlying(self, unsafe { vreinterpretq_u8_s8(vabdq_s8(x.0, y.0)) })
+        }
     }
 }
 
@@ -426,7 +483,7 @@ pub(super) fn test_neon() -> Option<Neon> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Architecture;
+    use crate::{Architecture, test_utils};
 
     struct TestOp;
 
@@ -542,5 +599,45 @@ mod tests {
 
         // Not equal across levels
         assert_ne!(scalar, neon);
+    }
+
+    //----------------//
+    // Custom Kernels //
+    //----------------//
+
+    #[test]
+    fn test_vabdq_u8() {
+        if let Some(arch) = test_neon() {
+            let f = move |x: &[u8], y: &[u8]| {
+                let got = arch
+                    .vabdq_u8(
+                        u8x16::from_array(arch, x.try_into().unwrap()),
+                        u8x16::from_array(arch, y.try_into().unwrap()),
+                    )
+                    .to_array();
+
+                test_utils::test_binary_op(x, y, &got, &|x: u8, y: u8| x.abs_diff(y), "vabdq_u8")
+            };
+
+            test_utils::driver::drive_binary(&f, (16, 16), 0x52d61896fd4a30fe);
+        }
+    }
+
+    #[test]
+    fn test_vabdq_s8() {
+        if let Some(arch) = test_neon() {
+            let f = move |x: &[i8], y: &[i8]| {
+                let got = arch
+                    .vabdq_s8(
+                        i8x16::from_array(arch, x.try_into().unwrap()),
+                        i8x16::from_array(arch, y.try_into().unwrap()),
+                    )
+                    .to_array();
+
+                test_utils::test_binary_op(x, y, &got, &|x: i8, y: i8| x.abs_diff(y), "vabdq_s8")
+            };
+
+            test_utils::driver::drive_binary(&f, (16, 16), 0xef9f703dfc172ad9);
+        }
     }
 }

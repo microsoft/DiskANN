@@ -1,8 +1,9 @@
-/* Copyright (c) Microsoft Corporation.
+/*
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 use std::{
-    io::{Read, Seek, Write},
+    io::{BufReader, BufWriter, Read, Seek, Write},
     mem,
 };
 
@@ -19,7 +20,6 @@ use tracing::info;
 use crate::{
     data_model::{GraphHeader, GraphMetadata},
     error::{diskann_error, ErrorKind},
-    storage::{CachedReader, CachedWriter},
 };
 
 // Struct DiskIndexWriterState maintains the state of the process of creating a disk
@@ -35,10 +35,10 @@ where
     muti_shard_index_reader: Option<StorageProvider::Reader>,
 
     // Reader to get associated data from disk.
-    associated_data_reader: Option<CachedReader<StorageProvider>>,
+    associated_data_reader: Option<BufReader<StorageProvider::Reader>>,
 
     // Reader to get data from the disk.
-    dataset_reader: Option<CachedReader<StorageProvider>>,
+    dataset_reader: Option<BufReader<StorageProvider::Reader>>,
 
     // Parameters required for processing data. They are set before data processing starts.
     dims: u64,
@@ -48,8 +48,8 @@ where
     vamana_frozen_num: u64,
     node_len: u64,
     associated_data_length: usize,
-    read_blk_size: u64,
-    write_blk_size: u64,
+    read_blk_size: usize,
+    write_blk_size: usize,
 }
 
 impl<StorageProvider> DiskIndexWriterState<StorageProvider>
@@ -216,14 +216,15 @@ impl DiskIndexWriter {
             .associated_data_file
         {
             Some(associated_data_stream) => {
-                let mut associated_data_reader = CachedReader::<StorageProvider>::new(
-                    associated_data_stream.as_str(),
-                    state.read_blk_size,
+                let mut associated_data_reader = super::open_buf_reader(
                     storage_provider,
+                    associated_data_stream,
+                    state.read_blk_size,
                 )?;
 
-                let associated_data_num_pts = associated_data_reader.read_u32()? as u64;
-                let length = associated_data_reader.read_u32()? as usize;
+                let associated_data_num_pts =
+                    associated_data_reader.read_u32::<LittleEndian>()? as u64;
+                let length = associated_data_reader.read_u32::<LittleEndian>()? as usize;
 
                 if state.num_pts != associated_data_num_pts {
                     return Err(diskann_error!(
@@ -250,17 +251,11 @@ impl DiskIndexWriter {
     where
         StorageProvider: StorageReadProvider,
     {
-        let dataset_reader = CachedReader::<StorageProvider>::new(
-            self.dataset_file.as_str(),
-            state.read_blk_size,
-            storage_provider,
-        )?;
+        let mut dataset_reader =
+            super::open_buf_reader(storage_provider, &self.dataset_file, state.read_blk_size)?;
+        state.num_pts = dataset_reader.read_u32::<LittleEndian>()? as u64;
+        state.dims = dataset_reader.read_u32::<LittleEndian>()? as u64;
         state.dataset_reader = Some(dataset_reader);
-
-        if let Some(dataset_reader) = state.dataset_reader.as_mut() {
-            state.num_pts = dataset_reader.read_u32()? as u64;
-            state.dims = dataset_reader.read_u32()? as u64;
-        }
 
         Ok(())
     }
@@ -281,7 +276,7 @@ impl DiskIndexWriter {
             let mut cur_node_coords =
                 vec![0u8; (state.dims as usize) * mem::size_of::<Data::VectorDataType>()];
 
-            dataset_reader.read(&mut cur_node_coords)?;
+            dataset_reader.read_exact(&mut cur_node_coords)?;
             block_buf[..cur_node_coords.len()].copy_from_slice(&cur_node_coords);
         }
 
@@ -312,7 +307,7 @@ impl DiskIndexWriter {
             let cur_node_associated_data = &mut block_buf[(state.node_len as usize
                 - state.associated_data_length * mem::size_of::<Data::AssociatedDataType>())
                 ..(state.node_len as usize)];
-            associated_data_reader.read(cur_node_associated_data)?;
+            associated_data_reader.read_exact(cur_node_associated_data)?;
         }
 
         Ok(())
@@ -444,17 +439,12 @@ impl DiskIndexWriter {
         info!("num_blocks: {}B", num_blocks);
 
         let disk_layout_file = self.disk_index_file();
+        let storage_writer = storage_provider.create_for_write(disk_layout_file.as_str())?;
+        let mut diskann_writer = BufWriter::with_capacity(state.write_blk_size, storage_writer);
         {
-            let storage_writer = storage_provider.create_for_write(disk_layout_file.as_str())?;
-            let mut diskann_writer = CachedWriter::<StorageProvider>::new(
-                disk_layout_file.as_str(),
-                state.write_blk_size,
-                storage_writer,
-            )?;
-
             // Buffer of block_size bytes for each block.
             let mut block_buf = vec![0u8; block_size];
-            diskann_writer.write(&block_buf)?;
+            diskann_writer.write_all(&block_buf)?;
 
             if num_nodes_per_block > 0 {
                 let mut cur_node_id = 0u64;
@@ -483,8 +473,7 @@ impl DiskIndexWriter {
                         cur_node_id += 1;
                     }
 
-                    // flush sector to disk
-                    diskann_writer.write(&block_buf)?;
+                    diskann_writer.write_all(&block_buf)?;
                 }
             } else {
                 // Write multi-sector nodes
@@ -499,32 +488,23 @@ impl DiskIndexWriter {
 
                     self.read_neighbors::<Data, _>(&mut state, &mut multi_block_buf)?;
 
-                    // flush sector to disk
-                    diskann_writer.write(&multi_block_buf)?;
+                    diskann_writer.write_all(&multi_block_buf)?;
                 }
             }
-
-            // Be sure to flush the writer before it goes out of scope so we can open a new one.
-            diskann_writer.flush()?;
         }
 
-        // Write the header.  Must re-open the file because the cached writer cannot seek to the start of the file.
-        // CachedWriter owns the underlying writer so we must open a new writer.  A new scope ensures that the old
-        // writer is out of scope.
-        {
-            let mut storage_writer = storage_provider.open_writer(disk_layout_file.as_str())?;
-            let disk_index_file_size = (num_blocks + 1) * (block_size as u64);
-            self.write_header::<Data, _, _>(
-                &mut state,
-                block_size,
-                num_nodes_per_block,
-                disk_index_file_size,
-                &mut storage_writer,
-            )?;
+        diskann_writer.rewind()?;
+        let disk_index_file_size = (num_blocks + 1) * (block_size as u64);
+        self.write_header::<Data, _, _>(
+            &mut state,
+            block_size,
+            num_nodes_per_block,
+            disk_index_file_size,
+            &mut diskann_writer,
+        )?;
 
-            storage_writer.flush()?;
-            Ok(())
-        }
+        diskann_writer.flush()?;
+        Ok(())
     }
 
     pub fn index_build_cleanup<StorageProvider>(

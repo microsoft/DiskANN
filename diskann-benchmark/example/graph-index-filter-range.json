@@ -1,0 +1,54 @@
+{
+  "search_directories": [
+    "test_data/disk_index_search"
+  ],
+  "jobs": [
+    {
+      "type": "graph-index-build",
+      "content": {
+        "source": {
+          "index-source": "Build",
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 1,
+          "start_point_strategy": "medoid",
+          "num_insert_attempts": 1,
+          "saturate_inserts": false
+        },
+        "search_phase": {
+          "search-type": "filtered-range",
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "query_predicates": "query.10.label.jsonl",
+          "data_labels": "data.256.label.jsonl",
+          "groundtruth": "groundtruth_rad_125000_filtered.rangeres",
+          "reps": 5,
+          "num_threads": [
+            1
+          ],
+          "runs": [
+            {
+              "radius": 125000,
+              "inner_radius": null,
+              "max_returned": null,
+              "beam_width": null,
+              "initial_search_l": [
+                1,
+                5,
+                10,
+                20,
+                30
+              ],
+              "initial_search_slack": 1.0,
+              "range_search_slack": 1.0
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

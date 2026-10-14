@@ -42,13 +42,11 @@ impl<T> VectorElement for T where
 
 /// A common collection of behavior required for element types of vectors that
 /// behave like full-precision vectors. It covers native types like `f32`, `f16`
-/// `i8` and `u8` but also [`MinMaxElement`] which is an element type to represent
-/// vectors quantized using [`quantization::minmax`] and can be used in-place of
-/// full-precision vectors.
+/// `i8` and `u8`, as well as custom quantized element representations that can
+/// be used in place of full-precision vectors.
 pub trait VectorRepr: VectorElement {
     /// An error type for implementations that throw-errors when converting to full-precision
-    /// vectors; such as [`crate::MinMaxElement`]. For regular full-precision vectors this a
-    /// null type.
+    /// vectors.
     type Error: std::error::Error + Debug + Send + Sync + Into<ANNError>;
 
     /// An implementation of [`DistanceFunction`] for computing similarity between two
@@ -59,7 +57,7 @@ pub trait VectorRepr: VectorElement {
         + Sync
         + 'static;
 
-    /// An implementation of [`PreprocessedDistanceFunciton`] for computing similarity
+    /// An implementation of [`PreprocessedDistanceFunction`] for computing similarity
     /// between a fixed query and slices of `Self`.
     type QueryDistance: for<'a> PreprocessedDistanceFunction<&'a [Self], f32>
         + Debug
@@ -70,8 +68,8 @@ pub trait VectorRepr: VectorElement {
     /// Return the dimension of the vector when converted into a full-precision vector.
     ///
     /// For most implementations of `VectorRepr` this simply outputs the length of the input
-    /// slice; however, for quantized vectors such as [`minmax::Data`] that can be used instead of
-    /// flat full-precision vectors, the output of this might be different than the input length.
+    /// slice; however, for quantized vectors that can be used instead of flat full-precision
+    /// vectors, the output of this might be different than the input length.
     fn full_dimension(vec: &[Self]) -> Result<usize, Self::Error>;
 
     /// Return a [`DistanceFunction`] that computes distances between equal sized slices

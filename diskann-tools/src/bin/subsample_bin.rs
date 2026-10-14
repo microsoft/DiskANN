@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Subsamples vectors from a DiskANN binary dataset.
+
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 

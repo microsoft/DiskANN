@@ -13,7 +13,7 @@ use crate::doubled;
 
 doubled::double_vector!(f32, 16, f32x8);
 
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub type f32x16 = doubled::Doubled<f32x8>;
 
 ///////////

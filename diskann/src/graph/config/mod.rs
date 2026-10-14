@@ -22,7 +22,7 @@ use crate::utils::IntoUsize;
 ///
 /// A higher occlusion factor means that `j` and `k` are "more similar" than `i` and `k`.
 /// The pruning rules are heuristics established such that using higher values of `alpha`
-/// yields sparser graphs.
+/// makes pruning less aggressive and generally yields denser graphs.
 ///
 /// ```text
 /// i (candidate vector) ----------> k
@@ -51,8 +51,8 @@ use crate::utils::IntoUsize;
 /// entirely as a neighbor candidate (achieved by settings its occlusion factor to
 /// `f32::MAX`.
 ///
-/// When alpha is greater, this requirement is more stringent, so higher alphas lead
-/// to less dense graphs.
+/// When alpha is greater, this requirement is more stringent, so fewer candidates are
+/// removed and the resulting graphs are generally denser.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PruneKind {
     TriangleInequality,
@@ -65,7 +65,7 @@ impl PruneKind {
     /// Construct a new [`PruneKind`] tailored for `metric`.
     ///
     /// For L2 and cosine variants, this returns [`Self::TriangleInequality`].
-    /// For inner product variants, this returns [`Self:Occluding`].
+    /// For inner product variants, this returns [`Self::Occluding`].
     pub fn from_metric(metric: diskann_vector::distance::Metric) -> Self {
         use diskann_vector::distance::Metric;
         match metric {
@@ -565,10 +565,7 @@ enum BackedgeSpec {
     Amount(usize),
 }
 
-/// A builder for for [`Config`]. Necessary invariants among the fields will be checked
-/// upon invoking [`Config::build`].
-///
-/// See [`Config::build`] for details.
+/// A builder for [`Config`].
 pub struct Builder {
     pruned_degree: usize,
     max_degree: MaxDegree,
@@ -652,7 +649,7 @@ impl Builder {
 
     /// Configure the `alpha` parameter used during pruning.
     ///
-    /// Values closer to 1.0 will yield denser graphs at the cost of increased build time.
+    /// Higher values generally yield denser graphs at the cost of increased build time.
     pub fn alpha(&mut self, alpha: f32) -> &mut Self {
         self.alpha = Some(alpha);
         self

@@ -15,7 +15,7 @@ type AccessorSetType<IdType, SP> =
 /// Implementation of a AttributeAccessor where attributes are mapped to
 /// u64s for efficient matching. Is a read-only view of attribute data that
 /// the MappedAttributeProvider manages. In this, labels are represented as
-/// Set<u64>.
+/// `Set<u64>`.
 ///
 /// Type Parameters:
 ///     SP: Store containing attributes per point. In theory this can be

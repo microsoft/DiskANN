@@ -26,10 +26,10 @@
 //! * [`Plugins::is_match`]: check whether any registered plugin accepts a requested `Kind`.
 //! * [`Plugins::run`]: dispatch to the first registered plugin matching `Kind`.
 //!
-//! The built-in ZST plugins in this module (`Topk`, `Range`, `BetaFilter`, and
-//! `MultihopFilter`) target the async benchmark inputs and fold their outputs into the closed
-//! [`AggregatedSearchResults`] families. That closed result boundary is deliberate: plugins are
-//! open for new search flavors, while result aggregation remains a curated
+//! The built-in ZST plugins in this module (`Topk`, `Range`, `FilteredRange`, `BetaFilter`,
+//! and `MultihopFilter`) target the async benchmark inputs and fold their outputs into the
+//! closed [`AggregatedSearchResults`] families. That closed result boundary is deliberate:
+//! plugins are open for new search flavors, while result aggregation remains a curated
 //! reporting/evaluation boundary.
 
 use std::sync::Arc;
@@ -189,6 +189,20 @@ impl Range {
 
     pub(crate) const fn as_str() -> &'static str {
         "range"
+    }
+}
+
+/// A search plugin for filtered range search.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FilteredRange;
+
+impl FilteredRange {
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_filtered_range().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "filtered-range"
     }
 }
 

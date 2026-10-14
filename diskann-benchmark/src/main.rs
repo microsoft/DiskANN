@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Command-line benchmarks for DiskANN.
+
 mod disk_index;
 mod exhaustive;
 mod filters;
@@ -570,6 +572,68 @@ mod tests {
             .to_string()
     }
 
+    //---------------//
+    // diskann-inmem //
+    //---------------//
+
+    #[test]
+    fn inmem_integration() {
+        let path = example_directory().join("inmem2.json");
+        let tempdir = tempfile::tempdir().unwrap();
+        let output_path = tempdir.path().join("output.json");
+        assert!(!output_path.exists());
+
+        let modified_input_path = tempdir.path().join("input.json");
+
+        let mut raw = value_from_file(&path);
+        prefix_search_directories(&mut raw, &root_directory());
+        save_to_file(&modified_input_path, &raw);
+
+        run_inmem_integration(&modified_input_path, &output_path)
+    }
+
+    #[cfg(feature = "inmem2")]
+    fn run_inmem_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        cli.run(&mut output).unwrap();
+        println!(
+            "output = {}",
+            String::from_utf8(output.into_inner()).unwrap()
+        );
+
+        // Check that the results file is generated.
+        assert!(output_path.exists());
+    }
+
+    #[cfg(not(feature = "inmem2"))]
+    fn run_inmem_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        let err = cli.run(&mut output).unwrap_err();
+        let msg = format!("{:?}", err);
+        println!("err = {msg}");
+        assert!(msg.contains("feature \"inmem2\""));
+
+        // The output file should not have been created because we failed the test.
+        assert!(!output_path.exists());
+    }
+
     ////////////////////////////
     //  MinMax Quantization   //
     ////////////////////////////
@@ -811,6 +875,22 @@ mod tests {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
         let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-range.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_filter_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-filter-range.json"));
         run_integration_test(raw);
     }
 

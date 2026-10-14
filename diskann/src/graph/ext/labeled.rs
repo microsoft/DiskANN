@@ -10,7 +10,7 @@
 //! To use, embed a [`SearchStrategy`](glue::SearchStrategy) `S` in a [`Filtered`] strategy
 //! with an associated [`QueryLabelProvider`]. This implements `SearchStrategy` under the
 //! same conditions as `S` with the resulting [`FilteredAccessor`] implementing
-//! [`glue::FilteredAccessor`](glue::FilteredAccessor).
+//! [`glue::FilteredAccessor`].
 //!
 //! [`glue::DefaultPostProcessor`] defaults to the `<S as DefaultPostProcessor<_, _, _>>`.
 //! To use a general post-processor for `S`, the [`Unfiltered`] [`glue::SearchPostProcessStep`]

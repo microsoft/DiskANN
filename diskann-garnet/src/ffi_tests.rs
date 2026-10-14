@@ -10,8 +10,8 @@ mod tests {
     use rand::{Rng, seq::SliceRandom};
 
     use crate::{
-        Index, InsertResult, VectorQuantType, backfill_quant_vectors, build_quant_table, card,
-        check_external_id_valid, check_internal_id_valid, create_index, drop_index,
+        Index, InsertResult, Overflow, VectorQuantType, backfill_quant_vectors, build_quant_table,
+        card, check_external_id_valid, check_internal_id_valid, create_index, drop_index,
         garnet::{Context, Term},
         insert,
         quantization::{GarnetQuantizer, Spherical1Bit},
@@ -60,6 +60,7 @@ mod tests {
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
                 callbacks.filter_callback(),
+                callbacks.log_callback(),
                 &mut quant_needed,
             )
         };
@@ -116,6 +117,64 @@ mod tests {
                 "Expected non-null for valid metric_type_raw={}",
                 valid_metric
             );
+            unsafe {
+                drop_index(ctx.get(), index_ptr);
+            }
+        }
+    }
+
+    #[test]
+    fn insert_distinguishes_updates() {
+        for quant_type in [
+            VectorQuantType::NoQuant,
+            VectorQuantType::Bin,
+            VectorQuantType::Q8,
+        ] {
+            let store = Store::new();
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
+
+            for (id, vector, expected, expected_internal_id) in [
+                (42, [1.0, 2.0], 1, 1u32),
+                (42, [2.0, 1.0], 3, 1),
+                (43, [3.0, 4.0], 1, 2),
+                (43, [4.0, 3.0], 3, 2),
+            ] {
+                assert_eq!(
+                    u8::from(insert_f32_vector(&ctx, index_ptr, id, &vector)),
+                    expected,
+                    "unexpected insert status for {quant_type:?} and ID {id}"
+                );
+                let internal_id = store
+                    .get(ctx.term(Term::IntMap).get(), bytemuck::bytes_of(&id))
+                    .unwrap();
+                assert_eq!(
+                    bytemuck::pod_read_unaligned::<u32>(&internal_id),
+                    expected_internal_id
+                );
+                assert_eq!(
+                    store.get(ctx.term(Term::Vector).get(), &internal_id),
+                    Some(bytemuck::cast_slice::<f32, u8>(&vector).to_vec())
+                );
+                assert_eq!(
+                    unsafe { card(ctx.get(), index_ptr) },
+                    u64::from(expected_internal_id)
+                );
+            }
+            assert_eq!(store.int_map_reads(), 4);
+
+            let (ids, distances) = do_search(&ctx, index_ptr, &[2.0, 1.0], 3, None);
+            assert_eq!(ids, [42, 43]);
+            assert_eq!(distances[0], 0.0);
+
+            let id_bytes = bytemuck::bytes_of(&42u32);
+            assert!(unsafe { remove(ctx.get(), index_ptr, id_bytes.as_ptr(), id_bytes.len()) });
+            store.clear_read_counts();
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 42, &[5.0, 6.0]),
+                InsertResult::Success
+            );
+            assert_eq!(store.int_map_reads(), 1);
+
             unsafe {
                 drop_index(ctx.get(), index_ptr);
             }
@@ -464,6 +523,7 @@ mod tests {
         let qv = &[0.0f32, 0.0];
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
+        let mut overflow = ptr::null_mut();
 
         let count = unsafe {
             search_vector(
@@ -480,25 +540,27 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                1,
+                &mut overflow,
             )
         };
 
         assert_eq!(count, 2);
+        assert!(overflow.is_null());
 
         let mut output_ids = vec![];
         let mut offset = 0;
         for _ in 0..(count as usize) {
-            let mut id_len = 0u32;
-            bytemuck::bytes_of_mut(&mut id_len)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            let id_len = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + mem::size_of::<u32>()],
+            );
             offset += mem::size_of::<u32>();
 
             assert_eq!(id_len, mem::size_of::<u64>() as u32);
 
-            let mut id = 0u64;
-            bytemuck::bytes_of_mut(&mut id)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u64>()]);
+            let id = bytemuck::pod_read_unaligned::<u64>(
+                &output_id_buffer[offset..offset + mem::size_of::<u64>()],
+            );
             offset += mem::size_of::<u64>();
 
             output_ids.push(id);
@@ -571,6 +633,7 @@ mod tests {
 
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
+        let mut overflow = ptr::null_mut();
 
         let count = unsafe {
             crate::search_element(
@@ -587,25 +650,27 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                1,
+                &mut overflow,
             )
         };
 
         assert_eq!(count, 2);
+        assert!(overflow.is_null());
 
         let mut output_ids = vec![];
         let mut offset = 0;
         for _ in 0..(count as usize) {
-            let mut id_len = 0u32;
-            bytemuck::bytes_of_mut(&mut id_len)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            let id_len = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + mem::size_of::<u32>()],
+            );
             offset += mem::size_of::<u32>();
 
             assert_eq!(id_len, mem::size_of::<u64>() as u32);
 
-            let mut id = 0u64;
-            bytemuck::bytes_of_mut(&mut id)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u64>()]);
+            let id = bytemuck::pod_read_unaligned::<u64>(
+                &output_id_buffer[offset..offset + mem::size_of::<u64>()],
+            );
             offset += mem::size_of::<u64>();
 
             output_ids.push(id);
@@ -631,13 +696,55 @@ mod tests {
     }
 
     #[test]
-    fn continue_search() {
+    fn search_element_writes_overflow_output() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        let id = 1u32;
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, id, &[0.0, 1.0]),
+            InsertResult::Success
+        );
+
+        let mut output_ids: [u8; 0] = [];
+        let mut output_distances: [f32; 1] = [0f32];
+        let mut overflow = ptr::null_mut();
+        let count = unsafe {
+            crate::search_element(
+                ctx.get(),
+                index_ptr,
+                bytemuck::bytes_of(&id).as_ptr(),
+                mem::size_of::<u32>(),
+                1.0,
+                10,
+                ptr::null(),
+                0,
+                0,
+                output_ids.as_mut_ptr(),
+                output_ids.len(),
+                output_distances.as_mut_ptr(),
+                output_distances.len(),
+                1,
+                &mut overflow,
+            )
+        };
+
+        assert_eq!(count, 0);
+        assert!(!overflow.is_null());
+
+        unsafe {
+            drop(Overflow::from_ptr(overflow));
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn overflow_results() {
         let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
         let res = unsafe {
-            crate::continue_search(
+            crate::overflow_results(
                 ctx.get(),
                 index_ptr,
                 ptr::null_mut(),
@@ -691,6 +798,7 @@ mod tests {
             Some(b) => (b.as_ptr(), b.len()),
             None => (ptr::null(), 0),
         };
+        let mut overflow = ptr::null_mut();
 
         let count = unsafe {
             search_vector(
@@ -707,9 +815,14 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                1,
+                &mut overflow,
             )
         };
+
+        if !overflow.is_null() {
+            unsafe { drop(Overflow::from_ptr(overflow)) };
+        }
 
         assert!(count >= 0, "search failed with {count}");
         let count = count as usize;
@@ -717,19 +830,62 @@ mod tests {
         let mut ids = vec![];
         let mut offset = 0;
         for _ in 0..count {
-            let mut id_len = 0u32;
-            bytemuck::bytes_of_mut(&mut id_len)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            let id_len = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + mem::size_of::<u32>()],
+            );
             offset += mem::size_of::<u32>();
-            let mut id = 0u32;
-            bytemuck::bytes_of_mut(&mut id)
-                .copy_from_slice(&output_id_buffer[offset..offset + id_len as usize]);
+            let id = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + id_len as usize],
+            );
             offset += id_len as usize;
             ids.push(id);
         }
 
         output_dists.truncate(count);
         (ids, output_dists)
+    }
+
+    #[test]
+    fn search_vector_writes_overflow_output() {
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        let vector = [0.0f32, 1.0];
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, 1, &vector),
+            InsertResult::Success
+        );
+
+        let query_bytes = bytemuck::cast_slice(&vector);
+        let mut output_ids: [u8; 0] = [];
+        let mut output_distances: [f32; 1] = [0f32];
+        let mut overflow = ptr::null_mut();
+        let count = unsafe {
+            search_vector(
+                ctx.get(),
+                index_ptr,
+                query_bytes.as_ptr(),
+                vector.len(),
+                1.0,
+                10,
+                ptr::null(),
+                0,
+                0,
+                output_ids.as_mut_ptr(),
+                output_ids.len(),
+                output_distances.as_mut_ptr(),
+                output_distances.len(),
+                1,
+                &mut overflow,
+            )
+        };
+
+        assert_eq!(count, 0);
+        assert!(!overflow.is_null());
+
+        unsafe {
+            drop(Overflow::from_ptr(overflow));
+            drop_index(ctx.get(), index_ptr);
+        }
     }
 
     #[test]

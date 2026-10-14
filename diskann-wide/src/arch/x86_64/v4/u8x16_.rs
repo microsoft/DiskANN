@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDMask, SIMDMulAdd, SIMDVector},
+    traits::{SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDVector},
 };
 
 ////////////////////
@@ -49,6 +49,13 @@ helpers::unsafe_map_binary_op!(
     sub,
     _mm_sub_epi8, /* intentional: epu8 does not exist and this does the same thing */
     "sse2"
+);
+helpers::unsafe_map_unary_op!(
+    u8x16,
+    SIMDPopcount,
+    popcount_simd,
+    _mm_popcnt_epi8,
+    "avx512bitalg,avx512vl"
 );
 
 helpers::unsafe_map_binary_op!(u8x16, std::ops::BitAnd, bitand, _mm_and_si128, "sse2");
@@ -141,4 +148,5 @@ mod test_x86_u8 {
 
     // Bit ops
     test_utils::ops::test_bitops!(u8x16, 0xd62d8de09f82ed4e, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(u8x16, 0xe67a50869e8b4695, V4::new_checked_uncached());
 }

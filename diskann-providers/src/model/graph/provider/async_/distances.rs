@@ -145,7 +145,7 @@ pub mod pq {
                     Hybrid::Quant(y) => {
                         // SAFETY: This can only panic when T = `MinMaxElement` and the underlying slice is ill-defined.
                         // we are ok with panicking in distance functions for now.
-                        #[allow(clippy::unwrap_used)]
+                        #[expect(clippy::unwrap_used)]
                         self.quant.evaluate_similarity(&*T::as_f32(x).unwrap(), y)
                     }
                 },
@@ -153,7 +153,7 @@ pub mod pq {
                     Hybrid::Full(y) => {
                         // SAFETY: This can only panic when T = `MinMaxElement` and the underlying slice is ill-defined.
                         // we are ok with panicking in distance functions for now.
-                        #[allow(clippy::unwrap_used)]
+                        #[expect(clippy::unwrap_used)]
                         self.quant.evaluate_similarity(&*T::as_f32(y).unwrap(), x)
                     }
                     Hybrid::Quant(y) => self.quant.evaluate_similarity(x, y),

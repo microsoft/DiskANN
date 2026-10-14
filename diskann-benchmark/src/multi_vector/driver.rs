@@ -14,7 +14,9 @@ use diskann_benchmark_runner::{
     },
     Checker, Input,
 };
-use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, Overflow, Standard};
+use diskann_quantization::multi_vector::{
+    Mat, MatRef, MaxSimElement, MaxSimKernel, Overflow, Standard,
+};
 use rand::{
     distr::{Distribution, StandardUniform},
     rngs::StdRng,
@@ -94,12 +96,12 @@ where
 // Timing harness   //
 //////////////////////
 
-pub(super) fn run_with_kernel<T: Copy>(
+pub(super) fn run_with_kernel<T: MaxSimElement>(
     run: &Run,
     doc: MatRef<'_, Standard<T>>,
     kernel: &dyn MaxSimKernel<T>,
 ) -> RunResult {
-    let mut scores = vec![0.0f32; run.num_query_vectors.get()];
+    let mut scores = vec![T::Score::default(); run.num_query_vectors.get()];
     let mut latencies = Vec::with_capacity(run.num_measurements.get());
 
     for _ in 0..run.num_measurements.get() {

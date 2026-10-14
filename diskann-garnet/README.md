@@ -123,8 +123,8 @@ the one you want.
 
 ## Testing
 
-Unit tests are run in the usual way with `cargo test`, but many are end-to-end
-and run from the Garnet side. These two invocations will run the relevant tests:
+Run the Rust tests from the workspace root with `cargo test -p diskann-garnet`.
+Many end-to-end tests run from the Garnet side. These two invocations run them:
 
 ```
 dotnet test test/standalone/Garnet.test.vectorset -f net10.0 -c Debug --filter RespVectorSetTests

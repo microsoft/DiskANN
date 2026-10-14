@@ -3,20 +3,17 @@
  * Licensed under the MIT license.
  */
 
-//! Baseline-cached regression sweep for [`crate::flat::FlatIndex::knn_search`].
+//! Baseline-cached regression sweep for [`crate::flat::knn_search`].
 //!
-//! Bbuilds a fresh index per parameter combination, runs `knn_search` through the
+//! Builds a fresh provider per parameter combination, runs `knn_search` through the
 //! [`crate::flat::test::harness`], snapshots the result + statistics into
 //! [`FlatKnnBaseline`], and compares the entire batch against the JSON committed under
 //! `diskann/test/generated/flat/test/cases/flat_knn_search/`.
 
 use crate::{
-    flat::{
-        FlatIndex,
-        test::{
-            harness,
-            provider::{self as flat_provider, ElementCounter, Strategy},
-        },
+    flat::test::{
+        harness,
+        provider::{self as flat_provider, ElementCounter},
     },
     graph::test::synthetic::Grid,
     test::{
@@ -34,7 +31,7 @@ fn root() -> TestRoot {
 const KS: [usize; 3] = [1, 4, 10];
 
 /// One row of the baseline JSON: a single `(grid, size, query, k)` execution of
-/// `FlatIndex::knn_search` plus the brute-force ground truth, search stats, and
+/// `knn_search` plus the brute-force ground truth, search stats, and
 /// per-row provider metrics.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct FlatKnnBaseline {
@@ -88,29 +85,23 @@ verbose_eq!(FlatKnnBaseline {
     metrics,
 });
 
-/// Run `knn_search` + brute-force oracle against a *shared* `index`, assert the
+/// Run `knn_search` + brute-force oracle against a *shared* provider, assert the
 /// cross-row invariants, and produce the baseline row. The per-row provider metrics
 /// captured into the baseline are the *delta* observed during this row, which keeps
 /// the snapshot independent of how many rows preceded it.
 fn run_row(
-    index: &FlatIndex<flat_provider::Provider>,
+    provider: &flat_provider::Provider,
     grid_dim: usize,
     grid_size: usize,
     query: &[f32],
     k: usize,
     desc: &str,
 ) -> FlatKnnBaseline {
-    let len = index.provider().len();
-    let metrics_before = index.provider().metrics();
+    let len = provider.len();
+    let metrics_before = provider.metrics();
 
-    let outcome = harness::KnnOracleRun::run_sync(
-        index,
-        &Strategy::new(index.provider().dim()),
-        &harness::CopyIdsOracle,
-        query,
-        k,
-    )
-    .unwrap();
+    let outcome =
+        harness::KnnOracleRun::run_sync(provider, &harness::CopyIdsOracle, query, k).unwrap();
     let stats = outcome.stats;
 
     assert_eq!(
@@ -129,7 +120,7 @@ fn run_row(
         "flat scan top-k distance multiset must agree with brute force",
     );
 
-    let metrics_after = index.provider().metrics();
+    let metrics_after = provider.metrics();
     let metrics = ElementCounter {
         count: metrics_after.count - metrics_before.count,
     };
@@ -159,8 +150,8 @@ fn run_row(
 fn _flat_knn_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
     let dim: usize = grid.dim().into();
 
-    // Build the provider and index once, mirroring the production pattern where a
-    // single index serves many queries.
+    // Build the provider once, mirroring the production pattern where one provider
+    // serves many queries.
     let provider = flat_provider::Provider::grid(grid, size).unwrap();
     let len = provider.len();
     assert_eq!(
@@ -168,8 +159,6 @@ fn _flat_knn_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
         size.pow(dim as u32),
         "flat::test::Provider::grid should produce size^dim rows",
     );
-    let index = FlatIndex::new(provider);
-
     let queries: [(Vec<f32>, &str); 2] = [
         (
             vec![-1.0; dim],
@@ -181,12 +170,11 @@ fn _flat_knn_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
         ),
     ];
 
-    let index_ref = &index;
     let results: Vec<FlatKnnBaseline> = queries
         .iter()
         .flat_map(|(q, desc)| {
             KS.iter()
-                .map(move |&k| run_row(index_ref, dim, size, q, k, desc))
+                .map(|&k| run_row(&provider, dim, size, q, k, desc))
         })
         .collect();
 

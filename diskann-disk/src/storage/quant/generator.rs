@@ -14,7 +14,10 @@ use diskann_providers::{
     storage::{StorageReadProvider, StorageWriteProvider},
     utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
 };
-use diskann_utils::{io::Metadata, views};
+use diskann_utils::{
+    io::Metadata,
+    views::{self, rowmajor::Matrix, rowmajor::MatrixMut},
+};
 use rayon::iter::IndexedParallelIterator;
 use tracing::info;
 
@@ -41,6 +44,7 @@ where
     T: Copy + VectorRepr,
     Q: QuantCompressor<T>,
 {
+    /// Construct the quantizer, which may train and write its codebook.
     pub fn new(
         data_path: String,
         compressed_data_path: String,
@@ -57,16 +61,9 @@ where
 
     /// This method reads the source data file, processes vectors in batches, compresses them
     /// using the provided quantizer, and writes the results to the compressed data file.
-    //
-    /// The implementation is adapted from generate_quantized_data_internal in pq_construction.rs
-    //
-    /// # Processing Flow
-    /// 1. Opens the source data file and validates its metadata.
-    /// 2. Deletes any existing output.
-    /// 3. Creates or opens output compressed file and writes metadata header - [num_points as i32, compressed_vector_size as i32]
-    /// 4. Processes data in bounded blocks.
-    /// 5. Compresses each block in small batch sizes in parallel to (potentially) take advantage of batch compression with quantizer
-    /// 6. Writes compressed blocks to the output file.
+    ///
+    /// Each call replaces the compressed output, using the already constructed quantizer
+    /// for every block.
     pub fn generate_data<Storage>(
         &self,
         storage_provider: &Storage, // Provider for reading source data and writing compressed results
@@ -78,20 +75,9 @@ where
     {
         let timer = Instant::now();
 
-        let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
+        let metadata =
+            validate_data_generation_input(storage_provider, &self.data_path, max_block_size)?;
         let (num_points, dim) = metadata.into_dims();
-        if max_block_size == 0 {
-            return Err(diskann_error!(
-                ErrorKind::PQError,
-                "Data compression chunk vector count must be greater than zero",
-            ));
-        }
-        if num_points == 0 {
-            return Err(diskann_error!(
-                ErrorKind::PQError,
-                "Cannot generate compressed data for an empty dataset",
-            ));
-        }
 
         let compressed_path = self.compressed_data_path.as_str();
 
@@ -150,16 +136,17 @@ where
             // process `BATCH_SIZE` many dataset vectors at a time.
             const BATCH_SIZE: usize = 128;
 
-            // Wrap the data in `MatrixViews` so we do not need to manually construct view
+            // Wrap the data in `rowmajor::Mut` so we do not need to manually construct a view
             // in the compression loop.
-            let mut compressed_block = views::MutMatrixView::try_from(
+            let mut compressed_block = views::rowmajor::Mut::try_from_data(
                 block_compressed_base,
                 cur_block_size,
                 compressed_size,
             )
             .bridge_err()?;
             let base_block =
-                views::MatrixView::try_from(&block_data, cur_block_size, full_dim).bridge_err()?;
+                views::rowmajor::Ref::try_from_data(&block_data, cur_block_size, full_dim)
+                    .bridge_err()?;
             base_block
                 .par_window_iter(BATCH_SIZE)
                 .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
@@ -185,6 +172,28 @@ where
     }
 }
 
+/// Validate the dataset and block size before disk builds train their search quantizer.
+pub(crate) fn validate_data_generation_input(
+    storage_provider: &impl StorageReadProvider,
+    data_path: &str,
+    max_block_size: usize,
+) -> ANNResult<Metadata> {
+    if max_block_size == 0 {
+        return Err(diskann_error!(
+            ErrorKind::PQError,
+            "Data compression chunk vector count must be greater than zero",
+        ));
+    }
+    let metadata = load_metadata_from_file(storage_provider, data_path)?;
+    if metadata.npoints() == 0 {
+        return Err(diskann_error!(
+            ErrorKind::PQError,
+            "Cannot generate compressed data for an empty dataset",
+        ));
+    }
+    Ok(metadata)
+}
+
 //////////////////
 ///// Tests /////
 /////////////////
@@ -196,10 +205,7 @@ mod generator_tests {
     use diskann::utils::read_exact_into;
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::utils::create_thread_pool_for_test;
-    use diskann_utils::{
-        io::{write_bin, Metadata},
-        views::MatrixView,
-    };
+    use diskann_utils::io::{write_bin, Metadata};
     use rstest::rstest;
     use vfs::{FileSystem, MemoryFS};
 
@@ -225,11 +231,11 @@ mod generator_tests {
 
         fn compress(
             &self,
-            _vector: views::MatrixView<f32>,
-            mut output: views::MutMatrixView<u8>,
+            _vector: views::rowmajor::Ref<f32>,
+            mut output: views::rowmajor::Mut<u8>,
         ) -> ANNResult<()> {
             output
-                .row_iter_mut()
+                .rows_mut()
                 .for_each(|r| r.copy_from_slice(&self.code));
             Ok(())
         }
@@ -267,7 +273,7 @@ mod generator_tests {
 
         // Setup test data
         let data = create_test_data(num_points, dim);
-        let view = MatrixView::try_from(data.as_slice(), num_points, dim).unwrap();
+        let view = views::rowmajor::Ref::try_from_data(data.as_slice(), num_points, dim).unwrap();
         write_bin(
             view,
             &mut storage_provider.create_for_write(data_path.as_str())?,
@@ -353,7 +359,6 @@ mod generator_tests {
             4,
             10_000,
         );
-
         assert!(result.is_err());
         assert!(!storage_provider.exists(&compressed_path));
         Ok(())

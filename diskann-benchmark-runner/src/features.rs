@@ -103,11 +103,7 @@ impl From<&'static str> for Features {
 impl std::fmt::Display for Features {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fn feature(plural: bool) -> &'static str {
-            if plural {
-                "features"
-            } else {
-                "feature"
-            }
+            if plural { "features" } else { "feature" }
         }
 
         match &self.0 {

@@ -23,7 +23,7 @@ use diskann::{
 };
 
 use diskann_utils::future::AsyncFriendly;
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, MatrixMut};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use crate::model::graph::provider::async_::{
@@ -178,11 +178,8 @@ where
 
 /// An accessor for retrieving full-precision vectors from the `DefaultProvider`.
 ///
-/// This type implements the following traits:
-///
-/// * [`Accessor`] for the [`DefaultProvider`].
-/// * [`ComputerAccessor`] for comparing full-precision distances.
-/// * [`BuildQueryComputer`].
+/// This type implements [`glue::SearchAccessor`] for the [`DefaultProvider`], retrieving
+/// vectors and computing full-precision distances.
 pub struct FullAccessor<'a, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -348,7 +345,7 @@ pub trait GetFullPrecision {
     fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<Self::Repr>;
 }
 
-/// A [`SearchPostProcess`]or that:
+/// A [`glue::SearchPostProcess`] implementation that:
 ///
 /// 1. Filters out deleted ids from being returned.
 /// 2. Reranks a candidate stream using full-precision distances.
@@ -402,7 +399,7 @@ where
     }
 }
 
-/// A [`SearchPostProcess`]or that reranks a full-precision candidate stream using the
+/// A [`glue::SearchPostProcess`] implementation that reranks a full-precision candidate stream using the
 /// Determinant-Diversity algorithm, reordering results to promote geometric diversity
 /// while preserving relevance to the query.
 #[derive(Debug, Clone, Copy)]
@@ -437,7 +434,11 @@ where
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
         let candidate_count = candidates.len();
         let store: &FullPrecisionStore<f32> = accessor.as_full_precision();
-        let mut vectors = Matrix::new(0.0f32, candidate_count, query.len());
+        let mut vectors =
+            match rowmajor::Owned::try_from_element(candidate_count, query.len(), 0.0f32) {
+                Ok(vectors) => vectors,
+                Err(error) => return std::future::ready(Err(error.into())),
+            };
         let mut ids = Vec::with_capacity(candidate_count);
         let mut distances = Vec::with_capacity(candidate_count);
 
@@ -451,7 +452,7 @@ where
         }
 
         let indices = match determinant_diversity(
-            vectors.as_mut_view(),
+            vectors.as_view_mut(),
             &distances,
             query,
             candidate_count,
@@ -540,7 +541,20 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
+    type SearchAccessor = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchAccessorError = Panics;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
+
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
     }

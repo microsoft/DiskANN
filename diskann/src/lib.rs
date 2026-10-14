@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Generic indexing algorithms.
+
 pub mod error;
 pub mod neighbor;
 pub mod provider;

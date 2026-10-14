@@ -13,12 +13,15 @@ use diskann_benchmark_runner::{
     files::InputFile,
     utils::fmt::Indent,
 };
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
-use half::f16;
 use serde::{Deserialize, Serialize};
 
-use diskann_inmem::{Provider, layers};
+use diskann_inmem::{
+    self as inmem, Provider,
+    num::{Capacity, MaxDegree},
+    repr::Full,
+};
 
 use crate::{
     index::{Counters, Index},
@@ -105,9 +108,39 @@ mod dto {
         pub(super) preprocess: Vec<Preprocess>,
     }
 
+    //-------------------------//
+    // Quantization Parameters //
+    //-------------------------//
+
+    pub(super) mod spherical {
+        use super::*;
+
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        pub(in crate::index::runner) enum Bits {
+            One,
+            Two,
+            Four,
+        }
+
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        pub(in crate::index::runner) enum Rerank {
+            None,
+            F16,
+        }
+    }
+
     #[derive(Debug, Serialize, Deserialize)]
-    pub(super) enum Layer {
-        FullPrecision { data_type: DataType },
+    #[serde(rename_all = "kebab-case")]
+    pub(super) enum Representation {
+        FullPrecision {
+            data_type: DataType,
+        },
+        Spherical {
+            bits: spherical::Bits,
+            rerank: spherical::Rerank,
+        },
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -134,7 +167,7 @@ mod dto {
     #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct Test {
         pub(super) data: Data,
-        pub(super) layer: Layer,
+        pub(super) representation: Representation,
         pub(super) build: Build,
         pub(super) search: Search,
     }
@@ -223,25 +256,99 @@ impl Data {
 struct Bundle {
     data: Dataset,
     queries: Dataset,
-    groundtruth: Matrix<u64>,
+    groundtruth: rowmajor::Owned<u64>,
 }
 
-#[derive(Debug)]
-enum Layer {
-    FullPrecision { data_type: DataType },
-}
+mod spherical {
+    use super::*;
 
-impl Layer {
-    fn from_raw(raw: dto::Layer) -> Self {
-        match raw {
-            dto::Layer::FullPrecision { data_type } => Self::FullPrecision { data_type },
+    #[derive(Debug, Clone, Copy)]
+    pub(super) enum Bits {
+        One,
+        Two,
+        Four,
+    }
+
+    impl Bits {
+        pub(super) fn from_raw(raw: dto::spherical::Bits) -> Self {
+            match raw {
+                dto::spherical::Bits::One => Self::One,
+                dto::spherical::Bits::Two => Self::Two,
+                dto::spherical::Bits::Four => Self::Four,
+            }
+        }
+
+        pub(super) fn as_raw(&self) -> dto::spherical::Bits {
+            match self {
+                Self::One => dto::spherical::Bits::One,
+                Self::Two => dto::spherical::Bits::Two,
+                Self::Four => dto::spherical::Bits::Four,
+            }
         }
     }
 
-    fn as_raw(&self) -> dto::Layer {
+    #[derive(Debug, Clone, Copy)]
+    pub(super) enum Rerank {
+        None,
+        F16,
+    }
+
+    impl Rerank {
+        pub(super) fn from_raw(raw: dto::spherical::Rerank) -> Self {
+            match raw {
+                dto::spherical::Rerank::None => Self::None,
+                dto::spherical::Rerank::F16 => Self::F16,
+            }
+        }
+
+        pub(super) fn as_raw(&self) -> dto::spherical::Rerank {
+            match self {
+                Self::None => dto::spherical::Rerank::None,
+                Self::F16 => dto::spherical::Rerank::F16,
+            }
+        }
+    }
+
+    impl From<Rerank> for inmem::repr::spherical::Rerank {
+        fn from(rerank: Rerank) -> Self {
+            match rerank {
+                Rerank::None => inmem::repr::spherical::Rerank::None,
+                Rerank::F16 => inmem::repr::spherical::Rerank::F16,
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Representation {
+    FullPrecision {
+        data_type: DataType,
+    },
+    Spherical {
+        bits: spherical::Bits,
+        rerank: spherical::Rerank,
+    },
+}
+
+impl Representation {
+    fn from_raw(raw: dto::Representation) -> Self {
+        match raw {
+            dto::Representation::FullPrecision { data_type } => Self::FullPrecision { data_type },
+            dto::Representation::Spherical { bits, rerank } => Self::Spherical {
+                bits: spherical::Bits::from_raw(bits),
+                rerank: spherical::Rerank::from_raw(rerank),
+            },
+        }
+    }
+
+    fn as_raw(&self) -> dto::Representation {
         match self {
-            Self::FullPrecision { data_type } => dto::Layer::FullPrecision {
+            Self::FullPrecision { data_type } => dto::Representation::FullPrecision {
                 data_type: *data_type,
+            },
+            Self::Spherical { bits, rerank } => dto::Representation::Spherical {
+                bits: bits.as_raw(),
+                rerank: rerank.as_raw(),
             },
         }
     }
@@ -323,7 +430,7 @@ impl Search {
 #[derive(Debug)]
 struct Test {
     data: Data,
-    layer: Layer,
+    representation: Representation,
     build: Build,
     search: Search,
 }
@@ -331,13 +438,13 @@ struct Test {
 impl Test {
     fn from_raw(raw: dto::Test, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
         let data = Data::from_raw(raw.data, checker)?;
-        let layer = Layer::from_raw(raw.layer);
+        let representation = Representation::from_raw(raw.representation);
         let build = Build::from_raw(raw.build, data.metric)?;
         let search = Search::from_raw(raw.search)?;
 
         Ok(Self {
             data,
-            layer,
+            representation,
             build,
             search,
         })
@@ -346,58 +453,133 @@ impl Test {
     fn as_raw(&self) -> anyhow::Result<dto::Test> {
         Ok(dto::Test {
             data: self.data.as_raw()?,
-            layer: self.layer.as_raw(),
+            representation: self.representation.as_raw(),
             build: self.build.as_raw(),
             search: self.search.as_raw(),
         })
     }
 
-    fn index(
-        &self,
-        capacity: usize,
-        start_points: DatasetView<'_>,
-    ) -> anyhow::Result<Arc<dyn Index>> {
-        match self.layer {
-            Layer::FullPrecision { data_type } => {
-                if start_points.data_type() != data_type {
+    fn index(&self, data: DatasetView<'_>) -> anyhow::Result<Arc<dyn Index>> {
+        match &self.representation {
+            Representation::FullPrecision { data_type } => {
+                if data.data_type() != *data_type {
                     anyhow::bail!(
                         "mismatched data types for start point - expected {}, got {}",
                         data_type,
-                        start_points.data_type(),
+                        data.data_type(),
                     );
                 }
 
-                let dim = start_points.ncols();
+                let start_points = data.medoid();
                 let metric = self.data.metric;
-                let config = diskann_inmem::provider::Config::new(
-                    capacity,
-                    self.build.config.max_degree().get(),
-                );
-
+                let capacity = Capacity::new(data.nrows());
+                let max_degree = self.build.config.max_degree().get();
                 let index_config = self.build.config.clone();
 
                 let index = match start_points {
-                    DatasetView::F32(v) => finish(
-                        Provider::new(layers::Full::<f32>::new(dim, metric), config, v.row_iter())?,
+                    Dataset::F32(v) => finish(
+                        Provider::new(Full::config(
+                            capacity,
+                            MaxDegree::new(max_degree),
+                            metric,
+                            v,
+                        )?)?,
                         index_config,
                     ),
-                    DatasetView::F16(v) => finish(
-                        Provider::new(layers::Full::<f16>::new(dim, metric), config, v.row_iter())?,
+                    Dataset::F16(v) => finish(
+                        Provider::new(Full::config(
+                            capacity,
+                            MaxDegree::new(max_degree),
+                            metric,
+                            v,
+                        )?)?,
                         index_config,
                     ),
-                    DatasetView::U8(v) => finish(
-                        Provider::new(layers::Full::<u8>::new(dim, metric), config, v.row_iter())?,
+                    Dataset::U8(v) => finish(
+                        Provider::new(Full::config(
+                            capacity,
+                            MaxDegree::new(max_degree),
+                            metric,
+                            v,
+                        )?)?,
                         index_config,
                     ),
-                    DatasetView::I8(v) => finish(
-                        Provider::new(layers::Full::<i8>::new(dim, metric), config, v.row_iter())?,
+                    Dataset::I8(v) => finish(
+                        Provider::new(Full::config(
+                            capacity,
+                            MaxDegree::new(max_degree),
+                            metric,
+                            v,
+                        )?)?,
                         index_config,
                     ),
                 };
 
                 Ok(index)
             }
+            Representation::Spherical { bits, rerank } => {
+                self.create_spherical(data, *bits, *rerank)
+            }
         }
+    }
+
+    fn create_spherical(
+        &self,
+        data: DatasetView<'_>,
+        bits: spherical::Bits,
+        rerank: spherical::Rerank,
+    ) -> anyhow::Result<Arc<dyn Index>> {
+        use diskann_quantization::{
+            algorithms::transforms,
+            alloc::GlobalAllocator,
+            spherical::{PreScale, SphericalQuantizer},
+        };
+        use rand::SeedableRng;
+
+        let DatasetView::F32(data) = data else {
+            anyhow::bail!("spherical quantization only supports f32 data");
+        };
+
+        // Step 1: Train a generic quantizer.
+        let quantizer = SphericalQuantizer::train(
+            data,
+            transforms::TransformKind::DoubleHadamard {
+                target_dim: transforms::TargetDim::Same,
+            },
+            self.data.metric.try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "metric {} not supported for spherical quantization",
+                    self.data.metric
+                )
+            })?,
+            PreScale::ReciprocalMeanNorm,
+            &mut rand::rngs::StdRng::seed_from_u64(0xc0ff33),
+            GlobalAllocator,
+        )?;
+
+        // Step 2: Associate it with the target bit-width.
+        let quantizer = match bits {
+            spherical::Bits::One => quantizer.as_quantizer::<1>()?,
+            spherical::Bits::Two => quantizer.as_quantizer::<2>()?,
+            spherical::Bits::Four => quantizer.as_quantizer::<4>()?,
+        };
+
+        let start_point = rowmajor::Owned::row_vector(Box::from(
+            <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
+        ));
+
+        // Step 3: Create the config.
+        let config = diskann_inmem::repr::Spherical::config(
+            quantizer,
+            Capacity::new(data.nrows()),
+            MaxDegree::new(self.build.config.max_degree().get()),
+            start_point,
+            rerank.into(),
+        )?;
+
+        let index_config = self.build.config.clone();
+
+        Ok(finish(Provider::new(config)?, index_config))
     }
 }
 
@@ -439,7 +621,7 @@ impl diskann_benchmark_runner::Input for Test {
                 data_type: DataType::F32,
                 preprocess: vec![],
             },
-            layer: dto::Layer::FullPrecision {
+            representation: dto::Representation::FullPrecision {
                 data_type: DataType::F32,
             },
             build: dto::Build {
@@ -483,9 +665,28 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     type Output = BuildAndSearch;
 
     fn try_match(&self, input: &Test, context: &MatchContext) -> Score {
-        // Future-proof against additional enums in `input.layer`.
-        let Layer::FullPrecision { .. } = input.layer;
-        context.success(0)
+        let mut score = context.success(0);
+
+        match input.representation {
+            Representation::FullPrecision { .. } => {
+                // We match all valid data-types
+            }
+            Representation::Spherical { .. } => {
+                let data_type = input.data.data_type;
+                // Ensure that the data type if `f32`.
+                if data_type != DataType::F32 {
+                    score.fail(
+                        1,
+                        &format_args!(
+                            "spherical-quantization requires f32 data, not {}",
+                            data_type
+                        ),
+                    );
+                }
+            }
+        }
+
+        score
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -498,8 +699,10 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
-        // Future-proof against additional enums in `input.layer`.
-        let Layer::FullPrecision { data_type } = input.layer;
+        let data_type = match input.representation {
+            Representation::FullPrecision { data_type } => data_type,
+            Representation::Spherical { .. } => input.data.data_type,
+        };
 
         // Load the data and perform any necessary data conversions.
         let Bundle {
@@ -508,7 +711,7 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
             groundtruth,
         } = input.data.load_as(data_type)?;
 
-        let index = input.index(data.nrows(), data.medoid().as_view())?;
+        let index = input.index(data.as_view())?;
         let rt = diskann_benchmark_core::tokio::runtime(1)?;
         let build = super::tests::insert(&*index, data.as_view(), rt.handle())?;
 

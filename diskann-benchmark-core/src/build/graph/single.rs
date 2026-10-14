@@ -10,7 +10,10 @@ use diskann::{
     graph::{self, glue},
     provider,
 };
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::build::{Build, ids::ToId};
 
@@ -23,7 +26,7 @@ where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     strategy: S,
     to_id: Box<dyn ToId<DP::ExternalId>>,
 }
@@ -41,7 +44,7 @@ where
     /// to external IDs.
     pub fn new<I>(
         index: Arc<graph::DiskANNIndex<DP>>,
-        data: Arc<Matrix<T>>,
+        data: Arc<rowmajor::Owned<T>>,
         strategy: S,
         to_id: I,
     ) -> Arc<Self>

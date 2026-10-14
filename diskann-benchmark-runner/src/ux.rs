@@ -78,10 +78,10 @@ pub fn strip_backtrace(s: String) -> String {
             in_stacktrace = true;
 
             // Remove a previous empty line (if any).
-            if let Some(previous) = lines.last() {
-                if previous.is_empty() {
-                    lines.pop();
-                }
+            if let Some(previous) = lines.last()
+                && previous.is_empty()
+            {
+                lines.pop();
             }
         } else {
             lines.push(line);

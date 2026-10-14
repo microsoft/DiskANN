@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Fallback kernel implementation of multi-vector distance computation.
 
@@ -64,8 +66,8 @@ impl FallbackKernel {
     /// Core kernel for computing per-query-vector max similarities (min negated inner-product).
     ///
     /// For each `query` vector, computes the maximum similarity (negated inner product)
-    /// to any document vector, then calls `f(index, score)` with the result. If
-    /// there are no vectors in the `doc`, the kernel returns immediately.
+    /// to any document vector, then calls `f(index, score)` with the result.
+    /// If there are no vectors in the `doc`, the score is `f32::MAX`.
     ///
     /// The callback can be used to aggregate or set scores as needed - as is the
     /// case with [`MaxSim`] and [`Chamfer`].
@@ -84,11 +86,6 @@ impl FallbackKernel {
         F: FnMut(usize, f32),
         InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
-        // Early exit if no doc vectors - callback should never be invoked
-        if doc.num_vectors() == 0 {
-            return;
-        }
-
         for (i, q_vec) in query.rows().enumerate() {
             // `InnerProduct::evaluate` returns negated inner product
             let mut min_dist = f32::MAX;
@@ -96,6 +93,37 @@ impl FallbackKernel {
             for d_vec in doc.rows() {
                 let dist = InnerProduct::evaluate(q_vec, d_vec);
                 min_dist = min_dist.min(dist);
+            }
+
+            f(i, min_dist);
+        }
+    }
+
+    /// Exact `i32` counterpart of [`FallbackKernel::max_sim_kernel`] for `i8`.
+    ///
+    /// The `i8` inner product fits an `i32` accumulator exactly for vector dimensions up
+    /// to `131_071`, so scores are exact rather than rounded through `f32`. If there are
+    /// no vectors in the `doc`, the score is `i32::MAX`.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query multi-vector (wrapped as [`QueryMatRef`])
+    /// * `doc` - The document multi-vector
+    /// * `f` - Callback invoked with `(query_index, similarity)` for each query vector
+    #[inline]
+    pub(crate) fn max_sim_kernel_i8<F>(
+        query: QueryMatRef<'_, Standard<i8>>,
+        doc: MatRef<'_, Standard<i8>>,
+        mut f: F,
+    ) where
+        F: FnMut(usize, i32),
+    {
+        for (i, q_vec) in query.rows().enumerate() {
+            // Negate to match the similarity convention of `InnerProduct::evaluate`.
+            let mut min_dist = i32::MAX;
+
+            for d_vec in doc.rows() {
+                min_dist = min_dist.min(-dot_i32(q_vec, d_vec));
             }
 
             f(i, min_dist);
@@ -147,6 +175,15 @@ impl FallbackKernel {
     }
 }
 
+/// Exact `i8` inner product, matching the `i32` accumulator width of the SIMD
+/// kernels.
+fn dot_i32(a: &[i8], b: &[i8]) -> i32 {
+    a.iter()
+        .zip(b)
+        .map(|(&x, &y)| i32::from(x) * i32::from(y))
+        .sum()
+}
+
 ////////////
 // MaxSim //
 ////////////
@@ -171,6 +208,13 @@ where
 
         if self.size() != query.num_vectors() {
             return Err(MaxSimError::InvalidBufferLength(size, n_queries));
+        }
+
+        if query.vector_dim() != doc.vector_dim() {
+            return Err(MaxSimError::UnequalDim(
+                doc.vector_dim(),
+                query.vector_dim(),
+            ));
         }
 
         FallbackKernel::max_sim_kernel(query, doc, |i, score| {
@@ -394,7 +438,7 @@ mod tests {
 
             let result = Chamfer::evaluate(QueryMatRef::from(doc), query.deref().reborrow());
 
-            assert_eq!(result, 0.0);
+            assert_eq!(result, f32::INFINITY);
         }
 
         #[test]

@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Context;
 use diskann::graph::{self, DiskANNIndex, InplaceDeleteMethod, StartPointStrategy};
 use diskann_benchmark_core::{
     self as benchmark_core, build as build_core, recall,
@@ -29,11 +30,17 @@ use diskann_benchmark_runner::{
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
 use diskann_inmem::{
-    layers::{Full, FullPrecision},
+    num::{Capacity, MaxDegree},
+    repr::{self, Full, FullPrecision},
     Provider, Strategy,
 };
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_quantization::{
+    alloc::{GlobalAllocator, Poly},
+    spherical::iface,
+};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
+use half::f16;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -47,7 +54,10 @@ use crate::{
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", Build::<f32>::new())?;
-    // registry.register("inmem2-f16", Build::<f16>::new())?;
+    registry.register("inmem2-f16", Build::<f16>::new())?;
+    registry.register("inmem2-u8", Build::<u8>::new())?;
+    registry.register("inmem2-spherical", SphericalBuild)?;
+
     registry.register("inmem2-f32-stream", StreamingBenchmark::<f32>::new())?;
     Ok(())
 }
@@ -91,6 +101,29 @@ mod dto {
         pub(super) num_threads: NonZeroUsize,
     }
 
+    //--------------//
+    // Quantization //
+    //--------------//
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) enum Quantization {
+        Spherical(Spherical),
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) enum SphericalBits {
+        One,
+        Two,
+        Four,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Spherical {
+        pub(super) bits: SphericalBits,
+    }
+
     //-----------//
     // Streaming //
     //-----------//
@@ -121,6 +154,7 @@ mod dto {
         pub(super) data: Data,
         pub(super) build: BuildParams,
         pub(super) search: KnnSearch,
+        pub(super) quantization: Option<Quantization>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -315,11 +349,146 @@ impl Display for BuildParams {
     }
 }
 
+//--------------//
+// Quantization //
+//--------------//
+
+#[derive(Debug)]
+enum Quantization {
+    None,
+    Spherical(Spherical),
+}
+
+impl Quantization {
+    fn from_raw(raw: Option<dto::Quantization>) -> Self {
+        if let Some(raw) = raw {
+            match raw {
+                dto::Quantization::Spherical(spherical) => {
+                    Self::Spherical(Spherical::from_raw(spherical))
+                }
+            }
+        } else {
+            Self::None
+        }
+    }
+
+    fn as_spherical(&self) -> Option<&Spherical> {
+        match self {
+            Self::Spherical(spherical) => Some(spherical),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Quantization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::Spherical(spherical) => {
+                let mut kv = KeyValue::new();
+                kv.push("spherical", spherical);
+                write!(f, "{}", kv)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum SphericalBits {
+    One,
+    Two,
+    Four,
+}
+
+impl SphericalBits {
+    fn from_raw(raw: dto::SphericalBits) -> Self {
+        match raw {
+            dto::SphericalBits::One => Self::One,
+            dto::SphericalBits::Two => Self::Two,
+            dto::SphericalBits::Four => Self::Four,
+        }
+    }
+}
+
+impl std::fmt::Display for SphericalBits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::One => write!(f, "1"),
+            Self::Two => write!(f, "2"),
+            Self::Four => write!(f, "4"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Spherical {
+    bits: SphericalBits,
+}
+
+impl Spherical {
+    fn from_raw(raw: dto::Spherical) -> Self {
+        let dto::Spherical { bits } = raw;
+
+        Self {
+            bits: SphericalBits::from_raw(bits),
+        }
+    }
+
+    fn train(
+        &self,
+        data: rowmajor::Ref<'_, f32>,
+        metric: Metric,
+    ) -> anyhow::Result<Poly<dyn iface::Quantizer>> {
+        use diskann_quantization::{algorithms::transforms, spherical};
+        use rand::SeedableRng;
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x7);
+
+        let quantizer = spherical::SphericalQuantizer::train(
+            data,
+            transforms::TransformKind::DoubleHadamard {
+                target_dim: transforms::TargetDim::Same,
+            },
+            metric
+                .try_into()
+                .context("internal error - dispatch should reject invalid metrics")?,
+            spherical::PreScale::ReciprocalMeanNorm,
+            &mut rng,
+            GlobalAllocator,
+        )?;
+
+        let quantizer = match self.bits {
+            SphericalBits::One => quantizer.as_quantizer::<1>()?,
+            SphericalBits::Two => quantizer.as_quantizer::<2>()?,
+            SphericalBits::Four => quantizer.as_quantizer::<4>()?,
+        };
+
+        Ok(quantizer)
+    }
+}
+
+impl std::fmt::Display for Spherical {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { bits } = self;
+
+        let mut kv = KeyValue::new();
+        kv.push("bits", bits);
+
+        write!(f, "{}", kv)
+    }
+}
+
+//-------------//
+// StaticBuild //
+//-------------//
+
 #[derive(Debug)]
 struct StaticBuild {
     data: Data,
     build: BuildParams,
     search: KnnSearch,
+    quantization: Quantization,
+
     // The serialized representation of the original input.
     input: serde_json::Value,
 }
@@ -332,27 +501,57 @@ impl StaticBuild {
             data,
             build,
             search,
+            quantization,
         } = raw;
 
         let data = Data::from_raw(data, checker.as_deref_mut())?;
         let build = BuildParams::from_raw(build, data.distance)?;
         let search = KnnSearch::from_raw(search, checker)?;
+        let quantization = Quantization::from_raw(quantization);
 
         Ok(Self {
             data,
             build,
             search,
+            quantization,
             input,
         })
     }
+
+    fn dispatch_params(&self) -> DispatchParams<'_> {
+        DispatchParams {
+            data_type: self.data.data_type,
+            quantization: &self.quantization,
+            distance: self.data.distance,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DispatchParams<'a> {
+    /// The type of the dataset.
+    data_type: DataType,
+    /// The quantization used by the dataset.
+    quantization: &'a Quantization,
+    /// The metric being used.
+    distance: Metric,
 }
 
 impl Display for StaticBuild {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            data,
+            build,
+            search,
+            quantization,
+            input: _input,
+        } = self;
+
         let mut kv = KeyValue::new();
-        kv.push("data", &self.data);
-        kv.push("build", &self.build);
-        kv.push("search", &self.search);
+        kv.push("data", &data);
+        kv.push("build", &build);
+        kv.push("search", &search);
+        kv.push("quantization", &quantization);
 
         write!(f, "{}", kv)
     }
@@ -401,6 +600,7 @@ impl Input for StaticBuild {
                     recall_k: 10,
                 }],
             },
+            quantization: None,
         }
     }
 }
@@ -408,6 +608,10 @@ impl Input for StaticBuild {
 ///////////////
 // Benchmark //
 ///////////////
+
+//---------------//
+// FullPrecision //
+//---------------//
 
 #[derive(Debug)]
 struct Build<T>(std::marker::PhantomData<T>);
@@ -420,7 +624,7 @@ impl<T> Build<T> {
 
 impl<T> Benchmark for Build<T>
 where
-    T: diskann_inmem::layers::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
+    T: diskann_inmem::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = StaticBuild;
     type Output = ();
@@ -428,7 +632,21 @@ where
     fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
         let mut score = context.success(0);
 
-        let data_type = input.data.data_type;
+        let DispatchParams {
+            data_type,
+            quantization,
+            distance,
+        } = input.dispatch_params();
+
+        accept_all(&distance);
+
+        if !matches!(quantization, Quantization::None) {
+            score.fail(
+                2000,
+                &"quantization not supported for full-precision builds",
+            );
+        }
+
         if !T::is_match(data_type) {
             score.fail(
                 1000,
@@ -462,7 +680,7 @@ where
         writeln!(output, "{input}\n")?;
 
         // Load data.
-        let data: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+        let data: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
             &input.data.data,
         ))?);
 
@@ -472,11 +690,14 @@ where
 
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-        let layer = Full::<T>::new(dim, input.data.distance);
-        let config =
-            diskann_inmem::provider::Config::new(num_points, input.build.config.max_degree().get());
-        let provider = Provider::<_, u32>::new(layer, config, start.row_iter())?;
+        let config = Full::config(
+            Capacity::new(num_points),
+            MaxDegree::new(input.build.config.max_degree().get()),
+            input.data.distance,
+            start,
+        )?;
 
+        let provider = Provider::<_, u32>::new(config)?;
         let index = Arc::new(DiskANNIndex::new(
             input.build.config.clone(),
             provider,
@@ -508,9 +729,159 @@ where
         checkpoint.checkpoint(&total_build_time)?;
 
         // Search.
-        let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-            &input.search.queries,
-        ))?);
+        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
+        let max_k = input.search.maximum_recall_k();
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&input.search.groundtruth),
+            Some(max_k),
+        )?;
+
+        writeln!(output, "Loaded {} queries\n", queries.nrows())?;
+
+        let knn = benchmark_core::search::graph::KNN::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(Strategy),
+        )?;
+
+        let results = _knn(
+            &knn,
+            &groundtruth,
+            input.search.reps,
+            &input.search.num_threads,
+            &input.search.runs,
+        )?;
+
+        let results = AggregatedSearchResults::Topk(results);
+
+        writeln!(output, "{}", results)?;
+
+        Ok(())
+    }
+}
+
+//-----------//
+// Spherical //
+//-----------//
+
+#[derive(Debug)]
+struct SphericalBuild;
+
+impl Benchmark for SphericalBuild {
+    type Input = StaticBuild;
+    type Output = ();
+
+    fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+
+        let DispatchParams {
+            data_type,
+            quantization,
+            distance,
+        } = input.dispatch_params();
+
+        if !matches!(quantization, Quantization::Spherical(_)) {
+            score.fail(2000, &"needed spherical-quantization");
+        }
+
+        if distance == Metric::CosineNormalized {
+            score.fail(
+                500,
+                &format_args!(
+                    "{} is not supported for spherical quantization- use \"cosine\" instead",
+                    Metric::CosineNormalized
+                ),
+            );
+        }
+
+        if !f32::is_match(data_type) {
+            score.fail(
+                1000,
+                &format_args!(
+                    "expected data-type {}, instead got {}",
+                    Quote(f32::DATA_TYPE),
+                    Quote(data_type)
+                ),
+            )
+        }
+
+        score
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "spherical-quantized index build-and-search",)?;
+
+        Ok(())
+    }
+
+    fn run(
+        &self,
+        input: &StaticBuild,
+        checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<()> {
+        writeln!(output, "{input}\n")?;
+
+        let spherical = input.quantization.as_spherical().unwrap();
+
+        // Load data.
+        let data: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.data.data),
+        )?);
+
+        let dim = data.ncols();
+        let num_points = data.nrows();
+        writeln!(output, "Loaded {num_points} points, dim={dim}")?;
+
+        let quantizer = spherical.train(data.as_view(), input.data.distance)?;
+
+        // Compute the medoid of the dataset as the single start point.
+        let start = StartPointStrategy::Medoid.compute(data.as_view())?;
+        let config = repr::spherical::Spherical::config(
+            quantizer,
+            Capacity::new(num_points),
+            MaxDegree::new(input.build.config.max_degree().get()),
+            start,
+            repr::spherical::Rerank::F16,
+        )?;
+
+        let provider = Provider::<_, u32>::new(config)?;
+        let index = Arc::new(DiskANNIndex::new(
+            input.build.config.clone(),
+            provider,
+            None,
+        ));
+
+        // Build via SingleInsert.
+        let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
+        let builder = build_core::graph::SingleInsert::new(
+            index.clone(),
+            data,
+            Strategy,
+            build_core::ids::Identity::<u32>::new(),
+        );
+
+        let build_results = build_core::build_tracked(
+            builder,
+            build_core::Parallelism::dynamic(diskann::utils::ONE, input.build.num_threads),
+            &rt,
+            Some(&ProgressMeter::new(output)),
+        )?;
+
+        let total_build_time = build_results.end_to_end_latency();
+        writeln!(
+            output,
+            "\nBuild complete in {:.2}s",
+            total_build_time.as_seconds()
+        )?;
+        checkpoint.checkpoint(&total_build_time)?;
+
+        // Search.
+        let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
         let max_k = input.search.maximum_recall_k();
         let groundtruth = datafiles::load_groundtruth(
             datafiles::BinFile(&input.search.groundtruth),
@@ -833,21 +1204,23 @@ where
         let max_points = runbook.max_points();
 
         // Load the dataset (consumed by `WithData`) and queries.
-        let dataset: Matrix<T> = datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
-        let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-            &input.search.queries,
-        ))?);
-        let dim = dataset.ncols();
+        let dataset: rowmajor::Owned<T> =
+            datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
+        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
 
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(dataset.as_view())?;
         let index_config = input.build.config.clone();
-        let layer = Full::<T>::new(dim, input.data.distance);
+        let config = Full::config(
+            Capacity::new(max_points),
+            MaxDegree::new(index_config.max_degree().get()),
+            input.data.distance,
+            start,
+        )?;
 
-        let config =
-            diskann_inmem::provider::Config::new(max_points, index_config.max_degree().get());
-        let provider = Provider::<_, u32>::new(layer, config, start.row_iter())?;
-
+        let provider = Provider::<_, u32>::new(config)?;
         let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
 
         let num_threads = input.build.num_threads;
@@ -924,7 +1297,7 @@ where
 {
     fn insert_(
         &mut self,
-        data: MatrixView<'_, T>,
+        data: rowmajor::Ref<'_, T>,
         ids: Range<usize>,
     ) -> anyhow::Result<BuildStats> {
         anyhow::ensure!(
@@ -936,7 +1309,7 @@ where
 
         let runner = build_core::graph::SingleInsert::new(
             self.index.clone(),
-            Arc::new(data.to_owned()),
+            Arc::new(data.to_rowmajor_owned()),
             Strategy,
             build_core::ids::Range::<u32>::new(ids.start as u32..ids.end as u32),
         );
@@ -959,7 +1332,7 @@ where
 
     fn search(
         &mut self,
-        (queries, groundtruth): (Arc<Matrix<T>>, &dyn recall::Rows<u32>),
+        (queries, groundtruth): (Arc<rowmajor::Owned<T>>, &dyn recall::Rows<u32>),
     ) -> anyhow::Result<Self::Output> {
         let knn = benchmark_core::search::graph::KNN::new(
             self.index.clone(),
@@ -980,7 +1353,7 @@ where
 
     fn insert(
         &mut self,
-        (data, ids): (MatrixView<'_, T>, Range<usize>),
+        (data, ids): (rowmajor::Ref<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
         self.insert_(data, ids).map(StreamStats::Insert)
     }
@@ -1008,7 +1381,7 @@ where
 
     fn replace(
         &mut self,
-        (data, ids): (MatrixView<'_, T>, Range<usize>),
+        (data, ids): (rowmajor::Ref<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
         use diskann::provider::Delete;
 
@@ -1033,3 +1406,6 @@ where
         false
     }
 }
+
+// Dispatch helper to make an item as used.
+fn accept_all<T>(_: &T) {}

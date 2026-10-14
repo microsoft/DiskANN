@@ -29,7 +29,7 @@
 
 use std::{alloc::Layout, iter::FusedIterator, marker::PhantomData, ptr::NonNull};
 
-use diskann_utils::{Reborrow, ReborrowMut, views::MatrixView};
+use diskann_utils::{Reborrow, ReborrowMut, views::rowmajor};
 use thiserror::Error;
 
 use crate::utils;
@@ -70,8 +70,7 @@ pub unsafe trait Repr: Copy {
     /// `self`, `self.nrows()` must return the same value.
     fn nrows(&self) -> usize;
 
-    /// Returns the memory layout for a memory allocation containing [`Repr::nrows`] vectors
-    /// each with vector dimension [`Repr::ncols`].
+    /// Returns the memory layout for an allocation containing [`Repr::nrows`] vectors.
     ///
     /// # Safety Contract
     ///
@@ -752,9 +751,9 @@ impl<T> Mat<Standard<T>> {
         self.as_view().as_slice()
     }
 
-    /// Return a [`MatrixView`] over the backing data.
+    /// Return a [`rowmajor::Ref`] over the backing data.
     #[inline]
-    pub fn as_matrix_view(&self) -> MatrixView<'_, T> {
+    pub fn as_matrix_view(&self) -> rowmajor::Ref<'_, T> {
         self.as_view().as_matrix_view()
     }
 }
@@ -884,13 +883,13 @@ impl<'a, T> MatRef<'a, Standard<T>> {
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<T>(), len) }
     }
 
-    /// Return a [`MatrixView`] over the backing data.
-    #[allow(clippy::expect_used)]
+    /// Return a [`rowmajor::Ref`] over the backing data.
+    #[expect(clippy::expect_used)]
     #[inline]
-    pub fn as_matrix_view(&self) -> MatrixView<'a, T> {
+    pub fn as_matrix_view(&self) -> rowmajor::Ref<'a, T> {
         // `Standard::new` validates that `nrows * ncols` does not overflow,
         // so `try_from` is infallible here.
-        MatrixView::try_from(self.as_slice(), self.num_vectors(), self.vector_dim())
+        rowmajor::Ref::try_from_data(self.as_slice(), self.num_vectors(), self.vector_dim())
             .expect("Standard<T> has valid dimensions")
     }
 }
@@ -1112,9 +1111,9 @@ impl<'a, T> MatMut<'a, Standard<T>> {
         self.as_view().as_slice()
     }
 
-    /// Return a [`MatrixView`] over the backing data.
+    /// Return a [`rowmajor::Ref`] over the backing data.
     #[inline]
-    pub fn as_matrix_view(&self) -> MatrixView<'_, T> {
+    pub fn as_matrix_view(&self) -> rowmajor::Ref<'_, T> {
         self.as_view().as_matrix_view()
     }
 }
@@ -1237,6 +1236,7 @@ mod tests {
     use std::fmt::Display;
 
     use diskann_utils::lazy_format;
+    use diskann_utils::views::rowmajor::Matrix;
 
     /// Helper to assert a type is Copy.
     fn assert_copy<T: Copy>(_: &T) {}
@@ -1887,7 +1887,7 @@ mod tests {
         assert_eq!(view.ncols(), 3);
         for row in 0..2 {
             for col in 0..3 {
-                assert_eq!(view[(row, col)], data[row * 3 + col]);
+                assert_eq!(*view.element(row, col), data[row * 3 + col]);
             }
         }
         assert_eq!(matref.as_slice(), &data);
@@ -1905,7 +1905,7 @@ mod tests {
         assert_eq!(view.ncols(), 3);
         for row in 0..2 {
             for col in 0..3 {
-                assert_eq!(view[(row, col)], data[row * 3 + col]);
+                assert_eq!(*view.element(row, col), data[row * 3 + col]);
             }
         }
         assert_eq!(mat.as_slice(), &data);
@@ -1918,7 +1918,7 @@ mod tests {
         assert_eq!(view.ncols(), 3);
         for row in 0..2 {
             for col in 0..3 {
-                assert_eq!(view[(row, col)], data[row * 3 + col]);
+                assert_eq!(*view.element(row, col), data[row * 3 + col]);
             }
         }
         assert_eq!(matmut.as_slice(), &data);

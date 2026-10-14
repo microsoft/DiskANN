@@ -151,7 +151,7 @@ impl<'a> Context<'a> {
 
 /// The backend-specific half of a [`Writer`].
 ///
-/// Each [`SaveContext`](super::SaveContext) implementation supplies its own
+/// Each [`SaveContext`] implementation supplies its own
 /// `WriterInner` (e.g. an in-memory cursor or an on-disk file). [`Writer`] wraps it in a
 /// [`BufWriter`] and forwards [`std::io::Write`] / [`std::io::Seek`] to it; on
 /// [`Writer::finish`] the (flushed) inner is consumed to commit the artifact and yield a

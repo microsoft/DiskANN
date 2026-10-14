@@ -260,7 +260,36 @@ impl RangeSearchResults {
 
         Self {
             num_tasks: setup.tasks.into(),
-            initial_l: parameters.starting_l(),
+            initial_l: parameters.starting_l().into(),
+            qps,
+            search_latencies: end_to_end_latencies,
+            mean_latencies,
+            p90_latencies,
+            p99_latencies,
+            average_precision: (&average_precision).into(),
+        }
+    }
+
+    pub fn new_filtered(summary: benchmark_core::search::graph::filtered_range::Summary) -> Self {
+        let benchmark_core::search::graph::filtered_range::Summary {
+            setup,
+            parameters,
+            end_to_end_latencies,
+            mean_latencies,
+            p90_latencies,
+            p99_latencies,
+            average_precision,
+            ..
+        } = summary;
+
+        let qps = end_to_end_latencies
+            .iter()
+            .map(|latency| average_precision.num_queries as f64 / latency.as_seconds())
+            .collect();
+
+        Self {
+            num_tasks: setup.tasks.into(),
+            initial_l: parameters.starting_l().into(),
             qps,
             search_latencies: end_to_end_latencies,
             mean_latencies,

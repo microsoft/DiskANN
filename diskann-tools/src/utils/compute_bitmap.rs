@@ -64,7 +64,7 @@ trait QueryAccelerator: Send + Sync {
     fn universe(&self) -> BitSet;
 
     // method for testing
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -79,7 +79,7 @@ impl QueryAccelerator for InvertedIndexAccelerator {
 
     fn universe(&self) -> BitSet {
         let mut result = BitSet::new();
-        for (_, bits) in self.map.iter() {
+        for bits in self.map.values() {
             result.extend(bits);
         }
         result
@@ -121,7 +121,7 @@ impl QueryAccelerator for BTreeAccelerator {
 
     fn universe(&self) -> BitSet {
         let mut result = BitSet::new();
-        for (_, ids) in self.map.iter() {
+        for ids in self.map.values() {
             result.extend(ids.iter().cloned());
         }
         result
@@ -428,7 +428,7 @@ pub fn compute_query_bitmaps(
     let global_label_set = compute_global_label_set(&flattened_base_label_hashmaps)?;
 
     // Compute the accelerators for each label in the global set
-    #[allow(clippy::disallowed_methods)]
+    #[expect(clippy::disallowed_methods)]
     let query_accelerators: HashMap<String, Box<dyn QueryAccelerator>> = global_label_set
         .par_iter()
         .map(|(key, value)| {
@@ -438,7 +438,7 @@ pub fn compute_query_bitmaps(
         .collect::<Result<_, _>>()?;
 
     // Evaluate each query using the precomputed accelerators
-    #[allow(clippy::disallowed_methods)]
+    #[expect(clippy::disallowed_methods)]
     let query_bitmaps: Result<Vec<BitSet>, anyhow::Error> = query_labels
         .par_iter()
         .map(|(_query_id, query_expr)| {

@@ -34,7 +34,7 @@ use std::sync::Arc;
 ///
 /// # Thread Safety
 ///
-/// BfTreeStore is thread-safe via Arc<BfTree>. Multiple readers and writers can
+/// BfTreeStore is thread-safe via `Arc<BfTree>`. Multiple readers and writers can
 /// safely access the store concurrently. BfTree internally handles synchronization.
 ///
 /// # Note on Batch Operations

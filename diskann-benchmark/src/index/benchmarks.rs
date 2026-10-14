@@ -31,7 +31,7 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix},
 };
 use half::f16;
 
@@ -76,6 +76,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         FullPrecision::<f32>::new()
             .search(plugins::Topk)
             .search(plugins::Range)
+            .search(plugins::FilteredRange)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
             .search(plugins::TopkInlineFilter)
@@ -88,7 +89,11 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
     registry.register(
         "graph-index-full-precision-u8",
-        FullPrecision::<u8>::new().search(plugins::Topk),
+        FullPrecision::<u8>::new()
+            .search(plugins::Topk)
+            .search(plugins::TopkBetaFilter)
+            .search(plugins::TopkInlineFilter)
+            .search(plugins::FilteredRange),
     )?;
     registry.register(
         "graph-index-full-precision-i8",
@@ -359,7 +364,7 @@ type Index<DP> = Arc<DiskANNIndex<DP>>;
 pub(crate) fn run_build<T, BF, CF, B, DP>(
     input: &IndexBuild,
     build_strategy: B,
-    data: Option<Arc<Matrix<T>>>,
+    data: Option<Arc<rowmajor::Owned<T>>>,
     output: &mut dyn Output,
     create: CF,
     build: BF,
@@ -367,13 +372,13 @@ pub(crate) fn run_build<T, BF, CF, B, DP>(
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
         + for<'a> provider::SetElement<&'a [T]>,
-    CF: FnOnce(MatrixView<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
+    CF: FnOnce(rowmajor::Ref<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
     T: diskann::graph::SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
     B: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + Send + Sync,
     BF: FnOnce(
         Index<DP>,
         B,
-        Arc<Matrix<T>>,
+        Arc<rowmajor::Owned<T>>,
         &IndexBuild,
         &mut dyn Output,
     ) -> anyhow::Result<BuildStats>,
@@ -486,7 +491,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let topk = phase.as_topk()?;
 
-        let queries: Arc<Matrix<DP::Element>> =
+        let queries: Arc<rowmajor::Owned<DP::Element>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
         // compute the maximum value of k used in any search
@@ -543,7 +548,7 @@ where
         strategy: &Strategy<S>,
     ) -> anyhow::Result<AggregatedSearchResults> {
         let range = phase.as_range()?;
-        let queries: Arc<Matrix<DP::Element>> =
+        let queries: Arc<rowmajor::Owned<DP::Element>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&range.queries))?);
 
         let groundtruth =
@@ -559,6 +564,72 @@ where
         )?;
 
         let result = search::range::run(&range, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Range(result))
+    }
+}
+
+//-------------------//
+// Filtered Range    //
+//-------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::FilteredRange
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        plugins::FilteredRange::is_match(phase)
+    }
+
+    fn kind(&self) -> &'static str {
+        plugins::FilteredRange::as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let filtered_range = phase.as_filtered_range()?;
+
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&filtered_range.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&filtered_range.groundtruth))?;
+
+        let steps = search::range::RangeSearchSteps::new(
+            filtered_range.reps,
+            &filtered_range.num_threads,
+            &filtered_range.runs,
+        );
+
+        let bit_maps = generate_bitmaps(
+            &filtered_range.query_predicates,
+            &filtered_range.data_labels,
+        )?;
+
+        let labels: Arc<[_]> = bit_maps
+            .into_iter()
+            .map(utils::filters::as_query_label_provider)
+            .collect();
+
+        let filtered_range = benchmark_core::search::graph::filtered_range::FilteredRange::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            labels,
+        )?;
+
+        let result = search::range::run_filtered(&filtered_range, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Range(result))
     }
 }
@@ -594,7 +665,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let beta_filter = phase.as_topk_beta_filter()?;
 
-        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
             datafiles::BinFile(&beta_filter.queries),
         )?);
 
@@ -660,7 +731,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let multihop = phase.as_topk_multihop_filter()?;
 
-        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
             datafiles::BinFile(&multihop.queries),
         )?);
 
@@ -722,7 +793,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let inline = phase.as_topk_inline_filter()?;
 
-        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
             datafiles::BinFile(&inline.queries),
         )?);
 

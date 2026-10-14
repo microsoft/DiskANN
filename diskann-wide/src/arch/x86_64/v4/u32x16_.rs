@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDMask, SIMDMulAdd, SIMDSelect, SIMDSumTree, SIMDVector},
+    traits::{SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDSelect, SIMDSumTree, SIMDVector},
 };
 
 /////
@@ -30,6 +30,13 @@ macros::x86_splitjoin!(__m512i, u32x16, u32x8);
 
 helpers::unsafe_map_binary_op!(u32x16, std::ops::Add, add, _mm512_add_epi32, "avx512f");
 helpers::unsafe_map_binary_op!(u32x16, std::ops::Sub, sub, _mm512_sub_epi32, "avx512f");
+helpers::unsafe_map_unary_op!(
+    u32x16,
+    SIMDPopcount,
+    popcount_simd,
+    _mm512_popcnt_epi32,
+    "avx512vpopcntdq"
+);
 helpers::unsafe_map_binary_op!(u32x16, std::ops::Mul, mul, _mm512_mullo_epi32, "avx512f");
 
 helpers::unsafe_map_binary_op!(
@@ -139,6 +146,7 @@ mod test_x86_u32 {
 
     // Bit ops
     test_utils::ops::test_bitops!(u32x16, 0xc5f7d8d8df0b7b6c, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(u32x16, 0x021d781b447eab07, V4::new_checked_uncached());
 
     // Reductions
     test_utils::ops::test_sumtree!(u32x16, 0xe533708e69ca0117, V4::new_checked_uncached());

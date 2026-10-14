@@ -5,16 +5,13 @@
 
 use benchmarks_iai::aligned_file_reader_bench_iai::aligned_file_reader_bench_iai;
 use benchmarks_iai::kmeans_bench_iai::kmeans_bench_iai;
-use iai_callgrind::{main, EventKind, LibraryBenchmarkConfig, RegressionConfig};
+use iai_callgrind::{main, Callgrind, EventKind, LibraryBenchmarkConfig};
 
 mod benchmarks_iai;
 
 main!(
     config = LibraryBenchmarkConfig::default()
-        .regression(
-            RegressionConfig::default()
-                .limits([(EventKind::Ir, 5.0), (EventKind::EstimatedCycles, 5.0)])
-        );
+        .tool(Callgrind::default().soft_limits([(EventKind::Ir, 5.0), (EventKind::EstimatedCycles, 5.0)]));
     library_benchmark_groups =
         aligned_file_reader_bench_iai,
         kmeans_bench_iai,
