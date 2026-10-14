@@ -5,7 +5,7 @@
 
 //! Configuration and deterministic row hashing for transposed Bloom label indexes.
 
-use crate::error::EncodedLabelIndexError;
+use crate::{error::EncodedLabelIndexError, format::MAX_LABEL_COUNT};
 
 pub(crate) const BLOOM_FORMAT: u32 = 1;
 const MAX_BLOOM_BITS: u32 = 65_536;
@@ -19,6 +19,7 @@ const HASH_SEED_STEP: u64 = 0x9e37_79b9_7f4a_7c15;
 pub struct BloomFilterConfig {
     bit_count: u32,
     hash_count: u32,
+    exact_label_count: u32,
 }
 
 impl BloomFilterConfig {
@@ -28,7 +29,22 @@ impl BloomFilterConfig {
         Ok(Self {
             bit_count,
             hash_count,
+            exact_label_count: 0,
         })
+    }
+
+    /// Store the most frequent `exact_label_count` labels as exact rows in addition to Bloom.
+    pub fn with_exact_label_count(
+        mut self,
+        exact_label_count: u32,
+    ) -> Result<Self, EncodedLabelIndexError> {
+        if exact_label_count as usize > MAX_LABEL_COUNT {
+            return Err(EncodedLabelIndexError::Invalid(format!(
+                "exact Bloom label count must be at most {MAX_LABEL_COUNT}, got {exact_label_count}"
+            )));
+        }
+        self.exact_label_count = exact_label_count;
+        Ok(self)
     }
 
     /// Return the fixed Bloom signature length used for every vector.
@@ -40,6 +56,11 @@ impl BloomFilterConfig {
     pub fn hash_count(self) -> u32 {
         self.hash_count
     }
+
+    /// Return how many highest-frequency labels are also stored as exact rows.
+    pub fn exact_label_count(self) -> u32 {
+        self.exact_label_count
+    }
 }
 
 impl Default for BloomFilterConfig {
@@ -47,6 +68,7 @@ impl Default for BloomFilterConfig {
         Self {
             bit_count: 128,
             hash_count: 4,
+            exact_label_count: 0,
         }
     }
 }
