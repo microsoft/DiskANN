@@ -309,15 +309,6 @@ mod quantization {
             }
         }
     }
-
-    impl From<Rerank> for inmem::repr::spherical::Rerank {
-        fn from(rerank: Rerank) -> Self {
-            match rerank {
-                Rerank::None => inmem::repr::spherical::Rerank::None,
-                Rerank::F16 => inmem::repr::spherical::Rerank::F16,
-            }
-        }
-    }
 }
 
 mod spherical {
@@ -641,6 +632,7 @@ impl Test {
             alloc::GlobalAllocator,
             spherical::{PreScale, SphericalQuantizer},
         };
+        use inmem::repr::quantized::Config;
         use rand::SeedableRng;
 
         let DatasetView::F32(data) = data else {
@@ -665,24 +657,36 @@ impl Test {
         )?;
 
         // Step 2: Associate it with the target bit-width.
-        let quantizer = match bits {
-            spherical::Bits::One => quantizer.as_quantizer::<1>()?,
-            spherical::Bits::Two => quantizer.as_quantizer::<2>()?,
-            spherical::Bits::Four => quantizer.as_quantizer::<4>()?,
-        };
-
+        let capacity = Capacity::new(data.nrows());
+        let max_degree = MaxDegree::new(self.build.config.max_degree().get());
         let start_point = rowmajor::Owned::row_vector(Box::from(
             <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
         ));
+        let rerank = quantizer_rerank(rerank, self.data.metric);
 
-        // Step 3: Create the config.
-        let config = inmem::repr::Spherical::config(
-            quantizer,
-            Capacity::new(data.nrows()),
-            MaxDegree::new(self.build.config.max_degree().get()),
-            start_point,
-            rerank.into(),
-        )?;
+        let config = match bits {
+            spherical::Bits::One => Config::new(
+                quantizer.as_quantizer_impl::<1>()?,
+                capacity,
+                max_degree,
+                start_point,
+                rerank,
+            )?,
+            spherical::Bits::Two => Config::new(
+                quantizer.as_quantizer_impl::<2>()?,
+                capacity,
+                max_degree,
+                start_point,
+                rerank,
+            )?,
+            spherical::Bits::Four => Config::new(
+                quantizer.as_quantizer_impl::<4>()?,
+                capacity,
+                max_degree,
+                start_point,
+                rerank,
+            )?,
+        };
 
         let index_config = self.build.config.clone();
 

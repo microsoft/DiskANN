@@ -30,6 +30,7 @@ use crate::{
 // Built-in quantizers
 pub mod product;
 pub mod scalar;
+pub mod spherical;
 
 /// Plug-in for a generalized quantizer compatible with [`Quantized`].
 ///
