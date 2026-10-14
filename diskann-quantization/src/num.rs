@@ -50,6 +50,8 @@ where
 
 // SAFETY: 1.0 is positive.
 pub const POSITIVE_ONE_F32: Positive<f32> = unsafe { Positive::new_unchecked(1.0) };
+// SAFETY: 1.0 is positive.
+pub const POSITIVE_ONE_F64: Positive<f64> = unsafe { Positive::new_unchecked(1.0) };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(transparent)]
