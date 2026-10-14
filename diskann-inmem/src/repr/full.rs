@@ -43,7 +43,8 @@ use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
     distance::{
-        Cosine, CosineNormalized, DistanceProvider, InnerProduct, Metric, Specialize, SquaredL2,
+        Cosine, CosineNormalized, Distance as VDistance, InnerProduct, Metric, Specialize,
+        SquaredL2,
     },
 };
 use diskann_wide::{
@@ -753,8 +754,7 @@ impl FullPrecisionImpl for i8 {
     ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
-        let distance =
-            <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
+        let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
         let output: Box<dyn repr::ExpandBeam + 'a> = into
             .into_expand_beam(distance, prefetch::Loop::new())
@@ -766,8 +766,7 @@ impl FullPrecisionImpl for i8 {
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
         let reader = full.reader()?;
 
-        let distance =
-            <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
+        let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
         let output: Box<dyn repr::Prune> =
             repr::internal::intrusive::Prune::new(reader, distance).boxed();
@@ -831,6 +830,7 @@ mod tests {
 
     use diskann::neighbor::Neighbor;
     use diskann_utils::lazy_format;
+    use diskann_vector::distance::DistanceProvider;
     use hashbrown::{HashMap, HashSet};
     use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -1246,7 +1246,7 @@ mod tests {
             id
         };
 
-        let distance = <T as DistanceProvider<T>>::distance_comparer(metric, None);
+        let distance = VDistance::<T, T>::new(metric, None);
         let expected = distance.call(&start_point, &query);
 
         // Expand Beam - both `evaluate` and `expand_beam` share the same distance computer,

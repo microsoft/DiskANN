@@ -735,6 +735,72 @@ mod inner {
     }
 }
 
+///////////////////////
+// Shared Test Utils //
+///////////////////////
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[derive(Debug)]
+    pub(super) struct Boxit;
+
+    impl<'a> DistanceVisitor<'a> for Boxit {
+        type Output = Box<dyn Distance + 'a>;
+        fn visit<D>(self, distance: D) -> Self::Output
+        where
+            D: Distance + 'a,
+        {
+            Box::new(distance)
+        }
+    }
+
+    impl<'a> QueryDistanceVisitor<'a> for Boxit {
+        type Output = Box<dyn QueryDistance + 'a>;
+        fn visit<D>(self, distance: D) -> Self::Output
+        where
+            D: QueryDistance + 'a,
+        {
+            Box::new(distance)
+        }
+    }
+
+    /// A dyn-compatible wrapper for [`super::Quantizer`].
+    pub(super) trait DynQuantizer {
+        fn dim(&self) -> usize;
+        fn bytes(&self) -> Bytes;
+        fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()>;
+        fn distance<'a>(&'a self) -> Box<dyn Distance + 'a>;
+        fn query_distance<'a>(&'a self, query: &'a [f32])
+        -> ANNResult<Box<dyn QueryDistance + 'a>>;
+    }
+
+    impl<Q> DynQuantizer for Q
+    where
+        Q: Quantizer,
+    {
+        fn dim(&self) -> usize {
+            Quantizer::dim(self)
+        }
+        fn bytes(&self) -> Bytes {
+            Quantizer::bytes(self)
+        }
+        fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()> {
+            Quantizer::quantize(self, quantized, data)
+        }
+        fn distance<'a>(&'a self) -> Box<dyn Distance + 'a> {
+            Quantizer::distance(self, Boxit)
+        }
+        fn query_distance<'a>(
+            &'a self,
+            query: &'a [f32],
+        ) -> ANNResult<Box<dyn QueryDistance + 'a>> {
+            Quantizer::query_distance(self, query, Boxit)
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -747,7 +813,7 @@ mod tests {
 
     use diskann::graph::test::synthetic::Grid;
     use diskann_utils::{assert_contains, views::rowmajor::MatrixMut};
-    use diskann_vector::distance::DistanceProvider;
+    use diskann_vector::distance::{Distance as VDistance, Metric as VMetric};
     use hashbrown::HashMap;
 
     use crate::{
@@ -755,18 +821,19 @@ mod tests {
         num::{LogicalId, SlotId},
         repr::test::{Reference, test_expand_beam, test_prune},
     };
+    /////////////////////
+    // Quantized Tests //
+    /////////////////////
 
     /// A simple test quantizer that tries its best to convert `f32` to `i8`.
     #[derive(Debug, Clone, Copy)]
     struct Round {
         dim: usize,
-        distance: diskann_vector::distance::Distance<i8, i8>,
+        distance: VDistance<i8, i8>,
     }
 
     impl Round {
         fn new(dim: usize, metric: Metric) -> Self {
-            use diskann_vector::distance::{DistanceProvider, Metric as VMetric};
-
             let vmetric = match metric {
                 Metric::SquaredL2 => VMetric::L2,
                 Metric::InnerProduct => VMetric::InnerProduct,
@@ -775,7 +842,7 @@ mod tests {
 
             Self {
                 dim,
-                distance: <i8 as DistanceProvider<i8>>::distance_comparer(vmetric, None),
+                distance: VDistance::new(vmetric, None),
             }
         }
     }
@@ -895,7 +962,7 @@ mod tests {
         let quantized = config.build().unwrap();
 
         assert_eq!(repr::Representation::id_limit(&quantized), TEST_LIMIT);
-        assert_eq!(quantized.dim(), grid.dim().into());
+        assert_eq!(quantized.dim(), usize::from(grid.dim()));
 
         let mut reference = Reference::new(grid.dim().into());
 
@@ -972,10 +1039,7 @@ mod tests {
         let v2 = &reference[i2];
 
         // The Round quantizer is exact for these integral values.
-        let f = <f32 as DistanceProvider<f32>>::distance_comparer(
-            metric.as_internal_metric().as_vector_metric(),
-            None,
-        );
+        let f = VDistance::<f32, f32>::new(metric.as_internal_metric().as_vector_metric(), None);
 
         let distances = HashMap::from_iter([
             (s0, f.call(&query, v0)),

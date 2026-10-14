@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_vector::distance::{Distance, DistanceProvider};
+use diskann_vector::distance::Distance;
 use half::f16;
 use thiserror::Error;
 
@@ -86,10 +86,7 @@ impl Reranker {
         match rerank {
             Rerank::None => Ok(Self::disabled()),
             Rerank::F16 => {
-                let distance = <f32 as DistanceProvider<f16>>::distance_comparer(
-                    metric.as_vector_metric(),
-                    Some(dim),
-                );
+                let distance = Distance::new(metric.as_vector_metric(), Some(dim));
 
                 let this = Self::F16(distance);
                 let config = Simple::config(rerank.bytes_for(dim)?);
