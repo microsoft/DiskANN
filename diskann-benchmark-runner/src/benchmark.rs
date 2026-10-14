@@ -408,7 +408,7 @@ pub(crate) mod internal {
     pub(crate) type CheckedPassFail = PassFail<Checked, Checked>;
 
     pub(crate) trait Regression {
-        fn tolerance(&self) -> &dyn crate::input::internal::DynInput;
+        fn tolerance(&self) -> crate::input::internal::Input;
         fn input_tag(&self) -> &'static str;
         fn check(
             &self,
@@ -457,8 +457,8 @@ pub(crate) mod internal {
     where
         T: super::Regression,
     {
-        fn tolerance(&self) -> &dyn crate::input::internal::DynInput {
-            &crate::input::internal::Wrapper::<T::Tolerances>::INSTANCE
+        fn tolerance(&self) -> crate::input::internal::Input {
+            crate::input::internal::Input::new::<T::Tolerances>()
         }
 
         fn input_tag(&self) -> &'static str {
