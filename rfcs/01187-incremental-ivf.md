@@ -4,7 +4,7 @@
 |---|---|
 | **Authors** | Aditya Krishnan |
 | **Created** | 2026-08-19 |
-| **Updated** | 2026-10-12 |
+| **Updated** | 2026-10-13 |
 | **Status** | Draft |
 
 ## Summary
@@ -16,8 +16,9 @@ overflow selection, two-means fitting, and regional assignment. Providers supply
 1. Centroid selection through a `Router`.
 2. A scoped `BuildAccessor` that stages ordinary appends, returns their resulting
    sizes, fills requested sources, and publishes the operation.
-3. An editable `RegionSet` that borrows source data and records list creation,
-   membership replacement or append, and retirement.
+3. A read-only `RegionView` for filled source data and an independent
+   `RegionUpdate` for list creation, complete membership replacement, and
+   retirement.
 
 Typed point preparation belongs to the insertion strategy, not to the core
 build accessor. Preparation reserves internal IDs and supplies a shared,
@@ -31,18 +32,26 @@ Insertion provisionally appends points, gathers all oversized parents into one
 region, fits two children per parent, and assigns the requested parents' members
 against all child centroids. All children are fitted before final assignment, and
 parent centroids are not candidates. The algorithm computes complete centroid
-and member groups before recording child creation and parent retirement in the
-region. Ordinary appends and splitting are published together, never as separate
+and member groups before writing child creation and parent retirement through
+the update object. Ordinary appends and splitting are published together, never as separate
 commits.
 Each parent is split once per insertion; this is not a recursive size-balancing
 operation.
 
-Consuming `RegionSet::into_update` releases its temporary input borrows and moves
-its private edits into the accessor's owned `Update`. The index passes that value
-to `BuildAccessor::finish`, which publishes it together with accessor-side
-appends. An insertion without splitting passes the default, empty regional update.
-The algorithm does not inspect the provider's update representation or require
-new child IDs during computation.
+Filling returns the source view and its regional writer together. The writer is
+the accessor's `Update` type and is independent of the view's temporary input
+borrows. The algorithm reads through the view and writes through the update
+object; no update extraction step is needed. After the view's borrows end, the
+index passes `Some(update)` to `BuildAccessor::finish`. An insertion without
+splitting passes `None`. The algorithm does not inspect the provider's update
+representation or require new child IDs during computation.
+
+Regional writes may be buffered or applied eagerly inside the provider's private
+operation context. An update object may own storage access or a transaction
+handle; it need not be a passive edit buffer. Such writes must preserve live
+source views, and successful finalization publishes one coherent result.
+Providers coordinate accessor-side appends and regional writes so complete
+replacement or retirement supersedes relevant earlier appends.
 
 The built-in split reads and edits only explicitly requested parents, even when
 a region contains additional sources. It covers every parent member exactly once,
@@ -69,7 +78,7 @@ The current implementation supports batched insert/split into a provider that
 already has centroids. Initialization, search, neighborhood-selection policies,
 deletion/dissolve, and colocation remain future work. See
 [the current contracts](../diskann/src/ivf/traits.rs) and
-[the region interface](../diskann/src/ivf/workingset.rs) for the implemented API.
+[the region interfaces](../diskann/src/ivf/regionset.rs) for the implemented API.
 
 The remainder of this RFC records the previous delta-oriented design and its
 longer-term goals. Its API sketches, source layout, and `apply`-based algorithms
@@ -975,10 +984,11 @@ accessor is simpler.
 
 Immediate, independently published list mutations expose a partial-write schedule
 to GraphIVF. The current design instead stages ordinary appends in the build
-accessor and regional list edits in a `RegionSet`. Consuming the region produces
-an owned update, and the accessor publishes both kinds of changes only at
-`finish`. This keeps get/set-style operations without requiring an
-algorithm-facing delta protocol or prescribing the provider's physical write
+accessor and regional writes through a `RegionUpdate`, independently of the
+`RegionView` used for input reads. The writer may buffer changes or apply them
+inside a private operation context, and the accessor publishes both kinds of
+changes only at `finish`. This keeps get/set-style operations without requiring
+an algorithm-facing delta protocol or prescribing the provider's physical write
 order.
 
 ### Optional Endpoints Instead Of Delta Variants

@@ -16,7 +16,7 @@ use hashbrown::{HashMap, hash_map::Entry};
 use crate::{ANNError, ANNResult, utils::VectorId};
 
 /// A pending change relative to a list's stored membership.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Membership<I> {
     Append(Vec<I>),
     Replace(Vec<I>),
@@ -26,7 +26,7 @@ pub enum Membership<I> {
 /// Membership state without vector storage or centroid-ID allocation.
 ///
 /// Callers supply stored sizes and members, and validate that list IDs exist.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PendingLists<I: VectorId, L: VectorId> {
     changes: HashMap<L, Membership<I>>,
 }

@@ -11,7 +11,7 @@ use rand::{Rng, rngs::StdRng};
 
 use super::{
     partition::{Partition, Partitioning},
-    workingset::RegionSet,
+    region::{RegionUpdate, RegionView},
 };
 use crate::{ANNError, ANNResult};
 
@@ -20,27 +20,28 @@ use crate::{ANNError, ANNResult};
 /// Parents are distinct filled sources. Other filled lists are not read or edited.
 /// Computation completes before any edits are recorded. A recording error may
 /// leave partial pending edits, which the caller must discard rather than publish.
-pub(super) fn split<I: Copy, L: Copy, R: RegionSet<I, L>>(
-    region: &mut R,
+pub(super) fn split<I: Copy, L: Copy, R: RegionView<I, L>, U: RegionUpdate<I, L>>(
+    region: &R,
+    update: &mut U,
     parents: &[L],
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
 ) -> ANNResult<()> {
-    let result = compute_split(&*region, parents, dim, iterations, rng)?;
+    let result = compute_split(region, parents, dim, iterations, rng)?;
     for (centroid, partition) in result.centroids.rows().zip(result.partitions) {
         match partition.id {
-            Some(id) => region.set_members(id, &partition.members)?,
-            None => region.create(centroid, &partition.members)?,
+            Some(id) => update.set_members(id, &partition.members)?,
+            None => update.create(centroid, &partition.members)?,
         }
     }
     for &parent in parents {
-        region.retire(parent)?;
+        update.retire(parent)?;
     }
     Ok(())
 }
 
-fn compute_split<I: Copy, L: Copy, R: RegionSet<I, L>>(
+fn compute_split<I: Copy, L: Copy, R: RegionView<I, L>>(
     region: &R,
     parents: &[L],
     dim: usize,

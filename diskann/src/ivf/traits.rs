@@ -9,11 +9,10 @@ use std::{fmt::Debug, sync::Arc};
 
 use diskann_utils::future::SendFuture;
 
-use super::workingset::Batch;
+use super::region::{Batch, RegionUpdate, RegionView};
 use crate::{
     ANNResult,
     error::{StandardError, ToRanked},
-    ivf::workingset::RegionSet,
     provider::ExecutionContext,
     utils::VectorId,
 };
@@ -65,17 +64,25 @@ pub trait Router: Send {
     ) -> impl SendFuture<ANNResult<Vec<(Self::ListId, f32)>>>;
 }
 
+pub trait RouterAndNearest: Router {
+    /// Find `nprobe` centroids nearest to list `id`.
+    fn nearest(
+        &self,
+        id: Self::ListId,
+        nprobe: usize,
+    ) -> impl SendFuture<ANNResult<Vec<(Self::ListId, f32)>>>;
+}
+
 pub trait BuildAccessor: Send + Sized + HasIds {
-    /// Owned regional edits. The default records no regional changes.
-    type Update: Send;
-
-    type Router<'a>: Router<ListId = Self::ListId>
+    type Router<'a>: RouterAndNearest<ListId = Self::ListId>
     where
         Self: 'a;
 
-    type Region<'a>: RegionSet<Self::InternalId, Self::ListId, Update = Self::Update>
+    type Region<'a>: RegionView<Self::InternalId, Self::ListId>
     where
         Self: 'a;
+
+    type Update: RegionUpdate<Self::InternalId, Self::ListId>;
 
     /// Positive dimension of all canonical points and centroids.
     fn dim(&self) -> usize;
@@ -90,11 +97,16 @@ pub trait BuildAccessor: Send + Sized + HasIds {
     ) -> impl SendFuture<ANNResult<usize>>;
 
     /// Make every requested list's complete operation-local membership, vectors
-    /// and centroids available for computation.
-    fn fill(&mut self, lists: &[Self::ListId]) -> impl SendFuture<ANNResult<Self::Region<'_>>>;
+    /// and centroids available for computation, together with its regional writer.
+    fn fill(
+        &mut self,
+        lists: &[Self::ListId],
+    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update)>>;
 
-    /// Publish accessor-side appends and owned regional edits together.
-    fn finish(&mut self, update: Option<Self::Update>) -> impl SendFuture<ANNResult<()>>;
+    /// Finalize the operation, publishing accessor-side appends and regional writes together.
+    ///
+    /// `None` means there are no regional re-writes.
+    fn finish(self, update: Option<&Self::Update>) -> impl SendFuture<ANNResult<()>>;
 }
 
 pub trait BuildStrategy<'a, P: Provider>: Send + Sync {

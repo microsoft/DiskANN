@@ -13,8 +13,7 @@ use thiserror::Error;
 
 use super::{
     clustering,
-    traits::{BuildAccessor, BuildStrategy, InsertStrategy, Provider, Router},
-    workingset::RegionSet,
+    traits::{BuildAccessor, InsertStrategy, Provider, Router},
 };
 use crate::{ANNError, ANNResult, error::IntoANNResult};
 
@@ -87,11 +86,11 @@ impl<P: Provider> IVFIndex<P> {
             let mut accessor = strategy
                 .build_accessor(provider, context)
                 .into_ann_result()?;
-            if accessor.router().is_empty() {
-                return Err(ANNError::message("the IVF index is not initialized"));
-            }
+
+            // Step 1: Compute the batch
             let batch = strategy.prepare(&mut accessor, points).await?;
 
+            // Step 2: Route the points to their nearest centroid.
             let mut routed = BTreeMap::<P::ListId, Vec<P::InternalId>>::new();
 
             {
@@ -121,14 +120,21 @@ impl<P: Provider> IVFIndex<P> {
             let splits = parents.len();
             let update = if !parents.is_empty() {
                 let dim = accessor.dim();
-                let mut view = accessor.fill(&parents).await?;
-                clustering::split(&mut view, &parents, dim, config.two_means_iterations, rng)?;
-                Some(view.into_update())
+                let (region, mut update) = accessor.fill(&parents).await?;
+                clustering::split(
+                    &region,
+                    &mut update,
+                    &parents,
+                    dim,
+                    config.two_means_iterations,
+                    rng,
+                )?;
+                Some(update)
             } else {
                 None
             };
 
-            accessor.finish(update).await?;
+            accessor.finish(update.as_ref()).await?;
 
             Ok(InsertStats {
                 inserted: points.len(),

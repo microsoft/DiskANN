@@ -3,7 +3,12 @@
  * Licensed under the MIT license.
  */
 
-use std::{cell::Cell, collections::BTreeMap, future::Future, sync::Arc};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    sync::Arc,
+};
 
 use diskann_utils::{
     future::SendFuture,
@@ -15,12 +20,12 @@ use rand::{SeedableRng, rngs::StdRng};
 use super::{
     Config, IVFIndex, InsertStats, clustering,
     pending::{Membership, PendingLists},
+    region::{Batch, RegionUpdate, RegionView, View},
     traits::{BuildAccessor, BuildStrategy, HasIds, InsertStrategy, Provider, Router},
-    workingset::{Batch, ListView, RegionSet},
 };
-use crate::{ANNError, ANNResult, provider::DefaultContext};
+use crate::{ANNError, ANNResult, ivf::traits::RouterAndNearest, provider::DefaultContext};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct StoredList {
     centroid: Vec<f32>,
     members: Vec<u32>,
@@ -95,49 +100,69 @@ impl Router for Coarse<'_> {
     }
 }
 
+impl RouterAndNearest for Coarse<'_> {
+    fn nearest(
+        &self,
+        id: Self::ListId,
+        nprobe: usize,
+    ) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
+        async move {
+            let query = &self.stored.get(&id).unwrap().centroid;
+            self.select(&query, nprobe).await
+        }
+    }
+}
+
 struct Source {
     centroid: Vec<f32>,
     members: Vec<u32>,
     vectors: rowmajor::Owned<f32>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Update {
+    dim: usize,
+    lists: BTreeSet<u32>,
     memberships: PendingLists<u32, u32>,
     created: Vec<StoredList>,
-}
-
-struct Region<'a> {
-    sources: &'a BTreeMap<u32, Source>,
-    dim: usize,
-    update: Update,
     fail_create: bool,
     fail_retire: bool,
 }
 
-impl<'a> Region<'a> {
-    fn new(sources: &'a BTreeMap<u32, Source>, dim: usize) -> Self {
+impl Update {
+    fn new(sources: &BTreeMap<u32, Source>, dim: usize) -> Self {
         Self {
-            sources,
             dim,
-            update: Update::default(),
+            lists: sources.keys().copied().collect(),
+            memberships: PendingLists::default(),
+            created: Vec::new(),
             fail_create: false,
             fail_retire: false,
         }
     }
 
-    fn source(&self, list: u32) -> ANNResult<&Source> {
-        self.sources
-            .get(&list)
-            .ok_or_else(|| ANNError::message(format!("unknown list {list}")))
+    fn check_list(&self, list: u32) -> ANNResult<()> {
+        if self.lists.contains(&list) {
+            Ok(())
+        } else {
+            Err(ANNError::message(format!("unknown list {list}")))
+        }
     }
 }
 
-impl RegionSet<u32, u32> for Region<'_> {
-    type Update = Update;
+struct Region<'a> {
+    sources: &'a BTreeMap<u32, Source>,
+}
 
-    fn get_view(&self, list: u32) -> Option<ListView<'_, u32, u32>> {
-        self.sources.get(&list).map(|source| ListView {
+impl<'a> Region<'a> {
+    fn new(sources: &'a BTreeMap<u32, Source>) -> Self {
+        Self { sources }
+    }
+}
+
+impl RegionView<u32, u32> for Region<'_> {
+    fn get_view(&self, list: u32) -> Option<View<'_, u32, u32>> {
+        self.sources.get(&list).map(|source| View {
             id: list,
             centroid: &source.centroid,
             members: &source.members,
@@ -149,24 +174,20 @@ impl RegionSet<u32, u32> for Region<'_> {
             .get(&list)
             .map(|source| source.vectors.as_view())
     }
+}
 
+impl RegionUpdate<u32, u32> for Update {
     fn set_members(&mut self, list: u32, members: &[u32]) -> ANNResult<()> {
-        self.source(list)?;
-        self.update.memberships.set(list, members.to_vec())
-    }
-
-    fn append_members(&mut self, list: u32, members: &[u32]) -> ANNResult<usize> {
-        let size = self.source(list)?.members.len();
-        self.update.memberships.append(list, members.to_vec())?;
-        self.update.memberships.list_size(list, size)
+        self.check_list(list)?;
+        self.memberships.set(list, members.to_vec())
     }
 
     fn retire(&mut self, list: u32) -> ANNResult<()> {
         if self.fail_retire {
             return Err(ANNError::message("injected retire failure"));
         }
-        self.source(list)?;
-        self.update.memberships.retire(list)
+        self.check_list(list)?;
+        self.memberships.retire(list)
     }
 
     fn create(&mut self, centroid: &[f32], members: &[u32]) -> ANNResult<()> {
@@ -176,15 +197,11 @@ impl RegionSet<u32, u32> for Region<'_> {
         if centroid.len() != self.dim || !centroid.iter().all(|value| value.is_finite()) {
             return Err(ANNError::message("invalid centroid"));
         }
-        self.update.created.push(StoredList {
+        self.created.push(StoredList {
             centroid: centroid.to_vec(),
             members: members.to_vec(),
         });
         Ok(())
-    }
-
-    fn into_update(self) -> Self::Update {
-        self.update
     }
 }
 
@@ -228,7 +245,10 @@ impl<'p> BuildAccessor for Build<'p> {
         }
     }
 
-    fn fill(&mut self, lists: &[u32]) -> impl SendFuture<ANNResult<Self::Region<'_>>> {
+    fn fill(
+        &mut self,
+        lists: &[u32],
+    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update)>> {
         async move {
             self.fills.set(self.fills.get() + 1);
             if self.store.fail_fill {
@@ -261,37 +281,44 @@ impl<'p> BuildAccessor for Build<'p> {
                     },
                 );
             }
-            let mut region = Region::new(&self.sources, self.dim());
-            region.fail_create = self.store.fail_create;
-            region.fail_retire = self.store.fail_retire;
-            Ok(region)
+            let mut update = Update::new(&self.sources, self.dim());
+            update.fail_create = self.store.fail_create;
+            update.fail_retire = self.store.fail_retire;
+            Ok((Region::new(&self.sources), update))
         }
     }
 
-    fn finish(&mut self, update: Self::Update) -> impl SendFuture<ANNResult<()>> {
+    fn finish(self, update: Option<&Self::Update>) -> impl SendFuture<ANNResult<()>> {
         async move {
             if self.store.fail_finish {
                 return Err(ANNError::message("injected finish failure"));
             }
-            let created = u32::try_from(update.created.len())
-                .map_err(|_| ANNError::message("list ID overflow"))?;
+            let created = update.as_ref().map_or(0, |update| update.created.len());
+            let created =
+                u32::try_from(created).map_err(|_| ANNError::message("list ID overflow"))?;
             let next_list = self
                 .store
                 .next_list
                 .checked_add(created)
                 .ok_or_else(|| ANNError::message("list ID overflow"))?;
-            if let Some(batch) = self.batch.take() {
+            if let Some(batch) = self.batch {
                 for point in batch.points() {
                     self.store.points.insert(point.id, point.vector.to_vec());
                 }
             }
-            for (id, list) in (self.store.next_list..next_list).zip(update.created) {
-                self.store.lists.insert(id, list);
-            }
-            for (id, change) in std::mem::take(&mut self.pending)
-                .into_changes()
-                .chain(update.memberships.into_changes())
-            {
+            let regional_memberships = if let Some(update) = update {
+                for (id, list) in (self.store.next_list..next_list).zip(update.created.clone()) {
+                    self.store.lists.insert(id, list);
+                }
+                Some(update.memberships.clone())
+            } else {
+                None
+            };
+            for (id, change) in self.pending.into_changes().chain(
+                regional_memberships
+                    .into_iter()
+                    .flat_map(PendingLists::into_changes),
+            ) {
                 match change {
                     Membership::Append(members) => {
                         self.store
@@ -555,7 +582,7 @@ async fn splitting_commits_children_and_ordinary_appends_once() {
 }
 
 #[tokio::test]
-async fn region_borrows_filled_rows_and_extracts_owned_edits() {
+async fn region_view_borrows_inputs_while_updates_are_recorded() {
     let mut store = seeded();
     let update = {
         let mut build = Strategy
@@ -564,24 +591,35 @@ async fn region_borrows_filled_rows_and_extracts_owned_edits() {
         let points = [(5, &[1.0, 1.0][..]), (6, &[3.0, 1.0][..])];
         let batch = Strategy.prepare(&mut build, &points).await.unwrap();
         assert_eq!(build.append_to(1, &[10_006, 10_005]).await.unwrap(), 4);
-        let mut region = require_send(build.fill(&[1])).await.unwrap();
-        let view = region.get_view(1).unwrap();
-        let vectors = region.get_vectors(1).unwrap();
-        let source = &region.sources[&1];
-        assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
-        assert_eq!(view.centroid.as_ptr(), source.centroid.as_ptr());
-        assert_eq!(view.members.as_ptr(), source.members.as_ptr());
-        assert_eq!(
-            vectors.as_slice().as_ptr(),
-            source.vectors.as_slice().as_ptr()
-        );
-        assert_eq!(vectors.row(0), [0.0, 0.0]);
-        assert_eq!(vectors.row(2), batch.get(10_006).unwrap());
-        assert_eq!(vectors.row(3), batch.get(10_005).unwrap());
-        clustering::split(&mut region, &[1], 2, 5, &mut StdRng::seed_from_u64(7)).unwrap();
-        assert!(region.append_members(1, &[10_001]).is_err());
-        assert!(region.set_members(1, &[]).is_err());
-        let update = region.into_update();
+        let update = {
+            let (region, mut update) = require_send(build.fill(&[1])).await.unwrap();
+            let view = region.get_view(1).unwrap();
+            let vectors = region.get_vectors(1).unwrap();
+            let source = &region.sources[&1];
+            assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
+            assert_eq!(view.centroid.as_ptr(), source.centroid.as_ptr());
+            assert_eq!(view.members.as_ptr(), source.members.as_ptr());
+            assert_eq!(
+                vectors.as_slice().as_ptr(),
+                source.vectors.as_slice().as_ptr()
+            );
+            assert_eq!(vectors.row(0), [0.0, 0.0]);
+            assert_eq!(vectors.row(2), batch.get(10_006).unwrap());
+            assert_eq!(vectors.row(3), batch.get(10_005).unwrap());
+            clustering::split(
+                &region,
+                &mut update,
+                &[1],
+                2,
+                5,
+                &mut StdRng::seed_from_u64(7),
+            )
+            .unwrap();
+            assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
+            assert_eq!(vectors.row(2), batch.get(10_006).unwrap());
+            assert!(update.set_members(1, &[]).is_err());
+            update
+        };
         assert_eq!(build.dim(), 2);
         update
     };
@@ -689,15 +727,39 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
     Strategy.prepare(&mut build, &points).await.unwrap();
     assert_eq!(build.append_to(1, &[10_005]).await.unwrap(), 3);
 
-    let mut region = build.fill(&[1, 2]).await.unwrap();
-    assert!(clustering::split(&mut region, &[1, 99], 2, 5, &mut StdRng::seed_from_u64(7)).is_err());
-    let failed = std::mem::take(&mut region.update);
-    assert!(failed.created.is_empty());
-    assert_eq!(failed.memberships.into_changes().count(), 0);
-    clustering::split(&mut region, &[1], 2, 5, &mut StdRng::seed_from_u64(7)).unwrap();
-    let update = region.into_update();
-    assert_eq!(update.created.len(), 2);
-    require_send(build.finish(update)).await.unwrap();
+    let update = {
+        let (region, mut update) = build.fill(&[1, 2]).await.unwrap();
+        assert!(
+            clustering::split(
+                &region,
+                &mut update,
+                &[1, 99],
+                2,
+                5,
+                &mut StdRng::seed_from_u64(7)
+            )
+            .is_err()
+        );
+        assert!(update.created.is_empty());
+        assert_eq!(
+            std::mem::take(&mut update.memberships)
+                .into_changes()
+                .count(),
+            0
+        );
+        clustering::split(
+            &region,
+            &mut update,
+            &[1],
+            2,
+            5,
+            &mut StdRng::seed_from_u64(7),
+        )
+        .unwrap();
+        assert_eq!(update.created.len(), 2);
+        update
+    };
+    require_send(build.finish(Some(&update))).await.unwrap();
 
     assert_eq!(store.finishes, 1);
     assert!(!store.lists.contains_key(&1));
@@ -737,9 +799,17 @@ fn assignment_can_cross_parent_boundaries() {
         ),
     ]
     .into();
-    let mut region = Region::new(&sources, 1);
-    clustering::split(&mut region, &[1, 2], 1, 10, &mut StdRng::seed_from_u64(7)).unwrap();
-    let update = region.into_update();
+    let region = Region::new(&sources);
+    let mut update = Update::new(&sources, 1);
+    clustering::split(
+        &region,
+        &mut update,
+        &[1, 2],
+        1,
+        10,
+        &mut StdRng::seed_from_u64(7),
+    )
+    .unwrap();
     assert!(
         update.created[2..]
             .iter()
@@ -759,12 +829,19 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
         },
     )]
     .into();
-    let mut region = Region::new(&sources, 1);
-    clustering::split(&mut region, &[1], 1, 0, &mut StdRng::seed_from_u64(7)).unwrap();
-    let zero = region.into_update();
-    let mut region = Region::new(&sources, 1);
-    clustering::split(&mut region, &[1], 1, 1, &mut StdRng::seed_from_u64(7)).unwrap();
-    let one = region.into_update();
+    let region = Region::new(&sources);
+    let mut zero = Update::new(&sources, 1);
+    clustering::split(
+        &region,
+        &mut zero,
+        &[1],
+        1,
+        0,
+        &mut StdRng::seed_from_u64(7),
+    )
+    .unwrap();
+    let mut one = Update::new(&sources, 1);
+    clustering::split(&region, &mut one, &[1], 1, 1, &mut StdRng::seed_from_u64(7)).unwrap();
     assert_eq!(zero.created.len(), 2);
     assert_eq!(one.created.len(), 2);
     for (zero, one) in zero.created.iter().zip(&one.created) {

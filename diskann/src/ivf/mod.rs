@@ -7,12 +7,14 @@
 //!
 //! The index routes points, splits oversized lists, and assigns their members to
 //! replacement centroids. Providers supply routing and operation-local appends
-//! through [`traits::BuildAccessor`], and borrowed inputs and private regional
-//! edits through [`workingset::RegionSet`].
+//! through [`traits::BuildAccessor`], borrowed inputs through [`regionset::RegionView`],
+//! and regional writes through [`regionset::RegionUpdate`].
 //!
 //! Clustering finishes reading its inputs before recording child creation and
-//! parent retirement. Consuming the region releases its input borrows and yields
-//! an owned update; the accessor publishes it together with ordinary appends once.
+//! parent retirement through the separate update object. The region's input
+//! borrows end before the accessor finalizes regional writes and ordinary appends
+//! together. Providers may buffer writes or apply them inside a private operation
+//! context.
 //! Providers choose their own storage, publication, and failure-recovery mechanisms.
 //!
 //! This first implementation supports batch insertion into an already initialized
@@ -24,8 +26,8 @@ mod clustering;
 mod index;
 pub mod partition;
 pub mod pending;
+pub mod region;
 pub mod traits;
-pub mod workingset;
 
 pub use index::{Config, ConfigError, IVFIndex, InsertStats};
 
