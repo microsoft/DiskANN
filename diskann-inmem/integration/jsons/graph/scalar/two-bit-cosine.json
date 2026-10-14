@@ -16,8 +16,7 @@
         "data": {
           "data": "yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "groundtruth.b
-          in",
+          "groundtruth": "groundtruth.bin",
           "metric": "l2",
           "queries": "yfcc_query_100.fbin",
           "preprocess": []

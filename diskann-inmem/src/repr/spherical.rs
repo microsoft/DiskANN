@@ -542,7 +542,7 @@ mod tests {
     use diskann::graph::test::synthetic::Grid;
     use diskann_quantization::spherical::SupportedMetric;
     use diskann_utils::{assert_contains, views::rowmajor::MatrixMut};
-    use diskann_vector::distance::DistanceProvider;
+    use diskann_vector::distance::Distance as VDistance;
     use hashbrown::HashMap;
 
     use crate::{
@@ -637,7 +637,7 @@ mod tests {
         let spherical = config.build().unwrap();
 
         assert_eq!(repr::Representation::id_limit(&spherical), TEST_LIMIT);
-        assert_eq!(spherical.dim(), grid.dim().into());
+        assert_eq!(spherical.dim(), usize::from(grid.dim()));
 
         let mut reference = Reference::new(grid.dim().into());
 
@@ -821,7 +821,7 @@ mod tests {
                     None => panic!("expected a post processor -- {}", ctx),
                 };
 
-                let f = <f32 as DistanceProvider<f32>>::distance_comparer(
+                let f = VDistance::<f32, f32>::new(
                     repr::internal::quantization::Metric::from(metric).as_vector_metric(),
                     None,
                 );
