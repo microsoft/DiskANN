@@ -10,14 +10,14 @@ use crate::{
     error::EncodedLabelIndexError,
     format::{
         validate_label, write_u32, write_u64, BITSLICE_FORMAT, COUNTED_BLOOM_INDEX_VERSION,
-        LABEL_INDEX_MAGIC, LABEL_INDEX_VERSION, MAX_LABEL_COUNT,
+        LABEL_INDEX_MAGIC, LABEL_INDEX_VERSION, MAX_LABEL_COUNT, SUMMARIZED_BLOOM_INDEX_VERSION,
     },
 };
 use serde_json::{Map, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write},
     path::Path,
 };
 
@@ -75,7 +75,8 @@ pub fn encode_label_index_jsonl(
 /// Encode a JSONL label file as a versioned transposed Bloom index.
 ///
 /// The accepted JSONL forms are identical to [`encode_label_index_jsonl`]. Each label hashes to
-/// `config.hash_count()` distinct rows in a fixed `config.bit_count()`-row vector bitmap.
+/// `config.hash_count()` distinct rows in a fixed `config.bit_count()`-row vector bitmap. New
+/// files also contain compact per-row summaries that identify nonzero 64-vector words.
 pub fn encode_bloom_label_index_jsonl(
     input_path: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
@@ -489,8 +490,39 @@ fn write_bloom_label_index(
     write_u32(&mut writer, config.bit_count())?;
     write_u32(&mut writer, config.hash_count())?;
     write_u64(&mut writer, words_per_row as u64)?;
-    for word in bits {
-        write_u64(&mut writer, *word)?;
+    let summary_words_per_row = words_per_row.div_ceil(64);
+    let total_summary_words = (config.bit_count() as usize)
+        .checked_mul(summary_words_per_row)
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("Bloom word-summary size overflow".to_string())
+        })?;
+    let mut nonzero_words = Vec::new();
+    nonzero_words
+        .try_reserve_exact(total_summary_words)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve Bloom word summaries".to_string())
+        })?;
+    nonzero_words.resize(total_summary_words, 0u64);
+
+    let mut nonzero_payload_words = 0usize;
+    for (index, &word) in bits.iter().enumerate() {
+        write_u64(&mut writer, word)?;
+        if word != 0 {
+            nonzero_payload_words += 1;
+            let row = index / words_per_row;
+            let word_index = index % words_per_row;
+            nonzero_words[row * summary_words_per_row + word_index / 64] |=
+                1u64 << (word_index % 64);
+        }
+    }
+    if nonzero_payload_words.saturating_mul(4) <= expected_words {
+        writer.seek(SeekFrom::Start(LABEL_INDEX_MAGIC.len() as u64))?;
+        write_u32(&mut writer, SUMMARIZED_BLOOM_INDEX_VERSION)?;
+        writer.seek(SeekFrom::End(0))?;
+        write_u64(&mut writer, summary_words_per_row as u64)?;
+        for word in nonzero_words {
+            write_u64(&mut writer, word)?;
+        }
     }
     for &count in counts {
         write_u32(&mut writer, count)?;

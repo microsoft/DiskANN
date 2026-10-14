@@ -8,7 +8,7 @@ use crate::{
     encode_bloom_label_index_jsonl, encode_label_index_jsonl,
     format::{
         write_u32, write_u64, BITSLICE_FORMAT, COUNTED_BLOOM_INDEX_VERSION, LABEL_INDEX_MAGIC,
-        LABEL_INDEX_VERSION, MAX_LABEL_COUNT,
+        LABEL_INDEX_VERSION, MAX_LABEL_COUNT, SUMMARIZED_BLOOM_INDEX_VERSION,
     },
     BloomFilterConfig, EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType,
 };
@@ -61,6 +61,26 @@ fn matching_ids(query: &EncodedLabelQuery, num_vectors: u32) -> Vec<u32> {
 }
 
 fn assert_send_sync_static<T: Send + Sync + 'static>(_: &T) {}
+
+fn bloom_section_offsets(bytes: &[u8]) -> (usize, usize) {
+    let read_u32_at =
+        |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+    let read_u64_at =
+        |offset: usize| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+
+    let label_count = read_u64_at(24);
+    let mut offset = 32;
+    for _ in 0..label_count {
+        let length = read_u32_at(offset);
+        offset += 4 + length;
+    }
+    let bit_count = read_u32_at(offset);
+    let words_per_row = read_u64_at(offset + 8);
+    let payload_end = offset + 16 + bit_count * words_per_row * 8;
+    let summary_words_per_row = read_u64_at(payload_end);
+    let summary_end = payload_end + 8 + bit_count * summary_words_per_row * 8;
+    (payload_end, summary_end)
+}
 
 #[test]
 fn dense_round_trip_supports_dnf() {
@@ -158,8 +178,9 @@ fn counted_bloom_bounds_distinct_vectors_for_dnf_and_cnf() {
     .unwrap();
     encode_bloom_label_index_jsonl(&input, &output, BloomFilterConfig::default()).unwrap();
     let bytes = std::fs::read(&output).unwrap();
-    assert_eq!(&bytes[8..12], &COUNTED_BLOOM_INDEX_VERSION.to_le_bytes());
+    assert_eq!(&bytes[8..12], &SUMMARIZED_BLOOM_INDEX_VERSION.to_le_bytes());
     let index = EncodedLabelIndex::load(&output).unwrap();
+    assert!(index.has_bloom_word_summary());
     let dnf = compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF);
     assert_eq!(dnf.match_upper_bound(), Some(3));
     let cnf = compile(&index, &["A|B", "C|D"], FilterExpressionType::CNF);
@@ -177,12 +198,13 @@ fn counted_bloom_bounds_distinct_vectors_for_dnf_and_cnf() {
         Some(0)
     );
 
+    let (payload_end, summary_end) = bloom_section_offsets(&bytes);
     let old = dir.path().join("labels.legacy.bin");
-    let mut old_bytes = bytes;
+    let mut old_bytes = bytes[..payload_end].to_vec();
     old_bytes[8..12].copy_from_slice(&LABEL_INDEX_VERSION.to_le_bytes());
-    old_bytes.truncate(old_bytes.len() - index.num_labels() * 4);
     std::fs::write(&old, old_bytes).unwrap();
     let old_index = EncodedLabelIndex::load(&old).unwrap();
+    assert!(!old_index.has_bloom_word_summary());
     assert_eq!(
         compile(&old_index, &["A"], FilterExpressionType::DNF).match_upper_bound(),
         None
@@ -194,6 +216,39 @@ fn counted_bloom_bounds_distinct_vectors_for_dnf_and_cnf() {
             old_index.num_vectors()
         )
     );
+
+    let counted = dir.path().join("labels.counted-v2.bin");
+    let mut counted_bytes = bytes[..payload_end].to_vec();
+    counted_bytes[8..12].copy_from_slice(&COUNTED_BLOOM_INDEX_VERSION.to_le_bytes());
+    counted_bytes.extend_from_slice(&bytes[summary_end..]);
+    std::fs::write(&counted, counted_bytes).unwrap();
+    let counted_index = EncodedLabelIndex::load(&counted).unwrap();
+    assert!(!counted_index.has_bloom_word_summary());
+    assert_eq!(
+        compile(&counted_index, &["A"], FilterExpressionType::DNF).match_upper_bound(),
+        Some(2)
+    );
+    assert_eq!(
+        matching_ids(&dnf, index.num_vectors()),
+        matching_ids(
+            &compile(&counted_index, &["A&B", "C&D"], FilterExpressionType::DNF),
+            counted_index.num_vectors()
+        )
+    );
+}
+
+#[test]
+fn dense_bloom_omits_word_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("labels.jsonl");
+    let output = dir.path().join("labels.bloom.bin");
+    std::fs::write(&input, "\"A\"\n".repeat(65)).unwrap();
+    encode_bloom_label_index_jsonl(&input, &output, BloomFilterConfig::new(1, 1).unwrap()).unwrap();
+    let bytes = std::fs::read(&output).unwrap();
+    assert_eq!(&bytes[8..12], &COUNTED_BLOOM_INDEX_VERSION.to_le_bytes());
+    assert!(!EncodedLabelIndex::load(output)
+        .unwrap()
+        .has_bloom_word_summary());
 }
 
 #[test]
@@ -349,6 +404,38 @@ fn unknown_labels_follow_normal_form_semantics() {
 
     let cnf = compile(&index, &["missing|A"], FilterExpressionType::CNF);
     assert_eq!(matching_ids(&cnf, index.num_vectors()), vec![0, 2]);
+}
+
+#[test]
+fn summarized_bloom_rejects_invalid_summary_length_padding_and_truncation() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("labels.jsonl");
+    let output = dir.path().join("labels.bloom.bin");
+    let documents = (0..65)
+        .map(|id| if id % 2 == 0 { "\"A\"\n" } else { "\"B\"\n" })
+        .collect::<String>();
+    std::fs::write(&input, documents).unwrap();
+    encode_bloom_label_index_jsonl(&input, &output, BloomFilterConfig::default()).unwrap();
+    let bytes = std::fs::read(&output).unwrap();
+    let (payload_end, summary_end) = bloom_section_offsets(&bytes);
+
+    let invalid_length = dir.path().join("invalid-summary-length.bin");
+    let mut data = bytes.clone();
+    data[payload_end..payload_end + 8].copy_from_slice(&2u64.to_le_bytes());
+    std::fs::write(&invalid_length, data).unwrap();
+    assert!(EncodedLabelIndex::load(invalid_length).is_err());
+
+    let invalid_padding = dir.path().join("invalid-summary-padding.bin");
+    let mut data = bytes.clone();
+    data[payload_end + 8..payload_end + 16].copy_from_slice(&(1u64 << 2).to_le_bytes());
+    std::fs::write(&invalid_padding, data).unwrap();
+    assert!(EncodedLabelIndex::load(invalid_padding).is_err());
+
+    let truncated = dir.path().join("truncated-summary.bin");
+    let mut data = bytes[..summary_end - 8].to_vec();
+    data.extend_from_slice(&bytes[summary_end..]);
+    std::fs::write(&truncated, data).unwrap();
+    assert!(EncodedLabelIndex::load(truncated).is_err());
 }
 
 #[test]

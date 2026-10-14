@@ -11,7 +11,7 @@ use crate::{
     format::{
         ensure_remaining, read_u32, read_u64, validate_bitslice_padding, validate_label,
         BITSLICE_FORMAT, COUNTED_BLOOM_INDEX_VERSION, LABEL_INDEX_MAGIC, LABEL_INDEX_VERSION,
-        MAX_LABEL_COUNT, MAX_LABEL_LENGTH,
+        MAX_LABEL_COUNT, MAX_LABEL_LENGTH, SUMMARIZED_BLOOM_INDEX_VERSION,
     },
 };
 use std::{
@@ -48,7 +48,14 @@ enum LabelIndexPayload {
         hash_count: usize,
         bits: Box<[u64]>,
         label_rows: Box<[u32]>,
+        nonzero_words: Option<BloomWordSummary>,
     },
+}
+
+struct BloomWordSummary {
+    words_per_row: usize,
+    bits: Box<[u64]>,
+    scan_useful: bool,
 }
 
 /// An immutable label index loaded from a versioned label-index file.
@@ -157,6 +164,7 @@ impl EncodedLabelQuery<'_> {
                     hash_count,
                     bits,
                     label_rows,
+                    ..
                 } => {
                     let row_offset = label_id * *hash_count;
                     label_rows[row_offset..row_offset + *hash_count]
@@ -187,6 +195,10 @@ impl EncodedLabelQuery<'_> {
 
     /// Visit matching vector IDs in ascending order, including Bloom false positives.
     pub fn visit_matches(&self, mut visit: impl FnMut(u32)) {
+        if self.visit_summarized_matches(&mut visit) {
+            return;
+        }
+
         let words_per_row = self.words_per_row();
 
         #[cfg(target_arch = "x86_64")]
@@ -219,6 +231,93 @@ impl EncodedLabelQuery<'_> {
             LabelIndexPayload::Bitslice { words_per_row, .. }
             | LabelIndexPayload::Bloom { words_per_row, .. } => *words_per_row,
         }
+    }
+
+    fn summary_word_matches(&self, word_index: usize) -> Option<u64> {
+        let LabelIndexPayload::Bloom {
+            hash_count,
+            label_rows,
+            nonzero_words: Some(summary),
+            ..
+        } = self.payload.as_ref()
+        else {
+            return None;
+        };
+        let word_for_label = |label_id: Option<u32>| {
+            let Some(label_id) = label_id.map(|id| id as usize) else {
+                return 0;
+            };
+            let start = label_id * *hash_count;
+            label_rows[start..start + *hash_count]
+                .iter()
+                .fold(u64::MAX, |word, &row| {
+                    word & summary.bits[row as usize * summary.words_per_row + word_index]
+                })
+        };
+
+        Some(match self.plan.expression_type {
+            FilterExpressionType::DNF => {
+                self.plan.clause_offsets.windows(2).fold(0, |acc, clause| {
+                    acc | self.plan.label_ids[clause[0]..clause[1]]
+                        .iter()
+                        .copied()
+                        .fold(u64::MAX, |word, label_id| word & word_for_label(label_id))
+                })
+            }
+            FilterExpressionType::CNF => {
+                self.plan
+                    .clause_offsets
+                    .windows(2)
+                    .fold(u64::MAX, |acc, clause| {
+                        acc & self.plan.label_ids[clause[0]..clause[1]]
+                            .iter()
+                            .copied()
+                            .fold(0, |word, label_id| word | word_for_label(label_id))
+                    })
+            }
+        })
+    }
+
+    fn visit_summarized_matches(&self, visit: &mut impl FnMut(u32)) -> bool {
+        let LabelIndexPayload::Bloom {
+            words_per_row,
+            nonzero_words:
+                Some(
+                    summary @ BloomWordSummary {
+                        scan_useful: true, ..
+                    },
+                ),
+            ..
+        } = self.payload.as_ref()
+        else {
+            return false;
+        };
+
+        let possible_word_count: usize = (0..summary.words_per_row)
+            .map(|summary_index| {
+                self.summary_word_matches(summary_index)
+                    .expect("Bloom summary disappeared while sizing")
+                    .count_ones() as usize
+            })
+            .sum();
+        if possible_word_count.saturating_mul(10) > *words_per_row {
+            return false;
+        }
+
+        for summary_index in 0..summary.words_per_row {
+            let mut possible_words = self
+                .summary_word_matches(summary_index)
+                .expect("Bloom summary disappeared while visiting");
+            while possible_words != 0 {
+                let bit = possible_words.trailing_zeros() as usize;
+                let word_index = summary_index * 64 + bit;
+                if word_index < *words_per_row {
+                    self.visit_word(word_index, self.word_matches(word_index), visit);
+                }
+                possible_words &= possible_words - 1;
+            }
+        }
+        true
     }
 
     fn word_matches(&self, word_index: usize) -> u64 {
@@ -283,6 +382,7 @@ impl EncodedLabelQuery<'_> {
             hash_count,
             bits,
             label_rows,
+            ..
         } = self.payload.as_ref()
         else {
             unreachable!("AVX2 visitor is only called for Bloom indexes")
@@ -353,6 +453,43 @@ impl EncodedLabelQuery<'_> {
 
     /// Count matching vectors; Bloom indexes count candidates, including false positives.
     pub fn count_matches(&self) -> u64 {
+        if let LabelIndexPayload::Bloom {
+            words_per_row,
+            nonzero_words:
+                Some(
+                    summary @ BloomWordSummary {
+                        scan_useful: true, ..
+                    },
+                ),
+            ..
+        } = self.payload.as_ref()
+        {
+            let possible_word_count: usize = (0..summary.words_per_row)
+                .map(|summary_index| {
+                    self.summary_word_matches(summary_index)
+                        .expect("Bloom summary disappeared while sizing count")
+                        .count_ones() as usize
+                })
+                .sum();
+            if possible_word_count.saturating_mul(10) <= *words_per_row {
+                let mut count = 0u64;
+                for summary_index in 0..summary.words_per_row {
+                    let mut possible_words = self
+                        .summary_word_matches(summary_index)
+                        .expect("Bloom summary disappeared while counting");
+                    while possible_words != 0 {
+                        let bit = possible_words.trailing_zeros() as usize;
+                        let word_index = summary_index * 64 + bit;
+                        if word_index < *words_per_row {
+                            count += u64::from(self.word_matches(word_index).count_ones());
+                        }
+                        possible_words &= possible_words - 1;
+                    }
+                }
+                return count;
+            }
+        }
+
         (0..self.words_per_row())
             .map(|word_index| u64::from(self.word_matches(word_index).count_ones()))
             .sum()
@@ -377,6 +514,8 @@ impl diskann::graph::ext::labeled::CandidateLabelProvider<u32> for EncodedLabelQ
 
 impl EncodedLabelIndex {
     /// Load a dense Bitslice or transposed Bloom label index from `path`.
+    ///
+    /// Bloom versions without word summaries remain supported and use the full payload scan.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, EncodedLabelIndexError> {
         let file = File::open(path)?;
         let file_len = file.metadata()?.len();
@@ -391,7 +530,10 @@ impl EncodedLabelIndex {
         }
 
         let version = read_u32(&mut reader)?;
-        if !matches!(version, LABEL_INDEX_VERSION | COUNTED_BLOOM_INDEX_VERSION) {
+        if !matches!(
+            version,
+            LABEL_INDEX_VERSION | COUNTED_BLOOM_INDEX_VERSION | SUMMARIZED_BLOOM_INDEX_VERSION
+        ) {
             return Err(EncodedLabelIndexError::Invalid(format!(
                 "unsupported label-index version {version}"
             )));
@@ -403,7 +545,11 @@ impl EncodedLabelIndex {
                 "unsupported label-index format {format}; supported formats are dense bitslice 0 and Bloom 1"
             )));
         }
-        if version == COUNTED_BLOOM_INDEX_VERSION && format != BLOOM_FORMAT {
+        if matches!(
+            version,
+            COUNTED_BLOOM_INDEX_VERSION | SUMMARIZED_BLOOM_INDEX_VERSION
+        ) && format != BLOOM_FORMAT
+        {
             return Err(EncodedLabelIndexError::Invalid(
                 "counted label-index version only supports Bloom format".to_string(),
             ));
@@ -538,17 +684,70 @@ impl EncodedLabelIndex {
                     append_label_rows(label, config, &mut label_rows);
                 }
 
+                let nonzero_words = if version == SUMMARIZED_BLOOM_INDEX_VERSION {
+                    let summary_words_per_row =
+                        usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+                            EncodedLabelIndexError::Invalid(
+                                "Bloom word-summary row length exceeds usize".to_string(),
+                            )
+                        })?;
+                    let expected_summary_words = words_per_row.div_ceil(64);
+                    if summary_words_per_row != expected_summary_words {
+                        return Err(EncodedLabelIndexError::Invalid(format!(
+                            "Bloom word-summary row has {summary_words_per_row} words; expected {expected_summary_words}"
+                        )));
+                    }
+                    let bits = read_payload(
+                        &mut reader,
+                        file_len,
+                        bit_count as usize,
+                        summary_words_per_row,
+                        "Bloom word-summary",
+                    )?;
+                    let summarized_words = u32::try_from(words_per_row).map_err(|_| {
+                        EncodedLabelIndexError::Invalid(
+                            "Bloom row word count exceeds u32".to_string(),
+                        )
+                    })?;
+                    validate_bitslice_padding(
+                        &bits,
+                        bit_count as usize,
+                        summary_words_per_row,
+                        summarized_words,
+                    )?;
+                    let nonzero_payload_words: usize =
+                        bits.iter().map(|word| word.count_ones() as usize).sum();
+                    let payload_words = (bit_count as usize)
+                        .checked_mul(words_per_row)
+                        .ok_or_else(|| {
+                            EncodedLabelIndexError::Invalid(
+                                "Bloom payload word count overflow".to_string(),
+                            )
+                        })?;
+                    Some(BloomWordSummary {
+                        words_per_row: summary_words_per_row,
+                        bits: bits.into_boxed_slice(),
+                        scan_useful: nonzero_payload_words.saturating_mul(4) <= payload_words,
+                    })
+                } else {
+                    None
+                };
+
                 LabelIndexPayload::Bloom {
                     words_per_row,
                     hash_count: hash_count as usize,
                     bits: bits.into_boxed_slice(),
                     label_rows: label_rows.into_boxed_slice(),
+                    nonzero_words,
                 }
             }
             _ => unreachable!("label-index format was validated above"),
         };
 
-        let counts = if version == COUNTED_BLOOM_INDEX_VERSION {
+        let counts = if matches!(
+            version,
+            COUNTED_BLOOM_INDEX_VERSION | SUMMARIZED_BLOOM_INDEX_VERSION
+        ) {
             let count_bytes = num_labels.checked_mul(4).ok_or_else(|| {
                 EncodedLabelIndexError::Invalid("Bloom label count table size overflow".to_string())
             })?;
@@ -589,6 +788,17 @@ impl EncodedLabelIndex {
     /// Return the number of vectors covered by this index.
     pub fn num_vectors(&self) -> u32 {
         self.num_vectors
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_bloom_word_summary(&self) -> bool {
+        matches!(
+            self.payload.as_ref(),
+            LabelIndexPayload::Bloom {
+                nonzero_words: Some(_),
+                ..
+            }
+        )
     }
 
     /// Return the number of encoded labels.
