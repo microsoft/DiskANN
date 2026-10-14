@@ -2106,8 +2106,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     /// # Strategy
     ///
     /// Unpack each 16-byte chunk of `y` into 32 nibble values via `unpack_half`,
-    /// then multiply with the corresponding 32 bytes of `x` using `_mm256_maddubs_epi16`
-    /// (u8 × u8 → i16, pairwise horizontal add).
+    /// then compute saturated pairwise products through wide's V3 intrinsic wrapper.
+    /// Each sum is at most 7_650, so saturation does not occur for these inputs.
     ///
     /// The main loop is 4× unrolled: four i16 products are summed in i16 before a single
     /// `_mm256_madd_epi16(…, 1)` widens to i32. This is safe because
@@ -2119,13 +2119,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         x: USlice<'_, 8>,
         y: USlice<'_, 4>,
     ) -> MathematicalResult<u32> {
-        use std::arch::x86_64::_mm256_maddubs_epi16;
-
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::x86_64::V3>::u8x16);
         diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
+        diskann_wide::alias!(i8s_32 = <diskann_wide::arch::x86_64::V3>::i8x32);
         diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
 
         let px: *const u8 = x.as_ptr();
@@ -2146,10 +2145,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let mut acc = i32s::default(arch);
 
             let products = |x: u8s_32, y: u8s_32| -> i16s {
-                // SAFETY: `arch` is V3 (AVX2), which provides `_mm256_maddubs_epi16`.
-                i16s::from_underlying(arch, unsafe {
-                    _mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
-                })
+                let signed_y = i8s_32::from_underlying(arch, y.to_underlying());
+                arch.mm256_maddubs_epi16(x, signed_y)
             };
 
             let ones = i16s::splat(arch, 1);
@@ -2242,7 +2239,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     /// Unpack each 16-byte chunk of `y` into 64 crumb values via a two-level cascade:
     /// first `unpack_sub` splits bytes into nibbles, then a second pass splits
     /// nibbles into crumbs (masked with `0x03`). Each unpacked half is paired with 32
-    /// bytes of `x` and multiplied via `_mm256_maddubs_epi16`.
+    /// bytes of `x` using saturated pairwise products through wide's V3 intrinsic wrapper.
+    /// Each sum is at most 1_530, so saturation does not occur for these inputs.
     ///
     /// The main loop is 4× unrolled: eight i16 products (4 blocks × 2 halves) are summed
     /// in i16 before a single `_mm256_madd_epi16(…, 1)` widens to i32. This is safe
@@ -2255,13 +2253,13 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         y: USlice<'_, 2>,
     ) -> MathematicalResult<u32> {
         use diskann_wide::SplitJoin;
-        use std::arch::x86_64::_mm256_maddubs_epi16;
 
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::x86_64::V3>::u8x16);
         diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
+        diskann_wide::alias!(i8s_32 = <diskann_wide::arch::x86_64::V3>::i8x32);
         diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
 
         let px: *const u8 = x.as_ptr();
@@ -2276,10 +2274,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let mut acc = i32s::default(arch);
 
             let products = |x: u8s_32, y: u8s_32| -> i16s {
-                // SAFETY: `arch` is V3 (AVX2), which provides `_mm256_maddubs_epi16`.
-                i16s::from_underlying(arch, unsafe {
-                    _mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
-                })
+                let signed_y = i8s_32::from_underlying(arch, y.to_underlying());
+                arch.mm256_maddubs_epi16(x, signed_y)
             };
 
             #[inline(always)]

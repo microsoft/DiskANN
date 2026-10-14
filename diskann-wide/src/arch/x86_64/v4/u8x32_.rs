@@ -12,6 +12,7 @@ use crate::{
         V4,
         common::AllOnes,
         macros::{self, X86Default, X86LoadStore, X86Splat},
+        v3,
         v4::{i16x32_::i16x32, u8x16_::u8x16},
     },
     constant::Const,
@@ -26,6 +27,7 @@ use crate::{
 macros::x86_define_register!(u8x32, __m256i, BitMask<32, V4>, u8, 32, V4);
 macros::x86_define_splat!(u8x32 as i8, _mm256_set1_epi8, "avx");
 macros::x86_define_default!(u8x32, _mm256_setzero_si256, "avx");
+macros::x86_retarget!(u8x32 => v3::u8x32);
 macros::x86_splitjoin!(
     u8x32,
     u8x16,
@@ -127,6 +129,16 @@ macros::x86_avx512_int_comparisons!(u8x32, _mm256_cmp_epu8_mask, "avx512bw,avx51
 mod test_x86_u8 {
     use super::*;
     use crate::{reference::ReferenceScalarOps, test_utils};
+
+    #[test]
+    fn test_retarget() {
+        if let Some(arch) = V4::new_checked_uncached() {
+            let values = core::array::from_fn(|i| (i as u8).wrapping_mul(17));
+            let v3 = u8x32::from_array(arch, values).retarget();
+            assert_eq!(v3.to_array(), values);
+            assert_eq!(u8x32::default(arch).from(v3).to_array(), values);
+        }
+    }
 
     #[test]
     fn miri_test_load() {
