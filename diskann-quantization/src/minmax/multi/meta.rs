@@ -11,11 +11,11 @@ use super::super::MinMaxQuantizer;
 use super::super::vectors::DataMutRef;
 use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
-use crate::minmax::{self, Data};
+use crate::minmax::{self, Data, MinMaxCompensation};
 use crate::multi_vector::matrix::{
     Defaulted, NewMut, NewOwned, NewRef, Repr, ReprMut, ReprOwned, SliceError,
 };
-use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
+use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Overflow, Standard};
 use crate::scalar::InputContainsNaN;
 use crate::utils;
 
@@ -26,12 +26,22 @@ use crate::utils;
 /// Metadata for MinMax quantized multi-vectors.
 ///
 /// Stores the intrinsic dimension (output dimension after transform) which is
-/// needed to interpret each row of the quantized data. The row stride in bytes
-/// is computed using [`minmax::Data::canonical_bytes`].
+/// needed to interpret each row of the quantized data. Construction validates the
+/// canonical row stride and total allocation extent, including empty matrices.
 #[derive(Debug, Clone, Copy)]
 pub struct MinMaxMeta<const NBITS: usize> {
     nrows: usize,
     intrinsic_dim: usize,
+    row_bytes: usize,
+}
+
+/// Failure to represent a canonical MinMax matrix's dimension or byte extent.
+#[derive(Debug, thiserror::Error)]
+pub enum MinMaxMetaError {
+    #[error("intrinsic dimension {0} exceeds the u32 MinMax metadata limit")]
+    DimensionTooLarge(usize),
+    #[error(transparent)]
+    Overflow(#[from] Overflow),
 }
 
 impl<const NBITS: usize> MinMaxMeta<NBITS>
@@ -39,11 +49,42 @@ where
     Unsigned: Representation<NBITS>,
 {
     /// Creates new MinMax metadata with the given number of rows and intrinsic dimension.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dimension does not fit the canonical metadata or the row/buffer
+    /// size is not representable. Use [`Self::try_new`] to handle invalid input.
+    #[track_caller]
+    #[expect(
+        clippy::expect_used,
+        reason = "try_new is the fallible construction API"
+    )]
     pub fn new(nrows: usize, intrinsic_dim: usize) -> Self {
-        Self {
+        Self::try_new(nrows, intrinsic_dim).expect("invalid canonical MinMax matrix dimensions")
+    }
+
+    /// Validate canonical geometry without allocating storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MinMaxMetaError`] if the dimension exceeds `u32::MAX`, size arithmetic
+    /// overflows, or a row or the complete buffer exceeds `isize::MAX` bytes.
+    pub fn try_new(nrows: usize, intrinsic_dim: usize) -> Result<Self, MinMaxMetaError> {
+        u32::try_from(intrinsic_dim)
+            .map_err(|_| MinMaxMetaError::DimensionTooLarge(intrinsic_dim))?;
+        let overflow = || Overflow::for_type::<u8>(nrows, intrinsic_dim);
+        intrinsic_dim.checked_mul(NBITS).ok_or_else(overflow)?;
+        let row_bytes = Data::<NBITS>::slice_bytes(intrinsic_dim)
+            .checked_add(std::mem::size_of::<MinMaxCompensation>())
+            .ok_or_else(overflow)?;
+        let bytes = nrows.checked_mul(row_bytes).ok_or_else(overflow)?;
+        Overflow::check_byte_budget::<u8>(row_bytes, 1, intrinsic_dim)?;
+        Overflow::check_byte_budget::<u8>(bytes, nrows, intrinsic_dim)?;
+        Ok(Self {
             nrows,
             intrinsic_dim,
-        }
+            row_bytes,
+        })
     }
 
     /// Returns the `intrinsic_dim`
@@ -54,11 +95,11 @@ where
     /// Returns the number of bytes from a canonical repr of
     /// a minmax quantized vector, see [minmax::Data::canonical_bytes]
     pub fn ncols(&self) -> usize {
-        Data::<NBITS>::canonical_bytes(self.intrinsic_dim)
+        self.row_bytes
     }
 
     fn bytes(&self) -> usize {
-        std::mem::size_of::<u8>() * self.nrows() * self.ncols()
+        self.nrows * self.row_bytes
     }
 }
 
@@ -82,9 +123,7 @@ where
     /// - [`crate::minmax::MinMaxCompensation`] does not require alignment
     ///   since it is always accessed by copying bytes first before casting.
     fn layout(&self) -> Result<std::alloc::Layout, LayoutError> {
-        Ok(std::alloc::Layout::array::<u8>(
-            self.nrows() * self.ncols(),
-        )?)
+        Ok(std::alloc::Layout::array::<u8>(self.bytes())?)
     }
 
     /// Returns an immutable reference to the i-th row.
@@ -373,6 +412,52 @@ mod tests {
 
     mod construction {
         use super::*;
+
+        fn checked_dimensions<const NBITS: usize>()
+        where
+            Unsigned: Representation<NBITS>,
+        {
+            for dim in [0, 1, 7, 8, 9, 63, 64, 65] {
+                for rows in [0, 1, 3] {
+                    let meta = MinMaxMeta::<NBITS>::try_new(rows, dim).unwrap();
+                    assert_eq!(meta.ncols(), Data::<NBITS>::canonical_bytes(dim));
+                    assert_eq!(meta.bytes(), rows * meta.ncols());
+                    assert_eq!(meta.layout().unwrap().size(), meta.bytes());
+                    let bytes = vec![0; meta.bytes()];
+                    let view = MatRef::new(meta, &bytes).unwrap();
+                    assert_eq!(view.rows().count(), rows);
+                }
+            }
+            let row_bytes = Data::<NBITS>::canonical_bytes(1);
+            let last_rows = isize::MAX as usize / row_bytes;
+            assert!(MinMaxMeta::<NBITS>::try_new(last_rows, 1).is_ok());
+            assert!(matches!(
+                MinMaxMeta::<NBITS>::try_new(last_rows + 1, 1),
+                Err(MinMaxMetaError::Overflow(_))
+            ));
+            assert!(matches!(
+                MinMaxMeta::<NBITS>::try_new(usize::MAX, 1),
+                Err(MinMaxMetaError::Overflow(_))
+            ));
+            if let Some(dim) = (u32::MAX as usize).checked_add(1) {
+                for rows in [0, 1] {
+                    assert!(matches!(MinMaxMeta::<NBITS>::try_new(rows, dim),
+                        Err(MinMaxMetaError::DimensionTooLarge(value)) if value == dim));
+                }
+            }
+            assert!(MinMaxMeta::<NBITS>::try_new(usize::MAX, usize::MAX).is_err());
+        }
+
+        expand_to_bitrates!(
+            canonical_extents_are_validated_before_allocation,
+            checked_dimensions
+        );
+
+        #[test]
+        #[should_panic(expected = "invalid canonical MinMax matrix dimensions")]
+        fn infallible_constructor_also_rejects_overflow() {
+            MinMaxMeta::<8>::new(usize::MAX, 1);
+        }
 
         /// Tests NewOwned (Mat::new with Defaulted) for various dimensions and sizes.
         fn test_new_owned<const NBITS: usize>()

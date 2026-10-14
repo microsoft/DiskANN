@@ -133,7 +133,10 @@ mod vectors;
 // Exports //
 /////////////
 
-pub use multi::{MinMaxErase, MinMaxKernel, MinMaxMaxSimKernel, MinMaxMeta, build_minmax_max_sim};
+pub use multi::{
+    MinMaxErase, MinMaxKernel, MinMaxMaxSimKernel, MinMaxMeta, MinMaxMetaError,
+    build_minmax_max_sim,
+};
 pub use quantizer::{L2Loss, MinMaxQuantizer};
 pub use recompress::{RecompressError, Recompressor};
 pub use vectors::{

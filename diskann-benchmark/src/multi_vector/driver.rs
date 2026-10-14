@@ -6,7 +6,6 @@
 //! Shared benchmark infrastructure for multi-vector kernels: timing harness,
 //! data fixtures, result types. None of the contents are kernel-aware.
 
-use anyhow::Context;
 use diskann_benchmark_runner::{
     utils::{
         fmt::Table,
@@ -20,7 +19,6 @@ use diskann_quantization::multi_vector::{
 };
 use diskann_quantization::{
     algorithms::{transforms::NullTransform, Transform},
-    bits::{Representation, Unsigned},
     minmax::{MinMaxMeta, MinMaxQuantizer},
     num::Positive,
     CompressInto,
@@ -97,29 +95,6 @@ where
     }
 }
 
-// MinMaxMeta::new does not check canonical allocation extents.
-fn checked_minmax_meta<const BITS: usize>(
-    rows: usize,
-    dim: usize,
-) -> anyhow::Result<MinMaxMeta<BITS>>
-where
-    Unsigned: Representation<BITS>,
-{
-    anyhow::ensure!(
-        u32::try_from(dim).is_ok(),
-        "MinMax dimension exceeds u32::MAX"
-    );
-    dim.checked_mul(BITS)
-        .and_then(|bits| bits.checked_add(7))
-        .context("MinMax row size overflow")?;
-    let repr = MinMaxMeta::new(rows, dim);
-    let bytes = rows
-        .checked_mul(repr.ncols())
-        .context("MinMax matrix size overflow")?;
-    std::alloc::Layout::array::<u8>(bytes).context("MinMax allocation exceeds the byte limit")?;
-    Ok(repr)
-}
-
 pub(super) struct MinMax8Data {
     pub(super) queries: Mat<MinMaxMeta<8>>,
     pub(super) docs: Mat<MinMaxMeta<4>>,
@@ -127,8 +102,8 @@ pub(super) struct MinMax8Data {
 
 impl MinMax8Data {
     pub(super) fn new(run: &Run) -> anyhow::Result<Self> {
-        let query_repr = checked_minmax_meta::<8>(run.num_query_vectors.get(), run.dim.get())?;
-        let doc_repr = checked_minmax_meta::<4>(run.num_doc_vectors.get(), run.dim.get())?;
+        let query_repr = MinMaxMeta::<8>::try_new(run.num_query_vectors.get(), run.dim.get())?;
+        let doc_repr = MinMaxMeta::<4>::try_new(run.num_doc_vectors.get(), run.dim.get())?;
         let data = Data::<f32>::new(run)?;
         let quantizer = MinMaxQuantizer::new(
             Transform::Null(NullTransform::new(run.dim)),

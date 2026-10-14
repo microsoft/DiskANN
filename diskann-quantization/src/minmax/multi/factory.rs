@@ -8,7 +8,7 @@ use super::query::PackedQuery;
 use crate::{
     matrix_kernels::{
         self as mk,
-        maxsim::minmax8_x_minmax4::{Driver, layout::MAX_DIM, panels::RawRows},
+        maxsim::minmax8_x_minmax4::{Driver, b::RawRows, layout::MAX_DIM},
     },
     minmax::MinMaxMeta,
     multi_vector::{MatRef, MaxSimError, MaxSimIsa, NotSupported, Overflow},
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn tiled_scalar_matches_pairwise() {
         for dim in [0, 1, 3, 4, 5, 63, 64, 65, 127, 128, 129, 250, 256, 257] {
-            for q in (0..=17).chain([32, 33]) {
+            for q in (0..=17).chain([24, 25, 32, 33]) {
                 let query = data::<8>(q, dim, 3);
                 for isa in [
                     MaxSimIsa::Scalar,
