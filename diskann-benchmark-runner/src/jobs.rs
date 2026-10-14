@@ -104,7 +104,7 @@ impl Unprocessed {
         Self { tag, content }
     }
 
-    pub(crate) fn format_input(example: input::Registered<'_>) -> anyhow::Result<Self> {
+    pub(crate) fn format_input(example: &input::internal::Input) -> anyhow::Result<Self> {
         let tag = example.tag().to_string();
         Ok(Self {
             tag,
