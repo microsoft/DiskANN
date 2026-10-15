@@ -53,6 +53,10 @@ impl LimitedAllocator {
             remaining: Arc::new(AtomicUsize::new(allocations)),
         }
     }
+
+    pub(crate) fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(not(miri))]
