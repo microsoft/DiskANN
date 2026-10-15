@@ -4407,8 +4407,8 @@ mod tests {
     }
 
     #[test]
-    fn finish_import_rejects_invalid_start_point_neighbors() {
-        for (neighbor_count, neighbor) in [(11, 0), (1, 0), (1, DEFAULT_START_POINT_ID)] {
+    fn finish_import_checks_start_point_neighbors() {
+        for (neighbor_count, expected_success) in [(11, false), (10, true)] {
             let store = Store::new();
             let ctx = Context::new(0);
             let provider = GarnetProvider::<f32>::new(
@@ -4422,7 +4422,8 @@ mod tests {
             )
             .unwrap();
             let mut neighbors = [0u32; 11];
-            neighbors[0] = neighbor;
+            // No ordinary vectors are imported; dangling and self-references are allowed.
+            neighbors[1] = DEFAULT_START_POINT_ID;
             neighbors[10] = neighbor_count;
             let id = DEFAULT_START_POINT_ID.to_ne_bytes();
             assert!(provider.import_term(
@@ -4433,7 +4434,7 @@ mod tests {
             ));
             let imported =
                 provider.import_term(&ctx, Term::Neighbors, &id, bytemuck::cast_slice(&neighbors));
-            assert_eq!(imported, neighbor_count <= 10);
+            assert_eq!(imported, expected_success);
             if !imported {
                 // Exercise finalization's check for malformed data already in storage.
                 store.set(
@@ -4443,8 +4444,11 @@ mod tests {
                 );
             }
 
-            assert_eq!(provider.finish_import(&ctx, 0, 1), (true, Some(false)));
-            assert!(!provider.start_points_exist());
+            assert_eq!(
+                provider.finish_import(&ctx, 0, 1),
+                (true, Some(expected_success))
+            );
+            assert_eq!(provider.start_points_exist(), expected_success);
         }
     }
 

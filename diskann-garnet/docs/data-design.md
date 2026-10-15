@@ -90,7 +90,7 @@ The are several terms in the index used for internal state management of the dis
 
 Only a single start point is supported. Its internal ID is fixed when the provider is created and defaults to `DEFAULT_START_POINT_ID` (`u32::MAX`). During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
 
-Imports must supply the full vector, neighbor list, and (for quantized indexes) quantized vector at the configured start-point ID. Finalization validates these terms and populates the caches. The neighbor count must fit the configured degree, and each listed neighbor must be a valid ID.
+Imports must supply the full vector, neighbor list, and (for quantized indexes) quantized vector at the configured start-point ID. Finalization validates these terms and populates the caches. The neighbor count must fit the configured degree.
 
 Start points have no associated attributes or ID mappings and are not counted as active vectors.
 
