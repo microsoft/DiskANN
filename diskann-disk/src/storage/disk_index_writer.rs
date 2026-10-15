@@ -735,6 +735,64 @@ mod disk_index_storage_test {
             .expect("Failed to delete file");
     }
 
+    // A 1-point graph has no neighbors; creating its disk layout must succeed.
+    #[test]
+    fn create_disk_layout_one_point_graph() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+
+        const DATA_FILE: &str = "/one_point.fbin";
+        const INDEX_PREFIX: &str = "/one_point_index";
+        const DIMS: u32 = 4;
+        const MAX_DEGREE: u32 = 4;
+
+        {
+            let mut writer = storage_provider.create_for_write(DATA_FILE).unwrap();
+            writer.write_all(&1u32.to_le_bytes()).unwrap();
+            writer.write_all(&DIMS.to_le_bytes()).unwrap();
+            for _ in 0..DIMS {
+                writer.write_all(&1.0f32.to_le_bytes()).unwrap();
+            }
+            writer.flush().unwrap();
+        }
+
+        let index_writer = DiskIndexWriter::new(
+            DATA_FILE.to_string(),
+            INDEX_PREFIX.to_string(),
+            Option::None,
+            DEFAULT_DISK_SECTOR_LEN,
+        )
+        .unwrap();
+
+        {
+            // Mem index header: file size, max degree, medoid, frozen point count,
+            // followed by a single node with zero neighbors.
+            let file_size = (8 + 4 + 4 + 8 + 4) as u64;
+            let mut writer = storage_provider
+                .create_for_write(index_writer.get_mem_index_file().as_str())
+                .unwrap();
+            writer.write_all(&file_size.to_le_bytes()).unwrap();
+            writer.write_all(&MAX_DEGREE.to_le_bytes()).unwrap();
+            writer.write_all(&0u32.to_le_bytes()).unwrap();
+            writer.write_all(&0u64.to_le_bytes()).unwrap();
+            writer.write_all(&0u32.to_le_bytes()).unwrap();
+            writer.flush().unwrap();
+        }
+
+        index_writer
+            .create_disk_layout::<GraphDataF32VectorU32Data, _>(&storage_provider)
+            .unwrap();
+
+        let mut disk_layout: Vec<u8> = Vec::new();
+        storage_provider
+            .open_reader(index_writer.disk_index_file().as_str())
+            .unwrap()
+            .read_to_end(&mut disk_layout)
+            .unwrap();
+
+        let header = GraphHeader::try_from(&disk_layout[8..]).unwrap();
+        assert_eq!(header.metadata().num_pts, 1);
+    }
+
     #[test]
     fn disk_index_writer_rejects_small_block_size() {
         let small_block_size = GraphMetadata::get_size() - 1;
