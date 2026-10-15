@@ -11,7 +11,7 @@ mod tests {
 
     use crate::{
         Overflow, VectorQuantType, create_index, drop_index, garnet::Context, insert,
-        search_vector, test_utils::Store,
+        provider::DEFAULT_START_POINT_ID, search_vector, test_utils::Store,
     };
 
     /// Helper to insert a vector with a string external ID and FP32 data.
@@ -170,6 +170,7 @@ mod tests {
                 metric as i32,
                 l_build,
                 max_degree,
+                DEFAULT_START_POINT_ID,
                 callbacks.read_callback(),
                 callbacks.write_callback(),
                 callbacks.delete_callback(),
