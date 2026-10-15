@@ -375,6 +375,10 @@ where
                 )
                 .await?;
 
+                // The second round of range search does not ensure items are added to
+                // `in_range` in sorted order. This restores that order.
+                scratch.in_range.sort_unstable();
+
                 InternalSearchStats {
                     cmps: range_stats.cmps,
                     hops: range_stats.hops,
