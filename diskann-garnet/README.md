@@ -35,7 +35,12 @@ Redis always uses cosine distance, but many vector data sets use other metrics. 
 - `XNOQUANT_U8`: full precision 8-bit unsigned integer
 - `XBIN_I8`: binary quantization of 8-bit signed integer (using DiskANN's spherical quantizer based on RaBitQ)
 - `XBIN_U8`: binary quantization of 8-bit unsigned integer (using DiskANN's spherical quantizer based on RaBitQ)
-
+- `XSPHERICAL2`: 2-bit spherical quantization of 32-bit float
+- `XSPHERICAL2_I8`: 2-bit spherical quantization of 8-bit signed integer
+- `XSPHERICAL2_U8`: 2-bit spherical quantization of 8-bit unsigned integer
+- `XSPHERICAL4`: 4-bit spherical quantization of 32-bit float
+- `XSPHERICAL4_I8`: 4-bit spherical quantization of 8-bit signed integer
+- `XSPHERICAL4_U8`: 4-bit spherical quantization of 8-bit unsigned integer
 
 An ndex supports up to `2^32 - 1` user vectors. User IDs range from 0 through
 `u32::MAX - 1`; `u32::MAX` is reserved for the start point.
