@@ -37,9 +37,8 @@ use diskann_inmem::{
 };
 use diskann_quantization::{
     self as dq,
-    alloc::{GlobalAllocator, Poly},
+    alloc::{GlobalAllocator},
     product::tables::BasicTable,
-    spherical::iface,
 };
 use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
@@ -498,7 +497,8 @@ impl Spherical {
         &self,
         data: rowmajor::Ref<'_, f32>,
         metric: Metric,
-    ) -> anyhow::Result<Poly<dyn iface::Quantizer>> {
+    ) -> anyhow::Result<inmem::repr::quantized::Backend> {
+        use inmem::repr::quantized::Backend;
         use diskann_quantization::{algorithms::transforms, spherical};
         use rand::SeedableRng;
 
@@ -518,9 +518,9 @@ impl Spherical {
         )?;
 
         let quantizer = match self.bits {
-            SphericalBits::One => quantizer.as_quantizer::<1>()?,
-            SphericalBits::Two => quantizer.as_quantizer::<2>()?,
-            SphericalBits::Four => quantizer.as_quantizer::<4>()?,
+            SphericalBits::One => Backend::new(quantizer.as_quantizer_impl::<1>()?),
+            SphericalBits::Two => Backend::new(quantizer.as_quantizer_impl::<2>()?),
+            SphericalBits::Four => Backend::new(quantizer.as_quantizer_impl::<4>()?),
         };
 
         Ok(quantizer)
@@ -1044,16 +1044,25 @@ impl Benchmark for SphericalBuild {
         let num_points = data.nrows();
         writeln!(output, "Loaded {num_points} points, dim={dim}")?;
 
-        let quantizer = spherical.train(data.as_view(), input.data.distance)?;
-
         // Compute the medoid of the dataset as the single start point.
+        let capacity = Capacity::new(num_points);
+        let max_degree = MaxDegree::new(input.build.config.max_degree().get());
         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-        let config = repr::spherical::Spherical::config(
-            quantizer,
-            Capacity::new(num_points),
-            MaxDegree::new(input.build.config.max_degree().get()),
+        let rerank = repr::quantized::Rerank::F16 {
+            metric: input.data.distance.into(),
+        };
+
+        let backend = spherical.train(
+            data.as_view(),
+            input.data.distance,
+        )?;
+
+        let config = repr::Quantized::config(
+            backend,
+            capacity,
+            max_degree,
             start,
-            repr::spherical::Rerank::F16,
+            rerank
         )?;
 
         let provider = Provider::<_, u32>::new(config)?;
@@ -1329,7 +1338,7 @@ impl Benchmark for ScalarBuild {
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<()> {
-        use repr::{quantized::scalar::Scalar, Quantized};
+        use repr::{quantized::{Backend, scalar::Scalar}, Quantized};
 
         writeln!(output, "{input}\n")?;
 
@@ -1357,36 +1366,20 @@ impl Benchmark for ScalarBuild {
             metric: input.data.distance.into(),
         };
 
-        let config = match scalar.bits {
-            ScalarBits::One => Quantized::config(
-                Scalar::<1>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start,
-                rerank,
-            )?,
-            ScalarBits::Two => Quantized::config(
-                Scalar::<2>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start,
-                rerank,
-            )?,
-            ScalarBits::Four => Quantized::config(
-                Scalar::<4>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start,
-                rerank,
-            )?,
-            ScalarBits::Eight => Quantized::config(
-                Scalar::<8>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start,
-                rerank,
-            )?,
+        let backend = match scalar.bits {
+            ScalarBits::One => Backend::new(Scalar::<1>::new(quantizer, metric)),
+            ScalarBits::Two => Backend::new(Scalar::<2>::new(quantizer, metric)),
+            ScalarBits::Four => Backend::new(Scalar::<4>::new(quantizer, metric)),
+            ScalarBits::Eight => Backend::new(Scalar::<8>::new(quantizer, metric)),
         };
+
+        let config = Quantized::config(
+            backend,
+            capacity,
+            max_degree,
+            start,
+            rerank,
+        )?;
 
         let provider = Provider::<_, u32>::new(config)?;
         let index = Arc::new(DiskANNIndex::new(
