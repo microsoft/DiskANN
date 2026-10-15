@@ -66,9 +66,10 @@ for API and term formats.
 
 ## Installing
 
-Garnet depends on diskann-garnet as a NuGet package, which means you can simply
-check out the Garnet repo on Windows or Linux, and if you have a dotnet
-toolchain installed you can just run:
+Garnet depends on diskann-garnet as a NuGet package, which includes native
+libraries for Windows x64 (`win-x64`), Linux x64 (`linux-x64`), and macOS ARM64
+(`osx-arm64`, Apple Silicon). With a native .NET toolchain installed, check out
+the Garnet repo and run:
 
 ```sh
 dotnet run -c Release -f net10.0 --project main/GarnetServer -- --enable-vector-set-preview
@@ -80,17 +81,19 @@ and it will build and launch Garnet with vector sets enabled.
 
 If you want to install a specific version of diskann-garnet to use with Garnet,
 it is a little more complicated. Aside from compiling diskann-garnet, you will
-need to create a NuGet package. For example:
+need to create a NuGet package. For example, on Windows:
 
 ```pwsh
 cd diskann-garnet
-cargo build --release
+cargo build --locked --release --package diskann-garnet
 mkdir ../target/pkg
 mkdir ../target/pkg/linux
 mkdir ../target/pkg/windows
+mkdir ../target/pkg/macos-arm64
 mkdir ../target/pkg/docs
 cp diskann-garnet.nuspec ../target/pkg
 cp README.md ../target/pkg/linux/libdiskann_garnet.so # dummy file
+cp README.md ../target/pkg/macos-arm64/libdiskann_garnet.dylib # dummy file
 cp ../target/release/*.dll ../target/pkg/windows
 cp ../target/release/*.pdb ../target/pkg/windows
 cp README.md ../target/pkg/docs
@@ -121,9 +124,9 @@ You will need to set up a local path to host NuGets and setup
 
 Replace `LOCAL_NUGET_PATH` with whatever path you like.
 
-Linux instructions are a bit more difficult as `nuget pack` does not exist in
-Linux. You will need to grab an existing NuGet from NuGet.org, unzip it, and
-then replace the files, and rezip.
+Linux and macOS instructions are a bit more difficult as `nuget pack` does not
+exist for those platforms. You will need to grab an existing NuGet from
+NuGet.org, unzip it, and then replace the files, and rezip.
 
 ```
 mkdir target/nupkg
