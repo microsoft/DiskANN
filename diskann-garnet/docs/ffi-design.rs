@@ -20,7 +20,7 @@ enum VectorValueType {
 /// Quantizer selection for an index. Must match the definition on the C# side.
 ///
 /// `NoQuant`, `Bin`, and `Q8` map to the quantizations Redis exposes and take `f32` vector
-/// data. The `X`-prefixed variants are DiskANN extensions taking `u8`/`i8` vector data.
+/// data. The spherical extensions without a type suffix also take `f32`.
 #[repr(C)]
 enum VectorQuantType {
     Invalid = 0,
@@ -31,6 +31,12 @@ enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2,
+    XSpherical2I8,
+    XSpherical2U8,
+    XSpherical4,
+    XSpherical4I8,
+    XSpherical4U8,
 }
 
 /// Status returned by `insert`, encoded as a `u8`.
