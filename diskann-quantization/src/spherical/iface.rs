@@ -1079,6 +1079,25 @@ mod query_distance {
         Ok(prepared)
     }
 
+    macro_rules! metric {
+        (
+            { $visitor: ident, $quantizer:ident, $query:ident, $arch:ident, $wrap:path },
+            $($metric:path => $method:ident ($kernel:ident)),+ $(,)?
+        ) => {
+            let dim = $quantizer.output_dim();
+            let arch = $arch;
+            match $quantizer.metric() {
+                $(
+                    $metric => $visitor.$method($wrap(Self::$kernel::new(
+                        Curried::new($quantizer.as_functor(), $query),
+                        dim,
+                        arch,
+                    ))),
+                )+
+            }
+        }
+    }
+
     macro_rules! map1 {
         ($arch:path) => {
             impl<A> Map<1, A> for $arch
@@ -1117,50 +1136,22 @@ mod query_distance {
                     match layout {
                         QueryLayout::SameAsData => {
                             let q = prepare_data(quantizer, query, allocator, scratch).unwrap();
-                            match metric {
-                                SquaredL2 => visitor.data_l2(Self::DataL2::new(
-                                    Curried::new(quantizer.as_functor(), q),
-                                    dim,
-                                    self,
-                                )),
-                                InnerProduct => visitor.data_ip(Self::DataIP::new(
-                                    Curried::new(quantizer.as_functor(), q),
-                                    dim,
-                                    self,
-                                )),
-                                Cosine => visitor.data_cosine(Self::DataCosine::new(
-                                    Curried::new(quantizer.as_functor(), q),
-                                    dim,
-                                    self,
-                                )),
-                            }
+                            metric!(
+                                { visitor, quantizer, q, self, identity },
+                                SquaredL2 => data_l2(DataL2),
+                                InnerProduct => data_ip(DataIP),
+                                Cosine => data_cosine(DataCosine),
+                            );
                         }
                         QueryLayout::FourBitTransposed => {
                             let q = prepare_bit_transpose(quantizer, query, allocator, scratch)
                                 .unwrap();
-                            match metric {
-                                SquaredL2 => {
-                                    visitor.bit_transpose_l2(Some(Self::BitTransposeL2::new(
-                                        Curried::new(quantizer.as_functor(), q),
-                                        dim,
-                                        self,
-                                    )))
-                                }
-                                InnerProduct => {
-                                    visitor.bit_transpose_ip(Some(Self::BitTransposeIP::new(
-                                        Curried::new(quantizer.as_functor(), q),
-                                        dim,
-                                        self,
-                                    )))
-                                }
-                                Cosine => visitor.bit_transpose_cosine(Some(
-                                    Self::BitTransposeCosine::new(
-                                        Curried::new(quantizer.as_functor(), q),
-                                        dim,
-                                        self,
-                                    ),
-                                )),
-                            }
+                            metric!(
+                                { visitor, quantizer, q, self, Some },
+                                SquaredL2 => bit_transpose_l2(BitTransposeL2),
+                                InnerProduct => bit_transpose_ip(BitTransposeIP),
+                                Cosine => bit_transpose_cosine(BitTransposeCosine),
+                            );
                         }
                         QueryLayout::ScalarQuantized => match metric {
                             SquaredL2 => visitor.scalar_l2(None),
@@ -1169,23 +1160,89 @@ mod query_distance {
                         },
                         QueryLayout::FullPrecision => {
                             let q = prepare_full(quantizer, query, allocator, scratch).unwrap();
-                            match metric {
-                                SquaredL2 => visitor.full_l2(Self::FullL2::new(
-                                    Curried::new(quantizer.as_functor(), q),
-                                    dim,
-                                    self,
-                                )),
-                                InnerProduct => visitor.full_ip(Self::FullIP::new(
-                                    Curried::new(quantizer.as_functor(), q),
-                                    dim,
-                                    self,
-                                )),
-                                Cosine => visitor.full_cosine(Self::FullCosine::new(
-                                    Curried::new(quantizer.as_functor(), q),
-                                    dim,
-                                    self,
-                                )),
-                            }
+                            metric!(
+                                { visitor, quantizer, q, self, identity },
+                                SquaredL2 => full_l2(FullL2),
+                                InnerProduct => full_ip(FullIP),
+                                Cosine => full_cosine(FullCosine),
+                            );
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    macro_rules! map {
+        ($arch:path, $N:literal) => {
+            impl<A> Map<$N, A> for $arch
+            where
+                A: AllocatorCore + std::fmt::Debug + Send + Sync,
+            {
+                type FullL2 = Reified<L2, $N, Full<A>, $arch>;
+                type FullIP = Reified<IP, $N, Full<A>, $arch>;
+                type FullCosine = Reified<Cosine, $N, Full<A>, $arch>;
+
+                type BitTransposeL2 = Unimplemented;
+                type BitTransposeIP = Unimplemented;
+                type BitTransposeCosine = Unimplemented;
+
+                type ScalarL2 = Reified<L2, $N, ScalarQuant<$N, A>, $arch>;
+                type ScalarIP = Reified<IP, $N, ScalarQuant<$N, A>, $arch>;
+                type ScalarCosine = Reified<Cosine, $N, ScalarQuant<$N, A>, $arch>;
+
+                type DataL2 = Reified<L2, $N, Data<$N, A>, $arch>;
+                type DataIP = Reified<IP, $N, Data<$N, A>, $arch>;
+                type DataCosine = Reified<Cosine, $N, Data<$N, A>, $arch>;
+
+                fn map(
+                    self,
+                    quantizer: &SphericalQuantizer,
+                    query: &[f32],
+                    layout: QueryLayout,
+                    allocator: A,
+                    scratch: ScopedAllocator<'_>,
+                    visitor: &mut dyn Visit<$N, Self, A>,
+                ) {
+                    use SupportedMetric::{Cosine, InnerProduct, SquaredL2};
+
+                    let metric = quantizer.metric();
+                    let dim = quantizer.output_dim();
+                    match layout {
+                        QueryLayout::SameAsData => {
+                            let q = prepare_data(quantizer, query, allocator, scratch).unwrap();
+                            metric!(
+                                { visitor, quantizer, q, self, identity },
+                                SquaredL2 => data_l2(DataL2),
+                                InnerProduct => data_ip(DataIP),
+                                Cosine => data_cosine(DataCosine),
+                            );
+                        }
+                        QueryLayout::FourBitTransposed => match metric {
+                            SquaredL2 => visitor.bit_transpose_l2(None),
+                            InnerProduct => visitor.bit_transpose_ip(None),
+                            Cosine => visitor.bit_transpose_cosine(None),
+                        },
+                        QueryLayout::ScalarQuantized => {
+                            let q = prepare_scalar::<$N, A>(
+                                quantizer, query, allocator, scratch
+                            ).unwrap();
+
+                            metric!(
+                                { visitor, quantizer, q, self, Some },
+                                SquaredL2 => scalar_l2(ScalarL2),
+                                InnerProduct => scalar_ip(ScalarIP),
+                                Cosine => scalar_cosine(ScalarCosine),
+                            );
+                        },
+                        QueryLayout::FullPrecision => {
+                            let q = prepare_full(quantizer, query, allocator, scratch).unwrap();
+                            metric!(
+                                { visitor, quantizer, q, self, identity },
+                                SquaredL2 => full_l2(FullL2),
+                                InnerProduct => full_ip(FullIP),
+                                Cosine => full_cosine(FullCosine),
+                            );
                         }
                     }
                 }
@@ -1194,6 +1251,23 @@ mod query_distance {
     }
 
     map1!(Scalar);
+    map!(Scalar, 2);
+    map!(Scalar, 4);
+    map!(Scalar, 8);
+
+    mod x86_64 {
+        use super::*;
+
+        map1!(V3);
+        map!(V3, 2);
+        map!(V3, 4);
+        map!(V3, 8);
+
+        map1!(V4);
+        map!(V4, 2);
+        map!(V4, 4);
+        map!(V4, 8);
+    }
 }
 
 ///////////////////////
