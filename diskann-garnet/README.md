@@ -37,8 +37,27 @@ Redis always uses cosine distance, but many vector data sets use other metrics. 
 - `XBIN_U8`: binary quantization of 8-bit unsigned integer (using DiskANN's spherical quantizer based on RaBitQ)
 
 
-Currently there is a limit of `2^32 - 1` vectors in a single instance due to
-internal IDs being `u32`. This restriction will be lifted in the future.
+Currently there is a limit of `2^32 - 2` user vectors in a single instance. Internal
+ID 0 is reserved for the start point, and `u32::MAX` marks ID allocation exhaustion.
+
+### Bulk Import
+
+Existing DiskANN graphs can be loaded without rebuilding them through `VADD`:
+
+1. Create an empty set with `XVCREATE`, supplying `QUANT_STATE` for a quantized index.
+2. Load its terms with `XVIMPORT`. Terms may be imported in any order and in parallel.
+3. Wait for all term imports to complete, then call `XVIMPORT key FINISH` before normal use.
+
+Internal IDs may also arrive in any order. Importing a high ID creates all missing
+free-space-map blocks through that ID; each block covers 65,536 IDs and uses 8 KiB.
+The start point is created during finalization and is excluded from FSM accounting.
+
+At the FFI layer, `can_import` checks eligibility.
+
+Ordinary operations (`card`, search, ID checks) and `FINISH` permanently disable importing.
+
+See the [FFI reference](docs/ffi-design.rs) and [data design](docs/data-design.md)
+for API and term formats.
 
 ## Installing
 
