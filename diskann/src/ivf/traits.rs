@@ -5,7 +5,7 @@
 
 //! Storage boundaries for IVF construction.
 
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, num::NonZeroUsize, sync::Arc};
 
 use diskann_utils::future::SendFuture;
 
@@ -42,13 +42,13 @@ pub trait Provider: Sized + Send + Sync + 'static {
 }
 
 pub trait HasIds {
-    type InternalId: VectorId;
+    type Id: VectorId;
     type ListId: VectorId;
 }
 
 /// Centroid selection within one build operation.
 pub trait Router: Send {
-    type ListId: VectorId;
+    type Id: VectorId;
 
     fn len(&self) -> usize;
 
@@ -56,33 +56,40 @@ pub trait Router: Send {
         self.len() == 0
     }
 
-    /// Select `min(nprobe, len())` live lists, nearest first.
-    fn select(
+    /// Select `min(nprobe, len())` distinct live lists, nearest first.
+    fn route(
         &self,
         query: &[f32],
         nprobe: usize,
-    ) -> impl SendFuture<ANNResult<Vec<(Self::ListId, f32)>>>;
+    ) -> impl SendFuture<ANNResult<Vec<(Self::Id, f32)>>>;
 }
 
 pub trait RouterAndNearest: Router {
-    /// Find `nprobe` centroids nearest to list `id`.
+    /// Select `min(nprobe, len())` distinct live lists nearest to `id`'s centroid.
+    ///
+    /// Results are nearest first and may include `id` itself. Callers exclude
+    /// lists being replaced when selecting retained neighbors.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `id` is not live or the provider cannot complete the lookup.
     fn nearest(
         &self,
-        id: Self::ListId,
+        id: Self::Id,
         nprobe: usize,
-    ) -> impl SendFuture<ANNResult<Vec<(Self::ListId, f32)>>>;
+    ) -> impl SendFuture<ANNResult<Vec<(Self::Id, f32)>>>;
 }
 
 pub trait BuildAccessor: Send + Sized + HasIds {
-    type Router<'a>: RouterAndNearest<ListId = Self::ListId>
+    type Router<'a>: RouterAndNearest<Id = Self::ListId>
     where
         Self: 'a;
 
-    type Region<'a>: RegionView<Self::InternalId, Self::ListId>
+    type Region<'a>: RegionView<Self::Id, Self::ListId>
     where
         Self: 'a;
 
-    type Update: RegionUpdate<Self::InternalId, Self::ListId>;
+    type Update: RegionUpdate<Self::Id, Self::ListId>;
 
     /// Positive dimension of all canonical points and centroids.
     fn dim(&self) -> usize;
@@ -90,18 +97,22 @@ pub trait BuildAccessor: Send + Sized + HasIds {
     fn router(&mut self) -> Self::Router<'_>;
 
     /// Append members and return the resulting operation-local list size.
-    fn append_to(
+    fn append_to<Itr>(
         &mut self,
         list: Self::ListId,
-        members: &[Self::InternalId],
-    ) -> impl SendFuture<ANNResult<usize>>;
+        members: Itr,
+    ) -> impl SendFuture<ANNResult<NonZeroUsize>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
 
-    /// Make every requested list's complete operation-local membership, vectors
-    /// and centroids available for computation, together with its regional writer.
-    fn fill(
+    /// Make every requested list's members, data and centroids available
+    /// for split and assignment. Register updates to the region.
+    fn fill<Itr>(
         &mut self,
-        lists: &[Self::ListId],
-    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update)>>;
+        lists: Itr,
+    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update)>>
+    where
+        Itr: Iterator<Item = Self::ListId> + Clone + Send + Sync;
 
     /// Finalize the operation, publishing accessor-side appends and regional writes together.
     ///
@@ -110,7 +121,7 @@ pub trait BuildAccessor: Send + Sized + HasIds {
 }
 
 pub trait BuildStrategy<'a, P: Provider>: Send + Sync {
-    type Accessor: BuildAccessor<InternalId = P::InternalId, ListId = P::ListId>;
+    type Accessor: BuildAccessor<Id = P::InternalId, ListId = P::ListId>;
     type Error: StandardError;
 
     fn build_accessor(

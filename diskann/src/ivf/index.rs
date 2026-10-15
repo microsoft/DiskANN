@@ -5,7 +5,10 @@
 
 //! IVF policy and orchestration, independent of physical list storage.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+};
 
 use diskann_utils::future::SendFuture;
 use rand::{SeedableRng, rngs::StdRng};
@@ -13,17 +16,28 @@ use thiserror::Error;
 
 use super::{
     clustering,
-    traits::{BuildAccessor, InsertStrategy, Provider, Router},
+    traits::{BuildAccessor, InsertStrategy, Provider, Router, RouterAndNearest},
 };
 use crate::{ANNError, ANNResult, error::IntoANNResult};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReassignCount {
+    None,
+    Count(NonZeroUsize),
+}
 
 /// Parameters for incremental two-means splitting.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
     /// Split a touched list when its pending membership exceeds this size.
-    pub split_threshold: usize,
-    /// Lloyd steps per parent. Zero still performs one step.
-    pub two_means_iterations: usize,
+    pub split_threshold: NonZeroUsize,
+    /// Nearest-list query count per split parent, before filtering split parents.
+    ///
+    /// [`ReassignCount::None`] disables neighborhood gathering.
+    /// All gathered points are reassigned across all children and retained neighbors.
+    pub reassign_count: ReassignCount,
+    /// Positive number of Lloyd steps per parent.
+    pub two_means_iterations: NonZeroUsize,
     pub seed: u64,
 }
 
@@ -51,8 +65,8 @@ impl<P: Provider> IVFIndex<P> {
     ///
     /// Returns [`ConfigError`] when the split threshold is less than two.
     pub fn new(provider: P, config: Config) -> Result<Self, ConfigError> {
-        if config.split_threshold < 2 {
-            return Err(ConfigError(config.split_threshold));
+        if config.split_threshold.get() < 2 {
+            return Err(ConfigError(config.split_threshold.get()));
         }
         Ok(Self {
             provider,
@@ -97,38 +111,63 @@ impl<P: Provider> IVFIndex<P> {
                 let router = accessor.router();
 
                 for point in batch.points() {
-                    let selected = router.select(point.vector, 1).await?;
-                    let list = selected
-                        .first()
-                        .ok_or_else(|| ANNError::message("IVF routing returned no live centroid"))?
-                        .0;
+                    let selected = router.route(point.vector, 1).await?;
 
-                    routed.entry(list).or_default().push(point.id);
+                    let (list, _) = selected.first().ok_or_else(|| {
+                        ANNError::message("IVF routing returned no live centroid")
+                    })?;
+
+                    routed.entry(*list).or_default().push(point.id);
                 }
             }
 
-            let mut parents = Vec::with_capacity(routed.len());
+            let mut parents = BTreeSet::new();
 
-            // append the points to their respective list ids and determine which need to be split.
-            for (list, members) in routed {
-                let size = accessor.append_to(list, &members).await?;
-                if size > config.split_threshold {
-                    parents.push(list);
+            // Step 3: append the points to their respective list ids and determine which need to be split.
+            for (list, members) in routed.iter() {
+                let size = accessor.append_to(*list, members.iter().copied()).await?;
+
+                if size.get() > config.split_threshold.get() {
+                    parents.insert(*list);
                 }
             }
 
             let splits = parents.len();
             let update = if !parents.is_empty() {
+                let mut neighbors = BTreeSet::new();
+
+                if let ReassignCount::Count(n) = config.reassign_count {
+                    let router = accessor.router();
+
+                    for &pid in parents.iter() {
+                        let nids = router
+                            .nearest(pid, n.get())
+                            .await?
+                            .into_iter()
+                            .map(|(id, _)| id)
+                            .filter(|id| !parents.contains(id));
+
+                        for id in nids {
+                            neighbors.insert(id);
+                        }
+                    }
+                }
+
                 let dim = accessor.dim();
-                let (region, mut update) = accessor.fill(&parents).await?;
+                let iter = parents.iter().chain(neighbors.iter()).copied();
+
+                let (region, mut update) = accessor.fill(iter).await?;
+
                 clustering::split(
                     &region,
                     &mut update,
                     &parents,
+                    &neighbors,
                     dim,
-                    config.two_means_iterations,
+                    config.two_means_iterations.get(),
                     rng,
                 )?;
+
                 Some(update)
             } else {
                 None

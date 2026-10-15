@@ -4,7 +4,7 @@
 |---|---|
 | **Authors** | Aditya Krishnan |
 | **Created** | 2026-08-19 |
-| **Updated** | 2026-10-13 |
+| **Updated** | 2026-10-15 |
 | **Status** | Draft |
 
 ## Summary
@@ -13,7 +13,8 @@ The implementation in [the IVF module](../diskann/src/ivf/mod.rs) follows the
 graph index's coarse accessor boundaries. The index owns routing policy,
 overflow selection, two-means fitting, and regional assignment. Providers supply:
 
-1. Centroid selection through a `Router`.
+1. Point routing through a `Router`, and nearest-list selection through
+   `RouterAndNearest`.
 2. A scoped `BuildAccessor` that stages ordinary appends, returns their resulting
    sizes, fills requested sources, and publishes the operation.
 3. A read-only `RegionView` for filled source data and an independent
@@ -28,21 +29,36 @@ prepared points, so clustering has no staged-point boundaries or provenance
 classification. Each source supplies its centroid, member IDs, and a borrowed
 matrix with one canonical vector row per member in the same order.
 
-Insertion provisionally appends points, gathers all oversized parents into one
-region, fits two children per parent, and assigns the requested parents' members
-against all child centroids. All children are fitted before final assignment, and
-parent centroids are not candidates. The algorithm computes complete centroid
-and member groups before writing child creation and parent retirement through
-the update object. Ordinary appends and splitting are published together, never as separate
-commits.
+Insertion provisionally appends points and identifies oversized parents. With
+`ReassignCount::Count(n)`, it queries the nearest `n` lists per parent, excludes
+every split parent, then fills the unique union of parents and neighbors once.
+Nearest-list queries may return the queried parent or other split parents;
+these consume query slots, so fewer than `n` retained neighbors may remain.
+Shared neighbors are filled once. Parents and neighbors are ordered sets, and
+filling accepts their chained ID iterator without collecting another vector.
+
+Two children are fitted per parent, using only that parent's complete membership.
+All children are fitted before final assignment. Every gathered point is then
+assigned across all new children and retained neighbor centroids; parent
+centroids are not candidates. Retained lists keep their identities and centroids
+while receiving complete replacement memberships. This full regional policy
+permits parent-to-neighbor, neighbor-to-child, cross-parent, and neighbor-to-neighbor
+movement. It is broader than the superseded per-parent candidate policy below.
+The algorithm computes complete centroid and member groups before writing child
+creation, retained memberships, and parent retirement through the update object.
+Ordinary appends and splitting are published together, never as separate commits.
 Each parent is split once per insertion; this is not a recursive size-balancing
-operation.
+operation, and retained neighbors are not split if reassignment makes them
+oversized. Setting `reassign_count` to `ReassignCount::None` preserves parent-only
+splitting. The count limits nearest-query results per parent, not the point
+volume or total union size. Configuration uses nonzero split thresholds and
+Lloyd iteration counts; the split threshold must still be at least two.
 
 Filling returns the source view and its regional writer together. The writer is
 the accessor's `Update` type and is independent of the view's temporary input
 borrows. The algorithm reads through the view and writes through the update
 object; no update extraction step is needed. After the view's borrows end, the
-index passes `Some(update)` to `BuildAccessor::finish`. An insertion without
+index passes `Some(&update)` to `BuildAccessor::finish`. An insertion without
 splitting passes `None`. The algorithm does not inspect the provider's update
 representation or require new child IDs during computation.
 
@@ -53,10 +69,10 @@ source views, and successful finalization publishes one coherent result.
 Providers coordinate accessor-side appends and regional writes so complete
 replacement or retirement supersedes relevant earlier appends.
 
-The built-in split reads and edits only explicitly requested parents, even when
-a region contains additional sources. It covers every parent member exactly once,
-including pending appends; other lists are unchanged. Source enumeration and
-neighborhood reassignment are deferred.
+The built-in split reads and edits only explicitly selected parents and neighbors,
+even when a region contains additional sources. It covers every source member
+exactly once, including pending appends to retained neighbors; other lists are
+unchanged. Explicit source IDs avoid requiring enumeration on the region view.
 
 Numerical computation borrows vector matrices and member slices, without building
 per-point reference tables or copying vector coordinates. A provider with
@@ -76,9 +92,10 @@ aliases themselves.
 
 The current implementation supports batched insert/split into a provider that
 already has centroids. Initialization, search, neighborhood-selection policies,
-deletion/dissolve, and colocation remain future work. See
+other than fixed-count nearest lists, deletion/dissolve, and colocation remain
+future work. See
 [the current contracts](../diskann/src/ivf/traits.rs) and
-[the region interfaces](../diskann/src/ivf/regionset.rs) for the implemented API.
+[the region interfaces](../diskann/src/ivf/region.rs) for the implemented API.
 
 The remainder of this RFC records the previous delta-oriented design and its
 longer-term goals. Its API sketches, source layout, and `apply`-based algorithms

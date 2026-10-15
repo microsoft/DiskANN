@@ -7,6 +7,7 @@ use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
     future::Future,
+    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -18,12 +19,14 @@ use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{SeedableRng, rngs::StdRng};
 
 use super::{
-    Config, IVFIndex, InsertStats, clustering,
+    Config, IVFIndex, InsertStats, ReassignCount, clustering,
     pending::{Membership, PendingLists},
     region::{Batch, RegionUpdate, RegionView, View},
-    traits::{BuildAccessor, BuildStrategy, HasIds, InsertStrategy, Provider, Router},
+    traits::{
+        BuildAccessor, BuildStrategy, HasIds, InsertStrategy, Provider, Router, RouterAndNearest,
+    },
 };
-use crate::{ANNError, ANNResult, ivf::traits::RouterAndNearest, provider::DefaultContext};
+use crate::{ANNError, ANNResult, provider::DefaultContext};
 
 #[derive(Debug, Clone)]
 struct StoredList {
@@ -39,8 +42,11 @@ struct Store {
     next_list: u32,
     finishes: usize,
     fills: usize,
+    filled_lists: Vec<u32>,
+    fail_nearest: bool,
     fail_fill: bool,
     fail_create: bool,
+    fail_set_members: bool,
     fail_retire: bool,
     fail_finish: bool,
 }
@@ -73,20 +79,22 @@ struct Build<'p> {
     batch: Option<Arc<Batch<u32>>>,
     sources: BTreeMap<u32, Source>,
     fills: Cell<usize>,
+    filled_lists: Vec<u32>,
 }
 
 struct Coarse<'a> {
     stored: &'a BTreeMap<u32, StoredList>,
+    fail_nearest: bool,
 }
 
 impl Router for Coarse<'_> {
-    type ListId = u32;
+    type Id = u32;
 
     fn len(&self) -> usize {
         self.stored.len()
     }
 
-    fn select(&self, query: &[f32], nprobe: usize) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
+    fn route(&self, query: &[f32], nprobe: usize) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
         async move {
             let mut selected: Vec<(u32, f32)> = self
                 .stored
@@ -101,14 +109,17 @@ impl Router for Coarse<'_> {
 }
 
 impl RouterAndNearest for Coarse<'_> {
-    fn nearest(
-        &self,
-        id: Self::ListId,
-        nprobe: usize,
-    ) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
+    fn nearest(&self, id: Self::Id, nprobe: usize) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
         async move {
-            let query = &self.stored.get(&id).unwrap().centroid;
-            self.select(&query, nprobe).await
+            if self.fail_nearest {
+                return Err(ANNError::message("injected nearest failure"));
+            }
+            let query = &self
+                .stored
+                .get(&id)
+                .ok_or_else(|| ANNError::message(format!("unknown list {id}")))?
+                .centroid;
+            self.route(query, nprobe).await
         }
     }
 }
@@ -126,6 +137,7 @@ struct Update {
     memberships: PendingLists<u32, u32>,
     created: Vec<StoredList>,
     fail_create: bool,
+    fail_set_members: bool,
     fail_retire: bool,
 }
 
@@ -137,6 +149,7 @@ impl Update {
             memberships: PendingLists::default(),
             created: Vec::new(),
             fail_create: false,
+            fail_set_members: false,
             fail_retire: false,
         }
     }
@@ -178,6 +191,9 @@ impl RegionView<u32, u32> for Region<'_> {
 
 impl RegionUpdate<u32, u32> for Update {
     fn set_members(&mut self, list: u32, members: &[u32]) -> ANNResult<()> {
+        if self.fail_set_members {
+            return Err(ANNError::message("injected set_members failure"));
+        }
         self.check_list(list)?;
         self.memberships.set(list, members.to_vec())
     }
@@ -206,7 +222,7 @@ impl RegionUpdate<u32, u32> for Update {
 }
 
 impl HasIds for Build<'_> {
-    type InternalId = u32;
+    type Id = u32;
     type ListId = u32;
 }
 
@@ -228,10 +244,18 @@ impl<'p> BuildAccessor for Build<'p> {
     fn router(&mut self) -> Self::Router<'_> {
         Coarse {
             stored: &self.store.lists,
+            fail_nearest: self.store.fail_nearest,
         }
     }
 
-    fn append_to(&mut self, list: u32, members: &[u32]) -> impl SendFuture<ANNResult<usize>> {
+    fn append_to<Itr>(
+        &mut self,
+        list: u32,
+        members: Itr,
+    ) -> impl SendFuture<ANNResult<NonZeroUsize>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+    {
         async move {
             let size = self
                 .store
@@ -240,22 +264,27 @@ impl<'p> BuildAccessor for Build<'p> {
                 .ok_or_else(|| ANNError::message(format!("unknown list {list}")))?
                 .members
                 .len();
-            self.pending.append(list, members.to_vec())?;
-            self.pending.list_size(list, size)
+            self.pending.append(list, members.collect())?;
+            NonZeroUsize::new(self.pending.list_size(list, size)?)
+                .ok_or_else(|| ANNError::message("appending must leave a nonempty list"))
         }
     }
 
-    fn fill(
+    fn fill<Itr>(
         &mut self,
-        lists: &[u32],
-    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update)>> {
+        lists: Itr,
+    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update)>>
+    where
+        Itr: Iterator<Item = Self::ListId> + Clone + Send + Sync,
+    {
         async move {
             self.fills.set(self.fills.get() + 1);
             if self.store.fail_fill {
                 return Err(ANNError::message("injected fill failure"));
             }
+            self.filled_lists.extend(lists.clone());
             self.sources.clear();
-            for &list in lists {
+            for list in lists {
                 let stored = self
                     .store
                     .lists
@@ -283,6 +312,7 @@ impl<'p> BuildAccessor for Build<'p> {
             }
             let mut update = Update::new(&self.sources, self.dim());
             update.fail_create = self.store.fail_create;
+            update.fail_set_members = self.store.fail_set_members;
             update.fail_retire = self.store.fail_retire;
             Ok((Region::new(&self.sources), update))
         }
@@ -339,6 +369,7 @@ impl<'p> BuildAccessor for Build<'p> {
             self.store.next_list = next_list;
             self.store.finishes += 1;
             self.store.fills += self.fills.get();
+            self.store.filled_lists = self.filled_lists;
             Ok(())
         }
     }
@@ -361,6 +392,7 @@ impl<'a> BuildStrategy<'a, Store> for Strategy {
             batch: None,
             sources: BTreeMap::new(),
             fills: Cell::new(0),
+            filled_lists: Vec::new(),
         })
     }
 }
@@ -400,11 +432,17 @@ fn matrix<const D: usize>(rows: &[[f32; D]]) -> rowmajor::Owned<f32> {
 }
 
 fn index(store: Store, threshold: usize) -> IVFIndex<Store> {
+    index_with_neighbors(store, threshold, 0)
+}
+
+fn index_with_neighbors(store: Store, threshold: usize, neighbors: usize) -> IVFIndex<Store> {
     IVFIndex::new(
         store,
         Config {
-            split_threshold: threshold,
-            two_means_iterations: 5,
+            split_threshold: NonZeroUsize::new(threshold).unwrap(),
+            reassign_count: NonZeroUsize::new(neighbors)
+                .map_or(ReassignCount::None, ReassignCount::Count),
+            two_means_iterations: NonZeroUsize::new(5).unwrap(),
             seed: 7,
         },
     )
@@ -478,6 +516,7 @@ async fn appends_publish_actual_memberships_without_filling() {
             ]
             .into(),
             next_list: 3,
+            fail_nearest: true,
             ..Store::default()
         },
         2,
@@ -531,7 +570,9 @@ async fn appends_publish_actual_memberships_without_filling() {
 
 #[tokio::test]
 async fn splitting_commits_children_and_ordinary_appends_once() {
-    let mut index = index(seeded(), 2);
+    let mut store = seeded();
+    store.fail_nearest = true;
+    let mut index = index(store, 2);
     let points = [
         (5, &[1.0, 1.0][..]),
         (6, &[11.0, 1.0][..]),
@@ -582,6 +623,198 @@ async fn splitting_commits_children_and_ordinary_appends_once() {
 }
 
 #[tokio::test]
+async fn neighboring_lists_exchange_points_and_pending_appends_once() {
+    let mut store = seeded();
+    store.points.insert(10_001, vec![10.0, 0.0]);
+    store.points.insert(10_002, vec![5.0, 0.0]);
+    store.points.insert(10_003, vec![10.1, 0.0]);
+    store.points.insert(10_005, vec![5.0, 0.0]);
+    store.points.insert(10_006, vec![5.0, 0.0]);
+    store
+        .lists
+        .get_mut(&1)
+        .unwrap()
+        .members
+        .extend([10_005, 10_006]);
+    store.lists.get_mut(&2).unwrap().centroid = vec![5.0, 0.0];
+    let mut index = index_with_neighbors(store, 3, 2);
+    let points = [(7, &[1.0, 0.0][..]), (8, &[5.2, 0.0][..])];
+    let stats = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
+        .await
+        .unwrap();
+    let store = index.provider();
+
+    assert_eq!(
+        stats,
+        InsertStats {
+            inserted: 2,
+            splits: 1
+        }
+    );
+    assert_eq!(store.fills, 1);
+    assert_eq!(store.finishes, 1);
+    assert_eq!(store.filled_lists, [1, 2]);
+    assert!(!store.lists.contains_key(&1));
+    assert_eq!(store.lists.len(), 4);
+    assert_eq!(store.lists[&2].centroid, [5.0, 0.0]);
+    assert_eq!(store.lists[&2].members, [10_005, 10_006, 10_002, 10_008]);
+    assert!(store.lists[&2].members.len() > 3);
+    assert!(
+        store
+            .lists
+            .iter()
+            .any(|(&id, list)| { id >= 4 && list.members.contains(&10_003) })
+    );
+    assert_eq!(store.lists[&3].centroid, [100.0, 0.0]);
+    assert_eq!(store.lists[&3].members, [10_004]);
+    let mut members: Vec<_> = store
+        .lists
+        .values()
+        .flat_map(|list| list.members.iter().copied())
+        .collect();
+    members.sort_unstable();
+    assert_eq!(members, (10_000..10_009).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn neighborhood_selection_filters_parents_and_fills_the_union_once() {
+    for (centers, two_candidates, three_candidates) in [
+        (vec![], vec![], vec![]),
+        (vec![100.0, 200.0, 300.0], vec![], vec![3]),
+        (vec![0.0, 12.0, 200.0], vec![3, 4], vec![3, 4]),
+    ] {
+        for count in [0, 1, 2, 3, 4, usize::MAX] {
+            let mut store = seeded();
+            if centers.is_empty() {
+                store.lists.remove(&3);
+                store.points.remove(&10_004);
+            } else {
+                store.lists.get_mut(&3).unwrap().centroid = vec![centers[0], 0.0];
+                for (id, &center) in (4..).zip(&centers[1..]) {
+                    store.lists.insert(
+                        id,
+                        StoredList {
+                            centroid: vec![center, 0.0],
+                            members: Vec::new(),
+                        },
+                    );
+                }
+            }
+            store.next_list = 3 + centers.len() as u32;
+            store.fail_nearest = count == 0;
+            let mut index = index_with_neighbors(store, 2, count);
+            let points = [(5, &[1.0, 1.0][..]), (6, &[11.0, 1.0][..])];
+            let stats = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
+                .await
+                .unwrap();
+            let store = index.provider();
+            let neighbors = match (count, centers.len()) {
+                (0 | 1, _) | (_, 0) => vec![],
+                (2, _) => two_candidates.clone(),
+                (3, _) => three_candidates.clone(),
+                (4, _) => vec![3, 4],
+                _ => vec![3, 4, 5],
+            };
+            let sources: Vec<_> = [1, 2].into_iter().chain(neighbors).collect();
+            assert_eq!(store.filled_lists, sources);
+            assert_eq!(store.fills, 1);
+            assert_eq!(store.finishes, 1);
+            assert_eq!(
+                stats,
+                InsertStats {
+                    inserted: 2,
+                    splits: 2
+                }
+            );
+            assert!(!store.lists.contains_key(&1));
+            assert!(!store.lists.contains_key(&2));
+            assert_eq!(store.lists.len(), 4 + centers.len());
+            for (id, &center) in (3..).zip(&centers) {
+                assert_eq!(store.lists[&id].centroid, [center, 0.0]);
+            }
+            let mut members: Vec<_> = store
+                .lists
+                .values()
+                .flat_map(|list| list.members.iter().copied())
+                .collect();
+            members.sort_unstable();
+            assert_eq!(members, store.points.keys().copied().collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
+    let sources = [
+        (
+            1,
+            Source {
+                centroid: vec![0.0],
+                members: vec![0, 1],
+                vectors: matrix(&[[-10.0], [10.0]]),
+            },
+        ),
+        (
+            2,
+            Source {
+                centroid: vec![5.0],
+                members: vec![2],
+                vectors: matrix(&[[50.0]]),
+            },
+        ),
+        (
+            3,
+            Source {
+                centroid: vec![50.0],
+                members: vec![3],
+                vectors: matrix(&[[51.0]]),
+            },
+        ),
+        (
+            4,
+            Source {
+                centroid: vec![10.0],
+                members: Vec::new(),
+                vectors: matrix::<1>(&[]),
+            },
+        ),
+    ]
+    .into();
+    let region = Region::new(&sources);
+    let mut update = Update::new(&sources, 1);
+    clustering::split(
+        &region,
+        &mut update,
+        &BTreeSet::from([1]),
+        &BTreeSet::from([2, 3, 4]),
+        1,
+        5,
+        &mut StdRng::seed_from_u64(7),
+    )
+    .unwrap();
+
+    let mut centers: Vec<_> = update.created.iter().map(|list| list.centroid[0]).collect();
+    centers.sort_by(f32::total_cmp);
+    assert_eq!(centers, [-10.0, 10.0]);
+    let mut child_members: Vec<_> = update
+        .created
+        .iter()
+        .flat_map(|list| list.members.iter().copied())
+        .collect();
+    child_members.sort_unstable();
+    assert_eq!(child_members, [0, 1]);
+    let mut changes: BTreeMap<_, _> = update.memberships.into_changes().collect();
+    assert!(matches!(changes.remove(&1), Some(Membership::Retire)));
+    for (id, expected) in [(2, vec![]), (3, vec![2, 3]), (4, vec![])] {
+        let Some(Membership::Replace(members)) = changes.remove(&id) else {
+            panic!("expected replacement for retained list {id}");
+        };
+        assert_eq!(members, expected);
+    }
+    assert!(changes.is_empty());
+}
+
+#[tokio::test]
 async fn region_view_borrows_inputs_while_updates_are_recorded() {
     let mut store = seeded();
     let update = {
@@ -590,9 +823,16 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
             .unwrap();
         let points = [(5, &[1.0, 1.0][..]), (6, &[3.0, 1.0][..])];
         let batch = Strategy.prepare(&mut build, &points).await.unwrap();
-        assert_eq!(build.append_to(1, &[10_006, 10_005]).await.unwrap(), 4);
+        assert_eq!(
+            build
+                .append_to(1, [10_006, 10_005].into_iter())
+                .await
+                .unwrap()
+                .get(),
+            4
+        );
         let update = {
-            let (region, mut update) = require_send(build.fill(&[1])).await.unwrap();
+            let (region, mut update) = require_send(build.fill([1].into_iter())).await.unwrap();
             let view = region.get_view(1).unwrap();
             let vectors = region.get_vectors(1).unwrap();
             let source = &region.sources[&1];
@@ -609,7 +849,8 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
             clustering::split(
                 &region,
                 &mut update,
-                &[1],
+                &BTreeSet::from([1]),
+                &BTreeSet::new(),
                 2,
                 5,
                 &mut StdRng::seed_from_u64(7),
@@ -644,26 +885,34 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
 
 #[tokio::test]
 async fn failed_planning_or_publication_is_not_reported_as_success() {
-    for (fail_fill, fail_create, fail_retire, fail_finish) in [
-        (true, false, false, false),
-        (false, true, false, false),
-        (false, false, true, false),
-        (false, false, false, true),
+    for (fail_nearest, fail_fill, fail_create, fail_set_members, fail_retire, fail_finish) in [
+        (true, false, false, false, false, false),
+        (false, true, false, false, false, false),
+        (false, false, true, false, false, false),
+        (false, false, false, true, false, false),
+        (false, false, false, false, true, false),
+        (false, false, false, false, false, true),
     ] {
         let mut store = seeded();
+        store.fail_nearest = fail_nearest;
         store.fail_fill = fail_fill;
         store.fail_create = fail_create;
+        store.fail_set_members = fail_set_members;
         store.fail_retire = fail_retire;
         store.fail_finish = fail_finish;
-        let mut index = index(store, 2);
+        let mut index = index_with_neighbors(store, 2, 2);
         let points = [(5, &[1.0, 1.0][..])];
         let error = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
             .await
             .unwrap_err();
-        let expected = if fail_fill {
+        let expected = if fail_nearest {
+            "injected nearest failure"
+        } else if fail_fill {
             "injected fill failure"
         } else if fail_create {
             "injected create failure"
+        } else if fail_set_members {
+            "injected set_members failure"
         } else if fail_retire {
             "injected retire failure"
         } else {
@@ -672,6 +921,7 @@ async fn failed_planning_or_publication_is_not_reported_as_success() {
         assert!(error.to_string().contains(expected), "{error}");
         assert_eq!(index.provider().finishes, 0);
         assert_eq!(index.provider().lists[&1].members, [10_000, 10_001]);
+        assert_eq!(index.provider().lists[&2].members, [10_002, 10_003]);
         assert_eq!(index.provider().lists.len(), 3);
         assert!(
             index
@@ -688,8 +938,9 @@ async fn invalid_config_and_uninitialized_insertion_fail() {
         IVFIndex::new(
             Store::default(),
             Config {
-                split_threshold: 1,
-                two_means_iterations: 5,
+                split_threshold: NonZeroUsize::new(1).unwrap(),
+                reassign_count: ReassignCount::None,
+                two_means_iterations: NonZeroUsize::new(5).unwrap(),
                 seed: 7,
             },
         )
@@ -725,15 +976,35 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
         .unwrap();
     let points = [(5, &[5.0, 0.0][..])];
     Strategy.prepare(&mut build, &points).await.unwrap();
-    assert_eq!(build.append_to(1, &[10_005]).await.unwrap(), 3);
+    assert_eq!(
+        build
+            .append_to(1, [10_005].into_iter())
+            .await
+            .unwrap()
+            .get(),
+        3
+    );
 
     let update = {
-        let (region, mut update) = build.fill(&[1, 2]).await.unwrap();
+        let (region, mut update) = build.fill([1, 2].into_iter()).await.unwrap();
         assert!(
             clustering::split(
                 &region,
                 &mut update,
-                &[1, 99],
+                &BTreeSet::from([1, 99]),
+                &BTreeSet::new(),
+                2,
+                5,
+                &mut StdRng::seed_from_u64(7)
+            )
+            .is_err()
+        );
+        assert!(
+            clustering::split(
+                &region,
+                &mut update,
+                &BTreeSet::from([1]),
+                &BTreeSet::from([99]),
                 2,
                 5,
                 &mut StdRng::seed_from_u64(7)
@@ -750,7 +1021,8 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
         clustering::split(
             &region,
             &mut update,
-            &[1],
+            &BTreeSet::from([1]),
+            &BTreeSet::new(),
             2,
             5,
             &mut StdRng::seed_from_u64(7),
@@ -804,7 +1076,8 @@ fn assignment_can_cross_parent_boundaries() {
     clustering::split(
         &region,
         &mut update,
-        &[1, 2],
+        &BTreeSet::from([1, 2]),
+        &BTreeSet::new(),
         1,
         10,
         &mut StdRng::seed_from_u64(7),
@@ -834,14 +1107,24 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
     clustering::split(
         &region,
         &mut zero,
-        &[1],
+        &BTreeSet::from([1]),
+        &BTreeSet::new(),
         1,
         0,
         &mut StdRng::seed_from_u64(7),
     )
     .unwrap();
     let mut one = Update::new(&sources, 1);
-    clustering::split(&region, &mut one, &[1], 1, 1, &mut StdRng::seed_from_u64(7)).unwrap();
+    clustering::split(
+        &region,
+        &mut one,
+        &BTreeSet::from([1]),
+        &BTreeSet::new(),
+        1,
+        1,
+        &mut StdRng::seed_from_u64(7),
+    )
+    .unwrap();
     assert_eq!(zero.created.len(), 2);
     assert_eq!(one.created.len(), 2);
     for (zero, one) in zero.created.iter().zip(&one.created) {

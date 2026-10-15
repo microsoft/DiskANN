@@ -5,6 +5,8 @@
 
 //! Two-means fitting and region-wide assignment over borrowed point rows.
 
+use std::collections::BTreeSet;
+
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{Rng, rngs::StdRng};
@@ -15,20 +17,22 @@ use super::{
 };
 use crate::{ANNError, ANNResult};
 
-/// Fit two children per parent, assign their members across all children, and record edits.
+/// Fit two children per parent and reassign sources across children and retained neighbors.
 ///
-/// Parents are distinct filled sources. Other filled lists are not read or edited.
+/// Parents and neighbors are distinct, disjoint filled sources. Neighbor centroids
+/// are retained unchanged. Other filled lists are not read or edited.
 /// Computation completes before any edits are recorded. A recording error may
 /// leave partial pending edits, which the caller must discard rather than publish.
 pub(super) fn split<I: Copy, L: Copy, R: RegionView<I, L>, U: RegionUpdate<I, L>>(
     region: &R,
     update: &mut U,
-    parents: &[L],
+    parents: &BTreeSet<L>,
+    neighbors: &BTreeSet<L>,
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
 ) -> ANNResult<()> {
-    let result = compute_split(region, parents, dim, iterations, rng)?;
+    let result = compute_split(region, parents, neighbors, dim, iterations, rng)?;
     for (centroid, partition) in result.centroids.rows().zip(result.partitions) {
         match partition.id {
             Some(id) => update.set_members(id, &partition.members)?,
@@ -43,7 +47,8 @@ pub(super) fn split<I: Copy, L: Copy, R: RegionView<I, L>, U: RegionUpdate<I, L>
 
 fn compute_split<I: Copy, L: Copy, R: RegionView<I, L>>(
     region: &R,
-    parents: &[L],
+    parents: &BTreeSet<L>,
+    neighbors: &BTreeSet<L>,
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
@@ -53,22 +58,29 @@ fn compute_split<I: Copy, L: Copy, R: RegionView<I, L>>(
             "IVF splitting needs parents and a positive dimension",
         ));
     }
-    let mut inputs = Vec::with_capacity(parents.len());
-    for &parent in parents {
+
+    let child_count = 2 * parents.len();
+    let mut centroids = rowmajor::Owned::try_from_element(child_count + neighbors.len(), dim, 0.0)?;
+    let mut inputs = Vec::with_capacity(parents.len() + neighbors.len());
+    for (index, &source) in parents.iter().chain(neighbors).enumerate() {
         let view = region
-            .get_view(parent)
-            .ok_or_else(|| ANNError::message("IVF split parent is missing from the region"))?;
-        let vectors = region.get_vectors(parent).ok_or_else(|| {
-            ANNError::message("IVF split parent vectors are missing from the region")
+            .get_view(source)
+            .ok_or_else(|| ANNError::message("IVF split source is missing from the region"))?;
+        let vectors = region.get_vectors(source).ok_or_else(|| {
+            ANNError::message("IVF split source vectors are missing from the region")
         })?;
+        if index >= parents.len() {
+            centroids
+                .row_mut(child_count + index - parents.len())
+                .copy_from_slice(view.centroid);
+        }
         inputs.push((view.members, vectors));
     }
 
-    let mut centroids = rowmajor::Owned::try_from_element(2 * parents.len(), dim, 0.0)?;
     let mut sums = vec![0.0; 2 * dim];
-    for ((_, vectors), centers) in inputs
+    for ((_, vectors), centers) in inputs[..parents.len()]
         .iter()
-        .zip(centroids.as_mut_slice().chunks_exact_mut(2 * dim))
+        .zip(centroids.as_mut_slice()[..child_count * dim].chunks_exact_mut(2 * dim))
     {
         fit_two_means(vectors.as_view(), centers, dim, iterations, rng, &mut sums)?;
     }
@@ -83,10 +95,11 @@ fn compute_split<I: Copy, L: Copy, R: RegionView<I, L>>(
             sizes[to] += 1;
         }
     }
-    let mut partitions: Vec<Partition<I, L>> = sizes
-        .into_iter()
-        .map(|size| Partition {
-            id: None,
+    let mut partitions: Vec<Partition<I, L>> = std::iter::repeat_n(None, child_count)
+        .chain(neighbors.iter().copied().map(Some))
+        .zip(sizes)
+        .map(|(id, size)| Partition {
+            id,
             members: Vec::with_capacity(size),
         })
         .collect();
