@@ -24,6 +24,7 @@ mod tests {
         check_internal_id_valid, create_index, drop_index, finish_import,
         garnet::{Context, Term, WriteCallback},
         import_term, insert,
+        provider::DEFAULT_START_POINT_ID,
         quantization::{GarnetQuantizer, MinMax8Bit, Spherical1Bit},
         remove, search_vector, set_attribute, set_quant_state,
         test_utils::{STORE, Store, q8_state_with_identity_transform},
@@ -61,6 +62,22 @@ mod tests {
         metric_type: i32,
         write_callback: WriteCallback,
     ) -> (*const c_void, Context) {
+        create_test_index_with_start_point(
+            store,
+            quant_type,
+            metric_type,
+            write_callback,
+            DEFAULT_START_POINT_ID,
+        )
+    }
+
+    fn create_test_index_with_start_point(
+        store: &Store,
+        quant_type: VectorQuantType,
+        metric_type: i32,
+        write_callback: WriteCallback,
+        start_point_id: u32,
+    ) -> (*const c_void, Context) {
         let callbacks = store.callbacks();
         let ctx = Context::new(0);
         let mut quant_needed = false;
@@ -79,6 +96,7 @@ mod tests {
                 metric_type,
                 l_build,
                 max_degree,
+                start_point_id,
                 callbacks.read_callback(),
                 write_callback,
                 callbacks.delete_callback(),
@@ -100,6 +118,38 @@ mod tests {
 
         unsafe {
             drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn basic_create_index_with_start_point() {
+        for start_point_id in [0, 42, DEFAULT_START_POINT_ID] {
+            let store = Store::new();
+            let create = || {
+                create_test_index_with_start_point(
+                    &store,
+                    VectorQuantType::NoQuant,
+                    Metric::L2 as i32,
+                    store.callbacks().write_callback(),
+                    start_point_id,
+                )
+            };
+            let (index_ptr, ctx) = create();
+            assert!(!index_ptr.is_null());
+            let point = [1.0f32, 2.0];
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 1, &point),
+                InsertResult::Success
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::Vector).get(), &start_point_id.to_ne_bytes()),
+                Some(bytemuck::cast_slice::<f32, u8>(&point).to_vec()),
+            );
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            let (index_ptr, ctx) = create();
+            assert!(!index_ptr.is_null());
+            assert_eq!(do_search(&ctx, index_ptr, &point, 1, None).0, [1]);
+            unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
 
@@ -157,12 +207,14 @@ mod tests {
             let store = Store::new();
             let (index_ptr, ctx) = create_test_index(&store, quant_type);
 
-            for (id, vector, expected, expected_internal_id) in [
-                (42, [1.0, 2.0], 1, 1u32),
+            for (id, vector, expected, expected_count) in [
+                (42, [1.0, 2.0], 1, 1u64),
                 (42, [2.0, 1.0], 3, 1),
                 (43, [3.0, 4.0], 1, 2),
                 (43, [4.0, 3.0], 3, 2),
             ] {
+                let existing_internal_id =
+                    store.get(ctx.term(Term::IntMap).get(), bytemuck::bytes_of(&id));
                 assert_eq!(
                     u8::from(insert_f32_vector(&ctx, index_ptr, id, &vector)),
                     expected,
@@ -171,18 +223,14 @@ mod tests {
                 let internal_id = store
                     .get(ctx.term(Term::IntMap).get(), bytemuck::bytes_of(&id))
                     .unwrap();
-                assert_eq!(
-                    bytemuck::pod_read_unaligned::<u32>(&internal_id),
-                    expected_internal_id
-                );
+                if let Some(existing_internal_id) = existing_internal_id {
+                    assert_eq!(internal_id, existing_internal_id);
+                }
                 assert_eq!(
                     store.get(ctx.term(Term::Vector).get(), &internal_id),
                     Some(bytemuck::cast_slice::<f32, u8>(&vector).to_vec())
                 );
-                assert_eq!(
-                    unsafe { card(ctx.get(), index_ptr) },
-                    u64::from(expected_internal_id)
-                );
+                assert_eq!(unsafe { card(ctx.get(), index_ptr) }, expected_count);
             }
             assert_eq!(store.int_map_reads(), 4);
 
@@ -344,10 +392,12 @@ mod tests {
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
             let id = 1u32.to_ne_bytes();
+            let zero = 0u32.to_ne_bytes();
             for (internal_id, accepted, expected) in [
-                (0u32, false, None),
+                (DEFAULT_START_POINT_ID, false, None),
+                (0, true, Some(zero.as_slice())),
                 (1, true, Some(id.as_slice())),
-                (0, false, Some(id.as_slice())),
+                (DEFAULT_START_POINT_ID, false, Some(id.as_slice())),
             ] {
                 let value = internal_id.to_ne_bytes();
                 assert_eq!(
@@ -546,7 +596,6 @@ mod tests {
     #[test]
     fn import_terms_and_finish_persistence_failure() {
         static FAIL_WRITE: AtomicBool = AtomicBool::new(false);
-        static STATUS_ONLY: AtomicBool = AtomicBool::new(false);
         unsafe extern "C" fn write(
             context: u64,
             key: *const u8,
@@ -554,51 +603,39 @@ mod tests {
             value: *const u8,
             value_len: usize,
         ) -> bool {
-            let is_final_status = context == Context::new(0).term(Term::Metadata).get()
-                && unsafe { std::slice::from_raw_parts(key, key_len) }
-                    == u32::from_be_bytes(*b"_imp").to_ne_bytes()
-                && unsafe { std::slice::from_raw_parts(value, value_len) } == [0];
-            if (!STATUS_ONLY.load(Ordering::Acquire) || is_final_status)
-                && FAIL_WRITE.swap(false, Ordering::AcqRel)
-            {
-                return false;
-            }
-            unsafe {
-                (Store::attach().callbacks().write_callback())(
-                    context, key, key_len, value, value_len,
-                )
-            }
+            !FAIL_WRITE.swap(false, Ordering::AcqRel)
+                && unsafe {
+                    (Store::attach().callbacks().write_callback())(
+                        context, key, key_len, value, value_len,
+                    )
+                }
         }
 
-        // Fail either start-point persistence or the final Disabled publication.
-        // Neither failure is retryable on this handle, unlike task validation.
-        for status_only in [false, true] {
-            let store = Store::new();
-            let (mut index_ptr, ctx) = create_test_index_with_write_callback(
-                &store,
-                VectorQuantType::NoQuant,
-                Metric::L2 as i32,
-                write,
-            );
-            assert!(!index_ptr.is_null());
-            import_single_vector(&ctx, index_ptr, None);
-            STATUS_ONLY.store(status_only, Ordering::Release);
-            FAIL_WRITE.store(true, Ordering::Release);
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::FinishFailed)
-            );
-            assert!(!FAIL_WRITE.load(Ordering::Acquire));
-            for reopen in [false, true] {
-                if reopen {
-                    unsafe { drop_index(ctx.get(), index_ptr) };
-                    index_ptr = create_test_index(&store, VectorQuantType::NoQuant).0;
-                }
-                assert!(unsafe { can_import(ctx.get(), index_ptr) });
-                assert_ordinary_operations_blocked(&ctx, index_ptr);
+        let store = Store::new();
+        let (mut index_ptr, ctx) = create_test_index_with_write_callback(
+            &store,
+            VectorQuantType::NoQuant,
+            Metric::L2 as i32,
+            write,
+        );
+        assert!(!index_ptr.is_null());
+        import_single_vector(&ctx, index_ptr, None);
+        // Finalization only writes ImportStatus::Disabled; start points were imported.
+        FAIL_WRITE.store(true, Ordering::Release);
+        assert_eq!(
+            unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
+            u8::from(ImportResult::FinishFailed)
+        );
+        assert!(!FAIL_WRITE.load(Ordering::Acquire));
+        for reopen in [false, true] {
+            if reopen {
+                unsafe { drop_index(ctx.get(), index_ptr) };
+                index_ptr = create_test_index(&store, VectorQuantType::NoQuant).0;
             }
-            unsafe { drop_index(ctx.get(), index_ptr) };
+            assert!(unsafe { can_import(ctx.get(), index_ptr) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
         }
+        unsafe { drop_index(ctx.get(), index_ptr) };
     }
 
     #[test]
@@ -653,6 +690,21 @@ mod tests {
             }
         });
 
+        let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
+        assert!(import_test_term(
+            &ctx,
+            index_ptr,
+            Term::Vector,
+            &start_id,
+            bytemuck::cast_slice(&[1.0f32, 2.0]),
+        ));
+        assert!(import_test_term(
+            &ctx,
+            index_ptr,
+            Term::Neighbors,
+            &start_id,
+            bytemuck::cast_slice(&[0u32; 21]),
+        ));
         assert_eq!(
             unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
             u8::from(ImportResult::Success)
@@ -663,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_empty_import_and_reopen() {
+    fn finish_import_requires_start_point() {
         for (quant_type, task_count) in [
             (VectorQuantType::NoQuant, 1),
             (VectorQuantType::NoQuant, 4),
@@ -681,17 +733,24 @@ mod tests {
             }
             for task_idx in 0..task_count {
                 assert!(unsafe { can_import(ctx.get(), index_ptr) });
+                let expected = if task_idx + 1 == task_count {
+                    ImportResult::FinishFailed
+                } else {
+                    ImportResult::Success
+                };
                 assert_eq!(
                     unsafe { finish_import(ctx.get(), index_ptr, task_idx, task_count) },
-                    u8::from(ImportResult::Success)
+                    u8::from(expected)
                 );
                 assert!(
                     store
-                        .get(ctx.term(Term::Vector).get(), &0u32.to_ne_bytes())
+                        .get(
+                            ctx.term(Term::Vector).get(),
+                            &DEFAULT_START_POINT_ID.to_ne_bytes(),
+                        )
                         .is_none()
                 );
                 if task_idx + 1 < task_count {
-                    assert!(unsafe { can_import(ctx.get(), index_ptr) });
                     assert_ordinary_operations_blocked(&ctx, index_ptr);
                 }
             }
@@ -700,27 +759,12 @@ mod tests {
                     unsafe { drop_index(ctx.get(), index_ptr) };
                     index_ptr = create_test_index(&store, quant_type).0;
                 }
-                assert!(!unsafe { can_import(ctx.get(), index_ptr) });
-                assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
-                assert!(
-                    store
-                        .get(ctx.term(Term::Vector).get(), &0u32.to_ne_bytes())
-                        .is_none()
-                );
+                assert_ordinary_operations_blocked(&ctx, index_ptr);
+                let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
+                assert!(!unsafe {
+                    check_internal_id_valid(ctx.get(), index_ptr, start_id.as_ptr(), start_id.len())
+                });
             }
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, 42, &[1.0; 2]),
-                InsertResult::Success
-            );
-            assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
-            let mapping = store
-                .get(ctx.term(Term::IntMap).get(), &42u32.to_ne_bytes())
-                .unwrap();
-            let internal_id = bytemuck::pod_read_unaligned::<u32>(&mapping);
-            assert!((1..u32::MAX).contains(&internal_id));
-            let (ids, distances) = do_search(&ctx, index_ptr, &[1.0; 2], 1, None);
-            assert_eq!(ids, [42]);
-            assert_eq!(distances, [0.0]);
             unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
@@ -753,12 +797,20 @@ mod tests {
         quantizer: Option<&dyn GarnetQuantizer>,
     ) {
         let id = 1u32.to_ne_bytes();
+        let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
         let vector = [1.0f32, 2.0];
         assert!(import_test_term(
             ctx,
             index_ptr,
             Term::Vector,
             &id,
+            bytemuck::cast_slice(&vector),
+        ));
+        assert!(import_test_term(
+            ctx,
+            index_ptr,
+            Term::Vector,
+            &start_id,
             bytemuck::cast_slice(&vector),
         ));
         if let Some(quantizer) = quantizer {
@@ -771,6 +823,13 @@ mod tests {
                 &id,
                 &quantized
             ));
+            assert!(import_test_term(
+                ctx,
+                index_ptr,
+                Term::Quantized,
+                &start_id,
+                &quantized,
+            ));
         }
         assert!(import_test_term(
             ctx,
@@ -778,6 +837,16 @@ mod tests {
             Term::Neighbors,
             &id,
             bytemuck::cast_slice(&[0u32; 21]),
+        ));
+        let mut start_neighbors = [0u32; 21];
+        start_neighbors[0] = 1;
+        start_neighbors[20] = 1;
+        assert!(import_test_term(
+            ctx,
+            index_ptr,
+            Term::Neighbors,
+            &start_id,
+            bytemuck::cast_slice(&start_neighbors),
         ));
         assert!(import_test_term(ctx, index_ptr, Term::IntMap, &id, &id));
         assert!(import_test_term(ctx, index_ptr, Term::ExtMap, &id, &id));
@@ -867,6 +936,23 @@ mod tests {
             .collect();
         let term_count = terms[0].len();
 
+        let start_vector = [0.5f32; 2];
+        let mut start_neighbors = [0u32; MAX_DEGREE + 1];
+        start_neighbors[0] = internal_ids[VECTOR_COUNT - 1];
+        start_neighbors[MAX_DEGREE] = 1;
+        let mut start_terms = vec![
+            (Term::Vector, bytemuck::cast_slice(&start_vector).to_vec()),
+            (
+                Term::Neighbors,
+                bytemuck::cast_slice(&start_neighbors).to_vec(),
+            ),
+        ];
+        if let Some(quantizer) = quantizer {
+            let mut quantized = vec![0u8; quantizer.bytes()];
+            quantizer.compress(&start_vector, &mut quantized).unwrap();
+            start_terms.push((Term::Quantized, quantized));
+        }
+
         for by_term in [true, false] {
             let store = Store::new();
             let (index_ptr, ctx) = create_test_index(&store, quant_type);
@@ -897,13 +983,16 @@ mod tests {
                     )
                 });
             }
-            for rejected_id in [0u32, u32::MAX] {
-                let id = rejected_id.to_ne_bytes();
-                let vector = [0.0f32; 2];
-                let value = bytemuck::cast_slice::<f32, u8>(&vector);
-                assert!(!import_test_term(&ctx, index_ptr, Term::Vector, &id, value));
-                assert!(store.get(ctx.term(Term::Vector).get(), &id).is_none());
-            }
+            let id = DEFAULT_START_POINT_ID.to_ne_bytes();
+            let value = b"{}";
+            assert!(!import_test_term(
+                &ctx,
+                index_ptr,
+                Term::Attributes,
+                &id,
+                value
+            ));
+            assert!(store.get(ctx.term(Term::Attributes).get(), &id).is_none());
 
             let rejected_id = (max_id + 1).to_ne_bytes();
             let mut bad_neighbors = [0u32; MAX_DEGREE + 1];
@@ -961,10 +1050,21 @@ mod tests {
                 }
             }
 
+            let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
+            for (term, value) in &start_terms {
+                assert!(import_test_term(&ctx, index_ptr, *term, &start_id, value));
+            }
+
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(&ctx, index_ptr);
             finalize(&ctx, index_ptr);
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
+            for (term, value) in &start_terms {
+                assert_eq!(
+                    store.get(ctx.get() | *term as u64, &start_id).as_ref(),
+                    Some(value)
+                );
+            }
             for rejected_id in [1u32, 101] {
                 let id = rejected_id.to_ne_bytes();
                 for (term, value) in &terms[1] {
@@ -1216,8 +1316,7 @@ mod tests {
         let vector_bytes = bytemuck::cast_slice(&vector);
         let vector_len = 2;
 
-        // First insert will get ID=1
-        let iid = 1u32;
+        let iid = 0u32;
         let iid_bytes = bytemuck::bytes_of(&iid);
 
         // Check internal ID does not exist
@@ -1778,7 +1877,7 @@ mod tests {
         );
 
         // previous insert is unquantized; inserted before training
-        let iid = required_vectors as u32;
+        let iid = required_vectors as u32 - 1;
         assert!(
             store
                 .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
@@ -1786,7 +1885,7 @@ mod tests {
         );
 
         // latest insert is quantized
-        let iid = required_vectors as u32 + 1; // +1 to account for the start vector
+        let iid = required_vectors as u32;
         let qv = store
             .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
             .expect("missing quant vector");
@@ -1797,7 +1896,7 @@ mod tests {
         unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 1) };
 
         // all previous inserts are now quantized
-        for iid in 1..=required_vectors as u32 {
+        for iid in (0..=required_vectors as u32).chain([DEFAULT_START_POINT_ID]) {
             let qv = store
                 .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
                 .expect("missing quant vector");
