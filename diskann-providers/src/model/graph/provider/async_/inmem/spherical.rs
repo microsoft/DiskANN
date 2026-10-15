@@ -244,7 +244,7 @@ macro_rules! create_vector_store {
     };
 }
 
-create_vector_store!(1, 2, 4);
+create_vector_store!(1, 2, 3, 4);
 
 ////////////////
 // SetElement //
