@@ -167,6 +167,7 @@ use crate::{
     meta,
     num::PowerOfTwo,
     poly,
+    utils::RuntimeArch,
 };
 #[cfg(feature = "flatbuffers")]
 use crate::{alloc::CompoundError, flatbuffers as fb};
@@ -800,6 +801,239 @@ where
     }
 }
 
+mod dispatch {
+    use super::*;
+
+    type L2 = CompensatedSquaredL2;
+    type IP = CompensatedIP;
+    type Co = CompensatedCosine;
+
+    type Full<A> = FullQuery<A>;
+    type BitTranspose<A> = Query<4, bits::BitTranspose, A>;
+    type ScalarQuant<const N: usize, A> = Query<N, bits::Dense, A>;
+
+    type Reified<D, const N: usize, M> = Reify<D, M, (), AsData<N>>;
+
+    type ReifiedData<D, const N: usize, M> = Reify<D, M, AsData<N>, AsData<N>>;
+    // type Curried<D, const N: usize, Q, M> = Reify<Curried<D, Q>, M, (), AsData<N>>;
+
+    #[derive(Debug)]
+    enum Adaptor<T, U> {
+        Empty,
+        Visitor(T),
+        Visited(U),
+    }
+
+    impl<T, U> Adaptor<T, U> {
+        pub(super) fn new(visitor: T) -> Self {
+            Self::Visitor(visitor)
+        }
+
+        fn take(&mut self) -> T {
+            if let Self::Visitor(visitor) = std::mem::replace(self, Self::Empty) {
+                visitor
+            } else {
+                panic!("visitor should only be used once");
+            }
+        }
+
+        fn set(&mut self, visited: U) {
+            *self = Self::Visited(visited)
+        }
+
+        fn visit<F>(&mut self, f: F)
+        where
+            F: FnOnce(T) -> U
+        {
+            let result = f(self.take());
+            self.set(result);
+        }
+    }
+
+    struct Bits<const N: usize>;
+
+    trait Family: 'static {
+       type DistanceVisitor<'a>: ?Sized + 'a;
+
+       fn distance_visitor<'a, V: DistanceVisitor>(
+            visitor: &'a mut Adaptor<V, V::Output>
+       ) -> &'a mut Self::DistanceVisitor<'a>;
+    }
+
+    impl Family for Bits<1> {
+       type DistanceVisitor<'a> = dyn Visit1 + 'a;
+
+       fn distance_visitor<'a, V: DistanceVisitor>(
+            visitor: &'a mut Adaptor<V, V::Output>
+       ) -> &'a mut Self::DistanceVisitor<'a> {
+           visitor
+       }
+    }
+
+    trait Visit1 {
+        // Scalar
+        fn l2_scalar(&mut self, d: ReifiedData<L2, 1, Scalar>);
+        fn ip_scalar(&mut self, d: ReifiedData<IP, 1, Scalar>);
+        fn co_scalar(&mut self, d: ReifiedData<Co, 1, Scalar>);
+
+        // V3
+        #[cfg(target_arch = "x86_64")]
+        fn l2_v3(&mut self, d: ReifiedData<L2, 1, V3>);
+
+        #[cfg(target_arch = "x86_64")]
+        fn ip_v3(&mut self, d: ReifiedData<IP, 1, V3>);
+
+        #[cfg(target_arch = "x86_64")]
+        fn co_v3(&mut self, d: ReifiedData<Co, 1, V3>);
+
+        // Neon
+        #[cfg(target_arch = "aarch64")]
+        fn l2_neon(&mut self, d: ReifiedData<L2, 1, Neon>);
+
+        #[cfg(target_arch = "aarch64")]
+        fn ip_neon(&mut self, d: ReifiedData<IP, 1, Neon>);
+
+        #[cfg(target_arch = "aarch64")]
+        fn co_neon(&mut self, d: ReifiedData<Co, 1, Neon>);
+    }
+
+    impl<V> Visit1 for Adaptor<V, V::Output>
+    where
+        V: DistanceVisitor,
+    {
+        // Scalar
+        fn l2_scalar(&mut self, d: ReifiedData<L2, 1, Scalar>) {
+            self.visit(|v| v.visit(d))
+        }
+        fn ip_scalar(&mut self, d: ReifiedData<IP, 1, Scalar>) {
+            self.visit(|v| v.visit(d))
+        }
+        fn co_scalar(&mut self, d: ReifiedData<Co, 1, Scalar>) {
+            self.visit(|v| v.visit(d))
+        }
+
+        // V3
+        #[cfg(target_arch = "x86_64")]
+        fn l2_v3(&mut self, d: ReifiedData<L2, 1, V3>) {
+            self.visit(|v| v.visit(d))
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        fn ip_v3(&mut self, d: ReifiedData<IP, 1, V3>) {
+            self.visit(|v| v.visit(d))
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        fn co_v3(&mut self, d: ReifiedData<Co, 1, V3>) {
+            self.visit(|v| v.visit(d))
+        }
+
+        // Neon
+        #[cfg(target_arch = "aarch64")]
+        fn l2_neon(&mut self, d: ReifiedData<L2, 1, Neon>) {
+            self.visit(|v| v.visit(d))
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        fn ip_neon(&mut self, d: ReifiedData<IP, 1, Neon>) {
+            self.visit(|v| v.visit(d))
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        fn co_neon(&mut self, d: ReifiedData<Co, 1, Neon>) {
+            self.visit(|v| v.visit(d))
+        }
+    }
+
+    trait DispatchDistance<const N: usize>
+    where
+        Bits<N>: Family,
+    {
+        fn dispatch_distance<'a>(
+            &self,
+            quantizer: &SphericalQuantizer,
+            visitor: &'a mut <Bits<N> as Family>::DistanceVisitor<'a>,
+        );
+    }
+
+    #[derive(Debug)]
+    struct Params<M, D> {
+        arch: M,
+        metric: D,
+    }
+
+    impl DispatchDistance<1> for Params<Scalar, crate::distances::SquaredL2> {
+        fn dispatch_distance(&self, quantizer: &SphericalQuantizer, visitor: &mut dyn Visit1) {
+            visitor.l2_scalar(ReifiedData::new(
+                quantizer.as_functor(),
+                quantizer.output_dim(),
+                self.arch,
+            ))
+        }
+    }
+
+    //     // Scalar
+    //     fn l2_scalar(self, v: Reified<L2, N, Scalar>);
+    //     fn ip_scalar(self, v: Reified<IP, N, Scalar>);
+    //     fn co_scalar(self, v: Reified<Co, N, Scalar>);
+
+    //     // V3
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn l2_v3(self, v: Reified<L2, N, V3>);
+
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn ip_v3(self, v: Reified<IP, N, V3>);
+
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn co_v3(self, v: Reified<Co, N, V3>);
+
+    //     // V4
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn l2_v4(self, v: Reified<L2, N, V4>);
+
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn ip_v4(self, v: Reified<IP, N, V4>);
+
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn co_v4(self, v: Reified<Co, N, V4>);
+
+    //     // Neon
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn l2_v3(self, v: Reified<L2, N, V3>);
+
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn ip_v3(self, v: Reified<IP, N, V3>);
+
+    //     #[cfg(target_arch = "x86_64")]
+    //     fn co_v3(self, v: Reified<Co, N, V3>);
+
+    // }
+
+    // trait Visit<T> {
+    //     fn visit(self, value: T);
+    // }
+
+    // trait DistanceMap {
+    //     type Distance: DynDistanceComputer;
+
+    //     fn map(self, quantizer: &SphericalQuantizer,
+    // }
+
+    // // This is used as the place-holder type for unimplemented kernels.
+    // #[derive(Debug)]
+    // pub(super) enum Unimplemented {}
+
+    // impl DynQueryComputer for Unimplemented {
+    //     fn evaluate(&self, _x: Opaque<'_>) -> Result<f32, QueryDistanceError> {
+    //         unreachable!("this type is unconstructible")
+    //     }
+
+    //     fn layout(&self) -> QueryLayout {
+    //         unreachable!("this type is unconstructible")
+    //     }
+    // }
+}
+
 mod distance {
     use super::*;
 
@@ -975,6 +1209,8 @@ mod query_distance {
             scratch: ScopedAllocator<'_>,
             visitor: &mut dyn Visit<N, Self, A>,
         );
+
+        fn supports(self, layout: QueryLayout) -> bool;
     }
 
     pub(super) trait Visit<const N: usize, M, A>
@@ -1120,6 +1356,16 @@ mod query_distance {
                 type DataIP = Reified<IP, 1, Data<1, A>, $arch>;
                 type DataCosine = Reified<Cosine, 1, Data<1, A>, $arch>;
 
+                fn supports(self, layout: QueryLayout) -> bool {
+                    match layout {
+                        QueryLayout::ScalarQuantized => false,
+                        QueryLayout::FullPrecision |
+                            QueryLayout::FourBitTransposed |
+                            QueryLayout::SameAsData => true,
+
+                    }
+                }
+
                 fn map(
                     self,
                     quantizer: &SphericalQuantizer,
@@ -1131,8 +1377,6 @@ mod query_distance {
                 ) {
                     use SupportedMetric::{Cosine, InnerProduct, SquaredL2};
 
-                    let metric = quantizer.metric();
-                    let dim = quantizer.output_dim();
                     match layout {
                         QueryLayout::SameAsData => {
                             let q = prepare_data(quantizer, query, allocator, scratch).unwrap();
@@ -1142,7 +1386,7 @@ mod query_distance {
                                 InnerProduct => data_ip(DataIP),
                                 Cosine => data_cosine(DataCosine),
                             );
-                        }
+                        },
                         QueryLayout::FourBitTransposed => {
                             let q = prepare_bit_transpose(quantizer, query, allocator, scratch)
                                 .unwrap();
@@ -1152,8 +1396,8 @@ mod query_distance {
                                 InnerProduct => bit_transpose_ip(BitTransposeIP),
                                 Cosine => bit_transpose_cosine(BitTransposeCosine),
                             );
-                        }
-                        QueryLayout::ScalarQuantized => match metric {
+                        },
+                        QueryLayout::ScalarQuantized => match quantizer.metric() {
                             SquaredL2 => visitor.scalar_l2(None),
                             InnerProduct => visitor.scalar_ip(None),
                             Cosine => visitor.scalar_cosine(None),
@@ -1166,7 +1410,7 @@ mod query_distance {
                                 InnerProduct => full_ip(FullIP),
                                 Cosine => full_cosine(FullCosine),
                             );
-                        }
+                        },
                     }
                 }
             }
@@ -1195,6 +1439,16 @@ mod query_distance {
                 type DataIP = Reified<IP, $N, Data<$N, A>, $arch>;
                 type DataCosine = Reified<Cosine, $N, Data<$N, A>, $arch>;
 
+                fn supports(self, layout: QueryLayout) -> bool {
+                    match layout {
+                        QueryLayout::FourBitTransposed => false,
+                        QueryLayout::FullPrecision |
+                            QueryLayout::ScalarQuantized |
+                            QueryLayout::SameAsData => true,
+
+                    }
+                }
+
                 fn map(
                     self,
                     quantizer: &SphericalQuantizer,
@@ -1206,8 +1460,6 @@ mod query_distance {
                 ) {
                     use SupportedMetric::{Cosine, InnerProduct, SquaredL2};
 
-                    let metric = quantizer.metric();
-                    let dim = quantizer.output_dim();
                     match layout {
                         QueryLayout::SameAsData => {
                             let q = prepare_data(quantizer, query, allocator, scratch).unwrap();
@@ -1218,7 +1470,7 @@ mod query_distance {
                                 Cosine => data_cosine(DataCosine),
                             );
                         }
-                        QueryLayout::FourBitTransposed => match metric {
+                        QueryLayout::FourBitTransposed => match quantizer.metric() {
                             SquaredL2 => visitor.bit_transpose_l2(None),
                             InnerProduct => visitor.bit_transpose_ip(None),
                             Cosine => visitor.bit_transpose_cosine(None),
