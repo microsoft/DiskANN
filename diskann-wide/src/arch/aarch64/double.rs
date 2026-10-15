@@ -482,6 +482,8 @@ mod tests {
     test_utils::ops::test_lossless_convert!(u8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x16 => i16x16, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u8x8 => f32x8, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u8x16 => f32x16, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(u16x8 => f32x8, 0x84c1c6f05b169a20, test_neon());
 
     test_utils::ops::test_cast!(f16x8 => f32x8, 0xba8fe343fc9dbeff, test_neon());

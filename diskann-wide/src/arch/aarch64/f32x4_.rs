@@ -219,7 +219,6 @@ mod tests {
     test_utils::ops::test_sumtree!(f32x4, 0x828bd890a470dc4d, test_neon());
 
     // Conversions
-    test_utils::ops::test_cast!(u32x4 => f32x4, 0xcd18de89bb8b2fcf, test_neon());
     test_utils::ops::test_lossless_convert!(u16x4 => f32x4, 0x2e07f4c89da53bb1, test_neon());
 
     test_utils::ops::test_lossless_convert!(f16x4 => f32x4, 0xecba3008eae54ce7, test_neon());

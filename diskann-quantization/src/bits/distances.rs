@@ -115,7 +115,9 @@ use diskann_wide::{
 };
 
 #[cfg(target_arch = "aarch64")]
-use diskann_wide::{SIMDDotProduct, SIMDMulAdd, SIMDSumTree, SIMDVector};
+use diskann_wide::{
+    SIMDDotProduct, SIMDMulAdd, SIMDPartialEq, SIMDSelect, SIMDSumTree, SIMDVector,
+};
 
 use super::{Binary, BitSlice, BitTranspose, Dense, Representation, Unsigned};
 use crate::distances::{Hamming, InnerProduct, MV, MathematicalResult, SquaredL2, check_lengths};
@@ -3542,10 +3544,6 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
         x: &[f32],
         y: USlice<'_, 1>,
     ) -> MathematicalResult<f32> {
-        use std::arch::aarch64::{
-            vandq_u32, vdupq_n_u8, vdupq_n_u32, vreinterpretq_f32_u32, vreinterpretq_u32_f32,
-            vreinterpretq_u32_u8,
-        };
         // returns number of quantized vectors
         let len = check_lengths!(x, y)?;
 
@@ -3572,22 +3570,13 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
             let bits5 = u32s_4::from_array(arch, [1048576, 2097152, 4194304, 8388608]);
             let bits6 = u32s_4::from_array(arch, [16777216, 33554432, 67108864, 134217728]);
             let bits7 = u32s_4::from_array(arch, [268435456, 536870912, 1073741824, 2147483648]);
+            let zero_u32 = u32s_4::splat(arch, 0);
+            let zero_f32 = f32s_4::splat(arch, 0.0);
 
             while i + 4 <= y_bytes {
                 // SAFETY: `i + 4 <= y_bytes` guarantees that four packed bytes are readable.
                 let y_word = unsafe { py_u8.add(i).cast::<u32>().read_unaligned() };
-                // SAFETY: `arch` proves that NEON instructions are available.
-                let y_words = unsafe { vdupq_n_u32(y_word) };
-                let (mask0, mask1, mask2, mask3, mask4, mask5, mask6, mask7) = (
-                    arch.vtstq_u32(y_words, bits0.to_underlying()),
-                    arch.vtstq_u32(y_words, bits1.to_underlying()),
-                    arch.vtstq_u32(y_words, bits2.to_underlying()),
-                    arch.vtstq_u32(y_words, bits3.to_underlying()),
-                    arch.vtstq_u32(y_words, bits4.to_underlying()),
-                    arch.vtstq_u32(y_words, bits5.to_underlying()),
-                    arch.vtstq_u32(y_words, bits6.to_underlying()),
-                    arch.vtstq_u32(y_words, bits7.to_underlying()),
-                );
+                let y_words = u32s_4::splat(arch, y_word);
 
                 // SAFETY: `i + 4 <= y_bytes` guarantees 32 logical elements are readable.
                 let x_ptr = unsafe { px_f32.add(8 * i) };
@@ -3608,28 +3597,14 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
                 // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
                 let x7 = unsafe { f32s_4::load_simd(arch, x_ptr.add(28)) };
 
-                let mask_and = |x: f32s_4, mask| {
-                    // SAFETY: This only reinterprets and masks lane bit patterns, preserving
-                    // valid `f32` encodings while selecting either the original lane or zero.
-                    unsafe {
-                        f32s_4::from_underlying(
-                            arch,
-                            vreinterpretq_f32_u32(vandq_u32(
-                                vreinterpretq_u32_f32(x.to_underlying()),
-                                mask,
-                            )),
-                        )
-                    }
-                };
-
-                s0 = s0 + mask_and(x0, mask0);
-                s1 = s1 + mask_and(x1, mask1);
-                s2 = s2 + mask_and(x2, mask2);
-                s3 = s3 + mask_and(x3, mask3);
-                s0 = s0 + mask_and(x4, mask4);
-                s1 = s1 + mask_and(x5, mask5);
-                s2 = s2 + mask_and(x6, mask6);
-                s3 = s3 + mask_and(x7, mask7);
+                s0 = s0 + (y_words & bits0).eq_simd(zero_u32).select(zero_f32, x0);
+                s1 = s1 + (y_words & bits1).eq_simd(zero_u32).select(zero_f32, x1);
+                s2 = s2 + (y_words & bits2).eq_simd(zero_u32).select(zero_f32, x2);
+                s3 = s3 + (y_words & bits3).eq_simd(zero_u32).select(zero_f32, x3);
+                s0 = s0 + (y_words & bits4).eq_simd(zero_u32).select(zero_f32, x4);
+                s1 = s1 + (y_words & bits5).eq_simd(zero_u32).select(zero_f32, x5);
+                s2 = s2 + (y_words & bits6).eq_simd(zero_u32).select(zero_f32, x6);
+                s3 = s3 + (y_words & bits7).eq_simd(zero_u32).select(zero_f32, x7);
 
                 i += 4;
             }
@@ -3637,12 +3612,7 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
             while i < y_bytes {
                 // SAFETY: The loop condition guarantees that one byte is readable.
                 let y_word = unsafe { *py_u8.add(i) };
-                // SAFETY: `arch` proves that NEON instructions are available.
-                let y_words = unsafe { vreinterpretq_u32_u8(vdupq_n_u8(y_word)) };
-                let (mask_lo, mask_hi) = (
-                    arch.vtstq_u32(y_words, bits0.to_underlying()),
-                    arch.vtstq_u32(y_words, bits1.to_underlying()),
-                );
+                let y_words = u32s_4::splat(arch, y_word as u32);
 
                 // SAFETY: The loop condition guarantees that 8 logical elements can be read.
                 let x_ptr = unsafe { px_f32.add(8 * i) };
@@ -3651,28 +3621,8 @@ impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32],
                 // SAFETY: `x_ptr` is valid for 8 consecutive `f32` values.
                 let x1 = unsafe { f32s_4::load_simd(arch, x_ptr.add(4)) };
 
-                // SAFETY: These bitwise operations preserve selected `f32` bit patterns.
-                let (x0, x1) = unsafe {
-                    (
-                        f32s_4::from_underlying(
-                            arch,
-                            vreinterpretq_f32_u32(vandq_u32(
-                                vreinterpretq_u32_f32(x0.to_underlying()),
-                                mask_lo,
-                            )),
-                        ),
-                        f32s_4::from_underlying(
-                            arch,
-                            vreinterpretq_f32_u32(vandq_u32(
-                                vreinterpretq_u32_f32(x1.to_underlying()),
-                                mask_hi,
-                            )),
-                        ),
-                    )
-                };
-
-                s0 = s0 + x0;
-                s1 = s1 + x1;
+                s0 = s0 + (y_words & bits0).eq_simd(zero_u32).select(zero_f32, x0);
+                s1 = s1 + (y_words & bits1).eq_simd(zero_u32).select(zero_f32, x1);
                 i += 1;
             }
             s = ((s0 + s1) + (s2 + s3)).sum_tree();

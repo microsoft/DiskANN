@@ -207,4 +207,5 @@ mod tests {
 
     // Conversions
     test_utils::ops::test_lossless_convert!(u16x4 => u32x4, 0x2e07f4c89da53bb1, test_neon());
+    test_utils::ops::test_cast!(u32x4 => f32x4, 0xcd18de89bb8b2fcf, test_neon());
 }

@@ -302,27 +302,6 @@ impl Neon {
         }
     }
 
-    /// Test each lane of `x` and `y` for any shared set bits.
-    ///
-    /// Returns `u32::MAX` in a lane if `(x[i] & y[i]) != 0`, otherwise `0`.
-    ///
-    /// See: [`vtstq_u32`]
-    #[inline(always)]
-    pub fn vtstq_u32(self, x: uint32x4_t, y: uint32x4_t) -> uint32x4_t {
-        if cfg!(miri) {
-            let x = u32x4::from_underlying(self, x).to_array();
-            let y = u32x4::from_underlying(self, y).to_array();
-            u32x4::from_array(
-                self,
-                core::array::from_fn(|i| if (x[i] & y[i]) != 0 { u32::MAX } else { 0 }),
-            )
-            .to_underlying()
-        } else {
-            // SAFETY: The `Neon` witness guarantees NEON is available.
-            unsafe { vtstq_u32(x, y) }
-        }
-    }
-
     fn run_function_with_1<F, T0, R>(self, x0: T0::Of<'_>) -> R
     where
         T0: AddLifetime,
@@ -740,17 +719,6 @@ mod tests {
             assert_eq!(b.to_array(), [10.0, 11.0, 12.0, 13.0]);
             assert_eq!(c.to_array(), [20.0, 21.0, 22.0, 23.0]);
             assert_eq!(d.to_array(), [30.0, 31.0, 32.0, 33.0]);
-        }
-    }
-
-    #[test]
-    fn test_vtstq_u32() {
-        if let Some(arch) = test_neon() {
-            let lhs = u32x4::from_array(arch, [0b0001, 0b0010, 0b0100, 0b1000]).to_underlying();
-            let rhs = u32x4::from_array(arch, [0b0001, 0b0000, 0b0111, 0b0001]).to_underlying();
-
-            let out = u32x4::from_underlying(arch, arch.vtstq_u32(lhs, rhs));
-            assert_eq!(out.to_array(), [u32::MAX, 0, u32::MAX, 0]);
         }
     }
 }
