@@ -65,6 +65,14 @@ impl<'a, I> SortedNeighbors<'a, I> {
         storage.extend(self.iter().map(|n| Neighbor::new(f(n.id()), *n.distance())));
         SortedNeighbors(storage)
     }
+
+    /// Return an iterator over the IDs.
+    pub(crate) fn ids(&self) -> impl ExactSizeIterator<Item = I> + Clone
+    where
+        I: Copy,
+    {
+        self.iter().map(|neighbor| *neighbor.id())
+    }
 }
 
 impl<I> Deref for SortedNeighbors<'_, I> {
