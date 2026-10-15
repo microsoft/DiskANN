@@ -24,10 +24,6 @@ use crate::{
 /// Choose how data is reranked.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::repr) enum Rerank {
-    /// No reranking will be performed and no space for higher-precision vectors will be
-    /// allocated.
-    None,
-
     /// Use 16-bit floating-point numbers to store the higher-precision representation.
     /// These will be used automatically during search to rerank candidates.
     F16,
@@ -40,7 +36,6 @@ impl Rerank {
     )]
     fn bytes_for(&self, dim: usize) -> Bytes {
         match self {
-            Self::None => Bytes::new(0),
             Self::F16 => Bytes::new(dim.checked_mul(2).expect("f16 is smaller than f32")),
         }
     }
@@ -64,7 +59,6 @@ impl Reranker {
         dim: usize,
     ) -> (Self, Option<simple::Config>) {
         match rerank {
-            Rerank::None => Self::disabled(),
             Rerank::F16 => {
                 let distance = Distance::new(metric.as_vector_metric(), Some(dim));
 
@@ -213,8 +207,12 @@ mod tests {
     const TEST_DIM: usize = 1;
 
     /// Create a reranker with the test dimension for the given configuration and metric.
-    fn make_store(rerank: Rerank, metric: Metric) -> (Reranker, Store<Optional<Simple>>) {
-        let (reranker, config) = Reranker::new_with_config(rerank, metric, TEST_DIM);
+    fn make_store(rerank: Option<Rerank>, metric: Metric) -> (Reranker, Store<Optional<Simple>>) {
+        let (reranker, config) = if let Some(rerank) = rerank {
+            Reranker::new_with_config(rerank, metric, TEST_DIM)
+        } else {
+            Reranker::disabled()
+        };
 
         let store = Store::new(
             store::Layout::new(Capacity::new(10), MaxDegree::new(0), 0),
@@ -228,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_disabled_rerank() {
-        let (reranker, store) = make_store(Rerank::None, Metric::SquaredL2);
+        let (reranker, store) = make_store(None, Metric::SquaredL2);
         assert_matches!(reranker, Reranker::None);
         assert!(
             store.slots().slots().is_none(),
@@ -248,7 +246,7 @@ mod tests {
     #[test]
     fn test_reranker_f16() {
         for metric in Metric::all() {
-            let (reranker, store) = make_store(Rerank::F16, metric);
+            let (reranker, store) = make_store(Some(Rerank::F16), metric);
             let mut map = Reference::new(TEST_DIM);
 
             // Insert the following values by logical id:
