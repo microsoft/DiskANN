@@ -940,9 +940,9 @@ where
 //   Informally, "what's the smallest scaling factor so `v[position]` gets rounded to
 //   the next value.
 //
-// 2. Imposes a total ordering on `f32` values so it can be used in a `BinaryHeap`.
-//   Additionally, ordering is reverse so that `BinaryHeap` models a min-heap instead
-//   of a max-heap.
+// 2. Imposes a total ordering on nonnegative, non-NaN critical values using unsigned
+//   bit order, which matches numeric order for these values. Additionally, ordering
+//   is reversed so that `BinaryHeap` models a min-heap instead of a max-heap.
 #[derive(Debug, Clone, Copy)]
 struct Pair {
     value: f32,
@@ -951,7 +951,7 @@ struct Pair {
 
 impl PartialEq for Pair {
     fn eq(&self, other: &Self) -> bool {
-        self.value.eq(&other.value)
+        self.value.to_bits().eq(&other.value.to_bits())
     }
 }
 
@@ -963,10 +963,7 @@ impl PartialOrd for Pair {
 }
 impl Ord for Pair {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .value
-            .partial_cmp(&self.value)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        other.value.to_bits().cmp(&self.value.to_bits())
     }
 }
 
@@ -992,6 +989,10 @@ impl Ord for Pair {
 ///
 /// Refer to algorithm 1 in <https://arxiv.org/pdf/2409.09913>.
 ///
+/// # Errors
+///
+/// Returns an error if `v` contains NaN or scratch allocation fails.
+///
 /// # Panics
 ///
 /// Panics is `v.is_empty()`.
@@ -1005,12 +1006,15 @@ fn maximize_cosine_similarity(
     v: &[f32],
     num_bits: NonZeroUsize,
     allocator: ScopedAllocator<'_>,
-) -> Result<f32, AllocatorError> {
+) -> Result<f32, CompressionError> {
     // Initially, the lattice element has the value `0.5` for all dimensions.
     // This means the initial inner product between `v` and the rounded term is simply
     // `0.5 * sum(abs.(v))`. The absolute value is used because the latice element is
     // always in the direction of the components in `v`.
     let mut current_ip = 0.5 * v.iter().map(|i| i.abs() as f64).sum::<f64>();
+    if current_ip.is_nan() {
+        return Err(CompressionError::InputContainsNaN);
+    }
     let mut current_square_norm = 0.25 * (v.len() as f64);
 
     // Book keeping for the current value of the rounded vector.
@@ -1254,7 +1258,40 @@ mod tests {
         test_util,
     };
 
-    // Test cosine-similarity maximizer
+    #[test]
+    fn cosine_similarity_maximizer_errors() {
+        let num_bits = NonZeroUsize::new(4).unwrap();
+        for nan in [f32::NAN, f32::from_bits(0xffc0_0001)] {
+            for position in 0..4 {
+                let mut target = [1.0; 4];
+                target[position] = nan;
+                assert_eq!(
+                    maximize_cosine_similarity(
+                        &target,
+                        num_bits,
+                        ScopedAllocator::new(&test_util::AlwaysFails),
+                    ),
+                    Err(CompressionError::InputContainsNaN),
+                );
+            }
+        }
+        for budget in 0..=2 {
+            let result = maximize_cosine_similarity(
+                &[1.0, 0.5],
+                num_bits,
+                ScopedAllocator::new(&test_util::LimitedAllocator::new(budget)),
+            );
+            if budget < 2 {
+                assert_eq!(
+                    result,
+                    Err(CompressionError::AllocatorError(AllocatorError))
+                );
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
     #[test]
     fn test_cosine_similarity_maximizer() {
         let mut rng = StdRng::seed_from_u64(0x070d9ff8cf5e0f8c);
@@ -1305,7 +1342,11 @@ mod tests {
 
             // We expect to either get the best value found via exhaustive search, or some
             // scalar multiple of it (since that will have the same cosine similarity).
-            let passed = if best == clamped {
+            let passed = if best == clamped
+                || (best_similarity == clamped_cosine.into_inner()
+                    && std::iter::zip(target, std::iter::zip(best, clamped))
+                        .all(|(input, (expected, actual))| input == 0.0 || expected == actual))
+            {
                 true
             } else {
                 let ratio: Vec<f32> = std::iter::zip(best, clamped)
@@ -1336,6 +1377,20 @@ mod tests {
                 );
             }
         };
+
+        for target in [
+            [1.0, 0.0, -0.0, -1.0],
+            [0.0, 0.5, -0.5, 0.0],
+            [1.0, 1.0, -1.0, -1.0],
+            [
+                f32::from_bits(1.0f32.to_bits() - 1),
+                1.0,
+                f32::from_bits(1.0f32.to_bits() + 1),
+                -1.0,
+            ],
+        ] {
+            run_test(target);
+        }
 
         // Run targeted tests.
         let min = -3.5;
@@ -2423,6 +2478,7 @@ mod tests {
         {
             let mut query: Vec<f32> = quantizer.shift().to_vec();
             let mut d = Data::<1, _>::new_boxed(quantizer.output_dim());
+            let mut multibit_data = Data::<4, _>::new_boxed(quantizer.output_dim());
             let mut q = Query::<4, BitTranspose, _>::new_boxed(quantizer.output_dim());
 
             for i in 0..query.len() {
@@ -2435,6 +2491,12 @@ mod tests {
                         .unwrap_err();
 
                     assert_eq!(err.to_string(), "input contains NaN", "failed for {}", v);
+
+                    let err = quantizer
+                        .compress_into_with(&*query, multibit_data.reborrow_mut(), scoped_global)
+                        .unwrap_err();
+
+                    assert_eq!(err, CompressionError::InputContainsNaN);
 
                     let err = quantizer
                         .compress_into_with(&*query, q.reborrow_mut(), scoped_global)
