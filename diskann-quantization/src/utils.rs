@@ -8,6 +8,7 @@ use std::ptr::NonNull;
 use thiserror::Error;
 
 use diskann_utils::views::rowmajor::{self, Matrix};
+use diskann_wide::arch;
 
 /// Specify featres and config flags that will be propagated to `docsrs` config.
 macro_rules! features {
@@ -198,6 +199,50 @@ where
     variances.iter_mut().for_each(|v| *v /= data.nrows() as f64);
     variances
 }
+
+/// The runtime architecture.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RuntimeArch {
+    Scalar(arch::Scalar),
+    #[cfg(target_arch = "x86_64")]
+    V3(arch::x86_64::V3),
+    #[cfg(target_arch = "x86_64")]
+    V4(arch::x86_64::V4),
+    #[cfg(target_arch = "aarch64")]
+    Neon(arch::aarch64::Neon),
+}
+
+impl RuntimeArch {
+    /// Get the current runtime architecture.
+    pub(crate) fn new() -> Self {
+        arch::dispatch_no_features(GetArch)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GetArch;
+
+macro_rules! target {
+    ($arch:path => $variant:ident) => {
+        impl arch::Target<$arch, RuntimeArch> for GetArch {
+            #[inline(always)]
+            fn run(self, arch: $arch) -> RuntimeArch {
+                RuntimeArch::$variant(arch)
+            }
+        }
+    };
+}
+
+target!(arch::Scalar => Scalar);
+
+#[cfg(target_arch = "x86_64")]
+target!(arch::x86_64::V3 => V3);
+
+#[cfg(target_arch = "x86_64")]
+target!(arch::x86_64::V4 => V4);
+
+#[cfg(target_arch = "aarch64")]
+target!(arch::aarch64::Neon => Neon);
 
 ///////////
 // Tests //

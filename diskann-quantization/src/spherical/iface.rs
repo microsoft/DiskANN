@@ -776,6 +776,426 @@ where
     }
 }
 
+trait DistanceVisitor {
+    type Output;
+    fn visit<T>(self, distance: T) -> Self::Output
+    where
+        T: DynDistanceComputer + 'static;
+}
+
+#[derive(Debug)]
+struct AsPoly<A>(A);
+
+impl<A> DistanceVisitor for AsPoly<A>
+where
+    A: AllocatorCore,
+{
+    type Output = Result<Poly<dyn DynDistanceComputer, A>, AllocatorError>;
+    fn visit<T>(self, distance: T) -> Self::Output
+    where
+        T: DynDistanceComputer + 'static,
+    {
+        let alloc = self.0;
+        poly!({ DynDistanceComputer }, distance, alloc)
+    }
+}
+
+mod distance {
+    use super::*;
+
+    pub(super) struct Visitor<T>
+    where
+        T: DistanceVisitor,
+    {
+        visitor: Option<T>,
+        output: Option<T::Output>,
+    }
+
+    impl<T> Visitor<T>
+    where
+        T: DistanceVisitor,
+    {
+        fn consume<D>(&mut self, distance: D)
+        where
+            D: DynDistanceComputer + 'static,
+        {
+            let visitor = self.visitor.take().unwrap();
+            self.output = Some(visitor.visit(distance));
+        }
+    }
+
+    impl<const N: usize, M, T> Visit<N, M> for Visitor<T>
+    where
+        M: Map<N>,
+        T: DistanceVisitor,
+    {
+        fn l2(&mut self, distance: M::L2) {
+            self.consume(distance)
+        }
+
+        fn ip(&mut self, distance: M::IP) {
+            self.consume(distance)
+        }
+
+        fn cosine(&mut self, distance: M::Cosine) {
+            self.consume(distance)
+        }
+    }
+
+    pub(super) trait Visit<const N: usize, M>
+    where
+        M: Map<N>,
+    {
+        fn l2(&mut self, distance: M::L2);
+        fn ip(&mut self, distance: M::IP);
+        fn cosine(&mut self, distance: M::Cosine);
+    }
+
+    pub(super) trait Map<const N: usize> {
+        type L2: super::DynDistanceComputer + 'static;
+        type IP: super::DynDistanceComputer + 'static;
+        type Cosine: super::DynDistanceComputer + 'static;
+
+        fn map(self, quantizer: &SphericalQuantizer, visitor: &mut dyn Visit<N, Self>);
+    }
+
+    type L2<A, const N: usize> = Reify<CompensatedSquaredL2, A, AsData<N>, AsData<N>>;
+    type IP<A, const N: usize> = Reify<CompensatedIP, A, AsData<N>, AsData<N>>;
+    type Cosine<A, const N: usize> = Reify<CompensatedCosine, A, AsData<N>, AsData<N>>;
+
+    fn identity<T>(x: T) -> T {
+        x
+    }
+
+    macro_rules! map {
+        ($arch:ty, $N:literal) => {
+            map!($arch => $arch, $N, identity);
+        };
+        ($arch:ty => $retarget:ty, $N:literal, $f:path) => {
+            impl Map<$N> for $arch {
+                type L2 = L2<$retarget, $N>;
+                type IP = IP<$retarget, $N>;
+                type Cosine = Cosine<$retarget, $N>;
+
+                fn map(
+                    self,
+                    quantizer: &SphericalQuantizer,
+                    visitor: &mut dyn Visit<$N, Self>,
+                ) {
+                    let arch = ($f)(self);
+                    let dim = quantizer.output_dim();
+                    match quantizer.metric() {
+                        SupportedMetric::SquaredL2 =>
+                            visitor.l2(Self::L2::new(quantizer.as_functor(), dim, arch)),
+                        SupportedMetric::InnerProduct =>
+                            visitor.ip(Self::IP::new(quantizer.as_functor(), dim, arch)),
+                        SupportedMetric::Cosine =>
+                            visitor.cosine(Self::Cosine::new(quantizer.as_functor(), dim, arch)),
+                    }
+                }
+            }
+        };
+    }
+
+    map!(Scalar, 1);
+    map!(Scalar, 2);
+    map!(Scalar, 4);
+    map!(Scalar, 8);
+
+    #[cfg(target_arch = "x86_64")]
+    mod x86_64 {
+        use super::*;
+
+        fn downcast_to_v3(arch: V4) -> V3 {
+            arch.into()
+        }
+
+        map!(V3, 1);
+        map!(V3, 2);
+        map!(V3, 4);
+        map!(V3, 8);
+
+        map!(V4 => V3, 1, downcast_to_v3);
+        map!(V4, 2);
+        map!(V4, 4);
+        map!(V4 => V3, 8, downcast_to_v3);
+    }
+}
+
+mod query_distance {
+    use super::*;
+
+    // This is used as the place-holder type for unimplemented kernels.
+    #[derive(Debug)]
+    pub(super) enum Unimplemented {}
+
+    impl DynQueryComputer for Unimplemented {
+        fn evaluate(&self, _x: Opaque<'_>) -> Result<f32, QueryDistanceError> {
+            unreachable!("this type is unconstructible")
+        }
+
+        fn layout(&self) -> QueryLayout {
+            unreachable!("this type is unconstructible")
+        }
+    }
+
+    // Prefixes:
+    //
+    // FP: FullPrecision
+    // FBT: FourBitTransposed
+    // SC: ScalarQuantized
+    // DAT: SameAsData
+    pub(super) trait Map<const N: usize, A> {
+        // Full Precision.
+        type FullL2: DynQueryComputer;
+        type FullIP: DynQueryComputer;
+        type FullCosine: DynQueryComputer;
+
+        // Four Bit Transposed
+        type BitTransposeL2: DynQueryComputer;
+        type BitTransposeIP: DynQueryComputer;
+        type BitTransposeCosine: DynQueryComputer;
+
+        // Scalar Quantized
+        type ScalarL2: DynQueryComputer;
+        type ScalarIP: DynQueryComputer;
+        type ScalarCosine: DynQueryComputer;
+
+        // Same as Data
+        type DataL2: DynQueryComputer;
+        type DataIP: DynQueryComputer;
+        type DataCosine: DynQueryComputer;
+
+        fn map(
+            self,
+            quantizer: &SphericalQuantizer,
+            query: &[f32],
+            layout: QueryLayout,
+            allocator: A,
+            scratch: ScopedAllocator<'_>,
+            visitor: &mut dyn Visit<N, Self, A>,
+        );
+    }
+
+    pub(super) trait Visit<const N: usize, M, A>
+    where
+        M: Map<N, A>,
+    {
+        fn full_l2(&mut self, distance: M::FullL2);
+        fn full_ip(&mut self, distance: M::FullIP);
+        fn full_cosine(&mut self, distance: M::FullCosine);
+
+        // Four-bit transposed.
+        //
+        // Not implemented by all backends - so takes `Option`.
+        fn bit_transpose_l2(&mut self, distance: Option<M::BitTransposeL2>);
+        fn bit_transpose_ip(&mut self, distance: Option<M::BitTransposeIP>);
+        fn bit_transpose_cosine(&mut self, distance: Option<M::BitTransposeCosine>);
+
+        // Scalar Quantized.
+        //
+        // Not implemented by all backends - so takes `Option`.
+        fn scalar_l2(&mut self, distance: Option<M::ScalarL2>);
+        fn scalar_ip(&mut self, distance: Option<M::ScalarIP>);
+        fn scalar_cosine(&mut self, distance: Option<M::ScalarCosine>);
+
+        fn data_l2(&mut self, distance: M::DataL2);
+        fn data_ip(&mut self, distance: M::DataIP);
+        fn data_cosine(&mut self, distance: M::DataCosine);
+    }
+
+    type L2 = CompensatedSquaredL2;
+    type IP = CompensatedIP;
+    type Cosine = CompensatedCosine;
+
+    type Full<A> = FullQuery<A>;
+    type BitTranspose<A> = Query<4, bits::BitTranspose, A>;
+    type ScalarQuant<const N: usize, A> = Query<N, bits::Dense, A>;
+
+    type Reified<D, const N: usize, Q, M> = Reify<Curried<D, Q>, M, (), AsData<N>>;
+
+    fn prepare_full<A>(
+        quantizer: &SphericalQuantizer,
+        query: &[f32],
+        allocator: A,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<Full<A>, quantizer::CompressionError>
+    where
+        A: AllocatorCore,
+    {
+        let mut prepared = FullQuery::empty(quantizer.output_dim(), allocator)?;
+        quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
+        Ok(prepared)
+    }
+
+    fn prepare_bit_transpose<A>(
+        quantizer: &SphericalQuantizer,
+        query: &[f32],
+        allocator: A,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<BitTranspose<A>, quantizer::CompressionError>
+    where
+        A: AllocatorCore,
+    {
+        let mut prepared =
+            Query::<4, bits::BitTranspose, A>::new_in(quantizer.output_dim(), allocator)?;
+        quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
+        Ok(prepared)
+    }
+
+    fn prepare_scalar<const N: usize, A>(
+        quantizer: &SphericalQuantizer,
+        query: &[f32],
+        allocator: A,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<ScalarQuant<N, A>, quantizer::CompressionError>
+    where
+        Unsigned: Representation<N>,
+        A: AllocatorCore,
+    {
+        let mut prepared = Query::<N, bits::Dense, A>::new_in(quantizer.output_dim(), allocator)?;
+        quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
+        Ok(prepared)
+    }
+
+    fn prepare_data<const N: usize, A>(
+        quantizer: &SphericalQuantizer,
+        query: &[f32],
+        allocator: A,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<Data<N, A>, quantizer::CompressionError>
+    where
+        Unsigned: Representation<N>,
+        SphericalQuantizer: for<'a> CompressIntoWith<
+                &'a [f32],
+                DataMut<'a, N>,
+                ScopedAllocator<'a>,
+                Error = quantizer::CompressionError,
+            >,
+        A: AllocatorCore,
+    {
+        let mut prepared = Data::<N, A>::new_in(quantizer.output_dim(), allocator)?;
+        quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
+        Ok(prepared)
+    }
+
+    macro_rules! map1 {
+        ($arch:path) => {
+            impl<A> Map<1, A> for $arch
+            where
+                A: AllocatorCore + std::fmt::Debug + Send + Sync,
+            {
+                type FullL2 = Reified<L2, 1, Full<A>, $arch>;
+                type FullIP = Reified<IP, 1, Full<A>, $arch>;
+                type FullCosine = Reified<Cosine, 1, Full<A>, $arch>;
+
+                type BitTransposeL2 = Reified<L2, 1, BitTranspose<A>, $arch>;
+                type BitTransposeIP = Reified<IP, 1, BitTranspose<A>, $arch>;
+                type BitTransposeCosine = Reified<Cosine, 1, BitTranspose<A>, $arch>;
+
+                type ScalarL2 = Unimplemented;
+                type ScalarIP = Unimplemented;
+                type ScalarCosine = Unimplemented;
+
+                type DataL2 = Reified<L2, 1, Data<1, A>, $arch>;
+                type DataIP = Reified<IP, 1, Data<1, A>, $arch>;
+                type DataCosine = Reified<Cosine, 1, Data<1, A>, $arch>;
+
+                fn map(
+                    self,
+                    quantizer: &SphericalQuantizer,
+                    query: &[f32],
+                    layout: QueryLayout,
+                    allocator: A,
+                    scratch: ScopedAllocator<'_>,
+                    visitor: &mut dyn Visit<1, Self, A>,
+                ) {
+                    use SupportedMetric::{Cosine, InnerProduct, SquaredL2};
+
+                    let metric = quantizer.metric();
+                    let dim = quantizer.output_dim();
+                    match layout {
+                        QueryLayout::SameAsData => {
+                            let q = prepare_data(quantizer, query, allocator, scratch).unwrap();
+                            match metric {
+                                SquaredL2 => visitor.data_l2(Self::DataL2::new(
+                                    Curried::new(quantizer.as_functor(), q),
+                                    dim,
+                                    self,
+                                )),
+                                InnerProduct => visitor.data_ip(Self::DataIP::new(
+                                    Curried::new(quantizer.as_functor(), q),
+                                    dim,
+                                    self,
+                                )),
+                                Cosine => visitor.data_cosine(Self::DataCosine::new(
+                                    Curried::new(quantizer.as_functor(), q),
+                                    dim,
+                                    self,
+                                )),
+                            }
+                        }
+                        QueryLayout::FourBitTransposed => {
+                            let q = prepare_bit_transpose(quantizer, query, allocator, scratch)
+                                .unwrap();
+                            match metric {
+                                SquaredL2 => {
+                                    visitor.bit_transpose_l2(Some(Self::BitTransposeL2::new(
+                                        Curried::new(quantizer.as_functor(), q),
+                                        dim,
+                                        self,
+                                    )))
+                                }
+                                InnerProduct => {
+                                    visitor.bit_transpose_ip(Some(Self::BitTransposeIP::new(
+                                        Curried::new(quantizer.as_functor(), q),
+                                        dim,
+                                        self,
+                                    )))
+                                }
+                                Cosine => visitor.bit_transpose_cosine(Some(
+                                    Self::BitTransposeCosine::new(
+                                        Curried::new(quantizer.as_functor(), q),
+                                        dim,
+                                        self,
+                                    ),
+                                )),
+                            }
+                        }
+                        QueryLayout::ScalarQuantized => match metric {
+                            SquaredL2 => visitor.scalar_l2(None),
+                            InnerProduct => visitor.scalar_ip(None),
+                            Cosine => visitor.scalar_cosine(None),
+                        },
+                        QueryLayout::FullPrecision => {
+                            let q = prepare_full(quantizer, query, allocator, scratch).unwrap();
+                            match metric {
+                                SquaredL2 => visitor.full_l2(Self::FullL2::new(
+                                    Curried::new(quantizer.as_functor(), q),
+                                    dim,
+                                    self,
+                                )),
+                                InnerProduct => visitor.full_ip(Self::FullIP::new(
+                                    Curried::new(quantizer.as_functor(), q),
+                                    dim,
+                                    self,
+                                )),
+                                Cosine => visitor.full_cosine(Self::FullCosine::new(
+                                    Curried::new(quantizer.as_functor(), q),
+                                    dim,
+                                    self,
+                                )),
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    map1!(Scalar);
+}
+
 ///////////////////////
 // Query Computation //
 ///////////////////////
