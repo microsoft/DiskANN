@@ -33,7 +33,6 @@ pub(in crate::repr) enum Rerank {
 impl Rerank {
     fn bytes_for(&self, dim: usize) -> Result<Bytes, Overflow> {
         match self {
-            Self::None => Ok(Bytes::new(0)),
             Self::F16 => match dim.checked_mul(2) {
                 Some(bytes) => Ok(Bytes::new(bytes)),
                 None => Err(Overflow { kind: *self, dim }),
@@ -43,7 +42,6 @@ impl Rerank {
 
     fn as_str(&self) -> &'static str {
         match self {
-            Self::None => "none",
             Self::F16 => "f16",
         }
     }
@@ -80,7 +78,6 @@ impl Reranker {
         dim: usize,
     ) -> Result<(Self, Option<simple::Config>), Overflow> {
         match rerank {
-            Rerank::None => Ok(Self::disabled()),
             Rerank::F16 => {
                 let distance = Distance::new(metric.as_vector_metric(), Some(dim));
 
@@ -232,7 +229,7 @@ mod tests {
     /// Create a reranker with the test dimension for the given configuration and metric.
     fn make_store(rerank: Option<Rerank>, metric: Metric) -> (Reranker, Store<Optional<Simple>>) {
         let (reranker, config) = if let Some(rerank) = rerank {
-            Reranker::new_with_config(rerank, metric, TEST_DIM).unwrap();
+            Reranker::new_with_config(rerank, metric, TEST_DIM).unwrap()
         } else {
             Reranker::disabled()
         };

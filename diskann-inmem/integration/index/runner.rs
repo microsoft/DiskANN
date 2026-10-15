@@ -754,7 +754,7 @@ impl Test {
         rerank: quantization::Rerank,
     ) -> anyhow::Result<Arc<dyn Index>> {
         use diskann_quantization::{num::Positive, scalar as qscalar};
-        use inmem::repr::quantized::{Quantized, scalar::Scalar};
+        use inmem::repr::quantized::{Backend, Quantized, scalar::Scalar};
 
         let DatasetView::F32(data) = data else {
             anyhow::bail!("scalar quantization only supports f32 data");
@@ -776,40 +776,18 @@ impl Test {
             inmem::repr::quantized::scalar::Metric::try_from(self.data.metric)?
         };
 
+        let backend = match bits {
+            scalar::Bits::One => Backend::new(Scalar::<1>::new(quantizer, metric)),
+            scalar::Bits::Two => Backend::new(Scalar::<2>::new(quantizer, metric)),
+            scalar::Bits::Four => Backend::new(Scalar::<4>::new(quantizer, metric)),
+            scalar::Bits::Eight => Backend::new(Scalar::<8>::new(quantizer, metric)),
+        };
+
         let capacity = Capacity::new(data.nrows());
         let max_degree = MaxDegree::new(self.build.config.max_degree().get());
         let rerank = quantizer_rerank(rerank, self.data.metric);
 
-        let config = match bits {
-            scalar::Bits::One => Quantized::config(
-                Scalar::<1>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-            scalar::Bits::Two => Quantized::config(
-                Scalar::<2>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-            scalar::Bits::Four => Quantized::config(
-                Scalar::<4>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-            scalar::Bits::Eight => Quantized::config(
-                Scalar::<8>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-        };
+        let config = Quantized::config(backend, capacity, max_degree, start_point, rerank)?;
 
         let index_config = self.build.config.clone();
         Ok(finish(Provider::new(config)?, index_config))

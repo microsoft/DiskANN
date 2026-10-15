@@ -387,8 +387,10 @@ where
     /// Rescale the argument `v` to be in the rough dynamic range of the training dataset.
     pub fn rescale(&self, v: &mut [f32]) {
         let norm = FastL2Norm.evaluate(&*v);
-        let m = self.mean_norm.into_inner() / norm;
-        v.iter_mut().for_each(|i| *i *= m);
+        if norm != 0.0 {
+            let m = self.mean_norm.into_inner() / norm;
+            v.iter_mut().for_each(|i| *i *= m);
+        }
     }
 
     /// Private helper function to do common data pre-processing.

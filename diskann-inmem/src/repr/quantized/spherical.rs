@@ -18,9 +18,11 @@ where
     fn bytes(&self) -> Bytes {
         Bytes::new(iface::Quantizer::bytes(self))
     }
+
     fn dim(&self) -> usize {
         iface::Quantizer::full_dim(self)
     }
+
     fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()> {
         iface::Quantizer::compress(
             self,
@@ -30,12 +32,14 @@ where
         )
         .map_err(ANNError::new)
     }
+
     fn distance<'a, V>(&'a self, visitor: V) -> V::Output
     where
         V: quantized::DistanceVisitor<'a>,
     {
         visitor.visit(iface::Quantizer::distance_computer_ref(self))
     }
+
     fn insert_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
     where
         V: quantized::QueryDistanceVisitor<'a>,
@@ -52,6 +56,7 @@ where
 
         Ok(visitor.visit(query_computer))
     }
+
     fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
     where
         V: quantized::QueryDistanceVisitor<'a>,
@@ -96,27 +101,33 @@ impl quantized::Distance for &dyn iface::DynDistanceComputer {
 mod tests {
     use super::*;
 
-    use diskann::graph::test::synthetic::Grid;
     use diskann_quantization::spherical::SupportedMetric;
-    use diskann_utils::{assert_contains, views::rowmajor::MatrixMut};
-    use diskann_vector::distance::Distance as VDistance;
-    use hashbrown::HashMap;
-
-    use crate::{
-        counters::Counters,
-        num::{LogicalId, SlotId},
-        repr::test::{Reference, test_expand_beam, test_prune},
+    use diskann_utils::{
+        assert_contains,
+        views::rowmajor::{self, Matrix, MatrixMut},
+    };
+    use diskann_vector::PreprocessedDistanceFunction;
+    use rand::{
+        SeedableRng,
+        distr::{Distribution, Uniform},
+        rngs::StdRng,
     };
 
-    fn train_quantizer(
+    use crate::repr::quantized::test::DynQuantizer;
+
+    const DIM: usize = 5;
+    const TRIALS: usize = 10;
+
+    fn train_quantizer<const N: usize>(
         data: rowmajor::Ref<'_, f32>,
         metric: SupportedMetric,
-        bits: Bits,
-    ) -> Poly<dyn iface::Quantizer> {
+    ) -> iface::Impl<N>
+    where
+        iface::Impl<N>: iface::Constructible + iface::Quantizer,
+    {
         use diskann_quantization::{algorithms::transforms, spherical};
-        use rand::{SeedableRng, rngs::StdRng};
 
-        let q = spherical::SphericalQuantizer::train(
+        spherical::SphericalQuantizer::train(
             data.as_view(),
             transforms::TransformKind::Null,
             metric,
@@ -124,12 +135,219 @@ mod tests {
             &mut StdRng::seed_from_u64(0x019823745),
             GlobalAllocator,
         )
-        .unwrap();
+        .unwrap()
+        .as_quantizer_impl::<N>()
+        .unwrap()
+    }
 
-        match bits {
-            Bits::One => q.as_quantizer::<1>().unwrap(),
-            Bits::Two => q.as_quantizer::<2>().unwrap(),
-            Bits::Four => q.as_quantizer::<4>().unwrap(),
+    /// Integration tests cover the correctness of the distances. Here, check that the
+    /// adapter agrees with the spherical API and propagates errors.
+    fn test_spherical(
+        quantizer: &dyn DynQuantizer,
+        reference: &dyn iface::Quantizer,
+        rng: &mut StdRng,
+        distribution: Uniform<f32>,
+        ntrials: usize,
+        ctx: &dyn std::fmt::Display,
+    ) {
+        assert_eq!(quantizer.dim(), reference.full_dim(), "{}", ctx);
+        assert_eq!(quantizer.bytes().value(), reference.bytes(), "{}", ctx);
+
+        let dim = quantizer.dim();
+        let bytes = quantizer.bytes().value();
+
+        let mut x = vec![0.0f32; dim];
+        let mut bx = vec![0u8; bytes];
+
+        let mut y = vec![0.0f32; dim];
+        let mut by = vec![0u8; bytes];
+
+        let mut expected = vec![0u8; bytes];
+
+        for trial in 0..ntrials {
+            // Include a zero query to exercise query scaling at zero norm.
+            if trial == 0 {
+                x.fill(0.0);
+            } else {
+                x.iter_mut().for_each(|x| *x = distribution.sample(rng));
+            }
+            y.iter_mut().for_each(|y| *y = distribution.sample(rng));
+
+            quantizer.quantize(&mut bx, &x).unwrap();
+            quantizer.quantize(&mut by, &y).unwrap();
+
+            // Check compression.
+            reference
+                .compress(
+                    &x,
+                    iface::OpaqueMut::new(&mut expected),
+                    ScopedAllocator::global(),
+                )
+                .unwrap();
+            assert_eq!(bx, expected, "trial = {trial} -- {ctx}");
+
+            // Check distance.
+            let expected = reference
+                .distance_computer_ref()
+                .evaluate(iface::Opaque::new(&bx), iface::Opaque::new(&by))
+                .unwrap();
+
+            let distance = quantizer.distance();
+            let from_distance = distance.eval(&bx, &by).unwrap();
+
+            assert_eq!(from_distance, expected, "trial = {trial} -- {ctx}");
+
+            for (layout, scale, actual) in [
+                (
+                    iface::QueryLayout::SameAsData,
+                    false,
+                    quantizer.insert_distance(&x).unwrap(),
+                ),
+                (
+                    iface::QueryLayout::FullPrecision,
+                    true,
+                    quantizer.query_distance(&x).unwrap(),
+                ),
+            ] {
+                let expected = reference
+                    .fused_query_computer(
+                        &x,
+                        layout,
+                        scale,
+                        GlobalAllocator,
+                        ScopedAllocator::global(),
+                    )
+                    .unwrap()
+                    .evaluate_similarity(iface::Opaque::new(&by))
+                    .unwrap();
+
+                assert_eq!(
+                    actual.eval(&by).unwrap(),
+                    expected,
+                    "trial = {trial}, layout = {layout} -- {ctx}"
+                );
+            }
         }
+
+        // Compression Errors
+        {
+            // Input size
+            let x = vec![1.0f32; dim - 1];
+            let mut bx = vec![0u8; bytes];
+            let err = quantizer.quantize(&mut bx, &x).unwrap_err().to_string();
+            assert_contains!(err, "expected source vector to have length 5", "{}", ctx);
+
+            let x = vec![1.0f32; dim + 1];
+            let err = quantizer.quantize(&mut bx, &x).unwrap_err().to_string();
+            assert_contains!(err, "expected source vector to have length 5", "{}", ctx);
+
+            // Output size
+            let x = vec![1.0f32; dim];
+            let mut bx = vec![0u8; bytes - 1];
+            assert!(quantizer.quantize(&mut bx, &x).is_err(), "{}", ctx);
+
+            let mut bx = vec![0u8; bytes + 1];
+            assert!(quantizer.quantize(&mut bx, &x).is_err(), "{}", ctx);
+
+            // NaN
+            let x = vec![f32::NAN; dim];
+            let mut bx = vec![0u8; bytes];
+            let err = quantizer.quantize(&mut bx, &x).unwrap_err().to_string();
+            assert_contains!(err, "NaN");
+        }
+
+        // Distance
+        {
+            let d = quantizer.distance();
+            for length in [bytes - 1, bytes + 1] {
+                let invalid = vec![0u8; length];
+                assert!(d.eval(&bx, &invalid).is_err(), "{ctx}");
+                assert!(d.eval(&invalid, &bx).is_err(), "{ctx}");
+            }
+            assert!(d.eval(&bx, &by).is_ok(), "{ctx}");
+        }
+
+        // Query Distance
+        {
+            for length in [dim - 1, dim + 1] {
+                let x = vec![1.0f32; length];
+                assert!(quantizer.query_distance(&x).is_err(), "{ctx}");
+            }
+
+            let x = vec![f32::NAN; dim];
+            let err = quantizer.query_distance(&x).unwrap_err().to_string();
+            assert_contains!(err, "NaN");
+
+            let x = vec![0.0f32; dim];
+            let d = quantizer.query_distance(&x).unwrap();
+            for length in [bytes - 1, bytes + 1] {
+                let invalid = vec![0u8; length];
+                assert!(d.eval(&invalid).is_err(), "{ctx}");
+            }
+            assert!(d.eval(&bx).is_ok(), "{ctx}");
+        }
+
+        // Insert Distance
+        {
+            for length in [dim - 1, dim + 1] {
+                let x = vec![1.0f32; length];
+                assert!(quantizer.insert_distance(&x).is_err(), "{ctx}");
+            }
+
+            let x = vec![f32::NAN; dim];
+            let err = quantizer.insert_distance(&x).unwrap_err().to_string();
+            assert_contains!(err, "NaN");
+
+            let x = vec![0.0f32; dim];
+            let d = quantizer.insert_distance(&x).unwrap();
+            for length in [bytes - 1, bytes + 1] {
+                let invalid = vec![0u8; length];
+                assert!(d.eval(&invalid).is_err(), "{ctx}");
+            }
+            assert!(d.eval(&bx).is_ok(), "{ctx}");
+        }
+    }
+
+    fn run_test<const N: usize>()
+    where
+        iface::Impl<N>: iface::Constructible + iface::Quantizer,
+    {
+        let mut rng = StdRng::seed_from_u64(0x019823745);
+        let distribution = Uniform::new(-4.0f32, 4.0).unwrap();
+        let mut data = rowmajor::Owned::from_element(TRIALS, DIM, 0.0);
+        data.as_mut_slice()
+            .iter_mut()
+            .for_each(|v| *v = distribution.sample(&mut rng));
+
+        for metric in [
+            SupportedMetric::SquaredL2,
+            SupportedMetric::InnerProduct,
+            SupportedMetric::Cosine,
+        ] {
+            let quantizer = train_quantizer::<N>(data.as_view(), metric);
+            test_spherical(
+                &quantizer,
+                &quantizer,
+                &mut rng,
+                distribution,
+                TRIALS,
+                &format_args!("metric = {metric:?}, bits = {N}"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_one_bit() {
+        run_test::<1>();
+    }
+
+    #[test]
+    fn test_two_bit() {
+        run_test::<2>();
+    }
+
+    #[test]
+    fn test_four_bit() {
+        run_test::<4>();
     }
 }
