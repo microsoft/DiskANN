@@ -25,6 +25,7 @@ expect_used = "warn"
 panic = "warn"
 
 [dev-dependencies]
+diskann-utils = { workspace = true, default-features = false, features = ["testing"] }
 tempfile.workspace = true
 
 [features]
