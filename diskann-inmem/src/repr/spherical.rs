@@ -10,22 +10,18 @@ use std::num::NonZeroUsize;
 use diskann::{ANNError, ANNResult, error::ErrorContext, utils::IntoUsize};
 use diskann_quantization::{
     alloc::{GlobalAllocator, Poly, ScopedAllocator},
-    spherical::{SupportedMetric, iface},
+    spherical::iface,
 };
 use diskann_utils::{
     lazy_format,
     views::rowmajor::{self, Matrix},
 };
-use diskann_vector::distance::{Distance, DistanceProvider};
-use half::f16;
 use thiserror::Error;
 
 use crate::{
     counters::LocalCounters,
-    epoch,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
-    prefetch,
-    repr::{self, internal::Calf},
+    prefetch, repr,
     store::{
         self, Store,
         cons::{self, Cons},
@@ -34,6 +30,28 @@ use crate::{
         simple::{self, Simple},
     },
 };
+
+/// Choose how data is going to be reranked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Rerank {
+    /// No reranking will be performed and no space for higher precision vectors will be
+    /// allocated.
+    None,
+
+    /// Use 16-bit floating point numbers to store the higher precision representation.
+    /// These will be used automatically during search to rerank candidates.
+    F16,
+}
+
+impl Rerank {
+    fn as_internal_rerank(&self) -> repr::internal::quantization::Rerank {
+        use repr::internal::quantization::Rerank as IRerank;
+        match self {
+            Self::None => IRerank::None,
+            Self::F16 => IRerank::F16,
+        }
+    }
+}
 
 /// The configuration for a [`Spherical`] representation.
 #[derive(Debug)]
@@ -45,7 +63,7 @@ pub struct Config {
     layout: store::Layout,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
-    rerank: Rerank,
+    rerank: repr::internal::quantization::Rerank,
 }
 
 const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(16).unwrap();
@@ -105,7 +123,7 @@ impl Config {
             layout: store::Layout::new(capacity, max_degree, num_start_points),
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
-            rerank,
+            rerank: rerank.as_internal_rerank(),
         })
     }
 
@@ -188,129 +206,6 @@ impl repr::RepresentationConfig for Config {
     }
 }
 
-/// Choose how data is going to be reranked.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Rerank {
-    /// No reranking will be performed and no space for higher precision vectors will be
-    /// allocated in [`Spherical`].
-    None,
-
-    /// Use 16-bit floating point numbers to store the higher precision representation.
-    /// These will be used automatically during search to rerank candidates.
-    F16,
-}
-
-/// Internal representation of [`Rerank`].
-///
-/// This is used for computing distances among the raw values in the auxiliary store.
-#[derive(Debug)]
-enum Reranker {
-    None,
-    F16(Distance<f32, f16>),
-}
-
-fn convert_metric(metric: SupportedMetric) -> diskann_vector::distance::Metric {
-    use diskann_vector::distance::Metric;
-
-    match metric {
-        SupportedMetric::SquaredL2 => Metric::L2,
-        SupportedMetric::InnerProduct => Metric::InnerProduct,
-        SupportedMetric::Cosine => Metric::Cosine,
-    }
-}
-
-impl Reranker {
-    /// Construct a new [`Reranker`] and a [`store::slots::SlotsConfig`]  for the auxiliary
-    /// store.
-    fn new_with_config(
-        rerank: Rerank,
-        metric: SupportedMetric,
-        dim: usize,
-    ) -> (Self, Option<simple::Config>) {
-        let this = match rerank {
-            Rerank::None => Self::None,
-            Rerank::F16 => {
-                let distance = <f32 as DistanceProvider<f16>>::distance_comparer(
-                    convert_metric(metric),
-                    Some(dim),
-                );
-
-                Self::F16(distance)
-            }
-        };
-
-        let config = match &this {
-            Self::None => None,
-            Self::F16(_) => Some(Simple::config(this.bytes_for(dim))),
-        };
-
-        (this, config)
-    }
-
-    #[expect(
-        clippy::expect_used,
-        reason = "the arithmetic should not overflow for the feasible `dim` values"
-    )]
-    fn bytes_for(&self, dim: usize) -> Bytes {
-        match self {
-            Self::None => Bytes::new(0),
-            Self::F16(_) => Bytes::new(
-                dim.checked_mul(2)
-                    .expect("f16 is smaller than the f32 in the quantizer"),
-            ),
-        }
-    }
-
-    /// Create a [`repr::PostProcess`].
-    ///
-    /// This assumes that `simple` has the same dimensions as `self`'s contained distance
-    /// computation and that `guard` belongs to `simple`.
-    ///
-    /// # Pre-conditions
-    ///
-    /// This requires that `slots` is the [`store::slots::Slots`] created from the
-    /// configuration returned in [`Self::new_with_config`].
-    fn post_process<'a>(
-        &'a self,
-        query: &'a [f32],
-        guard: &epoch::Guard<'a>,
-        slots: &'a Optional<store::simple::Simple>,
-        counters: &LocalCounters<'a>,
-    ) -> Option<Box<dyn repr::PostProcess + 'a>> {
-        match (self, slots.slots()) {
-            (Self::None, None) => None,
-            (Self::F16(distance), Some(simple)) => {
-                let distance = repr::full::QueryDistance::new(Calf::Borrowed(query), *distance);
-                let reader = simple.reader(guard.share());
-                let post_process =
-                    repr::internal::simple::Reranker::new(reader, distance, counters.fork());
-                Some(Box::new(post_process))
-            }
-            _ => unreachable!("invalid combination of arguments"),
-        }
-    }
-
-    /// Store the vector `v` into the raw buffer `buf`.
-    ///
-    /// # Pre-conditions
-    ///
-    /// `buf` must be consistent with the configuration returned from [`Self::new_with_config`],
-    /// and may only be `None` if that configuration was `None`.
-    ///
-    /// If it is `Some`, this function may panic if its length is not consistent with the
-    /// original configuration.
-    fn store(&self, v: &[f32], buf: &mut Option<simple::Exclusive<'_>>) {
-        match (self, buf) {
-            (Self::None, None) => {}
-            (Self::F16(_), Some(exclusive)) => {
-                use diskann_vector::conversion::CastFromSlice;
-                bytemuck::cast_slice_mut::<u8, f16>(exclusive.as_mut_slice()).cast_from_slice(v);
-            }
-            _ => unreachable!("invalid combination of arguments"),
-        }
-    }
-}
-
 /// Spherically quantized data representation.
 #[derive(Debug)]
 pub struct Spherical {
@@ -320,7 +215,7 @@ pub struct Spherical {
     // trait-object function call when accessing.
     full_dim: usize,
     lookahead: Option<NonZeroUsize>,
-    reranker: Reranker,
+    reranker: repr::internal::quantization::Reranker,
 }
 
 impl Spherical {
@@ -355,8 +250,11 @@ impl Spherical {
         } = config;
 
         let full_dim = quantizer.full_dim();
-        let (reranker, rerank_config) =
-            Reranker::new_with_config(rerank, quantizer.metric(), full_dim);
+        let (reranker, rerank_config) = repr::internal::quantization::Reranker::new_with_config(
+            rerank,
+            quantizer.metric().into(),
+            full_dim,
+        );
 
         let slots = cons::Config::new(
             Intrusive::config(Bytes::new(quantizer.bytes())),
@@ -375,14 +273,16 @@ impl Spherical {
 
         // Initialize start points.
         let num_start_points = start_points.nrows();
-        for (i, row) in std::iter::zip(this.store.frozen(), start_points.rows()) {
+        for (i, (slot_index, row)) in
+            std::iter::zip(this.store.frozen(), start_points.rows()).enumerate()
+        {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
             )]
             let mut slot = this
                 .store
-                .slot(i)
+                .slot(slot_index)
                 .expect("internal store should leave frozen points available for writing");
 
             this.set(row, slot.data()).with_context(|| {
@@ -639,14 +539,16 @@ impl repr::internal::RawDistance for &dyn iface::DynDistanceComputer {
 mod tests {
     use super::*;
 
-    use diskann::{graph::test::synthetic::Grid, neighbor::Neighbor};
+    use diskann::graph::test::synthetic::Grid;
+    use diskann_quantization::spherical::SupportedMetric;
     use diskann_utils::{assert_contains, views::rowmajor::MatrixMut};
+    use diskann_vector::distance::DistanceProvider;
     use hashbrown::HashMap;
 
     use crate::{
         counters::Counters,
         num::{LogicalId, SlotId},
-        repr::test::Reference,
+        repr::test::{Reference, test_expand_beam, test_prune},
     };
 
     #[derive(Debug, Clone, Copy)]
@@ -755,183 +657,6 @@ mod tests {
         }
 
         (spherical, reference)
-    }
-
-    /// Performs the following set of tests:
-    ///
-    /// * [`ExpandBeam::evaluate`]: For each id in `ids` - attempt to evaluate the distance
-    ///   through [`ExpandBeam::evaluate`]. If the id is present in `distances`, assert that
-    ///   the value in `distances` agrees with the result of the `EpandBeam method.
-    ///
-    ///   Otherwise, assert that `ExpandBeam` returns `None`.
-    ///
-    /// * [`ExpandBeam::expand_beam`]: Provid all `ids` to `expand_beam`. Verify that ids not
-    ///   present in `distances` get removed and all remaining ids are present and have a
-    ///   distance value equal to the corresponding entry in `distances`.
-    fn test_expand_beam(
-        accessor: &dyn repr::ExpandBeam,
-        distances: HashMap<SlotId, f32>,
-        ids: &[SlotId],
-        ctx: &dyn std::fmt::Display,
-    ) {
-        assert_eq!(accessor.id_limit(), TEST_LIMIT, "{ctx}");
-
-        for slot_id in ids {
-            if let Some(distance) = distances.get(slot_id) {
-                assert_eq!(
-                    accessor.evaluate(slot_id.value()).unwrap(),
-                    Some(*distance),
-                    "failed on slot id {} -- {}",
-                    slot_id,
-                    ctx,
-                );
-            } else {
-                assert!(
-                    accessor.evaluate(slot_id.value()).unwrap().is_none(),
-                    "failed on slot id {} -- {}",
-                    slot_id,
-                    ctx
-                );
-            }
-        }
-
-        // Test via `expand_beam`.
-        let list: Vec<u32> = ids.iter().map(|slot_id| slot_id.value()).collect();
-        let mut buffer = vec![Neighbor::default(); list.len()];
-        let len = repr::safe_expand_beam(accessor, &list, &mut buffer).unwrap();
-
-        let expected: Vec<Neighbor<u32>> = ids
-            .iter()
-            .filter_map(|slot_id| {
-                distances
-                    .get(slot_id)
-                    .map(|distance| Neighbor::new(slot_id.value(), *distance))
-            })
-            .collect();
-
-        assert_eq!(
-            expected.len(),
-            len,
-            "`expand_beam` returned the incorrect number of items -- {}",
-            ctx,
-        );
-
-        for (i, (got, expected)) in std::iter::zip(buffer.iter(), expected.iter()).enumerate() {
-            assert_eq!(
-                got.id(),
-                expected.id(),
-                "failed on entry {} of {} -- {}",
-                i,
-                len,
-                ctx
-            );
-            assert_eq!(
-                got.distance(),
-                expected.distance(),
-                "failed on entry {} of {} -- {}",
-                i,
-                len,
-                ctx,
-            );
-        }
-    }
-
-    /// Test that the [`repr::Prune`] computes distances according to the ground truth in
-    /// `distances`.
-    ///
-    /// This assumes that `distances` contains all valid (i.e., between undeleted) entries
-    /// in `ids` - including self distances.
-    ///
-    /// For example, if `ids` contains `[0, 1, 2, 3(deleted)]`, then `distances` should contain
-    /// the keys:
-    ///
-    /// (0, 0), (0, 1), (0, 2)
-    /// (1, 0), (1, 1), (1, 2)
-    /// (2, 0), (2, 1), (2, 2)
-    fn test_prune(
-        accessor: &mut dyn repr::Prune,
-        distances: HashMap<(SlotId, SlotId), f32>,
-        ids: &[SlotId],
-        ctx: &dyn std::fmt::Display,
-    ) {
-        let num_present_ids = ids
-            .iter()
-            .filter(|&&slot_id| distances.contains_key(&(slot_id, slot_id)))
-            .count();
-
-        let mut items: HashMap<u32, Option<repr::PruneKey>> =
-            ids.iter().map(|slot_id| (slot_id.value(), None)).collect();
-
-        let count = accessor.prepare(items.iter_mut()).unwrap();
-        assert_eq!(count, num_present_ids, "{ctx}");
-
-        let mut visited = 0;
-        for slot_id0 in ids.iter() {
-            if let Some(key0) = items[&slot_id0.value()] {
-                for slot_id1 in ids.iter() {
-                    if let Some(key1) = items[&slot_id1.value()] {
-                        let d = accessor.evaluate(key0, key1);
-                        let expected = distances[&(*slot_id0, *slot_id1)];
-                        assert_eq!(
-                            d, expected,
-                            "failed for {} x {} -- {}",
-                            slot_id0, slot_id1, ctx
-                        );
-
-                        visited += 1;
-                    }
-                }
-            }
-        }
-
-        assert_eq!(
-            visited,
-            distances.len(),
-            "not all distances were visited -- {}",
-            ctx
-        );
-    }
-
-    /// Test that [`repr::PostProcess`] reranks correctly.
-    ///
-    /// Pass all `ids` to [`repr::PostProcess::post_process`]. Verify that all ids not
-    /// present in `distances` have been removed and the remaining ids are present, sorted,
-    /// and have distance values matching those in `distances`.
-    fn test_rerank(
-        post_process: &mut dyn repr::PostProcess,
-        distances: HashMap<SlotId, f32>,
-        ids: &[SlotId],
-        ctx: &dyn std::fmt::Display,
-    ) {
-        let mut buffer: Vec<_> = ids
-            .iter()
-            .map(|slot_id| Neighbor::new(slot_id.value(), 0.0))
-            .collect();
-
-        post_process.post_process(&mut buffer).unwrap();
-        let mut previous = f32::NEG_INFINITY;
-        assert_eq!(buffer.len(), distances.len(), "{ctx}");
-        for neighbor in buffer.iter() {
-            let current = *neighbor.distance();
-            assert_eq!(current, distances[&SlotId(*neighbor.id())], "{ctx}",);
-
-            assert!(
-                current >= previous,
-                "distances is not monotonically increasing, previous = {}, current = {} -- {}",
-                previous,
-                current,
-                ctx,
-            );
-
-            previous = current;
-        }
-
-        assert!(
-            previous > f32::NEG_INFINITY,
-            "previous = {} -- {}",
-            previous,
-            ctx
-        );
     }
 
     /// Here - we don't test the whole `expand_beam` loop. That would be a waste of time and
@@ -1046,6 +771,7 @@ mod tests {
 
             test_expand_beam(
                 sa.get_expand_beam(),
+                TEST_LIMIT,
                 distances,
                 &[s0, s1, s3_deleted, s2, s4_deleted],
                 ctx,
@@ -1077,6 +803,7 @@ mod tests {
 
             test_expand_beam(
                 sa.get_expand_beam(),
+                TEST_LIMIT,
                 distances,
                 &[s0, s1, s3_deleted, s2, s4_deleted],
                 ctx,
@@ -1094,8 +821,10 @@ mod tests {
                     None => panic!("expected a post processor -- {}", ctx),
                 };
 
-                let f =
-                    <f32 as DistanceProvider<f32>>::distance_comparer(convert_metric(metric), None);
+                let f = <f32 as DistanceProvider<f32>>::distance_comparer(
+                    repr::internal::quantization::Metric::from(metric).as_vector_metric(),
+                    None,
+                );
 
                 let distances = HashMap::from_iter([
                     (s0, f.call(&query, v0)),
@@ -1103,7 +832,7 @@ mod tests {
                     (s2, f.call(&query, v2)),
                 ]);
 
-                test_rerank(
+                repr::internal::quantization::rerank::test_rerank(
                     post_process,
                     distances,
                     &[s0, s1, s3_deleted, s2, s4_deleted],
