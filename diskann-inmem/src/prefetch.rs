@@ -173,22 +173,28 @@ unsafe impl<const BYTES: usize> Prefetch for Unrolled<BYTES> {
 /// The memory range `[ptr, ptr.add(len))` must be valid.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
-unsafe fn prefetch_cache_line(ptr: *const i8) {
-    use std::arch::x86_64::*;
-    // SAFETY: Inherited from caller and intrinsic is cfg-gated to supported targets.
-    unsafe { _mm_prefetch(ptr, _MM_HINT_T0) };
+unsafe fn prefetch_cache_line(_ptr: *const i8) {
+    #[cfg(not(miri))]
+    {
+        use std::arch::x86_64::*;
+        // SAFETY: Inherited from caller and intrinsic is cfg-gated to supported targets.
+        unsafe { _mm_prefetch(_ptr, _MM_HINT_T0) };
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-unsafe fn prefetch_cache_line(ptr: *const i8) {
-    // SAFETY: `prfm` is a non-faulting prefetch hint and does not create Rust references.
-    unsafe {
-        std::arch::asm!(
-            "prfm pldl2keep, [{ptr}]",
-            ptr = in(reg) ptr,
-            options(nostack, preserves_flags),
-        );
+unsafe fn prefetch_cache_line(_ptr: *const i8) {
+    #[cfg(not(miri))]
+    {
+        // SAFETY: `prfm` is a non-faulting prefetch hint and does not create Rust references.
+        unsafe {
+            std::arch::asm!(
+                "prfm pldl2keep, [{ptr}]",
+                ptr = in(reg) _ptr,
+                options(nostack, preserves_flags, readonly),
+            );
+        }
     }
 }
 
