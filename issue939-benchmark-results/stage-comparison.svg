@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="680" viewBox="0 0 900 680" role="img" aria-labelledby="title desc">
+  <title id="title">K-means phase latency by dimension</title>
+  <desc id="desc">Disk and quantization median initialization and Lloyd latency for one thread.</desc>
+  <rect width="900" height="680" fill="#ffffff"/>
+  <text x="450" y="28" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="20" font-weight="600" fill="#1f2328">K-means phase latency by dimension (1 thread)</text>
+  <g font-family="Segoe UI, sans-serif" font-size="13">
+    <line x1="590" y1="50" x2="625" y2="50" stroke="#0969da" stroke-width="4"/><circle cx="607" cy="50" r="4" fill="#0969da"/><text x="633" y="55" fill="#1f2328">Disk</text>
+    <line x1="695" y1="50" x2="730" y2="50" stroke="#d97706" stroke-width="4"/><circle cx="712" cy="50" r="4" fill="#d97706"/><text x="738" y="55" fill="#1f2328">Quantization</text>
+  </g>
+
+  <g font-family="Segoe UI, sans-serif" font-size="12" fill="#1f2328">
+    <text x="75" y="88" font-size="16" font-weight="600">K-means++ initialization</text>
+    <line x1="80" y1="310" x2="820" y2="310" stroke="#1f2328"/><line x1="80" y1="70" x2="80" y2="310" stroke="#1f2328"/>
+    <line x1="80" y1="190" x2="820" y2="190" stroke="#d0d7de"/><text x="70" y="314" text-anchor="end">0</text><text x="70" y="194" text-anchor="end">4</text><text x="70" y="74" text-anchor="end">8 s</text>
+    <polyline points="100,307.6 215,307.2 330,303.9 445,283.4 560,256.8 675,239.8 790,100.9" fill="none" stroke="#0969da" stroke-width="4"/>
+    <polyline points="100,309.6 215,308.9 330,304.8 445,287.0 560,259.3 675,240.1 790,91.2" fill="none" stroke="#d97706" stroke-width="4"/>
+
+    <text x="75" y="398" font-size="16" font-weight="600">Lloyd iterations</text>
+    <line x1="80" y1="620" x2="820" y2="620" stroke="#1f2328"/><line x1="80" y1="380" x2="80" y2="620" stroke="#1f2328"/>
+    <line x1="80" y1="500" x2="820" y2="500" stroke="#d0d7de"/><text x="70" y="624" text-anchor="end">0</text><text x="70" y="504" text-anchor="end">9</text><text x="70" y="384" text-anchor="end">18 s</text>
+    <polyline points="100,617.9 215,616.8 330,612.6 445,601.7 560,584.9 675,575.9 790,530.3" fill="none" stroke="#0969da" stroke-width="4"/>
+    <polyline points="100,619.7 215,618.0 330,611.2 445,592.7 560,565.1 675,546.5 790,397.8" fill="none" stroke="#d97706" stroke-width="4"/>
+
+    <g fill="#0969da"><circle cx="100" cy="307.6" r="4"/><circle cx="215" cy="307.2" r="4"/><circle cx="330" cy="303.9" r="4"/><circle cx="445" cy="283.4" r="4"/><circle cx="560" cy="256.8" r="4"/><circle cx="675" cy="239.8" r="4"/><circle cx="790" cy="100.9" r="4"/><circle cx="100" cy="617.9" r="4"/><circle cx="215" cy="616.8" r="4"/><circle cx="330" cy="612.6" r="4"/><circle cx="445" cy="601.7" r="4"/><circle cx="560" cy="584.9" r="4"/><circle cx="675" cy="575.9" r="4"/><circle cx="790" cy="530.3" r="4"/></g>
+    <g fill="#d97706"><circle cx="100" cy="309.6" r="4"/><circle cx="215" cy="308.9" r="4"/><circle cx="330" cy="304.8" r="4"/><circle cx="445" cy="287.0" r="4"/><circle cx="560" cy="259.3" r="4"/><circle cx="675" cy="240.1" r="4"/><circle cx="790" cy="91.2" r="4"/><circle cx="100" cy="619.7" r="4"/><circle cx="215" cy="618.0" r="4"/><circle cx="330" cy="611.2" r="4"/><circle cx="445" cy="592.7" r="4"/><circle cx="560" cy="565.1" r="4"/><circle cx="675" cy="546.5" r="4"/><circle cx="790" cy="397.8" r="4"/></g>
+
+    <g text-anchor="middle"><text x="100" y="645">4</text><text x="215" y="645">32</text><text x="330" y="645">128</text><text x="445" y="645">384</text><text x="560" y="645">768</text><text x="675" y="645">1024</text><text x="790" y="645">3072</text></g>
+    <text x="450" y="670" text-anchor="middle">Dimensions</text>
+  </g>
+</svg>
