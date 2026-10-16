@@ -4,13 +4,13 @@
  */
 
 use crate::{
-    Emulated, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDReinterpret,
-    SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
+    Emulated, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+    SIMDReinterpret, SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
 use super::{
-    Neon, i8x16, internal,
+    Neon, f32x4, i8x16, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x4,
     u8x16, u32x2,
@@ -116,9 +116,23 @@ impl SIMDDotProduct<u8x16, u8x16> for u32x4 {
     }
 }
 
+//-------------//
+// Conversions //
+//-------------//
+
+helpers::unsafe_map_cast!(u32x4 => (f32, f32x4), vcvtq_f32_u32, "neon");
+
 //////////////////
 // Reinterprets //
 //////////////////
+
+impl SIMDReinterpret<u8x16> for u32x4 {
+    #[inline(always)]
+    fn reinterpret_simd(self) -> u8x16 {
+        // SAFETY: Allowed by the Neon architecture.
+        u8x16(unsafe { vreinterpretq_u8_u32(self.0) })
+    }
+}
 
 impl SIMDReinterpret<i8x16> for u32x4 {
     #[inline(always)]
@@ -183,6 +197,10 @@ mod tests {
     // Reductions
     test_utils::ops::test_sumtree!(u32x4, 0xb9ac82ab23a855da, test_neon());
 
+    // Conversions
+    test_utils::ops::test_cast!(u32x4 => f32x4, 0x9a8d420371b6c5ef, test_neon());
+
     // Reinterprets
     test_utils::ops::test_reinterpret!(u32x4 => i8x16, 0xbfad755f32d25e5c, test_neon());
+    test_utils::ops::test_reinterpret!(u32x4 => u8x16, 0xd56e9c21a7183b4f, test_neon());
 }

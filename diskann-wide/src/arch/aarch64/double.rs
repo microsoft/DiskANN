@@ -197,6 +197,22 @@ impl crate::SIMDCast<f32> for i32x8 {
     }
 }
 
+impl crate::SIMDCast<f32> for u32x8 {
+    type Cast = f32x8;
+    #[inline(always)]
+    fn simd_cast(self) -> f32x8 {
+        f32x8::new(self.0.simd_cast(), self.1.simd_cast())
+    }
+}
+
+impl crate::SIMDCast<f32> for u32x16 {
+    type Cast = f32x16;
+    #[inline(always)]
+    fn simd_cast(self) -> f32x16 {
+        f32x16::new(self.0.simd_cast(), self.1.simd_cast())
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -460,6 +476,8 @@ mod tests {
     test_utils::ops::test_cast!(f32x16 => f16x16, 0xba8fe343fc9dbeff, test_neon());
 
     test_utils::ops::test_cast!(i32x8 => f32x8, 0xba8fe343fc9dbeff, test_neon());
+    test_utils::ops::test_cast!(u32x8 => f32x8, 0x1e9e37b58fb3f1a8, test_neon());
+    test_utils::ops::test_cast!(u32x16 => f32x16, 0xd2b068a9bf3f9d24, test_neon());
 
     // SplitJoin + ZipUnzip for f16x16
     test_utils::ops::test_splitjoin!(f16x16 => f16x8, 0x2e301b7e12090d5c, test_neon());
