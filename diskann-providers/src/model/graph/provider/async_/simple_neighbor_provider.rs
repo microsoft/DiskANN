@@ -325,30 +325,24 @@ impl DiskAdaptor<'_> {
     /// The virtual start point's edges come first because they are the edges in-memory search
     /// expands first. The merged list is capped at the longer of the two in-memory lists so
     /// the serialized max degree does not grow.
-    fn merged_start_point_adjacency_list(&self, own: Vec<u32>) -> ANNResult<Vec<u32>> {
-        let mut inherited = AdjacencyList::new();
+    fn merged_start_point_adjacency_list(&self, own: &[u32]) -> ANNResult<Vec<u32>> {
+        let mut merged = AdjacencyList::new();
         self.provider
-            .get_neighbors_sync(self.inmem_start_point as usize, &mut inherited)?;
+            .get_neighbors_sync(self.inmem_start_point as usize, &mut merged)?;
 
-        let cap = own.len().max(inherited.len());
-        let mut merged = Vec::with_capacity(cap);
-        for &neighbor in inherited.iter().chain(own.iter()) {
+        let cap = own.len().max(merged.len());
+        let is_start_point =
+            |n: &u32| *n == self.inmem_start_point || *n == self.actual_start_point;
+
+        merged.retain(|n| !is_start_point(n));
+        for neighbor in own.iter().copied().filter(|n| !is_start_point(n)) {
             if merged.len() == cap {
                 break;
             }
-
-            let neighbor = if neighbor == self.inmem_start_point {
-                self.actual_start_point
-            } else {
-                neighbor
-            };
-
-            if neighbor != self.actual_start_point && !merged.contains(&neighbor) {
-                merged.push(neighbor);
-            }
+            merged.push(neighbor);
         }
 
-        Ok(merged)
+        Ok(merged.into())
     }
 }
 
@@ -367,7 +361,7 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
         let node_id = u32::try_from(i)?;
 
         if node_id == self.actual_start_point {
-            return self.merged_start_point_adjacency_list(list);
+            return self.merged_start_point_adjacency_list(&list);
         }
 
         let mut seen_actual_start_point = false;
