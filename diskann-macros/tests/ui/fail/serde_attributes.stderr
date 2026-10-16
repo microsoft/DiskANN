@@ -1,0 +1,77 @@
+error: serde attribute `rename_all` found multiple times
+ --> tests/ui/fail/serde_attributes.rs:9:49
+  |
+9 | #[serde(rename_all = "snake_case", rename_all = "kebab-case")]
+  |                                                 ^^^^^^^^^^^^
+
+error: serde attribute `rename` found multiple times
+  --> tests/ui/fail/serde_attributes.rs:16:40
+   |
+16 |     #[serde(rename = "first", rename = "second")]
+   |                                        ^^^^^^^^
+
+error: serde attribute `rename` found multiple times
+  --> tests/ui/fail/serde_attributes.rs:22:40
+   |
+22 |     #[serde(rename = "first", rename = "second")]
+   |                                        ^^^^^^^^
+
+error: unsupported serde `rename_all` rule "camelCase" - expected one of "lowercase", "snake_case", or "kebab-case"
+  --> tests/ui/fail/serde_attributes.rs:27:22
+   |
+27 | #[serde(rename_all = "camelCase")]
+   |                      ^^^^^^^^^^^
+
+error: unsupported Serde attribute for Reflect
+  --> tests/ui/fail/serde_attributes.rs:33:9
+   |
+33 | #[serde(default)]
+   |         ^^^^^^^
+
+error: unsupported Serde attribute for Reflect
+  --> tests/ui/fail/serde_attributes.rs:40:13
+   |
+40 |     #[serde(default)]
+   |             ^^^^^^^
+
+error: unsupported Serde attribute for Reflect
+  --> tests/ui/fail/serde_attributes.rs:46:13
+   |
+46 |     #[serde(skip)]
+   |             ^^^^
+
+error: rename attributes are not supported on unnamed fields
+  --> tests/ui/fail/serde_attributes.rs:51:44
+   |
+51 | struct RenameUnnamedField(#[serde(rename = "value")] usize);
+   |                                            ^^^^^^^
+
+error: `rename_all` cannot be applied to tuple structs
+  --> tests/ui/fail/serde_attributes.rs:54:22
+   |
+54 | #[serde(rename_all = "snake_case")]
+   |                      ^^^^^^^^^^^^
+
+error: `rename_all` cannot be applied to unit structs
+  --> tests/ui/fail/serde_attributes.rs:58:22
+   |
+58 | #[serde(rename_all = "snake_case")]
+   |                      ^^^^^^^^^^^^
+
+error: serde attribute `rename_all` found multiple times
+  --> tests/ui/fail/serde_attributes.rs:63:53
+   |
+63 |     #[serde(rename_all = "snake_case", rename_all = "snake_case")]
+   |                                                     ^^^^^^^^^^^^
+
+error: `rename_all` cannot be applied to tuple structs
+  --> tests/ui/fail/serde_attributes.rs:71:26
+   |
+71 |     #[serde(rename_all = "snake_case")]
+   |                          ^^^^^^^^^^^^
+
+error: `rename_all` cannot be applied to unit structs
+  --> tests/ui/fail/serde_attributes.rs:77:26
+   |
+77 |     #[serde(rename_all = "snake_case")]
+   |                          ^^^^^^^^^^^^

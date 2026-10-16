@@ -202,7 +202,7 @@ mod imp {
                         build::set_start_points(
                             index.provider(),
                             data_view,
-                            *build.start_point_strategy(),
+                            build.start_point_strategy(),
                         )?;
                         Ok(index)
                     };

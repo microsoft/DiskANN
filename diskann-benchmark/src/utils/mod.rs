@@ -6,6 +6,7 @@
 use diskann_benchmark_runner::{
     benchmark::Score,
     utils::datatype::{AsDataType, DataType},
+    Reflect,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +27,9 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(rename_all = "snake_case")]
+#[reflect(prefix = "benchmark::")]
 pub(crate) enum SimilarityMeasure {
     SquaredL2,
     InnerProduct,

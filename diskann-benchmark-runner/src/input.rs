@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::Checker;
+use crate::{Checker, Reflect};
 
 /// Inputs to [`Benchmarks`](crate::Benchmark).
 ///
@@ -16,7 +16,7 @@ pub trait Input: Sized + std::fmt::Debug + 'static {
     /// [`Deserialize`](serde::Deserialize) implementation.
     ///
     /// Final object validation is performed via [`from_raw`](Self::from_raw).
-    type Raw: serde::de::DeserializeOwned + serde::Serialize;
+    type Raw: serde::de::DeserializeOwned + serde::Serialize + Reflect;
 
     /// Return the discriminant associated with this type.
     ///
@@ -39,7 +39,7 @@ pub trait Input: Sized + std::fmt::Debug + 'static {
 }
 
 pub(crate) mod internal {
-    use crate::{Checker, Features, internal::visibility::Visibility};
+    use crate::{Checker, Features, Reflection, internal::visibility::Visibility};
 
     /// Runtime representation of a deserialized [`Input`].
     #[derive(Debug)]
@@ -145,6 +145,10 @@ pub(crate) mod internal {
             self.0.visibility()
         }
 
+        pub(crate) fn raw_reflection(&self) -> Option<Reflection> {
+            self.0.raw_reflection()
+        }
+
         pub(crate) fn as_any(&self) -> &dyn std::any::Any {
             self.0.as_any()
         }
@@ -221,6 +225,7 @@ pub(crate) mod internal {
         fn visibility(&self) -> Visibility<'_>;
 
         // reflection
+        fn raw_reflection(&self) -> Option<Reflection>;
         fn as_any(&self) -> &dyn std::any::Any;
         fn type_name(&self) -> &'static str;
     }
@@ -260,6 +265,9 @@ pub(crate) mod internal {
         }
         fn visibility(&self) -> Visibility<'_> {
             Visibility::Available
+        }
+        fn raw_reflection(&self) -> Option<Reflection> {
+            Some(Reflection::new::<T::Raw>())
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -304,6 +312,9 @@ pub(crate) mod internal {
             Visibility::Gated {
                 features: &self.features,
             }
+        }
+        fn raw_reflection(&self) -> Option<Reflection> {
+            None
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self

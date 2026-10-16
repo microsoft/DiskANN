@@ -1,0 +1,53 @@
+error: reflect attribute `prefix` found multiple times
+ --> tests/ui/fail/reflect_attributes.rs:9:38
+  |
+9 | #[reflect(prefix = "one::", prefix = "two::")]
+  |                                      ^^^^^^^
+
+error: reflect attribute `type_name` found multiple times
+  --> tests/ui/fail/reflect_attributes.rs:13:42
+   |
+13 | #[reflect(type_name = "One", type_name = "Two")]
+   |                                          ^^^^^
+
+error: reflect attributes `prefix` and `type_name` are mutually exclusive
+  --> tests/ui/fail/reflect_attributes.rs:17:47
+   |
+17 | #[reflect(prefix = "benchmark::", type_name = "Renamed")]
+   |                                               ^^^^^^^^^
+
+error: The `type_name` attribute cannot be applied to types with generics
+  --> tests/ui/fail/reflect_attributes.rs:21:23
+   |
+21 | #[reflect(type_name = "Generic")]
+   |                       ^^^^^^^^^
+
+error: unsupported attribute for Reflect
+  --> tests/ui/fail/reflect_attributes.rs:27:11
+   |
+27 | #[reflect(rename = "Unsupported")]
+   |           ^^^^^^
+
+error: Reflect does not support field-level attributes
+  --> tests/ui/fail/reflect_attributes.rs:32:5
+   |
+32 |     #[reflect(rename = "value")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Reflect does not support field-level attributes
+  --> tests/ui/fail/reflect_attributes.rs:38:5
+   |
+38 |     #[reflect]
+   |     ^^^^^^^^^^
+
+error: Reflect does not support variant-level attributes
+  --> tests/ui/fail/reflect_attributes.rs:44:5
+   |
+44 |     #[reflect(rename = "value")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Reflect does not support variant-level attributes
+  --> tests/ui/fail/reflect_attributes.rs:50:5
+   |
+50 |     #[reflect]
+   |     ^^^^^^^^^^

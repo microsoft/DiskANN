@@ -1,0 +1,65 @@
+error: serde attribute `content` provided without a `tag`
+ --> tests/ui/fail/tagging.rs:9:19
+  |
+9 | #[serde(content = "value")]
+  |                   ^^^^^^^
+
+error: serde attribute `content` found multiple times
+  --> tests/ui/fail/tagging.rs:15:52
+   |
+15 | #[serde(tag = "kind", content = "first", content = "second")]
+   |                                                    ^^^^^^^^
+
+error: serde attribute `tag` found multiple times
+  --> tests/ui/fail/tagging.rs:21:30
+   |
+21 | #[serde(tag = "first", tag = "second")]
+   |                              ^^^^^^^^
+
+error: adjacently tagged `content` conflicts with `tag`
+  --> tests/ui/fail/tagging.rs:27:33
+   |
+27 | #[serde(tag = "same", content = "same")]
+   |                                 ^^^^^^
+
+error: serde attribute `tag` provided on a non-enum
+  --> tests/ui/fail/tagging.rs:33:15
+   |
+33 | #[serde(tag = "kind")]
+   |               ^^^^^^
+
+error: serde attributes `tag` and `content` provided on a non-enum
+  --> tests/ui/fail/tagging.rs:39:15
+   |
+39 | #[serde(tag = "kind", content = "value")]
+   |               ^^^^^^
+
+error: non-newtype tuple type variants are not allowed with internal tagging
+  --> tests/ui/fail/tagging.rs:47:5
+   |
+47 |     Tuple(),
+   |     ^^^^^
+
+error: non-newtype tuple type variants are not allowed with internal tagging
+  --> tests/ui/fail/tagging.rs:53:5
+   |
+53 |     Tuple(usize, usize),
+   |     ^^^^^
+
+error: field "kind" conflicts with internal discriminant tag
+  --> tests/ui/fail/tagging.rs:59:13
+   |
+59 |     Value { kind: usize },
+   |             ^^^^
+
+error: field "kind" conflicts with internal discriminant tag
+  --> tests/ui/fail/tagging.rs:66:26
+   |
+66 |         #[serde(rename = "kind")]
+   |                          ^^^^^^
+
+error: field "foo-bar" conflicts with internal discriminant tag
+  --> tests/ui/fail/tagging.rs:75:13
+   |
+75 |     Value { foo_bar: usize },
+   |             ^^^^^^^
