@@ -9,6 +9,7 @@ on:
       - "diskann-garnet-v*"
 
 env:
+  RUST_CONFIG: 'target."cfg(all())".rustflags=["-Z", "stack-protector=all"]'
   RUST_BACKTRACE: 1
 
 permissions:
@@ -26,22 +27,22 @@ jobs:
             artifact-name: linux
             lib-path: target/release/libdiskann_garnet.so
           - os: windows-latest
-            env:
-              EXTRA_RUSTFLAGS: -C control-flow-guard
             artifact-name: windows
             lib-path: target/release/diskann_garnet.dll
             pdb-path: target/release/diskann_garnet.pdb
+          - os: macos-26
+            artifact-name: macos-arm64
+            lib-path: target/release/libdiskann_garnet.dylib
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Build diskann-garnet (release)
+        shell: bash
         env:
           RUSTC_BOOTSTRAP: 1
-          # NOTE: this overrides flags in /.cargo/config.toml so those must be manually merged in here.
-          RUSTFLAGS: -Z stack-protector=all -C target-cpu=x86-64-v3 ${{ env.EXTRA_RUSTFLAGS }}
-        run: cargo build --locked --release --package diskann-garnet
+        run: cargo build --locked --release --package diskann-garnet --config "$RUST_CONFIG"
 
       - name: Stage native library
         shell: bash
@@ -92,7 +93,7 @@ jobs:
 
       - name: Create staging directory
         shell: bash
-        run: mkdir -p staging/linux staging/windows staging/docs
+        run: mkdir -p staging/linux staging/windows staging/macos-arm64 staging/docs
 
       - name: Download Linux artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -105,6 +106,12 @@ jobs:
         with:
           name: windows
           path: staging/windows/
+
+      - name: Download macOS ARM64 artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-arm64
+          path: staging/macos-arm64/
 
       - name: Copy docs
         shell: bash
@@ -121,7 +128,7 @@ jobs:
         working-directory: staging
         run: nuget pack diskann-garnet.nuspec -NonInteractive
 
-      - name: List nupkg contents
+      - name: Verify nupkg contents
         shell: bash
         working-directory: staging
         run: |
@@ -130,6 +137,13 @@ jobs:
           echo ""
           echo "=== Package contents ==="
           unzip -l *.nupkg
+          for native_library in \
+            runtimes/linux-x64/native/libdiskann_garnet.so \
+            runtimes/win-x64/native/diskann_garnet.dll \
+            runtimes/win-x64/native/diskann_garnet.pdb \
+            runtimes/osx-arm64/native/libdiskann_garnet.dylib; do
+            unzip -t *.nupkg "$native_library"
+          done
 
       - name: Upload NuGet package artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
