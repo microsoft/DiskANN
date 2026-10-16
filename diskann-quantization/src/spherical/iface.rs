@@ -961,7 +961,7 @@ mod dispatch {
     type Reified<D, const N: usize, T, M> = Reify<D, M, T, AsData<N>>;
 
     #[derive(Debug)]
-    enum VisitOnce<T, U> {
+    pub(super) enum VisitOnce<T, U> {
         Empty,
         Visitor(T),
         Visited(U),
@@ -993,22 +993,33 @@ mod dispatch {
     }
 
     #[derive(Debug)]
-    struct QueryVisitOnce<'a, T, U, A> {
+    pub(super) struct QueryVisitOnce<'a, T, U, A> {
         visitor: VisitOnce<T, U>,
         allocator: Option<A>,
         query: &'a [f32],
         scratch: ScopedAllocator<'a>,
     }
 
-    struct Bits<const N: usize>;
+    pub(super) struct Bits<const N: usize>;
 
-    trait Dispatch<B>: 'static {
+    pub(super) trait Dispatch<B>: 'static {
         type Distance<'a>: ?Sized + 'a;
-        type Query<'a>: ?Sized + 'a where B: 'a;
 
-        fn distance<'a, V>(visitor: &'a mut VisitOnce<V, V::Output>) -> &'a mut Self::Distance<'a>
+        type Query<'a>: ?Sized + 'a
         where
-            V: DistanceVisitor<'a>;
+            B: 'a;
+
+        fn distance<'call, 'out, V>(
+            visitor: &'call mut VisitOnce<V, V::Output>,
+        ) -> &'call mut Self::Distance<'call>
+        where
+            V: DistanceVisitor<'out>;
+
+        fn other_query<'call, 'out, V>(
+            visitor: &'call mut VisitOnce<V, V::Output>,
+        ) -> &'call mut Self::Query<'call>
+        where
+            V: DistanceVisitor<'out>;
 
         fn query<'call, 'out, V, A>(
             visitor: &'call mut QueryVisitOnce<'_, V, V::Output, A>,
@@ -1034,7 +1045,7 @@ mod dispatch {
                 )*
             }
         ) => {
-            trait $distance {
+            pub(super) trait $distance {
                 $(
                     $(#[$distance_attr])*
                     fn $distance_method(
@@ -1056,7 +1067,7 @@ mod dispatch {
                 )*
             }
 
-            trait $query<B>
+            pub(super) trait $query<B>
             where
                 B: Allocator,
             {
@@ -1067,6 +1078,25 @@ mod dispatch {
                         quantizer: &SphericalQuantizer<B>,
                         kernel: $query_kernel,
                     ) -> Result<(), quantizer::CompressionError>;
+                )*
+            }
+
+            impl<'a, V, B> $query<B> for VisitOnce<V, V::Output>
+            where
+                V: DistanceVisitor<'a>,
+                B: Allocator,
+            {
+                $(
+                    $(#[$query_attr])*
+                    fn $query_method(
+                        &mut self,
+                        quantizer: &SphericalQuantizer<B>,
+                        d: $query_kernel,
+                    ) -> Result<(), quantizer::CompressionError>
+                    {
+                        self.visit(|v| v.visit(d));
+                        Ok(())
+                    }
                 )*
             }
 
@@ -1105,11 +1135,20 @@ mod dispatch {
                 type Distance<'a> = dyn $distance + 'a;
                 type Query<'a> = dyn $query<B> + 'a where B: 'a;
 
-                fn distance<'a, V>(
-                     visitor: &'a mut VisitOnce<V, V::Output>
-                ) -> &'a mut Self::Distance<'a>
+                fn distance<'call, 'out, V>(
+                     visitor: &'call mut VisitOnce<V, V::Output>
+                ) -> &'call mut Self::Distance<'call>
                 where
-                    V: DistanceVisitor<'a>,
+                    V: DistanceVisitor<'out>,
+                {
+                    visitor
+                }
+
+                fn other_query<'call, 'out, V>(
+                    visitor: &'call mut VisitOnce<V, V::Output>,
+                ) -> &'call mut Self::Query<'call>
+                where
+                    V: DistanceVisitor<'out>,
                 {
                     visitor
                 }
@@ -1193,7 +1232,8 @@ mod dispatch {
         trait VisitQuery8 {}
     }
 
-    trait DispatchDistance<const N: usize, B>
+    pub(super) trait Dispatcher<const N: usize, B>:
+        std::fmt::Debug + Send + Sync + 'static
     where
         Bits<N>: Dispatch<B>,
         B: Allocator,
@@ -1203,15 +1243,7 @@ mod dispatch {
             quantizer: &SphericalQuantizer<B>,
             visitor: &'a mut <Bits<N> as Dispatch<B>>::Distance<'a>,
         );
-    }
 
-    struct Unsupported;
-
-    trait DispatchQuery<const N: usize, B>
-    where
-        Bits<N>: Dispatch<B>,
-        B: Allocator,
-    {
         fn dispatch_query<'a>(
             &self,
             quantizer: &SphericalQuantizer<B>,
@@ -1221,13 +1253,26 @@ mod dispatch {
     }
 
     #[derive(Debug)]
-    struct Params<M, D> {
+    struct Unsupported;
+
+    #[derive(Debug)]
+    pub(super) struct Params<M, D> {
         arch: M,
         metric: D,
     }
 
+    impl<M, D> Params<M, D> {
+        pub(super) fn new(arch: M, metric: D) -> Self {
+            Self { arch, metric }
+        }
+    }
+
     // Temporary stubs.
-    impl<M: 'static, D: 'static, B: Allocator> DispatchDistance<2, B> for Params<M, D> {
+    impl<M, D, B: Allocator> Dispatcher<2, B> for Params<M, D>
+    where
+        M: std::fmt::Debug + Send + Sync + 'static,
+        D: std::fmt::Debug + Send + Sync + 'static,
+    {
         fn dispatch_distance<'a>(
             &self,
             quantizer: &SphericalQuantizer<B>,
@@ -1235,10 +1280,7 @@ mod dispatch {
         ) {
             unimplemented!()
         }
-    }
 
-    impl<M: 'static, D: 'static, B: Allocator> DispatchQuery<2, B> for Params<M, D>
-    {
         fn dispatch_query<'a>(
             &self,
             quantizer: &SphericalQuantizer<B>,
@@ -1249,7 +1291,11 @@ mod dispatch {
         }
     }
 
-    impl<M: 'static, D: 'static, B: Allocator> DispatchDistance<4, B> for Params<M, D> {
+    impl<M, D, B: Allocator> Dispatcher<4, B> for Params<M, D>
+    where
+        M: std::fmt::Debug + Send + Sync + 'static,
+        D: std::fmt::Debug + Send + Sync + 'static,
+    {
         fn dispatch_distance<'a>(
             &self,
             quantizer: &SphericalQuantizer<B>,
@@ -1257,10 +1303,7 @@ mod dispatch {
         ) {
             unimplemented!()
         }
-    }
 
-    impl<M: 'static, D: 'static, B: Allocator> DispatchQuery<4, B> for Params<M, D>
-    {
         fn dispatch_query<'a>(
             &self,
             quantizer: &SphericalQuantizer<B>,
@@ -1271,7 +1314,11 @@ mod dispatch {
         }
     }
 
-    impl<M: 'static, D: 'static, B: Allocator> DispatchDistance<8, B> for Params<M, D> {
+    impl<M, D, B: Allocator> Dispatcher<8, B> for Params<M, D>
+    where
+        M: std::fmt::Debug + Send + Sync + 'static,
+        D: std::fmt::Debug + Send + Sync + 'static,
+    {
         fn dispatch_distance<'a>(
             &self,
             quantizer: &SphericalQuantizer<B>,
@@ -1279,10 +1326,7 @@ mod dispatch {
         ) {
             unimplemented!()
         }
-    }
 
-    impl<M: 'static, D: 'static, B: Allocator> DispatchQuery<8, B> for Params<M, D>
-    {
         fn dispatch_query<'a>(
             &self,
             quantizer: &SphericalQuantizer<B>,
@@ -1309,7 +1353,7 @@ mod dispatch {
             ),+ $(,)?
         ) => {
             $(
-                impl<B> DispatchDistance<1, B> for Params<$arch, crate::distances::$dist>
+                impl<B> Dispatcher<1, B> for Params<$arch, crate::distances::$dist>
                 where
                     B: Allocator,
                 {
@@ -1325,12 +1369,7 @@ mod dispatch {
                             $modify_distance(self.arch),
                         ))
                     }
-                }
 
-                impl<B> DispatchQuery<1, B> for Params<$arch, crate::distances::$dist>
-                where
-                    B: Allocator,
-                {
                     fn dispatch_query(
                         &self,
                         quantizer: &SphericalQuantizer<B>,
@@ -1403,6 +1442,163 @@ mod dispatch {
         { V4, InnerProduct } => { ip_v3(to_v3) | data_ip_v3(to_v3), fbt_ip_v3(to_v3), full_ip_v3(to_v3) },
         { V4, Cosine } => { co_v3(to_v3) | data_co_v3(to_v3), fbt_co_v3(to_v3), full_co_v3(to_v3) },
     }
+
+    pub(super) trait MakeDispatcher<const N: usize, B>
+    where
+        B: Allocator,
+    {
+        fn make_dispatcher<A>(
+            &self,
+            allocator: A,
+        ) -> Result<Poly<dyn Dispatcher<N, B>, A>, AllocatorError>
+        where
+            A: AllocatorCore;
+    }
+
+    macro_rules! make_dispatcher {
+        ($N:literal) => {
+            impl<B: Allocator> MakeDispatcher<$N, B> for Params<RuntimeArch, SupportedMetric> {
+                fn make_dispatcher<A>(
+                    &self,
+                    allocator: A,
+                ) -> Result<Poly<dyn Dispatcher<$N, B>, A>, AllocatorError>
+                where
+                    A: AllocatorCore,
+                {
+                    use SupportedMetric::{Cosine, InnerProduct, SquaredL2};
+
+                    match self.arch {
+                        RuntimeArch::Scalar(arch) => match self.metric {
+                            SquaredL2 => {
+                                let p = Params::new(arch, distances::SquaredL2);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                            InnerProduct => {
+                                let p = Params::new(arch, distances::InnerProduct);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                            Cosine => {
+                                let p = Params::new(arch, distances::Cosine);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                        }
+                        RuntimeArch::V3(arch) => match self.metric {
+                            SquaredL2 => {
+                                let p = Params::new(arch, distances::SquaredL2);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                            InnerProduct => {
+                                let p = Params::new(arch, distances::InnerProduct);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                            Cosine => {
+                                let p = Params::new(arch, distances::Cosine);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                        }
+                        RuntimeArch::V4(arch) => match self.metric {
+                            SquaredL2 => {
+                                let p = Params::new(arch, distances::SquaredL2);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                            InnerProduct => {
+                                let p = Params::new(arch, distances::InnerProduct);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                            Cosine => {
+                                let p = Params::new(arch, distances::Cosine);
+                                poly!({ Dispatcher<$N, B> }, p, allocator)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    make_dispatcher!(1);
+    make_dispatcher!(2);
+    make_dispatcher!(4);
+    make_dispatcher!(8);
+
+    #[derive(Debug)]
+    pub(super) struct Bob<const N: usize, B>
+    where
+        B: Allocator,
+    {
+        dispatcher: Poly<dyn Dispatcher<N, B>, B>,
+    }
+
+    // TODO: Can we remove the '`static` requirement?
+    impl<const N: usize, B> Bob<N, B>
+    where
+        B: Allocator + 'static,
+    {
+        pub(super) fn new(dispatcher: Poly<dyn Dispatcher<N, B>, B>) -> Self {
+            Self { dispatcher }
+        }
+
+        pub(super) fn distance<'a, V>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            visitor: V,
+        ) -> V::Output
+        where
+            V: DistanceVisitor<'a>,
+            Bits<N>: Dispatch<B>,
+        {
+            let mut v = VisitOnce::new(visitor);
+            let dynamic = <Bits<N>>::distance(&mut v);
+            self.dispatcher.dispatch_distance(quantizer, dynamic);
+            v.take_visited()
+        }
+
+        pub(super) fn query_distance<'a, V>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            layout: QueryLayout,
+            visitor: V,
+        ) -> V::Output
+        where
+            V: DistanceVisitor<'a>,
+            Bits<N>: Dispatch<B>,
+        {
+            let mut v = VisitOnce::new(visitor);
+            let dynamic = <Bits<N>>::other_query(&mut v);
+            self.dispatcher
+                .dispatch_query(quantizer, layout, dynamic)
+                .unwrap();
+            v.take_visited()
+        }
+
+        pub(super) fn fused_query_distance<'a, V, A>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            query: &[f32],
+            layout: QueryLayout,
+            allocator: A,
+            scratch: ScopedAllocator<'_>,
+            visitor: V,
+        ) -> V::Output
+        where
+            V: QueryDistanceVisitor<'a>,
+            Bits<N>: Dispatch<B>,
+            A: AllocatorCore + std::fmt::Debug + Send + Sync + 'a,
+        {
+            let mut v = QueryVisitOnce {
+                visitor: VisitOnce::new(visitor),
+                allocator: Some(allocator),
+                query,
+                scratch,
+            };
+
+            let dynamic = <Bits<N>>::query(&mut v);
+            self.dispatcher
+                .dispatch_query(quantizer, layout, dynamic)
+                .unwrap();
+            v.visitor.take_visited()
+        }
+    }
 }
 
 ///////////////////////
@@ -1464,6 +1660,22 @@ where
     /// This is a temporary function until custom allocator support fully comes on line.
     pub fn into_inner(self) -> Poly<dyn DynQueryComputer, A> {
         self.inner
+    }
+}
+
+#[derive(Debug)]
+struct MakeQueryComputer<A>(A);
+
+impl<A> QueryDistanceVisitor<'static> for MakeQueryComputer<A>
+where
+    A: AllocatorCore,
+{
+    type Output = Result<QueryComputer<A>, AllocatorError>;
+    fn visit<T>(self, distance: T) -> Self::Output
+    where
+        T: DynQueryComputer + 'static,
+    {
+        QueryComputer::new(distance, self.0)
     }
 }
 
@@ -1584,6 +1796,25 @@ where
     }
 }
 
+#[derive(Debug)]
+struct MakeDistanceComputer<A>(A);
+
+impl<A> DistanceVisitor<'static> for MakeDistanceComputer<A>
+where
+    A: AllocatorCore,
+{
+    type Output = Result<DistanceComputer<A>, AllocatorError>;
+    fn visit<T>(self, distance: T) -> Self::Output
+    where
+        T: DynDistanceComputer + 'static,
+    {
+        let alloc = self.0;
+        Ok(DistanceComputer {
+            inner: poly!(DynDistanceComputer, distance, alloc)?,
+        })
+    }
+}
+
 //////////
 // Impl //
 //////////
@@ -1605,42 +1836,57 @@ where
 {
     quantizer: SphericalQuantizer<A>,
     distance: Poly<dyn DynDistanceComputer, A>,
+    bob: dispatch::Bob<NBITS, A>,
 }
 
 /// Pre-dispatch distance functions between compressed data vectors from `quantizer`
 /// specialized for the current run-time mciro architecture.
-pub trait Constructible<A = GlobalAllocator>
+pub trait Constructible<A = GlobalAllocator>: Sized
 where
     A: Allocator,
 {
-    fn dispatch_distance(
-        quantizer: &SphericalQuantizer<A>,
-    ) -> Result<Poly<dyn DynDistanceComputer, A>, AllocatorError>;
+    fn construct(quantizer: SphericalQuantizer<A>) -> Result<Self, AllocatorError>;
 }
 
 impl<const NBITS: usize, A: Allocator> Constructible<A> for Impl<NBITS, A>
 where
-    A: Allocator,
-    AsData<NBITS>: FromOpaque,
-    SphericalQuantizer<A>: Dispatchable<AsData<NBITS>, NBITS>,
+    A: Allocator + 'static,
+    dispatch::Params<RuntimeArch, SupportedMetric>: dispatch::MakeDispatcher<NBITS, A>,
+    dispatch::Bits<NBITS>: dispatch::Dispatch<A>,
 {
-    fn dispatch_distance(
-        quantizer: &SphericalQuantizer<A>,
-    ) -> Result<Poly<dyn DynDistanceComputer, A>, AllocatorError> {
-        diskann_wide::arch::dispatch2_no_features(
-            ComputerDispatcher::<AsData<NBITS>, NBITS>::new(),
+    fn construct(quantizer: SphericalQuantizer<A>) -> Result<Self, AllocatorError> {
+        use dispatch::MakeDispatcher;
+
+        let dispatcher = dispatch::Params::new(RuntimeArch::new(), quantizer.metric())
+            .make_dispatcher(quantizer.allocator().clone())?;
+        let bob = dispatch::Bob::new(dispatcher);
+        let distance = bob.distance(&quantizer, AsPoly(quantizer.allocator().clone()))?;
+
+        Ok(Self {
             quantizer,
-            quantizer.allocator().clone(),
-        )
-        .map(|obj| obj.inner)
+            distance,
+            bob,
+        })
+
+        // let mut visitor = AsPoly(quantizer.allocator.clone());
+
+        // dispatcher.dispatch_distance(
+
+        // diskann_wide::arch::dispatch2_no_features(
+        //     ComputerDispatcher::<AsData<NBITS>, NBITS>::new(),
+        //     quantizer,
+        //     quantizer.allocator().clone(),
+        // )
+        // .map(|obj| obj.inner)
     }
 }
 
 impl<const NBITS: usize, A> TryClone for Impl<NBITS, A>
 where
     A: Allocator,
-    AsData<NBITS>: FromOpaque,
-    SphericalQuantizer<A>: Dispatchable<AsData<NBITS>, NBITS>,
+    Self: Constructible<A>,
+    // AsData<NBITS>: FromOpaque,
+    // SphericalQuantizer<A>: Dispatchable<AsData<NBITS>, NBITS>,
 {
     fn try_clone(&self) -> Result<Self, AllocatorError> {
         Self::new(self.quantizer.try_clone()?)
@@ -1653,11 +1899,7 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
     where
         Self: Constructible<A>,
     {
-        let distance = Self::dispatch_distance(&quantizer)?;
-        Ok(Self {
-            quantizer,
-            distance,
-        })
+        Self::construct(quantizer)
     }
 
     /// Return the underlying [`SphericalQuantizer`].
@@ -1686,20 +1928,20 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         }
     }
 
-    /// Return a [`DistanceComputer`] that is specialized for the most specific runtime
-    /// architecture.
-    fn query_computer<Q, B>(&self, allocator: B) -> Result<DistanceComputer<B>, AllocatorError>
-    where
-        Q: FromOpaque,
-        B: AllocatorCore,
-        SphericalQuantizer<A>: Dispatchable<Q, NBITS>,
-    {
-        diskann_wide::arch::dispatch2_no_features(
-            ComputerDispatcher::<Q, NBITS>::new(),
-            &self.quantizer,
-            allocator,
-        )
-    }
+    // /// Return a [`DistanceComputer`] that is specialized for the most specific runtime
+    // /// architecture.
+    // fn query_computer<Q, B>(&self, allocator: B) -> Result<DistanceComputer<B>, AllocatorError>
+    // where
+    //     Q: FromOpaque,
+    //     B: AllocatorCore,
+    //     // SphericalQuantizer<A>: Dispatchable<Q, NBITS>,
+    // {
+    //     diskann_wide::arch::dispatch2_no_features(
+    //         ComputerDispatcher::<Q, NBITS>::new(),
+    //         &self.quantizer,
+    //         allocator,
+    //     )
+    // }
 
     fn compress_query<'a, T>(
         &self,
@@ -1715,48 +1957,48 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
             .map_err(|err| CompressionError::CompressionError(err).into())
     }
 
-    /// Return a [`QueryComputer`] that is specialized for the most specific runtime
-    /// architecture.
-    fn fused_query_computer<Q, T, B>(
-        &self,
-        query: &[f32],
-        mut storage: T,
-        allocator: B,
-        scratch: ScopedAllocator<'_>,
-    ) -> Result<QueryComputer<B>, QueryComputerError>
-    where
-        Q: FromOpaque,
-        T: for<'a> ReborrowMut<'a>
-            + for<'a> Reborrow<'a, Target = Q::Target<'a>>
-            + ReportQueryLayout
-            + Debug
-            + Send
-            + Sync
-            + 'static,
-        B: AllocatorCore,
-        SphericalQuantizer<A>: for<'a> CompressIntoWith<
-                &'a [f32],
-                <T as ReborrowMut<'a>>::Target,
-                ScopedAllocator<'a>,
-                Error = quantizer::CompressionError,
-            >,
-        SphericalQuantizer<A>: Dispatchable<Q, NBITS>,
-    {
-        if let Err(err) = self
-            .quantizer
-            .compress_into_with(query, storage.reborrow_mut(), scratch)
-        {
-            return Err(CompressionError::CompressionError(err).into());
-        }
+    // /// Return a [`QueryComputer`] that is specialized for the most specific runtime
+    // /// architecture.
+    // fn fused_query_computer<Q, T, B>(
+    //     &self,
+    //     query: &[f32],
+    //     mut storage: T,
+    //     allocator: B,
+    //     scratch: ScopedAllocator<'_>,
+    // ) -> Result<QueryComputer<B>, QueryComputerError>
+    // where
+    //     Q: FromOpaque,
+    //     T: for<'a> ReborrowMut<'a>
+    //         + for<'a> Reborrow<'a, Target = Q::Target<'a>>
+    //         + ReportQueryLayout
+    //         + Debug
+    //         + Send
+    //         + Sync
+    //         + 'static,
+    //     B: AllocatorCore,
+    //     SphericalQuantizer<A>: for<'a> CompressIntoWith<
+    //             &'a [f32],
+    //             <T as ReborrowMut<'a>>::Target,
+    //             ScopedAllocator<'a>,
+    //             Error = quantizer::CompressionError,
+    //         >,
+    //     SphericalQuantizer<A>: Dispatchable<Q, NBITS>,
+    // {
+    //     if let Err(err) = self
+    //         .quantizer
+    //         .compress_into_with(query, storage.reborrow_mut(), scratch)
+    //     {
+    //         return Err(CompressionError::CompressionError(err).into());
+    //     }
 
-        diskann_wide::arch::dispatch3_no_features(
-            ComputerDispatcher::<Q, NBITS>::new(),
-            &self.quantizer,
-            storage,
-            allocator,
-        )
-        .map_err(|e| e.into())
-    }
+    //     diskann_wide::arch::dispatch3_no_features(
+    //         ComputerDispatcher::<Q, NBITS>::new(),
+    //         &self.quantizer,
+    //         storage,
+    //         allocator,
+    //     )
+    //     .map_err(|e| e.into())
+    // }
 
     /// Attempt to deserialize a FlatBuffer `fb::spherical::Quantizer` (as produced by [`Quantizer::serialize`]) into [`Impl`].
     #[cfg(feature = "flatbuffers")]
@@ -1841,350 +2083,350 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
     }
 }
 
-//----------------------//
-// Distance Dispatching //
-//----------------------//
-
-/// This trait and [`ComputerDispatcher`] are the glue for pre-dispatching
-/// micro-architecture compatibility of distance computers.
-///
-/// This trait takes
-///
-/// * `M`: The target micro-architecture.
-/// * `Q`: The target query type
-///
-/// And generates a specialized `DistanceComputer` and `QueryComputer`.
-///
-/// The [`ComputerDispatcher`] struct implements the [`diskann_wide::arch::Target2`] and
-/// [`diskann_wide::arch::Target3`] traits to do the architecture-dispatching.
-trait BuildComputer<M, Q, const N: usize>
-where
-    M: Architecture,
-    Q: FromOpaque,
-{
-    /// Build a [`DistanceComputer`] targeting the micro-architecture `M`.
-    ///
-    /// The resulting object should implement distance calculations using just a single
-    /// level of indirection.
-    fn build_computer<A>(
-        &self,
-        arch: M,
-        allocator: A,
-    ) -> Result<DistanceComputer<A>, AllocatorError>
-    where
-        A: AllocatorCore;
-
-    /// Build a [`DistanceComputer`] with `query` targeting the micro-architecture `M`.
-    ///
-    /// The resulting object should implement distance calculations using just a single
-    /// level of indirection.
-    fn build_fused_computer<R, A>(
-        &self,
-        arch: M,
-        query: R,
-        allocator: A,
-    ) -> Result<QueryComputer<A>, AllocatorError>
-    where
-        R: ReportQueryLayout
-            + for<'a> Reborrow<'a, Target = Q::Target<'a>>
-            + Debug
-            + Send
-            + Sync
-            + 'static,
-        A: AllocatorCore;
-}
-
-fn identity<T>(x: T) -> T {
-    x
-}
-
-macro_rules! dispatch_map {
-    ($N:literal, $Q:ty, $arch:ty) => {
-        dispatch_map!($N, $Q, $arch, identity);
-    };
-    ($N:literal, $Q:ty, $arch:ty, $op:ident) => {
-        impl<A> BuildComputer<$arch, $Q, $N> for SphericalQuantizer<A>
-        where
-            A: Allocator,
-        {
-            fn build_computer<B>(
-                &self,
-                input_arch: $arch,
-                allocator: B,
-            ) -> Result<DistanceComputer<B>, AllocatorError>
-            where
-                B: AllocatorCore,
-            {
-                type D = AsData<$N>;
-
-                // Perform any architecture down-casting.
-                let arch = ($op)(input_arch);
-                let dim = self.output_dim();
-                match self.metric() {
-                    SupportedMetric::SquaredL2 => {
-                        let reify = Reify::<CompensatedSquaredL2, _, $Q, D>::new(
-                            self.as_functor(),
-                            dim,
-                            arch,
-                        );
-                        DistanceComputer::new(reify, allocator)
-                    }
-                    SupportedMetric::InnerProduct => {
-                        let reify =
-                            Reify::<CompensatedIP, _, $Q, D>::new(self.as_functor(), dim, arch);
-                        DistanceComputer::new(reify, allocator)
-                    }
-                    SupportedMetric::Cosine => {
-                        let reify =
-                            Reify::<CompensatedCosine, _, $Q, D>::new(self.as_functor(), dim, arch);
-                        DistanceComputer::new(reify, allocator)
-                    }
-                }
-            }
-
-            fn build_fused_computer<R, B>(
-                &self,
-                input_arch: $arch,
-                query: R,
-                allocator: B,
-            ) -> Result<QueryComputer<B>, AllocatorError>
-            where
-                R: ReportQueryLayout
-                    + for<'a> Reborrow<'a, Target = <$Q as FromOpaque>::Target<'a>>
-                    + Debug
-                    + Send
-                    + Sync
-                    + 'static,
-                B: AllocatorCore,
-            {
-                type D = AsData<$N>;
-                let arch = ($op)(input_arch);
-                let dim = self.output_dim();
-                match self.metric() {
-                    SupportedMetric::SquaredL2 => {
-                        let computer: CompensatedSquaredL2 = self.as_functor();
-                        let curried = Curried::new(computer, query);
-                        let reify = Reify::<_, _, (), D>::new(curried, dim, arch);
-                        Ok(QueryComputer::new(reify, allocator)?)
-                    }
-                    SupportedMetric::InnerProduct => {
-                        let computer: CompensatedIP = self.as_functor();
-                        let curried = Curried::new(computer, query);
-                        let reify = Reify::<_, _, (), D>::new(curried, dim, arch);
-                        Ok(QueryComputer::new(reify, allocator)?)
-                    }
-                    SupportedMetric::Cosine => {
-                        let computer: CompensatedCosine = self.as_functor();
-                        let curried = Curried::new(computer, query);
-                        let reify = Reify::<_, _, (), D>::new(curried, dim, arch);
-                        Ok(QueryComputer::new(reify, allocator)?)
-                    }
-                }
-            }
-        }
-    };
-}
-
-dispatch_map!(1, AsFull, Scalar);
-dispatch_map!(2, AsFull, Scalar);
-dispatch_map!(4, AsFull, Scalar);
-dispatch_map!(8, AsFull, Scalar);
-
-dispatch_map!(1, AsData<1>, Scalar);
-dispatch_map!(2, AsData<2>, Scalar);
-dispatch_map!(4, AsData<4>, Scalar);
-dispatch_map!(8, AsData<8>, Scalar);
-
-// Special Cases
-dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Scalar);
-dispatch_map!(2, AsQuery<2>, Scalar);
-dispatch_map!(4, AsQuery<4>, Scalar);
-dispatch_map!(8, AsQuery<8>, Scalar);
-
-cfg_if::cfg_if! {
-    if #[cfg(target_arch = "x86_64")] {
-        fn downcast_to_v3(arch: V4) -> V3 {
-            arch.into()
-        }
-
-        // V3
-        dispatch_map!(1, AsFull, V3);
-        dispatch_map!(2, AsFull, V3);
-        dispatch_map!(4, AsFull, V3);
-        dispatch_map!(8, AsFull, V3);
-
-        dispatch_map!(1, AsData<1>, V3);
-        dispatch_map!(2, AsData<2>, V3);
-        dispatch_map!(4, AsData<4>, V3);
-        dispatch_map!(8, AsData<8>, V3);
-
-        dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V3);
-        dispatch_map!(2, AsQuery<2>, V3);
-        dispatch_map!(4, AsQuery<4>, V3);
-        dispatch_map!(8, AsQuery<8>, V3);
-
-        // V4
-        dispatch_map!(1, AsFull, V4, downcast_to_v3);
-        dispatch_map!(2, AsFull, V4, downcast_to_v3);
-        dispatch_map!(4, AsFull, V4, downcast_to_v3);
-        dispatch_map!(8, AsFull, V4, downcast_to_v3);
-
-        dispatch_map!(1, AsData<1>, V4, downcast_to_v3);
-        dispatch_map!(2, AsData<2>, V4); // specialized
-        dispatch_map!(4, AsData<4>, V4); // specialized
-        dispatch_map!(8, AsData<8>, V4, downcast_to_v3);
-
-        dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V4, downcast_to_v3);
-        dispatch_map!(2, AsQuery<2>, V4); // specialized
-        dispatch_map!(4, AsQuery<4>, V4); // specialized
-        dispatch_map!(8, AsQuery<8>, V4, downcast_to_v3);
-    } else if #[cfg(target_arch = "aarch64")] {
-        fn downcast(arch: Neon) -> Scalar {
-            arch.retarget()
-        }
-
-        dispatch_map!(1, AsFull, Neon, downcast);
-        dispatch_map!(2, AsFull, Neon, downcast);
-        dispatch_map!(4, AsFull, Neon, downcast);
-        dispatch_map!(8, AsFull, Neon, downcast);
-
-        dispatch_map!(1, AsData<1>, Neon, downcast);
-        dispatch_map!(2, AsData<2>, Neon);
-        dispatch_map!(4, AsData<4>, Neon);
-        dispatch_map!(8, AsData<8>, Neon, downcast);
-
-        dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Neon, downcast);
-        dispatch_map!(2, AsQuery<2>, Neon);
-        dispatch_map!(4, AsQuery<4>, Neon);
-        dispatch_map!(8, AsQuery<8>, Neon, downcast);
-    }
-}
-
-/// This struct and the [`BuildComputer`] trait are the glue for pre-dispatching
-/// micro-architecture compatibility of distance computers.
-///
-/// This trait takes
-///
-/// * `Q`: The target query type.
-/// * `N`: The nubmer of data bits to target.
-///
-/// This struct implements [`diskann_wide::arch::Target2`] and
-/// [`diskann_wide::arch::Target3`] traits to do the architecture-dispatching, relying on
-/// `Impl<N, A> as BuildQueryComputer` for the implementation.
-#[derive(Debug, Clone, Copy)]
-struct ComputerDispatcher<Q, const N: usize> {
-    _query_type: std::marker::PhantomData<Q>,
-}
-
-impl<Q, const N: usize> ComputerDispatcher<Q, N> {
-    fn new() -> Self {
-        Self {
-            _query_type: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<M, const N: usize, A, B, Q>
-    diskann_wide::arch::Target2<
-        M,
-        Result<DistanceComputer<B>, AllocatorError>,
-        &SphericalQuantizer<A>,
-        B,
-    > for ComputerDispatcher<Q, N>
-where
-    M: Architecture,
-    A: Allocator,
-    B: AllocatorCore,
-    Q: FromOpaque,
-    SphericalQuantizer<A>: BuildComputer<M, Q, N>,
-{
-    fn run(
-        self,
-        arch: M,
-        quantizer: &SphericalQuantizer<A>,
-        allocator: B,
-    ) -> Result<DistanceComputer<B>, AllocatorError> {
-        quantizer.build_computer(arch, allocator)
-    }
-}
-
-impl<M, const N: usize, A, R, B, Q>
-    diskann_wide::arch::Target3<
-        M,
-        Result<QueryComputer<B>, AllocatorError>,
-        &SphericalQuantizer<A>,
-        R,
-        B,
-    > for ComputerDispatcher<Q, N>
-where
-    M: Architecture,
-    A: Allocator,
-    B: AllocatorCore,
-    Q: FromOpaque,
-    R: ReportQueryLayout
-        + for<'a> Reborrow<'a, Target = Q::Target<'a>>
-        + Debug
-        + Send
-        + Sync
-        + 'static,
-    SphericalQuantizer<A>: BuildComputer<M, Q, N>,
-{
-    fn run(
-        self,
-        arch: M,
-        quantizer: &SphericalQuantizer<A>,
-        query: R,
-        allocator: B,
-    ) -> Result<QueryComputer<B>, AllocatorError> {
-        quantizer.build_fused_computer(arch, query, allocator)
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-trait Dispatchable<Q, const N: usize>:
-    BuildComputer<Scalar, Q, N> + BuildComputer<V3, Q, N> + BuildComputer<V4, Q, N>
-where
-    Q: FromOpaque,
-{
-}
-
-#[cfg(target_arch = "x86_64")]
-impl<Q, const N: usize, T> Dispatchable<Q, N> for T
-where
-    Q: FromOpaque,
-    T: BuildComputer<Scalar, Q, N> + BuildComputer<V3, Q, N> + BuildComputer<V4, Q, N>,
-{
-}
-
-#[cfg(target_arch = "aarch64")]
-trait Dispatchable<Q, const N: usize>: BuildComputer<Scalar, Q, N> + BuildComputer<Neon, Q, N>
-where
-    Q: FromOpaque,
-{
-}
-
-#[cfg(target_arch = "aarch64")]
-impl<Q, const N: usize, T> Dispatchable<Q, N> for T
-where
-    Q: FromOpaque,
-    T: BuildComputer<Scalar, Q, N> + BuildComputer<Neon, Q, N>,
-{
-}
-
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-trait Dispatchable<Q, const N: usize>: BuildComputer<Scalar, Q, N>
-where
-    Q: FromOpaque,
-{
-}
-
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-impl<Q, const N: usize, T> Dispatchable<Q, N> for T
-where
-    Q: FromOpaque,
-    T: BuildComputer<Scalar, Q, N>,
-{
-}
+// //----------------------//
+// // Distance Dispatching //
+// //----------------------//
+//
+// /// This trait and [`ComputerDispatcher`] are the glue for pre-dispatching
+// /// micro-architecture compatibility of distance computers.
+// ///
+// /// This trait takes
+// ///
+// /// * `M`: The target micro-architecture.
+// /// * `Q`: The target query type
+// ///
+// /// And generates a specialized `DistanceComputer` and `QueryComputer`.
+// ///
+// /// The [`ComputerDispatcher`] struct implements the [`diskann_wide::arch::Target2`] and
+// /// [`diskann_wide::arch::Target3`] traits to do the architecture-dispatching.
+// trait BuildComputer<M, Q, const N: usize>
+// where
+//     M: Architecture,
+//     Q: FromOpaque,
+// {
+//     /// Build a [`DistanceComputer`] targeting the micro-architecture `M`.
+//     ///
+//     /// The resulting object should implement distance calculations using just a single
+//     /// level of indirection.
+//     fn build_computer<A>(
+//         &self,
+//         arch: M,
+//         allocator: A,
+//     ) -> Result<DistanceComputer<A>, AllocatorError>
+//     where
+//         A: AllocatorCore;
+//
+//     /// Build a [`DistanceComputer`] with `query` targeting the micro-architecture `M`.
+//     ///
+//     /// The resulting object should implement distance calculations using just a single
+//     /// level of indirection.
+//     fn build_fused_computer<R, A>(
+//         &self,
+//         arch: M,
+//         query: R,
+//         allocator: A,
+//     ) -> Result<QueryComputer<A>, AllocatorError>
+//     where
+//         R: ReportQueryLayout
+//             + for<'a> Reborrow<'a, Target = Q::Target<'a>>
+//             + Debug
+//             + Send
+//             + Sync
+//             + 'static,
+//         A: AllocatorCore;
+// }
+//
+// fn identity<T>(x: T) -> T {
+//     x
+// }
+//
+// macro_rules! dispatch_map {
+//     ($N:literal, $Q:ty, $arch:ty) => {
+//         dispatch_map!($N, $Q, $arch, identity);
+//     };
+//     ($N:literal, $Q:ty, $arch:ty, $op:ident) => {
+//         impl<A> BuildComputer<$arch, $Q, $N> for SphericalQuantizer<A>
+//         where
+//             A: Allocator,
+//         {
+//             fn build_computer<B>(
+//                 &self,
+//                 input_arch: $arch,
+//                 allocator: B,
+//             ) -> Result<DistanceComputer<B>, AllocatorError>
+//             where
+//                 B: AllocatorCore,
+//             {
+//                 type D = AsData<$N>;
+//
+//                 // Perform any architecture down-casting.
+//                 let arch = ($op)(input_arch);
+//                 let dim = self.output_dim();
+//                 match self.metric() {
+//                     SupportedMetric::SquaredL2 => {
+//                         let reify = Reify::<CompensatedSquaredL2, _, $Q, D>::new(
+//                             self.as_functor(),
+//                             dim,
+//                             arch,
+//                         );
+//                         DistanceComputer::new(reify, allocator)
+//                     }
+//                     SupportedMetric::InnerProduct => {
+//                         let reify =
+//                             Reify::<CompensatedIP, _, $Q, D>::new(self.as_functor(), dim, arch);
+//                         DistanceComputer::new(reify, allocator)
+//                     }
+//                     SupportedMetric::Cosine => {
+//                         let reify =
+//                             Reify::<CompensatedCosine, _, $Q, D>::new(self.as_functor(), dim, arch);
+//                         DistanceComputer::new(reify, allocator)
+//                     }
+//                 }
+//             }
+//
+//             fn build_fused_computer<R, B>(
+//                 &self,
+//                 input_arch: $arch,
+//                 query: R,
+//                 allocator: B,
+//             ) -> Result<QueryComputer<B>, AllocatorError>
+//             where
+//                 R: ReportQueryLayout
+//                     + for<'a> Reborrow<'a, Target = <$Q as FromOpaque>::Target<'a>>
+//                     + Debug
+//                     + Send
+//                     + Sync
+//                     + 'static,
+//                 B: AllocatorCore,
+//             {
+//                 type D = AsData<$N>;
+//                 let arch = ($op)(input_arch);
+//                 let dim = self.output_dim();
+//                 match self.metric() {
+//                     SupportedMetric::SquaredL2 => {
+//                         let computer: CompensatedSquaredL2 = self.as_functor();
+//                         let curried = Curried::new(computer, query);
+//                         let reify = Reify::<_, _, (), D>::new(curried, dim, arch);
+//                         Ok(QueryComputer::new(reify, allocator)?)
+//                     }
+//                     SupportedMetric::InnerProduct => {
+//                         let computer: CompensatedIP = self.as_functor();
+//                         let curried = Curried::new(computer, query);
+//                         let reify = Reify::<_, _, (), D>::new(curried, dim, arch);
+//                         Ok(QueryComputer::new(reify, allocator)?)
+//                     }
+//                     SupportedMetric::Cosine => {
+//                         let computer: CompensatedCosine = self.as_functor();
+//                         let curried = Curried::new(computer, query);
+//                         let reify = Reify::<_, _, (), D>::new(curried, dim, arch);
+//                         Ok(QueryComputer::new(reify, allocator)?)
+//                     }
+//                 }
+//             }
+//         }
+//     };
+// }
+//
+// dispatch_map!(1, AsFull, Scalar);
+// dispatch_map!(2, AsFull, Scalar);
+// dispatch_map!(4, AsFull, Scalar);
+// dispatch_map!(8, AsFull, Scalar);
+//
+// dispatch_map!(1, AsData<1>, Scalar);
+// dispatch_map!(2, AsData<2>, Scalar);
+// dispatch_map!(4, AsData<4>, Scalar);
+// dispatch_map!(8, AsData<8>, Scalar);
+//
+// // Special Cases
+// dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Scalar);
+// dispatch_map!(2, AsQuery<2>, Scalar);
+// dispatch_map!(4, AsQuery<4>, Scalar);
+// dispatch_map!(8, AsQuery<8>, Scalar);
+//
+// cfg_if::cfg_if! {
+//     if #[cfg(target_arch = "x86_64")] {
+//         fn downcast_to_v3(arch: V4) -> V3 {
+//             arch.into()
+//         }
+//
+//         // V3
+//         dispatch_map!(1, AsFull, V3);
+//         dispatch_map!(2, AsFull, V3);
+//         dispatch_map!(4, AsFull, V3);
+//         dispatch_map!(8, AsFull, V3);
+//
+//         dispatch_map!(1, AsData<1>, V3);
+//         dispatch_map!(2, AsData<2>, V3);
+//         dispatch_map!(4, AsData<4>, V3);
+//         dispatch_map!(8, AsData<8>, V3);
+//
+//         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V3);
+//         dispatch_map!(2, AsQuery<2>, V3);
+//         dispatch_map!(4, AsQuery<4>, V3);
+//         dispatch_map!(8, AsQuery<8>, V3);
+//
+//         // V4
+//         dispatch_map!(1, AsFull, V4, downcast_to_v3);
+//         dispatch_map!(2, AsFull, V4, downcast_to_v3);
+//         dispatch_map!(4, AsFull, V4, downcast_to_v3);
+//         dispatch_map!(8, AsFull, V4, downcast_to_v3);
+//
+//         dispatch_map!(1, AsData<1>, V4, downcast_to_v3);
+//         dispatch_map!(2, AsData<2>, V4); // specialized
+//         dispatch_map!(4, AsData<4>, V4); // specialized
+//         dispatch_map!(8, AsData<8>, V4, downcast_to_v3);
+//
+//         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V4, downcast_to_v3);
+//         dispatch_map!(2, AsQuery<2>, V4); // specialized
+//         dispatch_map!(4, AsQuery<4>, V4); // specialized
+//         dispatch_map!(8, AsQuery<8>, V4, downcast_to_v3);
+//     } else if #[cfg(target_arch = "aarch64")] {
+//         fn downcast(arch: Neon) -> Scalar {
+//             arch.retarget()
+//         }
+//
+//         dispatch_map!(1, AsFull, Neon, downcast);
+//         dispatch_map!(2, AsFull, Neon, downcast);
+//         dispatch_map!(4, AsFull, Neon, downcast);
+//         dispatch_map!(8, AsFull, Neon, downcast);
+//
+//         dispatch_map!(1, AsData<1>, Neon, downcast);
+//         dispatch_map!(2, AsData<2>, Neon);
+//         dispatch_map!(4, AsData<4>, Neon);
+//         dispatch_map!(8, AsData<8>, Neon, downcast);
+//
+//         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Neon, downcast);
+//         dispatch_map!(2, AsQuery<2>, Neon);
+//         dispatch_map!(4, AsQuery<4>, Neon);
+//         dispatch_map!(8, AsQuery<8>, Neon, downcast);
+//     }
+// }
+//
+// /// This struct and the [`BuildComputer`] trait are the glue for pre-dispatching
+// /// micro-architecture compatibility of distance computers.
+// ///
+// /// This trait takes
+// ///
+// /// * `Q`: The target query type.
+// /// * `N`: The nubmer of data bits to target.
+// ///
+// /// This struct implements [`diskann_wide::arch::Target2`] and
+// /// [`diskann_wide::arch::Target3`] traits to do the architecture-dispatching, relying on
+// /// `Impl<N, A> as BuildQueryComputer` for the implementation.
+// #[derive(Debug, Clone, Copy)]
+// struct ComputerDispatcher<Q, const N: usize> {
+//     _query_type: std::marker::PhantomData<Q>,
+// }
+//
+// impl<Q, const N: usize> ComputerDispatcher<Q, N> {
+//     fn new() -> Self {
+//         Self {
+//             _query_type: std::marker::PhantomData,
+//         }
+//     }
+// }
+//
+// impl<M, const N: usize, A, B, Q>
+//     diskann_wide::arch::Target2<
+//         M,
+//         Result<DistanceComputer<B>, AllocatorError>,
+//         &SphericalQuantizer<A>,
+//         B,
+//     > for ComputerDispatcher<Q, N>
+// where
+//     M: Architecture,
+//     A: Allocator,
+//     B: AllocatorCore,
+//     Q: FromOpaque,
+//     SphericalQuantizer<A>: BuildComputer<M, Q, N>,
+// {
+//     fn run(
+//         self,
+//         arch: M,
+//         quantizer: &SphericalQuantizer<A>,
+//         allocator: B,
+//     ) -> Result<DistanceComputer<B>, AllocatorError> {
+//         quantizer.build_computer(arch, allocator)
+//     }
+// }
+//
+// impl<M, const N: usize, A, R, B, Q>
+//     diskann_wide::arch::Target3<
+//         M,
+//         Result<QueryComputer<B>, AllocatorError>,
+//         &SphericalQuantizer<A>,
+//         R,
+//         B,
+//     > for ComputerDispatcher<Q, N>
+// where
+//     M: Architecture,
+//     A: Allocator,
+//     B: AllocatorCore,
+//     Q: FromOpaque,
+//     R: ReportQueryLayout
+//         + for<'a> Reborrow<'a, Target = Q::Target<'a>>
+//         + Debug
+//         + Send
+//         + Sync
+//         + 'static,
+//     SphericalQuantizer<A>: BuildComputer<M, Q, N>,
+// {
+//     fn run(
+//         self,
+//         arch: M,
+//         quantizer: &SphericalQuantizer<A>,
+//         query: R,
+//         allocator: B,
+//     ) -> Result<QueryComputer<B>, AllocatorError> {
+//         quantizer.build_fused_computer(arch, query, allocator)
+//     }
+// }
+//
+// #[cfg(target_arch = "x86_64")]
+// trait Dispatchable<Q, const N: usize>:
+//     BuildComputer<Scalar, Q, N> + BuildComputer<V3, Q, N> + BuildComputer<V4, Q, N>
+// where
+//     Q: FromOpaque,
+// {
+// }
+//
+// #[cfg(target_arch = "x86_64")]
+// impl<Q, const N: usize, T> Dispatchable<Q, N> for T
+// where
+//     Q: FromOpaque,
+//     T: BuildComputer<Scalar, Q, N> + BuildComputer<V3, Q, N> + BuildComputer<V4, Q, N>,
+// {
+// }
+//
+// #[cfg(target_arch = "aarch64")]
+// trait Dispatchable<Q, const N: usize>: BuildComputer<Scalar, Q, N> + BuildComputer<Neon, Q, N>
+// where
+//     Q: FromOpaque,
+// {
+// }
+//
+// #[cfg(target_arch = "aarch64")]
+// impl<Q, const N: usize, T> Dispatchable<Q, N> for T
+// where
+//     Q: FromOpaque,
+//     T: BuildComputer<Scalar, Q, N> + BuildComputer<Neon, Q, N>,
+// {
+// }
+//
+// #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+// trait Dispatchable<Q, const N: usize>: BuildComputer<Scalar, Q, N>
+// where
+//     Q: FromOpaque,
+// {
+// }
+//
+// #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+// impl<Q, const N: usize, T> Dispatchable<Q, N> for T
+// where
+//     Q: FromOpaque,
+//     T: BuildComputer<Scalar, Q, N>,
+// {
+// }
 
 //---------------------------//
 // Quantizer Implementations //
@@ -2212,7 +2454,8 @@ where
     }
 
     fn distance_computer(&self, allocator: B) -> Result<DistanceComputer<B>, AllocatorError> {
-        self.query_computer::<AsData<1>, _>(allocator)
+        self.bob
+            .distance(&self.quantizer, MakeDistanceComputer(allocator))
     }
 
     fn distance_computer_ref(&self) -> &dyn DynDistanceComputer {
@@ -2224,16 +2467,11 @@ where
         layout: QueryLayout,
         allocator: B,
     ) -> Result<DistanceComputer<B>, DistanceComputerError> {
-        match layout {
-            QueryLayout::SameAsData => Ok(self.query_computer::<AsData<1>, _>(allocator)?),
-            QueryLayout::FourBitTransposed => {
-                Ok(self.query_computer::<AsQuery<4, bits::BitTranspose>, _>(allocator)?)
-            }
-            QueryLayout::ScalarQuantized => {
-                Err(UnsupportedQueryLayout::new(layout, "1-bit compression").into())
-            }
-            QueryLayout::FullPrecision => Ok(self.query_computer::<AsFull, _>(allocator)?),
-        }
+        let computer = self
+            .bob
+            .query_distance(&self.quantizer, layout, MakeDistanceComputer(allocator))
+            .unwrap();
+        Ok(computer)
     }
 
     fn query_buffer_description(
@@ -2314,30 +2552,19 @@ where
     ) -> Result<QueryComputer<B>, QueryComputerError> {
         let dim = <Self as Quantizer<B>>::dim(self);
         let finish = |v: &[f32], allocator: B| -> Result<QueryComputer<B>, QueryComputerError> {
-            match layout {
-                    QueryLayout::SameAsData => self.fused_query_computer::<AsData<1>, Data<1, _>, _>(
-                        v,
-                        Data::new_in(dim, allocator.clone())?,
-                        allocator,
-                        scratch,
-                    ),
-                    QueryLayout::FourBitTransposed => self
-                        .fused_query_computer::<AsQuery<4, bits::BitTranspose>, Query<4, bits::BitTranspose, _>, _>(
-                            v,
-                            Query::new_in(dim, allocator.clone())?,
-                            allocator,
-                            scratch,
-                        ),
-                    QueryLayout::ScalarQuantized => {
-                        Err(UnsupportedQueryLayout::new(layout, "1-bit compression").into())
-                    }
-                    QueryLayout::FullPrecision => self.fused_query_computer::<AsFull, FullQuery<_>, _>(
-                        v,
-                        FullQuery::empty(dim, allocator.clone())?,
-                        allocator,
-                        scratch,
-                    ),
-                }
+            let computer = self
+                .bob
+                .fused_query_distance(
+                    &self.quantizer,
+                    v,
+                    layout,
+                    allocator.clone(),
+                    scratch,
+                    MakeQueryComputer(allocator),
+                )
+                .unwrap();
+
+            Ok(computer)
         };
 
         if allow_rescale && self.quantizer.metric() == SupportedMetric::InnerProduct {
@@ -2409,7 +2636,8 @@ macro_rules! plan {
                 &self,
                 allocator: B
             ) -> Result<DistanceComputer<B>, AllocatorError> {
-                self.query_computer::<AsData<$N>, _>(allocator)
+                self.bob
+                    .distance(&self.quantizer, MakeDistanceComputer(allocator))
             }
 
             fn distance_computer_ref(&self) -> &dyn DynDistanceComputer {
@@ -2421,19 +2649,11 @@ macro_rules! plan {
                 layout: QueryLayout,
                 allocator: B,
             ) -> Result<DistanceComputer<B>, DistanceComputerError> {
-                match layout {
-                    QueryLayout::SameAsData => Ok(self.query_computer::<AsData<$N>, _>(allocator)?)
-                    ,
-                    QueryLayout::FourBitTransposed => Err(UnsupportedQueryLayout::new(
-                        layout,
-                        concat!($N, "-bit compression"),
-                    ).into()),
-                    QueryLayout::ScalarQuantized => {
-                        Ok(self.query_computer::<AsQuery<$N, bits::Dense>, _>(allocator)?)
-                    },
-                    QueryLayout::FullPrecision => Ok(self.query_computer::<AsFull, _>(allocator)?),
-
-                }
+                let computer = self
+                    .bob
+                    .query_distance(&self.quantizer, layout, MakeDistanceComputer(allocator))
+                    .unwrap();
+                Ok(computer)
             }
 
             fn query_buffer_description(
@@ -2526,38 +2746,19 @@ macro_rules! plan {
             {
                 let dim = <Self as Quantizer<B>>::dim(self);
                 let finish = |v: &[f32]| -> Result<QueryComputer<B>, QueryComputerError> {
-                    match layout {
-                        QueryLayout::SameAsData => {
-                            self.fused_query_computer::<AsData<$N>, Data<$N, _>, B>(
-                                v,
-                                Data::new_in(dim, allocator.clone())?,
-                                allocator,
-                                scratch,
-                            )
-                        },
-                        QueryLayout::FourBitTransposed => {
-                            Err(UnsupportedQueryLayout::new(
-                                layout,
-                                concat!($N, "-bit compression"),
-                            ).into())
-                        },
-                        QueryLayout::ScalarQuantized => {
-                            self.fused_query_computer::<AsQuery<$N, bits::Dense>, Query<$N, bits::Dense, _>, B>(
-                                v,
-                                Query::new_in(dim, allocator.clone())?,
-                                allocator,
-                                scratch,
-                            )
-                        },
-                        QueryLayout::FullPrecision => {
-                            self.fused_query_computer::<AsFull, FullQuery<_>, B>(
-                                v,
-                                FullQuery::empty(dim, allocator.clone())?,
-                                allocator,
-                                scratch,
-                            )
-                        },
-                    }
+                    let computer = self
+                        .bob
+                        .fused_query_distance(
+                            &self.quantizer,
+                            v,
+                            layout,
+                            allocator.clone(),
+                            scratch,
+                            MakeQueryComputer(allocator),
+                        )
+                        .unwrap();
+
+                    Ok(computer)
                 };
 
                 let metric = <Self as Quantizer<B>>::metric(self);
