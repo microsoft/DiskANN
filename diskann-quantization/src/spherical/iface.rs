@@ -696,6 +696,100 @@ impl<const NBITS: usize> ReportQueryLayout for AsQuery<NBITS, bits::BitTranspose
     }
 }
 
+/// Prepare an owned query matching this layout's borrowed representation.
+///
+/// `A` is the quantizer's allocator; query storage and scratch use independent allocators.
+/// Optional inner-product rescaling remains the caller's responsibility.
+trait PrepareQuery<A>: FromOpaque
+where
+    A: Allocator,
+{
+    type Owned<B: AllocatorCore>: for<'a> Reborrow<'a, Target = Self::Target<'a>>
+        + ReportQueryLayout;
+
+    fn prepare<B: AllocatorCore>(
+        quantizer: &SphericalQuantizer<A>,
+        query: &[f32],
+        allocator: B,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<Self::Owned<B>, quantizer::CompressionError>;
+}
+
+impl<A: Allocator> PrepareQuery<A> for AsFull {
+    type Owned<B: AllocatorCore> = FullQuery<B>;
+
+    fn prepare<B: AllocatorCore>(
+        quantizer: &SphericalQuantizer<A>,
+        query: &[f32],
+        allocator: B,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<Self::Owned<B>, quantizer::CompressionError> {
+        let mut prepared = FullQuery::empty(quantizer.output_dim(), allocator)?;
+        quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
+        Ok(prepared)
+    }
+}
+
+impl<const N: usize, A> PrepareQuery<A> for AsData<N>
+where
+    A: Allocator,
+    Unsigned: Representation<N>,
+    SphericalQuantizer<A>: for<'a> CompressIntoWith<
+            &'a [f32],
+            DataMut<'a, N>,
+            ScopedAllocator<'a>,
+            Error = quantizer::CompressionError,
+        >,
+{
+    type Owned<B: AllocatorCore> = Data<N, B>;
+
+    fn prepare<B: AllocatorCore>(
+        quantizer: &SphericalQuantizer<A>,
+        query: &[f32],
+        allocator: B,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<Self::Owned<B>, quantizer::CompressionError> {
+        let mut prepared = Data::<N, B>::new_in(quantizer.output_dim(), allocator)?;
+        quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
+        Ok(prepared)
+    }
+}
+
+impl<const N: usize, A> PrepareQuery<A> for AsQuery<N, bits::Dense>
+where
+    A: Allocator,
+    Unsigned: Representation<N>,
+{
+    type Owned<B: AllocatorCore> = Query<N, bits::Dense, B>;
+
+    fn prepare<B: AllocatorCore>(
+        quantizer: &SphericalQuantizer<A>,
+        query: &[f32],
+        allocator: B,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<Self::Owned<B>, quantizer::CompressionError> {
+        let mut prepared = Query::<N, bits::Dense, B>::new_in(quantizer.output_dim(), allocator)?;
+        quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
+        Ok(prepared)
+    }
+}
+
+impl<A: Allocator> PrepareQuery<A> for AsQuery<4, bits::BitTranspose> {
+    type Owned<B: AllocatorCore> = Query<4, bits::BitTranspose, B>;
+
+    fn prepare<B: AllocatorCore>(
+        quantizer: &SphericalQuantizer<A>,
+        query: &[f32],
+        allocator: B,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<Self::Owned<B>, quantizer::CompressionError> {
+        let mut prepared =
+            Query::<4, bits::BitTranspose, B>::new_in(quantizer.output_dim(), allocator)?;
+        quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
+        Ok(prepared)
+    }
+}
+
 //-------//
 // Reify //
 //-------//
@@ -709,6 +803,8 @@ pub(super) struct Reify<T, M, L, R> {
     _markers: PhantomData<(L, R)>,
 }
 
+type CurriedReify<T, M, Q, R> = Reify<Curried<T, Q>, M, (), R>;
+
 impl<T, M, L, R> Reify<T, M, L, R> {
     pub(super) fn new(inner: T, dim: usize, arch: M) -> Self {
         Self {
@@ -717,6 +813,35 @@ impl<T, M, L, R> Reify<T, M, L, R> {
             arch,
             _markers: PhantomData,
         }
+    }
+
+    /// Bind a prepared query without introducing another reification or dispatch layer.
+    fn curry<Q>(self, query: Q) -> CurriedReify<T, M, Q, R>
+    where
+        L: FromOpaque,
+        Q: for<'a> Reborrow<'a, Target = L::Target<'a>>,
+    {
+        Reify::new(Curried::new(self.inner, query), self.dim, self.arch)
+    }
+
+    /// Prepare and bind a query using the quantizer that constructed this computer.
+    ///
+    /// Returns allocation or compression errors unchanged. Optional inner-product
+    /// rescaling remains the caller's responsibility.
+    fn prepare_and_curry<A, B>(
+        self,
+        quantizer: &SphericalQuantizer<A>,
+        query: &[f32],
+        allocator: B,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<CurriedReify<T, M, L::Owned<B>, R>, quantizer::CompressionError>
+    where
+        A: Allocator,
+        B: AllocatorCore,
+        L: PrepareQuery<A>,
+    {
+        let prepared = L::prepare(quantizer, query, allocator, scratch)?;
+        Ok(self.curry(prepared))
     }
 }
 
@@ -777,27 +902,48 @@ where
     }
 }
 
-trait DistanceVisitor {
+trait DistanceVisitor<'a> {
     type Output;
     fn visit<T>(self, distance: T) -> Self::Output
     where
-        T: DynDistanceComputer + 'static;
+        T: DynDistanceComputer + 'a;
+}
+
+trait QueryDistanceVisitor<'a> {
+    type Output;
+    fn visit<T>(self, distance: T) -> Self::Output
+    where
+        T: DynQueryComputer + 'a;
 }
 
 #[derive(Debug)]
 struct AsPoly<A>(A);
 
-impl<A> DistanceVisitor for AsPoly<A>
+impl<'a, A> DistanceVisitor<'a> for AsPoly<A>
 where
     A: AllocatorCore,
 {
-    type Output = Result<Poly<dyn DynDistanceComputer, A>, AllocatorError>;
+    type Output = Result<Poly<dyn DynDistanceComputer + 'a, A>, AllocatorError>;
     fn visit<T>(self, distance: T) -> Self::Output
     where
-        T: DynDistanceComputer + 'static,
+        T: DynDistanceComputer + 'a,
     {
         let alloc = self.0;
         poly!({ DynDistanceComputer }, distance, alloc)
+    }
+}
+
+impl<'a, A> QueryDistanceVisitor<'a> for AsPoly<A>
+where
+    A: AllocatorCore,
+{
+    type Output = Result<Poly<dyn DynQueryComputer + 'a, A>, AllocatorError>;
+    fn visit<T>(self, distance: T) -> Self::Output
+    where
+        T: DynQueryComputer + 'a,
+    {
+        let alloc = self.0;
+        poly!({ DynQueryComputer }, distance, alloc)
     }
 }
 
@@ -812,85 +958,169 @@ mod dispatch {
     type BitTranspose<A> = Query<4, bits::BitTranspose, A>;
     type ScalarQuant<const N: usize, A> = Query<N, bits::Dense, A>;
 
-    type Reified<D, const N: usize, M> = Reify<D, M, (), AsData<N>>;
-
-    type ReifiedData<D, const N: usize, M> = Reify<D, M, AsData<N>, AsData<N>>;
-    // type Curried<D, const N: usize, Q, M> = Reify<Curried<D, Q>, M, (), AsData<N>>;
+    type Reified<D, const N: usize, T, M> = Reify<D, M, T, AsData<N>>;
 
     #[derive(Debug)]
-    enum Adaptor<T, U> {
+    enum VisitOnce<T, U> {
         Empty,
         Visitor(T),
         Visited(U),
     }
 
-    impl<T, U> Adaptor<T, U> {
+    impl<T, U> VisitOnce<T, U> {
         pub(super) fn new(visitor: T) -> Self {
             Self::Visitor(visitor)
         }
 
-        fn take(&mut self) -> T {
+        fn visit<F>(&mut self, f: F)
+        where
+            F: FnOnce(T) -> U,
+        {
             if let Self::Visitor(visitor) = std::mem::replace(self, Self::Empty) {
-                visitor
+                *self = Self::Visited(f(visitor));
             } else {
                 panic!("visitor should only be used once");
             }
         }
 
-        fn set(&mut self, visited: U) {
-            *self = Self::Visited(visited)
+        fn take_visited(&mut self) -> U {
+            if let Self::Visited(visited) = std::mem::replace(self, Self::Empty) {
+                visited
+            } else {
+                panic!("visited is unavailable");
+            }
         }
+    }
 
-        fn visit<F>(&mut self, f: F)
-        where
-            F: FnOnce(T) -> U
-        {
-            let result = f(self.take());
-            self.set(result);
-        }
+    #[derive(Debug)]
+    struct QueryVisitOnce<'a, T, U, A> {
+        visitor: VisitOnce<T, U>,
+        allocator: Option<A>,
+        query: &'a [f32],
+        scratch: ScopedAllocator<'a>,
     }
 
     struct Bits<const N: usize>;
 
-    trait Family: 'static {
-       type DistanceVisitor<'a>: ?Sized + 'a;
+    trait Dispatch<B>: 'static {
+        type Distance<'a>: ?Sized + 'a;
+        type Query<'a>: ?Sized + 'a where B: 'a;
 
-       fn distance_visitor<'a, V: DistanceVisitor>(
-            visitor: &'a mut Adaptor<V, V::Output>
-       ) -> &'a mut Self::DistanceVisitor<'a>;
+        fn distance<'a, V>(visitor: &'a mut VisitOnce<V, V::Output>) -> &'a mut Self::Distance<'a>
+        where
+            V: DistanceVisitor<'a>;
+
+        fn query<'call, 'out, V, A>(
+            visitor: &'call mut QueryVisitOnce<'_, V, V::Output, A>,
+        ) -> &'call mut Self::Query<'call>
+        where
+            V: QueryDistanceVisitor<'out>,
+            A: AllocatorCore + std::fmt::Debug + Send + Sync + 'out;
     }
 
     macro_rules! distance_visitor {
         (
-            trait $name:ident ($N:literal) {
+            trait $distance:ident ($N:literal) {
                 $(
-                    $(#[$attr:meta])*
-                    fn $method:ident (&mut self, d: $kernel:ty);
-                )*
-            }
-        ) => {
-            trait $name {
-                $(
-                    $(#[$attr])*
-                    fn $method(&mut self, d: $kernel);
+                    $(#[$distance_attr:meta])*
+                    fn $distance_method:ident ($distance_kernel:ty);
                 )*
             }
 
-            impl<V: DistanceVisitor> $name for Adaptor<V, V::Output> {
+            trait $query:ident {
                 $(
-                    $(#[$attr])*
-                    fn $method(&mut self, d: $kernel) {
-                        self.visit(|v| v.visit(d))
+                    $(#[$query_attr:meta])*
+                    fn $query_method:ident ($query_kernel:ty);
+                )*
+            }
+        ) => {
+            trait $distance {
+                $(
+                    $(#[$distance_attr])*
+                    fn $distance_method(
+                        &mut self,
+                        kernel: $distance_kernel
+                    );
+                )*
+            }
+
+            impl<'a, V> $distance for VisitOnce<V, V::Output>
+            where
+                V: DistanceVisitor<'a>,
+            {
+                $(
+                    $(#[$distance_attr])*
+                    fn $distance_method(&mut self, kernel: $distance_kernel) {
+                        self.visit(|v| v.visit(kernel))
                     }
                 )*
             }
 
-            impl Family for Bits<$N> {
-                type DistanceVisitor<'a> = dyn $name + 'a;
+            trait $query<B>
+            where
+                B: Allocator,
+            {
+                $(
+                    $(#[$query_attr])*
+                    fn $query_method(
+                        &mut self,
+                        quantizer: &SphericalQuantizer<B>,
+                        kernel: $query_kernel,
+                    ) -> Result<(), quantizer::CompressionError>;
+                )*
+            }
 
-                fn distance_visitor<'a, V: DistanceVisitor>(
-                     visitor: &'a mut Adaptor<V, V::Output>
-                ) -> &'a mut Self::DistanceVisitor<'a> {
+            impl<'a, V, A, B> $query<B> for QueryVisitOnce<'_, V, V::Output, A>
+            where
+                V: QueryDistanceVisitor<'a>,
+                A: AllocatorCore + std::fmt::Debug + Send + Sync + 'a,
+                B: Allocator,
+            {
+                $(
+                    $(#[$query_attr])*
+                    fn $query_method(
+                        &mut self,
+                        quantizer: &SphericalQuantizer<B>,
+                        d: $query_kernel,
+                    ) -> Result<(), quantizer::CompressionError>
+                    {
+                        let allocator = self.allocator.take().unwrap();
+                        let curried = d.prepare_and_curry(
+                            quantizer,
+                            self.query,
+                            allocator,
+                            self.scratch
+                        )?;
+
+                        self.visitor.visit(|v| v.visit(curried));
+                        Ok(())
+                    }
+                )*
+            }
+
+            impl<B> Dispatch<B> for Bits<$N>
+            where
+                B: Allocator,
+            {
+                type Distance<'a> = dyn $distance + 'a;
+                type Query<'a> = dyn $query<B> + 'a where B: 'a;
+
+                fn distance<'a, V>(
+                     visitor: &'a mut VisitOnce<V, V::Output>
+                ) -> &'a mut Self::Distance<'a>
+                where
+                    V: DistanceVisitor<'a>,
+                {
+                    visitor
+                }
+
+                fn query<'call, 'out, V, A>(
+                    visitor: &'call mut QueryVisitOnce<'_, V, V::Output, A>,
+                ) -> &'call mut Self::Query<'call>
+                where
+                    V: QueryDistanceVisitor<'out>,
+                    A: AllocatorCore + std::fmt::Debug + Send + Sync + 'out,
+                {
                     visitor
                 }
             }
@@ -898,91 +1128,96 @@ mod dispatch {
     }
 
     distance_visitor! {
-        trait Visit1 (1) {
+        trait VisitDistance1 (1) {
             // Scalar
-            fn l2_scalar(&mut self, d: ReifiedData<L2, 1, Scalar>);
-            fn ip_scalar(&mut self, d: ReifiedData<IP, 1, Scalar>);
-            fn co_scalar(&mut self, d: ReifiedData<Co, 1, Scalar>);
+            fn l2_scalar(Reified<L2, 1, AsData<1>, Scalar>);
+            fn ip_scalar(Reified<IP, 1, AsData<1>, Scalar>);
+            fn co_scalar(Reified<Co, 1, AsData<1>, Scalar>);
 
             // V3
             #[cfg(target_arch = "x86_64")]
-            fn l2_v3(&mut self, d: ReifiedData<L2, 1, V3>);
+            fn l2_v3(Reified<L2, 1, AsData<1>, V3>);
 
             #[cfg(target_arch = "x86_64")]
-            fn ip_v3(&mut self, d: ReifiedData<IP, 1, V3>);
+            fn ip_v3(Reified<IP, 1, AsData<1>, V3>);
 
             #[cfg(target_arch = "x86_64")]
-            fn co_v3(&mut self, d: ReifiedData<Co, 1, V3>);
+            fn co_v3(Reified<Co, 1, AsData<1>, V3>);
+        }
+
+        trait VisitQuery1 {
+            // SameAsData
+            fn data_l2_scalar(Reified<L2, 1, AsData<1>, Scalar>);
+            fn data_ip_scalar(Reified<IP, 1, AsData<1>, Scalar>);
+            fn data_co_scalar(Reified<Co, 1, AsData<1>, Scalar>);
+
+            #[cfg(target_arch = "x86_64")]
+            fn data_l2_v3(Reified<L2, 1, AsData<1>, V3>);
+            #[cfg(target_arch = "x86_64")]
+            fn data_ip_v3(Reified<IP, 1, AsData<1>, V3>);
+            #[cfg(target_arch = "x86_64")]
+            fn data_co_v3(Reified<Co, 1, AsData<1>, V3>);
+
+            // FourBitTranspose
+            fn fbt_l2_scalar(Reified<L2, 1, AsQuery<4, bits::BitTranspose>, Scalar>);
+            fn fbt_ip_scalar(Reified<IP, 1, AsQuery<4, bits::BitTranspose>, Scalar>);
+            fn fbt_co_scalar(Reified<Co, 1, AsQuery<4, bits::BitTranspose>, Scalar>);
+
+            fn fbt_l2_v3(Reified<L2, 1, AsQuery<4, bits::BitTranspose>, V3>);
+            fn fbt_ip_v3(Reified<IP, 1, AsQuery<4, bits::BitTranspose>, V3>);
+            fn fbt_co_v3(Reified<Co, 1, AsQuery<4, bits::BitTranspose>, V3>);
+
+            // FullPrecision
+            fn full_l2_scalar(Reified<L2, 1, AsFull, Scalar>);
+            fn full_ip_scalar(Reified<IP, 1, AsFull, Scalar>);
+            fn full_co_scalar(Reified<Co, 1, AsFull, Scalar>);
+
+            fn full_l2_v3(Reified<L2, 1, AsFull, V3>);
+            fn full_ip_v3(Reified<IP, 1, AsFull, V3>);
+            fn full_co_v3(Reified<Co, 1, AsFull, V3>);
         }
     }
 
     distance_visitor! {
-        trait Visit2 (2) {
-            // Scalar
-            fn l2_scalar(&mut self, d: ReifiedData<L2, 2, Scalar>);
-            fn ip_scalar(&mut self, d: ReifiedData<IP, 2, Scalar>);
-            fn co_scalar(&mut self, d: ReifiedData<Co, 2, Scalar>);
-
-            // V3
-            #[cfg(target_arch = "x86_64")]
-            fn l2_v3(&mut self, d: ReifiedData<L2, 2, V3>);
-
-            #[cfg(target_arch = "x86_64")]
-            fn ip_v3(&mut self, d: ReifiedData<IP, 2, V3>);
-
-            #[cfg(target_arch = "x86_64")]
-            fn co_v3(&mut self, d: ReifiedData<Co, 2, V3>);
-
-            // V4
-            #[cfg(target_arch = "x86_64")]
-            fn l2_v4(&mut self, d: ReifiedData<L2, 2, V4>);
-
-            #[cfg(target_arch = "x86_64")]
-            fn ip_v4(&mut self, d: ReifiedData<IP, 2, V4>);
-
-            #[cfg(target_arch = "x86_64")]
-            fn co_v4(&mut self, d: ReifiedData<Co, 2, V4>);
-
-            // Neon
-            #[cfg(target_arch = "aarch64")]
-            fn l2_neon(&mut self, d: ReifiedData<L2, 2, Neon>);
-
-            #[cfg(target_arch = "aarch64")]
-            fn ip_neon(&mut self, d: ReifiedData<IP, 2, Neon>);
-
-            #[cfg(target_arch = "aarch64")]
-            fn co_neon(&mut self, d: ReifiedData<Co, 2, Neon>);
-        }
+        trait VisitDistance2 (2) {}
+        trait VisitQuery2 {}
     }
 
-    macro_rules! dispatch_distance {
-        ($N:literal, $visit:ident :: $method:ident, $dist:ident, $f:ident ($arch:path)) => {
-            impl DispatchDistance<$N> for Params<$arch, crate::distances::$dist> {
-                fn dispatch_distance(
-                    &self,
-                    quantizer: &SphericalQuantizer,
-                    visitor: &mut dyn $visit
-                ) {
-                    visitor.$method(ReifiedData::new(
-                        quantizer.as_functor(),
-                        quantizer.output_dim(),
-                        $f(self.arch),
-                    ))
-                }
-            }
-        }
+    distance_visitor! {
+        trait VisitDistance4 (4) {}
+        trait VisitQuery4 {}
     }
 
+    distance_visitor! {
+        trait VisitDistance8 (8) {}
+        trait VisitQuery8 {}
+    }
 
-    trait DispatchDistance<const N: usize>
+    trait DispatchDistance<const N: usize, B>
     where
-        Bits<N>: Family,
+        Bits<N>: Dispatch<B>,
+        B: Allocator,
     {
         fn dispatch_distance<'a>(
             &self,
-            quantizer: &SphericalQuantizer,
-            visitor: &'a mut <Bits<N> as Family>::DistanceVisitor<'a>,
+            quantizer: &SphericalQuantizer<B>,
+            visitor: &'a mut <Bits<N> as Dispatch<B>>::Distance<'a>,
         );
+    }
+
+    struct Unsupported;
+
+    trait DispatchQuery<const N: usize, B>
+    where
+        Bits<N>: Dispatch<B>,
+        B: Allocator,
+    {
+        fn dispatch_query<'a>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            layout: QueryLayout,
+            visitor: &'a mut <Bits<N> as Dispatch<B>>::Query<'a>,
+        ) -> Result<(), Unsupported>;
     }
 
     #[derive(Debug)]
@@ -991,529 +1226,184 @@ mod dispatch {
         metric: D,
     }
 
-    dispatch_distance!(1, Visit1::l2_scalar, SquaredL2, identity(Scalar));
-    dispatch_distance!(1, Visit1::ip_scalar, InnerProduct, identity(Scalar));
-    dispatch_distance!(1, Visit1::co_scalar, Cosine, identity(Scalar));
+    // Temporary stubs.
+    impl<M: 'static, D: 'static, B: Allocator> DispatchDistance<2, B> for Params<M, D> {
+        fn dispatch_distance<'a>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            visitor: &'a mut <Bits<2> as Dispatch<B>>::Distance<'a>,
+        ) {
+            unimplemented!()
+        }
+    }
 
-    dispatch_distance!(1, Visit1::l2_v3, SquaredL2, identity(V3));
-    dispatch_distance!(1, Visit1::ip_v3, InnerProduct, identity(V3));
-    dispatch_distance!(1, Visit1::co_v3, Cosine, identity(V3));
+    impl<M: 'static, D: 'static, B: Allocator> DispatchQuery<2, B> for Params<M, D>
+    {
+        fn dispatch_query<'a>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            layout: QueryLayout,
+            visitor: &'a mut <Bits<2> as Dispatch<B>>::Query<'a>,
+        ) -> Result<(), Unsupported> {
+            unimplemented!()
+        }
+    }
 
-    dispatch_distance!(1, Visit1::l2_v3, SquaredL2, downcast_to_v3(V4));
-    dispatch_distance!(1, Visit1::ip_v3, InnerProduct, downcast_to_v3(V4));
-    dispatch_distance!(1, Visit1::co_v3, Cosine, downcast_to_v3(V4));
+    impl<M: 'static, D: 'static, B: Allocator> DispatchDistance<4, B> for Params<M, D> {
+        fn dispatch_distance<'a>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            visitor: &'a mut <Bits<4> as Dispatch<B>>::Distance<'a>,
+        ) {
+            unimplemented!()
+        }
+    }
 
+    impl<M: 'static, D: 'static, B: Allocator> DispatchQuery<4, B> for Params<M, D>
+    {
+        fn dispatch_query<'a>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            layout: QueryLayout,
+            visitor: &'a mut <Bits<4> as Dispatch<B>>::Query<'a>,
+        ) -> Result<(), Unsupported> {
+            unimplemented!()
+        }
+    }
 
-    dispatch_distance!(2, Visit2::l2_scalar, SquaredL2, identity(Scalar));
-    dispatch_distance!(2, Visit2::ip_scalar, InnerProduct, identity(Scalar));
-    dispatch_distance!(2, Visit2::co_scalar, Cosine, identity(Scalar));
+    impl<M: 'static, D: 'static, B: Allocator> DispatchDistance<8, B> for Params<M, D> {
+        fn dispatch_distance<'a>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            visitor: &'a mut <Bits<8> as Dispatch<B>>::Distance<'a>,
+        ) {
+            unimplemented!()
+        }
+    }
 
-    dispatch_distance!(2, Visit2::l2_v3, SquaredL2, identity(V3));
-    dispatch_distance!(2, Visit2::ip_v3, InnerProduct, identity(V3));
-    dispatch_distance!(2, Visit2::co_v3, Cosine, identity(V3));
+    impl<M: 'static, D: 'static, B: Allocator> DispatchQuery<8, B> for Params<M, D>
+    {
+        fn dispatch_query<'a>(
+            &self,
+            quantizer: &SphericalQuantizer<B>,
+            layout: QueryLayout,
+            visitor: &'a mut <Bits<8> as Dispatch<B>>::Query<'a>,
+        ) -> Result<(), Unsupported> {
+            unimplemented!()
+        }
+    }
 
-    dispatch_distance!(2, Visit2::l2_v4, SquaredL2, identity(V4));
-    dispatch_distance!(2, Visit2::ip_v4, InnerProduct, identity(V4));
-    dispatch_distance!(2, Visit2::co_v4, Cosine, identity(V4));
+    macro_rules! dispatch1 {
+        (
+            $distance:ident | $query:ident,
+            $(
+                {
+                    $arch:ty,
+                    $dist:ident
+                } => {
+                    $distance_method:ident ($modify_distance:ident) |
+                    $same_as_data:ident ($modify_same_as_data:ident),
+                    $four_bit_transpose:ident ($modify_four_bit_transpose:ident),
+                    $full:ident ($modify_full:ident)
+                }
+            ),+ $(,)?
+        ) => {
+            $(
+                impl<B> DispatchDistance<1, B> for Params<$arch, crate::distances::$dist>
+                where
+                    B: Allocator,
+                {
+                    fn dispatch_distance(
+                        &self,
+                        quantizer: &SphericalQuantizer<B>,
+                        visitor: &mut dyn $distance,
+                    ) {
+                        let dim = quantizer.output_dim();
+                        visitor.$distance_method(Reified::new(
+                            quantizer.as_functor(),
+                            dim,
+                            $modify_distance(self.arch),
+                        ))
+                    }
+                }
 
-    // impl DispatchDistance<1> for Params<Scalar, crate::distances::SquaredL2> {
-    //     fn dispatch_distance(&self, quantizer: &SphericalQuantizer, visitor: &mut dyn Visit1) {
-    //         visitor.l2_scalar(ReifiedData::new(
-    //             quantizer.as_functor(),
-    //             quantizer.output_dim(),
-    //             self.arch,
-    //         ))
-    //     }
-    // }
+                impl<B> DispatchQuery<1, B> for Params<$arch, crate::distances::$dist>
+                where
+                    B: Allocator,
+                {
+                    fn dispatch_query(
+                        &self,
+                        quantizer: &SphericalQuantizer<B>,
+                        layout: QueryLayout,
+                        visitor: &mut dyn $query<B>,
+                    ) -> Result<(), Unsupported> {
+                        let dim = quantizer.output_dim();
+                        let arch = self.arch;
+                        match layout {
+                            QueryLayout::SameAsData => visitor.$same_as_data(
+                                quantizer,
+                                Reified::new(
+                                    quantizer.as_functor(),
+                                    dim,
+                                    $modify_same_as_data(arch),
+                                )
+                            ).unwrap(),
+                            QueryLayout::FourBitTransposed => visitor.$four_bit_transpose(
+                                quantizer,
+                                Reified::new(
+                                    quantizer.as_functor(),
+                                    dim,
+                                    $modify_four_bit_transpose(arch),
+                                )
+                            ).unwrap(),
+                            QueryLayout::FullPrecision => visitor.$full(
+                                quantizer,
+                                Reified::new(
+                                    quantizer.as_functor(),
+                                    dim,
+                                    $modify_full(arch),
+                                )
+                            ).unwrap(),
+                            _ => return Err(Unsupported),
+                        }
+
+                        Ok(())
+                    }
+                }
+            )+
+        }
+    }
+
+    fn same<T>(x: T) -> T {
+        x
+    }
+
+    fn to_v3(x: V4) -> V3 {
+        x.into()
+    }
+
+    dispatch1! {
+        VisitDistance1 | VisitQuery1,
+        // Scalar
+        { Scalar, SquaredL2 } => {
+            l2_scalar(same) | data_l2_scalar(same), fbt_l2_scalar(same), full_l2_scalar(same)
+        },
+        { Scalar, InnerProduct } => {
+            ip_scalar(same) | data_ip_scalar(same), fbt_ip_scalar(same), full_ip_scalar(same)
+        },
+        { Scalar, Cosine } => {
+            co_scalar(same) | data_co_scalar(same), fbt_co_scalar(same), full_co_scalar(same)
+        },
+        // V3
+        { V3, SquaredL2 } => { l2_v3(same) | data_l2_v3(same), fbt_l2_v3(same), full_l2_v3(same) },
+        { V3, InnerProduct } => { ip_v3(same) | data_ip_v3(same), fbt_ip_v3(same), full_ip_v3(same) },
+        { V3, Cosine } => { co_v3(same) | data_co_v3(same), fbt_co_v3(same), full_co_v3(same) },
+        // V4
+        { V4, SquaredL2 } => { l2_v3(to_v3) | data_l2_v3(to_v3), fbt_l2_v3(to_v3), full_l2_v3(to_v3) },
+        { V4, InnerProduct } => { ip_v3(to_v3) | data_ip_v3(to_v3), fbt_ip_v3(to_v3), full_ip_v3(to_v3) },
+        { V4, Cosine } => { co_v3(to_v3) | data_co_v3(to_v3), fbt_co_v3(to_v3), full_co_v3(to_v3) },
+    }
 }
-
-// mod distance {
-//     use super::*;
-//
-//     pub(super) struct Visitor<T>
-//     where
-//         T: DistanceVisitor,
-//     {
-//         visitor: Option<T>,
-//         output: Option<T::Output>,
-//     }
-//
-//     impl<T> Visitor<T>
-//     where
-//         T: DistanceVisitor,
-//     {
-//         fn consume<D>(&mut self, distance: D)
-//         where
-//             D: DynDistanceComputer + 'static,
-//         {
-//             let visitor = self.visitor.take().unwrap();
-//             self.output = Some(visitor.visit(distance));
-//         }
-//     }
-//
-//     impl<const N: usize, M, T> Visit<N, M> for Visitor<T>
-//     where
-//         M: Map<N>,
-//         T: DistanceVisitor,
-//     {
-//         fn l2(&mut self, distance: M::L2) {
-//             self.consume(distance)
-//         }
-//
-//         fn ip(&mut self, distance: M::IP) {
-//             self.consume(distance)
-//         }
-//
-//         fn cosine(&mut self, distance: M::Cosine) {
-//             self.consume(distance)
-//         }
-//     }
-//
-//     pub(super) trait Visit<const N: usize, M>
-//     where
-//         M: Map<N>,
-//     {
-//         fn l2(&mut self, distance: M::L2);
-//         fn ip(&mut self, distance: M::IP);
-//         fn cosine(&mut self, distance: M::Cosine);
-//     }
-//
-//     pub(super) trait Map<const N: usize> {
-//         type L2: super::DynDistanceComputer + 'static;
-//         type IP: super::DynDistanceComputer + 'static;
-//         type Cosine: super::DynDistanceComputer + 'static;
-//
-//         fn map(self, quantizer: &SphericalQuantizer, visitor: &mut dyn Visit<N, Self>);
-//     }
-//
-//     type L2<A, const N: usize> = Reify<CompensatedSquaredL2, A, AsData<N>, AsData<N>>;
-//     type IP<A, const N: usize> = Reify<CompensatedIP, A, AsData<N>, AsData<N>>;
-//     type Cosine<A, const N: usize> = Reify<CompensatedCosine, A, AsData<N>, AsData<N>>;
-//
-//     fn identity<T>(x: T) -> T {
-//         x
-//     }
-//
-//     macro_rules! map {
-//         ($arch:ty, $N:literal) => {
-//             map!($arch => $arch, $N, identity);
-//         };
-//         ($arch:ty => $retarget:ty, $N:literal, $f:path) => {
-//             impl Map<$N> for $arch {
-//                 type L2 = L2<$retarget, $N>;
-//                 type IP = IP<$retarget, $N>;
-//                 type Cosine = Cosine<$retarget, $N>;
-//
-//                 fn map(
-//                     self,
-//                     quantizer: &SphericalQuantizer,
-//                     visitor: &mut dyn Visit<$N, Self>,
-//                 ) {
-//                     let arch = ($f)(self);
-//                     let dim = quantizer.output_dim();
-//                     match quantizer.metric() {
-//                         SupportedMetric::SquaredL2 =>
-//                             visitor.l2(Self::L2::new(quantizer.as_functor(), dim, arch)),
-//                         SupportedMetric::InnerProduct =>
-//                             visitor.ip(Self::IP::new(quantizer.as_functor(), dim, arch)),
-//                         SupportedMetric::Cosine =>
-//                             visitor.cosine(Self::Cosine::new(quantizer.as_functor(), dim, arch)),
-//                     }
-//                 }
-//             }
-//         };
-//     }
-//
-//     map!(Scalar, 1);
-//     map!(Scalar, 2);
-//     map!(Scalar, 4);
-//     map!(Scalar, 8);
-//
-//     #[cfg(target_arch = "x86_64")]
-//     mod x86_64 {
-//         use super::*;
-//
-//         fn downcast_to_v3(arch: V4) -> V3 {
-//             arch.into()
-//         }
-//
-//         map!(V3, 1);
-//         map!(V3, 2);
-//         map!(V3, 4);
-//         map!(V3, 8);
-//
-//         map!(V4 => V3, 1, downcast_to_v3);
-//         map!(V4, 2);
-//         map!(V4, 4);
-//         map!(V4 => V3, 8, downcast_to_v3);
-//     }
-// }
-//
-// mod query_distance {
-//     use super::*;
-//
-//     // This is used as the place-holder type for unimplemented kernels.
-//     #[derive(Debug)]
-//     pub(super) enum Unimplemented {}
-//
-//     impl DynQueryComputer for Unimplemented {
-//         fn evaluate(&self, _x: Opaque<'_>) -> Result<f32, QueryDistanceError> {
-//             unreachable!("this type is unconstructible")
-//         }
-//
-//         fn layout(&self) -> QueryLayout {
-//             unreachable!("this type is unconstructible")
-//         }
-//     }
-//
-//     // Prefixes:
-//     //
-//     // FP: FullPrecision
-//     // FBT: FourBitTransposed
-//     // SC: ScalarQuantized
-//     // DAT: SameAsData
-//     pub(super) trait Map<const N: usize, A> {
-//         // Full Precision.
-//         type FullL2: DynQueryComputer;
-//         type FullIP: DynQueryComputer;
-//         type FullCosine: DynQueryComputer;
-//
-//         // Four Bit Transposed
-//         type BitTransposeL2: DynQueryComputer;
-//         type BitTransposeIP: DynQueryComputer;
-//         type BitTransposeCosine: DynQueryComputer;
-//
-//         // Scalar Quantized
-//         type ScalarL2: DynQueryComputer;
-//         type ScalarIP: DynQueryComputer;
-//         type ScalarCosine: DynQueryComputer;
-//
-//         // Same as Data
-//         type DataL2: DynQueryComputer;
-//         type DataIP: DynQueryComputer;
-//         type DataCosine: DynQueryComputer;
-//
-//         fn map(
-//             self,
-//             quantizer: &SphericalQuantizer,
-//             query: &[f32],
-//             layout: QueryLayout,
-//             allocator: A,
-//             scratch: ScopedAllocator<'_>,
-//             visitor: &mut dyn Visit<N, Self, A>,
-//         );
-//
-//         fn supports(self, layout: QueryLayout) -> bool;
-//     }
-//
-//     pub(super) trait Visit<const N: usize, M, A>
-//     where
-//         M: Map<N, A>,
-//     {
-//         fn full_l2(&mut self, distance: M::FullL2);
-//         fn full_ip(&mut self, distance: M::FullIP);
-//         fn full_cosine(&mut self, distance: M::FullCosine);
-//
-//         // Four-bit transposed.
-//         //
-//         // Not implemented by all backends - so takes `Option`.
-//         fn bit_transpose_l2(&mut self, distance: Option<M::BitTransposeL2>);
-//         fn bit_transpose_ip(&mut self, distance: Option<M::BitTransposeIP>);
-//         fn bit_transpose_cosine(&mut self, distance: Option<M::BitTransposeCosine>);
-//
-//         // Scalar Quantized.
-//         //
-//         // Not implemented by all backends - so takes `Option`.
-//         fn scalar_l2(&mut self, distance: Option<M::ScalarL2>);
-//         fn scalar_ip(&mut self, distance: Option<M::ScalarIP>);
-//         fn scalar_cosine(&mut self, distance: Option<M::ScalarCosine>);
-//
-//         fn data_l2(&mut self, distance: M::DataL2);
-//         fn data_ip(&mut self, distance: M::DataIP);
-//         fn data_cosine(&mut self, distance: M::DataCosine);
-//     }
-//
-//     type L2 = CompensatedSquaredL2;
-//     type IP = CompensatedIP;
-//     type Cosine = CompensatedCosine;
-//
-//     type Full<A> = FullQuery<A>;
-//     type BitTranspose<A> = Query<4, bits::BitTranspose, A>;
-//     type ScalarQuant<const N: usize, A> = Query<N, bits::Dense, A>;
-//
-//     type Reified<D, const N: usize, Q, M> = Reify<Curried<D, Q>, M, (), AsData<N>>;
-//
-//     fn prepare_full<A>(
-//         quantizer: &SphericalQuantizer,
-//         query: &[f32],
-//         allocator: A,
-//         scratch: ScopedAllocator<'_>,
-//     ) -> Result<Full<A>, quantizer::CompressionError>
-//     where
-//         A: AllocatorCore,
-//     {
-//         let mut prepared = FullQuery::empty(quantizer.output_dim(), allocator)?;
-//         quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
-//         Ok(prepared)
-//     }
-//
-//     fn prepare_bit_transpose<A>(
-//         quantizer: &SphericalQuantizer,
-//         query: &[f32],
-//         allocator: A,
-//         scratch: ScopedAllocator<'_>,
-//     ) -> Result<BitTranspose<A>, quantizer::CompressionError>
-//     where
-//         A: AllocatorCore,
-//     {
-//         let mut prepared =
-//             Query::<4, bits::BitTranspose, A>::new_in(quantizer.output_dim(), allocator)?;
-//         quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
-//         Ok(prepared)
-//     }
-//
-//     fn prepare_scalar<const N: usize, A>(
-//         quantizer: &SphericalQuantizer,
-//         query: &[f32],
-//         allocator: A,
-//         scratch: ScopedAllocator<'_>,
-//     ) -> Result<ScalarQuant<N, A>, quantizer::CompressionError>
-//     where
-//         Unsigned: Representation<N>,
-//         A: AllocatorCore,
-//     {
-//         let mut prepared = Query::<N, bits::Dense, A>::new_in(quantizer.output_dim(), allocator)?;
-//         quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
-//         Ok(prepared)
-//     }
-//
-//     fn prepare_data<const N: usize, A>(
-//         quantizer: &SphericalQuantizer,
-//         query: &[f32],
-//         allocator: A,
-//         scratch: ScopedAllocator<'_>,
-//     ) -> Result<Data<N, A>, quantizer::CompressionError>
-//     where
-//         Unsigned: Representation<N>,
-//         SphericalQuantizer: for<'a> CompressIntoWith<
-//                 &'a [f32],
-//                 DataMut<'a, N>,
-//                 ScopedAllocator<'a>,
-//                 Error = quantizer::CompressionError,
-//             >,
-//         A: AllocatorCore,
-//     {
-//         let mut prepared = Data::<N, A>::new_in(quantizer.output_dim(), allocator)?;
-//         quantizer.compress_into_with(query, prepared.reborrow_mut(), scratch)?;
-//         Ok(prepared)
-//     }
-//
-//     macro_rules! metric {
-//         (
-//             { $visitor: ident, $quantizer:ident, $query:ident, $arch:ident, $wrap:path },
-//             $($metric:path => $method:ident ($kernel:ident)),+ $(,)?
-//         ) => {
-//             let dim = $quantizer.output_dim();
-//             let arch = $arch;
-//             match $quantizer.metric() {
-//                 $(
-//                     $metric => $visitor.$method($wrap(Self::$kernel::new(
-//                         Curried::new($quantizer.as_functor(), $query),
-//                         dim,
-//                         arch,
-//                     ))),
-//                 )+
-//             }
-//         }
-//     }
-//
-//     macro_rules! map1 {
-//         ($arch:path) => {
-//             impl<A> Map<1, A> for $arch
-//             where
-//                 A: AllocatorCore + std::fmt::Debug + Send + Sync,
-//             {
-//                 type FullL2 = Reified<L2, 1, Full<A>, $arch>;
-//                 type FullIP = Reified<IP, 1, Full<A>, $arch>;
-//                 type FullCosine = Reified<Cosine, 1, Full<A>, $arch>;
-//
-//                 type BitTransposeL2 = Reified<L2, 1, BitTranspose<A>, $arch>;
-//                 type BitTransposeIP = Reified<IP, 1, BitTranspose<A>, $arch>;
-//                 type BitTransposeCosine = Reified<Cosine, 1, BitTranspose<A>, $arch>;
-//
-//                 type ScalarL2 = Unimplemented;
-//                 type ScalarIP = Unimplemented;
-//                 type ScalarCosine = Unimplemented;
-//
-//                 type DataL2 = Reified<L2, 1, Data<1, A>, $arch>;
-//                 type DataIP = Reified<IP, 1, Data<1, A>, $arch>;
-//                 type DataCosine = Reified<Cosine, 1, Data<1, A>, $arch>;
-//
-//                 fn supports(self, layout: QueryLayout) -> bool {
-//                     match layout {
-//                         QueryLayout::ScalarQuantized => false,
-//                         QueryLayout::FullPrecision |
-//                             QueryLayout::FourBitTransposed |
-//                             QueryLayout::SameAsData => true,
-//
-//                     }
-//                 }
-//
-//                 fn map(
-//                     self,
-//                     quantizer: &SphericalQuantizer,
-//                     query: &[f32],
-//                     layout: QueryLayout,
-//                     allocator: A,
-//                     scratch: ScopedAllocator<'_>,
-//                     visitor: &mut dyn Visit<1, Self, A>,
-//                 ) {
-//                     use SupportedMetric::{Cosine, InnerProduct, SquaredL2};
-//
-//                     match layout {
-//                         QueryLayout::SameAsData => {
-//                             let q = prepare_data(quantizer, query, allocator, scratch).unwrap();
-//                             metric!(
-//                                 { visitor, quantizer, q, self, identity },
-//                                 SquaredL2 => data_l2(DataL2),
-//                                 InnerProduct => data_ip(DataIP),
-//                                 Cosine => data_cosine(DataCosine),
-//                             );
-//                         },
-//                         QueryLayout::FourBitTransposed => {
-//                             let q = prepare_bit_transpose(quantizer, query, allocator, scratch)
-//                                 .unwrap();
-//                             metric!(
-//                                 { visitor, quantizer, q, self, Some },
-//                                 SquaredL2 => bit_transpose_l2(BitTransposeL2),
-//                                 InnerProduct => bit_transpose_ip(BitTransposeIP),
-//                                 Cosine => bit_transpose_cosine(BitTransposeCosine),
-//                             );
-//                         },
-//                         QueryLayout::ScalarQuantized => match quantizer.metric() {
-//                             SquaredL2 => visitor.scalar_l2(None),
-//                             InnerProduct => visitor.scalar_ip(None),
-//                             Cosine => visitor.scalar_cosine(None),
-//                         },
-//                         QueryLayout::FullPrecision => {
-//                             let q = prepare_full(quantizer, query, allocator, scratch).unwrap();
-//                             metric!(
-//                                 { visitor, quantizer, q, self, identity },
-//                                 SquaredL2 => full_l2(FullL2),
-//                                 InnerProduct => full_ip(FullIP),
-//                                 Cosine => full_cosine(FullCosine),
-//                             );
-//                         },
-//                     }
-//                 }
-//             }
-//         };
-//     }
-//
-//     macro_rules! map {
-//         ($arch:path, $N:literal) => {
-//             impl<A> Map<$N, A> for $arch
-//             where
-//                 A: AllocatorCore + std::fmt::Debug + Send + Sync,
-//             {
-//                 type FullL2 = Reified<L2, $N, Full<A>, $arch>;
-//                 type FullIP = Reified<IP, $N, Full<A>, $arch>;
-//                 type FullCosine = Reified<Cosine, $N, Full<A>, $arch>;
-//
-//                 type BitTransposeL2 = Unimplemented;
-//                 type BitTransposeIP = Unimplemented;
-//                 type BitTransposeCosine = Unimplemented;
-//
-//                 type ScalarL2 = Reified<L2, $N, ScalarQuant<$N, A>, $arch>;
-//                 type ScalarIP = Reified<IP, $N, ScalarQuant<$N, A>, $arch>;
-//                 type ScalarCosine = Reified<Cosine, $N, ScalarQuant<$N, A>, $arch>;
-//
-//                 type DataL2 = Reified<L2, $N, Data<$N, A>, $arch>;
-//                 type DataIP = Reified<IP, $N, Data<$N, A>, $arch>;
-//                 type DataCosine = Reified<Cosine, $N, Data<$N, A>, $arch>;
-//
-//                 fn supports(self, layout: QueryLayout) -> bool {
-//                     match layout {
-//                         QueryLayout::FourBitTransposed => false,
-//                         QueryLayout::FullPrecision |
-//                             QueryLayout::ScalarQuantized |
-//                             QueryLayout::SameAsData => true,
-//
-//                     }
-//                 }
-//
-//                 fn map(
-//                     self,
-//                     quantizer: &SphericalQuantizer,
-//                     query: &[f32],
-//                     layout: QueryLayout,
-//                     allocator: A,
-//                     scratch: ScopedAllocator<'_>,
-//                     visitor: &mut dyn Visit<$N, Self, A>,
-//                 ) {
-//                     use SupportedMetric::{Cosine, InnerProduct, SquaredL2};
-//
-//                     match layout {
-//                         QueryLayout::SameAsData => {
-//                             let q = prepare_data(quantizer, query, allocator, scratch).unwrap();
-//                             metric!(
-//                                 { visitor, quantizer, q, self, identity },
-//                                 SquaredL2 => data_l2(DataL2),
-//                                 InnerProduct => data_ip(DataIP),
-//                                 Cosine => data_cosine(DataCosine),
-//                             );
-//                         }
-//                         QueryLayout::FourBitTransposed => match quantizer.metric() {
-//                             SquaredL2 => visitor.bit_transpose_l2(None),
-//                             InnerProduct => visitor.bit_transpose_ip(None),
-//                             Cosine => visitor.bit_transpose_cosine(None),
-//                         },
-//                         QueryLayout::ScalarQuantized => {
-//                             let q = prepare_scalar::<$N, A>(
-//                                 quantizer, query, allocator, scratch
-//                             ).unwrap();
-//
-//                             metric!(
-//                                 { visitor, quantizer, q, self, Some },
-//                                 SquaredL2 => scalar_l2(ScalarL2),
-//                                 InnerProduct => scalar_ip(ScalarIP),
-//                                 Cosine => scalar_cosine(ScalarCosine),
-//                             );
-//                         },
-//                         QueryLayout::FullPrecision => {
-//                             let q = prepare_full(quantizer, query, allocator, scratch).unwrap();
-//                             metric!(
-//                                 { visitor, quantizer, q, self, identity },
-//                                 SquaredL2 => full_l2(FullL2),
-//                                 InnerProduct => full_ip(FullIP),
-//                                 Cosine => full_cosine(FullCosine),
-//                             );
-//                         }
-//                     }
-//                 }
-//             }
-//         };
-//     }
-//
-//     map1!(Scalar);
-//     map!(Scalar, 2);
-//     map!(Scalar, 4);
-//     map!(Scalar, 8);
-//
-//     mod x86_64 {
-//         use super::*;
-//
-//         map1!(V3);
-//         map!(V3, 2);
-//         map!(V3, 4);
-//         map!(V3, 8);
-//
-//         map1!(V4);
-//         map!(V4, 2);
-//         map!(V4, 4);
-//         map!(V4, 8);
-//     }
-// }
 
 ///////////////////////
 // Query Computation //
@@ -3125,6 +3015,181 @@ mod tests {
         .unwrap();
 
         (Impl::new(quantizer).unwrap(), data)
+    }
+
+    fn check_prepare_and_curry<const N: usize, L, D>(plan: &Impl<N>, dataset: rowmajor::Ref<f32>)
+    where
+        Impl<N>: Quantizer,
+        L: PrepareQuery<GlobalAllocator>,
+        SphericalQuantizer: AsFunctor<D>,
+        Reify<D, Scalar, L, AsData<N>>: DynDistanceComputer,
+        Reify<Curried<D, L::Owned<GlobalAllocator>>, Scalar, (), AsData<N>>: DynQueryComputer,
+    {
+        let quantizer = plan.quantizer();
+        let leaf = || {
+            Reify::<D, Scalar, L, AsData<N>>::new(
+                quantizer.as_functor(),
+                quantizer.output_dim(),
+                Scalar,
+            )
+        };
+        let layout = leaf().layout();
+        let scratch = ScopedAllocator::global();
+        let query = dataset.row(1);
+        let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
+        let mut data = Poly::broadcast(0u8, plan.bytes(), alloc).unwrap();
+        plan.compress(dataset.row(0), OpaqueMut::new(&mut data), scratch)
+            .unwrap();
+
+        let description = plan.query_buffer_description(layout).unwrap();
+        let mut query_buffer = Poly::broadcast(
+            0u8,
+            description.bytes(),
+            AlignedAllocator::new(description.align()),
+        )
+        .unwrap();
+        Quantizer::compress_query(
+            plan,
+            query,
+            layout,
+            false,
+            OpaqueMut::new(&mut query_buffer),
+            scratch,
+        )
+        .unwrap();
+        let expected = leaf()
+            .evaluate(Opaque::new(&query_buffer), Opaque::new(&data))
+            .unwrap();
+
+        let prepared = L::prepare(quantizer, query, GlobalAllocator, scratch).unwrap();
+        let curried = leaf().curry(prepared);
+        let fused = leaf()
+            .prepare_and_curry(quantizer, query, GlobalAllocator, scratch)
+            .unwrap();
+        for computer in [&curried as &dyn DynQueryComputer, &fused] {
+            assert_eq!(computer.layout(), layout);
+            assert_eq!(computer.evaluate(Opaque::new(&data)).unwrap(), expected);
+            assert!(matches!(
+                computer.evaluate(Opaque::new(&data[..data.len() - 1])),
+                Err(QueryDistanceError::XReify(_))
+            ));
+        }
+
+        assert!(matches!(
+            leaf().prepare_and_curry(
+                quantizer,
+                &query[..query.len() - 1],
+                GlobalAllocator,
+                scratch,
+            ),
+            Err(quantizer::CompressionError::SourceDimensionMismatch { .. })
+        ));
+        let mut invalid = query.to_vec();
+        invalid[0] = f32::NAN;
+        assert!(matches!(
+            leaf().prepare_and_curry(quantizer, &invalid, GlobalAllocator, scratch),
+            Err(quantizer::CompressionError::InputContainsNaN)
+        ));
+
+        assert!(matches!(
+            leaf().prepare_and_curry(quantizer, query, crate::test_util::AlwaysFails, scratch),
+            Err(quantizer::CompressionError::AllocatorError(_))
+        ));
+        assert!(matches!(
+            leaf().prepare_and_curry(
+                quantizer,
+                query,
+                GlobalAllocator,
+                ScopedAllocator::new(&crate::test_util::AlwaysFails),
+            ),
+            Err(quantizer::CompressionError::AllocatorError(_))
+        ));
+    }
+
+    #[test]
+    fn test_prepare_and_curry() {
+        macro_rules! check_metric {
+            ($distance:ty) => {{
+                for_plan!($distance, 1, AsQuery<4, bits::BitTranspose>);
+                for_plan!($distance, 2, AsQuery<2>);
+                for_plan!($distance, 4, AsQuery<4>);
+                for_plan!($distance, 8, AsQuery<8>);
+            }};
+        }
+
+        for metric in [
+            SupportedMetric::SquaredL2,
+            SupportedMetric::InnerProduct,
+            SupportedMetric::Cosine,
+        ] {
+            macro_rules! for_plan {
+                ($distance:ty, $bits:literal, $query:ty) => {{
+                    let (plan, dataset) = make_impl::<$bits>(metric);
+                    check_prepare_and_curry::<$bits, AsData<$bits>, $distance>(
+                        &plan,
+                        dataset.as_view(),
+                    );
+                    check_prepare_and_curry::<$bits, AsFull, $distance>(&plan, dataset.as_view());
+                    check_prepare_and_curry::<$bits, $query, $distance>(&plan, dataset.as_view());
+                }};
+            }
+
+            match metric {
+                SupportedMetric::SquaredL2 => check_metric!(CompensatedSquaredL2),
+                SupportedMetric::InnerProduct => check_metric!(CompensatedIP),
+                SupportedMetric::Cosine => check_metric!(CompensatedCosine),
+            }
+        }
+    }
+
+    #[test]
+    fn test_prepare_and_curry_borrowed_allocators() {
+        let dataset = test_dataset();
+        let quantizer_alloc = AlignedAllocator::new(PowerOfTwo::new(16).unwrap());
+        let query_alloc = AlignedAllocator::new(PowerOfTwo::new(32).unwrap());
+        let quantizer = SphericalQuantizer::train(
+            dataset.as_view(),
+            TransformKind::Null,
+            SupportedMetric::InnerProduct,
+            PreScale::None,
+            &mut StdRng::seed_from_u64(42),
+            ScopedAllocator::new(&quantizer_alloc),
+        )
+        .unwrap();
+        let mut data = Data::<1, _>::new_in(quantizer.output_dim(), GlobalAllocator).unwrap();
+        quantizer
+            .compress_into_with(
+                dataset.row(0),
+                data.reborrow_mut(),
+                ScopedAllocator::global(),
+            )
+            .unwrap();
+
+        macro_rules! check {
+            ($layout:ty) => {{
+                let leaf = Reify::<CompensatedIP, Scalar, $layout, AsData<1>>::new(
+                    quantizer.as_functor(),
+                    quantizer.output_dim(),
+                    Scalar,
+                );
+                let layout = leaf.layout();
+                let bound = leaf
+                    .prepare_and_curry(
+                        &quantizer,
+                        dataset.row(1),
+                        ScopedAllocator::new(&query_alloc),
+                        ScopedAllocator::global(),
+                    )
+                    .unwrap();
+                assert_eq!(bound.inner.report_query_layout(), layout);
+                let result: Rf32 = Scalar.run1(&bound.inner, data.reborrow());
+                assert!(result.unwrap().is_finite());
+            }};
+        }
+
+        check!(AsFull);
+        check!(AsData<1>);
+        check!(AsQuery<4, bits::BitTranspose>);
     }
 
     #[test]

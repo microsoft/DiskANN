@@ -46,8 +46,8 @@ unsafe impl AllocatorCore for GlobalAllocator {
 // Scoped //
 ////////////
 
-trait DebugAllocator: AllocatorCore + std::fmt::Debug {}
-impl<T> DebugAllocator for T where T: AllocatorCore + std::fmt::Debug {}
+trait DebugAllocator: AllocatorCore + std::fmt::Debug + Send + Sync {}
+impl<T> DebugAllocator for T where T: AllocatorCore + std::fmt::Debug + Send + Sync {}
 
 /// A dynamic wrapper around an `AllocatorCore` that provides the guarantee that all
 /// allocated object are tied to a given scope.
@@ -63,7 +63,7 @@ impl<'a> ScopedAllocator<'a> {
     /// Construct a new `ScopedAllocator` around the provided `allocator`.
     pub const fn new<T>(allocator: &'a T) -> Self
     where
-        T: AllocatorCore + std::fmt::Debug,
+        T: AllocatorCore + std::fmt::Debug + Send + Sync,
     {
         Self { allocator }
     }
