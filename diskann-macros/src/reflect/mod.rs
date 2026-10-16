@@ -9,6 +9,7 @@ use syn::DeriveInput;
 mod attributes;
 mod repr;
 
+/// The implementation of `diskann_benchmark_runner::Reflect`.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let input = repr::Input::parse(input)?;
     let crate_name = syn::parse_quote!(::diskann_benchmark_runner::reflect);

@@ -3,6 +3,151 @@
  * Licensed under the MIT license.
  */
 
+//! This macro is made annoying complicated by the need to be compatible with `serde` and
+//! more-or-less consistent with its corner cases. Particularly tricky or non-obvious (to
+//! the author at time of writing) aspects of macro writing are recorded here for posterity.
+//!
+//! ## Generic Bounds
+//!
+//! If we have a struct like
+//! ```
+//! struct Container<T>(T);
+//!
+//! struct Foo<'a, T, U> {
+//!     baz: Container<T>,
+//!     bar: String,
+//!     buz: U,
+//! }
+//! ```
+//! And we want to derive `Reflect`, we do so by recursing through all fields. For fields
+//! like `buz`, this will fail unless we add a bound `U: Reflect` to `Foo`'s implementation
+//! of `Reflect`. In addition, we don't know that types like `Container<T>` implement
+//! `Reflect`. A simple bound like `T: Reflect` doesn't work because `Container`'s
+//! implementation may not follow from `T`. So we need to add the following
+//! ```text
+//! impl<T, U> Reflect for Foo<'_, T, U>
+//! where
+//!    T: Reflect,
+//!    U: Reflect,
+//!    Containter<T>: Reflect,
+//!    String: Reflect,
+//! ```
+//! We can do this by walking the generics for `Foo` as well as all field types and adding
+//! bounds for all discovered items. Note that this can result in duplicates, but that's
+//! fine.
+//!
+//! The struct [`Generics`] is responsible for this aggregation and for creating the expanded
+//! where-clause.
+//!
+//! ## Renaming
+//!
+//! The attributes `rename_all` and `rename` are supported. `rename_all` can go on:
+//!
+//! * Structs: All fields are renamed according to the rule. Tuple-like and unit structs
+//!   do not support this attribute and should return an error.
+//!
+//!   [`Fields::parse`] enforces this.
+//!
+//! * Enums: All variants are renamed according to the rule.
+//!
+//! * Variants: Struct-like will have their fields renamed. Tuple-like and unit structs
+//!   do not support this attribute and should return an error.
+//!
+//! Attribute `rename` can go on struct fields, variants, and fields of struct-like variants.
+//! When present, it supersedes an enclosing `rename_all`.
+//!
+//! ## New Types
+//!
+//! Serde treats tuple-like structs with a single member as special new-types. These are not
+//! modeled as single-element containers and instead modeled as transparent types.
+//!
+//! We don't have to do anything special during parsing to handle this. However, during code
+//! emission, [`Fields::Unnamed`] needs to emit a `NewType` when there is just a single field.
+//!
+//! ## Enum Woes
+//!
+//! Serde supports four different enum tagging mechanism. We support the following three:
+//!
+//! ### Externally tagged
+//!
+//! Externally tagged enums are modeled as
+//! ```json
+//! "discriminant": {
+//!     "key0": 0,
+//!     "key1": 1,
+//! }
+//! ```
+//! where "discriminant" is the name for the active enum variant. This is relatively easy
+//! to support and doesn't require additional legalization checks.
+//!
+//! External tagging is the default for enum when neither `serde(tag = "")` nor
+//! `serde(content = "") attributes are provided.
+//!
+//! ### Adjacently Tagged
+//!
+//! Adjacently tagged enums look like
+//! ```json
+//! {
+//!     "tag": "discriminant",
+//!     "content": {
+//!         "key0": 0,
+//!         "key1": 1,
+//!     }
+//! }
+//! ```
+//!
+//! This gets selected when both the "tag" and "content" serde attributes are provided. The
+//! values for these attributes are used as the actual strings in the "tag" and "content"
+//! positions in the example JSON.
+//!
+//! Like externally tagged enums, there are no additional legalization steps.
+//!
+//! ### Internally Tagged
+//!
+//! These are evil. These look like
+//! ```text
+//! {
+//!     "tag": "discriminant", <--- Embedded with the content
+//!     "key0": 0,
+//!     "key1": 1,
+//! }
+//! ```
+//! This gets selected when just the `serde(tag = "")` attribute is applied to an enum, with
+//! the actual "tag" string in the sample replaced with the value of said attribute.
+//!
+//! There are several additional checks that internally tagged enums need beyond the other two:
+//!
+//! * Internal Tagging can only be used if *all* variants are either new-types, struct-like,
+//!   or units. Tuple-like variants don't have any named fields, so a tag doesn't work.
+//!
+//!   Serde supports new-types but throws a runtime error if the new-type is not struct-like.
+//!   We don't throw this run time error - we just assume it's going to work.
+//!
+//! * We need to check that the "tag" string does not conflict with any field of the
+//!   struct-like variant. This needs to happen *after* all renames have been applied.
+//!
+//! ### Untagged
+//!
+//! We don't support untagged enums.
+//!
+//! ## Name Uniqueness
+//!
+//! We also need to ensure that after renaming, all final field names are unique and all
+//! final variant names are unique.
+//!
+//! ## Type Names
+//!
+//! Type names are what we use to provide unique names for reflected types. Two attributes
+//! are supported:
+//!
+//! * `reflect(prefix = "")`: Apply the prefix to the type-name.
+//! * `reflect(type_name = "")`: Completely rewrite the type name.
+//!
+//! Since type registries assume that type names are unique, we don't allow `type_name` to
+//! be applied to types with generics. Otherwise, each instantiation of the generic would
+//! have the same name, limiting usefulness.
+//!
+
 use std::collections::HashSet;
 
 use proc_macro2::{Span, TokenStream};
@@ -58,9 +203,12 @@ impl<'a> Input<'a> {
     }
 }
 
+/// Emit a `where` clause predicate for all generics and field types.
 struct Generics<'a> {
     generics: &'a syn::Generics,
+    /// The type parameters of the original object.
     params: Vec<&'a syn::Ident>,
+    /// All field types.
     types: Vec<&'a syn::Type>,
 }
 
@@ -175,6 +323,26 @@ impl<'a> TypeName<'a> {
         })
     }
 
+    /// When generics are absent, do the easy thing and apply the prefix with the raw type
+    /// name from the [`syn::DeriveInput`].
+    ///
+    /// When generics are present (for example)
+    /// ```
+    /// struct Foo<T, U, const N: usize> {
+    ///    // ...
+    /// }
+    /// ```
+    /// use the type-names for each generic to get the final type. The generated code roughly
+    /// ```text
+    /// f.write_str("Foo")?;
+    /// f.write_str("<")?;
+    /// <T as Reflect>::type_name(f)?; // The type name for the generic
+    /// f.write_str(", ")?;
+    /// <U as Reflect>::type_name(f)?; // The type name for the generic
+    /// f.write_str(", ")?;
+    /// f.write!("{}", N)?;
+    /// f.write_str(">")?;
+    /// ```
     fn emit(&self, path: &syn::Path) -> TokenStream {
         match self {
             Self::Override(type_name) => quote!(f.write_str(#type_name)),

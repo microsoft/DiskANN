@@ -255,19 +255,26 @@ impl Registry {
         input: input::internal::Input,
         types: &[Reflection],
     ) -> Result<(), RegistryError> {
+        // Register all types. Only complete if type input registration succeeds.
+        //
+        // This allows multiple rounds of `Reflections` to be added even if the input type
+        // is the same (which can occur when collecting type information for regression
+        // inputs).
+        //
+        // Defer evaluating the `Result` until we check the type. This keeps incorrect
+        // inputs the first cause of error instead of a more obscure type conflict.
+        let result = self.types.register(types);
+
         let tag = input.tag();
-        match self.inputs.entry(tag) {
+        let input_result = match self.inputs.entry(tag) {
             Entry::Vacant(v) => {
-                // Before we insert - try to add all the reflection types. If this fails,
-                // then we haven't committed the input to the registry.
-                match self.types.register(types) {
+                // Make sure type insertion doesn't conflict.
+                match result {
                     Ok(transaction) => transaction.complete(),
-                    Err(err) => {
-                        return Err(RegistryError::type_name_conflict(err));
-                    }
-                }
+                    Err(err) => return Err(RegistryError::type_name_conflict(err)),
+                };
                 v.insert(input);
-                Ok(())
+                return Ok(());
             }
             Entry::Occupied(o) => {
                 use Visibility::{Available, Gated};
@@ -308,6 +315,15 @@ impl Registry {
                     }
                 }
             }
+        };
+
+        input_result?;
+        match result {
+            Ok(transaction) => {
+                transaction.complete();
+                Ok(())
+            }
+            Err(err) => Err(RegistryError::type_name_conflict(err)),
         }
     }
 
@@ -728,6 +744,56 @@ mod tests {
             msg.contains("A different input with tag \"type-a\" was already registered"),
             "FAILED: {}",
             msg
+        );
+    }
+
+    #[test]
+    fn test_duplicate_input_registers_additional_types() {
+        #[derive(Reflect)]
+        struct First;
+
+        #[derive(Reflect)]
+        struct Second;
+
+        #[derive(Reflect)]
+        struct RolledBack;
+
+        let mut registry = Registry::new();
+        registry
+            .register_input(
+                input::internal::Input::new::<A>(),
+                &[Reflection::new::<First>()],
+            )
+            .unwrap();
+        registry
+            .register_input(
+                input::internal::Input::new::<A>(),
+                &[Reflection::new::<Second>()],
+            )
+            .unwrap();
+
+        assert!(
+            registry
+                .type_info(&Reflection::new::<First>().type_name().to_string())
+                .is_some()
+        );
+        assert!(
+            registry
+                .type_info(&Reflection::new::<Second>().type_name().to_string())
+                .is_some()
+        );
+
+        registry
+            .register_input(
+                input::internal::Input::new::<A2>(),
+                &[Reflection::new::<RolledBack>()],
+            )
+            .unwrap_err();
+
+        assert!(
+            registry
+                .type_info(&Reflection::new::<RolledBack>().type_name().to_string())
+                .is_none()
         );
     }
 

@@ -30,10 +30,10 @@ mod reflect;
 /// This is meant to be used in conjunction with `serde` for documenting benchmark inputs
 /// and as such, it respects several common `serde` attributes:
 ///
-/// * rename_all = "lowercase" | "snake_case" | "kebab-case"
-/// * rename = "..."
-/// * tag = "..."
-/// * tag = "...", content = "..."
+/// * rename_all = "lowercase" | "snake_case" | "kebab-case" (on structs, enums, and variants)
+/// * rename = "..." (on fields)
+/// * tag = "..." (on enums)
+/// * tag = "...", content = "..." (on enums)
 #[proc_macro_derive(Reflect, attributes(reflect, serde))]
 pub fn derive_reflect(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

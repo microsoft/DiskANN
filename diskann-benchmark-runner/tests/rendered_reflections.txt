@@ -173,3 +173,87 @@ Config
 
         "int8"
 ========
+========
+{
+  "name": "tuples",
+  "description": "a sample tuple-like struct."
+}
+--------
+Tuples
+  A tuple like type!
+
+  0: usize
+    Some docs,
+
+  1: string
+========
+========
+{
+  "name": "internally-tagged",
+  "description": "an internally tagged enum"
+}
+--------
+InternallyTagged
+  Discriminant field: "internally-tagged"
+
+  Options:
+    "Config"
+      Config level docs.
+
+      Config
+        Field docs.
+
+        "source": SourceWrapper
+          render::Source
+
+        "param1": string
+          This does one thing.
+
+        "param2": Vec<render::AnnotatedDataType>
+          This does another.
+
+
+    "Other"
+      "foo": usize
+
+      "bar": string
+        Hello world
+
+    "Unit"
+========
+========
+{
+  "name": "adjacenctly-tagged",
+  "description": "an adjacently tagged enum"
+}
+--------
+AdjacentlyTagged
+  An adjacently tagged enum.
+
+  Discriminant field: "tag"
+  Content field: "content"
+
+  Options:
+    "Config"
+      Config
+        "source": SourceWrapper
+          render::Source
+
+        "param1": string
+          This does one thing.
+
+        "param2": Vec<render::AnnotatedDataType>
+          This does another.
+
+
+    "Other"
+      "foo": usize
+
+      "bar": string
+
+    "Unit"
+    "Tuple"
+      0: usize
+
+      1: usize
+========

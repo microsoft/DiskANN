@@ -603,6 +603,43 @@ mod tests {
         param2: Vec<AnnotatedDataType>,
     }
 
+    /// A tuple like type!
+    #[derive(Reflect)]
+    #[expect(unused, reason = "testing")]
+    struct Tuples(
+        /// Some docs,
+        usize,
+        String,
+    );
+
+    #[derive(Reflect)]
+    #[expect(unused, reason = "testing")]
+    #[serde(tag = "internally-tagged")]
+    enum InternallyTagged {
+        /// Config level docs.
+        Config(
+            /// Field docs.
+            Config,
+        ),
+        Other {
+            foo: usize,
+            /// Hello world
+            bar: String,
+        },
+        Unit,
+    }
+
+    /// An adjacently tagged enum.
+    #[derive(Reflect)]
+    #[expect(unused, reason = "testing")]
+    #[serde(tag = "tag", content = "content")]
+    enum AdjacentlyTagged {
+        Config(Config),
+        Other { foo: usize, bar: String },
+        Unit,
+        Tuple(usize, usize),
+    }
+
     #[test]
     fn run_tests() {
         let cases = [
@@ -611,6 +648,9 @@ mod tests {
             Case::new::<SourceWrapper>("source wrapper", "render a newtype wrapper"),
             Case::new::<Id>("id", "render a primitive newtype wrapper"),
             Case::new::<Config>("config", "a sample struct config."),
+            Case::new::<Tuples>("tuples", "a sample tuple-like struct."),
+            Case::new::<InternallyTagged>("internally-tagged", "an internally tagged enum"),
+            Case::new::<AdjacentlyTagged>("adjacenctly-tagged", "an adjacently tagged enum"),
         ];
 
         run_tests_inner(&cases, &baseline_path(), ux::test::overwrite());

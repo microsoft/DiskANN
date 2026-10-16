@@ -244,6 +244,23 @@ impl V4 {
         }
     }
 
+    /// This constructor should be used when testing miri compatibility within the
+    /// `diskann-wide` traits.
+    ///
+    /// In test mode - we have to use `uncached` so we don't race with the tests that
+    /// manually set the architecture number.
+    #[cfg(test)]
+    pub(crate) fn new_checked_miri_uncached() -> Option<Self> {
+        if cfg!(miri) {
+            V3::new_checked_uncached().map(|_| {
+                // SAFETY: With Miri enabled, AVX-512 emulation is used.
+                unsafe { Self::new() }
+            })
+        } else {
+            Self::new_checked_uncached()
+        }
+    }
+
     /// Retarget for a more conservative architecture.
     pub fn retarget(self) -> V3 {
         // SAFETY: `V4` is a superset of `V3` - so an instance of `V4` asserts the presence of `V3`.
@@ -580,6 +597,40 @@ impl Architecture for V4 {
     }
 }
 
+///////////////////////
+// Custom Intrinsics //
+///////////////////////
+
+impl V4 {
+    /// Multiply unsigned bytes from `x` by signed bytes from `y`, then add adjacent
+    /// products with saturation to `i16::MIN..=i16::MAX`.
+    ///
+    /// Each output lane corresponds to one adjacent input pair, in order.
+    /// There is no accumulator.
+    ///
+    /// See: [`std::arch::x86_64::_mm256_maddubs_epi16`].
+    #[inline(always)]
+    pub fn mm256_maddubs_epi16(self, x: u8x32, y: i8x32) -> i16x16 {
+        #[cfg(miri)]
+        {
+            // V4 aliases are Emulated under Miri, so bridge through arrays to V3.
+            let arch = self.retarget();
+            let x = super::v3::u8x32::from_array(arch, x.to_array());
+            let y = super::v3::i8x32::from_array(arch, y.to_array());
+            i16x16::from_array(self, arch.mm256_maddubs_epi16(x, y).to_array())
+        }
+        #[cfg(not(miri))]
+        {
+            i16x16::from_underlying(
+                self,
+                self.retarget()
+                    .mm256_maddubs_epi16(x.retarget(), y.retarget())
+                    .to_underlying(),
+            )
+        }
+    }
+}
+
 // Conversions
 impl From<V4> for Scalar {
     fn from(_: V4) -> Scalar {
@@ -590,5 +641,35 @@ impl From<V4> for Scalar {
 impl From<V4> for V3 {
     fn from(arch: V4) -> V3 {
         arch.retarget()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{arch::x86_64::v3, test_utils};
+
+    #[test]
+    fn test_mm256_maddubs_epi16() {
+        if let Some(arch) = V4::new_checked_miri_uncached() {
+            let arch_v3 = arch.retarget();
+            let check = move |x: &[u8], y: &[i8]| {
+                let x: [u8; 32] = x.try_into().unwrap();
+                let y: [i8; 32] = y.try_into().unwrap();
+                let got = arch
+                    .mm256_maddubs_epi16(u8x32::from_array(arch, x), i8x32::from_array(arch, y))
+                    .to_array();
+                let expected = arch_v3
+                    .mm256_maddubs_epi16(
+                        v3::u8x32::from_array(arch_v3, x),
+                        v3::i8x32::from_array(arch_v3, y),
+                    )
+                    .to_array();
+                assert_eq!(got, expected, "x = {x:?}, y = {y:?}");
+            };
+            check(&[u8::MAX; 32], &[i8::MAX; 32]);
+            check(&[u8::MAX; 32], &[i8::MIN; 32]);
+            test_utils::driver::drive_binary(&check, (32, 32), 0x7fc14e39a2d06b85);
+        }
     }
 }

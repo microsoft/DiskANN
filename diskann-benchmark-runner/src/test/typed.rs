@@ -81,7 +81,7 @@ impl Input for TypeInput {
 ///////////////
 
 #[derive(Debug, Serialize, Deserialize, Reflect)]
-#[reflect(prefix = "benchmark::test::")]
+#[reflect(prefix = "benchmark::test::typed::")]
 pub(super) struct Tolerance {
     /// Should we return an error when `from_raw` is called?
     pub(super) error_when_checked: bool,

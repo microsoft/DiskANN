@@ -6,12 +6,10 @@
 use crate::garnet::{Callbacks, ReadDataCallback, RmwDataCallback, TERM_BITMASK, Term};
 use core::slice;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use std::{
     ffi::c_void,
-    sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 thread_local! {
@@ -54,7 +52,7 @@ impl Store {
     pub fn clear(&self) {
         STORE.with(|s| s.clear());
         LOGS.with(|l| {
-            let mut guard = l.lock().unwrap();
+            let mut guard = l.lock();
             guard.clear();
         });
         FULL_READS.with(|fr| fr.store(0, Ordering::Release));
@@ -121,10 +119,33 @@ impl Store {
 
     pub fn log(&self, context: u64, msg: &str) {
         LOGS.with(|l| {
-            let mut guard = l.lock().unwrap();
+            let mut guard = l.lock();
             guard.push((context, msg.to_owned()));
         });
     }
+}
+
+/// A deterministic Q8 state distinct from the default DoubleHadamard transform.
+pub fn q8_state_with_identity_transform(
+    dim: usize,
+) -> diskann_quantization::alloc::Poly<[u8], diskann_quantization::alloc::GlobalAllocator> {
+    use diskann_quantization::{
+        algorithms::{Transform, TransformKind},
+        alloc::GlobalAllocator,
+        minmax::MinMaxQuantizer,
+        num::POSITIVE_ONE_F32,
+    };
+
+    let transform = Transform::new(
+        TransformKind::Null,
+        std::num::NonZero::new(dim).unwrap(),
+        None,
+        GlobalAllocator,
+    )
+    .unwrap();
+    MinMaxQuantizer::new(transform, POSITIVE_ONE_F32)
+        .serialize(GlobalAllocator)
+        .unwrap()
 }
 
 unsafe extern "C" fn test_read(
@@ -283,7 +304,7 @@ mod tests {
 
     #[test]
     fn garnet_provider_with_store_callbacks() {
-        use crate::provider::GarnetProvider;
+        use crate::provider::{DEFAULT_START_POINT_ID, GarnetProvider};
         use diskann_vector::distance::Metric;
 
         let store: Store = Store::new();
@@ -298,6 +319,7 @@ mod tests {
             VectorQuantType::NoQuant,
             Metric::L2,
             max_degree,
+            DEFAULT_START_POINT_ID,
             callbacks,
             &ctx,
         );
@@ -317,6 +339,7 @@ mod tests {
             VectorQuantType::NoQuant,
             Metric::L2,
             max_degree,
+            DEFAULT_START_POINT_ID,
             callbacks,
             &ctx,
         );

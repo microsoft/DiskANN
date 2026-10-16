@@ -122,6 +122,18 @@ pub(crate) struct Container {
 }
 
 impl Container {
+    /// Parse container level attributes. Accepts:
+    ///
+    /// * `doc`
+    /// * `serde(rename_all = "")`
+    /// * `serde(tag = "")`
+    /// * `serde(content = "")`
+    /// * `reflect(prefix = "")`
+    /// * `reflect(type_name = "")`
+    ///
+    /// `reflect(prefix)` and `reflect(type_name)` are mutually exclusive.
+    ///
+    /// All other serde and reflect attributes are rejected.
     pub(crate) fn parse(attrs: &[syn::Attribute]) -> syn::Result<Self> {
         let mut rename_all = RenameAll::default();
         let mut tag = Option::None;
@@ -274,6 +286,7 @@ impl EnumRepr {
     }
 }
 
+/// Rename rule for fields and variants.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct RenameAll {
     inner: RenameRule,
@@ -477,6 +490,13 @@ pub(crate) struct Variant {
 }
 
 impl Variant {
+    /// Parse variant level attributes. Accepts:
+    ///
+    /// * `doc`
+    /// * `serde(rename_all)`
+    /// * `serde(rename)`
+    ///
+    /// All other `serde` and `reflect` attributes are rejected.
     pub(crate) fn parse(attrs: &[syn::Attribute]) -> syn::Result<Self> {
         let mut me = Self::default();
 
@@ -524,6 +544,12 @@ pub(crate) struct Field {
 }
 
 impl Field {
+    /// Parse field level attributes. Accepts:
+    ///
+    /// * `doc`
+    /// * `serde(rename)`
+    ///
+    /// All other serde and reflect attributes are rejected.
     pub(crate) fn parse(attrs: &[syn::Attribute]) -> syn::Result<Self> {
         let mut me = Self::default();
 

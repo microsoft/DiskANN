@@ -57,7 +57,7 @@ impl Input for DimInput {
 ///////////////
 
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
-#[reflect(prefix = "benchmark::test::")]
+#[reflect(prefix = "benchmark::test::dim::")]
 pub(super) struct Tolerance {
     succeed: bool,
     error_in_check: bool,

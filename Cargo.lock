@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-garnet"
-version = "6.0.0"
+version = "8.0.0"
 dependencies = [
  "bytemuck",
  "crossbeam",
@@ -618,6 +618,7 @@ dependencies = [
  "diskann-utils",
  "diskann-vector",
  "foldhash",
+ "parking_lot",
  "rand",
  "strum",
  "thiserror 2.0.21",

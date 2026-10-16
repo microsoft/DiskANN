@@ -3,8 +3,9 @@ All registered types:
   benchmark::DataType
   benchmark::test::DimInput
   benchmark::test::SampleInput
-  benchmark::test::Tolerance
   benchmark::test::TypeInputRaw
+  benchmark::test::dim::Tolerance
+  benchmark::test::typed::Tolerance
   bool
   string
   usize
