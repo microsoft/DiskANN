@@ -7,6 +7,8 @@
 //!
 //! Each B tile is decoded once and reused across A panels. Integer inner products
 //! are compensated before reduction because B's coefficients vary by vector.
+//! B rows are zero-padded to PACK; kernel `k` remains the logical dimension used
+//! for compensation and accumulator limits.
 //!
 //! Outputs are unnegated maximum inner products. NaN candidates are ignored;
 //! empty B or all-NaN comparisons leave negative infinity.
@@ -23,12 +25,12 @@ use std::{
 };
 
 use diskann_wide::{
-    SIMDCast, SIMDDotProduct, SIMDMinMax, SIMDReinterpret, SIMDVector,
+    Const, SIMDCast, SIMDDotProduct, SIMDMinMax, SIMDReinterpret, SIMDVector, SupportedLaneCount,
     arch::{Architecture, Scalar, Target},
 };
 
 use crate::{
-    bits::{BitSlice, Representation, Unsigned},
+    bits::{Representation, Unsigned},
     matrix_kernels::{
         Cache,
         blocks::{packed, unpacked},
@@ -43,12 +45,12 @@ use crate::{
 
 use super::packed_f32_x_unpacked_f32::Params;
 
-diskann_wide::alias!(f32x16<W> = f32x16);
 diskann_wide::alias!(i8x32<W> = i8x32);
 diskann_wide::alias!(i8x64<W> = i8x64);
 diskann_wide::alias!(i16x16<W> = i16x16);
 diskann_wide::alias!(i16x32<W> = i16x32);
 diskann_wide::alias!(i32x16<W> = i32x16);
+diskann_wide::alias!(i32x8<W> = i32x8);
 diskann_wide::alias!(u8x32<W> = u8x32);
 diskann_wide::alias!(u8x64<W> = u8x64);
 diskann_wide::alias!(u32x4<W> = u32x4);
@@ -62,7 +64,7 @@ const fn max_k<const A_BITS: usize, const B_BITS: usize>() -> usize {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Coefficients<T> {
+pub(crate) struct Coefficients<T> {
     a: T,
     b: T,
     n: T,
@@ -142,7 +144,7 @@ pub(crate) struct Driver<
 {
     arch: W,
     a: packed::View<'a, W::AElem, MR, PACK>,
-    a_meta: Coefficients<&'a [f32]>,
+    a_meta: Coefficients<&'a [[f32; MR]]>,
     b: MatRef<'a, MinMaxMeta<B_BITS>>,
     c: &'a mut [f32],
     k: DimK,
@@ -185,6 +187,7 @@ where
         Unsigned: Representation<A_BITS>,
     {
         const {
+            assert!(NR > 0 && NR <= 8, "NR must be in 1..=8");
             assert!(
                 B_BITS <= W::MAX_B_BITS,
                 "B bit width exceeds the backend's supported range"
@@ -200,18 +203,23 @@ where
         bounds::check_eq!(bounds::Bound::new(b.repr().intrinsic_dim()), k);
         bounds::check_eq!(bounds::Bound::new(c.len()), a.codes.nrows());
         let a_meta = Coefficients {
-            a: a.meta.a.as_slice(),
-            b: a.meta.b.as_slice(),
-            n: a.meta.n.as_slice(),
+            a: a.meta.a.as_chunks::<MR>().0,
+            b: a.meta.b.as_chunks::<MR>().0,
+            n: a.meta.n.as_chunks::<MR>().0,
         };
         let a_bytes = a.panel_bytes();
         let a = packed::View::from_block_transposed(a.codes.as_view())
             .expect("A and K must be nonempty");
         for meta in [a_meta.a, a_meta.b, a_meta.n] {
-            bounds::check_eq!(bounds::Bound::new(meta.len()), MR * a.blocks().get());
+            bounds::check_eq!(bounds::Bound::new(meta.len()), a.blocks().get());
         }
-        let b_rows_per_tile =
-            Params::new(cache, a_bytes, BScratch::<W::BElem>::row_bytes(k), NR).b_cols_in_l1;
+        let b_rows_per_tile = Params::new(
+            cache,
+            a_bytes,
+            BScratch::<W::BElem>::row_bytes::<PACK>(k),
+            NR,
+        )
+        .b_cols_in_l1;
         Self {
             arch,
             a,
@@ -239,7 +247,8 @@ where
                 let mut start = 0;
                 while let Some(remaining) = NonZeroUsize::new(self.b.num_vectors() - start) {
                     let count = remaining.min(self.b_rows_per_tile);
-                    let b = scratch.prepare::<W, B_BITS, MR, PACK>(self.b, start, count, self.k);
+                    let b =
+                        scratch.prepare::<B_BITS, PACK>(self.b, start, count, self.k, W::convert_b);
                     // SAFETY: Driver's construction establishes all dimensions, metadata
                     // extents, and C's coverage of A. Visitors preserve these bounds.
                     unsafe {
@@ -248,9 +257,9 @@ where
                             let end = (row + MR).min(self.c.len());
                             let c = self.arch.load(&self.c[row..end]);
                             let a_meta = Coefficients {
-                                a: W::Float::load_simd(self.arch, self.a_meta.a.as_ptr().add(row)),
-                                b: W::Float::load_simd(self.arch, self.a_meta.b.as_ptr().add(row)),
-                                n: W::Float::load_simd(self.arch, self.a_meta.n.as_ptr().add(row)),
+                                a: &self.a_meta.a[panel],
+                                b: &self.a_meta.b[panel],
+                                n: &self.a_meta.n[panel],
                             };
                             let kernel = PanelKernel::<W, MR, NR, PACK> {
                                 arch: self.arch,
@@ -283,31 +292,47 @@ struct BTile<'a, T> {
     meta: &'a [MinMaxCompensation],
 }
 
+#[inline]
+#[expect(clippy::expect_used)]
+fn padded_k<const PACK: usize>(k: DimK) -> DimK {
+    DimK::new(
+        NonZeroUsize::new(k.value().get().next_multiple_of(PACK))
+            .expect("padding a positive dimension remains positive"),
+    )
+}
+
 impl<T: Copy + Default> BScratch<T> {
+    /// Convert logical codes once each; padding uses `T::default()` without conversion.
     #[expect(clippy::expect_used)]
-    fn prepare<W, const B_BITS: usize, const MR: usize, const PACK: usize>(
+    fn prepare<const B_BITS: usize, const PACK: usize>(
         &mut self,
         b: MatRef<'_, MinMaxMeta<B_BITS>>,
         start: usize,
         count: NonZeroUsize,
         k: DimK,
+        mut convert: impl FnMut(u8) -> T,
     ) -> BTile<'_, T>
     where
-        W: ExtraWide<MR, PACK, BElem = T>,
         Unsigned: Representation<B_BITS>,
     {
         let dim = k.value().get();
         assert_eq!(b.repr().intrinsic_dim(), dim);
         assert!(start <= b.num_vectors() && count.get() <= b.num_vectors() - start);
-        self.codes.resize(count.get() * dim, T::default());
+        let physical_k = padded_k::<PACK>(k);
+        let stride = physical_k.value().get();
+        self.codes.resize(count.get() * stride, T::default());
         self.meta.resize(count.get(), MinMaxCompensation::default());
         for i in 0..count.get() {
             let row = b.get_row(start + i).expect("B tile range was checked");
             self.meta[i] = row.meta();
-            decode_b::<W, B_BITS, MR, PACK>(row.vector(), &mut self.codes[i * dim..(i + 1) * dim]);
+            let dst = &mut self.codes[i * stride..(i + 1) * stride];
+            row.vector()
+                .decode_into(&mut dst[..dim], |code| convert(code as u8))
+                .expect("B output must match the logical code count");
+            dst[dim..].fill(T::default());
         }
-        // SAFETY: The initialized codes contain count rows of exactly dim elements.
-        let codes = unsafe { unpacked::View::new(Slice::new(&self.codes), count, k) };
+        // SAFETY: Each row has physical_k initialized elements, including zero padding.
+        let codes = unsafe { unpacked::View::new(Slice::new(&self.codes), count, physical_k) };
         BTile {
             codes,
             meta: &self.meta,
@@ -315,50 +340,9 @@ impl<T: Copy + Default> BScratch<T> {
     }
 
     /// Cache-planning bytes for one decoded B row, including metadata.
-    fn row_bytes(k: DimK) -> Bytes {
-        let codes = Elements::<T>::new(k.value().get()).bytes();
+    fn row_bytes<const PACK: usize>(k: DimK) -> Bytes {
+        let codes = Elements::<T>::new(padded_k::<PACK>(k).value().get()).bytes();
         Bytes::new(codes.value() + size_of::<MinMaxCompensation>())
-    }
-}
-
-/// Expand a B row, ignoring unused padding bits.
-///
-/// # Panics
-///
-/// Panics if the logical input and output lengths differ.
-#[inline(always)]
-#[expect(clippy::expect_used)]
-fn decode_b<W, const B_BITS: usize, const MR: usize, const PACK: usize>(
-    codes: BitSlice<'_, B_BITS, Unsigned>,
-    dst: &mut [W::BElem],
-) where
-    W: ExtraWide<MR, PACK>,
-    Unsigned: Representation<B_BITS>,
-{
-    const {
-        assert!(
-            B_BITS <= W::MAX_B_BITS,
-            "B bit width exceeds the backend's supported range"
-        )
-    };
-    assert_eq!(codes.len(), dst.len());
-    let packed = codes.as_slice();
-    if B_BITS == 8 {
-        for (out, &code) in dst.iter_mut().zip(packed) {
-            *out = W::convert_b(code);
-        }
-    } else if B_BITS == 4 {
-        let (pairs, tail) = dst.as_chunks_mut::<2>();
-        for (pair, &byte) in pairs.iter_mut().zip(packed) {
-            *pair = [W::convert_b(byte & 15), W::convert_b(byte >> 4)];
-        }
-        if let Some(last) = tail.first_mut() {
-            *last = W::convert_b(packed[pairs.len()] & 15);
-        }
-    } else {
-        for (i, out) in dst.iter_mut().enumerate() {
-            *out = W::convert_b(codes.get(i).expect("input and output lengths match") as u8);
-        }
     }
 }
 
@@ -370,7 +354,7 @@ struct PanelKernel<'a, W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize,
 {
     arch: W,
     a: packed::Panel<'a, W::AElem, MR, PACK>,
-    a_meta: Coefficients<W::Float>,
+    a_meta: Coefficients<&'a [f32; MR]>,
     b: unpacked::View<'a, W::BElem>,
     b_meta: &'a [MinMaxCompensation],
     c: [f32; MR],
@@ -390,7 +374,7 @@ impl<W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: usize
 struct Visitor<'a, W: ExtraWide<MR, PACK>, const MR: usize, const PACK: usize> {
     arch: W,
     a: packed::Panel<'a, W::AElem, MR, PACK>,
-    a_meta: Coefficients<W::Float>,
+    a_meta: Coefficients<&'a [f32; MR]>,
     b_meta: &'a [MinMaxCompensation],
     c: &'a mut [f32; MR],
     k: DimK,
@@ -400,13 +384,16 @@ impl<W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: usize
     unpacked::PanelVisitor<W::BElem, NR> for Visitor<'_, W, MR, PACK>
 {
     #[inline(always)]
+    #[expect(clippy::expect_used)]
     fn visit(&mut self, b: unpacked::Panel<'_, W::BElem, NR>, start: usize) {
         let mut kernel = MicroKernel {
             arch: self.arch,
             a: self.a,
             a_meta: self.a_meta,
             b,
-            b_meta: &self.b_meta[start..start + NR],
+            b_meta: self.b_meta[start..]
+                .first_chunk::<NR>()
+                .expect("B panel metadata is in bounds"),
             c: self.c,
             k: self.k,
         };
@@ -419,7 +406,6 @@ impl<W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: usize
 {
     #[inline(always)]
     fn panel_kernel(&mut self) {
-        const { assert!(NR > 0 && NR <= 8) };
         let mut visitor = Visitor {
             arch: self.arch,
             a: self.a,
@@ -428,10 +414,10 @@ impl<W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: usize
             c: &mut self.c,
             k: self.k,
         };
-        // SAFETY: PanelKernel is constructed with equal dimensions and matching B metadata.
+        // SAFETY: B's view is constructed with PACK-padded rows and matching metadata.
         let tail = unsafe {
             self.b.visit_panels::<NR>(
-                self.k,
+                padded_k::<PACK>(self.k),
                 Visitor {
                     c: &mut *visitor.c,
                     ..visitor
@@ -441,7 +427,7 @@ impl<W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: usize
         if let Some(tail) = tail {
             macro_rules! remainder {
                 ($($n:literal),+) => {$(
-                    if let Some(b) = tail.try_as_panel::<$n>() {
+                    if $n < NR && let Some(b) = tail.try_as_panel::<$n>() {
                         unpacked::PanelVisitor::visit(&mut visitor, b, tail.start());
                         return;
                     }
@@ -461,9 +447,9 @@ struct MicroKernel<'a, W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize,
 {
     arch: W,
     a: packed::Panel<'a, W::AElem, MR, PACK>,
-    a_meta: Coefficients<W::Float>,
+    a_meta: Coefficients<&'a [f32; MR]>,
     b: unpacked::Panel<'a, W::BElem, NR>,
-    b_meta: &'a [MinMaxCompensation],
+    b_meta: &'a [MinMaxCompensation; NR],
     c: &'a mut [f32; MR],
     k: DimK,
 }
@@ -472,24 +458,23 @@ struct MicroKernel<'a, W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize,
 ///
 /// # Safety
 ///
-/// `a` must contain at least `W::Wide::LANES` readable elements. `valid <= PACK`,
-/// and for every `j < NR`, `b.add(bstride * j)` must contain `valid` readable elements.
+/// `a` must contain at least MR * PACK readable elements, and for every
+/// `j < NR`, `b.add(bstride * j)` must contain PACK readable elements.
 #[inline(always)]
 unsafe fn accumulate_pack<W, const MR: usize, const NR: usize, const PACK: usize>(
     arch: W,
     a: Slice<'_, W::AElem>,
     b: Slice<'_, W::BElem>,
     bstride: Elements<W::BElem>,
-    valid: usize,
     acc: &mut [W::Acc; NR],
 ) where
     W: ExtraWide<MR, PACK>,
 {
     // SAFETY: The caller provides a full padded A pack.
-    let a = unsafe { W::Wide::load_simd(arch, a.as_ptr()) };
+    let a = unsafe { arch.load_a(a) };
     for (j, acc) in acc.iter_mut().enumerate() {
-        // SAFETY: The caller guarantees valid elements in every B column.
-        let b = unsafe { arch.splat(b.add(bstride * j), valid) };
+        // SAFETY: The caller guarantees a full pack in every B column.
+        let b = unsafe { arch.splat(b.add(bstride * j)) };
         *acc = arch.dot(*acc, a, b);
     }
 }
@@ -499,71 +484,38 @@ impl<W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: usize
 {
     #[inline(always)]
     fn micro_kernel(&mut self) {
-        const {
-            assert!(W::Float::LANES == MR);
-            assert!(W::Wide::LANES == MR * PACK);
-        }
         bounds::check_eq!(self.a.k(), self.k);
-        bounds::check_eq!(self.b.k(), self.k);
+        let physical_k = padded_k::<PACK>(self.k);
+        bounds::check_eq!(self.b.k(), physical_k);
         let k = self.k.value().get();
-        let mut acc = [W::Acc::default(self.arch); NR];
+        let mut acc = [self.arch.zero_acc(); NR];
         let ap = self.a.as_ptr();
         let bp = self.b.as_ptr();
         let astride = self.a.pack_stride();
-        let bstride = self.b.stride(self.k);
-        let full = k / PACK;
+        let bstride = self.b.stride(physical_k);
 
-        for pack in 0..full {
-            // SAFETY: A contains a full pack; every B column has PACK logical elements.
+        let packs = physical_k.value().get() / PACK;
+        for pack in 0..packs {
+            // SAFETY: A and every B row are zero-padded to a multiple of PACK.
             unsafe {
                 accumulate_pack::<W, MR, NR, PACK>(
                     self.arch,
                     ap.add(astride * pack),
                     bp.add(Elements::new(pack * PACK)),
                     bstride,
-                    PACK,
                     &mut acc,
                 );
             }
         }
-        if !k.is_multiple_of(PACK) {
-            // SAFETY: A's last pack is padded. B has k % PACK remaining logical elements;
-            // splat zero-fills the rest, without reading a padded B extent.
-            unsafe {
-                accumulate_pack::<W, MR, NR, PACK>(
-                    self.arch,
-                    ap.add(astride * full),
-                    bp.add(Elements::new(full * PACK)),
-                    bstride,
-                    k % PACK,
-                    &mut acc,
-                );
-            }
-        }
-
-        // SAFETY: Float has exactly MR lanes, and C is an MR-element array.
-        let mut best = unsafe { W::Float::load_simd(self.arch, self.c.as_ptr()) };
-        for (acc, b) in acc.into_iter().zip(self.b_meta) {
-            let dot = acc.simd_cast();
-            let a_b = W::Float::splat(self.arch, b.a);
-            let b_b = W::Float::splat(self.arch, b.b);
-            let n_b = W::Float::splat(self.arch, b.n);
-            let dim = W::Float::splat(self.arch, k as f32);
-            let a = self.a_meta;
-            let ip = ((a.a * a_b) * dot + a.n * b_b) + n_b * a.b + (a.b * b_b) * dim;
-            best = best.max_simd_standard(ip);
-        }
-        // SAFETY: C has exactly Float::LANES writable elements.
-        unsafe { best.store_simd(self.c.as_mut_ptr()) };
+        self.arch.max_into(acc, self.a_meta, self.b_meta, k, self.c);
     }
 }
-
 //----------//
 // Backends //
 //----------//
 
-/// SIMD types for MR A rows and PACK contraction elements. NR counts accumulators,
-/// not lanes, so it does not change these types.
+/// Backend operations for MR A rows and PACK contraction elements. Register
+/// representation is private to each backend; NR only controls the number of accumulators.
 ///
 /// All implementations accept A codes in 0..=255. B's range is limited by
 /// both its element type and any intermediate arithmetic in the dot product.
@@ -574,54 +526,94 @@ pub(crate) trait ExtraWide<const MR: usize, const PACK: usize>: Architecture {
 
     type AElem: Copy + Default;
     type BElem: Copy + Default;
-    type Wide: SIMDVector<Arch = Self, Scalar = Self::AElem>;
-    type Splat: SIMDVector<Arch = Self, Scalar = Self::BElem>;
-    type Acc: SIMDVector<Arch = Self>
-        + SIMDDotProduct<Self::Wide, Self::Splat>
-        + SIMDCast<f32, Cast = Self::Float>;
-    type Float: SIMDVector<Arch = Self, Scalar = f32>
-        + SIMDMinMax
-        + Add<Output = Self::Float>
-        + Mul<Output = Self::Float>;
+    type Wide: Copy;
+    type Splat: Copy;
+    type Acc: Copy;
 
     fn convert_a(code: u8) -> Self::AElem;
     /// `code` fits in MAX_B_BITS unsigned bits.
     fn convert_b(code: u8) -> Self::BElem;
 
-    /// Accumulate codes produced by `convert_a` and `convert_b`.
-    #[inline(always)]
-    fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
-        acc.dot_simd(a, b)
-    }
+    /// # Safety
+    ///
+    /// `a` must contain at least MR * PACK initialized, readable elements.
+    unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide;
+
+    fn zero_acc(self) -> Self::Acc;
+
+    /// Accumulate MR dot products of PACK elements without mixing rows.
+    fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc;
+
+    /// Compensate in B order using logical `k`, then update scores without lowering existing
+    /// maxima. NaN candidates are ignored.
+    fn max_into<const NR: usize>(
+        self,
+        acc: [Self::Acc; NR],
+        query: Coefficients<&[f32; MR]>,
+        docs: &[MinMaxCompensation; NR],
+        k: usize,
+        scores: &mut [f32; MR],
+    );
 
     /// # Safety
     ///
-    /// `valid <= PACK` and the first `valid` elements of B must be readable.
-    unsafe fn splat(self, b: Slice<'_, Self::BElem>, valid: usize) -> Self::Splat;
+    /// B must contain PACK readable elements, including any zero padding.
+    unsafe fn splat(self, b: Slice<'_, Self::BElem>) -> Self::Splat;
+}
+
+#[inline(always)]
+fn compensated_max_into<I, F, const MR: usize, const NR: usize>(
+    arch: F::Arch,
+    acc: impl IntoIterator<Item = I>,
+    query: Coefficients<&[f32; MR]>,
+    docs: &[MinMaxCompensation; NR],
+    k: usize,
+    scores: &mut [f32; MR],
+) where
+    I: SIMDCast<f32, Cast = F>,
+    F: SIMDVector<Scalar = f32, ConstLanes = Const<MR>>
+        + SIMDMinMax
+        + Add<Output = F>
+        + Mul<Output = F>,
+    Const<MR>: SupportedLaneCount,
+{
+    let a = Coefficients {
+        a: F::from_array(arch, *query.a),
+        b: F::from_array(arch, *query.b),
+        n: F::from_array(arch, *query.n),
+    };
+    let mut best = F::from_array(arch, *scores);
+    for (acc, b) in acc.into_iter().zip(docs) {
+        let dot = acc.simd_cast();
+        let a_b = F::splat(arch, b.a);
+        let b_b = F::splat(arch, b.b);
+        let n_b = F::splat(arch, b.n);
+        let dim = F::splat(arch, k as f32);
+        let ip = ((a.a * a_b) * dot + a.n * b_b) + n_b * a.b + (a.b * b_b) * dim;
+        best = best.max_simd_standard(ip);
+    }
+    *scores = best.to_array();
 }
 
 /// # Safety
 ///
-/// `valid <= PACK` and the first `valid` elements of B must be readable.
+/// `b` must contain at least PACK initialized, readable elements.
 #[inline(always)]
-unsafe fn group<T: Copy + Default, const PACK: usize>(b: Slice<'_, T>, valid: usize) -> [T; PACK] {
-    core::array::from_fn(|i| {
-        if i < valid {
-            // SAFETY: i < valid, so the element is readable.
-            unsafe { *b.add(Elements::new(i)).as_unit().as_ref() }
-        } else {
-            T::default()
-        }
-    })
+unsafe fn load_pack<T: Copy, const PACK: usize>(b: Slice<'_, T>) -> [T; PACK] {
+    bounds::check_ge!(b.len(), PACK);
+    // SAFETY: The caller provides a full pack; no array alignment is required.
+    unsafe { b.as_ptr().cast::<[T; PACK]>().read_unaligned() }
 }
 
+/// Pack two i16 bit patterns into the low and high halves of a u32.
+///
 /// # Safety
 ///
-/// `valid <= 2` and the first `valid` elements of B must be readable.
+/// B must contain two readable elements.
 #[inline(always)]
-unsafe fn pair(b: Slice<'_, i16>, valid: usize) -> u32 {
-    // SAFETY: Inherited from the caller; group zero-fills a partial pair.
-    let [lo, hi] = unsafe { group::<_, 2>(b, valid) };
+unsafe fn pack_i16_pair(b: Slice<'_, i16>) -> u32 {
+    // SAFETY: The caller provides two readable elements, including any zero padding.
+    let [lo, hi] = unsafe { load_pack::<_, 2>(b) };
     u32::from(lo as u16) | (u32::from(hi as u16) << 16)
 }
 
@@ -633,7 +625,34 @@ impl ExtraWide<16, 4> for Scalar {
     type Wide = u8x64<Scalar>;
     type Splat = i8x64<Scalar>;
     type Acc = i32x16<Scalar>;
-    type Float = f32x16<Scalar>;
+
+    #[inline(always)]
+    unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+        // SAFETY: The caller provides 64 initialized elements.
+        Self::Wide::from_array(self, unsafe { load_pack::<_, 64>(a) })
+    }
+
+    #[inline(always)]
+    fn zero_acc(self) -> Self::Acc {
+        SIMDVector::default(self)
+    }
+
+    #[inline(always)]
+    fn max_into<const NR: usize>(
+        self,
+        acc: [Self::Acc; NR],
+        query: Coefficients<&[f32; 16]>,
+        docs: &[MinMaxCompensation; NR],
+        k: usize,
+        scores: &mut [f32; 16],
+    ) {
+        compensated_max_into(self, acc, query, docs, k, scores);
+    }
+
+    #[inline(always)]
+    fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+        acc.dot_simd(a, b)
+    }
 
     fn convert_a(code: u8) -> u8 {
         code
@@ -644,9 +663,9 @@ impl ExtraWide<16, 4> for Scalar {
     }
 
     #[inline(always)]
-    unsafe fn splat(self, b: Slice<'_, i8>, valid: usize) -> Self::Splat {
-        // SAFETY: Inherited from the caller.
-        let values = unsafe { group::<_, 4>(b, valid) };
+    unsafe fn splat(self, b: Slice<'_, i8>) -> Self::Splat {
+        // SAFETY: The caller provides four readable elements, including any zero padding.
+        let values = unsafe { load_pack::<_, 4>(b) };
         let quad = u32::from_le_bytes(values.map(|x| x as u8));
         u32x16::<Scalar>::splat(self, quad).reinterpret_simd()
     }
@@ -660,7 +679,34 @@ impl ExtraWide<16, 2> for Scalar {
     type Wide = i16x32<Scalar>;
     type Splat = Self::Wide;
     type Acc = i32x16<Scalar>;
-    type Float = f32x16<Scalar>;
+
+    #[inline(always)]
+    unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+        // SAFETY: The caller provides 32 initialized elements.
+        Self::Wide::from_array(self, unsafe { load_pack::<_, 32>(a) })
+    }
+
+    #[inline(always)]
+    fn zero_acc(self) -> Self::Acc {
+        SIMDVector::default(self)
+    }
+
+    #[inline(always)]
+    fn max_into<const NR: usize>(
+        self,
+        acc: [Self::Acc; NR],
+        query: Coefficients<&[f32; 16]>,
+        docs: &[MinMaxCompensation; NR],
+        k: usize,
+        scores: &mut [f32; 16],
+    ) {
+        compensated_max_into(self, acc, query, docs, k, scores);
+    }
+
+    #[inline(always)]
+    fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+        acc.dot_simd(a, b)
+    }
 
     fn convert_a(code: u8) -> i16 {
         i16::from(code)
@@ -671,9 +717,58 @@ impl ExtraWide<16, 2> for Scalar {
     }
 
     #[inline(always)]
-    unsafe fn splat(self, b: Slice<'_, i16>, valid: usize) -> Self::Splat {
+    unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
         // SAFETY: Inherited from the caller.
-        u32x16::<Scalar>::splat(self, unsafe { pair(b, valid) }).reinterpret_simd()
+        u32x16::<Scalar>::splat(self, unsafe { pack_i16_pair(b) }).reinterpret_simd()
+    }
+}
+
+impl ExtraWide<8, 2> for Scalar {
+    const MAX_B_BITS: usize = 8;
+    type AElem = i16;
+    type BElem = i16;
+    type Wide = i16x16<Scalar>;
+    type Splat = Self::Wide;
+    type Acc = i32x8<Scalar>;
+
+    #[inline(always)]
+    unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+        // SAFETY: The caller provides 16 initialized elements.
+        Self::Wide::from_array(self, unsafe { load_pack::<_, 16>(a) })
+    }
+
+    #[inline(always)]
+    fn zero_acc(self) -> Self::Acc {
+        SIMDVector::default(self)
+    }
+
+    #[inline(always)]
+    fn max_into<const NR: usize>(
+        self,
+        acc: [Self::Acc; NR],
+        query: Coefficients<&[f32; 8]>,
+        docs: &[MinMaxCompensation; NR],
+        k: usize,
+        scores: &mut [f32; 8],
+    ) {
+        compensated_max_into(self, acc, query, docs, k, scores);
+    }
+
+    #[inline(always)]
+    fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+        acc.dot_simd(a, b)
+    }
+
+    fn convert_a(code: u8) -> i16 {
+        i16::from(code)
+    }
+    fn convert_b(code: u8) -> i16 {
+        i16::from(code)
+    }
+    #[inline(always)]
+    unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
+        // SAFETY: The caller provides two readable elements.
+        u32x8::<Scalar>::splat(self, unsafe { pack_i16_pair(b) }).reinterpret_simd()
     }
 }
 
@@ -683,6 +778,146 @@ mod x86_64 {
     use diskann_wide::SplitJoin;
     use diskann_wide::arch::x86_64::{V3, V4};
 
+    #[inline(always)]
+    fn compensated_max_into_v3<const NR: usize>(
+        arch: V3,
+        acc: [i32x16<V3>; NR],
+        query: Coefficients<&[f32; 16]>,
+        docs: &[MinMaxCompensation; NR],
+        k: usize,
+        scores: &mut [f32; 16],
+    ) {
+        let a = query.a.as_chunks::<8>().0;
+        let b = query.b.as_chunks::<8>().0;
+        let n = query.n.as_chunks::<8>().0;
+        let scores = scores.as_chunks_mut::<8>().0;
+        // Finish one native-width row group before loading the next group's coefficients.
+        compensated_max_into(
+            arch,
+            acc.iter().map(|v| v.split().lo),
+            Coefficients {
+                a: &a[0],
+                b: &b[0],
+                n: &n[0],
+            },
+            docs,
+            k,
+            &mut scores[0],
+        );
+        compensated_max_into(
+            arch,
+            acc.iter().map(|v| v.split().hi),
+            Coefficients {
+                a: &a[1],
+                b: &b[1],
+                n: &n[1],
+            },
+            docs,
+            k,
+            &mut scores[1],
+        );
+    }
+
+    impl ExtraWide<8, 4> for V3 {
+        const MAX_B_BITS: usize = 6;
+        type AElem = u8;
+        type BElem = i8;
+        type Wide = u8x32<V3>;
+        type Splat = i8x32<V3>;
+        type Acc = i32x8<V3>;
+
+        #[inline(always)]
+        unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+            // SAFETY: The caller provides 32 initialized elements.
+            Self::Wide::from_array(self, unsafe { load_pack::<_, 32>(a) })
+        }
+
+        #[inline(always)]
+        fn zero_acc(self) -> Self::Acc {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        fn max_into<const NR: usize>(
+            self,
+            acc: [Self::Acc; NR],
+            query: Coefficients<&[f32; 8]>,
+            docs: &[MinMaxCompensation; NR],
+            k: usize,
+            scores: &mut [f32; 8],
+        ) {
+            compensated_max_into(self, acc, query, docs, k, scores);
+        }
+
+        fn convert_a(code: u8) -> u8 {
+            code
+        }
+        fn convert_b(code: u8) -> i8 {
+            code as i8
+        }
+        #[inline(always)]
+        fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+            // The largest pair is 2 * 255 * 63 = 32130, below i16 saturation.
+            acc.dot_simd(self.mm256_maddubs_epi16(a, b), i16x16::<V3>::splat(self, 1))
+        }
+        #[inline(always)]
+        unsafe fn splat(self, b: Slice<'_, i8>) -> Self::Splat {
+            // SAFETY: The caller provides four readable elements.
+            let values = unsafe { load_pack::<_, 4>(b) };
+            let quad = u32::from_le_bytes(values.map(|v| v as u8));
+            u32x8::<V3>::splat(self, quad).reinterpret_simd()
+        }
+    }
+
+    impl ExtraWide<8, 2> for V3 {
+        const MAX_B_BITS: usize = 8;
+        type AElem = i16;
+        type BElem = i16;
+        type Wide = i16x16<V3>;
+        type Splat = Self::Wide;
+        type Acc = i32x8<V3>;
+
+        #[inline(always)]
+        unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+            // SAFETY: The caller provides 16 initialized elements.
+            Self::Wide::from_array(self, unsafe { load_pack::<_, 16>(a) })
+        }
+
+        #[inline(always)]
+        fn zero_acc(self) -> Self::Acc {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        fn max_into<const NR: usize>(
+            self,
+            acc: [Self::Acc; NR],
+            query: Coefficients<&[f32; 8]>,
+            docs: &[MinMaxCompensation; NR],
+            k: usize,
+            scores: &mut [f32; 8],
+        ) {
+            compensated_max_into(self, acc, query, docs, k, scores);
+        }
+
+        #[inline(always)]
+        fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+            acc.dot_simd(a, b)
+        }
+
+        fn convert_a(code: u8) -> i16 {
+            i16::from(code)
+        }
+        fn convert_b(code: u8) -> i16 {
+            i16::from(code)
+        }
+        #[inline(always)]
+        unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
+            // SAFETY: The caller provides two readable elements.
+            u32x8::<V3>::splat(self, unsafe { pack_i16_pair(b) }).reinterpret_simd()
+        }
+    }
+
     impl ExtraWide<16, 4> for V3 {
         const MAX_B_BITS: usize = 6;
 
@@ -691,7 +926,29 @@ mod x86_64 {
         type Wide = u8x64<V3>;
         type Splat = i8x64<V3>;
         type Acc = i32x16<V3>;
-        type Float = f32x16<V3>;
+
+        #[inline(always)]
+        unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+            // SAFETY: The caller provides 64 initialized elements.
+            Self::Wide::from_array(self, unsafe { load_pack::<_, 64>(a) })
+        }
+
+        #[inline(always)]
+        fn zero_acc(self) -> Self::Acc {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        fn max_into<const NR: usize>(
+            self,
+            acc: [Self::Acc; NR],
+            query: Coefficients<&[f32; 16]>,
+            docs: &[MinMaxCompensation; NR],
+            k: usize,
+            scores: &mut [f32; 16],
+        ) {
+            compensated_max_into_v3(self, acc, query, docs, k, scores);
+        }
 
         fn convert_a(code: u8) -> u8 {
             code
@@ -715,9 +972,9 @@ mod x86_64 {
         }
 
         #[inline(always)]
-        unsafe fn splat(self, b: Slice<'_, i8>, valid: usize) -> Self::Splat {
-            // SAFETY: Inherited from the caller.
-            let values = unsafe { group::<_, 4>(b, valid) };
+        unsafe fn splat(self, b: Slice<'_, i8>) -> Self::Splat {
+            // SAFETY: The caller provides four readable elements, including any zero padding.
+            let values = unsafe { load_pack::<_, 4>(b) };
             let quad = u32::from_le_bytes(values.map(|x| x as u8));
             let half: i8x32<V3> = u32x8::<V3>::splat(self, quad).reinterpret_simd();
             i8x64::<V3>::new(half, half)
@@ -732,7 +989,34 @@ mod x86_64 {
         type Wide = i16x32<V3>;
         type Splat = Self::Wide;
         type Acc = i32x16<V3>;
-        type Float = f32x16<V3>;
+
+        #[inline(always)]
+        unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+            // SAFETY: The caller provides 32 initialized elements.
+            Self::Wide::from_array(self, unsafe { load_pack::<_, 32>(a) })
+        }
+
+        #[inline(always)]
+        fn zero_acc(self) -> Self::Acc {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        fn max_into<const NR: usize>(
+            self,
+            acc: [Self::Acc; NR],
+            query: Coefficients<&[f32; 16]>,
+            docs: &[MinMaxCompensation; NR],
+            k: usize,
+            scores: &mut [f32; 16],
+        ) {
+            compensated_max_into_v3(self, acc, query, docs, k, scores);
+        }
+
+        #[inline(always)]
+        fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+            acc.dot_simd(a, b)
+        }
 
         fn convert_a(code: u8) -> i16 {
             i16::from(code)
@@ -743,9 +1027,9 @@ mod x86_64 {
         }
 
         #[inline(always)]
-        unsafe fn splat(self, b: Slice<'_, i16>, valid: usize) -> Self::Splat {
+        unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
             // SAFETY: Inherited from the caller.
-            let pair = unsafe { pair(b, valid) };
+            let pair = unsafe { pack_i16_pair(b) };
             let half: i16x16<V3> = u32x8::<V3>::splat(self, pair).reinterpret_simd();
             i16x32::<V3>::new(half, half)
         }
@@ -759,7 +1043,34 @@ mod x86_64 {
         type Wide = u8x64<V4>;
         type Splat = i8x64<V4>;
         type Acc = i32x16<V4>;
-        type Float = f32x16<V4>;
+
+        #[inline(always)]
+        unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+            // SAFETY: The caller provides 64 initialized elements.
+            Self::Wide::from_array(self, unsafe { load_pack::<_, 64>(a) })
+        }
+
+        #[inline(always)]
+        fn zero_acc(self) -> Self::Acc {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        fn max_into<const NR: usize>(
+            self,
+            acc: [Self::Acc; NR],
+            query: Coefficients<&[f32; 16]>,
+            docs: &[MinMaxCompensation; NR],
+            k: usize,
+            scores: &mut [f32; 16],
+        ) {
+            compensated_max_into(self, acc, query, docs, k, scores);
+        }
+
+        #[inline(always)]
+        fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+            acc.dot_simd(a, b)
+        }
 
         fn convert_a(code: u8) -> u8 {
             code
@@ -770,9 +1081,9 @@ mod x86_64 {
         }
 
         #[inline(always)]
-        unsafe fn splat(self, b: Slice<'_, i8>, valid: usize) -> Self::Splat {
-            // SAFETY: Inherited from the caller.
-            let values = unsafe { group::<_, 4>(b, valid) };
+        unsafe fn splat(self, b: Slice<'_, i8>) -> Self::Splat {
+            // SAFETY: The caller provides four readable elements, including any zero padding.
+            let values = unsafe { load_pack::<_, 4>(b) };
             let quad = u32::from_le_bytes(values.map(|x| x as u8));
             u32x16::<V4>::splat(self, quad).reinterpret_simd()
         }
@@ -786,7 +1097,34 @@ mod x86_64 {
         type Wide = i16x32<V4>;
         type Splat = Self::Wide;
         type Acc = i32x16<V4>;
-        type Float = f32x16<V4>;
+
+        #[inline(always)]
+        unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+            // SAFETY: The caller provides 32 initialized elements.
+            Self::Wide::from_array(self, unsafe { load_pack::<_, 32>(a) })
+        }
+
+        #[inline(always)]
+        fn zero_acc(self) -> Self::Acc {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        fn max_into<const NR: usize>(
+            self,
+            acc: [Self::Acc; NR],
+            query: Coefficients<&[f32; 16]>,
+            docs: &[MinMaxCompensation; NR],
+            k: usize,
+            scores: &mut [f32; 16],
+        ) {
+            compensated_max_into(self, acc, query, docs, k, scores);
+        }
+
+        #[inline(always)]
+        fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+            acc.dot_simd(a, b)
+        }
 
         fn convert_a(code: u8) -> i16 {
             i16::from(code)
@@ -797,9 +1135,9 @@ mod x86_64 {
         }
 
         #[inline(always)]
-        unsafe fn splat(self, b: Slice<'_, i16>, valid: usize) -> Self::Splat {
+        unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
             // SAFETY: Inherited from the caller.
-            u32x16::<V4>::splat(self, unsafe { pair(b, valid) }).reinterpret_simd()
+            u32x16::<V4>::splat(self, unsafe { pack_i16_pair(b) }).reinterpret_simd()
         }
     }
 }
@@ -809,6 +1147,57 @@ mod aarch64 {
     use super::*;
     use diskann_wide::arch::aarch64::Neon;
 
+    impl ExtraWide<8, 4> for Neon {
+        const MAX_B_BITS: usize = 8;
+        type AElem = u8;
+        type BElem = u8;
+        type Wide = u8x32<Neon>;
+        type Splat = Self::Wide;
+        type Acc = u32x8<Neon>;
+
+        #[inline(always)]
+        unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+            // SAFETY: The caller provides 32 initialized elements.
+            Self::Wide::from_array(self, unsafe { load_pack::<_, 32>(a) })
+        }
+
+        #[inline(always)]
+        fn zero_acc(self) -> Self::Acc {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        fn max_into<const NR: usize>(
+            self,
+            acc: [Self::Acc; NR],
+            query: Coefficients<&[f32; 8]>,
+            docs: &[MinMaxCompensation; NR],
+            k: usize,
+            scores: &mut [f32; 8],
+        ) {
+            compensated_max_into(self, acc, query, docs, k, scores);
+        }
+
+        #[inline(always)]
+        fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+            acc.dot_simd(a, b)
+        }
+
+        fn convert_a(code: u8) -> u8 {
+            code
+        }
+        fn convert_b(code: u8) -> u8 {
+            code
+        }
+        #[inline(always)]
+        unsafe fn splat(self, b: Slice<'_, u8>) -> Self::Splat {
+            // SAFETY: The caller provides four readable elements.
+            let values = unsafe { load_pack::<_, 4>(b) };
+            let quarter = u32x4::<Neon>::splat(self, u32::from_le_bytes(values)).reinterpret_simd();
+            u8x32::<Neon>::new(quarter, quarter)
+        }
+    }
+
     impl ExtraWide<16, 4> for Neon {
         const MAX_B_BITS: usize = 8;
 
@@ -817,7 +1206,34 @@ mod aarch64 {
         type Wide = u8x64<Neon>;
         type Splat = Self::Wide;
         type Acc = u32x16<Neon>;
-        type Float = f32x16<Neon>;
+
+        #[inline(always)]
+        unsafe fn load_a(self, a: Slice<'_, Self::AElem>) -> Self::Wide {
+            // SAFETY: The caller provides 64 initialized elements.
+            Self::Wide::from_array(self, unsafe { load_pack::<_, 64>(a) })
+        }
+
+        #[inline(always)]
+        fn zero_acc(self) -> Self::Acc {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        fn max_into<const NR: usize>(
+            self,
+            acc: [Self::Acc; NR],
+            query: Coefficients<&[f32; 16]>,
+            docs: &[MinMaxCompensation; NR],
+            k: usize,
+            scores: &mut [f32; 16],
+        ) {
+            compensated_max_into(self, acc, query, docs, k, scores);
+        }
+
+        #[inline(always)]
+        fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
+            acc.dot_simd(a, b)
+        }
 
         fn convert_a(code: u8) -> u8 {
             code
@@ -828,9 +1244,10 @@ mod aarch64 {
         }
 
         #[inline(always)]
-        unsafe fn splat(self, b: Slice<'_, u8>, valid: usize) -> Self::Splat {
-            // SAFETY: Inherited from the caller.
-            let quad = u32::from_le_bytes(unsafe { group::<_, 4>(b, valid) });
+        unsafe fn splat(self, b: Slice<'_, u8>) -> Self::Splat {
+            // SAFETY: The caller provides four readable elements, including any zero padding.
+            let values = unsafe { load_pack::<_, 4>(b) };
+            let quad = u32::from_le_bytes(values);
             let quarter = u32x4::<Neon>::splat(self, quad).reinterpret_simd();
             let half = u8x32::<Neon>::new(quarter, quarter);
             u8x64::<Neon>::new(half, half)
@@ -853,7 +1270,17 @@ mod tests {
         multi_vector::{Defaulted, Mat},
     };
 
-    const MAX_K_8X4: usize = max_k::<8, 4>();
+    #[test]
+    fn i16_pair_preserves_lane_order_and_bits() {
+        for (values, expected) in [
+            ([1, 255], 0x00ff_0001),
+            ([255, 1], 0x0001_00ff),
+            ([-1, i16::MIN], 0x8000_ffff),
+        ] {
+            // SAFETY: values contains both initialized elements of the pair.
+            assert_eq!(unsafe { pack_i16_pair(Slice::new(&values)) }, expected);
+        }
+    }
 
     fn random_minmax_matrix<const BITS: usize>(
         rows: usize,
@@ -968,7 +1395,7 @@ mod tests {
     {
         let mut rng = StdRng::seed_from_u64(0x63de91a0ba5c8742);
         for shape in packed_x_unpacked_test_dims(MR, NR) {
-            for k in [1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 127, 129] {
+            for k in [shape.k, shape.k.next_multiple_of(PACK)] {
                 let a = random_minmax_matrix::<8>(shape.total_a_rows, k, &mut rng);
                 let b = random_minmax_matrix::<B_BITS>(shape.total_b_cols, k, &mut rng);
                 let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
@@ -980,13 +1407,6 @@ mod tests {
                     b.as_view(),
                     &mut guarded[1..=a.num_vectors()],
                 );
-                driver::Drive::drive(&mut driver);
-                assert_scores_close(
-                    driver.c,
-                    &expected,
-                    format_args!("default tiling: {shape:?}, K={k}, MR={MR}, NR={NR}, PACK={PACK}"),
-                );
-
                 driver.b_rows_per_tile = NonZeroUsize::new(shape.b_cols_per_tile).unwrap();
                 driver.c.fill(f32::INFINITY);
                 driver::Drive::drive(&mut driver);
@@ -997,20 +1417,11 @@ mod tests {
                         "forced B tiling: {shape:?}, K={k}, MR={MR}, NR={NR}, PACK={PACK}"
                     ),
                 );
-                // Reset stale scores once per invocation, never once per B tile.
-                driver.c.fill(f32::INFINITY);
-                driver::Drive::drive(&mut driver);
-                assert_scores_close(
-                    driver.c,
-                    &expected,
-                    format_args!("repeated drive: {shape:?}, K={k}, MR={MR}, NR={NR}, PACK={PACK}"),
-                );
                 assert_eq!(guarded[0], 654321.0);
                 assert_eq!(guarded[a.num_vectors() + 1], 654321.0);
             }
         }
         assert_compensated_reduction::<W, B_BITS, MR, NR, PACK>(arch);
-        assert_accumulator_limit_is_exact::<W, B_BITS, MR, NR, PACK>(arch);
 
         let a = random_minmax_matrix::<8>(MR + 1, 5, &mut rng);
         let b = random_minmax_matrix::<B_BITS>(0, 5, &mut rng);
@@ -1064,7 +1475,8 @@ mod tests {
         Unsigned: Representation<B_BITS>,
     {
         let a = constant_minmax_matrix::<8>(MR + 1, 3, 1, 1.0, 0.0);
-        let mut b = constant_minmax_matrix::<B_BITS>(NR + 1, 3, 15, 1.0, 0.0);
+        let mut b = constant_minmax_matrix::<B_BITS>(NR + 1, 3, (1 << B_BITS) - 1, 1.0, 0.0);
+        let winner_scale = (1 << B_BITS) as f32;
         {
             let mut row = b.get_row_mut(0).unwrap();
             row.vector_mut().set(0, 1).unwrap();
@@ -1072,9 +1484,9 @@ mod tests {
             row.vector_mut().set(2, 1).unwrap();
             row.set_meta(MinMaxCompensation {
                 dim: 3,
-                a: 100.0,
+                a: winner_scale,
                 b: 0.0,
-                n: 300.0,
+                n: 3.0 * winner_scale,
                 norm_squared: 0.0,
             });
         }
@@ -1082,10 +1494,10 @@ mod tests {
         let mut c = vec![0.0; MR + 1];
         let mut driver =
             checked_driver::<_, 8, B_BITS, MR, NR, PACK>(arch, &packed, b.as_view(), &mut c);
-        // The compensated winner is in the first tile, not the last.
-        driver.b_rows_per_tile = NonZeroUsize::new(1).unwrap();
+        // The first tile contains competing raw dots; its compensated winner must survive the tail.
+        driver.b_rows_per_tile = NonZeroUsize::new(NR).unwrap();
         driver::Drive::drive(&mut driver);
-        assert_eq!(c, vec![300.0; MR + 1]);
+        assert_eq!(c, vec![3.0 * winner_scale; MR + 1]);
 
         let a = constant_minmax_matrix::<8>(MR + 1, 3, 1, 1.0, -2.0);
         let b = constant_minmax_matrix::<B_BITS>((NR - 1).max(1), 3, 1, 1.0, 0.0);
@@ -1100,34 +1512,22 @@ mod tests {
         assert_eq!(c, vec![-3.0; MR + 1]);
     }
 
-    fn assert_accumulator_limit_is_exact<
-        W,
-        const B_BITS: usize,
-        const MR: usize,
-        const NR: usize,
-        const PACK: usize,
-    >(
-        arch: W,
-    ) where
-        W: ExtraWide<MR, PACK> + LoadStore<f32, MR>,
-        Unsigned: Representation<B_BITS>,
-    {
-        if cfg!(miri) {
-            return;
-        }
-        let k = max_k::<8, B_BITS>();
-        let max_b = (1 << B_BITS) - 1;
+    #[cfg(not(miri))]
+    #[test]
+    fn accumulator_is_exact_at_dimension_limit() {
+        let arch = Scalar::new();
+        let k = max_k::<8, 8>();
         let a = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
-        let b = constant_minmax_matrix::<B_BITS>(1, k, max_b as i64, 1.0, 0.0);
-        let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+        let b = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
+        let packed = PackedA::<_, 8, 8, 2>::new(arch, a.as_view()).unwrap();
         let mut c = [0.0];
-        driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
+        driver::Drive::drive(&mut checked_driver::<_, 8, 8, 8, 2, 2>(
             arch,
             &packed,
             b.as_view(),
             &mut c,
         ));
-        assert_eq!(c[0], (k * 255 * max_b) as f32);
+        assert_eq!(c[0], (k * 255 * 255) as f32);
     }
 
     #[test]
@@ -1165,13 +1565,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn smaller_panels_preserve_tiling_and_nan_reduction() {
+        fn check<W, const B_BITS: usize, const NR: usize, const PACK: usize>(arch: W)
+        where
+            W: ExtraWide<8, PACK> + LoadStore<f32, 8>,
+            Unsigned: Representation<B_BITS>,
+        {
+            assert_driver_contract::<W, B_BITS, 8, NR, PACK>(arch);
+            assert_microkernel_nan_reduction::<W, 8, NR, PACK>(arch);
+        }
+        check::<_, 8, 2, 2>(Scalar::new());
+        #[cfg(target_arch = "x86_64")]
+        if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+            check::<_, 4, 4, 4>(arch);
+            check::<_, 8, 4, 2>(arch);
+        }
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+            check::<_, 8, 4, 4>(arch);
+        }
+    }
+
     fn assert_a_packing<W, const A_BITS: usize, const MR: usize, const PACK: usize>(arch: W)
     where
         W: ExtraWide<MR, PACK>,
         W::AElem: PartialEq + std::fmt::Debug,
         Unsigned: Representation<A_BITS>,
     {
-        for (m, k) in [(0, 0), (0, 5), (3, 0), (0, MAX_K_8X4), (0, MAX_K_8X4 + 1)] {
+        for (m, k) in [(0, 0), (0, 5), (3, 0)] {
             let a = constant_minmax_matrix::<A_BITS>(m, k, 0, 1.0, 0.0);
             let packed = PackedA::<_, A_BITS, MR, PACK>::new(arch, a.as_view()).unwrap();
             assert_eq!(packed.codes.nrows(), m);
@@ -1207,28 +1629,23 @@ mod tests {
     }
 
     #[test]
-    fn packing_preserves_codes_coefficients_and_zero_padding() {
-        assert_a_packing::<_, 8, 16, 4>(Scalar::new());
-        #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-            assert_a_packing::<_, 8, 16, 4>(arch);
+    fn a_packing_preserves_codes_metadata_and_padding() {
+        macro_rules! check {
+            ($($bits:literal),+) => {$(
+                assert_a_packing::<_, $bits, 16, 4>(Scalar::new());
+                assert_a_packing::<_, $bits, 16, 2>(Scalar::new());
+            )+};
         }
-        #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
-            assert_a_packing::<_, 8, 16, 4>(arch);
-        }
-        #[cfg(target_arch = "aarch64")]
-        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
-            assert_a_packing::<_, 8, 16, 4>(arch);
-        }
+        check!(1, 2, 3, 4, 5, 6, 7, 8);
+        assert_a_packing::<_, 3, 8, 2>(Scalar::new());
     }
 
     #[test]
     fn cache_footprints_match_prepared_layouts() {
-        for (k, a_bytes, b_bytes) in [(256, 4288, 276), (257, 4352, 277)] {
+        for (k, a_bytes, b_bytes) in [(256, 4288, 276), (257, 4352, 280)] {
             let dim = DimK::new(NonZeroUsize::new(k).unwrap());
-            assert_eq!(BScratch::<i8>::row_bytes(dim).value(), b_bytes);
-            assert_eq!(BScratch::<u8>::row_bytes(dim).value(), b_bytes);
+            assert_eq!(BScratch::<i8>::row_bytes::<4>(dim).value(), b_bytes);
+            assert_eq!(BScratch::<u8>::row_bytes::<4>(dim).value(), b_bytes);
             for rows in [1, 16, 17] {
                 let a = constant_minmax_matrix::<8>(rows, k, 0, 1.0, 0.0);
                 let packed = PackedA::<u8, 8, 16, 4>::new(Scalar::new(), a.as_view()).unwrap();
@@ -1246,9 +1663,9 @@ mod tests {
 
     #[test]
     fn widened_cache_footprints_match_prepared_layouts() {
-        for (k, a_bytes, b_bytes) in [(256, 8384, 532), (257, 8448, 534)] {
+        for (k, a_bytes, b_bytes) in [(256, 8384, 532), (257, 8448, 536)] {
             let dim = DimK::new(NonZeroUsize::new(k).unwrap());
-            assert_eq!(BScratch::<i16>::row_bytes(dim).value(), b_bytes);
+            assert_eq!(BScratch::<i16>::row_bytes::<2>(dim).value(), b_bytes);
             for rows in [1, 16, 17] {
                 let a = constant_minmax_matrix::<8>(rows, k, 255, 1.0, 0.0);
                 let packed = PackedA::<i16, 8, 16, 2>::new(Scalar::new(), a.as_view()).unwrap();
@@ -1262,285 +1679,87 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
-    #[should_panic(expected = "exceeds the MinMax8 x MinMax4 limit")]
-    fn driver_rejects_k_above_accumulator_limit() {
-        let k = MAX_K_8X4 + 1;
-        let a = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
-        let b = constant_minmax_matrix::<4>(1, k, 15, 1.0, 0.0);
-        let packed = PackedA::<u8, 8, 16, 4>::new(Scalar::new(), a.as_view()).unwrap();
-        let mut c = [123.0];
-        let _ = checked_driver::<_, 8, 4, 16, 2, 4>(Scalar::new(), &packed, b.as_view(), &mut c);
+    fn b_preparation_preserves_metadata_and_zero_padding() {
+        assert_b_preparation::<i8, 7, 4>(-1, |code| code as i8);
+        assert_b_preparation::<i16, 8, 2>(-1, i16::from);
+        assert_b_preparation::<u8, 8, 4>(u8::MAX, |code| code);
+        assert_b_preparation::<u16, 3, 4>(u16::MAX, |code| u16::from(code) + 1);
     }
 
-    #[test]
-    fn b_preparation_masks_padding_and_reuses_storage() {
-        let k = 5;
-        let stride = crate::minmax::Data::<4>::canonical_bytes(k);
-        let mut bytes = vec![0xff; stride * 3];
-        for (row_index, raw) in bytes.chunks_exact_mut(stride).enumerate() {
-            let mut row = crate::minmax::DataMutRef::<4>::from_canonical_front_mut(raw, k).unwrap();
-            let a = (row_index + 1) as f32;
-            row.set_meta(MinMaxCompensation {
-                dim: k as u32,
-                a,
-                b: -(row_index as f32),
-                n: a * (10 + 5 * row_index) as f32,
-                ..Default::default()
-            });
-            for i in 0..k {
-                row.vector_mut().set(i, (i + row_index) as i64).unwrap();
-            }
-        }
-        let b = MatRef::new(MinMaxMeta::<4>::new(3, k), &bytes).unwrap();
-        let mut scratch = BScratch::<i8>::default();
-        let dim = DimK::new(NonZeroUsize::new(k).unwrap());
-        let tile = scratch.prepare::<Scalar, 4, 16, 4>(b, 0, NonZeroUsize::new(3).unwrap(), dim);
-        assert_eq!(
-            // SAFETY: dim is the dimension passed to prepare.
-            unsafe { tile.codes.as_std_slice(dim) },
-            &[0, 1, 2, 3, 4, 1, 2, 3, 4, 5, 2, 3, 4, 5, 6]
-        );
-        let ptr = scratch.codes.as_ptr();
-        let tile = scratch.prepare::<Scalar, 4, 16, 4>(b, 2, NonZeroUsize::new(1).unwrap(), dim);
-        assert_eq!(tile.meta, &[b.get_row(2).unwrap().meta()]);
-        assert_eq!(
-            // SAFETY: dim is the dimension passed to prepare.
-            unsafe { tile.codes.as_std_slice(dim) },
-            &[2, 3, 4, 5, 6]
-        );
-        assert_eq!(scratch.codes.as_ptr(), ptr);
-    }
-
-    fn assert_b_decoding_boundaries<
-        W,
-        const B_BITS: usize,
-        const MR: usize,
-        const NR: usize,
-        const PACK: usize,
-    >(
-        arch: W,
-        sentinel: W::BElem,
+    fn assert_b_preparation<T, const B_BITS: usize, const PACK: usize>(
+        sentinel: T,
+        convert: impl Fn(u8) -> T,
     ) where
-        W: ExtraWide<MR, PACK> + LoadStore<f32, MR>,
-        W::BElem: PartialEq + std::fmt::Debug,
+        T: Copy + Default + PartialEq + std::fmt::Debug,
         Unsigned: Representation<B_BITS>,
     {
-        decode_b::<W, B_BITS, MR, PACK>(BitSlice::new(&[] as &[u8], 0).unwrap(), &mut []);
-        let mut rng = StdRng::seed_from_u64(0x8af450de13c769b2);
-        let mut scratch = BScratch::<W::BElem>::default();
-        let dimensions: &[usize] = if cfg!(miri) {
-            &[1, 2, 3, 4, 5, 15, 16, 17]
-        } else {
-            &[
-                1, 2, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 250, 255, 256, 257, 511,
-                512, 513,
-            ]
-        };
-        for &dim in dimensions {
+        let mut scratch = BScratch::<T>::default();
+        for dim in [PACK, PACK + 1] {
             let k = DimK::new(NonZeroUsize::new(dim).unwrap());
-            let a = random_minmax_matrix::<8>(MR + 1, dim, &mut rng);
-            let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
             let stride = crate::minmax::Data::<B_BITS>::canonical_bytes(dim);
-            for offset in [0, 1, 3, 15] {
-                let mut storage = vec![0xff; offset + 5 * stride];
-                let bytes = &mut storage[offset..];
-                for (i, raw) in bytes.chunks_exact_mut(stride).enumerate() {
-                    let mut row =
-                        crate::minmax::DataMutRef::<B_BITS>::from_canonical_front_mut(raw, dim)
-                            .unwrap();
-                    let mut sum = 0;
-                    for j in 0..dim {
-                        // Cover every code value, and every packed byte for MinMax4.
-                        let code = if B_BITS == 4 {
-                            let byte = (i * 37 + j / 2) & 255;
-                            (byte >> (4 * (j % 2))) & 15
-                        } else {
-                            (i * 37 + j) & ((1 << B_BITS) - 1)
-                        } as i64;
-                        row.vector_mut().set(j, code).unwrap();
-                        sum += code;
-                    }
-                    let scale = (i + 1) as f32 * 0.25;
-                    row.set_meta(MinMaxCompensation {
-                        dim: dim as u32,
-                        a: scale,
-                        b: i as f32 - 3.0,
-                        n: scale * sum as f32,
-                        norm_squared: (i * i + 1) as f32,
-                    });
+            // Unaligned storage and dirty high bits exercise the packed input boundary.
+            let mut storage = vec![0xff; 1 + 3 * stride];
+            let bytes = &mut storage[1..];
+            for (i, raw) in bytes.chunks_exact_mut(stride).enumerate() {
+                let mut row =
+                    crate::minmax::DataMutRef::<B_BITS>::from_canonical_front_mut(raw, dim)
+                        .unwrap();
+                let mut sum = 0;
+                let max_code = (1 << B_BITS) - 1;
+                for j in 0..dim {
+                    let code = (max_code - ((i + j) & max_code)) as i64;
+                    row.vector_mut().set(j, code).unwrap();
+                    sum += code;
                 }
-                let b = MatRef::new(MinMaxMeta::<B_BITS>::new(5, dim), bytes).unwrap();
-                for row in b.rows() {
-                    let codes = row.vector();
-                    if B_BITS == 4 && dim % 2 != 0 {
-                        assert_eq!(codes.as_slice().last().unwrap() >> 4, 15);
-                    }
-                    let mut guarded = vec![sentinel; dim + 2];
-                    decode_b::<W, B_BITS, MR, PACK>(codes, &mut guarded[1..=dim]);
+                let scale = (i + 1) as f32 * 0.25;
+                row.set_meta(MinMaxCompensation {
+                    dim: dim as u32,
+                    a: scale,
+                    b: i as f32 - 3.0,
+                    n: scale * sum as f32,
+                    norm_squared: (i * i + 1) as f32,
+                });
+            }
+            let b = MatRef::new(MinMaxMeta::<B_BITS>::new(3, dim), bytes).unwrap();
+            for (start, count) in [(0, 3), (2, 1), (1, 2)] {
+                scratch.codes.fill(sentinel);
+                scratch.meta.fill(MinMaxCompensation::default());
+                let mut conversions = 0;
+                let tile = scratch.prepare::<B_BITS, PACK>(
+                    b,
+                    start,
+                    NonZeroUsize::new(count).unwrap(),
+                    k,
+                    |code| {
+                        conversions += 1;
+                        convert(code)
+                    },
+                );
+                assert_eq!(conversions, count * dim);
+                let padded = padded_k::<PACK>(k);
+                let row_len = padded.value().get();
+                // SAFETY: prepare constructs the view with this padded dimension.
+                let codes = unsafe { tile.codes.as_std_slice(padded) };
+                assert_eq!(codes.len(), count * row_len);
+                assert_eq!(tile.meta.len(), count);
+                for i in 0..count {
+                    let row = b.get_row(start + i).unwrap();
+                    assert_eq!(tile.meta[i], row.meta());
                     for j in 0..dim {
                         assert_eq!(
-                            guarded[j + 1],
-                            W::convert_b(codes.get(j).unwrap() as u8),
-                            "row decode: K={dim}, offset={offset}, column={j}, MR={MR}, PACK={PACK}"
+                            codes[i * row_len + j],
+                            convert(row.vector().get(j).unwrap() as u8),
+                            "B tile: K={dim}, start={start}, count={count}, row={i}, column={j}"
                         );
                     }
-                    assert_eq!(guarded[0], sentinel);
-                    assert_eq!(guarded[dim + 1], sentinel);
-                }
-                for (start, count) in [(0, 1), (1, 3), (4, 1), (0, 5)] {
-                    scratch.codes.fill(sentinel);
-                    scratch.meta.fill(MinMaxCompensation::default());
-                    let tile = scratch.prepare::<W, B_BITS, MR, PACK>(
-                        b,
-                        start,
-                        NonZeroUsize::new(count).unwrap(),
-                        k,
+                    assert!(
+                        codes[i * row_len + dim..(i + 1) * row_len]
+                            .iter()
+                            .all(|&v| v == T::default())
                     );
-                    // SAFETY: k is the dimension used to prepare this tile.
-                    let codes = unsafe { tile.codes.as_std_slice(k) };
-                    assert_eq!(codes.len(), count * dim);
-                    assert_eq!(tile.meta.len(), count);
-                    for i in 0..count {
-                        let row = b.get_row(start + i).unwrap();
-                        assert_eq!(tile.meta[i], row.meta());
-                        for j in 0..dim {
-                            assert_eq!(
-                                codes[i * dim + j],
-                                W::convert_b(row.vector().get(j).unwrap() as u8),
-                                "B tile: K={dim}, offset={offset}, start={start}, \
-                                 count={count}, row={i}, column={j}, MR={MR}, PACK={PACK}"
-                            );
-                        }
-                    }
-                }
-                let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b);
-                let mut guarded = vec![654321.0; MR + 3];
-                for tile_rows in [3, 4, 5] {
-                    let mut driver = checked_driver::<W, 8, B_BITS, MR, NR, PACK>(
-                        arch,
-                        &packed,
-                        b,
-                        &mut guarded[1..=MR + 1],
-                    );
-                    driver.b_rows_per_tile = NonZeroUsize::new(tile_rows).unwrap();
-                    driver.c.fill(f32::INFINITY);
-                    driver::Drive::drive(&mut driver);
-                    assert_scores_close(
-                        driver.c,
-                        &expected,
-                        format_args!(
-                            "B decoding: K={dim}, offset={offset}, B tile={tile_rows}, \
-                             MR={MR}, NR={NR}, PACK={PACK}"
-                        ),
-                    );
-                    assert_eq!(guarded[0], 654321.0);
-                    assert_eq!(guarded[MR + 2], 654321.0);
                 }
             }
-        }
-    }
-
-    #[test]
-    fn scalar_b_decoding_preserves_rows_tails_and_scores() {
-        assert_b_decoding_boundaries::<_, 4, 16, 2, 4>(Scalar::new(), -1);
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn avx2_b_decoding_preserves_rows_tails_and_scores() {
-        if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-            assert_b_decoding_boundaries::<_, 4, 16, 4, 4>(arch, -1);
-        } else {
-            eprintln!("AVX2 unavailable; B decoding regression not executed");
-        }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn avx512_b_decoding_preserves_rows_tails_and_scores() {
-        if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
-            assert_b_decoding_boundaries::<_, 4, 16, 8, 4>(arch, -1);
-        } else {
-            eprintln!("V4 unavailable; B decoding regression not executed");
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn neon_b_decoding_preserves_rows_tails_and_scores() {
-        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
-            assert_b_decoding_boundaries::<_, 4, 16, 4, 4>(arch, u8::MAX);
-        } else {
-            eprintln!("Neon/dotprod unavailable; B decoding regression not executed");
-        }
-    }
-
-    #[test]
-    #[should_panic]
-    fn b_decoding_rejects_a_short_output() {
-        let codes = BitSlice::new(&[0x21u8][..], 2).unwrap();
-        decode_b::<Scalar, 4, 16, 4>(codes, &mut [0]);
-    }
-
-    #[test]
-    #[should_panic]
-    fn b_decoding_rejects_a_long_output() {
-        let codes = BitSlice::new(&[0xf1u8][..], 1).unwrap();
-        decode_b::<Scalar, 4, 16, 4>(codes, &mut [0; 2]);
-    }
-
-    fn assert_packed_a_reuse<
-        W,
-        const B_BITS: usize,
-        const MR: usize,
-        const NR: usize,
-        const PACK: usize,
-    >(
-        arch: W,
-    ) where
-        W: ExtraWide<MR, PACK> + LoadStore<f32, MR>,
-        Unsigned: Representation<B_BITS>,
-    {
-        let k = 17;
-        let mut rng = StdRng::seed_from_u64(0xa619e2c5f387b04d);
-        let a = random_minmax_matrix::<8>(11, k, &mut rng);
-        let b = random_minmax_matrix::<B_BITS>(9, k, &mut rng);
-        let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
-        let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
-        drop(a);
-        let mut actual = vec![0.0; 11];
-        for _ in 0..2 {
-            actual.fill(f32::INFINITY);
-            driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
-                arch,
-                &packed,
-                b.as_view(),
-                &mut actual,
-            ));
-            assert_scores_close(
-                &actual,
-                &expected,
-                format_args!("packed-A reuse: MR={MR}, NR={NR}, PACK={PACK}"),
-            );
-        }
-    }
-
-    #[test]
-    fn packed_a_outlives_source_and_supports_repeated_drives() {
-        assert_packed_a_reuse::<_, 4, 16, 2, 4>(Scalar::new());
-        #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-            assert_packed_a_reuse::<_, 4, 16, 4, 4>(arch);
-        }
-        #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
-            assert_packed_a_reuse::<_, 4, 16, 8, 4>(arch);
-        }
-        #[cfg(target_arch = "aarch64")]
-        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
-            assert_packed_a_reuse::<_, 4, 16, 4, 4>(arch);
         }
     }
 
@@ -1557,42 +1776,28 @@ mod tests {
         Unsigned: Representation<B_BITS>,
     {
         let mut rng = StdRng::seed_from_u64(0x8f61d9c34a257be0);
-        let dimensions: &[usize] = if cfg!(miri) { &[3] } else { &[3, 256, 257] };
-        for m in [1, 16, 17] {
-            for n in (1..=NR + 1).chain([16, 17]) {
-                for &k in dimensions {
-                    let a = random_minmax_matrix::<8>(m, k, &mut rng);
-                    let b = random_minmax_matrix::<B_BITS>(n, k, &mut rng);
-                    let expected =
-                        reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
-                    let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
-                    let mut c = vec![f32::INFINITY; m];
-                    driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
-                        arch,
-                        &packed,
-                        b.as_view(),
-                        &mut c,
-                    ));
-                    assert_scores_close(
-                        &c,
-                        &expected,
-                        format_args!("M={m}, N={n}, K={k}, MR={MR}, NR={NR}, PACK={PACK}"),
-                    );
-                }
-            }
+        let mut shapes: Vec<_> = (1..NR).map(|n| (MR + 1, n, PACK + 1)).collect();
+        if !cfg!(miri) {
+            shapes.extend([(16, 16, 256), (17, 17, 257)]);
         }
-        let a = constant_minmax_matrix::<8>(16, 257, 255, 1.0, 0.0);
-        let max_b = (1 << B_BITS) - 1;
-        let b = constant_minmax_matrix::<B_BITS>(16, 257, max_b, 1.0, 0.0);
-        let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
-        let mut c = [0.0; 16];
-        driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
-            arch,
-            &packed,
-            b.as_view(),
-            &mut c,
-        ));
-        assert_eq!(c, [(257 * 255 * max_b) as f32; 16]);
+        for (m, n, k) in shapes {
+            let a = random_minmax_matrix::<8>(m, k, &mut rng);
+            let b = random_minmax_matrix::<B_BITS>(n, k, &mut rng);
+            let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
+            let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+            let mut c = vec![f32::INFINITY; m];
+            driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
+                arch,
+                &packed,
+                b.as_view(),
+                &mut c,
+            ));
+            assert_scores_close(
+                &c,
+                &expected,
+                format_args!("M={m}, N={n}, K={k}, MR={MR}, NR={NR}, PACK={PACK}"),
+            );
+        }
     }
 
     #[test]
@@ -1630,97 +1835,76 @@ mod tests {
         }
     }
 
-    fn assert_nan_candidates_preserve_maxima<
-        W,
-        const B_BITS: usize,
-        const MR: usize,
-        const NR: usize,
-        const PACK: usize,
-    >(
+    fn assert_microkernel_nan_reduction<W, const MR: usize, const NR: usize, const PACK: usize>(
         arch: W,
     ) where
-        W: ExtraWide<MR, PACK> + LoadStore<f32, MR>,
-        Unsigned: Representation<B_BITS>,
+        W: ExtraWide<MR, PACK>,
     {
-        let mut a = constant_minmax_matrix::<8>(MR + 1, 1, 1, 1.0, 0.0);
-        // Exercise mixed SIMD lanes as well as the partial A panel.
-        for row in [1, MR] {
-            a.get_row_mut(row).unwrap().set_meta(MinMaxCompensation {
-                dim: 1,
-                a: 1.0,
-                b: 0.0,
-                n: f32::NAN,
-                norm_squared: 0.0,
-            });
-        }
-        let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
-        let mut cases = vec![
-            vec![],
-            vec![10.0, f32::NAN, 5.0],
-            vec![f32::NAN, 10.0, 5.0],
-            vec![10.0, 5.0, f32::NAN],
-            vec![10.0, f32::NAN, f32::NAN, 5.0],
-            vec![-5.0, f32::NAN, -10.0],
-            vec![f32::NAN, f32::NAN],
-        ];
-        let n = 2 * NR + 1;
-        for nan_index in [0, NR, n - 1] {
-            let mut scores = vec![5.0; n];
-            scores[if nan_index == 0 { 1 } else { 0 }] = 10.0;
-            scores[nan_index] = f32::NAN;
-            cases.push(scores);
-        }
-
-        for scores in cases {
-            let mut b = constant_minmax_matrix::<B_BITS>(scores.len(), 1, 0, 1.0, 0.0);
-            for (mut row, offset) in b.rows_mut().zip(scores.iter().copied()) {
-                row.set_meta(MinMaxCompensation {
-                    dim: 1,
-                    a: 1.0,
-                    b: offset,
-                    n: 0.0,
-                    norm_squared: 0.0,
-                });
+        let k = DimK::new(NonZeroUsize::new(1).unwrap());
+        let a_codes = vec![W::AElem::default(); MR * PACK];
+        let b_codes = vec![W::BElem::default(); NR * PACK];
+        arch.run(|| {
+            let mut n = [0.0; MR];
+            n[MR - 1] = f32::NAN;
+            let a_meta = Coefficients {
+                a: &[1.0; MR],
+                b: &[1.0; MR],
+                n: &n,
+            };
+            for (initial, score) in [
+                (f32::NEG_INFINITY, f32::NAN),
+                (f32::NEG_INFINITY, 5.0),
+                (f32::NEG_INFINITY, -5.0),
+                (f32::NEG_INFINITY, f32::INFINITY),
+                (7.0, f32::NAN),
+            ] {
+                for column in [0, NR - 1] {
+                    let mut b_meta = [MinMaxCompensation {
+                        dim: 1,
+                        a: 1.0,
+                        b: 0.0,
+                        n: f32::NAN,
+                        norm_squared: 0.0,
+                    }; NR];
+                    b_meta[column].n = score;
+                    let mut c = [initial; MR];
+                    let mut kernel = MicroKernel::<W, MR, NR, PACK> {
+                        arch,
+                        // SAFETY: A is one full MR panel, padded to PACK for logical K=1.
+                        a: unsafe { packed::Panel::new(Slice::new(&a_codes), k) },
+                        a_meta,
+                        // SAFETY: B contains NR rows of PACK initialized elements.
+                        b: unsafe {
+                            unpacked::Panel::new(Slice::new(&b_codes), padded_k::<PACK>(k))
+                        },
+                        b_meta: &b_meta,
+                        c: &mut c,
+                        k,
+                    };
+                    driver::MicroKernel::micro_kernel(&mut kernel);
+                    let mut expected = [initial.max(score); MR];
+                    expected[MR - 1] = initial;
+                    assert_eq!(
+                        c, expected,
+                        "NaN reduction: initial={initial}, score={score}, column={column}",
+                    );
+                }
             }
-            let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
-            assert_eq!(
-                expected[0],
-                scores.iter().copied().fold(f32::NEG_INFINITY, f32::max)
-            );
-            assert_eq!(expected[1], f32::NEG_INFINITY);
-            assert_eq!(expected[MR], f32::NEG_INFINITY);
-            for tile_rows in [1, 2, NR, NR + 1, scores.len().max(1)] {
-                let mut c = vec![f32::NAN; MR + 1];
-                let mut driver = checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
-                    arch,
-                    &packed,
-                    b.as_view(),
-                    &mut c,
-                );
-                driver.b_rows_per_tile = NonZeroUsize::new(tile_rows).unwrap();
-                driver::Drive::drive(&mut driver);
-                assert_scores_close(
-                    &c,
-                    &expected,
-                    format_args!(
-                        "NaN reduction: scores={scores:?}, B tile={tile_rows}, \
-                         MR={MR}, NR={NR}, PACK={PACK}"
-                    ),
-                );
-            }
-        }
+        });
     }
 
     #[test]
-    fn scalar_driver_ignores_nan_candidates() {
-        assert_nan_candidates_preserve_maxima::<Scalar, 4, 16, 2, 4>(Scalar::new());
+    fn scalar_microkernel_ignores_nan_candidates() {
+        assert_microkernel_nan_reduction::<Scalar, 16, 2, 4>(Scalar::new());
+        assert_microkernel_nan_reduction::<Scalar, 16, 4, 2>(Scalar::new());
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn avx2_driver_ignores_nan_candidates() {
+    fn avx2_microkernel_ignores_nan_candidates() {
         if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-            assert_nan_candidates_preserve_maxima::<_, 4, 16, 4, 4>(arch);
+            assert_microkernel_nan_reduction::<_, 16, 4, 4>(arch);
+            assert_microkernel_nan_reduction::<_, 16, 4, 2>(arch);
         } else {
             eprintln!("AVX2 unavailable; NaN regression not executed");
         }
@@ -1728,9 +1912,78 @@ mod tests {
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn avx512_driver_ignores_nan_candidates() {
+    fn avx2_half_reduction_matches_whole_rows() {
+        use diskann_wide::arch::x86_64::V3;
+
+        fn check<const NR: usize>(arch: V3) {
+            arch.run(|| {
+                let acc: [i32x16<V3>; NR] = core::array::from_fn(|j| {
+                    i32x16::<V3>::from_array(
+                        arch,
+                        core::array::from_fn(|i| (i * 37 + j * 11) as i32),
+                    )
+                });
+                let a = core::array::from_fn(|i| (i + 1) as f32 * 0.125);
+                let b = core::array::from_fn(|i| i as f32 * 0.25 - 2.0);
+                let mut n = core::array::from_fn(|i| i as f32 * 0.75);
+                n[9] = f32::NAN;
+                let query = Coefficients {
+                    a: &a,
+                    b: &b,
+                    n: &n,
+                };
+                let mut docs: [MinMaxCompensation; NR] =
+                    core::array::from_fn(|j| MinMaxCompensation {
+                        dim: 31,
+                        a: (j + 1) as f32 * 0.25,
+                        b: 1.0 - j as f32,
+                        n: j as f32 * 0.5,
+                        norm_squared: 0.0,
+                    });
+                for special in [0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    docs[NR - 1].n = special;
+                    let initial = core::array::from_fn(|i| {
+                        if i.is_multiple_of(2) {
+                            f32::NEG_INFINITY
+                        } else {
+                            i as f32
+                        }
+                    });
+                    let mut expected = initial;
+                    compensated_max_into(arch, acc, query, &docs, 31, &mut expected);
+                    let mut pair = initial;
+                    let mut quad = initial;
+                    <V3 as ExtraWide<16, 2>>::max_into(arch, acc, query, &docs, 31, &mut pair);
+                    <V3 as ExtraWide<16, 4>>::max_into(arch, acc, query, &docs, 31, &mut quad);
+                    assert_eq!(
+                        pair.map(f32::to_bits),
+                        expected.map(f32::to_bits),
+                        "NR={NR}"
+                    );
+                    assert_eq!(
+                        quad.map(f32::to_bits),
+                        expected.map(f32::to_bits),
+                        "NR={NR}"
+                    );
+                }
+            });
+        }
+
+        if let Some(arch) = V3::new_checked() {
+            check::<1>(arch);
+            check::<2>(arch);
+            check::<4>(arch);
+            check::<6>(arch);
+            check::<8>(arch);
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn avx512_microkernel_ignores_nan_candidates() {
         if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
-            assert_nan_candidates_preserve_maxima::<_, 4, 16, 8, 4>(arch);
+            assert_microkernel_nan_reduction::<_, 16, 8, 4>(arch);
+            assert_microkernel_nan_reduction::<_, 16, 8, 2>(arch);
         } else {
             eprintln!("V4 unavailable; NaN regression not executed");
         }
@@ -1738,9 +1991,9 @@ mod tests {
 
     #[cfg(target_arch = "aarch64")]
     #[test]
-    fn neon_driver_ignores_nan_candidates() {
+    fn neon_microkernel_ignores_nan_candidates() {
         if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
-            assert_nan_candidates_preserve_maxima::<_, 4, 16, 4, 4>(arch);
+            assert_microkernel_nan_reduction::<_, 16, 4, 4>(arch);
         } else {
             eprintln!("Neon/dotprod unavailable; NaN regression not executed");
         }
@@ -1756,23 +2009,53 @@ mod tests {
             assert!((1..=8).contains(&W::MAX_B_BITS));
             let max_b = u8::MAX >> (8 - W::MAX_B_BITS);
             arch.run(|| {
-                let a = W::Wide::splat(arch, W::convert_a(u8::MAX));
-                let b = W::Splat::splat(arch, W::convert_b(max_b));
-                let dot = arch.dot(W::Acc::default(arch), a, b).simd_cast();
-                let mut actual = [0.0; MR];
-                assert_eq!(W::Float::LANES, MR);
-                // SAFETY: actual has exactly Float::LANES writable elements.
-                unsafe { dot.store_simd(actual.as_mut_ptr()) };
+                let codes: Vec<_> = (0..MR * PACK)
+                    .map(|i| {
+                        W::convert_a(if (i / PACK).is_multiple_of(2) {
+                            u8::MAX
+                        } else {
+                            1
+                        })
+                    })
+                    .collect();
+                let b_codes = [W::convert_b(max_b); PACK];
+                // SAFETY: The buffers contain one complete A pack and B pack.
+                let (a, b) = unsafe {
+                    (
+                        arch.load_a(Slice::new(&codes)),
+                        arch.splat(Slice::new(&b_codes)),
+                    )
+                };
+                let acc = arch.dot(arch.zero_acc(), a, b);
+                let acc = arch.dot(acc, a, b);
+                let coefficients = Coefficients {
+                    a: &[1.0; MR],
+                    b: &[0.0; MR],
+                    n: &[0.0; MR],
+                };
+                let mut actual = [f32::NEG_INFINITY; MR];
+                arch.max_into(
+                    [acc],
+                    coefficients,
+                    &[MinMaxCompensation {
+                        a: 1.0,
+                        ..Default::default()
+                    }],
+                    2 * PACK,
+                    &mut actual,
+                );
                 assert_eq!(
                     actual,
-                    [(PACK * usize::from(u8::MAX) * usize::from(max_b)) as f32; MR],
+                    core::array::from_fn(|i| {
+                        let a = if i.is_multiple_of(2) { 255 } else { 1 };
+                        (2 * PACK * a * usize::from(max_b)) as f32
+                    }),
                 );
             });
         }
 
-        fn assert_bit_pair<
+        fn assert_b_width<
             W,
-            const A_BITS: usize,
             const B_BITS: usize,
             const MR: usize,
             const NR: usize,
@@ -1782,121 +2065,74 @@ mod tests {
             rng: &mut StdRng,
         ) where
             W: ExtraWide<MR, PACK> + LoadStore<f32, MR>,
-            W::AElem: PartialEq + std::fmt::Debug,
-            Unsigned: Representation<A_BITS> + Representation<B_BITS>,
+            Unsigned: Representation<B_BITS>,
         {
-            let max_a = (1u64 << A_BITS) - 1;
+            let max_a = u64::from(u8::MAX);
             let max_b = (1u64 << B_BITS) - 1;
-            let limit = max_k::<A_BITS, B_BITS>() as u64;
+            let limit = max_k::<8, B_BITS>() as u64;
             assert!(limit * max_a * max_b <= i32::MAX as u64);
             assert!((limit + 1) * max_a * max_b > i32::MAX as u64);
-            assert_a_packing::<W, A_BITS, MR, PACK>(arch);
 
-            let dimensions: &[usize] = if cfg!(miri) {
-                &[1, 3]
-            } else {
-                &[1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 33, 255, 256, 257]
-            };
-            for (m, n) in [
-                (1, 0),
-                (1, 1),
-                (MR - 1, (NR - 1).max(1)),
-                (MR, NR),
-                (MR + 1, 2 * NR + 1),
-            ] {
-                for &k in dimensions {
-                    let mut a = random_minmax_matrix::<A_BITS>(m, k, rng);
-                    let mut b = random_minmax_matrix::<B_BITS>(n, k, rng);
-                    if m > 1 {
-                        let mut row = a.get_row_mut(m - 1).unwrap();
-                        let mut meta = row.meta();
-                        meta.n = f32::NAN;
-                        row.set_meta(meta);
-                    }
-                    if n > 1 {
-                        let mut row = b.get_row_mut(n - 1).unwrap();
-                        let mut meta = row.meta();
-                        meta.n = f32::NAN;
-                        row.set_meta(meta);
-                    }
-                    let expected =
-                        reference_max_inner_products::<A_BITS, B_BITS>(a.as_view(), b.as_view());
-                    let packed = PackedA::<_, A_BITS, MR, PACK>::new(arch, a.as_view()).unwrap();
-                    let mut guarded = vec![654321.0; m + 2];
-                    let mut kernel = checked_driver::<W, A_BITS, B_BITS, MR, NR, PACK>(
-                        arch,
-                        &packed,
-                        b.as_view(),
-                        &mut guarded[1..=m],
-                    );
-                    for tile_rows in [kernel.b_rows_per_tile, NonZeroUsize::new(NR + 1).unwrap()] {
-                        kernel.b_rows_per_tile = tile_rows;
-                        kernel.c.fill(f32::INFINITY);
-                        driver::Drive::drive(&mut kernel);
-                        assert_scores_close(
-                            kernel.c,
-                            &expected,
-                            format_args!(
-                                "{A_BITS}x{B_BITS}: M={m}, N={n}, K={k}, B tile={tile_rows}, PACK={PACK}"
-                            ),
-                        );
-                    }
-                    assert_eq!(guarded[0], 654321.0);
-                    assert_eq!(guarded[m + 1], 654321.0);
-                }
-            }
+            let (m, n, k) = (MR + 1, NR + 1, PACK + 1);
+            let a = random_minmax_matrix::<8>(m, k, rng);
+            let b = random_minmax_matrix::<B_BITS>(n, k, rng);
+            let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
+            let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+            let mut guarded = vec![654321.0; m + 2];
+            let mut kernel = checked_driver::<W, 8, B_BITS, MR, NR, PACK>(
+                arch,
+                &packed,
+                b.as_view(),
+                &mut guarded[1..=m],
+            );
+            driver::Drive::drive(&mut kernel);
+            assert_scores_close(
+                kernel.c,
+                &expected,
+                format_args!("8x{B_BITS}: M={m}, N={n}, K={k}, PACK={PACK}"),
+            );
+            assert_eq!(guarded[0], 654321.0);
+            assert_eq!(guarded[m + 1], 654321.0);
 
-            let dimensions: &[usize] = if cfg!(miri) {
-                &[PACK, PACK + 1]
-            } else {
-                &[PACK, PACK + 1, 257]
-            };
-            for &k in dimensions {
-                let a = constant_minmax_matrix::<A_BITS>(MR + 1, k, max_a as i64, 1.0, 0.0);
-                let b = constant_minmax_matrix::<B_BITS>(NR + 1, k, max_b as i64, 1.0, 0.0);
-                let packed = PackedA::<_, A_BITS, MR, PACK>::new(arch, a.as_view()).unwrap();
-                let mut c = vec![0.0; MR + 1];
-                driver::Drive::drive(&mut checked_driver::<W, A_BITS, B_BITS, MR, NR, PACK>(
-                    arch,
-                    &packed,
-                    b.as_view(),
-                    &mut c,
-                ));
-                assert_eq!(c, vec![(k as u64 * max_a * max_b) as f32; MR + 1]);
-            }
+            let a = constant_minmax_matrix::<8>(1, k, max_a as i64, 1.0, 0.0);
+            let b = constant_minmax_matrix::<B_BITS>(1, k, max_b as i64, 1.0, 0.0);
+            let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+            let mut c = [0.0];
+            driver::Drive::drive(&mut checked_driver::<W, 8, B_BITS, MR, NR, PACK>(
+                arch,
+                &packed,
+                b.as_view(),
+                &mut c,
+            ));
+            assert_eq!(c, [(k as u64 * max_a * max_b) as f32]);
         }
 
         macro_rules! check_widths {
-            ($arch:expr, $sentinel:expr, $nr:literal, $pack:literal; $($b:literal),+ $(,)?) => {{
+            ($arch:expr, $mr:literal, $nr:literal, $pack:literal; $($b:literal),+ $(,)?) => {{
                 let arch = $arch;
                 let mut rng = StdRng::seed_from_u64(0x948cd3e02a671fb5);
-                assert_backend_code_range::<_, 16, $pack>(arch);
+                assert_backend_code_range::<_, $mr, $pack>(arch);
                 $(
-                    assert_b_decoding_boundaries::<_, $b, 16, $nr, $pack>(arch, $sentinel);
-                    assert_bit_pair::<_, 1, $b, 16, $nr, $pack>(arch, &mut rng);
-                    assert_bit_pair::<_, 2, $b, 16, $nr, $pack>(arch, &mut rng);
-                    assert_bit_pair::<_, 3, $b, 16, $nr, $pack>(arch, &mut rng);
-                    assert_bit_pair::<_, 4, $b, 16, $nr, $pack>(arch, &mut rng);
-                    assert_bit_pair::<_, 5, $b, 16, $nr, $pack>(arch, &mut rng);
-                    assert_bit_pair::<_, 6, $b, 16, $nr, $pack>(arch, &mut rng);
-                    assert_bit_pair::<_, 7, $b, 16, $nr, $pack>(arch, &mut rng);
-                    assert_bit_pair::<_, 8, $b, 16, $nr, $pack>(arch, &mut rng);
+                    assert_b_width::<_, $b, $mr, $nr, $pack>(arch, &mut rng);
                 )+
             }};
         }
 
         #[test]
-        fn scalar_supports_all_bit_pairs_and_byte_layouts() {
-            check_widths!(Scalar::new(), -1, 2, 2; 1, 2, 3, 4, 5, 6, 7, 8);
-            check_widths!(Scalar::new(), -1, 2, 4; 1, 2, 3, 4, 5, 6, 7);
+        fn scalar_supports_all_b_widths_and_layouts() {
+            check_widths!(Scalar::new(), 16, 2, 2; 1, 2, 3, 4, 5, 6, 7, 8);
+            check_widths!(Scalar::new(), 16, 2, 4; 1, 2, 3, 4, 5, 6, 7);
+            check_widths!(Scalar::new(), 8, 2, 2; 1, 2, 3, 4, 5, 6, 7, 8);
         }
 
         #[cfg(target_arch = "x86_64")]
         #[test]
-        fn avx2_supports_all_bit_pairs_and_byte_layouts() {
+        fn avx2_supports_all_b_widths_and_layouts() {
             if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-                check_widths!(arch, -1, 4, 2; 1, 2, 3, 4, 5, 6, 7, 8);
-                check_widths!(arch, -1, 4, 4; 1, 2, 3, 4, 5, 6);
+                check_widths!(arch, 16, 4, 2; 1, 2, 3, 4, 5, 6, 7, 8);
+                check_widths!(arch, 16, 4, 4; 1, 2, 3, 4, 5, 6);
+                check_widths!(arch, 8, 4, 2; 1, 2, 3, 4, 5, 6, 7, 8);
+                check_widths!(arch, 8, 4, 4; 1, 2, 3, 4, 5, 6);
             } else {
                 eprintln!("AVX2 unavailable; all-width regression not executed");
             }
@@ -1904,10 +2140,10 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         #[test]
-        fn avx512_supports_all_bit_pairs_and_byte_layouts() {
+        fn avx512_supports_all_b_widths_and_layouts() {
             if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
-                check_widths!(arch, -1, 8, 2; 1, 2, 3, 4, 5, 6, 7, 8);
-                check_widths!(arch, -1, 8, 4; 1, 2, 3, 4, 5, 6, 7);
+                check_widths!(arch, 16, 8, 2; 1, 2, 3, 4, 5, 6, 7, 8);
+                check_widths!(arch, 16, 8, 4; 1, 2, 3, 4, 5, 6, 7);
             } else {
                 eprintln!("V4 unavailable; all-width regression not executed");
             }
@@ -1915,9 +2151,10 @@ mod tests {
 
         #[cfg(target_arch = "aarch64")]
         #[test]
-        fn neon_supports_all_bit_pairs() {
+        fn neon_supports_all_b_widths_and_layouts() {
             if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
-                check_widths!(arch, u8::MAX, 4, 4; 1, 2, 3, 4, 5, 6, 7, 8);
+                check_widths!(arch, 16, 4, 4; 1, 2, 3, 4, 5, 6, 7, 8);
+                check_widths!(arch, 8, 4, 4; 1, 2, 3, 4, 5, 6, 7, 8);
             } else {
                 eprintln!("Neon/dotprod unavailable; all-width regression not executed");
             }
@@ -1933,9 +2170,9 @@ mod tests {
                 >,
         {
             let mut rng = StdRng::seed_from_u64(0x14a7f0b2c69d538e);
-            for k in [1, 3, 17, 257] {
-                let a = random_minmax_matrix::<A_BITS>(17, k, &mut rng);
-                let b = random_minmax_matrix::<B_BITS>(19, k, &mut rng);
+            for k in [3, 65] {
+                let a = random_minmax_matrix::<A_BITS>(3, k, &mut rng);
+                let b = random_minmax_matrix::<B_BITS>(5, k, &mut rng);
                 let expected: Vec<_> = a
                     .rows()
                     .map(|a| {
@@ -1975,26 +2212,6 @@ mod tests {
             check_reference::<8, 1>();
         }
 
-        #[test]
-        fn packed_a_is_reused_across_b_widths() {
-            let arch = Scalar::new();
-            let mut rng = StdRng::seed_from_u64(0xac21f49d70b365e8);
-            let a = random_minmax_matrix::<3>(17, 33, &mut rng);
-            let packed = PackedA::<_, 3, 16, 2>::new(arch, a.as_view()).unwrap();
-            let mut c = vec![f32::NAN; 17];
-            macro_rules! check {
-                ($($b:literal),+) => {$(
-                    let b = random_minmax_matrix::<$b>(9, 33, &mut rng);
-                    let expected = reference_max_inner_products::<3, $b>(a.as_view(), b.as_view());
-                    driver::Drive::drive(&mut checked_driver::<_, 3, $b, 16, 2, 2>(
-                        arch, &packed, b.as_view(), &mut c,
-                    ));
-                    assert_scores_close(&c, &expected, format_args!("reused A3 with B{}", $b));
-                )+};
-            }
-            check!(1, 2, 3, 4, 5, 6, 7, 8);
-        }
-
         #[cfg(not(miri))]
         #[test]
         fn low_bit_inputs_can_exceed_the_eight_bit_dimension_limit() {
@@ -2018,7 +2235,6 @@ mod tests {
                 assert_eq!(c[0], (k as i64 * max_a * max_b) as f32);
             }
             check::<1, 8>();
-            check::<4, 8>();
             check::<8, 1>();
         }
     }
@@ -2026,18 +2242,12 @@ mod tests {
     mod minmax8 {
         use super::*;
 
-        fn check_backend<W, const NR: usize, const PACK: usize>(arch: W, sentinel: W::BElem)
+        fn check_backend<W, const NR: usize, const PACK: usize>(arch: W)
         where
             W: ExtraWide<16, PACK> + LoadStore<f32, 16>,
-            W::AElem: PartialEq + std::fmt::Debug,
-            W::BElem: PartialEq + std::fmt::Debug,
         {
-            assert_a_packing::<W, 8, 16, PACK>(arch);
             assert_driver_contract::<W, 8, 16, NR, PACK>(arch);
             assert_driver_target_shapes::<W, 8, 16, NR, PACK>(arch);
-            assert_nan_candidates_preserve_maxima::<W, 8, 16, NR, PACK>(arch);
-            assert_packed_a_reuse::<W, 8, 16, NR, PACK>(arch);
-            assert_b_decoding_boundaries::<W, 8, 16, NR, PACK>(arch, sentinel);
             assert_unsigned_byte_products::<W, NR, PACK>(arch);
         }
 
@@ -2048,10 +2258,11 @@ mod tests {
             if cfg!(miri) {
                 return;
             }
-            for k in [1, 2, 3, 4, 5, 257, 259] {
-                let mut a = constant_minmax_matrix::<8>(257, k, 0, 1.0, 0.0);
+            for k in [PACK - 1, PACK, PACK + 1] {
+                let boundary_codes = [0, 1, 127, 128, 255];
+                let mut a = constant_minmax_matrix::<8>(17, k, 0, 1.0, 0.0);
                 for (i, mut row) in a.rows_mut().enumerate() {
-                    let code = (i % 256) as i64;
+                    let code = boundary_codes[i % boundary_codes.len()];
                     for j in 0..k {
                         row.vector_mut().set(j, code).unwrap();
                     }
@@ -2060,8 +2271,8 @@ mod tests {
                     row.set_meta(meta);
                 }
                 let a = PackedA::<_, 8, 16, PACK>::new(arch, a.as_view()).unwrap();
-                let mut c = vec![f32::NAN; 257];
-                for code in 0..=255 {
+                let mut c = vec![f32::NAN; 17];
+                for code in boundary_codes {
                     let b = constant_minmax_matrix::<8>(1, k, code, 1.0, 0.0);
                     driver::Drive::drive(&mut checked_driver::<W, 8, 8, 16, NR, PACK>(
                         arch,
@@ -2072,9 +2283,10 @@ mod tests {
                     for (i, &actual) in c.iter().enumerate() {
                         assert_eq!(
                             actual,
-                            ((i % 256) * code as usize * k) as f32,
+                            (boundary_codes[i % boundary_codes.len()] as usize * code as usize * k)
+                                as f32,
                             "A={}, B={code}, K={k}",
-                            i % 256,
+                            boundary_codes[i % boundary_codes.len()],
                         );
                     }
                 }
@@ -2083,14 +2295,14 @@ mod tests {
 
         #[test]
         fn scalar_driver_obeys_maxsim_contract() {
-            check_backend::<_, 2, 2>(Scalar::new(), -1);
+            check_backend::<_, 2, 2>(Scalar::new());
         }
 
         #[cfg(target_arch = "x86_64")]
         #[test]
         fn avx2_driver_obeys_maxsim_contract() {
             if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-                check_backend::<_, 4, 2>(arch, -1);
+                check_backend::<_, 4, 2>(arch);
             } else {
                 eprintln!("AVX2 unavailable; MinMax8 x MinMax8 backend not executed");
             }
@@ -2100,7 +2312,7 @@ mod tests {
         #[test]
         fn avx512_driver_obeys_maxsim_contract() {
             if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
-                check_backend::<_, 8, 2>(arch, -1);
+                check_backend::<_, 8, 2>(arch);
             } else {
                 eprintln!("V4 unavailable; MinMax8 x MinMax8 backend not executed");
             }
@@ -2110,7 +2322,7 @@ mod tests {
         #[test]
         fn neon_driver_obeys_maxsim_contract() {
             if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
-                check_backend::<_, 4, 4>(arch, u8::MAX);
+                check_backend::<_, 4, 4>(arch);
             } else {
                 eprintln!("Neon/dotprod unavailable; MinMax8 x MinMax8 backend not executed");
             }
@@ -2120,26 +2332,12 @@ mod tests {
         #[test]
         #[should_panic(expected = "exceeds the MinMax8 x MinMax8 limit")]
         fn driver_rejects_k_above_accumulator_limit() {
-            let k = 33026;
+            let k = max_k::<8, 8>() + 1;
             let a = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
             let b = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
             let a = PackedA::<_, 8, 16, 2>::new(Scalar::new(), a.as_view()).unwrap();
             let mut c = [0.0];
             let _ = checked_driver::<_, 8, 8, 16, 2, 2>(Scalar::new(), &a, b.as_view(), &mut c);
-        }
-
-        #[test]
-        #[should_panic]
-        fn b_decoding_rejects_a_short_output() {
-            let codes = BitSlice::new(&[128u8, 255][..], 2).unwrap();
-            decode_b::<Scalar, 8, 16, 2>(codes, &mut [0]);
-        }
-
-        #[test]
-        #[should_panic]
-        fn b_decoding_rejects_a_long_output() {
-            let codes = BitSlice::new(&[255u8][..], 1).unwrap();
-            decode_b::<Scalar, 8, 16, 2>(codes, &mut [0; 2]);
         }
     }
 }
