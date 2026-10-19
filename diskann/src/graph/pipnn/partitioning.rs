@@ -627,8 +627,9 @@ mod tests {
             )
             .unwrap();
 
-            // The `fanout` leader columns nearest to each point. No two leaders
-            // are at the same distance from a point.
+            // The `fanout` leader columns nearest to each point. In one dimension,
+            // |x - leader| orders the leaders the same way as squared L2. No two
+            // leaders are at the same distance from a point.
             let distance =
                 |id: u32, column: u32| (values[id as usize] - leader_values[column as usize]).abs();
             let expected: Vec<Vec<u32>> = ids
