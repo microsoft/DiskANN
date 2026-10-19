@@ -13,11 +13,12 @@ use std::{
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::{
-    clustering,
-    traits::{BuildAccessor, InsertStrategy, Provider, Router, RouterAndNearest},
+use super::traits::{BuildAccessor, InsertStrategy, Provider, Router, RouterAndNearest};
+use crate::{
+    ANNError, ANNResult,
+    error::IntoANNResult,
+    ivf::clustering::{RegionalNearest, SplitAndAssign, TwoMeans},
 };
-use crate::{ANNError, ANNResult, error::IntoANNResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReassignCount {
@@ -154,13 +155,12 @@ impl<P: Provider> IVFIndex<P> {
 
                 let (region, mut update) = accessor.fill(iter).await?;
 
-                clustering::split(
+                let clusterer = TwoMeans::new(config.split_iterations, dim);
+                SplitAndAssign::new(clusterer, RegionalNearest).run(
                     &region,
                     &mut update,
                     &parents,
                     &neighbors,
-                    config.split_iterations,
-                    dim,
                 )?;
 
                 update_final = Some(update)

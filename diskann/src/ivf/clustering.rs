@@ -95,25 +95,6 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
     }
 }
 
-/// Fit two children per parent and reassign sources across children and retained neighbors.
-///
-/// Parents and neighbors are distinct, disjoint filled sources. Neighbor centroids
-/// are retained unchanged. Other filled lists are not read or edited.
-/// Computation completes before any edits are recorded. A recording error may
-/// leave partial pending edits, which the caller must discard rather than publish.
-/// An empty set of parents is a no-op.
-pub(super) fn split<I: Copy, L: Copy + Ord, R: RegionView<I, L>, U: RegionUpdate<I, L>>(
-    region: &R,
-    update: &mut U,
-    parents: &BTreeSet<L>,
-    neighbors: &BTreeSet<L>,
-    iterations: NonZeroUsize,
-    dim: NonZeroUsize,
-) -> ANNResult<()> {
-    SplitAndAssign::new(TwoMeans::new(iterations, dim), RegionalNearest)
-        .run(region, update, parents, neighbors)
-}
-
 impl<C: Clusterer, A> SplitAndAssign<C, A> {
     /// Compute the complete result before registering any provider writes.
     pub(super) fn run<I: Copy, L: Copy + Ord, R, U>(
