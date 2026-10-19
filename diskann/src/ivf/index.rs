@@ -7,17 +7,22 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
     num::NonZeroUsize,
 };
 
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::traits::{BuildAccessor, InsertStrategy, Provider, Router, RouterAndNearest};
+use super::traits::{BuildAccessor, Router, RouterAndNearest, SetElements};
 use crate::{
     ANNError, ANNResult,
     error::IntoANNResult,
-    ivf::clustering::{RegionalNearest, SplitAndAssign, TwoMeans},
+    ivf::{
+        clustering::{RegionalNearest, SplitAndAssign, TwoMeans},
+        traits::BuildStrategy,
+    },
+    provider::ExecutionContext,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,37 +59,32 @@ pub struct InsertStats {
 
 /// An IVF index with serialized mutation through the underlying provider.
 #[derive(Debug)]
-pub struct IVFIndex<P: Provider> {
-    provider: P,
+pub struct IVFIndex<C: ExecutionContext> {
     config: Config,
+    phantom: PhantomData<C>,
 }
 
-impl<P: Provider> IVFIndex<P> {
+impl<C: ExecutionContext> IVFIndex<C> {
     /// # Errors
     ///
     /// Returns [`ConfigError`] when the split threshold is less than two.
-    pub fn new(provider: P, config: Config) -> Result<Self, ConfigError> {
-        if config.split_threshold.get() < 2 {
-            return Err(ConfigError(config.split_threshold.get()));
-        }
-        Ok(Self { provider, config })
-    }
-
-    pub fn provider(&self) -> &P {
-        &self.provider
+    pub fn new(config: Config) -> Result<Self, ConfigError> {
+        Ok(Self {
+            config,
+            phantom: PhantomData::default(),
+        })
     }
 
     pub fn insert_batch<'a, S, T>(
         &'a mut self,
         strategy: &'a S,
-        context: &'a P::Context,
-        points: &'a [(P::ExternalId, T)],
+        context: &'a C,
+        points: &'a [T],
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
-        S: InsertStrategy<'a, P, T>,
+        S: BuildStrategy<'a, T, C>,
         T: Sync,
     {
-        let provider = &mut self.provider;
         let config = self.config;
 
         async move {
@@ -92,29 +92,27 @@ impl<P: Provider> IVFIndex<P> {
                 return Ok(InsertStats::default());
             }
 
-            let mut accessor = strategy
-                .build_accessor(provider, context)
-                .into_ann_result()?;
+            let mut accessor = strategy.build_accessor(context).into_ann_result()?;
 
             let dim = accessor.dim();
 
             // Step 1: Compute the batch
-            let batch = strategy.prepare(&mut accessor, points).await?;
+            let ids = accessor.set_elements(context, points).await?;
 
             // Step 2: Route the points to their nearest centroid.
-            let mut routed = BTreeMap::<P::ListId, Vec<P::InternalId>>::new();
+            let mut routed = BTreeMap::<S::ListId, Vec<S::Id>>::new();
 
             {
                 let router = accessor.router();
 
-                for point in batch.points() {
-                    let selected = router.route(point.vector, 1).await?;
+                for (id, point) in ids.iter().zip(points.iter()) {
+                    let selected = router.route(point, 1).await?;
 
                     let (list, _) = selected.first().ok_or_else(|| {
                         ANNError::message("IVF routing returned no live centroid")
                     })?;
 
-                    routed.entry(*list).or_default().push(point.id);
+                    routed.entry(*list).or_default().push(*id);
                 }
             }
 

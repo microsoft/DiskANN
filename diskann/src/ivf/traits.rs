@@ -5,41 +5,12 @@
 
 //! Storage boundaries for IVF construction.
 
-use std::{fmt::Debug, num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
 
-use super::region::{Batch, RegionUpdate, RegionView};
-use crate::{
-    ANNResult,
-    error::{StandardError, ToRanked},
-    provider::ExecutionContext,
-    utils::VectorId,
-};
-
-/// Point identity and execution context shared by an IVF provider's accessors.
-///
-/// Prepared points become translatable only after the build operation finishes.
-pub trait Provider: Sized + Send + Sync + 'static {
-    type Context: ExecutionContext;
-    type InternalId: VectorId;
-    type ExternalId: PartialEq + Send + Sync + 'static;
-    /// Stable identity shared by a centroid and its inverted list. Never reused.
-    type ListId: VectorId;
-    type Error: ToRanked + Debug + Send + Sync + 'static;
-
-    fn to_internal_id(
-        &self,
-        context: &Self::Context,
-        id: &Self::ExternalId,
-    ) -> Result<Self::InternalId, Self::Error>;
-
-    fn to_external_id(
-        &self,
-        context: &Self::Context,
-        id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error>;
-}
+use super::region::{RegionUpdate, RegionView};
+use crate::{ANNResult, error::StandardError, provider::ExecutionContext, utils::VectorId};
 
 pub trait HasIds {
     type Id: VectorId;
@@ -47,7 +18,7 @@ pub trait HasIds {
 }
 
 /// Centroid selection within one build operation.
-pub trait Router: Send {
+pub trait Router<T>: Send {
     type Id: VectorId;
 
     fn len(&self) -> usize;
@@ -57,14 +28,10 @@ pub trait Router: Send {
     }
 
     /// Select `min(nprobe, len())` distinct live lists, nearest first.
-    fn route(
-        &self,
-        query: &[f32],
-        nprobe: usize,
-    ) -> impl SendFuture<ANNResult<Vec<(Self::Id, f32)>>>;
+    fn route(&self, query: &T, nprobe: usize) -> impl SendFuture<ANNResult<Vec<(Self::Id, f32)>>>;
 }
 
-pub trait RouterAndNearest: Router {
+pub trait RouterAndNearest<T>: Router<T> {
     /// Select `min(nprobe, len())` distinct live lists nearest to `id`'s centroid.
     ///
     /// Results are nearest first and may include `id` itself. Callers exclude
@@ -80,8 +47,8 @@ pub trait RouterAndNearest: Router {
     ) -> impl SendFuture<ANNResult<Vec<(Self::Id, f32)>>>;
 }
 
-pub trait BuildAccessor: Send + Sized + HasIds {
-    type Router<'a>: RouterAndNearest<Id = Self::ListId>
+pub trait BuildAccessor<T>: Send + Sized + HasIds {
+    type Router<'a>: RouterAndNearest<T, Id = Self::ListId>
     where
         Self: 'a;
 
@@ -100,7 +67,7 @@ pub trait BuildAccessor: Send + Sized + HasIds {
     fn append_to<Itr>(
         &mut self,
         list: Self::ListId,
-        members: Itr,
+        ids: Itr,
     ) -> impl SendFuture<ANNResult<NonZeroUsize>>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
@@ -120,24 +87,20 @@ pub trait BuildAccessor: Send + Sized + HasIds {
     fn finish(self, update: Option<&Self::Update>) -> impl SendFuture<ANNResult<()>>;
 }
 
-pub trait BuildStrategy<'a, P: Provider>: Send + Sync {
-    type Accessor: BuildAccessor<Id = P::InternalId, ListId = P::ListId>;
+pub trait BuildStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
+    type Accessor: BuildAccessor<T, Id = Self::Id, ListId = Self::ListId>
+        + SetElements<T, C, Id = Self::Id>;
     type Error: StandardError;
 
-    fn build_accessor(
-        &'a self,
-        provider: &'a mut P,
-        context: &'a P::Context,
-    ) -> Result<Self::Accessor, Self::Error>;
+    fn build_accessor(&'a self, context: &'a C) -> Result<Self::Accessor, Self::Error>;
 }
 
-/// Prepare typed inputs and seed a build accessor with their canonical data.
-///
-/// Only this boundary depends on `T`; list operations and clustering do not.
-pub trait InsertStrategy<'a, P: Provider, T: Sync>: BuildStrategy<'a, P> {
-    fn prepare(
-        &self,
-        accessor: &mut Self::Accessor,
-        points: &[(P::ExternalId, T)],
-    ) -> impl SendFuture<ANNResult<Arc<Batch<P::InternalId>>>>;
+pub trait SetElements<T, C: ExecutionContext> {
+    type Id: VectorId;
+
+    fn set_elements(
+        &mut self,
+        context: &C,
+        elements: &[T],
+    ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send;
 }
