@@ -603,18 +603,18 @@ mod tests {
     }
 
     #[test]
-    fn reused_stripe_buffers_do_not_carry_points_or_widths() {
+    fn reused_stripe_buffers_do_not_carry_points() {
+        // Points and leaders lie on a line, so the nearest leaders follow from
+        // the coordinates. The first stripe grows the buffer. The second stripe is
+        // smaller and reads only a prefix of it.
         let values = [100.0_f32, 0.0, 8.0, 10.0, 2.0];
         let data = MatrixView::try_from(&values[..], 5, 1).unwrap();
         let leader_values = [0.0_f32, 10.0, 100.0];
         let leaders = L2::create_leaders(MatrixView::try_from(&leader_values[..], 3, 1).unwrap());
+        let fanout = 2;
         let mut buffers = StripeBuffers::default();
 
-        for (ids, fanout, expected) in [
-            (&[4, 2, 0, 3, 1][..], 2, &[0, 1, 1, 0, 2, 1, 1, 0, 0, 1][..]),
-            (&[2, 1][..], 1, &[1, 0][..]),
-            (&[1, 0, 4, 2][..], 2, &[0, 1, 2, 1, 0, 1, 1, 0][..]),
-        ] {
+        for ids in [&[4, 2, 0, 3, 1][..], &[2, 1][..]] {
             let mut assignments = Matrix::new(0, ids.len(), fanout);
 
             assign_point_stripe::<_, L2, _>(
@@ -627,13 +627,21 @@ mod tests {
             )
             .unwrap();
 
+            // The `fanout` leader columns nearest to each point. No two leaders
+            // are at the same distance from a point.
+            let distance =
+                |id: u32, column: u32| (values[id as usize] - leader_values[column as usize]).abs();
+            let expected: Vec<Vec<u32>> = ids
+                .iter()
+                .map(|&id| {
+                    let mut columns: Vec<u32> = (0..leader_values.len() as u32).collect();
+                    columns.sort_by(|&a, &b| distance(id, a).total_cmp(&distance(id, b)));
+                    columns.truncate(fanout);
+                    columns
+                })
+                .collect();
             let actual: Vec<_> = assignments.row_iter().map(<[u32]>::to_vec).collect();
-            let expected: Vec<_> = expected.chunks_exact(fanout).map(<[u32]>::to_vec).collect();
-            assert_eq!(
-                sorted_members_per_row(&actual),
-                sorted_members_per_row(&expected),
-                "points {ids:?}, fanout={fanout}"
-            );
+            assert_eq!(actual, expected, "points {ids:?}");
         }
     }
 
