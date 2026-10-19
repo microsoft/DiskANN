@@ -64,8 +64,9 @@ pub(crate) struct DiskIndexBuild {
 }
 
 /// Disk search mode, modeled after the four backend search strategies.
-/// Strategy-specific settings live only on the variants that use them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Null optional settings are treated as absent.
+/// Parsing rejects incompatible recognized options but ignores unknown fields.
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub(crate) enum DiskSearchMode {
     /// Brute-force flat scan, optionally restricted by a per-query vector filter.
@@ -90,6 +91,60 @@ pub(crate) enum DiskSearchMode {
         vector_filters_file: Option<InputFile>,
         post_processor: TopkPostProcessor,
     },
+}
+
+impl<'de> Deserialize<'de> for DiskSearchMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        enum Mode {
+            Flat,
+            Graph,
+            GraphInlineFilter,
+            GraphDiverse,
+        }
+        #[derive(Deserialize)]
+        struct RawMode {
+            mode: Mode,
+            vector_filters_file: Option<InputFile>,
+            adaptive_l: Option<AdaptiveL>,
+            post_processor: Option<TopkPostProcessor>,
+        }
+        let raw = RawMode::deserialize(deserializer)?;
+        if raw.adaptive_l.is_some() && !matches!(raw.mode, Mode::GraphInlineFilter) {
+            return Err(serde::de::Error::custom(
+                "adaptive_l is only supported with mode graph-inline-filter",
+            ));
+        }
+        if raw.post_processor.is_some() && !matches!(raw.mode, Mode::GraphDiverse) {
+            return Err(serde::de::Error::custom(
+                "post_processor is only supported with mode graph-diverse",
+            ));
+        }
+        Ok(match raw.mode {
+            Mode::Flat => Self::Flat {
+                vector_filters_file: raw.vector_filters_file,
+            },
+            Mode::Graph => Self::Graph {
+                vector_filters_file: raw.vector_filters_file,
+            },
+            Mode::GraphInlineFilter => Self::GraphInlineFilter {
+                vector_filters_file: raw
+                    .vector_filters_file
+                    .ok_or_else(|| serde::de::Error::missing_field("vector_filters_file"))?,
+                adaptive_l: raw.adaptive_l,
+            },
+            Mode::GraphDiverse => Self::GraphDiverse {
+                vector_filters_file: raw.vector_filters_file,
+                post_processor: raw
+                    .post_processor
+                    .ok_or_else(|| serde::de::Error::missing_field("post_processor"))?,
+            },
+        })
+    }
 }
 
 /// Path-independent search metadata written to benchmark results.
@@ -304,6 +359,54 @@ mod tests {
             serde_json::from_str::<DiskSearchMode>(r#"{ "mode": "graph-diverse" }"#)
                 .expect_err("diverse mode must require a post-processor");
         assert!(diverse_error.to_string().contains("post_processor"));
+    }
+
+    #[test]
+    fn incompatible_search_options_are_rejected() {
+        let adaptive = serde_json::json!({ "sample_count": 1, "scale_factor": 2.0 });
+        let diverse =
+            serde_json::json!({ "type": "determinant-diversity", "power": 2.0, "eta": 1.0 });
+        for (mode, option, value) in [
+            ("flat", "adaptive_l", adaptive.clone()),
+            ("graph", "adaptive_l", adaptive.clone()),
+            ("graph-diverse", "adaptive_l", adaptive),
+            ("flat", "post_processor", diverse.clone()),
+            ("graph", "post_processor", diverse.clone()),
+            ("graph-inline-filter", "post_processor", diverse.clone()),
+        ] {
+            let mut input =
+                serde_json::json!({ "mode": mode, "vector_filters_file": "filters.bin" });
+            if mode == "graph-diverse" {
+                input["post_processor"] = diverse.clone();
+            }
+            input[option] = value;
+            let error = serde_json::from_value::<DiskSearchMode>(input).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains(&format!("{option} is only supported")));
+        }
+    }
+
+    #[test]
+    fn unknown_fields_and_null_optional_settings_are_accepted() {
+        let mode: DiskSearchMode = serde_json::from_value(serde_json::json!({
+            "mode": "flat", "future_option": { "enabled": true },
+            "adaptive_l": null, "post_processor": null
+        }))
+        .unwrap();
+        assert!(matches!(mode, DiskSearchMode::Flat { .. }));
+    }
+
+    #[test]
+    fn invalid_search_mode_and_field_types_are_rejected() {
+        for input in [
+            serde_json::json!({ "mode": "unknown" }),
+            serde_json::json!({ "mode": "graph", "vector_filters_file": 42 }),
+            serde_json::json!({ "mode": "graph-inline-filter", "vector_filters_file": "filters.bin", "adaptive_l": "invalid" }),
+            serde_json::json!({ "mode": "graph-diverse", "post_processor": "invalid" }),
+        ] {
+            assert!(serde_json::from_value::<DiskSearchMode>(input).is_err());
+        }
     }
 
     #[test]
