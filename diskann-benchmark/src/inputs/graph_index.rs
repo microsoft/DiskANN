@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use std::num::{NonZero, NonZeroU32, NonZeroUsize};
+use std::{
+    num::{NonZero, NonZeroU32, NonZeroUsize},
+    path::PathBuf,
+};
 
 use anyhow::{anyhow, Context};
 use diskann::{
@@ -1351,13 +1354,12 @@ impl From<InplaceDeleteMethod> for graph::InplaceDeleteMethod {
 pub(crate) struct DynamicRunbookParams {
     pub(crate) runbook_path: InputFile,
     pub(crate) dataset_name: String,
-    pub(crate) gt_directory: String,
+    pub(crate) gt_directory: PathBuf,
     pub(crate) ip_delete_method: InplaceDeleteMethod,
     pub(crate) ip_delete_num_to_replace: usize,
     /// Threshold for deferred consolidation. Required for soft-delete providers (inmem).
     /// Hard-delete providers (bf-tree) ignore this field.
     pub(crate) consolidate_threshold: RequiredOption<f32>,
-    pub(crate) resolved_gt_directory: Option<std::path::PathBuf>,
 }
 
 // Validates:
@@ -1379,23 +1381,23 @@ impl DynamicRunbookParams {
         }
 
         let final_gt_directory = checker.find_input_dir(self.gt_directory.as_ref())?;
-        self.resolved_gt_directory = Some(final_gt_directory.clone());
 
         // Run pre-flight checks for the runbook.
         let _runbook = bigann::RunBook::load(
             &self.runbook_path,
             &self.dataset_name,
-            &mut bigann::ScanDirectory::new(final_gt_directory)?,
+            &mut bigann::ScanDirectory::new(&final_gt_directory)?,
         )
         .with_context(|| {
             format!(
                 "Failed to validate runbook '{}' with dataset '{}' and gt_directory '{}'",
                 self.runbook_path.display(),
                 self.dataset_name,
-                self.gt_directory
+                self.gt_directory.display(),
             )
         })?;
 
+        self.gt_directory = final_gt_directory;
         Ok(())
     }
 }
@@ -1412,7 +1414,6 @@ impl Example for DynamicRunbookParams {
             },
             ip_delete_num_to_replace: 3,
             consolidate_threshold: RequiredOption::some(0.2),
-            resolved_gt_directory: None,
         }
     }
 }
@@ -1433,13 +1434,7 @@ impl std::fmt::Display for DynamicRunbookParams {
         writeln!(f, "Dynamic Runbook Parameters")?;
         write_field!(f, "Runbook Path", self.runbook_path.display())?;
         write_field!(f, "Dataset Name", self.dataset_name)?;
-
-        // Show resolved path if available, otherwise show original
-        let gt_dir_display = match &self.resolved_gt_directory {
-            Some(resolved) => resolved.display().to_string(),
-            None => self.gt_directory.clone(),
-        };
-        write_field!(f, "Ground Truth Directory", gt_dir_display)?;
+        write_field!(f, "Ground Truth Directory", self.gt_directory.display())?;
 
         match self.ip_delete_method {
             InplaceDeleteMethod::VisitedAndTopK { k_value, l_value } => {

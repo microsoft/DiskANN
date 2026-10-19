@@ -304,14 +304,7 @@ where
     ) -> anyhow::Result<Vec<managed::Stats<StreamStats>>> {
         writeln!(output, "{}", input)?;
 
-        let groundtruth_directory = input
-            .runbook_params
-            .resolved_gt_directory
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Ground truth directory path was not resolved during validation")
-            })?;
-
+        let groundtruth_directory = &input.runbook_params.gt_directory;
         let mut runbook = bigann::RunBook::load(
             &input.runbook_params.runbook_path,
             &input.runbook_params.dataset_name,
