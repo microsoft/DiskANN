@@ -17,6 +17,10 @@
 //! nearest leaders. This module samples leaders, gathers vectors, and groups the
 //! assignments into children.
 //!
+//! A split assigns its points in parallel stripes. An assignment stripe is a
+//! batch of up to `ASSIGNMENT_STRIPE_POINTS` points that one task gathers as
+//! `f32` and ranks against all leaders of the split.
+//!
 //! Buffer sizes use plain multiplication. The IDs of one split are distinct
 //! dataset rows, so a gathered `rows x dimensions` buffer is not larger than the
 //! dataset. An assignment buffer holds `points x fanout` IDs. With at most
@@ -46,22 +50,12 @@ use super::{
 /// split of 10M points at `p_samp = 0.005` samples 50,000 leaders and does 50
 /// times the work.
 const LEADER_CAP: usize = 1_000;
-/// Number of points in one assignment stripe. A stripe gathers its points as
-/// `f32` and computes their distances to all leaders, so it moves
-/// `points x (leaders + dimensions) x 4` bytes through the cache.
-///
-/// Each stripe repeats fixed work, such as one GEMM call over the leader matrix,
-/// so 16-point stripes took 1.3 to 2 times as long as the best height. Tall
-/// stripes slow down when the stripes of all workers exceed the last-level
-/// cache. The L2 cache is not the limit: one worker ran 16 MiB stripes at full
-/// speed on a CPU with 512 KiB of L2 per core.
-///
-/// Sweeps on Zen 3, Zen 4, Emerald Rapids and Ice Lake CPUs covered f32, f16 and
-/// u8 data, 128 to 1,536 dimensions, 64 to 1,000 leaders and 1 to 16 workers.
-/// 256 points stayed within 11% of the best height, and within 1.4% on average.
-/// With 8 leaders and 1,536 dimensions, where the gather dominates, the loss was
-/// up to 27%. A rule from the detected cache size did not do better, because a
-/// virtual machine reports a last-level cache that other tenants also use.
+/// Number of points in one assignment stripe. Short stripes repeat the fixed
+/// cost of a kernel call, and tall stripes overflow the last-level cache once
+/// every worker holds one. 256 points stayed within 1.4% of the best height on
+/// average in sweeps over x86 CPUs, data types, dimensions and leader counts. A
+/// height from the detected cache size did no better, because a VM reports a
+/// last-level cache that other tenants share.
 const ASSIGNMENT_STRIPE_POINTS: usize = 256;
 /// Clusters with at least this many points group their points by leader in
 /// parallel. Such clusters occur at the first levels, where few splits run at
