@@ -11,7 +11,6 @@ use std::{
 };
 
 use diskann_utils::future::SendFuture;
-use rand::{SeedableRng, rngs::StdRng};
 use thiserror::Error;
 
 use super::{
@@ -57,7 +56,6 @@ pub struct InsertStats {
 pub struct IVFIndex<P: Provider> {
     provider: P,
     config: Config,
-    rng: StdRng,
 }
 
 impl<P: Provider> IVFIndex<P> {
@@ -68,11 +66,7 @@ impl<P: Provider> IVFIndex<P> {
         if config.split_threshold.get() < 2 {
             return Err(ConfigError(config.split_threshold.get()));
         }
-        Ok(Self {
-            provider,
-            rng: StdRng::seed_from_u64(config.seed),
-            config,
-        })
+        Ok(Self { provider, config })
     }
 
     pub fn provider(&self) -> &P {
@@ -91,7 +85,6 @@ impl<P: Provider> IVFIndex<P> {
     {
         let provider = &mut self.provider;
         let config = self.config;
-        let rng = &mut self.rng;
 
         async move {
             if points.is_empty() {
@@ -168,7 +161,6 @@ impl<P: Provider> IVFIndex<P> {
                     &neighbors,
                     config.split_iterations,
                     dim,
-                    rng,
                 )?;
 
                 update_final = Some(update)

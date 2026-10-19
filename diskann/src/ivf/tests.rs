@@ -1115,35 +1115,35 @@ fn assignment_can_cross_parent_boundaries() {
 }
 
 #[test]
-fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
-    let rows = [[f32::MAX], [f32::MAX], [f32::MAX]];
-    let sources = [(
-        1,
-        Source {
-            centroid: vec![f32::MAX],
-            members: vec![0, 1, 2],
-            vectors: matrix(&rows),
-        },
-    )]
-    .into();
-    let region = Region::new(&sources);
-    let mut one = Update::new(&sources, 1);
-    clustering::split(
-        &region,
-        &mut one,
-        &BTreeSet::from([1]),
-        &BTreeSet::new(),
-        NonZeroUsize::new(1).unwrap(),
-        NonZeroUsize::new(1).unwrap(),
-        &mut StdRng::seed_from_u64(7),
-    )
-    .unwrap();
-    assert_eq!(one.created.len(), 2);
-    for child in &one.created {
-        assert_eq!(child.centroid, [f32::MAX]);
+fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
+    for value in [0.0, 7.0] {
+        let sources = [(
+            1,
+            Source {
+                centroid: vec![value],
+                members: vec![0, 1, 2],
+                vectors: matrix(&[[value]; 3]),
+            },
+        )]
+        .into();
+        let region = Region::new(&sources);
+        let mut update = Update::new(&sources, 1);
+        clustering::split(
+            &region,
+            &mut update,
+            &BTreeSet::from([1]),
+            &BTreeSet::new(),
+            NonZeroUsize::new(1).unwrap(),
+            NonZeroUsize::new(1).unwrap(),
+            &mut StdRng::seed_from_u64(7),
+        )
+        .unwrap();
+        assert_eq!(update.created.len(), 2);
+        assert_eq!(update.created[0].centroid, [value]);
+        assert_eq!(update.created[1].centroid, [0.0]);
+        assert_eq!(update.created[0].members, [0, 1, 2]);
+        assert!(update.created[1].members.is_empty());
     }
-    assert_eq!(one.created[0].members, [0, 1, 2]);
-    assert!(one.created[1].members.is_empty());
 }
 
 #[test]
@@ -1494,6 +1494,40 @@ fn numerical_strategy_failures_record_no_updates() {
         "{error}"
     );
     assert_unwritten(update);
+}
+
+#[test]
+fn two_means_matches_quantization_lloyds() {
+    use clustering::{Clusterer, TwoMeans};
+    use rand::Rng;
+
+    let points = matrix(&[[0.0, 2.0], [2.0, 4.0], [6.0, 6.0], [10.0, 12.0]]);
+    for seed in [0, 7, 42] {
+        for iterations in [1, 5] {
+            let mut expected = rowmajor::Owned::from_element(2, 2, 0.0);
+            let mut reference_rng = StdRng::seed_from_u64(seed);
+            let first = reference_rng.random_range(0..points.nrows());
+            let second = (first + reference_rng.random_range(1..points.nrows())) % points.nrows();
+            expected.row_mut(0).copy_from_slice(points.row(first));
+            expected.row_mut(1).copy_from_slice(points.row(second));
+            let _ = diskann_quantization::algorithms::kmeans::lloyds::lloyds(
+                points.as_view(),
+                expected.as_view_mut(),
+                iterations,
+            );
+
+            let mut actual = rowmajor::Owned::from_element(2, 2, 0.0);
+            let mut rng = StdRng::seed_from_u64(seed);
+            TwoMeans::new(
+                NonZeroUsize::new(iterations).unwrap(),
+                NonZeroUsize::new(2).unwrap(),
+            )
+            .fit(points.as_view(), actual.as_view_mut(), &mut rng)
+            .unwrap();
+            assert_eq!(actual.as_slice(), expected.as_slice());
+            assert_eq!(rng.random::<u64>(), reference_rng.random::<u64>());
+        }
+    }
 }
 
 #[test]

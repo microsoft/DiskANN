@@ -10,9 +10,9 @@
 
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
+use diskann_quantization::algorithms::kmeans::lloyds::lloyds;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
-use rand::{Rng, rngs::StdRng};
 
 use super::region::{RegionUpdate, RegionView};
 use crate::{ANNError, ANNResult};
@@ -24,12 +24,7 @@ pub(super) trait Clusterer<T = f32> {
     /// Implementations own initialization, convergence, empty-cluster handling,
     /// and reusable fitting scratch. `dst` has `num_centers()` rows and `dim()`
     /// columns. The number of centers must be at least two.
-    fn fit(
-        &mut self,
-        points: rowmajor::Ref<'_, T>,
-        dst: rowmajor::Mut<'_, T>,
-        rng: &mut StdRng,
-    ) -> ANNResult<()>;
+    fn fit(&mut self, points: rowmajor::Ref<'_, T>, dst: rowmajor::Mut<'_, T>) -> ANNResult<()>;
 
     fn num_centers(&self) -> NonZeroUsize;
 
@@ -114,10 +109,9 @@ pub(super) fn split<I: Copy, L: Copy + Ord, R: RegionView<I, L>, U: RegionUpdate
     neighbors: &BTreeSet<L>,
     iterations: NonZeroUsize,
     dim: NonZeroUsize,
-    rng: &mut StdRng,
 ) -> ANNResult<()> {
     SplitAndAssign::new(TwoMeans::new(iterations, dim), RegionalNearest)
-        .run(region, update, parents, neighbors, rng)
+        .run(region, update, parents, neighbors)
 }
 
 impl<C: Clusterer, A> SplitAndAssign<C, A> {
@@ -128,7 +122,6 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
         update: &mut U,
         parents: &BTreeSet<L>,
         neighbors: &BTreeSet<L>,
-        rng: &mut StdRng,
     ) -> ANNResult<()>
     where
         A: Assigner<I, L>,
@@ -158,7 +151,6 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
                 clusters.subview_mut(s..end).ok_or_else(|| {
                     ANNError::message("IVF centroid scratch range is out of bounds")
                 })?,
-                rng,
             )?;
 
             s = end;
@@ -190,19 +182,15 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
     }
 }
 
+/// Random input seeds followed by Lloyd iterations, which reset empty centers to zero.
 pub(super) struct TwoMeans {
     iterations: NonZeroUsize,
-    sums: Vec<f64>,
     dim: NonZeroUsize,
 }
 
 impl TwoMeans {
     pub(super) fn new(iterations: NonZeroUsize, dim: NonZeroUsize) -> Self {
-        Self {
-            iterations,
-            sums: Vec::new(),
-            dim,
-        }
+        Self { iterations, dim }
     }
 }
 
@@ -211,52 +199,28 @@ impl Clusterer for TwoMeans {
         &mut self,
         points: rowmajor::Ref<'_, f32>,
         mut dst: rowmajor::Mut<'_, f32>,
-        rng: &mut StdRng,
     ) -> ANNResult<()> {
-        let dim = self.dim.get();
-        if points.nrows() < 2 {
+        let dim = self.dim().get();
+        let num_centers = self.num_centers().get();
+
+        if points.nrows() < num_centers {
             return Err(ANNError::message("an IVF split needs at least two points"));
         }
-        if points.ncols() != dim || dst.ncols() != dim || dst.nrows() != self.num_centers().get() {
+        if points.ncols() != dim || dst.ncols() != dim || dst.nrows() != num_centers {
             return Err(ANNError::message(
                 "two-means needs canonical input rows and a two-row destination of the canonical dimension",
             ));
         }
-        if !points.as_slice().iter().all(|value| value.is_finite()) {
-            return Err(ANNError::message(
-                "two-means input coordinates must be finite",
-            ));
-        }
-        let centers = dst.as_mut_slice();
-        self.sums.resize(centers.len(), 0.0);
-        let first = rng.random_range(0..points.nrows());
-        let second = (first + rng.random_range(1..points.nrows())) % points.nrows();
-        centers[..dim].copy_from_slice(points.row(first));
-        centers[dim..].copy_from_slice(points.row(second));
 
-        for _ in 0..self.iterations.get() {
-            self.sums.fill(0.0);
-            let mut counts = [0usize; 2];
-            for point in points.rows() {
-                let to = nearest(point, centers.chunks_exact(dim));
-                counts[to] += 1;
-                for (sum, &value) in self.sums[to * dim..(to + 1) * dim].iter_mut().zip(point) {
-                    // A finite mean must not overflow while accumulating its inputs.
-                    *sum += f64::from(value);
-                }
-            }
-            for ((center, sum), count) in centers
-                .chunks_exact_mut(dim)
-                .zip(self.sums.chunks_exact(dim))
-                .zip(counts)
-            {
-                if count != 0 {
-                    for (value, &sum) in center.iter_mut().zip(sum) {
-                        *value = (sum / count as f64) as f32;
-                    }
-                }
-            }
-        }
+        dst.as_mut_slice().copy_from_slice(
+            points
+                .subview(0..num_centers)
+                .ok_or(ANNError::message("oh no!"))?
+                .as_slice(),
+        );
+
+        let _ = lloyds(points, dst, self.iterations.get());
+
         Ok(())
     }
 

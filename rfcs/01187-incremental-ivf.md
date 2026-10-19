@@ -74,9 +74,13 @@ even when a region contains additional sources. It covers every source member
 exactly once, including pending appends to retained neighbors; other lists are
 unchanged. Explicit source IDs avoid requiring enumeration on the region view.
 
-Numerical computation borrows vector matrices and member slices, without building
-per-point reference tables or copying vector coordinates. A provider with
-scattered storage may pack rows during filling to satisfy the matrix interface.
+The numerical driver borrows vector matrices and member slices, without building
+per-point reference tables. A provider with scattered storage may pack rows during
+filling to satisfy the matrix interface. The built-in two-means fitter seeds two
+distinct random input rows and delegates to quantization's Lloyd routine, which
+builds internal transposed scratch and resets empty centers to zero. Its
+norm-based distance arithmetic does not preserve support for extreme finite
+coordinates whose squared norms overflow.
 The numerical driver separates per-parent fitting (`Clusterer`) from whole-region
 placement (`Assigner`). A clusterer declares its dimension and fixed number of
 centers per parent, then fills mutable row windows of reusable centroid scratch.
