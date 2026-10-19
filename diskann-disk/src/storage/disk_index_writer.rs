@@ -560,7 +560,7 @@ impl DiskIndexWriter {
 mod disk_index_storage_test {
     use crate::test_utils::GraphDataF32VectorU32Data;
     use diskann_providers::model::graph::provider::async_::SimpleNeighborProviderAsync;
-    use diskann_providers::storage::{DiskGraphOnly, SaveWith, VirtualStorageProvider};
+    use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::{io::write_bin, test_data_root, views::rowmajor};
     use vfs::OverlayFS;
 
@@ -760,17 +760,9 @@ mod disk_index_storage_test {
         )
         .unwrap();
 
-        // Save the graph the way the disk index build does: one point plus the virtual start
-        // point at ID 1, linked to each other, with the virtual start point folded into point 0.
-        let graph = SimpleNeighborProviderAsync::new(1, 1, MAX_DEGREE, 1.0);
-        graph.set_neighbors_sync(0, &[1]).unwrap();
-        graph.set_neighbors_sync(1, &[0]).unwrap();
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(graph.save_with(
-                &storage_provider,
-                &(1, 0, DiskGraphOnly::new(index_writer.get_mem_index_file())),
-            ))
+        // A single node with no neighbors, which is also the start point.
+        SimpleNeighborProviderAsync::new(1, 0, MAX_DEGREE, 1.0)
+            .save_direct(&storage_provider, 0, &index_writer.get_mem_index_file())
             .unwrap();
 
         index_writer
