@@ -3664,6 +3664,33 @@ mod tests {
         }
 
         #[test]
+        fn compat_3bit_l2() {
+            run_compatibility_test::<3>(
+                SupportedMetric::SquaredL2,
+                DataTransform::DoubleHadamard,
+                ScaleConfig::None,
+            );
+        }
+
+        #[test]
+        fn compat_3bit_ip() {
+            run_compatibility_test::<3>(
+                SupportedMetric::InnerProduct,
+                DataTransform::DoubleHadamard,
+                ScaleConfig::None,
+            );
+        }
+
+        #[test]
+        fn compat_3bit_cosine() {
+            run_compatibility_test::<3>(
+                SupportedMetric::Cosine,
+                DataTransform::DoubleHadamard,
+                ScaleConfig::None,
+            );
+        }
+
+        #[test]
         fn compat_4bit_l2() {
             run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,

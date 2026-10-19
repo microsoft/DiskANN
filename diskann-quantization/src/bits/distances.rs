@@ -3466,25 +3466,21 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<f32>, &[f32], US
         y: USlice<'_, 3>,
     ) -> MathematicalResult<f32> {
         // SAFETY: V3 guarantees AVX2 and FMA.
-        unsafe { full_ip_3bit_long(arch, x, y) }
+        unsafe { full_ip_3bit(arch, x, y) }
     }
 }
 
-// Keep the four-accumulator loop out of line to limit caller register pressure.
+/// Keep the four-accumulator loop out of line to limit caller register pressure.
+///
+/// # Safety
+///
+/// The current CPU must support AVX2 and FMA, as guaranteed by a correctly constructed
+/// `V3`. Input lengths are checked internally; neither slice requires padding or
+/// additional alignment.
 #[cfg(target_arch = "x86_64")]
 #[inline(never)]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn full_ip_3bit_long(
-    arch: diskann_wide::arch::x86_64::V3,
-    x: &[f32],
-    y: USlice<'_, 3>,
-) -> MathematicalResult<f32> {
-    full_ip_3bit(arch, x, y)
-}
-
-#[cfg(target_arch = "x86_64")]
-#[inline(always)]
-fn full_ip_3bit(
+unsafe fn full_ip_3bit(
     arch: diskann_wide::arch::x86_64::V3,
     x: &[f32],
     y: USlice<'_, 3>,
@@ -3523,7 +3519,7 @@ fn full_ip_3bit(
     }
     // Leave at least one dimension after each pair: its byte makes the second
     // overlapping u32 load valid, even when the packed slice has no trailing storage.
-    while len - i > 16 {
+    if len - i > 16 {
         // SAFETY: At least 17 dimensions remain: 16 query values and 7 packed bytes
         // are readable. The two windows cover bytes [0, 4) and [3, 7).
         unsafe {
@@ -4802,6 +4798,18 @@ mod tests {
     test_full!(test_full_distance_1bit, 1, 0xe20e26e926d4b853);
     test_full!(test_full_distance_2bit, 2, 0xae9542700aecbf68);
     test_full!(test_full_distance_3bit, 3, 0xfffd04b26bb6068c);
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_full_distance_3bit_direct_v3() {
+        let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() else {
+            return;
+        };
+        test_full_distance_tails::<3>(
+            &|query, packed| InnerProduct.run(arch, query, packed),
+            "x86-64-v3 direct",
+        );
+    }
 
     test_full!(test_full_distance_4bit, 4, 0x86db49fd1a1704ba);
     test_full!(test_full_distance_5bit, 5, 0x3a35dc7fa7931c41);
