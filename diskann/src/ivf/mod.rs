@@ -15,6 +15,11 @@
 //! points, then all gathered points are reassigned across every child and retained
 //! neighbor centroid. This permits movement between retained neighbors as well.
 //! Parent centroids are not assignment candidates; retained centroids are unchanged.
+//! The numerical driver separates per-parent fitting from whole-region assignment.
+//! Fitting writes a fixed number of children per parent into reusable centroid
+//! scratch. Assignment borrows those rows and retained centroids, groups members,
+//! and records writes directly through the regional update object.
+//! The index currently selects two-means and regional-nearest assignment.
 //!
 //! Clustering finishes reading its inputs before recording child creation and
 //! parent retirement and neighbor membership replacement through the separate

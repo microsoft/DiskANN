@@ -92,7 +92,7 @@ pub trait BuildAccessor: Send + Sized + HasIds {
     type Update: RegionUpdate<Self::Id, Self::ListId>;
 
     /// Positive dimension of all canonical points and centroids.
-    fn dim(&self) -> usize;
+    fn dim(&self) -> NonZeroUsize;
 
     fn router(&mut self) -> Self::Router<'_>;
 

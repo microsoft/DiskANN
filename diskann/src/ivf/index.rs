@@ -33,11 +33,11 @@ pub struct Config {
     pub split_threshold: NonZeroUsize,
     /// Nearest-list query count per split parent, before filtering split parents.
     ///
-    /// [`ReassignCount::None`] disables neighborhood gathering.
-    /// All gathered points are reassigned across all children and retained neighbors.
+    /// - [`ReassignCount::None`] corresponds to no neighborhood gathering.
+    /// - [`ReassignCount::Count`] coresponds to a non-zero neighborhood size to be gathered.
     pub reassign_count: ReassignCount,
     /// Positive number of Lloyd steps per parent.
-    pub two_means_iterations: NonZeroUsize,
+    pub split_iterations: NonZeroUsize,
     pub seed: u64,
 }
 
@@ -97,9 +97,12 @@ impl<P: Provider> IVFIndex<P> {
             if points.is_empty() {
                 return Ok(InsertStats::default());
             }
+
             let mut accessor = strategy
                 .build_accessor(provider, context)
                 .into_ann_result()?;
+
+            let dim = accessor.dim();
 
             // Step 1: Compute the batch
             let batch = strategy.prepare(&mut accessor, points).await?;
@@ -133,7 +136,9 @@ impl<P: Provider> IVFIndex<P> {
             }
 
             let splits = parents.len();
-            let update = if !parents.is_empty() {
+            let mut update_final = None;
+
+            if !parents.is_empty() {
                 let mut neighbors = BTreeSet::new();
 
                 if let ReassignCount::Count(n) = config.reassign_count {
@@ -144,16 +149,14 @@ impl<P: Provider> IVFIndex<P> {
                             .nearest(pid, n.get())
                             .await?
                             .into_iter()
-                            .map(|(id, _)| id)
-                            .filter(|id| !parents.contains(id));
+                            .filter(|(id, _)| !parents.contains(id));
 
-                        for id in nids {
+                        for (id, _) in nids {
                             neighbors.insert(id);
                         }
                     }
                 }
 
-                let dim = accessor.dim();
                 let iter = parents.iter().chain(neighbors.iter()).copied();
 
                 let (region, mut update) = accessor.fill(iter).await?;
@@ -163,17 +166,15 @@ impl<P: Provider> IVFIndex<P> {
                     &mut update,
                     &parents,
                     &neighbors,
+                    config.split_iterations,
                     dim,
-                    config.two_means_iterations.get(),
                     rng,
                 )?;
 
-                Some(update)
-            } else {
-                None
+                update_final = Some(update)
             };
 
-            accessor.finish(update.as_ref()).await?;
+            accessor.finish(update_final.as_ref()).await?;
 
             Ok(InsertStats {
                 inserted: points.len(),

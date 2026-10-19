@@ -3,19 +3,102 @@
  * Licensed under the MIT license.
  */
 
-//! Two-means fitting and region-wide assignment over borrowed point rows.
+//! Replaceable child fitting and regional assignment over borrowed point rows.
+//!
+//! Fitting writes new centroids into reusable scratch. Assignment borrows the
+//! destinations, groups source members, and records regional writes directly.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, num::NonZeroUsize};
 
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{Rng, rngs::StdRng};
 
-use super::{
-    partition::{Partition, Partitioning},
-    region::{RegionUpdate, RegionView},
-};
+use super::region::{RegionUpdate, RegionView};
 use crate::{ANNError, ANNResult};
+
+/// Fit a parent's replacement centroids without assigning regional memberships.
+pub(super) trait Clusterer<T = f32> {
+    /// Fill `dst` with finite centroids of the canonical dimension.
+    ///
+    /// Implementations own initialization, convergence, empty-cluster handling,
+    /// and reusable fitting scratch. `dst` has `num_centers()` rows and `dim()`
+    /// columns. The number of centers must be at least two.
+    fn fit(
+        &mut self,
+        points: rowmajor::Ref<'_, T>,
+        dst: rowmajor::Mut<'_, T>,
+        rng: &mut StdRng,
+    ) -> ANNResult<()>;
+
+    fn num_centers(&self) -> NonZeroUsize;
+
+    fn dim(&self) -> NonZeroUsize;
+}
+
+/// Assign the whole region, allowing policies that coordinate multiple sources.
+pub(super) trait Assigner<I, L> {
+    /// Assign each source member to a destination and record complete memberships.
+    ///
+    /// Create new destinations, replace retained memberships, and retire sources
+    /// not retained as destinations. Validate and compute assignments before
+    /// recording writes. A write error may leave partial private updates.
+    fn assign<R, U>(
+        &mut self,
+        region: &R,
+        update: &mut U,
+        sources: &[L],
+        destinations: &[Destination<'_, L>],
+    ) -> ANNResult<()>
+    where
+        R: RegionView<I, L>,
+        U: RegionUpdate<I, L>;
+}
+
+pub(super) enum Type<L> {
+    /// Existing centroid.
+    Exists(L),
+    /// New centroid as a result of the split.
+    New,
+}
+
+/// A borrowed centroid; only retained destinations have an existing list ID.
+pub(super) struct Destination<'a, L> {
+    pub list: Type<L>,
+    pub centroid: &'a [f32],
+}
+
+pub(super) struct SplitAndAssign<C, A> {
+    pub clusterer: C,
+    pub assigner: A,
+    scratch: Option<rowmajor::Owned<f32>>, // scratch for the centroids.
+}
+
+impl<C: Clusterer, A> SplitAndAssign<C, A> {
+    pub(super) fn new(clusterer: C, assigner: A) -> Self {
+        Self {
+            clusterer,
+            assigner,
+            scratch: None,
+        }
+    }
+
+    /// Initialize the scratch for a particular number of output cluster centroids.
+    fn initialize(&mut self, num_jobs: NonZeroUsize) -> ANNResult<()> {
+        let c = self.clusterer.num_centers();
+
+        let rows = num_jobs
+            .checked_mul(c)
+            .ok_or_else(|| ANNError::message("IVF centroid count overflow"))?
+            .get();
+
+        let dim = self.clusterer.dim().get();
+
+        self.scratch = Some(rowmajor::Owned::try_from_element(rows, dim, f32::NAN)?);
+
+        Ok(())
+    }
+}
 
 /// Fit two children per parent and reassign sources across children and retained neighbors.
 ///
@@ -23,151 +106,232 @@ use crate::{ANNError, ANNResult};
 /// are retained unchanged. Other filled lists are not read or edited.
 /// Computation completes before any edits are recorded. A recording error may
 /// leave partial pending edits, which the caller must discard rather than publish.
-pub(super) fn split<I: Copy, L: Copy, R: RegionView<I, L>, U: RegionUpdate<I, L>>(
+/// An empty set of parents is a no-op.
+pub(super) fn split<I: Copy, L: Copy + Ord, R: RegionView<I, L>, U: RegionUpdate<I, L>>(
     region: &R,
     update: &mut U,
     parents: &BTreeSet<L>,
     neighbors: &BTreeSet<L>,
-    dim: usize,
-    iterations: usize,
+    iterations: NonZeroUsize,
+    dim: NonZeroUsize,
     rng: &mut StdRng,
 ) -> ANNResult<()> {
-    let result = compute_split(region, parents, neighbors, dim, iterations, rng)?;
-    for (centroid, partition) in result.centroids.rows().zip(result.partitions) {
-        match partition.id {
-            Some(id) => update.set_members(id, &partition.members)?,
-            None => update.create(centroid, &partition.members)?,
-        }
-    }
-    for &parent in parents {
-        update.retire(parent)?;
-    }
-    Ok(())
+    SplitAndAssign::new(TwoMeans::new(iterations, dim), RegionalNearest)
+        .run(region, update, parents, neighbors, rng)
 }
 
-fn compute_split<I: Copy, L: Copy, R: RegionView<I, L>>(
-    region: &R,
-    parents: &BTreeSet<L>,
-    neighbors: &BTreeSet<L>,
-    dim: usize,
-    iterations: usize,
-    rng: &mut StdRng,
-) -> ANNResult<Partitioning<I, L>> {
-    if parents.is_empty() || dim == 0 {
-        return Err(ANNError::message(
-            "IVF splitting needs parents and a positive dimension",
-        ));
-    }
-
-    let child_count = 2 * parents.len();
-    let mut centroids = rowmajor::Owned::try_from_element(child_count + neighbors.len(), dim, 0.0)?;
-    let mut inputs = Vec::with_capacity(parents.len() + neighbors.len());
-    for (index, &source) in parents.iter().chain(neighbors).enumerate() {
-        let view = region
-            .get_view(source)
-            .ok_or_else(|| ANNError::message("IVF split source is missing from the region"))?;
-        let vectors = region.get_vectors(source).ok_or_else(|| {
-            ANNError::message("IVF split source vectors are missing from the region")
-        })?;
-        if index >= parents.len() {
-            centroids
-                .row_mut(child_count + index - parents.len())
-                .copy_from_slice(view.centroid);
-        }
-        inputs.push((view.members, vectors));
-    }
-
-    let mut sums = vec![0.0; 2 * dim];
-    for ((_, vectors), centers) in inputs[..parents.len()]
-        .iter()
-        .zip(centroids.as_mut_slice()[..child_count * dim].chunks_exact_mut(2 * dim))
+impl<C: Clusterer, A> SplitAndAssign<C, A> {
+    /// Compute the complete result before registering any provider writes.
+    pub(super) fn run<I: Copy, L: Copy + Ord, R, U>(
+        &mut self,
+        region: &R,
+        update: &mut U,
+        parents: &BTreeSet<L>,
+        neighbors: &BTreeSet<L>,
+        rng: &mut StdRng,
+    ) -> ANNResult<()>
+    where
+        A: Assigner<I, L>,
+        R: RegionView<I, L>,
+        U: RegionUpdate<I, L>,
     {
-        fit_two_means(vectors.as_view(), centers, dim, iterations, rng, &mut sums)?;
-    }
+        self.initialize(NonZeroUsize::new(parents.len()).ok_or(ANNError::message("err"))?)?;
 
-    let count = inputs.iter().map(|(members, _)| members.len()).sum();
-    let mut assignments = Vec::with_capacity(count);
-    let mut sizes = vec![0; centroids.nrows()];
-    for (_, vectors) in &inputs {
-        for vector in vectors.rows() {
-            let to = nearest(vector, centroids.as_slice(), dim);
-            assignments.push(to);
-            sizes[to] += 1;
+        let n_centroids = self.clusterer.num_centers().get();
+        let mut s = 0;
+
+        let mut clusters = self
+            .scratch
+            .as_mut()
+            .ok_or_else(|| ANNError::message("IVF centroid scratch was not initialized"))?
+            .as_view_mut();
+
+        for &p in parents {
+            let vecs = region.get_vectors(p).ok_or_else(|| {
+                ANNError::message("IVF split source vectors are missing from the region")
+            })?;
+
+            let end = s + n_centroids;
+
+            self.clusterer.fit(
+                vecs,
+                clusters.subview_mut(s..end).ok_or_else(|| {
+                    ANNError::message("IVF centroid scratch range is out of bounds")
+                })?,
+                rng,
+            )?;
+
+            s = end;
         }
+
+        let mut destinations: Vec<_> = clusters
+            .rows()
+            .map(|centroid| Destination {
+                list: Type::New,
+                centroid,
+            })
+            .collect();
+
+        for &n in neighbors {
+            let view = region
+                .get_view(n)
+                .ok_or_else(|| ANNError::message("IVF neighbor is missing from the region"))?;
+
+            destinations.push(Destination {
+                list: Type::Exists(n),
+                centroid: view.centroid,
+            });
+        }
+
+        let sources = parents.iter().chain(neighbors).copied().collect::<Vec<_>>();
+
+        self.assigner
+            .assign(region, update, &sources, &destinations)
     }
-    let mut partitions: Vec<Partition<I, L>> = std::iter::repeat_n(None, child_count)
-        .chain(neighbors.iter().copied().map(Some))
-        .zip(sizes)
-        .map(|(id, size)| Partition {
-            id,
-            members: Vec::with_capacity(size),
-        })
-        .collect();
-    for (id, to) in inputs
-        .iter()
-        .flat_map(|(members, _)| members.iter().copied())
-        .zip(assignments)
-    {
-        partitions[to].members.push(id);
-    }
-    Ok(Partitioning {
-        centroids,
-        partitions,
-    })
 }
 
-fn fit_two_means(
-    points: rowmajor::Ref<'_, f32>,
-    centers: &mut [f32],
-    dim: usize,
-    iterations: usize,
-    rng: &mut StdRng,
-    sums: &mut [f64],
-) -> ANNResult<()> {
-    if points.nrows() < 2 {
-        return Err(ANNError::message("an IVF split needs at least two points"));
-    }
-    let first = rng.random_range(0..points.nrows());
-    let second = (first + rng.random_range(1..points.nrows())) % points.nrows();
-    centers[..dim].copy_from_slice(points.row(first));
-    centers[dim..].copy_from_slice(points.row(second));
+pub(super) struct TwoMeans {
+    iterations: NonZeroUsize,
+    sums: Vec<f64>,
+    dim: NonZeroUsize,
+}
 
-    for _ in 0..iterations.max(1) {
-        sums.fill(0.0);
-        let mut counts = [0; 2];
-        for point in points.rows() {
-            let to = nearest(point, centers, dim);
-            counts[to] += 1;
-            for (sum, &value) in sums[to * dim..(to + 1) * dim].iter_mut().zip(point) {
-                // A finite mean must not overflow while accumulating its inputs.
-                *sum += f64::from(value);
+impl TwoMeans {
+    pub(super) fn new(iterations: NonZeroUsize, dim: NonZeroUsize) -> Self {
+        Self {
+            iterations,
+            sums: Vec::new(),
+            dim,
+        }
+    }
+}
+
+impl Clusterer for TwoMeans {
+    fn fit(
+        &mut self,
+        points: rowmajor::Ref<'_, f32>,
+        mut dst: rowmajor::Mut<'_, f32>,
+        rng: &mut StdRng,
+    ) -> ANNResult<()> {
+        let dim = self.dim.get();
+        if points.nrows() < 2 {
+            return Err(ANNError::message("an IVF split needs at least two points"));
+        }
+        if points.ncols() != dim || dst.ncols() != dim || dst.nrows() != self.num_centers().get() {
+            return Err(ANNError::message(
+                "two-means needs canonical input rows and a two-row destination of the canonical dimension",
+            ));
+        }
+        if !points.as_slice().iter().all(|value| value.is_finite()) {
+            return Err(ANNError::message(
+                "two-means input coordinates must be finite",
+            ));
+        }
+        let centers = dst.as_mut_slice();
+        self.sums.resize(centers.len(), 0.0);
+        let first = rng.random_range(0..points.nrows());
+        let second = (first + rng.random_range(1..points.nrows())) % points.nrows();
+        centers[..dim].copy_from_slice(points.row(first));
+        centers[dim..].copy_from_slice(points.row(second));
+
+        for _ in 0..self.iterations.get() {
+            self.sums.fill(0.0);
+            let mut counts = [0usize; 2];
+            for point in points.rows() {
+                let to = nearest(point, centers.chunks_exact(dim));
+                counts[to] += 1;
+                for (sum, &value) in self.sums[to * dim..(to + 1) * dim].iter_mut().zip(point) {
+                    // A finite mean must not overflow while accumulating its inputs.
+                    *sum += f64::from(value);
+                }
             }
-        }
-        for ((center, sum), count) in centers
-            .chunks_exact_mut(dim)
-            .zip(sums.chunks_exact(dim))
-            .zip(counts)
-        {
-            if count != 0 {
-                for (value, &sum) in center.iter_mut().zip(sum) {
-                    *value = (sum / count as f64) as f32;
+            for ((center, sum), count) in centers
+                .chunks_exact_mut(dim)
+                .zip(self.sums.chunks_exact(dim))
+                .zip(counts)
+            {
+                if count != 0 {
+                    for (value, &sum) in center.iter_mut().zip(sum) {
+                        *value = (sum / count as f64) as f32;
+                    }
                 }
             }
         }
+        Ok(())
     }
-    Ok(())
+
+    fn num_centers(&self) -> NonZeroUsize {
+        const { NonZeroUsize::new(2).unwrap() }
+    }
+
+    fn dim(&self) -> NonZeroUsize {
+        self.dim
+    }
 }
 
-/// Prefer the first centroid on ties. `centers` contains at least one full row.
-fn nearest(point: &[f32], centers: &[f32], dim: usize) -> usize {
-    let mut best = 0;
-    let mut best_distance: f32 = SquaredL2::evaluate(point, &centers[..dim]);
-    for (index, center) in centers.chunks_exact(dim).enumerate().skip(1) {
-        let distance: f32 = SquaredL2::evaluate(point, center);
-        if distance.total_cmp(&best_distance).is_lt() {
-            best = index;
-            best_distance = distance;
+pub(super) struct RegionalNearest;
+
+impl<I: Copy, L: Copy + Ord> Assigner<I, L> for RegionalNearest {
+    fn assign<R, U>(
+        &mut self,
+        region: &R,
+        update: &mut U,
+        sources: &[L],
+        destinations: &[Destination<'_, L>],
+    ) -> ANNResult<()>
+    where
+        R: RegionView<I, L>,
+        U: RegionUpdate<I, L>,
+    {
+        let mut memberships: Vec<Vec<I>> = (0..destinations.len()).map(|_| Vec::new()).collect();
+
+        for &src in sources {
+            let view = region.get_view(src).ok_or_else(|| {
+                ANNError::message("IVF assignment source is missing from the region")
+            })?;
+            let vectors = region.get_vectors(src).ok_or_else(|| {
+                ANNError::message("IVF assignment source vectors are missing from the region")
+            })?;
+
+            for (&id, point) in view.members.iter().zip(vectors.rows()) {
+                let dst = nearest(point, destinations.iter().map(|d| d.centroid));
+                memberships[dst].push(id);
+            }
+        }
+
+        let mut retained = BTreeSet::new();
+
+        for (destination, members) in destinations.iter().zip(memberships) {
+            match &destination.list {
+                Type::Exists(id) => {
+                    update.set_members(*id, &members)?;
+                    retained.insert(*id);
+                }
+                Type::New => update.create(destination.centroid, &members)?,
+            }
+        }
+
+        for &source in sources {
+            if !retained.contains(&source) {
+                update.retire(source)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Prefer the first centroid on ties.
+fn nearest<'a>(point: &[f32], targets: impl Iterator<Item = &'a [f32]>) -> usize {
+    let mut min = f32::MAX;
+    let mut best = usize::MAX;
+    for (i, center) in targets.enumerate() {
+        let dist = SquaredL2::evaluate(point, center);
+        if min > dist {
+            best = i;
+            min = dist;
         }
     }
+
     best
 }

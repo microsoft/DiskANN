@@ -77,6 +77,20 @@ unchanged. Explicit source IDs avoid requiring enumeration on the region view.
 Numerical computation borrows vector matrices and member slices, without building
 per-point reference tables or copying vector coordinates. A provider with
 scattered storage may pack rows during filling to satisfy the matrix interface.
+The numerical driver separates per-parent fitting (`Clusterer`) from whole-region
+placement (`Assigner`). A clusterer declares its dimension and fixed number of
+centers per parent, then fills mutable row windows of reusable centroid scratch.
+A borrowed destination catalog combines the completed rows with unchanged retained
+centroids; retained coordinates are not copied. The assigner receives the region,
+source IDs, destinations, and regional writer directly. It computes complete
+destination memberships before creating new lists, replacing retained memberships,
+and retiring replaced sources. The index still selects two-means and full regional
+nearest-centroid assignment. Restricted assignment can keep caller-supplied
+candidate relationships in its own state, but the index does not yet preserve those
+relationships or expose numerical strategy selection.
+Alternative geometries must keep fitting, assignment, and provider routing
+compatible.
+
 Fitted centroids and assignment/member metadata need new storage. Providers can
 reuse the canonical batch and optional pending-membership helper, or implement
 their own caches and private transactions. The owned update is provider-defined;

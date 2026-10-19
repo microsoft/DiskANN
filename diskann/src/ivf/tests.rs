@@ -237,8 +237,8 @@ impl<'p> BuildAccessor for Build<'p> {
     where
         Self: 'a;
 
-    fn dim(&self) -> usize {
-        self.store.dim
+    fn dim(&self) -> NonZeroUsize {
+        NonZeroUsize::new(self.store.dim).unwrap()
     }
 
     fn router(&mut self) -> Self::Router<'_> {
@@ -291,7 +291,8 @@ impl<'p> BuildAccessor for Build<'p> {
                     .get(&list)
                     .ok_or_else(|| ANNError::message(format!("unknown list {list}")))?;
                 let members: Vec<_> = self.pending.members(list, &stored.members)?.collect();
-                let mut vectors = rowmajor::Owned::from_element(members.len(), self.dim(), 0.0);
+                let mut vectors =
+                    rowmajor::Owned::from_element(members.len(), self.dim().get(), 0.0);
                 for (&id, row) in members.iter().zip(vectors.rows_mut()) {
                     let vector = self
                         .batch
@@ -310,7 +311,7 @@ impl<'p> BuildAccessor for Build<'p> {
                     },
                 );
             }
-            let mut update = Update::new(&self.sources, self.dim());
+            let mut update = Update::new(&self.sources, self.dim().get());
             update.fail_create = self.store.fail_create;
             update.fail_set_members = self.store.fail_set_members;
             update.fail_retire = self.store.fail_retire;
@@ -404,7 +405,8 @@ impl<'a, 'p> InsertStrategy<'a, Store, &'p [f32]> for Strategy {
         points: &[(u32, &'p [f32])],
     ) -> impl SendFuture<ANNResult<Arc<Batch<u32>>>> {
         async move {
-            let mut vectors = rowmajor::Owned::from_element(points.len(), accessor.dim(), 0.0);
+            let mut vectors =
+                rowmajor::Owned::from_element(points.len(), accessor.dim().get(), 0.0);
             let mut ids = Vec::with_capacity(points.len());
             for ((external, vector), out) in points.iter().zip(vectors.rows_mut()) {
                 if vector.len() != out.len() || !vector.iter().all(|value| value.is_finite()) {
@@ -442,7 +444,7 @@ fn index_with_neighbors(store: Store, threshold: usize, neighbors: usize) -> IVF
             split_threshold: NonZeroUsize::new(threshold).unwrap(),
             reassign_count: NonZeroUsize::new(neighbors)
                 .map_or(ReassignCount::None, ReassignCount::Count),
-            two_means_iterations: NonZeroUsize::new(5).unwrap(),
+            split_iterations: NonZeroUsize::new(5).unwrap(),
             seed: 7,
         },
     )
@@ -787,8 +789,8 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
         &mut update,
         &BTreeSet::from([1]),
         &BTreeSet::from([2, 3, 4]),
-        1,
-        5,
+        NonZeroUsize::new(5).unwrap(),
+        NonZeroUsize::new(1).unwrap(),
         &mut StdRng::seed_from_u64(7),
     )
     .unwrap();
@@ -851,8 +853,8 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 &mut update,
                 &BTreeSet::from([1]),
                 &BTreeSet::new(),
-                2,
-                5,
+                NonZeroUsize::new(5).unwrap(),
+                NonZeroUsize::new(2).unwrap(),
                 &mut StdRng::seed_from_u64(7),
             )
             .unwrap();
@@ -861,7 +863,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
             assert!(update.set_members(1, &[]).is_err());
             update
         };
-        assert_eq!(build.dim(), 2);
+        assert_eq!(build.dim().get(), 2);
         update
     };
     assert_eq!(update.created.len(), 2);
@@ -940,7 +942,7 @@ async fn invalid_config_and_uninitialized_insertion_fail() {
             Config {
                 split_threshold: NonZeroUsize::new(1).unwrap(),
                 reassign_count: ReassignCount::None,
-                two_means_iterations: NonZeroUsize::new(5).unwrap(),
+                split_iterations: NonZeroUsize::new(5).unwrap(),
                 seed: 7,
             },
         )
@@ -993,8 +995,8 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 &mut update,
                 &BTreeSet::from([1, 99]),
                 &BTreeSet::new(),
-                2,
-                5,
+                NonZeroUsize::new(5).unwrap(),
+                NonZeroUsize::new(2).unwrap(),
                 &mut StdRng::seed_from_u64(7)
             )
             .is_err()
@@ -1005,12 +1007,34 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 &mut update,
                 &BTreeSet::from([1]),
                 &BTreeSet::from([99]),
-                2,
-                5,
+                NonZeroUsize::new(5).unwrap(),
+                NonZeroUsize::new(2).unwrap(),
                 &mut StdRng::seed_from_u64(7)
             )
             .is_err()
         );
+        assert!(
+            clustering::split(
+                &region,
+                &mut update,
+                &BTreeSet::from([1]),
+                &BTreeSet::from([1]),
+                NonZeroUsize::new(5).unwrap(),
+                NonZeroUsize::new(2).unwrap(),
+                &mut StdRng::seed_from_u64(7)
+            )
+            .is_err()
+        );
+        clustering::split(
+            &region,
+            &mut update,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            NonZeroUsize::new(5).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
+            &mut StdRng::seed_from_u64(7),
+        )
+        .unwrap();
         assert!(update.created.is_empty());
         assert_eq!(
             std::mem::take(&mut update.memberships)
@@ -1023,8 +1047,8 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             &mut update,
             &BTreeSet::from([1]),
             &BTreeSet::new(),
-            2,
-            5,
+            NonZeroUsize::new(5).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
             &mut StdRng::seed_from_u64(7),
         )
         .unwrap();
@@ -1078,8 +1102,8 @@ fn assignment_can_cross_parent_boundaries() {
         &mut update,
         &BTreeSet::from([1, 2]),
         &BTreeSet::new(),
-        1,
-        10,
+        NonZeroUsize::new(10).unwrap(),
+        NonZeroUsize::new(1).unwrap(),
         &mut StdRng::seed_from_u64(7),
     )
     .unwrap();
@@ -1103,34 +1127,489 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
     )]
     .into();
     let region = Region::new(&sources);
-    let mut zero = Update::new(&sources, 1);
-    clustering::split(
-        &region,
-        &mut zero,
-        &BTreeSet::from([1]),
-        &BTreeSet::new(),
-        1,
-        0,
-        &mut StdRng::seed_from_u64(7),
-    )
-    .unwrap();
     let mut one = Update::new(&sources, 1);
     clustering::split(
         &region,
         &mut one,
         &BTreeSet::from([1]),
         &BTreeSet::new(),
-        1,
-        1,
+        NonZeroUsize::new(1).unwrap(),
+        NonZeroUsize::new(1).unwrap(),
         &mut StdRng::seed_from_u64(7),
     )
     .unwrap();
-    assert_eq!(zero.created.len(), 2);
     assert_eq!(one.created.len(), 2);
-    for (zero, one) in zero.created.iter().zip(&one.created) {
-        assert_eq!(zero.centroid, one.centroid);
-        assert!(zero.centroid.iter().all(|value| value.is_finite()));
+    for child in &one.created {
+        assert_eq!(child.centroid, [f32::MAX]);
     }
-    assert_eq!(zero.created[0].members, [0, 1, 2]);
-    assert!(zero.created[1].members.is_empty());
+    assert_eq!(one.created[0].members, [0, 1, 2]);
+    assert!(one.created[1].members.is_empty());
+}
+
+#[test]
+fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
+    struct RowsAsCenters;
+
+    impl clustering::Clusterer for RowsAsCenters {
+        fn fit(
+            &mut self,
+            points: rowmajor::Ref<'_, f32>,
+            mut dst: rowmajor::Mut<'_, f32>,
+            _: &mut StdRng,
+        ) -> ANNResult<()> {
+            assert_eq!(points.nrows(), dst.nrows());
+            dst.as_mut_slice().copy_from_slice(points.as_slice());
+            Ok(())
+        }
+
+        fn num_centers(&self) -> NonZeroUsize {
+            NonZeroUsize::new(2).unwrap()
+        }
+
+        fn dim(&self) -> NonZeroUsize {
+            NonZeroUsize::new(1).unwrap()
+        }
+    }
+
+    struct ParentLocal {
+        owners: BTreeMap<u32, Vec<u32>>,
+    }
+
+    impl clustering::Assigner<u32, u32> for ParentLocal {
+        fn assign<R, U>(
+            &mut self,
+            region: &R,
+            update: &mut U,
+            sources: &[u32],
+            destinations: &[clustering::Destination<'_, u32>],
+        ) -> ANNResult<()>
+        where
+            R: RegionView<u32, u32>,
+            U: RegionUpdate<u32, u32>,
+        {
+            assert_eq!(sources, [1, 2, 3, 4]);
+            assert_eq!(destinations.len(), 6);
+            assert!(std::ptr::eq(
+                destinations[4].centroid,
+                region.get_view(3).unwrap().centroid
+            ));
+            let children = [(1, 0..2), (2, 2..4)];
+            let mut memberships = vec![Vec::new(); destinations.len()];
+            for &source in sources {
+                let view = region.get_view(source).unwrap();
+                let vectors = region.get_vectors(source).unwrap();
+                let mut candidates: Vec<_> = destinations
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, destination)| {
+                        matches!(&destination.list, clustering::Type::Exists(id) if *id == source)
+                            .then_some(index)
+                    })
+                    .collect();
+                for (parent, range) in &children {
+                    if *parent == source
+                        || self
+                            .owners
+                            .get(&source)
+                            .is_some_and(|owners| owners.contains(parent))
+                    {
+                        candidates.extend(range.clone());
+                    }
+                }
+                for (&id, point) in view.members.iter().zip(vectors.rows()) {
+                    let destination = candidates
+                        .iter()
+                        .copied()
+                        .min_by(|&a, &b| {
+                            let left: f32 = SquaredL2::evaluate(point, destinations[a].centroid);
+                            let right: f32 = SquaredL2::evaluate(point, destinations[b].centroid);
+                            left.total_cmp(&right)
+                        })
+                        .unwrap();
+                    memberships[destination].push(id);
+                }
+            }
+            for (destination, members) in destinations.iter().zip(memberships) {
+                match &destination.list {
+                    clustering::Type::New => update.create(destination.centroid, &members)?,
+                    clustering::Type::Exists(id) => update.set_members(*id, &members)?,
+                }
+            }
+            for (parent, _) in children {
+                update.retire(parent)?;
+            }
+            Ok(())
+        }
+    }
+
+    let sources = [
+        (
+            1,
+            Source {
+                centroid: vec![0.0],
+                members: vec![0, 1],
+                vectors: matrix(&[[-10.0], [10.0]]),
+            },
+        ),
+        (
+            2,
+            Source {
+                centroid: vec![105.0],
+                members: vec![2, 3],
+                vectors: matrix(&[[100.0], [110.0]]),
+            },
+        ),
+        (
+            3,
+            Source {
+                centroid: vec![105.0],
+                members: vec![4, 5, 6],
+                vectors: matrix(&[[9.9], [100.1], [105.0]]),
+            },
+        ),
+        (
+            4,
+            Source {
+                centroid: vec![1000.0],
+                members: vec![7],
+                vectors: matrix(&[[100.2]]),
+            },
+        ),
+    ]
+    .into();
+    let region = Region::new(&sources);
+    let parents = BTreeSet::from([1, 2]);
+    let neighbors = BTreeSet::from([3, 4]);
+    let mut full = Update::new(&sources, 1);
+    let mut splitter = clustering::SplitAndAssign::new(RowsAsCenters, clustering::RegionalNearest);
+    splitter
+        .run(
+            &region,
+            &mut full,
+            &parents,
+            &neighbors,
+            &mut StdRng::seed_from_u64(7),
+        )
+        .unwrap();
+    let mut restricted = Update::new(&sources, 1);
+    clustering::SplitAndAssign::new(
+        RowsAsCenters,
+        ParentLocal {
+            owners: [(3, vec![1]), (4, vec![1, 2])].into(),
+        },
+    )
+    .run(
+        &region,
+        &mut restricted,
+        &parents,
+        &neighbors,
+        &mut StdRng::seed_from_u64(7),
+    )
+    .unwrap();
+
+    for update in [&full, &restricted] {
+        assert_eq!(
+            update
+                .created
+                .iter()
+                .map(|list| list.centroid[0])
+                .collect::<Vec<_>>(),
+            [-10.0, 10.0, 100.0, 110.0]
+        );
+        assert_eq!(update.created[0].members, [0]);
+        assert_eq!(update.created[1].members, [1, 4]);
+        assert_eq!(update.created[3].members, [3]);
+    }
+    assert_eq!(full.created[2].members, [2, 5, 7]);
+    assert_eq!(restricted.created[2].members, [2, 7]);
+    let mut repeated = Update::new(&sources, 1);
+    splitter
+        .run(
+            &region,
+            &mut repeated,
+            &parents,
+            &neighbors,
+            &mut StdRng::seed_from_u64(7),
+        )
+        .unwrap();
+    for (first, repeated) in full.created.iter().zip(&repeated.created) {
+        assert_eq!(first.centroid, repeated.centroid);
+        assert_eq!(first.members, repeated.members);
+    }
+    let mut smaller = Update::new(&sources, 1);
+    splitter
+        .run(
+            &region,
+            &mut smaller,
+            &BTreeSet::from([1]),
+            &BTreeSet::new(),
+            &mut StdRng::seed_from_u64(7),
+        )
+        .unwrap();
+    assert_eq!(smaller.created.len(), 2);
+    assert_eq!(smaller.created[0].members, [0]);
+    assert_eq!(smaller.created[1].members, [1]);
+    for (update, expected) in [(full, vec![6]), (restricted, vec![5, 6])] {
+        let mut changes: BTreeMap<_, _> = update.memberships.into_changes().collect();
+        for parent in [1, 2] {
+            assert!(matches!(changes.remove(&parent), Some(Membership::Retire)));
+        }
+        for (id, expected) in [(3, expected), (4, vec![])] {
+            let Some(Membership::Replace(members)) = changes.remove(&id) else {
+                panic!("expected replacement for retained list {id}");
+            };
+            assert_eq!(members, expected);
+        }
+        assert!(changes.is_empty());
+    }
+}
+
+#[test]
+fn numerical_strategy_failures_record_no_updates() {
+    enum InvalidFit {
+        Error,
+        TooFew,
+        WrongDimension,
+        NonFinite,
+        Incomplete,
+        CountOverflow,
+    }
+
+    impl clustering::Clusterer for InvalidFit {
+        fn fit(
+            &mut self,
+            _: rowmajor::Ref<'_, f32>,
+            mut dst: rowmajor::Mut<'_, f32>,
+            _: &mut StdRng,
+        ) -> ANNResult<()> {
+            match self {
+                Self::Error => Err(ANNError::message("injected fitting failure")),
+                Self::NonFinite => {
+                    dst.as_mut_slice().fill(f32::INFINITY);
+                    Ok(())
+                }
+                Self::Incomplete => {
+                    dst.row_mut(0).fill(0.0);
+                    Ok(())
+                }
+                _ => unreachable!("invalid centroid layout should be rejected before fitting"),
+            }
+        }
+
+        fn num_centers(&self) -> NonZeroUsize {
+            NonZeroUsize::new(match self {
+                Self::TooFew => 1,
+                Self::CountOverflow => usize::MAX,
+                _ => 2,
+            })
+            .unwrap()
+        }
+
+        fn dim(&self) -> NonZeroUsize {
+            NonZeroUsize::new(if matches!(self, Self::WrongDimension) {
+                2
+            } else {
+                1
+            })
+            .unwrap()
+        }
+    }
+
+    struct InvalidAssignment;
+
+    impl clustering::Assigner<u32, u32> for InvalidAssignment {
+        fn assign<R, U>(
+            &mut self,
+            _: &R,
+            _: &mut U,
+            _: &[u32],
+            _: &[clustering::Destination<'_, u32>],
+        ) -> ANNResult<()>
+        where
+            R: RegionView<u32, u32>,
+            U: RegionUpdate<u32, u32>,
+        {
+            Err(ANNError::message("injected assignment failure"))
+        }
+    }
+
+    fn assert_unwritten(update: Update) {
+        assert!(update.created.is_empty());
+        assert_eq!(update.memberships.into_changes().count(), 0);
+    }
+
+    let sources = [(
+        1,
+        Source {
+            centroid: vec![0.0],
+            members: vec![0, 1],
+            vectors: matrix(&[[-1.0], [1.0]]),
+        },
+    )]
+    .into();
+    let region = Region::new(&sources);
+    let parents = BTreeSet::from([1]);
+    let neighbors = BTreeSet::new();
+    for (clusterer, expected) in [
+        (InvalidFit::Error, "injected fitting failure"),
+        (InvalidFit::TooFew, "at least two centroids"),
+        (InvalidFit::WrongDimension, "canonical dimension"),
+        (InvalidFit::NonFinite, "finite value"),
+        (InvalidFit::Incomplete, "every centroid coordinate"),
+        (InvalidFit::CountOverflow, "centroid count overflow"),
+    ] {
+        let mut update = Update::new(&sources, 1);
+        let selected = if matches!(clusterer, InvalidFit::CountOverflow) {
+            BTreeSet::from([1, 2])
+        } else {
+            parents.clone()
+        };
+        let error = clustering::SplitAndAssign::new(clusterer, clustering::RegionalNearest)
+            .run(
+                &region,
+                &mut update,
+                &selected,
+                &neighbors,
+                &mut StdRng::seed_from_u64(7),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_unwritten(update);
+    }
+    let mut update = Update::new(&sources, 1);
+    let error = clustering::SplitAndAssign::new(
+        clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(1).unwrap()),
+        InvalidAssignment,
+    )
+    .run(
+        &region,
+        &mut update,
+        &parents,
+        &neighbors,
+        &mut StdRng::seed_from_u64(7),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("injected assignment failure"),
+        "{error}"
+    );
+    assert_unwritten(update);
+}
+
+#[test]
+fn two_means_fits_only_the_destination_window() {
+    use clustering::{Clusterer, TwoMeans};
+
+    let points = matrix(&[[0.0, 2.0], [2.0, 4.0], [10.0, 12.0], [12.0, 14.0]]);
+    let mut scratch = rowmajor::Owned::from_element(4, 2, -1.0);
+    let mut clusterer = TwoMeans::new(
+        NonZeroUsize::new(10).unwrap(),
+        NonZeroUsize::new(2).unwrap(),
+    );
+    let mut rng = StdRng::seed_from_u64(7);
+    clusterer
+        .fit(
+            points.as_view(),
+            scratch.subview_mut(1..3).unwrap(),
+            &mut rng,
+        )
+        .unwrap();
+    assert_eq!(scratch.row(0), [-1.0, -1.0]);
+    assert_eq!(scratch.row(3), [-1.0, -1.0]);
+    let window = scratch.subview(1..3).unwrap();
+    let mut centers: Vec<_> = window.rows().collect();
+    centers.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    assert_eq!(centers, [&[1.0, 3.0][..], &[11.0, 13.0][..]]);
+
+    for (points, rows, dim) in [
+        (matrix(&[[0.0, 2.0]]), 2, 2),
+        (matrix(&[[0.0], [1.0]]), 2, 2),
+        (matrix(&[[0.0, 2.0], [1.0, 3.0]]), 1, 2),
+        (matrix(&[[0.0, 2.0], [1.0, 3.0]]), 2, 1),
+        (matrix(&[[f32::NAN, 2.0], [1.0, 3.0]]), 2, 2),
+    ] {
+        let mut dst = rowmajor::Owned::from_element(rows, dim, -1.0);
+        assert!(
+            clusterer
+                .fit(points.as_view(), dst.as_view_mut(), &mut rng)
+                .is_err()
+        );
+        assert!(dst.as_slice().iter().all(|&value| value == -1.0));
+    }
+}
+
+#[test]
+fn regional_assignment_rejects_invalid_inputs_before_writing() {
+    use clustering::{Assigner, Destination, RegionalNearest, Type};
+
+    let mut sources = BTreeMap::from([
+        (
+            1,
+            Source {
+                centroid: vec![0.0],
+                members: vec![0, 1],
+                vectors: matrix(&[[0.0], [1.0]]),
+            },
+        ),
+        (
+            2,
+            Source {
+                centroid: vec![2.0],
+                members: vec![2],
+                vectors: matrix(&[[2.0]]),
+            },
+        ),
+    ]);
+    let destinations = [Destination {
+        list: Type::New,
+        centroid: &[0.0],
+    }];
+    for invalid in [
+        vec![],
+        vec![Destination {
+            list: Type::New,
+            centroid: &[],
+        }],
+        vec![Destination {
+            list: Type::New,
+            centroid: &[f32::NAN],
+        }],
+        vec![
+            Destination {
+                list: Type::New,
+                centroid: &[0.0],
+            },
+            Destination {
+                list: Type::New,
+                centroid: &[1.0, 2.0],
+            },
+        ],
+    ] {
+        let mut update = Update::new(&sources, 1);
+        assert!(
+            RegionalNearest
+                .assign(&Region::new(&sources), &mut update, &[1, 2], &invalid)
+                .is_err()
+        );
+        assert!(update.created.is_empty());
+        assert_eq!(update.memberships.into_changes().count(), 0);
+    }
+    for (ids, members, vectors) in [
+        (vec![1, 99], vec![2], matrix(&[[2.0]])),
+        (vec![1, 2], vec![], matrix(&[[2.0]])),
+        (vec![1, 2], vec![2], matrix(&[[0.0, 1.0]])),
+        (vec![1, 2], vec![2], matrix(&[[f32::INFINITY]])),
+    ] {
+        let mut update = Update::new(&sources, 1);
+        sources.get_mut(&2).unwrap().members = members;
+        sources.get_mut(&2).unwrap().vectors = vectors;
+        let region = Region::new(&sources);
+        assert!(
+            RegionalNearest
+                .assign(&region, &mut update, &ids, &destinations)
+                .is_err()
+        );
+        assert!(update.created.is_empty());
+        assert_eq!(update.memberships.into_changes().count(), 0);
+    }
 }
