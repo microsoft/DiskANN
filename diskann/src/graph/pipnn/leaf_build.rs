@@ -121,22 +121,25 @@ where
         return Ok(());
     }
 
+    buffers.prepare_local_adjacency(point_count);
     let point_values = &mut buffers.point_values[..point_count * data.ncols()];
     gather_as_f32(data, point_ids, point_values)?;
     let points = MatrixView::try_from(&*point_values, point_count, data.ncols())?;
-    let neighbor_count = point_count * leaf_k;
-    let output = MutMatrixView::try_from(
-        &mut buffers.neighbors[..neighbor_count],
+    let mut output = MutMatrixView::try_from(
+        &mut buffers.neighbors[..point_count * leaf_k],
         point_count,
         leaf_k,
     )?;
-    select_leaf_neighbors::<A, M>(arch, points, output, &mut buffers.kernel_workspace)?;
+    select_leaf_neighbors::<A, M>(
+        arch,
+        points,
+        output.as_mut_view(),
+        &mut buffers.kernel_workspace,
+    )?;
 
-    buffers.prepare_local_adjacency(point_count);
     add_symmetric_neighbors(
         point_ids,
-        leaf_k,
-        &buffers.neighbors[..neighbor_count],
+        output.as_view(),
         &mut buffers.local_adjacency[..point_count],
     );
     for (&point_id, additions) in point_ids.iter().zip(&buffers.local_adjacency) {
@@ -151,11 +154,10 @@ where
 /// the edge lists of both points.
 fn add_symmetric_neighbors(
     point_ids: &[u32],
-    leaf_k: usize,
-    neighbors: &[Candidate],
+    neighbors: MatrixView<'_, Candidate>,
     local_adjacency: &mut [Vec<u32>],
 ) {
-    for (source, source_neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
+    for (source, source_neighbors) in neighbors.row_iter().enumerate() {
         for neighbor in source_neighbors {
             // Skip the empty slots that the kernel leaves for NaN and infinite
             // distances.
