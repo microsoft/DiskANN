@@ -239,12 +239,13 @@ where
         if child.len() <= c_max {
             leaves.push(child);
         } else if fanout == 1 && child.len() == cluster.point_ids.len() {
-            // Every point chose this leader, so the split made no progress. This
-            // happens when all sampled leaders are copies of one vector: each
-            // point is equally near to all of them. Another split can stall the
-            // same way, so cut the child into equal leaves in point order. The
-            // cut groups points arbitrarily, which can lower recall but keeps
-            // the graph valid.
+            // Every point chose this leader, so the split made no progress. With
+            // L2 or cosine, each leader is nearest to itself, so this needs all
+            // sampled leaders to be copies of one vector. With inner product, a
+            // leader with a large norm can also win every point. Another split can
+            // stall the same way, so cut the child into equal leaves in point
+            // order. The cut groups points arbitrarily, which can lower recall but
+            // keeps the graph valid.
             let leaf_len = child.len().div_ceil(child.len().div_ceil(c_max));
             leaves.extend(child.chunks(leaf_len).map(<[u32]>::to_vec));
         } else {
