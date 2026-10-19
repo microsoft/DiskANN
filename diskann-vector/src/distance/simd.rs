@@ -1405,7 +1405,7 @@ impl SIMDSchema<u8, u8, V3> for L2 {
 #[cfg(target_arch = "aarch64")]
 impl SIMDSchema<u8, u8, Neon> for L2 {
     type SIMDWidth = Const<16>;
-    type Accumulator = <Neon as Architecture>::u32x8;
+    type Accumulator = <Neon as Architecture>::u32x4;
     type Left = diskann_wide::arch::aarch64::u8x16;
     type Right = diskann_wide::arch::aarch64::u8x16;
     type Return = f32;
@@ -1445,7 +1445,7 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
                 acc + ((c * c) as u32)
             },
         );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
     }
 
     // Perform a final reduction.

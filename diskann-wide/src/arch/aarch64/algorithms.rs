@@ -5,9 +5,9 @@
 
 use std::arch::aarch64::*;
 
-use crate::SIMDVector;
+use crate::{SIMDDotProduct, SIMDVector};
 
-use super::{i8x16, i32x8, u8x16, u32x8};
+use super::{i8x16, i32x8, u8x16, u32x4};
 
 /// Accumulates squared Euclidean distances between 16 pairs of `u8` lanes.
 ///
@@ -19,72 +19,20 @@ use super::{i8x16, i32x8, u8x16, u32x8};
 /// `acc`. This function is intended for computing full squared-L2 distances
 /// where the accumulator is reduced to a single scalar at the end.
 #[inline(always)]
-pub fn squared_euclidean_accum_u8x16(x: u8x16, y: u8x16, acc: u32x8) -> u32x8 {
+pub fn squared_euclidean_accum_u8x16(x: u8x16, y: u8x16, acc: u32x4) -> u32x4 {
     let arch = acc.arch();
 
     if cfg!(miri) {
         let x = x.to_array();
         let y = y.to_array();
-        let acc = acc.to_array();
-
-        let op = |x: u8, y: u8| -> u32 {
-            let x: i32 = x.into();
-            let y: i32 = y.into();
-            let diff = x - y;
-            (diff * diff) as u32
-        };
-
-        let f = |i: usize| -> u32 {
-            let base = 8 * (i / 4) + (i % 4);
-            acc[i]
-                .wrapping_add(op(x[base], y[base]))
-                .wrapping_add(op(x[base + 4], y[base + 4]))
-        };
-
-        u32x8::from_array(arch, core::array::from_fn(f))
+        let diff = u8x16::from_array(arch, core::array::from_fn(|i| x[i].abs_diff(y[i])));
+        acc.dot_simd(diff, diff)
     } else {
         // SAFETY: Neon intrinsics are allowed by the `Neon` architecture.
-        let (lo, hi) = unsafe {
-            let x = x.to_underlying();
-            let y = y.to_underlying();
-            let (acc_lo, acc_hi) = acc.to_underlying();
-
-            // The algorithm works like this:
-            //
-            // * `vsubl[_high]_u8` performs subtraction and widens to `u16`
-            //
-            // * We reinterpret from `u16` to `s16`, which is valid because all `u8` values
-            //   can be represented as an `i16`, and the subtraction is wrapping, so negative
-            //   values are represented properly.
-            //
-            // * Then, we use `vmlal_s16` to square the results and accumulate. All of this
-            //   needs to be done in the signed space so that negative values get properly
-            //   sign extended and thus behave correctly.
-            //
-            // * At the end, we can reinterpret back. Since multiplication and addition are
-            //   the same for signed and unsigned numbers (once sign-extension is accounted
-            //   for), the final result is correct.
-            let lo = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(x), vget_low_u8(y)));
-            let hi = vreinterpretq_s16_u16(vsubl_high_u8(x, y));
-
-            let acc_lo = vmlal_s16(
-                vreinterpretq_s32_u32(acc_lo),
-                vget_low_s16(lo),
-                vget_low_s16(lo),
-            );
-            let acc_hi = vmlal_s16(
-                vreinterpretq_s32_u32(acc_hi),
-                vget_low_s16(hi),
-                vget_low_s16(hi),
-            );
-
-            let acc_lo = vmlal_high_s16(acc_lo, lo, lo);
-            let acc_hi = vmlal_high_s16(acc_hi, hi, hi);
-
-            (vreinterpretq_u32_s32(acc_lo), vreinterpretq_u32_s32(acc_hi))
-        };
-
-        u32x8::from_underlying(arch, (lo, hi))
+        let diff = u8x16::from_underlying(arch, unsafe {
+            vabdq_u8(x.to_underlying(), y.to_underlying())
+        });
+        acc.dot_simd(diff, diff)
     }
 }
 
@@ -166,32 +114,21 @@ mod tests {
         let f = move |x: &[u8], y: &[u8], acc: &[u32]| {
             let x: [u8; 16] = x.try_into().unwrap();
             let y: [u8; 16] = y.try_into().unwrap();
-            let acc: [u32; 8] = acc.try_into().unwrap();
+            let acc: [u32; 4] = acc.try_into().unwrap();
 
             // Compute expected result
-            let expected: [u32; 8] = core::array::from_fn(|i| {
-                let a = acc[i];
-                let block = 8 * (i / 4);
-                let offset = i % 4;
-
-                let xi: i32 = x[block + offset].into();
-                let yi: i32 = y[block + offset].into();
-                let diff = xi - yi;
-                let prod: u32 = (diff * diff).try_into().unwrap();
-                let a = a.wrapping_add(prod);
-
-                let xi: i32 = x[block + offset + 4].into();
-                let yi: i32 = y[block + offset + 4].into();
-                let diff = xi - yi;
-                let prod: u32 = (diff * diff).try_into().unwrap();
-                a.wrapping_add(prod)
+            let expected: [u32; 4] = core::array::from_fn(|i| {
+                (4 * i..4 * i + 4).fold(acc[i], |sum, j| {
+                    let diff = x[j] as i32 - y[j] as i32;
+                    sum.wrapping_add((diff * diff) as u32)
+                })
             });
 
             // Compute Neon result
             let got = {
                 let x = u8x16::from_array(arch, x);
                 let y = u8x16::from_array(arch, y);
-                let acc = u32x8::from_array(arch, acc);
+                let acc = u32x4::from_array(arch, acc);
                 squared_euclidean_accum_u8x16(x, y, acc).to_array()
             };
 
@@ -202,7 +139,8 @@ mod tests {
             );
         };
 
-        driver::drive_ternary(&f, (16, 16, 8), 0xc0ffee);
+        f(&[0; 16], &[u8::MAX; 16], &[u32::MAX; 4]);
+        driver::drive_ternary(&f, (16, 16, 4), 0xc0ffee);
     }
 
     #[test]
