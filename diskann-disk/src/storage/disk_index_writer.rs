@@ -284,7 +284,7 @@ impl DiskIndexWriter {
         let num_nbrs: u32 = Self::get_neighbors_number(state)?;
 
         // sanity checks on num_nbrs
-        debug_assert!(num_nbrs > 0);
+        debug_assert!(num_nbrs > 0 || state.num_pts == 1);
         debug_assert!(num_nbrs <= state.max_degree);
 
         let num_nbrs_start = state.dims as usize * mem::size_of::<Data::VectorDataType>();
@@ -559,8 +559,9 @@ impl DiskIndexWriter {
 #[cfg(test)]
 mod disk_index_storage_test {
     use crate::test_utils::GraphDataF32VectorU32Data;
+    use diskann_providers::model::graph::provider::async_::SimpleNeighborProviderAsync;
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_utils::test_data_root;
+    use diskann_utils::{io::write_bin, test_data_root, views::rowmajor};
     use vfs::OverlayFS;
 
     use super::*;
@@ -733,6 +734,50 @@ mod disk_index_storage_test {
         storage_provider
             .delete(disk_layout_file.as_str())
             .expect("Failed to delete file");
+    }
+
+    // A 1-point graph has no neighbors; creating its disk layout must succeed.
+    #[test]
+    fn create_disk_layout_one_point_graph() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+
+        const DATA_FILE: &str = "/one_point.fbin";
+        const INDEX_PREFIX: &str = "/one_point_index";
+        const DIMS: usize = 4;
+        const MAX_DEGREE: u32 = 4;
+
+        write_bin(
+            rowmajor::Ref::try_from_data([1.0f32; DIMS].as_slice(), 1, DIMS).unwrap(),
+            &mut storage_provider.create_for_write(DATA_FILE).unwrap(),
+        )
+        .unwrap();
+
+        let index_writer = DiskIndexWriter::new(
+            DATA_FILE.to_string(),
+            INDEX_PREFIX.to_string(),
+            Option::None,
+            DEFAULT_DISK_SECTOR_LEN,
+        )
+        .unwrap();
+
+        // A single node with no neighbors, which is also the start point.
+        SimpleNeighborProviderAsync::new(1, 0, MAX_DEGREE, 1.0)
+            .save_direct(&storage_provider, 0, &index_writer.get_mem_index_file())
+            .unwrap();
+
+        index_writer
+            .create_disk_layout::<GraphDataF32VectorU32Data, _>(&storage_provider)
+            .unwrap();
+
+        let mut disk_layout: Vec<u8> = Vec::new();
+        storage_provider
+            .open_reader(index_writer.disk_index_file().as_str())
+            .unwrap()
+            .read_to_end(&mut disk_layout)
+            .unwrap();
+
+        let header = GraphHeader::try_from(&disk_layout[8..]).unwrap();
+        assert_eq!(header.metadata().num_pts, 1);
     }
 
     #[test]

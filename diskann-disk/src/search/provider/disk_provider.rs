@@ -1571,6 +1571,10 @@ mod disk_provider_tests {
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_pq_compressed.bin";
     const TEST_TRUTH_RESULT_10PTS_128DIM: &str =
         "/disk_index_search/disk_index_10pts_idx_uint32_truth_search_res.bin";
+    /// Search results for an index built by the current builder, unlike
+    /// [`TEST_TRUTH_RESULT_10PTS_128DIM`], which matches the prebuilt [`TEST_INDEX_128DIM`].
+    const TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM: &str =
+        "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_associated_data_10pts_truth_search_res.bin";
     const TEST_QUERY_10PTS_128DIM: &str = "/disk_index_search/disk_index_sample_query_10pts.fbin";
 
     const TEST_INDEX_PREFIX_100DIM: &str = "/disk_index_search/256pts_100dim_f32_truth_Index";
@@ -1727,7 +1731,7 @@ mod disk_provider_tests {
                     index_search_engine: &search_engine,
                     thread_num: 1,
                     query_file_path: TEST_QUERY_10PTS_128DIM,
-                    truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
+                    truth_result_file_path: TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM,
                     k: 10,
                     l: 20,
                 },
@@ -1741,7 +1745,7 @@ mod disk_provider_tests {
                     index_search_engine: &search_engine,
                     thread_num: 5,
                     query_file_path: TEST_QUERY_10PTS_128DIM,
-                    truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
+                    truth_result_file_path: TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM,
                     k: 10,
                     l: 20,
                 },
