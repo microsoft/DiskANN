@@ -345,8 +345,7 @@ impl<'a> PiPNNBuildContext<'a> {
 /// Build one adjacency list for each point of `data`.
 ///
 /// The graph links dataset points only; the caller selects start points and
-/// serializes the index. `CosineNormalized` on `u8` or `i8` data builds with
-/// `Cosine`, because converted integer vectors do not have unit norm.
+/// serializes the index.
 pub fn build_graph<T>(
     data: MatrixView<'_, T>,
     context: &PiPNNBuildContext<'_>,
@@ -399,8 +398,7 @@ where
         data: MatrixView<'_, T>,
         context: &PiPNNBuildContext<'_>,
     ) -> ANNResult<Vec<AdjacencyList<u32>>> {
-        // Converting raw integer coordinates does not normalize their vectors.
-        let metric = effective_metric::<T>(context.metric);
+        let metric = context.metric;
         match metric {
             Metric::L2 => build_graph_for::<A, L2, T>(arch, data, context, metric),
             Metric::Cosine => build_graph_for::<A, Cosine, T>(arch, data, context, metric),
@@ -456,19 +454,6 @@ where
     // Final pruning cuts each candidate list in place.
     Ok(tracing::info_span!("pipnn.finalization")
         .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric)))
-}
-
-/// Return the metric that the build uses for element type `T`. See [`build_graph`].
-fn effective_metric<T: VectorRepr>(metric: Metric) -> Metric {
-    use std::any::TypeId;
-
-    if metric == Metric::CosineNormalized
-        && (TypeId::of::<T>() == TypeId::of::<u8>() || TypeId::of::<T>() == TypeId::of::<i8>())
-    {
-        Metric::Cosine
-    } else {
-        metric
-    }
 }
 
 #[cfg(test)]
@@ -873,34 +858,6 @@ mod construction_tests {
                 "{metric:?}"
             );
         }
-    }
-
-    #[test]
-    fn normalized_cosine_requests_on_raw_integers_use_vector_norms() {
-        // Cosine pairs 0 <-> 1 and 2 <-> 3. Unnormalized dot products instead
-        // connect 1 to 3, so treating raw integers as unit vectors changes edges.
-        // The first build checks leaf ranking. The second build selects three
-        // leaf neighbors and checks final pruning to one.
-        fn check<T: VectorRepr>(values: [T; 8]) {
-            for (leaf_k, degree) in [(1, 3), (3, 1)] {
-                let config = PiPNNConfig {
-                    leaf_k: nz(leaf_k),
-                    ..partition_policy()
-                };
-
-                let actual = build(&values, 2, config, degree, Metric::CosineNormalized, 2);
-
-                assert_eq!(
-                    actual,
-                    [vec![1], vec![0], vec![3], vec![2]],
-                    "{}, leaf_k={leaf_k}, degree={degree}",
-                    std::any::type_name::<T>()
-                );
-            }
-        }
-
-        check([1_i8, 0, 4, 1, 1, 2, 0, 9]);
-        check([1_u8, 0, 4, 1, 1, 2, 0, 9]);
     }
 
     #[test]
