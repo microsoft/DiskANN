@@ -70,7 +70,13 @@ struct ExactLabelRows {
 /// Reusable allocation for summarized Bloom candidate enumeration.
 #[derive(Debug)]
 pub struct BloomVisitScratch {
-    possible_words: Vec<u64>,
+    surviving_words: Vec<SummarizedWord>,
+}
+
+#[derive(Debug)]
+struct SummarizedWord {
+    summary_index: usize,
+    possible_words: u64,
 }
 
 const MAX_CACHED_SUMMARY_MATCH_BOUND: u64 = 1024;
@@ -78,18 +84,21 @@ const MAX_CACHED_SUMMARY_MATCH_BOUND: u64 = 1024;
 impl Default for BloomVisitScratch {
     fn default() -> Self {
         Self {
-            possible_words: Vec::with_capacity(4096),
+            surviving_words: Vec::with_capacity(4096),
         }
     }
 }
 
 impl BloomVisitScratch {
     fn reset(&mut self, summary_words: usize) {
-        self.possible_words.clear();
-        if self.possible_words.capacity() > 1_048_576 {
-            self.possible_words.shrink_to(1_048_576);
+        self.surviving_words.clear();
+        if self.surviving_words.capacity() > 65_536 {
+            self.surviving_words.shrink_to(65_536);
         }
-        self.possible_words.resize(summary_words, 0);
+        let initial_capacity = summary_words.min(4096);
+        if self.surviving_words.capacity() < initial_capacity {
+            self.surviving_words.reserve(initial_capacity);
+        }
     }
 }
 
@@ -392,9 +401,14 @@ impl EncodedLabelQuery<'_> {
                 .expect("Bloom summary disappeared while collecting");
             possible_word_count =
                 possible_word_count.saturating_add(possible_words.count_ones() as usize);
-            scratch.possible_words[summary_index] = possible_words;
+            if possible_words != 0 {
+                scratch.surviving_words.push(SummarizedWord {
+                    summary_index,
+                    possible_words,
+                });
+            }
             if possible_word_count.saturating_mul(10) > *words_per_row {
-                scratch.possible_words.clear();
+                scratch.surviving_words.clear();
                 return false;
             }
         }
@@ -409,8 +423,8 @@ impl EncodedLabelQuery<'_> {
         if !self.collect_cached_summarized_matches(scratch) {
             return false;
         }
-        for (summary_index, &possible_words) in scratch.possible_words.iter().enumerate() {
-            self.visit_summarized_word(summary_index, possible_words, visit);
+        for summarized in &scratch.surviving_words {
+            self.visit_summarized_word(summarized.summary_index, summarized.possible_words, visit);
         }
         true
     }
@@ -639,11 +653,10 @@ impl EncodedLabelQuery<'_> {
     pub fn count_matches_with_scratch(&self, scratch: &mut BloomVisitScratch) -> u64 {
         if self.should_cache_summary_matches() && self.collect_cached_summarized_matches(scratch) {
             return scratch
-                .possible_words
+                .surviving_words
                 .iter()
-                .enumerate()
-                .map(|(summary_index, &possible_words)| {
-                    self.count_summarized_word(summary_index, possible_words)
+                .map(|summarized| {
+                    self.count_summarized_word(summarized.summary_index, summarized.possible_words)
                 })
                 .sum();
         }
