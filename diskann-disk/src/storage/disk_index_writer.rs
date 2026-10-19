@@ -559,8 +559,9 @@ impl DiskIndexWriter {
 #[cfg(test)]
 mod disk_index_storage_test {
     use crate::test_utils::GraphDataF32VectorU32Data;
-    use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_utils::test_data_root;
+    use diskann_providers::model::graph::provider::async_::SimpleNeighborProviderAsync;
+    use diskann_providers::storage::{DiskGraphOnly, SaveWith, VirtualStorageProvider};
+    use diskann_utils::{io::write_bin, test_data_root, views::rowmajor};
     use vfs::OverlayFS;
 
     use super::*;
@@ -742,18 +743,14 @@ mod disk_index_storage_test {
 
         const DATA_FILE: &str = "/one_point.fbin";
         const INDEX_PREFIX: &str = "/one_point_index";
-        const DIMS: u32 = 4;
+        const DIMS: usize = 4;
         const MAX_DEGREE: u32 = 4;
 
-        {
-            let mut writer = storage_provider.create_for_write(DATA_FILE).unwrap();
-            writer.write_all(&1u32.to_le_bytes()).unwrap();
-            writer.write_all(&DIMS.to_le_bytes()).unwrap();
-            for _ in 0..DIMS {
-                writer.write_all(&1.0f32.to_le_bytes()).unwrap();
-            }
-            writer.flush().unwrap();
-        }
+        write_bin(
+            rowmajor::Ref::try_from_data([1.0f32; DIMS].as_slice(), 1, DIMS).unwrap(),
+            &mut storage_provider.create_for_write(DATA_FILE).unwrap(),
+        )
+        .unwrap();
 
         let index_writer = DiskIndexWriter::new(
             DATA_FILE.to_string(),
@@ -763,20 +760,18 @@ mod disk_index_storage_test {
         )
         .unwrap();
 
-        {
-            // Mem index header: file size, max degree, medoid, frozen point count,
-            // followed by a single node with zero neighbors.
-            let file_size = (8 + 4 + 4 + 8 + 4) as u64;
-            let mut writer = storage_provider
-                .create_for_write(index_writer.get_mem_index_file().as_str())
-                .unwrap();
-            writer.write_all(&file_size.to_le_bytes()).unwrap();
-            writer.write_all(&MAX_DEGREE.to_le_bytes()).unwrap();
-            writer.write_all(&0u32.to_le_bytes()).unwrap();
-            writer.write_all(&0u64.to_le_bytes()).unwrap();
-            writer.write_all(&0u32.to_le_bytes()).unwrap();
-            writer.flush().unwrap();
-        }
+        // Save the graph the way the disk index build does: one point plus the virtual start
+        // point at ID 1, linked to each other, with the virtual start point folded into point 0.
+        let graph = SimpleNeighborProviderAsync::new(1, 1, MAX_DEGREE, 1.0);
+        graph.set_neighbors_sync(0, &[1]).unwrap();
+        graph.set_neighbors_sync(1, &[0]).unwrap();
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(graph.save_with(
+                &storage_provider,
+                &(1, 0, DiskGraphOnly::new(index_writer.get_mem_index_file())),
+            ))
+            .unwrap();
 
         index_writer
             .create_disk_layout::<GraphDataF32VectorU32Data, _>(&storage_provider)
