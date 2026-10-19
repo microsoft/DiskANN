@@ -84,7 +84,7 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
     /// Finalize the operation, publishing accessor-side appends and regional writes together.
     ///
     /// `None` means there are no regional re-writes.
-    fn finish(self, update: Option<&Self::Update>) -> impl SendFuture<ANNResult<()>>;
+    fn finish(self, update: Option<Self::Update>) -> impl SendFuture<ANNResult<()>>;
 }
 
 pub trait BuildStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {

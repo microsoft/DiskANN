@@ -164,7 +164,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 update_final = Some(update)
             };
 
-            accessor.finish(update_final.as_ref()).await?;
+            accessor.finish(update_final).await?;
 
             Ok(InsertStats {
                 inserted: points.len(),

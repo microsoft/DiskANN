@@ -3,12 +3,11 @@
  * Licensed under the MIT license.
  */
 
-//! Regional input views, write operations, and a reusable canonical insertion batch.
+//! Regional input views and write operations.
 
-use diskann_utils::views::rowmajor::{self, Matrix};
-use hashbrown::HashMap;
+use diskann_utils::views::rowmajor;
 
-use crate::{ANNError, ANNResult, utils::VectorId};
+use crate::ANNResult;
 
 /// One source list's centroid and complete operation-local membership.
 ///

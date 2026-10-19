@@ -8,7 +8,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
     num::NonZeroUsize,
-    sync::Arc,
 };
 
 use diskann_utils::{
@@ -16,15 +15,13 @@ use diskann_utils::{
     views::rowmajor::{self, Matrix, MatrixMut},
 };
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
-use rand::{SeedableRng, rngs::StdRng};
+use tokio::sync::{Mutex, MutexGuard};
 
 use super::{
     Config, IVFIndex, InsertStats, ReassignCount, clustering,
     pending::{Membership, PendingLists},
-    region::{Batch, RegionUpdate, RegionView, View},
-    traits::{
-        BuildAccessor, BuildStrategy, HasIds, InsertStrategy, Provider, Router, RouterAndNearest,
-    },
+    region::{RegionUpdate, RegionView, View},
+    traits::{BuildAccessor, BuildStrategy, HasIds, Router, RouterAndNearest, SetElements},
 };
 use crate::{ANNError, ANNResult, provider::DefaultContext};
 
@@ -51,13 +48,7 @@ struct Store {
     fail_finish: bool,
 }
 
-impl Provider for Store {
-    type Context = DefaultContext;
-    type InternalId = u32;
-    type ExternalId = u32;
-    type ListId = u32;
-    type Error = ANNError;
-
+impl Store {
     fn to_internal_id(&self, _: &DefaultContext, id: &u32) -> ANNResult<u32> {
         id.checked_add(10_000)
             .filter(|id| self.points.contains_key(id))
@@ -73,10 +64,10 @@ impl Provider for Store {
     }
 }
 
-struct Build<'p> {
-    store: &'p mut Store,
+struct Build<'p, T> {
+    store: MutexGuard<'p, Store>,
     pending: PendingLists<u32, u32>,
-    batch: Option<Arc<Batch<u32>>>,
+    staged: BTreeMap<u32, Vec<T>>,
     sources: BTreeMap<u32, Source>,
     fills: Cell<usize>,
     filled_lists: Vec<u32>,
@@ -87,28 +78,46 @@ struct Coarse<'a> {
     fail_nearest: bool,
 }
 
-impl Router for Coarse<'_> {
+impl Coarse<'_> {
+    fn select<T: Copy + Into<f32>>(&self, query: &[T], nprobe: usize) -> Vec<(u32, f32)> {
+        let mut selected: Vec<_> = self
+            .stored
+            .iter()
+            .map(|(&id, list)| {
+                let distance: f32 = query
+                    .iter()
+                    .zip(&list.centroid)
+                    .map(|(&value, &center)| {
+                        let delta = value.into() - center;
+                        delta * delta
+                    })
+                    .sum();
+                (id, distance)
+            })
+            .collect();
+        selected.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        selected.truncate(nprobe);
+        selected
+    }
+}
+
+impl<T: Copy + Into<f32> + Sync> Router<(u32, &[T])> for Coarse<'_> {
     type Id = u32;
 
     fn len(&self) -> usize {
         self.stored.len()
     }
 
-    fn route(&self, query: &[f32], nprobe: usize) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
-        async move {
-            let mut selected: Vec<(u32, f32)> = self
-                .stored
-                .iter()
-                .map(|(&id, list)| (id, SquaredL2::evaluate(query, list.centroid.as_slice())))
-                .collect();
-            selected.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-            selected.truncate(nprobe);
-            Ok(selected)
-        }
+    fn route(
+        &self,
+        query: &(u32, &[T]),
+        nprobe: usize,
+    ) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
+        async move { Ok(self.select(query.1, nprobe)) }
     }
 }
 
-impl RouterAndNearest for Coarse<'_> {
+impl<T: Copy + Into<f32> + Sync> RouterAndNearest<(u32, &[T])> for Coarse<'_> {
     fn nearest(&self, id: Self::Id, nprobe: usize) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
         async move {
             if self.fail_nearest {
@@ -119,7 +128,7 @@ impl RouterAndNearest for Coarse<'_> {
                 .get(&id)
                 .ok_or_else(|| ANNError::message(format!("unknown list {id}")))?
                 .centroid;
-            self.route(query, nprobe).await
+            Ok(self.select(query, nprobe))
         }
     }
 }
@@ -221,12 +230,12 @@ impl RegionUpdate<u32, u32> for Update {
     }
 }
 
-impl HasIds for Build<'_> {
+impl<T> HasIds for Build<'_, T> {
     type Id = u32;
     type ListId = u32;
 }
 
-impl<'p> BuildAccessor for Build<'p> {
+impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build<'p, T> {
     type Update = Update;
     type Router<'a>
         = Coarse<'a>
@@ -294,13 +303,18 @@ impl<'p> BuildAccessor for Build<'p> {
                 let mut vectors =
                     rowmajor::Owned::from_element(members.len(), self.dim().get(), 0.0);
                 for (&id, row) in members.iter().zip(vectors.rows_mut()) {
-                    let vector = self
-                        .batch
-                        .as_ref()
-                        .and_then(|batch| batch.get(id))
-                        .or_else(|| self.store.points.get(&id).map(Vec::as_slice))
-                        .ok_or_else(|| ANNError::message(format!("missing point {id}")))?;
-                    row.copy_from_slice(vector);
+                    if let Some(vector) = self.staged.get(&id) {
+                        for (dst, &src) in row.iter_mut().zip(vector) {
+                            *dst = src.into();
+                        }
+                    } else {
+                        let vector = self
+                            .store
+                            .points
+                            .get(&id)
+                            .ok_or_else(|| ANNError::message(format!("missing point {id}")))?;
+                        row.copy_from_slice(vector);
+                    }
                 }
                 self.sources.insert(
                     list,
@@ -319,7 +333,7 @@ impl<'p> BuildAccessor for Build<'p> {
         }
     }
 
-    fn finish(self, update: Option<&Self::Update>) -> impl SendFuture<ANNResult<()>> {
+    fn finish(mut self, update: Option<Self::Update>) -> impl SendFuture<ANNResult<()>> {
         async move {
             if self.store.fail_finish {
                 return Err(ANNError::message("injected finish failure"));
@@ -332,16 +346,16 @@ impl<'p> BuildAccessor for Build<'p> {
                 .next_list
                 .checked_add(created)
                 .ok_or_else(|| ANNError::message("list ID overflow"))?;
-            if let Some(batch) = self.batch {
-                for point in batch.points() {
-                    self.store.points.insert(point.id, point.vector.to_vec());
-                }
+            for (id, vector) in self.staged {
+                self.store
+                    .points
+                    .insert(id, vector.into_iter().map(Into::into).collect());
             }
             let regional_memberships = if let Some(update) = update {
-                for (id, list) in (self.store.next_list..next_list).zip(update.created.clone()) {
+                for (id, list) in (self.store.next_list..next_list).zip(update.created) {
                     self.store.lists.insert(id, list);
                 }
-                Some(update.memberships.clone())
+                Some(update.memberships)
             } else {
                 None
             };
@@ -376,21 +390,38 @@ impl<'p> BuildAccessor for Build<'p> {
     }
 }
 
-struct Strategy;
+struct Strategy {
+    store: Mutex<Store>,
+}
 
-impl<'a> BuildStrategy<'a, Store> for Strategy {
-    type Accessor = Build<'a>;
+impl Strategy {
+    fn new(store: Store) -> Self {
+        Self {
+            store: Mutex::new(store),
+        }
+    }
+
+    fn store(&self) -> MutexGuard<'_, Store> {
+        self.store.try_lock().unwrap()
+    }
+}
+
+impl HasIds for Strategy {
+    type Id = u32;
+    type ListId = u32;
+}
+
+impl<'a, T: Copy + Into<f32> + Send + Sync> BuildStrategy<'a, (u32, &[T]), DefaultContext>
+    for Strategy
+{
+    type Accessor = Build<'a, T>;
     type Error = ANNError;
 
-    fn build_accessor(
-        &'a self,
-        store: &'a mut Store,
-        _: &'a DefaultContext,
-    ) -> ANNResult<Build<'a>> {
+    fn build_accessor(&'a self, _: &'a DefaultContext) -> ANNResult<Self::Accessor> {
         Ok(Build {
-            store,
+            store: self.store.try_lock().map_err(ANNError::new)?,
             pending: PendingLists::default(),
-            batch: None,
+            staged: BTreeMap::new(),
             sources: BTreeMap::new(),
             fills: Cell::new(0),
             filled_lists: Vec::new(),
@@ -398,33 +429,38 @@ impl<'a> BuildStrategy<'a, Store> for Strategy {
     }
 }
 
-impl<'a, 'p> InsertStrategy<'a, Store, &'p [f32]> for Strategy {
-    fn prepare(
-        &self,
-        accessor: &mut Self::Accessor,
-        points: &[(u32, &'p [f32])],
-    ) -> impl SendFuture<ANNResult<Arc<Batch<u32>>>> {
-        async move {
-            let mut vectors =
-                rowmajor::Owned::from_element(points.len(), accessor.dim().get(), 0.0);
-            let mut ids = Vec::with_capacity(points.len());
-            for ((external, vector), out) in points.iter().zip(vectors.rows_mut()) {
-                if vector.len() != out.len() || !vector.iter().all(|value| value.is_finite()) {
-                    return Err(ANNError::message("invalid input vector"));
-                }
-                let id = external
-                    .checked_add(10_000)
-                    .ok_or_else(|| ANNError::message("internal point ID overflow"))?;
-                if accessor.store.points.contains_key(&id) || ids.contains(&id) {
-                    return Err(ANNError::message("point already exists"));
-                }
-                out.copy_from_slice(vector);
-                ids.push(id);
+impl<'p, T: Copy + Into<f32> + Send + Sync> SetElements<(u32, &'p [T]), DefaultContext>
+    for Build<'_, T>
+{
+    type Id = u32;
+
+    async fn set_elements(
+        &mut self,
+        _: &DefaultContext,
+        points: &[(u32, &'p [T])],
+    ) -> ANNResult<Vec<u32>> {
+        let mut staged = BTreeMap::new();
+        let mut ids = Vec::with_capacity(points.len());
+        for (external, vector) in points {
+            if vector.len() != self.store.dim
+                || !vector.iter().all(|&value| value.into().is_finite())
+            {
+                return Err(ANNError::message("invalid input vector"));
             }
-            let batch = Arc::new(Batch::new(ids, vectors)?);
-            accessor.batch = Some(Arc::clone(&batch));
-            Ok(batch)
+            let id = external
+                .checked_add(10_000)
+                .ok_or_else(|| ANNError::message("internal point ID overflow"))?;
+            if self.store.points.contains_key(&id)
+                || self.staged.contains_key(&id)
+                || staged.contains_key(&id)
+            {
+                return Err(ANNError::message("point already exists"));
+            }
+            staged.insert(id, vector.to_vec());
+            ids.push(id);
         }
+        self.staged.extend(staged);
+        Ok(ids)
     }
 }
 
@@ -433,22 +469,24 @@ fn matrix<const D: usize>(rows: &[[f32; D]]) -> rowmajor::Owned<f32> {
     rowmajor::Owned::try_from_data(data, rows.len(), D).unwrap()
 }
 
-fn index(store: Store, threshold: usize) -> IVFIndex<Store> {
+fn index(store: Store, threshold: usize) -> (IVFIndex<DefaultContext>, Strategy) {
     index_with_neighbors(store, threshold, 0)
 }
 
-fn index_with_neighbors(store: Store, threshold: usize, neighbors: usize) -> IVFIndex<Store> {
-    IVFIndex::new(
-        store,
-        Config {
-            split_threshold: NonZeroUsize::new(threshold).unwrap(),
-            reassign_count: NonZeroUsize::new(neighbors)
-                .map_or(ReassignCount::None, ReassignCount::Count),
-            split_iterations: NonZeroUsize::new(5).unwrap(),
-            seed: 7,
-        },
-    )
-    .unwrap()
+fn index_with_neighbors(
+    store: Store,
+    threshold: usize,
+    neighbors: usize,
+) -> (IVFIndex<DefaultContext>, Strategy) {
+    let index = IVFIndex::new(Config {
+        split_threshold: NonZeroUsize::new(threshold).unwrap(),
+        reassign_count: NonZeroUsize::new(neighbors)
+            .map_or(ReassignCount::None, ReassignCount::Count),
+        split_iterations: NonZeroUsize::new(5).unwrap(),
+        seed: 7,
+    })
+    .unwrap();
+    (index, Strategy::new(store))
 }
 
 fn seeded() -> Store {
@@ -496,8 +534,81 @@ fn require_send<F: Future + Send>(future: F) -> F {
 }
 
 #[tokio::test]
+async fn staging_preserves_native_inputs_and_id_order() {
+    let strategy = Strategy::new(seeded());
+    let mut build: Build<'_, u8> = strategy.build_accessor(&DefaultContext).unwrap();
+    let points: [(u32, &[u8]); 3] = [(9, &[11, 0]), (7, &[1, 0]), (8, &[0, 0])];
+    let ids = require_send(build.set_elements(&DefaultContext, &points))
+        .await
+        .unwrap();
+    assert_eq!(ids, [10_009, 10_007, 10_008]);
+    for (&id, point) in ids.iter().zip(&points) {
+        assert_eq!(build.staged[&id], point.1);
+        assert!(!build.store.points.contains_key(&id));
+    }
+    let router = build.router();
+    for (point, expected) in points.iter().zip([2, 1, 1]) {
+        assert_eq!(
+            require_send(router.route(point, 1)).await.unwrap()[0].0,
+            expected
+        );
+    }
+    drop(build);
+    let store = strategy.store();
+    assert_eq!(store.points.len(), 5);
+    assert_eq!(store.finishes, 0);
+}
+
+#[tokio::test]
+async fn native_inputs_are_inserted_using_the_returned_ids() {
+    let (mut index, strategy) = index(seeded(), 4);
+    let points: [(u32, &[u8]); 3] = [(9, &[11, 0]), (7, &[1, 0]), (8, &[0, 0])];
+    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
+        .await
+        .unwrap();
+    assert_eq!(
+        stats,
+        InsertStats {
+            inserted: 3,
+            splits: 0
+        }
+    );
+    let store = strategy.store();
+    assert_eq!(store.lists[&1].members, [10_000, 10_001, 10_007, 10_008]);
+    assert_eq!(store.lists[&2].members, [10_002, 10_003, 10_009]);
+    for (external, vector) in points {
+        let expected: Vec<_> = vector.iter().copied().map(f32::from).collect();
+        assert_eq!(store.points[&(external + 10_000)], expected);
+    }
+    assert_eq!(store.finishes, 1);
+    assert_eq!(store.fills, 0);
+}
+
+#[tokio::test]
+async fn failed_staging_leaves_no_new_elements() {
+    let strategy = Strategy::new(seeded());
+    for points in [
+        vec![(5, &[1.0, 0.0][..]), (5, &[2.0, 0.0][..])],
+        vec![(5, &[1.0, 0.0][..]), (0, &[2.0, 0.0][..])],
+        vec![(5, &[1.0, 0.0][..]), (6, &[2.0][..])],
+        vec![(5, &[1.0, 0.0][..]), (6, &[f32::NAN, 0.0][..])],
+        vec![(5, &[1.0, 0.0][..]), (u32::MAX, &[2.0, 0.0][..])],
+    ] {
+        let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
+        assert!(
+            require_send(build.set_elements(&DefaultContext, &points))
+                .await
+                .is_err()
+        );
+        assert!(build.staged.is_empty());
+        assert_eq!(build.store.points.len(), 5);
+        assert_eq!(build.store.finishes, 0);
+    }
+}
+
+#[tokio::test]
 async fn appends_publish_actual_memberships_without_filling() {
-    let mut index = index(
+    let (mut index, strategy) = index(
         Store {
             dim: 2,
             lists: [
@@ -523,12 +634,12 @@ async fn appends_publish_actual_memberships_without_filling() {
         },
         2,
     );
-    let points = [
+    let points: [(u32, &[f32]); 3] = [
         (7, &[0.0, 1.0][..]),
         (8, &[1.0, 0.0][..]),
         (9, &[10.0, 1.0][..]),
     ];
-    let stats = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
+    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
         .await
         .unwrap();
 
@@ -539,51 +650,40 @@ async fn appends_publish_actual_memberships_without_filling() {
             splits: 0
         }
     );
-    assert_eq!(index.provider().lists[&1].members, [10_007, 10_008]);
-    assert_eq!(index.provider().lists[&2].members, [10_009]);
-    assert_eq!(index.provider().points[&10_007], [0.0, 1.0]);
-    assert_eq!(
-        index
-            .provider()
-            .to_internal_id(&DefaultContext, &7)
-            .unwrap(),
-        10_007
-    );
-    assert_eq!(
-        index
-            .provider()
-            .to_external_id(&DefaultContext, 10_007)
-            .unwrap(),
-        7
-    );
-    assert_eq!(index.provider().finishes, 1);
-    assert_eq!(index.provider().fills, 0);
+    let store = strategy.store();
+    assert_eq!(store.lists[&1].members, [10_007, 10_008]);
+    assert_eq!(store.lists[&2].members, [10_009]);
+    assert_eq!(store.points[&10_007], [0.0, 1.0]);
+    assert_eq!(store.to_internal_id(&DefaultContext, &7).unwrap(), 10_007);
+    assert_eq!(store.to_external_id(&DefaultContext, 10_007).unwrap(), 7);
+    assert_eq!(store.finishes, 1);
+    assert_eq!(store.fills, 0);
 
     let empty: [(u32, &[f32]); 0] = [];
     assert_eq!(
         index
-            .insert_batch(&Strategy, &DefaultContext, &empty)
+            .insert_batch(&strategy, &DefaultContext, &empty)
             .await
             .unwrap(),
         InsertStats::default()
     );
-    assert_eq!(index.provider().finishes, 1);
+    assert_eq!(store.finishes, 1);
 }
 
 #[tokio::test]
 async fn splitting_commits_children_and_ordinary_appends_once() {
     let mut store = seeded();
     store.fail_nearest = true;
-    let mut index = index(store, 2);
-    let points = [
+    let (mut index, strategy) = index(store, 2);
+    let points: [(u32, &[f32]); 3] = [
         (5, &[1.0, 1.0][..]),
         (6, &[11.0, 1.0][..]),
         (7, &[101.0, 0.0][..]),
     ];
-    let stats = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
+    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
         .await
         .unwrap();
-    let store = index.provider();
+    let store = strategy.store();
 
     assert_eq!(
         stats,
@@ -639,12 +739,12 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
         .members
         .extend([10_005, 10_006]);
     store.lists.get_mut(&2).unwrap().centroid = vec![5.0, 0.0];
-    let mut index = index_with_neighbors(store, 3, 2);
-    let points = [(7, &[1.0, 0.0][..]), (8, &[5.2, 0.0][..])];
-    let stats = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
+    let (mut index, strategy) = index_with_neighbors(store, 3, 2);
+    let points: [(u32, &[f32]); 2] = [(7, &[1.0, 0.0][..]), (8, &[5.2, 0.0][..])];
+    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
         .await
         .unwrap();
-    let store = index.provider();
+    let store = strategy.store();
 
     assert_eq!(
         stats,
@@ -704,12 +804,12 @@ async fn neighborhood_selection_filters_parents_and_fills_the_union_once() {
             }
             store.next_list = 3 + centers.len() as u32;
             store.fail_nearest = count == 0;
-            let mut index = index_with_neighbors(store, 2, count);
-            let points = [(5, &[1.0, 1.0][..]), (6, &[11.0, 1.0][..])];
-            let stats = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
+            let (mut index, strategy) = index_with_neighbors(store, 2, count);
+            let points: [(u32, &[f32]); 2] = [(5, &[1.0, 1.0][..]), (6, &[11.0, 1.0][..])];
+            let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
                 .await
                 .unwrap();
-            let store = index.provider();
+            let store = strategy.store();
             let neighbors = match (count, centers.len()) {
                 (0 | 1, _) | (_, 0) => vec![],
                 (2, _) => two_candidates.clone(),
@@ -784,14 +884,15 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
     .into();
     let region = Region::new(&sources);
     let mut update = Update::new(&sources, 1);
-    clustering::split(
+    clustering::SplitAndAssign::new(
+        clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(1).unwrap()),
+        clustering::RegionalNearest,
+    )
+    .run(
         &region,
         &mut update,
         &BTreeSet::from([1]),
         &BTreeSet::from([2, 3, 4]),
-        NonZeroUsize::new(5).unwrap(),
-        NonZeroUsize::new(1).unwrap(),
-        &mut StdRng::seed_from_u64(7),
     )
     .unwrap();
 
@@ -818,13 +919,12 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
 
 #[tokio::test]
 async fn region_view_borrows_inputs_while_updates_are_recorded() {
-    let mut store = seeded();
+    let strategy = Strategy::new(seeded());
     let update = {
-        let mut build = Strategy
-            .build_accessor(&mut store, &DefaultContext)
-            .unwrap();
+        let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
         let points = [(5, &[1.0, 1.0][..]), (6, &[3.0, 1.0][..])];
-        let batch = Strategy.prepare(&mut build, &points).await.unwrap();
+        let ids = build.set_elements(&DefaultContext, &points).await.unwrap();
+        assert_eq!(ids, [10_005, 10_006]);
         assert_eq!(
             build
                 .append_to(1, [10_006, 10_005].into_iter())
@@ -846,20 +946,19 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 source.vectors.as_slice().as_ptr()
             );
             assert_eq!(vectors.row(0), [0.0, 0.0]);
-            assert_eq!(vectors.row(2), batch.get(10_006).unwrap());
-            assert_eq!(vectors.row(3), batch.get(10_005).unwrap());
-            clustering::split(
-                &region,
-                &mut update,
-                &BTreeSet::from([1]),
-                &BTreeSet::new(),
-                NonZeroUsize::new(5).unwrap(),
-                NonZeroUsize::new(2).unwrap(),
-                &mut StdRng::seed_from_u64(7),
+            assert_eq!(vectors.row(2), points[1].1);
+            assert_eq!(vectors.row(3), points[0].1);
+            clustering::SplitAndAssign::new(
+                clustering::TwoMeans::new(
+                    NonZeroUsize::new(5).unwrap(),
+                    NonZeroUsize::new(2).unwrap(),
+                ),
+                clustering::RegionalNearest,
             )
+            .run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new())
             .unwrap();
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
-            assert_eq!(vectors.row(2), batch.get(10_006).unwrap());
+            assert_eq!(vectors.row(2), points[1].1);
             assert!(update.set_members(1, &[]).is_err());
             update
         };
@@ -880,6 +979,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
             .into_changes()
             .any(|(id, change)| id == 1 && matches!(change, Membership::Retire))
     );
+    let store = strategy.store();
     assert_eq!(store.lists[&1].members, [10_000, 10_001]);
     assert!(!store.points.contains_key(&10_005));
     assert_eq!(store.finishes, 0);
@@ -902,9 +1002,9 @@ async fn failed_planning_or_publication_is_not_reported_as_success() {
         store.fail_set_members = fail_set_members;
         store.fail_retire = fail_retire;
         store.fail_finish = fail_finish;
-        let mut index = index_with_neighbors(store, 2, 2);
-        let points = [(5, &[1.0, 1.0][..])];
-        let error = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
+        let (mut index, strategy) = index_with_neighbors(store, 2, 2);
+        let points: [(u32, &[f32]); 1] = [(5, &[1.0, 1.0][..])];
+        let error = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
             .await
             .unwrap_err();
         let expected = if fail_nearest {
@@ -921,34 +1021,18 @@ async fn failed_planning_or_publication_is_not_reported_as_success() {
             "injected finish failure"
         };
         assert!(error.to_string().contains(expected), "{error}");
-        assert_eq!(index.provider().finishes, 0);
-        assert_eq!(index.provider().lists[&1].members, [10_000, 10_001]);
-        assert_eq!(index.provider().lists[&2].members, [10_002, 10_003]);
-        assert_eq!(index.provider().lists.len(), 3);
-        assert!(
-            index
-                .provider()
-                .to_internal_id(&DefaultContext, &5)
-                .is_err()
-        );
+        let store = strategy.store();
+        assert_eq!(store.finishes, 0);
+        assert_eq!(store.lists[&1].members, [10_000, 10_001]);
+        assert_eq!(store.lists[&2].members, [10_002, 10_003]);
+        assert_eq!(store.lists.len(), 3);
+        assert!(store.to_internal_id(&DefaultContext, &5).is_err());
     }
 }
 
 #[tokio::test]
-async fn invalid_config_and_uninitialized_insertion_fail() {
-    assert!(
-        IVFIndex::new(
-            Store::default(),
-            Config {
-                split_threshold: NonZeroUsize::new(1).unwrap(),
-                reassign_count: ReassignCount::None,
-                split_iterations: NonZeroUsize::new(5).unwrap(),
-                seed: 7,
-            },
-        )
-        .is_err()
-    );
-    let mut index = index(
+async fn uninitialized_insertion_fails() {
+    let (mut index, strategy) = index(
         Store {
             dim: 2,
             next_list: 1,
@@ -956,14 +1040,14 @@ async fn invalid_config_and_uninitialized_insertion_fail() {
         },
         2,
     );
-    let points = [(7, &[0.0, 1.0][..])];
+    let points: [(u32, &[f32]); 1] = [(7, &[0.0, 1.0][..])];
     assert!(
         index
-            .insert_batch(&Strategy, &DefaultContext, &points)
+            .insert_batch(&strategy, &DefaultContext, &points)
             .await
             .is_err()
     );
-    assert_eq!(index.provider().finishes, 0);
+    assert_eq!(strategy.store().finishes, 0);
 }
 
 #[tokio::test]
@@ -973,11 +1057,10 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
     store.points.insert(10_002, vec![5.0, 0.0]);
     store.points.insert(10_003, vec![10.1, 0.0]);
     store.lists.get_mut(&2).unwrap().centroid = vec![5.0, 0.0];
-    let mut build = Strategy
-        .build_accessor(&mut store, &DefaultContext)
-        .unwrap();
+    let strategy = Strategy::new(store);
+    let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
     let points = [(5, &[5.0, 0.0][..])];
-    Strategy.prepare(&mut build, &points).await.unwrap();
+    build.set_elements(&DefaultContext, &points).await.unwrap();
     assert_eq!(
         build
             .append_to(1, [10_005].into_iter())
@@ -990,51 +1073,37 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
     let update = {
         let (region, mut update) = build.fill([1, 2].into_iter()).await.unwrap();
         assert!(
-            clustering::split(
+            clustering::SplitAndAssign::new(
+                clustering::TwoMeans::new(
+                    NonZeroUsize::new(5).unwrap(),
+                    NonZeroUsize::new(2).unwrap(),
+                ),
+                clustering::RegionalNearest,
+            )
+            .run(
                 &region,
                 &mut update,
                 &BTreeSet::from([1, 99]),
-                &BTreeSet::new(),
-                NonZeroUsize::new(5).unwrap(),
-                NonZeroUsize::new(2).unwrap(),
-                &mut StdRng::seed_from_u64(7)
+                &BTreeSet::new()
             )
             .is_err()
         );
         assert!(
-            clustering::split(
+            clustering::SplitAndAssign::new(
+                clustering::TwoMeans::new(
+                    NonZeroUsize::new(5).unwrap(),
+                    NonZeroUsize::new(2).unwrap(),
+                ),
+                clustering::RegionalNearest,
+            )
+            .run(
                 &region,
                 &mut update,
                 &BTreeSet::from([1]),
-                &BTreeSet::from([99]),
-                NonZeroUsize::new(5).unwrap(),
-                NonZeroUsize::new(2).unwrap(),
-                &mut StdRng::seed_from_u64(7)
+                &BTreeSet::from([99])
             )
             .is_err()
         );
-        assert!(
-            clustering::split(
-                &region,
-                &mut update,
-                &BTreeSet::from([1]),
-                &BTreeSet::from([1]),
-                NonZeroUsize::new(5).unwrap(),
-                NonZeroUsize::new(2).unwrap(),
-                &mut StdRng::seed_from_u64(7)
-            )
-            .is_err()
-        );
-        clustering::split(
-            &region,
-            &mut update,
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            NonZeroUsize::new(5).unwrap(),
-            NonZeroUsize::new(2).unwrap(),
-            &mut StdRng::seed_from_u64(7),
-        )
-        .unwrap();
         assert!(update.created.is_empty());
         assert_eq!(
             std::mem::take(&mut update.memberships)
@@ -1042,21 +1111,18 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 .count(),
             0
         );
-        clustering::split(
-            &region,
-            &mut update,
-            &BTreeSet::from([1]),
-            &BTreeSet::new(),
-            NonZeroUsize::new(5).unwrap(),
-            NonZeroUsize::new(2).unwrap(),
-            &mut StdRng::seed_from_u64(7),
+        clustering::SplitAndAssign::new(
+            clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap()),
+            clustering::RegionalNearest,
         )
+        .run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new())
         .unwrap();
         assert_eq!(update.created.len(), 2);
         update
     };
-    require_send(build.finish(Some(&update))).await.unwrap();
+    require_send(build.finish(Some(update))).await.unwrap();
 
+    let store = strategy.store();
     assert_eq!(store.finishes, 1);
     assert!(!store.lists.contains_key(&1));
     assert_eq!(store.lists[&2].centroid, [5.0, 0.0]);
@@ -1097,14 +1163,18 @@ fn assignment_can_cross_parent_boundaries() {
     .into();
     let region = Region::new(&sources);
     let mut update = Update::new(&sources, 1);
-    clustering::split(
+    clustering::SplitAndAssign::new(
+        clustering::TwoMeans::new(
+            NonZeroUsize::new(10).unwrap(),
+            NonZeroUsize::new(1).unwrap(),
+        ),
+        clustering::RegionalNearest,
+    )
+    .run(
         &region,
         &mut update,
         &BTreeSet::from([1, 2]),
         &BTreeSet::new(),
-        NonZeroUsize::new(10).unwrap(),
-        NonZeroUsize::new(1).unwrap(),
-        &mut StdRng::seed_from_u64(7),
     )
     .unwrap();
     assert!(
@@ -1128,15 +1198,11 @@ fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
         .into();
         let region = Region::new(&sources);
         let mut update = Update::new(&sources, 1);
-        clustering::split(
-            &region,
-            &mut update,
-            &BTreeSet::from([1]),
-            &BTreeSet::new(),
-            NonZeroUsize::new(1).unwrap(),
-            NonZeroUsize::new(1).unwrap(),
-            &mut StdRng::seed_from_u64(7),
+        clustering::SplitAndAssign::new(
+            clustering::TwoMeans::new(NonZeroUsize::new(1).unwrap(), NonZeroUsize::new(1).unwrap()),
+            clustering::RegionalNearest,
         )
+        .run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new())
         .unwrap();
         assert_eq!(update.created.len(), 2);
         assert_eq!(update.created[0].centroid, [value]);
@@ -1155,7 +1221,6 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
             &mut self,
             points: rowmajor::Ref<'_, f32>,
             mut dst: rowmajor::Mut<'_, f32>,
-            _: &mut StdRng,
         ) -> ANNResult<()> {
             assert_eq!(points.nrows(), dst.nrows());
             dst.as_mut_slice().copy_from_slice(points.as_slice());
@@ -1283,13 +1348,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     let mut full = Update::new(&sources, 1);
     let mut splitter = clustering::SplitAndAssign::new(RowsAsCenters, clustering::RegionalNearest);
     splitter
-        .run(
-            &region,
-            &mut full,
-            &parents,
-            &neighbors,
-            &mut StdRng::seed_from_u64(7),
-        )
+        .run(&region, &mut full, &parents, &neighbors)
         .unwrap();
     let mut restricted = Update::new(&sources, 1);
     clustering::SplitAndAssign::new(
@@ -1298,13 +1357,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
             owners: [(3, vec![1]), (4, vec![1, 2])].into(),
         },
     )
-    .run(
-        &region,
-        &mut restricted,
-        &parents,
-        &neighbors,
-        &mut StdRng::seed_from_u64(7),
-    )
+    .run(&region, &mut restricted, &parents, &neighbors)
     .unwrap();
 
     for update in [&full, &restricted] {
@@ -1324,13 +1377,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     assert_eq!(restricted.created[2].members, [2, 7]);
     let mut repeated = Update::new(&sources, 1);
     splitter
-        .run(
-            &region,
-            &mut repeated,
-            &parents,
-            &neighbors,
-            &mut StdRng::seed_from_u64(7),
-        )
+        .run(&region, &mut repeated, &parents, &neighbors)
         .unwrap();
     for (first, repeated) in full.created.iter().zip(&repeated.created) {
         assert_eq!(first.centroid, repeated.centroid);
@@ -1343,7 +1390,6 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
             &mut smaller,
             &BTreeSet::from([1]),
             &BTreeSet::new(),
-            &mut StdRng::seed_from_u64(7),
         )
         .unwrap();
     assert_eq!(smaller.created.len(), 2);
@@ -1368,50 +1414,29 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
 fn numerical_strategy_failures_record_no_updates() {
     enum InvalidFit {
         Error,
-        TooFew,
-        WrongDimension,
-        NonFinite,
-        Incomplete,
         CountOverflow,
     }
 
     impl clustering::Clusterer for InvalidFit {
-        fn fit(
-            &mut self,
-            _: rowmajor::Ref<'_, f32>,
-            mut dst: rowmajor::Mut<'_, f32>,
-            _: &mut StdRng,
-        ) -> ANNResult<()> {
+        fn fit(&mut self, _: rowmajor::Ref<'_, f32>, _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
             match self {
                 Self::Error => Err(ANNError::message("injected fitting failure")),
-                Self::NonFinite => {
-                    dst.as_mut_slice().fill(f32::INFINITY);
-                    Ok(())
+                Self::CountOverflow => {
+                    unreachable!("centroid count overflow should be rejected before fitting")
                 }
-                Self::Incomplete => {
-                    dst.row_mut(0).fill(0.0);
-                    Ok(())
-                }
-                _ => unreachable!("invalid centroid layout should be rejected before fitting"),
             }
         }
 
         fn num_centers(&self) -> NonZeroUsize {
             NonZeroUsize::new(match self {
-                Self::TooFew => 1,
                 Self::CountOverflow => usize::MAX,
-                _ => 2,
+                Self::Error => 2,
             })
             .unwrap()
         }
 
         fn dim(&self) -> NonZeroUsize {
-            NonZeroUsize::new(if matches!(self, Self::WrongDimension) {
-                2
-            } else {
-                1
-            })
-            .unwrap()
+            NonZeroUsize::new(1).unwrap()
         }
     }
 
@@ -1452,10 +1477,6 @@ fn numerical_strategy_failures_record_no_updates() {
     let neighbors = BTreeSet::new();
     for (clusterer, expected) in [
         (InvalidFit::Error, "injected fitting failure"),
-        (InvalidFit::TooFew, "at least two centroids"),
-        (InvalidFit::WrongDimension, "canonical dimension"),
-        (InvalidFit::NonFinite, "finite value"),
-        (InvalidFit::Incomplete, "every centroid coordinate"),
         (InvalidFit::CountOverflow, "centroid count overflow"),
     ] {
         let mut update = Update::new(&sources, 1);
@@ -1465,13 +1486,7 @@ fn numerical_strategy_failures_record_no_updates() {
             parents.clone()
         };
         let error = clustering::SplitAndAssign::new(clusterer, clustering::RegionalNearest)
-            .run(
-                &region,
-                &mut update,
-                &selected,
-                &neighbors,
-                &mut StdRng::seed_from_u64(7),
-            )
+            .run(&region, &mut update, &selected, &neighbors)
             .unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
         assert_unwritten(update);
@@ -1481,13 +1496,7 @@ fn numerical_strategy_failures_record_no_updates() {
         clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(1).unwrap()),
         InvalidAssignment,
     )
-    .run(
-        &region,
-        &mut update,
-        &parents,
-        &neighbors,
-        &mut StdRng::seed_from_u64(7),
-    )
+    .run(&region, &mut update, &parents, &neighbors)
     .unwrap_err();
     assert!(
         error.to_string().contains("injected assignment failure"),
@@ -1499,34 +1508,24 @@ fn numerical_strategy_failures_record_no_updates() {
 #[test]
 fn two_means_matches_quantization_lloyds() {
     use clustering::{Clusterer, TwoMeans};
-    use rand::Rng;
 
     let points = matrix(&[[0.0, 2.0], [2.0, 4.0], [6.0, 6.0], [10.0, 12.0]]);
-    for seed in [0, 7, 42] {
-        for iterations in [1, 5] {
-            let mut expected = rowmajor::Owned::from_element(2, 2, 0.0);
-            let mut reference_rng = StdRng::seed_from_u64(seed);
-            let first = reference_rng.random_range(0..points.nrows());
-            let second = (first + reference_rng.random_range(1..points.nrows())) % points.nrows();
-            expected.row_mut(0).copy_from_slice(points.row(first));
-            expected.row_mut(1).copy_from_slice(points.row(second));
-            let _ = diskann_quantization::algorithms::kmeans::lloyds::lloyds(
-                points.as_view(),
-                expected.as_view_mut(),
-                iterations,
-            );
+    for iterations in [1, 5] {
+        let mut expected = points.as_view().subview(0..2).unwrap().to_rowmajor_owned();
+        let _ = diskann_quantization::algorithms::kmeans::lloyds::lloyds(
+            points.as_view(),
+            expected.as_view_mut(),
+            iterations,
+        );
 
-            let mut actual = rowmajor::Owned::from_element(2, 2, 0.0);
-            let mut rng = StdRng::seed_from_u64(seed);
-            TwoMeans::new(
-                NonZeroUsize::new(iterations).unwrap(),
-                NonZeroUsize::new(2).unwrap(),
-            )
-            .fit(points.as_view(), actual.as_view_mut(), &mut rng)
-            .unwrap();
-            assert_eq!(actual.as_slice(), expected.as_slice());
-            assert_eq!(rng.random::<u64>(), reference_rng.random::<u64>());
-        }
+        let mut actual = rowmajor::Owned::from_element(2, 2, 0.0);
+        TwoMeans::new(
+            NonZeroUsize::new(iterations).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
+        )
+        .fit(points.as_view(), actual.as_view_mut())
+        .unwrap();
+        assert_eq!(actual.as_slice(), expected.as_slice());
     }
 }
 
@@ -1540,13 +1539,8 @@ fn two_means_fits_only_the_destination_window() {
         NonZeroUsize::new(10).unwrap(),
         NonZeroUsize::new(2).unwrap(),
     );
-    let mut rng = StdRng::seed_from_u64(7);
     clusterer
-        .fit(
-            points.as_view(),
-            scratch.subview_mut(1..3).unwrap(),
-            &mut rng,
-        )
+        .fit(points.as_view(), scratch.subview_mut(1..3).unwrap())
         .unwrap();
     assert_eq!(scratch.row(0), [-1.0, -1.0]);
     assert_eq!(scratch.row(3), [-1.0, -1.0]);
@@ -1560,23 +1554,18 @@ fn two_means_fits_only_the_destination_window() {
         (matrix(&[[0.0], [1.0]]), 2, 2),
         (matrix(&[[0.0, 2.0], [1.0, 3.0]]), 1, 2),
         (matrix(&[[0.0, 2.0], [1.0, 3.0]]), 2, 1),
-        (matrix(&[[f32::NAN, 2.0], [1.0, 3.0]]), 2, 2),
     ] {
         let mut dst = rowmajor::Owned::from_element(rows, dim, -1.0);
-        assert!(
-            clusterer
-                .fit(points.as_view(), dst.as_view_mut(), &mut rng)
-                .is_err()
-        );
+        assert!(clusterer.fit(points.as_view(), dst.as_view_mut()).is_err());
         assert!(dst.as_slice().iter().all(|&value| value == -1.0));
     }
 }
 
 #[test]
-fn regional_assignment_rejects_invalid_inputs_before_writing() {
+fn regional_assignment_reports_missing_sources_before_writing() {
     use clustering::{Assigner, Destination, RegionalNearest, Type};
 
-    let mut sources = BTreeMap::from([
+    let sources = BTreeMap::from([
         (
             1,
             Source {
@@ -1598,51 +1587,13 @@ fn regional_assignment_rejects_invalid_inputs_before_writing() {
         list: Type::New,
         centroid: &[0.0],
     }];
-    for invalid in [
-        vec![],
-        vec![Destination {
-            list: Type::New,
-            centroid: &[],
-        }],
-        vec![Destination {
-            list: Type::New,
-            centroid: &[f32::NAN],
-        }],
-        vec![
-            Destination {
-                list: Type::New,
-                centroid: &[0.0],
-            },
-            Destination {
-                list: Type::New,
-                centroid: &[1.0, 2.0],
-            },
-        ],
-    ] {
+    for ids in [vec![99], vec![1, 99], vec![1, 2, 99]] {
         let mut update = Update::new(&sources, 1);
-        assert!(
-            RegionalNearest
-                .assign(&Region::new(&sources), &mut update, &[1, 2], &invalid)
-                .is_err()
-        );
-        assert!(update.created.is_empty());
-        assert_eq!(update.memberships.into_changes().count(), 0);
-    }
-    for (ids, members, vectors) in [
-        (vec![1, 99], vec![2], matrix(&[[2.0]])),
-        (vec![1, 2], vec![], matrix(&[[2.0]])),
-        (vec![1, 2], vec![2], matrix(&[[0.0, 1.0]])),
-        (vec![1, 2], vec![2], matrix(&[[f32::INFINITY]])),
-    ] {
-        let mut update = Update::new(&sources, 1);
-        sources.get_mut(&2).unwrap().members = members;
-        sources.get_mut(&2).unwrap().vectors = vectors;
         let region = Region::new(&sources);
-        assert!(
-            RegionalNearest
-                .assign(&region, &mut update, &ids, &destinations)
-                .is_err()
-        );
+        let error = RegionalNearest
+            .assign(&region, &mut update, &ids, &destinations)
+            .unwrap_err();
+        assert!(error.to_string().contains("source is missing"), "{error}");
         assert!(update.created.is_empty());
         assert_eq!(update.memberships.into_changes().count(), 0);
     }
