@@ -7,6 +7,7 @@
 //!
 //! Each B tile is decoded once and reused across A panels. Integer inner products
 //! are compensated before reduction because B's coefficients vary by vector.
+//! B preparation retains only the three coefficients used by MaxSim.
 //! B rows are zero-padded to PACK; kernel `k` remains the logical dimension used
 //! for compensation and accumulator limits.
 //!
@@ -39,7 +40,7 @@ use crate::{
         ptr::Slice,
         util::LoadStore,
     },
-    minmax::{MinMaxCompensation, MinMaxMeta},
+    minmax::MinMaxMeta,
     multi_vector::{BlockTransposed, MatRef, Overflow},
 };
 
@@ -63,7 +64,7 @@ const fn max_k<const A_BITS: usize, const B_BITS: usize>() -> usize {
     (i32::MAX as usize) / (((1 << A_BITS) - 1) * ((1 << B_BITS) - 1))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Coefficients<T> {
     a: T,
     b: T,
@@ -81,7 +82,7 @@ where
 
 impl<T, const A_BITS: usize, const MR: usize, const PACK: usize> PackedA<T, A_BITS, MR, PACK>
 where
-    T: Copy + Default,
+    T: Copy + Default + From<u8>,
     Unsigned: Representation<A_BITS>,
 {
     /// Pack A and copy its coefficients, zero-filling partial rows and K packs.
@@ -90,10 +91,7 @@ where
     ///
     /// Returns [`Overflow`] if the packed data or coefficient allocation size overflows.
     #[expect(clippy::expect_used)]
-    pub(crate) fn new<W: ExtraWide<MR, PACK, AElem = T>>(
-        _: W,
-        a: MatRef<'_, MinMaxMeta<A_BITS>>,
-    ) -> Result<Self, Overflow> {
+    pub(crate) fn new(a: MatRef<'_, MinMaxMeta<A_BITS>>) -> Result<Self, Overflow> {
         let k = a.repr().intrinsic_dim();
         let mut codes = BlockTransposed::try_new(a.num_vectors(), k)?;
         let padded_rows = codes.padded_nrows();
@@ -114,7 +112,7 @@ where
                 .expect("A and its packing have equal row counts");
             for j in 0..k {
                 // SAFETY: MinMaxMeta exposes exactly k codes for every row.
-                dst.set(j, W::convert_a(unsafe { v.get_unchecked(j) } as u8));
+                dst.set(j, T::from(unsafe { v.get_unchecked(j) } as u8));
             }
         }
         Ok(Self { codes, meta })
@@ -284,12 +282,12 @@ where
 #[derive(Default)]
 struct BScratch<T> {
     codes: Vec<T>,
-    meta: Vec<MinMaxCompensation>,
+    meta: Vec<Coefficients<f32>>,
 }
 
 struct BTile<'a, T> {
     codes: unpacked::View<'a, T>,
-    meta: &'a [MinMaxCompensation],
+    meta: &'a [Coefficients<f32>],
 }
 
 #[inline]
@@ -321,10 +319,15 @@ impl<T: Copy + Default> BScratch<T> {
         let physical_k = padded_k::<PACK>(k);
         let stride = physical_k.value().get();
         self.codes.resize(count.get() * stride, T::default());
-        self.meta.resize(count.get(), MinMaxCompensation::default());
+        self.meta.resize(count.get(), Coefficients::default());
         for i in 0..count.get() {
             let row = b.get_row(start + i).expect("B tile range was checked");
-            self.meta[i] = row.meta();
+            let meta = row.meta();
+            self.meta[i] = Coefficients {
+                a: meta.a,
+                b: meta.b,
+                n: meta.n,
+            };
             let dst = &mut self.codes[i * stride..(i + 1) * stride];
             row.vector()
                 .decode_into(&mut dst[..dim], |code| convert(code as u8))
@@ -342,7 +345,7 @@ impl<T: Copy + Default> BScratch<T> {
     /// Cache-planning bytes for one decoded B row, including metadata.
     fn row_bytes<const PACK: usize>(k: DimK) -> Bytes {
         let codes = Elements::<T>::new(padded_k::<PACK>(k).value().get()).bytes();
-        Bytes::new(codes.value() + size_of::<MinMaxCompensation>())
+        Bytes::new(codes.value() + size_of::<Coefficients<f32>>())
     }
 }
 
@@ -356,7 +359,7 @@ struct PanelKernel<'a, W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize,
     a: packed::Panel<'a, W::AElem, MR, PACK>,
     a_meta: Coefficients<&'a [f32; MR]>,
     b: unpacked::View<'a, W::BElem>,
-    b_meta: &'a [MinMaxCompensation],
+    b_meta: &'a [Coefficients<f32>],
     c: [f32; MR],
     k: DimK,
 }
@@ -375,7 +378,7 @@ struct Visitor<'a, W: ExtraWide<MR, PACK>, const MR: usize, const PACK: usize> {
     arch: W,
     a: packed::Panel<'a, W::AElem, MR, PACK>,
     a_meta: Coefficients<&'a [f32; MR]>,
-    b_meta: &'a [MinMaxCompensation],
+    b_meta: &'a [Coefficients<f32>],
     c: &'a mut [f32; MR],
     k: DimK,
 }
@@ -449,7 +452,7 @@ struct MicroKernel<'a, W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize,
     a: packed::Panel<'a, W::AElem, MR, PACK>,
     a_meta: Coefficients<&'a [f32; MR]>,
     b: unpacked::Panel<'a, W::BElem, NR>,
-    b_meta: &'a [MinMaxCompensation; NR],
+    b_meta: &'a [Coefficients<f32>; NR],
     c: &'a mut [f32; MR],
     k: DimK,
 }
@@ -524,13 +527,12 @@ pub(crate) trait ExtraWide<const MR: usize, const PACK: usize>: Architecture {
     /// This is a backend capability, not the actual A or B input width.
     const MAX_B_BITS: usize;
 
-    type AElem: Copy + Default;
+    type AElem: Copy + Default + From<u8>;
     type BElem: Copy + Default;
     type Wide: Copy;
     type Splat: Copy;
     type Acc: Copy;
 
-    fn convert_a(code: u8) -> Self::AElem;
     /// `code` fits in MAX_B_BITS unsigned bits.
     fn convert_b(code: u8) -> Self::BElem;
 
@@ -550,7 +552,7 @@ pub(crate) trait ExtraWide<const MR: usize, const PACK: usize>: Architecture {
         self,
         acc: [Self::Acc; NR],
         query: Coefficients<&[f32; MR]>,
-        docs: &[MinMaxCompensation; NR],
+        docs: &[Coefficients<f32>; NR],
         k: usize,
         scores: &mut [f32; MR],
     );
@@ -566,7 +568,7 @@ fn compensated_max_into<I, F, const MR: usize, const NR: usize>(
     arch: F::Arch,
     acc: impl IntoIterator<Item = I>,
     query: Coefficients<&[f32; MR]>,
-    docs: &[MinMaxCompensation; NR],
+    docs: &[Coefficients<f32>; NR],
     k: usize,
     scores: &mut [f32; MR],
 ) where
@@ -642,7 +644,7 @@ impl ExtraWide<16, 4> for Scalar {
         self,
         acc: [Self::Acc; NR],
         query: Coefficients<&[f32; 16]>,
-        docs: &[MinMaxCompensation; NR],
+        docs: &[Coefficients<f32>; NR],
         k: usize,
         scores: &mut [f32; 16],
     ) {
@@ -652,10 +654,6 @@ impl ExtraWide<16, 4> for Scalar {
     #[inline(always)]
     fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
         acc.dot_simd(a, b)
-    }
-
-    fn convert_a(code: u8) -> u8 {
-        code
     }
 
     fn convert_b(code: u8) -> i8 {
@@ -696,7 +694,7 @@ impl ExtraWide<16, 2> for Scalar {
         self,
         acc: [Self::Acc; NR],
         query: Coefficients<&[f32; 16]>,
-        docs: &[MinMaxCompensation; NR],
+        docs: &[Coefficients<f32>; NR],
         k: usize,
         scores: &mut [f32; 16],
     ) {
@@ -706,10 +704,6 @@ impl ExtraWide<16, 2> for Scalar {
     #[inline(always)]
     fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
         acc.dot_simd(a, b)
-    }
-
-    fn convert_a(code: u8) -> i16 {
-        i16::from(code)
     }
 
     fn convert_b(code: u8) -> i16 {
@@ -747,7 +741,7 @@ impl ExtraWide<8, 2> for Scalar {
         self,
         acc: [Self::Acc; NR],
         query: Coefficients<&[f32; 8]>,
-        docs: &[MinMaxCompensation; NR],
+        docs: &[Coefficients<f32>; NR],
         k: usize,
         scores: &mut [f32; 8],
     ) {
@@ -759,9 +753,6 @@ impl ExtraWide<8, 2> for Scalar {
         acc.dot_simd(a, b)
     }
 
-    fn convert_a(code: u8) -> i16 {
-        i16::from(code)
-    }
     fn convert_b(code: u8) -> i16 {
         i16::from(code)
     }
@@ -783,7 +774,7 @@ mod x86_64 {
         arch: V3,
         acc: [i32x16<V3>; NR],
         query: Coefficients<&[f32; 16]>,
-        docs: &[MinMaxCompensation; NR],
+        docs: &[Coefficients<f32>; NR],
         k: usize,
         scores: &mut [f32; 16],
     ) {
@@ -842,16 +833,13 @@ mod x86_64 {
             self,
             acc: [Self::Acc; NR],
             query: Coefficients<&[f32; 8]>,
-            docs: &[MinMaxCompensation; NR],
+            docs: &[Coefficients<f32>; NR],
             k: usize,
             scores: &mut [f32; 8],
         ) {
             compensated_max_into(self, acc, query, docs, k, scores);
         }
 
-        fn convert_a(code: u8) -> u8 {
-            code
-        }
         fn convert_b(code: u8) -> i8 {
             code as i8
         }
@@ -893,7 +881,7 @@ mod x86_64 {
             self,
             acc: [Self::Acc; NR],
             query: Coefficients<&[f32; 8]>,
-            docs: &[MinMaxCompensation; NR],
+            docs: &[Coefficients<f32>; NR],
             k: usize,
             scores: &mut [f32; 8],
         ) {
@@ -905,9 +893,6 @@ mod x86_64 {
             acc.dot_simd(a, b)
         }
 
-        fn convert_a(code: u8) -> i16 {
-            i16::from(code)
-        }
         fn convert_b(code: u8) -> i16 {
             i16::from(code)
         }
@@ -943,15 +928,11 @@ mod x86_64 {
             self,
             acc: [Self::Acc; NR],
             query: Coefficients<&[f32; 16]>,
-            docs: &[MinMaxCompensation; NR],
+            docs: &[Coefficients<f32>; NR],
             k: usize,
             scores: &mut [f32; 16],
         ) {
             compensated_max_into_v3(self, acc, query, docs, k, scores);
-        }
-
-        fn convert_a(code: u8) -> u8 {
-            code
         }
 
         fn convert_b(code: u8) -> i8 {
@@ -1006,7 +987,7 @@ mod x86_64 {
             self,
             acc: [Self::Acc; NR],
             query: Coefficients<&[f32; 16]>,
-            docs: &[MinMaxCompensation; NR],
+            docs: &[Coefficients<f32>; NR],
             k: usize,
             scores: &mut [f32; 16],
         ) {
@@ -1016,10 +997,6 @@ mod x86_64 {
         #[inline(always)]
         fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
             acc.dot_simd(a, b)
-        }
-
-        fn convert_a(code: u8) -> i16 {
-            i16::from(code)
         }
 
         fn convert_b(code: u8) -> i16 {
@@ -1060,7 +1037,7 @@ mod x86_64 {
             self,
             acc: [Self::Acc; NR],
             query: Coefficients<&[f32; 16]>,
-            docs: &[MinMaxCompensation; NR],
+            docs: &[Coefficients<f32>; NR],
             k: usize,
             scores: &mut [f32; 16],
         ) {
@@ -1070,10 +1047,6 @@ mod x86_64 {
         #[inline(always)]
         fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
             acc.dot_simd(a, b)
-        }
-
-        fn convert_a(code: u8) -> u8 {
-            code
         }
 
         fn convert_b(code: u8) -> i8 {
@@ -1114,7 +1087,7 @@ mod x86_64 {
             self,
             acc: [Self::Acc; NR],
             query: Coefficients<&[f32; 16]>,
-            docs: &[MinMaxCompensation; NR],
+            docs: &[Coefficients<f32>; NR],
             k: usize,
             scores: &mut [f32; 16],
         ) {
@@ -1124,10 +1097,6 @@ mod x86_64 {
         #[inline(always)]
         fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
             acc.dot_simd(a, b)
-        }
-
-        fn convert_a(code: u8) -> i16 {
-            i16::from(code)
         }
 
         fn convert_b(code: u8) -> i16 {
@@ -1171,7 +1140,7 @@ mod aarch64 {
             self,
             acc: [Self::Acc; NR],
             query: Coefficients<&[f32; 8]>,
-            docs: &[MinMaxCompensation; NR],
+            docs: &[Coefficients<f32>; NR],
             k: usize,
             scores: &mut [f32; 8],
         ) {
@@ -1183,9 +1152,6 @@ mod aarch64 {
             acc.dot_simd(a, b)
         }
 
-        fn convert_a(code: u8) -> u8 {
-            code
-        }
         fn convert_b(code: u8) -> u8 {
             code
         }
@@ -1223,7 +1189,7 @@ mod aarch64 {
             self,
             acc: [Self::Acc; NR],
             query: Coefficients<&[f32; 16]>,
-            docs: &[MinMaxCompensation; NR],
+            docs: &[Coefficients<f32>; NR],
             k: usize,
             scores: &mut [f32; 16],
         ) {
@@ -1233,10 +1199,6 @@ mod aarch64 {
         #[inline(always)]
         fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
             acc.dot_simd(a, b)
-        }
-
-        fn convert_a(code: u8) -> u8 {
-            code
         }
 
         fn convert_b(code: u8) -> u8 {
@@ -1266,7 +1228,7 @@ mod tests {
         bits::{Representation, Unsigned},
         distances,
         matrix_kernels::maxsim::test::packed_x_unpacked_test_dims,
-        minmax::{DataRef, MinMaxIP},
+        minmax::{DataRef, MinMaxCompensation, MinMaxIP},
         multi_vector::{Defaulted, Mat},
     };
 
@@ -1398,7 +1360,7 @@ mod tests {
             for k in [shape.k, shape.k.next_multiple_of(PACK)] {
                 let a = random_minmax_matrix::<8>(shape.total_a_rows, k, &mut rng);
                 let b = random_minmax_matrix::<B_BITS>(shape.total_b_cols, k, &mut rng);
-                let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+                let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
                 let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
                 let mut guarded = vec![654321.0; a.num_vectors() + 2];
                 let mut driver = checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
@@ -1425,7 +1387,7 @@ mod tests {
 
         let a = random_minmax_matrix::<8>(MR + 1, 5, &mut rng);
         let b = random_minmax_matrix::<B_BITS>(0, 5, &mut rng);
-        let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+        let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
         let mut c = vec![f32::INFINITY; a.num_vectors()];
         driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
             arch,
@@ -1490,7 +1452,7 @@ mod tests {
                 norm_squared: 0.0,
             });
         }
-        let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+        let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
         let mut c = vec![0.0; MR + 1];
         let mut driver =
             checked_driver::<_, 8, B_BITS, MR, NR, PACK>(arch, &packed, b.as_view(), &mut c);
@@ -1501,7 +1463,7 @@ mod tests {
 
         let a = constant_minmax_matrix::<8>(MR + 1, 3, 1, 1.0, -2.0);
         let b = constant_minmax_matrix::<B_BITS>((NR - 1).max(1), 3, 1, 1.0, 0.0);
-        let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+        let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
         driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
             arch,
             &packed,
@@ -1519,7 +1481,7 @@ mod tests {
         let k = max_k::<8, 8>();
         let a = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
         let b = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
-        let packed = PackedA::<_, 8, 8, 2>::new(arch, a.as_view()).unwrap();
+        let packed = PackedA::<i16, 8, 8, 2>::new(a.as_view()).unwrap();
         let mut c = [0.0];
         driver::Drive::drive(&mut checked_driver::<_, 8, 8, 8, 2, 2>(
             arch,
@@ -1587,22 +1549,21 @@ mod tests {
         }
     }
 
-    fn assert_a_packing<W, const A_BITS: usize, const MR: usize, const PACK: usize>(arch: W)
+    fn assert_a_packing<T, const A_BITS: usize, const MR: usize, const PACK: usize>()
     where
-        W: ExtraWide<MR, PACK>,
-        W::AElem: PartialEq + std::fmt::Debug,
+        T: Copy + Default + From<u8> + PartialEq + std::fmt::Debug,
         Unsigned: Representation<A_BITS>,
     {
         for (m, k) in [(0, 0), (0, 5), (3, 0)] {
             let a = constant_minmax_matrix::<A_BITS>(m, k, 0, 1.0, 0.0);
-            let packed = PackedA::<_, A_BITS, MR, PACK>::new(arch, a.as_view()).unwrap();
+            let packed = PackedA::<T, A_BITS, MR, PACK>::new(a.as_view()).unwrap();
             assert_eq!(packed.codes.nrows(), m);
             assert_eq!(packed.codes.ncols(), k);
             assert!(packed::View::from_block_transposed(packed.codes.as_view()).is_none());
         }
         let mut rng = StdRng::seed_from_u64(0x0ae4b97f2c186d35);
         let a = random_minmax_matrix::<A_BITS>(MR + 1, 5, &mut rng);
-        let packed = PackedA::<_, A_BITS, MR, PACK>::new(arch, a.as_view()).unwrap();
+        let packed = PackedA::<T, A_BITS, MR, PACK>::new(a.as_view()).unwrap();
         let padded_cols = 5usize.div_ceil(PACK) * PACK;
         assert_eq!(packed.codes.nrows(), MR + 1);
         assert_eq!(packed.codes.ncols(), 5);
@@ -1615,9 +1576,9 @@ mod tests {
                     + (row % MR) * PACK
                     + col % PACK;
                 let expected = if row <= MR && col < 5 {
-                    W::convert_a(a.get_row(row).unwrap().vector().get(col).unwrap() as u8)
+                    T::from(a.get_row(row).unwrap().vector().get(col).unwrap() as u8)
                 } else {
-                    W::AElem::default()
+                    T::default()
                 };
                 assert_eq!(packed.codes.as_slice()[index], expected);
             }
@@ -1632,23 +1593,23 @@ mod tests {
     fn a_packing_preserves_codes_metadata_and_padding() {
         macro_rules! check {
             ($($bits:literal),+) => {$(
-                assert_a_packing::<_, $bits, 16, 4>(Scalar::new());
-                assert_a_packing::<_, $bits, 16, 2>(Scalar::new());
+                assert_a_packing::<u8, $bits, 16, 4>();
+                assert_a_packing::<i16, $bits, 16, 2>();
             )+};
         }
         check!(1, 2, 3, 4, 5, 6, 7, 8);
-        assert_a_packing::<_, 3, 8, 2>(Scalar::new());
+        assert_a_packing::<i16, 3, 8, 2>();
     }
 
     #[test]
     fn cache_footprints_match_prepared_layouts() {
-        for (k, a_bytes, b_bytes) in [(256, 4288, 276), (257, 4352, 280)] {
+        for (k, a_bytes, b_bytes) in [(256, 4288, 268), (257, 4352, 272)] {
             let dim = DimK::new(NonZeroUsize::new(k).unwrap());
             assert_eq!(BScratch::<i8>::row_bytes::<4>(dim).value(), b_bytes);
             assert_eq!(BScratch::<u8>::row_bytes::<4>(dim).value(), b_bytes);
             for rows in [1, 16, 17] {
                 let a = constant_minmax_matrix::<8>(rows, k, 0, 1.0, 0.0);
-                let packed = PackedA::<u8, 8, 16, 4>::new(Scalar::new(), a.as_view()).unwrap();
+                let packed = PackedA::<u8, 8, 16, 4>::new(a.as_view()).unwrap();
                 assert_eq!(packed.panel_bytes().value(), a_bytes);
 
                 // Preserve the previous view-based cache estimate.
@@ -1663,12 +1624,12 @@ mod tests {
 
     #[test]
     fn widened_cache_footprints_match_prepared_layouts() {
-        for (k, a_bytes, b_bytes) in [(256, 8384, 532), (257, 8448, 536)] {
+        for (k, a_bytes, b_bytes) in [(256, 8384, 524), (257, 8448, 528)] {
             let dim = DimK::new(NonZeroUsize::new(k).unwrap());
             assert_eq!(BScratch::<i16>::row_bytes::<2>(dim).value(), b_bytes);
             for rows in [1, 16, 17] {
                 let a = constant_minmax_matrix::<8>(rows, k, 255, 1.0, 0.0);
-                let packed = PackedA::<i16, 8, 16, 2>::new(Scalar::new(), a.as_view()).unwrap();
+                let packed = PackedA::<i16, 8, 16, 2>::new(a.as_view()).unwrap();
                 assert_eq!(packed.panel_bytes().value(), a_bytes);
                 let view = packed::View::from_block_transposed(packed.codes.as_view()).unwrap();
                 assert_eq!(
@@ -1677,6 +1638,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn compact_metadata_preserves_scores_across_tile_sizes() {
+        let arch = Scalar::new();
+        let mut rng = StdRng::seed_from_u64(0x9f23ea1640b187ac);
+        let a = random_minmax_matrix::<8>(9, 3, &mut rng);
+        let b = random_minmax_matrix::<8>(11, 3, &mut rng);
+        let packed = PackedA::<i16, 8, 8, 2>::new(a.as_view()).unwrap();
+        let k = DimK::new(NonZeroUsize::new(3).unwrap());
+        // This budget gives different rounded tiles for compact and canonical metadata.
+        let cache = Cache::new(
+            NonZeroUsize::new(packed.panel_bytes().value() + 81).unwrap(),
+            NonZeroUsize::new(4096).unwrap(),
+        );
+        let expected = reference_max_inner_products(a.as_view(), b.as_view());
+        let mut scores = vec![f32::NAN; a.num_vectors()];
+        // SAFETY: A is nonempty; both inputs have K=3 and scores covers every A row.
+        let mut driver = unsafe {
+            Driver::<_, 8, 8, 2, 2>::new::<8>(arch, &packed, b.as_view(), &mut scores, k, cache)
+        };
+        assert_eq!(driver.b_rows_per_tile.get(), 6);
+        driver::Drive::drive(&mut driver);
+        assert_scores_close(driver.c, &expected, format_args!("compact metadata tiling"));
+
+        let previous_row_bytes = Bytes::new(4 * size_of::<i16>() + size_of::<MinMaxCompensation>());
+        driver.b_rows_per_tile =
+            Params::new(cache, packed.panel_bytes(), previous_row_bytes, 2).b_cols_in_l1;
+        assert_eq!(driver.b_rows_per_tile.get(), 4);
+        driver::Drive::drive(&mut driver);
+        assert_scores_close(
+            driver.c,
+            &expected,
+            format_args!("previous metadata tiling"),
+        );
     }
 
     #[test]
@@ -1724,7 +1720,7 @@ mod tests {
             let b = MatRef::new(MinMaxMeta::<B_BITS>::new(3, dim), bytes).unwrap();
             for (start, count) in [(0, 3), (2, 1), (1, 2)] {
                 scratch.codes.fill(sentinel);
-                scratch.meta.fill(MinMaxCompensation::default());
+                scratch.meta.fill(Coefficients::default());
                 let mut conversions = 0;
                 let tile = scratch.prepare::<B_BITS, PACK>(
                     b,
@@ -1745,7 +1741,12 @@ mod tests {
                 assert_eq!(tile.meta.len(), count);
                 for i in 0..count {
                     let row = b.get_row(start + i).unwrap();
-                    assert_eq!(tile.meta[i], row.meta());
+                    let expected = row.meta();
+                    let actual = tile.meta[i];
+                    assert_eq!(
+                        (actual.a, actual.b, actual.n),
+                        (expected.a, expected.b, expected.n),
+                    );
                     for j in 0..dim {
                         assert_eq!(
                             codes[i * row_len + j],
@@ -1784,7 +1785,7 @@ mod tests {
             let a = random_minmax_matrix::<8>(m, k, &mut rng);
             let b = random_minmax_matrix::<B_BITS>(n, k, &mut rng);
             let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
-            let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+            let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
             let mut c = vec![f32::INFINITY; m];
             driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
                 arch,
@@ -1859,12 +1860,10 @@ mod tests {
                 (7.0, f32::NAN),
             ] {
                 for column in [0, NR - 1] {
-                    let mut b_meta = [MinMaxCompensation {
-                        dim: 1,
+                    let mut b_meta = [Coefficients {
                         a: 1.0,
                         b: 0.0,
                         n: f32::NAN,
-                        norm_squared: 0.0,
                     }; NR];
                     b_meta[column].n = score;
                     let mut c = [initial; MR];
@@ -1932,14 +1931,11 @@ mod tests {
                     b: &b,
                     n: &n,
                 };
-                let mut docs: [MinMaxCompensation; NR] =
-                    core::array::from_fn(|j| MinMaxCompensation {
-                        dim: 31,
-                        a: (j + 1) as f32 * 0.25,
-                        b: 1.0 - j as f32,
-                        n: j as f32 * 0.5,
-                        norm_squared: 0.0,
-                    });
+                let mut docs: [Coefficients<f32>; NR] = core::array::from_fn(|j| Coefficients {
+                    a: (j + 1) as f32 * 0.25,
+                    b: 1.0 - j as f32,
+                    n: j as f32 * 0.5,
+                });
                 for special in [0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
                     docs[NR - 1].n = special;
                     let initial = core::array::from_fn(|i| {
@@ -2011,7 +2007,7 @@ mod tests {
             arch.run(|| {
                 let codes: Vec<_> = (0..MR * PACK)
                     .map(|i| {
-                        W::convert_a(if (i / PACK).is_multiple_of(2) {
+                        W::AElem::from(if (i / PACK).is_multiple_of(2) {
                             u8::MAX
                         } else {
                             1
@@ -2037,7 +2033,7 @@ mod tests {
                 arch.max_into(
                     [acc],
                     coefficients,
-                    &[MinMaxCompensation {
+                    &[Coefficients {
                         a: 1.0,
                         ..Default::default()
                     }],
@@ -2077,7 +2073,7 @@ mod tests {
             let a = random_minmax_matrix::<8>(m, k, rng);
             let b = random_minmax_matrix::<B_BITS>(n, k, rng);
             let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
-            let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+            let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
             let mut guarded = vec![654321.0; m + 2];
             let mut kernel = checked_driver::<W, 8, B_BITS, MR, NR, PACK>(
                 arch,
@@ -2096,7 +2092,7 @@ mod tests {
 
             let a = constant_minmax_matrix::<8>(1, k, max_a as i64, 1.0, 0.0);
             let b = constant_minmax_matrix::<B_BITS>(1, k, max_b as i64, 1.0, 0.0);
-            let packed = PackedA::<_, 8, MR, PACK>::new(arch, a.as_view()).unwrap();
+            let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
             let mut c = [0.0];
             driver::Drive::drive(&mut checked_driver::<W, 8, B_BITS, MR, NR, PACK>(
                 arch,
@@ -2224,7 +2220,7 @@ mod tests {
                 let max_b = (1 << B_BITS) - 1;
                 let a = constant_minmax_matrix::<A_BITS>(1, k, max_a, 1.0, 0.0);
                 let b = constant_minmax_matrix::<B_BITS>(1, k, max_b, 1.0, 0.0);
-                let packed = PackedA::<_, A_BITS, 16, 2>::new(Scalar::new(), a.as_view()).unwrap();
+                let packed = PackedA::<i16, A_BITS, 16, 2>::new(a.as_view()).unwrap();
                 let mut c = [0.0];
                 driver::Drive::drive(&mut checked_driver::<_, A_BITS, B_BITS, 16, 2, 2>(
                     Scalar::new(),
@@ -2270,7 +2266,7 @@ mod tests {
                     meta.n = (k as i64 * code) as f32;
                     row.set_meta(meta);
                 }
-                let a = PackedA::<_, 8, 16, PACK>::new(arch, a.as_view()).unwrap();
+                let a = PackedA::<W::AElem, 8, 16, PACK>::new(a.as_view()).unwrap();
                 let mut c = vec![f32::NAN; 17];
                 for code in boundary_codes {
                     let b = constant_minmax_matrix::<8>(1, k, code, 1.0, 0.0);
@@ -2335,7 +2331,7 @@ mod tests {
             let k = max_k::<8, 8>() + 1;
             let a = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
             let b = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
-            let a = PackedA::<_, 8, 16, 2>::new(Scalar::new(), a.as_view()).unwrap();
+            let a = PackedA::<i16, 8, 16, 2>::new(a.as_view()).unwrap();
             let mut c = [0.0];
             let _ = checked_driver::<_, 8, 8, 16, 2, 2>(Scalar::new(), &a, b.as_view(), &mut c);
         }
