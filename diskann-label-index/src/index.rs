@@ -79,7 +79,82 @@ struct SummarizedWord {
     possible_words: u64,
 }
 
-const MAX_CACHED_SUMMARY_MATCH_BOUND: u64 = 1024;
+/// Query-time Bloom candidate enumeration configuration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BloomQueryConfig {
+    summary_cache_bound_percent: f64,
+    summary_scan_max_word_percent: f64,
+}
+
+impl BloomQueryConfig {
+    /// Create a query configuration with a 1% to 100% summary-cache bound.
+    ///
+    /// A value of 1 caches masks when the conservative match bound is at most
+    /// 1% of the searchable vectors. The summary-scan word limit defaults to 10%.
+    pub fn new(summary_cache_bound_percent: f64) -> Result<Self, EncodedLabelIndexError> {
+        validate_percent(
+            "Bloom summary cache bound percent",
+            summary_cache_bound_percent,
+        )?;
+        Ok(Self {
+            summary_cache_bound_percent,
+            summary_scan_max_word_percent: 10.0,
+        })
+    }
+
+    /// Set the maximum surviving payload-word percentage that uses word summaries.
+    ///
+    /// A value of 100 always uses available summaries instead of falling back
+    /// to a full payload scan.
+    pub fn with_summary_scan_max_word_percent(
+        mut self,
+        summary_scan_max_word_percent: f64,
+    ) -> Result<Self, EncodedLabelIndexError> {
+        validate_percent(
+            "Bloom summary scan maximum word percent",
+            summary_scan_max_word_percent,
+        )?;
+        self.summary_scan_max_word_percent = summary_scan_max_word_percent;
+        Ok(self)
+    }
+
+    /// Return the maximum conservative match-bound percentage eligible for mask caching.
+    pub fn summary_cache_bound_percent(self) -> f64 {
+        self.summary_cache_bound_percent
+    }
+
+    /// Return the maximum surviving payload-word percentage that uses word summaries.
+    pub fn summary_scan_max_word_percent(self) -> f64 {
+        self.summary_scan_max_word_percent
+    }
+
+    pub(crate) fn should_scan_summarized_words(
+        self,
+        possible_word_count: usize,
+        words_per_row: usize,
+    ) -> bool {
+        (possible_word_count as f64) * 100.0
+            <= (words_per_row as f64) * self.summary_scan_max_word_percent
+    }
+}
+
+impl Default for BloomQueryConfig {
+    fn default() -> Self {
+        Self {
+            summary_cache_bound_percent: 1.0,
+            summary_scan_max_word_percent: 10.0,
+        }
+    }
+}
+
+fn validate_percent(name: &str, value: f64) -> Result<(), EncodedLabelIndexError> {
+    if !value.is_finite() || !(1.0..=100.0).contains(&value) {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "{name} must be in 1..=100, got {value}"
+        )));
+    }
+    Ok(())
+}
 
 impl Default for BloomVisitScratch {
     fn default() -> Self {
@@ -142,6 +217,7 @@ pub struct EncodedLabelQuery<'a> {
     payload: Arc<LabelIndexPayload>,
     plan: CompiledPlan,
     counts: Option<Arc<[u32]>>,
+    config: BloomQueryConfig,
     _lifetime: PhantomData<&'a ()>,
 }
 
@@ -150,6 +226,14 @@ impl std::fmt::Debug for EncodedLabelQuery<'_> {
         f.debug_struct("EncodedLabelQuery")
             .field("num_vectors", &self.num_vectors)
             .field("expression_type", &self.plan.expression_type)
+            .field(
+                "summary_cache_bound_percent",
+                &self.config.summary_cache_bound_percent(),
+            )
+            .field(
+                "summary_scan_max_word_percent",
+                &self.config.summary_scan_max_word_percent(),
+            )
             .finish()
     }
 }
@@ -303,9 +387,11 @@ impl EncodedLabelQuery<'_> {
         }
     }
 
-    fn should_cache_summary_matches(&self) -> bool {
-        self.match_upper_bound()
-            .is_some_and(|bound| bound <= MAX_CACHED_SUMMARY_MATCH_BOUND)
+    pub(crate) fn should_cache_summary_matches(&self) -> bool {
+        self.match_upper_bound().is_some_and(|bound| {
+            (bound as f64) * 100.0
+                <= (self.num_vectors as f64) * self.config.summary_cache_bound_percent()
+        })
     }
 
     fn visit_word(&self, word_index: usize, mut matches: u64, visit: &mut impl FnMut(u32)) {
@@ -407,7 +493,10 @@ impl EncodedLabelQuery<'_> {
                     possible_words,
                 });
             }
-            if possible_word_count.saturating_mul(10) > *words_per_row {
+            if !self
+                .config
+                .should_scan_summarized_words(possible_word_count, *words_per_row)
+            {
                 scratch.surviving_words.clear();
                 return false;
             }
@@ -451,7 +540,10 @@ impl EncodedLabelQuery<'_> {
                     .count_ones() as usize
             })
             .sum();
-        if possible_word_count.saturating_mul(10) > *words_per_row {
+        if !self
+            .config
+            .should_scan_summarized_words(possible_word_count, *words_per_row)
+        {
             return false;
         }
         for summary_index in 0..summary.words_per_row {
@@ -682,7 +774,10 @@ impl EncodedLabelQuery<'_> {
                         .count_ones() as usize
                 })
                 .sum();
-            if possible_word_count.saturating_mul(10) <= *words_per_row {
+            if self
+                .config
+                .should_scan_summarized_words(possible_word_count, *words_per_row)
+            {
                 return (0..summary.words_per_row)
                     .map(|summary_index| {
                         let possible_words = self
@@ -1152,11 +1247,25 @@ impl EncodedLabelIndex {
     where
         S: AsRef<str>,
     {
+        self.query_with_config(clauses, expression_type, BloomQueryConfig::default())
+    }
+
+    /// Compile a query with explicit Bloom candidate-enumeration configuration.
+    pub fn query_with_config<S>(
+        &self,
+        clauses: &[S],
+        expression_type: FilterExpressionType,
+        config: BloomQueryConfig,
+    ) -> Result<EncodedLabelQuery<'static>, EncodedLabelIndexError>
+    where
+        S: AsRef<str>,
+    {
         Ok(EncodedLabelQuery {
             num_vectors: self.num_vectors,
             payload: Arc::clone(&self.payload),
             plan: compile_plan(clauses, expression_type, &self.label_ids)?,
             counts: self.counts.clone(),
+            config,
             _lifetime: PhantomData,
         })
     }

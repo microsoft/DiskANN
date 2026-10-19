@@ -11,7 +11,7 @@ use crate::{
         LABEL_INDEX_VERSION, MAX_LABEL_COUNT, MIXED_BLOOM_INDEX_VERSION,
         SUMMARIZED_BLOOM_INDEX_VERSION,
     },
-    BloomFilterConfig, BloomVisitScratch, EncodedLabelIndex, EncodedLabelQuery,
+    BloomFilterConfig, BloomQueryConfig, BloomVisitScratch, EncodedLabelIndex, EncodedLabelQuery,
     FilterExpressionType,
 };
 use diskann::graph::ext::labeled::{CandidateLabelProvider, QueryLabelProvider};
@@ -554,6 +554,65 @@ fn bloom_configuration_is_validated() {
         .unwrap()
         .with_exact_label_count(1_000_001)
         .is_err());
+}
+
+#[test]
+fn bloom_query_percentages_are_validated_and_applied() {
+    let default = BloomQueryConfig::default();
+    assert_eq!(default.summary_cache_bound_percent(), 1.0);
+    assert_eq!(default.summary_scan_max_word_percent(), 10.0);
+    assert!(default.should_scan_summarized_words(10, 100));
+    assert!(!default.should_scan_summarized_words(11, 100));
+
+    assert!(BloomQueryConfig::new(0.999).is_err());
+    assert!(BloomQueryConfig::new(100.001).is_err());
+    assert!(BloomQueryConfig::new(f64::NAN).is_err());
+    assert!(default.with_summary_scan_max_word_percent(0.999).is_err());
+    assert!(default.with_summary_scan_max_word_percent(100.001).is_err());
+    assert!(default
+        .with_summary_scan_max_word_percent(f64::INFINITY)
+        .is_err());
+    assert!(default
+        .with_summary_scan_max_word_percent(100.0)
+        .unwrap()
+        .should_scan_summarized_words(100, 100));
+
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("labels.jsonl");
+    let output = dir.path().join("labels.bloom.bin");
+    let documents = (0..200)
+        .map(|id| if id < 2 { "\"RARE\"\n" } else { "\"COMMON\"\n" })
+        .collect::<String>();
+    std::fs::write(&input, documents).unwrap();
+    encode_bloom_label_index_jsonl(&input, &output, BloomFilterConfig::default()).unwrap();
+    let index = EncodedLabelIndex::load(output).unwrap();
+
+    let one_percent = index
+        .query_with_config(
+            &["RARE"],
+            FilterExpressionType::DNF,
+            BloomQueryConfig::new(1.0).unwrap(),
+        )
+        .unwrap();
+    assert!(one_percent.should_cache_summary_matches());
+
+    let common = index
+        .query_with_config(
+            &["COMMON"],
+            FilterExpressionType::DNF,
+            BloomQueryConfig::new(1.0).unwrap(),
+        )
+        .unwrap();
+    assert!(!common.should_cache_summary_matches());
+
+    let full_cache = index
+        .query_with_config(
+            &["COMMON"],
+            FilterExpressionType::DNF,
+            BloomQueryConfig::new(100.0).unwrap(),
+        )
+        .unwrap();
+    assert!(full_cache.should_cache_summary_matches());
 }
 
 #[test]
