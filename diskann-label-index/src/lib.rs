@@ -14,7 +14,7 @@ mod index;
 pub use bloom::BloomFilterConfig;
 pub use builder::{encode_bloom_label_index_jsonl, encode_label_index_jsonl};
 pub use error::EncodedLabelIndexError;
-pub use index::{EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType};
+pub use index::{BloomVisitScratch, EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType};
 
 #[cfg(test)]
 mod tests;

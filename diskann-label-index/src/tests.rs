@@ -11,7 +11,8 @@ use crate::{
         LABEL_INDEX_VERSION, MAX_LABEL_COUNT, MIXED_BLOOM_INDEX_VERSION,
         SUMMARIZED_BLOOM_INDEX_VERSION,
     },
-    BloomFilterConfig, EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType,
+    BloomFilterConfig, BloomVisitScratch, EncodedLabelIndex, EncodedLabelQuery,
+    FilterExpressionType,
 };
 use diskann::graph::ext::labeled::{CandidateLabelProvider, QueryLabelProvider};
 use std::{
@@ -345,7 +346,69 @@ fn mixed_bloom_summary_agrees_with_point_lookups_across_words() {
         query.visit_matches(|id| visited.push(id));
         assert_eq!(visited, expected);
         assert_eq!(query.count_matches(), expected.len() as u64);
+
+        let mut scratch = BloomVisitScratch::default();
+        let mut with_scratch = Vec::new();
+        query.visit_matches_with_scratch(&mut scratch, |id| with_scratch.push(id));
+        assert_eq!(with_scratch, expected);
+        assert_eq!(
+            query.count_matches_with_scratch(&mut scratch),
+            expected.len() as u64
+        );
+        with_scratch.clear();
+        query.visit_matches_with_scratch(&mut scratch, |id| with_scratch.push(id));
+        assert_eq!(with_scratch, expected);
     }
+}
+
+#[test]
+fn thread_local_bloom_scratch_falls_back_for_reentrant_visits() {
+    let index = bloom_round_trip(
+        BloomFilterConfig::new(128, 4)
+            .unwrap()
+            .with_exact_label_count(1)
+            .unwrap(),
+    );
+    let query = compile(&index, &["A"], FilterExpressionType::DNF);
+    let expected = matching_ids(&query, index.num_vectors());
+    let mut visited = Vec::new();
+    let mut nested = Vec::new();
+    query.visit_matches(|id| {
+        visited.push(id);
+        if nested.is_empty() {
+            query.visit_matches(|nested_id| nested.push(nested_id));
+        }
+    });
+    assert_eq!(visited, expected);
+    assert_eq!(nested, expected);
+}
+
+#[test]
+fn thread_local_bloom_scratch_is_independent_across_threads() {
+    let index = bloom_round_trip(
+        BloomFilterConfig::new(128, 4)
+            .unwrap()
+            .with_exact_label_count(1)
+            .unwrap(),
+    );
+    let query = Arc::new(compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF));
+    let expected = matching_ids(&query, index.num_vectors());
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let query = Arc::clone(&query);
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    let mut actual = Vec::new();
+                    query.visit_matches(|id| actual.push(id));
+                    assert_eq!(actual, vec![2, 3]);
+                }
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    assert_eq!(matching_ids(&query, index.num_vectors()), expected);
 }
 
 #[test]

@@ -16,6 +16,7 @@ use crate::{
     },
 };
 use std::{
+    cell::RefCell,
     collections::HashMap,
     fs::File,
     io::{BufReader, Read},
@@ -64,6 +65,37 @@ struct ExactLabelRows {
     row_by_label: Box<[u32]>,
     bits: Box<[u64]>,
     nonzero_words: BloomWordSummary,
+}
+
+/// Reusable allocation for summarized Bloom candidate enumeration.
+#[derive(Debug)]
+pub struct BloomVisitScratch {
+    possible_words: Vec<u64>,
+}
+
+const MAX_CACHED_SUMMARY_MATCH_BOUND: u64 = 1024;
+
+impl Default for BloomVisitScratch {
+    fn default() -> Self {
+        Self {
+            possible_words: Vec::with_capacity(4096),
+        }
+    }
+}
+
+impl BloomVisitScratch {
+    fn reset(&mut self, summary_words: usize) {
+        self.possible_words.clear();
+        if self.possible_words.capacity() > 1_048_576 {
+            self.possible_words.shrink_to(1_048_576);
+        }
+        self.possible_words.resize(summary_words, 0);
+    }
+}
+
+thread_local! {
+    static BLOOM_VISIT_SCRATCH: RefCell<BloomVisitScratch> =
+        RefCell::new(BloomVisitScratch::default());
 }
 
 /// An immutable label index loaded from a versioned label-index file.
@@ -213,10 +245,38 @@ impl EncodedLabelQuery<'_> {
 
     /// Visit matching vector IDs in ascending order, including Bloom false positives.
     pub fn visit_matches(&self, mut visit: impl FnMut(u32)) {
-        if self.visit_summarized_matches(&mut visit) {
+        if !self.should_cache_summary_matches() {
+            self.visit_matches_without_scratch(&mut visit);
             return;
         }
+        BLOOM_VISIT_SCRATCH.with(|cell| {
+            if let Ok(mut scratch) = cell.try_borrow_mut() {
+                self.visit_matches_with_scratch(&mut scratch, &mut visit);
+            } else {
+                let mut scratch = BloomVisitScratch::default();
+                self.visit_matches_with_scratch(&mut scratch, &mut visit);
+            }
+        });
+    }
 
+    /// Visit matching vector IDs using caller-owned reusable scratch memory.
+    pub fn visit_matches_with_scratch(
+        &self,
+        scratch: &mut BloomVisitScratch,
+        mut visit: impl FnMut(u32),
+    ) {
+        if self.should_cache_summary_matches()
+            && self.visit_cached_summarized_matches(scratch, &mut visit)
+        {
+            return;
+        }
+        self.visit_matches_without_scratch(&mut visit);
+    }
+
+    fn visit_matches_without_scratch(&self, mut visit: impl FnMut(u32)) {
+        if self.visit_summarized_matches_uncached(&mut visit) {
+            return;
+        }
         let words_per_row = self.words_per_row();
 
         #[cfg(target_arch = "x86_64")]
@@ -232,6 +292,11 @@ impl EncodedLabelQuery<'_> {
         for word_index in 0..words_per_row {
             self.visit_word(word_index, self.word_matches(word_index), &mut visit);
         }
+    }
+
+    fn should_cache_summary_matches(&self) -> bool {
+        self.match_upper_bound()
+            .is_some_and(|bound| bound <= MAX_CACHED_SUMMARY_MATCH_BOUND)
     }
 
     fn visit_word(&self, word_index: usize, mut matches: u64, visit: &mut impl FnMut(u32)) {
@@ -304,7 +369,53 @@ impl EncodedLabelQuery<'_> {
         })
     }
 
-    fn visit_summarized_matches(&self, visit: &mut impl FnMut(u32)) -> bool {
+    fn collect_cached_summarized_matches(&self, scratch: &mut BloomVisitScratch) -> bool {
+        let LabelIndexPayload::Bloom {
+            words_per_row,
+            nonzero_words:
+                Some(
+                    summary @ BloomWordSummary {
+                        scan_useful: true, ..
+                    },
+                ),
+            ..
+        } = self.payload.as_ref()
+        else {
+            return false;
+        };
+
+        scratch.reset(summary.words_per_row);
+        let mut possible_word_count = 0usize;
+        for summary_index in 0..summary.words_per_row {
+            let possible_words = self
+                .summary_word_matches(summary_index)
+                .expect("Bloom summary disappeared while collecting");
+            possible_word_count =
+                possible_word_count.saturating_add(possible_words.count_ones() as usize);
+            scratch.possible_words[summary_index] = possible_words;
+            if possible_word_count.saturating_mul(10) > *words_per_row {
+                scratch.possible_words.clear();
+                return false;
+            }
+        }
+        true
+    }
+
+    fn visit_cached_summarized_matches(
+        &self,
+        scratch: &mut BloomVisitScratch,
+        visit: &mut impl FnMut(u32),
+    ) -> bool {
+        if !self.collect_cached_summarized_matches(scratch) {
+            return false;
+        }
+        for (summary_index, &possible_words) in scratch.possible_words.iter().enumerate() {
+            self.visit_summarized_word(summary_index, possible_words, visit);
+        }
+        true
+    }
+
+    fn visit_summarized_matches_uncached(&self, visit: &mut impl FnMut(u32)) -> bool {
         let LabelIndexPayload::Bloom {
             words_per_row,
             nonzero_words:
@@ -329,21 +440,29 @@ impl EncodedLabelQuery<'_> {
         if possible_word_count.saturating_mul(10) > *words_per_row {
             return false;
         }
-
         for summary_index in 0..summary.words_per_row {
-            let mut possible_words = self
+            let possible_words = self
                 .summary_word_matches(summary_index)
                 .expect("Bloom summary disappeared while visiting");
-            while possible_words != 0 {
-                let bit = possible_words.trailing_zeros() as usize;
-                let word_index = summary_index * 64 + bit;
-                if word_index < *words_per_row {
-                    self.visit_word(word_index, self.word_matches(word_index), visit);
-                }
-                possible_words &= possible_words - 1;
-            }
+            self.visit_summarized_word(summary_index, possible_words, visit);
         }
         true
+    }
+
+    fn visit_summarized_word(
+        &self,
+        summary_index: usize,
+        mut possible_words: u64,
+        visit: &mut impl FnMut(u32),
+    ) {
+        while possible_words != 0 {
+            let bit = possible_words.trailing_zeros() as usize;
+            let word_index = summary_index * 64 + bit;
+            if word_index < self.words_per_row() {
+                self.visit_word(word_index, self.word_matches(word_index), visit);
+            }
+            possible_words &= possible_words - 1;
+        }
     }
 
     fn word_matches(&self, word_index: usize) -> u64 {
@@ -503,6 +622,35 @@ impl EncodedLabelQuery<'_> {
 
     /// Count matching vectors; Bloom indexes count candidates, including false positives.
     pub fn count_matches(&self) -> u64 {
+        if !self.should_cache_summary_matches() {
+            return self.count_matches_without_scratch();
+        }
+        BLOOM_VISIT_SCRATCH.with(|cell| {
+            if let Ok(mut scratch) = cell.try_borrow_mut() {
+                self.count_matches_with_scratch(&mut scratch)
+            } else {
+                let mut scratch = BloomVisitScratch::default();
+                self.count_matches_with_scratch(&mut scratch)
+            }
+        })
+    }
+
+    /// Count matching vectors using caller-owned reusable scratch memory.
+    pub fn count_matches_with_scratch(&self, scratch: &mut BloomVisitScratch) -> u64 {
+        if self.should_cache_summary_matches() && self.collect_cached_summarized_matches(scratch) {
+            return scratch
+                .possible_words
+                .iter()
+                .enumerate()
+                .map(|(summary_index, &possible_words)| {
+                    self.count_summarized_word(summary_index, possible_words)
+                })
+                .sum();
+        }
+        self.count_matches_without_scratch()
+    }
+
+    fn count_matches_without_scratch(&self) -> u64 {
         if let LabelIndexPayload::Bloom {
             words_per_row,
             nonzero_words:
@@ -522,27 +670,32 @@ impl EncodedLabelQuery<'_> {
                 })
                 .sum();
             if possible_word_count.saturating_mul(10) <= *words_per_row {
-                let mut count = 0u64;
-                for summary_index in 0..summary.words_per_row {
-                    let mut possible_words = self
-                        .summary_word_matches(summary_index)
-                        .expect("Bloom summary disappeared while counting");
-                    while possible_words != 0 {
-                        let bit = possible_words.trailing_zeros() as usize;
-                        let word_index = summary_index * 64 + bit;
-                        if word_index < *words_per_row {
-                            count += u64::from(self.word_matches(word_index).count_ones());
-                        }
-                        possible_words &= possible_words - 1;
-                    }
-                }
-                return count;
+                return (0..summary.words_per_row)
+                    .map(|summary_index| {
+                        let possible_words = self
+                            .summary_word_matches(summary_index)
+                            .expect("Bloom summary disappeared while counting");
+                        self.count_summarized_word(summary_index, possible_words)
+                    })
+                    .sum();
             }
         }
-
         (0..self.words_per_row())
             .map(|word_index| u64::from(self.word_matches(word_index).count_ones()))
             .sum()
+    }
+
+    fn count_summarized_word(&self, summary_index: usize, mut possible_words: u64) -> u64 {
+        let mut count = 0u64;
+        while possible_words != 0 {
+            let bit = possible_words.trailing_zeros() as usize;
+            let word_index = summary_index * 64 + bit;
+            if word_index < self.words_per_row() {
+                count += u64::from(self.word_matches(word_index).count_ones());
+            }
+            possible_words &= possible_words - 1;
+        }
+        count
     }
 }
 
