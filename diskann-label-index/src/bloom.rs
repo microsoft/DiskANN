@@ -33,7 +33,7 @@ impl BloomFilterConfig {
         })
     }
 
-    /// Store the most frequent `exact_label_count` labels as exact rows in addition to Bloom.
+    /// Store the most frequent `exact_label_count` labels as exact rows instead of Bloom.
     pub fn with_exact_label_count(
         mut self,
         exact_label_count: u32,

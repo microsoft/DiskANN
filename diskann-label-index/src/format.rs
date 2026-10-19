@@ -16,6 +16,7 @@ pub(crate) const LABEL_INDEX_VERSION: u32 = 1;
 pub(crate) const COUNTED_BLOOM_INDEX_VERSION: u32 = 2;
 pub(crate) const SUMMARIZED_BLOOM_INDEX_VERSION: u32 = 3;
 pub(crate) const MIXED_BLOOM_INDEX_VERSION: u32 = 4;
+pub(crate) const PREFIX_EXACT_BLOOM_INDEX_VERSION: u32 = 5;
 pub(crate) const BITSLICE_FORMAT: u32 = 0;
 pub(crate) const MAX_LABEL_COUNT: usize = 1_000_000;
 pub(crate) const MAX_LABEL_LENGTH: usize = 1 << 20;

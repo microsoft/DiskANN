@@ -4,12 +4,12 @@
  */
 
 use crate::{
-    bloom::BLOOM_FORMAT,
+    bloom::{append_label_rows, BLOOM_FORMAT},
     encode_bloom_label_index_jsonl, encode_label_index_jsonl,
     format::{
         write_u32, write_u64, BITSLICE_FORMAT, COUNTED_BLOOM_INDEX_VERSION, LABEL_INDEX_MAGIC,
         LABEL_INDEX_VERSION, MAX_LABEL_COUNT, MIXED_BLOOM_INDEX_VERSION,
-        SUMMARIZED_BLOOM_INDEX_VERSION,
+        PREFIX_EXACT_BLOOM_INDEX_VERSION, SUMMARIZED_BLOOM_INDEX_VERSION,
     },
     BloomFilterConfig, BloomQueryConfig, BloomVisitScratch, EncodedLabelIndex, EncodedLabelQuery,
     FilterExpressionType,
@@ -64,27 +64,69 @@ fn matching_ids(query: &EncodedLabelQuery, num_vectors: u32) -> Vec<u32> {
 
 fn assert_send_sync_static<T: Send + Sync + 'static>(_: &T) {}
 
-fn bloom_section_offsets(bytes: &[u8]) -> (usize, usize) {
-    let read_u32_at =
-        |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-    let read_u64_at =
-        |offset: usize| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
-
-    let label_count = read_u64_at(24);
-    let mut offset = 32;
-    for _ in 0..label_count {
-        let length = read_u32_at(offset);
-        offset += 4 + length;
-    }
-    let bit_count = read_u32_at(offset);
-    let words_per_row = read_u64_at(offset + 8);
-    let payload_end = offset + 16 + bit_count * words_per_row * 8;
-    let summary_words_per_row = read_u64_at(payload_end);
-    let summary_end = payload_end + 8 + bit_count * summary_words_per_row * 8;
-    (payload_end, summary_end)
+struct PrefixExactOffsets {
+    exact_count_offset: usize,
+    flags_offset: usize,
+    mapping_start: usize,
+    payload_start: usize,
+    summary_words_offset: usize,
+    summary_start: usize,
+    summary_end: usize,
+    bit_count: usize,
+    hash_count: usize,
+    exact_count: usize,
 }
 
-fn mixed_section_offsets(bytes: &[u8]) -> (usize, usize, usize, usize) {
+fn prefix_exact_offsets(bytes: &[u8]) -> PrefixExactOffsets {
+    let read_u32_at =
+        |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+    let read_u64_at =
+        |offset: usize| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+
+    let label_count = read_u64_at(24);
+    let mut offset = 32;
+    for _ in 0..label_count {
+        let length = read_u32_at(offset);
+        offset += 4 + length;
+    }
+    let bit_count = read_u32_at(offset);
+    let hash_count = read_u32_at(offset + 4);
+    let exact_count_offset = offset + 8;
+    let exact_count = read_u32_at(exact_count_offset);
+    let flags_offset = offset + 12;
+    let words_per_row = read_u64_at(offset + 16);
+    let mapping_start = offset + 24;
+    let payload_start =
+        mapping_start + (label_count - exact_count) * hash_count * std::mem::size_of::<u32>();
+    let row_count = exact_count + bit_count;
+    let payload_end = payload_start + row_count * words_per_row * 8;
+    let summary_words_offset = payload_end;
+    let summary_words_per_row = read_u64_at(summary_words_offset);
+    let summary_start = summary_words_offset + 8;
+    let summary_end = summary_start + row_count * summary_words_per_row * 8;
+    PrefixExactOffsets {
+        exact_count_offset,
+        flags_offset,
+        mapping_start,
+        payload_start,
+        summary_words_offset,
+        summary_start,
+        summary_end,
+        bit_count,
+        hash_count,
+        exact_count,
+    }
+}
+
+struct MixedV4Offsets {
+    exact_count: usize,
+    exact_ids: usize,
+    exact_bits: usize,
+    exact_summary_words: usize,
+    exact_summary: usize,
+}
+
+fn mixed_v4_offsets(bytes: &[u8]) -> MixedV4Offsets {
     let read_u32_at =
         |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
     let read_u64_at =
@@ -97,21 +139,100 @@ fn mixed_section_offsets(bytes: &[u8]) -> (usize, usize, usize, usize) {
     }
     let bit_count = read_u32_at(offset);
     let words_per_row = read_u64_at(offset + 8);
-    let payload_end = offset + 16 + bit_count * words_per_row * 8;
-    let summary_words_per_row = read_u64_at(payload_end);
-    let summary_end = payload_end + 8 + bit_count * summary_words_per_row * 8;
-    let counts_end = summary_end + label_count * 4;
-    let exact_count = read_u32_at(counts_end);
-    let exact_bits_start = counts_end + 4 + exact_count * 4;
-    let exact_bits_end = exact_bits_start + exact_count * words_per_row * 8;
-    let exact_summary_words_per_row = read_u64_at(exact_bits_end);
-    let exact_summary_end = exact_bits_end + 8 + exact_count * exact_summary_words_per_row * 8;
-    (
-        counts_end,
-        exact_bits_start,
-        exact_bits_end,
-        exact_summary_end,
-    )
+    let bloom_end = offset + 16 + bit_count * words_per_row * 8;
+    let summary_words_per_row = read_u64_at(bloom_end);
+    let summary_end = bloom_end + 8 + bit_count * summary_words_per_row * 8;
+    let exact_count = summary_end + label_count * 4;
+    let exact_rows = read_u32_at(exact_count);
+    let exact_ids = exact_count + 4;
+    let exact_bits = exact_ids + exact_rows * 4;
+    let exact_summary_words = exact_bits + exact_rows * words_per_row * 8;
+    let exact_summary = exact_summary_words + 8;
+    MixedV4Offsets {
+        exact_count,
+        exact_ids,
+        exact_bits,
+        exact_summary_words,
+        exact_summary,
+    }
+}
+
+fn legacy_bloom_bytes(version: u32) -> Vec<u8> {
+    assert!(matches!(
+        version,
+        LABEL_INDEX_VERSION | COUNTED_BLOOM_INDEX_VERSION | SUMMARIZED_BLOOM_INDEX_VERSION
+    ));
+    let labels = ["A", "B"];
+    let config = BloomFilterConfig::new(8, 2).unwrap();
+    let mut label_rows = Vec::new();
+    for label in labels {
+        append_label_rows(label, config, &mut label_rows);
+    }
+    let mut bits = vec![0u64; config.bit_count() as usize];
+    for (label_id, vector_ids) in [(0usize, &[0u32][..]), (1, &[1u32, 2][..])] {
+        let start = label_id * config.hash_count() as usize;
+        for &row in &label_rows[start..start + config.hash_count() as usize] {
+            for &vector_id in vector_ids {
+                bits[row as usize] |= 1u64 << vector_id;
+            }
+        }
+    }
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&LABEL_INDEX_MAGIC);
+    write_u32(&mut bytes, version).unwrap();
+    write_u32(&mut bytes, BLOOM_FORMAT).unwrap();
+    write_u64(&mut bytes, 3).unwrap();
+    write_u64(&mut bytes, labels.len() as u64).unwrap();
+    for label in labels {
+        write_u32(&mut bytes, label.len() as u32).unwrap();
+        bytes.extend_from_slice(label.as_bytes());
+    }
+    write_u32(&mut bytes, config.bit_count()).unwrap();
+    write_u32(&mut bytes, config.hash_count()).unwrap();
+    write_u64(&mut bytes, 1).unwrap();
+    for word in &bits {
+        write_u64(&mut bytes, *word).unwrap();
+    }
+    if version == SUMMARIZED_BLOOM_INDEX_VERSION {
+        write_u64(&mut bytes, 1).unwrap();
+        for word in bits {
+            write_u64(&mut bytes, u64::from(word != 0)).unwrap();
+        }
+    }
+    if version != LABEL_INDEX_VERSION {
+        write_u32(&mut bytes, 1).unwrap();
+        write_u32(&mut bytes, 2).unwrap();
+    }
+    bytes
+}
+
+fn mixed_v4_bytes() -> Vec<u8> {
+    let labels = ["A", "B"];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&LABEL_INDEX_MAGIC);
+    write_u32(&mut bytes, MIXED_BLOOM_INDEX_VERSION).unwrap();
+    write_u32(&mut bytes, BLOOM_FORMAT).unwrap();
+    write_u64(&mut bytes, 3).unwrap();
+    write_u64(&mut bytes, labels.len() as u64).unwrap();
+    for label in labels {
+        write_u32(&mut bytes, label.len() as u32).unwrap();
+        bytes.extend_from_slice(label.as_bytes());
+    }
+    write_u32(&mut bytes, 1).unwrap();
+    write_u32(&mut bytes, 1).unwrap();
+    write_u64(&mut bytes, 1).unwrap();
+    write_u64(&mut bytes, 0b111).unwrap();
+    write_u64(&mut bytes, 1).unwrap();
+    write_u64(&mut bytes, 1).unwrap();
+    write_u32(&mut bytes, 1).unwrap();
+    write_u32(&mut bytes, 2).unwrap();
+    write_u32(&mut bytes, 1).unwrap();
+    write_u32(&mut bytes, 1).unwrap();
+    write_u64(&mut bytes, 0b110).unwrap();
+    write_u64(&mut bytes, 1).unwrap();
+    write_u64(&mut bytes, 1).unwrap();
+    bytes
 }
 
 #[test]
@@ -199,7 +320,7 @@ fn bloom_false_positives_follow_approximate_membership() {
 }
 
 #[test]
-fn mixed_bloom_exact_rows_remove_false_positives_for_dense_labels() {
+fn prefix_exact_bloom_rows_remove_false_positives_and_bloom_contamination() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("labels.jsonl");
     let output = dir.path().join("labels.bloom.bin");
@@ -210,7 +331,10 @@ fn mixed_bloom_exact_rows_remove_false_positives_for_dense_labels() {
         .unwrap();
     encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
     let bytes = std::fs::read(&output).unwrap();
-    assert_eq!(&bytes[8..12], &MIXED_BLOOM_INDEX_VERSION.to_le_bytes());
+    assert_eq!(
+        &bytes[8..12],
+        &PREFIX_EXACT_BLOOM_INDEX_VERSION.to_le_bytes()
+    );
 
     let index = EncodedLabelIndex::load(output).unwrap();
     assert_eq!(index.num_exact_labels(), 1);
@@ -226,12 +350,12 @@ fn mixed_bloom_exact_rows_remove_false_positives_for_dense_labels() {
             &compile(&index, &["A"], FilterExpressionType::DNF),
             index.num_vectors()
         ),
-        vec![0, 1, 2]
+        vec![0]
     );
 }
 
 #[test]
-fn mixed_bloom_selects_count_then_label_bytes_deterministically() {
+fn prefix_exact_bloom_sorts_count_then_label_bytes_deterministically() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("labels.jsonl");
     let output = dir.path().join("labels.bloom.bin");
@@ -255,57 +379,169 @@ fn mixed_bloom_selects_count_then_label_bytes_deterministically() {
             &compile(&index, &["B"], FilterExpressionType::DNF),
             index.num_vectors()
         ),
-        vec![0, 1]
+        vec![0]
     );
 }
 
 #[test]
-fn mixed_bloom_rejects_invalid_exact_sections() {
+fn prefix_exact_bloom_persists_contiguous_exact_and_bloom_rows() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("labels.jsonl");
     let output = dir.path().join("labels.bloom.bin");
-    std::fs::write(&input, "\"A\"\n".repeat(65)).unwrap();
+    std::fs::write(&input, "\"A\"\n\"A\"\n\"B\"\n").unwrap();
+    let config = BloomFilterConfig::new(8, 2)
+        .unwrap()
+        .with_exact_label_count(1)
+        .unwrap();
+    encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
+    let bytes = std::fs::read(&output).unwrap();
+    let offsets = prefix_exact_offsets(&bytes);
+    assert_eq!(offsets.exact_count, 1);
+    assert_eq!(offsets.bit_count, 8);
+    assert_eq!(offsets.hash_count, 2);
+
+    let read_u32_at =
+        |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+    let read_u64_at =
+        |offset: usize| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+    let mut expected_rows = Vec::new();
+    append_label_rows("B", config, &mut expected_rows);
+    assert_eq!(
+        [
+            read_u32_at(offsets.mapping_start),
+            read_u32_at(offsets.mapping_start + 4)
+        ],
+        [expected_rows[0], expected_rows[1]]
+    );
+
+    assert_eq!(read_u64_at(offsets.payload_start), 0b011);
+    for logical_row in 0..offsets.bit_count {
+        let physical_row = offsets.exact_count + logical_row;
+        let expected = u64::from(expected_rows.contains(&(logical_row as u32))) << 2;
+        assert_eq!(
+            read_u64_at(offsets.payload_start + physical_row * 8),
+            expected
+        );
+    }
+}
+
+#[test]
+fn prefix_exact_bloom_supports_zero_and_clamped_exact_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("labels.jsonl");
+    std::fs::write(&input, "\"A\"\n\"B\"\n").unwrap();
+
+    let no_exact = dir.path().join("no-exact.bin");
+    encode_bloom_label_index_jsonl(&input, &no_exact, BloomFilterConfig::new(8, 2).unwrap())
+        .unwrap();
+    assert_eq!(
+        EncodedLabelIndex::load(no_exact)
+            .unwrap()
+            .num_exact_labels(),
+        0
+    );
+
+    let all_exact = dir.path().join("all-exact.bin");
+    encode_bloom_label_index_jsonl(
+        &input,
+        &all_exact,
+        BloomFilterConfig::new(8, 2)
+            .unwrap()
+            .with_exact_label_count(100)
+            .unwrap(),
+    )
+    .unwrap();
+    let bytes = std::fs::read(&all_exact).unwrap();
+    let offsets = prefix_exact_offsets(&bytes);
+    assert_eq!(offsets.exact_count, 2);
+    assert_eq!(offsets.mapping_start, offsets.payload_start);
+    for row in offsets.exact_count..offsets.exact_count + offsets.bit_count {
+        assert_eq!(
+            u64::from_le_bytes(
+                bytes[offsets.payload_start + row * 8..offsets.payload_start + row * 8 + 8]
+                    .try_into()
+                    .unwrap()
+            ),
+            0
+        );
+    }
+    assert_eq!(
+        EncodedLabelIndex::load(all_exact)
+            .unwrap()
+            .num_exact_labels(),
+        2
+    );
+}
+
+#[test]
+fn prefix_exact_bloom_rejects_invalid_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("labels.jsonl");
+    let output = dir.path().join("labels.bloom.bin");
+    let documents = (0..65)
+        .map(|id| if id == 64 { "\"COLD\"\n" } else { "\"HOT\"\n" })
+        .collect::<String>();
+    std::fs::write(&input, documents).unwrap();
     let config = BloomFilterConfig::new(128, 4)
         .unwrap()
         .with_exact_label_count(1)
         .unwrap();
     encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
     let bytes = std::fs::read(&output).unwrap();
-    let (exact_count_offset, exact_bits_start, exact_bits_end, exact_summary_end) =
-        mixed_section_offsets(&bytes);
+    let offsets = prefix_exact_offsets(&bytes);
+    assert_eq!(offsets.exact_count, 1);
+    assert_eq!(offsets.hash_count, 4);
 
-    let zero_count = dir.path().join("zero-exact-count.bin");
+    let excessive_count = dir.path().join("excessive-exact-count.bin");
     let mut data = bytes.clone();
-    data[exact_count_offset..exact_count_offset + 4].copy_from_slice(&0u32.to_le_bytes());
-    std::fs::write(&zero_count, data).unwrap();
-    assert!(EncodedLabelIndex::load(zero_count).is_err());
+    data[offsets.exact_count_offset..offsets.exact_count_offset + 4]
+        .copy_from_slice(&3u32.to_le_bytes());
+    std::fs::write(&excessive_count, data).unwrap();
+    assert!(EncodedLabelIndex::load(excessive_count).is_err());
 
-    let invalid_id = dir.path().join("invalid-exact-id.bin");
+    let invalid_flags = dir.path().join("invalid-flags.bin");
     let mut data = bytes.clone();
-    data[exact_count_offset + 4..exact_count_offset + 8].copy_from_slice(&1u32.to_le_bytes());
-    std::fs::write(&invalid_id, data).unwrap();
-    assert!(EncodedLabelIndex::load(invalid_id).is_err());
+    data[offsets.flags_offset..offsets.flags_offset + 4].copy_from_slice(&1u32.to_le_bytes());
+    std::fs::write(&invalid_flags, data).unwrap();
+    assert!(EncodedLabelIndex::load(invalid_flags).is_err());
+
+    let invalid_mapping = dir.path().join("invalid-mapping.bin");
+    let mut data = bytes.clone();
+    data[offsets.mapping_start..offsets.mapping_start + 4]
+        .copy_from_slice(&(offsets.bit_count as u32).to_le_bytes());
+    std::fs::write(&invalid_mapping, data).unwrap();
+    assert!(EncodedLabelIndex::load(invalid_mapping).is_err());
+
+    let duplicate_mapping = dir.path().join("duplicate-mapping.bin");
+    let mut data = bytes.clone();
+    let first = data[offsets.mapping_start..offsets.mapping_start + 4].to_vec();
+    data[offsets.mapping_start + 4..offsets.mapping_start + 8].copy_from_slice(&first);
+    std::fs::write(&duplicate_mapping, data).unwrap();
+    assert!(EncodedLabelIndex::load(duplicate_mapping).is_err());
 
     let invalid_payload_padding = dir.path().join("invalid-exact-padding.bin");
     let mut data = bytes.clone();
-    data[exact_bits_start + 8..exact_bits_start + 16].copy_from_slice(&(1u64 << 1).to_le_bytes());
+    data[offsets.payload_start + 8..offsets.payload_start + 16]
+        .copy_from_slice(&(1u64 << 1).to_le_bytes());
     std::fs::write(&invalid_payload_padding, data).unwrap();
     assert!(EncodedLabelIndex::load(invalid_payload_padding).is_err());
 
-    let invalid_summary_length = dir.path().join("invalid-exact-summary-length.bin");
+    let invalid_summary_length = dir.path().join("invalid-summary-length.bin");
     let mut data = bytes.clone();
-    data[exact_bits_end..exact_bits_end + 8].copy_from_slice(&2u64.to_le_bytes());
+    data[offsets.summary_words_offset..offsets.summary_words_offset + 8]
+        .copy_from_slice(&2u64.to_le_bytes());
     std::fs::write(&invalid_summary_length, data).unwrap();
     assert!(EncodedLabelIndex::load(invalid_summary_length).is_err());
 
-    let invalid_summary_padding = dir.path().join("invalid-exact-summary-padding.bin");
+    let invalid_summary_padding = dir.path().join("invalid-summary-padding.bin");
     let mut data = bytes.clone();
-    data[exact_bits_end + 8..exact_bits_end + 16].copy_from_slice(&(1u64 << 2).to_le_bytes());
+    data[offsets.summary_start..offsets.summary_start + 8]
+        .copy_from_slice(&(1u64 << 2).to_le_bytes());
     std::fs::write(&invalid_summary_padding, data).unwrap();
     assert!(EncodedLabelIndex::load(invalid_summary_padding).is_err());
 
-    let truncated = dir.path().join("truncated-exact-summary.bin");
-    std::fs::write(&truncated, &bytes[..exact_summary_end - 1]).unwrap();
+    let truncated = dir.path().join("truncated-summary.bin");
+    std::fs::write(&truncated, &bytes[..offsets.summary_end - 1]).unwrap();
     assert!(EncodedLabelIndex::load(truncated).is_err());
 }
 
@@ -423,7 +659,10 @@ fn counted_bloom_bounds_distinct_vectors_for_dnf_and_cnf() {
     .unwrap();
     encode_bloom_label_index_jsonl(&input, &output, BloomFilterConfig::default()).unwrap();
     let bytes = std::fs::read(&output).unwrap();
-    assert_eq!(&bytes[8..12], &SUMMARIZED_BLOOM_INDEX_VERSION.to_le_bytes());
+    assert_eq!(
+        &bytes[8..12],
+        &PREFIX_EXACT_BLOOM_INDEX_VERSION.to_le_bytes()
+    );
     let index = EncodedLabelIndex::load(&output).unwrap();
     assert!(index.has_bloom_word_summary());
     let dnf = compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF);
@@ -442,56 +681,107 @@ fn counted_bloom_bounds_distinct_vectors_for_dnf_and_cnf() {
         compile(&index, &["missing", "A"], FilterExpressionType::CNF).match_upper_bound(),
         Some(0)
     );
+}
 
-    let (payload_end, summary_end) = bloom_section_offsets(&bytes);
-    let old = dir.path().join("labels.legacy.bin");
-    let mut old_bytes = bytes[..payload_end].to_vec();
-    old_bytes[8..12].copy_from_slice(&LABEL_INDEX_VERSION.to_le_bytes());
-    std::fs::write(&old, old_bytes).unwrap();
-    let old_index = EncodedLabelIndex::load(&old).unwrap();
-    assert!(!old_index.has_bloom_word_summary());
-    assert_eq!(
-        compile(&old_index, &["A"], FilterExpressionType::DNF).match_upper_bound(),
-        None
-    );
-    assert_eq!(
-        matching_ids(&cnf, index.num_vectors()),
-        matching_ids(
-            &compile(&old_index, &["A|B", "C|D"], FilterExpressionType::CNF),
-            old_index.num_vectors()
-        )
-    );
+#[test]
+fn legacy_bloom_versions_remain_loadable() {
+    let dir = tempfile::tempdir().unwrap();
+    for version in [
+        LABEL_INDEX_VERSION,
+        COUNTED_BLOOM_INDEX_VERSION,
+        SUMMARIZED_BLOOM_INDEX_VERSION,
+    ] {
+        let path = dir.path().join(format!("legacy-v{version}.bin"));
+        std::fs::write(&path, legacy_bloom_bytes(version)).unwrap();
+        let index = EncodedLabelIndex::load(&path).unwrap();
+        assert_eq!(index.num_exact_labels(), 0);
+        assert!(compile(&index, &["A"], FilterExpressionType::DNF).is_match(0));
+        assert!(compile(&index, &["B"], FilterExpressionType::DNF).is_match(2));
+        assert_eq!(
+            index.has_bloom_word_summary(),
+            version == SUMMARIZED_BLOOM_INDEX_VERSION
+        );
+        assert_eq!(
+            compile(&index, &["B"], FilterExpressionType::DNF).match_upper_bound(),
+            (version != LABEL_INDEX_VERSION).then_some(2)
+        );
+    }
 
-    let counted = dir.path().join("labels.counted-v2.bin");
-    let mut counted_bytes = bytes[..payload_end].to_vec();
-    counted_bytes[8..12].copy_from_slice(&COUNTED_BLOOM_INDEX_VERSION.to_le_bytes());
-    counted_bytes.extend_from_slice(&bytes[summary_end..]);
-    std::fs::write(&counted, counted_bytes).unwrap();
-    let counted_index = EncodedLabelIndex::load(&counted).unwrap();
-    assert!(!counted_index.has_bloom_word_summary());
+    let mixed = dir.path().join("mixed-v4.bin");
+    std::fs::write(&mixed, mixed_v4_bytes()).unwrap();
+    let index = EncodedLabelIndex::load(mixed).unwrap();
+    assert_eq!(index.num_exact_labels(), 1);
     assert_eq!(
-        compile(&counted_index, &["A"], FilterExpressionType::DNF).match_upper_bound(),
-        Some(2)
+        matching_ids(
+            &compile(&index, &["B"], FilterExpressionType::DNF),
+            index.num_vectors()
+        ),
+        vec![1, 2]
     );
     assert_eq!(
-        matching_ids(&dnf, index.num_vectors()),
         matching_ids(
-            &compile(&counted_index, &["A&B", "C&D"], FilterExpressionType::DNF),
-            counted_index.num_vectors()
-        )
+            &compile(&index, &["A"], FilterExpressionType::DNF),
+            index.num_vectors()
+        ),
+        vec![0, 1, 2]
     );
 }
 
 #[test]
-fn dense_bloom_omits_word_summary() {
+fn mixed_v4_rejects_invalid_exact_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = mixed_v4_bytes();
+    let offsets = mixed_v4_offsets(&bytes);
+
+    for (name, data) in [
+        ("zero-count", {
+            let mut data = bytes.clone();
+            data[offsets.exact_count..offsets.exact_count + 4].copy_from_slice(&0u32.to_le_bytes());
+            data
+        }),
+        ("invalid-id", {
+            let mut data = bytes.clone();
+            data[offsets.exact_ids..offsets.exact_ids + 4].copy_from_slice(&2u32.to_le_bytes());
+            data
+        }),
+        ("invalid-padding", {
+            let mut data = bytes.clone();
+            data[offsets.exact_bits..offsets.exact_bits + 8]
+                .copy_from_slice(&(1u64 << 3).to_le_bytes());
+            data
+        }),
+        ("invalid-summary-length", {
+            let mut data = bytes.clone();
+            data[offsets.exact_summary_words..offsets.exact_summary_words + 8]
+                .copy_from_slice(&2u64.to_le_bytes());
+            data
+        }),
+        ("invalid-summary-padding", {
+            let mut data = bytes.clone();
+            data[offsets.exact_summary..offsets.exact_summary + 8]
+                .copy_from_slice(&(1u64 << 1).to_le_bytes());
+            data
+        }),
+    ] {
+        let path = dir.path().join(format!("{name}.bin"));
+        std::fs::write(&path, data).unwrap();
+        assert!(EncodedLabelIndex::load(path).is_err(), "{name}");
+    }
+}
+
+#[test]
+fn prefix_exact_bloom_always_stores_word_summary() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("labels.jsonl");
     let output = dir.path().join("labels.bloom.bin");
     std::fs::write(&input, "\"A\"\n".repeat(65)).unwrap();
     encode_bloom_label_index_jsonl(&input, &output, BloomFilterConfig::new(1, 1).unwrap()).unwrap();
     let bytes = std::fs::read(&output).unwrap();
-    assert_eq!(&bytes[8..12], &COUNTED_BLOOM_INDEX_VERSION.to_le_bytes());
-    assert!(!EncodedLabelIndex::load(output)
+    assert_eq!(
+        &bytes[8..12],
+        &PREFIX_EXACT_BLOOM_INDEX_VERSION.to_le_bytes()
+    );
+    assert!(EncodedLabelIndex::load(output)
         .unwrap()
         .has_bloom_word_summary());
 }
@@ -734,23 +1024,25 @@ fn summarized_bloom_rejects_invalid_summary_length_padding_and_truncation() {
     std::fs::write(&input, documents).unwrap();
     encode_bloom_label_index_jsonl(&input, &output, BloomFilterConfig::default()).unwrap();
     let bytes = std::fs::read(&output).unwrap();
-    let (payload_end, summary_end) = bloom_section_offsets(&bytes);
+    let offsets = prefix_exact_offsets(&bytes);
 
     let invalid_length = dir.path().join("invalid-summary-length.bin");
     let mut data = bytes.clone();
-    data[payload_end..payload_end + 8].copy_from_slice(&2u64.to_le_bytes());
+    data[offsets.summary_words_offset..offsets.summary_words_offset + 8]
+        .copy_from_slice(&2u64.to_le_bytes());
     std::fs::write(&invalid_length, data).unwrap();
     assert!(EncodedLabelIndex::load(invalid_length).is_err());
 
     let invalid_padding = dir.path().join("invalid-summary-padding.bin");
     let mut data = bytes.clone();
-    data[payload_end + 8..payload_end + 16].copy_from_slice(&(1u64 << 2).to_le_bytes());
+    data[offsets.summary_start..offsets.summary_start + 8]
+        .copy_from_slice(&(1u64 << 2).to_le_bytes());
     std::fs::write(&invalid_padding, data).unwrap();
     assert!(EncodedLabelIndex::load(invalid_padding).is_err());
 
     let truncated = dir.path().join("truncated-summary.bin");
-    let mut data = bytes[..summary_end - 8].to_vec();
-    data.extend_from_slice(&bytes[summary_end..]);
+    let mut data = bytes[..offsets.summary_end - 8].to_vec();
+    data.extend_from_slice(&bytes[offsets.summary_end..]);
     std::fs::write(&truncated, data).unwrap();
     assert!(EncodedLabelIndex::load(truncated).is_err());
 }
