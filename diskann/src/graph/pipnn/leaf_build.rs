@@ -185,10 +185,14 @@ where
 
     let point_count = point_ids.len();
     buffers.prepare_local_adjacency(point_count);
+    let neighbors = MatrixView::try_from(
+        &buffers.neighbors[..point_count * leaf_k],
+        point_count,
+        leaf_k,
+    )?;
     add_symmetric_neighbors(
         point_ids,
-        leaf_k,
-        &buffers.neighbors[..point_count * leaf_k],
+        neighbors,
         &mut buffers.local_adjacency[..point_count],
     );
     for (&point_id, additions) in point_ids.iter().zip(&buffers.local_adjacency) {
@@ -238,11 +242,10 @@ where
 /// the edge lists of both points.
 fn add_symmetric_neighbors(
     point_ids: &[u32],
-    leaf_k: usize,
-    neighbors: &[Candidate],
+    neighbors: MatrixView<'_, Candidate>,
     local_adjacency: &mut [Vec<u32>],
 ) {
-    for (source, source_neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
+    for (source, source_neighbors) in neighbors.row_iter().enumerate() {
         for neighbor in source_neighbors {
             // Skip the empty slots that the kernel leaves for NaN and infinite
             // distances.

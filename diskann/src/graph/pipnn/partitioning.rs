@@ -26,7 +26,7 @@
 use crate::{ANNResult, utils::VectorRepr};
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool},
-    views::{MatrixView, MutMatrixView},
+    views::{Matrix, MatrixView, MutMatrixView},
 };
 use rand::{Rng, SeedableRng, prelude::IndexedRandom, rngs::StdRng};
 use rayon::prelude::*;
@@ -288,21 +288,18 @@ where
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
-    let dimension_count = data.ncols();
-    let mut leader_values = vec![0.0f32; leader_ids.len() * dimension_count];
-    gather_as_f32(data, leader_ids, &mut leader_values)?;
+    let mut leader_values = Matrix::new(0.0f32, leader_ids.len(), data.ncols());
+    gather_as_f32(data, leader_ids, leader_values.as_mut_slice())?;
 
-    let leader_matrix =
-        MatrixView::try_from(leader_values.as_slice(), leader_ids.len(), dimension_count)?;
-    let leaders = M::create_leaders(leader_matrix);
+    let leaders = M::create_leaders(leader_values.as_view());
     let leader_count = M::leader_count(&leaders);
 
-    let mut assignments = vec![0u32; point_ids.len() * fanout];
+    let mut assignments = Matrix::new(0u32, point_ids.len(), fanout);
     // This runs in the pool of the build context (see `build_graph`). A lease
     // for each stripe takes one lock, which costs far less than the GEMM and
     // ranking of the stripe.
     assignments
-        .par_chunks_mut(ASSIGNMENT_STRIPE_POINTS * fanout)
+        .par_window_iter_mut(ASSIGNMENT_STRIPE_POINTS)
         .zip(point_ids.par_chunks(ASSIGNMENT_STRIPE_POINTS))
         .try_for_each(|(stripe_assignments, stripe_ids)| {
             assign_point_stripe::<A, M, T>(
@@ -310,7 +307,6 @@ where
                 data,
                 stripe_ids,
                 &leaders,
-                fanout,
                 &mut stripe_buffers.get_ref(()),
                 stripe_assignments,
             )
@@ -318,23 +314,21 @@ where
 
     Ok(group_by_leader(
         point_ids,
-        &assignments,
-        fanout,
+        assignments.as_view(),
         leader_count,
     ))
 }
 
 /// Gather one stripe of points as `f32` and write the leader columns of the
-/// `fanout` nearest leaders of each point to `assignments`.
+/// nearest leaders of each point to its row of `assignments`, one per column.
 #[inline]
 fn assign_point_stripe<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     point_ids: &[u32],
     leaders: &M::Leaders<'_>,
-    fanout: usize,
     buffers: &mut StripeBuffers,
-    assignments: &mut [u32],
+    assignments: MutMatrixView<'_, u32>,
 ) -> ANNResult<()>
 where
     A: Simd,
@@ -358,8 +352,13 @@ where
         dimensions,
     )?;
     gather_as_f32(data, point_ids, points.as_mut_slice())?;
-    let output = MutMatrixView::try_from(assignments, point_count, fanout)?;
-    assign_leaders::<A, M>(arch, points.as_view(), leaders, output, kernel_workspace)
+    assign_leaders::<A, M>(
+        arch,
+        points.as_view(),
+        leaders,
+        assignments,
+        kernel_workspace,
+    )
 }
 
 /// Group the points by assigned leader. Unassigned slots join no child.
@@ -368,12 +367,11 @@ where
 /// next split samples its leaders by position.
 fn group_by_leader(
     points: &[u32],
-    assignments: &[u32],
-    fanout: usize,
+    assignments: MatrixView<'_, u32>,
     leaders: usize,
 ) -> Vec<Vec<u32>> {
     if points.len() < PARALLEL_GROUPING_MIN_POINTS {
-        return group_by_leader_serial(points, assignments, fanout, leaders);
+        return group_by_leader_serial(points, assignments, leaders);
     }
 
     let chunk_points = points.len().div_ceil(rayon::current_num_threads());
@@ -381,8 +379,8 @@ fn group_by_leader(
     // order.
     let locals: Vec<_> = points
         .par_chunks(chunk_points)
-        .zip(assignments.par_chunks(chunk_points * fanout))
-        .map(|(points, assignments)| group_by_leader_serial(points, assignments, fanout, leaders))
+        .zip(assignments.par_window_iter(chunk_points))
+        .map(|(points, assignments)| group_by_leader_serial(points, assignments, leaders))
         .collect();
 
     let mut sizes = vec![0usize; leaders];
@@ -408,18 +406,17 @@ fn group_by_leader(
 
 fn group_by_leader_serial(
     points: &[u32],
-    assignments: &[u32],
-    fanout: usize,
+    assignments: MatrixView<'_, u32>,
     leaders: usize,
 ) -> Vec<Vec<u32>> {
     let mut sizes = vec![0usize; leaders];
-    for &leader in assignments {
+    for &leader in assignments.as_slice() {
         if leader != UNASSIGNED {
             sizes[leader as usize] += 1;
         }
     }
     let mut clusters: Vec<Vec<u32>> = sizes.into_iter().map(Vec::with_capacity).collect();
-    for (&point, point_assignments) in points.iter().zip(assignments.chunks_exact(fanout)) {
+    for (&point, point_assignments) in points.iter().zip(assignments.row_iter()) {
         for &leader in point_assignments {
             if leader != UNASSIGNED {
                 clusters[leader as usize].push(point);
@@ -618,23 +615,19 @@ mod tests {
             (&[2, 1][..], 1, &[1, 0][..]),
             (&[1, 0, 4, 2][..], 2, &[0, 1, 2, 1, 0, 1, 1, 0][..]),
         ] {
-            let mut assignments = vec![0; ids.len() * fanout];
+            let mut assignments = Matrix::new(0, ids.len(), fanout);
 
             assign_point_stripe::<_, L2, _>(
                 ARCH,
                 data,
                 ids,
                 &leaders,
-                fanout,
                 &mut buffers,
-                &mut assignments,
+                assignments.as_mut_view(),
             )
             .unwrap();
 
-            let actual: Vec<_> = assignments
-                .chunks_exact(fanout)
-                .map(<[u32]>::to_vec)
-                .collect();
+            let actual: Vec<_> = assignments.row_iter().map(<[u32]>::to_vec).collect();
             let expected: Vec<_> = expected.chunks_exact(fanout).map(<[u32]>::to_vec).collect();
             assert_eq!(
                 sorted_members_per_row(&actual),
@@ -664,6 +657,7 @@ mod tests {
         ] {
             let ids: Vec<_> = (0..point_count).map(|i| 1_000_000 - i as u32).collect();
             let assignments: Vec<_> = (0..point_count).flat_map(|i| pattern[i % 4]).collect();
+            let assignments = MatrixView::try_from(assignments.as_slice(), point_count, 2).unwrap();
             let expected = [
                 ids.iter().copied().step_by(2).collect(),
                 ids.iter().copied().skip(1).step_by(4).collect(),
@@ -671,7 +665,7 @@ mod tests {
                 vec![],
             ];
 
-            let actual = pool.install(|| group_by_leader(&ids, &assignments, 2, 4));
+            let actual = pool.install(|| group_by_leader(&ids, assignments, 4));
 
             assert_eq!(
                 sorted_members_per_row(&actual),
