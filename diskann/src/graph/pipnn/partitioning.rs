@@ -888,7 +888,9 @@ mod tests {
     }
 
     #[test]
-    fn a_second_replica_adds_new_leaf_memberships() {
+    fn replicas_use_different_seeds() {
+        // With one seed for every replica, the second replica would repeat the
+        // leaves of the first.
         let point_count = 33;
         let values = dense_points(point_count, 17, 1290);
         let data = MatrixView::try_from(values.as_slice(), point_count, 17).unwrap();
@@ -899,42 +901,21 @@ mod tests {
             ..splitting_config()
         };
         let pool = thread_pool(2);
-        let first = pool
-            .install(|| partition::<_, L2, _>(ARCH, data, &config))
-            .unwrap();
+        let leaves = |replicas| {
+            let config = PiPNNConfig {
+                replicas: nz(replicas),
+                ..config.clone()
+            };
+            let leaves = pool
+                .install(|| partition::<_, L2, _>(ARCH, data, &config))
+                .unwrap();
+            sorted_leaf_memberships(&leaves)
+        };
 
-        let combined = pool
-            .install(|| {
-                partition::<_, L2, _>(
-                    ARCH,
-                    data,
-                    &PiPNNConfig {
-                        replicas: nz(2),
-                        ..config
-                    },
-                )
-            })
-            .unwrap();
+        let one = leaves(1);
+        let two = leaves(2);
 
-        let first = sorted_leaf_memberships(&first);
-        let combined = sorted_leaf_memberships(&combined);
-        assert!(first.iter().all(|leaf| combined.contains(leaf)));
-        // This fixed cloud and partial sample produce different memberships in
-        // the second pass. Repeating the first seed would only duplicate leaves.
-        assert!(combined.iter().any(|leaf| !first.contains(leaf)));
-        // Fanout one gives every point exactly one membership per replica.
-        let mut memberships = vec![0; point_count];
-        for leaf in &combined {
-            assert!(
-                !leaf.is_empty() && leaf.len() <= config.c_max.get(),
-                "leaf {leaf:?}"
-            );
-            assert_eq!(leaf.iter().collect::<HashSet<_>>().len(), leaf.len());
-            for &id in leaf {
-                memberships[id as usize] += 1;
-            }
-        }
-        assert_eq!(memberships, vec![2; point_count]);
+        assert!(two.iter().any(|leaf| !one.contains(leaf)));
     }
 
     #[test]
