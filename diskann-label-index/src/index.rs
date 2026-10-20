@@ -182,6 +182,7 @@ pub struct EncodedLabelIndex {
     labels: Box<[String]>,
     label_ids: HashMap<String, u32>,
     counts: Option<Arc<[u32]>>,
+    summary_nonzero_words_per_row: Option<Arc<[u32]>>,
     num_vectors: u32,
     payload: Arc<LabelIndexPayload>,
 }
@@ -206,11 +207,19 @@ struct CompiledPlan {
 #[derive(Debug, Clone, Copy)]
 enum PointPlan {
     Generic,
-    ExactAnd2 {
+    ExactAnd2Payload {
         first_word_offset: usize,
         second_word_offset: usize,
     },
+    ExactAnd2Summary {
+        first_word_offset: usize,
+        second_word_offset: usize,
+        first_summary_word_offset: usize,
+        second_summary_word_offset: usize,
+    },
 }
+
+const EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT: usize = 85;
 
 /// Query-scoped evaluator compiled from an [`EncodedLabelIndex`].
 ///
@@ -246,17 +255,25 @@ impl std::fmt::Debug for EncodedLabelQuery<'_> {
 impl EncodedLabelQuery<'_> {
     #[cfg(test)]
     pub(crate) fn uses_exact_and2_point_plan(&self) -> bool {
-        matches!(self.point_plan, PointPlan::ExactAnd2 { .. })
+        matches!(
+            self.point_plan,
+            PointPlan::ExactAnd2Payload { .. } | PointPlan::ExactAnd2Summary { .. }
+        )
     }
 
     #[cfg(test)]
     pub(crate) fn exact_and2_rows(&self) -> Option<(usize, usize)> {
-        let PointPlan::ExactAnd2 {
-            first_word_offset,
-            second_word_offset,
-        } = &self.point_plan
-        else {
-            return None;
+        let (first_word_offset, second_word_offset) = match &self.point_plan {
+            PointPlan::ExactAnd2Payload {
+                first_word_offset,
+                second_word_offset,
+            }
+            | PointPlan::ExactAnd2Summary {
+                first_word_offset,
+                second_word_offset,
+                ..
+            } => (first_word_offset, second_word_offset),
+            PointPlan::Generic => return None,
         };
         let LabelIndexPayload::Bloom { words_per_row, .. } = self.payload.as_ref() else {
             return None;
@@ -265,6 +282,11 @@ impl EncodedLabelQuery<'_> {
             *first_word_offset / *words_per_row,
             *second_word_offset / *words_per_row,
         ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exact_and2_uses_summary(&self) -> bool {
+        matches!(self.point_plan, PointPlan::ExactAnd2Summary { .. })
     }
 
     /// Return a conservative bound on exact matching vectors, if exact label counts were stored.
@@ -309,20 +331,54 @@ impl EncodedLabelQuery<'_> {
         if vec_id >= self.num_vectors {
             return false;
         }
-        if let PointPlan::ExactAnd2 {
-            first_word_offset,
-            second_word_offset,
-        } = &self.point_plan
-        {
-            let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
-                unreachable!("exact-row point plans require a Bloom payload")
-            };
-            let word_index = vec_id as usize / 64;
-            let mask = 1u64 << (vec_id % 64);
-            if bits[*first_word_offset + word_index] & mask == 0 {
-                return false;
+        match &self.point_plan {
+            PointPlan::ExactAnd2Payload {
+                first_word_offset,
+                second_word_offset,
+            } => {
+                let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
+                    unreachable!("exact-row point plans require a Bloom payload")
+                };
+                let word_index = vec_id as usize / 64;
+                let mask = 1u64 << (vec_id % 64);
+                if bits[*first_word_offset + word_index] & mask == 0 {
+                    return false;
+                }
+                return bits[*second_word_offset + word_index] & mask != 0;
             }
-            return bits[*second_word_offset + word_index] & mask != 0;
+            PointPlan::ExactAnd2Summary {
+                first_word_offset,
+                second_word_offset,
+                first_summary_word_offset,
+                second_summary_word_offset,
+            } => {
+                let LabelIndexPayload::Bloom {
+                    bits,
+                    nonzero_words: Some(summary),
+                    ..
+                } = self.payload.as_ref()
+                else {
+                    unreachable!("summary point plans require summarized Bloom payloads")
+                };
+                let word_index = vec_id as usize / 64;
+                let summary_word_index = word_index / 64;
+                let summary_mask = 1u64 << (word_index % 64);
+                if summary.bits[*first_summary_word_offset + summary_word_index] & summary_mask == 0
+                {
+                    return false;
+                }
+                let mask = 1u64 << (vec_id % 64);
+                if bits[*first_word_offset + word_index] & mask == 0 {
+                    return false;
+                }
+                if summary.bits[*second_summary_word_offset + summary_word_index] & summary_mask
+                    == 0
+                {
+                    return false;
+                }
+                return bits[*second_word_offset + word_index] & mask != 0;
+            }
+            PointPlan::Generic => {}
         }
         self.is_match_generic(vec_id)
     }
@@ -1342,11 +1398,32 @@ impl EncodedLabelIndex {
                 "label-index contains trailing bytes".to_string(),
             ));
         }
+        let summary_nonzero_words_per_row = match &payload {
+            LabelIndexPayload::Bloom {
+                nonzero_words: Some(summary),
+                ..
+            } => Some(Arc::from(
+                summary
+                    .bits
+                    .chunks_exact(summary.words_per_row)
+                    .map(|row| {
+                        let count: usize = row.iter().map(|word| word.count_ones() as usize).sum();
+                        u32::try_from(count).map_err(|_| {
+                            EncodedLabelIndexError::Invalid(
+                                "Bloom nonzero word count exceeds u32".to_string(),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            _ => None,
+        };
 
         Ok(Self {
             labels: labels.into_boxed_slice(),
             label_ids,
             counts,
+            summary_nonzero_words_per_row,
             num_vectors,
             payload: Arc::new(payload),
         })
@@ -1411,7 +1488,12 @@ impl EncodedLabelIndex {
         S: AsRef<str>,
     {
         let plan = compile_plan(clauses, expression_type, &self.label_ids)?;
-        let point_plan = compile_point_plan(&plan, &self.payload, self.counts.as_deref());
+        let point_plan = compile_point_plan(
+            &plan,
+            &self.payload,
+            self.counts.as_deref(),
+            self.summary_nonzero_words_per_row.as_deref(),
+        );
         Ok(EncodedLabelQuery {
             num_vectors: self.num_vectors,
             payload: Arc::clone(&self.payload),
@@ -1498,10 +1580,12 @@ fn compile_point_plan(
     plan: &CompiledPlan,
     payload: &LabelIndexPayload,
     counts: Option<&[u32]>,
+    summary_nonzero_words_per_row: Option<&[u32]>,
 ) -> PointPlan {
     let LabelIndexPayload::Bloom {
         words_per_row,
         exact_row_by_label,
+        nonzero_words,
         ..
     } = payload
     else {
@@ -1532,13 +1616,64 @@ fn compile_point_plan(
     };
     let left_count = counts.map(|counts| counts[left_label]);
     let right_count = counts.map(|counts| counts[right_label]);
-    let (first_word_offset, second_word_offset) = if matches!((left_count, right_count), (Some(left), Some(right)) if left > right)
+    let count_swap = matches!((left_count, right_count), (Some(left), Some(right)) if left > right);
+    if let (Some(summary), Some(nonzero_words_per_row)) =
+        (nonzero_words, summary_nonzero_words_per_row)
     {
+        if let (Some(&left_nonzero), Some(&right_nonzero)) = (
+            nonzero_words_per_row.get(left_row as usize),
+            nonzero_words_per_row.get(right_row as usize),
+        ) {
+            let summary_swap = left_nonzero > right_nonzero;
+            let first_nonzero = if summary_swap {
+                right_nonzero
+            } else {
+                left_nonzero
+            } as usize;
+            let zero = words_per_row.saturating_sub(first_nonzero);
+            if zero.saturating_mul(100)
+                >= words_per_row.saturating_mul(EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT)
+            {
+                let (first_row, second_row, first_word_offset, second_word_offset) = if summary_swap
+                {
+                    (
+                        right_row as usize,
+                        left_row as usize,
+                        right_word_offset,
+                        left_word_offset,
+                    )
+                } else {
+                    (
+                        left_row as usize,
+                        right_row as usize,
+                        left_word_offset,
+                        right_word_offset,
+                    )
+                };
+                let Some(first_summary_word_offset) = first_row.checked_mul(summary.words_per_row)
+                else {
+                    return PointPlan::Generic;
+                };
+                let Some(second_summary_word_offset) =
+                    second_row.checked_mul(summary.words_per_row)
+                else {
+                    return PointPlan::Generic;
+                };
+                return PointPlan::ExactAnd2Summary {
+                    first_word_offset,
+                    second_word_offset,
+                    first_summary_word_offset,
+                    second_summary_word_offset,
+                };
+            }
+        }
+    }
+    let (first_word_offset, second_word_offset) = if count_swap {
         (right_word_offset, left_word_offset)
     } else {
         (left_word_offset, right_word_offset)
     };
-    PointPlan::ExactAnd2 {
+    PointPlan::ExactAnd2Payload {
         first_word_offset,
         second_word_offset,
     }

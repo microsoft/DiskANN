@@ -399,6 +399,7 @@ fn prefix_exact_bloom_specializes_two_label_dnf_point_checks() {
     let exact_pair = compile(&index, &["A&B"], FilterExpressionType::DNF);
     assert!(exact_pair.uses_exact_and2_point_plan());
     assert_eq!(exact_pair.exact_and2_rows(), Some((1, 0)));
+    assert!(!exact_pair.exact_and2_uses_summary());
     assert!(!QueryLabelProvider::cache_rejections(&exact_pair));
     assert_eq!(matching_ids(&exact_pair, index.num_vectors()), vec![0]);
     assert_eq!(exact_pair.count_matches(), 1);
@@ -408,6 +409,28 @@ fn prefix_exact_bloom_specializes_two_label_dnf_point_checks() {
     assert!(!mixed_pair.uses_exact_and2_point_plan());
     assert!(QueryLabelProvider::cache_rejections(&mixed_pair));
     assert!(!compile(&index, &["A|B"], FilterExpressionType::CNF).uses_exact_and2_point_plan());
+}
+
+#[test]
+fn prefix_exact_bloom_compiles_sparse_exact_rows_to_summary_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("labels.jsonl");
+    let output = dir.path().join("labels.bloom.bin");
+    let documents = std::iter::once("[\"A\",\"B\"]\n")
+        .chain(std::iter::repeat_n("\"B\"\n", 4095))
+        .collect::<String>();
+    std::fs::write(&input, documents).unwrap();
+    let config = BloomFilterConfig::new(128, 4)
+        .unwrap()
+        .with_exact_label_count(2)
+        .unwrap();
+    encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
+    let index = EncodedLabelIndex::load(output).unwrap();
+    let query = compile(&index, &["A&B"], FilterExpressionType::DNF);
+
+    assert_eq!(query.exact_and2_rows(), Some((1, 0)));
+    assert!(query.exact_and2_uses_summary());
+    assert_eq!(matching_ids(&query, index.num_vectors()), vec![0]);
 }
 
 #[test]
