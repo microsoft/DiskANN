@@ -11,8 +11,8 @@ use crate::{
         LABEL_INDEX_VERSION, MAX_LABEL_COUNT, MIXED_BLOOM_INDEX_VERSION,
         PREFIX_EXACT_BLOOM_INDEX_VERSION, SUMMARIZED_BLOOM_INDEX_VERSION,
     },
-    BloomFilterConfig, BloomQueryConfig, BloomVisitScratch, EncodedLabelIndex, EncodedLabelQuery,
-    FilterExpressionType,
+    BloomFilterConfig, BloomQueryConfig, BloomVisitScratch, EncodedLabelIndex,
+    EncodedLabelPointEvaluator, EncodedLabelQuery, FilterExpressionType,
 };
 use diskann::graph::ext::labeled::{CandidateLabelProvider, QueryLabelProvider};
 use std::{
@@ -57,6 +57,12 @@ fn compile(
 }
 
 fn matching_ids(query: &EncodedLabelQuery, num_vectors: u32) -> Vec<u32> {
+    (0..num_vectors)
+        .filter(|&vec_id| query.is_match(vec_id))
+        .collect()
+}
+
+fn matching_provider_ids(query: &impl QueryLabelProvider<u32>, num_vectors: u32) -> Vec<u32> {
     (0..num_vectors)
         .filter(|&vec_id| query.is_match(vec_id))
         .collect()
@@ -399,15 +405,95 @@ fn prefix_exact_bloom_specializes_two_label_dnf_point_checks() {
     let exact_pair = compile(&index, &["A&B"], FilterExpressionType::DNF);
     assert!(exact_pair.uses_exact_and2_point_plan());
     assert_eq!(exact_pair.exact_and2_rows(), Some((1, 0)));
+    assert!(!exact_pair.exact_and2_uses_summary());
     assert!(!QueryLabelProvider::cache_rejections(&exact_pair));
     assert_eq!(matching_ids(&exact_pair, index.num_vectors()), vec![0]);
     assert_eq!(exact_pair.count_matches(), 1);
+    let EncodedLabelPointEvaluator::ExactAnd2Payload(evaluator) = exact_pair.point_evaluator()
+    else {
+        panic!("dense exact pair should compile to the payload evaluator");
+    };
+    assert_eq!(
+        matching_provider_ids(&evaluator, index.num_vectors()),
+        vec![0]
+    );
+    assert!(!QueryLabelProvider::cache_rejections(&evaluator));
+    assert!(!QueryLabelProvider::is_match(
+        &evaluator,
+        index.num_vectors()
+    ));
 
     assert!(!compile(&index, &["A"], FilterExpressionType::DNF).uses_exact_and2_point_plan());
     let mixed_pair = compile(&index, &["A&C"], FilterExpressionType::DNF);
     assert!(!mixed_pair.uses_exact_and2_point_plan());
     assert!(QueryLabelProvider::cache_rejections(&mixed_pair));
-    assert!(!compile(&index, &["A|B"], FilterExpressionType::CNF).uses_exact_and2_point_plan());
+    assert!(matches!(
+        mixed_pair.point_evaluator(),
+        EncodedLabelPointEvaluator::Dnf(_)
+    ));
+    let EncodedLabelPointEvaluator::Dnf(dnf_evaluator) = mixed_pair.point_evaluator() else {
+        unreachable!();
+    };
+    assert!(QueryLabelProvider::cache_rejections(&dnf_evaluator));
+    assert_eq!(
+        matching_provider_ids(&dnf_evaluator, index.num_vectors()),
+        matching_ids(&mixed_pair, index.num_vectors())
+    );
+    assert!(!QueryLabelProvider::is_match(
+        &dnf_evaluator,
+        index.num_vectors()
+    ));
+    let cnf = compile(&index, &["A|B"], FilterExpressionType::CNF);
+    assert!(!cnf.uses_exact_and2_point_plan());
+    assert!(matches!(
+        cnf.point_evaluator(),
+        EncodedLabelPointEvaluator::Cnf(_)
+    ));
+    let EncodedLabelPointEvaluator::Cnf(cnf_evaluator) = cnf.point_evaluator() else {
+        unreachable!();
+    };
+    assert_eq!(
+        matching_provider_ids(&cnf_evaluator, index.num_vectors()),
+        matching_ids(&cnf, index.num_vectors())
+    );
+    assert!(!QueryLabelProvider::is_match(
+        &cnf_evaluator,
+        index.num_vectors()
+    ));
+}
+
+#[test]
+fn prefix_exact_bloom_compiles_sparse_exact_rows_to_summary_evaluator() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("labels.jsonl");
+    let output = dir.path().join("labels.bloom.bin");
+    let documents = std::iter::once("[\"A\",\"B\"]\n")
+        .chain(std::iter::repeat_n("\"B\"\n", 4095))
+        .collect::<String>();
+    std::fs::write(&input, documents).unwrap();
+    let config = BloomFilterConfig::new(128, 4)
+        .unwrap()
+        .with_exact_label_count(2)
+        .unwrap();
+    encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
+    let index = EncodedLabelIndex::load(output).unwrap();
+    let query = compile(&index, &["A&B"], FilterExpressionType::DNF);
+
+    assert_eq!(query.exact_and2_rows(), Some((1, 0)));
+    assert!(query.exact_and2_uses_summary());
+    assert_eq!(matching_ids(&query, index.num_vectors()), vec![0]);
+    let EncodedLabelPointEvaluator::ExactAnd2Summary(evaluator) = query.point_evaluator() else {
+        panic!("sparse exact pair should compile to the summary evaluator");
+    };
+    assert_eq!(
+        matching_provider_ids(&evaluator, index.num_vectors()),
+        vec![0]
+    );
+    assert!(!QueryLabelProvider::cache_rejections(&evaluator));
+    assert!(!QueryLabelProvider::is_match(
+        &evaluator,
+        index.num_vectors()
+    ));
 }
 
 #[test]

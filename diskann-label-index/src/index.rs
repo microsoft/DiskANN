@@ -182,6 +182,7 @@ pub struct EncodedLabelIndex {
     labels: Box<[String]>,
     label_ids: HashMap<String, u32>,
     counts: Option<Arc<[u32]>>,
+    summary_nonzero_words_per_row: Option<Arc<[u32]>>,
     num_vectors: u32,
     payload: Arc<LabelIndexPayload>,
 }
@@ -203,14 +204,97 @@ struct CompiledPlan {
     label_ids: Box<[Option<u32>]>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 enum PointPlan {
-    Generic,
-    ExactAnd2 {
+    Dnf,
+    Cnf,
+    ExactAnd2Payload {
         first_word_offset: usize,
         second_word_offset: usize,
     },
+    // Keep the four-offset summary plan out of line so PointPlan remains as compact as the
+    // payload-only plan. The allocation occurs once during query compilation.
+    ExactAnd2Summary(Box<ExactAnd2SummaryPlan>),
 }
+
+#[derive(Debug)]
+struct ExactAnd2SummaryPlan {
+    first_word_offset: usize,
+    second_word_offset: usize,
+    first_summary_word_offset: usize,
+    second_summary_word_offset: usize,
+}
+
+#[derive(Clone, Copy)]
+struct GenericEvaluator<'a> {
+    num_vectors: u32,
+    payload: &'a LabelIndexPayload,
+    clause_offsets: &'a [usize],
+    label_ids: &'a [Option<u32>],
+    cache_rejections: bool,
+}
+
+impl std::fmt::Debug for GenericEvaluator<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenericEvaluator")
+            .field("num_vectors", &self.num_vectors)
+            .field("num_clauses", &self.clause_offsets.len().saturating_sub(1))
+            .field("num_terminals", &self.label_ids.len())
+            .field("cache_rejections", &self.cache_rejections)
+            .finish()
+    }
+}
+
+/// A point evaluator selected once from a compiled [`EncodedLabelQuery`].
+///
+/// Match this enum outside a repeated classification loop so each variant's concrete evaluator
+/// can be statically dispatched without checking the query mode for every vector ID.
+#[derive(Debug, Clone, Copy)]
+pub enum EncodedLabelPointEvaluator<'a> {
+    /// Two exact rows evaluated directly from the payload.
+    ExactAnd2Payload(ExactAnd2PayloadEvaluator<'a>),
+    /// Two exact rows guarded by compact nonzero-word summaries.
+    ExactAnd2Summary(ExactAnd2SummaryEvaluator<'a>),
+    /// A generic DNF evaluator.
+    Dnf(DnfEvaluator<'a>),
+    /// A generic CNF evaluator.
+    Cnf(CnfEvaluator<'a>),
+}
+
+/// A statically dispatched evaluator for two exact payload rows.
+#[derive(Debug, Clone, Copy)]
+pub struct ExactAnd2PayloadEvaluator<'a> {
+    num_vectors: u32,
+    bits: &'a [u64],
+    first_word_offset: usize,
+    second_word_offset: usize,
+}
+
+/// A statically dispatched evaluator for two summary-guarded exact rows.
+#[derive(Debug, Clone, Copy)]
+pub struct ExactAnd2SummaryEvaluator<'a> {
+    num_vectors: u32,
+    bits: &'a [u64],
+    summary_bits: &'a [u64],
+    first_word_offset: usize,
+    second_word_offset: usize,
+    first_summary_word_offset: usize,
+    second_summary_word_offset: usize,
+}
+
+/// A statically dispatched generic DNF evaluator.
+#[derive(Debug, Clone, Copy)]
+pub struct DnfEvaluator<'a> {
+    inner: GenericEvaluator<'a>,
+}
+
+/// A statically dispatched generic CNF evaluator.
+#[derive(Debug, Clone, Copy)]
+pub struct CnfEvaluator<'a> {
+    inner: GenericEvaluator<'a>,
+}
+
+const EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT: usize = 85;
 
 /// Query-scoped evaluator compiled from an [`EncodedLabelIndex`].
 ///
@@ -244,19 +328,77 @@ impl std::fmt::Debug for EncodedLabelQuery<'_> {
 }
 
 impl EncodedLabelQuery<'_> {
+    /// Select a concrete evaluator for repeated point classification.
+    ///
+    /// Callers should match the returned enum once before entering a hot loop. Each contained
+    /// evaluator implements [`diskann::graph::ext::labeled::QueryLabelProvider`]. The owning query
+    /// remains the [`diskann::graph::ext::labeled::CandidateLabelProvider`] used for exhaustive
+    /// enumeration.
+    pub fn point_evaluator(&self) -> EncodedLabelPointEvaluator<'_> {
+        match &self.point_plan {
+            PointPlan::ExactAnd2Payload {
+                first_word_offset,
+                second_word_offset,
+            } => {
+                let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
+                    unreachable!("exact-row point plans require a Bloom payload")
+                };
+                EncodedLabelPointEvaluator::ExactAnd2Payload(ExactAnd2PayloadEvaluator {
+                    num_vectors: self.num_vectors,
+                    bits,
+                    first_word_offset: *first_word_offset,
+                    second_word_offset: *second_word_offset,
+                })
+            }
+            PointPlan::ExactAnd2Summary(plan) => {
+                let LabelIndexPayload::Bloom {
+                    bits,
+                    nonzero_words: Some(summary),
+                    ..
+                } = self.payload.as_ref()
+                else {
+                    unreachable!("summary point plans require summarized Bloom payloads")
+                };
+                EncodedLabelPointEvaluator::ExactAnd2Summary(ExactAnd2SummaryEvaluator {
+                    num_vectors: self.num_vectors,
+                    bits,
+                    summary_bits: &summary.bits,
+                    first_word_offset: plan.first_word_offset,
+                    second_word_offset: plan.second_word_offset,
+                    first_summary_word_offset: plan.first_summary_word_offset,
+                    second_summary_word_offset: plan.second_summary_word_offset,
+                })
+            }
+            PointPlan::Dnf => EncodedLabelPointEvaluator::Dnf(DnfEvaluator {
+                inner: self.generic_evaluator(),
+            }),
+            PointPlan::Cnf => EncodedLabelPointEvaluator::Cnf(CnfEvaluator {
+                inner: self.generic_evaluator(),
+            }),
+        }
+    }
+}
+
+impl EncodedLabelQuery<'_> {
     #[cfg(test)]
     pub(crate) fn uses_exact_and2_point_plan(&self) -> bool {
-        matches!(self.point_plan, PointPlan::ExactAnd2 { .. })
+        matches!(
+            self.point_plan,
+            PointPlan::ExactAnd2Payload { .. } | PointPlan::ExactAnd2Summary(_)
+        )
     }
 
     #[cfg(test)]
     pub(crate) fn exact_and2_rows(&self) -> Option<(usize, usize)> {
-        let PointPlan::ExactAnd2 {
-            first_word_offset,
-            second_word_offset,
-        } = &self.point_plan
-        else {
-            return None;
+        let (first_word_offset, second_word_offset) = match &self.point_plan {
+            PointPlan::ExactAnd2Payload {
+                first_word_offset,
+                second_word_offset,
+            } => (first_word_offset, second_word_offset),
+            PointPlan::ExactAnd2Summary(plan) => {
+                (&plan.first_word_offset, &plan.second_word_offset)
+            }
+            PointPlan::Dnf | PointPlan::Cnf => return None,
         };
         let LabelIndexPayload::Bloom { words_per_row, .. } = self.payload.as_ref() else {
             return None;
@@ -265,6 +407,11 @@ impl EncodedLabelQuery<'_> {
             *first_word_offset / *words_per_row,
             *second_word_offset / *words_per_row,
         ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exact_and2_uses_summary(&self) -> bool {
+        matches!(self.point_plan, PointPlan::ExactAnd2Summary(_))
     }
 
     /// Return a conservative bound on exact matching vectors, if exact label counts were stored.
@@ -309,78 +456,82 @@ impl EncodedLabelQuery<'_> {
         if vec_id >= self.num_vectors {
             return false;
         }
-        if let PointPlan::ExactAnd2 {
-            first_word_offset,
-            second_word_offset,
-        } = &self.point_plan
-        {
-            let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
-                unreachable!("exact-row point plans require a Bloom payload")
-            };
-            let word_index = vec_id as usize / 64;
-            let mask = 1u64 << (vec_id % 64);
-            if bits[*first_word_offset + word_index] & mask == 0 {
-                return false;
+        match &self.point_plan {
+            PointPlan::ExactAnd2Payload {
+                first_word_offset,
+                second_word_offset,
+            } => {
+                let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
+                    unreachable!("exact-row point plans require a Bloom payload")
+                };
+                exact_and2_payload_matches(bits, *first_word_offset, *second_word_offset, vec_id)
             }
-            return bits[*second_word_offset + word_index] & mask != 0;
+            PointPlan::ExactAnd2Summary(plan) => {
+                let LabelIndexPayload::Bloom {
+                    bits,
+                    nonzero_words: Some(summary),
+                    ..
+                } = self.payload.as_ref()
+                else {
+                    unreachable!("summary point plans require summarized Bloom payloads")
+                };
+                exact_and2_summary_matches(
+                    bits,
+                    &summary.bits,
+                    plan.first_word_offset,
+                    plan.second_word_offset,
+                    plan.first_summary_word_offset,
+                    plan.second_summary_word_offset,
+                    vec_id,
+                )
+            }
+            PointPlan::Dnf => self.is_match_dnf(vec_id),
+            PointPlan::Cnf => self.is_match_cnf(vec_id),
         }
-        self.is_match_generic(vec_id)
     }
 
-    // Keep the generic evaluator out of line so exact point plans remain small enough to inline
-    // across crate boundaries.
     #[inline(never)]
-    fn is_match_generic(&self, vec_id: u32) -> bool {
-        let terminal_matches = |label_id: Option<u32>| {
-            let Some(label_id) = label_id.map(|id| id as usize) else {
-                return false;
-            };
-            match self.payload.as_ref() {
-                LabelIndexPayload::Bitslice {
-                    words_per_row,
-                    bits,
-                } => {
-                    let word = bits[label_id * *words_per_row + vec_id as usize / 64];
-                    word & (1u64 << (vec_id % 64)) != 0
-                }
-                LabelIndexPayload::Bloom {
-                    words_per_row,
-                    hash_count,
-                    bits,
-                    label_rows,
-                    exact_row_by_label,
-                    ..
-                } => {
-                    let exact_row = exact_row_by_label[label_id];
-                    if exact_row != u32::MAX {
-                        let word = bits[exact_row as usize * *words_per_row + vec_id as usize / 64];
-                        return word & (1u64 << (vec_id % 64)) != 0;
-                    }
-                    let row_offset = label_id * *hash_count;
-                    label_rows[row_offset..row_offset + *hash_count]
-                        .iter()
-                        .all(|&row| {
-                            let word = bits[row as usize * *words_per_row + vec_id as usize / 64];
-                            word & (1u64 << (vec_id % 64)) != 0
-                        })
-                }
-            }
-        };
+    fn is_match_dnf(&self, vec_id: u32) -> bool {
+        dnf_matches(
+            self.payload.as_ref(),
+            &self.plan.clause_offsets,
+            &self.plan.label_ids,
+            vec_id,
+        )
+    }
 
-        match self.plan.expression_type {
-            FilterExpressionType::DNF => self.plan.clause_offsets.windows(2).any(|clause| {
-                self.plan.label_ids[clause[0]..clause[1]]
-                    .iter()
-                    .copied()
-                    .all(terminal_matches)
-            }),
-            FilterExpressionType::CNF => self.plan.clause_offsets.windows(2).all(|clause| {
-                self.plan.label_ids[clause[0]..clause[1]]
-                    .iter()
-                    .copied()
-                    .any(terminal_matches)
-            }),
+    #[inline(never)]
+    fn is_match_cnf(&self, vec_id: u32) -> bool {
+        cnf_matches(
+            self.payload.as_ref(),
+            &self.plan.clause_offsets,
+            &self.plan.label_ids,
+            vec_id,
+        )
+    }
+
+    fn generic_evaluator(&self) -> GenericEvaluator<'_> {
+        GenericEvaluator {
+            num_vectors: self.num_vectors,
+            payload: self.payload.as_ref(),
+            clause_offsets: &self.plan.clause_offsets,
+            label_ids: &self.plan.label_ids,
+            cache_rejections: self.should_cache_rejections(),
         }
+    }
+
+    fn should_cache_rejections(&self) -> bool {
+        let LabelIndexPayload::Bloom {
+            exact_row_by_label, ..
+        } = self.payload.as_ref()
+        else {
+            return false;
+        };
+        self.plan
+            .label_ids
+            .iter()
+            .flatten()
+            .any(|&id| exact_row_by_label[id as usize] == u32::MAX)
     }
 
     /// Visit matching vector IDs in ascending order, including Bloom false positives.
@@ -845,6 +996,179 @@ impl EncodedLabelQuery<'_> {
     }
 }
 
+#[inline]
+fn terminal_matches(payload: &LabelIndexPayload, label_id: Option<u32>, vec_id: u32) -> bool {
+    let Some(label_id) = label_id.map(|id| id as usize) else {
+        return false;
+    };
+    match payload {
+        LabelIndexPayload::Bitslice {
+            words_per_row,
+            bits,
+        } => {
+            let word = bits[label_id * *words_per_row + vec_id as usize / 64];
+            word & (1u64 << (vec_id % 64)) != 0
+        }
+        LabelIndexPayload::Bloom {
+            words_per_row,
+            hash_count,
+            bits,
+            label_rows,
+            exact_row_by_label,
+            ..
+        } => {
+            let exact_row = exact_row_by_label[label_id];
+            if exact_row != u32::MAX {
+                let word = bits[exact_row as usize * *words_per_row + vec_id as usize / 64];
+                return word & (1u64 << (vec_id % 64)) != 0;
+            }
+            let row_offset = label_id * *hash_count;
+            label_rows[row_offset..row_offset + *hash_count]
+                .iter()
+                .all(|&row| {
+                    let word = bits[row as usize * *words_per_row + vec_id as usize / 64];
+                    word & (1u64 << (vec_id % 64)) != 0
+                })
+        }
+    }
+}
+
+#[inline(never)]
+fn dnf_matches(
+    payload: &LabelIndexPayload,
+    clause_offsets: &[usize],
+    label_ids: &[Option<u32>],
+    vec_id: u32,
+) -> bool {
+    let terminal_matches = |label_id| terminal_matches(payload, label_id, vec_id);
+    clause_offsets.windows(2).any(|clause| {
+        label_ids[clause[0]..clause[1]]
+            .iter()
+            .copied()
+            .all(terminal_matches)
+    })
+}
+
+#[inline(never)]
+fn cnf_matches(
+    payload: &LabelIndexPayload,
+    clause_offsets: &[usize],
+    label_ids: &[Option<u32>],
+    vec_id: u32,
+) -> bool {
+    let terminal_matches = |label_id| terminal_matches(payload, label_id, vec_id);
+    clause_offsets.windows(2).all(|clause| {
+        label_ids[clause[0]..clause[1]]
+            .iter()
+            .copied()
+            .any(terminal_matches)
+    })
+}
+
+#[inline]
+fn exact_and2_payload_matches(
+    bits: &[u64],
+    first_word_offset: usize,
+    second_word_offset: usize,
+    vec_id: u32,
+) -> bool {
+    let word_index = vec_id as usize / 64;
+    let mask = 1u64 << (vec_id % 64);
+    if bits[first_word_offset + word_index] & mask == 0 {
+        return false;
+    }
+    bits[second_word_offset + word_index] & mask != 0
+}
+
+#[inline]
+fn exact_and2_summary_matches(
+    bits: &[u64],
+    summary_bits: &[u64],
+    first_word_offset: usize,
+    second_word_offset: usize,
+    first_summary_word_offset: usize,
+    second_summary_word_offset: usize,
+    vec_id: u32,
+) -> bool {
+    let word_index = vec_id as usize / 64;
+    let summary_word_index = word_index / 64;
+    let summary_mask = 1u64 << (word_index % 64);
+    if summary_bits[first_summary_word_offset + summary_word_index] & summary_mask == 0 {
+        return false;
+    }
+    let mask = 1u64 << (vec_id % 64);
+    if bits[first_word_offset + word_index] & mask == 0 {
+        return false;
+    }
+    if summary_bits[second_summary_word_offset + summary_word_index] & summary_mask == 0 {
+        return false;
+    }
+    bits[second_word_offset + word_index] & mask != 0
+}
+
+impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for ExactAnd2PayloadEvaluator<'_> {
+    #[inline]
+    fn is_match(&self, id: u32) -> bool {
+        id < self.num_vectors
+            && exact_and2_payload_matches(
+                self.bits,
+                self.first_word_offset,
+                self.second_word_offset,
+                id,
+            )
+    }
+}
+
+impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for ExactAnd2SummaryEvaluator<'_> {
+    #[inline]
+    fn is_match(&self, id: u32) -> bool {
+        id < self.num_vectors
+            && exact_and2_summary_matches(
+                self.bits,
+                self.summary_bits,
+                self.first_word_offset,
+                self.second_word_offset,
+                self.first_summary_word_offset,
+                self.second_summary_word_offset,
+                id,
+            )
+    }
+}
+
+impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for DnfEvaluator<'_> {
+    #[inline]
+    fn is_match(&self, id: u32) -> bool {
+        id < self.inner.num_vectors
+            && dnf_matches(
+                self.inner.payload,
+                self.inner.clause_offsets,
+                self.inner.label_ids,
+                id,
+            )
+    }
+
+    fn cache_rejections(&self) -> bool {
+        self.inner.cache_rejections
+    }
+}
+
+impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for CnfEvaluator<'_> {
+    #[inline]
+    fn is_match(&self, id: u32) -> bool {
+        id < self.inner.num_vectors
+            && cnf_matches(
+                self.inner.payload,
+                self.inner.clause_offsets,
+                self.inner.label_ids,
+                id,
+            )
+    }
+
+    fn cache_rejections(&self) -> bool {
+        self.inner.cache_rejections
+    }
+}
+
 impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for EncodedLabelQuery<'_> {
     #[inline]
     fn is_match(&self, id: u32) -> bool {
@@ -852,17 +1176,7 @@ impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for EncodedLabelQuery
     }
 
     fn cache_rejections(&self) -> bool {
-        let LabelIndexPayload::Bloom {
-            exact_row_by_label, ..
-        } = self.payload.as_ref()
-        else {
-            return false;
-        };
-        self.plan
-            .label_ids
-            .iter()
-            .flatten()
-            .any(|&id| exact_row_by_label[id as usize] == u32::MAX)
+        self.should_cache_rejections()
     }
 }
 
@@ -1343,10 +1657,32 @@ impl EncodedLabelIndex {
             ));
         }
 
+        let summary_nonzero_words_per_row = match &payload {
+            LabelIndexPayload::Bloom {
+                nonzero_words: Some(summary),
+                ..
+            } => Some(Arc::from(
+                summary
+                    .bits
+                    .chunks_exact(summary.words_per_row)
+                    .map(|row| {
+                        let count: usize = row.iter().map(|word| word.count_ones() as usize).sum();
+                        u32::try_from(count).map_err(|_| {
+                            EncodedLabelIndexError::Invalid(
+                                "Bloom nonzero word count exceeds u32".to_string(),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            _ => None,
+        };
+
         Ok(Self {
             labels: labels.into_boxed_slice(),
             label_ids,
             counts,
+            summary_nonzero_words_per_row,
             num_vectors,
             payload: Arc::new(payload),
         })
@@ -1411,7 +1747,12 @@ impl EncodedLabelIndex {
         S: AsRef<str>,
     {
         let plan = compile_plan(clauses, expression_type, &self.label_ids)?;
-        let point_plan = compile_point_plan(&plan, &self.payload, self.counts.as_deref());
+        let point_plan = compile_point_plan(
+            &plan,
+            &self.payload,
+            self.counts.as_deref(),
+            self.summary_nonzero_words_per_row.as_deref(),
+        );
         Ok(EncodedLabelQuery {
             num_vectors: self.num_vectors,
             payload: Arc::clone(&self.payload),
@@ -1494,51 +1835,111 @@ fn compile_plan<S: AsRef<str>>(
     })
 }
 
+fn generic_point_plan(expression_type: FilterExpressionType) -> PointPlan {
+    match expression_type {
+        FilterExpressionType::DNF => PointPlan::Dnf,
+        FilterExpressionType::CNF => PointPlan::Cnf,
+    }
+}
+
 fn compile_point_plan(
     plan: &CompiledPlan,
     payload: &LabelIndexPayload,
     counts: Option<&[u32]>,
+    summary_nonzero_words_per_row: Option<&[u32]>,
 ) -> PointPlan {
     let LabelIndexPayload::Bloom {
         words_per_row,
         exact_row_by_label,
+        nonzero_words,
         ..
     } = payload
     else {
-        return PointPlan::Generic;
+        return generic_point_plan(plan.expression_type);
     };
     if plan.expression_type != FilterExpressionType::DNF
         || plan.clause_offsets.as_ref() != [0, 2]
         || plan.label_ids.len() != 2
     {
-        return PointPlan::Generic;
+        return generic_point_plan(plan.expression_type);
     }
     let Some(left_label) = plan.label_ids[0].map(|id| id as usize) else {
-        return PointPlan::Generic;
+        return generic_point_plan(plan.expression_type);
     };
     let Some(right_label) = plan.label_ids[1].map(|id| id as usize) else {
-        return PointPlan::Generic;
+        return generic_point_plan(plan.expression_type);
     };
     let left_row = exact_row_by_label[left_label];
     let right_row = exact_row_by_label[right_label];
     if left_row == u32::MAX || right_row == u32::MAX {
-        return PointPlan::Generic;
+        return generic_point_plan(plan.expression_type);
     }
     let Some(left_word_offset) = (left_row as usize).checked_mul(*words_per_row) else {
-        return PointPlan::Generic;
+        return generic_point_plan(plan.expression_type);
     };
     let Some(right_word_offset) = (right_row as usize).checked_mul(*words_per_row) else {
-        return PointPlan::Generic;
+        return generic_point_plan(plan.expression_type);
     };
     let left_count = counts.map(|counts| counts[left_label]);
     let right_count = counts.map(|counts| counts[right_label]);
-    let (first_word_offset, second_word_offset) = if matches!((left_count, right_count), (Some(left), Some(right)) if left > right)
+    let count_swap = matches!((left_count, right_count), (Some(left), Some(right)) if left > right);
+    if let (Some(summary), Some(nonzero_words_per_row)) =
+        (nonzero_words, summary_nonzero_words_per_row)
     {
+        if let (Some(&left_nonzero), Some(&right_nonzero)) = (
+            nonzero_words_per_row.get(left_row as usize),
+            nonzero_words_per_row.get(right_row as usize),
+        ) {
+            let summary_swap = left_nonzero > right_nonzero;
+            let first_nonzero = if summary_swap {
+                right_nonzero
+            } else {
+                left_nonzero
+            } as usize;
+            let zero = words_per_row.saturating_sub(first_nonzero);
+            if zero.saturating_mul(100)
+                >= words_per_row.saturating_mul(EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT)
+            {
+                let (first_row, second_row, first_word_offset, second_word_offset) = if summary_swap
+                {
+                    (
+                        right_row as usize,
+                        left_row as usize,
+                        right_word_offset,
+                        left_word_offset,
+                    )
+                } else {
+                    (
+                        left_row as usize,
+                        right_row as usize,
+                        left_word_offset,
+                        right_word_offset,
+                    )
+                };
+                let Some(first_summary_word_offset) = first_row.checked_mul(summary.words_per_row)
+                else {
+                    return generic_point_plan(plan.expression_type);
+                };
+                let Some(second_summary_word_offset) =
+                    second_row.checked_mul(summary.words_per_row)
+                else {
+                    return generic_point_plan(plan.expression_type);
+                };
+                return PointPlan::ExactAnd2Summary(Box::new(ExactAnd2SummaryPlan {
+                    first_word_offset,
+                    second_word_offset,
+                    first_summary_word_offset,
+                    second_summary_word_offset,
+                }));
+            }
+        }
+    }
+    let (first_word_offset, second_word_offset) = if count_swap {
         (right_word_offset, left_word_offset)
     } else {
         (left_word_offset, right_word_offset)
     };
-    PointPlan::ExactAnd2 {
+    PointPlan::ExactAnd2Payload {
         first_word_offset,
         second_word_offset,
     }
