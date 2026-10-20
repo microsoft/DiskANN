@@ -46,17 +46,14 @@ use super::{
 
 /// Number of points in one assignment stripe. Short stripes repeat the fixed
 /// cost of a kernel call, and tall stripes overflow the last-level cache once
-/// every worker holds one. 256 points stayed within 1.4% of the best height on
-/// average in sweeps over x86 CPUs, data types, dimensions and leader counts. A
-/// height from the detected cache size did no better, because a VM reports a
-/// last-level cache that other tenants share.
+/// every worker holds one. The height does not follow the detected cache size,
+/// because a virtual machine reports a last-level cache that other tenants
+/// share.
 const ASSIGNMENT_STRIPE_POINTS: usize = 256;
 /// Clusters with at least this many points group their points by leader in
 /// parallel. Such clusters occur at the first levels, where few splits run at
-/// the same time. Serial grouping of 10M points at fanout 10 takes 0.59 s, and
-/// parallel grouping takes 0.15 s on 16 threads (AMD EPYC 7763). The serial time
-/// does not decrease with more threads, so its share of the build increases on
-/// larger machines. Below this size, serial grouping takes a few milliseconds.
+/// the same time, so a serial pass would leave most workers idle. Smaller
+/// clusters group serially, because the parallel pass costs more than it saves.
 const PARALLEL_GROUPING_MIN_POINTS: usize = 100_000;
 
 /// A cluster with more than `c_max` points that waits for its split.
