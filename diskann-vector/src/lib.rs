@@ -44,9 +44,14 @@ pub mod sparse;
 ))]
 const CACHE_LINE_SIZE: usize = 64;
 
+/// Prefetch the cache line containing `ptr`.
+///
+/// # Safety
+///
+/// `ptr` must point to a byte within a live allocation.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
-unsafe fn prefetch_cache_line(_ptr: *const i8) {
+pub unsafe fn prefetch_cache_line(_ptr: *const i8) {
     #[cfg(not(miri))]
     {
         use std::arch::x86_64::*;
@@ -55,9 +60,14 @@ unsafe fn prefetch_cache_line(_ptr: *const i8) {
     }
 }
 
+/// Prefetch the cache line containing `ptr`.
+///
+/// # Safety
+///
+/// `ptr` must point to a byte within a live allocation.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-unsafe fn prefetch_cache_line(_ptr: *const i8) {
+pub unsafe fn prefetch_cache_line(_ptr: *const i8) {
     #[cfg(not(miri))]
     {
         // SAFETY: The `prfm` hint does not dereference the pointer in Rust memory model terms.
@@ -70,6 +80,18 @@ unsafe fn prefetch_cache_line(_ptr: *const i8) {
         }
     }
 }
+
+/// Prefetch the cache line containing `ptr`.
+///
+/// # Safety
+///
+/// `ptr` must point to a byte within a live allocation.
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "avx2"),
+    target_arch = "aarch64",
+)))]
+#[inline(always)]
+pub unsafe fn prefetch_cache_line(_ptr: *const i8) {}
 
 #[cfg(any(
     all(target_arch = "x86_64", target_feature = "avx2"),

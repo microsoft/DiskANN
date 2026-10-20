@@ -171,41 +171,6 @@ unsafe impl<const BYTES: usize> Prefetch for Unrolled<BYTES> {
 /// # Safety
 ///
 /// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
-unsafe fn prefetch_cache_line(_ptr: *const i8) {
-    #[cfg(not(miri))]
-    {
-        use std::arch::x86_64::*;
-        // SAFETY: Inherited from caller and intrinsic is cfg-gated to supported targets.
-        unsafe { _mm_prefetch(_ptr, _MM_HINT_T0) };
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-unsafe fn prefetch_cache_line(_ptr: *const i8) {
-    #[cfg(not(miri))]
-    {
-        // SAFETY: `prfm` is a non-faulting prefetch hint and does not create Rust references.
-        unsafe {
-            std::arch::asm!(
-                "prfm pldl2keep, [{ptr}]",
-                ptr = in(reg) _ptr,
-                options(nostack, preserves_flags, readonly),
-            );
-        }
-    }
-}
-
-/// Prefetch `len` bytes beginning at `ptr`.
-///
-/// Prefetch locations are spaced one cache-line width apart. The final location is
-/// prefetched first, followed by the rest in ascending order.
-///
-/// # Safety
-///
-/// The memory range `[ptr, ptr.add(len))` must be valid.
 #[cfg(any(
     all(target_arch = "x86_64", target_feature = "avx2"),
     target_arch = "aarch64",
@@ -221,10 +186,10 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
     }
 
     // SAFETY: Inherited from caller.
-    unsafe { prefetch_cache_line(ptr.add(stride * (lines - 1))) };
+    unsafe { diskann_vector::prefetch_cache_line(ptr.add(stride * (lines - 1))) };
     for i in 0..(lines - 1) {
         // SAFETY: Inherited from caller.
-        unsafe { prefetch_cache_line(ptr.add(stride * i)) };
+        unsafe { diskann_vector::prefetch_cache_line(ptr.add(stride * i)) };
     }
 }
 
