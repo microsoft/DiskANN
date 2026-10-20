@@ -118,6 +118,7 @@ mod tests {
         PiPNNParameters {
             c_max: nz(512),
             p_samp: 0.01,
+            max_leaders: nz(1000),
             fanout: vec![nz(10), nz(3)],
             k: nz(2),
             replicas: nz(1),
