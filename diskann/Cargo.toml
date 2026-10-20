@@ -39,6 +39,7 @@ diskann-linalg = { workspace = true, optional = true }
 libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
+diskann-utils = { workspace = true, features = ["testing"] }
 futures-util = { workspace = true, default-features = false  }
 pin-project.workspace = true
 rand.workspace = true
