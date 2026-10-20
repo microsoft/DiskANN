@@ -161,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn candidates_within_degree_keep_their_order() {
+    fn skip_prune_when_candidates_do_not_exceed_degree() {
         // x[i] is the one-dimensional vector of point i.
         let x = [0.0, 1.0, -2.0];
         let source = 0;
@@ -236,16 +236,16 @@ mod tests {
         // Degree 1 keeps each point's nearest point.
         let expected = BTreeSet::from([(0, 1), (1, 0), (2, 1), (3, 2)]);
 
-        for workers in [1, 3] {
+        for n_threads in [1, 3] {
             let candidates = [[3, 2, 1], [3, 2, 0], [3, 1, 0], [2, 1, 0]]
                 .map(|ids| candidates_in_order(&ids))
                 .to_vec();
 
-            let actual = thread_pool(workers)
+            let actual = thread_pool(n_threads)
                 .install(|| prune_overfull(data, candidates, &graph, Metric::L2));
 
             let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
-            assert_eq!(edges(&actual), expected, "{workers} workers");
+            assert_eq!(edges(&actual), expected, "{n_threads} threads");
         }
     }
 }

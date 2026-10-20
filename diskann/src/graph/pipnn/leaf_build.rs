@@ -195,11 +195,11 @@ mod tests {
     };
     use diskann_wide::ARCH;
 
-    /// Build L2 candidates from one-dimensional points on `workers` threads.
-    fn build_1d(x: &[f32], leaves: Vec<Vec<u32>>, k: usize, workers: usize) -> Vec<Vec<u32>> {
+    /// Build L2 candidates from one-dimensional points on `n_threads` threads.
+    fn build_1d(x: &[f32], leaves: Vec<Vec<u32>>, k: usize, n_threads: usize) -> Vec<Vec<u32>> {
         let dimensions = 1;
         let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
-        let candidates = thread_pool(workers)
+        let candidates = thread_pool(n_threads)
             .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, k))
             .unwrap();
         candidates.into_iter().map(Vec::from).collect()
@@ -219,9 +219,9 @@ mod tests {
             x[id as usize] = value;
         }
         let ids = leaf.iter().map(|&(id, _)| id).collect();
-        // One leaf is one task, so more workers change nothing.
-        let workers = 1;
-        build_1d(&x, vec![ids], k, workers)
+        // One leaf is one task, so more threads change nothing.
+        let n_threads = 1;
+        build_1d(&x, vec![ids], k, n_threads)
     }
 
     #[test]
@@ -248,11 +248,11 @@ mod tests {
         // Three leaves find pair 1-2, and two leaves each find 0-1 and 2-3.
         let expected = both_directions([(0, 1), (1, 2), (2, 3), (3, 4)]);
 
-        for workers in [1, 3] {
-            let actual = build_1d(&x, leaves.clone(), k, workers);
+        for n_threads in [1, 3] {
+            let actual = build_1d(&x, leaves.clone(), k, n_threads);
 
             // `edges` panics on a repeated edge.
-            assert_eq!(edges(&actual), expected, "{workers} workers");
+            assert_eq!(edges(&actual), expected, "{n_threads} threads");
         }
     }
 
@@ -286,11 +286,11 @@ mod tests {
         let x = [0.0, 3.0, f32::NAN];
         let leaf = vec![0, 1, 2];
         let k = leaf.len() - 1;
-        let workers = 1;
+        let n_threads = 1;
         // Point 2 is NaN, so its pairs are not rankable.
         let expected = both_directions([(0, 1)]);
 
-        let actual = build_1d(&x, vec![leaf], k, workers);
+        let actual = build_1d(&x, vec![leaf], k, n_threads);
 
         assert_eq!(edges(&actual), expected);
     }
@@ -320,7 +320,7 @@ mod tests {
         let x = [0.0, 1.0, 4.0, 9.0, 16.0, 25.0, 36.0];
         let mut buffers = LeafBuffers::default();
 
-        // One worker runs a leaf, a smaller leaf with k above its size, then a
+        // One thread runs a leaf, a smaller leaf with k above its size, then a
         // third leaf with a larger k. Each call must see only its own points.
         for (leaf, k, expected) in [
             // k = 1 selects one of the three other points of this leaf.

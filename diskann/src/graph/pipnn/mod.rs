@@ -416,10 +416,10 @@ mod test_support {
         std::num::NonZeroUsize::new(value).unwrap()
     }
 
-    /// Build a Rayon pool with `threads` workers.
-    pub(super) fn thread_pool(threads: usize) -> rayon::ThreadPool {
+    /// Build a Rayon pool with `n_threads` threads.
+    pub(super) fn thread_pool(n_threads: usize) -> rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
+            .num_threads(n_threads)
             .build()
             .unwrap()
     }
@@ -586,10 +586,19 @@ mod test_support {
 #[cfg(test)]
 mod construction_tests {
     use super::*;
-    use crate::graph::config;
+    use crate::{
+        graph::{DiskANNIndex, config, search::Knn, test::provider as test_provider},
+        neighbor::{BackInserter, Neighbor},
+        test::tokio::current_thread_runtime,
+    };
+    use diskann_utils::{io::read_bin, test_data_root, views::Matrix};
+    use diskann_vector::DistanceFunction;
     use half::f16;
-    use std::collections::BTreeSet;
-    use test_support::{both_directions, edges, nz, thread_pool};
+    use std::fs::File;
+    use test_support::{nz, thread_pool};
+
+    const SIFT: &str = "sift/siftsmall_learn_256pts.fbin";
+    const SIFT_NORMALIZED: &str = "sift/siftsmall_learn_256pts_normalized.fbin";
 
     /// Every point is a leader (`p_samp = 1.0`), so leader sampling picks the
     /// same set for any seed.
@@ -622,27 +631,161 @@ mod construction_tests {
         .unwrap()
     }
 
-    /// Build the graph of `values` on two workers; these tests do not vary scheduling.
-    fn build<T: VectorRepr>(
-        values: &[T],
-        dimensions: usize,
-        config: PiPNNConfig,
-        degree: usize,
-        metric: Metric,
-    ) -> Vec<Vec<u32>> {
-        let workers = 2;
-        let data = MatrixView::try_from(values, values.len() / dimensions, dimensions).unwrap();
-        let graph = graph_policy(degree, metric);
-        let pool = thread_pool(workers);
-        let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
-        let graph = build_graph(data, &context).unwrap();
-        graph.into_iter().map(Vec::from).collect()
+    fn load_sift(file: &str) -> Matrix<f32> {
+        read_bin::<f32>(&mut File::open(test_data_root().join(file)).unwrap()).unwrap()
     }
 
-    /// Build the L2 graph of one-dimensional points `x` on the build helper's two workers.
-    fn build_1d<T: VectorRepr>(x: &[T], config: PiPNNConfig, degree: usize) -> Vec<Vec<u32>> {
-        let dimensions = 1;
-        build(x, dimensions, config, degree, Metric::L2)
+    /// 256 x 0.05 = 12.8 rounds up to 13 leaders, so the fanout-10 level runs
+    /// and the leaves overlap.
+    fn sift_pipnn_config() -> PiPNNConfig {
+        PiPNNConfig {
+            c_max: nz(64),
+            p_samp: 0.05,
+            max_leaders: nz(1000),
+            fanout: vec![nz(10), nz(3)],
+            leaf_k: nz(2),
+            replicas: nz(1),
+            seed: Some(1290),
+        }
+    }
+
+    /// Degree 16 with the default alpha. PiPNN does not read the build search
+    /// list size.
+    fn sift_graph(metric: Metric) -> Config {
+        let degree = 16;
+        let l_build = 64;
+        config::Builder::new(
+            degree,
+            config::MaxDegree::default_slack(),
+            l_build,
+            metric.into(),
+        )
+        .build()
+        .unwrap()
+    }
+
+    /// Return the point nearest to the mean of `data`, under squared L2.
+    fn medoid(data: MatrixView<'_, f32>) -> usize {
+        let point_count = data.nrows();
+        let dimensions = data.ncols();
+        let mut mean = vec![0.0_f64; dimensions];
+        for row in data.row_iter() {
+            for (sum, &value) in mean.iter_mut().zip(row) {
+                *sum += f64::from(value);
+            }
+        }
+        let mean: Vec<f32> = mean
+            .into_iter()
+            .map(|sum| (sum / point_count as f64) as f32)
+            .collect();
+        let l2 = f32::distance(Metric::L2, Some(dimensions));
+        data.row_iter()
+            .enumerate()
+            .map(|(id, row)| (id, l2.evaluate_similarity(row, mean.as_slice())))
+            .min_by(|left, right| left.1.total_cmp(&right.1))
+            .unwrap()
+            .0
+    }
+
+    /// Build the PiPNN graph of `build_data` on two threads.
+    fn build_sift_graph<T: VectorRepr>(
+        build_data: MatrixView<'_, T>,
+        graph: &Config,
+        metric: Metric,
+    ) -> Vec<AdjacencyList<u32>> {
+        let config = sift_pipnn_config();
+        let n_threads = 2;
+        let pool = thread_pool(n_threads);
+        let context = PiPNNBuildContext::new(config, graph, metric, &pool).unwrap();
+        build_graph(build_data, &context).unwrap()
+    }
+
+    /// Load `data` and its PiPNN graph into the test provider. One start node
+    /// points to the medoid, as the disk path starts at the medoid; the provider
+    /// leaves start nodes out of search results.
+    fn searchable_index(
+        data: MatrixView<'_, f32>,
+        graph: Config,
+        metric: Metric,
+        adjacency: Vec<AdjacencyList<u32>>,
+    ) -> DiskANNIndex<test_provider::Provider> {
+        let medoid_id = medoid(data);
+        let start_id = data.nrows() as u32;
+        let degree = graph.pruned_degree().get();
+        let provider_config = test_provider::Config::new(
+            metric,
+            degree,
+            test_provider::StartPoint::new(start_id, data.row(medoid_id).to_vec()),
+        )
+        .unwrap();
+        let start_neighbors = AdjacencyList::from_iter_untrusted([medoid_id as u32]);
+        let points = data
+            .row_iter()
+            .zip(adjacency)
+            .enumerate()
+            .map(|(id, (row, neighbors))| (id as u32, row.to_vec(), neighbors));
+        let provider = test_provider::Provider::new_from(
+            provider_config,
+            [(start_id, start_neighbors)],
+            points,
+        )
+        .unwrap();
+        DiskANNIndex::new(graph, provider, None)
+    }
+
+    /// Assert that a search for each point of `data` returns its ten nearest
+    /// distances, in order. An exact top 1 for every point also shows that
+    /// every point is reachable from the start node.
+    fn assert_exact_top_10(
+        index: &DiskANNIndex<test_provider::Provider>,
+        data: MatrixView<'_, f32>,
+        metric: Metric,
+        case: &str,
+    ) {
+        let search_l = 32;
+        let top_k = 10;
+        let point_count = data.nrows();
+        let dimensions = data.ncols();
+        let runtime = current_thread_runtime();
+        let distance = f32::distance(metric, Some(dimensions));
+        let mut mismatches = 0;
+        let mut example = String::new();
+
+        for (query_id, query) in data.row_iter().enumerate() {
+            let mut expected: Vec<f32> = data
+                .row_iter()
+                .map(|point| distance.evaluate_similarity(query, point))
+                .collect();
+            expected.sort_unstable_by(f32::total_cmp);
+            expected.truncate(top_k);
+            let mut neighbors = vec![Neighbor::<u32>::default(); top_k];
+            let stats = runtime
+                .block_on(index.search(
+                    Knn::new_default(search_l).unwrap(),
+                    &test_provider::Strategy::new(),
+                    &test_provider::Context::new(),
+                    query,
+                    &mut BackInserter::new(neighbors.as_mut_slice()),
+                ))
+                .unwrap();
+            let actual: Vec<f32> = neighbors
+                .iter()
+                .take(stats.result_count as usize)
+                .map(|neighbor| *neighbor.distance())
+                .collect();
+            // Equal distances can have different IDs, so compare distances in order.
+            if actual != expected {
+                mismatches += 1;
+                if mismatches == 1 {
+                    example = format!("query {query_id}: expected {expected:?}, actual {actual:?}");
+                }
+            }
+        }
+
+        assert_eq!(
+            mismatches, 0,
+            "{case}: {mismatches}/{point_count} queries differ; first: {example}"
+        );
     }
 
     #[test]
@@ -709,13 +852,13 @@ mod construction_tests {
     fn a_build_context_checks_the_configuration() {
         // An empty fanout must fail when the context is created, before a build.
         let degree = 2;
-        let workers = 1;
+        let n_threads = 1;
         let config = PiPNNConfig {
             fanout: vec![],
             ..partition_policy()
         };
         let graph = graph_policy(degree, Metric::L2);
-        let pool = thread_pool(workers);
+        let pool = thread_pool(n_threads);
 
         let error = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap_err();
 
@@ -726,9 +869,9 @@ mod construction_tests {
     fn an_empty_dataset_axis_is_rejected_before_building() {
         // Each shape has one empty axis; validation must reject it before a kernel runs.
         let degree = 2;
-        let workers = 1;
+        let n_threads = 1;
         let graph = graph_policy(degree, Metric::L2);
-        let pool = thread_pool(workers);
+        let pool = thread_pool(n_threads);
         let context =
             PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, &pool).unwrap();
 
@@ -745,62 +888,52 @@ mod construction_tests {
     }
 
     #[test]
-    fn a_build_links_each_point_to_its_nearest_point_for_each_vector_type() {
-        // x[i] is the one-dimensional vector of point i: two groups of three
-        // points, far apart. c_max = 3 splits the groups apart. In each group,
-        // leaf_k = 2 gives every point both other points, and degree 1 keeps
-        // the nearest.
-        fn check<T: VectorRepr>(x: [T; 6]) {
-            let config = PiPNNConfig {
-                c_max: nz(3),
-                leaf_k: nz(2),
-                ..partition_policy()
-            };
-            let degree = 1;
+    fn every_point_finds_its_exact_top_10_for_each_metric() {
+        // Raw SIFT rows serve L2 and cosine. Normalized cosine and inner product
+        // need unit vectors, so they use the normalized file.
+        for (metric, file) in [
+            (Metric::L2, SIFT),
+            (Metric::Cosine, SIFT),
+            (Metric::CosineNormalized, SIFT_NORMALIZED),
+            (Metric::InnerProduct, SIFT_NORMALIZED),
+        ] {
+            let data = load_sift(file);
+            let graph = sift_graph(metric);
 
-            let actual = build_1d(&x, config, degree);
+            let adjacency = build_sift_graph(data.as_view(), &graph, metric);
+            let index = searchable_index(data.as_view(), graph, metric, adjacency);
 
-            assert_eq!(
-                edges(&actual),
-                BTreeSet::from([(0, 1), (1, 0), (2, 1), (3, 4), (4, 3), (5, 4)]),
-                "{}",
-                std::any::type_name::<T>()
-            );
+            assert_exact_top_10(&index, data.as_view(), metric, &format!("{metric:?}"));
         }
-
-        check([0.0_f32, 1.0, 4.0, 100.0, 101.0, 104.0]);
-        check([0.0_f32, 1.0, 4.0, 100.0, 101.0, 104.0].map(f16::from_f32));
-        check([0_i8, 1, 4, 100, 101, 104]);
-        check([0_u8, 1, 4, 100, 101, 104]);
     }
 
     #[test]
-    fn a_build_links_each_point_to_its_nearest_point_for_each_metric() {
-        // One leaf (c_max = 4), leaf_k = 1 and degree 3, so no list is pruned.
-        // L2, cosine and inner product give different graphs, so a wrong metric arm fails.
-        let dimensions = 2;
-        let degree = 3;
-        for (metric, expected) in [
-            // Points 0, 1 and 3 pick point 2, and point 2 picks point 0.
-            (Metric::L2, both_directions([(0, 2), (1, 2), (2, 3)])),
-            // Points 0, 1 and points 2, 3 have the closest directions.
-            (Metric::Cosine, both_directions([(0, 1), (2, 3)])),
-            (Metric::CosineNormalized, both_directions([(0, 1), (2, 3)])),
-            // Point 0 picks 1, point 1 picks 3, and points 2 and 3 pick each other.
-            (
-                Metric::InnerProduct,
-                both_directions([(0, 1), (1, 3), (2, 3)]),
-            ),
-        ] {
-            let values = test_support::packed_points(
-                &[[1.0, 0.0], [5.0, 2.0], [1.0, 3.0], [0.0, 9.0]],
-                dimensions,
-                metric == Metric::CosineNormalized,
-            );
+    fn every_point_finds_its_exact_top_10_for_each_vector_type() {
+        let data = load_sift(SIFT);
+        // These bounds make f16 and u8 conversion exact, so every build must
+        // find the same distances against the original f32 rows.
+        assert!(
+            data.as_slice()
+                .iter()
+                .all(|&value| value.fract() == 0.0 && (0.0..=255.0).contains(&value)),
+            "raw SIFT values must be integers in 0..=255 for exact f16 and u8 conversion"
+        );
+        // i8 is not covered: SIFT values reach 143.
+        let half = data.map(|&value| f16::from_f32(value));
+        let unsigned = data.map(|&value| value as u8);
+        let metric = Metric::L2;
+        let graph = sift_graph(metric);
 
-            let actual = build(&values, dimensions, partition_policy(), degree, metric);
+        let adjacency = build_sift_graph(data.as_view(), &graph, metric);
+        let index = searchable_index(data.as_view(), graph.clone(), metric, adjacency);
+        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<f32>());
 
-            assert_eq!(edges(&actual), expected, "{metric:?}");
-        }
+        let adjacency = build_sift_graph(half.as_view(), &graph, metric);
+        let index = searchable_index(data.as_view(), graph.clone(), metric, adjacency);
+        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<f16>());
+
+        let adjacency = build_sift_graph(unsigned.as_view(), &graph, metric);
+        let index = searchable_index(data.as_view(), graph, metric, adjacency);
+        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<u8>());
     }
 }
