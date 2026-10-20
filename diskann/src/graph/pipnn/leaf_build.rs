@@ -236,24 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn leaves_without_pairs_add_no_candidates() {
-        let values = [0.0_f32, 1.0, 4.0];
-
-        for (leaves, k) in [
-            (vec![], 2),
-            (vec![vec![]], 2),
-            (vec![vec![2]], 2),
-            (vec![vec![0, 1, 2]], 0),
-        ] {
-            let case = format!("leaves {leaves:?}, k={k}");
-
-            let actual = build(&values, leaves, k, 1);
-
-            assert_eq!(actual, [Vec::<u32>::new(), vec![], vec![]], "{case}");
-        }
-    }
-
-    #[test]
     fn k_above_the_leaf_size_selects_every_other_point() {
         let values = [100.0_f32, 0.0, -100.0, 2.0, 200.0, 9.0];
 

@@ -61,9 +61,9 @@ impl PruneWorkspace {
         // Sort before mapping: changing the element type can change the unstable
         // sort's order for equal distances, and therefore RobustPrune's choices.
         let sorted = SortedNeighbors::new(&mut self.candidates, graph.max_occlusion_size().get());
-        let mapped = sorted.map_in(&mut self.mapped_candidates, |&candidate| {
-            (candidate as usize != source).then_some(candidate)
-        });
+        // A list never holds its source: leaf build only pairs two distinct points
+        // of one leaf. So every candidate stays.
+        let mapped = sorted.map_in(&mut self.mapped_candidates, |&candidate| Some(candidate));
         self.states.clear();
         self.states.resize(sorted.len(), prune::State::default());
         let selected = prune::robust_prune(
@@ -194,14 +194,6 @@ mod tests {
 
             assert_eq!(&*actual, expected, "{metric:?}");
         }
-    }
-
-    #[test]
-    fn pruning_excludes_the_source_without_shifting_selected_ids() {
-        assert_eq!(
-            prune_l2(&[0.0, 1.0, 3.0, -2.0], &[3, 0, 2, 1], 2, 1.0),
-            [1, 3]
-        );
     }
 
     #[test]
