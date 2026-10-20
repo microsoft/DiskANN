@@ -67,6 +67,7 @@ impl Store {
 struct Build<'p, T> {
     store: MutexGuard<'p, Store>,
     pending: PendingLists<u32, u32>,
+    created: Vec<StoredList>,
     staged: BTreeMap<u32, Vec<T>>,
     sources: BTreeMap<u32, Source>,
     fills: Cell<usize>,
@@ -139,24 +140,28 @@ struct Source {
     vectors: rowmajor::Owned<f32>,
 }
 
-#[derive(Debug)]
-struct Update {
+struct Update<'a> {
     dim: usize,
-    lists: BTreeSet<u32>,
-    memberships: PendingLists<u32, u32>,
-    created: Vec<StoredList>,
+    sources: &'a BTreeMap<u32, Source>,
+    memberships: &'a mut PendingLists<u32, u32>,
+    created: &'a mut Vec<StoredList>,
     fail_create: bool,
     fail_set_members: bool,
     fail_retire: bool,
 }
 
-impl Update {
-    fn new(sources: &BTreeMap<u32, Source>, dim: usize) -> Self {
+impl<'a> Update<'a> {
+    fn new(
+        sources: &'a BTreeMap<u32, Source>,
+        dim: usize,
+        memberships: &'a mut PendingLists<u32, u32>,
+        created: &'a mut Vec<StoredList>,
+    ) -> Self {
         Self {
             dim,
-            lists: sources.keys().copied().collect(),
-            memberships: PendingLists::default(),
-            created: Vec::new(),
+            sources,
+            memberships,
+            created,
             fail_create: false,
             fail_set_members: false,
             fail_retire: false,
@@ -164,7 +169,7 @@ impl Update {
     }
 
     fn check_list(&self, list: u32) -> ANNResult<()> {
-        if self.lists.contains(&list) {
+        if self.sources.contains_key(&list) {
             Ok(())
         } else {
             Err(ANNError::message(format!("unknown list {list}")))
@@ -198,7 +203,7 @@ impl RegionView<u32, u32> for Region<'_> {
     }
 }
 
-impl RegionUpdate<u32, u32> for Update {
+impl RegionUpdate<u32, u32> for Update<'_> {
     fn set_members(&mut self, list: u32, members: &[u32]) -> ANNResult<()> {
         if self.fail_set_members {
             return Err(ANNError::message("injected set_members failure"));
@@ -236,7 +241,10 @@ impl<T> HasIds for Build<'_, T> {
 }
 
 impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build<'p, T> {
-    type Update = Update;
+    type Update<'a>
+        = Update<'a>
+    where
+        Self: 'a;
     type Router<'a>
         = Coarse<'a>
     where
@@ -282,7 +290,7 @@ impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build
     fn fill<Itr>(
         &mut self,
         lists: Itr,
-    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update)>>
+    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update<'_>)>>
     where
         Itr: Iterator<Item = Self::ListId> + Clone + Send + Sync,
     {
@@ -325,7 +333,12 @@ impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build
                     },
                 );
             }
-            let mut update = Update::new(&self.sources, self.dim().get());
+            let mut update = Update::new(
+                &self.sources,
+                self.store.dim,
+                &mut self.pending,
+                &mut self.created,
+            );
             update.fail_create = self.store.fail_create;
             update.fail_set_members = self.store.fail_set_members;
             update.fail_retire = self.store.fail_retire;
@@ -333,14 +346,13 @@ impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build
         }
     }
 
-    fn finish(mut self, update: Option<Self::Update>) -> impl SendFuture<ANNResult<()>> {
+    fn finish(mut self) -> impl SendFuture<ANNResult<()>> {
         async move {
             if self.store.fail_finish {
                 return Err(ANNError::message("injected finish failure"));
             }
-            let created = update.as_ref().map_or(0, |update| update.created.len());
-            let created =
-                u32::try_from(created).map_err(|_| ANNError::message("list ID overflow"))?;
+            let created = u32::try_from(self.created.len())
+                .map_err(|_| ANNError::message("list ID overflow"))?;
             let next_list = self
                 .store
                 .next_list
@@ -351,19 +363,10 @@ impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build
                     .points
                     .insert(id, vector.into_iter().map(Into::into).collect());
             }
-            let regional_memberships = if let Some(update) = update {
-                for (id, list) in (self.store.next_list..next_list).zip(update.created) {
-                    self.store.lists.insert(id, list);
-                }
-                Some(update.memberships)
-            } else {
-                None
-            };
-            for (id, change) in self.pending.into_changes().chain(
-                regional_memberships
-                    .into_iter()
-                    .flat_map(PendingLists::into_changes),
-            ) {
+            for (id, list) in (self.store.next_list..next_list).zip(self.created) {
+                self.store.lists.insert(id, list);
+            }
+            for (id, change) in self.pending.into_changes() {
                 match change {
                     Membership::Append(members) => {
                         self.store
@@ -421,6 +424,7 @@ impl<'a, T: Copy + Into<f32> + Send + Sync> BuildStrategy<'a, (u32, &[T]), Defau
         Ok(Build {
             store: self.store.try_lock().map_err(ANNError::new)?,
             pending: PendingLists::default(),
+            created: Vec::new(),
             staged: BTreeMap::new(),
             sources: BTreeMap::new(),
             fills: Cell::new(0),
@@ -883,7 +887,9 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
     ]
     .into();
     let region = Region::new(&sources);
-    let mut update = Update::new(&sources, 1);
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
     clustering::SplitAndAssign::new(
         clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(1).unwrap()),
         clustering::RegionalNearest,
@@ -906,7 +912,7 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
         .collect();
     child_members.sort_unstable();
     assert_eq!(child_members, [0, 1]);
-    let mut changes: BTreeMap<_, _> = update.memberships.into_changes().collect();
+    let mut changes: BTreeMap<_, _> = std::mem::take(update.memberships).into_changes().collect();
     assert!(matches!(changes.remove(&1), Some(Membership::Retire)));
     for (id, expected) in [(2, vec![]), (3, vec![2, 3]), (4, vec![])] {
         let Some(Membership::Replace(members)) = changes.remove(&id) else {
@@ -920,7 +926,7 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
 #[tokio::test]
 async fn region_view_borrows_inputs_while_updates_are_recorded() {
     let strategy = Strategy::new(seeded());
-    let update = {
+    {
         let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
         let points = [(5, &[1.0, 1.0][..]), (6, &[3.0, 1.0][..])];
         let ids = build.set_elements(&DefaultContext, &points).await.unwrap();
@@ -933,7 +939,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 .get(),
             4
         );
-        let update = {
+        {
             let (region, mut update) = require_send(build.fill([1].into_iter())).await.unwrap();
             let view = region.get_view(1).unwrap();
             let vectors = region.get_vectors(1).unwrap();
@@ -960,29 +966,79 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
             assert_eq!(vectors.row(2), points[1].1);
             assert!(update.set_members(1, &[]).is_err());
-            update
-        };
+        }
         assert_eq!(build.dim().get(), 2);
-        update
-    };
-    assert_eq!(update.created.len(), 2);
-    let mut members: Vec<_> = update
-        .created
-        .iter()
-        .flat_map(|list| list.members.iter().copied())
-        .collect();
-    members.sort_unstable();
-    assert_eq!(members, [10_000, 10_001, 10_005, 10_006]);
-    assert!(
-        update
-            .memberships
-            .into_changes()
-            .any(|(id, change)| id == 1 && matches!(change, Membership::Retire))
-    );
+        assert_eq!(build.created.len(), 2);
+        let mut members: Vec<_> = build
+            .created
+            .iter()
+            .flat_map(|list| list.members.iter().copied())
+            .collect();
+        members.sort_unstable();
+        assert_eq!(members, [10_000, 10_001, 10_005, 10_006]);
+        assert!(build.pending.is_retired(1));
+    }
     let store = strategy.store();
     assert_eq!(store.lists[&1].members, [10_000, 10_001]);
     assert!(!store.points.contains_key(&10_005));
     assert_eq!(store.finishes, 0);
+}
+
+#[tokio::test]
+async fn borrowed_updates_share_pending_memberships_and_publish_on_finish() {
+    let strategy = Strategy::new(seeded());
+    let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
+    let points = [
+        (5, &[1.0, 0.0][..]),
+        (6, &[11.0, 0.0][..]),
+        (7, &[100.0, 0.0][..]),
+    ];
+    build.set_elements(&DefaultContext, &points).await.unwrap();
+    for (list, id) in [(1, 10_005), (2, 10_006), (3, 10_007)] {
+        build.append_to(list, [id].into_iter()).await.unwrap();
+    }
+
+    {
+        let (region, mut update) = require_send(build.fill([1, 2].into_iter())).await.unwrap();
+        let parent = region.get_view(1).unwrap();
+        let neighbor = region.get_view(2).unwrap();
+        assert_eq!(parent.members, [10_000, 10_001, 10_005]);
+        assert_eq!(neighbor.members, [10_002, 10_003, 10_006]);
+        assert!(update.set_members(3, &[]).is_err());
+        assert!(update.retire(3).is_err());
+
+        update.set_members(2, &[10_002, 10_003, 10_005]).unwrap();
+        update
+            .create(&[1.0, 0.0], &[10_000, 10_001, 10_006])
+            .unwrap();
+        update.retire(1).unwrap();
+
+        assert_eq!(parent.members, [10_000, 10_001, 10_005]);
+        assert_eq!(neighbor.members, [10_002, 10_003, 10_006]);
+        assert_eq!(region.get_vectors(2).unwrap().row(2), points[1].1);
+    }
+
+    assert!(build.pending.is_retired(1));
+    assert_eq!(build.pending.list_size(2, 2).unwrap(), 3);
+    assert_eq!(build.created.len(), 1);
+    assert_eq!(build.store.points.len(), 5);
+    assert_eq!(build.store.lists[&1].members, [10_000, 10_001]);
+    assert_eq!(build.store.lists[&2].members, [10_002, 10_003]);
+    assert_eq!(build.store.lists.len(), 3);
+    assert_eq!(build.store.next_list, 4);
+    assert_eq!(build.store.finishes, 0);
+
+    require_send(build.finish()).await.unwrap();
+    let store = strategy.store();
+    assert!(!store.lists.contains_key(&1));
+    assert_eq!(store.lists[&2].members, [10_002, 10_003, 10_005]);
+    assert_eq!(store.lists[&3].members, [10_004, 10_007]);
+    assert_eq!(store.lists[&4].members, [10_000, 10_001, 10_006]);
+    assert_eq!(store.lists[&4].centroid, [1.0, 0.0]);
+    assert_eq!(store.points.len(), 8);
+    assert_eq!(store.lists.len(), 3);
+    assert_eq!(store.next_list, 5);
+    assert_eq!(store.finishes, 1);
 }
 
 #[tokio::test]
@@ -1070,7 +1126,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
         3
     );
 
-    let update = {
+    {
         let (region, mut update) = build.fill([1, 2].into_iter()).await.unwrap();
         assert!(
             clustering::SplitAndAssign::new(
@@ -1105,11 +1161,9 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             .is_err()
         );
         assert!(update.created.is_empty());
-        assert_eq!(
-            std::mem::take(&mut update.memberships)
-                .into_changes()
-                .count(),
-            0
+        let changes: Vec<_> = update.memberships.clone().into_changes().collect();
+        assert!(
+            matches!(changes.as_slice(), [(1, Membership::Append(members))] if members == &[10_005])
         );
         clustering::SplitAndAssign::new(
             clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap()),
@@ -1118,9 +1172,8 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
         .run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new())
         .unwrap();
         assert_eq!(update.created.len(), 2);
-        update
-    };
-    require_send(build.finish(Some(update))).await.unwrap();
+    }
+    require_send(build.finish()).await.unwrap();
 
     let store = strategy.store();
     assert_eq!(store.finishes, 1);
@@ -1162,7 +1215,9 @@ fn assignment_can_cross_parent_boundaries() {
     ]
     .into();
     let region = Region::new(&sources);
-    let mut update = Update::new(&sources, 1);
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
     clustering::SplitAndAssign::new(
         clustering::TwoMeans::new(
             NonZeroUsize::new(10).unwrap(),
@@ -1197,7 +1252,9 @@ fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
         )]
         .into();
         let region = Region::new(&sources);
-        let mut update = Update::new(&sources, 1);
+        let mut memberships = PendingLists::default();
+        let mut created = Vec::new();
+        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
         clustering::SplitAndAssign::new(
             clustering::TwoMeans::new(NonZeroUsize::new(1).unwrap(), NonZeroUsize::new(1).unwrap()),
             clustering::RegionalNearest,
@@ -1345,12 +1402,21 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     let region = Region::new(&sources);
     let parents = BTreeSet::from([1, 2]);
     let neighbors = BTreeSet::from([3, 4]);
-    let mut full = Update::new(&sources, 1);
+    let mut full_memberships = PendingLists::default();
+    let mut full_created = Vec::new();
+    let mut full = Update::new(&sources, 1, &mut full_memberships, &mut full_created);
     let mut splitter = clustering::SplitAndAssign::new(RowsAsCenters, clustering::RegionalNearest);
     splitter
         .run(&region, &mut full, &parents, &neighbors)
         .unwrap();
-    let mut restricted = Update::new(&sources, 1);
+    let mut restricted_memberships = PendingLists::default();
+    let mut restricted_created = Vec::new();
+    let mut restricted = Update::new(
+        &sources,
+        1,
+        &mut restricted_memberships,
+        &mut restricted_created,
+    );
     clustering::SplitAndAssign::new(
         RowsAsCenters,
         ParentLocal {
@@ -1375,15 +1441,24 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     }
     assert_eq!(full.created[2].members, [2, 5, 7]);
     assert_eq!(restricted.created[2].members, [2, 7]);
-    let mut repeated = Update::new(&sources, 1);
+    let mut repeated_memberships = PendingLists::default();
+    let mut repeated_created = Vec::new();
+    let mut repeated = Update::new(
+        &sources,
+        1,
+        &mut repeated_memberships,
+        &mut repeated_created,
+    );
     splitter
         .run(&region, &mut repeated, &parents, &neighbors)
         .unwrap();
-    for (first, repeated) in full.created.iter().zip(&repeated.created) {
+    for (first, repeated) in full.created.iter().zip(repeated.created.iter()) {
         assert_eq!(first.centroid, repeated.centroid);
         assert_eq!(first.members, repeated.members);
     }
-    let mut smaller = Update::new(&sources, 1);
+    let mut smaller_memberships = PendingLists::default();
+    let mut smaller_created = Vec::new();
+    let mut smaller = Update::new(&sources, 1, &mut smaller_memberships, &mut smaller_created);
     splitter
         .run(
             &region,
@@ -1396,7 +1471,8 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     assert_eq!(smaller.created[0].members, [0]);
     assert_eq!(smaller.created[1].members, [1]);
     for (update, expected) in [(full, vec![6]), (restricted, vec![5, 6])] {
-        let mut changes: BTreeMap<_, _> = update.memberships.into_changes().collect();
+        let mut changes: BTreeMap<_, _> =
+            std::mem::take(update.memberships).into_changes().collect();
         for parent in [1, 2] {
             assert!(matches!(changes.remove(&parent), Some(Membership::Retire)));
         }
@@ -1458,9 +1534,9 @@ fn numerical_strategy_failures_record_no_updates() {
         }
     }
 
-    fn assert_unwritten(update: Update) {
+    fn assert_unwritten(update: Update<'_>) {
         assert!(update.created.is_empty());
-        assert_eq!(update.memberships.into_changes().count(), 0);
+        assert_eq!(std::mem::take(update.memberships).into_changes().count(), 0);
     }
 
     let sources = [(
@@ -1479,7 +1555,9 @@ fn numerical_strategy_failures_record_no_updates() {
         (InvalidFit::Error, "injected fitting failure"),
         (InvalidFit::CountOverflow, "centroid count overflow"),
     ] {
-        let mut update = Update::new(&sources, 1);
+        let mut memberships = PendingLists::default();
+        let mut created = Vec::new();
+        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
         let selected = if matches!(clusterer, InvalidFit::CountOverflow) {
             BTreeSet::from([1, 2])
         } else {
@@ -1491,7 +1569,9 @@ fn numerical_strategy_failures_record_no_updates() {
         assert!(error.to_string().contains(expected), "{error}");
         assert_unwritten(update);
     }
-    let mut update = Update::new(&sources, 1);
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
     let error = clustering::SplitAndAssign::new(
         clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(1).unwrap()),
         InvalidAssignment,
@@ -1588,13 +1668,15 @@ fn regional_assignment_reports_missing_sources_before_writing() {
         centroid: &[0.0],
     }];
     for ids in [vec![99], vec![1, 99], vec![1, 2, 99]] {
-        let mut update = Update::new(&sources, 1);
+        let mut memberships = PendingLists::default();
+        let mut created = Vec::new();
+        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
         let region = Region::new(&sources);
         let error = RegionalNearest
             .assign(&region, &mut update, &ids, &destinations)
             .unwrap_err();
         assert!(error.to_string().contains("source is missing"), "{error}");
         assert!(update.created.is_empty());
-        assert_eq!(update.memberships.into_changes().count(), 0);
+        assert_eq!(std::mem::take(update.memberships).into_changes().count(), 0);
     }
 }

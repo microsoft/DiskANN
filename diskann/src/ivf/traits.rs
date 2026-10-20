@@ -56,7 +56,9 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
     where
         Self: 'a;
 
-    type Update: RegionUpdate<Self::Id, Self::ListId>;
+    type Update<'a>: RegionUpdate<Self::Id, Self::ListId>
+    where
+        Self: 'a;
 
     /// Positive dimension of all canonical points and centroids.
     fn dim(&self) -> NonZeroUsize;
@@ -72,19 +74,19 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
 
-    /// Make every requested list's members, data and centroids available
+    /// Make requested list's members, data and centroids available
     /// for split and assignment. Register updates to the region.
+    ///
+    /// Writes recorded through the update handle remain pending until [`Self::finish`].
     fn fill<Itr>(
         &mut self,
         lists: Itr,
-    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update)>>
+    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update<'_>)>>
     where
         Itr: Iterator<Item = Self::ListId> + Clone + Send + Sync;
 
     /// Finalize the operation, publishing accessor-side appends and regional writes together.
-    ///
-    /// `None` means there are no regional re-writes.
-    fn finish(self, update: Option<Self::Update>) -> impl SendFuture<ANNResult<()>>;
+    fn finish(self) -> impl SendFuture<ANNResult<()>>;
 }
 
 pub trait BuildStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {

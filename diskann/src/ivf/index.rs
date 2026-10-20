@@ -128,7 +128,6 @@ impl<C: ExecutionContext> IVFIndex<C> {
             }
 
             let splits = parents.len();
-            let mut update_final = None;
 
             if !parents.is_empty() {
                 let mut neighbors = BTreeSet::new();
@@ -160,11 +159,9 @@ impl<C: ExecutionContext> IVFIndex<C> {
                     &parents,
                     &neighbors,
                 )?;
-
-                update_final = Some(update)
             };
 
-            accessor.finish(update_final).await?;
+            accessor.finish().await?;
 
             Ok(InsertStats {
                 inserted: points.len(),
