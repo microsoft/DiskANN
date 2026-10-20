@@ -685,7 +685,7 @@ mod construction_tests {
     use diskann_vector::DistanceFunction;
     use half::f16;
     use std::fs::File;
-    use test_support::{nz, thread_pool};
+    use test_support::{both_directions, edges, nz, thread_pool};
 
     const SIFT: &str = "sift/siftsmall_learn_256pts.fbin";
     const SIFT_NORMALIZED: &str = "sift/siftsmall_learn_256pts_normalized.fbin";
@@ -1029,7 +1029,8 @@ mod construction_tests {
 
     #[test]
     fn hash_prune_parameters_must_hold_the_graph_degree() {
-        let pool = thread_pool(1);
+        let n_threads = 1;
+        let pool = thread_pool(n_threads);
         for (num_hash_planes, l_max, degree, expected) in [
             (0, 64, 2, Err(PiPNNConfigError::HashPlanes(0))),
             (17, 64, 2, Err(PiPNNConfigError::HashPlanes(17))),
@@ -1060,7 +1061,7 @@ mod construction_tests {
                 }),
             ),
         ] {
-            let graph = graph_policy(degree, Metric::L2).unwrap();
+            let graph = graph_policy(degree, Metric::L2);
             let context =
                 PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, &pool).unwrap();
             let config = HashPruneConfig {
@@ -1085,7 +1086,8 @@ mod construction_tests {
         // keeps the nearest point on each side. Degree two keeps both.
         let values = [-3.0_f32, 0.0, 1.0];
         let data = MatrixView::column_vector(&values[..]);
-        let graph = graph_policy(2, Metric::L2).unwrap();
+        let degree = 2;
+        let graph = graph_policy(degree, Metric::L2);
         let config = PiPNNConfig {
             c_max: nz(3),
             fanout: vec![nz(1)],
@@ -1093,8 +1095,8 @@ mod construction_tests {
             replicas: nz(2),
             ..partition_policy()
         };
-        for (threads, final_prune) in [(1, true), (4, true), (4, false)] {
-            let pool = thread_pool(threads);
+        for (n_threads, final_prune) in [(1, true), (4, true), (4, false)] {
+            let pool = thread_pool(n_threads);
             let context = PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
                 .unwrap()
                 .with_hash_prune(HashPruneConfig {
@@ -1108,9 +1110,9 @@ mod construction_tests {
 
             let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
             assert_eq!(
-                sorted_members_per_row(&actual),
-                [vec![1], vec![0, 2], vec![1]],
-                "{threads} threads, final_prune={final_prune}"
+                edges(&actual),
+                both_directions([(0, 1), (1, 2)]),
+                "{n_threads} threads, final_prune={final_prune}"
             );
         }
     }
