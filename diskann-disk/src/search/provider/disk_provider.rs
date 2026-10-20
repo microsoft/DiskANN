@@ -5,6 +5,7 @@
 
 use std::{
     collections::HashMap,
+    future::Future,
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicU64, AtomicUsize},
@@ -47,7 +48,7 @@ use diskann_utils::{
 use crate::search::pq::{PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
 use tokio::runtime::Runtime;
-use tracing::debug;
+use tracing::{debug, info_span, instrument::WithSubscriber, Instrument};
 
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
@@ -471,6 +472,7 @@ where
             > + Send
             + ?Sized,
     {
+        let _span = info_span!("diskann.disk.search.postprocess").entered();
         let provider = accessor.provider;
 
         let mut uncached_ids = Vec::new();
@@ -538,6 +540,7 @@ where
             > + Send
             + ?Sized,
     {
+        let _span = info_span!("diskann.disk.search.postprocess").entered();
         let provider = accessor.provider;
         let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
 
@@ -647,7 +650,8 @@ where
         _context: &DefaultContext,
         query: &'this [Data::VectorDataType],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        DiskAccessor::new(provider, query, self)
+        info_span!("diskann.disk.search.setup")
+            .in_scope(|| DiskAccessor::new(provider, query, self))
     }
 }
 
@@ -1139,6 +1143,16 @@ where
         })
     }
 
+    fn block_on_search<F: Future>(&self, parent: &tracing::Span, future: F) -> F::Output {
+        let execution = info_span!(parent: parent, "diskann.disk.search.execution");
+        self.runtime.block_on(
+            future
+                .instrument(execution)
+                .instrument(parent.clone())
+                .with_current_subscriber(),
+        )
+    }
+
     fn search_strategy<'a>(
         &'a self,
         io_tracker: &'a IOTracker,
@@ -1181,7 +1195,8 @@ where
                 "flat search list size must be greater than zero",
             )
         })?;
-        let mut visitor = DiskAccessor::new(self.index.provider(), query, strategy)?
+        let mut visitor = info_span!("diskann.disk.search.setup")
+            .in_scope(|| DiskAccessor::new(self.index.provider(), query, strategy))?
             .with_flat_scan_filter(vector_filter);
         let FlatSearchStats { cmps, result_count } = flat_knn_search(
             &mut visitor,
@@ -1392,6 +1407,20 @@ where
         mode: &SearchMode<'_>,
     ) -> ANNResult<SearchResultStats> {
         let l = search_list_size as usize;
+        let mode_name = match mode {
+            SearchMode::FlatScan { .. } => "flat_scan",
+            SearchMode::Graph { .. } => "graph",
+            SearchMode::InlineFilter { .. } => "inline_filter",
+            SearchMode::DiverseGraph { .. } => "diverse_graph",
+        };
+        let search_span = info_span!(
+            "diskann.disk.search",
+            diskann.search.mode = mode_name,
+            diskann.search.query_dimensions = query.len(),
+            diskann.search.k = k_value,
+            diskann.search.l = l,
+            diskann.search.beam_width = beam_width.unwrap_or(1),
+        );
 
         if l < k_value {
             return Err(diskann_error!(
@@ -1428,13 +1457,16 @@ where
                     PostprocessStrategy::AcceptAll,
                     cache_indexed_vectors,
                 );
-                self.runtime.block_on(self.flat_search(
-                    &strategy,
-                    query,
-                    filter.as_deref(),
-                    l,
-                    &mut result_output_buffer,
-                ))?
+                self.block_on_search(
+                    &search_span,
+                    self.flat_search(
+                        &strategy,
+                        query,
+                        filter.as_deref(),
+                        l,
+                        &mut result_output_buffer,
+                    ),
+                )?
             }
             SearchMode::Graph { filter } => {
                 let strategy = self.search_strategy(
@@ -1446,13 +1478,16 @@ where
                 );
                 let knn_search = Knn::new(l, beam_width)
                     .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
-                self.runtime.block_on(self.index.search(
-                    knn_search,
-                    &strategy,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                self.block_on_search(
+                    &search_span,
+                    self.index.search(
+                        knn_search,
+                        &strategy,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    ),
+                )?
             }
             SearchMode::InlineFilter { filter, adaptive_l } => {
                 // Strategy is passed by value into `filter_search` so that the
@@ -1464,14 +1499,17 @@ where
                     cache_indexed_vectors,
                 );
                 let knn_search = Knn::new(l, beam_width)?;
-                self.runtime.block_on(self.filter_search(
-                    strategy,
-                    query,
-                    knn_search,
-                    filter.as_ref(),
-                    adaptive_l.clone(),
-                    &mut result_output_buffer,
-                ))?
+                self.block_on_search(
+                    &search_span,
+                    self.filter_search(
+                        strategy,
+                        query,
+                        knn_search,
+                        filter.as_ref(),
+                        adaptive_l.clone(),
+                        &mut result_output_buffer,
+                    ),
+                )?
             }
             SearchMode::DiverseGraph { filter, params } => {
                 // Strategy installs the filter so `RerankAndFilter` would also
@@ -1486,14 +1524,17 @@ where
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(postprocess_config, *params),
                 );
-                self.runtime.block_on(self.index.search_with(
-                    knn_search,
-                    &strategy,
-                    processor,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                self.block_on_search(
+                    &search_span,
+                    self.index.search_with(
+                        knn_search,
+                        &strategy,
+                        processor,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    ),
+                )?
             }
         };
         query_stats.total_comparisons = stats.cmps;
