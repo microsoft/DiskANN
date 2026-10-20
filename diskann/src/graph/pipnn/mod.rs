@@ -383,6 +383,8 @@ where
 
 #[cfg(test)]
 mod test_support {
+    use std::collections::BTreeSet;
+
     use super::simd::Simd;
     use diskann_vector::distance::Metric;
 
@@ -396,6 +398,30 @@ mod test_support {
                 members.sort_unstable();
                 members
             })
+            .collect()
+    }
+
+    /// Return the directed edges `(source, target)` of `rows`, where row `i`
+    /// lists the neighbors of point `i`. A repeated edge panics, so tests that
+    /// compare edge sets still catch duplicate candidates.
+    pub(super) fn edges(rows: &[Vec<u32>]) -> BTreeSet<(u32, u32)> {
+        let mut edges = BTreeSet::new();
+        for (source, row) in rows.iter().enumerate() {
+            for &target in row {
+                assert!(
+                    edges.insert((source as u32, target)),
+                    "repeated edge {source} -> {target}"
+                );
+            }
+        }
+        edges
+    }
+
+    /// Return both directions of each undirected pair.
+    pub(super) fn both_directions<const N: usize>(pairs: [(u32, u32); N]) -> BTreeSet<(u32, u32)> {
+        pairs
+            .into_iter()
+            .flat_map(|(a, b)| [(a, b), (b, a)])
             .collect()
     }
 
@@ -419,6 +445,12 @@ mod test_support {
             sorted_members_per_row(&rows),
             [vec![3, 9, 9], vec![], vec![1, 2], vec![1, 2]]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "repeated edge 0 -> 1")]
+    fn a_repeated_edge_panics() {
+        edges(&[vec![1, 1], vec![]]);
     }
 
     /// A test body that runs once for each architecture.
