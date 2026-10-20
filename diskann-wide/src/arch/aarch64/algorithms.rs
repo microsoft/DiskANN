@@ -114,7 +114,13 @@ mod tests {
             );
         };
 
-        f(&[0; 16], &[u8::MAX; 16], &[u32::MAX; 4]);
+        for x in [u8::MIN, u8::MAX] {
+            for y in [u8::MIN, u8::MAX] {
+                for acc in [u32::MIN, u32::MAX] {
+                    f(&[x; 16], &[y; 16], &[acc; 4]);
+                }
+            }
+        }
         driver::drive_ternary(&f, (16, 16, 4), 0xc0ffee);
     }
 
@@ -153,7 +159,13 @@ mod tests {
             );
         };
 
-        f(&[i8::MIN; 16], &[i8::MAX; 16], &[i32::MAX; 4]);
+        for x in [i8::MIN, i8::MAX] {
+            for y in [i8::MIN, i8::MAX] {
+                for acc in [i32::MIN, i32::MAX] {
+                    f(&[x; 16], &[y; 16], &[acc; 4]);
+                }
+            }
+        }
         driver::drive_ternary(&f, (16, 16, 4), 0xc0ffee);
     }
 }
