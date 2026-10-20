@@ -31,6 +31,7 @@ use diskann_providers::{
 };
 use diskann_quantization::spherical::iface;
 use diskann_utils::future::{AsyncFriendly, SendFuture};
+use tracing::debug;
 
 use super::quantizer::BuildQuantizer;
 
@@ -44,11 +45,6 @@ pub(super) trait InmemIndexBuilder<T: Sized>: Send + Sync {
 
     /// Return the total capacity of the provider, **including** start points.
     fn total_points(&self) -> usize;
-
-    /// Set a single start point to search.
-    ///
-    /// The slice must match the underlying vector type, else `WrongDataType` is returned.
-    fn set_start_point(&self, start_point: &[T]) -> ANNResult<()>;
 
     /// Insert a vector with a `id`.
     ///
@@ -84,6 +80,30 @@ pub(super) trait InmemIndexBuilder<T: Sized>: Send + Sync {
     fn count_reachable_nodes(&self) -> Pin<Box<dyn SendFuture<ANNResult<usize>> + '_>>;
 }
 
+/// The start point for an inmem build.
+#[derive(Debug)]
+pub(crate) struct StartPoint<T> {
+    data: Vec<T>,
+    id: u32,
+}
+
+impl<T> StartPoint<T> {
+    /// Construct a new singular start point containing `data`.
+    pub(crate) fn new(data: Vec<T>, id: u32) -> Self {
+        Self { data, id }
+    }
+
+    /// Create the iterator for [`SetStartPoints`].
+    pub(crate) fn iter(&self) -> std::iter::Once<&[T]> {
+        std::iter::once(&*self.data)
+    }
+
+    /// Return the `id` associated with this start point.
+    pub(crate) fn id(&self) -> u32 {
+        self.id
+    }
+}
+
 //////////////////////////////////
 // FullPrecision Implementation //
 //////////////////////////////////
@@ -98,11 +118,6 @@ where
 
     fn total_points(&self) -> usize {
         self.provider().total_points()
-    }
-
-    fn set_start_point(&self, start_point: &[T]) -> ANNResult<()> {
-        self.provider()
-            .set_start_points(std::iter::once(start_point))
     }
 
     fn insert_vector<'a>(
@@ -202,12 +217,6 @@ where
         self.index().provider().total_points()
     }
 
-    fn set_start_point(&self, start_point: &[T]) -> ANNResult<()> {
-        self.index()
-            .provider()
-            .set_start_points(std::iter::once(start_point))
-    }
-
     fn insert_vector<'a>(
         &'a self,
         id: u32,
@@ -270,6 +279,7 @@ where
 /// # Parameters
 /// * `config` – Index configuration.
 /// * `build_quantizer` – Quantization strategy to apply.
+/// * `start_point` - The value of the data start point.
 ///
 /// # Returns
 /// An `Arc<dyn InmemIndexBuilder>` wrapped in `ANNResult`.
@@ -280,30 +290,38 @@ pub(super) fn new_inmem_index_builder<T>(
     config: Config,
     params: DefaultProviderParameters,
     build_quantizer: &BuildQuantizer,
+    start_point: StartPoint<T>,
 ) -> ANNResult<Arc<dyn InmemIndexBuilder<T>>>
 where
     T: VectorRepr,
 {
-    match &build_quantizer {
-        BuildQuantizer::NoQuant(_) => diskann_async::new_index::<T, _>(config, params, NoDeletes)
-            .map(|index| index as Arc<dyn InmemIndexBuilder<T>>),
+    let result: Arc<dyn InmemIndexBuilder<T>> = match &build_quantizer {
+        BuildQuantizer::NoQuant(_) => {
+            let index = diskann_async::new_index::<T, _>(config, params, NoDeletes)?;
+            index.provider().set_start_points(start_point.iter())?;
+            index
+        }
         BuildQuantizer::Scalar1Bit(q) => {
             let index = diskann_async::new_quant_only_index(config, params, q.clone(), NoDeletes)?;
-            Ok(Arc::new(QuantInMemBuilder::new(index, DefaultQuantized)))
+            index.provider().set_start_points(start_point.iter())?;
+            Arc::new(QuantInMemBuilder::new(index, DefaultQuantized))
         }
         BuildQuantizer::Spherical1Bit(q) => {
             let quantizer = q.try_clone().map_err(spherical::AllocatorError::from)?;
             let plan = iface::Impl::<1>::new(quantizer).map_err(spherical::AllocatorError::from)?;
             let index = diskann_async::new_quant_only_index(config, params, plan, NoDeletes)?;
-            Ok(Arc::new(QuantInMemBuilder::new(
-                index,
-                spherical::Quantized::build(),
-            )))
+            index.provider().set_start_points(start_point.iter())?;
+            Arc::new(QuantInMemBuilder::new(index, spherical::Quantized::build()))
         }
         BuildQuantizer::PQ(table) => {
             let index =
                 diskann_async::new_quant_only_index(config, params, table.clone(), NoDeletes)?;
-            Ok(Arc::new(QuantInMemBuilder::new(index, DefaultQuantized)))
+            index.provider().set_start_points(start_point.iter())?;
+            Arc::new(QuantInMemBuilder::new(index, DefaultQuantized))
         }
-    }
+    };
+
+    debug!("Set start point to medoid ID: {}", start_point.id());
+
+    Ok(result)
 }
