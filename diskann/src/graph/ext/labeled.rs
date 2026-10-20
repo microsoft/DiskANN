@@ -32,7 +32,9 @@
 //!
 //! * As of writing, [`QueryLabelProvider`] does not have batched accesses.
 
-use std::{collections::HashSet, marker::PhantomData};
+use std::marker::PhantomData;
+
+use hashbrown::HashSet;
 
 use crate::{
     ANNResult,
@@ -79,14 +81,14 @@ enum ClassificationPhase {
 #[derive(Debug)]
 struct LabelDecisionCache<I> {
     rejected: HashSet<I>,
-    stats: glue::FilterClassificationStats,
+    stats: Option<glue::FilterClassificationStats>,
 }
 
-impl<I> Default for LabelDecisionCache<I> {
-    fn default() -> Self {
+impl<I> LabelDecisionCache<I> {
+    fn new(collect_stats: bool) -> Self {
         Self {
             rejected: HashSet::new(),
-            stats: glue::FilterClassificationStats::default(),
+            stats: collect_stats.then(glue::FilterClassificationStats::default),
         }
     }
 }
@@ -99,36 +101,47 @@ where
     where
         L: QueryLabelProvider<I> + ?Sized,
     {
-        let (requests, evaluations, cached_rejections, accepted, rejected) = match phase {
-            ClassificationPhase::StartPoint => (
-                &mut self.stats.start_point_requests,
-                &mut self.stats.start_point_evaluations,
-                &mut self.stats.start_point_cached_rejections,
-                &mut self.stats.start_point_accepted,
-                &mut self.stats.start_point_rejected,
-            ),
-            ClassificationPhase::FirstHop => (
-                &mut self.stats.first_hop_requests,
-                &mut self.stats.first_hop_evaluations,
-                &mut self.stats.first_hop_cached_rejections,
-                &mut self.stats.first_hop_accepted,
-                &mut self.stats.first_hop_rejected,
-            ),
-        };
-        *requests += 1;
+        if let Some(stats) = &mut self.stats {
+            match phase {
+                ClassificationPhase::StartPoint => stats.start_point_requests += 1,
+                ClassificationPhase::FirstHop => stats.first_hop_requests += 1,
+            }
+        }
         if self.rejected.contains(&id) {
-            *cached_rejections += 1;
-            *rejected += 1;
+            if let Some(stats) = &mut self.stats {
+                match phase {
+                    ClassificationPhase::StartPoint => {
+                        stats.start_point_cached_rejections += 1;
+                        stats.start_point_rejected += 1;
+                    }
+                    ClassificationPhase::FirstHop => {
+                        stats.first_hop_cached_rejections += 1;
+                        stats.first_hop_rejected += 1;
+                    }
+                }
+            }
             return Decision::reject(id);
         }
-        *evaluations += 1;
+        if let Some(stats) = &mut self.stats {
+            match phase {
+                ClassificationPhase::StartPoint => stats.start_point_evaluations += 1,
+                ClassificationPhase::FirstHop => stats.first_hop_evaluations += 1,
+            }
+        }
         if labels.is_match(id) {
-            *accepted += 1;
+            if let Some(stats) = &mut self.stats {
+                match phase {
+                    ClassificationPhase::StartPoint => stats.start_point_accepted += 1,
+                    ClassificationPhase::FirstHop => stats.first_hop_accepted += 1,
+                }
+            }
             Decision::accept(id)
         } else {
-            *rejected += 1;
-            if self.rejected.insert(id) {
-                self.stats.unique_rejected_ids += 1;
+            if let Some(stats) = &mut self.stats {
+                match phase {
+                    ClassificationPhase::StartPoint => stats.start_point_rejected += 1,
+                    ClassificationPhase::FirstHop => stats.first_hop_rejected += 1,
+                }
             }
             Decision::reject(id)
         }
@@ -153,6 +166,7 @@ where
 {
     strategy: S,
     labels: &'a L,
+    collect_classification_stats: bool,
     _id: PhantomData<fn(I)>,
 }
 
@@ -169,8 +183,15 @@ where
         Self {
             strategy,
             labels,
+            collect_classification_stats: false,
             _id: PhantomData,
         }
+    }
+
+    /// Collect label-classification statistics for this search.
+    pub fn with_classification_stats(mut self) -> Self {
+        self.collect_classification_stats = true;
+        self
     }
 
     /// Return the contained [`QueryLabelProvider`].
@@ -198,7 +219,7 @@ where
         Ok(FilteredAccessor {
             inner,
             labels: self.labels,
-            label_cache: LabelDecisionCache::default(),
+            label_cache: LabelDecisionCache::new(self.collect_classification_stats),
         })
     }
 }
@@ -244,7 +265,7 @@ where
         Self {
             inner,
             labels,
-            label_cache: LabelDecisionCache::default(),
+            label_cache: LabelDecisionCache::new(true),
         }
     }
 }
@@ -342,7 +363,7 @@ where
     }
 
     fn filter_classification_stats(&self) -> glue::FilterClassificationStats {
-        self.label_cache.stats
+        self.label_cache.stats.unwrap_or_default()
     }
 }
 
@@ -424,25 +445,39 @@ where
     L: QueryLabelProvider<I> + ?Sized,
 {
     fn eval_mut(&mut self, item: &I) -> bool {
-        self.label_cache.stats.second_hop_requests += 1;
+        if let Some(stats) = &mut self.label_cache.stats {
+            stats.second_hop_requests += 1;
+        }
         if !self.inner.eval(item) {
-            self.label_cache.stats.second_hop_already_visited += 1;
-            return false;
-        }
-        if self.label_cache.rejected.contains(item) {
-            self.label_cache.stats.second_hop_cached_rejections += 1;
-            self.label_cache.stats.second_hop_rejected += 1;
-            return false;
-        }
-        self.label_cache.stats.second_hop_evaluations += 1;
-        if !self.labels.is_match(*item) {
-            self.label_cache.stats.second_hop_rejected += 1;
-            if self.label_cache.rejected.insert(*item) {
-                self.label_cache.stats.unique_rejected_ids += 1;
+            if let Some(stats) = &mut self.label_cache.stats {
+                stats.second_hop_already_visited += 1;
             }
             return false;
         }
-        self.label_cache.stats.second_hop_accepted += 1;
+        if self.label_cache.rejected.contains(item) {
+            if let Some(stats) = &mut self.label_cache.stats {
+                stats.second_hop_cached_rejections += 1;
+                stats.second_hop_rejected += 1;
+            }
+            return false;
+        }
+        if let Some(stats) = &mut self.label_cache.stats {
+            stats.second_hop_evaluations += 1;
+        }
+        if !self.labels.is_match(*item) {
+            if let Some(stats) = &mut self.label_cache.stats {
+                stats.second_hop_rejected += 1;
+            }
+            if self.label_cache.rejected.insert(*item)
+                && let Some(stats) = &mut self.label_cache.stats
+            {
+                stats.unique_rejected_ids += 1;
+            }
+            return false;
+        }
+        if let Some(stats) = &mut self.label_cache.stats {
+            stats.second_hop_accepted += 1;
+        }
         self.inner.eval_mut(&Accept::new(*item))
     }
 }
@@ -614,7 +649,7 @@ mod tests {
     fn wrapper_predicate() {
         let filter = EvenFilter;
         let mut visited = HashSet::new();
-        let mut label_cache = LabelDecisionCache::default();
+        let mut label_cache = LabelDecisionCache::new(true);
         let mut wrapper = EvalFiltered::new(NotIn(&mut visited), &filter, &mut label_cache);
 
         // eval: both inner (not visited) and label (even) must pass.

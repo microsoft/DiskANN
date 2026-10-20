@@ -139,7 +139,8 @@ fn run(
         let stats = index
             .search_with(
                 multihop,
-                &labeled::Filtered::new(test_provider::Strategy::new(), filter),
+                &labeled::Filtered::new(test_provider::Strategy::new(), filter)
+                    .with_classification_stats(),
                 graph::glue::CopyIds,
                 &test_provider::Context::new(),
                 query,
@@ -302,7 +303,7 @@ fn cached_second_hop_rejection_can_still_become_a_first_hop_bridge() {
     );
     assert_eq!(stats.filter_classification.second_hop_cached_rejections, 1);
     assert_eq!(stats.filter_classification.first_hop_cached_rejections, 1);
-    assert_eq!(stats.filter_classification.unique_rejected_ids, 3);
+    assert_eq!(stats.filter_classification.unique_rejected_ids, 1);
     assert_eq!(filter.calls.load(Ordering::Relaxed), 6);
 }
 
