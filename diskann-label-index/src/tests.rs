@@ -384,6 +384,29 @@ fn prefix_exact_bloom_sorts_count_then_label_bytes_deterministically() {
 }
 
 #[test]
+fn prefix_exact_bloom_specializes_two_label_dnf_point_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("labels.jsonl");
+    let output = dir.path().join("labels.bloom.bin");
+    std::fs::write(&input, "[\"A\",\"B\"]\n\"A\"\n\"B\"\n\"C\"\n").unwrap();
+    let config = BloomFilterConfig::new(128, 4)
+        .unwrap()
+        .with_exact_label_count(2)
+        .unwrap();
+    encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
+    let index = EncodedLabelIndex::load(output).unwrap();
+
+    let exact_pair = compile(&index, &["A&B"], FilterExpressionType::DNF);
+    assert!(exact_pair.uses_exact_and2_point_plan());
+    assert_eq!(matching_ids(&exact_pair, index.num_vectors()), vec![0]);
+    assert_eq!(exact_pair.count_matches(), 1);
+
+    assert!(!compile(&index, &["A"], FilterExpressionType::DNF).uses_exact_and2_point_plan());
+    assert!(!compile(&index, &["A&C"], FilterExpressionType::DNF).uses_exact_and2_point_plan());
+    assert!(!compile(&index, &["A|B"], FilterExpressionType::CNF).uses_exact_and2_point_plan());
+}
+
+#[test]
 fn prefix_exact_bloom_persists_contiguous_exact_and_bloom_rows() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("labels.jsonl");

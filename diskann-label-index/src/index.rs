@@ -203,6 +203,15 @@ struct CompiledPlan {
     label_ids: Box<[Option<u32>]>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PointPlan {
+    Generic,
+    ExactAnd2 {
+        left_word_offset: usize,
+        right_word_offset: usize,
+    },
+}
+
 /// Query-scoped evaluator compiled from an [`EncodedLabelIndex`].
 ///
 /// Queries share the immutable index payload, so they remain usable after the source index is
@@ -211,6 +220,7 @@ pub struct EncodedLabelQuery<'a> {
     num_vectors: u32,
     payload: Arc<LabelIndexPayload>,
     plan: CompiledPlan,
+    point_plan: PointPlan,
     counts: Option<Arc<[u32]>>,
     config: BloomQueryConfig,
     _lifetime: PhantomData<&'a ()>,
@@ -234,6 +244,11 @@ impl std::fmt::Debug for EncodedLabelQuery<'_> {
 }
 
 impl EncodedLabelQuery<'_> {
+    #[cfg(test)]
+    pub(crate) fn uses_exact_and2_point_plan(&self) -> bool {
+        matches!(self.point_plan, PointPlan::ExactAnd2 { .. })
+    }
+
     /// Return a conservative bound on exact matching vectors, if exact label counts were stored.
     pub fn match_upper_bound(&self) -> Option<u64> {
         let counts = self.counts.as_ref()?;
@@ -274,6 +289,21 @@ impl EncodedLabelQuery<'_> {
     pub fn is_match(&self, vec_id: u32) -> bool {
         if vec_id >= self.num_vectors {
             return false;
+        }
+        if let PointPlan::ExactAnd2 {
+            left_word_offset,
+            right_word_offset,
+        } = self.point_plan
+        {
+            let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
+                unreachable!("exact-row point plans require a Bloom payload")
+            };
+            let word_index = vec_id as usize / 64;
+            let mask = 1u64 << (vec_id % 64);
+            return bits[left_word_offset + word_index]
+                & bits[right_word_offset + word_index]
+                & mask
+                != 0;
         }
 
         let terminal_matches = |label_id: Option<u32>| {
@@ -1340,10 +1370,13 @@ impl EncodedLabelIndex {
     where
         S: AsRef<str>,
     {
+        let plan = compile_plan(clauses, expression_type, &self.label_ids)?;
+        let point_plan = compile_point_plan(&plan, &self.payload);
         Ok(EncodedLabelQuery {
             num_vectors: self.num_vectors,
             payload: Arc::clone(&self.payload),
-            plan: compile_plan(clauses, expression_type, &self.label_ids)?,
+            plan,
+            point_plan,
             counts: self.counts.clone(),
             config,
             _lifetime: PhantomData,
@@ -1419,4 +1452,42 @@ fn compile_plan<S: AsRef<str>>(
         clause_offsets: clause_offsets.into_boxed_slice(),
         label_ids: encoded.into_boxed_slice(),
     })
+}
+
+fn compile_point_plan(plan: &CompiledPlan, payload: &LabelIndexPayload) -> PointPlan {
+    let LabelIndexPayload::Bloom {
+        words_per_row,
+        exact_row_by_label,
+        ..
+    } = payload
+    else {
+        return PointPlan::Generic;
+    };
+    if plan.expression_type != FilterExpressionType::DNF
+        || plan.clause_offsets.as_ref() != [0, 2]
+        || plan.label_ids.len() != 2
+    {
+        return PointPlan::Generic;
+    }
+    let Some(left_label) = plan.label_ids[0].map(|id| id as usize) else {
+        return PointPlan::Generic;
+    };
+    let Some(right_label) = plan.label_ids[1].map(|id| id as usize) else {
+        return PointPlan::Generic;
+    };
+    let left_row = exact_row_by_label[left_label];
+    let right_row = exact_row_by_label[right_label];
+    if left_row == u32::MAX || right_row == u32::MAX {
+        return PointPlan::Generic;
+    }
+    let Some(left_word_offset) = (left_row as usize).checked_mul(*words_per_row) else {
+        return PointPlan::Generic;
+    };
+    let Some(right_word_offset) = (right_row as usize).checked_mul(*words_per_row) else {
+        return PointPlan::Generic;
+    };
+    PointPlan::ExactAnd2 {
+        left_word_offset,
+        right_word_offset,
+    }
 }
