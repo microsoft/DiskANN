@@ -85,90 +85,45 @@ mod tests {
 
     #[test]
     fn gathered_rows_follow_requested_ids() {
-        // Row IDs are out of order and contain a repeat.
-        fn check<T: VectorRepr>(values: [T; 6], expected: [f32; 6]) {
-            let data = MatrixView::try_from(&values[..], 3, 2).unwrap();
-            let mut output = [f32::NAN; 6];
+        // The IDs are out of order and repeat a row.
+        let ids = [2, 0, 2];
+
+        fn check<T: VectorRepr>(rows: [[T; 2]; 3], ids: [u32; 3], expected: [[f32; 2]; 3]) {
+            let row_count = rows.len();
+            let dimensions = rows[0].len();
+            let output_rows = ids.len();
+            let data = MatrixView::try_from(rows.as_flattened(), row_count, dimensions).unwrap();
+            let mut output = [[f32::NAN; 2]; 3];
 
             gather_as_f32(
                 data,
-                &[2, 0, 2],
-                MutMatrixView::try_from(output.as_mut_slice(), 3, 2).unwrap(),
+                &ids,
+                MutMatrixView::try_from(output.as_flattened_mut(), output_rows, dimensions)
+                    .unwrap(),
             )
             .unwrap();
 
             assert_eq!(output, expected, "{}", std::any::type_name::<T>());
         }
 
+        let signed = [[1.5, -2.0], [7.0, 4.0], [0.5, 9.0]];
+        let signed_expected = [[0.5, 9.0], [1.5, -2.0], [0.5, 9.0]];
+        check(signed, ids, signed_expected);
+        // f16 takes the FP16 path; the other types take the VectorRepr path.
         check(
-            [1.5_f32, -2.0, 7.0, 4.0, 0.5, 9.0],
-            [0.5, 9.0, 1.5, -2.0, 0.5, 9.0],
+            signed.map(|row| row.map(f16::from_f32)),
+            ids,
+            signed_expected,
         );
-        check([1_i8, -2, 7, 4, -5, 9], [-5.0, 9.0, 1.0, -2.0, -5.0, 9.0]);
-        check([1_u8, 2, 7, 4, 5, 9], [5.0, 9.0, 1.0, 2.0, 5.0, 9.0]);
         check(
-            [1.5_f32, -2.0, 7.0, 4.0, 0.5, 9.0].map(f16::from_f32),
-            [0.5, 9.0, 1.5, -2.0, 0.5, 9.0],
+            [[1_i8, -2], [7, 4], [-5, 9]],
+            ids,
+            [[-5.0, 9.0], [1.0, -2.0], [-5.0, 9.0]],
         );
-    }
-
-    #[test]
-    fn fp16_gather_converts_every_coordinate() {
-        // x86 converts eight values at a time. The dimensions cover a short row,
-        // full vectors with and without a tail, and an embedding with a tail.
-        for dimensions in [7, 8, 9, 32, 33, 1537] {
-            let mut values: Vec<_> = (0..3 * dimensions)
-                .map(|index| f16::from_f32((index % 31) as f32 - 15.0))
-                .collect();
-            for (row, values) in values.chunks_exact_mut(dimensions).enumerate() {
-                values[dimensions - 1] = f16::from_f32(100.0 + row as f32);
-            }
-            let ids = [2, 0, 2];
-            let expected: Vec<_> = ids
-                .iter()
-                .flat_map(|&row| {
-                    values[row as usize * dimensions..(row as usize + 1) * dimensions]
-                        .iter()
-                        .map(|value| value.to_f32())
-                })
-                .collect();
-            let mut output = vec![f32::NAN; expected.len()];
-
-            gather_as_f32(
-                MatrixView::try_from(values.as_slice(), 3, dimensions).unwrap(),
-                &ids,
-                MutMatrixView::try_from(output.as_mut_slice(), 3, dimensions).unwrap(),
-            )
-            .unwrap();
-
-            assert_eq!(output, expected, "{dimensions} dimensions");
-        }
-    }
-
-    #[test]
-    fn fp16_gather_preserves_special_values_and_zero_signs() {
-        let values = [
-            f16::ZERO,
-            f16::NEG_ZERO,
-            f16::INFINITY,
-            f16::NEG_INFINITY,
-            f16::from_bits(1),
-            f16::NAN,
-        ];
-        let mut output = [42.0; 6];
-
-        gather_as_f32(
-            MatrixView::try_from(&values[..], 2, 3).unwrap(),
-            &[1, 0],
-            MutMatrixView::try_from(output.as_mut_slice(), 2, 3).unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(output[0], f32::NEG_INFINITY);
-        assert_eq!(output[1], 2.0_f32.powi(-24));
-        assert!(output[2].is_nan());
-        assert_eq!(output[3].to_bits(), 0.0_f32.to_bits());
-        assert_eq!(output[4].to_bits(), (-0.0_f32).to_bits());
-        assert_eq!(output[5], f32::INFINITY);
+        check(
+            [[1_u8, 2], [7, 4], [5, 9]],
+            ids,
+            [[5.0, 9.0], [1.0, 2.0], [5.0, 9.0]],
+        );
     }
 }

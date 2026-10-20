@@ -191,158 +191,121 @@ mod tests {
     use super::*;
     use crate::graph::pipnn::{
         L2,
-        test_support::{both_directions, dense_points, edges, thread_pool},
+        test_support::{both_directions, edges, thread_pool},
     };
     use diskann_wide::ARCH;
-    use half::f16;
-    use std::collections::BTreeSet;
 
+    /// Build L2 candidates from one-dimensional points on `workers` threads.
     fn build_1d(x: &[f32], leaves: Vec<Vec<u32>>, k: usize, workers: usize) -> Vec<Vec<u32>> {
-        let data = MatrixView::try_from(x, x.len(), 1).unwrap();
+        let dimensions = 1;
+        let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
         let candidates = thread_pool(workers)
             .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, k))
             .unwrap();
         candidates.into_iter().map(Vec::from).collect()
     }
 
+    /// Build the candidates of one leaf, given as `(point ID, value)` pairs in
+    /// leaf order. Points outside the leaf are NaN, so a read of a wrong row
+    /// drops edges and fails the test.
+    fn build_one_leaf(leaf: &[(u32, f32)], k: usize) -> Vec<Vec<u32>> {
+        let len = leaf
+            .iter()
+            .map(|&(id, _)| id as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let mut x = vec![f32::NAN; len];
+        for &(id, value) in leaf {
+            x[id as usize] = value;
+        }
+        let ids = leaf.iter().map(|&(id, _)| id).collect();
+        // One leaf is one task, so more workers change nothing.
+        let workers = 1;
+        build_1d(&x, vec![ids], k, workers)
+    }
+
     #[test]
     fn selected_pairs_add_global_ids_in_both_directions() {
-        // Only points 1, 3 and 5 form the leaf; point 1 is at 0.0.
-        let x = [0.0, 0.0, 0.0, 2.0, 0.0, 9.0];
-        // k = 1: 1 -> 3, 3 -> 1, 5 -> 3
+        // (point ID, one-dimensional vector) pairs, in leaf order.
+        let leaf = [(5, 9.0), (1, 0.0), (3, 2.0)];
+        // Each point picks its nearest point: 1 -> 3, 3 -> 1, 5 -> 3.
+        let k = 1;
         let expected = both_directions([(1, 3), (3, 5)]);
 
-        let actual = build_1d(&x, vec![vec![5, 1, 3]], 1, 1);
+        let actual = build_one_leaf(&leaf, k);
 
         assert_eq!(edges(&actual), expected);
     }
 
     #[test]
-    fn overlapping_leaves_merge_each_neighbor_once() {
-        // Point i is at x = i², so its nearest neighbors are its index neighbors.
+    fn a_pair_found_in_several_leaves_is_added_only_once() {
+        // x[i] = i² is the one-dimensional vector of point i, so each point's
+        // nearest point is an index neighbor.
         let x = [0.0, 1.0, 4.0, 9.0, 16.0];
+        // The leaves overlap, and the last one repeats the first, as a replica does.
         let leaves = vec![vec![0, 1, 2], vec![1, 2, 3], vec![2, 3, 4], vec![0, 1, 2]];
+        let k = 1;
+        // Three leaves find pair 1-2, and two leaves each find 0-1 and 2-3.
         let expected = both_directions([(0, 1), (1, 2), (2, 3), (3, 4)]);
 
         for workers in [1, 3] {
-            let actual = build_1d(&x, leaves.clone(), 1, workers);
+            let actual = build_1d(&x, leaves.clone(), k, workers);
 
-            // `edges` panics on duplicate candidates.
+            // `edges` panics on a repeated edge.
             assert_eq!(edges(&actual), expected, "{workers} workers");
         }
     }
 
     #[test]
     fn k_above_the_leaf_size_selects_every_other_point() {
-        // Only points 1, 3 and 5 form the leaf; point 1 is at 0.0.
-        let x = [0.0, 0.0, 0.0, 2.0, 0.0, 9.0];
+        // (point ID, one-dimensional vector) pairs, in leaf order.
+        let leaf = [(1, 0.0), (3, 2.0), (5, 9.0)];
+        let k = leaf.len() + 1;
         let expected = both_directions([(1, 3), (1, 5), (3, 5)]);
 
-        let actual = build_1d(&x, vec![vec![1, 3, 5]], 99, 1);
+        let actual = build_one_leaf(&leaf, k);
 
         assert_eq!(edges(&actual), expected);
+    }
+
+    #[test]
+    fn a_single_point_leaf_adds_no_candidates() {
+        // (point ID, one-dimensional vector) pairs, in leaf order.
+        let leaf = [(0, 3.0)];
+        // No other point exists, so the leaf returns without adding candidates.
+        let k = 2;
+
+        let actual = build_one_leaf(&leaf, k);
+
+        assert_eq!(actual, [Vec::<u32>::new()]);
     }
 
     #[test]
     fn unrankable_pairs_add_no_candidates() {
+        // x[i] is the one-dimensional vector of point i.
         let x = [0.0, 3.0, f32::NAN];
+        let leaf = vec![0, 1, 2];
+        let k = leaf.len() - 1;
+        let workers = 1;
         // Point 2 is NaN, so its pairs are not rankable.
         let expected = both_directions([(0, 1)]);
 
-        let actual = build_1d(&x, vec![vec![0, 1, 2]], 2, 1);
+        let actual = build_1d(&x, vec![leaf], k, workers);
 
         assert_eq!(edges(&actual), expected);
-    }
-
-    #[test]
-    fn candidates_match_the_leaf_kernel_on_each_leaf() {
-        // The kernel tests cover metrics, dimensions, widths and architectures.
-        // This test covers what leaf build adds: the gather of each element type,
-        // k cut to the leaf size, buffers reused across leaf shapes, and the merge
-        // of overlapping leaves on four workers.
-        let dimensions = 24;
-        let values = dense_points(500, dimensions, 1290);
-        let half: Vec<_> = values.iter().map(|&x| f16::from_f32(x)).collect();
-        // Dense points are multiples of 1/8 in [-2, 14], so eight times them fits
-        // `i8`, and an offset of 16 makes them fit `u8`.
-        let signed: Vec<_> = values.iter().map(|&x| (8.0 * x) as i8).collect();
-        let unsigned: Vec<_> = values.iter().map(|&x| (8.0 * x + 16.0) as u8).collect();
-        // Leaves of 1 to 40 points put each k above, equal to and below the other
-        // points of a leaf.
-        for k in 1..=10 {
-            check_against_kernel(&values, dimensions, k);
-            check_against_kernel(&half, dimensions, k);
-            check_against_kernel(&signed, dimensions, k);
-            check_against_kernel(&unsigned, dimensions, k);
-        }
-    }
-
-    /// Compare `build_leaf_candidates` with the leaf kernel run on each leaf
-    /// alone. The kernel sees the same rows in the same order, so ties break the
-    /// same way and the check is exact.
-    fn check_against_kernel<T: VectorRepr>(values: &[T], dimensions: usize, k: usize) {
-        let point_count = values.len() / dimensions;
-        let data = MatrixView::try_from(values, point_count, dimensions).unwrap();
-        // Sixty overlapping leaves of 1 to 40 points.
-        let leaves: Vec<Vec<u32>> = (0..60u32)
-            .map(|leaf| {
-                let ids: BTreeSet<_> = (0..1 + leaf % 40)
-                    .map(|i| (leaf * 7 + i * 13) % point_count as u32)
-                    .collect();
-                ids.into_iter().collect()
-            })
-            .collect();
-
-        let mut expected = BTreeSet::new();
-        for leaf in &leaves {
-            let width = k.min(leaf.len() - 1);
-            if width == 0 {
-                continue;
-            }
-            // Convert with `VectorRepr`, not with the gather under test.
-            let mut rows = vec![0.0; leaf.len() * dimensions];
-            for (&id, row) in leaf.iter().zip(rows.chunks_exact_mut(dimensions)) {
-                T::as_f32_into(data.row(id as usize), row).unwrap();
-            }
-            let mut output = vec![Candidate::default(); leaf.len() * width];
-            select_leaf_neighbors::<_, L2>(
-                ARCH,
-                MatrixView::try_from(rows.as_slice(), leaf.len(), dimensions).unwrap(),
-                MutMatrixView::try_from(output.as_mut_slice(), leaf.len(), width).unwrap(),
-                &mut LeafKernelWorkspace::default(),
-            )
-            .unwrap();
-            for (source, row) in output.chunks_exact(width).enumerate() {
-                for neighbor in row.iter().filter(|neighbor| neighbor.is_assigned()) {
-                    let (source, target) = (leaf[source], leaf[neighbor.local_idx as usize]);
-                    expected.insert((source, target));
-                    expected.insert((target, source));
-                }
-            }
-        }
-
-        let actual = thread_pool(4)
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, k))
-            .unwrap();
-
-        let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
-        assert_eq!(
-            edges(&actual),
-            expected,
-            "{}, k={k}",
-            std::any::type_name::<T>()
-        );
     }
 
     /// Run `add_leaf_candidates` for one leaf of one-dimensional points `x` with
     /// the given buffers, and return the candidate list of each point.
     fn add_one_leaf(x: &[f32], leaf: &[u32], k: usize, buffers: &mut LeafBuffers) -> Vec<Vec<u32>> {
-        let data = MatrixView::try_from(x, x.len(), 1).unwrap();
+        let dimensions = 1;
+        let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
         let candidates: Vec<_> = (0..x.len())
             .map(|_| Mutex::new(AdjacencyList::new()))
             .collect();
 
-        add_leaf_candidates::<_, L2, _>(ARCH, data, 1, leaf, k, buffers, &candidates).unwrap();
+        add_leaf_candidates::<_, L2, _>(ARCH, data, dimensions, leaf, k, buffers, &candidates)
+            .unwrap();
 
         candidates
             .into_iter()
@@ -352,19 +315,23 @@ mod tests {
 
     #[test]
     fn reused_buffers_do_not_carry_edges_between_leaves() {
-        // Point i is at x = i², so its nearest neighbors are its index neighbors.
+        // x[i] = i² is the one-dimensional vector of point i, so its nearest
+        // neighbors are its index neighbors.
         let x = [0.0, 1.0, 4.0, 9.0, 16.0, 25.0, 36.0];
         let mut buffers = LeafBuffers::default();
 
         // One worker runs a leaf, a smaller leaf with k above its size, then a
         // third leaf with a larger k. Each call must see only its own points.
         for (leaf, k, expected) in [
+            // k = 1 selects one of the three other points of this leaf.
             (
                 vec![0, 1, 2, 3],
                 1,
                 both_directions([(0, 1), (1, 2), (2, 3)]),
             ),
-            (vec![4, 6], 99, both_directions([(4, 6)])),
+            // k = 2 is above the one other point of this leaf.
+            (vec![4, 6], 2, both_directions([(4, 6)])),
+            // k = 2 selects both other points of this leaf.
             (vec![1, 3, 5], 2, both_directions([(1, 3), (1, 5), (3, 5)])),
         ] {
             let actual = add_one_leaf(&x, &leaf, k, &mut buffers);

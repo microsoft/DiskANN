@@ -119,10 +119,22 @@ mod tests {
     };
     use std::collections::BTreeSet;
 
-    fn pruning_config(degree: usize, metric: Metric, alpha: f32) -> Config {
-        config::Builder::new_with(degree, config::MaxDegree::same(), 16, metric.into(), |b| {
-            b.alpha(alpha);
-        })
+    /// L2 graph configuration that prunes to `degree`. Alpha 1 means that a
+    /// selected neighbor occludes a candidate when the neighbor is nearer to
+    /// the candidate than the source is.
+    fn pruning_config(degree: usize) -> Config {
+        // This is the build search list size, which pruning does not read.
+        let search_list_size = 16;
+        let alpha = 1.0;
+        config::Builder::new_with(
+            degree,
+            config::MaxDegree::same(),
+            search_list_size,
+            Metric::L2.into(),
+            |b| {
+                b.alpha(alpha);
+            },
+        )
         .build()
         .unwrap()
     }
@@ -135,8 +147,9 @@ mod tests {
 
     /// Prune the candidates of `source` in one-dimensional L2 points `x`.
     fn prune_1d(x: &[f32], source: usize, candidates: &[u32], graph: &Config) -> Vec<u32> {
-        let data = MatrixView::try_from(x, x.len(), 1).unwrap();
-        let distance = f32::distance(Metric::L2, Some(1));
+        let dimensions = 1;
+        let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
+        let distance = f32::distance(Metric::L2, Some(dimensions));
         let pruned = PruneWorkspace::default().prune(
             data,
             source,
@@ -149,99 +162,60 @@ mod tests {
 
     #[test]
     fn candidates_within_degree_keep_their_order() {
-        let x = [0.0, 1.0, 3.0, -2.0];
-        let graph = pruning_config(2, Metric::L2, 1.0);
+        // x[i] is the one-dimensional vector of point i.
+        let x = [0.0, 1.0, -2.0];
+        let source = 0;
+        // Point 1 is nearer to the source than point 2, so a prune would
+        // return [1, 2].
+        let candidates = [2, 1];
+        let degree = candidates.len();
 
-        // [3, 1] is not in distance order. A list within the degree skips
-        // pruning and keeps its order.
-        for candidates in [&[][..], &[2][..], &[3, 1][..]] {
-            assert_eq!(prune_1d(&x, 0, candidates, &graph), candidates);
-        }
+        let actual = prune_1d(&x, source, &candidates, &pruning_config(degree));
+
+        // The list fits the degree, so it comes back unpruned, in its order.
+        assert_eq!(actual, candidates);
     }
 
     #[test]
-    fn overfull_candidates_follow_the_metric_pruning_rule() {
-        // Source 0 keeps two of the candidates [3, 2, 1]. Point 1 is nearest
-        // for every metric, so the metric decides which second point stays.
-        for (metric, points, expected) in [
-            // Point 1 occludes point 2: 9 / 4 > 1.
-            (
-                Metric::L2,
-                [[0.0, 0.0], [1.0, 0.0], [3.0, 0.0], [-2.0, 0.0]],
-                [1, 3],
-            ),
-            // Points 0 and 1 share a direction, so point 2 has occlusion ratio 1 and stays.
-            (
-                Metric::Cosine,
-                [[1.0, 0.0], [2.0, 0.0], [1.0, 1.0], [-1.0, 0.0]],
-                [1, 2],
-            ),
-            // Point 3 is nearer than point 2 and has occlusion ratio 1 / 1.6 < 1.
-            (
-                Metric::CosineNormalized,
-                [[1.0, 0.0], [0.8, 0.6], [-1.0, 0.0], [0.0, -1.0]],
-                [1, 3],
-            ),
-            // Point 1 occludes point 2: their dot product is 6, against 2 with the source.
-            (
-                Metric::InnerProduct,
-                [[1.0, 0.0], [3.0, 0.0], [2.0, 1.0], [-1.0, 4.0]],
-                [1, 3],
-            ),
-        ] {
-            let data = MatrixView::try_from(points.as_flattened(), 4, 2).unwrap();
-            let distance = f32::distance(metric, Some(2));
+    fn an_overfull_list_is_pruned_by_robust_prune() {
+        // x[i] is the one-dimensional vector of point i.
+        let x = [0.0, 1.0, 2.0, -3.0];
+        let source = 0;
+        let candidates = [3, 2, 1];
+        let degree = 2;
 
-            let actual = PruneWorkspace::default().prune(
-                data,
-                0,
-                candidates_in_order(&[3, 2, 1]),
-                &pruning_config(2, metric, 1.0),
-                &distance,
-            );
+        let actual = prune_1d(&x, source, &candidates, &pruning_config(degree));
 
-            assert_eq!(&*actual, expected, "{metric:?}");
-        }
-    }
-
-    #[test]
-    fn graph_alpha_controls_which_occluded_neighbors_return() {
-        let x = [0.0, 1.0, 3.0, 4.0];
-
-        // Point 1 is nearest. It occludes point 2 with ratio 9 / 4 and point 3
-        // with ratio 16 / 9, so alpha 2 brings back point 3 only.
-        for (alpha, expected) in [(1.0, &[1][..]), (2.0, &[1, 3][..])] {
-            let graph = pruning_config(2, Metric::L2, alpha);
-
-            assert_eq!(
-                prune_1d(&x, 0, &[3, 2, 1], &graph),
-                expected,
-                "alpha {alpha}"
-            );
-        }
+        // Sorted by distance the list is [1, 2, 3], so a cut to the degree
+        // would return [1, 2]. Point 1 occludes point 2, so RobustPrune
+        // returns [1, 3].
+        assert_eq!(actual, [1, 3]);
     }
 
     #[test]
     fn a_reused_workspace_does_not_carry_state_between_sources() {
+        // x[i] is the one-dimensional vector of point i.
         let x = [0.0, 1.0, 3.0, -2.0, 9.0];
-        let data = MatrixView::try_from(&x[..], 5, 1).unwrap();
-        let graph = pruning_config(2, Metric::L2, 1.0);
-        let distance = f32::distance(Metric::L2, Some(1));
+        let dimensions = 1;
+        let degree = 2;
+        let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
+        let graph = pruning_config(degree);
+        let distance = f32::distance(Metric::L2, Some(dimensions));
         let mut workspace = PruneWorkspace::default();
 
         // One workspace prunes a long list, a shorter list, then a long list again.
         for (source, candidates, expected) in [
             // Points 1 and 3 are nearest, and point 1 does not occlude point 3.
-            (0, &[4, 3, 2, 1][..], &[1, 3][..]),
+            (0, vec![4, 3, 2, 1], vec![1, 3]),
             // Point 2 at x = 3 occludes points 1 and 3.
-            (4, &[3, 2, 1][..], &[2][..]),
+            (4, vec![3, 2, 1], vec![2]),
             // Points 0 and 2 are nearest, and point 0 does not occlude point 2.
-            (1, &[4, 3, 2, 0][..], &[0, 2][..]),
+            (1, vec![4, 3, 2, 0], vec![0, 2]),
         ] {
             let actual = workspace.prune(
                 data,
                 source,
-                candidates_in_order(candidates),
+                candidates_in_order(&candidates),
                 &graph,
                 &distance,
             );
@@ -251,38 +225,15 @@ mod tests {
     }
 
     #[test]
-    fn pruning_reads_only_the_max_occlusion_size_nearest_candidates() {
-        let x = [0.0, -3.0, 1.0, 2.0];
-
-        // Source 0 is at x=0. Candidates 2 and 3 lie on one side and candidate 1
-        // on the other, so 2 occludes 3 but not 1. A pool of two candidates
-        // drops 1, the farthest.
-        for (max_occlusion_size, expected) in [(2, &[2][..]), (3, &[2, 1][..])] {
-            let graph = config::Builder::new_with(
-                2,
-                config::MaxDegree::same(),
-                16,
-                Metric::L2.into(),
-                |b| {
-                    b.alpha(1.0).max_occlusion_size(max_occlusion_size);
-                },
-            )
-            .build()
-            .unwrap();
-
-            let actual = prune_1d(&x, 0, &[1, 2, 3], &graph);
-
-            assert_eq!(actual, expected, "max_occlusion_size {max_occlusion_size}");
-        }
-    }
-
-    #[test]
     fn parallel_pruning_keeps_each_result_with_its_source() {
-        // Point i is at x = i², and each point lists every other point.
+        // x[i] = i² is the one-dimensional vector of point i.
+        // Each point lists every other point, farthest first.
         let x = [0.0, 1.0, 4.0, 9.0];
-        let data = MatrixView::try_from(&x[..], 4, 1).unwrap();
-        let graph = pruning_config(1, Metric::L2, 1.0);
-        // Degree 1: each point keeps its nearest point.
+        let dimensions = 1;
+        let degree = 1;
+        let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
+        let graph = pruning_config(degree);
+        // Degree 1 keeps each point's nearest point.
         let expected = BTreeSet::from([(0, 1), (1, 0), (2, 1), (3, 2)]);
 
         for workers in [1, 3] {

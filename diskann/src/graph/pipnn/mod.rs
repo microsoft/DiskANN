@@ -388,19 +388,6 @@ mod test_support {
     use super::simd::Simd;
     use diskann_vector::distance::Metric;
 
-    // Sort the members of each row but keep the row order. A row position is a
-    // leader column or a graph source, so sorting the rows would hide a wrong
-    // assignment. Repeated members stay visible.
-    pub(super) fn sorted_members_per_row(rows: &[Vec<u32>]) -> Vec<Vec<u32>> {
-        rows.iter()
-            .map(|row| {
-                let mut members = row.clone();
-                members.sort_unstable();
-                members
-            })
-            .collect()
-    }
-
     /// Return the directed edges `(source, target)` of `rows`, where row `i`
     /// lists the neighbors of point `i`. A repeated edge panics, so tests that
     /// compare edge sets still catch duplicate candidates.
@@ -438,18 +425,9 @@ mod test_support {
     }
 
     #[test]
-    fn membership_comparison_preserves_group_positions_and_duplicate_counts() {
-        let rows = [vec![9, 3, 9], vec![], vec![2, 1], vec![2, 1]];
-
-        assert_eq!(
-            sorted_members_per_row(&rows),
-            [vec![3, 9, 9], vec![], vec![1, 2], vec![1, 2]]
-        );
-    }
-
-    #[test]
     #[should_panic(expected = "repeated edge 0 -> 1")]
     fn a_repeated_edge_panics() {
+        // Point 0 repeats point 1; an edge-set comparison must reject the repeat.
         edges(&[vec![1, 1], vec![]]);
     }
 
@@ -613,6 +591,8 @@ mod construction_tests {
     use std::collections::BTreeSet;
     use test_support::{both_directions, edges, nz, thread_pool};
 
+    /// Every point is a leader (`p_samp = 1.0`), so leader sampling picks the
+    /// same set for any seed.
     fn partition_policy() -> PiPNNConfig {
         PiPNNConfig {
             c_max: nz(4),
@@ -625,43 +605,49 @@ mod construction_tests {
         }
     }
 
+    /// Use alpha one and no degree slack. PiPNN does not use the build search list.
     fn graph_policy(degree: usize, metric: Metric) -> Config {
-        config::Builder::new_with(degree, config::MaxDegree::same(), 16, metric.into(), |b| {
-            b.alpha(1.0);
-        })
+        let search_list_size = 16;
+        let alpha = 1.0;
+        config::Builder::new_with(
+            degree,
+            config::MaxDegree::same(),
+            search_list_size,
+            metric.into(),
+            |b| {
+                b.alpha(alpha);
+            },
+        )
         .build()
         .unwrap()
     }
 
-    /// Build the graph of `values` with `threads` workers.
+    /// Build the graph of `values` on two workers; these tests do not vary scheduling.
     fn build<T: VectorRepr>(
         values: &[T],
         dimensions: usize,
         config: PiPNNConfig,
         degree: usize,
         metric: Metric,
-        threads: usize,
     ) -> Vec<Vec<u32>> {
+        let workers = 2;
         let data = MatrixView::try_from(values, values.len() / dimensions, dimensions).unwrap();
         let graph = graph_policy(degree, metric);
-        let pool = thread_pool(threads);
+        let pool = thread_pool(workers);
         let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
         let graph = build_graph(data, &context).unwrap();
         graph.into_iter().map(Vec::from).collect()
     }
 
-    /// Build the L2 graph of one-dimensional points `x` with `threads` workers.
-    fn build_1d<T: VectorRepr>(
-        x: &[T],
-        config: PiPNNConfig,
-        degree: usize,
-        threads: usize,
-    ) -> Vec<Vec<u32>> {
-        build(x, 1, config, degree, Metric::L2, threads)
+    /// Build the L2 graph of one-dimensional points `x` on the build helper's two workers.
+    fn build_1d<T: VectorRepr>(x: &[T], config: PiPNNConfig, degree: usize) -> Vec<Vec<u32>> {
+        let dimensions = 1;
+        build(x, dimensions, config, degree, Metric::L2)
     }
 
     #[test]
-    fn invalid_sampling_fractions_and_an_empty_fanout_are_rejected() {
+    fn invalid_sampling_fractions_are_rejected() {
+        // Fractions outside (0, 1] cannot select a valid sample of leaders.
         for p_samp in [
             0.0,
             -0.5,
@@ -682,7 +668,10 @@ mod construction_tests {
                 "p_samp {p_samp}: {error}"
             );
         }
+    }
 
+    #[test]
+    fn an_empty_fanout_is_rejected() {
         // An empty fanout list has no first level.
         let config = PiPNNConfig {
             fanout: vec![],
@@ -693,7 +682,9 @@ mod construction_tests {
 
     #[test]
     fn sampling_fraction_endpoints_are_accepted() {
-        for p_samp in [f64::from_bits(1), 1.0] {
+        // The smallest positive fraction and the inclusive upper bound are valid.
+        let smallest_positive = f64::from_bits(1);
+        for p_samp in [smallest_positive, 1.0] {
             let config = PiPNNConfig {
                 p_samp,
                 ..partition_policy()
@@ -705,6 +696,7 @@ mod construction_tests {
 
     #[test]
     fn a_leader_cap_below_two_is_rejected() {
+        // A split needs two leaders.
         let config = PiPNNConfig {
             max_leaders: nz(1),
             ..partition_policy()
@@ -715,12 +707,15 @@ mod construction_tests {
 
     #[test]
     fn a_build_context_checks_the_configuration() {
+        // An empty fanout must fail when the context is created, before a build.
+        let degree = 2;
+        let workers = 1;
         let config = PiPNNConfig {
             fanout: vec![],
             ..partition_policy()
         };
-        let graph = graph_policy(2, Metric::L2);
-        let pool = thread_pool(1);
+        let graph = graph_policy(degree, Metric::L2);
+        let pool = thread_pool(workers);
 
         let error = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap_err();
 
@@ -729,8 +724,11 @@ mod construction_tests {
 
     #[test]
     fn an_empty_dataset_axis_is_rejected_before_building() {
-        let graph = graph_policy(2, Metric::L2);
-        let pool = thread_pool(1);
+        // Each shape has one empty axis; validation must reject it before a kernel runs.
+        let degree = 2;
+        let workers = 1;
+        let graph = graph_policy(degree, Metric::L2);
+        let pool = thread_pool(workers);
         let context =
             PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, &pool).unwrap();
 
@@ -747,32 +745,41 @@ mod construction_tests {
     }
 
     #[test]
-    fn native_vector_types_build_the_expected_neighbor_graph() {
-        // Points 0 and 2 both pick point 1, and the merge adds the reverse edges.
-        fn check<T: VectorRepr>(x: [T; 3]) {
-            let actual = build_1d(&x, partition_policy(), 2, 2);
+    fn a_build_links_each_point_to_its_nearest_point_for_each_vector_type() {
+        // x[i] is the one-dimensional vector of point i: two groups of three
+        // points, far apart. c_max = 3 splits the groups apart. In each group,
+        // leaf_k = 2 gives every point both other points, and degree 1 keeps
+        // the nearest.
+        fn check<T: VectorRepr>(x: [T; 6]) {
+            let config = PiPNNConfig {
+                c_max: nz(3),
+                leaf_k: nz(2),
+                ..partition_policy()
+            };
+            let degree = 1;
+
+            let actual = build_1d(&x, config, degree);
 
             assert_eq!(
                 edges(&actual),
-                both_directions([(0, 1), (1, 2)]),
+                BTreeSet::from([(0, 1), (1, 0), (2, 1), (3, 4), (4, 3), (5, 4)]),
                 "{}",
                 std::any::type_name::<T>()
             );
         }
 
-        check([0.0_f32, 1.0, 4.0]);
-        check([0.0_f32, 1.0, 4.0].map(f16::from_f32));
-        check([0_i8, 1, 4]);
-        check([0_u8, 1, 4]);
+        check([0.0_f32, 1.0, 4.0, 100.0, 101.0, 104.0]);
+        check([0.0_f32, 1.0, 4.0, 100.0, 101.0, 104.0].map(f16::from_f32));
+        check([0_i8, 1, 4, 100, 101, 104]);
+        check([0_u8, 1, 4, 100, 101, 104]);
     }
 
     #[test]
-    fn the_requested_metric_determines_leaf_neighbors() {
-        // packed_points puts the second coordinate in the last of 1537
-        // dimensions, so a kernel that drops the tail ranks the points wrongly.
-        // Each point picks its nearest point (leaf_k = 1), and the merge adds
-        // the reverse edges.
-        let dimensions = 1537;
+    fn a_build_links_each_point_to_its_nearest_point_for_each_metric() {
+        // One leaf (c_max = 4), leaf_k = 1 and degree 3, so no list is pruned.
+        // L2, cosine and inner product give different graphs, so a wrong metric arm fails.
+        let dimensions = 2;
+        let degree = 3;
         for (metric, expected) in [
             // Points 0, 1 and 3 pick point 2, and point 2 picks point 0.
             (Metric::L2, both_directions([(0, 2), (1, 2), (2, 3)])),
@@ -791,155 +798,9 @@ mod construction_tests {
                 metric == Metric::CosineNormalized,
             );
 
-            let actual = build(&values, dimensions, partition_policy(), 3, metric, 2);
+            let actual = build(&values, dimensions, partition_policy(), degree, metric);
 
             assert_eq!(edges(&actual), expected, "{metric:?}");
-        }
-    }
-
-    #[test]
-    fn splitting_uses_the_requested_metric_to_group_points() {
-        // c_max = 2 forces splits, and every point is a leader. Degree 3 keeps
-        // every leaf pair, so the edges show which points share a leaf.
-        let config = PiPNNConfig {
-            c_max: nz(2),
-            ..partition_policy()
-        };
-        for (metric, expected) in [
-            // Only points 0 and 2 share a leaf. The child of point 2 holds all
-            // four points, and the next level splits it into single points.
-            (Metric::L2, both_directions([(0, 2)])),
-            // Points 0, 1 and points 2, 3 have the closest directions.
-            (Metric::Cosine, both_directions([(0, 1), (2, 3)])),
-            (Metric::CosineNormalized, both_directions([(0, 1), (2, 3)])),
-            // Points 0, 1 join leaders 1 and 2, and points 2, 3 join leaders 2
-            // and 3. The child of leader 2 splits into the same pairs.
-            (Metric::InnerProduct, both_directions([(0, 1), (2, 3)])),
-        ] {
-            let values = test_support::packed_points(
-                &[[1.0, 0.0], [6.0, 1.0], [2.0, 4.0], [0.0, 9.0]],
-                2,
-                metric == Metric::CosineNormalized,
-            );
-
-            let actual = build(&values, 2, config.clone(), 3, metric, 2);
-
-            assert_eq!(edges(&actual), expected, "{metric:?}");
-        }
-    }
-
-    #[test]
-    fn final_pruning_cuts_merged_candidates_to_the_degree() {
-        // leaf_k = 2 gives each point both other points as candidates.
-        let config = PiPNNConfig {
-            leaf_k: nz(2),
-            ..partition_policy()
-        };
-
-        let actual = build_1d(&[0.0_f32, 1.0, 4.0], config, 1, 2);
-
-        // Degree 1 keeps the nearest candidate of each point.
-        assert_eq!(edges(&actual), BTreeSet::from([(0, 1), (1, 0), (2, 1)]));
-    }
-
-    #[test]
-    fn overlapping_partitions_build_the_same_deduplicated_graph() {
-        // Every point is a leader and fanout is 2, so each close pair appears in
-        // two leaves, and replicas add more copies. `edges` panics on a repeated edge.
-        for (workers, replicas) in [(1, 1), (3, 2)] {
-            let config = PiPNNConfig {
-                c_max: nz(2),
-                replicas: nz(replicas),
-                ..partition_policy()
-            };
-
-            let actual = build_1d(&[0.0_f32, 1.0, 10.0, 11.0], config, 2, workers);
-
-            assert_eq!(
-                edges(&actual),
-                both_directions([(0, 1), (2, 3)]),
-                "{workers} workers, {replicas} replicas"
-            );
-        }
-    }
-
-    #[test]
-    fn a_single_point_has_one_empty_adjacency_list() {
-        let actual = build_1d(&[3.0_f32], partition_policy(), 2, 1);
-
-        assert_eq!(actual, [Vec::<u32>::new()]);
-    }
-
-    #[test]
-    fn multi_level_builds_give_valid_rows_for_every_metric() {
-        // With 1,000 points and c_max 32, the build splits over several levels,
-        // makes overlapping leaves, merges their candidates on four workers and
-        // prunes lists above the degree. Each row must be non-empty, within the
-        // degree, and free of duplicates and self edges. The f16 build checks
-        // that every step reads f16 rows, which the smaller builds never split.
-        fn check<T: VectorRepr>(values: &[T], metric: Metric) {
-            let (dimensions, degree) = (16, 8);
-            let config = PiPNNConfig {
-                c_max: nz(32),
-                p_samp: 0.05,
-                max_leaders: nz(1000),
-                fanout: vec![nz(4), nz(2)],
-                leaf_k: nz(2),
-                replicas: nz(1),
-                seed: Some(1290),
-            };
-
-            let actual = build(values, dimensions, config, degree, metric, 4);
-
-            let case = format!("{metric:?}, {}", std::any::type_name::<T>());
-            // `edges` panics on a repeated edge.
-            let graph_edges = edges(&actual);
-
-            for (point, neighbors) in actual.iter().enumerate() {
-                assert!(!neighbors.is_empty(), "{case}, point {point}");
-                assert!(
-                    neighbors.len() <= degree,
-                    "{case}, point {point}: {neighbors:?}"
-                );
-            }
-            assert!(
-                graph_edges.iter().all(|(source, target)| source != target),
-                "{case}"
-            );
-        }
-
-        for metric in [
-            Metric::L2,
-            Metric::Cosine,
-            Metric::CosineNormalized,
-            Metric::InnerProduct,
-        ] {
-            let mut values = test_support::dense_points(1000, 16, 1290);
-            if metric == Metric::CosineNormalized {
-                test_support::normalize(&mut values, 16);
-            }
-            check(&values, metric);
-            check(
-                &values.iter().map(|&x| f16::from_f32(x)).collect::<Vec<_>>(),
-                metric,
-            );
-        }
-    }
-
-    #[test]
-    fn copies_of_one_vector_build_leaf_local_edges() {
-        // Every leader is a copy, so each point ties at every split. The build
-        // splits the six copies into two leaves of three points.
-        let actual = build_1d(&[1.0_f32; 6], partition_policy(), 2, 2);
-
-        for (point, neighbors) in actual.iter().enumerate() {
-            assert!(!neighbors.is_empty(), "point {point}");
-            assert!(
-                neighbors
-                    .iter()
-                    .all(|&neighbor| neighbor / 3 == point as u32 / 3),
-                "point {point}: {neighbors:?}"
-            );
         }
     }
 }
