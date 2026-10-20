@@ -32,7 +32,7 @@
 //!
 //! * As of writing, [`QueryLabelProvider`] does not have batched accesses.
 
-use std::marker::PhantomData;
+use std::{collections::HashSet, marker::PhantomData};
 
 use crate::{
     ANNResult,
@@ -70,17 +70,68 @@ where
     fn visit_candidates(&self, visit: impl FnMut(I));
 }
 
-// Move this external to the `QueryLabelProvider` call so the indirect call has a slightly
-// simpler signature. Does it matter? Probably not.
-fn decide<T, I>(provider: &T, i: I) -> Decision<I>
+#[derive(Debug, Clone, Copy)]
+enum ClassificationPhase {
+    StartPoint,
+    FirstHop,
+}
+
+#[derive(Debug)]
+struct LabelDecisionCache<I> {
+    rejected: HashSet<I>,
+    stats: glue::FilterClassificationStats,
+}
+
+impl<I> Default for LabelDecisionCache<I> {
+    fn default() -> Self {
+        Self {
+            rejected: HashSet::new(),
+            stats: glue::FilterClassificationStats::default(),
+        }
+    }
+}
+
+impl<I> LabelDecisionCache<I>
 where
     I: VectorId,
-    T: QueryLabelProvider<I> + ?Sized,
 {
-    if provider.is_match(i) {
-        Decision::accept(i)
-    } else {
-        Decision::reject(i)
+    fn decide<L>(&mut self, labels: &L, id: I, phase: ClassificationPhase) -> Decision<I>
+    where
+        L: QueryLabelProvider<I> + ?Sized,
+    {
+        let (requests, evaluations, cached_rejections, accepted, rejected) = match phase {
+            ClassificationPhase::StartPoint => (
+                &mut self.stats.start_point_requests,
+                &mut self.stats.start_point_evaluations,
+                &mut self.stats.start_point_cached_rejections,
+                &mut self.stats.start_point_accepted,
+                &mut self.stats.start_point_rejected,
+            ),
+            ClassificationPhase::FirstHop => (
+                &mut self.stats.first_hop_requests,
+                &mut self.stats.first_hop_evaluations,
+                &mut self.stats.first_hop_cached_rejections,
+                &mut self.stats.first_hop_accepted,
+                &mut self.stats.first_hop_rejected,
+            ),
+        };
+        *requests += 1;
+        if self.rejected.contains(&id) {
+            *cached_rejections += 1;
+            *rejected += 1;
+            return Decision::reject(id);
+        }
+        *evaluations += 1;
+        if labels.is_match(id) {
+            *accepted += 1;
+            Decision::accept(id)
+        } else {
+            *rejected += 1;
+            if self.rejected.insert(id) {
+                self.stats.unique_rejected_ids += 1;
+            }
+            Decision::reject(id)
+        }
     }
 }
 
@@ -147,6 +198,7 @@ where
         Ok(FilteredAccessor {
             inner,
             labels: self.labels,
+            label_cache: LabelDecisionCache::default(),
         })
     }
 }
@@ -179,6 +231,7 @@ where
 {
     inner: A,
     labels: &'a L,
+    label_cache: LabelDecisionCache<A::Id>,
 }
 
 impl<'a, A, L> FilteredAccessor<'a, A, L>
@@ -188,7 +241,11 @@ where
 {
     #[cfg(test)]
     pub(crate) fn new(inner: A, labels: &'a L) -> Self {
-        Self { inner, labels }
+        Self {
+            inner,
+            labels,
+            label_cache: LabelDecisionCache::default(),
+        }
     }
 }
 
@@ -219,8 +276,15 @@ where
     where
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
+        let labels = self.labels;
+        let label_cache = &mut self.label_cache;
         self.inner
-            .start_point_distances(|id, distance| f(decide(self.labels, id), distance))
+            .start_point_distances(|id, distance| {
+                f(
+                    label_cache.decide(labels, id, ClassificationPhase::StartPoint),
+                    distance,
+                )
+            })
             .await
     }
 
@@ -235,9 +299,14 @@ where
         P: glue::HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
+        let labels = self.labels;
+        let label_cache = &mut self.label_cache;
         self.inner
             .expand_beam(ids, pred, |id, distance| {
-                on_neighbors(decide(self.labels, id), distance)
+                on_neighbors(
+                    label_cache.decide(labels, id, ClassificationPhase::FirstHop),
+                    distance,
+                )
             })
             .await
     }
@@ -253,10 +322,14 @@ where
         P: glue::Predicate<Self::Id> + glue::PredicateMut<Accept<Self::Id>> + Send + Sync,
         F: FnMut(Accept<Self::Id>, f32) + Send,
     {
+        let labels = self.labels;
+        let label_cache = &mut self.label_cache;
         self.inner
-            .expand_beam(ids, EvalFiltered::new(pred, self.labels), |id, distance| {
-                on_neighbors(Accept::new(id), distance)
-            })
+            .expand_beam(
+                ids,
+                EvalFiltered::new(pred, labels, label_cache),
+                |id, distance| on_neighbors(Accept::new(id), distance),
+            )
             .await
     }
 
@@ -266,6 +339,10 @@ where
 
     fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         self.inner.num_starting_points()
+    }
+
+    fn filter_classification_stats(&self) -> glue::FilterClassificationStats {
+        self.label_cache.stats
     }
 }
 
@@ -305,42 +382,72 @@ where
 /// A [`glue::HybridPredicate`] that uses an additional [`QueryLabelProvider`] to skip
 /// computing distances to items that do not satisfy the predicate.
 #[derive(Debug)]
-struct EvalFiltered<'a, P, L: ?Sized> {
+struct EvalFiltered<'a, P, L: ?Sized, I>
+where
+    I: VectorId,
+{
     inner: P,
     labels: &'a L,
+    label_cache: &'a mut LabelDecisionCache<I>,
 }
 
-impl<'a, P, L: ?Sized> EvalFiltered<'a, P, L> {
-    fn new(inner: P, labels: &'a L) -> Self {
-        Self { inner, labels }
+impl<'a, P, L: ?Sized, I> EvalFiltered<'a, P, L, I>
+where
+    I: VectorId,
+{
+    fn new(inner: P, labels: &'a L, label_cache: &'a mut LabelDecisionCache<I>) -> Self {
+        Self {
+            inner,
+            labels,
+            label_cache,
+        }
     }
 }
 
-impl<P, I, L> glue::Predicate<I> for EvalFiltered<'_, P, L>
+impl<P, I, L> glue::Predicate<I> for EvalFiltered<'_, P, L, I>
 where
     P: glue::Predicate<I>,
     I: VectorId,
     L: QueryLabelProvider<I> + ?Sized,
 {
     fn eval(&self, item: &I) -> bool {
-        self.inner.eval(item) && self.labels.is_match(*item)
+        self.inner.eval(item)
+            && !self.label_cache.rejected.contains(item)
+            && self.labels.is_match(*item)
     }
 }
 
-impl<P, I, L> glue::PredicateMut<I> for EvalFiltered<'_, P, L>
+impl<P, I, L> glue::PredicateMut<I> for EvalFiltered<'_, P, L, I>
 where
-    P: glue::PredicateMut<Accept<I>>,
+    P: glue::Predicate<I> + glue::PredicateMut<Accept<I>>,
     I: VectorId,
     L: QueryLabelProvider<I> + ?Sized,
 {
     fn eval_mut(&mut self, item: &I) -> bool {
-        // Order must be `label` -> `inner` because we have to know an ID is accepted before
-        // passing it to `eval_mut`.
-        self.labels.is_match(*item) && self.inner.eval_mut(&Accept::new(*item))
+        self.label_cache.stats.second_hop_requests += 1;
+        if !self.inner.eval(item) {
+            self.label_cache.stats.second_hop_already_visited += 1;
+            return false;
+        }
+        if self.label_cache.rejected.contains(item) {
+            self.label_cache.stats.second_hop_cached_rejections += 1;
+            self.label_cache.stats.second_hop_rejected += 1;
+            return false;
+        }
+        self.label_cache.stats.second_hop_evaluations += 1;
+        if !self.labels.is_match(*item) {
+            self.label_cache.stats.second_hop_rejected += 1;
+            if self.label_cache.rejected.insert(*item) {
+                self.label_cache.stats.unique_rejected_ids += 1;
+            }
+            return false;
+        }
+        self.label_cache.stats.second_hop_accepted += 1;
+        self.inner.eval_mut(&Accept::new(*item))
     }
 }
 
-impl<P, I, L> glue::HybridPredicate<I> for EvalFiltered<'_, P, L>
+impl<P, I, L> glue::HybridPredicate<I> for EvalFiltered<'_, P, L, I>
 where
     P: glue::Predicate<I> + glue::PredicateMut<Accept<I>>,
     I: VectorId,
@@ -507,7 +614,8 @@ mod tests {
     fn wrapper_predicate() {
         let filter = EvenFilter;
         let mut visited = HashSet::new();
-        let mut wrapper = EvalFiltered::new(NotIn(&mut visited), &filter);
+        let mut label_cache = LabelDecisionCache::default();
+        let mut wrapper = EvalFiltered::new(NotIn(&mut visited), &filter, &mut label_cache);
 
         // eval: both inner (not visited) and label (even) must pass.
         assert!(wrapper.eval(&2), "2 is even and not visited");

@@ -137,6 +137,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                 hops,
                 result_count,
                 range_search_second_round,
+                ..
             } = rt
                 .block_on(index.search(
                     params,

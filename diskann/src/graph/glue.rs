@@ -415,6 +415,45 @@ impl<T> From<Reject<T>> for Decision<T> {
     }
 }
 
+/// Label-classification statistics collected by filtered graph search.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FilterClassificationStats {
+    /// Label decisions requested for start points.
+    pub start_point_requests: u64,
+    /// Label evaluations performed for start points.
+    pub start_point_evaluations: u64,
+    /// Start-point rejections served from the query-local cache.
+    pub start_point_cached_rejections: u64,
+    /// Start points accepted by the label filter.
+    pub start_point_accepted: u64,
+    /// Start points rejected by the label filter.
+    pub start_point_rejected: u64,
+    /// Label decisions requested for first-hop neighbors.
+    pub first_hop_requests: u64,
+    /// Label evaluations performed for first-hop neighbors.
+    pub first_hop_evaluations: u64,
+    /// First-hop rejections served from the query-local cache.
+    pub first_hop_cached_rejections: u64,
+    /// First-hop neighbors accepted by the label filter.
+    pub first_hop_accepted: u64,
+    /// First-hop neighbors rejected by the label filter.
+    pub first_hop_rejected: u64,
+    /// IDs presented to the second-hop accept-only predicate.
+    pub second_hop_requests: u64,
+    /// Second-hop IDs skipped because traversal already visited them.
+    pub second_hop_already_visited: u64,
+    /// Label evaluations performed for second-hop IDs.
+    pub second_hop_evaluations: u64,
+    /// Second-hop rejections served from the query-local cache.
+    pub second_hop_cached_rejections: u64,
+    /// Second-hop IDs accepted by the label filter.
+    pub second_hop_accepted: u64,
+    /// Second-hop IDs rejected by the label filter.
+    pub second_hop_rejected: u64,
+    /// Distinct IDs inserted into the query-local rejected-label cache.
+    pub unique_rejected_ids: u64,
+}
+
 /// The main extension point for filtered-graph search.
 ///
 /// Filtered search is a best-first graph traversal with heuristics to direct the search
@@ -493,6 +532,11 @@ pub trait FilteredAccessor: HasId + Send + Sync {
 
     /// Return the number of starting points.
     fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send;
+
+    /// Return label-classification statistics collected by this accessor.
+    fn filter_classification_stats(&self) -> FilterClassificationStats {
+        FilterClassificationStats::default()
+    }
 }
 
 /// A predicate evaluating `item`.

@@ -146,6 +146,7 @@ where
                 hops,
                 range_search_second_round: false,
                 result_count: result_count as u32,
+                filter_classification: accessor.filter_classification_stats(),
             };
 
             Ok(stats)

@@ -103,6 +103,7 @@ where
                 hops: ret.hops,
                 result_count: result_count as u32,
                 range_search_second_round: false,
+                filter_classification: ret.filter_classification,
             };
 
             Ok(stats)
@@ -119,6 +120,7 @@ struct Ret<I> {
     cmps: u32,
     hops: u32,
     rejected_start_points: HashSet<I>,
+    filter_classification: glue::FilterClassificationStats,
 }
 
 /// Internal multihop search implementation.
@@ -239,5 +241,6 @@ where
         cmps: scratch.cmps,
         hops: scratch.hops,
         rejected_start_points,
+        filter_classification: accessor.filter_classification_stats(),
     })
 }
