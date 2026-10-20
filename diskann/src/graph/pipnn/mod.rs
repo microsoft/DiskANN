@@ -383,19 +383,32 @@ where
 
 #[cfg(test)]
 mod test_support {
+    use std::collections::BTreeSet;
+
     use super::simd::Simd;
     use diskann_vector::distance::Metric;
 
-    // Sort the members of each row but keep the row order. A row position is a
-    // leader column or a graph source, so sorting the rows would hide a wrong
-    // assignment. Repeated members stay visible.
-    pub(super) fn sorted_members_per_row(rows: &[Vec<u32>]) -> Vec<Vec<u32>> {
-        rows.iter()
-            .map(|row| {
-                let mut members = row.clone();
-                members.sort_unstable();
-                members
-            })
+    /// Return the directed edges `(source, target)` of `rows`, where row `i`
+    /// lists the neighbors of point `i`. A repeated edge panics, so tests that
+    /// compare edge sets still catch duplicate candidates.
+    pub(super) fn edges(rows: &[Vec<u32>]) -> BTreeSet<(u32, u32)> {
+        let mut edges = BTreeSet::new();
+        for (source, row) in rows.iter().enumerate() {
+            for &target in row {
+                assert!(
+                    edges.insert((source as u32, target)),
+                    "repeated edge {source} -> {target}"
+                );
+            }
+        }
+        edges
+    }
+
+    /// Return both directions of each undirected pair.
+    pub(super) fn both_directions<const N: usize>(pairs: [(u32, u32); N]) -> BTreeSet<(u32, u32)> {
+        pairs
+            .into_iter()
+            .flat_map(|(a, b)| [(a, b), (b, a)])
             .collect()
     }
 
@@ -403,22 +416,19 @@ mod test_support {
         std::num::NonZeroUsize::new(value).unwrap()
     }
 
-    /// Build a Rayon pool with `threads` workers.
-    pub(super) fn thread_pool(threads: usize) -> rayon::ThreadPool {
+    /// Build a Rayon pool with `n_threads` threads.
+    pub(super) fn thread_pool(n_threads: usize) -> rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
+            .num_threads(n_threads)
             .build()
             .unwrap()
     }
 
     #[test]
-    fn membership_comparison_preserves_group_positions_and_duplicate_counts() {
-        let rows = [vec![9, 3, 9], vec![], vec![2, 1], vec![2, 1]];
-
-        assert_eq!(
-            sorted_members_per_row(&rows),
-            [vec![3, 9, 9], vec![], vec![1, 2], vec![1, 2]]
-        );
+    #[should_panic(expected = "repeated edge 0 -> 1")]
+    fn a_repeated_edge_panics() {
+        // Point 0 repeats point 1; an edge-set comparison must reject the repeat.
+        edges(&[vec![1, 1], vec![]]);
     }
 
     /// A test body that runs once for each architecture.
@@ -576,10 +586,22 @@ mod test_support {
 #[cfg(test)]
 mod construction_tests {
     use super::*;
-    use crate::graph::config;
+    use crate::{
+        graph::{DiskANNIndex, config, search::Knn, test::provider as test_provider},
+        neighbor::{BackInserter, Neighbor},
+        test::tokio::current_thread_runtime,
+    };
+    use diskann_utils::{io::read_bin, test_data_root, views::Matrix};
+    use diskann_vector::DistanceFunction;
     use half::f16;
-    use test_support::{nz, sorted_members_per_row, thread_pool};
+    use std::fs::File;
+    use test_support::{nz, thread_pool};
 
+    const SIFT: &str = "sift/siftsmall_learn_256pts.fbin";
+    const SIFT_NORMALIZED: &str = "sift/siftsmall_learn_256pts_normalized.fbin";
+
+    /// Every point is a leader (`p_samp = 1.0`), so leader sampling picks the
+    /// same set for any seed.
     fn partition_policy() -> PiPNNConfig {
         PiPNNConfig {
             c_max: nz(4),
@@ -592,32 +614,183 @@ mod construction_tests {
         }
     }
 
-    fn graph_policy(degree: usize, metric: Metric) -> Result<Config, config::ConfigError> {
-        config::Builder::new_with(degree, config::MaxDegree::same(), 16, metric.into(), |b| {
-            b.alpha(1.0);
-        })
+    /// Use alpha one and no degree slack. PiPNN does not use the build search list.
+    fn graph_policy(degree: usize, metric: Metric) -> Config {
+        let search_list_size = 16;
+        let alpha = 1.0;
+        config::Builder::new_with(
+            degree,
+            config::MaxDegree::same(),
+            search_list_size,
+            metric.into(),
+            |b| {
+                b.alpha(alpha);
+            },
+        )
         .build()
+        .unwrap()
     }
 
-    /// Build the graph of `values` with `threads` workers.
-    fn build<T: VectorRepr>(
-        values: &[T],
-        dimensions: usize,
-        config: PiPNNConfig,
-        degree: usize,
+    fn load_sift(file: &str) -> Matrix<f32> {
+        read_bin::<f32>(&mut File::open(test_data_root().join(file)).unwrap()).unwrap()
+    }
+
+    /// 256 x 0.05 = 12.8 rounds up to 13 leaders, so the fanout-10 level runs
+    /// and the leaves overlap.
+    fn sift_pipnn_config() -> PiPNNConfig {
+        PiPNNConfig {
+            c_max: nz(64),
+            p_samp: 0.05,
+            max_leaders: nz(1000),
+            fanout: vec![nz(10), nz(3)],
+            leaf_k: nz(2),
+            replicas: nz(1),
+            seed: Some(1290),
+        }
+    }
+
+    /// Degree 16 with the default alpha. PiPNN does not read the build search
+    /// list size.
+    fn sift_graph(metric: Metric) -> Config {
+        let degree = 16;
+        let l_build = 64;
+        config::Builder::new(
+            degree,
+            config::MaxDegree::default_slack(),
+            l_build,
+            metric.into(),
+        )
+        .build()
+        .unwrap()
+    }
+
+    /// Return the point nearest to the mean of `data`, under squared L2.
+    fn medoid(data: MatrixView<'_, f32>) -> usize {
+        let point_count = data.nrows();
+        let dimensions = data.ncols();
+        let mut mean = vec![0.0_f64; dimensions];
+        for row in data.row_iter() {
+            for (sum, &value) in mean.iter_mut().zip(row) {
+                *sum += f64::from(value);
+            }
+        }
+        let mean: Vec<f32> = mean
+            .into_iter()
+            .map(|sum| (sum / point_count as f64) as f32)
+            .collect();
+        let l2 = f32::distance(Metric::L2, Some(dimensions));
+        data.row_iter()
+            .enumerate()
+            .map(|(id, row)| (id, l2.evaluate_similarity(row, mean.as_slice())))
+            .min_by(|left, right| left.1.total_cmp(&right.1))
+            .unwrap()
+            .0
+    }
+
+    /// Build the PiPNN graph of `build_data` on two threads.
+    fn build_sift_graph<T: VectorRepr>(
+        build_data: MatrixView<'_, T>,
+        graph: &Config,
         metric: Metric,
-        threads: usize,
-    ) -> Vec<Vec<u32>> {
-        let data = MatrixView::try_from(values, values.len() / dimensions, dimensions).unwrap();
-        let graph = graph_policy(degree, metric).unwrap();
-        let pool = thread_pool(threads);
-        let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
-        let graph = build_graph(data, &context).unwrap();
-        graph.into_iter().map(Vec::from).collect()
+    ) -> Vec<AdjacencyList<u32>> {
+        let config = sift_pipnn_config();
+        let n_threads = 2;
+        let pool = thread_pool(n_threads);
+        let context = PiPNNBuildContext::new(config, graph, metric, &pool).unwrap();
+        build_graph(build_data, &context).unwrap()
+    }
+
+    /// Load `data` and its PiPNN graph into the test provider. One start node
+    /// points to the medoid, as the disk path starts at the medoid; the provider
+    /// leaves start nodes out of search results.
+    fn searchable_index(
+        data: MatrixView<'_, f32>,
+        graph: Config,
+        metric: Metric,
+        adjacency: Vec<AdjacencyList<u32>>,
+    ) -> DiskANNIndex<test_provider::Provider> {
+        let medoid_id = medoid(data);
+        let start_id = data.nrows() as u32;
+        let degree = graph.pruned_degree().get();
+        let provider_config = test_provider::Config::new(
+            metric,
+            degree,
+            test_provider::StartPoint::new(start_id, data.row(medoid_id).to_vec()),
+        )
+        .unwrap();
+        let start_neighbors = AdjacencyList::from_iter_untrusted([medoid_id as u32]);
+        let points = data
+            .row_iter()
+            .zip(adjacency)
+            .enumerate()
+            .map(|(id, (row, neighbors))| (id as u32, row.to_vec(), neighbors));
+        let provider = test_provider::Provider::new_from(
+            provider_config,
+            [(start_id, start_neighbors)],
+            points,
+        )
+        .unwrap();
+        DiskANNIndex::new(graph, provider, None)
+    }
+
+    /// Assert that a search for each point of `data` returns its ten nearest
+    /// distances, in order. An exact top 1 for every point also shows that
+    /// every point is reachable from the start node.
+    fn assert_exact_top_10(
+        index: &DiskANNIndex<test_provider::Provider>,
+        data: MatrixView<'_, f32>,
+        metric: Metric,
+        case: &str,
+    ) {
+        let search_l = 32;
+        let top_k = 10;
+        let point_count = data.nrows();
+        let dimensions = data.ncols();
+        let runtime = current_thread_runtime();
+        let distance = f32::distance(metric, Some(dimensions));
+        let mut mismatches = 0;
+        let mut example = String::new();
+
+        for (query_id, query) in data.row_iter().enumerate() {
+            let mut expected: Vec<f32> = data
+                .row_iter()
+                .map(|point| distance.evaluate_similarity(query, point))
+                .collect();
+            expected.sort_unstable_by(f32::total_cmp);
+            expected.truncate(top_k);
+            let mut neighbors = vec![Neighbor::<u32>::default(); top_k];
+            let stats = runtime
+                .block_on(index.search(
+                    Knn::new_default(search_l).unwrap(),
+                    &test_provider::Strategy::new(),
+                    &test_provider::Context::new(),
+                    query,
+                    &mut BackInserter::new(neighbors.as_mut_slice()),
+                ))
+                .unwrap();
+            let actual: Vec<f32> = neighbors
+                .iter()
+                .take(stats.result_count as usize)
+                .map(|neighbor| *neighbor.distance())
+                .collect();
+            // Equal distances can have different IDs, so compare distances in order.
+            if actual != expected {
+                mismatches += 1;
+                if mismatches == 1 {
+                    example = format!("query {query_id}: expected {expected:?}, actual {actual:?}");
+                }
+            }
+        }
+
+        assert_eq!(
+            mismatches, 0,
+            "{case}: {mismatches}/{point_count} queries differ; first: {example}"
+        );
     }
 
     #[test]
-    fn invalid_sampling_fractions_and_an_empty_fanout_are_rejected() {
+    fn invalid_sampling_fractions_are_rejected() {
+        // Fractions outside (0, 1] cannot select a valid sample of leaders.
         for p_samp in [
             0.0,
             -0.5,
@@ -638,6 +811,11 @@ mod construction_tests {
                 "p_samp {p_samp}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn an_empty_fanout_is_rejected() {
+        // An empty fanout list has no first level.
         let config = PiPNNConfig {
             fanout: vec![],
             ..partition_policy()
@@ -647,7 +825,9 @@ mod construction_tests {
 
     #[test]
     fn sampling_fraction_endpoints_are_accepted() {
-        for p_samp in [f64::from_bits(1), 1.0] {
+        // The smallest positive fraction and the inclusive upper bound are valid.
+        let smallest_positive = f64::from_bits(1);
+        for p_samp in [smallest_positive, 1.0] {
             let config = PiPNNConfig {
                 p_samp,
                 ..partition_policy()
@@ -659,6 +839,7 @@ mod construction_tests {
 
     #[test]
     fn a_leader_cap_below_two_is_rejected() {
+        // A split needs two leaders.
         let config = PiPNNConfig {
             max_leaders: nz(1),
             ..partition_policy()
@@ -669,12 +850,15 @@ mod construction_tests {
 
     #[test]
     fn a_build_context_checks_the_configuration() {
+        // An empty fanout must fail when the context is created, before a build.
+        let degree = 2;
+        let n_threads = 1;
         let config = PiPNNConfig {
             fanout: vec![],
             ..partition_policy()
         };
-        let graph = graph_policy(2, Metric::L2).unwrap();
-        let pool = thread_pool(1);
+        let graph = graph_policy(degree, Metric::L2);
+        let pool = thread_pool(n_threads);
 
         let error = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap_err();
 
@@ -683,8 +867,11 @@ mod construction_tests {
 
     #[test]
     fn an_empty_dataset_axis_is_rejected_before_building() {
-        let graph = graph_policy(2, Metric::L2).unwrap();
-        let pool = thread_pool(1);
+        // Each shape has one empty axis; validation must reject it before a kernel runs.
+        let degree = 2;
+        let n_threads = 1;
+        let graph = graph_policy(degree, Metric::L2);
+        let pool = thread_pool(n_threads);
         let context =
             PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, &pool).unwrap();
 
@@ -701,216 +888,52 @@ mod construction_tests {
     }
 
     #[test]
-    fn native_vector_types_build_the_expected_neighbor_graph() {
-        // Nearest choices 0 -> 1, 1 -> 0 and 2 -> 1 become a symmetric chain.
-        fn check<T: VectorRepr>(values: [T; 3]) {
-            let actual = build(&values, 1, partition_policy(), 2, Metric::L2, 2);
-
-            assert_eq!(
-                sorted_members_per_row(&actual),
-                [vec![1], vec![0, 2], vec![1]],
-                "{}",
-                std::any::type_name::<T>()
-            );
-        }
-
-        check([0.0_f32, 1.0, 4.0]);
-        check([0.0_f32, 1.0, 4.0].map(f16::from_f32));
-        check([0_i8, 1, 4]);
-        check([0_u8, 1, 4]);
-    }
-
-    #[test]
-    fn the_requested_metric_determines_leaf_neighbors() {
-        // L2's nearest choices are [2, 2, 0, 2]; cosine pairs similar directions
-        // 0 <-> 1 and 2 <-> 3; dot products give [1, 3, 3, 2].
-        // The second coordinate sits in the last dimension of an embedding.
-        let dimensions = 1537;
-        for (metric, expected) in [
-            (Metric::L2, vec![vec![2], vec![2], vec![0, 1, 3], vec![2]]),
-            (Metric::Cosine, vec![vec![1], vec![0], vec![3], vec![2]]),
-            (
-                Metric::CosineNormalized,
-                vec![vec![1], vec![0], vec![3], vec![2]],
-            ),
-            (
-                Metric::InnerProduct,
-                vec![vec![1], vec![0, 3], vec![3], vec![1, 2]],
-            ),
+    fn every_point_finds_its_exact_top_10_for_each_metric() {
+        // Raw SIFT rows serve L2 and cosine. Normalized cosine and inner product
+        // need unit vectors, so they use the normalized file.
+        for (metric, file) in [
+            (Metric::L2, SIFT),
+            (Metric::Cosine, SIFT),
+            (Metric::CosineNormalized, SIFT_NORMALIZED),
+            (Metric::InnerProduct, SIFT_NORMALIZED),
         ] {
-            let values = test_support::packed_points(
-                &[[1.0, 0.0], [5.0, 2.0], [1.0, 3.0], [0.0, 9.0]],
-                dimensions,
-                metric == Metric::CosineNormalized,
-            );
+            let data = load_sift(file);
+            let graph = sift_graph(metric);
 
-            let actual = build(&values, dimensions, partition_policy(), 3, metric, 2);
+            let adjacency = build_sift_graph(data.as_view(), &graph, metric);
+            let index = searchable_index(data.as_view(), graph, metric, adjacency);
 
-            assert_eq!(
-                sorted_members_per_row(&actual),
-                sorted_members_per_row(&expected),
-                "{metric:?}"
-            );
+            assert_exact_top_10(&index, data.as_view(), metric, &format!("{metric:?}"));
         }
     }
 
     #[test]
-    fn splitting_uses_the_requested_metric_to_group_points() {
-        // Four points force splitting at c_max=2. Every point is sampled, so
-        // leader order cannot change memberships. With L2, leader 0 gets {0,2}
-        // and leader 2 gets all four points, which then split into singletons.
-        // Cosine pairs directions {0,1} and {2,3}. Inner product picks leaders
-        // {1,2} for points 0/1 and {2,3} for points 2/3; the oversized leader-2
-        // cluster then splits into those same pairs using fanout one.
-        // Every two-point leaf contributes its only pair; degree three retains
-        // every edge. The graph therefore exposes partition membership directly.
-        let config = PiPNNConfig {
-            c_max: nz(2),
-            ..partition_policy()
-        };
-        for (metric, expected) in [
-            (Metric::L2, vec![vec![2], vec![], vec![0], vec![]]),
-            (Metric::Cosine, vec![vec![1], vec![0], vec![3], vec![2]]),
-            (
-                Metric::CosineNormalized,
-                vec![vec![1], vec![0], vec![3], vec![2]],
-            ),
-            (
-                Metric::InnerProduct,
-                vec![vec![1], vec![0], vec![3], vec![2]],
-            ),
-        ] {
-            let values = test_support::packed_points(
-                &[[1.0, 0.0], [6.0, 1.0], [2.0, 4.0], [0.0, 9.0]],
-                2,
-                metric == Metric::CosineNormalized,
-            );
+    fn every_point_finds_its_exact_top_10_for_each_vector_type() {
+        let data = load_sift(SIFT);
+        // These bounds make f16 and u8 conversion exact, so every build must
+        // find the same distances against the original f32 rows.
+        assert!(
+            data.as_slice()
+                .iter()
+                .all(|&value| value.fract() == 0.0 && (0.0..=255.0).contains(&value)),
+            "raw SIFT values must be integers in 0..=255 for exact f16 and u8 conversion"
+        );
+        // i8 is not covered: SIFT values reach 143.
+        let half = data.map(|&value| f16::from_f32(value));
+        let unsigned = data.map(|&value| value as u8);
+        let metric = Metric::L2;
+        let graph = sift_graph(metric);
 
-            let actual = build(&values, 2, config.clone(), 3, metric, 2);
+        let adjacency = build_sift_graph(data.as_view(), &graph, metric);
+        let index = searchable_index(data.as_view(), graph.clone(), metric, adjacency);
+        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<f32>());
 
-            assert_eq!(
-                sorted_members_per_row(&actual),
-                sorted_members_per_row(&expected),
-                "{metric:?}"
-            );
-        }
-    }
+        let adjacency = build_sift_graph(half.as_view(), &graph, metric);
+        let index = searchable_index(data.as_view(), graph.clone(), metric, adjacency);
+        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<f16>());
 
-    #[test]
-    fn final_pruning_cuts_merged_candidates_to_the_degree() {
-        let config = PiPNNConfig {
-            leaf_k: nz(2),
-            ..partition_policy()
-        };
-
-        let actual = build(&[0.0_f32, 1.0, 4.0], 1, config, 1, Metric::L2, 2);
-
-        assert_eq!(actual, [vec![1], vec![0], vec![1]]);
-    }
-
-    #[test]
-    fn overlapping_partitions_build_the_same_deduplicated_graph() {
-        // Sampling every point with fanout 2 makes two overlapping copies
-        // of each close pair. Neither replicas nor worker count may duplicate edges.
-        for (workers, replicas) in [(1, 1), (3, 2)] {
-            let config = PiPNNConfig {
-                c_max: nz(2),
-                replicas: nz(replicas),
-                ..partition_policy()
-            };
-
-            let actual = build(
-                &[0.0_f32, 1.0, 10.0, 11.0],
-                1,
-                config,
-                2,
-                Metric::L2,
-                workers,
-            );
-
-            assert_eq!(
-                actual,
-                [vec![1], vec![0], vec![3], vec![2]],
-                "{workers} workers, {replicas} replicas"
-            );
-        }
-    }
-
-    #[test]
-    fn a_single_point_has_one_empty_adjacency_list() {
-        let actual = build(&[3.0_f32], 1, partition_policy(), 2, Metric::L2, 1);
-
-        assert_eq!(actual, [Vec::<u32>::new()]);
-    }
-
-    #[test]
-    fn multi_level_builds_give_valid_rows_for_every_metric() {
-        // With 1,000 points and c_max 32, the build splits over several levels,
-        // makes overlapping leaves, merges their candidates on four workers and
-        // prunes lists above the degree. Each row must be non-empty, within the
-        // degree, and free of duplicates and self edges. The f16 build checks
-        // that every step reads f16 rows, which the smaller builds never split.
-        fn check<T: VectorRepr>(values: &[T], metric: Metric) {
-            let (dimensions, degree) = (16, 8);
-            let config = PiPNNConfig {
-                c_max: nz(32),
-                p_samp: 0.05,
-                max_leaders: nz(1000),
-                fanout: vec![nz(4), nz(2)],
-                leaf_k: nz(2),
-                replicas: nz(1),
-                seed: Some(1290),
-            };
-
-            let actual = build(values, dimensions, config, degree, metric, 4);
-
-            for (point, neighbors) in actual.iter().enumerate() {
-                let mut distinct = neighbors.clone();
-                distinct.sort_unstable();
-                distinct.dedup();
-                assert!(
-                    !neighbors.is_empty()
-                        && neighbors.len() <= degree
-                        && distinct.len() == neighbors.len()
-                        && !neighbors.contains(&(point as u32)),
-                    "{metric:?}, {}, point {point}: {neighbors:?}",
-                    std::any::type_name::<T>()
-                );
-            }
-        }
-
-        for metric in [
-            Metric::L2,
-            Metric::Cosine,
-            Metric::CosineNormalized,
-            Metric::InnerProduct,
-        ] {
-            let mut values = test_support::dense_points(1000, 16, 1290);
-            if metric == Metric::CosineNormalized {
-                test_support::normalize(&mut values, 16);
-            }
-            check(&values, metric);
-            check(
-                &values.iter().map(|&x| f16::from_f32(x)).collect::<Vec<_>>(),
-                metric,
-            );
-        }
-    }
-
-    #[test]
-    fn copies_of_one_vector_build_leaf_local_edges() {
-        // Every leader is a copy, so each point ties at every split. The build
-        // splits the six copies into two leaves of three points.
-        let actual = build(&[1.0_f32; 6], 1, partition_policy(), 2, Metric::L2, 2);
-
-        for (point, neighbors) in actual.iter().enumerate() {
-            assert!(!neighbors.is_empty(), "point {point}");
-            assert!(
-                neighbors
-                    .iter()
-                    .all(|&neighbor| neighbor / 3 == point as u32 / 3),
-                "point {point}: {neighbors:?}"
-            );
-        }
+        let adjacency = build_sift_graph(unsigned.as_view(), &graph, metric);
+        let index = searchable_index(data.as_view(), graph, metric, adjacency);
+        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<u8>());
     }
 }
