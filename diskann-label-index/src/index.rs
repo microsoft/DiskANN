@@ -286,6 +286,7 @@ impl EncodedLabelQuery<'_> {
     }
 
     /// Return whether `vec_id` satisfies this compiled label query.
+    #[inline]
     pub fn is_match(&self, vec_id: u32) -> bool {
         if vec_id >= self.num_vectors {
             return false;
@@ -305,7 +306,13 @@ impl EncodedLabelQuery<'_> {
                 & mask
                 != 0;
         }
+        self.is_match_generic(vec_id)
+    }
 
+    // Keep the generic evaluator out of line so exact point plans remain small enough to inline
+    // across crate boundaries.
+    #[inline(never)]
+    fn is_match_generic(&self, vec_id: u32) -> bool {
         let terminal_matches = |label_id: Option<u32>| {
             let Some(label_id) = label_id.map(|id| id as usize) else {
                 return false;
@@ -821,6 +828,7 @@ impl EncodedLabelQuery<'_> {
 }
 
 impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for EncodedLabelQuery<'_> {
+    #[inline]
     fn is_match(&self, id: u32) -> bool {
         EncodedLabelQuery::is_match(self, id)
     }
