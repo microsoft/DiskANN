@@ -171,11 +171,12 @@ unsafe impl<const BYTES: usize> Prefetch for Unrolled<BYTES> {
 /// # Safety
 ///
 /// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "avx2"),
+    target_arch = "aarch64",
+))]
 #[inline(always)]
 pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
-    use std::arch::x86_64::*;
-
     // Fetch the final location (the one containing the tag) first.
     let stride = Bytes::CACHELINE.value();
     let ptr = ptr.cast::<i8>();
@@ -185,24 +186,17 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
     }
 
     // SAFETY: Inherited from caller.
-    unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
+    unsafe { diskann_vector::prefetch_cache_line(ptr.add(stride * (lines - 1))) };
     for i in 0..(lines - 1) {
         // SAFETY: Inherited from caller.
-        unsafe {
-            _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
-        }
+        unsafe { diskann_vector::prefetch_cache_line(ptr.add(stride * i)) };
     }
 }
 
-/// Prefetch `len` bytes beginning at `ptr`.
-///
-/// Prefetch locations are spaced one cache-line width apart. The final location is
-/// prefetched first, followed by the rest in ascending order.
-///
-/// # Safety
-///
-/// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "avx2"),
+    target_arch = "aarch64"
+)))]
 pub(crate) unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
 
 ///////////
