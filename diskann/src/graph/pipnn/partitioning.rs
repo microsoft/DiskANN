@@ -13,6 +13,12 @@
 //! the fanout of each level, and levels after the schedule use fanout 1. Each
 //! replica repeats the process with a different seed.
 //!
+//! A fanout-1 split in which one child gets every point makes no progress, for
+//! example when all sampled leaders are copies of one vector. The split cuts
+//! that child into equal leaves in point order, and the build logs a warning
+//! with the number of points it cut. These leaves group points arbitrarily,
+//! which can lower recall.
+//!
 //! The partition kernel computes point-to-leader distances and selects the
 //! nearest leaders. This module samples leaders, gathers vectors, and groups the
 //! assignments into children.
@@ -70,6 +76,8 @@ struct Cluster {
 struct ClusterSplit {
     next_level: Vec<Cluster>,
     leaves: Vec<Vec<u32>>,
+    /// Number of points that the split cut into leaves in point order.
+    cut_points: usize,
 }
 
 /// Scratch for one assignment stripe: the gathered `f32` points and the kernel
@@ -112,15 +120,25 @@ where
     T: VectorRepr + Send + Sync,
 {
     let mut leaves = Vec::new();
+    let mut cut_points = 0;
     let stripe_buffers = StripeBufferPool::new((), 0, None);
     // Replica `r` uses seed `base + r`. `StdRng::seed_from_u64` gives
     // independent streams for adjacent seeds.
     let base_seed = config.seed.unwrap_or_else(rand::random);
     for replica in 0..config.replicas.get() {
         let seed = base_seed.wrapping_add(replica as u64);
-        let mut replica_leaves =
+        let (mut replica_leaves, replica_cut_points) =
             partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
         leaves.append(&mut replica_leaves);
+        cut_points += replica_cut_points;
+    }
+    if cut_points > 0 {
+        tracing::warn!(
+            cut_points,
+            "PiPNN cut {cut_points} points into leaves in point order because no split \
+             could shrink their clusters; these leaves group points arbitrarily and can \
+             lower recall"
+        );
     }
     Ok(leaves)
 }
@@ -137,7 +155,7 @@ fn partition_replica<A, M, T>(
     config: &PiPNNConfig,
     seed: u64,
     stripe_buffers: &StripeBufferPool,
-) -> ANNResult<Vec<Vec<u32>>>
+) -> ANNResult<(Vec<Vec<u32>>, usize)>
 where
     A: Simd,
     M: PartitionMetric,
@@ -146,10 +164,11 @@ where
     let initial_point_ids = (0..data.nrows() as u32).collect();
     let c_max = config.c_max.get();
     if data.nrows() <= c_max {
-        return Ok(vec![initial_point_ids]);
+        return Ok((vec![initial_point_ids], 0));
     }
 
     let mut leaves = Vec::new();
+    let mut cut_points = 0;
     let mut pending = vec![Cluster {
         point_ids: initial_point_ids,
         level: 0,
@@ -166,10 +185,11 @@ where
         for mut split in splits? {
             next_level.append(&mut split.next_level);
             leaves.append(&mut split.leaves);
+            cut_points += split.cut_points;
         }
         pending = next_level;
     }
-    Ok(leaves)
+    Ok((leaves, cut_points))
 }
 
 /// Split one cluster into leaves and clusters for the next level.
@@ -206,6 +226,7 @@ where
                 seed: rng.random(),
             }],
             leaves: Vec::new(),
+            cut_points: 0,
         });
     }
 
@@ -221,6 +242,7 @@ where
 
     let mut next_level = Vec::new();
     let mut leaves = Vec::new();
+    let mut cut_points = 0;
     for child in children {
         if child.is_empty() {
             continue;
@@ -237,6 +259,7 @@ where
             // keeps the graph valid.
             let leaf_len = child.len().div_ceil(child.len().div_ceil(c_max));
             leaves.extend(child.chunks(leaf_len).map(<[u32]>::to_vec));
+            cut_points += child.len();
         } else {
             next_level.push(Cluster {
                 point_ids: child,
@@ -245,7 +268,11 @@ where
             });
         }
     }
-    Ok(ClusterSplit { next_level, leaves })
+    Ok(ClusterSplit {
+        next_level,
+        leaves,
+        cut_points,
+    })
 }
 
 /// Sample `count` distinct leaders from the points of a cluster.
@@ -702,6 +729,7 @@ mod tests {
                 "level {level}"
             );
             assert!(actual.next_level.is_empty(), "level {level}");
+            assert_eq!(actual.cut_points, 0, "level {level}");
         }
     }
 
@@ -757,6 +785,7 @@ mod tests {
             [vec![0, 1], vec![2, 3], vec![4]]
         );
         assert!(actual.next_level.is_empty());
+        assert_eq!(actual.cut_points, 5);
     }
 
     #[test]
