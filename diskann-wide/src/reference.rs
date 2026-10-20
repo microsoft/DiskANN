@@ -251,6 +251,12 @@ impl ReferenceCast<f32> for i32 {
     }
 }
 
+impl ReferenceCast<f32> for u32 {
+    fn reference_cast(self) -> f32 {
+        self as f32
+    }
+}
+
 impl ReferenceCast<u8> for i16 {
     fn reference_cast(self) -> u8 {
         self as u8

@@ -1414,9 +1414,9 @@ cfg_if::cfg_if! {
             arch.retarget()
         }
 
-        dispatch_map!(1, AsFull, Neon, downcast);
-        dispatch_map!(2, AsFull, Neon, downcast);
-        dispatch_map!(4, AsFull, Neon, downcast);
+        dispatch_map!(1, AsFull, Neon);
+        dispatch_map!(2, AsFull, Neon);
+        dispatch_map!(4, AsFull, Neon);
         dispatch_map!(8, AsFull, Neon, downcast);
 
         dispatch_map!(1, AsData<1>, Neon, downcast);
