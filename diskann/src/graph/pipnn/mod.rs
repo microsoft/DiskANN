@@ -274,6 +274,10 @@ impl<'a> PiPNNBuildContext<'a> {
 
 /// Build one adjacency list for each point of `data`.
 ///
+/// Each step converts the rows it reads to `f32` with
+/// [`VectorRepr::as_f32_into`], so any element type that converts to `f32`
+/// works, including compressed ones.
+///
 /// The graph links dataset points only; the caller selects start points and
 /// serializes the index.
 pub fn build_graph<T>(
