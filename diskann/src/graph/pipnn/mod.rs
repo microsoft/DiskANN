@@ -193,6 +193,8 @@ pub enum PiPNNConfigError {
     SamplingFraction(f64),
     #[error("fanout must not be empty")]
     EmptyFanout,
+    #[error("max_leaders ({0}) must be at least 2")]
+    MaxLeaders(usize),
     #[error("num_hash_planes ({0}) must be in [1, {max}]", max = lsh::MAX_PLANES)]
     HashPlanes(usize),
     #[error("l_max ({0}) must be in [1, {max}]", max = hash_prune::MAX_RESERVOIR_LEN)]
@@ -215,10 +217,10 @@ crate::convert_error!(PiPNNConfigError);
 /// The DiskANN graph [`Config`] supplies the degree, alpha, and prune kind.
 ///
 /// The default configuration is `c_max = 512`, `p_samp = 0.005`,
-/// `fanout = [10, 3]`, `leaf_k = 2` and `replicas = 1`. Each point then joins
-/// about 30 leaves, the product of the fanout values. Larger `c_max`, fanout
-/// values, `leaf_k` and `replicas` all give each point more or nearer candidates,
-/// which raises recall and makes the build slower.
+/// `max_leaders = 1000`, `fanout = [10, 3]`, `leaf_k = 2` and `replicas = 1`.
+/// Each point then joins about 30 leaves, the product of the fanout values.
+/// Larger `c_max`, fanout values, `leaf_k` and `replicas` all give each point
+/// more or nearer candidates, which raises recall and makes the build slower.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PiPNNConfig {
     /// Maximum number of points in a leaf. A larger leaf holds more of the true
@@ -228,8 +230,14 @@ pub struct PiPNNConfig {
     /// Fraction of the points of a cluster that a split samples as leaders, in
     /// `(0, 1]`. More leaders give smaller children and fewer split levels, but
     /// each split costs `points x leaders x dimensions` multiply-adds. A split
-    /// samples at most 1,000 leaders.
+    /// samples at least 2 and at most `max_leaders` leaders.
     pub p_samp: f64,
+    /// Maximum number of leaders in one split, at least 2. A split costs
+    /// `points x leaders x dimensions` multiply-adds, so the cap bounds the
+    /// first splits of a large dataset, where `p_samp` alone samples many
+    /// leaders: 10M points at `p_samp = 0.005` would give 50,000. The PiPNN
+    /// paper uses about 1,000.
+    pub max_leaders: NonZeroUsize,
     /// Number of nearest leaders that each point joins, for each split level.
     /// Levels after this schedule use one leader. The schedule must not be empty.
     /// Larger values make leaves overlap more, so each point gets candidates
@@ -257,6 +265,9 @@ impl PiPNNConfig {
         }
         if self.fanout.is_empty() {
             return Err(PiPNNConfigError::EmptyFanout);
+        }
+        if self.max_leaders.get() < 2 {
+            return Err(PiPNNConfigError::MaxLeaders(self.max_leaders.get()));
         }
         Ok(())
     }
@@ -663,6 +674,7 @@ mod construction_tests {
         PiPNNConfig {
             c_max: nz(4),
             p_samp: 1.0,
+            max_leaders: nz(1000),
             fanout: vec![nz(2)],
             leaf_k: nz(1),
             replicas: nz(1),
@@ -733,6 +745,16 @@ mod construction_tests {
 
             assert_eq!(config.validate(), Ok(()), "p_samp {p_samp}");
         }
+    }
+
+    #[test]
+    fn a_leader_cap_below_two_is_rejected() {
+        let config = PiPNNConfig {
+            max_leaders: nz(1),
+            ..partition_policy()
+        };
+
+        assert_eq!(config.validate(), Err(PiPNNConfigError::MaxLeaders(1)));
     }
 
     #[test]
@@ -923,6 +945,7 @@ mod construction_tests {
             let config = PiPNNConfig {
                 c_max: nz(32),
                 p_samp: 0.05,
+                max_leaders: nz(1000),
                 fanout: vec![nz(4), nz(2)],
                 leaf_k: nz(2),
                 replicas: nz(1),

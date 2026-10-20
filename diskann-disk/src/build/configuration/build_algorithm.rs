@@ -24,6 +24,8 @@ pub struct PiPNNParameters {
     pub c_max: NonZeroUsize,
     /// Fraction of a cluster sampled as leaders.
     pub p_samp: f64,
+    /// Maximum number of leaders in one split.
+    pub max_leaders: NonZeroUsize,
     /// Number of nearest leaders retained at each partition level.
     pub fanout: Vec<NonZeroUsize>,
     /// Number of nearest neighbors selected within each leaf.
@@ -73,6 +75,7 @@ impl From<&HashPruneParameters> for diskann::graph::pipnn::HashPruneConfig {
 impl Default for PiPNNParameters {
     fn default() -> Self {
         const C_MAX: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+        const MAX_LEADERS: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
         const FANOUT: [NonZeroUsize; 2] = [
             NonZeroUsize::new(10).unwrap(),
             NonZeroUsize::new(3).unwrap(),
@@ -81,6 +84,7 @@ impl Default for PiPNNParameters {
         Self {
             c_max: C_MAX,
             p_samp: 0.005,
+            max_leaders: MAX_LEADERS,
             fanout: FANOUT.to_vec(),
             k: K,
             replicas: NonZeroUsize::MIN,
@@ -95,6 +99,7 @@ impl From<&PiPNNParameters> for diskann::graph::pipnn::PiPNNConfig {
         Self {
             c_max: config.c_max,
             p_samp: config.p_samp,
+            max_leaders: config.max_leaders,
             fanout: config.fanout.clone(),
             leaf_k: config.k,
             replicas: config.replicas,
@@ -156,6 +161,7 @@ mod tests {
             panic!("expected PiPNN");
         };
         assert_eq!(config.c_max.get(), 512);
+        assert_eq!(config.max_leaders.get(), 1000);
         assert_eq!(
             config.fanout.iter().map(|f| f.get()).collect::<Vec<_>>(),
             [10, 3]

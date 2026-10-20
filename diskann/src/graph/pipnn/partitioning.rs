@@ -23,9 +23,9 @@
 //!
 //! Buffer sizes use plain multiplication. The IDs of one split are distinct
 //! dataset rows, so a gathered `rows x dimensions` buffer is not larger than the
-//! dataset. An assignment buffer holds `points x fanout` IDs. With at most
-//! `u32::MAX` points and `LEADER_CAP` leaders, this count fits in a 64-bit
-//! `usize`.
+//! dataset. An assignment buffer holds `points x fanout` IDs. The fanout of a
+//! split is below its leader count, which is at most its point count, so with at
+//! most `u32::MAX` points this count fits in a 64-bit `usize`.
 
 use crate::{ANNResult, utils::VectorRepr};
 use diskann_utils::{
@@ -44,25 +44,16 @@ use super::{
     topk::UNASSIGNED,
 };
 
-/// Maximum number of leaders in one split. The PiPNN paper uses the same hard
-/// cap ("typically 1000", Section 4.1). A split costs
-/// `points x leaders x dimensions` multiply-adds. Without the cap, the first
-/// split of 10M points at `p_samp = 0.005` samples 50,000 leaders and does 50
-/// times the work.
-const LEADER_CAP: usize = 1_000;
 /// Number of points in one assignment stripe. Short stripes repeat the fixed
 /// cost of a kernel call, and tall stripes overflow the last-level cache once
-/// every worker holds one. 256 points stayed within 1.4% of the best height on
-/// average in sweeps over x86 CPUs, data types, dimensions and leader counts. A
-/// height from the detected cache size did no better, because a VM reports a
-/// last-level cache that other tenants share.
+/// every worker holds one. The height does not follow the detected cache size,
+/// because a virtual machine reports a last-level cache that other tenants
+/// share.
 const ASSIGNMENT_STRIPE_POINTS: usize = 256;
 /// Clusters with at least this many points group their points by leader in
 /// parallel. Such clusters occur at the first levels, where few splits run at
-/// the same time. Serial grouping of 10M points at fanout 10 takes 0.59 s, and
-/// parallel grouping takes 0.15 s on 16 threads (AMD EPYC 7763). The serial time
-/// does not decrease with more threads, so its share of the build increases on
-/// larger machines. Below this size, serial grouping takes a few milliseconds.
+/// the same time, so a serial pass would leave most workers idle. Smaller
+/// clusters group serially, because the parallel pass costs more than it saves.
 const PARALLEL_GROUPING_MIN_POINTS: usize = 100_000;
 
 /// A cluster with more than `c_max` points that waits for its split.
@@ -200,7 +191,11 @@ where
         .get(cluster.level)
         .map_or(1, |fanout| fanout.get());
     let c_max = config.c_max.get();
-    let leader_count = sampled_leader_count(cluster.point_ids.len(), config.p_samp);
+    let leader_count = sampled_leader_count(
+        cluster.point_ids.len(),
+        config.p_samp,
+        config.max_leaders.get(),
+    );
     if fanout > 1 && fanout >= leader_count {
         // Every point would join every leader, and each child would repeat this
         // cluster. Split the cluster at the next level instead.
@@ -260,9 +255,9 @@ fn sample_leaders(points: &[u32], count: usize, rng: &mut StdRng) -> Vec<u32> {
 
 /// Return the number of leaders for a cluster of `points` points.
 ///
-/// A split needs two leaders. `LEADER_CAP` bounds the cost of one split.
-fn sampled_leader_count(points: usize, sampling_fraction: f64) -> usize {
-    ((points as f64 * sampling_fraction).ceil() as usize).clamp(2, LEADER_CAP)
+/// A split needs two leaders. `max_leaders` bounds the cost of one split.
+fn sampled_leader_count(points: usize, sampling_fraction: f64, max_leaders: usize) -> usize {
+    ((points as f64 * sampling_fraction).ceil() as usize).clamp(2, max_leaders)
 }
 
 /// Assign each point to its `fanout` nearest leaders and group the points by
@@ -446,6 +441,7 @@ mod tests {
         PiPNNConfig {
             c_max: nz(2),
             p_samp: 1.0,
+            max_leaders: nz(1000),
             fanout: vec![nz(2)],
             leaf_k: nz(1),
             replicas: nz(1),
@@ -472,13 +468,13 @@ mod tests {
             (7, 0.31, 3), // 2.17 rounds up.
             (7, 1.0, 7),
             (999, 1.0, 999),
-            (1000, 1.0, LEADER_CAP),
-            (1001, 1.0, LEADER_CAP),
+            (1000, 1.0, 1000),
+            (1001, 1.0, 1000),
         ] {
             let case = format!("{point_count} points, fraction {fraction}");
             let ids: Vec<_> = (0..point_count).map(|id| 10 + 3 * id).collect();
 
-            let count = sampled_leader_count(ids.len(), fraction);
+            let count = sampled_leader_count(ids.len(), fraction, 1000);
             let mut leaders = sample_leaders(&ids, count, &mut StdRng::seed_from_u64(1290));
 
             assert_eq!(leaders.len(), expected_count, "{case}");
