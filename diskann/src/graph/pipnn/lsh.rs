@@ -43,7 +43,7 @@ impl LshSketches {
         seed: u64,
     ) -> ANNResult<Self> {
         let npoints = data.nrows();
-        let ndims = data.ncols();
+        let ndims = super::conversion::f32_dimensions(data)?;
         let hyperplane_len = num_planes.checked_mul(ndims).ok_or_else(|| {
             ANNError::message(format!(
                 "LSH matrix shape {num_planes} x {ndims} overflows usize"
@@ -67,7 +67,7 @@ impl LshSketches {
             // Miri cannot execute Rayon's crossbeam dependency with strict provenance.
             let mut buffer = Vec::new();
             for (point, sketch_row) in sketches.chunks_mut(num_planes).enumerate() {
-                fill_sketch_row(data, point, &hyperplanes, &mut buffer, sketch_row)?;
+                fill_sketch_row(data, ndims, point, &hyperplanes, &mut buffer, sketch_row)?;
             }
         }
 
@@ -77,7 +77,7 @@ impl LshSketches {
                 .par_chunks_mut(num_planes)
                 .enumerate()
                 .try_for_each_init(Vec::new, |buffer, (point, sketch_row)| {
-                    fill_sketch_row(data, point, &hyperplanes, buffer, sketch_row)
+                    fill_sketch_row(data, ndims, point, &hyperplanes, buffer, sketch_row)
                 })?;
         }
 
@@ -102,12 +102,12 @@ impl LshSketches {
 
 fn fill_sketch_row<T: VectorRepr>(
     data: MatrixView<'_, T>,
+    dimensions: usize,
     point: usize,
     hyperplanes: &[f32],
     buffer: &mut Vec<f32>,
     sketch_row: &mut [f32],
 ) -> ANNResult<()> {
-    let dimensions = data.ncols();
     buffer.resize(dimensions, 0.0);
     super::conversion::as_f32_into(data.row(point), &mut buffer[..dimensions])
         .map_err(Into::<ANNError>::into)

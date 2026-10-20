@@ -37,7 +37,7 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    conversion::gather_as_f32,
+    conversion::{f32_dimensions, gather_as_f32},
     partition_kernel::{PartitionKernelWorkspace, assign_leaders},
     partition_metric::PartitionMetric,
     simd::Simd,
@@ -283,8 +283,9 @@ where
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
-    let mut leader_values = Matrix::new(0.0f32, leader_ids.len(), data.ncols());
-    gather_as_f32(data, leader_ids, leader_values.as_mut_slice())?;
+    let dimensions = f32_dimensions(data)?;
+    let mut leader_values = Matrix::new(0.0f32, leader_ids.len(), dimensions);
+    gather_as_f32(data, leader_ids, leader_values.as_mut_view())?;
 
     let leaders = M::create_leaders(leader_values.as_view());
     let leader_count = M::leader_count(&leaders);
@@ -301,6 +302,7 @@ where
                 arch,
                 data,
                 stripe_ids,
+                dimensions,
                 &leaders,
                 &mut stripe_buffers.get_ref(()),
                 stripe_assignments,
@@ -321,6 +323,7 @@ fn assign_point_stripe<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     point_ids: &[u32],
+    dimensions: usize,
     leaders: &M::Leaders<'_>,
     buffers: &mut StripeBuffers,
     assignments: MutMatrixView<'_, u32>,
@@ -331,7 +334,6 @@ where
     T: VectorRepr,
 {
     let point_count = point_ids.len();
-    let dimensions = data.ncols();
     let point_values_len = point_count * dimensions;
     // The buffer keeps its largest length. This stripe uses a prefix of it.
     if buffers.point_values.len() < point_values_len {
@@ -346,7 +348,7 @@ where
         point_count,
         dimensions,
     )?;
-    gather_as_f32(data, point_ids, points.as_mut_slice())?;
+    gather_as_f32(data, point_ids, points.as_mut_view())?;
     assign_leaders::<A, M>(
         arch,
         points.as_view(),
@@ -616,6 +618,7 @@ mod tests {
                 ARCH,
                 data,
                 ids,
+                1,
                 &leaders,
                 &mut buffers,
                 assignments.as_mut_view(),
