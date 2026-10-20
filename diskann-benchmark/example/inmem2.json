@@ -1,6 +1,6 @@
 {
   "search_directories": [
-    "test_data/yfcc"
+    "test_data/disk_index_search"
   ],
   "output_directory": null,
   "jobs": [
@@ -15,17 +15,17 @@
           "pruned_degree": 28
         },
         "data": {
-          "data": "yfcc_10k.fbin",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
           "data_type": "float32",
           "distance": "squared_l2"
         },
         "quantization": null,
         "search": {
-          "groundtruth": "groundtruth.bin",
+          "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
           "num_threads": [
             4
           ],
-          "queries": "yfcc_query_100.fbin",
+          "queries": "disk_index_sample_query_10pts.fbin",
           "reps": 3,
           "runs": [
             {
@@ -54,7 +54,7 @@
           "pruned_degree": 28
         },
         "data": {
-          "data": "yfcc_10k.fbin",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
           "data_type": "float32",
           "distance": "squared_l2"
         },
@@ -64,11 +64,56 @@
           }
         },
         "search": {
-          "groundtruth": "groundtruth.bin",
+          "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
           "num_threads": [
             4
           ],
-          "queries": "yfcc_query_100.fbin",
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "reps": 3,
+          "runs": [
+            {
+              "recall_k": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50
+              ],
+              "search_n": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "inmem2",
+      "content": {
+        "build": {
+          "alpha": 1.2,
+          "l_build": 100,
+          "max_degree": 32,
+          "num_threads": 4,
+          "pruned_degree": 28
+        },
+        "data": {
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "data_type": "float32",
+          "distance": "squared_l2"
+        },
+        "quantization": {
+          "product": {
+            "chunks": 32,
+            "centers": 32,
+            "seed": 1
+          }
+        },
+        "search": {
+          "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
+          "num_threads": [
+            4
+          ],
+          "queries": "disk_index_sample_query_10pts.fbin",
           "reps": 3,
           "runs": [
             {

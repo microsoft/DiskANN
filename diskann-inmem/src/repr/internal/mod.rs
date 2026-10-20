@@ -10,6 +10,9 @@ pub(super) mod intrusive;
 #[cfg(any(feature = "quantization", test))]
 pub(super) mod simple;
 
+#[cfg(feature = "quantization")]
+pub(super) mod quantization;
+
 pub(super) mod macros;
 
 //////////
