@@ -388,7 +388,7 @@ fn prefix_exact_bloom_specializes_two_label_dnf_point_checks() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("labels.jsonl");
     let output = dir.path().join("labels.bloom.bin");
-    std::fs::write(&input, "[\"A\",\"B\"]\n\"A\"\n\"B\"\n\"C\"\n").unwrap();
+    std::fs::write(&input, "[\"A\",\"B\"]\n\"A\"\n\"A\"\n\"C\"\n").unwrap();
     let config = BloomFilterConfig::new(128, 4)
         .unwrap()
         .with_exact_label_count(2)
@@ -398,6 +398,7 @@ fn prefix_exact_bloom_specializes_two_label_dnf_point_checks() {
 
     let exact_pair = compile(&index, &["A&B"], FilterExpressionType::DNF);
     assert!(exact_pair.uses_exact_and2_point_plan());
+    assert_eq!(exact_pair.exact_and2_rows(), Some((1, 0)));
     assert!(!QueryLabelProvider::cache_rejections(&exact_pair));
     assert_eq!(matching_ids(&exact_pair, index.num_vectors()), vec![0]);
     assert_eq!(exact_pair.count_matches(), 1);

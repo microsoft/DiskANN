@@ -207,8 +207,8 @@ struct CompiledPlan {
 enum PointPlan {
     Generic,
     ExactAnd2 {
-        left_word_offset: usize,
-        right_word_offset: usize,
+        first_word_offset: usize,
+        second_word_offset: usize,
     },
 }
 
@@ -247,6 +247,24 @@ impl EncodedLabelQuery<'_> {
     #[cfg(test)]
     pub(crate) fn uses_exact_and2_point_plan(&self) -> bool {
         matches!(self.point_plan, PointPlan::ExactAnd2 { .. })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exact_and2_rows(&self) -> Option<(usize, usize)> {
+        let PointPlan::ExactAnd2 {
+            first_word_offset,
+            second_word_offset,
+        } = &self.point_plan
+        else {
+            return None;
+        };
+        let LabelIndexPayload::Bloom { words_per_row, .. } = self.payload.as_ref() else {
+            return None;
+        };
+        Some((
+            *first_word_offset / *words_per_row,
+            *second_word_offset / *words_per_row,
+        ))
     }
 
     /// Return a conservative bound on exact matching vectors, if exact label counts were stored.
@@ -292,19 +310,19 @@ impl EncodedLabelQuery<'_> {
             return false;
         }
         if let PointPlan::ExactAnd2 {
-            left_word_offset,
-            right_word_offset,
-        } = self.point_plan
+            first_word_offset,
+            second_word_offset,
+        } = &self.point_plan
         {
             let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
                 unreachable!("exact-row point plans require a Bloom payload")
             };
             let word_index = vec_id as usize / 64;
             let mask = 1u64 << (vec_id % 64);
-            return bits[left_word_offset + word_index]
-                & bits[right_word_offset + word_index]
-                & mask
-                != 0;
+            if bits[*first_word_offset + word_index] & mask == 0 {
+                return false;
+            }
+            return bits[*second_word_offset + word_index] & mask != 0;
         }
         self.is_match_generic(vec_id)
     }
@@ -1393,7 +1411,7 @@ impl EncodedLabelIndex {
         S: AsRef<str>,
     {
         let plan = compile_plan(clauses, expression_type, &self.label_ids)?;
-        let point_plan = compile_point_plan(&plan, &self.payload);
+        let point_plan = compile_point_plan(&plan, &self.payload, self.counts.as_deref());
         Ok(EncodedLabelQuery {
             num_vectors: self.num_vectors,
             payload: Arc::clone(&self.payload),
@@ -1476,7 +1494,11 @@ fn compile_plan<S: AsRef<str>>(
     })
 }
 
-fn compile_point_plan(plan: &CompiledPlan, payload: &LabelIndexPayload) -> PointPlan {
+fn compile_point_plan(
+    plan: &CompiledPlan,
+    payload: &LabelIndexPayload,
+    counts: Option<&[u32]>,
+) -> PointPlan {
     let LabelIndexPayload::Bloom {
         words_per_row,
         exact_row_by_label,
@@ -1508,8 +1530,16 @@ fn compile_point_plan(plan: &CompiledPlan, payload: &LabelIndexPayload) -> Point
     let Some(right_word_offset) = (right_row as usize).checked_mul(*words_per_row) else {
         return PointPlan::Generic;
     };
+    let left_count = counts.map(|counts| counts[left_label]);
+    let right_count = counts.map(|counts| counts[right_label]);
+    let (first_word_offset, second_word_offset) = if matches!((left_count, right_count), (Some(left), Some(right)) if left > right)
+    {
+        (right_word_offset, left_word_offset)
+    } else {
+        (left_word_offset, right_word_offset)
+    };
     PointPlan::ExactAnd2 {
-        left_word_offset,
-        right_word_offset,
+        first_word_offset,
+        second_word_offset,
     }
 }
