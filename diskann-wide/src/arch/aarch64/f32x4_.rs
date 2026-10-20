@@ -6,8 +6,8 @@
 use half::f16;
 
 use crate::{
-    AsSIMD, Emulated, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
-    SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
+    AsSIMD, Emulated, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd,
+    SIMDPartialEq, SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
@@ -118,12 +118,20 @@ impl SIMDDotProduct<f16x4> for f32x4 {
             let acc = self.to_array();
             let left = left.to_array();
             let right = right.to_array();
-            Self::from_array(self.arch(), std::array::from_fn(|i| {
-                crate::cast_f16_to_f32(left[i]).mul_add(crate::cast_f16_to_f32(right[i]), acc[i])
-            }))
+            Self::from_array(
+                self.arch(),
+                std::array::from_fn(|i| {
+                    crate::cast_f16_to_f32(left[i])
+                        .mul_add(crate::cast_f16_to_f32(right[i]), acc[i])
+                }),
+            )
         } else {
             #[target_feature(enable = "fhm")]
-            unsafe fn fmlal(mut acc: float32x4_t, left: uint16x4_t, right: uint16x4_t) -> float32x4_t {
+            unsafe fn fmlal(
+                mut acc: float32x4_t,
+                left: uint16x4_t,
+                right: uint16x4_t,
+            ) -> float32x4_t {
                 // SAFETY: The instruction is available with the `fhm` target feature.
                 unsafe {
                     asm!(
