@@ -59,7 +59,6 @@ enum LabelIndexPayload {
 struct BloomWordSummary {
     words_per_row: usize,
     bits: Box<[u64]>,
-    nonzero_words_per_row: Box<[u32]>,
     scan_useful: bool,
 }
 
@@ -210,13 +209,8 @@ enum PointPlan {
     ExactAnd2 {
         first_word_offset: usize,
         second_word_offset: usize,
-        first_summary_word_offset: usize,
-        second_summary_word_offset: usize,
-        use_summary: bool,
     },
 }
-
-const EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT: usize = 85;
 
 /// Query-scoped evaluator compiled from an [`EncodedLabelIndex`].
 ///
@@ -260,7 +254,6 @@ impl EncodedLabelQuery<'_> {
         let PointPlan::ExactAnd2 {
             first_word_offset,
             second_word_offset,
-            ..
         } = &self.point_plan
         else {
             return None;
@@ -272,17 +265,6 @@ impl EncodedLabelQuery<'_> {
             *first_word_offset / *words_per_row,
             *second_word_offset / *words_per_row,
         ))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn exact_and2_uses_summary(&self) -> bool {
-        matches!(
-            self.point_plan,
-            PointPlan::ExactAnd2 {
-                use_summary: true,
-                ..
-            }
-        )
     }
 
     /// Return a conservative bound on exact matching vectors, if exact label counts were stored.
@@ -330,41 +312,13 @@ impl EncodedLabelQuery<'_> {
         if let PointPlan::ExactAnd2 {
             first_word_offset,
             second_word_offset,
-            first_summary_word_offset,
-            second_summary_word_offset,
-            use_summary,
         } = &self.point_plan
         {
-            let LabelIndexPayload::Bloom {
-                bits,
-                nonzero_words,
-                ..
-            } = self.payload.as_ref()
-            else {
+            let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
                 unreachable!("exact-row point plans require a Bloom payload")
             };
             let word_index = vec_id as usize / 64;
             let mask = 1u64 << (vec_id % 64);
-            if *use_summary {
-                let summary = nonzero_words
-                    .as_ref()
-                    .expect("summarized exact point plan requires word summaries");
-                let summary_word_index = word_index / 64;
-                let summary_mask = 1u64 << (word_index % 64);
-                if summary.bits[*first_summary_word_offset + summary_word_index] & summary_mask == 0
-                {
-                    return false;
-                }
-                if bits[*first_word_offset + word_index] & mask == 0 {
-                    return false;
-                }
-                if summary.bits[*second_summary_word_offset + summary_word_index] & summary_mask
-                    == 0
-                {
-                    return false;
-                }
-                return bits[*second_word_offset + word_index] & mask != 0;
-            }
             if bits[*first_word_offset + word_index] & mask == 0 {
                 return false;
             }
@@ -1222,22 +1176,8 @@ impl EncodedLabelIndex {
                         summary_words_per_row,
                         summarized_words,
                     )?;
-                    let nonzero_words_per_row = bits
-                        .chunks_exact(summary_words_per_row)
-                        .map(|row| {
-                            let count: usize =
-                                row.iter().map(|word| word.count_ones() as usize).sum();
-                            u32::try_from(count).map_err(|_| {
-                                EncodedLabelIndexError::Invalid(
-                                    "Bloom nonzero word count exceeds u32".to_string(),
-                                )
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let nonzero_payload_words: usize = nonzero_words_per_row
-                        .iter()
-                        .map(|&count| count as usize)
-                        .sum();
+                    let nonzero_payload_words: usize =
+                        bits.iter().map(|word| word.count_ones() as usize).sum();
                     let payload_words =
                         physical_row_count
                             .checked_mul(words_per_row)
@@ -1249,7 +1189,6 @@ impl EncodedLabelIndex {
                     Some(BloomWordSummary {
                         words_per_row: summary_words_per_row,
                         bits: bits.into_boxed_slice(),
-                        nonzero_words_per_row: nonzero_words_per_row.into_boxed_slice(),
                         scan_useful: prefix_exact
                             || nonzero_payload_words.saturating_mul(4) <= payload_words,
                     })
@@ -1389,27 +1328,12 @@ impl EncodedLabelIndex {
                 summary_words_per_row,
                 summarized_words,
             )?;
-            let exact_nonzero_words_per_row = summary_bits
-                .chunks_exact(summary_words_per_row)
-                .map(|row| {
-                    let count: usize = row.iter().map(|word| word.count_ones() as usize).sum();
-                    u32::try_from(count).map_err(|_| {
-                        EncodedLabelIndexError::Invalid(
-                            "exact Bloom nonzero word count exceeds u32".to_string(),
-                        )
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
             let summary = nonzero_words
                 .as_mut()
                 .expect("mixed Bloom indexes always contain Bloom summaries");
             let mut combined_summary_bits = std::mem::take(&mut summary.bits).into_vec();
             combined_summary_bits.extend_from_slice(&summary_bits);
             summary.bits = combined_summary_bits.into_boxed_slice();
-            let mut combined_nonzero_words =
-                std::mem::take(&mut summary.nonzero_words_per_row).into_vec();
-            combined_nonzero_words.extend_from_slice(&exact_nonzero_words_per_row);
-            summary.nonzero_words_per_row = combined_nonzero_words.into_boxed_slice();
             *exact_label_count = exact_count;
         }
 
@@ -1578,7 +1502,6 @@ fn compile_point_plan(
     let LabelIndexPayload::Bloom {
         words_per_row,
         exact_row_by_label,
-        nonzero_words,
         ..
     } = payload
     else {
@@ -1609,52 +1532,14 @@ fn compile_point_plan(
     };
     let left_count = counts.map(|counts| counts[left_label]);
     let right_count = counts.map(|counts| counts[right_label]);
-    let count_swap = matches!((left_count, right_count), (Some(left), Some(right)) if left > right);
-    let summary_policy = nonzero_words.as_ref().map(|summary| {
-        let left_nonzero = summary.nonzero_words_per_row[left_row as usize] as usize;
-        let right_nonzero = summary.nonzero_words_per_row[right_row as usize] as usize;
-        let summary_swap = left_nonzero > right_nonzero;
-        let first_nonzero = if summary_swap {
-            right_nonzero
-        } else {
-            left_nonzero
-        };
-        let zero = words_per_row.saturating_sub(first_nonzero);
-        let use_summary = zero.saturating_mul(100)
-            >= words_per_row.saturating_mul(EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT);
-        (summary_swap, use_summary)
-    });
-    let (swap, use_summary) = match summary_policy {
-        Some((summary_swap, true)) => (summary_swap, true),
-        _ => (count_swap, false),
-    };
-    let (first_row, second_row, first_word_offset, second_word_offset) = if swap {
-        (
-            right_row as usize,
-            left_row as usize,
-            right_word_offset,
-            left_word_offset,
-        )
+    let (first_word_offset, second_word_offset) = if matches!((left_count, right_count), (Some(left), Some(right)) if left > right)
+    {
+        (right_word_offset, left_word_offset)
     } else {
-        (
-            left_row as usize,
-            right_row as usize,
-            left_word_offset,
-            right_word_offset,
-        )
+        (left_word_offset, right_word_offset)
     };
-    let (first_summary_word_offset, second_summary_word_offset) =
-        nonzero_words.as_ref().map_or((0, 0), |summary| {
-            (
-                first_row * summary.words_per_row,
-                second_row * summary.words_per_row,
-            )
-        });
     PointPlan::ExactAnd2 {
         first_word_offset,
         second_word_offset,
-        first_summary_word_offset,
-        second_summary_word_offset,
-        use_summary,
     }
 }
