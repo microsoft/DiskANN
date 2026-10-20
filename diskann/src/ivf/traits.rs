@@ -19,7 +19,7 @@ pub trait HasIds {
 
 /// Centroid selection within one build operation.
 pub trait Router<T>: Send {
-    type Id: VectorId;
+    type Id;
 
     fn len(&self) -> usize;
 
@@ -28,23 +28,34 @@ pub trait Router<T>: Send {
     }
 
     /// Select `min(nprobe, len())` distinct live lists, nearest first.
-    fn route(&self, query: &T, nprobe: usize) -> impl SendFuture<ANNResult<Vec<(Self::Id, f32)>>>;
+    fn route<F>(
+        &self,
+        query: &T,
+        nprobe: NonZeroUsize,
+        emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        F: FnMut(&Self::Id, f32) + Send;
 }
 
 pub trait RouterAndNearest<T>: Router<T> {
-    /// Select `min(nprobe, len())` distinct live lists nearest to `id`'s centroid.
+    /// Select `nprobe` distinct live lists nearest to `id`'s centroid, that pass the filter.
     ///
-    /// Results are nearest first and may include `id` itself. Callers exclude
-    /// lists being replaced when selecting retained neighbors.
+    /// Results are nearest first and may include `id` itself.
     ///
     /// # Errors
     ///
     /// Fails if `id` is not live or the provider cannot complete the lookup.
-    fn nearest(
+    fn nearest<P, F>(
         &self,
         id: Self::Id,
-        nprobe: usize,
-    ) -> impl SendFuture<ANNResult<Vec<(Self::Id, f32)>>>;
+        nprobe: NonZeroUsize,
+        pred: P,
+        emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        P: Fn(&Self::Id) -> bool + Send,
+        F: FnMut(&Self::Id, f32) + Send;
 }
 
 pub trait BuildAccessor<T>: Send + Sized + HasIds {
@@ -75,7 +86,7 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
 
     /// Make requested list's members, data and centroids available
-    /// for split and assignment. Register updates to the region.
+    /// for split and assignment, and register updates to the region.
     ///
     /// Writes recorded through the update handle remain pending until [`Self::finish`].
     fn fill<Itr>(
@@ -89,9 +100,15 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
     fn finish(self) -> impl SendFuture<ANNResult<()>>;
 }
 
+///////////////
+// Strategy //
+//////////////
+
 pub trait BuildStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
-    type Accessor: BuildAccessor<T, Id = Self::Id, ListId = Self::ListId>
-        + SetElements<T, C, Id = Self::Id>;
+    /// [`BuildAccessor`] used to insert new points, and performs splits if necessary.
+    type Accessor: SetElements<T, C, Id = Self::Id>
+        + BuildAccessor<T, Id = Self::Id, ListId = Self::ListId>;
+
     type Error: StandardError;
 
     fn build_accessor(&'a self, context: &'a C) -> Result<Self::Accessor, Self::Error>;

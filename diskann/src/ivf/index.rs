@@ -23,6 +23,7 @@ use crate::{
         traits::BuildStrategy,
     },
     provider::ExecutionContext,
+    utils::ONE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,13 +107,15 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 let router = accessor.router();
 
                 for (id, point) in ids.iter().zip(points.iter()) {
-                    let selected = router.route(point, 1).await?;
+                    let count = router
+                        .route(point, ONE, |list, _| {
+                            routed.entry(*list).or_default().push(*id);
+                        })
+                        .await?;
 
-                    let (list, _) = selected.first().ok_or_else(|| {
-                        ANNError::message("IVF routing returned no live centroid")
-                    })?;
-
-                    routed.entry(*list).or_default().push(*id);
+                    if count != 1 {
+                        return Err(ANNError::message("IVF routing returned no live centroid"));
+                    }
                 }
             }
 
@@ -136,15 +139,16 @@ impl<C: ExecutionContext> IVFIndex<C> {
                     let router = accessor.router();
 
                     for &pid in parents.iter() {
-                        let nids = router
-                            .nearest(pid, n.get())
-                            .await?
-                            .into_iter()
-                            .filter(|(id, _)| !parents.contains(id));
-
-                        for (id, _) in nids {
-                            neighbors.insert(id);
-                        }
+                        router
+                            .nearest(
+                                pid,
+                                n,
+                                |id| !parents.contains(id),
+                                |id, _| {
+                                    neighbors.insert(*id);
+                                },
+                            )
+                            .await?;
                     }
                 }
 

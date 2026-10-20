@@ -23,7 +23,7 @@ use super::{
     region::{RegionUpdate, RegionView, View},
     traits::{BuildAccessor, BuildStrategy, HasIds, Router, RouterAndNearest, SetElements},
 };
-use crate::{ANNError, ANNResult, provider::DefaultContext};
+use crate::{ANNError, ANNResult, provider::DefaultContext, utils::ONE};
 
 #[derive(Debug, Clone)]
 struct StoredList {
@@ -80,10 +80,16 @@ struct Coarse<'a> {
 }
 
 impl Coarse<'_> {
-    fn select<T: Copy + Into<f32>>(&self, query: &[T], nprobe: usize) -> Vec<(u32, f32)> {
+    fn select<T, P, F>(&self, query: &[T], nprobe: NonZeroUsize, pred: P, mut emit: F) -> usize
+    where
+        T: Copy + Into<f32>,
+        P: Fn(&u32) -> bool,
+        F: FnMut(&u32, f32),
+    {
         let mut selected: Vec<_> = self
             .stored
             .iter()
+            .filter(|(id, _)| pred(id))
             .map(|(&id, list)| {
                 let distance: f32 = query
                     .iter()
@@ -97,8 +103,11 @@ impl Coarse<'_> {
             })
             .collect();
         selected.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        selected.truncate(nprobe);
-        selected
+        selected.truncate(nprobe.get());
+        for (id, distance) in &selected {
+            emit(id, *distance);
+        }
+        selected.len()
     }
 }
 
@@ -109,17 +118,31 @@ impl<T: Copy + Into<f32> + Sync> Router<(u32, &[T])> for Coarse<'_> {
         self.stored.len()
     }
 
-    fn route(
+    fn route<F>(
         &self,
         query: &(u32, &[T]),
-        nprobe: usize,
-    ) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
-        async move { Ok(self.select(query.1, nprobe)) }
+        nprobe: NonZeroUsize,
+        emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        F: FnMut(&Self::Id, f32) + Send,
+    {
+        async move { Ok(self.select(query.1, nprobe, |_| true, emit)) }
     }
 }
 
 impl<T: Copy + Into<f32> + Sync> RouterAndNearest<(u32, &[T])> for Coarse<'_> {
-    fn nearest(&self, id: Self::Id, nprobe: usize) -> impl SendFuture<ANNResult<Vec<(u32, f32)>>> {
+    fn nearest<P, F>(
+        &self,
+        id: Self::Id,
+        nprobe: NonZeroUsize,
+        pred: P,
+        emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        P: Fn(&Self::Id) -> bool + Send,
+        F: FnMut(&Self::Id, f32) + Send,
+    {
         async move {
             if self.fail_nearest {
                 return Err(ANNError::message("injected nearest failure"));
@@ -129,7 +152,7 @@ impl<T: Copy + Into<f32> + Sync> RouterAndNearest<(u32, &[T])> for Coarse<'_> {
                 .get(&id)
                 .ok_or_else(|| ANNError::message(format!("unknown list {id}")))?
                 .centroid;
-            Ok(self.select(query, nprobe))
+            Ok(self.select(query, nprobe, pred, emit))
         }
     }
 }
@@ -538,6 +561,84 @@ fn require_send<F: Future + Send>(future: F) -> F {
 }
 
 #[tokio::test]
+async fn routing_callbacks_emit_ranked_results_and_counts() {
+    let expected: [(u32, f32); 3] = [(1, 25.0), (2, 25.0), (3, 8836.0)];
+    for store in [seeded(), Store::default()] {
+        let router = Coarse {
+            stored: &store.lists,
+            fail_nearest: false,
+        };
+        for limit in [1, 2, usize::MAX] {
+            let mut emitted = Vec::new();
+            let count = require_send(router.route(
+                &(9, &[6u8, 0][..]),
+                NonZeroUsize::new(limit).unwrap(),
+                |id, distance| emitted.push((*id, distance)),
+            ))
+            .await
+            .unwrap();
+            let expected = &expected[..limit.min(store.lists.len())];
+            assert_eq!(count, expected.len());
+            assert_eq!(emitted, expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn nearest_callbacks_filter_before_limiting_and_count_emitted_results() {
+    let store = seeded();
+    let router = Coarse {
+        stored: &store.lists,
+        fail_nearest: false,
+    };
+    for (limit, excluded, expected) in [
+        (1, vec![1], vec![(2, 100.0_f32)]),
+        (2, vec![1], vec![(2, 100.0), (3, 9801.0)]),
+        (usize::MAX, vec![], vec![(1, 0.0), (2, 100.0), (3, 9801.0)]),
+        (2, vec![1, 2, 3], vec![]),
+    ] {
+        let mut emitted = Vec::new();
+        let count = require_send(RouterAndNearest::<(u32, &[f32])>::nearest(
+            &router,
+            1,
+            NonZeroUsize::new(limit).unwrap(),
+            |id| !excluded.contains(id),
+            |id, distance| emitted.push((*id, distance)),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(count, expected.len());
+        assert_eq!(emitted, expected);
+    }
+}
+
+#[tokio::test]
+async fn nearest_lookup_failures_do_not_emit_results() {
+    let store = seeded();
+    for (fail_nearest, id, expected) in [
+        (false, 99, "unknown list 99"),
+        (true, 1, "injected nearest failure"),
+    ] {
+        let router = Coarse {
+            stored: &store.lists,
+            fail_nearest,
+        };
+        let mut emitted = Vec::new();
+        let error = require_send(RouterAndNearest::<(u32, &[f32])>::nearest(
+            &router,
+            id,
+            ONE,
+            |_| true,
+            |id, distance| emitted.push((*id, distance)),
+        ))
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(emitted.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn staging_preserves_native_inputs_and_id_order() {
     let strategy = Strategy::new(seeded());
     let mut build: Build<'_, u8> = strategy.build_accessor(&DefaultContext).unwrap();
@@ -552,10 +653,12 @@ async fn staging_preserves_native_inputs_and_id_order() {
     }
     let router = build.router();
     for (point, expected) in points.iter().zip([2, 1, 1]) {
-        assert_eq!(
-            require_send(router.route(point, 1)).await.unwrap()[0].0,
-            expected
-        );
+        let mut selected = None;
+        let count = require_send(router.route(point, ONE, |id, _| selected = Some(*id)))
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(selected, Some(expected));
     }
     drop(build);
     let store = strategy.store();
@@ -759,7 +862,7 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
     );
     assert_eq!(store.fills, 1);
     assert_eq!(store.finishes, 1);
-    assert_eq!(store.filled_lists, [1, 2]);
+    assert_eq!(store.filled_lists, [1, 2, 3]);
     assert!(!store.lists.contains_key(&1));
     assert_eq!(store.lists.len(), 4);
     assert_eq!(store.lists[&2].centroid, [5.0, 0.0]);
@@ -784,10 +887,10 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
 
 #[tokio::test]
 async fn neighborhood_selection_filters_parents_and_fills_the_union_once() {
-    for (centers, two_candidates, three_candidates) in [
-        (vec![], vec![], vec![]),
-        (vec![100.0, 200.0, 300.0], vec![], vec![3]),
-        (vec![0.0, 12.0, 200.0], vec![3, 4], vec![3, 4]),
+    for (centers, one_candidate) in [
+        (vec![], vec![]),
+        (vec![100.0, 200.0, 300.0], vec![3]),
+        (vec![0.0, 12.0, 200.0], vec![3, 4]),
     ] {
         for count in [0, 1, 2, 3, 4, usize::MAX] {
             let mut store = seeded();
@@ -815,10 +918,9 @@ async fn neighborhood_selection_filters_parents_and_fills_the_union_once() {
                 .unwrap();
             let store = strategy.store();
             let neighbors = match (count, centers.len()) {
-                (0 | 1, _) | (_, 0) => vec![],
-                (2, _) => two_candidates.clone(),
-                (3, _) => three_candidates.clone(),
-                (4, _) => vec![3, 4],
+                (0, _) | (_, 0) => vec![],
+                (1, _) => one_candidate.clone(),
+                (2, _) => vec![3, 4],
                 _ => vec![3, 4, 5],
             };
             let sources: Vec<_> = [1, 2].into_iter().chain(neighbors).collect();
@@ -1097,11 +1199,15 @@ async fn uninitialized_insertion_fails() {
         2,
     );
     let points: [(u32, &[f32]); 1] = [(7, &[0.0, 1.0][..])];
+    let error = index
+        .insert_batch(&strategy, &DefaultContext, &points)
+        .await
+        .unwrap_err();
     assert!(
-        index
-            .insert_batch(&strategy, &DefaultContext, &points)
-            .await
-            .is_err()
+        error
+            .to_string()
+            .contains("IVF routing returned no live centroid"),
+        "{error}"
     );
     assert_eq!(strategy.store().finishes, 0);
 }
