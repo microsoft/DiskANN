@@ -24,7 +24,7 @@
 use std::any::TypeId;
 
 use crate::{ANNResult, utils::VectorRepr};
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::conversion::SliceCast;
 use diskann_wide::{
     Architecture,
@@ -32,18 +32,28 @@ use diskann_wide::{
 };
 use half::f16;
 
-/// Convert rows `ids` of `data` into consecutive rows of `output`.
+/// Return the length of a row of `data` after conversion to `f32`.
 ///
-/// `f16` input selects the CPU's instructions once for the whole batch.
+/// Compressed element types store a row in a different number of elements than
+/// the `f32` vector it converts to.
+pub(super) fn f32_dimensions<T: VectorRepr>(data: MatrixView<'_, T>) -> ANNResult<usize> {
+    T::full_dimension(data.row(0)).map_err(Into::into)
+}
+
+/// Convert rows `ids` of `data` into the rows of `output`, one row per ID.
+///
+/// `output` has [`f32_dimensions`] columns. `f16` input selects the CPU's
+/// instructions once for the whole batch.
 pub(super) fn gather_as_f32<T: VectorRepr>(
     data: MatrixView<'_, T>,
     ids: &[u32],
-    output: &mut [f32],
+    mut output: MutMatrixView<'_, f32>,
 ) -> ANNResult<()> {
+    debug_assert_eq!(output.nrows(), ids.len());
     if TypeId::of::<T>() == TypeId::of::<f16>() {
         arch::dispatch3(GatherFp16, data, ids, output);
     } else {
-        for (&id, destination) in ids.iter().zip(output.chunks_exact_mut(data.ncols())) {
+        for (&id, destination) in ids.iter().zip(output.row_iter_mut()) {
             T::as_f32_into(data.row(id as usize), destination).map_err(Into::into)?;
         }
     }
@@ -52,15 +62,21 @@ pub(super) fn gather_as_f32<T: VectorRepr>(
 
 struct GatherFp16;
 
-impl<A, T> Target3<A, (), MatrixView<'_, T>, &[u32], &mut [f32]> for GatherFp16
+impl<A, T> Target3<A, (), MatrixView<'_, T>, &[u32], MutMatrixView<'_, f32>> for GatherFp16
 where
     A: Architecture,
     T: VectorRepr,
     for<'a, 'b> SliceCast<f32, f16>: Target2<A, (), &'a mut [f32], &'b [f16]>,
 {
     #[inline(always)]
-    fn run(self, arch: A, data: MatrixView<'_, T>, ids: &[u32], output: &mut [f32]) {
-        for (&id, destination) in ids.iter().zip(output.chunks_exact_mut(data.ncols())) {
+    fn run(
+        self,
+        arch: A,
+        data: MatrixView<'_, T>,
+        ids: &[u32],
+        mut output: MutMatrixView<'_, f32>,
+    ) {
+        for (&id, destination) in ids.iter().zip(output.row_iter_mut()) {
             let source = bytemuck::cast_slice(data.row(id as usize));
             SliceCast::<f32, f16>::new().run(arch, destination, source);
         }
@@ -78,7 +94,12 @@ mod tests {
             let data = MatrixView::try_from(&values[..], 3, 2).unwrap();
             let mut output = [f32::NAN; 6];
 
-            gather_as_f32(data, &[2, 0, 2], &mut output).unwrap();
+            gather_as_f32(
+                data,
+                &[2, 0, 2],
+                MutMatrixView::try_from(output.as_mut_slice(), 3, 2).unwrap(),
+            )
+            .unwrap();
 
             assert_eq!(output, expected, "{}", std::any::type_name::<T>());
         }
@@ -120,7 +141,7 @@ mod tests {
             gather_as_f32(
                 MatrixView::try_from(values.as_slice(), 3, dimensions).unwrap(),
                 &ids,
-                &mut output,
+                MutMatrixView::try_from(output.as_mut_slice(), 3, dimensions).unwrap(),
             )
             .unwrap();
 
@@ -143,7 +164,7 @@ mod tests {
         gather_as_f32(
             MatrixView::try_from(&values[..], 2, 3).unwrap(),
             &[1, 0],
-            &mut output,
+            MutMatrixView::try_from(output.as_mut_slice(), 2, 3).unwrap(),
         )
         .unwrap();
 

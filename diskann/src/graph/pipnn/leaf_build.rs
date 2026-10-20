@@ -19,7 +19,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    conversion::gather_as_f32,
+    conversion::{f32_dimensions, gather_as_f32},
     leaf_kernel::{LeafKernelWorkspace, select_leaf_neighbors},
     leaf_metric::LeafMetric,
     simd::Simd,
@@ -90,10 +90,19 @@ where
     let candidates: Vec<_> = (0..data.nrows())
         .map(|_| Mutex::new(AdjacencyList::new()))
         .collect();
+    let dimensions = f32_dimensions(data)?;
     leaves
         .par_iter()
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
-            add_leaf_candidates::<A, M, T>(arch, data, point_ids, requested_k, buffers, &candidates)
+            add_leaf_candidates::<A, M, T>(
+                arch,
+                data,
+                dimensions,
+                point_ids,
+                requested_k,
+                buffers,
+                &candidates,
+            )
         })?;
     Ok(candidates.into_iter().map(Mutex::into_inner).collect())
 }
@@ -105,6 +114,7 @@ where
 fn add_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    dimensions: usize,
     point_ids: &[u32],
     requested_k: usize,
     buffers: &mut LeafBuffers,
@@ -116,15 +126,18 @@ where
     T: VectorRepr,
 {
     let point_count = point_ids.len();
-    let leaf_k = buffers.prepare(point_count, data.ncols(), requested_k);
+    let leaf_k = buffers.prepare(point_count, dimensions, requested_k);
     if leaf_k == 0 {
         return Ok(());
     }
 
     buffers.prepare_local_adjacency(point_count);
-    let point_values = &mut buffers.point_values[..point_count * data.ncols()];
-    gather_as_f32(data, point_ids, point_values)?;
-    let points = MatrixView::try_from(&*point_values, point_count, data.ncols())?;
+    let mut points = MutMatrixView::try_from(
+        &mut buffers.point_values[..point_count * dimensions],
+        point_count,
+        dimensions,
+    )?;
+    gather_as_f32(data, point_ids, points.as_mut_view())?;
     let mut output = MutMatrixView::try_from(
         &mut buffers.neighbors[..point_count * leaf_k],
         point_count,
@@ -132,7 +145,7 @@ where
     )?;
     select_leaf_neighbors::<A, M>(
         arch,
-        points,
+        points.as_view(),
         output.as_mut_view(),
         &mut buffers.kernel_workspace,
     )?;
@@ -391,6 +404,7 @@ mod tests {
             add_leaf_candidates::<_, L2, _>(
                 ARCH,
                 data,
+                1,
                 &ids,
                 requested_k,
                 &mut buffers,
