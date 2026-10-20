@@ -824,6 +824,20 @@ impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for EncodedLabelQuery
     fn is_match(&self, id: u32) -> bool {
         EncodedLabelQuery::is_match(self, id)
     }
+
+    fn cache_rejections(&self) -> bool {
+        let LabelIndexPayload::Bloom {
+            exact_row_by_label, ..
+        } = self.payload.as_ref()
+        else {
+            return false;
+        };
+        self.plan
+            .label_ids
+            .iter()
+            .flatten()
+            .any(|&id| exact_row_by_label[id as usize] == u32::MAX)
+    }
 }
 
 impl diskann::graph::ext::labeled::CandidateLabelProvider<u32> for EncodedLabelQuery<'_> {

@@ -54,6 +54,14 @@ where
     /// When used with [`Filtered`], callers may assume that `i` was yielded from a
     /// callback from [`glue::SearchAccessor::expand_beam`].
     fn is_match(&self, i: I) -> bool;
+
+    /// Return whether rejected IDs are expensive enough to justify query-local caching.
+    ///
+    /// The default is `false`; implementations should opt in only when repeated point
+    /// classification is expected to cost more than hash-table maintenance.
+    fn cache_rejections(&self) -> bool {
+        false
+    }
 }
 
 /// A label provider that can enumerate candidates for exhaustive filtered search.
@@ -82,13 +90,15 @@ enum ClassificationPhase {
 struct LabelDecisionCache<I> {
     rejected: HashSet<I>,
     stats: Option<glue::FilterClassificationStats>,
+    cache_rejections: bool,
 }
 
 impl<I> LabelDecisionCache<I> {
-    fn new(collect_stats: bool) -> Self {
+    fn new(collect_stats: bool, cache_rejections: bool) -> Self {
         Self {
             rejected: HashSet::new(),
             stats: collect_stats.then(glue::FilterClassificationStats::default),
+            cache_rejections,
         }
     }
 }
@@ -107,7 +117,7 @@ where
                 ClassificationPhase::FirstHop => stats.first_hop_requests += 1,
             }
         }
-        if self.rejected.contains(&id) {
+        if self.cache_rejections && self.rejected.contains(&id) {
             if let Some(stats) = &mut self.stats {
                 match phase {
                     ClassificationPhase::StartPoint => {
@@ -219,7 +229,10 @@ where
         Ok(FilteredAccessor {
             inner,
             labels: self.labels,
-            label_cache: LabelDecisionCache::new(self.collect_classification_stats),
+            label_cache: LabelDecisionCache::new(
+                self.collect_classification_stats,
+                self.labels.cache_rejections(),
+            ),
         })
     }
 }
@@ -265,7 +278,7 @@ where
         Self {
             inner,
             labels,
-            label_cache: LabelDecisionCache::new(true),
+            label_cache: LabelDecisionCache::new(true, labels.cache_rejections()),
         }
     }
 }
@@ -433,7 +446,7 @@ where
 {
     fn eval(&self, item: &I) -> bool {
         self.inner.eval(item)
-            && !self.label_cache.rejected.contains(item)
+            && (!self.label_cache.cache_rejections || !self.label_cache.rejected.contains(item))
             && self.labels.is_match(*item)
     }
 }
@@ -454,7 +467,7 @@ where
             }
             return false;
         }
-        if self.label_cache.rejected.contains(item) {
+        if self.label_cache.cache_rejections && self.label_cache.rejected.contains(item) {
             if let Some(stats) = &mut self.label_cache.stats {
                 stats.second_hop_cached_rejections += 1;
                 stats.second_hop_rejected += 1;
@@ -468,7 +481,8 @@ where
             if let Some(stats) = &mut self.label_cache.stats {
                 stats.second_hop_rejected += 1;
             }
-            if self.label_cache.rejected.insert(*item)
+            if self.label_cache.cache_rejections
+                && self.label_cache.rejected.insert(*item)
                 && let Some(stats) = &mut self.label_cache.stats
             {
                 stats.unique_rejected_ids += 1;
@@ -649,7 +663,7 @@ mod tests {
     fn wrapper_predicate() {
         let filter = EvenFilter;
         let mut visited = HashSet::new();
-        let mut label_cache = LabelDecisionCache::new(true);
+        let mut label_cache = LabelDecisionCache::new(true, filter.cache_rejections());
         let mut wrapper = EvalFiltered::new(NotIn(&mut visited), &filter, &mut label_cache);
 
         // eval: both inner (not visited) and label (even) must pass.

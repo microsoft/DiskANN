@@ -398,11 +398,14 @@ fn prefix_exact_bloom_specializes_two_label_dnf_point_checks() {
 
     let exact_pair = compile(&index, &["A&B"], FilterExpressionType::DNF);
     assert!(exact_pair.uses_exact_and2_point_plan());
+    assert!(!QueryLabelProvider::cache_rejections(&exact_pair));
     assert_eq!(matching_ids(&exact_pair, index.num_vectors()), vec![0]);
     assert_eq!(exact_pair.count_matches(), 1);
 
     assert!(!compile(&index, &["A"], FilterExpressionType::DNF).uses_exact_and2_point_plan());
-    assert!(!compile(&index, &["A&C"], FilterExpressionType::DNF).uses_exact_and2_point_plan());
+    let mixed_pair = compile(&index, &["A&C"], FilterExpressionType::DNF);
+    assert!(!mixed_pair.uses_exact_and2_point_plan());
+    assert!(QueryLabelProvider::cache_rejections(&mixed_pair));
     assert!(!compile(&index, &["A|B"], FilterExpressionType::CNF).uses_exact_and2_point_plan());
 }
 

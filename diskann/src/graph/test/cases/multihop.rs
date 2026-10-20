@@ -83,6 +83,10 @@ impl labeled::QueryLabelProvider<u32> for CountingEvenFilter {
         self.calls.fetch_add(1, Ordering::Relaxed);
         id.is_multiple_of(2)
     }
+
+    fn cache_rejections(&self) -> bool {
+        true
+    }
 }
 
 ////////////////////////////////////
