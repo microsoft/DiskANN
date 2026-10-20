@@ -30,7 +30,7 @@ pub struct UnequalLengths;
 
 impl UnequalLengths {
     /// Escalate the unequal length error to a full-blown panic.
-    #[allow(clippy::panic)]
+    #[expect(clippy::panic)]
     #[inline(never)]
     pub fn panic(self, xlen: usize, ylen: usize) -> ! {
         panic!(
@@ -81,6 +81,10 @@ pub struct SquaredL2;
 /// Compute the inner-product between vector-like types.
 #[derive(Debug, Clone, Copy)]
 pub struct InnerProduct;
+
+/// Compute the cosine similarity between vector-like types.
+#[derive(Debug, Clone, Copy)]
+pub struct Cosine;
 
 /// Compute the hamming distance between bit-vectors.
 #[derive(Debug, Clone, Copy)]

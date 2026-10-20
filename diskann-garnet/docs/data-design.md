@@ -30,13 +30,13 @@ The read-modify-write (rmw) method accesses a single key with a callback but all
 
 ### Keys & Contexts
 
-Garnet keys are arbitrary byte strings (e.g. `&[u8]`). The methods described above can use whatever keys they like, with some caveats, to read and write data, however those methods also take a semi-opaque context which gives the operation a scope. For the most part this context is used for internal Garnet bookkeeping and is opaque, but the least significant 3 bits are available for diskann-garnet to use for its own scoping. Keys must be a multiple of 4 bytes in length, except for keys stored under context 3 and context 5 (`Term::Attributes` and `Term::IntMap`) which are special cased in Garnet as they key is the user-provided external ID. There are no alignment requirements on keys.
+Garnet keys are arbitrary byte strings (e.g. `&[u8]`). The methods described above can use whatever keys they like, with some caveats, to read and write data, however those methods also take a semi-opaque context which gives the operation a scope. For the most part this context is used for internal Garnet bookkeeping and is opaque, but the least significant 3 bits are available for diskann-garnet to use for its own scoping. Keys must be a multiple of 4 bytes in length, except for keys stored under context 5 (`Term::IntMap`), which use the user-provided external ID. There are no alignment requirements on keys.
 
 Diskann-garnet uses these bits to distinguish between differnet kinds of index data so that the same key can be used to fetch different kinds of data. For example, vector data might be stored under the same key, the vector ID, as neighbor lists by setting different context bits for the operation.
 
 ### Key Data Prefixing
 
-In order to reduce allocations in the data access path in Garnet, Garnet needs some place to scribble state into during operations. It uses a single byte immediately preceding the first key byte for this purpose. This means that any key pointer given to Garnet access methods must contain valid space preceding the real key. For this reason, key data pointers are `*mut u8` and not `*const u8` and care must be taken to ensure the memory preceding that pointer is valid. In diskann-garnet, we precede the key data with at least 4 bytes of scratch space.
+Read callbacks receive keys with four-byte length prefixes. Write, delete, and RMW callbacks receive the key bytes and length separately.
 
 ## Term Types
 
@@ -58,7 +58,7 @@ precision only index, they are the most accessed term.
 *Key*: Internal ID as bytes; this key is always 4 bytes.
 *Value*: `[u32; M + 1]` stored as bytes, where `M` is the same `M` passed to VADD. Every value in the index will have this fixed size of `(M + 1) * 4` bytes.
 
-Neighbor lists are stored as a fixed size of `(M + 1) * mem::size_of::<u32>()`. The final entry is the true length of the neighbor list.
+Neighbor lists are stored as a fixed size of `(M + 1) * mem::size_of::<u32>()`. The final entry is the true length of the neighbor list and must not exceed `M`.
 
 For example, in a graph where the `M` value is given as 16, the size of a neighbor list would be `(16 + 1) * 4 = 68` bytes long. Using fixed size lists this way means that all neighbor list allocations are the same size.
 
@@ -75,7 +75,7 @@ In a quantized index, these vectors are the most often accessed piece of data an
 
 ### Attributes
 
-*Key*: External ID as bytes; this is variable length byte string that the user assigned.
+*Key*: Internal ID as bytes; this key is always 4 bytes.
 *Value*: Attributes given by the user. Variable length.
 
 When vectors are inserted by the Redis Vector Set API, an arbitrary JSON blob of attributes can be attached. These attributes are stored as a utf-8 string and read/written as a whole unit.
@@ -88,13 +88,15 @@ The are several terms in the index used for internal state management of the dis
 
 #### Start Points
 
-Currently only a single start point is supported, and it is given the internal ID of 0. Its vector data is the same as the first vector that was inserted, and it will not be returned by search, and it will not be modified during the lifetime of the index.
+Only a single start point is supported. Its internal ID is fixed when the provider is created and defaults to `DEFAULT_START_POINT_ID` (`u32::MAX`). During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
 
-Start points have no associated attributes.
+Imports must supply the full vector, neighbor list, and (for quantized indexes) quantized vector at the configured start-point ID. Finalization validates these terms and populates the caches. The neighbor count must fit the configured degree.
+
+Start points have no associated attributes or ID mappings and are not counted as active vectors.
 
 #### Metadata
 
-Metadata is currently used for the free space map which manages used and available internal IDs and the quantizer tables.
+Metadata is currently used for the free space map which manages used and available internal IDs, the quantizer tables, and import eligibility.
 
 ##### Free Space Map
 
@@ -103,9 +105,11 @@ Metadata is currently used for the free space map which manages used and availab
 
 The free space map is used to keep track of which internal IDs are allocated and in use. Please see the [ID Mapping](#id-mapping) section for more details on why mapped IDs are used.
 
-The free space map is a series of blocks where each block is a string of 1-bit values representing the state of the corresponding internal ID. Free IDs are represented by `0b0`, used IDs by `0b1`. Blocks are created on demand during insert when they are needed. Since each block contains 64k internal ID states, the total number of FSM blocks in the index will be at least number of active IDs / 2^16, each of which is 8kB in size.
+The free space map is a contiguous sequence of blocks starting at block zero. Each block contains 65,536 one-bit ID states and occupies 8 KiB: `0b0` for free and `0b1` for used. The bit for the configured start-point ID is ignored. Blocks grow on demand during insertion or import, including intermediate blocks.
 
-During startup, the index will scan FSM blocks in sequence to restore state. It will update the correct bits in a FSM block whenever the state of an internal ID changes.
+During startup, the index scans FSM blocks in sequence to restore state. It updates the corresponding bit whenever a user vector's allocation changes. A failed expansion retains its successfully written prefix, allowing subsequent expansion to continue without erasing earlier claims.
+
+Importing a term keyed by internal ID marks that ID as used unless it is the start point's ID, expanding the map and advancing the maximum assigned ID as needed. The start point is tracked separately from the FSM.
 
 ##### Quantizer Tables
 
@@ -114,12 +118,27 @@ During startup, the index will scan FSM blocks in sequence to restore state. It 
 
 Note that for the BIN quantizer, a 1 byte flag precedes the quantizer table which indicates whether quantization backfill is complete. That byte is accounted for in the value sizing above.
 
+Quantizer state can only be replaced while no ordinary IDs are occupied in the FSM and no start points exist.
+
+##### Import Status
+
+*Key*: b'_imp'; this key is always 4 bytes.
+*Value*: A single byte: 0 for `Disabled`, 1 for `Ready`, or 2 for `Importing`.
+
+When no saved status exists, an empty index starts `Ready` if it is unquantized or has supplied quantizer state, and `Disabled` otherwise. The initial status is persisted before writing Q8's generated default table, so that table cannot enable imports on reopen. Successfully supplying quantizer state during creation publishes `Ready` after setup completes. A saved status is restored rather than inferred from the absence of a start point.
+
+The first ordinary operation transitions `Ready` to `Disabled`; the first accepted imported term transitions `Ready` to `Importing`. More terms can then arrive in parallel, but ordinary operations fail until all verification tasks and finalization succeed. The last successful task transitions `Importing` to `Disabled`. Empty finalization also waits for every task and does not create a start point. Failed verification or finalization leaves an active import `Importing`.
+
+Status transitions persist the new byte before publishing it with an atomic compare-exchange, under a transition-only mutex. A failed metadata write does not publish the new in-memory status. Ordinary operations in `Disabled` only load the atomic status; admitted term writes and verification workers do not hold the transition mutex. Callers must finish all term writes before starting finalization.
+
+The former Boolean format did not distinguish ready indexes from unfinished imports; finish those imports before upgrading.
+
 #### Internal ID Mapping
 
 *Key*: Internal ID as bytes; this key is always 4 bytes in length.
 *Value*: External ID; this is variable length byte string that the user assigned.
 
-Each internal ID corresponds to an external ID, which is a byte string of arbitrary length. The external IDs are stored unmodified and read/written as a whole.
+Each internal ID corresponds to an external ID, which is a byte string of arbitrary length, including zero.
 
 Lookup of an external ID will happen during post processing when we return results to Garnet.
 
@@ -134,7 +153,7 @@ Lookup of an internal ID will happen for things such as delete.
 
 ## ID Mapping
 
-Garnet vector set IDs are arbitrary length byte strings natively. These are quite inefficient for indexing so we map each external ID to a `u32` internal ID. This imposes a maximum on the number of vectors that are indexable of `u32::MAX - 1` (the start point always consumes an ID).
+Garnet vector set IDs are arbitrary length byte strings natively. These are quite inefficient for indexing so we map each external ID to a `u32` internal ID. One internal ID is reserved for the start point and cannot be allocated to inserted vectors.
 
 When the DiskANN algorithm performs searches and other operations it works with internal IDs only. The external IDs are only used when returning data to the user (which has no concept of the internal IDs) or when asked to perform operations like delete on specific vectors which will be identified by their external ID. In order to convert back and forth for these occasions, lookup tables must be kept for the mapping.
 

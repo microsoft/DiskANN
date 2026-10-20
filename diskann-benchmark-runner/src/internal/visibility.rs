@@ -52,10 +52,12 @@ mod tests {
     fn test_is_available() {
         let features = Features::new("some-feature");
         assert!(Visibility::Available.is_available());
-        assert!(!Visibility::Gated {
-            features: &features
-        }
-        .is_available());
+        assert!(
+            !Visibility::Gated {
+                features: &features
+            }
+            .is_available()
+        );
     }
 
     #[test]

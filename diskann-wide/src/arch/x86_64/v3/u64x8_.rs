@@ -13,7 +13,7 @@ use crate::doubled;
 doubled::double_vector!(u64, 8, u64x4);
 doubled::double_scalar_shift!(Doubled<u64x4>);
 
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub type u64x8 = doubled::Doubled<u64x4>;
 
 ///////////

@@ -99,10 +99,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    benchmark::{internal::CheckedPassFail, PassFail},
+    Checker,
+    benchmark::{PassFail, internal::CheckedPassFail},
     input::internal::Any,
     internal::load_from_disk,
-    jobs, registry, result, Checker,
+    jobs, registry, result,
 };
 
 ////////////
@@ -531,7 +532,7 @@ pub(crate) struct Job<'a> {
     /// The executor for the actual check we wish to run.
     regression: registry::RegressionBenchmark<'a>,
 
-    /// The [`crate::benchmark::Regression::Tolerance`] associated with `regression`.
+    /// The [`crate::benchmark::Regression::Tolerances`] associated with `regression`.
     tolerance: Rc<Any>,
 
     /// The [`crate::Benchmark::Input`] associated with `benchmark`.

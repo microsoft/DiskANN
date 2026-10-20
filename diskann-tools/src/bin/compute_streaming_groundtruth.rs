@@ -31,7 +31,7 @@ use diskann_tools::utils::{
     init_subscriber, write_ground_truth, CMDResult, CMDToolError, DataType,
 };
 use diskann_utils::io::read_bin;
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{distance::Metric, DistanceFunction};
 use rayon::prelude::*;
 
@@ -44,8 +44,8 @@ trait GroundtruthDistance: Send + Sync {
 }
 
 struct MatrixDistance<'a, V: VectorRepr + Send + Sync> {
-    dataset: &'a Matrix<V>,
-    queries: &'a Matrix<V>,
+    dataset: &'a rowmajor::Owned<V>,
+    queries: &'a rowmajor::Owned<V>,
     distance_fn: V::Distance,
 }
 
@@ -80,8 +80,10 @@ fn compute_groundtruth_results(
     active_entries: &[(u32, usize)],
     recall_at: usize,
 ) -> anyhow::Result<Vec<NeighborPriorityQueue<u32>>> {
-    // using the global threadpool is generally fine in diskann-tools
-    #[allow(clippy::disallowed_methods)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "using the global threadpool is generally fine in diskann-tools"
+    )]
     let results = (0..distance.n_queries())
         .into_par_iter()
         .map(|query_id| {

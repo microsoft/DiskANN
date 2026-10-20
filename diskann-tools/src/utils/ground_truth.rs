@@ -20,7 +20,7 @@ use diskann_providers::utils::{
 };
 use diskann_utils::{
     io::{read_bin, Metadata},
-    views::Matrix,
+    views::rowmajor::{self, Matrix},
 };
 use diskann_vector::{distance::Metric, DistanceFunction};
 use itertools::Itertools;
@@ -118,8 +118,7 @@ fn build_query_bitmaps<StorageProvider: StorageReadProvider + StorageWriteProvid
     Ok(query_bitmaps)
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::panic)]
+#[expect(clippy::too_many_arguments)]
 /// Computes the true nearest neighbors for a set of queries and writes them to a file.
 ///
 /// # Arguments
@@ -222,8 +221,7 @@ pub fn compute_ground_truth_from_datafiles<
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::panic)]
+#[expect(clippy::too_many_arguments)]
 /// Computes range-search ground truth for a set of queries and writes it to a file.
 ///
 /// # Arguments
@@ -281,11 +279,10 @@ pub fn compute_range_ground_truth_from_datafiles<
     write_range_search_ground_truth(storage_provider, ground_truth_file, query_num, ground_truth)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn compute_range_ground_truth_from_data<V, A, VectorReader>(
     distance_function: Metric,
     dataset_iter: VectorDataIterator<VectorReader, V, A>,
-    queries: &Matrix<V>,
+    queries: &rowmajor::Owned<V>,
     radius: f32,
     query_bitmaps: Option<Vec<BitSet>>,
 ) -> CMDResult<Vec<Vec<Neighbor<u32>>>>
@@ -298,7 +295,7 @@ where
     let query_dim = queries.ncols();
 
     let mut ground_truth: Vec<Vec<Neighbor<u32>>> = vec![Vec::new(); query_num];
-    let mut queries_and_result: Vec<_> = queries.row_iter().zip(ground_truth.iter_mut()).collect();
+    let mut queries_and_result: Vec<_> = queries.rows().zip(ground_truth.iter_mut()).collect();
 
     let distance_comparer = V::distance(distance_function, Some(query_dim));
 
@@ -387,8 +384,7 @@ impl FromStr for MultivecAggregationMethod {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::panic)]
+#[expect(clippy::too_many_arguments)]
 /// Computes the true nearest neighbors for a set of queries and writes them to a file.
 ///
 /// # Arguments
@@ -579,17 +575,16 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 ///
 /// * `distance_function` - e.g. L2
 /// * `dataset_iter` - The iterator over the dataset vectors and associated data.
-/// * `queries` - Query vectors as a row-major `Matrix` of shape `num_queries × query_dim`.
+/// * `queries` - Query vectors as a row-major matrix (`rowmajor::Owned`) of shape `num_queries × query_dim`.
 ///   `query_dim` is inferred from `queries.ncols()`.
 /// * `recall_at` - The number of neighbors to compute for each query.
 /// * `insert_iter` - Optional iterator containing more dataset vectors. This may be useful if you are testing recall for an index that has points dynamically inserted into it.
 /// * `skip_base` - Optional number of base points to skip. This is useful if you want to compute the ground truth for a set where the first skip_base points are deleted from the index.
 /// * `query_bitmaps` - Optional per-query bitmaps restricting which base point ids contribute to that query's neighbors.
-#[allow(clippy::too_many_arguments)]
 pub fn compute_ground_truth_from_data<V, A, VectorReader>(
     distance_function: Metric,
     dataset_iter: VectorDataIterator<VectorReader, V, A>,
-    queries: &Matrix<V>,
+    queries: &rowmajor::Owned<V>,
     recall_at: u32,
     insert_iter: Option<VectorDataIterator<VectorReader, V, A>>,
     skip_base: Option<usize>,
@@ -607,7 +602,7 @@ where
         .map(|_| NeighborPriorityQueue::new(recall_at as usize))
         .collect();
     let mut queries_and_neighbor_queue: Vec<_> =
-        queries.row_iter().zip(neighbor_queues.iter_mut()).collect();
+        queries.rows().zip(neighbor_queues.iter_mut()).collect();
 
     let distance_comparer = V::distance(distance_function, Some(query_dim));
 
@@ -692,12 +687,11 @@ where
     Ok((neighbor_queues, id_to_associated_data))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn compute_multivec_ground_truth_from_data<T>(
     distance_function: Metric,
     aggregation_method: MultivecAggregationMethod,
-    base_vectors: Vec<Matrix<T>>,
-    queries: Vec<Matrix<T>>,
+    base_vectors: Vec<rowmajor::Owned<T>>,
+    queries: Vec<rowmajor::Owned<T>>,
     query_dim: usize,
     recall_at: u32,
     query_bitmaps: Option<Vec<BitSet>>,
@@ -740,8 +734,8 @@ where
                         let distance = match aggregation_method {
                             MultivecAggregationMethod::AveragePairwise => {
                                 let mut total_distance = 0.0;
-                                for query_vec in query_multivec.row_iter() {
-                                    for base_vec in base_multivec.row_iter() {
+                                for query_vec in query_multivec.rows() {
+                                    for base_vec in base_multivec.rows() {
                                         let dist = distance_comparer
                                             .evaluate_similarity(query_vec, base_vec);
                                         total_distance += dist;
@@ -752,8 +746,8 @@ where
                             }
                             MultivecAggregationMethod::MinPairwise => {
                                 let mut min_distance = f32::MAX;
-                                for query_vec in query_multivec.row_iter() {
-                                    for base_vec in base_multivec.row_iter() {
+                                for query_vec in query_multivec.rows() {
+                                    for base_vec in base_multivec.rows() {
                                         let dist = distance_comparer
                                             .evaluate_similarity(query_vec, base_vec);
                                         min_distance = min_distance.min(dist);
@@ -763,9 +757,9 @@ where
                             }
                             MultivecAggregationMethod::AvgofMins => {
                                 let mut distance = 0_f32;
-                                for query_vec in query_multivec.row_iter() {
+                                for query_vec in query_multivec.rows() {
                                     let mut local_min = f32::MAX;
-                                    for base_vec in base_multivec.row_iter() {
+                                    for base_vec in base_multivec.rows() {
                                         let dist = distance_comparer
                                             .evaluate_similarity(query_vec, base_vec);
                                         local_min = local_min.min(dist);

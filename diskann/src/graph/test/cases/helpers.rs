@@ -7,6 +7,7 @@
 
 use std::{iter, sync::Arc};
 
+use diskann_utils::views::rowmajor::Matrix;
 use diskann_vector::distance::Metric;
 
 use crate::{
@@ -62,7 +63,7 @@ pub(super) fn setup_2d_square(
     .unwrap();
 
     let points = vectors
-        .row_iter()
+        .rows()
         .zip(adjacency_lists.into_iter().take(num_points))
         .enumerate()
         .map(|(id, (row, adj))| (id as u32, row.to_vec(), adj));

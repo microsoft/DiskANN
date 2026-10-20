@@ -70,7 +70,7 @@ jobs:
         run: rustup show
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-nextest
 
@@ -97,7 +97,7 @@ jobs:
         run: rustup show
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-nextest
 
@@ -125,13 +125,26 @@ jobs:
         run: rustup toolchain install nightly --component miri
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-nextest
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: miri
-        run: cargo +nightly miri nextest run --locked --package diskann-quantization
+        run: |
+          cargo +nightly miri nextest run --locked \
+              --package diskann-quantization \
+              --package diskann-utils
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+
+      - name: PiPNN top-k group loads
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+        # One selection over two full groups and one pair scan over two full groups
+        # reach all three unsafe group loads in the top-k module.
+        run: |
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib -- \
+            graph::pipnn::topk::tests::selection_returns_distinct_candidates_when_distances_tie \
+            graph::pipnn::topk::tests::a_single_pair_updates_exactly_its_two_endpoints::case_1_finite

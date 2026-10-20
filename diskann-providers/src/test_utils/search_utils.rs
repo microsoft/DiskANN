@@ -4,7 +4,7 @@
  */
 
 use diskann::neighbor::{self, Neighbor};
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 /// Compute the ground truth for a small dataset.
 ///
@@ -13,12 +13,12 @@ use diskann_utils::views::MatrixView;
 ///
 /// This allows filtering by `is_match` to be much more efficient because it decreases
 /// the number of elements that have to be moved.
-pub fn groundtruth<T, F>(data: MatrixView<T>, query: &[T], f: F) -> Vec<Neighbor<u32>>
+pub fn groundtruth<T, F>(data: rowmajor::Ref<T>, query: &[T], f: F) -> Vec<Neighbor<u32>>
 where
     F: Fn(&[T], &[T]) -> f32,
 {
     let mut results: Vec<_> = data
-        .row_iter()
+        .rows()
         .enumerate()
         .map(|(i, row)| Neighbor::new(i as u32, f(row, query)))
         .collect();

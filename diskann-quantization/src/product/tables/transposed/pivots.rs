@@ -5,25 +5,27 @@
 
 use std::fmt;
 
-use diskann_utils::strided;
-use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
+use diskann_utils::strided::Strided;
+use diskann_wide::{LoHi, SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 
 use crate::{
     algorithms::kmeans,
-    distances::{InnerProduct, SquaredL2},
+    distances::{Cosine, InnerProduct, SquaredL2},
     multi_vector::BlockTransposed,
+    product::tables::lookup::DotAndNorm,
 };
 
 // The `Wide` type used as the group granularity for `Chunk`.
 diskann_wide::alias!(f32s = f32x8);
+diskann_wide::alias!(f32x16 = f32x16);
 diskann_wide::alias!(u32s = u32x8);
 
 /// Error types returned by Chunk construction.
 #[derive(Debug, Clone)]
 pub enum ChunkConstructionError {
-    /// A `StridedView` was provided with a dimension of zero.
+    /// A `Strided` was provided with a dimension of zero.
     DimensionCannotBeZero,
-    /// A `StridedView` was provided with a length of zero.
+    /// A `Strided` was provided with a length of zero.
     LengthCannotBeZero,
 }
 
@@ -187,6 +189,11 @@ impl Chunk {
         self.data.remainder()
     }
 
+    /// Return an iterator over the square norms.
+    pub(super) fn square_norm_chunks(&self) -> (&[[f32; 16]], &[f32]) {
+        self.square_norms.as_chunks::<16>()
+    }
+
     /// Retrieve the value originally stored in `(row, col)` of the input matrix.
     ///
     /// # Panics
@@ -220,7 +227,7 @@ impl Chunk {
     ///
     /// 1. `data.ncols() == 0`
     /// 2. `data.nrows() == 0`
-    pub(super) fn new(data: strided::StridedView<'_, f32>) -> Result<Self, ChunkConstructionError> {
+    pub(super) fn new(data: Strided<'_, f32>) -> Result<Self, ChunkConstructionError> {
         // Error handling.
         if data.ncols() == 0 {
             return Err(ChunkConstructionError::DimensionCannotBeZero);
@@ -229,7 +236,7 @@ impl Chunk {
             return Err(ChunkConstructionError::LengthCannotBeZero);
         }
 
-        let square_norms = data.row_iter().map(kmeans::square_norm).collect();
+        let square_norms = data.rows().map(kmeans::square_norm).collect();
         let data = BlockTransposed::<f32, 16>::from_strided(data);
         Ok(Self { data, square_norms })
     }
@@ -346,9 +353,9 @@ impl Chunk {
     ///
     /// This method is generally more efficient to call.
     ///
-    /// **IMPORTANT**: The provided `StridedView` must have a length of `Self::batchsize()`.
+    /// **IMPORTANT**: The provided `Strided` must have a length of `Self::batchsize()`.
     ///
-    /// Providing a `StridedView` as an argument allows the compiler to infer that each
+    /// Providing a `Strided` as an argument allows the compiler to infer that each
     /// row in `x` has a strided offset from the base, allowing for better code generation.
     ///
     /// If the distances between a row in `x` and all centers is not finite, return
@@ -385,7 +392,7 @@ impl Chunk {
     /// inner products.
     pub(super) fn find_closest_batch<T>(
         &self,
-        x: strided::StridedView<'_, T>,
+        x: Strided<'_, T>,
     ) -> [CompressionResult; Self::batchsize()]
     where
         T: Copy + Into<f32>,
@@ -394,7 +401,7 @@ impl Chunk {
         assert_eq!(
             x.nrows(),
             Self::batchsize(),
-            "argument StridedView must have a length of {}",
+            "argument Strided must have a length of {}",
             Self::batchsize()
         );
 
@@ -437,7 +444,7 @@ impl Chunk {
             debug_assert!(k < x.ncols());
 
             // SAFETY:
-            // * `StridedView` indexing: We have checked in Assertion 1 that it is safe
+            // * `Strided` indexing: We have checked in Assertion 1 that it is safe
             //   to index `x` at indices `0, 1, 2, and 3`.
             // * Inner slice indexing: It is the caller's responsibility to ensure that
             //   `k < x.dim()` so that indexing the slices return by `x.get_unchecked` are
@@ -449,19 +456,19 @@ impl Chunk {
                 (
                     f32s::splat(
                         diskann_wide::ARCH,
-                        <T as Into<f32>>::into(*x.get_row_unchecked(0).get_unchecked(k)),
+                        <T as Into<f32>>::into(*x.row_unchecked(0).get_unchecked(k)),
                     ),
                     f32s::splat(
                         diskann_wide::ARCH,
-                        <T as Into<f32>>::into(*x.get_row_unchecked(1).get_unchecked(k)),
+                        <T as Into<f32>>::into(*x.row_unchecked(1).get_unchecked(k)),
                     ),
                     f32s::splat(
                         diskann_wide::ARCH,
-                        <T as Into<f32>>::into(*x.get_row_unchecked(2).get_unchecked(k)),
+                        <T as Into<f32>>::into(*x.row_unchecked(2).get_unchecked(k)),
                     ),
                     f32s::splat(
                         diskann_wide::ARCH,
-                        <T as Into<f32>>::into(*x.get_row_unchecked(3).get_unchecked(k)),
+                        <T as Into<f32>>::into(*x.row_unchecked(3).get_unchecked(k)),
                     ),
                 )
             }
@@ -979,10 +986,10 @@ impl ComputeKernel for InnerProductMathematical {
 /// `from` and all pivots.
 ///
 /// Example types implementing this trait include:
-/// * [`SwuaredL2`]: Compute the squared l2 distance between `from` and all pivots.
+/// * [`SquaredL2`]: Compute the squared l2 distance between `from` and all pivots.
 /// * [`InnerProduct`]: Compute the inner product (as a [`diskann_vector::SimilarityScore`])
 ///   between `from` and all pivots.
-pub trait ProcessInto {
+pub trait ProcessInto<T> {
     /// Do the specified operation.
     ///
     /// # Panics
@@ -992,10 +999,10 @@ pub trait ProcessInto {
     ///   of dimensions as the pivots stored in `chunk`.
     /// * `into.len() != chunk.num_centers()`: This routine will produce one result per
     ///   pivot and `into` must be sized accordingly.
-    fn process_into(chunk: &Chunk, from: &[f32], into: &mut [f32]);
+    fn process_into(chunk: &Chunk, from: &[f32], into: &mut [T]);
 }
 
-impl<T> ProcessInto for T
+impl<T> ProcessInto<f32> for T
 where
     T: ComputeKernel,
 {
@@ -1055,14 +1062,71 @@ where
     }
 }
 
+impl ProcessInto<DotAndNorm> for Cosine {
+    fn process_into(chunk: &Chunk, from: &[f32], into: &mut [DotAndNorm]) {
+        assert_eq!(from.len(), chunk.dimension(), "incorrect input vector dim");
+        assert_eq!(
+            into.len(),
+            chunk.num_centers(),
+            "incorrect output vector dim"
+        );
+
+        let (norm_chunks, norm_remainder) = chunk.square_norm_chunks();
+        let (into_chunks, into_remainder) = into.as_chunks_mut::<16>();
+
+        debug_assert_eq!(
+            norm_chunks.len(),
+            into_chunks.len(),
+            "Check 1 already proves this"
+        );
+
+        debug_assert_eq!(
+            norm_remainder.len(),
+            into_remainder.len(),
+            "Check 1 already proves this"
+        );
+
+        // NOTE: This code generated for constructing `DotAndNorm` from the computed
+        // dot products and norms is not particularly efficient.
+        //
+        // It's not terrible, but LLVM refuses to implement a shuffle on its own.
+
+        for (block, (into, norms)) in
+            std::iter::zip(into_chunks.iter_mut(), norm_chunks.iter()).enumerate()
+        {
+            let (lo, hi) = chunk.compute_in_block::<InnerProductMathematical, f32>(from, block);
+
+            let dot: f32x16 = LoHi { lo, hi }.join();
+
+            std::iter::zip(into.iter_mut(), norms.iter())
+                .zip(dot.to_array())
+                .for_each(|((i, n), dot)| *i = DotAndNorm::new(dot, *n));
+        }
+
+        // Process the remainder.
+        if !into_remainder.is_empty() {
+            let (lo, hi) =
+                chunk.compute_in_block::<InnerProductMathematical, f32>(from, chunk.full_blocks());
+            let dot: f32x16 = LoHi { lo, hi }.join();
+
+            std::iter::zip(into_remainder.iter_mut(), norm_remainder.iter())
+                .zip(dot.to_array())
+                .for_each(|((i, n), dot)| *i = DotAndNorm::new(dot, *n));
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views};
-    use diskann_vector::{PureDistanceFunction, distance};
+    use diskann_utils::{
+        lazy_format,
+        views::{self, rowmajor::Matrix},
+    };
+    use diskann_vector::{Norm, PureDistanceFunction, SimilarityScore, distance, norm::FastL2Norm};
     use rand::{
         SeedableRng,
         distr::{Distribution, Uniform},
@@ -1198,19 +1262,13 @@ mod tests {
             let query_batch =
                 flatten(&[copy_query(0), copy_query(1), copy_query(2), copy_query(3)]);
 
-            let view = strided::StridedView::try_from(
-                query_batch.as_slice(),
-                Chunk::batchsize(),
-                dim,
-                dim,
-            )
-            .unwrap();
+            let view = Strided::try_from_data(query_batch.as_slice(), Chunk::batchsize(), dim, dim)
+                .unwrap();
 
             // Make sure that the query batch was constructed correctly.
             assert_eq!(view.nrows(), Chunk::batchsize());
             assert_eq!(view.ncols(), dim);
-            for k in 0..view.nrows() {
-                let row = view.row(k);
+            for (k, row) in view.rows().enumerate() {
                 if k == j {
                     assert_eq!(
                         row, query,
@@ -1261,13 +1319,8 @@ mod tests {
                 maybe_broadcast(3, values[3]),
             ]);
 
-            let view = strided::StridedView::try_from(
-                query_batch.as_slice(),
-                Chunk::batchsize(),
-                dim,
-                dim,
-            )
-            .unwrap();
+            let view = Strided::try_from_data(query_batch.as_slice(), Chunk::batchsize(), dim, dim)
+                .unwrap();
 
             let closest = chunk.find_closest_batch(view);
             // Lane `j` should not be okay. All other lanes should return the correct
@@ -1299,7 +1352,7 @@ mod tests {
         let mut data_aggregate = create_test_pattern(dim, total);
 
         let data = flatten(&data_aggregate);
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = Strided::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         assert_eq!(chunk.num_centers(), total);
@@ -1309,7 +1362,7 @@ mod tests {
         for row in 0..sliced.nrows() {
             for col in 0..sliced.ncols() {
                 assert_eq!(
-                    sliced[(row, col)],
+                    *sliced.element(row, col),
                     chunk.get(row, col),
                     "failed on row {} and col {}",
                     row,
@@ -1383,7 +1436,7 @@ mod tests {
         let last = data_aggregate.last().unwrap().clone();
         data_aggregate[0].clone_from(&last);
         let data = flatten(&data_aggregate);
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = Strided::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         assert_eq!(chunk.num_centers(), total);
@@ -1447,7 +1500,7 @@ mod tests {
     #[test]
     fn test_chunk_construction_error() {
         // No dimensions
-        let chunk = Chunk::new(strided::StridedView::try_from(&[], 3, 0, 0).unwrap());
+        let chunk = Chunk::new(Strided::try_from_data(&[], 3, 0, 0).unwrap());
         let err = chunk.unwrap_err();
         assert!(
             err.to_string()
@@ -1455,7 +1508,7 @@ mod tests {
         );
 
         // No length
-        let chunk = Chunk::new(strided::StridedView::try_from(&[], 0, 10, 10).unwrap());
+        let chunk = Chunk::new(Strided::try_from_data(&[], 0, 10, 10).unwrap());
         let err = chunk.unwrap_err();
         assert!(
             err.to_string()
@@ -1470,7 +1523,7 @@ mod tests {
         let dim = 10;
         let total = 13;
         let data = flatten(&create_test_pattern(dim, total));
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = Strided::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         let query: Vec<f32> = vec![0.0; total];
@@ -1486,13 +1539,12 @@ mod tests {
         let dim = 10;
         let total = 13;
         let data = flatten(&create_test_pattern(dim, total));
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = Strided::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         let query: Vec<f32> = vec![0.0; 4 * total];
         let query_view =
-            strided::StridedView::try_from(query.as_slice(), Chunk::batchsize(), total, total)
-                .unwrap();
+            Strided::try_from_data(query.as_slice(), Chunk::batchsize(), total, total).unwrap();
 
         // PANICS
         chunk.find_closest_batch(query_view);
@@ -1500,18 +1552,17 @@ mod tests {
 
     // Make sure `find_closest_batch` panics for an incorrect length
     #[test]
-    #[should_panic(expected = "argument StridedView must have a length of")]
+    #[should_panic(expected = "argument Strided must have a length of")]
     fn test_find_closest_batch_panics_on_non_batch_length() {
         let dim = 10;
         let total = 13;
         let data = flatten(&create_test_pattern(dim, total));
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = Strided::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         let query: Vec<f32> = vec![0.0; (Chunk::batchsize() + 1) * dim];
         let query_view =
-            strided::StridedView::try_from(query.as_slice(), Chunk::batchsize() + 1, dim, dim)
-                .unwrap();
+            Strided::try_from_data(query.as_slice(), Chunk::batchsize() + 1, dim, dim).unwrap();
 
         // PANICS
         chunk.find_closest_batch(query_view);
@@ -1520,7 +1571,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 5 must be less than 5")]
     fn get_panics_on_row() {
-        let data = views::Matrix::new(0.0, 5, 10);
+        let data = views::rowmajor::Owned::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(5, 1);
     }
@@ -1528,7 +1579,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 5 must be less than 5")]
     fn get_panics_on_col() {
-        let data = views::Matrix::new(0.0, 10, 5);
+        let data = views::rowmajor::Owned::from_element(10, 5, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(1, 5);
     }
@@ -1548,33 +1599,47 @@ mod tests {
     fn test_process_into_impl(dim: usize, total: usize, rng: &mut StdRng) {
         let distribution = Uniform::<i32>::new(-10, 10).unwrap();
         let base =
-            views::Matrix::<f32>::new(views::Init(|| distribution.sample(rng) as f32), total, dim);
+            views::rowmajor::Owned::<f32>::from_fn(total, dim, |_| distribution.sample(rng) as f32);
 
         let chunk = Chunk::new(base.as_view().into()).unwrap();
         let mut input = vec![0.0; dim];
-        let mut output = vec![0.0; total];
+
+        let mut output_f32 = vec![0.0; total];
+        let mut output_dot = vec![DotAndNorm::default(); total];
 
         for _ in 0..PROCESS_INTO_TRIALS {
             input
                 .iter_mut()
                 .for_each(|i| *i = distribution.sample(rng) as f32);
 
+            let input_norm = (FastL2Norm).evaluate(&*input);
+
             // Inner Product
-            InnerProduct::process_into(&chunk, &input, &mut output);
+            InnerProduct::process_into(&chunk, &input, &mut output_f32);
 
             // Check outputs
-            std::iter::zip(base.row_iter(), output.iter()).for_each(|(row, got)| {
+            std::iter::zip(base.rows(), output_f32.iter()).for_each(|(row, got)| {
                 let expected: f32 = distance::InnerProduct::evaluate(row, input.as_slice());
                 assert_eq!(*got, expected);
             });
 
             // Squared L2
-            SquaredL2::process_into(&chunk, &input, &mut output);
+            SquaredL2::process_into(&chunk, &input, &mut output_f32);
 
             // Check outputs
-            std::iter::zip(base.row_iter(), output.iter()).for_each(|(row, got)| {
+            std::iter::zip(base.rows(), output_f32.iter()).for_each(|(row, got)| {
                 let expected: f32 = distance::SquaredL2::evaluate(row, input.as_slice());
                 assert_eq!(*got, expected);
+            });
+
+            // Cosine
+            Cosine::process_into(&chunk, &input, &mut output_dot);
+
+            // Check outputs
+            std::iter::zip(base.rows(), output_dot.iter()).for_each(|(row, got)| {
+                let expected: f32 = distance::Cosine::evaluate(row, input.as_slice());
+                let got: SimilarityScore<f32> = got.finish_cosine(input_norm);
+                assert_eq!(got.into_inner(), expected);
             });
         }
     }
@@ -1597,7 +1662,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_process_into_panics_on_from() {
-        let data = views::Matrix::<f32>::new(0.0, 5, 10);
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);
@@ -1609,9 +1674,23 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "incorrect input vector dim"]
+    fn test_process_into_cosine_panics_on_from() {
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
+        let chunk = Chunk::new(data.as_view().into()).unwrap();
+        assert_eq!(chunk.dimension(), 10);
+        assert_eq!(chunk.num_centers(), 5);
+
+        // Query is too large.
+        let query: Vec<f32> = vec![0.0; chunk.dimension() + 1];
+        let mut dst = vec![DotAndNorm::default(); chunk.num_centers()];
+        Cosine::process_into(&chunk, query.as_slice(), dst.as_mut_slice());
+    }
+
+    #[test]
     #[should_panic]
     fn test_process_into_panics_on_into() {
-        let data = views::Matrix::<f32>::new(0.0, 5, 10);
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);
@@ -1620,5 +1699,19 @@ mod tests {
         // Dst is too big.
         let mut dst = vec![0.0; chunk.num_centers() + 1];
         InnerProduct::process_into(&chunk, query.as_slice(), dst.as_mut_slice());
+    }
+
+    #[test]
+    #[should_panic = "incorrect output vector dim"]
+    fn test_process_into_cosine_panics_on_into() {
+        let data = views::rowmajor::Owned::<f32>::from_element(5, 10, 0.0);
+        let chunk = Chunk::new(data.as_view().into()).unwrap();
+        assert_eq!(chunk.dimension(), 10);
+        assert_eq!(chunk.num_centers(), 5);
+
+        let query: Vec<f32> = vec![0.0; chunk.dimension()];
+        // Dst is too big.
+        let mut dst = vec![DotAndNorm::default(); chunk.num_centers() + 1];
+        Cosine::process_into(&chunk, query.as_slice(), dst.as_mut_slice());
     }
 }

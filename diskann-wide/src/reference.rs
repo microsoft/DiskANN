@@ -251,6 +251,12 @@ impl ReferenceCast<f32> for i32 {
     }
 }
 
+impl ReferenceCast<f32> for u32 {
+    fn reference_cast(self) -> f32 {
+        self as f32
+    }
+}
+
 impl ReferenceCast<u8> for i16 {
     fn reference_cast(self) -> u8 {
         self as u8
@@ -328,7 +334,7 @@ where
 /// general, we expect this to compile down to straight assembly without stack-allocating
 /// the intermediate arrays.
 ///
-/// An example can be seen here: https://godbolt.org/z/sMcdGbbPG
+/// An example can be seen here: <https://godbolt.org/z/sMcdGbbPG>
 macro_rules! impl_tree_reduce {
     ($N:literal) => {
         impl<T> TreeReduce for [T; $N]

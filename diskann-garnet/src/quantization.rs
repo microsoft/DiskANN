@@ -1,10 +1,16 @@
-use std::{num::NonZero, sync::RwLock};
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+use std::num::NonZero;
 
 use diskann::utils::VectorRepr;
 use diskann_quantization::{
     CompressInto,
     algorithms::{Transform, TransformKind, transforms::NewTransformError},
     alloc::{GlobalAllocator, Poly, ScopedAllocator},
+    bits::{Representation, Unsigned},
     minmax::{self, MinMaxQuantizer},
     num::POSITIVE_ONE_F32,
     spherical::{
@@ -12,8 +18,9 @@ use diskann_quantization::{
         iface::{self, Opaque, OpaqueMut, Quantizer},
     },
 };
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
+use parking_lot::RwLock;
 use thiserror::Error;
 
 use crate::provider::{GarnetDistanceComputer, GarnetQueryComputer};
@@ -52,7 +59,7 @@ pub(crate) trait GarnetQuantizer: Send + Sync {
     /// Each row of the matrix will be a vector.
     /// Returns a lock guard for purposes of synchronization; after the guard is released, the
     /// quantizer will be accessible to all threads.
-    fn train(&self, metric: Metric, data: MatrixView<f32>) -> Result<(), GarnetQuantizerError>;
+    fn train(&self, metric: Metric, data: rowmajor::Ref<f32>) -> Result<(), GarnetQuantizerError>;
     /// Quantize a vector
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError>;
     /// Returns a distance computer for comparing quantized vectors
@@ -75,42 +82,50 @@ pub(crate) trait DynQueryComputer: Send + Sync {
     fn evaluate_similarity(&self, a: &[u8]) -> f32;
 }
 
-/// Spherical 1-bit quantization.
+/// Spherical quantization with 1, 2, or 4 bits per dimension.
 ///
-/// This quantizer corresponds to `BIN` quantizer in the Redis protocol. It requires hundreds of
-/// vectors (but not thousands) for training. Quantized vectors have 1 bit per dimension plus up
-/// to 6 bytes of overhead.
-pub(crate) struct Spherical1Bit {
+/// Quantized vectors retain the spherical encoding's six bytes of metadata.
+pub(crate) struct SphericalBits<const NBITS: usize> {
+    metric: Metric,
     dim: usize,
-    inner: RwLock<Option<spherical::iface::Impl<1, GlobalAllocator>>>,
+    inner: RwLock<Option<iface::Impl<NBITS, GlobalAllocator>>>,
 }
 
-impl Spherical1Bit {
-    pub(crate) fn new(dim: usize) -> Self {
+pub(crate) type Spherical1Bit = SphericalBits<1>;
+pub(crate) type Spherical2Bit = SphericalBits<2>;
+pub(crate) type Spherical4Bit = SphericalBits<4>;
+
+impl<const NBITS: usize> SphericalBits<NBITS> {
+    pub(crate) fn new(metric: Metric, dim: usize) -> Self {
         Self {
+            metric,
             dim,
             inner: RwLock::new(None),
         }
     }
 }
 
-impl GarnetQuantizer for Spherical1Bit {
+impl<const NBITS: usize> GarnetQuantizer for SphericalBits<NBITS>
+where
+    iface::Impl<NBITS>: Quantizer<GlobalAllocator> + iface::Constructible,
+    Unsigned: Representation<NBITS>,
+{
     fn required_vectors(&self) -> usize {
         1000
     }
 
     fn bytes(&self) -> usize {
-        Data::<1, GlobalAllocator>::canonical_bytes(self.dim)
+        Data::<NBITS, GlobalAllocator>::canonical_bytes(self.dim)
     }
 
     fn is_trained(&self) -> bool {
-        self.inner.read().unwrap().is_some()
+        self.inner.read().is_some()
     }
 
     fn train(
         &self,
         metric_type: Metric,
-        data: MatrixView<f32>,
+        data: rowmajor::Ref<f32>,
     ) -> Result<(), GarnetQuantizerError> {
         let mut rng = rand::rng();
         let quantizer = SphericalQuantizer::train(
@@ -126,9 +141,9 @@ impl GarnetQuantizer for Spherical1Bit {
         )
         .map_err(|e| GarnetQuantizerError::Training(Box::new(e)))?;
 
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         *inner = Some(
-            spherical::iface::Impl::<1>::new(quantizer)
+            iface::Impl::<NBITS>::new(quantizer)
                 .map_err(|e| GarnetQuantizerError::Alloc(Box::new(e)))?,
         );
 
@@ -136,7 +151,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError> {
-        let guard = self.inner.read().unwrap();
+        let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             spherical::iface::Quantizer::<GlobalAllocator>::compress(
                 quantizer,
@@ -152,7 +167,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn distance_computer(&self) -> Result<GarnetDistanceComputer, GarnetQuantizerError> {
-        let guard = self.inner.read().unwrap();
+        let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             let computer = quantizer
                 .distance_computer(GlobalAllocator)
@@ -164,7 +179,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError> {
-        let guard = self.inner.read().unwrap();
+        let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             let computer = quantizer
                 .fused_query_computer(
@@ -182,7 +197,7 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
-        let guard = self.inner.read().unwrap();
+        let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             quantizer
                 .serialize(GlobalAllocator)
@@ -193,14 +208,26 @@ impl GarnetQuantizer for Spherical1Bit {
     }
 
     fn deserialize(&self, state: &[u8]) -> Result<(), GarnetQuantizerError> {
-        let mut guard = self.inner.write().unwrap();
+        if state.len() < 8 {
+            return Err(GarnetQuantizerError::UnsupportedSerialization);
+        }
+
+        let mut guard = self.inner.write();
         if guard.is_some() {
             Err(GarnetQuantizerError::UnsupportedSerialization)
         } else {
-            let q = spherical::iface::Impl::<1>::try_deserialize(state, GlobalAllocator)
-                .map_err(|e| GarnetQuantizerError::Deserialization(Box::new(e)))?;
-            *guard = Some(q);
-            Ok(())
+            let quantizer = iface::Impl::<NBITS>::try_deserialize(state, GlobalAllocator)
+                .map_err(|error| GarnetQuantizerError::Deserialization(Box::new(error)))?;
+            if <iface::Impl<NBITS> as Quantizer<GlobalAllocator>>::full_dim(&quantizer) == self.dim
+                && <iface::Impl<NBITS> as Quantizer<GlobalAllocator>>::dim(&quantizer) == self.dim
+                && <iface::Impl<NBITS> as Quantizer<GlobalAllocator>>::metric(&quantizer)
+                    == self.metric
+            {
+                *guard = Some(quantizer);
+                Ok(())
+            } else {
+                Err(GarnetQuantizerError::UnsupportedSerialization)
+            }
         }
     }
 }
@@ -232,7 +259,8 @@ impl DynQueryComputer for iface::QueryComputer {
 /// quantized vector has 8 bits per dimension and 20 bytes of overhead.
 pub(crate) struct MinMax8Bit {
     metric: Metric,
-    inner: minmax::MinMaxQuantizer,
+    dim: usize,
+    inner: RwLock<minmax::MinMaxQuantizer>,
 }
 
 impl MinMax8Bit {
@@ -255,7 +283,8 @@ impl MinMax8Bit {
 
         Ok(Self {
             metric,
-            inner: minmax::MinMaxQuantizer::new(transform, grid_scale),
+            dim: dim.get(),
+            inner: RwLock::new(minmax::MinMaxQuantizer::new(transform, grid_scale)),
         })
     }
 
@@ -265,7 +294,11 @@ impl MinMax8Bit {
     ) -> Result<Self, GarnetQuantizerError> {
         let inner = MinMaxQuantizer::try_deserialize(bytes)
             .map_err(|e| GarnetQuantizerError::Deserialization(Box::new(e)))?;
-        Ok(Self { metric, inner })
+        Ok(Self {
+            metric,
+            dim: inner.dim(),
+            inner: RwLock::new(inner),
+        })
     }
 }
 
@@ -275,21 +308,26 @@ impl GarnetQuantizer for MinMax8Bit {
     }
 
     fn bytes(&self) -> usize {
-        minmax::Data::<8>::canonical_bytes(self.inner.dim())
+        minmax::Data::<8>::canonical_bytes(self.dim)
     }
 
     fn is_trained(&self) -> bool {
         true
     }
 
-    fn train(&self, _metric: Metric, _data: MatrixView<f32>) -> Result<(), GarnetQuantizerError> {
+    fn train(
+        &self,
+        _metric: Metric,
+        _data: rowmajor::Ref<f32>,
+    ) -> Result<(), GarnetQuantizerError> {
         Ok(())
     }
 
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError> {
-        let into = minmax::DataMutRef::<8>::from_canonical_front_mut(into, self.inner.dim())
+        let into = minmax::DataMutRef::<8>::from_canonical_front_mut(into, self.dim)
             .map_err(|e| GarnetQuantizerError::Compression(Box::new(e)))?;
         self.inner
+            .read()
             .compress_into(v, into)
             .map_err(|e| GarnetQuantizerError::Compression(Box::new(e)))?;
         Ok(())
@@ -299,17 +337,18 @@ impl GarnetQuantizer for MinMax8Bit {
         let computer = GarnetDistanceComputer::new(
             <diskann_providers::common::MinMax8 as VectorRepr>::distance(
                 self.metric,
-                Some(self.inner.dim()),
+                Some(self.dim),
             ),
         );
         Ok(computer)
     }
 
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError> {
+        let inner = self.inner.read();
         let computer = GarnetQueryComputer::new(MinMax8BitQueryComputer::new(
-            &self.inner,
+            &inner,
             query,
-            self.inner.dim(),
+            self.dim,
             self.metric,
         )?);
         Ok(computer)
@@ -317,12 +356,25 @@ impl GarnetQuantizer for MinMax8Bit {
 
     fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
         self.inner
+            .read()
             .serialize(GlobalAllocator)
             .map_err(|e| GarnetQuantizerError::Alloc(Box::new(e)))
     }
 
-    fn deserialize(&self, _state: &[u8]) -> Result<(), GarnetQuantizerError> {
-        Err(GarnetQuantizerError::UnsupportedSerialization)
+    fn deserialize(&self, state: &[u8]) -> Result<(), GarnetQuantizerError> {
+        if state.len() < 8 {
+            return Err(GarnetQuantizerError::UnsupportedSerialization);
+        }
+
+        let mut guard = self.inner.write();
+        let quantizer = MinMaxQuantizer::try_deserialize(state)
+            .map_err(|error| GarnetQuantizerError::Deserialization(Box::new(error)))?;
+        if quantizer.dim() == self.dim && quantizer.output_dim() == self.dim {
+            *guard = quantizer;
+            Ok(())
+        } else {
+            Err(GarnetQuantizerError::UnsupportedSerialization)
+        }
     }
 }
 
@@ -369,15 +421,15 @@ impl DynQueryComputer for MinMax8BitQueryComputer {
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
-    use crate::quantization::{GarnetQuantizer, GarnetQuantizerError, MinMax8Bit, Spherical1Bit};
+    use crate::quantization::{
+        GarnetQuantizer, GarnetQuantizerError, MinMax8Bit, Spherical1Bit, Spherical2Bit,
+        Spherical4Bit,
+    };
 
-    #[test]
-    fn basic_spherical_1bit() {
-        let quantizer = Spherical1Bit::new(2);
-
+    fn check_spherical(quantizer: &dyn GarnetQuantizer, restored: &dyn GarnetQuantizer) {
         assert_eq!(quantizer.required_vectors(), 1000);
         assert_eq!(quantizer.bytes(), 1 + 6);
         assert!(!quantizer.is_trained());
@@ -398,7 +450,7 @@ mod tests {
             Err(GarnetQuantizerError::NoQuantizer)
         ));
 
-        let mut test_data = Matrix::new(0.0f32, 1000, 2);
+        let mut test_data = rowmajor::Owned::from_element(1000, 2, 0.0f32);
         for i in 0..1000 {
             test_data
                 .row_mut(i)
@@ -422,6 +474,44 @@ mod tests {
         let query_comp = quantizer.query_computer(&test_v).unwrap();
         let d = query_comp.evaluate_similarity(&quant_a);
         assert_ne!(d, 0.0);
+
+        let state = quantizer.serialize().unwrap();
+        restored.deserialize(&state).unwrap();
+        let mut restored_data = vec![0; restored.bytes()];
+        restored.compress(&test_v, &mut restored_data).unwrap();
+        assert_eq!(restored_data, test_q);
+        assert_eq!(
+            restored
+                .query_computer(&test_v)
+                .unwrap()
+                .evaluate_similarity(&quant_a),
+            d
+        );
+        assert!(restored.deserialize(&state).is_err());
+    }
+
+    #[test]
+    fn basic_spherical_1bit() {
+        check_spherical(
+            &Spherical1Bit::new(Metric::L2, 2),
+            &Spherical1Bit::new(Metric::L2, 2),
+        );
+    }
+
+    #[test]
+    fn basic_spherical_2bit() {
+        check_spherical(
+            &Spherical2Bit::new(Metric::L2, 2),
+            &Spherical2Bit::new(Metric::L2, 2),
+        );
+    }
+
+    #[test]
+    fn basic_spherical_4bit() {
+        check_spherical(
+            &Spherical4Bit::new(Metric::L2, 2),
+            &Spherical4Bit::new(Metric::L2, 2),
+        );
     }
 
     #[test]
@@ -436,7 +526,7 @@ mod tests {
         let test_v = [0.5f32, 0.5];
         let mut test_q = vec![0u8; quantizer.bytes()];
 
-        let mut test_data = Matrix::new(0.0f32, 1, 2);
+        let mut test_data = rowmajor::Owned::from_element(1, 2, 0.0f32);
         test_data.row_mut(0).copy_from_slice(&[1.0f32, 1.0]);
 
         // Training is a no-op, but succeeds.

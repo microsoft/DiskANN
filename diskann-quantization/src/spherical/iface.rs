@@ -40,10 +40,10 @@
 //!     spherical::{iface, SupportedMetric, SphericalQuantizer, PreScale},
 //!     num::PowerOfTwo,
 //! };
-//! use diskann_utils::views::Matrix;
+//! use diskann_utils::views::rowmajor::{self, Matrix};
 //!
 //! // For illustration purposes, the dataset consists of just a single vector.
-//! let mut data = Matrix::new(1.0, 1, 4);
+//! let mut data = rowmajor::Owned::from_element(1, 4, 1.0);
 //! let quantizer = SphericalQuantizer::train(
 //!     data.as_view(),
 //!     TransformKind::Null,
@@ -51,11 +51,11 @@
 //!     PreScale::None,
 //!     &mut rand::rng(),
 //!     GlobalAllocator
-//! ).unwrap();
+//! )
+//! .unwrap()
+//! .as_quantizer::<1>()
+//! .unwrap();
 //!
-//! let quantizer: Box<dyn iface::Quantizer> = Box::new(
-//!     iface::Impl::<1>::new(quantizer).unwrap()
-//! );
 //!
 //! let alloc = AlignedAllocator::new(PowerOfTwo::new(1).unwrap());
 //! let mut buf = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
@@ -133,7 +133,7 @@
 ///   - [`diskann_quantization::sphericasl::Data`]
 ///
 /// * Embedded inside [`Reify`] to convert [`Opaque`] to the correct type.
-use std::marker::PhantomData;
+use std::{fmt::Debug, marker::PhantomData};
 
 use diskann_utils::{Reborrow, ReborrowMut};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
@@ -223,7 +223,7 @@ impl QueryBufferDescription {
 /// 2. If dynamic memory allocation for scratch space is required, a separate `scratch`
 ///    allocator will be required and all scratch space allocations will go through that
 ///    allocator.
-pub trait Quantizer<A = GlobalAllocator>: Send + Sync
+pub trait Quantizer<A = GlobalAllocator>: Send + Sync + Debug
 where
     A: Allocator + std::panic::UnwindSafe + Send + Sync + 'static,
 {
@@ -532,7 +532,7 @@ impl QueryLayout {
 
 impl std::fmt::Display for QueryLayout {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        <Self as std::fmt::Debug>::fmt(self, fmt)
+        <Self as Debug>::fmt(self, fmt)
     }
 }
 
@@ -613,7 +613,7 @@ where
 ///
 /// THis is the building block for building distance computers with the reificiation code
 /// inlined into the callsite.
-trait FromOpaque: 'static + Send + Sync {
+trait FromOpaque: 'static + Send + Sync + Debug {
     type Target<'a>;
     type Error: std::error::Error + Send + Sync + 'static;
 
@@ -679,7 +679,7 @@ impl<const NBITS: usize> ReportQueryLayout for AsData<NBITS> {
 impl<const NBITS: usize, Perm> FromOpaque for AsQuery<NBITS, Perm>
 where
     Unsigned: Representation<NBITS>,
-    Perm: bits::PermutationStrategy<NBITS> + Send + Sync + 'static,
+    Perm: bits::PermutationStrategy<NBITS> + Debug + Send + Sync + 'static,
 {
     type Target<'a> = QueryRef<'a, NBITS, Perm>;
     type Error = meta::NotCanonical;
@@ -706,6 +706,7 @@ impl<const NBITS: usize> ReportQueryLayout for AsQuery<NBITS, bits::BitTranspose
 //-------//
 
 /// Helper struct to convert an [`Opaque`] to a fully-typed [`DataRef`].
+#[derive(Debug)]
 pub(super) struct Reify<T, M, L, R> {
     inner: T,
     dim: usize,
@@ -728,7 +729,7 @@ impl<M, T, R> DynQueryComputer for Reify<T, M, (), R>
 where
     M: Architecture,
     R: FromOpaque,
-    T: ReportQueryLayout + Send + Sync,
+    T: ReportQueryLayout + Debug + Send + Sync,
     for<'a> &'a T: Target1<M, Rf32, R::Target<'a>>,
 {
     fn evaluate(&self, x: Opaque<'_>) -> Result<f32, QueryDistanceError> {
@@ -755,7 +756,7 @@ where
     M: Architecture,
     Q: FromOpaque + Default + ReportQueryLayout,
     R: FromOpaque,
-    T: for<'a> Target2<M, Rf32, Q::Target<'a>, R::Target<'a>> + Copy + Send + Sync,
+    T: for<'a> Target2<M, Rf32, Q::Target<'a>, R::Target<'a>> + Copy + Debug + Send + Sync,
 {
     fn evaluate(&self, query: Opaque<'_>, x: Opaque<'_>) -> Result<f32, DistanceError> {
         self.arch.run3(
@@ -797,7 +798,7 @@ pub enum QueryDistanceError {
     UnequalLengths(#[source] UnequalLengths),
 }
 
-pub trait DynQueryComputer: Send + Sync {
+pub trait DynQueryComputer: Send + Sync + Debug {
     fn evaluate(&self, x: Opaque<'_>) -> Result<f32, QueryDistanceError>;
     fn layout(&self) -> QueryLayout;
 }
@@ -810,6 +811,7 @@ pub trait DynQueryComputer: Send + Sync {
 /// created the computer.
 ///
 /// Otherwise, distance computations may return garbage values or panic.
+#[derive(Debug)]
 pub struct QueryComputer<A = GlobalAllocator>
 where
     A: AllocatorCore,
@@ -842,19 +844,6 @@ where
     }
 }
 
-impl<A> std::fmt::Debug for QueryComputer<A>
-where
-    A: AllocatorCore,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "dynamic fused query computer with layout \"{}\"",
-            self.layout()
-        )
-    }
-}
-
 impl<A> PreprocessedDistanceFunction<Opaque<'_>, Result<f32, QueryDistanceError>>
     for QueryComputer<A>
 where
@@ -871,6 +860,7 @@ where
 /// This struct represents the partial application of the `inner` distance function with
 /// `query` in a generic way so we only have one level of dynamic dispatch when computing
 /// distances.
+#[derive(Debug)]
 pub(super) struct Curried<D, Q> {
     inner: D,
     query: Q,
@@ -915,7 +905,7 @@ pub enum DistanceError {
     UnequalLengths(UnequalLengths),
 }
 
-pub trait DynDistanceComputer: Send + Sync {
+pub trait DynDistanceComputer: Send + Sync + Debug {
     fn evaluate(&self, query: Opaque<'_>, x: Opaque<'_>) -> Result<f32, DistanceError>;
     fn layout(&self) -> QueryLayout;
 }
@@ -930,6 +920,7 @@ pub trait DynDistanceComputer: Send + Sync {
 /// Right-hand arguments must be [`Opaque`] slices compressed using [`Quantizer::compress`].
 ///
 /// Otherwise, distance computations may return garbage values or panic.
+#[derive(Debug)]
 pub struct DistanceComputer<A = GlobalAllocator>
 where
     A: AllocatorCore,
@@ -961,19 +952,6 @@ where
     }
 }
 
-impl<A> std::fmt::Debug for DistanceComputer<A>
-where
-    A: AllocatorCore,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "dynamic distance computer with layout \"{}\"",
-            self.layout()
-        )
-    }
-}
-
 impl<A> DistanceFunction<Opaque<'_>, Opaque<'_>, Result<f32, DistanceError>> for DistanceComputer<A>
 where
     A: AllocatorCore,
@@ -997,6 +975,7 @@ const DEFAULT_SERIALIZED_BYTES: usize = 1;
 
 /// Implementation for [`Quantizer`] specializing on the number of bits used for data
 /// compression.
+#[derive(Debug)]
 pub struct Impl<const NBITS: usize, A = GlobalAllocator>
 where
     A: Allocator,
@@ -1127,6 +1106,7 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         T: for<'a> ReborrowMut<'a>
             + for<'a> Reborrow<'a, Target = Q::Target<'a>>
             + ReportQueryLayout
+            + Debug
             + Send
             + Sync
             + 'static,
@@ -1282,7 +1262,12 @@ where
         allocator: A,
     ) -> Result<QueryComputer<A>, AllocatorError>
     where
-        R: ReportQueryLayout + for<'a> Reborrow<'a, Target = Q::Target<'a>> + Send + Sync + 'static,
+        R: ReportQueryLayout
+            + for<'a> Reborrow<'a, Target = Q::Target<'a>>
+            + Debug
+            + Send
+            + Sync
+            + 'static,
         A: AllocatorCore;
 }
 
@@ -1343,6 +1328,7 @@ macro_rules! dispatch_map {
             where
                 R: ReportQueryLayout
                     + for<'a> Reborrow<'a, Target = <$Q as FromOpaque>::Target<'a>>
+                    + Debug
                     + Send
                     + Sync
                     + 'static,
@@ -1434,9 +1420,9 @@ cfg_if::cfg_if! {
             arch.retarget()
         }
 
-        dispatch_map!(1, AsFull, Neon, downcast);
-        dispatch_map!(2, AsFull, Neon, downcast);
-        dispatch_map!(4, AsFull, Neon, downcast);
+        dispatch_map!(1, AsFull, Neon);
+        dispatch_map!(2, AsFull, Neon);
+        dispatch_map!(4, AsFull, Neon);
         dispatch_map!(8, AsFull, Neon, downcast);
 
         dispatch_map!(1, AsData<1>, Neon, downcast);
@@ -1512,7 +1498,12 @@ where
     A: Allocator,
     B: AllocatorCore,
     Q: FromOpaque,
-    R: ReportQueryLayout + for<'a> Reborrow<'a, Target = Q::Target<'a>> + Send + Sync + 'static,
+    R: ReportQueryLayout
+        + for<'a> Reborrow<'a, Target = Q::Target<'a>>
+        + Debug
+        + Send
+        + Sync
+        + 'static,
     SphericalQuantizer<A>: BuildComputer<M, Q, N>,
 {
     fn run(
@@ -1578,8 +1569,8 @@ where
 
 impl<A, B> Quantizer<B> for Impl<1, A>
 where
-    A: Allocator + std::panic::RefUnwindSafe + Send + Sync + 'static,
-    B: Allocator + std::panic::UnwindSafe + Send + Sync + 'static,
+    A: Allocator + Debug + std::panic::RefUnwindSafe + Send + Sync + 'static,
+    B: Allocator + Debug + std::panic::UnwindSafe + Send + Sync + 'static,
 {
     fn nbits(&self) -> usize {
         1
@@ -1779,8 +1770,8 @@ macro_rules! plan {
     ($N:literal) => {
         impl<A, B> Quantizer<B> for Impl<$N, A>
         where
-            A: Allocator + std::panic::RefUnwindSafe + Send + Sync + 'static,
-            B: Allocator + std::panic::UnwindSafe + Send + Sync + 'static,
+            A: Allocator + Debug + std::panic::RefUnwindSafe + Send + Sync + 'static,
+            B: Allocator + Debug + std::panic::UnwindSafe + Send + Sync + 'static,
         {
             fn nbits(&self) -> usize {
                 $N
@@ -2048,8 +2039,8 @@ pub fn try_deserialize<O, A>(
     alloc: A,
 ) -> Result<Poly<dyn Quantizer<O>, A>, DeserializationError>
 where
-    O: Allocator + std::panic::UnwindSafe + Send + Sync + 'static,
-    A: Allocator + std::panic::RefUnwindSafe + Send + Sync + 'static,
+    O: Allocator + Debug + std::panic::UnwindSafe + Send + Sync + 'static,
+    A: Allocator + Debug + std::panic::RefUnwindSafe + Send + Sync + 'static,
 {
     // An inner impl is used to ensure that the returned `Poly` is allocated before any of
     // the allocations needed by the members.
@@ -2106,7 +2097,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
@@ -2175,7 +2166,7 @@ mod tests {
     }
 
     #[inline(never)]
-    fn test_plan(plan: &dyn Quantizer, nbits: usize, dataset: MatrixView<f32>) {
+    fn test_plan(plan: &dyn Quantizer, nbits: usize, dataset: rowmajor::Ref<f32>) {
         // Perform the bit-specific test.
         if nbits == 1 {
             test_plan_1_bit(plan);
@@ -2395,7 +2386,7 @@ mod tests {
         }
     }
 
-    fn make_impl<const NBITS: usize>(metric: SupportedMetric) -> (Impl<NBITS>, Matrix<f32>)
+    fn make_impl<const NBITS: usize>(metric: SupportedMetric) -> (Impl<NBITS>, rowmajor::Owned<f32>)
     where
         Impl<NBITS>: Constructible,
     {
@@ -2414,7 +2405,7 @@ mod tests {
         )
         .unwrap();
 
-        (Impl::<NBITS>::new(quantizer).unwrap(), data)
+        (Impl::new(quantizer).unwrap(), data)
     }
 
     #[test]
@@ -2489,7 +2480,7 @@ mod tests {
         test_plan(&plan, 8, data.as_view());
     }
 
-    fn test_dataset() -> Matrix<f32> {
+    fn test_dataset() -> rowmajor::Owned<f32> {
         let data = vec![
             0.28657,
             -0.0318168,
@@ -2621,7 +2612,7 @@ mod tests {
             -0.324718, // row 15
         ];
 
-        Matrix::try_from(data.into(), 16, 8).unwrap()
+        rowmajor::Owned::try_from_data(data.into(), 16, 8).unwrap()
     }
 
     #[cfg(feature = "flatbuffers")]
@@ -2638,7 +2629,7 @@ mod tests {
             quantizer: &dyn Quantizer,
             deserialized: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<'_, f32>,
+            dataset: rowmajor::Ref<'_, f32>,
         ) {
             let scoped_global = ScopedAllocator::global();
 
@@ -2662,7 +2653,7 @@ mod tests {
                 let mut a = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
                 let mut b = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
 
-                for row in dataset.row_iter() {
+                for row in dataset.rows() {
                     quantizer
                         .compress(row, OpaqueMut::new(&mut a), scoped_global)
                         .unwrap();
@@ -2687,14 +2678,14 @@ mod tests {
                 let d_computer = deserialized.distance_computer(GlobalAllocator).unwrap();
                 let d_computer_ref = deserialized.distance_computer_ref();
 
-                for r0 in dataset.row_iter() {
+                for r0 in dataset.rows() {
                     quantizer
                         .compress(r0, OpaqueMut::new(&mut a0), scoped_global)
                         .unwrap();
                     deserialized
                         .compress(r0, OpaqueMut::new(&mut b0), scoped_global)
                         .unwrap();
-                    for r1 in dataset.row_iter() {
+                    for r1 in dataset.rows() {
                         quantizer
                             .compress(r1, OpaqueMut::new(&mut a1), scoped_global)
                             .unwrap();
@@ -2730,7 +2721,7 @@ mod tests {
                         continue;
                     }
 
-                    for r in dataset.row_iter() {
+                    for r in dataset.rows() {
                         let q_computer = quantizer
                             .fused_query_computer(r, layout, false, GlobalAllocator, scoped_global)
                             .unwrap();
@@ -2738,7 +2729,7 @@ mod tests {
                             .fused_query_computer(r, layout, false, GlobalAllocator, scoped_global)
                             .unwrap();
 
-                        for u in dataset.row_iter() {
+                        for u in dataset.rows() {
                             quantizer
                                 .compress(u, OpaqueMut::new(&mut a), scoped_global)
                                 .unwrap();
@@ -2760,7 +2751,7 @@ mod tests {
         fn test_plan_serialization(
             quantizer: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
         ) {
             let global = GlobalAllocator;
 
@@ -3180,11 +3171,14 @@ mod tests {
         // Helpers //
         /////////////
 
-        fn compress_dataset(quantizer: &dyn Quantizer, dataset: MatrixView<f32>) -> Vec<Vec<u8>> {
+        fn compress_dataset(
+            quantizer: &dyn Quantizer,
+            dataset: rowmajor::Ref<f32>,
+        ) -> Vec<Vec<u8>> {
             let scoped_global = ScopedAllocator::global();
             let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
             dataset
-                .row_iter()
+                .rows()
                 .map(|row| {
                     let mut buf = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
                     quantizer
@@ -3197,7 +3191,7 @@ mod tests {
 
         fn compute_layout_distances(
             quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             compressed: &[Vec<u8>],
             allow_rescale: bool,
         ) -> Vec<LayoutDistances> {
@@ -3207,7 +3201,7 @@ mod tests {
                 .filter(|&layout| quantizer.is_supported(layout))
                 .map(|layout| {
                     let distances = dataset
-                        .row_iter()
+                        .rows()
                         .map(|query_row| {
                             let computer = quantizer
                                 .fused_query_computer(
@@ -3238,7 +3232,7 @@ mod tests {
         /// per-layout query distances.
         fn assert_layout_distances(
             quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             compressed: &[Vec<u8>],
             expected: &[LayoutDistances],
             allow_rescale: bool,
@@ -3253,8 +3247,7 @@ mod tests {
                 );
 
                 for (qi, (query_row, expected_distances)) in
-                    std::iter::zip(dataset.row_iter(), layout_distances.distances.iter())
-                        .enumerate()
+                    std::iter::zip(dataset.rows(), layout_distances.distances.iter()).enumerate()
                 {
                     let computer = quantizer
                         .fused_query_computer(
@@ -3289,7 +3282,7 @@ mod tests {
             quantizer: &dyn Quantizer,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
         ) -> Baseline {
             let compressed_vectors = compress_dataset(quantizer, dataset);
 
@@ -3408,7 +3401,7 @@ mod tests {
 
         fn check_baseline(
             baseline: &Baseline,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             expected_transform: DataTransform,
             expected_pre_scale: ScaleConfig,
         ) {
@@ -3526,9 +3519,9 @@ mod tests {
             metric: SupportedMetric,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-        ) -> (Impl<NBITS>, Matrix<f32>)
+        ) -> (Poly<dyn Quantizer>, rowmajor::Owned<f32>)
         where
-            Impl<NBITS>: Constructible,
+            Impl<NBITS>: Constructible + Quantizer,
         {
             let data = test_dataset();
             let mut rng = StdRng::seed_from_u64(TRAINING_SEED);
@@ -3543,7 +3536,7 @@ mod tests {
             )
             .unwrap();
 
-            (Impl::<NBITS>::new(quantizer).unwrap(), data)
+            (quantizer.as_quantizer::<NBITS>().unwrap(), data)
         }
 
         fn run_compatibility_test<const NBITS: usize>(
@@ -3557,7 +3550,7 @@ mod tests {
             let dataset = data.as_view();
 
             let baseline = if should_overwrite() {
-                let baseline = generate_baseline(&quantizer, transform, pre_scale, dataset);
+                let baseline = generate_baseline(&*quantizer, transform, pre_scale, dataset);
                 save_baseline(&baseline);
                 baseline
             } else {

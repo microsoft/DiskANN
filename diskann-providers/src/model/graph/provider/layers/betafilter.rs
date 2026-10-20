@@ -159,6 +159,16 @@ where
     filter: Filter<Inner::Id>,
 }
 
+impl<Inner> BetaAccessor<Inner>
+where
+    Inner: HasId,
+{
+    /// Return a mutable reference to the inner accessor.
+    pub fn inner(&mut self) -> &mut Inner {
+        &mut self.inner
+    }
+}
+
 struct Filter<I> {
     labels: Arc<dyn QueryLabelProvider<I>>,
     beta: f32,

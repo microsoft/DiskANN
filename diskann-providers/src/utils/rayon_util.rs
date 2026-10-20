@@ -18,7 +18,7 @@ pub fn create_thread_pool(num_threads: usize) -> ANNResult<RayonThreadPool> {
 /// Creates a thread pool with a configurable number of threads for testing purposes.
 /// The number of threads can be set using the environment variable `DISKANN_TEST_POOL_THREADS`.
 /// If the environment variable is not set or cannot be parsed, it defaults to 3 threads.
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 pub fn create_thread_pool_for_test() -> RayonThreadPool {
     use std::env;
 
@@ -33,7 +33,7 @@ pub fn create_thread_pool_for_test() -> RayonThreadPool {
 /// The Rayon runtime will automatically determine the optimal number of threads to use.
 /// It uses the `RAYON_NUM_THREADS` environment variable if set,
 /// or defaults to the number of logical CPUs otherwise
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 pub fn create_thread_pool_for_bench() -> RayonThreadPool {
     let pool = rayon::ThreadPoolBuilder::new()
         .build()
@@ -79,7 +79,7 @@ impl<'a> RayonThreadPoolRef<'a> {
 // Allow use of disallowed methods within this trait to provide custom
 // implementations of common parallel operations that enforce execution
 // within a specified thread pool.
-#[allow(clippy::disallowed_methods)]
+#[expect(clippy::disallowed_methods)]
 pub trait ParallelIteratorInPool: ParallelIterator + Sized {
     fn for_each_in_pool<OP>(self, pool: RayonThreadPoolRef<'_>, op: OP)
     where

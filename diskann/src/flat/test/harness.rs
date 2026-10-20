@@ -10,6 +10,7 @@
 
 use std::{convert::Infallible, num::NonZeroUsize};
 
+use diskann_utils::views::rowmajor::Matrix;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
 use crate::{
@@ -210,7 +211,7 @@ pub(crate) fn brute_force_topk(
 
     let mut neighbors: Vec<Neighbor<u32>> = provider
         .items()
-        .row_iter()
+        .rows()
         .enumerate()
         .map(|(id, element)| Neighbor::new(id as u32, computer.evaluate_similarity(element)))
         .collect();

@@ -41,7 +41,7 @@ use diskann_providers::{
 use diskann_utils::{
     future::SendFuture,
     object_pool::{ObjectPool, PoolOption, TryAsPooled},
-    views::Matrix,
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 
 use crate::search::pq::{PQData, PQScratch};
@@ -555,7 +555,8 @@ where
 
         ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
 
-        let mut candidate_vectors = Matrix::new(0.0f32, candidate_ids.len(), query_f32.len());
+        let mut candidate_vectors =
+            rowmajor::Owned::try_from_element(candidate_ids.len(), query_f32.len(), 0.0)?;
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
         let mut associated_data = Vec::with_capacity(candidate_ids.len());
 
@@ -575,7 +576,7 @@ where
         }
 
         let reranked = determinant_diversity(
-            candidate_vectors.as_mut_view(),
+            candidate_vectors.as_view_mut(),
             &candidate_distances,
             &query_f32,
             usize::MAX,
@@ -1349,7 +1350,7 @@ where
 
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn search_internal(
         &self,
         query: &[Data::VectorDataType],
@@ -1376,7 +1377,7 @@ where
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn search_internal_impl(
         &self,
         query: &[Data::VectorDataType],
@@ -1542,7 +1543,11 @@ mod disk_provider_tests {
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
     use diskann_providers::utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool};
-    use diskann_utils::{io::read_bin, test_data_root, views::Matrix};
+    use diskann_utils::{
+        io::read_bin,
+        test_data_root,
+        views::rowmajor::{self, Matrix},
+    };
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
@@ -1566,6 +1571,10 @@ mod disk_provider_tests {
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_pq_compressed.bin";
     const TEST_TRUTH_RESULT_10PTS_128DIM: &str =
         "/disk_index_search/disk_index_10pts_idx_uint32_truth_search_res.bin";
+    /// Search results for an index built by the current builder, unlike
+    /// [`TEST_TRUTH_RESULT_10PTS_128DIM`], which matches the prebuilt [`TEST_INDEX_128DIM`].
+    const TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM: &str =
+        "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_associated_data_10pts_truth_search_res.bin";
     const TEST_QUERY_10PTS_128DIM: &str = "/disk_index_search/disk_index_sample_query_10pts.fbin";
 
     const TEST_INDEX_PREFIX_100DIM: &str = "/disk_index_search/256pts_100dim_f32_truth_Index";
@@ -1722,7 +1731,7 @@ mod disk_provider_tests {
                     index_search_engine: &search_engine,
                     thread_num: 1,
                     query_file_path: TEST_QUERY_10PTS_128DIM,
-                    truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
+                    truth_result_file_path: TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM,
                     k: 10,
                     l: 20,
                 },
@@ -1736,7 +1745,7 @@ mod disk_provider_tests {
                     index_search_engine: &search_engine,
                     thread_num: 5,
                     query_file_path: TEST_QUERY_10PTS_128DIM,
-                    truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
+                    truth_result_file_path: TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM,
                     k: 10,
                     l: 20,
                 },
@@ -1839,7 +1848,7 @@ mod disk_provider_tests {
     fn load_source_data<StorageReader: StorageReadProvider>(
         storage_provider: &StorageReader,
         path: &str,
-    ) -> Matrix<f32> {
+    ) -> rowmajor::Owned<f32> {
         read_bin(&mut storage_provider.open_reader(path).unwrap()).unwrap()
     }
 
@@ -1848,7 +1857,7 @@ mod disk_provider_tests {
         expected_result_count: u32,
         expected_io_operations: u32,
         expected_results: impl IntoIterator<Item = (u32, f32)>,
-        source: Option<&Matrix<f32>>,
+        source: Option<&rowmajor::Owned<f32>>,
         vector_dimension: usize,
     ) {
         assert_eq!(indexed.stats.result_count, expected_result_count);
@@ -1873,7 +1882,7 @@ mod disk_provider_tests {
     fn assert_indexed_search_results_match(
         result: &SearchResult<()>,
         indexed: &SearchResultWithVectors<(), f32>,
-        source: &Matrix<f32>,
+        source: &rowmajor::Owned<f32>,
     ) {
         assert_indexed_results_match(
             indexed,
@@ -1939,7 +1948,7 @@ mod disk_provider_tests {
 
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
         queries
-            .par_row_iter()
+            .par_rows()
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let mut query_stats = QueryStatistics::default();
@@ -2017,7 +2026,7 @@ mod disk_provider_tests {
             load_query_result(params.storage_provider, params.truth_result_file_path);
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
         queries
-            .par_row_iter()
+            .par_rows()
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
@@ -2954,7 +2963,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     |_| true,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("inline filter with accept-all predicate must succeed");
@@ -3003,7 +3012,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     predicate,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("inline filter search with AdaptiveL must succeed");
@@ -3015,7 +3024,7 @@ mod disk_provider_tests {
                 None,
                 SearchMode::inline_filter(
                     predicate,
-                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                    Some(AdaptiveL::new(10, 16.0).expect("valid AdaptiveL")),
                 ),
             )
             .expect("indexed-vector inline filter search with AdaptiveL must succeed");

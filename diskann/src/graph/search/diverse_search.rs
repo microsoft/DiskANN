@@ -169,8 +169,6 @@ where
             ),
             id_scratch: Vec::with_capacity(index.max_degree_with_slack()),
             beam_nodes: Vec::with_capacity(self.inner.beam_width().get()),
-            range_frontier: std::collections::VecDeque::new(),
-            in_range: Vec::new(),
             hops: 0,
             cmps: 0,
         }

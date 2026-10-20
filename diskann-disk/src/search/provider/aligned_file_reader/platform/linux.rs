@@ -11,7 +11,7 @@ use io_uring::IoUring;
 pub struct IOContext {
     // Kept alive so the file descriptor registered with the io_uring ring stays valid;
     // the fd is used via `register_files`, so this field is never read directly.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub file_handle: File,
     pub ring: IoUring,
 }

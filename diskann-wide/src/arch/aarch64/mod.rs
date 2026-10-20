@@ -1,7 +1,9 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
+use std::arch::aarch64::*;
 
 use crate::{
     Architecture, SIMDVector,
@@ -246,6 +248,60 @@ impl Neon {
         Scalar::new()
     }
 
+    /// Load 8 `f32` values from an interleaved layout and deinterleave them into two vectors.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid to read 8 consecutive `f32` values.
+    ///
+    #[inline(always)]
+    pub unsafe fn vld2q_f32(self, ptr: *const f32) -> [f32x4; 2] {
+        if cfg!(miri) {
+            // SAFETY: Guaranteed by the caller.
+            let input: [f32; 8] = core::array::from_fn(|i| unsafe { ptr.add(i).read_unaligned() });
+            [
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 2])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 2 + 1])),
+            ]
+        } else {
+            // SAFETY: Guaranteed by the caller.
+            let raw = unsafe { vld2q_f32(ptr) };
+            [
+                f32x4::from_underlying(self, raw.0),
+                f32x4::from_underlying(self, raw.1),
+            ]
+        }
+    }
+
+    /// Load 16 `f32` values from an interleaved layout and deinterleave them into four vectors.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid to read 16 consecutive `f32` values.
+    ///
+    #[inline(always)]
+    pub unsafe fn vld4q_f32(self, ptr: *const f32) -> [f32x4; 4] {
+        if cfg!(miri) {
+            // SAFETY: Guaranteed by the caller.
+            let input: [f32; 16] = core::array::from_fn(|i| unsafe { ptr.add(i).read_unaligned() });
+            [
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 1])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 2])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 3])),
+            ]
+        } else {
+            // SAFETY: Guaranteed by the caller.
+            let raw = unsafe { vld4q_f32(ptr) };
+            [
+                f32x4::from_underlying(self, raw.0),
+                f32x4::from_underlying(self, raw.1),
+                f32x4::from_underlying(self, raw.2),
+                f32x4::from_underlying(self, raw.3),
+            ]
+        }
+    }
+
     fn run_function_with_1<F, T0, R>(self, x0: T0::Of<'_>) -> R
     where
         T0: AddLifetime,
@@ -398,6 +454,48 @@ impl arch::Architecture for Neon {
     }
 }
 
+///////////////////////
+// Custom Intrinsics //
+///////////////////////
+
+impl Neon {
+    /// Compute the absolute difference between each lane of `x` and `y`.
+    ///
+    /// See: [`vabdq_u8`]
+    #[inline(always)]
+    pub fn vabdq_u8(self, x: u8x16, y: u8x16) -> u8x16 {
+        if cfg!(miri) {
+            let x = x.to_array();
+            let y = y.to_array();
+            u8x16::from_array(self, core::array::from_fn(|i| x[i].abs_diff(y[i])))
+        } else {
+            // SAFETY: Neon allows us to use `vabdq_u8`.
+            u8x16::from_underlying(self, unsafe { vabdq_u8(x.0, y.0) })
+        }
+    }
+
+    /// Compute the absolute difference between each lane of `x` and `y`.
+    ///
+    /// See: [`vabdq_s8`]
+    ///
+    /// # Note
+    ///
+    /// Unlike [`std::arch::aarch64::vabdq_s8`] - this function returns the results as
+    /// **unsigned** integers. This is consistent with [`i8::abs_diff`] and can correctly
+    /// encode all possible results.
+    #[inline(always)]
+    pub fn vabdq_s8(self, x: i8x16, y: i8x16) -> u8x16 {
+        if cfg!(miri) {
+            let x = x.to_array();
+            let y = y.to_array();
+            u8x16::from_array(self, core::array::from_fn(|i| x[i].abs_diff(y[i])))
+        } else {
+            // SAFETY: Neon allows us to use `vabdq_s8`.
+            u8x16::from_underlying(self, unsafe { vreinterpretq_u8_s8(vabdq_s8(x.0, y.0)) })
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -439,7 +537,7 @@ pub(super) fn test_neon() -> Option<Neon> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Architecture;
+    use crate::{Architecture, test_utils};
 
     struct TestOp;
 
@@ -555,5 +653,72 @@ mod tests {
 
         // Not equal across levels
         assert_ne!(scalar, neon);
+    }
+
+    //----------------//
+    // Custom Kernels //
+    //----------------//
+
+    #[test]
+    fn test_vabdq_u8() {
+        if let Some(arch) = test_neon() {
+            let f = move |x: &[u8], y: &[u8]| {
+                let got = arch
+                    .vabdq_u8(
+                        u8x16::from_array(arch, x.try_into().unwrap()),
+                        u8x16::from_array(arch, y.try_into().unwrap()),
+                    )
+                    .to_array();
+
+                test_utils::test_binary_op(x, y, &got, &|x: u8, y: u8| x.abs_diff(y), "vabdq_u8")
+            };
+
+            test_utils::driver::drive_binary(&f, (16, 16), 0x52d61896fd4a30fe);
+        }
+    }
+
+    #[test]
+    fn test_vld2q_f32() {
+        if let Some(arch) = test_neon() {
+            let input = [0.0, 10.0, 1.0, 11.0, 2.0, 12.0, 3.0, 13.0];
+            // SAFETY: `input` contains 8 consecutive values.
+            let [a, b] = unsafe { arch.vld2q_f32(input.as_ptr()) };
+            assert_eq!(a.to_array(), [0.0, 1.0, 2.0, 3.0]);
+            assert_eq!(b.to_array(), [10.0, 11.0, 12.0, 13.0]);
+        }
+    }
+
+    #[test]
+    fn test_vabdq_s8() {
+        if let Some(arch) = test_neon() {
+            let f = move |x: &[i8], y: &[i8]| {
+                let got = arch
+                    .vabdq_s8(
+                        i8x16::from_array(arch, x.try_into().unwrap()),
+                        i8x16::from_array(arch, y.try_into().unwrap()),
+                    )
+                    .to_array();
+
+                test_utils::test_binary_op(x, y, &got, &|x: i8, y: i8| x.abs_diff(y), "vabdq_s8")
+            };
+
+            test_utils::driver::drive_binary(&f, (16, 16), 0xef9f703dfc172ad9);
+        }
+    }
+
+    #[test]
+    fn test_vld4q_f32() {
+        if let Some(arch) = test_neon() {
+            let input = [
+                0.0, 10.0, 20.0, 30.0, 1.0, 11.0, 21.0, 31.0, 2.0, 12.0, 22.0, 32.0, 3.0, 13.0,
+                23.0, 33.0,
+            ];
+            // SAFETY: `input` contains 16 consecutive values.
+            let [a, b, c, d] = unsafe { arch.vld4q_f32(input.as_ptr()) };
+            assert_eq!(a.to_array(), [0.0, 1.0, 2.0, 3.0]);
+            assert_eq!(b.to_array(), [10.0, 11.0, 12.0, 13.0]);
+            assert_eq!(c.to_array(), [20.0, 21.0, 22.0, 23.0]);
+            assert_eq!(d.to_array(), [30.0, 31.0, 32.0, 33.0]);
+        }
     }
 }

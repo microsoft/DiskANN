@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
@@ -15,7 +15,7 @@ use crate::{
 use super::{
     f16x8, f32x4, i8x16, i16x8, i32x4,
     masks::{mask8x16, mask16x8, mask32x4, mask64x2},
-    u8x16, u32x4, u64x2,
+    u8x8, u8x16, u16x8, u32x4, u64x2,
 };
 
 // Double Masks
@@ -35,7 +35,7 @@ macro_rules! double_alias {
         // Implement `SIMDVector` and friends for the `Double` type.
         doubled::double_vector!($scalar, $lanes, $subtype);
 
-        #[allow(non_camel_case_types)]
+        #[expect(non_camel_case_types)]
         pub type $type = Doubled<$subtype>;
     };
 }
@@ -83,12 +83,36 @@ doubled::double_scalar_shift!(Doubled<Doubled<i32x4>>);
 // ZipUnzip //
 //////////////
 
-super::macros::aarch64_zipunzip!(i8x16, vzip1q_s8, vzip2q_s8, vuzp1q_s8, vuzp2q_s8);
-super::macros::aarch64_zipunzip!(i16x8, vzip1q_s16, vzip2q_s16, vuzp1q_s16, vuzp2q_s16);
-super::macros::aarch64_zipunzip!(i32x4, vzip1q_s32, vzip2q_s32, vuzp1q_s32, vuzp2q_s32);
-super::macros::aarch64_zipunzip!(u8x16, vzip1q_u8, vzip2q_u8, vuzp1q_u8, vuzp2q_u8);
-super::macros::aarch64_zipunzip!(u32x4, vzip1q_u32, vzip2q_u32, vuzp1q_u32, vuzp2q_u32);
-super::macros::aarch64_zipunzip!(f16x8, vzip1q_u16, vzip2q_u16, vuzp1q_u16, vuzp2q_u16);
+super::macros::aarch64_zipunzip!(Doubled<i8x16>, vzip1q_s8, vzip2q_s8, vuzp1q_s8, vuzp2q_s8);
+super::macros::aarch64_zipunzip!(
+    Doubled<i16x8>,
+    vzip1q_s16,
+    vzip2q_s16,
+    vuzp1q_s16,
+    vuzp2q_s16
+);
+super::macros::aarch64_zipunzip!(
+    Doubled<i32x4>,
+    vzip1q_s32,
+    vzip2q_s32,
+    vuzp1q_s32,
+    vuzp2q_s32
+);
+super::macros::aarch64_zipunzip!(Doubled<u8x16>, vzip1q_u8, vzip2q_u8, vuzp1q_u8, vuzp2q_u8);
+super::macros::aarch64_zipunzip!(
+    Doubled<u32x4>,
+    vzip1q_u32,
+    vzip2q_u32,
+    vuzp1q_u32,
+    vuzp2q_u32
+);
+super::macros::aarch64_zipunzip!(
+    Doubled<f16x8>,
+    vzip1q_u16,
+    vzip2q_u16,
+    vuzp1q_u16,
+    vuzp2q_u16
+);
 
 //-------------//
 // Conversions //
@@ -137,6 +161,30 @@ impl From<i8x32> for i16x32 {
     #[inline(always)]
     fn from(value: i8x32) -> Self {
         Self::new(value.0.into(), value.1.into())
+    }
+}
+
+impl From<u8x8> for f32x8 {
+    #[inline(always)]
+    fn from(value: u8x8) -> Self {
+        let u16s = u16x8::from(value);
+        Self::from(u16s)
+    }
+}
+
+impl From<u16x8> for f32x8 {
+    #[inline(always)]
+    fn from(value: u16x8) -> Self {
+        let LoHi { lo, hi } = value.split().map(From::from);
+        Self(lo, hi)
+    }
+}
+
+impl From<u8x16> for f32x16 {
+    #[inline(always)]
+    fn from(value: u8x16) -> Self {
+        let LoHi { lo, hi } = value.split();
+        Self::new(u16x8::from(lo).into(), u16x8::from(hi).into())
     }
 }
 
@@ -239,6 +287,11 @@ mod tests {
     }
 
     // u8s
+    mod test_u8x16 {
+        use super::*;
+        test_utils::ops::test_zipunzip!(u8x16 => u8x8, 0x78c92a4fe135db60, test_neon());
+    }
+
     mod test_u8x32 {
         use super::*;
         standard_tests!(u8x32, u8, 32);
@@ -361,6 +414,7 @@ mod tests {
         // Bit ops
         test_utils::ops::test_bitops!(i32x8, 0xc4491a44af4aa58e, test_neon());
         test_utils::ops::test_abs!(i32x8, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_minmax!(i32x8, 0x6d7fc8ed6d852187, test_neon());
 
         // Dot Products
         test_utils::dot_product::test_dot_product!(
@@ -394,6 +448,7 @@ mod tests {
         // Bit ops
         test_utils::ops::test_bitops!(i32x16, 0xc4491a44af4aa58e, test_neon());
         test_utils::ops::test_abs!(i32x16, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_minmax!(i32x16, 0x6d7fc8ed6d852187, test_neon());
 
         // Dot Products
         test_utils::dot_product::test_dot_product!(
@@ -427,6 +482,9 @@ mod tests {
     test_utils::ops::test_lossless_convert!(u8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x16 => i16x16, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u8x8 => f32x8, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u8x16 => f32x16, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u16x8 => f32x8, 0x84c1c6f05b169a20, test_neon());
 
     test_utils::ops::test_cast!(f16x8 => f32x8, 0xba8fe343fc9dbeff, test_neon());
     test_utils::ops::test_cast!(f16x16 => f32x16, 0xba8fe343fc9dbeff, test_neon());

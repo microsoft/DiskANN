@@ -47,7 +47,7 @@ The repository uses a Cargo workspace with crates organized into functional tier
 
 **Tier 2: Core Libraries**
 - `diskann-linalg/` - Linear algebra operations
-- `diskann-utils/` - Shared utilities (Reborrow, MatrixView traits)
+- `diskann-utils/` - Shared utilities (Reborrow, Matrix traits)
 - `diskann-quantization/` - Vector quantization (PQ, SQ)
 
 **Tier 3: Algorithm & Storage**
@@ -115,6 +115,10 @@ When touching architecture-specific intrinsics, run cross-platform validation pe
 ---
 
 ## Code Quality & Linting
+
+### License Headers
+
+Add the [license header](.github/LICENSE_HEADER.txt) when creating Rust source files.
 
 ### Error Handling
 

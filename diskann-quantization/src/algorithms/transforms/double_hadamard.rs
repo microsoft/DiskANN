@@ -243,9 +243,23 @@ where
     ) -> Result<(), TransformFailed> {
         check_dims(dst, src, self.input_dim(), self.output_dim())?;
 
-        // Copy and flip signs
+        if let Some(indices) = self.subsample.as_ref() {
+            let mut tmp = Poly::broadcast(0.0f32, self.intermediate_dim(), allocator)?;
+            self.transform_full(&mut tmp, src);
+            let rescale = ((tmp.len() as f32) / (indices.len() as f32)).sqrt();
+            dst.iter_mut()
+                .zip(indices.iter())
+                .for_each(|(d, s)| *d = tmp[*s as usize] * rescale);
+        } else {
+            // The destination already has room for the full transform.
+            dst[src.len()..].fill(0.0);
+            self.transform_full(dst, src);
+        }
+        Ok(())
+    }
+
+    fn transform_full(&self, tmp: &mut [f32], src: &[f32]) {
         let intermediate_dim = self.intermediate_dim();
-        let mut tmp = Poly::broadcast(0.0f32, intermediate_dim, allocator)?;
 
         std::iter::zip(tmp.iter_mut(), src.iter())
             .zip(self.signs0.iter())
@@ -257,7 +271,7 @@ where
         //
         // If it is equal to the size of `tmp`, then we only run the first transform. Otherwise,
         // we perform two transforms on the head and tail of `tmp`.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         hadamard_transform(&mut tmp[..split]).unwrap();
 
         // Apply the second transformation.
@@ -267,23 +281,8 @@ where
             .zip(self.signs1.iter())
             .for_each(|(dst, sign)| *dst = f32::from_bits(dst.to_bits() ^ sign));
 
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         hadamard_transform(&mut tmp[intermediate_dim - split..]).unwrap();
-
-        match self.subsample.as_ref() {
-            None => {
-                dst.copy_from_slice(&tmp);
-            }
-            Some(indices) => {
-                let rescale = ((tmp.len() as f32) / (indices.len() as f32)).sqrt();
-                debug_assert_eq!(dst.len(), indices.len());
-                dst.iter_mut()
-                    .zip(indices.iter())
-                    .for_each(|(d, s)| *d = tmp[*s as usize] * rescale);
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -392,7 +391,7 @@ mod tests {
     use crate::{
         algorithms::transforms::{Transform, TransformKind, test_utils},
         alloc::GlobalAllocator,
-        test_util::Check,
+        test_util::{Check, LimitedAllocator},
     };
 
     test_utils::delegate_transformer!(DoubleHadamard<GlobalAllocator>);
@@ -485,7 +484,7 @@ mod tests {
                         &mut checker,
                         &mut rng,
                         ctx,
-                    )
+                    );
                 }
 
                 // Abstract Transformer
@@ -507,6 +506,37 @@ mod tests {
                         ctx,
                     )
                 }
+            }
+
+            let mut allocation_rng = rng.clone();
+            let transformer =
+                DoubleHadamard::new(input_nz, target, &mut allocation_rng, GlobalAllocator)
+                    .unwrap();
+            let mut src = vec![1.0; input];
+            let mut dst = vec![f32::NAN; output + 2];
+            for value in [1.0, 0.0, -0.0] {
+                src.fill(value);
+                if !preserves_norms {
+                    let allocator = LimitedAllocator::new(0);
+                    assert_eq!(
+                        transformer.transform_into(
+                            &mut dst[1..=output],
+                            &src,
+                            ScopedAllocator::new(&allocator),
+                        ),
+                        Err(TransformFailed::AllocatorError(AllocatorError))
+                    );
+                }
+                let allocator = LimitedAllocator::new(usize::from(!preserves_norms));
+                transformer
+                    .transform_into(&mut dst[1..=output], &src, ScopedAllocator::new(&allocator))
+                    .unwrap();
+                assert_eq!(allocator.remaining(), 0);
+                assert!(dst[1..=output].iter().all(|value| value.is_finite()));
+                if value == 0.0 {
+                    assert!(dst[1..=output].iter().all(|value| *value == 0.0));
+                }
+                assert!(dst[0].is_nan() && dst[output + 1].is_nan());
             }
         }
     }

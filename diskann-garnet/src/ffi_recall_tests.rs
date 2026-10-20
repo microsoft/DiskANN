@@ -11,7 +11,7 @@ mod tests {
 
     use crate::{
         Overflow, VectorQuantType, create_index, drop_index, garnet::Context, insert,
-        search_vector, test_utils::Store,
+        provider::DEFAULT_START_POINT_ID, search_vector, test_utils::Store,
     };
 
     /// Helper to insert a vector with a string external ID and FP32 data.
@@ -125,9 +125,9 @@ mod tests {
         let mut result_ids = Vec::with_capacity(count);
         let mut offset = 0;
         for _ in 0..count {
-            let mut id_len = 0u32;
-            bytemuck::bytes_of_mut(&mut id_len)
-                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            let id_len = bytemuck::pod_read_unaligned::<u32>(
+                &output_id_buffer[offset..offset + mem::size_of::<u32>()],
+            );
             offset += mem::size_of::<u32>();
             let id_str = std::str::from_utf8(&output_id_buffer[offset..offset + id_len as usize])
                 .expect("id should be valid utf8");
@@ -170,6 +170,7 @@ mod tests {
                 metric as i32,
                 l_build,
                 max_degree,
+                DEFAULT_START_POINT_ID,
                 callbacks.read_callback(),
                 callbacks.write_callback(),
                 callbacks.delete_callback(),

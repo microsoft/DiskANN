@@ -5,8 +5,8 @@
 
 use crate::{
     SearchResults,
-    garnet::{Context, GarnetId},
-    provider::{DynamicQuantization, GarnetProvider},
+    garnet::{Context, GarnetError, GarnetId, Term},
+    provider::{DynamicQuantization, GarnetProvider, GarnetProviderError},
 };
 use diskann::{
     ANNResult,
@@ -21,7 +21,7 @@ use diskann_providers::index::wrapped_async::DiskANNIndex;
 /// All vector data is passed as untyped byte slices.
 pub(crate) trait DynIndex: Send + Sync {
     /// Inserts a vector with id into the index
-    fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
+    fn insert(&self, context: &Context, id: &GarnetId, data: &[u8], attrs: &[u8]) -> ANNResult<()>;
 
     /// Sets the attributes for a vector
     fn set_attributes(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
@@ -69,7 +69,7 @@ pub(crate) trait DynIndex: Send + Sync {
     fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()>;
 
     /// Return an approximate count of vectors in the index
-    fn approximate_count(&self) -> u64;
+    fn approximate_count(&self, context: &Context) -> ANNResult<u64>;
 
     /// Return the maximum degree of the index graph
     fn max_degree(&self) -> usize;
@@ -109,33 +109,73 @@ pub(crate) trait DynIndex: Send + Sync {
     /// message to an area (e.g. `Term::Quantized` for quantization related
     /// messages).
     fn log(&self, context: &Context, msg: &str);
+
+    /// Set the state of the quantizer.
+    /// Returns true on success and false otherwise.
+    fn set_quant_state(&self, context: &Context, state: &[u8]) -> bool;
+
+    /// Returns whether imported terms are accepted, without changing the import status.
+    fn can_import(&self, context: &Context) -> bool;
+
+    /// Import an index term.
+    fn import_term(&self, context: &Context, term: Term, id: &[u8], value: &[u8]) -> bool;
+
+    /// Finalize an import.
+    /// Returns task success and the optional finalization outcome. An empty import returns
+    /// `(false, Some(true))` so the FFI keeps start points uninitialized.
+    fn finish_import(
+        &self,
+        context: &Context,
+        task_idx: usize,
+        task_count: usize,
+    ) -> (bool, Option<bool>);
 }
 
 impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     /// Inserts a type erased vector into the index.
     ///
     /// The data slice here must be aligned to `T` or this will panic.
-    fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()> {
-        self.insert(
-            &DynamicQuantization,
-            context,
-            id,
-            bytemuck::cast_slice::<u8, T>(data),
-        )
+    fn insert(&self, context: &Context, id: &GarnetId, data: &[u8], attrs: &[u8]) -> ANNResult<()> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
+        self.run(|_| async {
+            let _pending = self.inner.provider().reserve_external_id(id).await?;
+            self.inner
+                .insert(
+                    &DynamicQuantization,
+                    context,
+                    id,
+                    (bytemuck::cast_slice::<u8, T>(data), attrs),
+                )
+                .await
+        })
     }
 
     fn set_attributes(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()> {
-        self.inner
-            .provider()
-            .set_attributes(context, id, data)
-            .map_err(|e| e.into())
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
+        self.run(|_| async {
+            let provider = self.inner.provider();
+            let _pending = provider.reserve_external_id(id).await?;
+            provider
+                .set_attributes(context, id, data)
+                .map_err(|error| error.into())
+        })
     }
 
     fn delete_attributes(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {
-        self.inner
-            .provider()
-            .delete_attributes(context, id)
-            .map_err(|e| e.into())
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
+        self.run(|_| async {
+            let provider = self.inner.provider();
+            let _pending = provider.reserve_external_id(id).await?;
+            provider
+                .delete_attributes(context, id)
+                .map_err(|error| error.into())
+        })
     }
 
     fn search_vector(
@@ -145,6 +185,9 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         params: search::Knn,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
         let query = bytemuck::cast_slice::<u8, T>(data);
         self.search(params, &DynamicQuantization, context, query, output)
     }
@@ -156,11 +199,19 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         params: search::Knn,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
         // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
         let data = self.inner.provider().get_full_vector(context, iid)?;
-        let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
-        self.search_vector(context, data_bytes, params, output)
+        self.search(
+            params,
+            &DynamicQuantization,
+            context,
+            data.as_slice(),
+            output,
+        )
     }
 
     fn filtered_search_vector(
@@ -170,6 +221,9 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         params: search::InlineFilterSearch,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
         let query = bytemuck::cast_slice::<u8, T>(data);
         self.search(params, &DynamicQuantization, context, query, output)
     }
@@ -181,25 +235,44 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         params: search::InlineFilterSearch,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
         // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
         let data = self.inner.provider().get_full_vector(context, iid)?;
-        let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
-        self.filtered_search_vector(context, data_bytes, params, output)
-    }
-
-    fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {
-        self.inplace_delete(
-            DynamicQuantization,
+        self.search(
+            params,
+            &DynamicQuantization,
             context,
-            id,
-            3,
-            InplaceDeleteMethod::TwoHopAndOneHop,
+            data.as_slice(),
+            output,
         )
     }
 
-    fn approximate_count(&self) -> u64 {
-        self.inner.provider().max_internal_id() as u64
+    fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
+        self.run(|_| async {
+            let _pending = self.inner.provider().reserve_external_id(id).await?;
+            self.inner
+                .inplace_delete(
+                    DynamicQuantization,
+                    context,
+                    id,
+                    3,
+                    InplaceDeleteMethod::TwoHopAndOneHop,
+                )
+                .await
+        })
+    }
+
+    fn approximate_count(&self, context: &Context) -> ANNResult<u64> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
+        Ok(self.inner.provider().total_used() as u64)
     }
 
     fn max_degree(&self) -> usize {
@@ -207,6 +280,9 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     }
 
     fn maybe_set_start_point(&self, context: &Context, data: &[u8]) -> ANNResult<()> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
         self.inner
             .provider()
             .maybe_set_start_point(context, bytemuck::cast_slice::<u8, T>(data))
@@ -214,14 +290,23 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     }
 
     fn internal_id_exists(&self, context: &Context, id: u32) -> bool {
+        if !self.inner.provider().disable_import(context) {
+            return false;
+        }
         self.inner.provider().vector_iid_exists(context, id)
     }
 
     fn external_id_exists(&self, context: &Context, id: &GarnetId) -> bool {
+        if !self.inner.provider().disable_import(context) {
+            return false;
+        }
         self.inner.provider().vector_id_exists(context, id)
     }
 
     fn train_quantizer(&self, context: &Context) -> bool {
+        if !self.inner.provider().disable_import(context) {
+            return false;
+        }
         self.inner.provider().train_quantizer(context)
     }
 
@@ -231,6 +316,9 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         task_idx: usize,
         task_count: usize,
     ) -> bool {
+        if !self.inner.provider().disable_import(context) {
+            return false;
+        }
         self.inner
             .provider()
             .backfill_quant_vectors(context, task_idx, task_count)
@@ -242,14 +330,43 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         count: u32,
         output: &mut SearchResults<'_>,
     ) -> bool {
+        if !self.inner.provider().disable_import(context) {
+            return false;
+        }
         self.inner.provider().random_members(context, count, output)
     }
 
     fn neighbors(&self, context: &Context, id: &GarnetId) -> ANNResult<Vec<Neighbor<GarnetId>>> {
+        if !self.inner.provider().disable_import(context) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Write).into());
+        }
         self.inner.provider().neighbors(context, id)
     }
 
     fn log(&self, context: &Context, msg: &str) {
         self.inner.provider().log(context, msg);
+    }
+
+    fn set_quant_state(&self, context: &Context, state: &[u8]) -> bool {
+        self.inner.provider().set_quant_state(context, state)
+    }
+
+    fn can_import(&self, context: &Context) -> bool {
+        self.inner.provider().can_import(context)
+    }
+
+    fn import_term(&self, context: &Context, term: Term, id: &[u8], value: &[u8]) -> bool {
+        self.inner.provider().import_term(context, term, id, value)
+    }
+
+    fn finish_import(
+        &self,
+        context: &Context,
+        task_idx: usize,
+        task_count: usize,
+    ) -> (bool, Option<bool>) {
+        self.inner
+            .provider()
+            .finish_import(context, task_idx, task_count)
     }
 }

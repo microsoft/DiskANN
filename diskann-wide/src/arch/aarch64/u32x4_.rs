@@ -1,19 +1,19 @@
 /*
- * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
 
 use crate::{
-    Emulated, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
-    SIMDSumTree, SIMDVector, constant::Const, helpers,
+    Emulated, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+    SIMDReinterpret, SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
 use super::{
-    Neon, internal,
+    Neon, f32x4, i8x16, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x4,
-    u8x16,
+    u8x16, u16x4, u32x2,
 };
 
 // AArch64 intrinsics
@@ -26,6 +26,8 @@ use std::arch::{aarch64::*, asm};
 macros::aarch64_define_register!(u32x4, uint32x4_t, mask32x4, u32, 4, Neon);
 macros::aarch64_define_splat!(u32x4, vmovq_n_u32);
 macros::aarch64_define_loadstore!(u32x4, vld1q_u32, internal::load_first::u32x4, vst1q_u32, 4);
+macros::aarch64_splitjoin!(u32x4, u32x2, vget_low_u32, vget_high_u32, vcombine_u32);
+macros::aarch64_zipunzip!(u32x4, u32x2, vzip1_u32, vzip2_u32, vuzp1_u32, vuzp2_u32);
 
 helpers::unsafe_map_binary_op!(u32x4, std::ops::Add, add, vaddq_u32, "neon");
 helpers::unsafe_map_binary_op!(u32x4, std::ops::Sub, sub, vsubq_u32, "neon");
@@ -57,6 +59,25 @@ macros::aarch64_define_bitops!(
     ),
     (u32, i32, vmovq_n_s32),
 );
+
+impl From<u16x4> for u32x4 {
+    #[inline(always)]
+    fn from(value: u16x4) -> Self {
+        // SAFETY: Allowed by the `Neon` architecture.
+        Self::from_underlying(value.arch(), unsafe { vmovl_u16(value.to_underlying()) })
+    }
+}
+
+impl SIMDCast<f32> for u32x4 {
+    type Cast = f32x4;
+
+    #[inline(always)]
+    fn simd_cast(self) -> f32x4 {
+        // SAFETY: Allowed by the implicit `Neon` architecture.
+        let raw = unsafe { vcvtq_f32_u32(self.to_underlying()) };
+        f32x4::from_underlying(self.arch(), raw)
+    }
+}
 
 impl SIMDSumTree for u32x4 {
     #[inline(always)]
@@ -114,6 +135,18 @@ impl SIMDDotProduct<u8x16, u8x16> for u32x4 {
     }
 }
 
+//////////////////
+// Reinterprets //
+//////////////////
+
+impl SIMDReinterpret<i8x16> for u32x4 {
+    #[inline(always)]
+    fn reinterpret_simd(self) -> i8x16 {
+        // SAFETY: Allowed by the `Neon` architecture.
+        i8x16(unsafe { vreinterpretq_s8_u32(self.0) })
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -150,6 +183,8 @@ mod tests {
     test_utils::ops::test_sub!(u32x4, 0xfc627f10b5f8db8a, test_neon());
     test_utils::ops::test_mul!(u32x4, 0x0f4caa80eceaa523, test_neon());
     test_utils::ops::test_fma!(u32x4, 0xb8f702ba85375041, test_neon());
+    test_utils::ops::test_splitjoin!(u32x4 => u32x2, 0xa4d00a4d04293967, test_neon());
+    test_utils::ops::test_zipunzip!(u32x4 => u32x2, 0x61c5d598ac4fb304, test_neon());
 
     test_utils::ops::test_cmp!(u32x4, 0x941757bd5cc641a1, test_neon());
 
@@ -166,4 +201,11 @@ mod tests {
 
     // Reductions
     test_utils::ops::test_sumtree!(u32x4, 0xb9ac82ab23a855da, test_neon());
+
+    // Reinterprets
+    test_utils::ops::test_reinterpret!(u32x4 => i8x16, 0xbfad755f32d25e5c, test_neon());
+
+    // Conversions
+    test_utils::ops::test_lossless_convert!(u16x4 => u32x4, 0x2e07f4c89da53bb1, test_neon());
+    test_utils::ops::test_cast!(u32x4 => f32x4, 0xcd18de89bb8b2fcf, test_neon());
 }

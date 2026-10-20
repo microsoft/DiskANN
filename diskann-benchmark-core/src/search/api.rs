@@ -9,7 +9,7 @@ use diskann::{ANNResult, graph, utils::async_tools};
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_utils::{
     future::{AsyncFriendly, boxit},
-    views::{self, Matrix},
+    views::rowmajor::{self, MatrixMut},
 };
 
 use crate::{
@@ -517,12 +517,12 @@ where
     T: Search,
 {
     let mut lengths = Vec::with_capacity(range.len());
-    let mut ids = Matrix::new(views::Init(T::Id::default), range.len(), num_ids.into());
+    let mut ids = rowmajor::Owned::try_from_fn(range.len(), num_ids.into(), |_| T::Id::default())?;
 
     let mut latencies = Vec::<MicroSeconds>::with_capacity(range.len());
     let mut outputs = Vec::<T::Output>::with_capacity(range.len());
 
-    for (ids, index) in std::iter::zip(ids.row_iter_mut(), range) {
+    for (ids, index) in std::iter::zip(ids.rows_mut(), range) {
         let mut buffer = internal::buffer::Buffer::slice(ids);
 
         let start = std::time::Instant::now();

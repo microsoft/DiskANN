@@ -14,7 +14,7 @@ pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<(
         // generates a full `Benchmark` impl/build path for
         // `ScalarQuantized<NBITS, T>` via the `impl_sq_build!` macro in `mod imp`,
         // which materially impacts compile time. We intentionally keep the registered
-        // set minimal (`f32` at 1, 4, and 8 bits) to cover the common cases used by
+        // set minimal (`f32` at 1, 2, 4, and 8 bits) to cover the common cases used by
         // `example/scalar.json`.
         //
         // To add a new variant (e.g. another bit-width or element type):
@@ -34,6 +34,10 @@ pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<(
         benchmarks.register(
             "graph-index-sq-4-bit-f32",
             imp::ScalarQuantized::<4, f32>::new().search(Topk),
+        )?;
+        benchmarks.register(
+            "graph-index-sq-2-bit-f32",
+            imp::ScalarQuantized::<2, f32>::new().search(Topk),
         )?;
         benchmarks.register(
             "graph-index-sq-1-bit-f32",
@@ -69,7 +73,7 @@ mod imp {
             graph::provider::async_::{common, inmem},
         },
     };
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
 
     use crate::{
         index::{
@@ -235,7 +239,7 @@ mod imp {
                             (Arc::new(index), None::<BuildStats>, MicroSeconds::new(0))
                         }
                         IndexSource::Build(build) => {
-                            let data: Arc<Matrix<$T>> =
+                            let data: Arc<rowmajor::Owned<$T>> =
                                 Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                         let start = std::time::Instant::now();
@@ -246,7 +250,7 @@ mod imp {
                             )?,
                         )
                         .train(data.as_view());
-                                            let create_index = |data_view: MatrixView<$T>| {
+                                            let create_index = |data_view: rowmajor::Ref<$T>| {
                         let index = diskann_async::new_quant_index::<$T, _, _>(
                             input.try_as_config()?.build()?,
                             input
@@ -313,5 +317,6 @@ mod imp {
     // impl and materially affects compile time.
     impl_sq_build!(8, f32);
     impl_sq_build!(4, f32);
+    impl_sq_build!(2, f32);
     impl_sq_build!(1, f32);
 }

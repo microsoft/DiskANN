@@ -710,9 +710,22 @@ where
             DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
             &'a [T],
             SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>,
+            SearchAccessorError = ANNError,
         >,
 {
+    type SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>;
+    type SearchAccessorError = ANNError;
+
     type PruneStrategy = Self;
+
+    fn insert_search_accessor(
+        &'a self,
+        provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+        context: &'a Ctx,
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, query)
+    }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
@@ -887,7 +900,7 @@ mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::utils::ONE;
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::views::MatrixView;
+    use diskann_utils::views::rowmajor;
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 
@@ -905,7 +918,7 @@ mod tests {
 
     fn make_store(metric: Metric) -> SQStore<NBITS> {
         let quantizer = ScalarQuantizationParameters::default()
-            .train(MatrixView::try_from(&DATA, NPTS, DIM).unwrap());
+            .train(rowmajor::Ref::try_from_data(&DATA, NPTS, DIM).unwrap());
         SQStore::new(quantizer, /* capacity */ 5, metric, None)
     }
 

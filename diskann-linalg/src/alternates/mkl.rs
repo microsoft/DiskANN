@@ -13,7 +13,7 @@ use thiserror::Error;
 ///
 /// The implementation may assume the the specified invariants hold for the sizes of the
 /// intermediate arrays.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(super) fn sgemm_impl(
     atranspose: Transpose,
     btranspose: Transpose,

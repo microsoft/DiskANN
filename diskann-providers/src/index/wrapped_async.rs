@@ -35,7 +35,7 @@ pub struct DiskANNIndex<DP: DataProvider> {
 
 /// Create a multi-threaded tokio runtime and return it together with its handle.
 fn create_multi_thread_runtime() -> (tokio::runtime::Runtime, tokio::runtime::Handle) {
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     let rt = tokio::runtime::Builder::new_multi_thread()
         .build()
         .expect("failed to create tokio runtime");
@@ -45,7 +45,7 @@ fn create_multi_thread_runtime() -> (tokio::runtime::Runtime, tokio::runtime::Ha
 
 /// Create a current-thread tokio runtime and return it together with its handle.
 fn create_current_thread_runtime() -> (tokio::runtime::Runtime, tokio::runtime::Handle) {
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("failed to create tokio runtime");
@@ -249,7 +249,6 @@ where
             .block_on(self.inner.drop_adj_list(accessor, vector_id))
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn get_undeleted_neighbors<NA>(
         &self,
         context: &DP::Context,
@@ -665,7 +664,7 @@ mod tests {
         provider::DefaultContext,
         utils::ONE,
     };
-    use diskann_utils::test_data_root;
+    use diskann_utils::{test_data_root, views::rowmajor::Matrix};
     use diskann_vector::distance::Metric;
 
     use super::DiskANNIndex;
@@ -724,7 +723,7 @@ mod tests {
 
         let storage = VirtualStorageProvider::new_memory();
         let ctx = DefaultContext;
-        for (i, v) in train_data.row_iter().enumerate() {
+        for (i, v) in train_data.rows().enumerate() {
             index.insert(&FullPrecision, &ctx, &(i as u32), v).unwrap();
         }
 

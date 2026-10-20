@@ -5,7 +5,10 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{ReborrowMut, views::MatrixView};
+use diskann_utils::{
+    ReborrowMut,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::{
     MathematicalValue, Norm, PureDistanceFunction, distance::InnerProduct, norm::FastL2Norm,
 };
@@ -16,7 +19,7 @@ use thiserror::Error;
 
 use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, DataMeta, DataMetaError, DataMut,
-    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric,
+    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric, iface,
 };
 use crate::{
     AsFunctor, CompressIntoWith,
@@ -286,7 +289,7 @@ where
     /// will first be scaled by this value. Cosine ignores `pre_scale`. Note that if given,
     /// `pre_scale` **must** be positive.
     pub fn train<T, R>(
-        data: MatrixView<T>,
+        data: rowmajor::Ref<T>,
         transform: TransformKind,
         metric: SupportedMetric,
         pre_scale: PreScale,
@@ -301,7 +304,7 @@ where
         // cut down on excess monomorphization.
         #[inline(never)]
         fn train<T, A>(
-            data: MatrixView<T>,
+            data: rowmajor::Ref<T>,
             transform: TransformKind,
             metric: SupportedMetric,
             pre_scale: PreScale,
@@ -436,6 +439,18 @@ where
             shifted_norm,
             inner_product_with_centroid,
         })
+    }
+
+    /// Construct an [`iface::Quantizer`] trait object from `self`.
+    pub fn as_quantizer<const NBITS: usize>(
+        self,
+    ) -> Result<Poly<dyn iface::Quantizer>, AllocatorError>
+    where
+        A: 'static,
+        iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
+    {
+        let iface = iface::Impl::<NBITS, A>::new(self)?;
+        crate::poly!({ iface::Quantizer }, iface, GlobalAllocator)
     }
 }
 
@@ -921,8 +936,6 @@ where
 
 struct AsNonZero<const NBITS: usize>;
 impl<const NBITS: usize> AsNonZero<NBITS> {
-    // Lint: Unwrap is being used in a const-context.
-    #[allow(clippy::unwrap_used)]
     const NON_ZERO: NonZeroUsize = NonZeroUsize::new(NBITS).unwrap();
 }
 
@@ -985,9 +998,9 @@ where
 //   Informally, "what's the smallest scaling factor so `v[position]` gets rounded to
 //   the next value.
 //
-// 2. Imposes a total ordering on `f32` values so it can be used in a `BinaryHeap`.
-//   Additionally, ordering is reverse so that `BinaryHeap` models a min-heap instead
-//   of a max-heap.
+// 2. Imposes a total ordering on nonnegative, non-NaN critical values using unsigned
+//   bit order, which matches numeric order for these values. Additionally, ordering
+//   is reversed so that `BinaryHeap` models a min-heap instead of a max-heap.
 #[derive(Debug, Clone, Copy)]
 struct Pair {
     value: f32,
@@ -996,7 +1009,7 @@ struct Pair {
 
 impl PartialEq for Pair {
     fn eq(&self, other: &Self) -> bool {
-        self.value.eq(&other.value)
+        self.value.to_bits().eq(&other.value.to_bits())
     }
 }
 
@@ -1008,10 +1021,7 @@ impl PartialOrd for Pair {
 }
 impl Ord for Pair {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .value
-            .partial_cmp(&self.value)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        other.value.to_bits().cmp(&self.value.to_bits())
     }
 }
 
@@ -1037,6 +1047,10 @@ impl Ord for Pair {
 ///
 /// Refer to algorithm 1 in <https://arxiv.org/pdf/2409.09913>.
 ///
+/// # Errors
+///
+/// Returns an error if `v` contains NaN or scratch allocation fails.
+///
 /// # Panics
 ///
 /// Panics is `v.is_empty()`.
@@ -1050,12 +1064,15 @@ fn maximize_cosine_similarity(
     v: &[f32],
     num_bits: NonZeroUsize,
     allocator: ScopedAllocator<'_>,
-) -> Result<f32, AllocatorError> {
+) -> Result<f32, CompressionError> {
     // Initially, the lattice element has the value `0.5` for all dimensions.
     // This means the initial inner product between `v` and the rounded term is simply
     // `0.5 * sum(abs.(v))`. The absolute value is used because the latice element is
     // always in the direction of the components in `v`.
     let mut current_ip = 0.5 * v.iter().map(|i| i.abs() as f64).sum::<f64>();
+    if current_ip.is_nan() {
+        return Err(CompressionError::InputContainsNaN);
+    }
     let mut current_square_norm = 0.25 * (v.len() as f64);
 
     // Book keeping for the current value of the rounded vector.
@@ -1083,7 +1100,7 @@ fn maximize_cosine_similarity(
 
     // Lint: This is a private method and all the callers have an invariant that they check
     // for non-empty inputs.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     let mut critical_values =
         SliceHeap::new(&mut base).expect("calling code should not allow the slice to be empty");
 
@@ -1254,7 +1271,7 @@ where
             //
             // Further, `c` has beem clamped to `[0, 2^NBITS - 1]` and is thus encodable
             // with the NBITS-bit unsigned representation.
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             into.vector_mut().set(i, c as i64).unwrap();
         });
 
@@ -1281,10 +1298,7 @@ mod tests {
 
     use std::fmt::Display;
 
-    use diskann_utils::{
-        ReborrowMut, lazy_format,
-        views::{self, Matrix},
-    };
+    use diskann_utils::{ReborrowMut, lazy_format, views::rowmajor::MatrixMut};
     use diskann_vector::{PureDistanceFunction, norm::FastL2NormSquared};
     use diskann_wide::ARCH;
     use rand::{
@@ -1302,7 +1316,40 @@ mod tests {
         test_util,
     };
 
-    // Test cosine-similarity maximizer
+    #[test]
+    fn cosine_similarity_maximizer_errors() {
+        let num_bits = NonZeroUsize::new(4).unwrap();
+        for nan in [f32::NAN, f32::from_bits(0xffc0_0001)] {
+            for position in 0..4 {
+                let mut target = [1.0; 4];
+                target[position] = nan;
+                assert_eq!(
+                    maximize_cosine_similarity(
+                        &target,
+                        num_bits,
+                        ScopedAllocator::new(&test_util::AlwaysFails),
+                    ),
+                    Err(CompressionError::InputContainsNaN),
+                );
+            }
+        }
+        for budget in 0..=2 {
+            let result = maximize_cosine_similarity(
+                &[1.0, 0.5],
+                num_bits,
+                ScopedAllocator::new(&test_util::LimitedAllocator::new(budget)),
+            );
+            if budget < 2 {
+                assert_eq!(
+                    result,
+                    Err(CompressionError::AllocatorError(AllocatorError))
+                );
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
     #[test]
     fn test_cosine_similarity_maximizer() {
         let mut rng = StdRng::seed_from_u64(0x070d9ff8cf5e0f8c);
@@ -1353,7 +1400,11 @@ mod tests {
 
             // We expect to either get the best value found via exhaustive search, or some
             // scalar multiple of it (since that will have the same cosine similarity).
-            let passed = if best == clamped {
+            let passed = if best == clamped
+                || (best_similarity == clamped_cosine.into_inner()
+                    && std::iter::zip(target, std::iter::zip(best, clamped))
+                        .all(|(input, (expected, actual))| input == 0.0 || expected == actual))
+            {
                 true
             } else {
                 let ratio: Vec<f32> = std::iter::zip(best, clamped)
@@ -1384,6 +1435,20 @@ mod tests {
                 );
             }
         };
+
+        for target in [
+            [1.0, 0.0, -0.0, -1.0],
+            [0.0, 0.5, -0.5, 0.0],
+            [1.0, 1.0, -1.0, -1.0],
+            [
+                f32::from_bits(1.0f32.to_bits() - 1),
+                1.0,
+                f32::from_bits(1.0f32.to_bits() + 1),
+                -1.0,
+            ],
+        ] {
+            run_test(target);
+        }
 
         // Run targeted tests.
         let min = -3.5;
@@ -2336,7 +2401,7 @@ mod tests {
 
     #[test]
     fn err_dim_cannot_be_zero() {
-        let data = Matrix::new(0.0f32, 10, 0);
+        let data = rowmajor::Owned::from_element(10, 0, 0.0f32);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2354,7 +2419,7 @@ mod tests {
 
     #[test]
     fn err_norm_must_be_positive() {
-        let data = Matrix::new(0.0f32, 10, 10);
+        let data = rowmajor::Owned::from_element(10, 10, 0.0f32);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2372,8 +2437,8 @@ mod tests {
 
     #[test]
     fn err_norm_cannot_be_infinity() {
-        let mut data = Matrix::new(0.0f32, 10, 10);
-        data[(2, 5)] = f32::INFINITY;
+        let mut data = rowmajor::Owned::from_element(10, 10, 0.0f32);
+        *data.element_mut(2, 5) = f32::INFINITY;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
@@ -2392,8 +2457,8 @@ mod tests {
 
     #[test]
     fn err_reciprocal_norm_cannot_be_infinity() {
-        let mut data = Matrix::new(0.0f32, 10, 10);
-        data[(2, 5)] = 2.93863e-39;
+        let mut data = rowmajor::Owned::from_element(10, 10, 0.0f32);
+        *data.element_mut(2, 5) = 2.93863e-39;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
@@ -2451,7 +2516,7 @@ mod tests {
     #[test]
     fn compression_errors_data() {
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
-        let data = Matrix::<f32>::new(views::Init(|| StandardNormal {}.sample(&mut rng)), 16, 12);
+        let data = rowmajor::Owned::<f32>::from_fn(16, 12, |_| StandardNormal {}.sample(&mut rng));
 
         let quantizer = SphericalQuantizer::train(
             data.as_view(),
@@ -2471,6 +2536,7 @@ mod tests {
         {
             let mut query: Vec<f32> = quantizer.shift().to_vec();
             let mut d = Data::<1, _>::new_boxed(quantizer.output_dim());
+            let mut multibit_data = Data::<4, _>::new_boxed(quantizer.output_dim());
             let mut q = Query::<4, BitTranspose, _>::new_boxed(quantizer.output_dim());
 
             for i in 0..query.len() {
@@ -2483,6 +2549,12 @@ mod tests {
                         .unwrap_err();
 
                     assert_eq!(err.to_string(), "input contains NaN", "failed for {}", v);
+
+                    let err = quantizer
+                        .compress_into_with(&*query, multibit_data.reborrow_mut(), scoped_global)
+                        .unwrap_err();
+
+                    assert_eq!(err, CompressionError::InputContainsNaN);
 
                     let err = quantizer
                         .compress_into_with(&*query, q.reborrow_mut(), scoped_global)

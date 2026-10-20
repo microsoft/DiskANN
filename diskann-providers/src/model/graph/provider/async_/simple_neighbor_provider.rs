@@ -72,7 +72,7 @@ impl SimpleNeighborProviderAsync {
         );
 
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].write().unwrap();
 
         // SAFETY: We are holding the write lock for this id.
@@ -94,7 +94,7 @@ impl SimpleNeighborProviderAsync {
         self.num_get_calls.increment();
 
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].read().unwrap();
 
         // SAFETY: We are holding the read lock for `id`.
@@ -105,7 +105,7 @@ impl SimpleNeighborProviderAsync {
 
     pub fn append_vector_sync(&self, id: usize, new_neighbor_ids: &[u32]) -> ANNResult<()> {
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let _guard = self.locks[id].write().unwrap();
 
         // SAFETY: We took the write lock for `id` above.
@@ -305,6 +305,7 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync {
 ///
 /// This adaptor handles these differences by:
 /// - Substituting the virtual start point ID with an actual dataset ID when found in adjacency lists
+/// - Merging the virtual start point's out-edges into the actual start point's adjacency list
 /// - Excluding the virtual point from the total count (subtracting 1 from length)
 /// - Setting additional_points to 0 because the virtual point is omitted from the serialized graph
 ///
@@ -313,6 +314,36 @@ struct DiskAdaptor<'a> {
     provider: &'a SimpleNeighborProviderAsync,
     inmem_start_point: u32,
     actual_start_point: u32,
+}
+
+impl DiskAdaptor<'_> {
+    /// The disk graph folds the virtual start point into `actual_start_point`, so the latter
+    /// must inherit the virtual start point's out-edges. Otherwise, disk search would begin
+    /// from a different neighborhood than in-memory search, and if `actual_start_point` only
+    /// linked to the virtual start point, it would have no out-edges at all.
+    ///
+    /// The virtual start point's edges come first because they are the edges in-memory search
+    /// expands first. The merged list is capped at the longer of the two in-memory lists so
+    /// the serialized max degree does not grow.
+    fn merged_start_point_adjacency_list(&self, own: &[u32]) -> ANNResult<Vec<u32>> {
+        let mut merged = AdjacencyList::new();
+        self.provider
+            .get_neighbors_sync(self.inmem_start_point as usize, &mut merged)?;
+
+        let cap = own.len().max(merged.len());
+        let is_start_point =
+            |n: &u32| *n == self.inmem_start_point || *n == self.actual_start_point;
+
+        merged.retain(|n| !is_start_point(n));
+        for neighbor in own.iter().copied().filter(|n| !is_start_point(n)) {
+            if merged.len() == cap {
+                break;
+            }
+            merged.push(neighbor);
+        }
+
+        Ok(merged.into())
+    }
 }
 
 impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
@@ -328,6 +359,11 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
 
         let mut list: Vec<_> = list.into();
         let node_id = u32::try_from(i)?;
+
+        if node_id == self.actual_start_point {
+            return self.merged_start_point_adjacency_list(&list);
+        }
+
         let mut seen_actual_start_point = false;
         list.retain_mut(|neighbor| {
             if *neighbor == self.inmem_start_point {
@@ -415,6 +451,41 @@ mod tests {
 
         assert_eq!(adaptor.get_adjacency_list(0).unwrap(), vec![1, 2]);
         assert_eq!(adaptor.get_adjacency_list(1).unwrap(), vec![3]);
+    }
+
+    #[test]
+    fn disk_adaptor_merges_virtual_start_point_edges_into_actual_start_point() {
+        let provider = SimpleNeighborProviderAsync::new(4, 1, 4, 1.0);
+        // The actual start point only links to the virtual start point, which links to
+        // everything else.
+        provider.set_neighbors_sync(0, &[4]).unwrap();
+        provider.set_neighbors_sync(1, &[4, 2]).unwrap();
+        provider.set_neighbors_sync(4, &[0, 1, 2, 3]).unwrap();
+
+        let adaptor = DiskAdaptor {
+            provider: &provider,
+            inmem_start_point: 4,
+            actual_start_point: 0,
+        };
+
+        assert_eq!(adaptor.get_adjacency_list(0).unwrap(), vec![1, 2, 3]);
+        assert_eq!(adaptor.get_adjacency_list(1).unwrap(), vec![0, 2]);
+    }
+
+    #[test]
+    fn disk_adaptor_caps_merged_start_point_edges() {
+        let provider = SimpleNeighborProviderAsync::new(6, 1, 4, 1.0);
+        provider.set_neighbors_sync(0, &[6, 4, 5]).unwrap();
+        provider.set_neighbors_sync(6, &[0, 1, 2, 3]).unwrap();
+
+        let adaptor = DiskAdaptor {
+            provider: &provider,
+            inmem_start_point: 6,
+            actual_start_point: 0,
+        };
+
+        // Inherited edges come first, and the list is no longer than the longest input list.
+        assert_eq!(adaptor.get_adjacency_list(0).unwrap(), vec![1, 2, 3, 4]);
     }
 
     #[tokio::test]
