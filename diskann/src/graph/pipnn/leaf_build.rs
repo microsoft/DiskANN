@@ -194,6 +194,8 @@ mod tests {
         test_support::{both_directions, edges, thread_pool},
     };
     use diskann_wide::ARCH;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use std::collections::BTreeSet;
 
     /// Build L2 candidates from one-dimensional points on `n_threads` threads.
     fn build_1d(x: &[f32], leaves: Vec<Vec<u32>>, k: usize, n_threads: usize) -> Vec<Vec<u32>> {
@@ -236,6 +238,106 @@ mod tests {
         let actual = build_one_leaf(&leaf, k);
 
         assert_eq!(edges(&actual), expected);
+    }
+
+    #[test]
+    fn should_build_leaf_candidates_successfully() {
+        // The main path of leaf build: multi-dimensional rows, leaves of 1 to 64
+        // points that overlap, k cut to the leaf size, and one thread that reuses
+        // its buffers across leaf sizes.
+        let point_count = 300;
+        let dimensions = 16;
+        let seed = 1290;
+        let leaf_count = 40;
+        let max_leaf_size = 64;
+        let k = 2;
+        let n_threads = 1;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let values: Vec<f32> = (0..point_count * dimensions)
+            .map(|_| rng.random())
+            .collect();
+        let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+        // The stride 11 is coprime to 300, so no leaf repeats a point.
+        let leaves: Vec<Vec<u32>> = (0..leaf_count)
+            .map(|j| {
+                let size = 1 + (j * 13) % max_leaf_size;
+                (0..size)
+                    .map(|i| ((j * 7 + i * 11) % point_count) as u32)
+                    .collect()
+            })
+            .collect();
+        assert!(
+            leaves.iter().any(|leaf| leaf.len() == 1),
+            "fixture must contain a single-point leaf"
+        );
+        assert!(
+            leaves.iter().any(|leaf| leaf.len() == 2),
+            "fixture must contain a two-point leaf below k + 1"
+        );
+
+        let squared_l2 = |source: u32, target: u32| {
+            data.row(source as usize)
+                .iter()
+                .zip(data.row(target as usize))
+                .map(|(&a, &b)| {
+                    let delta = f64::from(a) - f64::from(b);
+                    delta * delta
+                })
+                .sum::<f64>()
+        };
+        let mut expected = BTreeSet::new();
+        let mut selected_pairs = BTreeSet::new();
+        let mut pair_selected_in_different_leaves = false;
+        for leaf in &leaves {
+            let mut leaf_pairs = BTreeSet::new();
+            for &source in leaf {
+                let mut nearest: Vec<_> = leaf
+                    .iter()
+                    .copied()
+                    .filter(|&target| target != source)
+                    .map(|target| (target, squared_l2(source, target)))
+                    .collect();
+                nearest.sort_unstable_by(|left, right| left.1.total_cmp(&right.1));
+                for (target, _) in nearest.into_iter().take(k.min(leaf.len() - 1)) {
+                    expected.extend([(source, target), (target, source)]);
+                    leaf_pairs.insert((source.min(target), source.max(target)));
+                }
+            }
+            // Count a pair once per leaf; selection from both ends is not overlap.
+            for pair in leaf_pairs {
+                pair_selected_in_different_leaves |= !selected_pairs.insert(pair);
+            }
+        }
+        assert!(
+            pair_selected_in_different_leaves,
+            "the oracle must select a pair in two different leaves"
+        );
+
+        let actual = thread_pool(n_threads)
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, dimensions, leaves, k))
+            .unwrap();
+
+        let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
+        let actual_edges = edges(&actual);
+        let first_difference =
+            expected
+                .symmetric_difference(&actual_edges)
+                .next()
+                .map(|&(point, _)| {
+                    let expected_distances: Vec<_> = expected
+                        .range((point, 0)..=(point, u32::MAX))
+                        .map(|&(_, target)| (target, squared_l2(point, target)))
+                        .collect();
+                    let actual_distances: Vec<_> = actual_edges
+                        .range((point, 0)..=(point, u32::MAX))
+                        .map(|&(_, target)| (target, squared_l2(point, target)))
+                        .collect();
+                    (point, expected_distances, actual_distances)
+                });
+        assert_eq!(
+            actual_edges, expected,
+            "seed {seed}; first differing point, expected and actual candidate distances: {first_difference:?}"
+        );
     }
 
     #[test]
