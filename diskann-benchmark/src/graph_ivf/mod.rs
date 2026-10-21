@@ -9,7 +9,12 @@
 mod provider;
 mod search;
 
-use std::{collections::HashSet, hint::black_box, io::Write, time::Instant};
+use std::{
+    collections::{BTreeMap, HashSet},
+    hint::black_box,
+    io::Write,
+    time::{Duration, Instant},
+};
 
 use diskann::{
     ivf::{Config, IVFIndex},
@@ -95,8 +100,9 @@ impl Benchmark for Static {
             index.provider().validate_membership(data.nrows())?;
             writeln!(
                 output,
-                "Build {}: {:.3}s, {} lists, {} splits",
-                repetition, result.total_seconds, result.lists, result.splits
+                "Build {}: {:.3}s, {} lists, {} splits; two-means {:.6}s, reassignment {:.6}s, other IVF {:.6}s",
+                repetition, result.total_seconds, result.lists, result.splits,
+                result.two_means_seconds, result.reassignment_seconds, result.other_ivf_seconds
             )?;
             if let (Some(settings), Some(queries), Some(truth)) =
                 (&input.search, &queries, &groundtruth)
@@ -157,11 +163,17 @@ struct Results {
 struct BuildResult {
     repetition: usize,
     ivf_seconds: f64,
+    two_means_seconds: f64,
+    reassignment_seconds: f64,
+    other_ivf_seconds: f64,
     centroid_graph_seconds: f64,
     total_seconds: f64,
     vectors_per_second: f64,
     inserted: usize,
     splits: usize,
+    split_points: usize,
+    /// Split parents per insertion -> number of insertions, including zero splits.
+    split_parent_histogram: BTreeMap<usize, usize>,
     lists: usize,
     empty_lists: usize,
     max_list_size: usize,
@@ -211,6 +223,10 @@ async fn build(
         .await?;
     let mut inserted = 0;
     let mut splits = 0;
+    let mut split_points = 0;
+    let mut two_means = Duration::ZERO;
+    let mut reassignment = Duration::ZERO;
+    let mut split_parent_histogram = BTreeMap::new();
     for first in (0..data.nrows()).step_by(settings.batch_size.get()) {
         let end = first
             .saturating_add(settings.batch_size.get())
@@ -221,8 +237,12 @@ async fn build(
             .await?;
         inserted += stats.inserted;
         splits += stats.splits;
+        split_points += stats.split_points;
+        two_means += stats.two_means;
+        reassignment += stats.reassignment;
+        *split_parent_histogram.entry(stats.splits).or_insert(0) += 1;
     }
-    let ivf_seconds = start.elapsed().as_secs_f64();
+    let ivf = start.elapsed();
     let graph_start = Instant::now();
     let graph = CentroidGraph::build(index.provider(), &input.graph).await?;
     let centroid_graph_seconds = graph_start.elapsed().as_secs_f64();
@@ -230,12 +250,21 @@ async fn build(
     let store = index.provider();
     let result = BuildResult {
         repetition: 0,
-        ivf_seconds,
+        ivf_seconds: ivf.as_secs_f64(),
+        two_means_seconds: two_means.as_secs_f64(),
+        reassignment_seconds: reassignment.as_secs_f64(),
+        // Check the partition instead of clamping a broken measurement to zero.
+        other_ivf_seconds: ivf
+            .checked_sub(two_means + reassignment)
+            .ok_or_else(|| anyhow::anyhow!("split timings exceed the IVF build interval"))?
+            .as_secs_f64(),
         centroid_graph_seconds,
         total_seconds,
         vectors_per_second: data.nrows() as f64 / total_seconds,
         inserted,
         splits,
+        split_points,
+        split_parent_histogram,
         lists: store.lists.len(),
         empty_lists: store
             .lists
