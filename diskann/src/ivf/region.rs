@@ -5,9 +5,11 @@
 
 //! Regional input views and write operations.
 
-use diskann_utils::views::rowmajor;
+use std::fmt::Debug;
 
-use crate::ANNResult;
+use diskann_utils::{Reborrow, views::rowmajor};
+
+use crate::{ANNError, ANNResult};
 
 /// One source list's centroid and complete operation-local membership.
 ///
@@ -22,6 +24,14 @@ pub struct View<'a, I, L> {
 
 /// Views for one build operation to perform splits/re-assignments .
 pub trait RegionView<I, L>: Send {
+    /// The vector representation consumed by numerical algorithms.
+    type VectorsRef<'a>;
+
+    /// The returned handle supports shorter borrows for numerical algorithms.
+    type Vectors<'a>: for<'b> Reborrow<'b, Target = Self::VectorsRef<'b>>
+    where
+        Self: 'a;
+
     /// Borrow a filled source's centroid and complete operation-local membership.
     fn get_view(&self, i: L) -> Option<View<'_, I, L>>;
 
@@ -29,7 +39,7 @@ pub trait RegionView<I, L>: Send {
     ///
     /// There is one row per member, including pending accessor appends. Coordinates
     /// have the accessor's canonical dimension and are finite.
-    fn get_vectors(&self, i: L) -> Option<rowmajor::Ref<'_, f32>>;
+    fn get_vectors(&self, i: L) -> Option<Self::Vectors<'_>>;
 }
 
 /// Regional writes for one build operation.
@@ -42,4 +52,22 @@ pub trait RegionUpdate<I, L>: Send {
 
     /// Record a new centroid and its complete membership.
     fn create(&mut self, centroid: &[f32], members: &[I]) -> ANNResult<()>;
+}
+
+pub trait AsMatRef<T> {
+    type Error: Send + Sync + Debug + Into<ANNError>;
+
+    fn as_view(&self) -> Result<rowmajor::Ref<'_, T>, Self::Error>;
+}
+
+impl<T> AsMatRef<T> for rowmajor::Ref<'_, T> {
+    type Error = crate::error::Infallible;
+
+    fn as_view(&self) -> Result<rowmajor::Ref<'_, T>, Self::Error> {
+        Ok(*self)
+    }
+}
+
+pub trait AsMatMut<T>: AsMatRef<T> {
+    fn as_mut_view(&self) -> Result<rowmajor::Mut<'_, T>, Self::Error>;
 }

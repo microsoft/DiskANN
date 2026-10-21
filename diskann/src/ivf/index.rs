@@ -14,14 +14,20 @@ use std::{
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::traits::{BuildAccessor, Router, RouterAndNearest, SetElements};
+use super::traits::{
+    BuildAccessor, Router, RouterAndNearest, SearchAccessor, SearchStrategy, SetElements,
+};
 use crate::{
     ANNError, ANNResult,
-    error::IntoANNResult,
+    error::{ErrorExt, IntoANNResult},
+    flat::DistancesUnordered,
+    graph::SearchOutputBuffer,
     ivf::{
         clustering::{RegionalNearest, SplitAndAssign, TwoMeans},
+        region::AsMatRef,
         traits::BuildStrategy,
     },
+    neighbor::{Neighbor, NeighborPriorityQueue},
     provider::ExecutionContext,
     utils::ONE,
 };
@@ -84,6 +90,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
         S: BuildStrategy<'a, T, C>,
+        S::Accessor: for<'b> BuildAccessor<T, VectorsRef<'b>: AsMatRef<f32>>,
         T: Sync,
     {
         let config = self.config;
@@ -171,6 +178,42 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 inserted: points.len(),
                 splits,
             })
+        }
+    }
+
+    pub fn search<'a, S, T, OB>(
+        &'a self,
+        strategy: &'a S,
+        context: &'a C,
+        query: T,
+        k: NonZeroUsize,
+        nprobe: NonZeroUsize,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        S: SearchStrategy<'a, T, C>,
+        T: Copy + Send + Sync,
+        OB: SearchOutputBuffer<S::Id> + Send + ?Sized,
+    {
+        async move {
+            let accessor = strategy.search_accessor(context, query).into_ann_result()?;
+            let mut lists = Vec::new();
+            {
+                let router = accessor.router();
+                router
+                    .route(&query, nprobe, |id, scan| lists.push((*id, scan)))
+                    .await?;
+            }
+
+            let mut best = NeighborPriorityQueue::new(k.get());
+
+            for (_, scan) in lists.iter_mut() {
+                scan.distances_unordered(|id, dist| best.insert(Neighbor::new(id, dist)))
+                    .await
+                    .escalate("why")?;
+            }
+
+            Ok(output.extend(best.iter()))
         }
     }
 }

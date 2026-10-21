@@ -11,20 +11,23 @@
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
 use diskann_quantization::algorithms::kmeans::lloyds::lloyds;
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_utils::{
+    Reborrow,
+    views::rowmajor::{self, Matrix, MatrixMut},
+};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 
 use super::region::{RegionUpdate, RegionView};
-use crate::{ANNError, ANNResult};
+use crate::{ANNError, ANNResult, error::IntoANNResult, ivf::region::AsMatRef};
 
 /// Fit a parent's replacement centroids without assigning regional memberships.
-pub(super) trait Clusterer<T = f32> {
+pub trait Clusterer<V, T = f32> {
     /// Fill `dst` with finite centroids of the canonical dimension.
     ///
     /// Implementations own initialization, convergence, empty-cluster handling,
     /// and reusable fitting scratch. `dst` has `num_centers()` rows and `dim()`
     /// columns. The number of centers must be at least two.
-    fn fit(&mut self, points: rowmajor::Ref<'_, T>, dst: rowmajor::Mut<'_, T>) -> ANNResult<()>;
+    fn fit(&mut self, points: V, dst: rowmajor::Mut<'_, T>) -> ANNResult<()>;
 
     fn num_centers(&self) -> NonZeroUsize;
 
@@ -32,25 +35,24 @@ pub(super) trait Clusterer<T = f32> {
 }
 
 /// Assign the whole region, allowing policies that coordinate multiple sources.
-pub(super) trait Assigner<I, L> {
+pub trait Assigner<I, L, R: RegionView<I, L>> {
     /// Assign each source member to a destination and record complete memberships.
     ///
     /// Create new destinations, replace retained memberships, and retire sources
     /// not retained as destinations. Validate and compute assignments before
     /// recording writes. A write error may leave partial private updates.
-    fn assign<R, U>(
+    fn assign<U>(
         &mut self,
         region: &R,
         update: &mut U,
         sources: &[L],
-        destinations: &[Destination<'_, L>],
+        destinations: &[Target<'_, L>],
     ) -> ANNResult<()>
     where
-        R: RegionView<I, L>,
         U: RegionUpdate<I, L>;
 }
 
-pub(super) enum Type<L> {
+pub enum Type<L> {
     /// Existing centroid.
     Exists(L),
     /// New centroid as a result of the split.
@@ -58,19 +60,19 @@ pub(super) enum Type<L> {
 }
 
 /// A borrowed centroid; only retained destinations have an existing list ID.
-pub(super) struct Destination<'a, L> {
+pub struct Target<'a, L> {
     pub list: Type<L>,
     pub centroid: &'a [f32],
 }
 
-pub(super) struct SplitAndAssign<C, A> {
+pub struct SplitAndAssign<C, A> {
     pub clusterer: C,
     pub assigner: A,
     scratch: Option<rowmajor::Owned<f32>>, // scratch for the centroids.
 }
 
-impl<C: Clusterer, A> SplitAndAssign<C, A> {
-    pub(super) fn new(clusterer: C, assigner: A) -> Self {
+impl<C, A> SplitAndAssign<C, A> {
+    pub fn new(clusterer: C, assigner: A) -> Self {
         Self {
             clusterer,
             assigner,
@@ -79,7 +81,10 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
     }
 
     /// Initialize the scratch for a particular number of output cluster centroids.
-    fn initialize(&mut self, num_jobs: NonZeroUsize) -> ANNResult<()> {
+    fn initialize<V>(&mut self, num_jobs: NonZeroUsize) -> ANNResult<NonZeroUsize>
+    where
+        C: Clusterer<V>,
+    {
         let c = self.clusterer.num_centers();
 
         let rows = num_jobs
@@ -91,13 +96,14 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
 
         self.scratch = Some(rowmajor::Owned::try_from_element(rows, dim, f32::NAN)?);
 
-        Ok(())
+        Ok(c)
     }
-}
 
-impl<C: Clusterer, A> SplitAndAssign<C, A> {
     /// Compute the complete result before registering any provider writes.
-    pub(super) fn run<I: Copy, L: Copy + Ord, R, U>(
+    ///
+    /// Concrete-reference clusterers may need an explicit `R` type argument because
+    /// of a compiler limitation when inferring higher-ranked associated types.
+    pub fn run<I: Copy, L: Copy, R, U>(
         &mut self,
         region: &R,
         update: &mut U,
@@ -105,13 +111,17 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
         neighbors: &BTreeSet<L>,
     ) -> ANNResult<()>
     where
-        A: Assigner<I, L>,
+        A: Assigner<I, L, R>,
         R: RegionView<I, L>,
+        C: for<'a> Clusterer<R::VectorsRef<'a>>,
         U: RegionUpdate<I, L>,
     {
-        self.initialize(NonZeroUsize::new(parents.len()).ok_or(ANNError::message("err"))?)?;
-
-        let n_centroids = self.clusterer.num_centers().get();
+        let n_centroids = self
+            .initialize::<R::VectorsRef<'_>>(
+                NonZeroUsize::new(parents.len())
+                    .ok_or_else(|| ANNError::message("IVF splitting needs at least one parent"))?,
+            )?
+            .get();
         let mut s = 0;
 
         let mut clusters = self
@@ -128,7 +138,7 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
             let end = s + n_centroids;
 
             self.clusterer.fit(
-                vecs,
+                vecs.reborrow(),
                 clusters.subview_mut(s..end).ok_or_else(|| {
                     ANNError::message("IVF centroid scratch range is out of bounds")
                 })?,
@@ -139,7 +149,7 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
 
         let mut destinations: Vec<_> = clusters
             .rows()
-            .map(|centroid| Destination {
+            .map(|centroid| Target {
                 list: Type::New,
                 centroid,
             })
@@ -150,7 +160,7 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
                 .get_view(n)
                 .ok_or_else(|| ANNError::message("IVF neighbor is missing from the region"))?;
 
-            destinations.push(Destination {
+            destinations.push(Target {
                 list: Type::Exists(n),
                 centroid: view.centroid,
             });
@@ -164,49 +174,47 @@ impl<C: Clusterer, A> SplitAndAssign<C, A> {
 }
 
 /// Random input seeds followed by Lloyd iterations, which reset empty centers to zero.
-pub(super) struct TwoMeans {
+pub struct TwoMeans {
     iterations: NonZeroUsize,
     dim: NonZeroUsize,
 }
 
 impl TwoMeans {
-    pub(super) fn new(iterations: NonZeroUsize, dim: NonZeroUsize) -> Self {
+    pub fn new(iterations: NonZeroUsize, dim: NonZeroUsize) -> Self {
         Self { iterations, dim }
     }
 }
 
-impl Clusterer for TwoMeans {
-    fn fit(
-        &mut self,
-        points: rowmajor::Ref<'_, f32>,
-        mut dst: rowmajor::Mut<'_, f32>,
-    ) -> ANNResult<()> {
-        let dim = self.dim().get();
-        let num_centers = self.num_centers().get();
+impl<B: AsMatRef<f32>> Clusterer<B> for TwoMeans {
+    fn fit(&mut self, points: B, mut dst: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
+        let dim = self.dim.get();
+        let num_centers = <Self as Clusterer<B>>::num_centers(self).get();
 
-        if points.nrows() < num_centers {
+        let vectors = points.as_view().into_ann_result()?;
+
+        if vectors.nrows() < num_centers {
             return Err(ANNError::message("an IVF split needs at least two points"));
         }
-        if points.ncols() != dim || dst.ncols() != dim || dst.nrows() != num_centers {
+        if vectors.ncols() != dim || dst.ncols() != dim || dst.nrows() != num_centers {
             return Err(ANNError::message(
                 "two-means needs canonical input rows and a two-row destination of the canonical dimension",
             ));
         }
 
         dst.as_mut_slice().copy_from_slice(
-            points
+            vectors
                 .subview(0..num_centers)
                 .ok_or(ANNError::message("oh no!"))?
                 .as_slice(),
         );
 
-        let _ = lloyds(points, dst, self.iterations.get());
+        let _ = lloyds(vectors, dst, self.iterations.get());
 
         Ok(())
     }
 
     fn num_centers(&self) -> NonZeroUsize {
-        const { NonZeroUsize::new(2).unwrap() }
+        const { crate::utils::TWO }
     }
 
     fn dim(&self) -> NonZeroUsize {
@@ -214,18 +222,21 @@ impl Clusterer for TwoMeans {
     }
 }
 
-pub(super) struct RegionalNearest;
+pub struct RegionalNearest;
 
-impl<I: Copy, L: Copy + Ord> Assigner<I, L> for RegionalNearest {
-    fn assign<R, U>(
+impl<I: Copy, L: Copy + Ord, R> Assigner<I, L, R> for RegionalNearest
+where
+    R: RegionView<I, L>,
+    for<'a> R::VectorsRef<'a>: AsMatRef<f32>,
+{
+    fn assign<U>(
         &mut self,
         region: &R,
         update: &mut U,
         sources: &[L],
-        destinations: &[Destination<'_, L>],
+        destinations: &[Target<'_, L>],
     ) -> ANNResult<()>
     where
-        R: RegionView<I, L>,
         U: RegionUpdate<I, L>,
     {
         let mut memberships: Vec<Vec<I>> = (0..destinations.len()).map(|_| Vec::new()).collect();
@@ -237,6 +248,8 @@ impl<I: Copy, L: Copy + Ord> Assigner<I, L> for RegionalNearest {
             let vectors = region.get_vectors(src).ok_or_else(|| {
                 ANNError::message("IVF assignment source vectors are missing from the region")
             })?;
+            let vectors = vectors.reborrow();
+            let vectors = vectors.as_view().into_ann_result()?;
 
             for (&id, point) in view.members.iter().zip(vectors.rows()) {
                 let dst = nearest(point, destinations.iter().map(|d| d.centroid));

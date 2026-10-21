@@ -11,6 +11,7 @@ use std::{
 };
 
 use diskann_utils::{
+    Reborrow,
     future::SendFuture,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
@@ -20,10 +21,20 @@ use tokio::sync::{Mutex, MutexGuard};
 use super::{
     Config, IVFIndex, InsertStats, ReassignCount, clustering,
     pending::{Membership, PendingLists},
-    region::{RegionUpdate, RegionView, View},
-    traits::{BuildAccessor, BuildStrategy, HasIds, Router, RouterAndNearest, SetElements},
+    region::{AsMatRef, RegionUpdate, RegionView, View},
+    traits::{
+        BuildAccessor, BuildStrategy, HasIds, Router, RouterAndNearest, SearchAccessor,
+        SearchStrategy, SetElements,
+    },
 };
-use crate::{ANNError, ANNResult, provider::DefaultContext, utils::ONE};
+use crate::{
+    ANNError, ANNResult,
+    flat::DistancesUnordered,
+    graph::{IdDistance, SearchOutputBuffer},
+    neighbor::{BackInserter, Neighbor},
+    provider::{DefaultContext, HasId},
+    utils::ONE,
+};
 
 #[derive(Debug, Clone)]
 struct StoredList {
@@ -40,6 +51,7 @@ struct Store {
     finishes: usize,
     fills: usize,
     filled_lists: Vec<u32>,
+    fail_route: bool,
     fail_nearest: bool,
     fail_fill: bool,
     fail_create: bool,
@@ -76,7 +88,19 @@ struct Build<'p, T> {
 
 struct Coarse<'a> {
     stored: &'a BTreeMap<u32, StoredList>,
+    fail_route: bool,
     fail_nearest: bool,
+}
+
+fn squared_distance<T: Copy + Into<f32>>(query: &[T], vector: &[f32]) -> f32 {
+    query
+        .iter()
+        .zip(vector)
+        .map(|(&value, &coordinate)| {
+            let delta = value.into() - coordinate;
+            delta * delta
+        })
+        .sum()
 }
 
 impl Coarse<'_> {
@@ -90,17 +114,7 @@ impl Coarse<'_> {
             .stored
             .iter()
             .filter(|(id, _)| pred(id))
-            .map(|(&id, list)| {
-                let distance: f32 = query
-                    .iter()
-                    .zip(&list.centroid)
-                    .map(|(&value, &center)| {
-                        let delta = value.into() - center;
-                        delta * delta
-                    })
-                    .sum();
-                (id, distance)
-            })
+            .map(|(&id, list)| (id, squared_distance(query, &list.centroid)))
             .collect();
         selected.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         selected.truncate(nprobe.get());
@@ -113,6 +127,7 @@ impl Coarse<'_> {
 
 impl<T: Copy + Into<f32> + Sync> Router<(u32, &[T])> for Coarse<'_> {
     type Id = u32;
+    type Ret = f32;
 
     fn len(&self) -> usize {
         self.stored.len()
@@ -127,7 +142,38 @@ impl<T: Copy + Into<f32> + Sync> Router<(u32, &[T])> for Coarse<'_> {
     where
         F: FnMut(&Self::Id, f32) + Send,
     {
-        async move { Ok(self.select(query.1, nprobe, |_| true, emit)) }
+        async move {
+            if self.fail_route {
+                return Err(ANNError::message("injected routing failure"));
+            }
+            Ok(self.select(query.1, nprobe, |_| true, emit))
+        }
+    }
+}
+
+impl<T: Copy + Into<f32> + Sync> Router<&[T]> for Coarse<'_> {
+    type Id = u32;
+    type Ret = f32;
+
+    fn len(&self) -> usize {
+        self.stored.len()
+    }
+
+    fn route<F>(
+        &self,
+        query: &&[T],
+        nprobe: NonZeroUsize,
+        emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        F: FnMut(&Self::Id, f32) + Send,
+    {
+        async move {
+            if self.fail_route {
+                return Err(ANNError::message("injected routing failure"));
+            }
+            Ok(self.select(query, nprobe, |_| true, emit))
+        }
     }
 }
 
@@ -211,6 +257,12 @@ impl<'a> Region<'a> {
 }
 
 impl RegionView<u32, u32> for Region<'_> {
+    type VectorsRef<'a> = rowmajor::Ref<'a, f32>;
+    type Vectors<'a>
+        = rowmajor::Ref<'a, f32>
+    where
+        Self: 'a;
+
     fn get_view(&self, list: u32) -> Option<View<'_, u32, u32>> {
         self.sources.get(&list).map(|source| View {
             id: list,
@@ -272,6 +324,7 @@ impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build
         = Coarse<'a>
     where
         Self: 'a;
+    type VectorsRef<'a> = rowmajor::Ref<'a, f32>;
     type Region<'a>
         = Region<'a>
     where
@@ -284,6 +337,7 @@ impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build
     fn router(&mut self) -> Self::Router<'_> {
         Coarse {
             stored: &self.store.lists,
+            fail_route: self.store.fail_route,
             fail_nearest: self.store.fail_nearest,
         }
     }
@@ -456,6 +510,139 @@ impl<'a, T: Copy + Into<f32> + Send + Sync> BuildStrategy<'a, (u32, &[T]), Defau
     }
 }
 
+struct Search<'p, 'q, T> {
+    store: MutexGuard<'p, Store>,
+    query: &'q [T],
+}
+
+struct SearchRouter<'a, T> {
+    store: &'a Store,
+    query: &'a [T],
+}
+
+struct ListScan<'a, T> {
+    store: &'a Store,
+    list: u32,
+    query: &'a [T],
+}
+
+impl<'a, T: Copy + Into<f32> + Sync> Router<&[T]> for SearchRouter<'a, T> {
+    type Id = u32;
+    type Ret = ListScan<'a, T>;
+
+    fn len(&self) -> usize {
+        self.store.lists.len()
+    }
+
+    fn route<F>(
+        &self,
+        query: &&[T],
+        nprobe: NonZeroUsize,
+        mut emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        F: FnMut(&Self::Id, Self::Ret) + Send,
+    {
+        async move {
+            if self.store.fail_route {
+                return Err(ANNError::message("injected routing failure"));
+            }
+            let coarse = Coarse {
+                stored: &self.store.lists,
+                fail_route: false,
+                fail_nearest: false,
+            };
+            Ok(coarse.select(
+                query,
+                nprobe,
+                |_| true,
+                |id, _| {
+                    emit(
+                        id,
+                        ListScan {
+                            store: self.store,
+                            list: *id,
+                            query: self.query,
+                        },
+                    );
+                },
+            ))
+        }
+    }
+}
+
+impl<T> HasId for ListScan<'_, T> {
+    type Id = u32;
+}
+
+impl<T: Copy + Into<f32> + Sync> DistancesUnordered for ListScan<'_, T> {
+    type Error = ANNError;
+
+    fn distances_unordered<F>(&mut self, mut emit: F) -> impl SendFuture<ANNResult<()>>
+    where
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        async move {
+            let list = self
+                .store
+                .lists
+                .get(&self.list)
+                .ok_or_else(|| ANNError::message(format!("unknown list {}", self.list)))?;
+            for id in &list.members {
+                let vector = self
+                    .store
+                    .points
+                    .get(id)
+                    .ok_or_else(|| ANNError::message(format!("missing point {id}")))?;
+                emit(*id, squared_distance(self.query, vector));
+            }
+            Ok(())
+        }
+    }
+}
+
+impl<T> HasIds for Search<'_, '_, T> {
+    type Id = u32;
+    type ListId = u32;
+}
+
+impl<'q, T: Copy + Into<f32> + Send + Sync> SearchAccessor<&'q [T]> for Search<'_, 'q, T> {
+    type Router<'a>
+        = SearchRouter<'a, T>
+    where
+        Self: 'a;
+    type Dist<'a>
+        = ListScan<'a, T>
+    where
+        Self: 'a;
+
+    fn router(&self) -> Self::Router<'_> {
+        SearchRouter {
+            store: &self.store,
+            query: self.query,
+        }
+    }
+}
+
+impl<'a, 'q, T: Copy + Into<f32> + Send + Sync> SearchStrategy<'a, &'q [T], DefaultContext>
+    for Strategy
+{
+    type Accessor = Search<'a, 'q, T>;
+    type Error = ANNError;
+
+    fn search_accessor(
+        &'a self,
+        _: &'a DefaultContext,
+        query: &'q [T],
+    ) -> ANNResult<Self::Accessor> {
+        let store = self.store.try_lock().map_err(ANNError::new)?;
+        if query.len() != store.dim || !query.iter().all(|&value| value.into().is_finite()) {
+            return Err(ANNError::message("invalid query vector"));
+        }
+        Ok(Search { store, query })
+    }
+}
+
 impl<'p, T: Copy + Into<f32> + Send + Sync> SetElements<(u32, &'p [T]), DefaultContext>
     for Build<'_, T>
 {
@@ -561,11 +748,220 @@ fn require_send<F: Future + Send>(future: F) -> F {
 }
 
 #[tokio::test]
+async fn search_scans_selected_lists_and_returns_the_best_k() {
+    let mut store = seeded();
+    store.points.insert(10_004, vec![7.5, 0.0]);
+    let (index, strategy) = index(store, 2);
+    let query = [7.5f32, 0.0];
+    for (nprobe, k, expected) in [
+        (1, 3, vec![(10_002, 6.25_f32), (10_003, 20.25)]),
+        (2, 3, vec![(10_002, 6.25), (10_003, 20.25), (10_001, 30.25)]),
+        (3, 2, vec![(10_004, 0.0), (10_002, 6.25)]),
+        (
+            usize::MAX,
+            10,
+            vec![
+                (10_004, 0.0),
+                (10_002, 6.25),
+                (10_003, 20.25),
+                (10_001, 30.25),
+                (10_000, 56.25),
+            ],
+        ),
+    ] {
+        let mut output = Vec::new();
+        let count = require_send(index.search(
+            &strategy,
+            &DefaultContext,
+            query.as_slice(),
+            NonZeroUsize::new(k).unwrap(),
+            NonZeroUsize::new(nprobe).unwrap(),
+            &mut output,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(count, expected.len());
+        assert_eq!(
+            output
+                .into_iter()
+                .map(Neighbor::as_tuple)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    let store = strategy.store();
+    assert_eq!(store.points.len(), 5);
+    assert_eq!(store.lists.len(), 3);
+    assert_eq!(store.finishes, 0);
+}
+
+#[tokio::test]
+async fn search_respects_output_buffer_capacity_and_existing_results() {
+    let (index, strategy) = index(seeded(), 2);
+    let query = [7.5f32, 0.0];
+    let mut ids = [u32::MAX; 3];
+    let mut distances = [f32::INFINITY; 3];
+    {
+        let mut output = IdDistance::new(&mut ids, &mut distances);
+        assert!(output.push(Neighbor::new(42, -1.0)).is_available());
+        for expected_count in [2, 0] {
+            let count = require_send(index.search(
+                &strategy,
+                &DefaultContext,
+                query.as_slice(),
+                NonZeroUsize::new(4).unwrap(),
+                NonZeroUsize::new(3).unwrap(),
+                &mut output,
+            ))
+            .await
+            .unwrap();
+            assert_eq!(count, expected_count);
+            assert_eq!(output.current_len(), 3);
+        }
+    }
+    assert_eq!(ids, [42, 10_002, 10_003]);
+    assert_eq!(distances, [-1.0, 6.25, 20.25]);
+
+    let mut buffer = [];
+    let mut output = BackInserter::new(&mut buffer);
+    assert_eq!(
+        require_send(index.search(
+            &strategy,
+            &DefaultContext,
+            query.as_slice(),
+            ONE,
+            ONE,
+            &mut output,
+        ))
+        .await
+        .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn search_returns_no_results_for_empty_regions() {
+    for empty_index in [false, true] {
+        let mut store = seeded();
+        if empty_index {
+            store.lists.clear();
+            store.points.clear();
+        } else {
+            store.lists.get_mut(&2).unwrap().members.clear();
+        }
+        let (index, strategy) = index(store, 2);
+        let mut output = vec![Neighbor::new(42, -1.0)];
+        assert_eq!(
+            require_send(index.search(
+                &strategy,
+                &DefaultContext,
+                &[7.5f32, 0.0][..],
+                ONE,
+                ONE,
+                &mut output,
+            ))
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            output
+                .into_iter()
+                .map(Neighbor::as_tuple)
+                .collect::<Vec<_>>(),
+            [(42, -1.0)]
+        );
+    }
+}
+
+#[tokio::test]
+async fn search_failures_do_not_publish_partial_results() {
+    for (case, expected) in [
+        ("dimension", "invalid query vector"),
+        ("nonfinite", "invalid query vector"),
+        ("route", "injected routing failure"),
+        ("scan", "missing point 10003"),
+    ] {
+        let mut store = seeded();
+        if case == "route" {
+            store.fail_route = true;
+        }
+        if case == "scan" {
+            store.points.remove(&10_003);
+        }
+        let (index, strategy) = index(store, 2);
+        let mut query = [7.5f32, 0.0];
+        if case == "nonfinite" {
+            query[0] = f32::NAN;
+        }
+        let query = if case == "dimension" {
+            &query[..1]
+        } else {
+            &query[..]
+        };
+        let mut output = vec![Neighbor::new(42, -1.0)];
+        let error = require_send(index.search(
+            &strategy,
+            &DefaultContext,
+            query,
+            NonZeroUsize::new(3).unwrap(),
+            ONE,
+            &mut output,
+        ))
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_eq!(
+            output
+                .into_iter()
+                .map(Neighbor::as_tuple)
+                .collect::<Vec<_>>(),
+            [(42, -1.0)]
+        );
+        assert_eq!(strategy.store().finishes, 0);
+    }
+}
+
+#[tokio::test]
+async fn search_supports_native_queries_after_insertion_and_splitting() {
+    let (mut index, strategy) = index(seeded(), 2);
+    let points = [(5, &[8u8, 0][..])];
+    let stats = index
+        .insert_batch(&strategy, &DefaultContext, &points)
+        .await
+        .unwrap();
+    assert_eq!(stats.splits, 1);
+
+    let mut output = Vec::new();
+    assert_eq!(
+        require_send(index.search(
+            &strategy,
+            &DefaultContext,
+            &[8u8, 0][..],
+            ONE,
+            NonZeroUsize::new(usize::MAX).unwrap(),
+            &mut output,
+        ))
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        output
+            .into_iter()
+            .map(Neighbor::as_tuple)
+            .collect::<Vec<_>>(),
+        [(10_005, 0.0)]
+    );
+}
+
+#[tokio::test]
 async fn routing_callbacks_emit_ranked_results_and_counts() {
     let expected: [(u32, f32); 3] = [(1, 25.0), (2, 25.0), (3, 8836.0)];
     for store in [seeded(), Store::default()] {
         let router = Coarse {
             stored: &store.lists,
+            fail_route: false,
             fail_nearest: false,
         };
         for limit in [1, 2, usize::MAX] {
@@ -589,6 +985,7 @@ async fn nearest_callbacks_filter_before_limiting_and_count_emitted_results() {
     let store = seeded();
     let router = Coarse {
         stored: &store.lists,
+        fail_route: false,
         fail_nearest: false,
     };
     for (limit, excluded, expected) in [
@@ -621,6 +1018,7 @@ async fn nearest_lookup_failures_do_not_emit_results() {
     ] {
         let router = Coarse {
             stored: &store.lists,
+            fail_route: false,
             fail_nearest,
         };
         let mut emitted = Vec::new();
@@ -1379,10 +1777,10 @@ fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
 fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     struct RowsAsCenters;
 
-    impl clustering::Clusterer for RowsAsCenters {
+    impl<'v> clustering::Clusterer<rowmajor::Ref<'v, f32>> for RowsAsCenters {
         fn fit(
             &mut self,
-            points: rowmajor::Ref<'_, f32>,
+            points: rowmajor::Ref<'v, f32>,
             mut dst: rowmajor::Mut<'_, f32>,
         ) -> ANNResult<()> {
             assert_eq!(points.nrows(), dst.nrows());
@@ -1403,16 +1801,18 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
         owners: BTreeMap<u32, Vec<u32>>,
     }
 
-    impl clustering::Assigner<u32, u32> for ParentLocal {
-        fn assign<R, U>(
+    impl<R> clustering::Assigner<u32, u32, R> for ParentLocal
+    where
+        R: for<'a> RegionView<u32, u32, VectorsRef<'a> = rowmajor::Ref<'a, f32>>,
+    {
+        fn assign<U>(
             &mut self,
             region: &R,
             update: &mut U,
             sources: &[u32],
-            destinations: &[clustering::Destination<'_, u32>],
+            destinations: &[clustering::Target<'_, u32>],
         ) -> ANNResult<()>
         where
-            R: RegionView<u32, u32>,
             U: RegionUpdate<u32, u32>,
         {
             assert_eq!(sources, [1, 2, 3, 4]);
@@ -1426,6 +1826,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
             for &source in sources {
                 let view = region.get_view(source).unwrap();
                 let vectors = region.get_vectors(source).unwrap();
+                let vectors = vectors.reborrow();
                 let mut candidates: Vec<_> = destinations
                     .iter()
                     .enumerate()
@@ -1513,7 +1914,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     let mut full = Update::new(&sources, 1, &mut full_memberships, &mut full_created);
     let mut splitter = clustering::SplitAndAssign::new(RowsAsCenters, clustering::RegionalNearest);
     splitter
-        .run(&region, &mut full, &parents, &neighbors)
+        .run::<_, _, Region<'_>, _>(&region, &mut full, &parents, &neighbors)
         .unwrap();
     let mut restricted_memberships = PendingLists::default();
     let mut restricted_created = Vec::new();
@@ -1529,7 +1930,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
             owners: [(3, vec![1]), (4, vec![1, 2])].into(),
         },
     )
-    .run(&region, &mut restricted, &parents, &neighbors)
+    .run::<_, _, Region<'_>, _>(&region, &mut restricted, &parents, &neighbors)
     .unwrap();
 
     for update in [&full, &restricted] {
@@ -1556,7 +1957,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
         &mut repeated_created,
     );
     splitter
-        .run(&region, &mut repeated, &parents, &neighbors)
+        .run::<_, _, Region<'_>, _>(&region, &mut repeated, &parents, &neighbors)
         .unwrap();
     for (first, repeated) in full.created.iter().zip(repeated.created.iter()) {
         assert_eq!(first.centroid, repeated.centroid);
@@ -1566,7 +1967,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     let mut smaller_created = Vec::new();
     let mut smaller = Update::new(&sources, 1, &mut smaller_memberships, &mut smaller_created);
     splitter
-        .run(
+        .run::<_, _, Region<'_>, _>(
             &region,
             &mut smaller,
             &BTreeSet::from([1]),
@@ -1599,8 +2000,8 @@ fn numerical_strategy_failures_record_no_updates() {
         CountOverflow,
     }
 
-    impl clustering::Clusterer for InvalidFit {
-        fn fit(&mut self, _: rowmajor::Ref<'_, f32>, _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
+    impl<V> clustering::Clusterer<V> for InvalidFit {
+        fn fit(&mut self, _: V, _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
             match self {
                 Self::Error => Err(ANNError::message("injected fitting failure")),
                 Self::CountOverflow => {
@@ -1624,16 +2025,15 @@ fn numerical_strategy_failures_record_no_updates() {
 
     struct InvalidAssignment;
 
-    impl clustering::Assigner<u32, u32> for InvalidAssignment {
-        fn assign<R, U>(
+    impl<R: RegionView<u32, u32>> clustering::Assigner<u32, u32, R> for InvalidAssignment {
+        fn assign<U>(
             &mut self,
             _: &R,
             _: &mut U,
             _: &[u32],
-            _: &[clustering::Destination<'_, u32>],
+            _: &[clustering::Target<'_, u32>],
         ) -> ANNResult<()>
         where
-            R: RegionView<u32, u32>,
             U: RegionUpdate<u32, u32>,
         {
             Err(ANNError::message("injected assignment failure"))
@@ -1689,6 +2089,262 @@ fn numerical_strategy_failures_record_no_updates() {
         "{error}"
     );
     assert_unwritten(update);
+}
+
+#[test]
+fn region_vector_reborrows_share_source_storage() {
+    let sources = BTreeMap::from([(
+        1,
+        Source {
+            centroid: vec![0.0],
+            members: vec![0, 1],
+            vectors: matrix(&[[-1.0], [1.0]]),
+        },
+    )]);
+    let region = Region::new(&sources);
+    let view = region.get_view(1).unwrap();
+    assert!(std::ptr::eq(view.members, sources[&1].members.as_slice()));
+    let vectors = region.get_vectors(1).unwrap();
+    let reborrowed = vectors.reborrow();
+    assert!(std::ptr::eq(
+        reborrowed.as_slice(),
+        sources[&1].vectors.as_slice()
+    ));
+    assert_eq!(reborrowed.row(0), [-1.0]);
+    assert_eq!(reborrowed.row(1), [1.0]);
+}
+
+#[test]
+fn split_driver_reuses_clusterer_with_fallible_borrowed_batches() {
+    struct Batch<'a> {
+        vectors: rowmajor::Ref<'a, f32>,
+        reads: &'a Cell<usize>,
+        fail_on: Option<usize>,
+    }
+
+    struct BatchRef<'a> {
+        vectors: rowmajor::Ref<'a, f32>,
+        reads: &'a Cell<usize>,
+        fail_on: Option<usize>,
+    }
+
+    impl<'r> Reborrow<'r> for Batch<'_> {
+        type Target = BatchRef<'r>;
+
+        fn reborrow(&'r self) -> Self::Target {
+            BatchRef {
+                vectors: self.vectors.reborrow(),
+                reads: self.reads,
+                fail_on: self.fail_on,
+            }
+        }
+    }
+
+    impl AsMatRef<f32> for BatchRef<'_> {
+        type Error = ANNError;
+
+        fn as_view(&self) -> ANNResult<rowmajor::Ref<'_, f32>> {
+            let count = self.reads.get() + 1;
+            self.reads.set(count);
+            if self.fail_on == Some(count) {
+                return Err(ANNError::message("injected batch conversion failure"));
+            }
+            Ok(self.vectors)
+        }
+    }
+
+    struct BatchRegion<'a> {
+        inner: Region<'a>,
+        reads: Cell<usize>,
+        fail_on: Option<usize>,
+    }
+
+    impl RegionView<u32, u32> for BatchRegion<'_> {
+        type VectorsRef<'a> = BatchRef<'a>;
+        type Vectors<'a>
+            = Batch<'a>
+        where
+            Self: 'a;
+
+        fn get_view(&self, list: u32) -> Option<View<'_, u32, u32>> {
+            self.inner.get_view(list)
+        }
+
+        fn get_vectors(&self, list: u32) -> Option<Self::Vectors<'_>> {
+            self.inner.get_vectors(list).map(|vectors| Batch {
+                vectors,
+                reads: &self.reads,
+                fail_on: self.fail_on,
+            })
+        }
+    }
+
+    let mut driver = clustering::SplitAndAssign::new(
+        clustering::TwoMeans::new(ONE, ONE),
+        clustering::RegionalNearest,
+    );
+    for fail_on in [Some(1), Some(2), None] {
+        let sources = BTreeMap::from([(
+            1,
+            Source {
+                centroid: vec![0.0],
+                members: vec![0, 1],
+                vectors: matrix(&[[-1.0], [1.0]]),
+            },
+        )]);
+        let region = BatchRegion {
+            inner: Region::new(&sources),
+            reads: Cell::new(0),
+            fail_on,
+        };
+        let batch = region.get_vectors(1).unwrap();
+        let borrowed = batch.reborrow();
+        assert!(std::ptr::eq(borrowed.reads, &region.reads));
+        assert!(std::ptr::eq(
+            borrowed.vectors.as_slice(),
+            sources[&1].vectors.as_slice()
+        ));
+        let mut memberships = PendingLists::default();
+        let mut created = Vec::new();
+        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
+        let result = driver.run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new());
+        if let Some(count) = fail_on {
+            let error = result.unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("injected batch conversion failure")
+            );
+            assert_eq!(region.reads.get(), count);
+            assert!(created.is_empty());
+            assert_eq!(memberships.into_changes().count(), 0);
+        } else {
+            result.unwrap();
+            assert_eq!(region.reads.get(), 2);
+            assert_eq!(created.len(), 2);
+            assert_eq!(created[0].centroid, [-1.0]);
+            assert_eq!(created[0].members, [0]);
+            assert_eq!(created[1].centroid, [1.0]);
+            assert_eq!(created[1].members, [1]);
+            assert!(matches!(
+                memberships.into_changes().collect::<Vec<_>>().as_slice(),
+                [(1, Membership::Retire)]
+            ));
+        }
+    }
+}
+
+#[test]
+fn split_driver_accepts_native_batches_without_matrix_access() {
+    struct NativeBatch<'a>(&'a [[u8; 1]]);
+
+    impl<'r> Reborrow<'r> for NativeBatch<'_> {
+        type Target = &'r [[u8; 1]];
+
+        fn reborrow(&'r self) -> Self::Target {
+            self.0
+        }
+    }
+
+    struct NativeRegion<'a> {
+        inner: Region<'a>,
+        vectors: &'a [[u8; 1]],
+    }
+
+    impl RegionView<u32, u32> for NativeRegion<'_> {
+        type VectorsRef<'a> = &'a [[u8; 1]];
+        type Vectors<'a>
+            = NativeBatch<'a>
+        where
+            Self: 'a;
+
+        fn get_view(&self, list: u32) -> Option<View<'_, u32, u32>> {
+            self.inner.get_view(list)
+        }
+
+        fn get_vectors(&self, list: u32) -> Option<Self::Vectors<'_>> {
+            self.inner.get_view(list).map(|_| NativeBatch(self.vectors))
+        }
+    }
+
+    struct NativeCenters;
+
+    impl<'v> clustering::Clusterer<&'v [[u8; 1]]> for NativeCenters {
+        fn fit(&mut self, points: &'v [[u8; 1]], mut dst: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
+            for (point, center) in points.iter().zip(dst.rows_mut()) {
+                center[0] = point[0].into();
+            }
+            Ok(())
+        }
+
+        fn num_centers(&self) -> NonZeroUsize {
+            NonZeroUsize::new(2).unwrap()
+        }
+
+        fn dim(&self) -> NonZeroUsize {
+            ONE
+        }
+    }
+
+    struct OrderedAssignment;
+
+    impl<R: RegionView<u32, u32>> clustering::Assigner<u32, u32, R> for OrderedAssignment {
+        fn assign<U>(
+            &mut self,
+            region: &R,
+            update: &mut U,
+            sources: &[u32],
+            destinations: &[clustering::Target<'_, u32>],
+        ) -> ANNResult<()>
+        where
+            U: RegionUpdate<u32, u32>,
+        {
+            let view = region.get_view(sources[0]).unwrap();
+            for (destination, member) in destinations.iter().zip(view.members) {
+                update.create(destination.centroid, std::slice::from_ref(member))?;
+            }
+            update.retire(sources[0])
+        }
+    }
+
+    let mut driver = clustering::SplitAndAssign::new(NativeCenters, OrderedAssignment);
+    for offset in [0u8, 20] {
+        let sources = BTreeMap::from([(
+            1,
+            Source {
+                centroid: vec![0.0],
+                members: vec![0, 1],
+                vectors: matrix(&[[0.0], [10.0]]),
+            },
+        )]);
+        let vectors = vec![[offset], [offset + 10]];
+        let region = NativeRegion {
+            inner: Region::new(&sources),
+            vectors: &vectors,
+        };
+        let batch = region.get_vectors(1).unwrap();
+        assert!(std::ptr::eq(batch.reborrow(), vectors.as_slice()));
+        let mut memberships = PendingLists::default();
+        let mut created = Vec::new();
+        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
+        driver
+            .run::<_, _, NativeRegion<'_>, _>(
+                &region,
+                &mut update,
+                &BTreeSet::from([1]),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+        assert_eq!(created.len(), 2);
+        assert_eq!(created[0].centroid, [f32::from(offset)]);
+        assert_eq!(created[0].members, [0]);
+        assert_eq!(created[1].centroid, [f32::from(offset + 10)]);
+        assert_eq!(created[1].members, [1]);
+        assert!(matches!(
+            memberships.into_changes().collect::<Vec<_>>().as_slice(),
+            [(1, Membership::Retire)]
+        ));
+    }
 }
 
 #[test]
@@ -1749,7 +2405,7 @@ fn two_means_fits_only_the_destination_window() {
 
 #[test]
 fn regional_assignment_reports_missing_sources_before_writing() {
-    use clustering::{Assigner, Destination, RegionalNearest, Type};
+    use clustering::{Assigner, RegionalNearest, Target, Type};
 
     let sources = BTreeMap::from([
         (
@@ -1769,7 +2425,7 @@ fn regional_assignment_reports_missing_sources_before_writing() {
             },
         ),
     ]);
-    let destinations = [Destination {
+    let destinations = [Target {
         list: Type::New,
         centroid: &[0.0],
     }];

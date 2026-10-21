@@ -37,7 +37,7 @@
 //! recursively split. Initialization, search, deletion, and colocation are not
 //! implemented.
 
-mod clustering;
+pub mod clustering;
 mod index;
 pub mod partition;
 pub mod pending;

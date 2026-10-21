@@ -10,7 +10,10 @@ use std::num::NonZeroUsize;
 use diskann_utils::future::SendFuture;
 
 use super::region::{RegionUpdate, RegionView};
-use crate::{ANNResult, error::StandardError, provider::ExecutionContext, utils::VectorId};
+use crate::{
+    ANNResult, error::StandardError, flat::DistancesUnordered, provider::ExecutionContext,
+    utils::VectorId,
+};
 
 pub trait HasIds {
     type Id: VectorId;
@@ -20,6 +23,7 @@ pub trait HasIds {
 /// Centroid selection within one build operation.
 pub trait Router<T>: Send {
     type Id;
+    type Ret;
 
     fn len(&self) -> usize;
 
@@ -35,7 +39,7 @@ pub trait Router<T>: Send {
         emit: F,
     ) -> impl SendFuture<ANNResult<usize>>
     where
-        F: FnMut(&Self::Id, f32) + Send;
+        F: FnMut(&Self::Id, Self::Ret) + Send;
 }
 
 pub trait RouterAndNearest<T>: Router<T> {
@@ -63,7 +67,9 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
     where
         Self: 'a;
 
-    type Region<'a>: RegionView<Self::Id, Self::ListId>
+    type VectorsRef<'a>;
+
+    type Region<'a>: for<'b> RegionView<Self::Id, Self::ListId, VectorsRef<'b> = Self::VectorsRef<'b>>
     where
         Self: 'a;
 
@@ -100,7 +106,7 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
     fn finish(self) -> impl SendFuture<ANNResult<()>>;
 }
 
-///////////////
+//////////////
 // Strategy //
 //////////////
 
@@ -122,4 +128,29 @@ pub trait SetElements<T, C: ExecutionContext> {
         context: &C,
         elements: &[T],
     ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send;
+}
+
+////////////
+// Search //
+////////////
+
+pub trait SearchStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
+    /// [`BuildAccessor`] used to insert new points, and performs splits if necessary.
+    type Accessor: SearchAccessor<T, ListId = Self::ListId, Id = Self::Id>;
+
+    type Error: StandardError;
+
+    fn search_accessor(&'a self, context: &'a C, query: T) -> Result<Self::Accessor, Self::Error>;
+}
+
+pub trait SearchAccessor<T: Sync>: Send + Sized + HasIds {
+    type Router<'a>: Router<T, Id = Self::ListId, Ret = Self::Dist<'a>>
+    where
+        Self: 'a;
+
+    type Dist<'a>: DistancesUnordered<Id = Self::Id>
+    where
+        Self: 'a;
+
+    fn router(&self) -> Self::Router<'_>;
 }

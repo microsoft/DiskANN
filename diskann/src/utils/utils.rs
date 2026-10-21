@@ -6,6 +6,8 @@ use std::num::NonZeroUsize;
 
 /// A constant representing the number one as a `NonZeroUsize`.
 pub const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+/// A constant representing the number two as a `NonZeroUsize`.
+pub const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 /// Read exact number of POD type elements from a reader into a vector.
 pub fn read_exact_into<T, R>(reader: &mut R, count: usize) -> std::io::Result<Vec<T>>
