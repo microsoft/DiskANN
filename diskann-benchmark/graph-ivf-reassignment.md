@@ -1,5 +1,8 @@
 # Split reassignment SIMD measurements
 
+For the full 1,087,932-vector Enron 384D FP32 follow-up, see
+[Enron measurements](graph-ivf-enron.md). The results below use synthetic data.
+
 Measured on 2026-10-21 against stack layer 2, commit
 `0735fc3db269986613da9693c3ec269034ebd9b9` ([PR #1503](https://github.com/microsoft/DiskANN/pull/1503)).
 

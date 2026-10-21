@@ -1,0 +1,2431 @@
+{
+  "date": "2026-10-21",
+  "baseline_commit": "0735fc3db269986613da9693c3ec269034ebd9b9",
+  "optimized_commit": "dfee4c9f8e241f14ebc13234742f1727753dba64",
+  "baseline_exe_sha256": "e767c45803c202cd027f84c53afef138173d62eec34ffb03fda8cb3f7a913777",
+  "optimized_exe_sha256": "e63adbab572443bface20fb944e34e577523baaa5eb65d3e25ff758bf5f81c29",
+  "dataset": {
+    "vectors": 1087932,
+    "queries": 1000,
+    "dimensions": 384,
+    "stored_and_computed_type": "fp32",
+    "source_type": "fp16",
+    "transformation": "Exact FP16-to-FP32 promotion, original row order, no normalization or sampling",
+    "source_base_sha256": "18361999ecce0fbf3827b3159706bb3ba754d58b31cc427edd931c425e7a850e",
+    "source_queries_sha256": "3fe1e52b7b9a33edb060d5f5fcf8db02682eb2f7a91f6241bb7f9c02a2623f04",
+    "base_sha256": "fe0d43cca3e531730c75f54c34cf1e36aa99c53a5ac1d5dc379d62e31b92abc1",
+    "queries_sha256": "721915bf01887fefa0f0e8cf4e81c8eb7c396ac50828cb2fa6ee42c0d18e8e92",
+    "groundtruth_sha256": "efd96501319005f1b69ac6a8a4bf177945004d53212e844848057b5b36828da6",
+    "groundtruth": "Fresh exhaustive FP32 squared L2 with diskann-tools compute_groundtruth, k=10; no filters; all 1000 queries",
+    "independent_validation": {
+      "f64_exhaustive_queries": [
+        0,
+        143,
+        285,
+        428,
+        571,
+        714,
+        857,
+        999
+      ],
+      "top10_ids_equal": true,
+      "maximum_distance_error": 7.617114761160337e-8
+    }
+  },
+  "measurement": {
+    "cpu": "AMD Ryzen AI Max+ 395",
+    "rust": "1.97.1",
+    "target": "x86-64-v3",
+    "threads": 1,
+    "affinity_mask": 16,
+    "build_rounds": 4,
+    "build_order": [
+      "AB",
+      "BA",
+      "AB",
+      "BA"
+    ],
+    "build_repetitions_per_process_per_batch": 5,
+    "discard_first_build_per_process_per_batch": true,
+    "retained_build_samples_per_version_per_batch": 16,
+    "search_rounds": 1,
+    "search_builds_per_batch": 1,
+    "search_passes_per_probe": 1,
+    "search_warmup_passes": 0,
+    "search_timing_usable": false,
+    "search_timing_reason": "Very large elapsed-time outliers: some 1000-query passes lasted over 3000 seconds despite median query latency near 42-53 ms. Cause was not established; timing is not a valid throughput comparison.",
+    "notes": "Full-corpus results; no parameter tuning from recall. Build medians are noisy observations, not a performance gate. Benchmark executables were saved before later phase-telemetry changes."
+  },
+  "build_summary": [
+    {
+      "batch": 1024,
+      "samples": 16,
+      "checked": 20,
+      "before": 15.232943800000001,
+      "after": 15.516376699999999,
+      "reduction_pct": -1.8606574259139474,
+      "ivf_reduction_pct": -2.000582153977226,
+      "rounds": [
+        [
+          13.5463351,
+          13.6189792
+        ],
+        [
+          17.387628550000002,
+          14.33192965
+        ],
+        [
+          15.556601749999999,
+          16.06620735
+        ],
+        [
+          15.739514400000001,
+          24.61533225
+        ]
+      ],
+      "stats": {
+        "empty_lists": 0,
+        "inserted": 1087932,
+        "lists": 782,
+        "max_list_size": 2048,
+        "splits": 766
+      }
+    },
+    {
+      "batch": 16384,
+      "samples": 16,
+      "checked": 20,
+      "before": 18.03315475,
+      "after": 16.157975200000003,
+      "reduction_pct": 10.39851083183323,
+      "ivf_reduction_pct": 10.418267240285461,
+      "rounds": [
+        [
+          17.24589505,
+          15.230544049999999
+        ],
+        [
+          18.35395985,
+          15.2987248
+        ],
+        [
+          17.17986765,
+          17.17707615
+        ],
+        [
+          20.29042115,
+          17.242823950000002
+        ]
+      ],
+      "stats": {
+        "empty_lists": 0,
+        "inserted": 1087932,
+        "lists": 787,
+        "max_list_size": 2048,
+        "splits": 771
+      }
+    }
+  ],
+  "search_summary": [
+    {
+      "batch": 1024,
+      "probe": 4,
+      "queries": 1000,
+      "recall": 0.3575,
+      "scanned": 5972.007,
+      "lists": 4,
+      "centroid_comparisons": 480.78,
+      "returned": 10,
+      "before_seconds": 11.0778312,
+      "after_seconds": 16.5590967,
+      "before_qps": 90.27037711136093,
+      "after_qps": 60.38976751672692,
+      "before_latency": {
+        "mean": 11077138.5,
+        "median": 9861500,
+        "minimum": 3012600,
+        "p90": 16453800,
+        "p99": 22787600
+      },
+      "after_latency": {
+        "mean": 16558245.5,
+        "median": 11627600,
+        "minimum": 2775700,
+        "p90": 30113200,
+        "p99": 76603200
+      }
+    },
+    {
+      "batch": 1024,
+      "probe": 16,
+      "queries": 1000,
+      "recall": 0.5712,
+      "scanned": 23883.467,
+      "lists": 16,
+      "centroid_comparisons": 480.78,
+      "returned": 10,
+      "before_seconds": 3777.2914179,
+      "after_seconds": 60.0030181,
+      "before_qps": 0.26473996559046375,
+      "after_qps": 16.665828347724396,
+      "before_latency": {
+        "mean": 3777290706.7,
+        "median": 41684000,
+        "minimum": 24899200,
+        "p90": 73249300,
+        "p99": 434160600
+      },
+      "after_latency": {
+        "mean": 60002205.6,
+        "median": 53071800,
+        "minimum": 13730100,
+        "p90": 97752200,
+        "p99": 205002000
+      }
+    },
+    {
+      "batch": 1024,
+      "probe": 64,
+      "queries": 1000,
+      "recall": 0.7843,
+      "scanned": 94864.022,
+      "lists": 64,
+      "centroid_comparisons": 480.78,
+      "returned": 10,
+      "before_seconds": 208.2442973,
+      "after_seconds": 387.2293546,
+      "before_qps": 4.802052267291547,
+      "after_qps": 2.582448846196021,
+      "before_latency": {
+        "mean": 208243473.3,
+        "median": 191582500,
+        "minimum": 121111900,
+        "p90": 286434500,
+        "p99": 540155000
+      },
+      "after_latency": {
+        "mean": 387228677,
+        "median": 135986700,
+        "minimum": 48452500,
+        "p90": 209559900,
+        "p99": 309862700
+      }
+    },
+    {
+      "batch": 16384,
+      "probe": 4,
+      "queries": 1000,
+      "recall": 0.366,
+      "scanned": 5889.01,
+      "lists": 4,
+      "centroid_comparisons": 478.66,
+      "returned": 10,
+      "before_seconds": 10.9041734,
+      "after_seconds": 4.0895618,
+      "before_qps": 91.70800603739482,
+      "after_qps": 244.52497575657125,
+      "before_latency": {
+        "mean": 10903637.6,
+        "median": 10742150,
+        "minimum": 4883100,
+        "p90": 15210900,
+        "p99": 18663300
+      },
+      "after_latency": {
+        "mean": 4089426.1,
+        "median": 3806900,
+        "minimum": 1710500,
+        "p90": 5727300,
+        "p99": 7045700
+      }
+    },
+    {
+      "batch": 16384,
+      "probe": 16,
+      "queries": 1000,
+      "recall": 0.5737,
+      "scanned": 23696.902,
+      "lists": 16,
+      "centroid_comparisons": 478.66,
+      "returned": 10,
+      "before_seconds": 3227.59505,
+      "after_seconds": 14.9535292,
+      "before_qps": 0.3098282109461037,
+      "after_qps": 66.87384540634059,
+      "before_latency": {
+        "mean": 3227594226.2,
+        "median": 52638700,
+        "minimum": 12456600,
+        "p90": 188722000,
+        "p99": 428935000
+      },
+      "after_latency": {
+        "mean": 14953111.5,
+        "median": 13762200,
+        "minimum": 10425300,
+        "p90": 19979900,
+        "p99": 26142100
+      }
+    },
+    {
+      "batch": 16384,
+      "probe": 64,
+      "queries": 1000,
+      "recall": 0.787,
+      "scanned": 94265.834,
+      "lists": 64,
+      "centroid_comparisons": 478.66,
+      "returned": 10,
+      "before_seconds": 203.2028538,
+      "after_seconds": 2013.3409856,
+      "before_qps": 4.92119072788337,
+      "after_qps": 0.4966868539170914,
+      "before_latency": {
+        "mean": 203202060.7,
+        "median": 167854500,
+        "minimum": 80713900,
+        "p90": 331764800,
+        "p99": 672887500
+      },
+      "after_latency": {
+        "mean": 2013340258.1,
+        "median": 74275950,
+        "minimum": 46620900,
+        "p90": 135229900,
+        "p99": 633982500
+      }
+    }
+  ],
+  "build_runs": {
+    "before-0": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0202224,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.3030557,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 14.3232787,
+              "vectors_per_second": 75955.51429157068
+            },
+            {
+              "centroid_graph_seconds": 0.0183685,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.5587393,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 766,
+              "total_seconds": 14.5771085,
+              "vectors_per_second": 74632.90816556658
+            },
+            {
+              "centroid_graph_seconds": 0.0211381,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 13.5055658,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 766,
+              "total_seconds": 13.5267047,
+              "vectors_per_second": 80428.4579377267
+            },
+            {
+              "centroid_graph_seconds": 0.0176518,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 13.5483131,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 766,
+              "total_seconds": 13.5659655,
+              "vectors_per_second": 80195.69266927592
+            },
+            {
+              "centroid_graph_seconds": 0.017817,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 13.2639024,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 766,
+              "total_seconds": 13.28172,
+              "vectors_per_second": 81911.98127953308
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0200601,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.6895968,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 14.7096574,
+              "vectors_per_second": 73960.39013118009
+            },
+            {
+              "centroid_graph_seconds": 0.0226643,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.6431161,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 771,
+              "total_seconds": 16.665781,
+              "vectors_per_second": 65279.388946728635
+            },
+            {
+              "centroid_graph_seconds": 0.0178787,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 17.8081299,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 771,
+              "total_seconds": 17.8260091,
+              "vectors_per_second": 61030.59826217636
+            },
+            {
+              "centroid_graph_seconds": 0.0233715,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.4177831,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 771,
+              "total_seconds": 16.4411553,
+              "vectors_per_second": 66171.26230782579
+            },
+            {
+              "centroid_graph_seconds": 0.0240344,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 18.4057781,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 771,
+              "total_seconds": 18.4298133,
+              "vectors_per_second": 59031.0917582654
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ],
+    "after-0": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0205747,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.149717,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 16.1702922,
+              "vectors_per_second": 67279.67476060822
+            },
+            {
+              "centroid_graph_seconds": 0.018822,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.0194008,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 766,
+              "total_seconds": 14.0382237,
+              "vectors_per_second": 77497.83898941573
+            },
+            {
+              "centroid_graph_seconds": 0.0186881,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 12.9559453,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 766,
+              "total_seconds": 12.9746339,
+              "vectors_per_second": 83850.68961367765
+            },
+            {
+              "centroid_graph_seconds": 0.0185091,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 13.1812249,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 766,
+              "total_seconds": 13.1997347,
+              "vectors_per_second": 82420.74744123455
+            },
+            {
+              "centroid_graph_seconds": 0.0213106,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.8146368,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 766,
+              "total_seconds": 15.8359478,
+              "vectors_per_second": 68700.15067869825
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0235421,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.8513806,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 16.8749233,
+              "vectors_per_second": 64470.33747406722
+            },
+            {
+              "centroid_graph_seconds": 0.0221488,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.2780755,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 771,
+              "total_seconds": 16.300225,
+              "vectors_per_second": 66743.37317429666
+            },
+            {
+              "centroid_graph_seconds": 0.0179261,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.5974132,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 771,
+              "total_seconds": 15.6153397,
+              "vectors_per_second": 69670.72256519659
+            },
+            {
+              "centroid_graph_seconds": 0.0179037,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.8278442,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 771,
+              "total_seconds": 14.8457484,
+              "vectors_per_second": 73282.39511320292
+            },
+            {
+              "centroid_graph_seconds": 0.0171389,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.2817763,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 771,
+              "total_seconds": 14.2989156,
+              "vectors_per_second": 76084.93052438185
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ],
+    "before-1": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0234067,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.8647265,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 14.888134,
+              "vectors_per_second": 73073.76465042563
+            },
+            {
+              "centroid_graph_seconds": 0.018342,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.2237259,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 766,
+              "total_seconds": 15.2420686,
+              "vectors_per_second": 71376.92583275738
+            },
+            {
+              "centroid_graph_seconds": 0.0241103,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.5861147,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 766,
+              "total_seconds": 15.6102256,
+              "vectors_per_second": 69693.5475423238
+            },
+            {
+              "centroid_graph_seconds": 0.0342039,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 19.1308269,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 766,
+              "total_seconds": 19.1650315,
+              "vectors_per_second": 56766.512489165485
+            },
+            {
+              "centroid_graph_seconds": 0.0305404,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 21.1569197,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 766,
+              "total_seconds": 21.1874608,
+              "vectors_per_second": 51347.91801007131
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.02888,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 23.5415253,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 23.570406,
+              "vectors_per_second": 46156.69327036624
+            },
+            {
+              "centroid_graph_seconds": 0.0275627,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 21.2564478,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 771,
+              "total_seconds": 21.2840112,
+              "vectors_per_second": 51114.989076871
+            },
+            {
+              "centroid_graph_seconds": 0.0177597,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 21.0476981,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 771,
+              "total_seconds": 21.0654585,
+              "vectors_per_second": 51645.30361397071
+            },
+            {
+              "centroid_graph_seconds": 0.0184247,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.6240358,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 771,
+              "total_seconds": 15.6424612,
+              "vectors_per_second": 69549.92479060777
+            },
+            {
+              "centroid_graph_seconds": 0.0172934,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.40514,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 771,
+              "total_seconds": 15.4224341,
+              "vectors_per_second": 70542.17206867495
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ],
+    "after-1": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0182118,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 13.8179847,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 13.836197,
+              "vectors_per_second": 78629.40951187671
+            },
+            {
+              "centroid_graph_seconds": 0.0209836,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.1898681,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 766,
+              "total_seconds": 15.2108522,
+              "vectors_per_second": 71523.40879362433
+            },
+            {
+              "centroid_graph_seconds": 0.0177521,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.5512787,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 766,
+              "total_seconds": 14.5690312,
+              "vectors_per_second": 74674.28582348015
+            },
+            {
+              "centroid_graph_seconds": 0.0191638,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.075664,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 766,
+              "total_seconds": 14.0948281,
+              "vectors_per_second": 77186.61003038412
+            },
+            {
+              "centroid_graph_seconds": 0.019035,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 13.653137300000001,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 766,
+              "total_seconds": 13.6721726,
+              "vectors_per_second": 79572.72277267769
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0178765,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.4427802,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 15.4606573,
+              "vectors_per_second": 70367.7714918369
+            },
+            {
+              "centroid_graph_seconds": 0.0181671,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.9582916,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 771,
+              "total_seconds": 14.9764592,
+              "vectors_per_second": 72642.80464904547
+            },
+            {
+              "centroid_graph_seconds": 0.01863,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.6023599,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 771,
+              "total_seconds": 15.6209904,
+              "vectors_per_second": 69645.5200433386
+            },
+            {
+              "centroid_graph_seconds": 0.0176349,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.0685918,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 771,
+              "total_seconds": 16.0862273,
+              "vectors_per_second": 67631.27113092577
+            },
+            {
+              "centroid_graph_seconds": 0.0174705,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.6573307,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 771,
+              "total_seconds": 14.6748017,
+              "vectors_per_second": 74136.06140926592
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ],
+    "before-2": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0234059,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.8353391,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 14.8587455,
+              "vectors_per_second": 73218.2942362126
+            },
+            {
+              "centroid_graph_seconds": 0.0193778,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.4090621,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 766,
+              "total_seconds": 14.4284406,
+              "vectors_per_second": 75401.91141653935
+            },
+            {
+              "centroid_graph_seconds": 0.0182979,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.175007,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 766,
+              "total_seconds": 14.1933054,
+              "vectors_per_second": 76651.06677687637
+            },
+            {
+              "centroid_graph_seconds": 0.022861,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.6619009,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 766,
+              "total_seconds": 16.6847629,
+              "vectors_per_second": 65205.12197389392
+            },
+            {
+              "centroid_graph_seconds": 0.0360343,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 21.9738374,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 766,
+              "total_seconds": 22.0098725,
+              "vectors_per_second": 49429.27315912439
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0178606,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 18.7213136,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 18.7391746,
+              "vectors_per_second": 58056.5592253994
+            },
+            {
+              "centroid_graph_seconds": 0.0178575,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 18.2224423,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 771,
+              "total_seconds": 18.2403004,
+              "vectors_per_second": 59644.41243522503
+            },
+            {
+              "centroid_graph_seconds": 0.0184687,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.6285769,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 771,
+              "total_seconds": 16.6470462,
+              "vectors_per_second": 65352.85521103438
+            },
+            {
+              "centroid_graph_seconds": 0.0232248,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 17.6894637,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 771,
+              "total_seconds": 17.7126891,
+              "vectors_per_second": 61421.052097617416
+            },
+            {
+              "centroid_graph_seconds": 0.0178529,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.5808948,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 771,
+              "total_seconds": 16.5987484,
+              "vectors_per_second": 65543.01407448287
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ],
+    "after-2": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0246316,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.3221021,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 16.3467343,
+              "vectors_per_second": 66553.47667821334
+            },
+            {
+              "centroid_graph_seconds": 0.0184361,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.2920767,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 766,
+              "total_seconds": 16.3105135,
+              "vectors_per_second": 66701.27215798572
+            },
+            {
+              "centroid_graph_seconds": 0.0181009,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.8037997,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 766,
+              "total_seconds": 15.8219012,
+              "vectors_per_second": 68761.14230823284
+            },
+            {
+              "centroid_graph_seconds": 0.0233025,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 13.8877415,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 766,
+              "total_seconds": 13.9110446,
+              "vectors_per_second": 78206.3483571895
+            },
+            {
+              "centroid_graph_seconds": 0.0384528,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.9675403,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 766,
+              "total_seconds": 17.0059938,
+              "vectors_per_second": 63973.44446873784
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0180347,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 20.5105564,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 20.5285916,
+              "vectors_per_second": 52995.939575318946
+            },
+            {
+              "centroid_graph_seconds": 0.0205293,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.0187335,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 771,
+              "total_seconds": 16.0392635,
+              "vectors_per_second": 67829.29901987083
+            },
+            {
+              "centroid_graph_seconds": 0.0197614,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 22.0251447,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 771,
+              "total_seconds": 22.0449068,
+              "vectors_per_second": 49350.71896062632
+            },
+            {
+              "centroid_graph_seconds": 0.0182599,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 17.8702517,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 771,
+              "total_seconds": 17.8885122,
+              "vectors_per_second": 60817.35517389758
+            },
+            {
+              "centroid_graph_seconds": 0.0187447,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.4468948,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 771,
+              "total_seconds": 16.4656401,
+              "vectors_per_second": 66072.86406071756
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ],
+    "before-3": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.019203,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.5007896,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 16.5199929,
+              "vectors_per_second": 65855.47624539235
+            },
+            {
+              "centroid_graph_seconds": 0.0244533,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.7204516,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 766,
+              "total_seconds": 16.7449057,
+              "vectors_per_second": 64970.924261460605
+            },
+            {
+              "centroid_graph_seconds": 0.0187699,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.2364394,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 766,
+              "total_seconds": 16.2552098,
+              "vectors_per_second": 66928.20415027802
+            },
+            {
+              "centroid_graph_seconds": 0.0187277,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 14.9590432,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 766,
+              "total_seconds": 14.9777715,
+              "vectors_per_second": 72636.4399403476
+            },
+            {
+              "centroid_graph_seconds": 0.0617686,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 15.1620495,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 766,
+              "total_seconds": 15.223819,
+              "vectors_per_second": 71462.48914283597
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0201774,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 20.2072012,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 20.2273792,
+              "vectors_per_second": 53785.11913199313
+            },
+            {
+              "centroid_graph_seconds": 0.0209705,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 19.9073331,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 771,
+              "total_seconds": 19.9283042,
+              "vectors_per_second": 54592.30193806456
+            },
+            {
+              "centroid_graph_seconds": 0.0207426,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 20.6317949,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 771,
+              "total_seconds": 20.6525381,
+              "vectors_per_second": 52677.88369314278
+            },
+            {
+              "centroid_graph_seconds": 0.0192712,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 21.7713045,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 771,
+              "total_seconds": 21.7905764,
+              "vectors_per_second": 49926.71969888782
+            },
+            {
+              "centroid_graph_seconds": 0.0264643,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 18.5511842,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 771,
+              "total_seconds": 18.5776493,
+              "vectors_per_second": 58561.33800523406
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ],
+    "after-3": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0339372,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 19.2416952,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 19.2756332,
+              "vectors_per_second": 56440.79178680366
+            },
+            {
+              "centroid_graph_seconds": 0.0283407,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 22.4490617,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 766,
+              "total_seconds": 22.4774033,
+              "vectors_per_second": 48401.14249318114
+            },
+            {
+              "centroid_graph_seconds": 0.02692,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 24.654196,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 766,
+              "total_seconds": 24.6811165,
+              "vectors_per_second": 44079.529384337206
+            },
+            {
+              "centroid_graph_seconds": 0.0256698,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 24.5238774,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 766,
+              "total_seconds": 24.549548,
+              "vectors_per_second": 44315.76499901342
+            },
+            {
+              "centroid_graph_seconds": 0.0317291,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 24.67463,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 766,
+              "total_seconds": 24.70636,
+              "vectors_per_second": 44034.49152364007
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 5,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": null,
+              "kind": "files",
+              "queries": null
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": null
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0249202,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 20.9239336,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 20.9488543,
+              "vectors_per_second": 51932.76846648363
+            },
+            {
+              "centroid_graph_seconds": 0.0248739,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 19.8495518,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 1,
+              "splits": 771,
+              "total_seconds": 19.8744262,
+              "vectors_per_second": 54740.2973576163
+            },
+            {
+              "centroid_graph_seconds": 0.0246757,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 18.2186125,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 2,
+              "splits": 771,
+              "total_seconds": 18.2432892,
+              "vectors_per_second": 59634.64088482465
+            },
+            {
+              "centroid_graph_seconds": 0.0215035,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.2082191,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 3,
+              "splits": 771,
+              "total_seconds": 16.2297231,
+              "vectors_per_second": 67033.30631685269
+            },
+            {
+              "centroid_graph_seconds": 0.0190305,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 16.2233276,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 4,
+              "splits": 771,
+              "total_seconds": 16.2423587,
+              "vectors_per_second": 66981.1583461705
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ]
+  },
+  "search_runs": {
+    "before": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 1,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": "target/enron-comparison/data\\enron-groundtruth-l2-k10.bin",
+              "kind": "files",
+              "queries": "target/enron-comparison/data\\enron-queries-f32.bin"
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": {
+              "k": 10,
+              "l_search": 128,
+              "nprobe": [
+                4,
+                16,
+                64
+              ],
+              "repetitions": 1,
+              "warmup_repetitions": 0
+            }
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.057149,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 61.5820611,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 61.6392109,
+              "vectors_per_second": 17649.998825666342
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 4,
+              "k": 10,
+              "latency_ns": {
+                "mean": 11077138.5,
+                "median": 9861500,
+                "minimum": 3012600,
+                "p90": 16453800,
+                "p99": 22787600
+              },
+              "mean_centroid_comparisons": 480.78,
+              "mean_lists_scanned": 4,
+              "mean_points_scanned": 5972.007,
+              "mean_results_returned": 10,
+              "qps": 90.27037711136093,
+              "queries": 1000,
+              "recall_at_k": 0.3575,
+              "repetition": 0,
+              "requested_nprobe": 4,
+              "scanned_fraction": 0.005489320104565359,
+              "total_seconds": 11.0778312
+            },
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 16,
+              "k": 10,
+              "latency_ns": {
+                "mean": 3777290706.7,
+                "median": 41684000,
+                "minimum": 24899200,
+                "p90": 73249300,
+                "p99": 434160600
+              },
+              "mean_centroid_comparisons": 480.78,
+              "mean_lists_scanned": 16,
+              "mean_points_scanned": 23883.467,
+              "mean_results_returned": 10,
+              "qps": 0.26473996559046375,
+              "queries": 1000,
+              "recall_at_k": 0.5712,
+              "repetition": 0,
+              "requested_nprobe": 16,
+              "scanned_fraction": 0.021953088060650848,
+              "total_seconds": 3777.2914179
+            },
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 64,
+              "k": 10,
+              "latency_ns": {
+                "mean": 208243473.3,
+                "median": 191582500,
+                "minimum": 121111900,
+                "p90": 286434500,
+                "p99": 540155000
+              },
+              "mean_centroid_comparisons": 480.78,
+              "mean_lists_scanned": 64,
+              "mean_points_scanned": 94864.022,
+              "mean_results_returned": 10,
+              "qps": 4.802052267291547,
+              "queries": 1000,
+              "recall_at_k": 0.7843,
+              "repetition": 0,
+              "requested_nprobe": 64,
+              "scanned_fraction": 0.08719664648158157,
+              "total_seconds": 208.2442973
+            }
+          ],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 1,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": "target/enron-comparison/data\\enron-groundtruth-l2-k10.bin",
+              "kind": "files",
+              "queries": "target/enron-comparison/data\\enron-queries-f32.bin"
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": {
+              "k": 10,
+              "l_search": 128,
+              "nprobe": [
+                4,
+                16,
+                64
+              ],
+              "repetitions": 1,
+              "warmup_repetitions": 0
+            }
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0648721,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 58.0243287,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 58.0892017,
+              "vectors_per_second": 18728.6443635186
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 4,
+              "k": 10,
+              "latency_ns": {
+                "mean": 10903637.6,
+                "median": 10742150,
+                "minimum": 4883100,
+                "p90": 15210900,
+                "p99": 18663300
+              },
+              "mean_centroid_comparisons": 478.66,
+              "mean_lists_scanned": 4,
+              "mean_points_scanned": 5889.01,
+              "mean_results_returned": 10,
+              "qps": 91.70800603739482,
+              "queries": 1000,
+              "recall_at_k": 0.366,
+              "repetition": 0,
+              "requested_nprobe": 4,
+              "scanned_fraction": 0.005413031329163955,
+              "total_seconds": 10.9041734
+            },
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 16,
+              "k": 10,
+              "latency_ns": {
+                "mean": 3227594226.2,
+                "median": 52638700,
+                "minimum": 12456600,
+                "p90": 188722000,
+                "p99": 428935000
+              },
+              "mean_centroid_comparisons": 478.66,
+              "mean_lists_scanned": 16,
+              "mean_points_scanned": 23696.902,
+              "mean_results_returned": 10,
+              "qps": 0.3098282109461037,
+              "queries": 1000,
+              "recall_at_k": 0.5737,
+              "repetition": 0,
+              "requested_nprobe": 16,
+              "scanned_fraction": 0.021781602158958465,
+              "total_seconds": 3227.59505
+            },
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 64,
+              "k": 10,
+              "latency_ns": {
+                "mean": 203202060.7,
+                "median": 167854500,
+                "minimum": 80713900,
+                "p90": 331764800,
+                "p99": 672887500
+              },
+              "mean_centroid_comparisons": 478.66,
+              "mean_lists_scanned": 64,
+              "mean_points_scanned": 94265.834,
+              "mean_results_returned": 10,
+              "qps": 4.92119072788337,
+              "queries": 1000,
+              "recall_at_k": 0.787,
+              "repetition": 0,
+              "requested_nprobe": 64,
+              "scanned_fraction": 0.08664680696955325,
+              "total_seconds": 203.2028538
+            }
+          ],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ],
+    "after": [
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 1024,
+              "initial_centroids": 16,
+              "repetitions": 1,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": "target/enron-comparison/data\\enron-groundtruth-l2-k10.bin",
+              "kind": "files",
+              "queries": "target/enron-comparison/data\\enron-queries-f32.bin"
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": {
+              "k": 10,
+              "l_search": 128,
+              "nprobe": [
+                4,
+                16,
+                64
+              ],
+              "repetitions": 1,
+              "warmup_repetitions": 0
+            }
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0298553,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 65.7392451,
+              "lists": 782,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 766,
+              "total_seconds": 65.7691012,
+              "vectors_per_second": 16541.688728445024
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 4,
+              "k": 10,
+              "latency_ns": {
+                "mean": 16558245.5,
+                "median": 11627600,
+                "minimum": 2775700,
+                "p90": 30113200,
+                "p99": 76603200
+              },
+              "mean_centroid_comparisons": 480.78,
+              "mean_lists_scanned": 4,
+              "mean_points_scanned": 5972.007,
+              "mean_results_returned": 10,
+              "qps": 60.38976751672692,
+              "queries": 1000,
+              "recall_at_k": 0.3575,
+              "repetition": 0,
+              "requested_nprobe": 4,
+              "scanned_fraction": 0.005489320104565359,
+              "total_seconds": 16.5590967
+            },
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 16,
+              "k": 10,
+              "latency_ns": {
+                "mean": 60002205.6,
+                "median": 53071800,
+                "minimum": 13730100,
+                "p90": 97752200,
+                "p99": 205002000
+              },
+              "mean_centroid_comparisons": 480.78,
+              "mean_lists_scanned": 16,
+              "mean_points_scanned": 23883.467,
+              "mean_results_returned": 10,
+              "qps": 16.665828347724396,
+              "queries": 1000,
+              "recall_at_k": 0.5712,
+              "repetition": 0,
+              "requested_nprobe": 16,
+              "scanned_fraction": 0.021953088060650848,
+              "total_seconds": 60.0030181
+            },
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 64,
+              "k": 10,
+              "latency_ns": {
+                "mean": 387228677,
+                "median": 135986700,
+                "minimum": 48452500,
+                "p90": 209559900,
+                "p99": 309862700
+              },
+              "mean_centroid_comparisons": 480.78,
+              "mean_lists_scanned": 64,
+              "mean_points_scanned": 94864.022,
+              "mean_results_returned": 10,
+              "qps": 2.582448846196021,
+              "queries": 1000,
+              "recall_at_k": 0.7843,
+              "repetition": 0,
+              "requested_nprobe": 64,
+              "scanned_fraction": 0.08719664648158157,
+              "total_seconds": 387.2293546
+            }
+          ],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      },
+      {
+        "input": {
+          "content": {
+            "build": {
+              "batch_size": 16384,
+              "initial_centroids": 16,
+              "repetitions": 1,
+              "seed": 7,
+              "split_threshold": 2048,
+              "two_means_iterations": 5
+            },
+            "dataset": {
+              "data": "target/enron-comparison/data\\enron-base-f32.bin",
+              "groundtruth": "target/enron-comparison/data\\enron-groundtruth-l2-k10.bin",
+              "kind": "files",
+              "queries": "target/enron-comparison/data\\enron-queries-f32.bin"
+            },
+            "graph": {
+              "l_build": 64,
+              "max_degree": 16
+            },
+            "search": {
+              "k": 10,
+              "l_search": 128,
+              "nprobe": [
+                4,
+                16,
+                64
+              ],
+              "repetitions": 1,
+              "warmup_repetitions": 0
+            }
+          },
+          "type": "graph-ivf-build"
+        },
+        "results": {
+          "build_routing": "exhaustive-centroids",
+          "builds": [
+            {
+              "centroid_graph_seconds": 0.0249958,
+              "empty_lists": 0,
+              "inserted": 1087932,
+              "ivf_seconds": 18.7623152,
+              "lists": 787,
+              "max_list_size": 2048,
+              "repetition": 0,
+              "splits": 771,
+              "total_seconds": 18.7873118,
+              "vectors_per_second": 57907.805628690316
+            }
+          ],
+          "dimensions": 384,
+          "distance": "squared_l2",
+          "implementation": "diskann::ivf + benchmark-local static centroid-graph adapter",
+          "provider": "in-memory-fp32",
+          "search_routing": "diskann-centroid-graph",
+          "searches": [
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 4,
+              "k": 10,
+              "latency_ns": {
+                "mean": 4089426.1,
+                "median": 3806900,
+                "minimum": 1710500,
+                "p90": 5727300,
+                "p99": 7045700
+              },
+              "mean_centroid_comparisons": 478.66,
+              "mean_lists_scanned": 4,
+              "mean_points_scanned": 5889.01,
+              "mean_results_returned": 10,
+              "qps": 244.52497575657125,
+              "queries": 1000,
+              "recall_at_k": 0.366,
+              "repetition": 0,
+              "requested_nprobe": 4,
+              "scanned_fraction": 0.005413031329163955,
+              "total_seconds": 4.0895618
+            },
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 16,
+              "k": 10,
+              "latency_ns": {
+                "mean": 14953111.5,
+                "median": 13762200,
+                "minimum": 10425300,
+                "p90": 19979900,
+                "p99": 26142100
+              },
+              "mean_centroid_comparisons": 478.66,
+              "mean_lists_scanned": 16,
+              "mean_points_scanned": 23696.902,
+              "mean_results_returned": 10,
+              "qps": 66.87384540634059,
+              "queries": 1000,
+              "recall_at_k": 0.5737,
+              "repetition": 0,
+              "requested_nprobe": 16,
+              "scanned_fraction": 0.021781602158958465,
+              "total_seconds": 14.9535292
+            },
+            {
+              "build_repetition": 0,
+              "effective_nprobe": 64,
+              "k": 10,
+              "latency_ns": {
+                "mean": 2013340258.1,
+                "median": 74275950,
+                "minimum": 46620900,
+                "p90": 135229900,
+                "p99": 633982500
+              },
+              "mean_centroid_comparisons": 478.66,
+              "mean_lists_scanned": 64,
+              "mean_points_scanned": 94265.834,
+              "mean_results_returned": 10,
+              "qps": 0.4966868539170914,
+              "queries": 1000,
+              "recall_at_k": 0.787,
+              "repetition": 0,
+              "requested_nprobe": 64,
+              "scanned_fraction": 0.08664680696955325,
+              "total_seconds": 2013.3409856
+            }
+          ],
+          "threads": 1,
+          "vectors": 1087932
+        }
+      }
+    ]
+  }
+}

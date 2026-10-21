@@ -1,0 +1,51 @@
+{
+  "jobs": [
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "files",
+          "data": "enron-base-f32.bin"
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 1024,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 5
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": null
+      }
+    },
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "files",
+          "data": "enron-base-f32.bin"
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 16384,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 5
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": null
+      }
+    }
+  ],
+  "search_directories": [
+    "target/enron-comparison/data"
+  ]
+}

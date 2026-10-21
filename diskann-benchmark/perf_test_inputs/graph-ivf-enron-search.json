@@ -1,0 +1,75 @@
+{
+  "jobs": [
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "files",
+          "data": "enron-base-f32.bin",
+          "queries": "enron-queries-f32.bin",
+          "groundtruth": "enron-groundtruth-l2-k10.bin"
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 1024,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 1
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": {
+          "k": 10,
+          "nprobe": [
+            4,
+            16,
+            64
+          ],
+          "l_search": 128,
+          "warmup_repetitions": 0,
+          "repetitions": 1
+        }
+      }
+    },
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "files",
+          "data": "enron-base-f32.bin",
+          "queries": "enron-queries-f32.bin",
+          "groundtruth": "enron-groundtruth-l2-k10.bin"
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 16384,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 1
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": {
+          "k": 10,
+          "nprobe": [
+            4,
+            16,
+            64
+          ],
+          "l_search": 128,
+          "warmup_repetitions": 0,
+          "repetitions": 1
+        }
+      }
+    }
+  ],
+  "search_directories": [
+    "target/enron-comparison/data"
+  ]
+}
