@@ -9,6 +9,12 @@
 #[derive(Debug, Clone, Copy)]
 pub struct FullPrecision;
 
+/// Operates in full precision and prefetches predicate data before neighbor filtering.
+///
+/// This strategy is intended for predicates that expose a nonzero prefetch lookahead.
+#[derive(Debug, Clone, Copy)]
+pub struct PrefetchFullPrecision;
+
 /// Operates entirely in the quantized space
 ///
 /// All indexing and search operations use quantized vectors.
