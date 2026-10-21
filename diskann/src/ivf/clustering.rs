@@ -61,6 +61,20 @@ fn fit_two_means<I>(
     rng: &mut StdRng,
     sums: &mut [f64],
 ) -> ANNResult<()> {
+    fit_two_means_with(points, centers, dim, iterations, rng, sums, nearest_two)
+}
+
+// A compile-time selector lets tests compare the original two-distance path
+// without duplicating Lloyd's state transitions or introducing dynamic dispatch.
+fn fit_two_means_with<I>(
+    points: &[PointRef<'_, I>],
+    centers: &mut [f32],
+    dim: usize,
+    iterations: usize,
+    rng: &mut StdRng,
+    sums: &mut [f64],
+    select: impl Fn(&[f32], &[f32], usize) -> usize,
+) -> ANNResult<()> {
     if points.len() < 2 {
         return Err(ANNError::message("an IVF split needs at least two points"));
     }
@@ -73,7 +87,7 @@ fn fit_two_means<I>(
         sums.fill(0.0);
         let mut counts = [0; 2];
         for point in points {
-            let to = nearest(point.vector, centers, dim);
+            let to = select(point.vector, centers, dim);
             counts[to] += 1;
             for (sum, &value) in sums[to * dim..(to + 1) * dim].iter_mut().zip(point.vector) {
                 // A finite mean must not overflow while accumulating its inputs.
@@ -95,6 +109,12 @@ fn fit_two_means<I>(
     Ok(())
 }
 
+#[inline]
+fn nearest_two(point: &[f32], centers: &[f32], dim: usize) -> usize {
+    let [first, second] = SquaredL2::evaluate_pair(point, &centers[..dim], &centers[dim..]);
+    usize::from(second.total_cmp(&first).is_lt())
+}
+
 /// Prefer the first centroid on ties. `centers` contains at least one full row.
 fn nearest(point: &[f32], centers: &[f32], dim: usize) -> usize {
     let mut best = 0;
@@ -108,3 +128,6 @@ fn nearest(point: &[f32], centers: &[f32], dim: usize) -> usize {
     }
     best
 }
+
+#[cfg(test)]
+mod tests;

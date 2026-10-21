@@ -670,7 +670,7 @@ where
 
 #[inline(never)]
 #[expect(clippy::panic)]
-fn emit_length_error(xlen: usize, ylen: usize) -> ! {
+pub(super) fn emit_length_error(xlen: usize, ylen: usize) -> ! {
     panic!(
         "lengths must be equal, instead got: xlen = {}, ylen = {}",
         xlen, ylen
