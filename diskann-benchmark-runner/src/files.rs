@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::Checker;
+use crate::{Checker, Reflect};
 
 /// A file that is used as an input to for a benchmark.
 ///
@@ -25,6 +25,16 @@ use super::Checker;
 #[serde(transparent)]
 pub struct InputFile {
     path: PathBuf,
+}
+
+impl Reflect for InputFile {
+    fn ty() -> crate::reflect::Type {
+        <PathBuf as Reflect>::ty()
+    }
+
+    fn format_type_name(f: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        f.write_str("benchmark::InputFile")
+    }
 }
 
 impl InputFile {

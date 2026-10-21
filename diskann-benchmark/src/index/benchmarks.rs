@@ -226,7 +226,7 @@ where
                         build::set_start_points(
                             index.provider(),
                             data.as_view(),
-                            *build.start_point_strategy(),
+                            build.start_point_strategy(),
                         )?;
                         Ok(index)
                     },
@@ -304,14 +304,7 @@ where
     ) -> anyhow::Result<Vec<managed::Stats<StreamStats>>> {
         writeln!(output, "{}", input)?;
 
-        let groundtruth_directory = input
-            .runbook_params
-            .resolved_gt_directory
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Ground truth directory path was not resolved during validation")
-            })?;
-
+        let groundtruth_directory = &input.runbook_params.gt_directory;
         let mut runbook = bigann::RunBook::load(
             &input.runbook_params.runbook_path,
             &input.runbook_params.dataset_name,
@@ -843,9 +836,10 @@ where
 {
     let topk = input.search_phase.as_topk()?;
 
-    let consolidate_threshold: f32 = input
+    let consolidate_threshold: f32 = *input
         .runbook_params
         .consolidate_threshold
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("consolidate_threshold is required for inmem streaming"))?;
 
     let data = datafiles::load_dataset::<T>(datafiles::BinFile(input.build.data()))?;
@@ -865,7 +859,7 @@ where
     build::set_start_points(
         index.provider(),
         data.as_view(),
-        *input.build.start_point_strategy(),
+        input.build.start_point_strategy(),
     )?;
 
     let num_threads_and_tasks = NonZeroUsize::new(input.build.num_threads()).unwrap();

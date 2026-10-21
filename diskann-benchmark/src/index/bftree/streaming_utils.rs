@@ -28,13 +28,7 @@ where
     T: 'static,
     F: FnOnce(usize) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, StreamStats>>>,
 {
-    let groundtruth_directory = runbook_params
-        .resolved_gt_directory
-        .as_ref()
-        .ok_or_else(|| {
-            anyhow::anyhow!("Ground truth directory path was not resolved during validation")
-        })?;
-
+    let groundtruth_directory = &runbook_params.gt_directory;
     let mut runbook = bigann::RunBook::load(
         &runbook_params.runbook_path,
         &runbook_params.dataset_name,

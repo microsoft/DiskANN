@@ -26,6 +26,7 @@ use diskann_benchmark_runner::{
     utils::{
         datatype::{AsDataType, DataType},
         fmt::{Delimit, KeyValue, Quote},
+        RequiredOption,
     },
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
@@ -72,14 +73,18 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 mod dto {
     use super::*;
 
-    #[derive(Debug, Serialize, Deserialize)]
+    use diskann_benchmark_runner::Reflect;
+
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct KnnSweep {
         pub(super) search_n: usize,
         pub(super) search_l: Vec<usize>,
         pub(super) recall_k: usize,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct KnnSearch {
         pub(super) queries: InputFile,
         pub(super) groundtruth: InputFile,
@@ -88,14 +93,16 @@ mod dto {
         pub(super) runs: Vec<KnnSweep>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct Data {
         pub(super) data_type: DataType,
         pub(super) data: InputFile,
         pub(super) distance: SimilarityMeasure,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct BuildParams {
         pub(super) pruned_degree: usize,
         pub(super) max_degree: usize,
@@ -108,27 +115,31 @@ mod dto {
     // Quantization //
     //--------------//
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
     #[serde(rename_all = "kebab-case")]
+    #[reflect(prefix = "inmem::")]
     pub(super) enum Quantization {
         Spherical(Spherical),
         Product(Product),
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
     #[serde(rename_all = "kebab-case")]
+    #[reflect(prefix = "inmem::")]
     pub(super) enum SphericalBits {
         One,
         Two,
         Four,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct Spherical {
         pub(super) bits: SphericalBits,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct Product {
         pub(super) chunks: NonZeroUsize,
         pub(super) centers: NonZeroUsize,
@@ -139,7 +150,8 @@ mod dto {
     // Streaming //
     //-----------//
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct StreamingKnnSearch {
         pub(super) queries: InputFile,
         pub(super) reps: NonZeroUsize,
@@ -147,7 +159,8 @@ mod dto {
         pub(super) runs: Vec<KnnSweep>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct RunBook {
         pub(super) path: InputFile,
         pub(super) dataset: String,
@@ -160,15 +173,17 @@ mod dto {
     // Top Level Inputs //
     //------------------//
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct StaticBuild {
         pub(super) data: Data,
         pub(super) build: BuildParams,
         pub(super) search: KnnSearch,
-        pub(super) quantization: Option<Quantization>,
+        pub(super) quantization: RequiredOption<Quantization>,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Reflect)]
+    #[reflect(prefix = "inmem::")]
     pub(super) struct BigANNStreaming {
         pub(super) data: Data,
         pub(super) build: BuildParams,
@@ -607,7 +622,7 @@ impl StaticBuild {
         let data = Data::from_raw(data, checker.as_deref_mut())?;
         let build = BuildParams::from_raw(build, data.distance)?;
         let search = KnnSearch::from_raw(search, checker)?;
-        let quantization = Quantization::from_raw(quantization);
+        let quantization = Quantization::from_raw(quantization.into_inner());
 
         Ok(Self {
             data,
@@ -700,7 +715,7 @@ impl Input for StaticBuild {
                     recall_k: 10,
                 }],
             },
-            quantization: None,
+            quantization: RequiredOption::none(),
         }
     }
 }

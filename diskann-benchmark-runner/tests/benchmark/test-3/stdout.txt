@@ -1,4 +1,5 @@
 The example JSON representation for "test-input-types" is:
+
 {
   "type": "test-input-types",
   "content": {
@@ -7,3 +8,32 @@ The example JSON representation for "test-input-types" is:
     "error_when_checked": false
   }
 }
+
+Type Information:
+
+benchmark::test::TypeInputRaw
+  This is a test input for testing corner cases in the benchmark runner.
+
+  "data_type": benchmark::DataType
+    Representation: externally tagged
+
+    Options:
+      "float64"
+      "float32"
+      "float16"
+      "uint8"
+      "uint16"
+      "uint32"
+      "uint64"
+      "int8"
+      "int16"
+      "int32"
+      "int64"
+      "bool"
+
+  "dim": usize
+
+  "error_when_checked": bool
+    Should we return an error when deserializing?
+
+More type information available using `type-info`

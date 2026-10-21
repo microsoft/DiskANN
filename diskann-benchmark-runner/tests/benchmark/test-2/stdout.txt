@@ -1,7 +1,16 @@
 The example JSON representation for "test-input-dim" is:
+
 {
   "type": "test-input-dim",
   "content": {
     "dim": 128
   }
 }
+
+Type Information:
+
+benchmark::test::DimInput
+  "dim": Option<usize>
+    May be `null`.
+
+More type information available using `type-info`

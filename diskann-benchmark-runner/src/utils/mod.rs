@@ -8,5 +8,7 @@ pub mod fmt;
 pub mod microseconds;
 pub mod num;
 pub mod percentiles;
+mod required;
 
 pub use microseconds::MicroSeconds;
+pub use required::RequiredOption;

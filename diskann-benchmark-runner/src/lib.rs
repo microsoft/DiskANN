@@ -5,6 +5,9 @@
 
 //! A moderately functional utility for making simple benchmarking CLI applications.
 
+#[doc(hidden)]
+extern crate self as diskann_benchmark_runner;
+
 pub mod benchmark;
 mod checker;
 mod features;
@@ -16,6 +19,7 @@ pub mod app;
 pub mod files;
 pub mod input;
 pub mod output;
+pub mod reflect;
 pub mod registry;
 pub mod utils;
 
@@ -25,6 +29,7 @@ pub use checker::Checker;
 pub use features::Features;
 pub use input::Input;
 pub use output::Output;
+pub use reflect::{Reflect, Reflection};
 pub use registry::{Registry, RegistryError};
 pub use result::Checkpoint;
 

@@ -16,7 +16,8 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Benchmark, Checker, Checkpoint, Input, Output, benchmark::MatchContext, benchmark::Score,
+    Benchmark, Checker, Checkpoint, Input, Output, Reflect, benchmark::MatchContext,
+    benchmark::Score,
 };
 
 use super::{dim::DimInput, typed::TypeInput};
@@ -85,7 +86,8 @@ impl Benchmark for AnotherGatedBench {
 // Partially Gated with Input Always Registered //
 //////////////////////////////////////////////////
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct SampleInput {
     value: String,
 }
@@ -145,7 +147,8 @@ impl Benchmark for GatedWithIndependentInput {
 // The input backing the fully-gated benchmark. This is only compiled and registered when the
 // controlling feature set is enabled, standing in for an input whose validation would otherwise
 // pull in a heavy optional dependency.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(prefix = "benchmark::test::")]
 pub(super) struct PhantomInput {
     value: usize,
 }
