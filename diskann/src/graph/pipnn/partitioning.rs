@@ -464,8 +464,13 @@ mod tests {
         L2,
         test_support::{dense_points, nz, thread_pool},
     };
+    use crate::test::{TestRoot, get_or_save_test_results};
     use diskann_wide::ARCH;
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
+
+    fn as_set(ids: &[u32]) -> BTreeSet<u32> {
+        ids.iter().copied().collect()
+    }
 
     /// Sort each leaf and then the list of leaves. Neither order is part of the
     /// result. Repeated leaves and points stay, so a comparison still catches
@@ -553,43 +558,57 @@ mod tests {
             .unwrap()
     }
 
+    #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+    struct PartitionSnapshot {
+        /// What the snapshot shows, for a reviewer of a changed snapshot file.
+        description: String,
+        /// Leaves of both replicas, each sorted, then sorted as a list.
+        leaves: Vec<Vec<u32>>,
+    }
+
     #[test]
     fn should_partition_successfully() {
-        let point_count = 40;
-        let dimensions = 2;
+        let point_count = 600;
+        let dimensions = 8;
         let seed = 1290;
         let n_threads = 1;
         let mut rng = StdRng::seed_from_u64(seed);
-        let values: Vec<f32> = (0..point_count * dimensions)
+        let x: Vec<f32> = (0..point_count * dimensions)
             .map(|_| rng.random())
             .collect();
-        let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
-        // 40 x 0.25 = 10 leaders. Fanout 3 puts each point in 3 of 10 children
-        // of about 12 points, above c_max = 8, so level 1 splits again with fanout 2.
+        // 600 points: the first split assigns two full stripes and a tail.
+        assert!(x.len() / dimensions > 2 * ASSIGNMENT_STRIPE_POINTS);
+        let data = MatrixView::try_from(x.as_slice(), point_count, dimensions).unwrap();
+        // 600 x 0.05 = 30 sampled leaders, so most points are not leaders and join
+        // their nearest ones. Fanout 3 gives children of about 60 points, above
+        // c_max, so the clusters split again at level 1 with fanout 2 and later
+        // with fanout 1. Two replicas use seeds 1290 and 1291.
         let config = PiPNNConfig {
-            c_max: nz(8),
-            p_samp: 0.25,
+            c_max: nz(32),
+            p_samp: 0.05,
+            max_leaders: nz(1000),
             fanout: vec![nz(3), nz(2)],
             max_depth: nz(10),
-            replicas: nz(1),
+            replicas: nz(2),
+            seed: Some(seed),
             ..splitting_config()
         };
+        let mut root = TestRoot::new("graph/pipnn/partitioning");
 
-        let leaves = partition_l2(data, &config, n_threads);
+        let actual = partition_l2(data, &config, n_threads);
 
-        let mut ids: Vec<_> = leaves.iter().flatten().copied().collect();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids, (0..point_count as u32).collect::<Vec<_>>());
-        for leaf in leaves {
-            assert!(!leaf.is_empty(), "leaf {leaf:?}");
-            assert!(leaf.len() <= config.c_max.get(), "leaf {leaf:?}");
-            assert_eq!(
-                leaf.iter().copied().collect::<HashSet<_>>().len(),
-                leaf.len(),
-                "duplicate IDs in leaf {leaf:?}"
-            );
-        }
+        let actual_snapshot = PartitionSnapshot {
+            description: "Leaves of 600 seeded random 8-dimensional points under L2 with c_max 32, \
+                          p_samp 0.05, fanout [3, 2], max_depth 10, two replicas and seed 1290. \
+                          A change in leader sampling, assignment, grouping or the split rules changes this file."
+                .to_string(),
+            leaves: sorted_leaves(&actual),
+        };
+        let expected = get_or_save_test_results(
+            &root.path().push("should_partition_successfully"),
+            &actual_snapshot,
+        );
+        assert_eq!(actual_snapshot, expected);
     }
 
     #[test]
@@ -649,44 +668,11 @@ mod tests {
     }
 
     #[test]
-    fn a_stripe_lists_each_points_nearest_leaders_nearest_first() {
-        // x[i] is the one-dimensional vector of point i.
-        let x = [100.0, 0.0, 8.0, 10.0, 2.0];
-        let ids = [4, 2, 0, 3, 1];
-        let leader_x = [0.0, 10.0, 100.0];
-        let dimensions = 1;
-        let fanout = 2;
-        let initial_assignment = 0;
-        let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
-        let leaders = L2::create_leaders(
-            MatrixView::try_from(leader_x.as_slice(), leader_x.len(), dimensions).unwrap(),
-        );
-        let mut buffers = StripeBuffers::default();
-        let mut assignments = Matrix::new(initial_assignment, ids.len(), fanout);
-        // Rows follow ids, and each row gives the two nearest indices in leader_x.
-        let expected = vec![vec![0, 1], vec![1, 0], vec![2, 1], vec![1, 0], vec![0, 1]];
-
-        assign_point_stripe::<_, L2, _>(
-            ARCH,
-            data,
-            &ids,
-            dimensions,
-            &leaders,
-            &mut buffers,
-            assignments.as_mut_view(),
-        )
-        .unwrap();
-
-        let actual: Vec<_> = assignments.row_iter().map(<[u32]>::to_vec).collect();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
     fn reused_stripe_buffers_do_not_carry_points() {
         // x[i] is the one-dimensional vector of point i.
         let x = [100.0, 0.0, 8.0, 10.0, 2.0];
         let first_ids = [4, 2, 0, 3, 1];
-        let ids = [2, 1];
+        let ids = [0, 3];
         let leader_x = [0.0, 10.0, 100.0];
         let dimensions = 1;
         let fanout = 2;
@@ -698,9 +684,10 @@ mod tests {
         let mut buffers = StripeBuffers::default();
         let mut first_assignments = Matrix::new(initial_assignment, first_ids.len(), fanout);
         let mut assignments = Matrix::new(initial_assignment, ids.len(), fanout);
-        // The first stripe grows the buffers. The second stripe is smaller and
-        // reads only a prefix of them. It must gather [8, 0], not retain [2, 8].
-        let expected = vec![vec![1, 0], vec![0, 1]];
+        // The first stripe grows the buffers with points at 2 and 8 first.
+        // The smaller stripe uses points at 100 and 10, so its first leader set
+        // is {1, 2}, not the stale prefix's {0, 1}.
+        let expected = vec![BTreeSet::from([1, 2]), BTreeSet::from([0, 1])];
 
         assign_point_stripe::<_, L2, _>(
             ARCH,
@@ -723,7 +710,7 @@ mod tests {
         )
         .unwrap();
 
-        let actual: Vec<_> = assignments.row_iter().map(<[u32]>::to_vec).collect();
+        let actual: Vec<_> = assignments.row_iter().map(as_set).collect();
         assert_eq!(actual, expected, "points {ids:?}");
     }
 

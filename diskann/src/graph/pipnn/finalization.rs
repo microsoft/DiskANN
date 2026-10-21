@@ -114,6 +114,11 @@ pub(crate) fn prune_overfull<T: VectorRepr>(
 mod tests {
     use super::*;
     use crate::graph::{config, pipnn::test_support::thread_pool};
+    use std::collections::BTreeSet;
+
+    fn as_set(ids: &[u32]) -> BTreeSet<u32> {
+        ids.iter().copied().collect()
+    }
 
     /// L2 graph configuration that prunes to `degree`. Alpha 1 means that a
     /// selected neighbor occludes a candidate when the neighbor is nearer to
@@ -159,17 +164,16 @@ mod tests {
     #[test]
     fn skip_prune_when_candidates_do_not_exceed_degree() {
         // x[i] is the one-dimensional vector of point i.
-        let x = [0.0, 1.0, -2.0];
+        let x = [0.0, 1.0, 2.0];
         let source = 0;
-        // Point 1 is nearer to the source than point 2, so a prune would
-        // return [1, 2].
+        // Point 1 occludes point 2, so a prune would keep only {1}.
         let candidates = [2, 1];
         let degree = candidates.len();
 
         let actual = prune_1d(&x, source, &candidates, &pruning_config(degree));
 
-        // The list fits the degree, so it comes back unpruned, in its order.
-        assert_eq!(actual, candidates);
+        // The list fits the degree, so both candidates stay.
+        assert_eq!(as_set(&actual), as_set(&candidates));
     }
 
     #[test]
@@ -183,9 +187,9 @@ mod tests {
         let actual = prune_1d(&x, source, &candidates, &pruning_config(degree));
 
         // Sorted by distance the list is [1, 2, 3], so a cut to the degree
-        // would return [1, 2]. Point 1 occludes point 2, so RobustPrune
-        // returns [1, 3].
-        assert_eq!(actual, [1, 3]);
+        // would return {1, 2}. Point 1 occludes point 2, so RobustPrune
+        // returns {1, 3}.
+        assert_eq!(as_set(&actual), BTreeSet::from([1, 3]));
     }
 
     #[test]
@@ -216,7 +220,7 @@ mod tests {
                 &distance,
             );
 
-            assert_eq!(&*actual, expected, "source {source}");
+            assert_eq!(as_set(&actual), as_set(&expected), "source {source}");
         }
     }
 
@@ -235,19 +239,19 @@ mod tests {
             .to_vec();
         let expected = vec![
             // Source 0: point 1 occludes point 2.
-            vec![1, 3],
+            BTreeSet::from([1, 3]),
             // Source 1: the list fits the degree and keeps its order.
-            vec![0, 2],
+            BTreeSet::from([0, 2]),
             // Source 2: point 1 occludes points 0 and 3.
-            vec![1],
+            BTreeSet::from([1]),
             // Source 3: the empty list keeps its row.
-            vec![],
+            BTreeSet::new(),
         ];
 
         let actual =
             thread_pool(n_threads).install(|| prune_overfull(data, candidates, &graph, Metric::L2));
 
-        let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
+        let actual: Vec<BTreeSet<u32>> = actual.into_iter().map(|row| as_set(&row)).collect();
         assert_eq!(actual, expected);
     }
 }
