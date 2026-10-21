@@ -318,26 +318,7 @@ mod tests {
             .unwrap();
 
         let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
-        let actual_edges = edges(&actual);
-        let first_difference =
-            expected
-                .symmetric_difference(&actual_edges)
-                .next()
-                .map(|&(point, _)| {
-                    let expected_distances: Vec<_> = expected
-                        .range((point, 0)..=(point, u32::MAX))
-                        .map(|&(_, target)| (target, squared_l2(point, target)))
-                        .collect();
-                    let actual_distances: Vec<_> = actual_edges
-                        .range((point, 0)..=(point, u32::MAX))
-                        .map(|&(_, target)| (target, squared_l2(point, target)))
-                        .collect();
-                    (point, expected_distances, actual_distances)
-                });
-        assert_eq!(
-            actual_edges, expected,
-            "seed {seed}; first differing point, expected and actual candidate distances: {first_difference:?}"
-        );
+        assert_eq!(edges(&actual), expected, "seed {seed}");
     }
 
     #[test]

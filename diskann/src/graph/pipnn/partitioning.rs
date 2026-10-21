@@ -466,6 +466,11 @@ mod tests {
     };
     use crate::test::{TestRoot, get_or_save_test_results};
     use diskann_wide::ARCH;
+    use std::collections::BTreeSet;
+
+    fn as_set(ids: &[u32]) -> BTreeSet<u32> {
+        ids.iter().copied().collect()
+    }
 
     /// Sort each leaf and then the list of leaves. Neither order is part of the
     /// result. Repeated leaves and points stay, so a comparison still catches
@@ -667,7 +672,7 @@ mod tests {
         // x[i] is the one-dimensional vector of point i.
         let x = [100.0, 0.0, 8.0, 10.0, 2.0];
         let first_ids = [4, 2, 0, 3, 1];
-        let ids = [2, 1];
+        let ids = [0, 3];
         let leader_x = [0.0, 10.0, 100.0];
         let dimensions = 1;
         let fanout = 2;
@@ -679,9 +684,10 @@ mod tests {
         let mut buffers = StripeBuffers::default();
         let mut first_assignments = Matrix::new(initial_assignment, first_ids.len(), fanout);
         let mut assignments = Matrix::new(initial_assignment, ids.len(), fanout);
-        // The first stripe grows the buffers. The second stripe is smaller and
-        // reads only a prefix of them. It must gather [8, 0], not retain [2, 8].
-        let expected = vec![vec![1, 0], vec![0, 1]];
+        // The first stripe grows the buffers with points at 2 and 8 first.
+        // The smaller stripe uses points at 100 and 10, so its first leader set
+        // is {1, 2}, not the stale prefix's {0, 1}.
+        let expected = vec![BTreeSet::from([1, 2]), BTreeSet::from([0, 1])];
 
         assign_point_stripe::<_, L2, _>(
             ARCH,
@@ -704,7 +710,7 @@ mod tests {
         )
         .unwrap();
 
-        let actual: Vec<_> = assignments.row_iter().map(<[u32]>::to_vec).collect();
+        let actual: Vec<_> = assignments.row_iter().map(as_set).collect();
         assert_eq!(actual, expected, "points {ids:?}");
     }
 
