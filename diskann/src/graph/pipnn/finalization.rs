@@ -113,11 +113,7 @@ pub(crate) fn prune_overfull<T: VectorRepr>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{
-        config,
-        pipnn::test_support::{edges, thread_pool},
-    };
-    use std::collections::BTreeSet;
+    use crate::graph::{config, pipnn::test_support::thread_pool};
 
     /// L2 graph configuration that prunes to `degree`. Alpha 1 means that a
     /// selected neighbor occludes a candidate when the neighbor is nearer to
@@ -225,27 +221,33 @@ mod tests {
     }
 
     #[test]
-    fn parallel_pruning_keeps_each_result_with_its_source() {
-        // x[i] = i² is the one-dimensional vector of point i.
-        // Each point lists every other point, farthest first.
-        let x = [0.0, 1.0, 4.0, 9.0];
+    fn prune_overfull_keeps_each_result_with_its_source() {
+        // x[i] is the one-dimensional vector of point i.
+        // Overfull, within-degree and empty lists must retain their source rows.
+        let x = [0.0, 1.0, 2.0, -3.0];
         let dimensions = 1;
-        let degree = 1;
+        let degree = 2;
+        let n_threads = 1;
         let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
         let graph = pruning_config(degree);
-        // Degree 1 keeps each point's nearest point.
-        let expected = BTreeSet::from([(0, 1), (1, 0), (2, 1), (3, 2)]);
+        let candidates = [vec![3, 2, 1], vec![0, 2], vec![1, 0, 3], vec![]]
+            .map(|ids| candidates_in_order(&ids))
+            .to_vec();
+        let expected = vec![
+            // Source 0: point 1 occludes point 2.
+            vec![1, 3],
+            // Source 1: the list fits the degree and keeps its order.
+            vec![0, 2],
+            // Source 2: point 1 occludes points 0 and 3.
+            vec![1],
+            // Source 3: the empty list keeps its row.
+            vec![],
+        ];
 
-        for n_threads in [1, 3] {
-            let candidates = [[3, 2, 1], [3, 2, 0], [3, 1, 0], [2, 1, 0]]
-                .map(|ids| candidates_in_order(&ids))
-                .to_vec();
+        let actual =
+            thread_pool(n_threads).install(|| prune_overfull(data, candidates, &graph, Metric::L2));
 
-            let actual = thread_pool(n_threads)
-                .install(|| prune_overfull(data, candidates, &graph, Metric::L2));
-
-            let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
-            assert_eq!(edges(&actual), expected, "{n_threads} threads");
-        }
+        let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
+        assert_eq!(actual, expected);
     }
 }

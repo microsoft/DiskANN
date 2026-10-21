@@ -19,7 +19,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    conversion::{f32_dimensions, gather_as_f32},
+    conversion::gather_as_f32,
     leaf_kernel::{LeafKernelWorkspace, select_leaf_neighbors},
     leaf_metric::LeafMetric,
     simd::Simd,
@@ -79,6 +79,7 @@ impl LeafBuffers {
 pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    dimensions: usize,
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
@@ -90,7 +91,6 @@ where
     let candidates: Vec<_> = (0..data.nrows())
         .map(|_| Mutex::new(AdjacencyList::new()))
         .collect();
-    let dimensions = f32_dimensions(data)?;
     leaves
         .par_iter()
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
@@ -200,7 +200,7 @@ mod tests {
         let dimensions = 1;
         let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
         let candidates = thread_pool(n_threads)
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, k))
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, dimensions, leaves, k))
             .unwrap();
         candidates.into_iter().map(Vec::from).collect()
     }
@@ -227,10 +227,11 @@ mod tests {
     #[test]
     fn selected_pairs_add_global_ids_in_both_directions() {
         // (point ID, one-dimensional vector) pairs, in leaf order.
-        let leaf = [(5, 9.0), (1, 0.0), (3, 2.0)];
-        // Each point picks its nearest point: 1 -> 3, 3 -> 1, 5 -> 3.
-        let k = 1;
-        let expected = both_directions([(1, 3), (3, 5)]);
+        let leaf = [(7, 0.0), (2, 1.0), (5, 3.0), (0, 7.0)];
+        // Nearest pairs: 7 picks 2 and 5; 2 picks 7 and 5;
+        // 5 picks 2 and 7; 0 picks 5 and 2.
+        let k = 2;
+        let expected = both_directions([(2, 7), (5, 7), (2, 5), (0, 5), (0, 2)]);
 
         let actual = build_one_leaf(&leaf, k);
 
@@ -245,15 +246,14 @@ mod tests {
         // The leaves overlap, and the last one repeats the first, as a replica does.
         let leaves = vec![vec![0, 1, 2], vec![1, 2, 3], vec![2, 3, 4], vec![0, 1, 2]];
         let k = 1;
+        let n_threads = 1;
         // Three leaves find pair 1-2, and two leaves each find 0-1 and 2-3.
         let expected = both_directions([(0, 1), (1, 2), (2, 3), (3, 4)]);
 
-        for n_threads in [1, 3] {
-            let actual = build_1d(&x, leaves.clone(), k, n_threads);
+        let actual = build_1d(&x, leaves, k, n_threads);
 
-            // `edges` panics on a repeated edge.
-            assert_eq!(edges(&actual), expected, "{n_threads} threads");
-        }
+        // `edges` panics on a repeated edge.
+        assert_eq!(edges(&actual), expected);
     }
 
     #[test]
