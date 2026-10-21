@@ -1,0 +1,110 @@
+{
+  "jobs": [
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "synthetic",
+          "vectors": 65536,
+          "queries": 64,
+          "dimensions": 128,
+          "seed": 42
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 16384,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 3
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": {
+          "k": 10,
+          "nprobe": [
+            4,
+            16,
+            64
+          ],
+          "l_search": 128,
+          "warmup_repetitions": 1,
+          "repetitions": 2
+        }
+      }
+    },
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "synthetic",
+          "vectors": 65536,
+          "queries": 64,
+          "dimensions": 384,
+          "seed": 42
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 16384,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 3
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": {
+          "k": 10,
+          "nprobe": [
+            4,
+            16,
+            64
+          ],
+          "l_search": 128,
+          "warmup_repetitions": 1,
+          "repetitions": 2
+        }
+      }
+    },
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "synthetic",
+          "vectors": 65536,
+          "queries": 64,
+          "dimensions": 768,
+          "seed": 42
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 16384,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 3
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": {
+          "k": 10,
+          "nprobe": [
+            4,
+            16,
+            64
+          ],
+          "l_search": 128,
+          "warmup_repetitions": 1,
+          "repetitions": 2
+        }
+      }
+    }
+  ],
+  "search_directories": []
+}

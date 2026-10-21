@@ -3,9 +3,25 @@
  * Licensed under the MIT license.
  */
 
+use diskann_vector::PureDistanceFunction;
 use rand::{RngCore, SeedableRng};
 
 use super::*;
+
+// Independent pre-optimization selector. Both two-means and reassignment tests
+// use it so neither new path can accidentally become its own reference.
+pub(super) fn nearest(point: &[f32], centers: &[f32], dim: usize) -> usize {
+    let mut best = 0;
+    let mut best_distance: f32 = SquaredL2::evaluate(point, &centers[..dim]);
+    for (index, center) in centers.chunks_exact(dim).enumerate().skip(1) {
+        let distance: f32 = SquaredL2::evaluate(point, center);
+        if distance.total_cmp(&best_distance).is_lt() {
+            best = index;
+            best_distance = distance;
+        }
+    }
+    best
+}
 
 fn points(rows: &[Vec<f32>]) -> Vec<PointRef<'_, u32>> {
     rows.iter()
@@ -177,49 +193,55 @@ fn two_means_invalid_work_does_not_consume_rng() {
 #[test]
 fn split_preserves_all_child_centroids_and_membership_order() {
     for dim in [3, 8, 33, 128, 129, 384] {
-        let mut rng = StdRng::seed_from_u64(51);
-        let rows: Vec<Vec<f32>> = (0..96)
-            .map(|_| (0..dim).map(|_| rng.random_range(-2.0..2.0)).collect())
-            .collect();
-        let points = points(&rows);
-        let lists: Vec<_> = points
-            .chunks(24)
-            .enumerate()
-            .map(|(id, points)| ListView {
-                id: id as u32,
-                points: points.to_vec(),
-            })
-            .collect();
-        let mut reference_rng = rng.clone();
-        let children = split(&lists, dim, 5, &mut rng).unwrap();
-        let mut centers = vec![0.0; 2 * lists.len() * dim];
-        let mut sums = vec![0.0; 2 * dim];
-        for (list, centers) in lists.iter().zip(centers.chunks_exact_mut(2 * dim)) {
-            fit_two_means_with(
-                &list.points,
-                centers,
-                dim,
-                5,
-                &mut reference_rng,
-                &mut sums,
-                nearest,
-            )
-            .unwrap();
+        for parents in [1, 2, 3, 4, 5, 8, 9, 17] {
+            let mut rng = StdRng::seed_from_u64(51);
+            let rows: Vec<Vec<f32>> = (0..12 * parents)
+                .map(|_| (0..dim).map(|_| rng.random_range(-2.0..2.0)).collect())
+                .collect();
+            let mut points = points(&rows);
+            for point in &mut points {
+                point.id = u32::MAX - 13 * point.id;
+            }
+            points.reverse();
+            let lists: Vec<_> = points
+                .chunks(12)
+                .enumerate()
+                .map(|(id, points)| ListView {
+                    id: id as u32,
+                    points: points.to_vec(),
+                })
+                .collect();
+            let mut reference_rng = rng.clone();
+            let children = split(&lists, dim, 5, &mut rng).unwrap();
+            let mut centers = vec![0.0; 2 * lists.len() * dim];
+            let mut sums = vec![0.0; 2 * dim];
+            for (list, centers) in lists.iter().zip(centers.chunks_exact_mut(2 * dim)) {
+                fit_two_means_with(
+                    &list.points,
+                    centers,
+                    dim,
+                    5,
+                    &mut reference_rng,
+                    &mut sums,
+                    nearest,
+                )
+                .unwrap();
+            }
+            let mut members = vec![Vec::new(); 2 * lists.len()];
+            for point in &points {
+                members[nearest(point.vector, &centers, dim)].push(point.id);
+            }
+            assert_eq!(
+                children
+                    .centroids
+                    .as_slice()
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect::<Vec<_>>(),
+                centers.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+            );
+            assert_eq!(children.members, members);
+            assert_eq!(rng.next_u64(), reference_rng.next_u64());
         }
-        let mut members = vec![Vec::new(); 2 * lists.len()];
-        for point in &points {
-            members[nearest(point.vector, &centers, dim)].push(point.id);
-        }
-        assert_eq!(
-            children
-                .centroids
-                .as_slice()
-                .iter()
-                .map(|x| x.to_bits())
-                .collect::<Vec<_>>(),
-            centers.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
-        );
-        assert_eq!(children.members, members);
-        assert_eq!(rng.next_u64(), reference_rng.next_u64());
     }
 }

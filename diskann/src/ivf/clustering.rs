@@ -6,11 +6,13 @@
 //! Two-means fitting and region-wide assignment over borrowed point rows.
 
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
-use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
+use diskann_vector::distance::SquaredL2;
 use rand::{Rng, rngs::StdRng};
 
 use super::workingset::{ListView, PointRef};
 use crate::{ANNError, ANNResult};
+
+mod assignment;
 
 pub(super) struct Children<I> {
     pub centroids: rowmajor::Owned<f32>,
@@ -41,8 +43,10 @@ pub(super) fn split<I: Copy, L>(
     let count = lists.iter().map(|list| list.points.len()).sum();
     let mut assignments = Vec::with_capacity(count);
     let mut sizes = vec![0; centroids.nrows()];
+    // Reuse one distance row for every point; never materialize points x children.
+    let mut distances = vec![0.0; centroids.nrows()];
     for point in lists.iter().flat_map(|list| &list.points) {
-        let to = nearest(point.vector, centroids.as_slice(), dim);
+        let to = assignment::nearest(point.vector, centroids.as_slice(), dim, &mut distances);
         assignments.push(to);
         sizes[to] += 1;
     }
@@ -113,20 +117,6 @@ fn fit_two_means_with<I>(
 fn nearest_two(point: &[f32], centers: &[f32], dim: usize) -> usize {
     let [first, second] = SquaredL2::evaluate_pair(point, &centers[..dim], &centers[dim..]);
     usize::from(second.total_cmp(&first).is_lt())
-}
-
-/// Prefer the first centroid on ties. `centers` contains at least one full row.
-fn nearest(point: &[f32], centers: &[f32], dim: usize) -> usize {
-    let mut best = 0;
-    let mut best_distance: f32 = SquaredL2::evaluate(point, &centers[..dim]);
-    for (index, center) in centers.chunks_exact(dim).enumerate().skip(1) {
-        let distance: f32 = SquaredL2::evaluate(point, center);
-        if distance.total_cmp(&best_distance).is_lt() {
-            best = index;
-            best_distance = distance;
-        }
-    }
-    best
 }
 
 #[cfg(test)]
