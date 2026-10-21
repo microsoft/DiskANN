@@ -15,7 +15,9 @@ pub mod __codegen;
 // Exports //
 /////////////
 
-pub use quantizer::{CompressionError, PreScale, SphericalQuantizer, TrainError};
+pub use quantizer::{
+    CentroidDistanceError, CompressionError, PreScale, SphericalQuantizer, TrainError,
+};
 #[cfg(feature = "flatbuffers")]
 pub use vectors::InvalidMetric;
 pub use vectors::{

@@ -33,7 +33,7 @@ use tracing::{debug, info};
 use crate::{
     build::builder::{
         core::{determine_build_strategy, IndexBuildStrategy, MergedVamanaIndexBuilder},
-        inmem_builder::{new_inmem_index_builder, InmemIndexBuilder},
+        inmem_builder::{new_inmem_index_builder, InmemIndexBuilder, StartPoint},
         quantizer::BuildQuantizer,
         tokio::create_runtime,
     },
@@ -252,10 +252,12 @@ where
         prefetch_lookahead: config.prefetch_lookahead.map(|x| x.get()),
         prefetch_cache_line_level: config.prefetch_cache_line_level,
     };
-    let index = new_inmem_index_builder::<T>(index_config, provider_parameters, quantizer)?;
-    let medoid_id =
-        set_start_point_to_medoid::<T, _>(&index, data_path, config.random_seed, storage_provider)?;
-    let start_point = u32_try_from(medoid_id)?;
+
+    let start_point =
+        start_point_from_medoid::<T, _>(data_path, config.random_seed, storage_provider)?;
+    let start_point_id = start_point.id();
+    let index =
+        new_inmem_index_builder::<T>(index_config, provider_parameters, quantizer, start_point)?;
 
     run_build(&index, dataset_iter, num_tasks).await?;
 
@@ -266,7 +268,7 @@ where
     index
         .save_graph(
             storage_provider,
-            &(start_point, DiskGraphOnly::new(save_path)),
+            &(start_point_id, DiskGraphOnly::new(save_path)),
         )
         .await?;
 
@@ -304,12 +306,11 @@ fn u32_try_from(value: usize) -> ANNResult<u32> {
         .map_err(|_| diskann_error!(ErrorKind::IndexError, "id {value} exceeds u32::MAX"))
 }
 
-fn set_start_point_to_medoid<T, StorageReader>(
-    index: &Arc<dyn InmemIndexBuilder<T>>,
+fn start_point_from_medoid<T, StorageReader>(
     path: &str,
     random_seed: Option<u64>,
     reader: &StorageReader,
-) -> ANNResult<usize>
+) -> ANNResult<StartPoint<T>>
 where
     T: VectorRepr,
     StorageReader: StorageReadProvider,
@@ -318,11 +319,8 @@ where
     let (medoid, medoid_id) =
         find_medoid_with_sampling::<T, _>(path, reader, MAX_MEDOID_SAMPLE_SIZE, &mut rng)?;
 
-    index.set_start_point(medoid.as_slice())?;
-
-    debug!("Set start point to medoid ID: {}", medoid_id);
-
-    Ok(medoid_id)
+    let medoid_id = u32::try_from(medoid_id)?;
+    Ok(StartPoint::new(medoid, medoid_id))
 }
 
 async fn run_build<T, I>(

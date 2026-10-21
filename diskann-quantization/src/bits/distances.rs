@@ -79,10 +79,10 @@
 //! |               |               | `       ` |           |               |           |           |
 //! | `TSlice<4>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Optimized | Optimized |
 //! |               |               | `       ` |           |               |           |           |
-//! | `&[f32]`      | `USlice<1>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
-//! | `&[f32]`      | `USlice<2>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<1>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Optimized |
+//! | `&[f32]`      | `USlice<2>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Optimized |
 //! | `&[f32]`      | `USlice<3>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
-//! | `&[f32]`      | `USlice<4>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<4>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Optimized |
 //! | `&[f32]`      | `USlice<5>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `&[f32]`      | `USlice<6>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `&[f32]`      | `USlice<7>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
@@ -115,7 +115,9 @@ use diskann_wide::{
 };
 
 #[cfg(target_arch = "aarch64")]
-use diskann_wide::{SIMDDotProduct, SIMDSumTree, SIMDVector};
+use diskann_wide::{
+    SIMDDotProduct, SIMDMulAdd, SIMDPartialEq, SIMDSelect, SIMDSumTree, SIMDVector,
+};
 
 use super::{Binary, BitSlice, BitTranspose, Dense, Representation, Unsigned};
 use crate::distances::{Hamming, InnerProduct, MV, MathematicalResult, SquaredL2, check_lengths};
@@ -3527,6 +3529,352 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<f32>, &[f32], US
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32], USlice<'_, 1>>
+    for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::aarch64::Neon,
+        x: &[f32],
+        y: USlice<'_, 1>,
+    ) -> MathematicalResult<f32> {
+        // returns number of quantized vectors
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(f32s_4 = <diskann_wide::arch::aarch64::Neon>::f32x4);
+        diskann_wide::alias!(u32s_4 = <diskann_wide::arch::aarch64::Neon>::u32x4);
+
+        let px_f32: *const f32 = x.as_ptr();
+        let py_u8: *const u8 = y.as_ptr().cast();
+
+        let mut i = 0;
+        let mut s: f32 = 0.0;
+
+        let y_bytes = len / 8; // number of y bytes over the underlying slice
+        if i < y_bytes {
+            let mut s0 = f32s_4::default(arch);
+            let mut s1 = f32s_4::default(arch);
+            let mut s2 = f32s_4::default(arch);
+            let mut s3 = f32s_4::default(arch);
+            let bits0 = u32s_4::from_array(arch, [1, 2, 4, 8]);
+            let bits1 = u32s_4::from_array(arch, [16, 32, 64, 128]);
+            let bits2 = u32s_4::from_array(arch, [256, 512, 1024, 2048]);
+            let bits3 = u32s_4::from_array(arch, [4096, 8192, 16384, 32768]);
+            let bits4 = u32s_4::from_array(arch, [65536, 131072, 262144, 524288]);
+            let bits5 = u32s_4::from_array(arch, [1048576, 2097152, 4194304, 8388608]);
+            let bits6 = u32s_4::from_array(arch, [16777216, 33554432, 67108864, 134217728]);
+            let bits7 = u32s_4::from_array(arch, [268435456, 536870912, 1073741824, 2147483648]);
+            let zero_u32 = u32s_4::splat(arch, 0);
+            let zero_f32 = f32s_4::splat(arch, 0.0);
+
+            while i + 4 <= y_bytes {
+                // SAFETY: `i + 4 <= y_bytes` guarantees that four packed bytes are readable.
+                let y_word = unsafe { py_u8.add(i).cast::<u32>().read_unaligned() };
+                let y_words = u32s_4::splat(arch, y_word);
+
+                // SAFETY: `i + 4 <= y_bytes` guarantees 32 logical elements are readable.
+                let x_ptr = unsafe { px_f32.add(8 * i) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x0 = unsafe { f32s_4::load_simd(arch, x_ptr) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x1 = unsafe { f32s_4::load_simd(arch, x_ptr.add(4)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x2 = unsafe { f32s_4::load_simd(arch, x_ptr.add(8)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x3 = unsafe { f32s_4::load_simd(arch, x_ptr.add(12)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x4 = unsafe { f32s_4::load_simd(arch, x_ptr.add(16)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x5 = unsafe { f32s_4::load_simd(arch, x_ptr.add(20)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x6 = unsafe { f32s_4::load_simd(arch, x_ptr.add(24)) };
+                // SAFETY: `x_ptr` is valid for 32 consecutive `f32` values.
+                let x7 = unsafe { f32s_4::load_simd(arch, x_ptr.add(28)) };
+
+                s0 = s0 + (y_words & bits0).eq_simd(zero_u32).select(zero_f32, x0);
+                s1 = s1 + (y_words & bits1).eq_simd(zero_u32).select(zero_f32, x1);
+                s2 = s2 + (y_words & bits2).eq_simd(zero_u32).select(zero_f32, x2);
+                s3 = s3 + (y_words & bits3).eq_simd(zero_u32).select(zero_f32, x3);
+                s0 = s0 + (y_words & bits4).eq_simd(zero_u32).select(zero_f32, x4);
+                s1 = s1 + (y_words & bits5).eq_simd(zero_u32).select(zero_f32, x5);
+                s2 = s2 + (y_words & bits6).eq_simd(zero_u32).select(zero_f32, x6);
+                s3 = s3 + (y_words & bits7).eq_simd(zero_u32).select(zero_f32, x7);
+
+                i += 4;
+            }
+
+            while i < y_bytes {
+                // SAFETY: The loop condition guarantees that one byte is readable.
+                let y_word = unsafe { *py_u8.add(i) };
+                let y_words = u32s_4::splat(arch, y_word as u32);
+
+                // SAFETY: The loop condition guarantees that 8 logical elements can be read.
+                let x_ptr = unsafe { px_f32.add(8 * i) };
+                // SAFETY: `x_ptr` is valid for 8 consecutive `f32` values.
+                let x0 = unsafe { f32s_4::load_simd(arch, x_ptr) };
+                // SAFETY: `x_ptr` is valid for 8 consecutive `f32` values.
+                let x1 = unsafe { f32s_4::load_simd(arch, x_ptr.add(4)) };
+
+                s0 = s0 + (y_words & bits0).eq_simd(zero_u32).select(zero_f32, x0);
+                s1 = s1 + (y_words & bits1).eq_simd(zero_u32).select(zero_f32, x1);
+                i += 1;
+            }
+            s = ((s0 + s1) + (s2 + s3)).sum_tree();
+        }
+
+        // converting from y bytes to logical elements.
+        i *= 8;
+
+        // Deal with the remainder the slow way (at most 7 elements).
+        debug_assert!(len - i <= 7);
+        if i != len {
+            #[inline(never)]
+            fn fallback(x: &[f32], y: USlice<'_, 1>, from: usize) -> f32 {
+                let mut s: f32 = 0.0;
+                for i in from..x.len() {
+                    // SAFETY: `i` is in `from..x.len()`, which equals `y.len()`.
+                    let (ix, iy) = unsafe { (*x.get_unchecked(i), y.get_unchecked(i) as f32) };
+                    s += ix * iy;
+                }
+                s
+            }
+            s += fallback(x, y, i)
+        }
+
+        Ok(MV::new(s))
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32], USlice<'_, 2>>
+    for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::aarch64::Neon,
+        x: &[f32],
+        y: USlice<'_, 2>,
+    ) -> MathematicalResult<f32> {
+        // returns number of quantized vectors
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(u8s_8 = type diskann_wide::arch::aarch64::u8x8);
+        diskann_wide::alias!(u16s_8 = type diskann_wide::arch::aarch64::u16x8);
+        diskann_wide::alias!(f32s_8 = <diskann_wide::arch::aarch64::Neon>::f32x8);
+
+        let px_f32: *const f32 = x.as_ptr();
+        let py_u8: *const u8 = y.as_ptr();
+
+        let mut i = 0;
+        let mut s: f32 = 0.0;
+
+        let y_bytes = len / 4; // number of y blocks over the underlying slice
+        if i < y_bytes {
+            let mut s0 = f32s_8::default(arch);
+            let mut s1 = f32s_8::default(arch);
+            let mut s2 = f32s_8::default(arch);
+            let mut s3 = f32s_8::default(arch);
+
+            let mask = u8s_8::splat(arch, 0x03);
+
+            while i + 8 <= y_bytes {
+                // SAFETY: The loop condition guarantees that eight packed bytes are readable.
+                let y_vec = unsafe { u8s_8::load_simd(arch, py_u8.add(i)) };
+
+                // SAFETY: Eight packed bytes represent 32 logical values, and the loop
+                // condition therefore establishes that `4 * i < x.len()`.
+                let x_base = unsafe { px_f32.add(4 * i) };
+                // SAFETY: The loop condition guarantees 32 readable `f32` values at
+                // `x_base`; each structured load consumes 16 values.
+                let x_lo = unsafe { arch.vld4q_f32(x_base) };
+                // SAFETY: Same bound as above; offsetting by 16 stays within the 32 readable
+                // values guaranteed by the loop condition.
+                let x_hi_base = unsafe { x_base.add(16) };
+                // SAFETY: Same bound as above; offsetting by 16 stays within the 32 readable
+                // values guaranteed by the loop condition.
+                let x_hi = unsafe { arch.vld4q_f32(x_hi_base) };
+
+                let x_vec1 = f32s_8::new(x_lo[0], x_hi[0]);
+                let y_vec1: f32s_8 = (y_vec & mask).into();
+                s0 = x_vec1.mul_add_simd(y_vec1, s0);
+
+                let x_vec2 = f32s_8::new(x_lo[1], x_hi[1]);
+                let y_vec2: f32s_8 = ((y_vec >> 2) & mask).into();
+                s1 = x_vec2.mul_add_simd(y_vec2, s1);
+
+                let x_vec3 = f32s_8::new(x_lo[2], x_hi[2]);
+                let y_vec3: f32s_8 = ((y_vec >> 4) & mask).into();
+                s2 = x_vec3.mul_add_simd(y_vec3, s2);
+
+                let x_vec4 = f32s_8::new(x_lo[3], x_hi[3]);
+                let y_vec4: f32s_8 = ((y_vec >> 6) & mask).into();
+                s3 = x_vec4.mul_add_simd(y_vec4, s3);
+
+                i += 8;
+            }
+
+            // remainder uses a  different approach since diskann wide
+            // does not provide a method for variable length de-interleaved loads
+            while i + 1 < y_bytes {
+                let mask_u16 = u16s_8::splat(arch, 0x0003);
+                // SAFETY: `i + 1 < y_bytes` implies at least two packed bytes are readable at
+                // offset `i`, allowing an unaligned `u16` read.
+                let y_u16 = unsafe { py_u8.add(i).cast::<u16>().read_unaligned() };
+                let y_raw = u16s_8::splat(arch, y_u16);
+                let shifts = u16s_8::from_array(arch, [0, 2, 4, 6, 8, 10, 12, 14]);
+                let y_vec: f32s_8 = ((y_raw >> shifts) & mask_u16).into();
+                // SAFETY: `i + 1 < y_bytes` means at least 8 logical elements remain, so
+                // loading 8 `f32` values from `px_f32.add(4 * i)` is in-bounds.
+                let x_vec = unsafe { f32s_8::load_simd(arch, px_f32.add(4 * i)) };
+                s0 = x_vec.mul_add_simd(y_vec, s0);
+                i += 2;
+            }
+
+            s = ((s0 + s1) + (s2 + s3)).sum_tree();
+        }
+
+        // converting from y blocks to logical elements.
+        i *= 4;
+
+        // Deal with the remainder the slow way (at most 7 elements).
+        debug_assert!(len - i <= 7);
+        if i != len {
+            #[inline(never)]
+            fn fallback(x: &[f32], y: USlice<'_, 2>, from: usize) -> f32 {
+                let mut s: f32 = 0.0;
+                for i in from..x.len() {
+                    // SAFETY: `i` is in `from..x.len()`, which equals `y.len()`.
+                    let (ix, iy) = unsafe { (*x.get_unchecked(i), y.get_unchecked(i) as f32) };
+                    s += ix * iy;
+                }
+                s
+            }
+            s += fallback(x, y, i);
+        }
+
+        Ok(MV::new(s))
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Target2<diskann_wide::arch::aarch64::Neon, MathematicalResult<f32>, &[f32], USlice<'_, 4>>
+    for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::aarch64::Neon,
+        x: &[f32],
+        y: USlice<'_, 4>,
+    ) -> MathematicalResult<f32> {
+        // returns number of quantized vectors
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(u8s_8 = type diskann_wide::arch::aarch64::u8x8);
+        diskann_wide::alias!(u8s_16 = <diskann_wide::arch::aarch64::Neon>::u8x16);
+        diskann_wide::alias!(f32s_8 = <diskann_wide::arch::aarch64::Neon>::f32x8);
+        diskann_wide::alias!(f32s_16 = <diskann_wide::arch::aarch64::Neon>::f32x16);
+
+        let px_f32: *const f32 = x.as_ptr();
+        let py_u8: *const u8 = y.as_ptr().cast();
+
+        let mut i = 0;
+        let mut s: f32 = 0.0;
+
+        let y_bytes = len / 2; // number of y blocks over the underlying slice
+        if i < y_bytes {
+            let mut s0 = f32s_8::default(arch);
+            let mut s1 = f32s_8::default(arch);
+            let mask = u8s_8::splat(arch, 0x0f);
+
+            while i + 8 <= y_bytes {
+                // SAFETY: The loop condition guarantees eight readable packed bytes.
+                let y_vec = unsafe { u8s_8::load_simd(arch, py_u8.add(i)) };
+                // SAFETY: Eight packed bytes represent 16 logical values, so the loop
+                // condition guarantees 16 readable `f32` values at offset `2 * i`.
+                let x_lo_base = unsafe { px_f32.add(2 * i) };
+                // SAFETY: The loop condition guarantees 16 readable `f32` values at `2 * i`,
+                // so the first deinterleaved load (8 values) is in-bounds.
+                let [x_vec_1, x_vec_2] = unsafe { arch.vld2q_f32(x_lo_base) };
+                // SAFETY: Eight packed bytes represent 16 logical values, so the loop
+                // condition guarantees 16 readable `f32` values at offset `2 * i`.
+                let x_hi_base = unsafe { px_f32.add(2 * i + 8) };
+                // SAFETY: Same loop bound as above; offsetting by 8 stays within the same
+                // 16-value readable window.
+                let [x_vec_3, x_vec_4] = unsafe { arch.vld2q_f32(x_hi_base) };
+
+                let x_vec_even = f32s_8::new(x_vec_1, x_vec_3);
+                let x_vec_odd = f32s_8::new(x_vec_2, x_vec_4);
+
+                let y_vec_even: f32s_8 = (y_vec & mask).into();
+                let y_vec_odd: f32s_8 = (y_vec >> 4).into();
+
+                s0 = x_vec_even.mul_add_simd(y_vec_even, s0);
+                s1 = x_vec_odd.mul_add_simd(y_vec_odd, s1);
+
+                i += 8;
+            }
+
+            #[inline(always)]
+            fn split_and_zip(input: u8s_8) -> u8s_16 {
+                use diskann_wide::{LoHi, ZipUnzip};
+                let zipped = u8s_16::zip(LoHi::new(input, input >> 4));
+                zipped & u8s_16::splat(input.arch(), 0x0f)
+            }
+
+            let remaining_y_bytes = len / 2 - i;
+
+            let mut s_grouped = f32s_16::new(s0, s1);
+
+            // remainder uses a  different approach since diskann wide
+            // does not provide a method for variable length de-interleaved loads
+            if remaining_y_bytes > 0 {
+                // SAFETY: `remaining_y_bytes` is in `1..8`, and that many packed bytes
+                // remain readable at offset `i`.
+                let y_vec_u8s_8 =
+                    unsafe { u8s_8::load_simd_first(arch, py_u8.add(i), remaining_y_bytes) };
+                let y_vec_u8s_16 = split_and_zip(y_vec_u8s_8);
+                let y_vec: f32s_16 = y_vec_u8s_16.into();
+
+                // SAFETY: Every remaining packed byte represents two logical values, so
+                // `remaining_y_bytes * 2` values remain readable at offset `2 * i`.
+                let x_vec = unsafe {
+                    f32s_16::load_simd_first(arch, px_f32.add(2 * i), remaining_y_bytes * 2)
+                };
+
+                s_grouped = x_vec.mul_add_simd(y_vec, s_grouped);
+
+                i += remaining_y_bytes;
+            }
+            s = s_grouped.sum_tree();
+        }
+
+        // converting from y bytes to logical elements.
+        i *= 2;
+
+        // Deal with the remainder the slow way (at most 1 element).
+        debug_assert!(len - i <= 1);
+        if i != len {
+            #[inline(never)]
+            fn fallback(x: &[f32], y: USlice<'_, 4>, from: usize) -> f32 {
+                let mut s: f32 = 0.0;
+                for i in from..x.len() {
+                    // SAFETY: `i` is in `from..x.len()`, which equals `y.len()`.
+                    let (ix, iy) = unsafe { (*x.get_unchecked(i), y.get_unchecked(i) as f32) };
+                    s += ix * iy;
+                }
+                s
+            }
+            s += fallback(x, y, i);
+        }
+
+        Ok(MV::new(s))
+    }
+}
+
 impl<const N: usize>
     Target2<diskann_wide::arch::Scalar, MathematicalResult<f32>, &[f32], USlice<'_, N>>
     for InnerProduct
@@ -3585,7 +3933,7 @@ ip_retarget!(diskann_wide::arch::x86_64::V3, 3, 5, 6, 7, 8);
 ip_retarget!(diskann_wide::arch::x86_64::V4, 1, 2, 3, 4, 5, 6, 7, 8);
 
 #[cfg(target_arch = "aarch64")]
-ip_retarget!(diskann_wide::arch::aarch64::Neon, 1, 2, 3, 4, 5, 6, 7, 8);
+ip_retarget!(diskann_wide::arch::aarch64::Neon, 3, 5, 6, 7, 8);
 
 /// Delegate the implementation of `PureDistanceFunction` to `diskann_wide::arch::Target2`
 /// with the current architectures.
