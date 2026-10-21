@@ -119,6 +119,8 @@ output work, rather than distance-kernel-only CPU time.
 
 The [three-layer phase comparison](graph-ivf-stages.md) records measured values,
 per-round variation, work histograms, and search-quality checks at batch size 4,096.
+The [24-round repeat study](graph-ivf-stages-means.md) adds arithmetic means,
+standard deviations, and paired-round confidence intervals while retaining stalls.
 
 The two phase durations are measured inside the real split call and returned in
 `InsertStats` after successful publication. No-split insertions report zero. Each
