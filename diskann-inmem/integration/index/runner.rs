@@ -632,7 +632,7 @@ impl Test {
             alloc::GlobalAllocator,
             spherical::{PreScale, SphericalQuantizer},
         };
-        use inmem::repr::quantized::Config;
+        use inmem::repr::quantized::{Backend, Config, spherical::Spherical};
         use rand::SeedableRng;
 
         let DatasetView::F32(data) = data else {
@@ -664,30 +664,19 @@ impl Test {
         ));
         let rerank = quantizer_rerank(rerank, self.data.metric);
 
-        let config = match bits {
-            spherical::Bits::One => Config::new(
-                quantizer.as_quantizer_impl::<1>()?,
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-            spherical::Bits::Two => Config::new(
-                quantizer.as_quantizer_impl::<2>()?,
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-            spherical::Bits::Four => Config::new(
-                quantizer.as_quantizer_impl::<4>()?,
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
+        let backend = match bits {
+            spherical::Bits::One => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<1>()?))
+            }
+            spherical::Bits::Two => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<2>()?))
+            }
+            spherical::Bits::Four => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?))
+            }
         };
 
+        let config = Config::new(backend, capacity, max_degree, start_point, rerank)?;
         let index_config = self.build.config.clone();
 
         Ok(finish(Provider::new(config)?, index_config))
