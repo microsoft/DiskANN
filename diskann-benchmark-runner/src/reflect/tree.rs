@@ -107,6 +107,15 @@ impl Type {
             None
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn as_sequence(&self) -> Option<&Sequence> {
+        if let Self::Sequence(seq) = self {
+            Some(seq)
+        } else {
+            None
+        }
+    }
 }
 
 //-----------//
@@ -216,7 +225,7 @@ impl Fields {
         Self::Named(itr.into_iter().collect())
     }
 
-    /// Construct [`Fields::Unamed`] from the iterator.
+    /// Construct [`Fields::Unnamed`] from the iterator.
     pub fn unnamed(itr: impl IntoIterator<Item = UnnamedField>) -> Self {
         Self::Unnamed(itr.into_iter().collect())
     }

@@ -393,3 +393,27 @@ fn test_enum_variants() {
     assert_eq!(f[1].doc().unwrap(), "All the bars!");
     assert_eq!(f[1].field().type_name().to_string(), "u32");
 }
+
+#[test]
+fn test_recursive() {
+    #[expect(unused)]
+    #[derive(Reflect)]
+    struct Recursive {
+        inner: Vec<Recursive>,
+    }
+
+    let r = Reflection::new::<Recursive>();
+    let ty = r.ty();
+    assert!(ty.doc().is_none());
+    assert_eq!(r.type_name().to_string(), "Recursive");
+
+    let aggregate = ty.as_aggregate().unwrap();
+    let fields = aggregate.fields().as_named().unwrap();
+    assert_eq!(fields.len(), 1);
+    let f = &fields[0];
+
+    assert!(f.doc().is_none());
+    let field_ty = f.field().ty();
+    let seq = field_ty.as_sequence().unwrap();
+    assert_eq!(seq.element().reflected_type_id(), r.reflected_type_id());
+}

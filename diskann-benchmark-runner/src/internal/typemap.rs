@@ -43,6 +43,14 @@ impl TypeMap {
         self.name_map.keys().map(|v| &**v)
     }
 
+    /// Register all entries in `reflections` and all reachable types for all reflections.
+    ///
+    /// If any discovered typename conflicts with an existing type name, the entire operation
+    /// is aborted and a [`Conflict`] is returned with the coliding type name.
+    ///
+    /// Returns a [`Transaction`], which must be explicitly completed via
+    /// [`Transaction::complete`] to finish registration. Dropping the return value without
+    /// completion will roll back the registration.
     pub(crate) fn register(
         &mut self,
         reflections: &[Reflection],
@@ -51,7 +59,7 @@ impl TypeMap {
 
         reflections.iter().try_for_each(|r| {
             r.visit_with(|r: Reflection| -> Result<bool, Conflict> {
-                let type_id = r.type_id();
+                let type_id = r.reflected_type_id();
 
                 // If the type doesn't exist - try to add it via type-name.
                 // Only if all that succeeds to we commit the type-id.
@@ -68,7 +76,7 @@ impl TypeMap {
                             // This branch is only reachable if `type_id` did not exist
                             // in `type_ids`, which means it never could have entered into
                             // `name_map` anyways.
-                            debug_assert_ne!(occupied_type_name.get().type_id(), type_id);
+                            debug_assert_ne!(occupied_type_name.get().reflected_type_id(), type_id);
 
                             return Err(Conflict {
                                 type_name: occupied_type_name.key().clone(),
@@ -89,6 +97,7 @@ impl TypeMap {
     }
 }
 
+/// Type name conflict discovered during [`TypeMap::register`].
 #[derive(Debug)]
 pub(crate) struct Conflict {
     type_name: String,
@@ -106,6 +115,7 @@ impl std::fmt::Display for Conflict {
 
 impl std::error::Error for Conflict {}
 
+/// Deferred completion of [`TypeMap::register`].
 #[derive(Debug)]
 #[must_use = "transactions must be explicitly completed - otherwise they automatically abort"]
 pub(crate) struct Transaction<'a> {
@@ -141,7 +151,7 @@ impl<'a> Transaction<'a> {
 
         self.map
             .name_map
-            .retain(|_, v| !added_type_ids.contains(&v.type_id()));
+            .retain(|_, v| !added_type_ids.contains(&v.reflected_type_id()));
     }
 
     pub(crate) fn complete(mut self) {
@@ -244,7 +254,7 @@ mod tests {
         let type_name = type_name_for::<T>();
         let r = map.type_info(&type_name).unwrap();
 
-        assert_eq!(r.type_id(), TypeId::of::<T>());
+        assert_eq!(r.reflected_type_id(), TypeId::of::<T>());
         assert_eq!(r.type_name().to_string(), type_name);
     }
 
@@ -255,8 +265,8 @@ mod tests {
         let type_name = type_name_for::<T>();
         if let Some(r) = map.type_info(&type_name) {
             assert_ne!(
-                r.type_id(),
-                Reflection::new::<T>().type_id(),
+                r.reflected_type_id(),
+                Reflection::new::<T>().reflected_type_id(),
                 "Did not expect \"{}\" to be registered",
                 std::any::type_name::<T>(),
             );

@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Macros supporting DiskANN3.
+
 use syn::{DeriveInput, parse_macro_input};
 
 mod reflect;

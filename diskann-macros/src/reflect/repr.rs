@@ -10,7 +10,7 @@
 //! ## Generic Bounds
 //!
 //! If we have a struct like
-//! ```
+//! ```text
 //! struct Container<T>(T);
 //!
 //! struct Foo<T, U> {
@@ -81,7 +81,7 @@
 //! to support and doesn't require additional legalization checks.
 //!
 //! External tagging is the default for enum when neither `serde(tag = "")` nor
-//! `serde(content = "") attributes are provided.
+//! `serde(content = "")` attributes are provided.
 //!
 //! ### Adjacently Tagged
 //!
@@ -146,7 +146,6 @@
 //! Since type registries assume that type names are unique, we don't allow `type_name` to
 //! be applied to types with generics. Otherwise, each instantiation of the generic would
 //! have the same name, limiting usefulness.
-//!
 
 use std::collections::HashSet;
 
@@ -172,7 +171,7 @@ impl<'a> Input<'a> {
 
         // Parse the type tree for the container.
         let container = Container::parse(&input.data, attrs, input.span())?;
-        let generics = Generics::parse(&input.generics, &container);
+        let generics = Generics::parse(&input.generics);
 
         Ok(Self {
             type_name,
@@ -208,20 +207,12 @@ struct Generics<'a> {
     generics: &'a syn::Generics,
     /// The type parameters of the original object.
     params: Vec<&'a syn::Ident>,
-    /// All field types.
-    types: Vec<&'a syn::Type>,
 }
 
 impl<'a> Generics<'a> {
-    fn parse(generics: &'a syn::Generics, container: &Container<'a>) -> Self {
+    fn parse(generics: &'a syn::Generics) -> Self {
         let params = generics.type_params().map(|p| &p.ident).collect();
-        let mut types = Vec::new();
-        container.for_each_type(|ty| types.push(ty));
-        Self {
-            generics,
-            params,
-            types,
-        }
+        Self { generics, params }
     }
 
     fn emit(&self, path: &syn::Path) -> syn::Generics {
@@ -230,10 +221,6 @@ impl<'a> Generics<'a> {
         let predicates = &mut generics.make_where_clause().predicates;
         for ident in self.params.iter() {
             predicates.push(parse_quote!(#ident: #path::Reflect));
-        }
-
-        for ty in self.types.iter() {
-            predicates.push(parse_quote!(#ty: #path::Reflect));
         }
 
         generics
@@ -254,16 +241,6 @@ impl<'a> Container<'a> {
                 span,
                 "Reflect cannot be derived for unions",
             )),
-        }
-    }
-
-    pub(crate) fn for_each_type<F>(&self, f: F)
-    where
-        F: FnMut(&'a syn::Type),
-    {
-        match self {
-            Self::Struct(s) => s.for_each_type(f),
-            Self::Enum(e) => e.for_each_type(f),
         }
     }
 
@@ -407,26 +384,19 @@ impl Generic<'_> {
 // Struct //
 ////////////
 
-pub(crate) struct Struct<'a> {
+struct Struct<'a> {
     doc: attributes::Doc,
     fields: Fields<'a>,
 }
 
 impl<'a> Struct<'a> {
-    pub(crate) fn parse(s: &'a syn::DataStruct, attrs: attributes::Struct) -> syn::Result<Self> {
+    fn parse(s: &'a syn::DataStruct, attrs: attributes::Struct) -> syn::Result<Self> {
         let attributes::Struct { rename_all, doc } = attrs;
         let fields = Fields::parse(&s.fields, rename_all)?;
         Ok(Self { doc, fields })
     }
 
-    pub(crate) fn for_each_type<F>(&self, f: F)
-    where
-        F: FnMut(&'a syn::Type),
-    {
-        self.fields.for_each_type(f)
-    }
-
-    pub(crate) fn emit(&self, path: &syn::Path) -> TokenStream {
+    fn emit(&self, path: &syn::Path) -> TokenStream {
         let doc = self.doc.emit();
         let fields = self.fields.emit(path);
         quote! {
@@ -442,14 +412,14 @@ impl<'a> Struct<'a> {
 // Enum //
 //////////
 
-pub(crate) struct Enum<'a> {
+struct Enum<'a> {
     doc: attributes::Doc,
     enum_repr: attributes::EnumRepr,
     variants: Vec<Variant<'a>>,
 }
 
 impl<'a> Enum<'a> {
-    pub(crate) fn parse(enum_: &'a syn::DataEnum, attr: attributes::Enum) -> syn::Result<Self> {
+    fn parse(enum_: &'a syn::DataEnum, attr: attributes::Enum) -> syn::Result<Self> {
         let attributes::Enum {
             rename_all,
             enum_repr,
@@ -516,14 +486,7 @@ impl<'a> Enum<'a> {
         })
     }
 
-    pub(crate) fn for_each_type<F>(&self, mut f: F)
-    where
-        F: FnMut(&'a syn::Type),
-    {
-        self.variants.iter().for_each(|v| v.for_each_type(&mut f))
-    }
-
-    pub(crate) fn emit(&self, path: &syn::Path) -> TokenStream {
+    fn emit(&self, path: &syn::Path) -> TokenStream {
         let enum_repr = match &self.enum_repr {
             attributes::EnumRepr::External => quote!(#path::tree::EnumRepr::External),
             attributes::EnumRepr::Internal { tag } => {
@@ -550,7 +513,7 @@ impl<'a> Enum<'a> {
 // Implementation //
 ////////////////////
 
-pub(crate) struct UnnamedField<'a> {
+struct UnnamedField<'a> {
     doc: attributes::Doc,
     ty: &'a syn::Type,
 }
@@ -582,7 +545,7 @@ impl<'a> UnnamedField<'a> {
     }
 }
 
-pub(crate) struct NamedField<'a> {
+struct NamedField<'a> {
     doc: attributes::Doc,
     name: syn::LitStr,
     ty: &'a syn::Type,
@@ -616,7 +579,7 @@ impl<'a> NamedField<'a> {
     }
 }
 
-pub(crate) enum Fields<'a> {
+enum Fields<'a> {
     Named(Vec<NamedField<'a>>),
     Unnamed(Vec<UnnamedField<'a>>),
     Unit,
@@ -674,17 +637,6 @@ impl<'a> Fields<'a> {
         Ok(me)
     }
 
-    fn for_each_type<F>(&self, mut f: F)
-    where
-        F: FnMut(&'a syn::Type),
-    {
-        match self {
-            Self::Named(named) => named.iter().for_each(|field| f(field.ty)),
-            Self::Unnamed(unnamed) => unnamed.iter().for_each(|field| f(field.ty)),
-            Self::Unit => {}
-        }
-    }
-
     fn emit(&self, path: &syn::Path) -> TokenStream {
         match self {
             Self::Named(named) => {
@@ -728,13 +680,6 @@ impl<'a> Variant<'a> {
         let name = rename_variant.apply_to_variant(name, rename_all);
 
         Ok(Self { doc, name, fields })
-    }
-
-    fn for_each_type<F>(&self, f: F)
-    where
-        F: FnMut(&'a syn::Type),
-    {
-        self.fields.for_each_type(f)
     }
 
     fn emit(&self, path: &syn::Path) -> TokenStream {

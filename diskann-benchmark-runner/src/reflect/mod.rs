@@ -90,8 +90,8 @@ mod test;
 /// ### Container Attributes
 ///
 /// * `#[reflect(type_name = "name")]`: Use the given name to describe a struct instead of
-///   its Rust name. This is used to avoid naming conflicts within a [`Registry`], which
-///   enforces that type names are unique.
+///   its Rust name. This is used to avoid naming conflicts within a [`crate::Registry`],
+///   which enforces that type names are unique.
 ///
 ///   Because of this, this attribute cannot be used on generic structs.
 ///
@@ -156,9 +156,9 @@ impl Reflection {
         TypeName(*self)
     }
 
-    /// Return the [`TypeId`] of the
-    pub fn type_id(&self) -> TypeId {
-        (self.reflection.type_id)()
+    /// Return the [`TypeId`] of the reflected type.
+    pub fn reflected_type_id(&self) -> TypeId {
+        (self.reflection.reflected_type_id)()
     }
 
     /// Return a [`std::fmt::Display`] comaptible struct for rendering the reflected type.
@@ -377,7 +377,7 @@ pub mod internal {
     pub(super) struct VTable {
         pub(super) ty: fn() -> super::Type,
         pub(super) format_type_name: fn(&mut dyn std::fmt::Write) -> std::fmt::Result,
-        pub(super) type_id: fn() -> std::any::TypeId,
+        pub(super) reflected_type_id: fn() -> std::any::TypeId,
     }
 
     impl VTable {
@@ -388,7 +388,7 @@ pub mod internal {
             &Self {
                 ty: ty::<T>,
                 format_type_name: format_type_name::<T>,
-                type_id: type_id::<T>,
+                reflected_type_id: reflected_type_id::<T>,
             }
         }
     }
@@ -407,7 +407,7 @@ pub mod internal {
         <T as super::Reflect>::format_type_name(f)
     }
 
-    fn type_id<T>() -> std::any::TypeId
+    fn reflected_type_id<T>() -> std::any::TypeId
     where
         T: super::Reflect,
     {
