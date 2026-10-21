@@ -11,21 +11,48 @@ use diskann_quantization::{
 
 use crate::{num::Bytes, repr::quantized};
 
-impl<T> quantized::Quantizer for T
+/// A new-type wrapper around [`iface::Quantizer`] for implementing [`quantized::Quantizer`].
+#[derive(Debug)]
+pub struct Spherical<T>(T);
+
+impl<T> Spherical<T> {
+    pub fn new(quantizer: T) -> Self {
+        Self(quantizer)
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> std::ops::Deref for Spherical<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Spherical<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
+impl<T> quantized::Quantizer for Spherical<T>
 where
     T: iface::Quantizer + 'static,
 {
     fn bytes(&self) -> Bytes {
-        Bytes::new(iface::Quantizer::bytes(self))
+        Bytes::new(iface::Quantizer::bytes(&**self))
     }
 
     fn dim(&self) -> usize {
-        iface::Quantizer::full_dim(self)
+        iface::Quantizer::full_dim(&**self)
     }
 
     fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()> {
         iface::Quantizer::compress(
-            self,
+            &**self,
             data,
             iface::OpaqueMut::new(quantized),
             ScopedAllocator::global(),
@@ -37,7 +64,7 @@ where
     where
         V: quantized::DistanceVisitor<'a>,
     {
-        visitor.visit(iface::Quantizer::distance_computer_ref(self))
+        visitor.visit(iface::Quantizer::distance_computer_ref(&**self))
     }
 
     fn insert_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
@@ -45,7 +72,7 @@ where
         V: quantized::QueryDistanceVisitor<'a>,
     {
         let query_computer = iface::Quantizer::fused_query_computer(
-            self,
+            &**self,
             query,
             iface::QueryLayout::SameAsData,
             false,
@@ -62,7 +89,7 @@ where
         V: quantized::QueryDistanceVisitor<'a>,
     {
         let query_computer = iface::Quantizer::fused_query_computer(
-            self,
+            &**self,
             query,
             iface::QueryLayout::FullPrecision,
             true,
@@ -324,10 +351,10 @@ mod tests {
             SupportedMetric::InnerProduct,
             SupportedMetric::Cosine,
         ] {
-            let quantizer = train_quantizer::<N>(data.as_view(), metric);
+            let quantizer = Spherical::new(train_quantizer::<N>(data.as_view(), metric));
             test_spherical(
                 &quantizer,
-                &quantizer,
+                &*quantizer,
                 &mut rng,
                 distribution,
                 TRIALS,

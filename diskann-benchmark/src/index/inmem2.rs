@@ -495,7 +495,7 @@ impl Spherical {
         metric: Metric,
     ) -> anyhow::Result<inmem::repr::quantized::Backend> {
         use diskann_quantization::{algorithms::transforms, spherical};
-        use inmem::repr::quantized::Backend;
+        use inmem::repr::quantized::{spherical::Spherical, Backend};
         use rand::SeedableRng;
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x7);
@@ -514,9 +514,11 @@ impl Spherical {
         )?;
 
         let quantizer = match self.bits {
-            SphericalBits::One => Backend::new(quantizer.as_quantizer_impl::<1>()?),
-            SphericalBits::Two => Backend::new(quantizer.as_quantizer_impl::<2>()?),
-            SphericalBits::Four => Backend::new(quantizer.as_quantizer_impl::<4>()?),
+            SphericalBits::One => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<1>()?)),
+            SphericalBits::Two => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<2>()?)),
+            SphericalBits::Four => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?))
+            }
         };
 
         Ok(quantizer)
