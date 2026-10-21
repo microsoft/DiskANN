@@ -3,6 +3,10 @@
 The goal of the benchmarking infrastructure is to make performance testing and development
 easier by providing a "one click" runner for benchmarks with machine readable output.
 
+For a static build + search baseline of the new IVF implementation, see
+[Graph-IVF benchmark](graph-ivf.md). It includes a self-contained synthetic workload
+and does not require a dynamic runbook.
+
 ## Usage
 
 To get started, run

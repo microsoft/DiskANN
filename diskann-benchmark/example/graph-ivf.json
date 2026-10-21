@@ -1,0 +1,36 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "synthetic",
+          "vectors": 8192,
+          "queries": 128,
+          "dimensions": 128,
+          "seed": 42
+        },
+        "build": {
+          "initial_centroids": 8,
+          "batch_size": 256,
+          "split_threshold": 512,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 3
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": {
+          "k": 10,
+          "nprobe": [1, 4, 16],
+          "l_search": 64,
+          "warmup_repetitions": 1,
+          "repetitions": 5
+        }
+      }
+    }
+  ]
+}
