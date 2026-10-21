@@ -147,6 +147,8 @@ where
             parameters.into(),
             &graph,
             metric,
+            std::num::NonZeroUsize::new(dimensions)
+                .context("PiPNN needs at least one dimension")?,
             &pool,
         )?;
         if let Some(hash_prune) = &parameters.hash_prune {
