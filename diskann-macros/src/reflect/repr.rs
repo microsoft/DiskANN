@@ -13,7 +13,7 @@
 //! ```
 //! struct Container<T>(T);
 //!
-//! struct Foo<'a, T, U> {
+//! struct Foo<T, U> {
 //!     baz: Container<T>,
 //!     bar: String,
 //!     buz: U,
@@ -327,7 +327,7 @@ impl<'a> TypeName<'a> {
     /// name from the [`syn::DeriveInput`].
     ///
     /// When generics are present (for example)
-    /// ```
+    /// ```text
     /// struct Foo<T, U, const N: usize> {
     ///    // ...
     /// }
