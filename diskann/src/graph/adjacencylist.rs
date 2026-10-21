@@ -56,6 +56,34 @@ impl<I> AdjacencyList<I> {
         self.edges.retain(f)
     }
 
+    /// Prefetch future items while retaining those accepted by `pred`.
+    ///
+    /// The list is compacted in place without allocating. `lookahead` must be nonzero.
+    pub fn retain_with_prefetch<P>(&mut self, lookahead: usize, pred: &mut P)
+    where
+        I: Copy,
+        P: super::glue::HybridPredicate<I>,
+    {
+        debug_assert!(lookahead > 0);
+        for item in self.edges.iter().take(lookahead) {
+            pred.prefetch(item);
+        }
+
+        let len = self.edges.len();
+        let mut write_index = 0usize;
+        for read_index in 0..len {
+            if read_index + lookahead < len {
+                pred.prefetch(&self.edges[read_index + lookahead]);
+            }
+            let item = self.edges[read_index];
+            if pred.eval_mut(&item) {
+                self.edges[write_index] = item;
+                write_index += 1;
+            }
+        }
+        self.edges.truncate(write_index);
+    }
+
     /// Clear the slice.
     pub fn clear(&mut self) {
         self.edges.clear();
