@@ -377,4 +377,48 @@ mod tests {
             "graph/product/cosine-baseline.json",
         );
     }
+
+    //---------------------//
+    // Scalar Quantization //
+    //---------------------//
+
+    #[test]
+    #[cfg(not(miri))]
+    fn graph_scalar_one() {
+        run_regression_example(
+            "graph/scalar/one-bit-l2.json",
+            "checks.json",
+            "graph/scalar/one-bit-l2-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_scalar_two() {
+        run_regression_example(
+            "graph/scalar/two-bit-cosine.json",
+            "checks.json",
+            "graph/scalar/two-bit-cosine-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_scalar_four() {
+        run_regression_example(
+            "graph/scalar/four-bit-ip.json",
+            "checks.json",
+            "graph/scalar/four-bit-ip-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_scalar_eight() {
+        run_regression_example(
+            "graph/scalar/eight-bit-l2.json",
+            "checks.json",
+            "graph/scalar/eight-bit-l2-baseline.json",
+        );
+    }
 }

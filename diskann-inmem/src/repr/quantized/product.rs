@@ -357,6 +357,9 @@ mod tests {
 
     use diskann::graph::test::synthetic::Grid;
     use diskann_utils::assert_contains;
+    use diskann_vector::distance::Distance as VDistance;
+
+    use crate::repr::quantized::test::Boxit;
 
     fn train(
         data: rowmajor::Ref<'_, f32>,
@@ -389,29 +392,6 @@ mod tests {
             .unwrap();
 
         Product::new(basic, metric, NonZeroUsize::new(1)).unwrap()
-    }
-
-    #[derive(Debug)]
-    struct Boxit;
-
-    impl<'a> quantized::DistanceVisitor<'a> for Boxit {
-        type Output = Box<dyn quantized::Distance + 'a>;
-        fn visit<D>(self, distance: D) -> Self::Output
-        where
-            D: quantized::Distance + 'a,
-        {
-            Box::new(distance)
-        }
-    }
-
-    impl<'a> quantized::QueryDistanceVisitor<'a> for Boxit {
-        type Output = Box<dyn quantized::QueryDistance + 'a>;
-        fn visit<D>(self, distance: D) -> Self::Output
-        where
-            D: quantized::QueryDistance + 'a,
-        {
-            Box::new(distance)
-        }
     }
 
     // Use the canonical grid layout, but center the data around the origin.
@@ -502,13 +482,10 @@ mod tests {
     /// Happy path tests.
     #[test]
     fn test_product() {
-        use diskann_vector::distance::DistanceProvider;
-
         for metric in Metric::all() {
             let (product, data) = make_test(*metric);
 
-            let reference =
-                <f32 as DistanceProvider<f32>>::distance_comparer(metric.as_vector_metric(), None);
+            let reference = VDistance::<f32, f32>::new(metric.as_vector_metric(), None);
 
             // Quantize the data.
             let mut quantized = rowmajor::Owned::from_element(
