@@ -19,7 +19,7 @@
 
 use std::any::TypeId;
 
-use crate::{ANNResult, utils::VectorRepr};
+use crate::{ANNError, ANNResult, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::conversion::SliceCast;
 use diskann_wide::{
@@ -41,22 +41,10 @@ pub(super) fn as_f32_into<T: VectorRepr>(source: &[T], output: &mut [f32]) -> Re
     }
 }
 
-/// Return the length of a row of `data` after conversion to `f32`.
-///
-/// Compressed element types store a row in a different number of elements than
-/// the `f32` vector it converts to. Empty data has no row to read, so it keeps
-/// the stored row length.
-pub(super) fn f32_dimensions<T: VectorRepr>(data: MatrixView<'_, T>) -> ANNResult<usize> {
-    match data.get_row(0) {
-        Some(row) => T::full_dimension(row).map_err(Into::into),
-        None => Ok(data.ncols()),
-    }
-}
-
 /// Convert rows `ids` of `data` into the rows of `output`, one row per ID.
 ///
-/// `output` has [`f32_dimensions`] columns. `f16` input selects the CPU's
-/// instructions once for the whole batch.
+/// `output` has the `f32` row length of the build as its column count.
+/// `f16` input selects the CPU's instructions once for the whole batch.
 pub(super) fn gather_as_f32<T: VectorRepr>(
     data: MatrixView<'_, T>,
     ids: &[u32],
@@ -64,6 +52,13 @@ pub(super) fn gather_as_f32<T: VectorRepr>(
 ) -> ANNResult<()> {
     debug_assert_eq!(output.nrows(), ids.len());
     if TypeId::of::<T>() == TypeId::of::<f16>() {
+        if output.ncols() != data.ncols() {
+            return Err(ANNError::message(format!(
+                "PiPNN dimension {} does not match the f16 row length {}",
+                output.ncols(),
+                data.ncols()
+            )));
+        }
         arch::dispatch3(GatherFp16, data, ids, output);
     } else {
         for (&id, destination) in ids.iter().zip(output.row_iter_mut()) {
@@ -141,6 +136,28 @@ mod tests {
             [[1_u8, 2], [7, 4], [5, 9]],
             ids,
             [[5.0, 9.0], [1.0, 2.0], [5.0, 9.0]],
+        );
+    }
+
+    #[test]
+    fn an_f16_row_length_that_differs_from_the_dimension_is_an_error() {
+        // A stored row has two values, but the build dimension asks for three.
+        let rows = [[f16::ONE, f16::ZERO]];
+        let ids = [0];
+        let stored_dimensions = rows[0].len();
+        let dimensions = 3;
+        let data =
+            MatrixView::try_from(rows.as_flattened(), rows.len(), stored_dimensions).unwrap();
+        let mut output = vec![f32::NAN; ids.len() * dimensions];
+        let output = MutMatrixView::try_from(output.as_mut_slice(), ids.len(), dimensions).unwrap();
+
+        let error = gather_as_f32(data, &ids, output).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("PiPNN dimension 3 does not match the f16 row length 2"),
+            "{error}"
         );
     }
 }

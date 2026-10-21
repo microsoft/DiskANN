@@ -617,13 +617,14 @@ impl HashPrune {
     /// Create one empty direction reservoir and LSH sketch for each dataset point.
     pub(crate) fn new<T: VectorRepr + Send + Sync>(
         data: MatrixView<'_, T>,
+        dimensions: usize,
         num_planes: usize,
         l_max: usize,
         seed: u64,
     ) -> ANNResult<Self> {
         let npoints = data.nrows();
         let t0 = std::time::Instant::now();
-        let sketches = LshSketches::try_new(data, num_planes, seed)?;
+        let sketches = LshSketches::try_new(data, dimensions, num_planes, seed)?;
         tracing::debug!(
             elapsed_secs = t0.elapsed().as_secs_f64(),
             "sketch computation"
@@ -917,6 +918,7 @@ mod tests {
     ) -> ANNResult<HashPrune> {
         HashPrune::new(
             MatrixView::try_from(data, points, dimensions).unwrap(),
+            dimensions,
             planes,
             l_max,
             42,
@@ -1076,12 +1078,14 @@ mod tests {
                     (
                         LshSketches::try_new(
                             MatrixView::try_from(converted.as_slice(), points, dimensions).unwrap(),
+                            dimensions,
                             planes,
                             42,
                         )
                         .unwrap(),
                         LshSketches::try_new(
                             MatrixView::try_from(f32_data.as_slice(), points, dimensions).unwrap(),
+                            dimensions,
                             planes,
                             42,
                         )

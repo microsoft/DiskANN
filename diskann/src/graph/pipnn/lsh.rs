@@ -39,11 +39,12 @@ impl LshSketches {
     /// sketch work uses the currently installed Rayon pool.
     pub(super) fn try_new<T: VectorRepr>(
         data: MatrixView<'_, T>,
+        dimensions: usize,
         num_planes: usize,
         seed: u64,
     ) -> ANNResult<Self> {
         let npoints = data.nrows();
-        let ndims = super::conversion::f32_dimensions(data)?;
+        let ndims = dimensions;
         let hyperplane_len = num_planes.checked_mul(ndims).ok_or_else(|| {
             ANNError::message(format!(
                 "LSH matrix shape {num_planes} x {ndims} overflows usize"
@@ -163,7 +164,12 @@ mod tests {
 
         // When
         let sketches = run_with_threads(2, || {
-            LshSketches::try_new(matrix_view(&data, point_count, dimensions), plane_count, 42)
+            LshSketches::try_new(
+                matrix_view(&data, point_count, dimensions),
+                dimensions,
+                plane_count,
+                42,
+            )
         })
         .unwrap();
 
@@ -201,7 +207,7 @@ mod tests {
 
         // When
         let actual_sketches = run_with_threads(2, || {
-            LshSketches::try_new(matrix_view(&data, npoints, ndims), planes, seed)
+            LshSketches::try_new(matrix_view(&data, npoints, ndims), ndims, planes, seed)
         })
         .unwrap();
 
@@ -220,8 +226,8 @@ mod tests {
         let empty_data = matrix_view(&[] as &[f32], point_count, dimensions);
 
         // When
-        let error =
-            LshSketches::try_new(empty_data, 2, 42).expect_err("overflowing LSH shape must fail");
+        let error = LshSketches::try_new(empty_data, dimensions, 2, 42)
+            .expect_err("overflowing LSH shape must fail");
 
         // Then
         assert!(error.to_string().contains("overflows"));

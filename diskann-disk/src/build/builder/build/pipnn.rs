@@ -11,6 +11,8 @@
 //!
 //! PiPNN and Vamana use the same disk graph format.
 
+use std::num::NonZeroUsize;
+
 use diskann::graph::pipnn::PiPNNBuildContext;
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::{
@@ -55,6 +57,17 @@ where
     // supplied Rayon pool.
     let data =
         read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
+    // PiPNN needs the row length after conversion to `f32`. A compressed type
+    // such as MinMax stores more elements per row and encodes the dimension in
+    // each row, so read it from the first row, as the PQ generator does.
+    let dimensions = data
+        .as_view()
+        .get_row(0)
+        .map(Data::VectorDataType::full_dimension)
+        .transpose()
+        .map_err(Into::<ANNError>::into)?
+        .and_then(NonZeroUsize::new)
+        .ok_or_else(|| ANNError::message("PiPNN requires at least one data point"))?;
     // The same seed controls leader sampling and the medoid sample below.
     let config = diskann::graph::pipnn::PiPNNConfig {
         seed: builder.index_configuration.random_seed,
@@ -64,6 +77,7 @@ where
         config,
         &builder.index_configuration.config,
         builder.index_configuration.dist_metric,
+        dimensions,
         pool.as_rayon(),
     )?;
     if let Some(hash_prune) = &parameters.hash_prune {
@@ -123,6 +137,7 @@ mod tests {
             p_samp: 0.01,
             max_leaders: nz(1000),
             fanout: vec![nz(10), nz(3)],
+            max_depth: nz(10),
             k: nz(2),
             replicas: nz(1),
             hash_prune: Some(crate::HashPruneParameters::default()),
