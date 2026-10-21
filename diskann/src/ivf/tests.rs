@@ -23,8 +23,7 @@ use super::{
     pending::{Membership, PendingLists},
     region::{AsMatRef, RegionUpdate, RegionView, View},
     traits::{
-        BuildAccessor, BuildStrategy, HasIds, Router, RouterAndNearest, SearchAccessor,
-        SearchStrategy, SetElements,
+        BuildAccessor, BuildStrategy, HasIds, NearestList, Router, SearchAccessor, SearchStrategy,
     },
 };
 use crate::{
@@ -138,7 +137,7 @@ impl<T: Copy + Into<f32> + Sync> Router<(u32, &[T])> for Coarse<'_> {
         query: &(u32, &[T]),
         nprobe: NonZeroUsize,
         emit: F,
-    ) -> impl SendFuture<ANNResult<usize>>
+    ) -> impl SendFuture<ANNResult<()>>
     where
         F: FnMut(&Self::Id, f32) + Send,
     {
@@ -146,7 +145,8 @@ impl<T: Copy + Into<f32> + Sync> Router<(u32, &[T])> for Coarse<'_> {
             if self.fail_route {
                 return Err(ANNError::message("injected routing failure"));
             }
-            Ok(self.select(query.1, nprobe, |_| true, emit))
+            self.select(query.1, nprobe, |_| true, emit);
+            Ok(())
         }
     }
 }
@@ -164,7 +164,7 @@ impl<T: Copy + Into<f32> + Sync> Router<&[T]> for Coarse<'_> {
         query: &&[T],
         nprobe: NonZeroUsize,
         emit: F,
-    ) -> impl SendFuture<ANNResult<usize>>
+    ) -> impl SendFuture<ANNResult<()>>
     where
         F: FnMut(&Self::Id, f32) + Send,
     {
@@ -172,13 +172,16 @@ impl<T: Copy + Into<f32> + Sync> Router<&[T]> for Coarse<'_> {
             if self.fail_route {
                 return Err(ANNError::message("injected routing failure"));
             }
-            Ok(self.select(query, nprobe, |_| true, emit))
+            self.select(query, nprobe, |_| true, emit);
+            Ok(())
         }
     }
 }
 
-impl<T: Copy + Into<f32> + Sync> RouterAndNearest<(u32, &[T])> for Coarse<'_> {
-    fn nearest<P, F>(
+impl NearestList for Coarse<'_> {
+    type Id = u32;
+
+    fn find<P, F>(
         &self,
         id: Self::Id,
         nprobe: NonZeroUsize,
@@ -315,12 +318,12 @@ impl<T> HasIds for Build<'_, T> {
     type ListId = u32;
 }
 
-impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build<'p, T> {
+impl<'p, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &'v [T])> for Build<'p, T> {
     type Update<'a>
         = Update<'a>
     where
         Self: 'a;
-    type Router<'a>
+    type Nearest<'a>
         = Coarse<'a>
     where
         Self: 'a;
@@ -334,7 +337,7 @@ impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build
         NonZeroUsize::new(self.store.dim).unwrap()
     }
 
-    fn router(&mut self) -> Self::Router<'_> {
+    fn nearest(&mut self) -> Self::Nearest<'_> {
         Coarse {
             stored: &self.store.lists,
             fail_route: self.store.fail_route,
@@ -342,25 +345,60 @@ impl<'p, T: Copy + Into<f32> + Send + Sync> BuildAccessor<(u32, &[T])> for Build
         }
     }
 
-    fn append_to<Itr>(
-        &mut self,
-        list: u32,
-        members: Itr,
-    ) -> impl SendFuture<ANNResult<NonZeroUsize>>
+    fn route<Itr, F>(&mut self, points: Itr, mut emit: F) -> impl SendFuture<ANNResult<()>>
     where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Itr: ExactSizeIterator<Item = (u32, &'v [T])> + Clone + Send + Sync,
+        F: FnMut(&Self::ListId, NonZeroUsize) + Send,
     {
         async move {
-            let size = self
-                .store
-                .lists
-                .get(&list)
-                .ok_or_else(|| ANNError::message(format!("unknown list {list}")))?
-                .members
-                .len();
-            self.pending.append(list, members.collect())?;
-            NonZeroUsize::new(self.pending.list_size(list, size)?)
-                .ok_or_else(|| ANNError::message("appending must leave a nonempty list"))
+            let mut staged = BTreeMap::new();
+            let mut routed = BTreeMap::<u32, Vec<u32>>::new();
+            for point in points {
+                let (external, vector) = point;
+                if vector.len() != self.store.dim
+                    || !vector.iter().all(|&value| value.into().is_finite())
+                {
+                    return Err(ANNError::message("invalid input vector"));
+                }
+                let id = external
+                    .checked_add(10_000)
+                    .ok_or_else(|| ANNError::message("internal point ID overflow"))?;
+                if self.store.points.contains_key(&id)
+                    || self.staged.contains_key(&id)
+                    || staged.contains_key(&id)
+                {
+                    return Err(ANNError::message("point already exists"));
+                }
+                let mut count = 0usize;
+                {
+                    let router = self.nearest();
+                    router
+                        .route(&point, ONE, |&list, _| {
+                            count += 1;
+                            routed.entry(list).or_default().push(id);
+                        })
+                        .await?;
+                }
+                if count != 1 {
+                    return Err(ANNError::message("IVF routing returned no live centroid"));
+                }
+                staged.insert(id, vector.to_vec());
+            }
+            self.staged.extend(staged);
+            for (list, members) in routed {
+                let size = self
+                    .store
+                    .lists
+                    .get(&list)
+                    .ok_or_else(|| ANNError::message(format!("unknown list {list}")))?
+                    .members
+                    .len();
+                self.pending.append(list, members)?;
+                let size = NonZeroUsize::new(self.pending.list_size(list, size)?)
+                    .ok_or_else(|| ANNError::message("appending must leave a nonempty list"))?;
+                emit(&list, size);
+            }
+            Ok(())
         }
     }
 
@@ -539,7 +577,7 @@ impl<'a, T: Copy + Into<f32> + Sync> Router<&[T]> for SearchRouter<'a, T> {
         query: &&[T],
         nprobe: NonZeroUsize,
         mut emit: F,
-    ) -> impl SendFuture<ANNResult<usize>>
+    ) -> impl SendFuture<ANNResult<()>>
     where
         F: FnMut(&Self::Id, Self::Ret) + Send,
     {
@@ -552,7 +590,7 @@ impl<'a, T: Copy + Into<f32> + Sync> Router<&[T]> for SearchRouter<'a, T> {
                 fail_route: false,
                 fail_nearest: false,
             };
-            Ok(coarse.select(
+            coarse.select(
                 query,
                 nprobe,
                 |_| true,
@@ -566,7 +604,8 @@ impl<'a, T: Copy + Into<f32> + Sync> Router<&[T]> for SearchRouter<'a, T> {
                         },
                     );
                 },
-            ))
+            );
+            Ok(())
         }
     }
 }
@@ -640,41 +679,6 @@ impl<'a, 'q, T: Copy + Into<f32> + Send + Sync> SearchStrategy<'a, &'q [T], Defa
             return Err(ANNError::message("invalid query vector"));
         }
         Ok(Search { store, query })
-    }
-}
-
-impl<'p, T: Copy + Into<f32> + Send + Sync> SetElements<(u32, &'p [T]), DefaultContext>
-    for Build<'_, T>
-{
-    type Id = u32;
-
-    async fn set_elements(
-        &mut self,
-        _: &DefaultContext,
-        points: &[(u32, &'p [T])],
-    ) -> ANNResult<Vec<u32>> {
-        let mut staged = BTreeMap::new();
-        let mut ids = Vec::with_capacity(points.len());
-        for (external, vector) in points {
-            if vector.len() != self.store.dim
-                || !vector.iter().all(|&value| value.into().is_finite())
-            {
-                return Err(ANNError::message("invalid input vector"));
-            }
-            let id = external
-                .checked_add(10_000)
-                .ok_or_else(|| ANNError::message("internal point ID overflow"))?;
-            if self.store.points.contains_key(&id)
-                || self.staged.contains_key(&id)
-                || staged.contains_key(&id)
-            {
-                return Err(ANNError::message("point already exists"));
-            }
-            staged.insert(id, vector.to_vec());
-            ids.push(id);
-        }
-        self.staged.extend(staged);
-        Ok(ids)
     }
 }
 
@@ -927,7 +931,7 @@ async fn search_supports_native_queries_after_insertion_and_splitting() {
     let (mut index, strategy) = index(seeded(), 2);
     let points = [(5, &[8u8, 0][..])];
     let stats = index
-        .insert_batch(&strategy, &DefaultContext, &points)
+        .insert_batch(&strategy, &DefaultContext, points.iter().copied())
         .await
         .unwrap();
     assert_eq!(stats.splits, 1);
@@ -956,7 +960,7 @@ async fn search_supports_native_queries_after_insertion_and_splitting() {
 }
 
 #[tokio::test]
-async fn routing_callbacks_emit_ranked_results_and_counts() {
+async fn routing_callbacks_emit_ranked_results() {
     let expected: [(u32, f32); 3] = [(1, 25.0), (2, 25.0), (3, 8836.0)];
     for store in [seeded(), Store::default()] {
         let router = Coarse {
@@ -966,7 +970,7 @@ async fn routing_callbacks_emit_ranked_results_and_counts() {
         };
         for limit in [1, 2, usize::MAX] {
             let mut emitted = Vec::new();
-            let count = require_send(router.route(
+            require_send(router.route(
                 &(9, &[6u8, 0][..]),
                 NonZeroUsize::new(limit).unwrap(),
                 |id, distance| emitted.push((*id, distance)),
@@ -974,7 +978,6 @@ async fn routing_callbacks_emit_ranked_results_and_counts() {
             .await
             .unwrap();
             let expected = &expected[..limit.min(store.lists.len())];
-            assert_eq!(count, expected.len());
             assert_eq!(emitted, expected);
         }
     }
@@ -983,7 +986,7 @@ async fn routing_callbacks_emit_ranked_results_and_counts() {
 #[tokio::test]
 async fn nearest_callbacks_filter_before_limiting_and_count_emitted_results() {
     let store = seeded();
-    let router = Coarse {
+    let nearest = Coarse {
         stored: &store.lists,
         fail_route: false,
         fail_nearest: false,
@@ -995,8 +998,7 @@ async fn nearest_callbacks_filter_before_limiting_and_count_emitted_results() {
         (2, vec![1, 2, 3], vec![]),
     ] {
         let mut emitted = Vec::new();
-        let count = require_send(RouterAndNearest::<(u32, &[f32])>::nearest(
-            &router,
+        let count = require_send(nearest.find(
             1,
             NonZeroUsize::new(limit).unwrap(),
             |id| !excluded.contains(id),
@@ -1016,14 +1018,13 @@ async fn nearest_lookup_failures_do_not_emit_results() {
         (false, 99, "unknown list 99"),
         (true, 1, "injected nearest failure"),
     ] {
-        let router = Coarse {
+        let nearest = Coarse {
             stored: &store.lists,
             fail_route: false,
             fail_nearest,
         };
         let mut emitted = Vec::new();
-        let error = require_send(RouterAndNearest::<(u32, &[f32])>::nearest(
-            &router,
+        let error = require_send(nearest.find(
             id,
             ONE,
             |_| true,
@@ -1037,26 +1038,45 @@ async fn nearest_lookup_failures_do_not_emit_results() {
 }
 
 #[tokio::test]
-async fn staging_preserves_native_inputs_and_id_order() {
+async fn routing_preserves_native_inputs_and_id_order() {
     let strategy = Strategy::new(seeded());
     let mut build: Build<'_, u8> = strategy.build_accessor(&DefaultContext).unwrap();
     let points: [(u32, &[u8]); 3] = [(9, &[11, 0]), (7, &[1, 0]), (8, &[0, 0])];
-    let ids = require_send(build.set_elements(&DefaultContext, &points))
-        .await
-        .unwrap();
-    assert_eq!(ids, [10_009, 10_007, 10_008]);
-    for (&id, point) in ids.iter().zip(&points) {
+    let mut emitted = Vec::new();
+    require_send(build.route(points.iter().copied(), |&list, size| {
+        emitted.push((list, size.get()));
+    }))
+    .await
+    .unwrap();
+    assert_eq!(emitted, [(1, 4), (2, 3)]);
+    assert_eq!(
+        build
+            .pending
+            .members(1, &build.store.lists[&1].members)
+            .unwrap()
+            .collect::<Vec<_>>(),
+        [10_000, 10_001, 10_007, 10_008]
+    );
+    assert_eq!(
+        build
+            .pending
+            .members(2, &build.store.lists[&2].members)
+            .unwrap()
+            .collect::<Vec<_>>(),
+        [10_002, 10_003, 10_009]
+    );
+    for point in &points {
+        let id = point.0 + 10_000;
         assert_eq!(build.staged[&id], point.1);
         assert!(!build.store.points.contains_key(&id));
     }
-    let router = build.router();
+    let router = build.nearest();
     for (point, expected) in points.iter().zip([2, 1, 1]) {
-        let mut selected = None;
-        let count = require_send(router.route(point, ONE, |id, _| selected = Some(*id)))
+        let mut selected = Vec::new();
+        require_send(router.route(point, ONE, |&id, _| selected.push(id)))
             .await
             .unwrap();
-        assert_eq!(count, 1);
-        assert_eq!(selected, Some(expected));
+        assert_eq!(selected, [expected]);
     }
     drop(build);
     let store = strategy.store();
@@ -1065,12 +1085,70 @@ async fn staging_preserves_native_inputs_and_id_order() {
 }
 
 #[tokio::test]
-async fn native_inputs_are_inserted_using_the_returned_ids() {
-    let (mut index, strategy) = index(seeded(), 4);
-    let points: [(u32, &[u8]); 3] = [(9, &[11, 0]), (7, &[1, 0]), (8, &[0, 0])];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
+async fn routing_reports_sizes_including_previous_pending_appends() {
+    let strategy = Strategy::new(seeded());
+    let mut build: Build<'_, u8> = strategy.build_accessor(&DefaultContext).unwrap();
+    let points: [(u32, &[u8]); 2] = [(5, &[1, 0]), (6, &[2, 0])];
+    let mut emitted = Vec::new();
+    for point in points {
+        require_send(build.route(std::iter::once(point), |&list, size| {
+            emitted.push((list, size.get()));
+        }))
         .await
         .unwrap();
+    }
+    assert_eq!(emitted, [(1, 3), (1, 4)]);
+    assert_eq!(build.pending.list_size(1, 2).unwrap(), 4);
+    assert_eq!(build.store.lists[&1].members, [10_000, 10_001]);
+    assert_eq!(build.store.finishes, 0);
+
+    require_send(build.finish()).await.unwrap();
+    let store = strategy.store();
+    assert_eq!(store.lists[&1].members, [10_000, 10_001, 10_005, 10_006]);
+    assert_eq!(store.points[&10_005], [1.0, 0.0]);
+    assert_eq!(store.points[&10_006], [2.0, 0.0]);
+    assert_eq!(store.finishes, 1);
+}
+
+#[tokio::test]
+async fn failed_routing_leaves_no_staged_points_or_appends() {
+    for fail_route in [false, true] {
+        let mut store = seeded();
+        store.fail_route = fail_route;
+        if !fail_route {
+            store.lists.clear();
+        }
+        let strategy = Strategy::new(store);
+        let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
+        let points = [(5, &[1.0, 0.0][..])];
+        let mut emitted = Vec::new();
+        let error = require_send(build.route(points.into_iter(), |&list, size| {
+            emitted.push((list, size.get()));
+        }))
+        .await
+        .unwrap_err();
+        let expected = if fail_route {
+            "injected routing failure"
+        } else {
+            "IVF routing returned no live centroid"
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(emitted.is_empty());
+        assert!(build.staged.is_empty());
+        assert!(build.pending.clone().into_changes().next().is_none());
+        assert!(!build.store.points.contains_key(&10_005));
+        assert_eq!(build.store.finishes, 0);
+    }
+}
+
+#[tokio::test]
+async fn native_inputs_are_inserted_using_the_assigned_ids() {
+    let (mut index, strategy) = index(seeded(), 4);
+    let points: [(u32, &[u8]); 3] = [(9, &[11, 0]), (7, &[1, 0]), (8, &[0, 0])];
+    let stats =
+        require_send(index.insert_batch(&strategy, &DefaultContext, points.iter().copied()))
+            .await
+            .unwrap();
     assert_eq!(
         stats,
         InsertStats {
@@ -1100,12 +1178,17 @@ async fn failed_staging_leaves_no_new_elements() {
         vec![(5, &[1.0, 0.0][..]), (u32::MAX, &[2.0, 0.0][..])],
     ] {
         let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
+        let mut emitted = Vec::new();
         assert!(
-            require_send(build.set_elements(&DefaultContext, &points))
-                .await
-                .is_err()
+            require_send(build.route(points.iter().copied(), |&list, size| {
+                emitted.push((list, size.get()));
+            }))
+            .await
+            .is_err()
         );
+        assert!(emitted.is_empty());
         assert!(build.staged.is_empty());
+        assert!(build.pending.clone().into_changes().next().is_none());
         assert_eq!(build.store.points.len(), 5);
         assert_eq!(build.store.finishes, 0);
     }
@@ -1144,9 +1227,10 @@ async fn appends_publish_actual_memberships_without_filling() {
         (8, &[1.0, 0.0][..]),
         (9, &[10.0, 1.0][..]),
     ];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
-        .await
-        .unwrap();
+    let stats =
+        require_send(index.insert_batch(&strategy, &DefaultContext, points.iter().copied()))
+            .await
+            .unwrap();
 
     assert_eq!(
         stats,
@@ -1167,7 +1251,7 @@ async fn appends_publish_actual_memberships_without_filling() {
     let empty: [(u32, &[f32]); 0] = [];
     assert_eq!(
         index
-            .insert_batch(&strategy, &DefaultContext, &empty)
+            .insert_batch(&strategy, &DefaultContext, empty.into_iter())
             .await
             .unwrap(),
         InsertStats::default()
@@ -1185,9 +1269,10 @@ async fn splitting_commits_children_and_ordinary_appends_once() {
         (6, &[11.0, 1.0][..]),
         (7, &[101.0, 0.0][..]),
     ];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
-        .await
-        .unwrap();
+    let stats =
+        require_send(index.insert_batch(&strategy, &DefaultContext, points.iter().copied()))
+            .await
+            .unwrap();
     let store = strategy.store();
 
     assert_eq!(
@@ -1246,9 +1331,10 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
     store.lists.get_mut(&2).unwrap().centroid = vec![5.0, 0.0];
     let (mut index, strategy) = index_with_neighbors(store, 3, 2);
     let points: [(u32, &[f32]); 2] = [(7, &[1.0, 0.0][..]), (8, &[5.2, 0.0][..])];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
-        .await
-        .unwrap();
+    let stats =
+        require_send(index.insert_batch(&strategy, &DefaultContext, points.iter().copied()))
+            .await
+            .unwrap();
     let store = strategy.store();
 
     assert_eq!(
@@ -1311,9 +1397,13 @@ async fn neighborhood_selection_filters_parents_and_fills_the_union_once() {
             store.fail_nearest = count == 0;
             let (mut index, strategy) = index_with_neighbors(store, 2, count);
             let points: [(u32, &[f32]); 2] = [(5, &[1.0, 1.0][..]), (6, &[11.0, 1.0][..])];
-            let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
-                .await
-                .unwrap();
+            let stats = require_send(index.insert_batch(
+                &strategy,
+                &DefaultContext,
+                points.iter().copied(),
+            ))
+            .await
+            .unwrap();
             let store = strategy.store();
             let neighbors = match (count, centers.len()) {
                 (0, _) | (_, 0) => vec![],
@@ -1429,16 +1519,14 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
     {
         let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
         let points = [(5, &[1.0, 1.0][..]), (6, &[3.0, 1.0][..])];
-        let ids = build.set_elements(&DefaultContext, &points).await.unwrap();
-        assert_eq!(ids, [10_005, 10_006]);
-        assert_eq!(
-            build
-                .append_to(1, [10_006, 10_005].into_iter())
-                .await
-                .unwrap()
-                .get(),
-            4
-        );
+        let mut emitted = Vec::new();
+        build
+            .route(points.iter().rev().copied(), |&list, size| {
+                emitted.push((list, size.get()));
+            })
+            .await
+            .unwrap();
+        assert_eq!(emitted, [(1, 4)]);
         {
             let (region, mut update) = require_send(build.fill([1].into_iter())).await.unwrap();
             let view = region.get_view(1).unwrap();
@@ -1493,10 +1581,10 @@ async fn borrowed_updates_share_pending_memberships_and_publish_on_finish() {
         (6, &[11.0, 0.0][..]),
         (7, &[100.0, 0.0][..]),
     ];
-    build.set_elements(&DefaultContext, &points).await.unwrap();
-    for (list, id) in [(1, 10_005), (2, 10_006), (3, 10_007)] {
-        build.append_to(list, [id].into_iter()).await.unwrap();
-    }
+    build
+        .route(points.iter().copied(), |_, _| {})
+        .await
+        .unwrap();
 
     {
         let (region, mut update) = require_send(build.fill([1, 2].into_iter())).await.unwrap();
@@ -1560,9 +1648,10 @@ async fn failed_planning_or_publication_is_not_reported_as_success() {
         store.fail_finish = fail_finish;
         let (mut index, strategy) = index_with_neighbors(store, 2, 2);
         let points: [(u32, &[f32]); 1] = [(5, &[1.0, 1.0][..])];
-        let error = require_send(index.insert_batch(&strategy, &DefaultContext, &points))
-            .await
-            .unwrap_err();
+        let error =
+            require_send(index.insert_batch(&strategy, &DefaultContext, points.iter().copied()))
+                .await
+                .unwrap_err();
         let expected = if fail_nearest {
             "injected nearest failure"
         } else if fail_fill {
@@ -1598,7 +1687,7 @@ async fn uninitialized_insertion_fails() {
     );
     let points: [(u32, &[f32]); 1] = [(7, &[0.0, 1.0][..])];
     let error = index
-        .insert_batch(&strategy, &DefaultContext, &points)
+        .insert_batch(&strategy, &DefaultContext, points.iter().copied())
         .await
         .unwrap_err();
     assert!(
@@ -1616,19 +1705,19 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
     store.points.insert(10_001, vec![10.0, 0.0]);
     store.points.insert(10_002, vec![5.0, 0.0]);
     store.points.insert(10_003, vec![10.1, 0.0]);
+    store.lists.get_mut(&1).unwrap().centroid = vec![5.0, 0.0];
     store.lists.get_mut(&2).unwrap().centroid = vec![5.0, 0.0];
     let strategy = Strategy::new(store);
     let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
     let points = [(5, &[5.0, 0.0][..])];
-    build.set_elements(&DefaultContext, &points).await.unwrap();
-    assert_eq!(
-        build
-            .append_to(1, [10_005].into_iter())
-            .await
-            .unwrap()
-            .get(),
-        3
-    );
+    let mut emitted = Vec::new();
+    build
+        .route(points.iter().copied(), |&list, size| {
+            emitted.push((list, size.get()));
+        })
+        .await
+        .unwrap();
+    assert_eq!(emitted, [(1, 3)]);
 
     {
         let (region, mut update) = build.fill([1, 2].into_iter()).await.unwrap();

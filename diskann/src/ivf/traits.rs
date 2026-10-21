@@ -32,17 +32,13 @@ pub trait Router<T>: Send {
     }
 
     /// Select `min(nprobe, len())` distinct live lists, nearest first.
-    fn route<F>(
-        &self,
-        query: &T,
-        nprobe: NonZeroUsize,
-        emit: F,
-    ) -> impl SendFuture<ANNResult<usize>>
+    fn route<F>(&self, query: &T, nprobe: NonZeroUsize, emit: F) -> impl SendFuture<ANNResult<()>>
     where
         F: FnMut(&Self::Id, Self::Ret) + Send;
 }
 
-pub trait RouterAndNearest<T>: Router<T> {
+pub trait NearestList: Send {
+    type Id;
     /// Select `nprobe` distinct live lists nearest to `id`'s centroid, that pass the filter.
     ///
     /// Results are nearest first and may include `id` itself.
@@ -50,7 +46,7 @@ pub trait RouterAndNearest<T>: Router<T> {
     /// # Errors
     ///
     /// Fails if `id` is not live or the provider cannot complete the lookup.
-    fn nearest<P, F>(
+    fn find<P, F>(
         &self,
         id: Self::Id,
         nprobe: NonZeroUsize,
@@ -63,7 +59,7 @@ pub trait RouterAndNearest<T>: Router<T> {
 }
 
 pub trait BuildAccessor<T>: Send + Sized + HasIds {
-    type Router<'a>: RouterAndNearest<T, Id = Self::ListId>
+    type Nearest<'a>: NearestList<Id = Self::ListId>
     where
         Self: 'a;
 
@@ -80,16 +76,17 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
     /// Positive dimension of all canonical points and centroids.
     fn dim(&self) -> NonZeroUsize;
 
-    fn router(&mut self) -> Self::Router<'_>;
+    fn nearest(&mut self) -> Self::Nearest<'_>;
 
-    /// Append members and return the resulting operation-local list size.
-    fn append_to<Itr>(
-        &mut self,
-        list: Self::ListId,
-        ids: Itr,
-    ) -> impl SendFuture<ANNResult<NonZeroUsize>>
+    /// Stage points and append their internal IDs to exactly one routed list each.
+    ///
+    /// Emit operation-local list sizes including pending appends. Lists may be emitted
+    /// more than once, but each touched list must report its final size.
+    /// Staged points and memberships remain unpublished until [`Self::finish`].
+    fn route<Itr, F>(&mut self, points: Itr, emit: F) -> impl SendFuture<ANNResult<()>>
     where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
+        Itr: ExactSizeIterator<Item = T> + Clone + Send + Sync,
+        F: FnMut(&Self::ListId, NonZeroUsize) + Send;
 
     /// Make requested list's members, data and centroids available
     /// for split and assignment, and register updates to the region.
@@ -112,22 +109,11 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
 
 pub trait BuildStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
     /// [`BuildAccessor`] used to insert new points, and performs splits if necessary.
-    type Accessor: SetElements<T, C, Id = Self::Id>
-        + BuildAccessor<T, Id = Self::Id, ListId = Self::ListId>;
+    type Accessor: BuildAccessor<T, Id = Self::Id, ListId = Self::ListId>;
 
     type Error: StandardError;
 
     fn build_accessor(&'a self, context: &'a C) -> Result<Self::Accessor, Self::Error>;
-}
-
-pub trait SetElements<T, C: ExecutionContext> {
-    type Id: VectorId;
-
-    fn set_elements(
-        &mut self,
-        context: &C,
-        elements: &[T],
-    ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send;
 }
 
 ////////////

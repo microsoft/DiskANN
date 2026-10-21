@@ -5,20 +5,14 @@
 
 //! IVF policy and orchestration, independent of physical list storage.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    marker::PhantomData,
-    num::NonZeroUsize,
-};
+use std::{collections::BTreeSet, marker::PhantomData, num::NonZeroUsize};
 
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::traits::{
-    BuildAccessor, Router, RouterAndNearest, SearchAccessor, SearchStrategy, SetElements,
-};
+use super::traits::{BuildAccessor, NearestList, Router, SearchAccessor, SearchStrategy};
 use crate::{
-    ANNError, ANNResult,
+    ANNResult,
     error::{ErrorExt, IntoANNResult},
     flat::DistancesUnordered,
     graph::SearchOutputBuffer,
@@ -29,7 +23,6 @@ use crate::{
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
     provider::ExecutionContext,
-    utils::ONE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,13 +75,14 @@ impl<C: ExecutionContext> IVFIndex<C> {
         })
     }
 
-    pub fn insert_batch<'a, S, T>(
+    pub fn insert_batch<'a, S, T, Itr>(
         &'a mut self,
         strategy: &'a S,
         context: &'a C,
-        points: &'a [T],
+        points: Itr,
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
+        Itr: ExactSizeIterator<Item = T> + Clone + Send + Sync,
         S: BuildStrategy<'a, T, C>,
         S::Accessor: for<'b> BuildAccessor<T, VectorsRef<'b>: AsMatRef<f32>>,
         T: Sync,
@@ -96,7 +90,8 @@ impl<C: ExecutionContext> IVFIndex<C> {
         let config = self.config;
 
         async move {
-            if points.is_empty() {
+            let inserted = points.len();
+            if inserted == 0 {
                 return Ok(InsertStats::default());
             }
 
@@ -104,38 +99,15 @@ impl<C: ExecutionContext> IVFIndex<C> {
 
             let dim = accessor.dim();
 
-            // Step 1: Compute the batch
-            let ids = accessor.set_elements(context, points).await?;
-
-            // Step 2: Route the points to their nearest centroid.
-            let mut routed = BTreeMap::<S::ListId, Vec<S::Id>>::new();
-
-            {
-                let router = accessor.router();
-
-                for (id, point) in ids.iter().zip(points.iter()) {
-                    let count = router
-                        .route(point, ONE, |list, _| {
-                            routed.entry(*list).or_default().push(*id);
-                        })
-                        .await?;
-
-                    if count != 1 {
-                        return Err(ANNError::message("IVF routing returned no live centroid"));
-                    }
-                }
-            }
-
             let mut parents = BTreeSet::new();
 
-            // Step 3: append the points to their respective list ids and determine which need to be split.
-            for (list, members) in routed.iter() {
-                let size = accessor.append_to(*list, members.iter().copied()).await?;
-
-                if size.get() > config.split_threshold.get() {
-                    parents.insert(*list);
-                }
-            }
+            accessor
+                .route(points, |&list, size| {
+                    if size.get() > config.split_threshold.get() {
+                        parents.insert(list);
+                    }
+                })
+                .await?;
 
             let splits = parents.len();
 
@@ -143,11 +115,11 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 let mut neighbors = BTreeSet::new();
 
                 if let ReassignCount::Count(n) = config.reassign_count {
-                    let router = accessor.router();
+                    let router = accessor.nearest();
 
                     for &pid in parents.iter() {
                         router
-                            .nearest(
+                            .find(
                                 pid,
                                 n,
                                 |id| !parents.contains(id),
@@ -174,10 +146,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
 
             accessor.finish().await?;
 
-            Ok(InsertStats {
-                inserted: points.len(),
-                splits,
-            })
+            Ok(InsertStats { inserted, splits })
         }
     }
 
