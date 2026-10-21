@@ -54,6 +54,30 @@ fn graph_ivf_cli_reports_build_and_real_graph_search() {
         let splits = build["splits"].as_u64().unwrap();
         assert!(splits > 0);
         assert_eq!(build["lists"].as_u64().unwrap(), 2 + splits);
+        let two_means = build["two_means_seconds"].as_f64().unwrap();
+        let reassignment = build["reassignment_seconds"].as_f64().unwrap();
+        let other = build["other_ivf_seconds"].as_f64().unwrap();
+        let ivf = build["ivf_seconds"].as_f64().unwrap();
+        assert!(two_means >= 0.0 && reassignment >= 0.0 && other >= 0.0);
+        assert!((two_means + reassignment + other - ivf).abs() < 1e-9);
+        assert!(ivf <= build["total_seconds"].as_f64().unwrap());
+        let histogram = build["split_parent_histogram"].as_object().unwrap();
+        assert_eq!(
+            histogram.values().map(|n| n.as_u64().unwrap()).sum::<u64>(),
+            8
+        );
+        assert_eq!(
+            histogram
+                .iter()
+                .map(|(parents, count)| {
+                    parents.parse::<u64>().unwrap() * count.as_u64().unwrap()
+                })
+                .sum::<u64>(),
+            splits
+        );
+        // Every split parent had more than eight points; reassignment may revisit
+        // points on subsequent batches, so this is not a distinct-point count.
+        assert!(build["split_points"].as_u64().unwrap() >= 9 * splits);
     }
     let searches = results["searches"].as_array().unwrap();
     assert_eq!(searches.len(), 8);
@@ -69,6 +93,25 @@ fn graph_ivf_cli_reports_build_and_real_graph_search() {
                 "nprobe=1 must not silently scan the whole corpus"
             );
         }
+    }
+}
+
+#[test]
+fn graph_ivf_unsplit_build_reports_zero_split_work() {
+    let mut input = small_input();
+    input["jobs"][0]["content"]["build"]["split_threshold"] = json!(64);
+    input["jobs"][0]["content"]["build"]["batch_size"] = json!(15);
+    input["jobs"][0]["content"]["search"] = Value::Null;
+    let output = run_cli(&input).unwrap();
+    for build in output[0]["results"]["builds"].as_array().unwrap() {
+        assert_eq!(build["splits"], 0);
+        assert_eq!(build["split_points"], 0);
+        assert_eq!(build["two_means_seconds"], 0.0);
+        assert_eq!(build["reassignment_seconds"], 0.0);
+        assert_eq!(build["other_ivf_seconds"], build["ivf_seconds"]);
+        // Four full batches and a four-point tail are each counted once.
+        assert_eq!(build["split_parent_histogram"], json!({"0": 5}));
+        assert_eq!(build["inserted"], 64);
     }
 }
 

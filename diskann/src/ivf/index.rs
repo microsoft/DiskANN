@@ -5,7 +5,7 @@
 
 //! IVF policy and orchestration, independent of physical list storage.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use diskann_utils::{
     future::SendFuture,
@@ -41,6 +41,15 @@ pub struct ConfigError(pub usize);
 pub struct InsertStats {
     pub inserted: usize,
     pub splits: usize,
+    /// Point visits in the split working set, including stored and new points.
+    /// A point can contribute again in a later insertion if its list splits again.
+    pub split_points: usize,
+    /// Wall time fitting two centroids per split parent, including fitting scratch.
+    /// Zero when no lists split; clock resolution can also produce zero.
+    pub two_means: Duration,
+    /// Wall time assigning all split points across all fitted children, including
+    /// assignment scratch and member-list materialization. Excludes provider I/O.
+    pub reassignment: Duration,
 }
 
 /// An IVF index with serialized mutation through the underlying provider.
@@ -165,12 +174,18 @@ impl<P: Provider> IVFIndex<P> {
                 }
             }
             let splits = parents.len();
+            let mut split_points = 0;
+            let mut two_means = Duration::ZERO;
+            let mut reassignment = Duration::ZERO;
             if !parents.is_empty() {
                 let children = {
                     let dim = accessor.dim();
                     let view = accessor.fill(&parents).await?;
                     clustering::split(&view, dim, config.two_means_iterations, rng)?
                 };
+                two_means = children.timing.two_means;
+                reassignment = children.timing.reassignment;
+                split_points = children.point_count;
                 for (centroid, members) in children.centroids.rows().zip(children.members) {
                     accessor.lists().create_list(centroid, members).await?;
                 }
@@ -184,6 +199,9 @@ impl<P: Provider> IVFIndex<P> {
             Ok(InsertStats {
                 inserted: points.len(),
                 splits,
+                split_points,
+                two_means,
+                reassignment,
             })
         }
     }
