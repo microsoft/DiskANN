@@ -426,7 +426,10 @@ async fn initialize_and_append_publish_actual_memberships() {
         stats,
         InsertStats {
             inserted: 3,
-            splits: 0
+            splits: 0,
+            split_points: 0,
+            two_means: std::time::Duration::ZERO,
+            reassignment: std::time::Duration::ZERO,
         }
     );
     assert_eq!(index.provider().lists[&1].members, [10_007, 10_008]);
@@ -468,18 +471,18 @@ async fn splitting_commits_children_and_ordinary_appends_once() {
         (6, &[11.0, 1.0][..]),
         (7, &[101.0, 0.0][..]),
     ];
+    let start = std::time::Instant::now();
     let stats = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
         .await
         .unwrap();
     let store = index.provider();
 
-    assert_eq!(
-        stats,
-        InsertStats {
-            inserted: 3,
-            splits: 2
-        }
-    );
+    assert_eq!(stats.inserted, 3);
+    assert_eq!(stats.splits, 2);
+    assert_eq!(stats.split_points, 6);
+    // A coarse clock may report zero for this tiny workload. Timings must be
+    // disjoint subsets of the insertion, not performance thresholds.
+    assert!(stats.two_means + stats.reassignment <= start.elapsed());
     assert_eq!(store.finishes, 1);
     assert_eq!(store.fills, 1);
     assert!(!store.lists.contains_key(&1));
