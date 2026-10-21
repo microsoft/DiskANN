@@ -117,6 +117,9 @@ improvement cannot hide an end-to-end regression. The console prints each split
 phase separately. These are phase wall times, including each phase's setup and
 output work, rather than distance-kernel-only CPU time.
 
+The [three-layer phase comparison](graph-ivf-stages.md) records measured values,
+per-round variation, work histograms, and search-quality checks at batch size 4,096.
+
 The two phase durations are measured inside the real split call and returned in
 `InsertStats` after successful publication. No-split insertions report zero. Each
 split adds four clock reads, with no per-point timers. `other_ivf_seconds` is a
