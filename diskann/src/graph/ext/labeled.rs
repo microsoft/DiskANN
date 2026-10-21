@@ -55,6 +55,18 @@ where
     /// callback from [`glue::SearchAccessor::expand_beam`].
     fn is_match(&self, i: I) -> bool;
 
+    /// Prefetch data needed to classify `i`.
+    ///
+    /// The default is a no-op.
+    fn prefetch(&self, _i: I) {}
+
+    /// Return how many classifications ahead callers should prefetch.
+    ///
+    /// The default disables label prefetching.
+    fn prefetch_lookahead(&self) -> usize {
+        0
+    }
+
     /// Return whether rejected IDs are expensive enough to justify query-local caching.
     ///
     /// The default is `false`; implementations should opt in only when repeated point
@@ -448,6 +460,16 @@ where
         self.inner.eval(item)
             && (!self.label_cache.cache_rejections || !self.label_cache.rejected.contains(item))
             && self.labels.is_match(*item)
+    }
+
+    #[inline]
+    fn prefetch(&self, item: &I) {
+        self.labels.prefetch(*item);
+    }
+
+    #[inline]
+    fn prefetch_lookahead(&self) -> usize {
+        self.labels.prefetch_lookahead()
     }
 }
 

@@ -79,13 +79,17 @@ struct SummarizedWord {
 pub struct BloomQueryConfig {
     summary_cache_bound_percent: f64,
     summary_scan_max_word_percent: f64,
+    exact_point_prefetch_lookahead: usize,
 }
+
+const DEFAULT_EXACT_POINT_PREFETCH_LOOKAHEAD: usize = 32;
 
 impl BloomQueryConfig {
     /// Create a query configuration with a 1% to 100% summary-cache bound.
     ///
     /// A value of 1 caches masks when the conservative match bound is at most
-    /// 1% of the searchable vectors. The summary-scan word limit defaults to 10%.
+    /// 1% of the searchable vectors. The summary-scan word limit defaults to 10%, and exact
+    /// payload point classification prefetches 32 IDs ahead on supported architectures.
     pub fn new(summary_cache_bound_percent: f64) -> Result<Self, EncodedLabelIndexError> {
         validate_percent(
             "Bloom summary cache bound percent",
@@ -94,6 +98,7 @@ impl BloomQueryConfig {
         Ok(Self {
             summary_cache_bound_percent,
             summary_scan_max_word_percent: 10.0,
+            exact_point_prefetch_lookahead: DEFAULT_EXACT_POINT_PREFETCH_LOOKAHEAD,
         })
     }
 
@@ -113,6 +118,15 @@ impl BloomQueryConfig {
         Ok(self)
     }
 
+    /// Set the exact payload point-classification prefetch lookahead.
+    ///
+    /// Zero disables prefetching. Nonzero values are used only on supported architectures and only
+    /// by exact payload evaluators.
+    pub fn with_exact_point_prefetch_lookahead(mut self, lookahead: usize) -> Self {
+        self.exact_point_prefetch_lookahead = lookahead;
+        self
+    }
+
     /// Return the maximum conservative match-bound percentage eligible for mask caching.
     pub fn summary_cache_bound_percent(self) -> f64 {
         self.summary_cache_bound_percent
@@ -121,6 +135,11 @@ impl BloomQueryConfig {
     /// Return the maximum surviving payload-word percentage that uses word summaries.
     pub fn summary_scan_max_word_percent(self) -> f64 {
         self.summary_scan_max_word_percent
+    }
+
+    /// Return the exact payload point-classification prefetch lookahead.
+    pub fn exact_point_prefetch_lookahead(self) -> usize {
+        self.exact_point_prefetch_lookahead
     }
 
     pub(crate) fn should_scan_summarized_words(
@@ -138,6 +157,7 @@ impl Default for BloomQueryConfig {
         Self {
             summary_cache_bound_percent: 1.0,
             summary_scan_max_word_percent: 10.0,
+            exact_point_prefetch_lookahead: DEFAULT_EXACT_POINT_PREFETCH_LOOKAHEAD,
         }
     }
 }
@@ -268,6 +288,7 @@ pub struct ExactAnd2PayloadEvaluator<'a> {
     bits: &'a [u64],
     first_word_offset: usize,
     second_word_offset: usize,
+    prefetch_lookahead: usize,
 }
 
 /// A statically dispatched evaluator for two summary-guarded exact rows.
@@ -323,6 +344,10 @@ impl std::fmt::Debug for EncodedLabelQuery<'_> {
                 "summary_scan_max_word_percent",
                 &self.config.summary_scan_max_word_percent(),
             )
+            .field(
+                "exact_point_prefetch_lookahead",
+                &self.config.exact_point_prefetch_lookahead(),
+            )
             .finish()
     }
 }
@@ -348,6 +373,7 @@ impl EncodedLabelQuery<'_> {
                     bits,
                     first_word_offset: *first_word_offset,
                     second_word_offset: *second_word_offset,
+                    prefetch_lookahead: self.config.exact_point_prefetch_lookahead(),
                 })
             }
             PointPlan::ExactAnd2Summary(plan) => {
@@ -1066,6 +1092,25 @@ fn cnf_matches(
 }
 
 #[inline]
+fn prefetch_exact_payload_word(bits: &[u64], first_word_offset: usize, vec_id: u32) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+
+        let word_index = vec_id as usize / 64;
+        // SAFETY: Exact point plans validate row offsets during query compilation, and callers
+        // validate `vec_id` against the index vector count before prefetching.
+        let ptr = unsafe { bits.as_ptr().add(first_word_offset + word_index) };
+        // SAFETY: `ptr` addresses a valid payload word. Prefetch is only a cache hint and does not
+        // dereference the pointer architecturally.
+        unsafe { _mm_prefetch(ptr.cast::<i8>(), _MM_HINT_T0) };
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = (bits, first_word_offset, vec_id);
+}
+
+#[inline]
 fn exact_and2_payload_matches(
     bits: &[u64],
     first_word_offset: usize,
@@ -1116,6 +1161,22 @@ impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for ExactAnd2PayloadE
                 self.second_word_offset,
                 id,
             )
+    }
+
+    #[inline]
+    fn prefetch(&self, id: u32) {
+        if id < self.num_vectors {
+            prefetch_exact_payload_word(self.bits, self.first_word_offset, id);
+        }
+    }
+
+    #[inline]
+    fn prefetch_lookahead(&self) -> usize {
+        if cfg!(target_arch = "x86_64") {
+            self.prefetch_lookahead
+        } else {
+            0
+        }
     }
 }
 

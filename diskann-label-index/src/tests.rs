@@ -418,10 +418,33 @@ fn prefix_exact_bloom_specializes_two_label_dnf_point_checks() {
         vec![0]
     );
     assert!(!QueryLabelProvider::cache_rejections(&evaluator));
+    assert_eq!(
+        QueryLabelProvider::prefetch_lookahead(&evaluator),
+        if cfg!(target_arch = "x86_64") { 32 } else { 0 }
+    );
     assert!(!QueryLabelProvider::is_match(
         &evaluator,
         index.num_vectors()
     ));
+    QueryLabelProvider::prefetch(&evaluator, 0);
+    QueryLabelProvider::prefetch(&evaluator, index.num_vectors());
+
+    let prefetch_pair = index
+        .query_with_config(
+            &["A&B"],
+            FilterExpressionType::DNF,
+            BloomQueryConfig::default().with_exact_point_prefetch_lookahead(8),
+        )
+        .unwrap();
+    let EncodedLabelPointEvaluator::ExactAnd2Payload(prefetch_evaluator) =
+        prefetch_pair.point_evaluator()
+    else {
+        panic!("dense exact pair should compile to the payload evaluator");
+    };
+    assert_eq!(
+        QueryLabelProvider::prefetch_lookahead(&prefetch_evaluator),
+        if cfg!(target_arch = "x86_64") { 8 } else { 0 }
+    );
 
     assert!(!compile(&index, &["A"], FilterExpressionType::DNF).uses_exact_and2_point_plan());
     let mixed_pair = compile(&index, &["A&C"], FilterExpressionType::DNF);
@@ -490,6 +513,7 @@ fn prefix_exact_bloom_compiles_sparse_exact_rows_to_summary_evaluator() {
         vec![0]
     );
     assert!(!QueryLabelProvider::cache_rejections(&evaluator));
+    assert_eq!(QueryLabelProvider::prefetch_lookahead(&evaluator), 0);
     assert!(!QueryLabelProvider::is_match(
         &evaluator,
         index.num_vectors()
@@ -964,6 +988,13 @@ fn bloom_query_percentages_are_validated_and_applied() {
     let default = BloomQueryConfig::default();
     assert_eq!(default.summary_cache_bound_percent(), 1.0);
     assert_eq!(default.summary_scan_max_word_percent(), 10.0);
+    assert_eq!(default.exact_point_prefetch_lookahead(), 32);
+    assert_eq!(
+        default
+            .with_exact_point_prefetch_lookahead(16)
+            .exact_point_prefetch_lookahead(),
+        16
+    );
     assert!(default.should_scan_summarized_words(10, 100));
     assert!(!default.should_scan_summarized_words(11, 100));
 

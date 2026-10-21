@@ -542,6 +542,19 @@ pub trait FilteredAccessor: HasId + Send + Sync {
 /// A predicate evaluating `item`.
 pub trait Predicate<T> {
     fn eval(&self, item: &T) -> bool;
+
+    /// Prefetch data needed to evaluate `item`.
+    ///
+    /// The default is a no-op. Callers may invoke this several iterations before [`eval`](Self::eval)
+    /// or [`PredicateMut::eval_mut`].
+    fn prefetch(&self, _item: &T) {}
+
+    /// Return how many iterations ahead callers should prefetch.
+    ///
+    /// The default disables predicate prefetching.
+    fn prefetch_lookahead(&self) -> usize {
+        0
+    }
 }
 
 /// A mutable predicate evaluating `item`.
