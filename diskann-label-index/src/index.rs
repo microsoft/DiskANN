@@ -6,13 +6,12 @@
 //! Label-index loading and query serving.
 
 use crate::{
-    bloom::{append_label_rows, validate_bloom_config, BloomFilterConfig, BLOOM_FORMAT},
+    bloom::validate_bloom_config,
     error::EncodedLabelIndexError,
     format::{
-        ensure_remaining, read_u32, read_u64, validate_bitslice_padding, validate_label,
-        BITSLICE_FORMAT, COUNTED_BLOOM_INDEX_VERSION, LABEL_INDEX_MAGIC, LABEL_INDEX_VERSION,
-        MAX_LABEL_COUNT, MAX_LABEL_LENGTH, MIXED_BLOOM_INDEX_VERSION,
-        PREFIX_EXACT_BLOOM_INDEX_VERSION, SUMMARIZED_BLOOM_INDEX_VERSION,
+        ensure_remaining, read_u32, read_u64, validate_label, validate_row_padding,
+        LABEL_INDEX_FLAGS, LABEL_INDEX_MAGIC, LABEL_INDEX_VERSION, MAX_LABEL_COUNT,
+        MAX_LABEL_LENGTH,
     },
 };
 use std::{
@@ -40,20 +39,15 @@ pub enum FilterExpressionType {
     CNF = 1,
 }
 
-enum LabelIndexPayload {
-    Bitslice {
-        words_per_row: usize,
-        bits: Box<[u64]>,
-    },
-    Bloom {
-        words_per_row: usize,
-        hash_count: usize,
-        bits: Box<[u64]>,
-        label_rows: Box<[u32]>,
-        exact_row_by_label: Box<[u32]>,
-        exact_label_count: usize,
-        nonzero_words: Option<BloomWordSummary>,
-    },
+struct LabelIndexPayload {
+    words_per_row: usize,
+    hash_count: usize,
+    bits: Box<[u64]>,
+    label_rows: Box<[u32]>,
+    exact_row_by_label: Box<[u32]>,
+    exact_label_count: usize,
+    row_valid_counts: Box<[u32]>,
+    nonzero_words: BloomWordSummary,
 }
 
 struct BloomWordSummary {
@@ -201,8 +195,8 @@ thread_local! {
 pub struct EncodedLabelIndex {
     labels: Box<[String]>,
     label_ids: HashMap<String, u32>,
-    counts: Option<Arc<[u32]>>,
-    summary_nonzero_words_per_row: Option<Arc<[u32]>>,
+    counts: Arc<[u32]>,
+    summary_nonzero_words_per_row: Arc<[u32]>,
     num_vectors: u32,
     payload: Arc<LabelIndexPayload>,
 }
@@ -326,7 +320,7 @@ pub struct EncodedLabelQuery<'a> {
     payload: Arc<LabelIndexPayload>,
     plan: CompiledPlan,
     point_plan: PointPlan,
-    counts: Option<Arc<[u32]>>,
+    counts: Arc<[u32]>,
     config: BloomQueryConfig,
     _lifetime: PhantomData<&'a ()>,
 }
@@ -364,31 +358,18 @@ impl EncodedLabelQuery<'_> {
             PointPlan::ExactAnd2Payload {
                 first_word_offset,
                 second_word_offset,
-            } => {
-                let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
-                    unreachable!("exact-row point plans require a Bloom payload")
-                };
-                EncodedLabelPointEvaluator::ExactAnd2Payload(ExactAnd2PayloadEvaluator {
-                    num_vectors: self.num_vectors,
-                    bits,
-                    first_word_offset: *first_word_offset,
-                    second_word_offset: *second_word_offset,
-                    prefetch_lookahead: self.config.exact_point_prefetch_lookahead(),
-                })
-            }
+            } => EncodedLabelPointEvaluator::ExactAnd2Payload(ExactAnd2PayloadEvaluator {
+                num_vectors: self.num_vectors,
+                bits: &self.payload.bits,
+                first_word_offset: *first_word_offset,
+                second_word_offset: *second_word_offset,
+                prefetch_lookahead: self.config.exact_point_prefetch_lookahead(),
+            }),
             PointPlan::ExactAnd2Summary(plan) => {
-                let LabelIndexPayload::Bloom {
-                    bits,
-                    nonzero_words: Some(summary),
-                    ..
-                } = self.payload.as_ref()
-                else {
-                    unreachable!("summary point plans require summarized Bloom payloads")
-                };
                 EncodedLabelPointEvaluator::ExactAnd2Summary(ExactAnd2SummaryEvaluator {
                     num_vectors: self.num_vectors,
-                    bits,
-                    summary_bits: &summary.bits,
+                    bits: &self.payload.bits,
+                    summary_bits: &self.payload.nonzero_words.bits,
                     first_word_offset: plan.first_word_offset,
                     second_word_offset: plan.second_word_offset,
                     first_summary_word_offset: plan.first_summary_word_offset,
@@ -426,12 +407,9 @@ impl EncodedLabelQuery<'_> {
             }
             PointPlan::Dnf | PointPlan::Cnf => return None,
         };
-        let LabelIndexPayload::Bloom { words_per_row, .. } = self.payload.as_ref() else {
-            return None;
-        };
         Some((
-            *first_word_offset / *words_per_row,
-            *second_word_offset / *words_per_row,
+            *first_word_offset / self.payload.words_per_row,
+            *second_word_offset / self.payload.words_per_row,
         ))
     }
 
@@ -442,9 +420,8 @@ impl EncodedLabelQuery<'_> {
 
     /// Return a conservative bound on exact matching vectors, if exact label counts were stored.
     pub fn match_upper_bound(&self) -> Option<u64> {
-        let counts = self.counts.as_ref()?;
         let count =
-            |label_id: &Option<u32>| label_id.map_or(0, |id| u64::from(counts[id as usize]));
+            |label_id: &Option<u32>| label_id.map_or(0, |id| u64::from(self.counts[id as usize]));
         let bound = match self.plan.expression_type {
             FilterExpressionType::DNF => {
                 self.plan
@@ -486,31 +463,21 @@ impl EncodedLabelQuery<'_> {
             PointPlan::ExactAnd2Payload {
                 first_word_offset,
                 second_word_offset,
-            } => {
-                let LabelIndexPayload::Bloom { bits, .. } = self.payload.as_ref() else {
-                    unreachable!("exact-row point plans require a Bloom payload")
-                };
-                exact_and2_payload_matches(bits, *first_word_offset, *second_word_offset, vec_id)
-            }
-            PointPlan::ExactAnd2Summary(plan) => {
-                let LabelIndexPayload::Bloom {
-                    bits,
-                    nonzero_words: Some(summary),
-                    ..
-                } = self.payload.as_ref()
-                else {
-                    unreachable!("summary point plans require summarized Bloom payloads")
-                };
-                exact_and2_summary_matches(
-                    bits,
-                    &summary.bits,
-                    plan.first_word_offset,
-                    plan.second_word_offset,
-                    plan.first_summary_word_offset,
-                    plan.second_summary_word_offset,
-                    vec_id,
-                )
-            }
+            } => exact_and2_payload_matches(
+                &self.payload.bits,
+                *first_word_offset,
+                *second_word_offset,
+                vec_id,
+            ),
+            PointPlan::ExactAnd2Summary(plan) => exact_and2_summary_matches(
+                &self.payload.bits,
+                &self.payload.nonzero_words.bits,
+                plan.first_word_offset,
+                plan.second_word_offset,
+                plan.first_summary_word_offset,
+                plan.second_summary_word_offset,
+                vec_id,
+            ),
             PointPlan::Dnf => self.is_match_dnf(vec_id),
             PointPlan::Cnf => self.is_match_cnf(vec_id),
         }
@@ -547,17 +514,11 @@ impl EncodedLabelQuery<'_> {
     }
 
     fn should_cache_rejections(&self) -> bool {
-        let LabelIndexPayload::Bloom {
-            exact_row_by_label, ..
-        } = self.payload.as_ref()
-        else {
-            return false;
-        };
         self.plan
             .label_ids
             .iter()
             .flatten()
-            .any(|&id| exact_row_by_label[id as usize] == u32::MAX)
+            .any(|&id| self.payload.exact_row_by_label[id as usize] == u32::MAX)
     }
 
     /// Visit matching vector IDs in ascending order, including Bloom false positives.
@@ -597,10 +558,7 @@ impl EncodedLabelQuery<'_> {
         let words_per_row = self.words_per_row();
 
         #[cfg(target_arch = "x86_64")]
-        if matches!(self.payload.as_ref(), LabelIndexPayload::Bloom { .. })
-            && words_per_row >= 4
-            && std::is_x86_feature_detected!("avx2")
-        {
+        if words_per_row >= 4 && std::is_x86_feature_detected!("avx2") {
             // SAFETY: The AVX2 path is called only after runtime feature detection.
             unsafe { self.visit_bloom_avx2(&mut visit) };
             return;
@@ -629,33 +587,21 @@ impl EncodedLabelQuery<'_> {
     }
 
     fn words_per_row(&self) -> usize {
-        match self.payload.as_ref() {
-            LabelIndexPayload::Bitslice { words_per_row, .. }
-            | LabelIndexPayload::Bloom { words_per_row, .. } => *words_per_row,
-        }
+        self.payload.words_per_row
     }
 
     fn summary_word_matches(&self, word_index: usize) -> Option<u64> {
-        let LabelIndexPayload::Bloom {
-            hash_count,
-            label_rows,
-            nonzero_words: Some(summary),
-            exact_row_by_label,
-            ..
-        } = self.payload.as_ref()
-        else {
-            return None;
-        };
+        let summary = &self.payload.nonzero_words;
         let word_for_label = |label_id: Option<u32>| {
             let Some(label_id) = label_id.map(|id| id as usize) else {
                 return 0;
             };
-            let exact_row = exact_row_by_label[label_id];
+            let exact_row = self.payload.exact_row_by_label[label_id];
             if exact_row != u32::MAX {
                 return summary.bits[exact_row as usize * summary.words_per_row + word_index];
             }
-            let start = label_id * *hash_count;
-            label_rows[start..start + *hash_count]
+            let start = label_id * self.payload.hash_count;
+            self.payload.label_rows[start..start + self.payload.hash_count]
                 .iter()
                 .fold(u64::MAX, |word, &row| {
                     word & summary.bits[row as usize * summary.words_per_row + word_index]
@@ -686,19 +632,10 @@ impl EncodedLabelQuery<'_> {
     }
 
     fn collect_cached_summarized_matches(&self, scratch: &mut BloomVisitScratch) -> bool {
-        let LabelIndexPayload::Bloom {
-            words_per_row,
-            nonzero_words:
-                Some(
-                    summary @ BloomWordSummary {
-                        scan_useful: true, ..
-                    },
-                ),
-            ..
-        } = self.payload.as_ref()
-        else {
+        let summary = &self.payload.nonzero_words;
+        if !summary.scan_useful {
             return false;
-        };
+        }
 
         scratch.reset(summary.words_per_row);
         let mut possible_word_count = 0usize;
@@ -716,7 +653,7 @@ impl EncodedLabelQuery<'_> {
             }
             if !self
                 .config
-                .should_scan_summarized_words(possible_word_count, *words_per_row)
+                .should_scan_summarized_words(possible_word_count, self.payload.words_per_row)
             {
                 scratch.surviving_words.clear();
                 return false;
@@ -740,19 +677,10 @@ impl EncodedLabelQuery<'_> {
     }
 
     fn visit_summarized_matches_uncached(&self, visit: &mut impl FnMut(u32)) -> bool {
-        let LabelIndexPayload::Bloom {
-            words_per_row,
-            nonzero_words:
-                Some(
-                    summary @ BloomWordSummary {
-                        scan_useful: true, ..
-                    },
-                ),
-            ..
-        } = self.payload.as_ref()
-        else {
+        let summary = &self.payload.nonzero_words;
+        if !summary.scan_useful {
             return false;
-        };
+        }
 
         let possible_word_count: usize = (0..summary.words_per_row)
             .map(|summary_index| {
@@ -763,7 +691,7 @@ impl EncodedLabelQuery<'_> {
             .sum();
         if !self
             .config
-            .should_scan_summarized_words(possible_word_count, *words_per_row)
+            .should_scan_summarized_words(possible_word_count, self.payload.words_per_row)
         {
             return false;
         }
@@ -798,29 +726,16 @@ impl EncodedLabelQuery<'_> {
             let Some(label_id) = label_id.map(|id| id as usize) else {
                 return 0;
             };
-            match self.payload.as_ref() {
-                LabelIndexPayload::Bitslice { bits, .. } => {
-                    bits[label_id * words_per_row + word_index]
-                }
-                LabelIndexPayload::Bloom {
-                    hash_count,
-                    bits,
-                    label_rows,
-                    exact_row_by_label,
-                    ..
-                } => {
-                    let exact_row = exact_row_by_label[label_id];
-                    if exact_row != u32::MAX {
-                        return bits[exact_row as usize * words_per_row + word_index];
-                    }
-                    let start = label_id * *hash_count;
-                    label_rows[start..start + *hash_count]
-                        .iter()
-                        .fold(u64::MAX, |word, &row| {
-                            word & bits[row as usize * words_per_row + word_index]
-                        })
-                }
+            let exact_row = self.payload.exact_row_by_label[label_id];
+            if exact_row != u32::MAX {
+                return self.payload.bits[exact_row as usize * words_per_row + word_index];
             }
+            let start = label_id * self.payload.hash_count;
+            self.payload.label_rows[start..start + self.payload.hash_count]
+                .iter()
+                .fold(u64::MAX, |word, &row| {
+                    word & self.payload.bits[row as usize * words_per_row + word_index]
+                })
         };
 
         match self.plan.expression_type {
@@ -854,17 +769,11 @@ impl EncodedLabelQuery<'_> {
             _mm256_setzero_si256, _mm256_storeu_si256, _mm256_testz_si256,
         };
 
-        let LabelIndexPayload::Bloom {
-            words_per_row,
-            hash_count,
-            bits,
-            label_rows,
-            exact_row_by_label,
-            ..
-        } = self.payload.as_ref()
-        else {
-            unreachable!("AVX2 visitor is only called for Bloom indexes")
-        };
+        let words_per_row = self.payload.words_per_row;
+        let hash_count = self.payload.hash_count;
+        let bits = &self.payload.bits;
+        let label_rows = &self.payload.label_rows;
+        let exact_row_by_label = &self.payload.exact_row_by_label;
         let simd_end = words_per_row / 4 * 4;
         for word_index in (0..simd_end).step_by(4) {
             let word_for_label = |label_id: Option<u32>| {
@@ -877,21 +786,21 @@ impl EncodedLabelQuery<'_> {
                     // Bloom rows, and this block begins at most four words before the end.
                     let ptr = unsafe {
                         bits.as_ptr()
-                            .add(exact_row as usize * *words_per_row + word_index)
+                            .add(exact_row as usize * words_per_row + word_index)
                             .cast::<__m256i>()
                     };
                     // SAFETY: The four exact-row words at `ptr` are in bounds.
                     return unsafe { _mm256_loadu_si256(ptr) };
                 }
-                let start = label_id * *hash_count;
-                label_rows[start..start + *hash_count].iter().fold(
+                let start = label_id * hash_count;
+                label_rows[start..start + hash_count].iter().fold(
                     _mm256_set1_epi64x(-1),
                     |word, &row| {
                         // SAFETY: Every loaded row has `words_per_row` words and this block
                         // starts at most four words before the end; unaligned loads are valid.
                         let ptr = unsafe {
                             bits.as_ptr()
-                                .add(row as usize * *words_per_row + word_index)
+                                .add(row as usize * words_per_row + word_index)
                                 .cast::<__m256i>()
                         };
                         // SAFETY: The four words at `ptr` are in bounds; the intrinsic
@@ -936,7 +845,7 @@ impl EncodedLabelQuery<'_> {
                 self.visit_word(word_index + offset, word, visit);
             }
         }
-        for word_index in simd_end..*words_per_row {
+        for word_index in simd_end..words_per_row {
             self.visit_word(word_index, self.word_matches(word_index), visit);
         }
     }
@@ -971,17 +880,8 @@ impl EncodedLabelQuery<'_> {
     }
 
     fn count_matches_without_scratch(&self) -> u64 {
-        if let LabelIndexPayload::Bloom {
-            words_per_row,
-            nonzero_words:
-                Some(
-                    summary @ BloomWordSummary {
-                        scan_useful: true, ..
-                    },
-                ),
-            ..
-        } = self.payload.as_ref()
-        {
+        let summary = &self.payload.nonzero_words;
+        if summary.scan_useful {
             let possible_word_count: usize = (0..summary.words_per_row)
                 .map(|summary_index| {
                     self.summary_word_matches(summary_index)
@@ -991,7 +891,7 @@ impl EncodedLabelQuery<'_> {
                 .sum();
             if self
                 .config
-                .should_scan_summarized_words(possible_word_count, *words_per_row)
+                .should_scan_summarized_words(possible_word_count, self.payload.words_per_row)
             {
                 return (0..summary.words_per_row)
                     .map(|summary_index| {
@@ -1027,36 +927,18 @@ fn terminal_matches(payload: &LabelIndexPayload, label_id: Option<u32>, vec_id: 
     let Some(label_id) = label_id.map(|id| id as usize) else {
         return false;
     };
-    match payload {
-        LabelIndexPayload::Bitslice {
-            words_per_row,
-            bits,
-        } => {
-            let word = bits[label_id * *words_per_row + vec_id as usize / 64];
-            word & (1u64 << (vec_id % 64)) != 0
-        }
-        LabelIndexPayload::Bloom {
-            words_per_row,
-            hash_count,
-            bits,
-            label_rows,
-            exact_row_by_label,
-            ..
-        } => {
-            let exact_row = exact_row_by_label[label_id];
-            if exact_row != u32::MAX {
-                let word = bits[exact_row as usize * *words_per_row + vec_id as usize / 64];
-                return word & (1u64 << (vec_id % 64)) != 0;
-            }
-            let row_offset = label_id * *hash_count;
-            label_rows[row_offset..row_offset + *hash_count]
-                .iter()
-                .all(|&row| {
-                    let word = bits[row as usize * *words_per_row + vec_id as usize / 64];
-                    word & (1u64 << (vec_id % 64)) != 0
-                })
-        }
+    let exact_row = payload.exact_row_by_label[label_id];
+    if exact_row != u32::MAX {
+        let word = payload.bits[exact_row as usize * payload.words_per_row + vec_id as usize / 64];
+        return word & (1u64 << (vec_id % 64)) != 0;
     }
+    let row_offset = label_id * payload.hash_count;
+    payload.label_rows[row_offset..row_offset + payload.hash_count]
+        .iter()
+        .all(|&row| {
+            let word = payload.bits[row as usize * payload.words_per_row + vec_id as usize / 64];
+            word & (1u64 << (vec_id % 64)) != 0
+        })
 }
 
 #[inline(never)]
@@ -1252,501 +1134,9 @@ impl diskann::graph::ext::labeled::CandidateLabelProvider<u32> for EncodedLabelQ
 }
 
 impl EncodedLabelIndex {
-    /// Load a dense Bitslice or transposed Bloom label index from `path`.
-    ///
-    /// Bloom versions without word summaries remain supported and use the full payload scan.
+    /// Load a unified exact/Bloom label index from `path`.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, EncodedLabelIndexError> {
-        let file = File::open(path)?;
-        let file_len = file.metadata()?.len();
-        let mut reader = BufReader::new(file);
-
-        let mut magic = [0u8; LABEL_INDEX_MAGIC.len()];
-        reader.read_exact(&mut magic)?;
-        if magic != LABEL_INDEX_MAGIC {
-            return Err(EncodedLabelIndexError::Invalid(
-                "invalid label-index file magic".to_string(),
-            ));
-        }
-
-        let version = read_u32(&mut reader)?;
-        if !matches!(
-            version,
-            LABEL_INDEX_VERSION
-                | COUNTED_BLOOM_INDEX_VERSION
-                | SUMMARIZED_BLOOM_INDEX_VERSION
-                | MIXED_BLOOM_INDEX_VERSION
-                | PREFIX_EXACT_BLOOM_INDEX_VERSION
-        ) {
-            return Err(EncodedLabelIndexError::Invalid(format!(
-                "unsupported label-index version {version}"
-            )));
-        }
-
-        let format = read_u32(&mut reader)?;
-        if !matches!(format, BITSLICE_FORMAT | BLOOM_FORMAT) {
-            return Err(EncodedLabelIndexError::Invalid(format!(
-                "unsupported label-index format {format}; supported formats are dense bitslice 0 and Bloom 1"
-            )));
-        }
-        if matches!(
-            version,
-            COUNTED_BLOOM_INDEX_VERSION
-                | SUMMARIZED_BLOOM_INDEX_VERSION
-                | MIXED_BLOOM_INDEX_VERSION
-                | PREFIX_EXACT_BLOOM_INDEX_VERSION
-        ) && format != BLOOM_FORMAT
-        {
-            return Err(EncodedLabelIndexError::Invalid(
-                "counted label-index version only supports Bloom format".to_string(),
-            ));
-        }
-
-        let num_vectors = u32::try_from(read_u64(&mut reader)?).map_err(|_| {
-            EncodedLabelIndexError::Invalid("label-index vector count exceeds u32".to_string())
-        })?;
-        if num_vectors == 0 {
-            return Err(EncodedLabelIndexError::Invalid(
-                "label-index vector count cannot be zero".to_string(),
-            ));
-        }
-
-        let num_labels = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
-            EncodedLabelIndexError::Invalid("label-index label count exceeds usize".to_string())
-        })?;
-        if num_labels > MAX_LABEL_COUNT {
-            return Err(EncodedLabelIndexError::Invalid(format!(
-                "label-index label count {num_labels} exceeds limit {MAX_LABEL_COUNT}"
-            )));
-        }
-        let minimum_dictionary_bytes = num_labels.checked_mul(4).ok_or_else(|| {
-            EncodedLabelIndexError::Invalid("label dictionary size overflow".to_string())
-        })?;
-        ensure_remaining(
-            &mut reader,
-            file_len,
-            minimum_dictionary_bytes,
-            "label dictionary",
-        )?;
-
-        let mut labels = Vec::new();
-        labels.try_reserve_exact(num_labels).map_err(|_| {
-            EncodedLabelIndexError::Invalid("cannot reserve label dictionary".to_string())
-        })?;
-        let mut label_ids = HashMap::new();
-        label_ids.try_reserve(num_labels).map_err(|_| {
-            EncodedLabelIndexError::Invalid("cannot reserve label lookup map".to_string())
-        })?;
-
-        for id in 0..num_labels {
-            let len = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
-                EncodedLabelIndexError::Invalid("label length exceeds usize".to_string())
-            })?;
-            if len > MAX_LABEL_LENGTH {
-                return Err(EncodedLabelIndexError::Invalid(format!(
-                    "label length {len} exceeds limit {MAX_LABEL_LENGTH}"
-                )));
-            }
-            ensure_remaining(&mut reader, file_len, len, "label bytes")?;
-
-            let mut bytes = Vec::new();
-            bytes.try_reserve_exact(len).map_err(|_| {
-                EncodedLabelIndexError::Invalid("cannot reserve label bytes".to_string())
-            })?;
-            bytes.resize(len, 0);
-            reader.read_exact(&mut bytes)?;
-
-            let label = String::from_utf8(bytes).map_err(|_| {
-                EncodedLabelIndexError::Invalid("label-index contains invalid UTF-8".to_string())
-            })?;
-            validate_label(&label)?;
-
-            let id = u32::try_from(id).map_err(|_| {
-                EncodedLabelIndexError::Invalid("label count exceeds u32".to_string())
-            })?;
-            if label_ids.insert(label.clone(), id).is_some() {
-                return Err(EncodedLabelIndexError::Invalid(format!(
-                    "duplicate label '{label}' in label-index"
-                )));
-            }
-            labels.push(label);
-        }
-
-        let expected_words = (num_vectors as usize).div_ceil(64);
-        let mut payload = match format {
-            BITSLICE_FORMAT => {
-                let words_per_row = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
-                    EncodedLabelIndexError::Invalid("bitslice row length exceeds usize".to_string())
-                })?;
-                if words_per_row != expected_words {
-                    return Err(EncodedLabelIndexError::Invalid(format!(
-                        "bitslice row has {words_per_row} words; expected {expected_words}"
-                    )));
-                }
-                let bits =
-                    read_payload(&mut reader, file_len, num_labels, words_per_row, "bitslice")?;
-                validate_bitslice_padding(&bits, num_labels, words_per_row, num_vectors)?;
-                LabelIndexPayload::Bitslice {
-                    words_per_row,
-                    bits: bits.into_boxed_slice(),
-                }
-            }
-            BLOOM_FORMAT => {
-                let bit_count = read_u32(&mut reader)?;
-                let hash_count = read_u32(&mut reader)?;
-                validate_bloom_config(bit_count, hash_count)?;
-                let hash_count = hash_count as usize;
-                let prefix_exact = version == PREFIX_EXACT_BLOOM_INDEX_VERSION;
-                let exact_label_count = if prefix_exact {
-                    let count = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
-                        EncodedLabelIndexError::Invalid(
-                            "exact Bloom label count exceeds usize".to_string(),
-                        )
-                    })?;
-                    if count > num_labels {
-                        return Err(EncodedLabelIndexError::Invalid(format!(
-                            "exact Bloom label count {count} exceeds label count {num_labels}"
-                        )));
-                    }
-                    let flags = read_u32(&mut reader)?;
-                    if flags != 0 {
-                        return Err(EncodedLabelIndexError::Invalid(format!(
-                            "unsupported prefix-exact Bloom flags {flags}"
-                        )));
-                    }
-                    count
-                } else {
-                    0
-                };
-                let words_per_row = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
-                    EncodedLabelIndexError::Invalid("Bloom row length exceeds usize".to_string())
-                })?;
-                if words_per_row != expected_words {
-                    return Err(EncodedLabelIndexError::Invalid(format!(
-                        "Bloom row has {words_per_row} words; expected {expected_words}"
-                    )));
-                }
-                let total_label_rows = num_labels.checked_mul(hash_count).ok_or_else(|| {
-                    EncodedLabelIndexError::Invalid(
-                        "Bloom label-row table size overflow".to_string(),
-                    )
-                })?;
-                let mut label_rows = vec![u32::MAX; total_label_rows];
-                let mut exact_row_by_label = vec![u32::MAX; num_labels];
-                if prefix_exact {
-                    for (label_id, exact_row) in exact_row_by_label
-                        .iter_mut()
-                        .take(exact_label_count)
-                        .enumerate()
-                    {
-                        *exact_row = u32::try_from(label_id).map_err(|_| {
-                            EncodedLabelIndexError::Invalid(
-                                "exact Bloom row count exceeds u32".to_string(),
-                            )
-                        })?;
-                    }
-                    let mapping_count = (num_labels - exact_label_count)
-                        .checked_mul(hash_count)
-                        .ok_or_else(|| {
-                            EncodedLabelIndexError::Invalid(
-                                "Bloom label-row mapping size overflow".to_string(),
-                            )
-                        })?;
-                    let mapping_bytes = mapping_count.checked_mul(4).ok_or_else(|| {
-                        EncodedLabelIndexError::Invalid(
-                            "Bloom label-row mapping byte size overflow".to_string(),
-                        )
-                    })?;
-                    ensure_remaining(
-                        &mut reader,
-                        file_len,
-                        mapping_bytes,
-                        "Bloom label-row mappings",
-                    )?;
-                    for label_id in exact_label_count..num_labels {
-                        let start = label_id * hash_count;
-                        for hash_index in 0..hash_count {
-                            let logical_row = read_u32(&mut reader)?;
-                            let physical_row = u32::try_from(exact_label_count)
-                                .ok()
-                                .and_then(|prefix| prefix.checked_add(logical_row))
-                                .ok_or_else(|| {
-                                    EncodedLabelIndexError::Invalid(
-                                        "Bloom physical row index overflow".to_string(),
-                                    )
-                                })?;
-                            if logical_row >= bit_count
-                                || label_rows[start..start + hash_index].contains(&physical_row)
-                            {
-                                return Err(EncodedLabelIndexError::Invalid(
-                                    "Bloom label rows must be distinct and within the Bloom row count"
-                                        .to_string(),
-                                ));
-                            }
-                            label_rows[start + hash_index] = physical_row;
-                        }
-                    }
-                } else {
-                    let config = BloomFilterConfig::new(bit_count, hash_count as u32)?;
-                    let mut generated_rows = Vec::new();
-                    generated_rows
-                        .try_reserve_exact(total_label_rows)
-                        .map_err(|_| {
-                            EncodedLabelIndexError::Invalid(
-                                "cannot reserve Bloom label-row table".to_string(),
-                            )
-                        })?;
-                    for label in &labels {
-                        append_label_rows(label, config, &mut generated_rows);
-                    }
-                    label_rows.copy_from_slice(&generated_rows);
-                }
-
-                let physical_row_count = exact_label_count
-                    .checked_add(bit_count as usize)
-                    .ok_or_else(|| {
-                        EncodedLabelIndexError::Invalid("Bloom row count overflow".to_string())
-                    })?;
-                let bits = read_payload(
-                    &mut reader,
-                    file_len,
-                    physical_row_count,
-                    words_per_row,
-                    "Bloom",
-                )?;
-                validate_bitslice_padding(&bits, physical_row_count, words_per_row, num_vectors)?;
-
-                let nonzero_words = if matches!(
-                    version,
-                    SUMMARIZED_BLOOM_INDEX_VERSION
-                        | MIXED_BLOOM_INDEX_VERSION
-                        | PREFIX_EXACT_BLOOM_INDEX_VERSION
-                ) {
-                    let summary_words_per_row =
-                        usize::try_from(read_u64(&mut reader)?).map_err(|_| {
-                            EncodedLabelIndexError::Invalid(
-                                "Bloom word-summary row length exceeds usize".to_string(),
-                            )
-                        })?;
-                    let expected_summary_words = words_per_row.div_ceil(64);
-                    if summary_words_per_row != expected_summary_words {
-                        return Err(EncodedLabelIndexError::Invalid(format!(
-                            "Bloom word-summary row has {summary_words_per_row} words; expected {expected_summary_words}"
-                        )));
-                    }
-                    let bits = read_payload(
-                        &mut reader,
-                        file_len,
-                        physical_row_count,
-                        summary_words_per_row,
-                        "Bloom word-summary",
-                    )?;
-                    let summarized_words = u32::try_from(words_per_row).map_err(|_| {
-                        EncodedLabelIndexError::Invalid(
-                            "Bloom row word count exceeds u32".to_string(),
-                        )
-                    })?;
-                    validate_bitslice_padding(
-                        &bits,
-                        physical_row_count,
-                        summary_words_per_row,
-                        summarized_words,
-                    )?;
-                    let nonzero_payload_words: usize =
-                        bits.iter().map(|word| word.count_ones() as usize).sum();
-                    let payload_words =
-                        physical_row_count
-                            .checked_mul(words_per_row)
-                            .ok_or_else(|| {
-                                EncodedLabelIndexError::Invalid(
-                                    "Bloom payload word count overflow".to_string(),
-                                )
-                            })?;
-                    Some(BloomWordSummary {
-                        words_per_row: summary_words_per_row,
-                        bits: bits.into_boxed_slice(),
-                        scan_useful: prefix_exact
-                            || nonzero_payload_words.saturating_mul(4) <= payload_words,
-                    })
-                } else {
-                    None
-                };
-
-                LabelIndexPayload::Bloom {
-                    words_per_row,
-                    hash_count,
-                    bits: bits.into_boxed_slice(),
-                    label_rows: label_rows.into_boxed_slice(),
-                    exact_row_by_label: exact_row_by_label.into_boxed_slice(),
-                    exact_label_count,
-                    nonzero_words,
-                }
-            }
-            _ => unreachable!("label-index format was validated above"),
-        };
-
-        let counts = if matches!(
-            version,
-            COUNTED_BLOOM_INDEX_VERSION
-                | SUMMARIZED_BLOOM_INDEX_VERSION
-                | MIXED_BLOOM_INDEX_VERSION
-                | PREFIX_EXACT_BLOOM_INDEX_VERSION
-        ) {
-            let count_bytes = num_labels.checked_mul(4).ok_or_else(|| {
-                EncodedLabelIndexError::Invalid("Bloom label count table size overflow".to_string())
-            })?;
-            ensure_remaining(&mut reader, file_len, count_bytes, "Bloom label counts")?;
-            let mut counts = Vec::new();
-            counts.try_reserve_exact(num_labels).map_err(|_| {
-                EncodedLabelIndexError::Invalid("cannot reserve Bloom label counts".to_string())
-            })?;
-            for _ in 0..num_labels {
-                let count = read_u32(&mut reader)?;
-                if count == 0 || count > num_vectors {
-                    return Err(EncodedLabelIndexError::Invalid(format!(
-                        "Bloom label count {count} is outside 1..={num_vectors}"
-                    )));
-                }
-                counts.push(count);
-            }
-            Some(Arc::from(counts))
-        } else {
-            None
-        };
-
-        if version == MIXED_BLOOM_INDEX_VERSION {
-            let LabelIndexPayload::Bloom {
-                words_per_row,
-                bits: combined_bits,
-                exact_row_by_label,
-                exact_label_count,
-                nonzero_words,
-                ..
-            } = &mut payload
-            else {
-                unreachable!("mixed label-index version requires Bloom format")
-            };
-            let exact_count = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
-                EncodedLabelIndexError::Invalid("exact Bloom row count exceeds usize".to_string())
-            })?;
-            if exact_count == 0 || exact_count > num_labels {
-                return Err(EncodedLabelIndexError::Invalid(format!(
-                    "exact Bloom row count {exact_count} is outside 1..={num_labels}"
-                )));
-            }
-            let exact_id_bytes = exact_count.checked_mul(4).ok_or_else(|| {
-                EncodedLabelIndexError::Invalid("exact Bloom label ID size overflow".to_string())
-            })?;
-            ensure_remaining(
-                &mut reader,
-                file_len,
-                exact_id_bytes,
-                "exact Bloom label IDs",
-            )?;
-            let first_exact_row = combined_bits.len() / *words_per_row;
-            for row in 0..exact_count {
-                let label_id = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
-                    EncodedLabelIndexError::Invalid(
-                        "exact Bloom label ID exceeds usize".to_string(),
-                    )
-                })?;
-                if label_id >= num_labels || exact_row_by_label[label_id] != u32::MAX {
-                    return Err(EncodedLabelIndexError::Invalid(
-                        "exact Bloom label IDs must be unique dictionary entries".to_string(),
-                    ));
-                }
-                let physical_row = first_exact_row.checked_add(row).ok_or_else(|| {
-                    EncodedLabelIndexError::Invalid("exact Bloom physical row overflow".to_string())
-                })?;
-                exact_row_by_label[label_id] = u32::try_from(physical_row).map_err(|_| {
-                    EncodedLabelIndexError::Invalid(
-                        "exact Bloom physical row exceeds u32".to_string(),
-                    )
-                })?;
-            }
-
-            let exact_bits = read_payload(
-                &mut reader,
-                file_len,
-                exact_count,
-                *words_per_row,
-                "exact Bloom",
-            )?;
-            validate_bitslice_padding(&exact_bits, exact_count, *words_per_row, num_vectors)?;
-            let mut bits = std::mem::take(combined_bits).into_vec();
-            bits.extend_from_slice(&exact_bits);
-            *combined_bits = bits.into_boxed_slice();
-
-            let summary_words_per_row = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
-                EncodedLabelIndexError::Invalid(
-                    "exact Bloom word-summary row length exceeds usize".to_string(),
-                )
-            })?;
-            let expected_summary_words = words_per_row.div_ceil(64);
-            if summary_words_per_row != expected_summary_words {
-                return Err(EncodedLabelIndexError::Invalid(format!(
-                    "exact Bloom word-summary row has {summary_words_per_row} words; expected {expected_summary_words}"
-                )));
-            }
-            let summary_bits = read_payload(
-                &mut reader,
-                file_len,
-                exact_count,
-                summary_words_per_row,
-                "exact Bloom word-summary",
-            )?;
-            let summarized_words = u32::try_from(*words_per_row).map_err(|_| {
-                EncodedLabelIndexError::Invalid("Bloom row word count exceeds u32".to_string())
-            })?;
-            validate_bitslice_padding(
-                &summary_bits,
-                exact_count,
-                summary_words_per_row,
-                summarized_words,
-            )?;
-            let summary = nonzero_words
-                .as_mut()
-                .expect("mixed Bloom indexes always contain Bloom summaries");
-            let mut combined_summary_bits = std::mem::take(&mut summary.bits).into_vec();
-            combined_summary_bits.extend_from_slice(&summary_bits);
-            summary.bits = combined_summary_bits.into_boxed_slice();
-            *exact_label_count = exact_count;
-        }
-
-        if reader.read(&mut [0u8; 1])? != 0 {
-            return Err(EncodedLabelIndexError::Invalid(
-                "label-index contains trailing bytes".to_string(),
-            ));
-        }
-
-        let summary_nonzero_words_per_row = match &payload {
-            LabelIndexPayload::Bloom {
-                nonzero_words: Some(summary),
-                ..
-            } => Some(Arc::from(
-                summary
-                    .bits
-                    .chunks_exact(summary.words_per_row)
-                    .map(|row| {
-                        let count: usize = row.iter().map(|word| word.count_ones() as usize).sum();
-                        u32::try_from(count).map_err(|_| {
-                            EncodedLabelIndexError::Invalid(
-                                "Bloom nonzero word count exceeds u32".to_string(),
-                            )
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            _ => None,
-        };
-
-        Ok(Self {
-            labels: labels.into_boxed_slice(),
-            label_ids,
-            counts,
-            summary_nonzero_words_per_row,
-            num_vectors,
-            payload: Arc::new(payload),
-        })
+        load_label_index(path.as_ref())
     }
 
     /// Return the number of vectors covered by this index.
@@ -1754,30 +1144,24 @@ impl EncodedLabelIndex {
         self.num_vectors
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_bloom_word_summary(&self) -> bool {
-        matches!(
-            self.payload.as_ref(),
-            LabelIndexPayload::Bloom {
-                nonzero_words: Some(_),
-                ..
-            }
-        )
-    }
-
     /// Return the number of encoded labels.
     pub fn num_labels(&self) -> usize {
         self.labels.len()
     }
 
-    /// Return how many Bloom dictionary labels also have exact rows.
+    /// Return how many dictionary labels use exact Bitslice rows.
     pub fn num_exact_labels(&self) -> usize {
-        match self.payload.as_ref() {
-            LabelIndexPayload::Bloom {
-                exact_label_count, ..
-            } => *exact_label_count,
-            _ => 0,
-        }
+        self.payload.exact_label_count
+    }
+
+    /// Return valid-node counts for physical rows in exact-prefix then Bloom-row order.
+    pub fn physical_row_valid_counts(&self) -> &[u32] {
+        &self.payload.row_valid_counts
+    }
+
+    /// Return nonzero payload-word counts for physical rows.
+    pub fn physical_row_nonzero_word_counts(&self) -> &[u32] {
+        &self.summary_nonzero_words_per_row
     }
 
     /// Return whether this index contains an encoded label.
@@ -1811,8 +1195,8 @@ impl EncodedLabelIndex {
         let point_plan = compile_point_plan(
             &plan,
             &self.payload,
-            self.counts.as_deref(),
-            self.summary_nonzero_words_per_row.as_deref(),
+            &self.counts,
+            &self.summary_nonzero_words_per_row,
         );
         Ok(EncodedLabelQuery {
             num_vectors: self.num_vectors,
@@ -1824,6 +1208,344 @@ impl EncodedLabelIndex {
             _lifetime: PhantomData,
         })
     }
+}
+
+fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexError> {
+    let file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut reader = BufReader::new(file);
+
+    let mut magic = [0u8; LABEL_INDEX_MAGIC.len()];
+    reader.read_exact(&mut magic)?;
+    if magic != LABEL_INDEX_MAGIC {
+        return Err(EncodedLabelIndexError::Invalid(
+            "invalid label-index file magic".to_string(),
+        ));
+    }
+    let version = read_u32(&mut reader)?;
+    if version != LABEL_INDEX_VERSION {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "unsupported label-index version {version}"
+        )));
+    }
+    let flags = read_u32(&mut reader)?;
+    if flags != LABEL_INDEX_FLAGS {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "unsupported label-index flags {flags}"
+        )));
+    }
+
+    let num_vectors = u32::try_from(read_u64(&mut reader)?).map_err(|_| {
+        EncodedLabelIndexError::Invalid("label-index vector count exceeds u32".to_string())
+    })?;
+    if num_vectors == 0 {
+        return Err(EncodedLabelIndexError::Invalid(
+            "label-index vector count cannot be zero".to_string(),
+        ));
+    }
+    let num_labels = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+        EncodedLabelIndexError::Invalid("label-index label count exceeds usize".to_string())
+    })?;
+    if num_labels == 0 || num_labels > MAX_LABEL_COUNT {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "label-index label count {num_labels} is outside 1..={MAX_LABEL_COUNT}"
+        )));
+    }
+    let exact_label_count = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
+        EncodedLabelIndexError::Invalid("exact label count exceeds usize".to_string())
+    })?;
+    let bloom_row_count = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
+        EncodedLabelIndexError::Invalid("Bloom row count exceeds usize".to_string())
+    })?;
+    let hash_count = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
+        EncodedLabelIndexError::Invalid("Bloom hash count exceeds usize".to_string())
+    })?;
+    let reserved = read_u32(&mut reader)?;
+    if reserved != 0 {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "label-index reserved field is {reserved}, expected 0"
+        )));
+    }
+    if exact_label_count > num_labels {
+        return Err(EncodedLabelIndexError::Invalid(
+            "exact label count exceeds label count".to_string(),
+        ));
+    }
+    if exact_label_count == num_labels {
+        if bloom_row_count != 0 || hash_count != 0 {
+            return Err(EncodedLabelIndexError::Invalid(
+                "all-exact label-index cannot contain Bloom rows".to_string(),
+            ));
+        }
+    } else {
+        let bloom_rows = u32::try_from(bloom_row_count).map_err(|_| {
+            EncodedLabelIndexError::Invalid("Bloom row count exceeds u32".to_string())
+        })?;
+        let hashes = u32::try_from(hash_count).map_err(|_| {
+            EncodedLabelIndexError::Invalid("Bloom hash count exceeds u32".to_string())
+        })?;
+        validate_bloom_config(bloom_rows, hashes)?;
+    }
+    let physical_row_count = exact_label_count
+        .checked_add(bloom_row_count)
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("physical row count overflow".to_string())
+        })?;
+    if physical_row_count == 0 {
+        return Err(EncodedLabelIndexError::Invalid(
+            "label-index must contain at least one physical row".to_string(),
+        ));
+    }
+
+    let words_per_row = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+        EncodedLabelIndexError::Invalid("payload row length exceeds usize".to_string())
+    })?;
+    let expected_words_per_row = (num_vectors as usize).div_ceil(64);
+    if words_per_row != expected_words_per_row {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "payload row has {words_per_row} words; expected {expected_words_per_row}"
+        )));
+    }
+    let summary_words_per_row = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+        EncodedLabelIndexError::Invalid("summary row length exceeds usize".to_string())
+    })?;
+    let expected_summary_words = words_per_row.div_ceil(64);
+    if summary_words_per_row != expected_summary_words {
+        return Err(EncodedLabelIndexError::Invalid(format!(
+            "summary row has {summary_words_per_row} words; expected {expected_summary_words}"
+        )));
+    }
+
+    let minimum_dictionary_bytes = num_labels.checked_mul(8).ok_or_else(|| {
+        EncodedLabelIndexError::Invalid("label dictionary size overflow".to_string())
+    })?;
+    ensure_remaining(
+        &mut reader,
+        file_len,
+        minimum_dictionary_bytes,
+        "label dictionary",
+    )?;
+    let mut labels = Vec::new();
+    let mut counts = Vec::new();
+    let mut label_ids = HashMap::new();
+    labels.try_reserve_exact(num_labels).map_err(|_| {
+        EncodedLabelIndexError::Invalid("cannot reserve label dictionary".to_string())
+    })?;
+    counts
+        .try_reserve_exact(num_labels)
+        .map_err(|_| EncodedLabelIndexError::Invalid("cannot reserve label counts".to_string()))?;
+    label_ids.try_reserve(num_labels).map_err(|_| {
+        EncodedLabelIndexError::Invalid("cannot reserve label lookup map".to_string())
+    })?;
+    for id in 0..num_labels {
+        let len = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
+            EncodedLabelIndexError::Invalid("label length exceeds usize".to_string())
+        })?;
+        let count = read_u32(&mut reader)?;
+        if len > MAX_LABEL_LENGTH {
+            return Err(EncodedLabelIndexError::Invalid(format!(
+                "label length {len} exceeds limit {MAX_LABEL_LENGTH}"
+            )));
+        }
+        if count == 0 || count > num_vectors {
+            return Err(EncodedLabelIndexError::Invalid(format!(
+                "label count {count} is outside 1..={num_vectors}"
+            )));
+        }
+        ensure_remaining(&mut reader, file_len, len, "label bytes")?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(len).map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve label bytes".to_string())
+        })?;
+        bytes.resize(len, 0);
+        reader.read_exact(&mut bytes)?;
+        let label = String::from_utf8(bytes).map_err(|_| {
+            EncodedLabelIndexError::Invalid("label-index contains invalid UTF-8".to_string())
+        })?;
+        validate_label(&label)?;
+        let id = u32::try_from(id)
+            .map_err(|_| EncodedLabelIndexError::Invalid("label count exceeds u32".to_string()))?;
+        if label_ids.insert(label.clone(), id).is_some() {
+            return Err(EncodedLabelIndexError::Invalid(format!(
+                "duplicate label '{label}' in label-index"
+            )));
+        }
+        labels.push(label);
+        counts.push(count);
+    }
+
+    let total_label_rows = num_labels.checked_mul(hash_count).ok_or_else(|| {
+        EncodedLabelIndexError::Invalid("label-row table size overflow".to_string())
+    })?;
+    let mut label_rows = Vec::new();
+    label_rows
+        .try_reserve_exact(total_label_rows)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve label-row table".to_string())
+        })?;
+    label_rows.resize(total_label_rows, u32::MAX);
+    let mut exact_row_by_label = Vec::new();
+    exact_row_by_label
+        .try_reserve_exact(num_labels)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve exact-row table".to_string())
+        })?;
+    exact_row_by_label.resize(num_labels, u32::MAX);
+    for (label_id, exact_row) in exact_row_by_label
+        .iter_mut()
+        .take(exact_label_count)
+        .enumerate()
+    {
+        *exact_row = u32::try_from(label_id).map_err(|_| {
+            EncodedLabelIndexError::Invalid("exact row index exceeds u32".to_string())
+        })?;
+    }
+    let mapping_count = (num_labels - exact_label_count)
+        .checked_mul(hash_count)
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("Bloom mapping count overflow".to_string())
+        })?;
+    ensure_remaining(
+        &mut reader,
+        file_len,
+        mapping_count.checked_mul(4).ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("Bloom mapping byte size overflow".to_string())
+        })?,
+        "Bloom label-row mappings",
+    )?;
+    for label_id in exact_label_count..num_labels {
+        let start = label_id * hash_count;
+        for hash_index in 0..hash_count {
+            let row = read_u32(&mut reader)?;
+            if row < exact_label_count as u32
+                || row as usize >= physical_row_count
+                || label_rows[start..start + hash_index].contains(&row)
+            {
+                return Err(EncodedLabelIndexError::Invalid(
+                    "Bloom label rows must be distinct physical Bloom rows".to_string(),
+                ));
+            }
+            label_rows[start + hash_index] = row;
+        }
+    }
+
+    ensure_remaining(
+        &mut reader,
+        file_len,
+        physical_row_count.checked_mul(8).ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("row metadata byte size overflow".to_string())
+        })?,
+        "row metadata",
+    )?;
+    let mut row_valid_counts = Vec::new();
+    let mut row_nonzero_word_counts = Vec::new();
+    row_valid_counts
+        .try_reserve_exact(physical_row_count)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve row valid counts".to_string())
+        })?;
+    row_nonzero_word_counts
+        .try_reserve_exact(physical_row_count)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve row nonzero counts".to_string())
+        })?;
+    for _ in 0..physical_row_count {
+        let valid_node_count = read_u32(&mut reader)?;
+        let nonzero_word_count = read_u32(&mut reader)?;
+        if valid_node_count > num_vectors || nonzero_word_count as usize > words_per_row {
+            return Err(EncodedLabelIndexError::Invalid(
+                "row metadata exceeds index dimensions".to_string(),
+            ));
+        }
+        row_valid_counts.push(valid_node_count);
+        row_nonzero_word_counts.push(nonzero_word_count);
+    }
+    if row_valid_counts[..exact_label_count] != counts[..exact_label_count] {
+        return Err(EncodedLabelIndexError::Invalid(
+            "exact row valid count does not match label count".to_string(),
+        ));
+    }
+
+    let summary_bits = read_payload(
+        &mut reader,
+        file_len,
+        physical_row_count,
+        summary_words_per_row,
+        "label summary",
+    )?;
+    let summarized_words = u32::try_from(words_per_row).map_err(|_| {
+        EncodedLabelIndexError::Invalid("payload row word count exceeds u32".to_string())
+    })?;
+    validate_row_padding(
+        &summary_bits,
+        physical_row_count,
+        summary_words_per_row,
+        summarized_words,
+    )?;
+    for (row, summary) in summary_bits.chunks_exact(summary_words_per_row).enumerate() {
+        let nonzero = summary.iter().map(|word| word.count_ones()).sum::<u32>();
+        if nonzero != row_nonzero_word_counts[row] {
+            return Err(EncodedLabelIndexError::Invalid(
+                "summary popcount does not match row metadata".to_string(),
+            ));
+        }
+    }
+
+    let payload_bits = read_payload(
+        &mut reader,
+        file_len,
+        physical_row_count,
+        words_per_row,
+        "label payload",
+    )?;
+    validate_row_padding(
+        &payload_bits,
+        physical_row_count,
+        words_per_row,
+        num_vectors,
+    )?;
+    if reader.read(&mut [0u8; 1])? != 0 {
+        return Err(EncodedLabelIndexError::Invalid(
+            "label-index contains trailing bytes".to_string(),
+        ));
+    }
+
+    let total_nonzero_words = row_nonzero_word_counts
+        .iter()
+        .try_fold(0usize, |sum, &count| sum.checked_add(count as usize))
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("row nonzero word count overflow".to_string())
+        })?;
+    let total_payload_words = physical_row_count
+        .checked_mul(words_per_row)
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("payload word count overflow".to_string())
+        })?;
+    let summary = BloomWordSummary {
+        words_per_row: summary_words_per_row,
+        bits: summary_bits.into_boxed_slice(),
+        scan_useful: exact_label_count > 0
+            || total_nonzero_words.saturating_mul(4) <= total_payload_words,
+    };
+    let payload = LabelIndexPayload {
+        words_per_row,
+        hash_count,
+        bits: payload_bits.into_boxed_slice(),
+        label_rows: label_rows.into_boxed_slice(),
+        exact_row_by_label: exact_row_by_label.into_boxed_slice(),
+        exact_label_count,
+        row_valid_counts: row_valid_counts.into_boxed_slice(),
+        nonzero_words: summary,
+    };
+
+    Ok(EncodedLabelIndex {
+        labels: labels.into_boxed_slice(),
+        label_ids,
+        counts: Arc::from(counts),
+        summary_nonzero_words_per_row: Arc::from(row_nonzero_word_counts),
+        num_vectors,
+        payload: Arc::new(payload),
+    })
 }
 
 fn read_payload(
@@ -1906,18 +1628,9 @@ fn generic_point_plan(expression_type: FilterExpressionType) -> PointPlan {
 fn compile_point_plan(
     plan: &CompiledPlan,
     payload: &LabelIndexPayload,
-    counts: Option<&[u32]>,
-    summary_nonzero_words_per_row: Option<&[u32]>,
+    counts: &[u32],
+    summary_nonzero_words_per_row: &[u32],
 ) -> PointPlan {
-    let LabelIndexPayload::Bloom {
-        words_per_row,
-        exact_row_by_label,
-        nonzero_words,
-        ..
-    } = payload
-    else {
-        return generic_point_plan(plan.expression_type);
-    };
     if plan.expression_type != FilterExpressionType::DNF
         || plan.clause_offsets.as_ref() != [0, 2]
         || plan.label_ids.len() != 2
@@ -1930,26 +1643,23 @@ fn compile_point_plan(
     let Some(right_label) = plan.label_ids[1].map(|id| id as usize) else {
         return generic_point_plan(plan.expression_type);
     };
-    let left_row = exact_row_by_label[left_label];
-    let right_row = exact_row_by_label[right_label];
+    let left_row = payload.exact_row_by_label[left_label];
+    let right_row = payload.exact_row_by_label[right_label];
     if left_row == u32::MAX || right_row == u32::MAX {
         return generic_point_plan(plan.expression_type);
     }
-    let Some(left_word_offset) = (left_row as usize).checked_mul(*words_per_row) else {
+    let Some(left_word_offset) = (left_row as usize).checked_mul(payload.words_per_row) else {
         return generic_point_plan(plan.expression_type);
     };
-    let Some(right_word_offset) = (right_row as usize).checked_mul(*words_per_row) else {
+    let Some(right_word_offset) = (right_row as usize).checked_mul(payload.words_per_row) else {
         return generic_point_plan(plan.expression_type);
     };
-    let left_count = counts.map(|counts| counts[left_label]);
-    let right_count = counts.map(|counts| counts[right_label]);
-    let count_swap = matches!((left_count, right_count), (Some(left), Some(right)) if left > right);
-    if let (Some(summary), Some(nonzero_words_per_row)) =
-        (nonzero_words, summary_nonzero_words_per_row)
+    let count_swap = counts[left_label] > counts[right_label];
     {
+        let summary = &payload.nonzero_words;
         if let (Some(&left_nonzero), Some(&right_nonzero)) = (
-            nonzero_words_per_row.get(left_row as usize),
-            nonzero_words_per_row.get(right_row as usize),
+            summary_nonzero_words_per_row.get(left_row as usize),
+            summary_nonzero_words_per_row.get(right_row as usize),
         ) {
             let summary_swap = left_nonzero > right_nonzero;
             let first_nonzero = if summary_swap {
@@ -1957,9 +1667,11 @@ fn compile_point_plan(
             } else {
                 left_nonzero
             } as usize;
-            let zero = words_per_row.saturating_sub(first_nonzero);
+            let zero = payload.words_per_row.saturating_sub(first_nonzero);
             if zero.saturating_mul(100)
-                >= words_per_row.saturating_mul(EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT)
+                >= payload
+                    .words_per_row
+                    .saturating_mul(EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT)
             {
                 let (first_row, second_row, first_word_offset, second_word_offset) = if summary_swap
                 {

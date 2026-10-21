@@ -7,7 +7,6 @@
 
 use crate::{error::EncodedLabelIndexError, format::MAX_LABEL_COUNT};
 
-pub(crate) const BLOOM_FORMAT: u32 = 1;
 const MAX_BLOOM_BITS: u32 = 65_536;
 const MAX_BLOOM_HASHES: u32 = 64;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
