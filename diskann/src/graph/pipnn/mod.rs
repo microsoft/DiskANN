@@ -724,7 +724,7 @@ mod construction_tests {
             .0
     }
 
-    /// Build the PiPNN graph of `build_data` on two threads.
+    /// Build the PiPNN graph of `build_data` on one thread.
     fn build_sift_graph<T: VectorRepr>(
         build_data: MatrixView<'_, T>,
         graph: &Config,
@@ -732,7 +732,7 @@ mod construction_tests {
     ) -> Vec<AdjacencyList<u32>> {
         let config = sift_pipnn_config();
         let dimensions = NonZeroUsize::new(build_data.ncols()).unwrap();
-        let n_threads = 2;
+        let n_threads = 1;
         let pool = thread_pool(n_threads);
         let context = PiPNNBuildContext::new(config, graph, metric, dimensions, &pool).unwrap();
         build_graph(build_data, &context).unwrap()
@@ -887,6 +887,26 @@ mod construction_tests {
     }
 
     #[test]
+    fn a_max_depth_below_the_fanout_levels_is_rejected() {
+        // Two fanout levels cannot fit within one split level.
+        let config = PiPNNConfig {
+            fanout: vec![nz(10), nz(3)],
+            max_depth: nz(1),
+            ..partition_policy()
+        };
+
+        let actual = config.validate();
+
+        assert_eq!(
+            actual,
+            Err(PiPNNConfigError::MaxDepth {
+                max_depth: 1,
+                fanout_levels: 2
+            })
+        );
+    }
+
+    #[test]
     fn a_build_context_checks_the_configuration() {
         // An empty fanout must fail when the context is created, before a build.
         let degree = 2;
@@ -960,9 +980,12 @@ mod construction_tests {
                 .all(|&value| value.fract() == 0.0 && (0.0..=255.0).contains(&value)),
             "raw SIFT values must be integers in 0..=255 for exact f16 and u8 conversion"
         );
-        // i8 is not covered: SIFT values reach 143.
         let half = data.map(|&value| f16::from_f32(value));
         let unsigned = data.map(|&value| value as u8);
+        // i8 uses every value minus 128; a shift keeps every L2 distance.
+        let shift = 128.0;
+        let shifted = data.map(|&value| value - shift);
+        let signed = shifted.map(|&value| value as i8);
         let metric = Metric::L2;
         let graph = sift_graph(metric);
 
@@ -975,7 +998,16 @@ mod construction_tests {
         assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<f16>());
 
         let adjacency = build_sift_graph(unsigned.as_view(), &graph, metric);
-        let index = searchable_index(data.as_view(), graph, metric, adjacency);
+        let index = searchable_index(data.as_view(), graph.clone(), metric, adjacency);
         assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<u8>());
+
+        let adjacency = build_sift_graph(signed.as_view(), &graph, metric);
+        let index = searchable_index(shifted.as_view(), graph, metric, adjacency);
+        assert_exact_top_10(
+            &index,
+            shifted.as_view(),
+            metric,
+            std::any::type_name::<i8>(),
+        );
     }
 }

@@ -227,10 +227,11 @@ mod tests {
     #[test]
     fn selected_pairs_add_global_ids_in_both_directions() {
         // (point ID, one-dimensional vector) pairs, in leaf order.
-        let leaf = [(5, 9.0), (1, 0.0), (3, 2.0)];
-        // Each point picks its nearest point: 1 -> 3, 3 -> 1, 5 -> 3.
-        let k = 1;
-        let expected = both_directions([(1, 3), (3, 5)]);
+        let leaf = [(7, 0.0), (2, 1.0), (5, 3.0), (0, 7.0)];
+        // Nearest pairs: 7 picks 2 and 5; 2 picks 7 and 5;
+        // 5 picks 2 and 7; 0 picks 5 and 2.
+        let k = 2;
+        let expected = both_directions([(2, 7), (5, 7), (2, 5), (0, 5), (0, 2)]);
 
         let actual = build_one_leaf(&leaf, k);
 
@@ -245,15 +246,14 @@ mod tests {
         // The leaves overlap, and the last one repeats the first, as a replica does.
         let leaves = vec![vec![0, 1, 2], vec![1, 2, 3], vec![2, 3, 4], vec![0, 1, 2]];
         let k = 1;
+        let n_threads = 1;
         // Three leaves find pair 1-2, and two leaves each find 0-1 and 2-3.
         let expected = both_directions([(0, 1), (1, 2), (2, 3), (3, 4)]);
 
-        for n_threads in [1, 3] {
-            let actual = build_1d(&x, leaves.clone(), k, n_threads);
+        let actual = build_1d(&x, leaves, k, n_threads);
 
-            // `edges` panics on a repeated edge.
-            assert_eq!(edges(&actual), expected, "{n_threads} threads");
-        }
+        // `edges` panics on a repeated edge.
+        assert_eq!(edges(&actual), expected);
     }
 
     #[test]

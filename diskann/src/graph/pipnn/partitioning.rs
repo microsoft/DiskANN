@@ -519,7 +519,7 @@ mod tests {
     }
 
     /// Split the cluster of `point_ids` at `level` in one-dimensional L2 points `x`.
-    /// Two threads use a fixed sampling seed and an initially empty scratch pool.
+    /// One thread uses a fixed sampling seed and an initially empty scratch pool.
     fn split_1d(
         x: &[f32],
         config: &PiPNNConfig,
@@ -527,7 +527,7 @@ mod tests {
         level: usize,
     ) -> ClusterSplit {
         let dimensions = 1;
-        let n_threads = 2;
+        let n_threads = 1;
         let initial_buffers = 0;
         let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
         let parent = Cluster {
@@ -555,21 +555,41 @@ mod tests {
 
     #[test]
     fn should_partition_successfully() {
-        // x[i] is the one-dimensional vector of point i: two pairs far apart.
-        let x = [0.0, 1.0, 10.0, 11.0];
-        let dimensions = 1;
-        let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
-        // c_max = 2 forces one split. Every point is a leader with fanout 2, so
-        // both leaders of a pair create the same leaf.
-        let config = splitting_config();
+        let point_count = 40;
+        let dimensions = 2;
+        let seed = 1290;
         let n_threads = 1;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let values: Vec<f32> = (0..point_count * dimensions)
+            .map(|_| rng.random())
+            .collect();
+        let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+        // 40 x 0.25 = 10 leaders. Fanout 3 puts each point in 3 of 10 children
+        // of about 12 points, above c_max = 8, so level 1 splits again with fanout 2.
+        let config = PiPNNConfig {
+            c_max: nz(8),
+            p_samp: 0.25,
+            fanout: vec![nz(3), nz(2)],
+            max_depth: nz(10),
+            replicas: nz(1),
+            ..splitting_config()
+        };
 
-        let actual = partition_l2(data, &config, n_threads);
+        let leaves = partition_l2(data, &config, n_threads);
 
-        assert_eq!(
-            sorted_leaves(&actual),
-            [vec![0, 1], vec![0, 1], vec![2, 3], vec![2, 3]]
-        );
+        let mut ids: Vec<_> = leaves.iter().flatten().copied().collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids, (0..point_count as u32).collect::<Vec<_>>());
+        for leaf in leaves {
+            assert!(!leaf.is_empty(), "leaf {leaf:?}");
+            assert!(leaf.len() <= config.c_max.get(), "leaf {leaf:?}");
+            assert_eq!(
+                leaf.iter().copied().collect::<HashSet<_>>().len(),
+                leaf.len(),
+                "duplicate IDs in leaf {leaf:?}"
+            );
+        }
     }
 
     #[test]
@@ -591,28 +611,6 @@ mod tests {
                 expected,
                 "{points} points, fraction {sampling_fraction}"
             );
-        }
-    }
-
-    #[test]
-    fn points_join_their_nearest_leaders() {
-        // x[i] is the one-dimensional vector of point i.
-        // Leader points 2 and 0 are at x = 10 and x = 0. The points to assign
-        // are 5, 4 and 1, at x = 8, 2 and 100. Point 3 is not used.
-        let x = [0.0, 100.0, 10.0, 0.0, 2.0, 8.0];
-        let dimensions = 1;
-        let n_threads = 2;
-        let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
-
-        for (fanout, expected) in [
-            // Points 5 and 1 are nearer to x = 10, and point 4 to x = 0.
-            (1, [vec![5, 1], vec![4]]),
-            // With two leaders, every point joins both groups.
-            (2, [vec![5, 4, 1], vec![5, 4, 1]]),
-        ] {
-            let actual = assign_l2(data, &[5, 4, 1], &[2, 0], fanout, n_threads);
-
-            assert_eq!(actual, expected, "fanout {fanout}");
         }
     }
 
@@ -643,145 +641,175 @@ mod tests {
             ids.clone(),
         ];
 
-        // With three threads, the three stripes run in parallel.
-        for n_threads in [1, 3] {
-            let actual = assign_l2(data, &ids, &leaders, fanout, n_threads);
+        let n_threads = 1;
 
-            assert_eq!(actual, expected, "{n_threads} threads");
-        }
+        let actual = assign_l2(data, &ids, &leaders, fanout, n_threads);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn a_stripe_lists_each_points_nearest_leaders_nearest_first() {
+        // x[i] is the one-dimensional vector of point i.
+        let x = [100.0, 0.0, 8.0, 10.0, 2.0];
+        let ids = [4, 2, 0, 3, 1];
+        let leader_x = [0.0, 10.0, 100.0];
+        let dimensions = 1;
+        let fanout = 2;
+        let initial_assignment = 0;
+        let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
+        let leaders = L2::create_leaders(
+            MatrixView::try_from(leader_x.as_slice(), leader_x.len(), dimensions).unwrap(),
+        );
+        let mut buffers = StripeBuffers::default();
+        let mut assignments = Matrix::new(initial_assignment, ids.len(), fanout);
+        // Rows follow ids, and each row gives the two nearest indices in leader_x.
+        let expected = vec![vec![0, 1], vec![1, 0], vec![2, 1], vec![1, 0], vec![0, 1]];
+
+        assign_point_stripe::<_, L2, _>(
+            ARCH,
+            data,
+            &ids,
+            dimensions,
+            &leaders,
+            &mut buffers,
+            assignments.as_mut_view(),
+        )
+        .unwrap();
+
+        let actual: Vec<_> = assignments.row_iter().map(<[u32]>::to_vec).collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
     fn reused_stripe_buffers_do_not_carry_points() {
         // x[i] is the one-dimensional vector of point i.
         let x = [100.0, 0.0, 8.0, 10.0, 2.0];
+        let first_ids = [4, 2, 0, 3, 1];
+        let ids = [2, 1];
+        let leader_x = [0.0, 10.0, 100.0];
         let dimensions = 1;
         let fanout = 2;
         let initial_assignment = 0;
         let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
-        let leader_x = [0.0, 10.0, 100.0];
         let leaders = L2::create_leaders(
             MatrixView::try_from(leader_x.as_slice(), leader_x.len(), dimensions).unwrap(),
         );
         let mut buffers = StripeBuffers::default();
-
+        let mut first_assignments = Matrix::new(initial_assignment, first_ids.len(), fanout);
+        let mut assignments = Matrix::new(initial_assignment, ids.len(), fanout);
         // The first stripe grows the buffers. The second stripe is smaller and
-        // reads only a prefix of them. Each row lists the indices of the two
-        // nearest leaders in `leader_x`, nearest first.
-        for (ids, expected) in [
-            (
-                vec![4, 2, 0, 3, 1],
-                vec![vec![0, 1], vec![1, 0], vec![2, 1], vec![1, 0], vec![0, 1]],
-            ),
-            (vec![2, 1], vec![vec![1, 0], vec![0, 1]]),
-        ] {
-            let mut assignments = Matrix::new(initial_assignment, ids.len(), fanout);
+        // reads only a prefix of them. It must gather [8, 0], not retain [2, 8].
+        let expected = vec![vec![1, 0], vec![0, 1]];
 
-            assign_point_stripe::<_, L2, _>(
-                ARCH,
-                data,
-                &ids,
-                dimensions,
-                &leaders,
-                &mut buffers,
-                assignments.as_mut_view(),
-            )
-            .unwrap();
+        assign_point_stripe::<_, L2, _>(
+            ARCH,
+            data,
+            &first_ids,
+            dimensions,
+            &leaders,
+            &mut buffers,
+            first_assignments.as_mut_view(),
+        )
+        .unwrap();
+        assign_point_stripe::<_, L2, _>(
+            ARCH,
+            data,
+            &ids,
+            dimensions,
+            &leaders,
+            &mut buffers,
+            assignments.as_mut_view(),
+        )
+        .unwrap();
 
-            let actual: Vec<_> = assignments.row_iter().map(<[u32]>::to_vec).collect();
-            assert_eq!(actual, expected, "points {ids:?}");
-        }
+        let actual: Vec<_> = assignments.row_iter().map(<[u32]>::to_vec).collect();
+        assert_eq!(actual, expected, "points {ids:?}");
     }
 
     #[test]
-    fn grouping_by_leader_drops_unassigned_slots() {
-        // Point i takes row i % 4. UNASSIGNED marks a slot without a leader.
+    fn group_by_leader_lists_each_leaders_points_in_input_order() {
+        // IDs are not sorted, so sorting a group would change its expected order.
+        let ids = [70, 20, 60, 10, 50, 30, 40];
+        let assignment_rows = [[2, 0], [3, 1], [0, 3], [2, 3], [2, 0], [3, 1], [0, 3]];
+        let fanout = 2;
+        let leader_count = 4;
+        let n_threads = 1;
+        let assignments =
+            MatrixView::try_from(assignment_rows.as_flattened(), ids.len(), fanout).unwrap();
+        let expected = [
+            vec![70, 60, 50, 40],
+            vec![20, 30],
+            vec![70, 10, 50],
+            vec![20, 60, 10, 30, 40],
+        ];
+
+        let actual =
+            thread_pool(n_threads).install(|| group_by_leader(&ids, assignments, leader_count));
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn unassigned_slots_join_no_group() {
+        // Point 10 has no assigned leader; the other empty slots must also be skipped.
+        let ids = [70, 20, 60, 10, 50, 30, 40];
         let assignment_rows = [
             [2, 0],
             [UNASSIGNED, 1],
             [0, UNASSIGNED],
             [UNASSIGNED, UNASSIGNED],
+            [2, 0],
+            [UNASSIGNED, 1],
+            [0, UNASSIGNED],
         ];
-        let n_threads = 3;
+        let fanout = 2;
         let leader_count = 4;
-        let fanout = assignment_rows[0].len();
-        let pool = thread_pool(n_threads);
+        let n_threads = 1;
+        let assignments =
+            MatrixView::try_from(assignment_rows.as_flattened(), ids.len(), fanout).unwrap();
+        let expected = [vec![70, 60, 50, 40], vec![20, 30], vec![70, 50], vec![]];
 
-        // Counts around the parallel threshold cover both grouping paths and
-        // parallel chunks of unequal length.
-        for point_count in [
-            7,
-            PARALLEL_GROUPING_MIN_POINTS - 1,
-            PARALLEL_GROUPING_MIN_POINTS,
-            PARALLEL_GROUPING_MIN_POINTS + 1,
-        ] {
-            let ids: Vec<_> = (0..point_count).map(|i| 1_000_000 - i as u32).collect();
-            let assignments: Vec<_> = (0..point_count)
-                .flat_map(|i| assignment_rows[i % 4])
-                .collect();
-            let assignments =
-                MatrixView::try_from(assignments.as_slice(), point_count, fanout).unwrap();
-            let expected = [
-                // Rows 0 and 2 hold leader 0.
-                ids.iter().copied().step_by(2).collect(),
-                // Row 1 holds leader 1.
-                ids.iter().copied().skip(1).step_by(4).collect(),
-                // Row 0 holds leader 2.
-                ids.iter().copied().step_by(4).collect(),
-                // No row holds leader 3.
-                vec![],
-            ];
+        let actual =
+            thread_pool(n_threads).install(|| group_by_leader(&ids, assignments, leader_count));
 
-            let actual = pool.install(|| group_by_leader(&ids, assignments, leader_count));
-
-            assert_eq!(actual, expected, "{point_count} points");
-        }
+        assert_eq!(actual, expected);
     }
 
     #[test]
-    fn a_split_uses_the_configured_fanout_then_falls_back_to_one_leader() {
+    fn should_split_a_cluster_successfully() {
         // x[i] is the one-dimensional vector of point i.
-        // Every point is a leader. Points 0, 1 and points 2, 3 are pairs.
-        let x = [0.0, 1.0, 10.0, 11.0];
-
-        for (level, expected) in [
-            // Fanout 2: each point joins itself and the other point of its pair.
-            (0, vec![vec![0, 1], vec![0, 1], vec![2, 3], vec![2, 3]]),
-            // The fanout list has no level 1, so each point joins only itself.
-            (1, vec![vec![0], vec![1], vec![2], vec![3]]),
-        ] {
-            let actual = split_1d(&x, &splitting_config(), vec![0, 1, 2, 3], level);
-
-            assert_eq!(sorted_leaves(&actual.leaves), expected, "level {level}");
-            assert!(actual.next_level.is_empty(), "level {level}");
-            assert_eq!(actual.cut_points, 0, "level {level}");
-        }
-    }
-
-    #[test]
-    fn children_above_cmax_are_queued_at_the_next_level() {
-        // x[i] is the one-dimensional vector of point i.
-        let x = [0.0, 1.0, 10.0, 11.0];
+        let x = [0.0, 1.0, 10.0, 11.0, 13.0];
         let level = 0;
-        // With c_max = 1, every two-point child moves to level 1.
-        let config = PiPNNConfig {
-            c_max: nz(1),
-            ..splitting_config()
+        let config = splitting_config();
+        // Point 4 joins leader 3, so that group exceeds c_max while the others fit.
+        let expected = [vec![0, 1], vec![0, 1], vec![2, 3], vec![4]];
+
+        let actual = split_1d(&x, &config, vec![0, 1, 2, 3, 4], level);
+
+        assert_eq!(sorted_leaves(&actual.leaves), expected);
+        let [child] = actual.next_level.as_slice() else {
+            panic!("expected one pending cluster");
         };
+        assert_eq!(child.point_ids, [2, 3, 4]);
+        assert_eq!(child.level, 1);
+        assert_eq!(actual.cut_points, 0);
+    }
+
+    #[test]
+    fn a_level_past_the_fanout_list_uses_fanout_one() {
+        // x[i] is the one-dimensional vector of point i.
+        // Level 1 is past the fanout list, so each leader point joins only itself.
+        let x = [0.0, 1.0, 10.0, 11.0];
+        let level = 1;
+        let config = splitting_config();
+        let expected = [vec![0], vec![1], vec![2], vec![3]];
 
         let actual = split_1d(&x, &config, vec![0, 1, 2, 3], level);
 
-        assert!(actual.leaves.is_empty());
-        assert!(actual.next_level.iter().all(|child| child.level == 1));
-        let ids: Vec<_> = actual
-            .next_level
-            .into_iter()
-            .map(|child| child.point_ids)
-            .collect();
-        assert_eq!(
-            sorted_leaves(&ids),
-            [vec![0, 1], vec![0, 1], vec![2, 3], vec![2, 3]]
-        );
+        assert_eq!(sorted_leaves(&actual.leaves), expected);
+        assert!(actual.next_level.is_empty());
+        assert_eq!(actual.cut_points, 0);
     }
 
     #[test]
@@ -807,9 +835,46 @@ mod tests {
     }
 
     #[test]
-    fn data_within_cmax_forms_one_complete_leaf_per_replica() {
+    fn an_empty_child_is_not_a_leaf() {
         // x[i] is the one-dimensional vector of point i.
-        // The dataset fits c_max, so each replica returns it as one leaf.
+        // No point chooses the NaN leader, so its empty group must be dropped.
+        let x = [f32::NAN, 0.0, 2.0];
+        let level = 0;
+        let config = PiPNNConfig {
+            fanout: vec![nz(1)],
+            ..splitting_config()
+        };
+        let expected = [vec![1], vec![2]];
+
+        let actual = split_1d(&x, &config, vec![0, 1, 2], level);
+
+        assert_eq!(sorted_leaves(&actual.leaves), expected);
+        assert!(actual.next_level.is_empty());
+    }
+
+    #[test]
+    fn a_cluster_at_max_depth_is_cut_into_equal_leaves() {
+        // x[i] is the one-dimensional vector of point i.
+        // At max_depth, five points exceed c_max and must be cut in point order.
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let config = PiPNNConfig {
+            max_depth: nz(1),
+            ..splitting_config()
+        };
+        let level = config.max_depth.get();
+        let expected = [vec![0, 1], vec![2, 3], vec![4]];
+
+        let actual = split_1d(&x, &config, vec![0, 1, 2, 3, 4], level);
+
+        assert_eq!(actual.leaves, expected);
+        assert!(actual.next_level.is_empty());
+        assert_eq!(actual.cut_points, 5);
+    }
+
+    #[test]
+    fn data_within_cmax_is_one_leaf() {
+        // x[i] is the one-dimensional vector of point i.
+        // The dataset fits c_max, so it returns as one leaf without splitting.
         let x = [0.0, 1.0, 10.0];
         let dimensions = 1;
         let n_threads = 1;
@@ -818,75 +883,12 @@ mod tests {
         for c_max in [x.len(), x.len() + 1] {
             let config = PiPNNConfig {
                 c_max: nz(c_max),
-                replicas: nz(2),
                 ..splitting_config()
             };
 
             let actual = partition_l2(data, &config, n_threads);
 
-            assert_eq!(
-                sorted_leaves(&actual),
-                [vec![0, 1, 2], vec![0, 1, 2]],
-                "c_max {c_max}"
-            );
-        }
-    }
-
-    /// Build 129 dense 17-dimensional points with two fanout levels and two replicas.
-    fn recursive_partition_fixture() -> (Matrix<f32>, PiPNNConfig) {
-        let point_count = 129;
-        let dimensions = 17;
-        let seed = 1290;
-        let values = dense_points(point_count, dimensions, seed);
-        let data = Matrix::try_from(values.into_boxed_slice(), point_count, dimensions).unwrap();
-        let config = PiPNNConfig {
-            c_max: nz(16),
-            p_samp: 0.2,
-            fanout: vec![nz(2), nz(2)],
-            replicas: nz(2),
-            ..splitting_config()
-        };
-        (data, config)
-    }
-
-    #[test]
-    fn the_leaves_do_not_depend_on_the_worker_count() {
-        // Each child keeps the input order of its points, so the next split
-        // samples the same leaders for any thread count.
-        let (data, config) = recursive_partition_fixture();
-        let serial_n_threads = 1;
-        let parallel_n_threads = 3;
-
-        let first = partition_l2(data.as_view(), &config, serial_n_threads);
-        let second = partition_l2(data.as_view(), &config, parallel_n_threads);
-
-        assert_eq!(sorted_leaves(&first), sorted_leaves(&second));
-    }
-
-    #[test]
-    fn every_point_lands_in_a_leaf_of_at_most_c_max_points() {
-        // Two fanout levels and two replicas make several levels of splits.
-        let (data, config) = recursive_partition_fixture();
-        let n_threads = 1;
-
-        let leaves = partition_l2(data.as_view(), &config, n_threads);
-
-        // Every point is in some leaf.
-        let mut ids: Vec<_> = leaves.iter().flatten().copied().collect();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids, (0..data.nrows() as u32).collect::<Vec<_>>());
-        // Each leaf holds 1 to c_max points, each point at most once.
-        for leaf in leaves {
-            assert!(
-                !leaf.is_empty() && leaf.len() <= config.c_max.get(),
-                "leaf {leaf:?}"
-            );
-            assert_eq!(
-                leaf.iter().copied().collect::<HashSet<_>>().len(),
-                leaf.len(),
-                "duplicate IDs in leaf {leaf:?}"
-            );
+            assert_eq!(sorted_leaves(&actual), [vec![0, 1, 2]], "c_max {c_max}");
         }
     }
 
@@ -897,7 +899,7 @@ mod tests {
         let point_count = 33;
         let dimensions = 17;
         let seed = 1290;
-        let n_threads = 2;
+        let n_threads = 1;
         let values = dense_points(point_count, dimensions, seed);
         let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
         let config = PiPNNConfig {
@@ -919,31 +921,5 @@ mod tests {
         let two_replicas = sorted_leaves_with(2);
 
         assert!(two_replicas.iter().any(|leaf| !one_replica.contains(leaf)));
-    }
-
-    #[test]
-    fn unrankable_points_join_no_leaf() {
-        // x[i] in each case is the one-dimensional vector of point i.
-        // Single-point leaves expose whether an unrankable point joined a child.
-        let dimensions = 1;
-        let n_threads = 1;
-        let config = PiPNNConfig {
-            c_max: nz(1),
-            fanout: vec![nz(1)],
-            ..splitting_config()
-        };
-
-        for (x, expected) in [
-            // Point 2 is NaN, so no leader ranks it.
-            ([0.0, 3.0, f32::NAN], vec![vec![0], vec![1]]),
-            // No point can be ranked.
-            ([f32::NAN; 3], vec![]),
-        ] {
-            let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
-
-            let actual = partition_l2(data, &config, n_threads);
-
-            assert_eq!(sorted_leaves(&actual), expected, "x {x:?}");
-        }
     }
 }

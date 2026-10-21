@@ -125,4 +125,26 @@ mod tests {
             [[5.0, 9.0], [1.0, 2.0], [5.0, 9.0]],
         );
     }
+
+    #[test]
+    fn an_f16_row_length_that_differs_from_the_dimension_is_an_error() {
+        // A stored row has two values, but the build dimension asks for three.
+        let rows = [[f16::ONE, f16::ZERO]];
+        let ids = [0];
+        let stored_dimensions = rows[0].len();
+        let dimensions = 3;
+        let data =
+            MatrixView::try_from(rows.as_flattened(), rows.len(), stored_dimensions).unwrap();
+        let mut output = vec![f32::NAN; ids.len() * dimensions];
+        let output = MutMatrixView::try_from(output.as_mut_slice(), ids.len(), dimensions).unwrap();
+
+        let error = gather_as_f32(data, &ids, output).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("PiPNN dimension 3 does not match the f16 row length 2"),
+            "{error}"
+        );
+    }
 }
