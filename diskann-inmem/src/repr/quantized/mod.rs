@@ -29,15 +29,40 @@ use crate::{
 
 // Built-in quantizers
 pub mod product;
+pub mod scalar;
 
 /// Plug-in for a generalized quantizer compatible with [`Quantized`].
 ///
 /// This is applicable for quantizers that have a single, non-split, flat representation for
-/// quantized vectors with a fixed number of bytes and the same distance computation for insertion
-/// searches and standard serving searches.
+/// quantized vectors with a fixed number of bytes.
 ///
-/// Distance functors provided by [`Self::distance`] and [`Self::query_distance`] will be
-/// inlined into a higher-level kernel, allowing implementations to specialize distances.
+/// Three different distance types are allowed:
+///
+/// * [`Self::query_distance`]: The distance computation used for general queries over an
+///   index. Implementations may assume that a query is fixed for the duration of this search
+///   and the distances used will not participate in any stage of index construction.
+///
+///   Queries may come from a different distributions than the standard data corpus.
+///
+/// * [`Self::insert_distance`]: Distance computations used for the search phase of an
+///   insertion. This is like [`Self::query_distance`] but with some important differences:
+///
+///   * The item being inserted can be assumed to belong to the corpus of data upon which
+///     the quantizer is trained.
+///
+///   * Distance yielded from this computer may be mixed with those returned by
+///     [`Self::distance`] for index construction and should be compatible.
+///
+/// * [`Self::distance`]: General distance computations between quantized items.
+///   Unlike the [`QueryDistance`] style methods, the left and right-hand sides of the
+///   arguments to the returned [`Distance`] can both change.
+///
+///   Distance values returned from this method should be compatible with those yielded
+///   by [`Self::insert_distance`].
+///
+/// Distance functors provided by [`Self::distance`], [`Self::insert_distance`], and
+/// [`Self::query_distance`] will be inlined into a higher-level kernel, allowing
+/// implementations to specialize distances.
 pub trait Quantizer: std::fmt::Debug + Send + Sync + 'static {
     /// The number of bytes required for each quantized vector.
     ///
@@ -70,6 +95,19 @@ pub trait Quantizer: std::fmt::Debug + Send + Sync + 'static {
     fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
     where
         V: QueryDistanceVisitor<'a>;
+
+    /// Return the distance used during the search phase of insert. Implementations may use
+    /// this to provide distance computations that are more compatible with [`Self::distance`].
+    ///
+    /// Implementations may assume that `query.len() == self.dim()`.
+    ///
+    /// This defaults to using [`Self::query_distance`].
+    fn insert_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
+    where
+        V: QueryDistanceVisitor<'a>,
+    {
+        self.query_distance(query, visitor)
+    }
 }
 
 /// Return the distance between two raw byte slices.
@@ -429,7 +467,7 @@ impl Quantized {
         counters: LocalCounters<'a>,
         args: AccessorArgs,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        let AccessorArgs { rerank_if_enabled } = args;
+        let AccessorArgs { insert } = args;
 
         // NOTE: `ProcessInto` panics on a query dimension mismatch.
         //
@@ -448,6 +486,7 @@ impl Quantized {
         let (expand_beam, post_process) = self.store.guard(|cons, guard| -> ANNResult<_> {
             // This will result in some wasted work if `expand_beam` errors, but that should
             // be a relatively rare occurrence.
+            let rerank_if_enabled = !insert;
             let post_process = rerank_if_enabled
                 .then(|| {
                     self.reranker
@@ -455,9 +494,18 @@ impl Quantized {
                 })
                 .flatten();
 
-            let expand_beam =
-                self.quantizer
-                    .expand_beam(query, cons.first().reader(guard), self.lookahead)?;
+            let kind = if insert {
+                inner::ExpandBeamKind::Insert
+            } else {
+                inner::ExpandBeamKind::Query
+            };
+
+            let expand_beam = self.quantizer.expand_beam(
+                query,
+                cons.first().reader(guard),
+                self.lookahead,
+                kind,
+            )?;
 
             Ok((expand_beam, post_process))
         })??;
@@ -475,7 +523,7 @@ impl Quantized {
 
 #[derive(Debug)]
 struct AccessorArgs {
-    rerank_if_enabled: bool,
+    insert: bool,
 }
 
 repr::internal::macros::representation!(Quantized);
@@ -520,14 +568,7 @@ impl repr::Search for Quantized {
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        self.create_accessor(
-            query,
-            provider,
-            counters,
-            AccessorArgs {
-                rerank_if_enabled: true,
-            },
-        )
+        self.create_accessor(query, provider, counters, AccessorArgs { insert: false })
     }
 }
 
@@ -538,14 +579,7 @@ impl repr::Insert for Quantized {
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        self.create_accessor(
-            query,
-            provider,
-            counters,
-            AccessorArgs {
-                rerank_if_enabled: false,
-            },
-        )
+        self.create_accessor(query, provider, counters, AccessorArgs { insert: true })
     }
 
     fn prune_accessor<'a>(
@@ -576,6 +610,12 @@ mod inner {
     use diskann::{ANNError, ANNResult};
 
     use crate::{num::Bytes, prefetch, repr, store::intrusive};
+
+    #[derive(Debug)]
+    pub(super) enum ExpandBeamKind {
+        Insert,
+        Query,
+    }
 
     #[derive(Debug)]
     pub(super) struct Quantizer {
@@ -618,8 +658,9 @@ mod inner {
             query: &'a [f32],
             reader: intrusive::Reader<'a>,
             lookahead: Option<NonZeroUsize>,
+            kind: ExpandBeamKind,
         ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
-            self.quantizer.expand_beam(query, reader, lookahead)
+            self.quantizer.expand_beam(query, reader, lookahead, kind)
         }
 
         pub(super) fn prune<'a>(
@@ -639,6 +680,7 @@ mod inner {
             query: &'a [f32],
             reader: intrusive::Reader<'a>,
             lookahead: Option<NonZeroUsize>,
+            kind: ExpandBeamKind,
         ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>>;
 
         fn prune<'a>(&'a self, reader: intrusive::Reader<'a>) -> Box<dyn repr::Prune + 'a>;
@@ -724,12 +766,92 @@ mod inner {
             query: &'a [f32],
             reader: intrusive::Reader<'a>,
             lookahead: Option<NonZeroUsize>,
+            kind: ExpandBeamKind,
         ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
-            self.0
-                .query_distance(query, QueryDistanceVisitor { reader, lookahead })
+            let visitor = QueryDistanceVisitor { reader, lookahead };
+            match kind {
+                ExpandBeamKind::Insert => self.0.insert_distance(query, visitor),
+                ExpandBeamKind::Query => self.0.query_distance(query, visitor),
+            }
         }
         fn prune<'a>(&'a self, reader: intrusive::Reader<'a>) -> Box<dyn repr::Prune + 'a> {
             self.0.distance(DistanceVisitor { reader })
+        }
+    }
+}
+
+///////////////////////
+// Shared Test Utils //
+///////////////////////
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[derive(Debug)]
+    pub(super) struct Boxit;
+
+    impl<'a> DistanceVisitor<'a> for Boxit {
+        type Output = Box<dyn Distance + 'a>;
+        fn visit<D>(self, distance: D) -> Self::Output
+        where
+            D: Distance + 'a,
+        {
+            Box::new(distance)
+        }
+    }
+
+    impl<'a> QueryDistanceVisitor<'a> for Boxit {
+        type Output = Box<dyn QueryDistance + 'a>;
+        fn visit<D>(self, distance: D) -> Self::Output
+        where
+            D: QueryDistance + 'a,
+        {
+            Box::new(distance)
+        }
+    }
+
+    /// A dyn-compatible wrapper for [`super::Quantizer`].
+    pub(super) trait DynQuantizer {
+        fn dim(&self) -> usize;
+        fn bytes(&self) -> Bytes;
+        fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()>;
+        fn distance<'a>(&'a self) -> Box<dyn Distance + 'a>;
+        fn query_distance<'a>(&'a self, query: &'a [f32])
+        -> ANNResult<Box<dyn QueryDistance + 'a>>;
+        fn insert_distance<'a>(
+            &'a self,
+            query: &'a [f32],
+        ) -> ANNResult<Box<dyn QueryDistance + 'a>>;
+    }
+
+    impl<Q> DynQuantizer for Q
+    where
+        Q: Quantizer,
+    {
+        fn dim(&self) -> usize {
+            Quantizer::dim(self)
+        }
+        fn bytes(&self) -> Bytes {
+            Quantizer::bytes(self)
+        }
+        fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()> {
+            Quantizer::quantize(self, quantized, data)
+        }
+        fn distance<'a>(&'a self) -> Box<dyn Distance + 'a> {
+            Quantizer::distance(self, Boxit)
+        }
+        fn query_distance<'a>(
+            &'a self,
+            query: &'a [f32],
+        ) -> ANNResult<Box<dyn QueryDistance + 'a>> {
+            Quantizer::query_distance(self, query, Boxit)
+        }
+        fn insert_distance<'a>(
+            &'a self,
+            query: &'a [f32],
+        ) -> ANNResult<Box<dyn QueryDistance + 'a>> {
+            Quantizer::insert_distance(self, query, Boxit)
         }
     }
 }
@@ -746,7 +868,7 @@ mod tests {
 
     use diskann::graph::test::synthetic::Grid;
     use diskann_utils::{assert_contains, views::rowmajor::MatrixMut};
-    use diskann_vector::distance::DistanceProvider;
+    use diskann_vector::distance::{Distance as VDistance, Metric as VMetric};
     use hashbrown::HashMap;
 
     use crate::{
@@ -755,17 +877,28 @@ mod tests {
         repr::test::{Reference, test_expand_beam, test_prune},
     };
 
+    /////////////////////
+    // Quantized Tests //
+    /////////////////////
+
     /// A simple test quantizer that tries its best to convert `f32` to `i8`.
+    ///
+    /// To test that [`Quantizer::query_distance`] and [`Quantizer::insert_distance`] are
+    /// called correctly, we assume that queries are all shifted by `[5.0, 5.0]` and need
+    /// to be recentered around zero.
+    ///
+    /// In other words, a query may come in as `[5.0, 5.0]` but for purposes of all distance
+    /// computations, it should be treated as `[0.0, 0.0]`.
     #[derive(Debug, Clone, Copy)]
     struct Round {
         dim: usize,
-        distance: diskann_vector::distance::Distance<i8, i8>,
+        distance: VDistance<i8, i8>,
     }
 
     impl Round {
-        fn new(dim: usize, metric: Metric) -> Self {
-            use diskann_vector::distance::{DistanceProvider, Metric as VMetric};
+        const QUERY_OFFSET: f32 = 5.0;
 
+        fn new(dim: usize, metric: Metric) -> Self {
             let vmetric = match metric {
                 Metric::SquaredL2 => VMetric::L2,
                 Metric::InnerProduct => VMetric::InnerProduct,
@@ -774,7 +907,7 @@ mod tests {
 
             Self {
                 dim,
-                distance: <i8 as DistanceProvider<i8>>::distance_comparer(vmetric, None),
+                distance: VDistance::new(vmetric, None),
             }
         }
     }
@@ -807,6 +940,19 @@ mod tests {
             visitor.visit(RoundDistance(*self))
         }
         fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
+        where
+            V: QueryDistanceVisitor<'a>,
+        {
+            let distance = RoundQueryDistance {
+                round: *self,
+                query: query
+                    .iter()
+                    .map(|v| (*v - Self::QUERY_OFFSET) as i8)
+                    .collect(),
+            };
+            Ok(visitor.visit(distance))
+        }
+        fn insert_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
         where
             V: QueryDistanceVisitor<'a>,
         {
@@ -894,7 +1040,7 @@ mod tests {
         let quantized = config.build().unwrap();
 
         assert_eq!(repr::Representation::id_limit(&quantized), TEST_LIMIT);
-        assert_eq!(quantized.dim(), grid.dim().into());
+        assert_eq!(quantized.dim(), usize::from(grid.dim()));
 
         let mut reference = Reference::new(grid.dim().into());
 
@@ -940,7 +1086,8 @@ mod tests {
             "{ctx}"
         );
 
-        let query = [10.0, -10.0];
+        let insert_vector = [10.0, -10.0];
+        let query_vector = insert_vector.map(|q| q + Round::QUERY_OFFSET);
 
         // Generate a couple of data points in the dataset.
         let i0 = LogicalId(2);
@@ -971,15 +1118,23 @@ mod tests {
         let v2 = &reference[i2];
 
         // The Round quantizer is exact for these integral values.
-        let f = <f32 as DistanceProvider<f32>>::distance_comparer(
-            metric.as_internal_metric().as_vector_metric(),
-            None,
-        );
+        let f = VDistance::<f32, f32>::new(metric.as_internal_metric().as_vector_metric(), None);
 
-        let distances = HashMap::from_iter([
-            (s0, f.call(&query, v0)),
-            (s1, f.call(&query, v1)),
-            (s2, f.call(&query, v2)),
+        // True distances between the insert vector and the dataset vectors.
+        let insert_distances = HashMap::from_iter([
+            (s0, f.call(&insert_vector, v0)),
+            (s1, f.call(&insert_vector, v1)),
+            (s2, f.call(&insert_vector, v2)),
+        ]);
+
+        // Distances between the un-shifted query vector and the dataset vectors.
+        let query_distances = insert_distances.clone();
+
+        // THe true distances between the shifted query vector and the dataset vectors.
+        let true_query_distances = HashMap::from_iter([
+            (s0, f.call(&query_vector, v0)),
+            (s1, f.call(&query_vector, v1)),
+            (s2, f.call(&query_vector, v2)),
         ]);
 
         // Insert
@@ -987,7 +1142,7 @@ mod tests {
             let counters = Counters::new();
             let mut sa = repr::Insert::insert_search_accessor(
                 quantized,
-                query.as_slice(),
+                insert_vector.as_slice(),
                 &(),
                 counters.local(),
             )
@@ -1002,7 +1157,7 @@ mod tests {
             test_expand_beam(
                 sa.get_expand_beam(),
                 TEST_LIMIT,
-                distances.clone(),
+                insert_distances,
                 &[s0, s1, s3_deleted, s2, s4_deleted],
                 ctx,
             );
@@ -1011,14 +1166,18 @@ mod tests {
         // Search
         {
             let counters = Counters::new();
-            let mut sa =
-                repr::Search::search_accessor(quantized, query.as_slice(), &(), counters.local())
-                    .unwrap();
+            let mut sa = repr::Search::search_accessor(
+                quantized,
+                query_vector.as_slice(),
+                &(),
+                counters.local(),
+            )
+            .unwrap();
 
             test_expand_beam(
                 sa.get_expand_beam(),
                 TEST_LIMIT,
-                distances.clone(),
+                query_distances,
                 &[s0, s1, s3_deleted, s2, s4_deleted],
                 ctx,
             );
@@ -1037,7 +1196,7 @@ mod tests {
 
                 repr::internal::quantization::rerank::test_rerank(
                     post_process,
-                    distances,
+                    true_query_distances,
                     &[s0, s1, s3_deleted, s2, s4_deleted],
                     ctx,
                 );
