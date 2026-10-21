@@ -13,11 +13,12 @@
 //! the fanout of each level, and levels after the schedule use fanout 1. Each
 //! replica repeats the process with a different seed.
 //!
-//! A fanout-1 split in which one child gets every point makes no progress, for
-//! example when all sampled leaders are copies of one vector. The split cuts
-//! that child into equal leaves in point order, and the build logs a warning
-//! with the number of points it cut. These leaves group points arbitrarily,
-//! which can lower recall.
+//! The recursion stops at `max_depth` levels. A cluster that is still larger
+//! than `c_max` at that level is cut into equal leaves in point order, and the
+//! build logs a warning with the number of points it cut. A cluster can stay
+//! large when its points are copies of one vector, or when, under inner
+//! product, one leader with a large norm wins every point. These leaves group
+//! points arbitrarily, which can lower recall.
 //!
 //! The partition kernel computes point-to-leader distances and selects the
 //! nearest leaders. This module samples leaders, gathers vectors, and groups the
@@ -43,7 +44,7 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    conversion::{f32_dimensions, gather_as_f32},
+    conversion::gather_as_f32,
     partition_kernel::{PartitionKernelWorkspace, assign_leaders},
     partition_metric::PartitionMetric,
     simd::Simd,
@@ -76,7 +77,7 @@ struct Cluster {
 struct ClusterSplit {
     next_level: Vec<Cluster>,
     leaves: Vec<Vec<u32>>,
-    /// Number of points that the split cut into leaves in point order.
+    /// Number of points that the split cut into leaves at `max_depth`.
     cut_points: usize,
 }
 
@@ -112,6 +113,7 @@ type StripeBufferPool = ObjectPool<StripeBuffers>;
 pub(super) fn partition<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    dimensions: usize,
     config: &PiPNNConfig,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
@@ -128,16 +130,16 @@ where
     for replica in 0..config.replicas.get() {
         let seed = base_seed.wrapping_add(replica as u64);
         let (mut replica_leaves, replica_cut_points) =
-            partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
+            partition_replica::<A, M, T>(arch, data, dimensions, config, seed, &stripe_buffers)?;
         leaves.append(&mut replica_leaves);
         cut_points += replica_cut_points;
     }
     if cut_points > 0 {
         tracing::warn!(
             cut_points,
-            "PiPNN cut {cut_points} points into leaves in point order because no split \
-             could shrink their clusters; these leaves group points arbitrarily and can \
-             lower recall"
+            "PiPNN cut {cut_points} points into leaves in point order because their clusters \
+             were still larger than c_max at max_depth; these leaves group points arbitrarily \
+             and can lower recall"
         );
     }
     Ok(leaves)
@@ -145,13 +147,12 @@ where
 
 /// Split one replica, one level at a time, until every cluster is a leaf.
 ///
-/// The loop ends. The fanout schedule is finite, and each split sends its
-/// clusters one level deeper. After the schedule, fanout is 1, so each point
-/// joins one child. A child is then smaller than its parent, or it holds every
-/// point and [`split_cluster`] cuts it into leaves.
+/// The loop ends: each split sends its clusters one level deeper, and a
+/// cluster at `max_depth` becomes leaves.
 fn partition_replica<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    dimensions: usize,
     config: &PiPNNConfig,
     seed: u64,
     stripe_buffers: &StripeBufferPool,
@@ -178,7 +179,9 @@ where
         // Indexed parallel collection keeps the parent order.
         let splits: ANNResult<Vec<_>> = pending
             .into_par_iter()
-            .map(|cluster| split_cluster::<A, M, T>(arch, data, config, cluster, stripe_buffers))
+            .map(|cluster| {
+                split_cluster::<A, M, T>(arch, data, dimensions, config, cluster, stripe_buffers)
+            })
             .collect();
 
         let mut next_level = Vec::new();
@@ -196,6 +199,7 @@ where
 fn split_cluster<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    dimensions: usize,
     config: &PiPNNConfig,
     cluster: Cluster,
     stripe_buffers: &StripeBufferPool,
@@ -205,12 +209,31 @@ where
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
+    let c_max = config.c_max.get();
+    // The recursion stops at `max_depth`. A cluster that reaches it is cut into
+    // equal leaves in point order.
+    if cluster.level >= config.max_depth.get() {
+        let leaf_len = cluster
+            .point_ids
+            .len()
+            .div_ceil(cluster.point_ids.len().div_ceil(c_max));
+        let leaves = cluster
+            .point_ids
+            .chunks(leaf_len)
+            .map(<[u32]>::to_vec)
+            .collect();
+        return Ok(ClusterSplit {
+            next_level: Vec::new(),
+            leaves,
+            cut_points: cluster.point_ids.len(),
+        });
+    }
+
     let mut rng = StdRng::seed_from_u64(cluster.seed);
     let fanout = config
         .fanout
         .get(cluster.level)
         .map_or(1, |fanout| fanout.get());
-    let c_max = config.c_max.get();
     let leader_count = sampled_leader_count(
         cluster.point_ids.len(),
         config.p_samp,
@@ -234,6 +257,7 @@ where
     let children = assign_to_leaders::<A, M, T>(
         arch,
         data,
+        dimensions,
         &cluster.point_ids,
         &leaders,
         fanout,
@@ -242,24 +266,12 @@ where
 
     let mut next_level = Vec::new();
     let mut leaves = Vec::new();
-    let mut cut_points = 0;
     for child in children {
         if child.is_empty() {
             continue;
         }
         if child.len() <= c_max {
             leaves.push(child);
-        } else if fanout == 1 && child.len() == cluster.point_ids.len() {
-            // Every point chose this leader, so the split made no progress. With
-            // L2 or cosine, each leader is nearest to itself, so this needs all
-            // sampled leaders to be copies of one vector. With inner product, a
-            // leader with a large norm can also win every point. Another split can
-            // stall the same way, so cut the child into equal leaves in point
-            // order. The cut groups points arbitrarily, which can lower recall but
-            // keeps the graph valid.
-            let leaf_len = child.len().div_ceil(child.len().div_ceil(c_max));
-            leaves.extend(child.chunks(leaf_len).map(<[u32]>::to_vec));
-            cut_points += child.len();
         } else {
             next_level.push(Cluster {
                 point_ids: child,
@@ -271,7 +283,7 @@ where
     Ok(ClusterSplit {
         next_level,
         leaves,
-        cut_points,
+        cut_points: 0,
     })
 }
 
@@ -295,6 +307,7 @@ fn sampled_leader_count(points: usize, sampling_fraction: f64, max_leaders: usiz
 fn assign_to_leaders<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    dimensions: usize,
     point_ids: &[u32],
     leader_ids: &[u32],
     fanout: usize,
@@ -305,7 +318,6 @@ where
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
-    let dimensions = f32_dimensions(data)?;
     let mut leader_values = Matrix::new(0.0f32, leader_ids.len(), dimensions);
     gather_as_f32(data, leader_ids, leader_values.as_mut_view())?;
 
@@ -479,6 +491,7 @@ mod tests {
             p_samp: 1.0,
             max_leaders: nz(1000),
             fanout: vec![nz(2)],
+            max_depth: nz(10),
             leaf_k: nz(1),
             replicas: nz(1),
             seed: Some(1290),
@@ -493,10 +506,15 @@ mod tests {
         fanout: usize,
         n_threads: usize,
     ) -> Vec<Vec<u32>> {
+        let dimensions = data.ncols();
         let initial_buffers = 0;
         let buffers = StripeBufferPool::new((), initial_buffers, None);
         thread_pool(n_threads)
-            .install(|| assign_to_leaders::<_, L2, _>(ARCH, data, ids, leaders, fanout, &buffers))
+            .install(|| {
+                assign_to_leaders::<_, L2, _>(
+                    ARCH, data, dimensions, ids, leaders, fanout, &buffers,
+                )
+            })
             .unwrap()
     }
 
@@ -519,7 +537,7 @@ mod tests {
         };
         let buffers = StripeBufferPool::new((), initial_buffers, None);
         thread_pool(n_threads)
-            .install(|| split_cluster::<_, L2, _>(ARCH, data, config, parent, &buffers))
+            .install(|| split_cluster::<_, L2, _>(ARCH, data, dimensions, config, parent, &buffers))
             .unwrap()
     }
 
@@ -529,8 +547,9 @@ mod tests {
         config: &PiPNNConfig,
         n_threads: usize,
     ) -> Vec<Vec<u32>> {
+        let dimensions = data.ncols();
         thread_pool(n_threads)
-            .install(|| partition::<_, L2, _>(ARCH, data, config))
+            .install(|| partition::<_, L2, _>(ARCH, data, dimensions, config))
             .unwrap()
     }
 
@@ -763,48 +782,6 @@ mod tests {
             sorted_leaves(&ids),
             [vec![0, 1], vec![0, 1], vec![2, 3], vec![2, 3]]
         );
-    }
-
-    #[test]
-    fn a_fanout_one_split_without_progress_cuts_equal_leaves() {
-        // x[i] is the one-dimensional vector of point i.
-        // Copies of one vector tie for every leader, so all points choose the
-        // same leader and the child equals its parent.
-        let x = [1.0; 5];
-        let level = 0;
-        let config = PiPNNConfig {
-            fanout: vec![nz(1)],
-            ..splitting_config()
-        };
-
-        let actual = split_1d(&x, &config, (0..x.len() as u32).collect(), level);
-
-        // c_max = 2 cuts the five points into leaves of two, in point order.
-        assert_eq!(
-            sorted_leaves(&actual.leaves),
-            [vec![0, 1], vec![2, 3], vec![4]]
-        );
-        assert!(actual.next_level.is_empty());
-        assert_eq!(actual.cut_points, 5);
-    }
-
-    #[test]
-    fn a_child_that_repeats_its_parent_at_fanout_two_is_split_again() {
-        // x[i] is the one-dimensional vector of point i.
-        // Points at x=0, x=10 and x=4 are all leaders. Each point joins itself and
-        // x=4, so the child of x=4 holds all points. With fanout above one this
-        // is overlap, not a stalled split.
-        let x = [0.0, 10.0, 4.0];
-        let level = 0;
-
-        let actual = split_1d(&x, &splitting_config(), vec![0, 1, 2], level);
-
-        assert_eq!(sorted_leaves(&actual.leaves), [vec![0, 2], vec![1]]);
-        let [child] = actual.next_level.as_slice() else {
-            panic!("expected one pending cluster");
-        };
-        assert_eq!(child.point_ids, [0, 1, 2]);
-        assert_eq!(child.level, 1);
     }
 
     #[test]

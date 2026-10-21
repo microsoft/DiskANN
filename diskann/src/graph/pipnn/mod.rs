@@ -186,6 +186,13 @@ pub enum PiPNNConfigError {
     SamplingFraction(f64),
     #[error("fanout must not be empty")]
     EmptyFanout,
+    #[error(
+        "max_depth ({max_depth}) must be at least the number of fanout levels ({fanout_levels})"
+    )]
+    MaxDepth {
+        max_depth: usize,
+        fanout_levels: usize,
+    },
     #[error("max_leaders ({0}) must be at least 2")]
     MaxLeaders(usize),
 }
@@ -197,7 +204,8 @@ crate::convert_error!(PiPNNConfigError);
 /// The DiskANN graph [`Config`] supplies the degree, alpha, and prune kind.
 ///
 /// The default configuration is `c_max = 512`, `p_samp = 0.005`,
-/// `max_leaders = 1000`, `fanout = [10, 3]`, `leaf_k = 2` and `replicas = 1`.
+/// `max_leaders = 1000`, `fanout = [10, 3]`, `max_depth = 10`, `leaf_k = 2`
+/// and `replicas = 1`.
 /// Each point then joins about 30 leaves, the product of the fanout values.
 /// Larger `c_max`, fanout values, `leaf_k` and `replicas` all give each point
 /// more or nearer candidates, which raises recall and makes the build slower.
@@ -224,6 +232,12 @@ pub struct PiPNNConfig {
     /// from more leaves. The number of leaves and the leaf build time grow with
     /// the product of the values.
     pub fanout: Vec<NonZeroUsize>,
+    /// Maximum number of split levels. A cluster that is still larger than
+    /// `c_max` after `max_depth` splits is cut into equal leaves in point
+    /// order, and the build logs a warning with the number of points it cut.
+    /// Such leaves group points arbitrarily, which can lower recall. The value
+    /// must be at least the number of `fanout` levels.
+    pub max_depth: NonZeroUsize,
     /// Number of nearest neighbors that each point selects inside a leaf. Each
     /// selected pair adds a candidate in both directions. A larger value gives
     /// more candidates and makes final pruning slower.
@@ -246,6 +260,12 @@ impl PiPNNConfig {
         if self.fanout.is_empty() {
             return Err(PiPNNConfigError::EmptyFanout);
         }
+        if self.max_depth.get() < self.fanout.len() {
+            return Err(PiPNNConfigError::MaxDepth {
+                max_depth: self.max_depth.get(),
+                fanout_levels: self.fanout.len(),
+            });
+        }
         if self.max_leaders.get() < 2 {
             return Err(PiPNNConfigError::MaxLeaders(self.max_leaders.get()));
         }
@@ -259,6 +279,7 @@ pub struct PiPNNBuildContext<'a> {
     config: PiPNNConfig,
     graph: &'a Config,
     metric: Metric,
+    dimensions: NonZeroUsize,
     pool: &'a ThreadPool,
 }
 
@@ -267,10 +288,15 @@ impl<'a> PiPNNBuildContext<'a> {
     ///
     /// Final pruning uses the prune kind of `graph`, as Vamana does. Build
     /// `graph` with the prune kind of `metric` (`metric.into()`).
+    ///
+    /// `dimensions` is the length of each row after conversion to `f32`.
+    /// Compressed element types such as MinMax store more elements per row,
+    /// so it can differ from `data.ncols()`.
     pub fn new(
         config: PiPNNConfig,
         graph: &'a Config,
         metric: Metric,
+        dimensions: NonZeroUsize,
         pool: &'a ThreadPool,
     ) -> Result<Self, PiPNNConfigError> {
         config.validate()?;
@@ -278,6 +304,7 @@ impl<'a> PiPNNBuildContext<'a> {
             config,
             graph,
             metric,
+            dimensions,
             pool,
         })
     }
@@ -369,13 +396,21 @@ where
     M: LeafMetric + PartitionMetric,
     T: VectorRepr,
 {
-    let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
+    let leaves = tracing::info_span!("pipnn.partition").in_scope(|| {
+        partitioning::partition::<A, M, T>(arch, data, context.dimensions.get(), &context.config)
+    })?;
     // The leaf step takes the leaves by value, so their memory is free before
     // final pruning starts.
     let leaf_k = context.config.leaf_k.get();
-    let candidates = tracing::info_span!("pipnn.leaf_build")
-        .in_scope(|| leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, leaf_k))?;
+    let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+        leaf_build::build_leaf_candidates::<A, M, T>(
+            arch,
+            data,
+            context.dimensions.get(),
+            leaves,
+            leaf_k,
+        )
+    })?;
     // Final pruning cuts each candidate list in place.
     Ok(tracing::info_span!("pipnn.finalization")
         .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric)))
@@ -608,6 +643,7 @@ mod construction_tests {
             p_samp: 1.0,
             max_leaders: nz(1000),
             fanout: vec![nz(2)],
+            max_depth: nz(10),
             leaf_k: nz(1),
             replicas: nz(1),
             seed: Some(1290),
@@ -643,6 +679,7 @@ mod construction_tests {
             p_samp: 0.05,
             max_leaders: nz(1000),
             fanout: vec![nz(10), nz(3)],
+            max_depth: nz(10),
             leaf_k: nz(2),
             replicas: nz(1),
             seed: Some(1290),
@@ -694,9 +731,10 @@ mod construction_tests {
         metric: Metric,
     ) -> Vec<AdjacencyList<u32>> {
         let config = sift_pipnn_config();
+        let dimensions = NonZeroUsize::new(build_data.ncols()).unwrap();
         let n_threads = 2;
         let pool = thread_pool(n_threads);
-        let context = PiPNNBuildContext::new(config, graph, metric, &pool).unwrap();
+        let context = PiPNNBuildContext::new(config, graph, metric, dimensions, &pool).unwrap();
         build_graph(build_data, &context).unwrap()
     }
 
@@ -857,10 +895,12 @@ mod construction_tests {
             fanout: vec![],
             ..partition_policy()
         };
+        let dimensions = nz(1);
         let graph = graph_policy(degree, Metric::L2);
         let pool = thread_pool(n_threads);
 
-        let error = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap_err();
+        let error =
+            PiPNNBuildContext::new(config, &graph, Metric::L2, dimensions, &pool).unwrap_err();
 
         assert_eq!(error, PiPNNConfigError::EmptyFanout);
     }
@@ -870,10 +910,12 @@ mod construction_tests {
         // Each shape has one empty axis; validation must reject it before a kernel runs.
         let degree = 2;
         let n_threads = 1;
+        let dimensions = nz(2);
         let graph = graph_policy(degree, Metric::L2);
         let pool = thread_pool(n_threads);
         let context =
-            PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, &pool).unwrap();
+            PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, dimensions, &pool)
+                .unwrap();
 
         for (rows, columns, expected_message) in [
             (0, 2, "at least one data point"),

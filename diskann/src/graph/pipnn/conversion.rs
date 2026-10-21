@@ -19,7 +19,7 @@
 
 use std::any::TypeId;
 
-use crate::{ANNResult, utils::VectorRepr};
+use crate::{ANNError, ANNResult, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::conversion::SliceCast;
 use diskann_wide::{
@@ -28,18 +28,10 @@ use diskann_wide::{
 };
 use half::f16;
 
-/// Return the length of a row of `data` after conversion to `f32`.
-///
-/// Compressed element types store a row in a different number of elements than
-/// the `f32` vector it converts to.
-pub(super) fn f32_dimensions<T: VectorRepr>(data: MatrixView<'_, T>) -> ANNResult<usize> {
-    T::full_dimension(data.row(0)).map_err(Into::into)
-}
-
 /// Convert rows `ids` of `data` into the rows of `output`, one row per ID.
 ///
-/// `output` has [`f32_dimensions`] columns. `f16` input selects the CPU's
-/// instructions once for the whole batch.
+/// `output` has the `f32` row length of the build as its column count.
+/// `f16` input selects the CPU's instructions once for the whole batch.
 pub(super) fn gather_as_f32<T: VectorRepr>(
     data: MatrixView<'_, T>,
     ids: &[u32],
@@ -47,6 +39,13 @@ pub(super) fn gather_as_f32<T: VectorRepr>(
 ) -> ANNResult<()> {
     debug_assert_eq!(output.nrows(), ids.len());
     if TypeId::of::<T>() == TypeId::of::<f16>() {
+        if output.ncols() != data.ncols() {
+            return Err(ANNError::message(format!(
+                "PiPNN dimension {} does not match the f16 row length {}",
+                output.ncols(),
+                data.ncols()
+            )));
+        }
         arch::dispatch3(GatherFp16, data, ids, output);
     } else {
         for (&id, destination) in ids.iter().zip(output.row_iter_mut()) {

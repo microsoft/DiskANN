@@ -19,7 +19,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    conversion::{f32_dimensions, gather_as_f32},
+    conversion::gather_as_f32,
     leaf_kernel::{LeafKernelWorkspace, select_leaf_neighbors},
     leaf_metric::LeafMetric,
     simd::Simd,
@@ -79,6 +79,7 @@ impl LeafBuffers {
 pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    dimensions: usize,
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
@@ -90,7 +91,6 @@ where
     let candidates: Vec<_> = (0..data.nrows())
         .map(|_| Mutex::new(AdjacencyList::new()))
         .collect();
-    let dimensions = f32_dimensions(data)?;
     leaves
         .par_iter()
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
@@ -200,7 +200,7 @@ mod tests {
         let dimensions = 1;
         let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
         let candidates = thread_pool(n_threads)
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, leaves, k))
+            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, dimensions, leaves, k))
             .unwrap();
         candidates.into_iter().map(Vec::from).collect()
     }
