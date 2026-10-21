@@ -23,10 +23,7 @@ use super::{
 };
 use crate::{
     AsFunctor, CompressIntoWith,
-    algorithms::{
-        heap::SliceHeap,
-        transforms::{NewTransformError, Transform, TransformFailed, TransformKind},
-    },
+    algorithms::transforms::{NewTransformError, Transform, TransformFailed, TransformKind},
     alloc::{Allocator, AllocatorError, GlobalAllocator, Poly, ScopedAllocator, TryClone},
     bits::{PermutationStrategy, Representation, Unsigned},
     num::Positive,
@@ -1000,7 +997,7 @@ where
 //
 // 2. Imposes a total ordering on nonnegative, non-NaN critical values using unsigned
 //   bit order, which matches numeric order for these values. Additionally, ordering
-//   is reversed so that `BinaryHeap` models a min-heap instead of a max-heap.
+//   is reversed so that smaller critical values compare greater.
 #[derive(Debug, Clone, Copy)]
 struct Pair {
     value: f32,
@@ -1060,11 +1057,22 @@ impl Ord for Pair {
 /// We work with the absolute value of the elements in the vector `v`.
 /// This does not affect the final result as the scaling works the same in both the
 /// positive and negative directions but simplifies the book keeping.
+///
+/// All critical values are sorted once and scanned linearly. For `num_bits >= 2`,
+/// scratch space for these values is `D * (2^(num_bits - 1) - 1) * size_of::<Pair>()`
+/// bytes, in addition to `D * size_of::<u16>()` bytes for the rounded coordinates.
+/// Similarities are nonnegative, so their squares can be compared by cross multiplication
+/// without evaluating a square root or division at each critical value.
 fn maximize_cosine_similarity(
     v: &[f32],
     num_bits: NonZeroUsize,
     allocator: ScopedAllocator<'_>,
 ) -> Result<f32, CompressionError> {
+    assert!(
+        !v.is_empty(),
+        "calling code should not allow the slice to be empty"
+    );
+
     // Initially, the lattice element has the value `0.5` for all dimensions.
     // This means the initial inner product between `v` and the rounded term is simply
     // `0.5 * sum(abs.(v))`. The absolute value is used because the latice element is
@@ -1080,94 +1088,51 @@ fn maximize_cosine_similarity(
     // integers for a smaller memory footprint.
     let mut rounded = Poly::broadcast(1u16, v.len(), allocator)?;
 
-    // Compute the critical values and store them on a heap.
-    //
-    // The binary heap will keep track of the minimum critical value. Multiplying `v` by the
-    // minimum critical value `s` means that `s * v` will only change `rounded` from its
-    // current value at a single index (the position associated with `s`).
     let eps = 0.0001f32;
-    let one_and_change = 1.0 + eps;
-    let mut base = Poly::from_iter(
-        v.iter().enumerate().map(|(position, value)| {
-            let value = one_and_change / value.abs();
-            Pair {
-                value,
-                position: position as u32,
-            }
-        }),
+    let stop = 1usize << (num_bits.get() - 1);
+    let visits_per_dim = stop.max(2) - 1;
+    let total = v.len().checked_mul(visits_per_dim).ok_or(AllocatorError)?;
+    let mut critical_values = Poly::broadcast(
+        Pair {
+            value: 0.0,
+            position: 0,
+        },
+        total,
         allocator,
     )?;
+    for ((position, component), entries) in v
+        .iter()
+        .enumerate()
+        .zip(critical_values.chunks_exact_mut(visits_per_dim))
+    {
+        let reciprocal = 1.0 / component.abs();
+        for (level, pair) in entries.iter_mut().enumerate() {
+            *pair = Pair {
+                value: (level as f32 + 1.0 + eps) * reciprocal,
+                position: position as u32,
+            };
+        }
+    }
+    critical_values.sort_unstable_by(|first, second| second.cmp(first));
 
-    // Lint: This is a private method and all the callers have an invariant that they check
-    // for non-empty inputs.
-    #[expect(clippy::expect_used)]
-    let mut critical_values =
-        SliceHeap::new(&mut base).expect("calling code should not allow the slice to be empty");
-
-    let mut max_similarity = f64::NEG_INFINITY;
+    let mut max_ip_squared = f64::NEG_INFINITY;
+    let mut max_square_norm = 1.0f64;
     let mut optimal_scale = f32::default();
-    let stop = (2usize).pow(num_bits.get() as u32 - 1) as u16;
 
-    loop {
-        let mut should_break = false;
-        critical_values.update_root(|pair| {
-            let Pair { value, position } = *pair;
-            if value == f32::MAX {
-                should_break = true;
-                return;
-            }
+    for &Pair { value, position } in critical_values.iter() {
+        let coordinate = &mut rounded[position as usize];
+        let component = v[position as usize].abs();
 
-            let r = &mut rounded[position as usize];
-            let vp = &v[position as usize];
+        let old_coordinate = *coordinate;
+        *coordinate += 1;
+        current_ip += component as f64;
+        current_square_norm += (2 * old_coordinate) as f64;
 
-            let old_r = *r;
-            // By the nature of cricital values, only `r` will change in `rounded` when
-            // multiplying by `value`. And that change will be to increase by 1.
-            *r += 1;
-
-            // The inner product estimate simply increases by `vp.abs()` because:
-            //
-            // * `r` is the only value in `rounded` that changes.
-            // * `r` is increased by 1.
-            current_ip += vp.abs() as f64;
-
-            // This uses the formula
-            // ```math
-            // (x + 1)^2 - x^2 = x^2 + 2x + 1 - x^2
-            //                 = 2x + 1
-            // ```
-            // substitute `x = y - 1/2` to obtain the true value associated with rounded and
-            // we get
-            // ```math
-            // 2 ( y - 1/2 ) + 1 = 2y - 1 + 1
-            //                   = 2y
-            // ```
-            // Therefore, the change in the estimate for the square norm of `rounded` is
-            // `2 * old_r`.
-            current_square_norm += (2 * old_r) as f64;
-
-            // Compute the current cosine similarity and update max if needed.
-            let similarity = current_ip / current_square_norm.sqrt();
-            if similarity > max_similarity {
-                max_similarity = similarity;
-                optimal_scale = value;
-            }
-
-            // Compute the scaling factor that will change this dimension to the next value.
-            if *r < stop {
-                *pair = Pair {
-                    value: (*r as f32 + eps) / vp.abs(),
-                    position,
-                };
-            } else {
-                *pair = Pair {
-                    value: f32::MAX,
-                    position,
-                };
-            }
-        });
-        if should_break {
-            break;
+        let ip_squared = current_ip * current_ip;
+        if ip_squared * max_square_norm > max_ip_squared * current_square_norm {
+            max_ip_squared = ip_squared;
+            max_square_norm = current_square_norm;
+            optimal_scale = value;
         }
     }
 
@@ -1346,6 +1311,116 @@ mod tests {
                 );
             } else {
                 assert!(result.is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn cosine_similarity_maximizer_matches_heap() {
+        fn heap_scale(target: &[f32], num_bits: NonZeroUsize) -> f32 {
+            let mut rounded = vec![1u16; target.len()];
+            let mut critical_values: Vec<_> = target
+                .iter()
+                .enumerate()
+                .map(|(position, component)| Pair {
+                    value: 1.0001 / component.abs(),
+                    position: position as u32,
+                })
+                .collect();
+            let mut critical_values =
+                crate::algorithms::heap::SliceHeap::new(&mut critical_values).unwrap();
+            let mut current_ip = 0.5 * target.iter().map(|value| value.abs() as f64).sum::<f64>();
+            let mut current_square_norm = 0.25 * target.len() as f64;
+            let mut max_similarity = f64::NEG_INFINITY;
+            let mut optimal_scale = 0.0;
+            let stop = 1u16 << (num_bits.get() - 1);
+
+            while critical_values.peek().unwrap().value != f32::MAX {
+                critical_values.update_root(|pair| {
+                    let coordinate = &mut rounded[pair.position as usize];
+                    let component = target[pair.position as usize].abs();
+                    current_ip += component as f64;
+                    current_square_norm += (2 * *coordinate) as f64;
+                    *coordinate += 1;
+
+                    let similarity = current_ip / current_square_norm.sqrt();
+                    if similarity > max_similarity {
+                        max_similarity = similarity;
+                        optimal_scale = pair.value;
+                    }
+                    pair.value = if *coordinate < stop {
+                        (*coordinate as f32 + 0.0001) / component
+                    } else {
+                        f32::MAX
+                    };
+                });
+            }
+            optimal_scale
+        }
+
+        let mut rng = StdRng::seed_from_u64(0xa10f_1137);
+        let distribution = Uniform::new(-1.0f32, 1.0).unwrap();
+        for bits in [2, 3, 4, 8] {
+            let num_bits = NonZeroUsize::new(bits).unwrap();
+            let offset = ((1usize << bits) - 1) as f32 / 2.0;
+            for dim in [1, 4, 32, 128] {
+                for trial in 0..32 {
+                    let target: Vec<_> = (0..dim)
+                        .map(|position| match trial {
+                            0 => 1.0,
+                            1 => {
+                                if position % 2 == 0 {
+                                    1.0
+                                } else {
+                                    -1.0
+                                }
+                            }
+                            2 => {
+                                if position == 0 {
+                                    1.0
+                                } else {
+                                    0.0
+                                }
+                            }
+                            3 => {
+                                if position % 2 == 0 {
+                                    0.5
+                                } else {
+                                    -0.25
+                                }
+                            }
+                            4 => f32::from_bits(1.0f32.to_bits() + position as u32),
+                            5 => distribution.sample(&mut rng) * 1e-20,
+                            6 => distribution.sample(&mut rng) * 1e20,
+                            _ => distribution.sample(&mut rng),
+                        })
+                        .collect();
+                    let expected_scale = heap_scale(&target, num_bits);
+                    let actual_scale =
+                        maximize_cosine_similarity(&target, num_bits, ScopedAllocator::global())
+                            .unwrap();
+                    assert!(actual_scale.is_finite() && actual_scale > 0.0);
+
+                    let similarity = |scale: f32| {
+                        let mut inner_product = 0.0;
+                        let mut square_norm = 0.0;
+                        for &component in &target {
+                            let quantized = ((component * scale + offset)
+                                .clamp(0.0, 2.0 * offset)
+                                .round()
+                                - offset) as f64;
+                            inner_product += quantized * component as f64;
+                            square_norm += quantized * quantized;
+                        }
+                        inner_product / square_norm.sqrt()
+                    };
+                    let expected = similarity(expected_scale);
+                    let actual = similarity(actual_scale);
+                    assert!(
+                        actual + 1e-6 * expected.abs() >= expected,
+                        "bits={bits}, dim={dim}, trial={trial}: expected {expected}, got {actual}"
+                    );
+                }
             }
         }
     }
