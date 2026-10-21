@@ -147,6 +147,8 @@ where
             parameters.into(),
             &graph,
             metric,
+            std::num::NonZeroUsize::new(dimensions)
+                .context("PiPNN needs at least one dimension")?,
             &pool,
         )?;
         diskann::graph::pipnn::build_graph(data.as_view(), &context)?
