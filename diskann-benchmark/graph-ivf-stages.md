@@ -1,5 +1,10 @@
 # Graph-IVF split phase comparison
 
+Follow-up: the [24 additional rounds using arithmetic means](graph-ivf-stages-means.md)
+retain 288 samples per version/dimension and report dispersion and paired-round
+uncertainty. The historical six-round medians below remain unchanged; the follow-up
+does not confirm all of their headline gains.
+
 Measurements captured on 2026-10-21. All three stack layers use the phase timing
 implementation from the first-layer commit `f7b706bed29a5b7768afccfaae63084bba79e54e`.
 This report records observed wall times, including slowdowns. The host was noisy;
