@@ -16,10 +16,12 @@ use crate::{num::Bytes, repr::quantized};
 pub struct Spherical<T>(T);
 
 impl<T> Spherical<T> {
+    /// Construct a new [`Spherical`] new-type wrapper around `quantizer`.
     pub fn new(quantizer: T) -> Self {
         Self(quantizer)
     }
 
+    /// Return the wrapped quantizer.
     pub fn into_inner(self) -> T {
         self.0
     }
