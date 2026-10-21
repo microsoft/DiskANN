@@ -28,6 +28,9 @@ pub struct PiPNNParameters {
     pub max_leaders: NonZeroUsize,
     /// Number of nearest leaders retained at each partition level.
     pub fanout: Vec<NonZeroUsize>,
+    /// Maximum number of partition levels; a cluster still larger than c_max at
+    /// this level is cut into leaves.
+    pub max_depth: NonZeroUsize,
     /// Number of nearest neighbors selected within each leaf.
     pub k: NonZeroUsize,
     /// Number of independent partition passes.
@@ -43,12 +46,14 @@ impl Default for PiPNNParameters {
             NonZeroUsize::new(10).unwrap(),
             NonZeroUsize::new(3).unwrap(),
         ];
+        const MAX_DEPTH: NonZeroUsize = NonZeroUsize::new(10).unwrap();
         const K: NonZeroUsize = NonZeroUsize::new(2).unwrap();
         Self {
             c_max: C_MAX,
             p_samp: 0.005,
             max_leaders: MAX_LEADERS,
             fanout: FANOUT.to_vec(),
+            max_depth: MAX_DEPTH,
             k: K,
             replicas: NonZeroUsize::MIN,
         }
@@ -63,6 +68,7 @@ impl From<&PiPNNParameters> for diskann::graph::pipnn::PiPNNConfig {
             p_samp: config.p_samp,
             max_leaders: config.max_leaders,
             fanout: config.fanout.clone(),
+            max_depth: config.max_depth,
             leaf_k: config.k,
             replicas: config.replicas,
             // The disk builder sets the seed from `IndexConfiguration::random_seed`.
@@ -128,6 +134,7 @@ mod tests {
             config.fanout.iter().map(|f| f.get()).collect::<Vec<_>>(),
             [10, 3]
         );
+        assert_eq!(config.max_depth.get(), 10);
         assert_eq!(config.k.get(), 3);
         assert_eq!(config.replicas.get(), 1);
         assert!(
