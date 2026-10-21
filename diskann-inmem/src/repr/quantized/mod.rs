@@ -876,6 +876,7 @@ mod tests {
         num::{LogicalId, SlotId},
         repr::test::{Reference, test_expand_beam, test_prune},
     };
+
     /////////////////////
     // Quantized Tests //
     /////////////////////

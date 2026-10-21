@@ -221,14 +221,15 @@ mod tests {
 
     use std::assert_matches;
 
+    use diskann::utils::IntoUsize;
+    use diskann_utils::assert_contains;
+
     use crate::{
         counters::Counters,
         num::{Capacity, LogicalId, MaxDegree, SlotId},
         repr::test::Reference,
         store::Store,
     };
-    use diskann::utils::IntoUsize;
-    use diskann_utils::assert_contains;
 
     const TEST_DIM: usize = 1;
 
