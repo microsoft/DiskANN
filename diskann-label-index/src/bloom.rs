@@ -6,12 +6,10 @@
 //! Configuration and deterministic row hashing for transposed Bloom label indexes.
 
 use crate::{error::EncodedLabelIndexError, format::MAX_LABEL_COUNT};
+use xxhash_rust::xxh3::xxh3_128;
 
 const MAX_BLOOM_BITS: u32 = 65_536;
 const MAX_BLOOM_HASHES: u32 = 64;
-const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-const HASH_SEED_STEP: u64 = 0x9e37_79b9_7f4a_7c15;
 
 /// Configuration for a transposed Bloom label index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,8 +98,11 @@ pub(crate) fn validate_bloom_config(
 
 pub(crate) fn append_label_rows(label: &str, config: BloomFilterConfig, rows: &mut Vec<u32>) {
     let start = rows.len();
+    // Kirsch-Mitzenmacher double hashing derives all Bloom positions from one 128-bit hash.
+    let (first_hash, step_hash) = label_hash_pair(label.as_bytes());
     for hash_index in 0..config.hash_count {
-        let mut row = stable_hash(label.as_bytes(), hash_index) % u64::from(config.bit_count);
+        let mut row = first_hash.wrapping_add(u64::from(hash_index).wrapping_mul(step_hash))
+            % u64::from(config.bit_count);
         while rows[start..].contains(&(row as u32)) {
             row = (row + 1) % u64::from(config.bit_count);
         }
@@ -109,13 +110,60 @@ pub(crate) fn append_label_rows(label: &str, config: BloomFilterConfig, rows: &m
     }
 }
 
-fn stable_hash(bytes: &[u8], hash_index: u32) -> u64 {
-    let mut hash = FNV_OFFSET_BASIS ^ u64::from(hash_index).wrapping_mul(HASH_SEED_STEP);
-    for &byte in bytes {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
+fn label_hash_pair(bytes: &[u8]) -> (u64, u64) {
+    let hash = xxh3_128(bytes);
+    let first_hash = hash as u64;
+    // An odd step traverses every row when the configured row count is a power of two.
+    let step_hash = ((hash >> 64) as u64) | 1;
+    (first_hash, step_hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn double_hashing_is_stable() {
+        assert_eq!(
+            label_hash_pair(b""),
+            (6_918_025_063_187_695_999, 11_072_670_137_173_121_241)
+        );
+        assert_eq!(
+            label_hash_pair(b"MARKET=EN-US"),
+            (6_522_125_905_851_381_566, 1_379_806_965_550_470_695)
+        );
+        let mut rows = Vec::new();
+        append_label_rows(
+            "MARKET=EN-US",
+            BloomFilterConfig::new(256, 4).unwrap(),
+            &mut rows,
+        );
+        assert_eq!(rows, [62, 101, 140, 179]);
     }
-    hash ^= hash >> 32;
-    hash = hash.wrapping_mul(0xd6e8_feb8_6659_fd93);
-    hash ^ (hash >> 32)
+
+    #[test]
+    fn double_hashing_produces_distinct_rows() {
+        let config = BloomFilterConfig::new(8, 8).unwrap();
+        for label in ["A", "B", "MARKET=EN-US", "WWW.EXAMPLE.COM"] {
+            let mut rows = Vec::new();
+            append_label_rows(label, config, &mut rows);
+            rows.sort_unstable();
+            rows.dedup();
+            assert_eq!(rows.len(), 8);
+        }
+    }
+
+    #[test]
+    fn double_hashing_distributes_rows_evenly() {
+        let config = BloomFilterConfig::new(256, 4).unwrap();
+        let mut counts = [0u32; 256];
+        for index in 0..10_000 {
+            let mut rows = Vec::new();
+            append_label_rows(&format!("label-{index}"), config, &mut rows);
+            for row in rows {
+                counts[row as usize] += 1;
+            }
+        }
+        assert!(counts.iter().all(|&count| (120..=195).contains(&count)));
+    }
 }
