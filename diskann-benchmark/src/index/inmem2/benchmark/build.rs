@@ -19,12 +19,25 @@ pub(in crate::index::inmem2) mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct Config {
+    pub(in crate::index::inmem2) struct Config {
         pub(super) pruned_degree: usize,
         pub(super) max_degree: usize,
         pub(super) l_build: usize,
         pub(super) alpha: f32,
         pub(super) num_threads: NonZeroUsize,
+    }
+
+    impl Config {
+        pub(in crate::index::inmem2) fn example() -> Self {
+            const EIGHT: NonZeroUsize = NonZeroUsize::new(8).unwrap();
+            Self {
+                pruned_degree: 28,
+                max_degree: 32,
+                l_build: 100,
+                alpha: 1.2,
+                num_threads: EIGHT,
+            }
+        }
     }
 }
 
@@ -35,7 +48,10 @@ pub(in crate::index::inmem2) struct Config {
 }
 
 impl Config {
-    fn from_raw(raw: &dto::Config, metric: dv::distance::Metric) -> anyhow::Result<Self> {
+    pub(in crate::index::inmem2) fn from_raw(
+        raw: &dto::Config,
+        metric: dv::distance::Metric,
+    ) -> anyhow::Result<Self> {
         let dto::Config {
             pruned_degree,
             max_degree,
@@ -61,7 +77,11 @@ impl Config {
         })
     }
 
-    fn engine<DP, S>(&self, provider: DP, strategy: S) -> Engine<DP, S>
+    pub(in crate::index::inmem2) fn max_degree(&self) -> usize {
+        self.config.max_degree().get()
+    }
+
+    pub(in crate::index::inmem2) fn engine<DP, S>(&self, provider: DP, strategy: S) -> Engine<DP, S>
     where
         DP: diskann::provider::DataProvider,
     {
@@ -101,7 +121,7 @@ impl std::fmt::Display for Config {
     }
 }
 
-struct Engine<DP, S>
+pub(in crate::index::inmem2) struct Engine<DP, S>
 where
     DP: diskann::provider::DataProvider,
 {
@@ -129,11 +149,11 @@ where
         }
     }
 
-    fn index(&self) -> &Arc<diskann::graph::DiskANNIndex<DP>> {
+    pub(in crate::index::inmem2) fn index(&self) -> &Arc<diskann::graph::DiskANNIndex<DP>> {
         &self.index
     }
 
-    fn build<T>(
+    pub(in crate::index::inmem2) fn build<T>(
         &self,
         data: Arc<rowmajor::Owned<T>>,
         output: &mut dyn dbr::Output,
@@ -163,7 +183,7 @@ where
 }
 
 #[derive(Debug, Serialize)]
-struct Stats {
+pub(in crate::index::inmem2) struct Stats {
     total_time: dbr::utils::MicroSeconds,
     inserted: usize,
     latencies: dbr::utils::percentiles::Percentiles<dbr::utils::MicroSeconds>,
