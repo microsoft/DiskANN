@@ -15,7 +15,7 @@ pub mod distances;
 pub use length::{Dynamic, Length, Static};
 pub use ptr::{AsMutPtr, AsPtr, MutSlicePtr, SlicePtr};
 pub use slice::{
-    Binary, BitSlice, BitSliceBase, BitTranspose, BoxedBitSlice, ConstructionError,
-    DecodeLengthMismatch, Dense, EncodingError, GetError, IndexOutOfBounds, MutBitSlice,
-    PermutationStrategy, Representation, SetError, Unsigned,
+    Binary, BitSlice, BitSliceBase, BitTranspose, BoxedBitSlice, ConstructionError, Dense,
+    EncodingError, GetError, IndexOutOfBounds, MutBitSlice, PermutationStrategy, Representation,
+    SetError, Unsigned,
 };
