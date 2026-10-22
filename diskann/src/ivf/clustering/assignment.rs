@@ -8,7 +8,58 @@
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use diskann_wide::{ARCH, Architecture, SIMDMask, SIMDPartialOrd, SIMDVector};
 
+use super::super::workingset::ListView;
+
 const LANES: usize = 8;
+
+/// Retain each small point tile while streaming through the child centroids.
+/// This bounds the point working set when the complete centroid matrix no longer
+/// fits beside one point in L1. No point coordinates are copied.
+pub(super) fn assign<I, L>(
+    lists: &[ListView<'_, I, L>],
+    centers: &[f32],
+    dim: usize,
+) -> Vec<usize> {
+    let mut assignments = Vec::with_capacity(lists.iter().map(|list| list.points.len()).sum());
+    let count = centers.len() / dim;
+    // Small centroid matrices already fit in cache, so avoid the extra point
+    // bookkeeping unless the matrix is at least 32 KiB.
+    if count < 16 || centers.len() < 8192 {
+        let mut scratch = vec![0.0; count];
+        for point in lists.iter().flat_map(|list| &list.points) {
+            assignments.push(nearest(point.vector, centers, dim, &mut scratch));
+        }
+        return assignments;
+    }
+    for list in lists {
+        for points in list.points.chunks(4) {
+            let mut best = [Top1::new(), Top1::new(), Top1::new(), Top1::new()];
+            for (index, center) in centers.chunks_exact(dim).enumerate() {
+                let (pairs, tail) = points.as_chunks::<2>();
+                for (pair, points) in pairs.iter().enumerate() {
+                    let mut distances =
+                        SquaredL2::evaluate_pair(center, points[0].vector, points[1].vector);
+                    // Finite squared differences are symmetric, including
+                    // overflow to infinity. Preserve the original operand order
+                    // for NaNs, whose sign/payload can affect total ordering.
+                    for (distance, point) in distances.iter_mut().zip(points) {
+                        if distance.is_nan() {
+                            *distance = SquaredL2::evaluate(point.vector, center);
+                        }
+                    }
+                    best[2 * pair].offer_each(&distances[..1], index);
+                    best[2 * pair + 1].offer_each(&distances[1..], index);
+                }
+                if let Some(point) = tail.first() {
+                    let distance: f32 = SquaredL2::evaluate(point.vector, center);
+                    best[points.len() - 1].offer_each(&[distance], index);
+                }
+            }
+            assignments.extend(best[..points.len()].iter().map(|best| best.index));
+        }
+    }
+    assignments
+}
 
 /// Prefer the first centroid on ties, including infinite distances. The caller
 /// supplies nonempty, complete rows of positive dimension, matching `point`.

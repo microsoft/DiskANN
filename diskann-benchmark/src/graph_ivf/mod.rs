@@ -98,6 +98,7 @@ impl Benchmark for Static {
             result.repetition = repetition;
             // Membership validation and groundtruth never contribute to build/search timing.
             index.provider().validate_membership(data.nrows())?;
+            result.layout_fingerprint = index.provider().layout_fingerprint();
             writeln!(
                 output,
                 "Build {}: {:.3}s, {} lists, {} splits; two-means {:.6}s, reassignment {:.6}s, other IVF {:.6}s",
@@ -162,6 +163,7 @@ struct Results {
 #[derive(Serialize)]
 struct BuildResult {
     repetition: usize,
+    layout_fingerprint: String,
     ivf_seconds: f64,
     two_means_seconds: f64,
     reassignment_seconds: f64,
@@ -250,6 +252,7 @@ async fn build(
     let store = index.provider();
     let result = BuildResult {
         repetition: 0,
+        layout_fingerprint: String::new(),
         ivf_seconds: ivf.as_secs_f64(),
         two_means_seconds: two_means.as_secs_f64(),
         reassignment_seconds: reassignment.as_secs_f64(),

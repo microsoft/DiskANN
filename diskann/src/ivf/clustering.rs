@@ -54,13 +54,9 @@ pub(super) fn split<I: Copy, L>(
 
     let reassignment_start = Instant::now();
     let count = lists.iter().map(|list| list.points.len()).sum();
-    let mut assignments = Vec::with_capacity(count);
+    let assignments = assignment::assign(lists, centroids.as_slice(), dim);
     let mut sizes = vec![0; centroids.nrows()];
-    // Reuse one distance row for every point; never materialize points x children.
-    let mut distances = vec![0.0; centroids.nrows()];
-    for point in lists.iter().flat_map(|list| &list.points) {
-        let to = assignment::nearest(point.vector, centroids.as_slice(), dim, &mut distances);
-        assignments.push(to);
+    for &to in &assignments {
         sizes[to] += 1;
     }
     let mut members: Vec<Vec<I>> = sizes.into_iter().map(Vec::with_capacity).collect();

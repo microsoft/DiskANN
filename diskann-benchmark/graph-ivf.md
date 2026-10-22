@@ -58,6 +58,7 @@ includes no SSD I/O, quantization, replication, or Mimir integration.
 | `builds[].splits`, `lists`, `empty_lists`, `max_list_size` | Amount of split work and resulting list layout |
 | `builds[].split_points` | Sum of split-working-set point visits; a point may contribute on multiple insertions |
 | `builds[].split_parent_histogram` | Split parents per nonempty insertion mapped to the number of insertions; includes zero-split batches. An insertion with P parents reassigns across 2P children |
+| `builds[].layout_fingerprint` | Untimed same-toolchain fingerprint of list IDs, centroid bits and ordered members; a regression signal, not a persistent format or cryptographic guarantee |
 | `searches[].qps`, `total_seconds` | One complete sequential query pass, including result collection |
 | `searches[].latency_ns` | Per-query minimum, mean, median, p90, p99; includes graph traversal, posting scan, top-k, and query allocations |
 | `searches[].recall_at_k` | Unique correct returned IDs divided by `queries * k`; missing results count as misses |
@@ -119,6 +120,8 @@ output work, rather than distance-kernel-only CPU time.
 
 The [three-layer phase comparison](graph-ivf-stages.md) records measured values,
 per-round variation, work histograms, and search-quality checks at batch size 4,096.
+The [FBV8 Mimir follow-up](graph-ivf-fbv8.md) measures additional point tiling on
+the complete 896D corpus, with arithmetic means and paired-round intervals.
 
 The two phase durations are measured inside the real split call and returned in
 `InsertStats` after successful publication. No-split insertions report zero. Each

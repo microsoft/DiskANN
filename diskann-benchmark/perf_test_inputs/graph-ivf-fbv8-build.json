@@ -1,0 +1,37 @@
+{
+  "jobs": [
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": { "kind": "files", "data": "fbv8-base-f32.bin" },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 4096,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 3
+        },
+        "graph": { "max_degree": 16, "l_build": 64 },
+        "search": null
+      }
+    },
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": { "kind": "files", "data": "fbv8-base-f32.bin" },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 16384,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 3
+        },
+        "graph": { "max_degree": 16, "l_build": 64 },
+        "search": null
+      }
+    }
+  ],
+  "search_directories": ["target/fbv8-comparison/data"]
+}

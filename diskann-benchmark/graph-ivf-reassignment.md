@@ -1,5 +1,8 @@
 # Split reassignment SIMD measurements
 
+The [FBV8 Mimir follow-up](graph-ivf-fbv8.md) evaluates additional point tiling
+against this implementation, using repeated arithmetic means on the full corpus.
+
 For the full 1,087,932-vector Enron 384D FP32 follow-up, see
 [Enron measurements](graph-ivf-enron.md). The results below use synthetic data.
 

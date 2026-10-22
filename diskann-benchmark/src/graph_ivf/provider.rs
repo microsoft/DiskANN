@@ -6,7 +6,11 @@
 //! Benchmark-local storage for exercising the real IVF insertion algorithm.
 //! Build routing is exhaustive; a centroid graph is built once after ingestion.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{hash_map::DefaultHasher, BTreeMap},
+    hash::Hasher,
+    sync::Arc,
+};
 
 use diskann::{
     ivf::{
@@ -80,6 +84,25 @@ impl Store {
             "some points have no list membership"
         );
         Ok(())
+    }
+
+    /// Same-toolchain regression fingerprint, computed outside build timing.
+    /// Includes list identity/order, exact centroid bits, and member order.
+    pub fn layout_fingerprint(&self) -> String {
+        let mut hash = DefaultHasher::new();
+        hash.write_u64(self.lists.len() as u64);
+        hash.write_u64(self.dim as u64);
+        for (&id, list) in &self.lists {
+            hash.write_u32(id);
+            for value in &list.centroid {
+                hash.write_u32(value.to_bits());
+            }
+            hash.write_u64(list.members.len() as u64);
+            for &id in &list.members {
+                hash.write_u32(id);
+            }
+        }
+        format!("{:016x}", hash.finish())
     }
 }
 

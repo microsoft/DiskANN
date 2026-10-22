@@ -148,6 +148,81 @@ fn assignment_matches_original_for_row_and_dimension_tails() {
 }
 
 #[test]
+fn tiled_assignment_preserves_order_for_scattered_rows_and_tails() {
+    use super::super::super::workingset::{ListView, PointRef};
+    let mut rng = StdRng::seed_from_u64(0x9274);
+    for dim in [1, 7, 33, 128, 384, 896, 897] {
+        for count in [1, 7, 16, 17, 32, 65, 129] {
+            let rows: Vec<Vec<f32>> = (0..31)
+                .map(|_| (0..dim).map(|_| rng.random_range(-8.0..8.0)).collect())
+                .collect();
+            let mut centers: Vec<f32> = (0..dim * count)
+                .map(|_| rng.random_range(-8.0..8.0))
+                .collect();
+            for list_size in [1, 2, 3, 4, 5, 7, 31] {
+                let references: Vec<_> = rows
+                    .iter()
+                    .rev()
+                    .enumerate()
+                    .map(|(i, row)| PointRef {
+                        id: 9000 - i * 17,
+                        vector: row.as_slice(),
+                    })
+                    .collect();
+                let lists: Vec<_> = references
+                    .chunks(list_size)
+                    .enumerate()
+                    .map(|(id, points)| ListView {
+                        id,
+                        points: points.to_vec(),
+                    })
+                    .collect();
+                let expected: Vec<_> = references
+                    .iter()
+                    .map(|point| super::super::tests::nearest(point.vector, &centers, dim))
+                    .collect();
+                assert_eq!(
+                    assign(&lists, &centers, dim),
+                    expected,
+                    "dim={dim}, count={count}, list_size={list_size}"
+                );
+            }
+            // Duplicate centers, overflow and nonfinite values retain the
+            // original first-on-ties and total-order selection.
+            for value in [
+                0.0,
+                f32::MAX,
+                f32::INFINITY,
+                f32::from_bits(0x7fc0_1234),
+                f32::from_bits(0xffc0_4321),
+            ] {
+                centers.fill(value);
+                let vectors: Vec<_> = [0.0, -0.0, f32::MAX, f32::NEG_INFINITY, f32::NAN]
+                    .map(|x| vec![x; dim])
+                    .into_iter()
+                    .collect();
+                let points: Vec<_> = vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(id, vector)| PointRef {
+                        id,
+                        vector: vector.as_slice(),
+                    })
+                    .collect();
+                let expected: Vec<_> = points
+                    .iter()
+                    .map(|point| super::super::tests::nearest(point.vector, &centers, dim))
+                    .collect();
+                assert_eq!(
+                    assign(&[ListView { id: 0, points }], &centers, dim),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "manual release-only kernel benchmark; no timing assertion"]
 fn assignment_kernel_timing() {
     use std::{hint::black_box, time::Instant};

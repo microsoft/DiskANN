@@ -49,6 +49,11 @@ fn graph_ivf_cli_reports_build_and_real_graph_search() {
     let results = &output[0]["results"];
     let builds = results["builds"].as_array().unwrap();
     assert_eq!(builds.len(), 2);
+    assert_eq!(
+        builds[0]["layout_fingerprint"],
+        builds[1]["layout_fingerprint"]
+    );
+    assert_eq!(builds[0]["layout_fingerprint"].as_str().unwrap().len(), 16);
     for build in builds {
         assert_eq!(build["inserted"], 64);
         let splits = build["splits"].as_u64().unwrap();
@@ -94,6 +99,29 @@ fn graph_ivf_cli_reports_build_and_real_graph_search() {
             );
         }
     }
+}
+
+#[test]
+fn graph_ivf_fingerprint_detects_centroid_and_membership_changes() {
+    let mut store = Store::new(2);
+    store.lists.insert(
+        7,
+        provider::StoredList {
+            centroid: vec![1.0, 2.0],
+            members: vec![0, 1, 2],
+        },
+    );
+    let original = store.layout_fingerprint();
+    store.lists.get_mut(&7).unwrap().members.swap(0, 2);
+    assert_ne!(store.layout_fingerprint(), original);
+    store.lists.get_mut(&7).unwrap().members.swap(0, 2);
+    assert_eq!(store.layout_fingerprint(), original);
+    store.lists.get_mut(&7).unwrap().centroid[0] = f32::from_bits(1.0f32.to_bits() + 1);
+    assert_ne!(store.layout_fingerprint(), original);
+    store.lists.get_mut(&7).unwrap().centroid[0] = 1.0;
+    let list = store.lists.remove(&7).unwrap();
+    store.lists.insert(8, list);
+    assert_ne!(store.layout_fingerprint(), original);
 }
 
 #[test]
