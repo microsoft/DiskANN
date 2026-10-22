@@ -179,46 +179,49 @@ fn order_dictionary(
     requested_exact: u32,
 ) -> Result<(ScannedLabels, usize), EncodedLabelIndexError> {
     let ScannedLabels {
-        labels,
-        counts,
+        labels: scanned_labels,
+        counts: scanned_counts,
         num_vectors,
         ..
     } = scanned;
     let requested_exact = usize::try_from(requested_exact).map_err(|_| {
-        EncodedLabelIndexError::Invalid("exact Bloom label count exceeds usize".to_string())
+        EncodedLabelIndexError::Invalid("exact label count exceeds usize".to_string())
     })?;
-    let mut entries: Vec<_> = labels.into_iter().zip(counts).collect();
+    let mut entries: Vec<_> = scanned_labels.into_iter().zip(scanned_counts).collect();
     entries.sort_unstable_by(|(left_label, left_count), (right_label, right_count)| {
         right_count
             .cmp(left_count)
             .then_with(|| left_label.as_bytes().cmp(right_label.as_bytes()))
     });
     let exact_label_count = requested_exact.min(entries.len());
-    let mut labels = Vec::new();
-    labels.try_reserve_exact(entries.len()).map_err(|_| {
-        EncodedLabelIndexError::Invalid("cannot reserve sorted Bloom labels".to_string())
-    })?;
-    let mut counts = Vec::new();
-    counts.try_reserve_exact(entries.len()).map_err(|_| {
-        EncodedLabelIndexError::Invalid("cannot reserve sorted Bloom counts".to_string())
-    })?;
-    let mut label_ids = HashMap::new();
-    label_ids.try_reserve(entries.len()).map_err(|_| {
-        EncodedLabelIndexError::Invalid("cannot reserve sorted Bloom label map".to_string())
+    let mut ordered_labels = Vec::new();
+    ordered_labels
+        .try_reserve_exact(entries.len())
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve ordered labels".to_string())
+        })?;
+    let mut ordered_counts = Vec::new();
+    ordered_counts
+        .try_reserve_exact(entries.len())
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve ordered label counts".to_string())
+        })?;
+    let mut ordered_label_ids = HashMap::new();
+    ordered_label_ids.try_reserve(entries.len()).map_err(|_| {
+        EncodedLabelIndexError::Invalid("cannot reserve ordered label map".to_string())
     })?;
     for (id, (label, count)) in entries.into_iter().enumerate() {
-        let id = u32::try_from(id).map_err(|_| {
-            EncodedLabelIndexError::Invalid("Bloom label ID exceeds u32".to_string())
-        })?;
-        label_ids.insert(label.clone(), id);
-        labels.push(label);
-        counts.push(count);
+        let id = u32::try_from(id)
+            .map_err(|_| EncodedLabelIndexError::Invalid("label ID exceeds u32".to_string()))?;
+        ordered_label_ids.insert(label.clone(), id);
+        ordered_labels.push(label);
+        ordered_counts.push(count);
     }
     Ok((
         ScannedLabels {
-            labels,
-            label_ids,
-            counts,
+            labels: ordered_labels,
+            label_ids: ordered_label_ids,
+            counts: ordered_counts,
             num_vectors,
         },
         exact_label_count,
