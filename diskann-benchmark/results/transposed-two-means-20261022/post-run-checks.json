@@ -1,0 +1,18 @@
+{
+  "all_measurements_completed_before_checks": true,
+  "default_benchmark_tests": 8,
+  "cargo_fmt_all": "passed; all 165 frozen source hashes still match",
+  "workspace_clippy_default": "passed with -D warnings",
+  "workspace_clippy_experimental": "passed with -D warnings",
+  "raw_zip_integrity": "passed; 133 entries; no dataset coordinates",
+  "complete_build_search_invocations": 24,
+  "all_query_counts": [100, 1000, 6380],
+  "core_fit_samples": 504,
+  "boundary_fit_samples": 864,
+  "fit_summary_strategy_workloads": 380,
+  "numeric_divergence_cases": 6,
+  "parent_snapshots_local_only": true,
+  "old_automation": "remains PAUSED; old 288-run experiment not resumed",
+  "old_enron_user_inputs": "hashes unchanged",
+  "coverage_note": "Per-executable reports are preserved. A supplementary cross-binary profile merge emitted 20 mismatched-function warnings and is not used as the reported coverage result."
+}

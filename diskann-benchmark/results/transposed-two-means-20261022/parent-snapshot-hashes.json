@@ -1,0 +1,25 @@
+{
+  "enron-parents": {
+    "manifest.json": "1e95b8c7d300b248a21acd11e7446f4df72f8b309f943ba403feaa4372937054",
+    "parent-000000-ids.json": "cad98fe3a12f34888fef5e4603dbe31666bedb8d85f0dd29ba8bd92fc15ca24c",
+    "parent-000000.fbin": "244d1bc7b5c6338a84f0b4f26ebcd23e9fb99fba40c34094a349b80b048126a1",
+    "parent-000128-ids.json": "582b5d6aadfe4b1b608aa000c527c6998a29c9473567f480951487b6702f6525",
+    "parent-000128.fbin": "6b02e7b41115a9509c3960d48975b9086e75bf68daab4db6b6fcc4239c9f6227",
+    "parent-000512-ids.json": "443b802d38aa8a63b0b148aaecff74b67b9246729a9310232581c07737e424e6",
+    "parent-000512.fbin": "ef02db99730db70c7077199c0eb8dff3f2d47644f9ce7d12b5263275fdad8fc5"
+  },
+  "fbv8_mimir-parents": {
+    "manifest.json": "06ae8da5a4bc135031889c2141a68baaee19f2d3e10001f2cf63b53e2da4b20f",
+    "parent-000000-ids.json": "ba5c07af94896d6e475fdfae3c88f34a03627809b5415b04e2dd6e73dfe47bac",
+    "parent-000000.fbin": "590a1b92074001dd08ea5af5b8ba036e69352ec7f2c2da2fe5ce19d6c26ab05b",
+    "parent-000128-ids.json": "38ce0311b2f8e705f8a042b41c9e92a43683c8df93f59ba1bf35955b18749b76",
+    "parent-000128.fbin": "f71177b3981aeaa65f8693ae2fa657acbfa361d0a1f2736ad6db52c30477dcc4",
+    "parent-000512-ids.json": "7fe56d80f8e55003df223faa21ae08a0b30c21ae7af33b9e3f47c567d63757be",
+    "parent-000512.fbin": "fd4f68367e45dc6a852513812ebc40ce893dc8a048917c8c0af0e4f6a4e2dd70"
+  },
+  "yfcc-parents": {
+    "manifest.json": "f836fd0bd9b1b81b9acd83dac3ce102ff2bb04747e96bd0e2d883a1c461b6bad",
+    "parent-000000-ids.json": "46d66e46746725a7a0b1d4e01d1250b18ecff528b3043f6ca23a91b34ae57c3a",
+    "parent-000000.fbin": "5802514d4312bffbfd1f7494eb26a7fad0b116bc90993ce16535e81a64445496"
+  }
+}

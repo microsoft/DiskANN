@@ -26,6 +26,14 @@ pub(super) async fn build(
     input: &GraphIvfBuild,
     data: rowmajor::Ref<'_, f32>,
 ) -> anyhow::Result<(IVFIndex<Store>, CentroidGraph, BuildResult)> {
+    build_with_store(input, data, Store::new(data.ncols())).await
+}
+
+pub(super) async fn build_with_store(
+    input: &GraphIvfBuild,
+    data: rowmajor::Ref<'_, f32>,
+    store: Store,
+) -> anyhow::Result<(IVFIndex<Store>, CentroidGraph, BuildResult)> {
     let start = Instant::now();
     let settings = &input.build;
     let mut rng = StdRng::seed_from_u64(settings.seed);
@@ -35,7 +43,7 @@ pub(super) async fn build(
         row.copy_from_slice(data.row(index));
     }
     let mut index = IVFIndex::new(
-        Store::new(data.ncols()),
+        store,
         Config {
             split_threshold: settings.split_threshold,
             two_means_iterations: settings.two_means_iterations.get(),

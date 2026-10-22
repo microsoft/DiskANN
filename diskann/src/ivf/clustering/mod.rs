@@ -6,15 +6,11 @@
 //! Two-means fitting and region-wide assignment over borrowed point rows.
 
 #[cfg(feature = "ivf-experimental")]
-mod assignment;
-#[cfg(feature = "ivf-experimental")]
-mod batched;
-#[cfg(feature = "ivf-experimental")]
 mod strategy;
 mod two_means;
 
 #[cfg(feature = "ivf-experimental")]
-pub use strategy::{Strategy, TwoMeans};
+pub use strategy::{Strategy, TwoMeans, fit_with_assignment};
 
 use std::time::{Duration, Instant};
 

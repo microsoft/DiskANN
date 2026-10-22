@@ -1,0 +1,2 @@
+avx2=true fma=true avx512f=true avx512bw=true avx512vl=true avx512dq=true avx512vnni=true avx512bitalg=true avx512vpopcntdq=true avx512vbmi=true
+AMD RYZEN AI MAX+ 395 w/ Radeon 8060S

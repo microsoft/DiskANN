@@ -1,0 +1,146 @@
+{
+  "verified_utc": "2026-10-22T19:03:27.574550+00:00",
+  "complete_invocations": 24,
+  "executable": true,
+  "source": true,
+  "inputs": true,
+  "datasets": true,
+  "user_enron_inputs_unchanged": true,
+  "historic_binary_unchanged": true,
+  "per_run_quality_and_full_queries": "verified by analyze_ivf_abba",
+  "same_input_repeat_determinism": [
+    {
+      "dataset": "yfcc",
+      "candidate": "transposed_l2_16",
+      "side": "A",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "yfcc",
+      "candidate": "transposed_l2_16",
+      "side": "B",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "yfcc",
+      "candidate": "transposed_dot_16",
+      "side": "A",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "yfcc",
+      "candidate": "transposed_dot_16",
+      "side": "B",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "enron",
+      "candidate": "transposed_l2_16",
+      "side": "A",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "enron",
+      "candidate": "transposed_l2_16",
+      "side": "B",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "enron",
+      "candidate": "transposed_dot_16",
+      "side": "A",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "enron",
+      "candidate": "transposed_dot_16",
+      "side": "B",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "fbv8_mimir",
+      "candidate": "transposed_l2_16",
+      "side": "A",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "fbv8_mimir",
+      "candidate": "transposed_l2_16",
+      "side": "B",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "fbv8_mimir",
+      "candidate": "transposed_dot_16",
+      "side": "A",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "dataset": "fbv8_mimir",
+      "candidate": "transposed_dot_16",
+      "side": "B",
+      "distinct_build_outputs": 1,
+      "distinct_search_outputs": [
+        1,
+        1,
+        1
+      ]
+    }
+  ],
+  "background_overlaps": []
+}

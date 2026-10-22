@@ -34,6 +34,8 @@ pub(super) struct Store {
     point_batches: Vec<usize>,
     pub lists: BTreeMap<u32, StoredList>,
     next_list: u32,
+    #[cfg(feature = "ivf-two-means")]
+    pub capture: Option<Arc<std::sync::Mutex<super::two_means::replay::Capture>>>,
 }
 
 impl Store {
@@ -44,6 +46,8 @@ impl Store {
             point_batches: Vec::new(),
             lists: BTreeMap::new(),
             next_list: 0,
+            #[cfg(feature = "ivf-two-means")]
+            capture: None,
         }
     }
 
@@ -250,6 +254,16 @@ impl<'p> BuildAccessor for Build<'p> {
                 points.push(PointRef { id, vector });
             }
             view.push(ListView { id: list, points });
+        }
+        #[cfg(feature = "ivf-two-means")]
+        if let Some(capture) = &self.store.capture {
+            let inserted =
+                self.store.len() + self.batch.as_ref().map_or(0, |b| b.vectors().nrows());
+            capture
+                .lock()
+                .map_err(|_| ANNError::message("parent capture lock poisoned"))?
+                .record(&view, inserted)
+                .map_err(|error| ANNError::message(format!("parent capture failed: {error:#}")))?;
         }
         Ok(view)
     }

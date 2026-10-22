@@ -1,0 +1,14 @@
+{
+  "assignment-disassembly.txt": "488d4a83d58847fc1cd44251b4583e4af01b5744653eee2945dfc3347fc30575",
+  "final-verification.json": "824112fdb43ccb8b79c9b0b6f4f33849993b50cb3359be1d2fa24b5ed00dc029",
+  "fit-summary.json": "7d418b10b09118022a7655833a7b9929b5d054a0f0b572bb53433645bb3690be",
+  "hardware.txt": "9e060e863a78905e147737bb41a2fcf439e757119a03061c843ab0ad24d6fd25",
+  "implementation-review.md": "8e0365ec9eca6a2ee7926559a7dc726c7e1a6de65b901666fd14bafdea3b4365",
+  "input-scope.json": "822da4ed03971d6453d25067c61820b75c694edfadae45180b2e4fc634645530",
+  "parent-snapshot-hashes.json": "6f5dbebc0f0144298b84303b24d5f05c861cdf885c9965c51203d1d6245108b0",
+  "post-run-checks.json": "1c9cea57d1c9ebcf3151edd68712d56ee647558ec561d82760663101bbba7516",
+  "provenance.json": "f358d9a8f0e99437fb271d5aefa42c4b1b9f13cc3d04fd5904acaf030cade4c8",
+  "raw-samples.zip": "8bc7946ef4e8a41767730da03c028f5520d1d11a374817976c72fe5ec7cb9959",
+  "summary.json": "5b4f23e8d052c7a5897056064432269bd4b3e1a94123d1f28206074d022040f9",
+  "validation.json": "9f9d196b2a74c4f44ea1cfa0094f22bdbe91a2c3d202c515f14daaf14fee7f5f"
+}

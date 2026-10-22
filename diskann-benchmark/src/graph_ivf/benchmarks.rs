@@ -30,6 +30,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         "graph-ivf-two-means-strategies",
         super::two_means::Strategies,
     )?;
+    #[cfg(feature = "ivf-two-means")]
+    registry.register("graph-ivf-parent-replay", super::two_means::replay::Replay)?;
     #[cfg(not(feature = "ivf-two-means"))]
     registry.register_gated(
         "graph-ivf-two-means",

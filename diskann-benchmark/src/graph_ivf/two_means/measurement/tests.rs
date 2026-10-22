@@ -17,21 +17,21 @@ fn reports_packing_and_diagnostics_for_complete_fit() {
             vector: &[10.0; 3],
         },
     ];
-    for strategy in TwoMeansStrategy::ALL {
+    for strategy in Strategy::ALL {
         let run = fit(&points, 3, 3, 7, strategy).unwrap();
         assert!(run.preparation <= run.total);
-        assert!(run.margins.iter().all(|&value| value == 1200.0));
-        assert_ne!(run.assignments[0], run.assignments[1]);
+        assert_ne!(run.centers[0], run.centers[3]);
+        assert_eq!(run.packed_bytes, if strategy == BASELINE { 0 } else { 192 });
         assert_eq!(
-            run.packed_bytes,
-            if matches!(
-                strategy,
-                TwoMeansStrategy::PackedPaired | TwoMeansStrategy::Sgemm
-            ) {
-                24
-            } else {
-                0
-            }
+            run.scratch_bytes,
+            6 * 8
+                + if strategy == BASELINE {
+                    0
+                } else if strategy == Strategy::TransposedLloydReference {
+                    16
+                } else {
+                    8
+                }
         );
     }
 }

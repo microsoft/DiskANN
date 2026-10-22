@@ -7,7 +7,8 @@ For a static build + search baseline of the new IVF implementation, see
 [Graph-IVF benchmark](graph-ivf.md). It reuses the SIFT small test dataset
 and does not require a dynamic runbook.
 The opt-in [two-means experiments](graph-ivf-two-means-experiments.md) compare
-paired L2, multi-point kernels, packing, SGEMM, and center-difference fitting.
+paired L2 with block-transposed cross-point L2/dot kernels and a controlled
+Lloyd reference, including packing and scratch release in complete-fit timing.
 The [full FBV8 study](graph-ivf-two-means-fbv8.md) reports build means, numerical
 differences, and search quality, with retained samples.
 

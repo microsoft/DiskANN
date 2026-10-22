@@ -15,9 +15,12 @@ use diskann_utils::views::rowmajor::{self, Matrix};
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
 
-use crate::inputs::graph_ivf_two_means::{GraphIvfTwoMeans, Layout, TwoMeansStrategy as Strategy};
+use crate::inputs::graph_ivf_two_means::{FitOrder, GraphIvfTwoMeans, Layout};
 
+mod diagnostics;
 mod measurement;
+pub(super) mod replay;
+use measurement::{Strategy, BASELINE};
 
 pub(super) struct Strategies;
 
@@ -28,7 +31,10 @@ impl Benchmark for Strategies {
         context.success(0)
     }
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Complete two-means: existing L2, paired, packed paired, batched 4/8, SGEMM, center difference")
+        write!(
+            f,
+            "Complete two-means: paired baseline, transposed L2/dot, controlled Lloyd reference"
+        )
     }
     fn run(
         &self,
@@ -84,8 +90,9 @@ impl Benchmark for Strategies {
             }
         }
         Ok(Results {
+            schema_version: 2,
             threads: 1,
-            timing_scope: "validate + scratch + pack + seed + distance/selection + ordered f64 sums + center updates; diagnostics excluded",
+            timing_scope: "validate + scratch + pack/norms + seed + distance/selection + ordered f64 sums + center updates + scratch/packing release; diagnostics run after all timed rounds",
             numerical_reference: "paired_point",
             source: if corpus.is_some() { "file_sample" } else { "synthetic_uniform" },
             workloads,
@@ -104,6 +111,7 @@ impl Layout {
 
 #[derive(Serialize)]
 pub(super) struct Results {
+    schema_version: u32,
     threads: usize,
     timing_scope: &'static str,
     numerical_reference: &'static str,
@@ -113,7 +121,15 @@ pub(super) struct Results {
 #[derive(Serialize)]
 struct WorkloadResults {
     workload: Workload,
+    invocation_order: Vec<Invocation>,
     strategies: Vec<StrategyResult>,
+}
+#[derive(Serialize)]
+struct Invocation {
+    round: usize,
+    position: usize,
+    warmup: bool,
+    strategy: &'static str,
 }
 #[derive(Serialize)]
 struct Workload {
@@ -125,22 +141,23 @@ struct Workload {
 #[derive(Serialize)]
 struct StrategyResult {
     strategy: &'static str,
+    status: &'static str,
     samples: usize,
-    total_ns: Percentiles<u64>,
-    preparation_ns: Percentiles<u64>,
+    total_ns: Option<Percentiles<u64>>,
+    preparation_ns: Option<Percentiles<u64>>,
     /// Preserve measurement order for paired analysis. No slow samples are discarded.
     total_samples_ns: Vec<u64>,
-    packed_bytes: usize,
-    assignment_disagreements: usize,
-    center_bit_disagreements: usize,
-    max_center_absolute_error: f64,
-    min_reference_margin: Option<f64>,
+    packed_bytes: Option<usize>,
+    scratch_bytes: Option<usize>,
+    diagnostics: Option<diagnostics::Comparison>,
+    failures: Vec<String>,
 }
 
 struct Samples {
     totals: Vec<u64>,
     preparations: Vec<u64>,
     last: Option<measurement::Run>,
+    failures: Vec<String>,
 }
 
 fn run_workload(
@@ -151,37 +168,54 @@ fn run_workload(
     iterations: usize,
     mut output: &mut dyn Output,
 ) -> anyhow::Result<WorkloadResults> {
-    let reference = measurement::fit(points, dim, iterations, input.seed, Strategy::PairedPoint)?;
-    let min_margin = reference
-        .margins
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .reduce(f64::min);
-    let mut measurements: Vec<_> = Strategy::ALL
+    let mut measurements: Vec<_> = input
+        .strategies
         .iter()
         .map(|_| Samples {
             totals: Vec::new(),
             preparations: Vec::new(),
             last: None,
+            failures: Vec::new(),
         })
         .collect();
+    let mut invocation_order = Vec::new();
     // Rotate and reverse strategy order between complete rounds to reduce ordering bias.
     for round in 0..input.warmup_repetitions + input.repetitions.get() {
-        let mut order: Vec<_> = (0..Strategy::ALL.len()).collect();
-        order.rotate_left(round % Strategy::ALL.len());
-        if round % 2 != 0 {
-            order.reverse();
-        }
-        for index in order {
+        let order = if input.order == FitOrder::Abba {
+            vec![0, 1, 1, 0]
+        } else {
+            let mut order: Vec<_> = (0..input.strategies.len()).collect();
+            order.rotate_left(round % input.strategies.len());
+            if round % 2 != 0 {
+                order.reverse();
+            }
+            order
+        };
+        for (position, index) in order.into_iter().enumerate() {
+            invocation_order.push(Invocation {
+                round,
+                position,
+                warmup: round < input.warmup_repetitions,
+                strategy: input.strategies[index].name(),
+            });
             let run = measurement::fit(
                 black_box(points),
                 dim,
                 iterations,
                 input.seed,
-                Strategy::ALL[index],
-            )?;
+                input.strategies[index],
+            );
             let samples = &mut measurements[index];
+            let run = match run {
+                Ok(run) => run,
+                Err(error) if input.strategies[index] == Strategy::TransposedLloydReference => {
+                    samples
+                        .failures
+                        .push(format!("round {round}, position {position}: {error:#}"));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if round >= input.warmup_repetitions {
                 samples.totals.push(duration_ns(run.total));
                 samples.preparations.push(duration_ns(run.preparation));
@@ -191,62 +225,68 @@ fn run_workload(
             }
         }
     }
+    // Diagnostics use independent fits and identical seeding. They never interleave
+    // with measured fits; both same-center and diverging-trajectory views are retained.
+    let reference = diagnostics::trace(points, dim, iterations, input.seed, BASELINE)?;
     let mut strategies = Vec::new();
-    for (strategy, mut samples) in Strategy::ALL.into_iter().zip(measurements) {
-        let run = samples
-            .last
-            .ok_or_else(|| anyhow::anyhow!("missing measured run"))?;
-        let assignment_disagreements = run
-            .assignments
-            .iter()
-            .zip(&reference.assignments)
-            .filter(|(a, b)| a != b)
-            .count();
-        let center_bit_disagreements = run
-            .centers
-            .iter()
-            .zip(&reference.centers)
-            .filter(|(a, b)| a.to_bits() != b.to_bits())
-            .count();
-        let max_center_absolute_error = run
-            .centers
-            .iter()
-            .zip(&reference.centers)
-            .map(|(&a, &b)| (f64::from(a) - f64::from(b)).abs())
-            .fold(0.0, f64::max);
-        if matches!(
-            strategy,
-            Strategy::Separate | Strategy::PairedPoint | Strategy::PackedPaired
-        ) {
-            anyhow::ensure!(
-                assignment_disagreements == 0 && center_bit_disagreements == 0,
-                "exact strategy changed fitted output"
-            );
-        }
+    for (strategy, mut samples) in input.strategies.iter().copied().zip(measurements) {
+        let comparison = (|| -> anyhow::Result<_> {
+            let trace = diagnostics::trace(points, dim, iterations, input.seed, strategy)?;
+            if let Some(run) = &samples.last {
+                anyhow::ensure!(
+                    run.centers
+                        .iter()
+                        .zip(&trace.centers)
+                        .all(|(a, b)| a.to_bits() == b.to_bits()),
+                    "diagnostic fit differs from timed fit"
+                );
+            }
+            diagnostics::compare(points, dim, strategy, &reference, &trace)
+        })();
+        let comparison = match comparison {
+            Ok(comparison) => Some(comparison),
+            Err(error) if strategy == Strategy::TransposedLloydReference => {
+                samples.failures.push(format!("diagnostic: {error:#}"));
+                None
+            }
+            Err(error) => return Err(error),
+        };
         let total_samples_ns = samples.totals.clone();
-        let total_ns = percentiles::compute_percentiles(&mut samples.totals)?;
+        let total_ns = if samples.totals.is_empty() {
+            None
+        } else {
+            Some(percentiles::compute_percentiles(&mut samples.totals)?)
+        };
         writeln!(
             output,
-            "  {}: mean {:.0} ns; assignments {}, center bits {}",
+            "  {}: mean {:?} ns; failures {}",
             strategy.name(),
-            total_ns.mean,
-            assignment_disagreements,
-            center_bit_disagreements
+            total_ns.as_ref().map(|t| t.mean),
+            samples.failures.len()
         )?;
         strategies.push(StrategyResult {
             strategy: strategy.name(),
+            status: if samples.failures.is_empty() {
+                "complete"
+            } else {
+                "failed_or_not_applicable"
+            },
             samples: samples.totals.len(),
             total_ns,
-            preparation_ns: percentiles::compute_percentiles(&mut samples.preparations)?,
+            preparation_ns: if samples.preparations.is_empty() {
+                None
+            } else {
+                Some(percentiles::compute_percentiles(&mut samples.preparations)?)
+            },
             total_samples_ns,
-            packed_bytes: run.packed_bytes,
-            assignment_disagreements,
-            center_bit_disagreements,
-            max_center_absolute_error,
-            min_reference_margin: min_margin,
+            packed_bytes: samples.last.as_ref().map(|r| r.packed_bytes),
+            scratch_bytes: samples.last.as_ref().map(|r| r.scratch_bytes),
+            diagnostics: comparison,
+            failures: samples.failures,
         });
     }
     Ok(WorkloadResults {
+        invocation_order,
         workload: Workload {
             layout: layout.name(),
             bucket_size: points.len(),
@@ -285,7 +325,11 @@ impl Data {
         } else {
             (0..len).map(|_| rng.random_range(-1.0..1.0)).collect()
         };
-        Ok(match layout {
+        Ok(Self::from_values(layout, size, dim, seed, values))
+    }
+    fn from_values(layout: Layout, size: usize, dim: usize, seed: u64, values: Vec<f32>) -> Self {
+        let mut rng = StdRng::seed_from_u64(seed ^ ((size as u64) << 32) ^ dim as u64);
+        match layout {
             Layout::Contiguous => Self::Contiguous { values, dim },
             Layout::Scattered => {
                 let mut order: Vec<_> = (0..size).collect();
@@ -298,7 +342,7 @@ impl Data {
                 }
                 Self::Scattered { rows }
             }
-        })
+        }
     }
     fn points(&self) -> Vec<PointRef<'_, usize>> {
         match self {

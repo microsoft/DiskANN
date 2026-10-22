@@ -1,0 +1,14 @@
+{
+  "core_shapes": 18,
+  "boundary_shapes": 27,
+  "boundary_blocks_per_candidate": 4,
+  "replay_parent_ordinals": [
+    0,
+    128,
+    512
+  ],
+  "build_search_blocks_per_dataset_candidate": 1,
+  "build_search_invocations": 24,
+  "default_unchanged": true,
+  "candidate_numerical_differences_allowed_and_reported": true
+}

@@ -1,0 +1,34 @@
+{
+  "validation_source_parent": "5b790d821e3d5f7349f17f95036a142036d9cb66",
+  "snapshot": "source/ and provenance.json source hashes",
+  "new_kernel_tests": 7,
+  "kmeans_tests": 34,
+  "clustering_tests": 12,
+  "experimental_benchmark_tests": 15,
+  "parent_export_flush_change_retested": true,
+  "python_protocol_tests": 9,
+  "workspace_clippy_default": "passed",
+  "workspace_clippy_experimental": "passed after final Rust source changes",
+  "cargo_fmt": "passed",
+  "git_diff_check": "passed",
+  "release_build": "passed",
+  "aarch64_pc_windows_msvc_all_targets_check": "passed",
+  "scalar_v3_v4_integer_oracle_runtime": "passed; all required V4 features confirmed by CPUID",
+  "neon_runtime": "unavailable on this Windows x86 host",
+  "old_x86_sde_runtime": "not available; scalar implementation was explicitly exercised",
+  "default_ivf_suite": {
+    "passed": 11,
+    "failed": 1,
+    "failure": "invalid_initialization_and_uninitialized_insertion_fail",
+    "source": "diskann/src/ivf/tests.rs:626",
+    "classification": "pre-existing NaN initialization failure; index.rs and tests.rs unchanged from HEAD; historical baseline evidence in target/two-means-refactor-20261022/validation-summary.json"
+  },
+  "local_llvm_coverage": {
+    "kernel_lines_pct": 88.11,
+    "clustering_selected_lines_pct": 90.70,
+    "benchmark_selected_lines_pct": 91.17,
+    "note": "Selected-source local coverage; not Codecov patch coverage. Final export writer flush was added after collection and separately retested. Coverage uses a separate executable and is not a performance sample."
+  },
+  "skills_used": ["code-simplifier", "pr-writer"],
+  "measurement_constraints": "No compilation, tests or competing workload during timed measurements. OS-managed clocks, interactive host, no assertion of fixed power or exclusive use."
+}

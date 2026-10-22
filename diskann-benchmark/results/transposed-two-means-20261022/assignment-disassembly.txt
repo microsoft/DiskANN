@@ -1,0 +1,569 @@
+
+target/release/deps/libdiskann_quantization-c41120c60352ac7a.rlib(lib.rmeta):	file format coff-x86-64
+
+target/release/deps/libdiskann_quantization-c41120c60352ac7a.rlib(lib.rmeta-link):	file format coff-x86-64
+
+target/release/deps/libdiskann_quantization-c41120c60352ac7a.rlib(diskann_quantization-c41120c60352ac7a.diskann_quantization.c717958520bc0683-cgu.0.rcgu.o):	file format coff-x86-64
+
+Disassembly of section .text:
+
+0000000000000000 <diskann_quantization::algorithms::kmeans::two_means::assign>:
+       0: 41 57                        	pushq	%r15
+       2: 41 56                        	pushq	%r14
+       4: 41 55                        	pushq	%r13
+       6: 41 54                        	pushq	%r12
+       8: 56                           	pushq	%rsi
+       9: 57                           	pushq	%rdi
+       a: 55                           	pushq	%rbp
+       b: 53                           	pushq	%rbx
+       c: 48 81 ec d8 00 00 00         	subq	$0xd8, %rsp
+      13: c5 78 29 bc 24 c0 00 00 00   	vmovaps	%xmm15, 0xc0(%rsp)
+      1c: c5 78 29 b4 24 b0 00 00 00   	vmovaps	%xmm14, 0xb0(%rsp)
+      25: c5 78 29 ac 24 a0 00 00 00   	vmovaps	%xmm13, 0xa0(%rsp)
+      2e: c5 78 29 a4 24 90 00 00 00   	vmovaps	%xmm12, 0x90(%rsp)
+      37: c5 78 29 9c 24 80 00 00 00   	vmovaps	%xmm11, 0x80(%rsp)
+      40: c5 78 29 54 24 70            	vmovaps	%xmm10, 0x70(%rsp)
+      46: c5 78 29 4c 24 60            	vmovaps	%xmm9, 0x60(%rsp)
+      4c: c5 78 29 44 24 50            	vmovaps	%xmm8, 0x50(%rsp)
+      52: c5 f8 29 7c 24 40            	vmovaps	%xmm7, 0x40(%rsp)
+      58: c5 f8 29 74 24 30            	vmovaps	%xmm6, 0x30(%rsp)
+      5e: 4c 8b 94 24 50 01 00 00      	movq	0x150(%rsp), %r10
+      66: 48 8b 42 08                  	movq	0x8(%rdx), %rax
+      6a: 4c 8b 5a 10                  	movq	0x10(%rdx), %r11
+      6e: 48 85 c0                     	testq	%rax, %rax
+      71: 0f 94 c3                     	sete	%bl
+      74: 4d 85 db                     	testq	%r11, %r11
+      77: 40 0f 9e c6                  	setle	%sil
+      7b: 40 08 de                     	orb	%bl, %sil
+      7e: 40 80 fe 01                  	cmpb	$0x1, %sil
+      82: 75 7d                        	jne	0x101 <diskann_quantization::algorithms::kmeans::two_means::assign+0x101>
+      84: 4c 89 59 08                  	movq	%r11, 0x8(%rcx)
+      88: 48 89 41 10                  	movq	%rax, 0x10(%rcx)
+      8c: 4c 89 49 18                  	movq	%r9, 0x18(%rcx)
+      90: 4c 89 51 20                  	movq	%r10, 0x20(%rcx)
+      94: b8 01 00 00 00               	movl	$0x1, %eax
+      99: 48 89 01                     	movq	%rax, (%rcx)
+      9c: 48 89 c8                     	movq	%rcx, %rax
+      9f: c5 f8 28 74 24 30            	vmovaps	0x30(%rsp), %xmm6
+      a5: c5 f8 28 7c 24 40            	vmovaps	0x40(%rsp), %xmm7
+      ab: c5 78 28 44 24 50            	vmovaps	0x50(%rsp), %xmm8
+      b1: c5 78 28 4c 24 60            	vmovaps	0x60(%rsp), %xmm9
+      b7: c5 78 28 54 24 70            	vmovaps	0x70(%rsp), %xmm10
+      bd: c5 78 28 9c 24 80 00 00 00   	vmovaps	0x80(%rsp), %xmm11
+      c6: c5 78 28 a4 24 90 00 00 00   	vmovaps	0x90(%rsp), %xmm12
+      cf: c5 78 28 ac 24 a0 00 00 00   	vmovaps	0xa0(%rsp), %xmm13
+      d8: c5 78 28 b4 24 b0 00 00 00   	vmovaps	0xb0(%rsp), %xmm14
+      e1: c5 78 28 bc 24 c0 00 00 00   	vmovaps	0xc0(%rsp), %xmm15
+      ea: 48 81 c4 d8 00 00 00         	addq	$0xd8, %rsp
+      f1: 5b                           	popq	%rbx
+      f2: 5d                           	popq	%rbp
+      f3: 5f                           	popq	%rdi
+      f4: 5e                           	popq	%rsi
+      f5: 41 5c                        	popq	%r12
+      f7: 41 5d                        	popq	%r13
+      f9: 41 5e                        	popq	%r14
+      fb: 41 5f                        	popq	%r15
+      fd: c5 f8 77                     	vzeroupper
+     100: c3                           	retq
+     101: 4b 8d 34 1b                  	leaq	(%r11,%r11), %rsi
+     105: 4c 31 ce                     	xorq	%r9, %rsi
+     108: 4c 89 d7                     	movq	%r10, %rdi
+     10b: 48 31 c7                     	xorq	%rax, %rdi
+     10e: 48 09 f7                     	orq	%rsi, %rdi
+     111: 0f 85 6d ff ff ff            	jne	0x84 <diskann_quantization::algorithms::kmeans::two_means::assign+0x84>
+     117: 48 8b b4 24 48 01 00 00      	movq	0x148(%rsp), %rsi
+     11f: 80 bc 24 40 01 00 00 00      	cmpb	$0x0, 0x140(%rsp)
+     127: 74 43                        	je	0x16c <diskann_quantization::algorithms::kmeans::two_means::assign+0x16c>
+     129: 49 83 fb 20                  	cmpq	$0x20, %r11
+     12d: 0f 82 ca 02 00 00            	jb	0x3fd <diskann_quantization::algorithms::kmeans::two_means::assign+0x3fd>
+     133: 49 8d 43 e0                  	leaq	-0x20(%r11), %rax
+     137: 48 89 c3                     	movq	%rax, %rbx
+     13a: 48 c1 eb 05                  	shrq	$0x5, %rbx
+     13e: 48 ff c3                     	incq	%rbx
+     141: 89 df                        	movl	%ebx, %edi
+     143: 83 e7 03                     	andl	$0x3, %edi
+     146: 48 83 f8 60                  	cmpq	$0x60, %rax
+     14a: 0f 83 c8 02 00 00            	jae	0x418 <diskann_quantization::algorithms::kmeans::two_means::assign+0x418>
+     150: c5 f8 57 c0                  	vxorps	%xmm0, %xmm0, %xmm0
+     154: bb 20 00 00 00               	movl	$0x20, %ebx
+     159: 31 c0                        	xorl	%eax, %eax
+     15b: c5 f0 57 c9                  	vxorps	%xmm1, %xmm1, %xmm1
+     15f: c5 e8 57 d2                  	vxorps	%xmm2, %xmm2, %xmm2
+     163: c5 e0 57 db                  	vxorps	%xmm3, %xmm3, %xmm3
+     167: e9 c4 03 00 00               	jmp	0x530 <diskann_quantization::algorithms::kmeans::two_means::assign+0x530>
+     16c: 31 c0                        	xorl	%eax, %eax
+     16e: 4c 89 cf                     	movq	%r9, %rdi
+     171: 4c 29 df                     	subq	%r11, %rdi
+     174: 48 0f 43 c7                  	cmovaeq	%rdi, %rax
+     178: 49 8d 7b ff                  	leaq	-0x1(%r11), %rdi
+     17c: 48 39 f8                     	cmpq	%rdi, %rax
+     17f: 0f 86 7a 08 00 00            	jbe	0x9ff <diskann_quantization::algorithms::kmeans::two_means::assign+0x9ff>
+     185: 48 8b 02                     	movq	(%rdx), %rax
+     188: 4c 89 da                     	movq	%r11, %rdx
+     18b: 48 c1 e2 04                  	shlq	$0x4, %rdx
+     18f: 48 89 54 24 20               	movq	%rdx, 0x20(%rsp)
+     194: 4f 8d 0c 98                  	leaq	(%r8,%r11,4), %r9
+     198: 48 bb fe ff ff ff ff ff ff 7f	movabsq	$0x7ffffffffffffffe, %rbx # imm = 0x7FFFFFFFFFFFFFFE
+     1a2: 4c 21 db                     	andq	%r11, %rbx
+     1a5: 48 89 44 24 28               	movq	%rax, 0x28(%rsp)
+     1aa: 48 83 c0 60                  	addq	$0x60, %rax
+     1ae: 4d 89 df                     	movq	%r11, %r15
+     1b1: 49 c1 e7 06                  	shlq	$0x6, %r15
+     1b5: 4d 8d 60 04                  	leaq	0x4(%r8), %r12
+     1b9: c5 f9 ef c0                  	vpxor	%xmm0, %xmm0, %xmm0
+     1bd: c4 e2 7d 18 0d 00 00 00 00   	vbroadcastss	(%rip), %ymm1   # 0x1c6 <diskann_quantization::algorithms::kmeans::two_means::assign+0x1c6>
+     1c6: c4 e2 7d 18 15 00 00 00 00   	vbroadcastss	(%rip), %ymm2   # 0x1cf <diskann_quantization::algorithms::kmeans::two_means::assign+0x1cf>
+     1cf: c5 e5 76 db                  	vpcmpeqd	%ymm3, %ymm3, %ymm3
+     1d3: 48 8d 2d 00 00 00 00         	leaq	(%rip), %rbp            # 0x1da <diskann_quantization::algorithms::kmeans::two_means::assign+0x1da>
+     1da: 45 31 ed                     	xorl	%r13d, %r13d
+     1dd: eb 19                        	jmp	0x1f8 <diskann_quantization::algorithms::kmeans::two_means::assign+0x1f8>
+     1df: 90                           	nop
+     1e0: 49 29 fa                     	subq	%rdi, %r10
+     1e3: 49 ff c5                     	incq	%r13
+     1e6: 89 fa                        	movl	%edi, %edx
+     1e8: 48 8d 34 96                  	leaq	(%rsi,%rdx,4), %rsi
+     1ec: 4c 01 f8                     	addq	%r15, %rax
+     1ef: 4d 85 d2                     	testq	%r10, %r10
+     1f2: 0f 84 00 08 00 00            	je	0x9f8 <diskann_quantization::algorithms::kmeans::two_means::assign+0x9f8>
+     1f8: 49 8d 53 ff                  	leaq	-0x1(%r11), %rdx
+     1fc: 48 85 d2                     	testq	%rdx, %rdx
+     1ff: 0f 84 bb 00 00 00            	je	0x2c0 <diskann_quantization::algorithms::kmeans::two_means::assign+0x2c0>
+     205: c5 d8 57 e4                  	vxorps	%xmm4, %xmm4, %xmm4
+     209: 49 89 c6                     	movq	%rax, %r14
+     20c: 31 ff                        	xorl	%edi, %edi
+     20e: c5 c8 57 f6                  	vxorps	%xmm6, %xmm6, %xmm6
+     212: c5 d0 57 ed                  	vxorps	%xmm5, %xmm5, %xmm5
+     216: c5 c0 57 ff                  	vxorps	%xmm7, %xmm7, %xmm7
+     21a: 66 0f 1f 44 00 00            	nopw	(%rax,%rax)
+     220: c4 42 7d 18 44 bc fc         	vbroadcastss	-0x4(%r12,%rdi,4), %ymm8
+     227: c4 42 7d 18 0c b9            	vbroadcastss	(%r9,%rdi,4), %ymm9
+     22d: c4 41 7c 10 56 a0            	vmovups	-0x60(%r14), %ymm10
+     233: c4 41 7c 10 5e c0            	vmovups	-0x40(%r14), %ymm11
+     239: c4 41 7c 10 66 e0            	vmovups	-0x20(%r14), %ymm12
+     23f: c4 41 7c 10 2e               	vmovups	(%r14), %ymm13
+     244: c4 41 2c 5c f0               	vsubps	%ymm8, %ymm10, %ymm14
+     249: c4 41 24 5c c0               	vsubps	%ymm8, %ymm11, %ymm8
+     24e: c4 41 2c 5c d1               	vsubps	%ymm9, %ymm10, %ymm10
+     253: c4 41 24 5c c9               	vsubps	%ymm9, %ymm11, %ymm9
+     258: c4 62 0d a8 f7               	vfmadd213ps	%ymm7, %ymm14, %ymm14 # ymm14 = (ymm14 * ymm14) + ymm7
+     25d: c4 62 3d a8 c5               	vfmadd213ps	%ymm5, %ymm8, %ymm8 # ymm8 = (ymm8 * ymm8) + ymm5
+     262: c4 62 2d a8 d6               	vfmadd213ps	%ymm6, %ymm10, %ymm10 # ymm10 = (ymm10 * ymm10) + ymm6
+     267: c4 62 35 a8 cc               	vfmadd213ps	%ymm4, %ymm9, %ymm9 # ymm9 = (ymm9 * ymm9) + ymm4
+     26c: c4 c2 7d 18 24 bc            	vbroadcastss	(%r12,%rdi,4), %ymm4
+     272: c4 42 7d 18 5c b9 04         	vbroadcastss	0x4(%r9,%rdi,4), %ymm11
+     279: 48 83 c7 02                  	addq	$0x2, %rdi
+     27d: c5 9c 5c fc                  	vsubps	%ymm4, %ymm12, %ymm7
+     281: c5 94 5c ec                  	vsubps	%ymm4, %ymm13, %ymm5
+     285: c4 c1 1c 5c f3               	vsubps	%ymm11, %ymm12, %ymm6
+     28a: c4 c1 14 5c e3               	vsubps	%ymm11, %ymm13, %ymm4
+     28f: c4 c2 45 a8 fe               	vfmadd213ps	%ymm14, %ymm7, %ymm7 # ymm7 = (ymm7 * ymm7) + ymm14
+     294: c4 c2 55 a8 e8               	vfmadd213ps	%ymm8, %ymm5, %ymm5 # ymm5 = (ymm5 * ymm5) + ymm8
+     299: c4 c2 4d a8 f2               	vfmadd213ps	%ymm10, %ymm6, %ymm6 # ymm6 = (ymm6 * ymm6) + ymm10
+     29e: c4 c2 5d a8 e1               	vfmadd213ps	%ymm9, %ymm4, %ymm4 # ymm4 = (ymm4 * ymm4) + ymm9
+     2a3: 49 83 ee 80                  	subq	$-0x80, %r14
+     2a7: 48 39 fb                     	cmpq	%rdi, %rbx
+     2aa: 0f 85 70 ff ff ff            	jne	0x220 <diskann_quantization::algorithms::kmeans::two_means::assign+0x220>
+     2b0: 41 f6 c3 01                  	testb	$0x1, %r11b
+     2b4: 75 1c                        	jne	0x2d2 <diskann_quantization::algorithms::kmeans::two_means::assign+0x2d2>
+     2b6: e9 7f 00 00 00               	jmp	0x33a <diskann_quantization::algorithms::kmeans::two_means::assign+0x33a>
+     2bb: 0f 1f 44 00 00               	nopl	(%rax,%rax)
+     2c0: 31 ff                        	xorl	%edi, %edi
+     2c2: c5 d8 57 e4                  	vxorps	%xmm4, %xmm4, %xmm4
+     2c6: c5 c8 57 f6                  	vxorps	%xmm6, %xmm6, %xmm6
+     2ca: c5 d0 57 ed                  	vxorps	%xmm5, %xmm5, %xmm5
+     2ce: c5 c0 57 ff                  	vxorps	%xmm7, %xmm7, %xmm7
+     2d2: c5 7c 28 c7                  	vmovaps	%ymm7, %ymm8
+     2d6: c5 7c 28 cd                  	vmovaps	%ymm5, %ymm9
+     2da: c5 7c 28 d6                  	vmovaps	%ymm6, %ymm10
+     2de: c5 7c 28 dc                  	vmovaps	%ymm4, %ymm11
+     2e2: 4c 8b 74 24 20               	movq	0x20(%rsp), %r14
+     2e7: 4d 0f af f5                  	imulq	%r13, %r14
+     2eb: 48 8b 54 24 28               	movq	0x28(%rsp), %rdx
+     2f0: 4e 8d 34 b2                  	leaq	(%rdx,%r14,4), %r14
+     2f4: 48 89 fa                     	movq	%rdi, %rdx
+     2f7: 48 c1 e2 06                  	shlq	$0x6, %rdx
+     2fb: c4 c1 7c 10 24 16            	vmovups	(%r14,%rdx), %ymm4
+     301: c4 41 7c 10 64 16 20         	vmovups	0x20(%r14,%rdx), %ymm12
+     308: c4 c2 7d 18 2c b8            	vbroadcastss	(%r8,%rdi,4), %ymm5
+     30e: c4 42 7d 18 2c b9            	vbroadcastss	(%r9,%rdi,4), %ymm13
+     314: c5 dc 5c fd                  	vsubps	%ymm5, %ymm4, %ymm7
+     318: c5 9c 5c ed                  	vsubps	%ymm5, %ymm12, %ymm5
+     31c: c4 c1 5c 5c f5               	vsubps	%ymm13, %ymm4, %ymm6
+     321: c4 c1 1c 5c e5               	vsubps	%ymm13, %ymm12, %ymm4
+     326: c4 c2 45 a8 f8               	vfmadd213ps	%ymm8, %ymm7, %ymm7 # ymm7 = (ymm7 * ymm7) + ymm8
+     32b: c4 c2 55 a8 e9               	vfmadd213ps	%ymm9, %ymm5, %ymm5 # ymm5 = (ymm5 * ymm5) + ymm9
+     330: c4 c2 4d a8 f2               	vfmadd213ps	%ymm10, %ymm6, %ymm6 # ymm6 = (ymm6 * ymm6) + ymm10
+     335: c4 c2 5d a8 e3               	vfmadd213ps	%ymm11, %ymm4, %ymm4 # ymm4 = (ymm4 * ymm4) + ymm11
+     33a: 49 83 fa 10                  	cmpq	$0x10, %r10
+     33e: bf 10 00 00 00               	movl	$0x10, %edi
+     343: 49 0f 42 fa                  	cmovbq	%r10, %rdi
+     347: 49 83 fa 08                  	cmpq	$0x8, %r10
+     34b: ba 08 00 00 00               	movl	$0x8, %edx
+     350: 49 0f 42 d2                  	cmovbq	%r10, %rdx
+     354: c1 e2 05                     	shll	$0x5, %edx
+     357: c5 4c c2 c7 11               	vcmplt_oqps	%ymm7, %ymm6, %ymm8
+     35c: c4 c1 3d 72 d0 1f            	vpsrld	$0x1f, %ymm8, %ymm8
+     362: c5 44 c2 c9 11               	vcmplt_oqps	%ymm1, %ymm7, %ymm9
+     367: c5 c4 c2 fa 1e               	vcmpgt_oqps	%ymm2, %ymm7, %ymm7
+     36c: c5 b4 54 ff                  	vandps	%ymm7, %ymm9, %ymm7
+     370: c5 4c c2 c9 11               	vcmplt_oqps	%ymm1, %ymm6, %ymm9
+     375: c5 cc c2 f2 1e               	vcmpgt_oqps	%ymm2, %ymm6, %ymm6
+     37a: c5 b4 54 f6                  	vandps	%ymm6, %ymm9, %ymm6
+     37e: c5 cc 54 f7                  	vandps	%ymm7, %ymm6, %ymm6
+     382: c5 fd 66 f6                  	vpcmpgtd	%ymm6, %ymm0, %ymm6
+     386: c5 cd ef f3                  	vpxor	%ymm3, %ymm6, %ymm6
+     38a: c5 bd eb f6                  	vpor	%ymm6, %ymm8, %ymm6
+     38e: c5 fc 10 3c 2a               	vmovups	(%rdx,%rbp), %ymm7
+     393: c4 e2 45 2e 36               	vmaskmovps	%ymm6, %ymm7, (%rsi)
+     398: 49 83 fa 08                  	cmpq	$0x8, %r10
+     39c: 0f 86 3e fe ff ff            	jbe	0x1e0 <diskann_quantization::algorithms::kmeans::two_means::assign+0x1e0>
+     3a2: c5 dc c2 f5 11               	vcmplt_oqps	%ymm5, %ymm4, %ymm6
+     3a7: c5 cd 72 d6 1f               	vpsrld	$0x1f, %ymm6, %ymm6
+     3ac: c5 d4 c2 f9 11               	vcmplt_oqps	%ymm1, %ymm5, %ymm7
+     3b1: c5 d4 c2 ea 1e               	vcmpgt_oqps	%ymm2, %ymm5, %ymm5
+     3b6: c5 d4 54 ef                  	vandps	%ymm7, %ymm5, %ymm5
+     3ba: c5 dc c2 f9 11               	vcmplt_oqps	%ymm1, %ymm4, %ymm7
+     3bf: c5 dc c2 e2 1e               	vcmpgt_oqps	%ymm2, %ymm4, %ymm4
+     3c4: c5 dc 54 e7                  	vandps	%ymm7, %ymm4, %ymm4
+     3c8: c5 dc 54 e5                  	vandps	%ymm5, %ymm4, %ymm4
+     3cc: c5 fd 66 e4                  	vpcmpgtd	%ymm4, %ymm0, %ymm4
+     3d0: c5 dd ef e3                  	vpxor	%ymm3, %ymm4, %ymm4
+     3d4: c5 dd eb e6                  	vpor	%ymm6, %ymm4, %ymm4
+     3d8: 48 8d 57 f8                  	leaq	-0x8(%rdi), %rdx
+     3dc: 48 83 fa 08                  	cmpq	$0x8, %rdx
+     3e0: 41 be 08 00 00 00            	movl	$0x8, %r14d
+     3e6: 49 0f 43 d6                  	cmovaeq	%r14, %rdx
+     3ea: c1 e2 05                     	shll	$0x5, %edx
+     3ed: c5 fc 10 2c 2a               	vmovups	(%rdx,%rbp), %ymm5
+     3f2: c4 e2 55 2e 66 20            	vmaskmovps	%ymm4, %ymm5, 0x20(%rsi)
+     3f8: e9 e3 fd ff ff               	jmp	0x1e0 <diskann_quantization::algorithms::kmeans::two_means::assign+0x1e0>
+     3fd: c5 f8 57 c0                  	vxorps	%xmm0, %xmm0, %xmm0
+     401: 31 c0                        	xorl	%eax, %eax
+     403: 48 89 c7                     	movq	%rax, %rdi
+     406: 48 83 cf 08                  	orq	$0x8, %rdi
+     40a: 4c 39 df                     	cmpq	%r11, %rdi
+     40d: 0f 87 70 01 00 00            	ja	0x583 <diskann_quantization::algorithms::kmeans::two_means::assign+0x583>
+     413: e9 78 01 00 00               	jmp	0x590 <diskann_quantization::algorithms::kmeans::two_means::assign+0x590>
+     418: 48 83 e3 fc                  	andq	$-0x4, %rbx
+     41c: c5 f8 57 c0                  	vxorps	%xmm0, %xmm0, %xmm0
+     420: 31 c0                        	xorl	%eax, %eax
+     422: c5 f0 57 c9                  	vxorps	%xmm1, %xmm1, %xmm1
+     426: c5 e8 57 d2                  	vxorps	%xmm2, %xmm2, %xmm2
+     42a: c5 e0 57 db                  	vxorps	%xmm3, %xmm3, %xmm3
+     42e: 66 90                        	nop
+     430: c4 c1 7c 10 24 80            	vmovups	(%r8,%rax,4), %ymm4
+     436: c4 c1 7c 10 6c 80 20         	vmovups	0x20(%r8,%rax,4), %ymm5
+     43d: c4 c1 7c 10 74 80 40         	vmovups	0x40(%r8,%rax,4), %ymm6
+     444: c4 c1 7c 10 7c 80 60         	vmovups	0x60(%r8,%rax,4), %ymm7
+     44b: c4 e2 5d a8 e0               	vfmadd213ps	%ymm0, %ymm4, %ymm4 # ymm4 = (ymm4 * ymm4) + ymm0
+     450: c4 e2 55 a8 e9               	vfmadd213ps	%ymm1, %ymm5, %ymm5 # ymm5 = (ymm5 * ymm5) + ymm1
+     455: c4 e2 4d a8 f2               	vfmadd213ps	%ymm2, %ymm6, %ymm6 # ymm6 = (ymm6 * ymm6) + ymm2
+     45a: c4 e2 45 a8 fb               	vfmadd213ps	%ymm3, %ymm7, %ymm7 # ymm7 = (ymm7 * ymm7) + ymm3
+     45f: c4 c1 7c 10 84 80 80 00 00 00	vmovups	0x80(%r8,%rax,4), %ymm0
+     469: c4 e2 7d a8 c4               	vfmadd213ps	%ymm4, %ymm0, %ymm0 # ymm0 = (ymm0 * ymm0) + ymm4
+     46e: c4 c1 7c 10 8c 80 a0 00 00 00	vmovups	0xa0(%r8,%rax,4), %ymm1
+     478: c4 e2 75 a8 cd               	vfmadd213ps	%ymm5, %ymm1, %ymm1 # ymm1 = (ymm1 * ymm1) + ymm5
+     47d: c4 c1 7c 10 94 80 c0 00 00 00	vmovups	0xc0(%r8,%rax,4), %ymm2
+     487: c4 e2 6d a8 d6               	vfmadd213ps	%ymm6, %ymm2, %ymm2 # ymm2 = (ymm2 * ymm2) + ymm6
+     48c: c4 c1 7c 10 9c 80 e0 00 00 00	vmovups	0xe0(%r8,%rax,4), %ymm3
+     496: c4 e2 65 a8 df               	vfmadd213ps	%ymm7, %ymm3, %ymm3 # ymm3 = (ymm3 * ymm3) + ymm7
+     49b: c4 c1 7c 10 a4 80 00 01 00 00	vmovups	0x100(%r8,%rax,4), %ymm4
+     4a5: c4 e2 5d a8 e0               	vfmadd213ps	%ymm0, %ymm4, %ymm4 # ymm4 = (ymm4 * ymm4) + ymm0
+     4aa: c4 c1 7c 10 ac 80 20 01 00 00	vmovups	0x120(%r8,%rax,4), %ymm5
+     4b4: c4 e2 55 a8 e9               	vfmadd213ps	%ymm1, %ymm5, %ymm5 # ymm5 = (ymm5 * ymm5) + ymm1
+     4b9: c4 c1 7c 10 b4 80 40 01 00 00	vmovups	0x140(%r8,%rax,4), %ymm6
+     4c3: c4 e2 4d a8 f2               	vfmadd213ps	%ymm2, %ymm6, %ymm6 # ymm6 = (ymm6 * ymm6) + ymm2
+     4c8: c4 c1 7c 10 bc 80 60 01 00 00	vmovups	0x160(%r8,%rax,4), %ymm7
+     4d2: c4 e2 45 a8 fb               	vfmadd213ps	%ymm3, %ymm7, %ymm7 # ymm7 = (ymm7 * ymm7) + ymm3
+     4d7: c4 c1 7c 10 84 80 80 01 00 00	vmovups	0x180(%r8,%rax,4), %ymm0
+     4e1: c4 e2 7d a8 c4               	vfmadd213ps	%ymm4, %ymm0, %ymm0 # ymm0 = (ymm0 * ymm0) + ymm4
+     4e6: c4 c1 7c 10 8c 80 a0 01 00 00	vmovups	0x1a0(%r8,%rax,4), %ymm1
+     4f0: c4 e2 75 a8 cd               	vfmadd213ps	%ymm5, %ymm1, %ymm1 # ymm1 = (ymm1 * ymm1) + ymm5
+     4f5: c4 c1 7c 10 94 80 c0 01 00 00	vmovups	0x1c0(%r8,%rax,4), %ymm2
+     4ff: c4 e2 6d a8 d6               	vfmadd213ps	%ymm6, %ymm2, %ymm2 # ymm2 = (ymm2 * ymm2) + ymm6
+     504: c4 c1 7c 10 9c 80 e0 01 00 00	vmovups	0x1e0(%r8,%rax,4), %ymm3
+     50e: c4 e2 65 a8 df               	vfmadd213ps	%ymm7, %ymm3, %ymm3 # ymm3 = (ymm3 * ymm3) + ymm7
+     513: 48 83 e8 80                  	subq	$-0x80, %rax
+     517: 48 83 c3 fc                  	addq	$-0x4, %rbx
+     51b: 0f 85 0f ff ff ff            	jne	0x430 <diskann_quantization::algorithms::kmeans::two_means::assign+0x430>
+     521: 48 85 ff                     	testq	%rdi, %rdi
+     524: 74 45                        	je	0x56b <diskann_quantization::algorithms::kmeans::two_means::assign+0x56b>
+     526: 48 8d 58 20                  	leaq	0x20(%rax), %rbx
+     52a: 66 0f 1f 44 00 00            	nopw	(%rax,%rax)
+     530: c4 c1 7c 10 24 80            	vmovups	(%r8,%rax,4), %ymm4
+     536: c4 c1 7c 10 6c 80 20         	vmovups	0x20(%r8,%rax,4), %ymm5
+     53d: c4 c1 7c 10 74 80 40         	vmovups	0x40(%r8,%rax,4), %ymm6
+     544: c4 c1 7c 10 7c 80 60         	vmovups	0x60(%r8,%rax,4), %ymm7
+     54b: 48 89 d8                     	movq	%rbx, %rax
+     54e: c4 e2 5d b8 c4               	vfmadd231ps	%ymm4, %ymm4, %ymm0 # ymm0 = (ymm4 * ymm4) + ymm0
+     553: c4 e2 55 b8 cd               	vfmadd231ps	%ymm5, %ymm5, %ymm1 # ymm1 = (ymm5 * ymm5) + ymm1
+     558: c4 e2 4d b8 d6               	vfmadd231ps	%ymm6, %ymm6, %ymm2 # ymm2 = (ymm6 * ymm6) + ymm2
+     55d: c4 e2 45 b8 df               	vfmadd231ps	%ymm7, %ymm7, %ymm3 # ymm3 = (ymm7 * ymm7) + ymm3
+     562: 48 83 c3 20                  	addq	$0x20, %rbx
+     566: 48 ff cf                     	decq	%rdi
+     569: 75 c5                        	jne	0x530 <diskann_quantization::algorithms::kmeans::two_means::assign+0x530>
+     56b: c5 ec 58 d3                  	vaddps	%ymm3, %ymm2, %ymm2
+     56f: c5 fc 58 c1                  	vaddps	%ymm1, %ymm0, %ymm0
+     573: c5 fc 58 c2                  	vaddps	%ymm2, %ymm0, %ymm0
+     577: 48 89 c7                     	movq	%rax, %rdi
+     57a: 48 83 cf 08                  	orq	$0x8, %rdi
+     57e: 4c 39 df                     	cmpq	%r11, %rdi
+     581: 76 0d                        	jbe	0x590 <diskann_quantization::algorithms::kmeans::two_means::assign+0x590>
+     583: 48 89 c7                     	movq	%rax, %rdi
+     586: eb 23                        	jmp	0x5ab <diskann_quantization::algorithms::kmeans::two_means::assign+0x5ab>
+     588: 0f 1f 84 00 00 00 00 00      	nopl	(%rax,%rax)
+     590: c4 c1 7c 10 0c 80            	vmovups	(%r8,%rax,4), %ymm1
+     596: c4 e2 75 b8 c1               	vfmadd231ps	%ymm1, %ymm1, %ymm0 # ymm0 = (ymm1 * ymm1) + ymm0
+     59b: 48 8d 78 08                  	leaq	0x8(%rax), %rdi
+     59f: 48 83 c0 10                  	addq	$0x10, %rax
+     5a3: 4c 39 d8                     	cmpq	%r11, %rax
+     5a6: 48 89 f8                     	movq	%rdi, %rax
+     5a9: 76 e5                        	jbe	0x590 <diskann_quantization::algorithms::kmeans::two_means::assign+0x590>
+     5ab: 4c 89 d8                     	movq	%r11, %rax
+     5ae: 48 29 f8                     	subq	%rdi, %rax
+     5b1: 74 27                        	je	0x5da <diskann_quantization::algorithms::kmeans::two_means::assign+0x5da>
+     5b3: 48 83 f8 08                  	cmpq	$0x8, %rax
+     5b7: bb 08 00 00 00               	movl	$0x8, %ebx
+     5bc: 48 0f 42 d8                  	cmovbq	%rax, %rbx
+     5c0: c1 e3 05                     	shll	$0x5, %ebx
+     5c3: 48 8d 05 00 00 00 00         	leaq	(%rip), %rax            # 0x5ca <diskann_quantization::algorithms::kmeans::two_means::assign+0x5ca>
+     5ca: c5 fc 10 0c 03               	vmovups	(%rbx,%rax), %ymm1
+     5cf: c4 c2 75 2c 0c b8            	vmaskmovps	(%r8,%rdi,4), %ymm1, %ymm1
+     5d5: c4 e2 75 b8 c1               	vfmadd231ps	%ymm1, %ymm1, %ymm0 # ymm0 = (ymm1 * ymm1) + ymm0
+     5da: 4c 89 c8                     	movq	%r9, %rax
+     5dd: 4c 29 d8                     	subq	%r11, %rax
+     5e0: 48 83 f8 20                  	cmpq	$0x20, %rax
+     5e4: 72 63                        	jb	0x649 <diskann_quantization::algorithms::kmeans::two_means::assign+0x649>
+     5e6: 4b 8d 1c 98                  	leaq	(%r8,%r11,4), %rbx
+     5ea: 48 83 c3 60                  	addq	$0x60, %rbx
+     5ee: c5 f0 57 c9                  	vxorps	%xmm1, %xmm1, %xmm1
+     5f2: 31 ff                        	xorl	%edi, %edi
+     5f4: c5 e8 57 d2                  	vxorps	%xmm2, %xmm2, %xmm2
+     5f8: c5 e0 57 db                  	vxorps	%xmm3, %xmm3, %xmm3
+     5fc: c5 d8 57 e4                  	vxorps	%xmm4, %xmm4, %xmm4
+     600: 49 89 fe                     	movq	%rdi, %r14
+     603: c5 fc 10 6c bb a0            	vmovups	-0x60(%rbx,%rdi,4), %ymm5
+     609: c5 fc 10 74 bb c0            	vmovups	-0x40(%rbx,%rdi,4), %ymm6
+     60f: c5 fc 10 7c bb e0            	vmovups	-0x20(%rbx,%rdi,4), %ymm7
+     615: c5 7c 10 04 bb               	vmovups	(%rbx,%rdi,4), %ymm8
+     61a: c4 e2 55 b8 cd               	vfmadd231ps	%ymm5, %ymm5, %ymm1 # ymm1 = (ymm5 * ymm5) + ymm1
+     61f: c4 e2 4d b8 d6               	vfmadd231ps	%ymm6, %ymm6, %ymm2 # ymm2 = (ymm6 * ymm6) + ymm2
+     624: c4 e2 45 b8 df               	vfmadd231ps	%ymm7, %ymm7, %ymm3 # ymm3 = (ymm7 * ymm7) + ymm3
+     629: c4 c2 3d b8 e0               	vfmadd231ps	%ymm8, %ymm8, %ymm4 # ymm4 = (ymm8 * ymm8) + ymm4
+     62e: 48 83 c7 20                  	addq	$0x20, %rdi
+     632: 49 83 c6 40                  	addq	$0x40, %r14
+     636: 49 39 c6                     	cmpq	%rax, %r14
+     639: 76 c5                        	jbe	0x600 <diskann_quantization::algorithms::kmeans::two_means::assign+0x600>
+     63b: c5 f4 58 ca                  	vaddps	%ymm2, %ymm1, %ymm1
+     63f: c5 e4 58 d4                  	vaddps	%ymm4, %ymm3, %ymm2
+     643: c5 f4 58 ca                  	vaddps	%ymm2, %ymm1, %ymm1
+     647: eb 06                        	jmp	0x64f <diskann_quantization::algorithms::kmeans::two_means::assign+0x64f>
+     649: c5 f0 57 c9                  	vxorps	%xmm1, %xmm1, %xmm1
+     64d: 31 ff                        	xorl	%edi, %edi
+     64f: 4b 8d 1c 98                  	leaq	(%r8,%r11,4), %rbx
+     653: 49 89 fe                     	movq	%rdi, %r14
+     656: 49 83 ce 08                  	orq	$0x8, %r14
+     65a: 49 39 c6                     	cmpq	%rax, %r14
+     65d: 76 11                        	jbe	0x670 <diskann_quantization::algorithms::kmeans::two_means::assign+0x670>
+     65f: 49 89 fe                     	movq	%rdi, %r14
+     662: eb 26                        	jmp	0x68a <diskann_quantization::algorithms::kmeans::two_means::assign+0x68a>
+     664: 66 66 66 2e 0f 1f 84 00 00 00 00 00  	nopw	%cs:(%rax,%rax)
+     670: c5 fc 10 14 bb               	vmovups	(%rbx,%rdi,4), %ymm2
+     675: c4 e2 6d b8 ca               	vfmadd231ps	%ymm2, %ymm2, %ymm1 # ymm1 = (ymm2 * ymm2) + ymm1
+     67a: 4c 8d 77 08                  	leaq	0x8(%rdi), %r14
+     67e: 48 83 c7 10                  	addq	$0x10, %rdi
+     682: 48 39 c7                     	cmpq	%rax, %rdi
+     685: 4c 89 f7                     	movq	%r14, %rdi
+     688: 76 e6                        	jbe	0x670 <diskann_quantization::algorithms::kmeans::two_means::assign+0x670>
+     68a: 4c 29 f0                     	subq	%r14, %rax
+     68d: 74 27                        	je	0x6b6 <diskann_quantization::algorithms::kmeans::two_means::assign+0x6b6>
+     68f: 48 83 f8 08                  	cmpq	$0x8, %rax
+     693: bf 08 00 00 00               	movl	$0x8, %edi
+     698: 48 0f 42 f8                  	cmovbq	%rax, %rdi
+     69c: c1 e7 05                     	shll	$0x5, %edi
+     69f: 48 8d 05 00 00 00 00         	leaq	(%rip), %rax            # 0x6a6 <diskann_quantization::algorithms::kmeans::two_means::assign+0x6a6>
+     6a6: c5 fc 10 14 07               	vmovups	(%rdi,%rax), %ymm2
+     6ab: c4 a2 6d 2c 14 b3            	vmaskmovps	(%rbx,%r14,4), %ymm2, %ymm2
+     6b1: c4 e2 6d b8 ca               	vfmadd231ps	%ymm2, %ymm2, %ymm1 # ymm1 = (ymm2 * ymm2) + ymm1
+     6b6: 31 c0                        	xorl	%eax, %eax
+     6b8: 4c 89 cf                     	movq	%r9, %rdi
+     6bb: 4c 29 df                     	subq	%r11, %rdi
+     6be: 48 0f 43 c7                  	cmovaeq	%rdi, %rax
+     6c2: 49 8d 7b ff                  	leaq	-0x1(%r11), %rdi
+     6c6: 48 89 7c 24 28               	movq	%rdi, 0x28(%rsp)
+     6cb: 48 39 f8                     	cmpq	%rdi, %rax
+     6ce: 0f 86 2b 03 00 00            	jbe	0x9ff <diskann_quantization::algorithms::kmeans::two_means::assign+0x9ff>
+     6d4: c4 e3 7d 19 c2 01            	vextractf128	$0x1, %ymm0, %xmm2
+     6da: c5 f8 58 c2                  	vaddps	%xmm2, %xmm0, %xmm0
+     6de: c5 f9 c6 d0 01               	vshufpd	$0x1, %xmm0, %xmm0, %xmm2 # xmm2 = xmm0[1,0]
+     6e3: c5 f8 58 c2                  	vaddps	%xmm2, %xmm0, %xmm0
+     6e7: c5 fa 16 d0                  	vmovshdup	%xmm0, %xmm2    # xmm2 = xmm0[1,1,3,3]
+     6eb: c5 f8 58 c2                  	vaddps	%xmm2, %xmm0, %xmm0
+     6ef: c4 e3 7d 19 ca 01            	vextractf128	$0x1, %ymm1, %xmm2
+     6f5: c5 f0 58 ca                  	vaddps	%xmm2, %xmm1, %xmm1
+     6f9: c5 f1 c6 d1 01               	vshufpd	$0x1, %xmm1, %xmm1, %xmm2 # xmm2 = xmm1[1,0]
+     6fe: c5 f0 58 ca                  	vaddps	%xmm2, %xmm1, %xmm1
+     702: c5 fa 16 d1                  	vmovshdup	%xmm1, %xmm2    # xmm2 = xmm1[1,1,3,3]
+     706: c5 f0 58 ca                  	vaddps	%xmm2, %xmm1, %xmm1
+     70a: 48 8b 12                     	movq	(%rdx), %rdx
+     70d: c4 e2 7d 18 c0               	vbroadcastss	%xmm0, %ymm0
+     712: c4 e2 7d 18 c9               	vbroadcastss	%xmm1, %ymm1
+     717: 44 89 dd                     	movl	%r11d, %ebp
+     71a: 83 e5 03                     	andl	$0x3, %ebp
+     71d: 48 bb fc ff ff ff ff ff ff 7f	movabsq	$0x7ffffffffffffffc, %rbx # imm = 0x7FFFFFFFFFFFFFFC
+     727: 4c 21 db                     	andq	%r11, %rbx
+     72a: 48 8d 82 e0 00 00 00         	leaq	0xe0(%rdx), %rax
+     731: 4d 89 df                     	movq	%r11, %r15
+     734: 49 c1 e7 06                  	shlq	$0x6, %r15
+     738: 4d 8d 60 0c                  	leaq	0xc(%r8), %r12
+     73c: 4f 8d 2c 98                  	leaq	(%r8,%r11,4), %r13
+     740: 49 83 c5 0c                  	addq	$0xc, %r13
+     744: 49 c1 e3 02                  	shlq	$0x2, %r11
+     748: 48 89 6c 24 20               	movq	%rbp, 0x20(%rsp)
+     74d: c1 e5 06                     	shll	$0x6, %ebp
+     750: c5 e8 57 d2                  	vxorps	%xmm2, %xmm2, %xmm2
+     754: c4 e2 7d 18 1d 00 00 00 00   	vbroadcastss	(%rip), %ymm3   # 0x75d <diskann_quantization::algorithms::kmeans::two_means::assign+0x75d>
+     75d: c4 e2 7d 18 25 00 00 00 00   	vbroadcastss	(%rip), %ymm4   # 0x766 <diskann_quantization::algorithms::kmeans::two_means::assign+0x766>
+     766: c5 d5 76 ed                  	vpcmpeqd	%ymm5, %ymm5, %ymm5
+     76a: eb 1d                        	jmp	0x789 <diskann_quantization::algorithms::kmeans::two_means::assign+0x789>
+     76c: 0f 1f 40 00                  	nopl	(%rax)
+     770: 4d 29 ca                     	subq	%r9, %r10
+     773: 45 89 c9                     	movl	%r9d, %r9d
+     776: 4a 8d 34 8e                  	leaq	(%rsi,%r9,4), %rsi
+     77a: 4c 01 f8                     	addq	%r15, %rax
+     77d: 4c 01 fa                     	addq	%r15, %rdx
+     780: 4d 85 d2                     	testq	%r10, %r10
+     783: 0f 84 6f 02 00 00            	je	0x9f8 <diskann_quantization::algorithms::kmeans::two_means::assign+0x9f8>
+     789: 48 83 7c 24 28 03            	cmpq	$0x3, 0x28(%rsp)
+     78f: 73 1f                        	jae	0x7b0 <diskann_quantization::algorithms::kmeans::two_means::assign+0x7b0>
+     791: 45 31 c9                     	xorl	%r9d, %r9d
+     794: c5 c8 57 f6                  	vxorps	%xmm6, %xmm6, %xmm6
+     798: c4 41 38 57 c0               	vxorps	%xmm8, %xmm8, %xmm8
+     79d: c5 c0 57 ff                  	vxorps	%xmm7, %xmm7, %xmm7
+     7a1: c4 41 30 57 c9               	vxorps	%xmm9, %xmm9, %xmm9
+     7a6: e9 00 01 00 00               	jmp	0x8ab <diskann_quantization::algorithms::kmeans::two_means::assign+0x8ab>
+     7ab: 0f 1f 44 00 00               	nopl	(%rax,%rax)
+     7b0: c5 c8 57 f6                  	vxorps	%xmm6, %xmm6, %xmm6
+     7b4: 49 89 c6                     	movq	%rax, %r14
+     7b7: 45 31 c9                     	xorl	%r9d, %r9d
+     7ba: c4 41 38 57 c0               	vxorps	%xmm8, %xmm8, %xmm8
+     7bf: c5 c0 57 ff                  	vxorps	%xmm7, %xmm7, %xmm7
+     7c3: c4 41 30 57 c9               	vxorps	%xmm9, %xmm9, %xmm9
+     7c8: 0f 1f 84 00 00 00 00 00      	nopl	(%rax,%rax)
+     7d0: c4 02 7d 18 54 8c f4         	vbroadcastss	-0xc(%r12,%r9,4), %ymm10
+     7d7: c4 02 7d 18 5c 8d f4         	vbroadcastss	-0xc(%r13,%r9,4), %ymm11
+     7de: c4 41 7c 10 a6 20 ff ff ff   	vmovups	-0xe0(%r14), %ymm12
+     7e7: c4 41 7c 10 ae 40 ff ff ff   	vmovups	-0xc0(%r14), %ymm13
+     7f0: c4 41 7c 10 b6 60 ff ff ff   	vmovups	-0xa0(%r14), %ymm14
+     7f9: c4 41 7c 10 7e 80            	vmovups	-0x80(%r14), %ymm15
+     7ff: c4 42 2d b8 cc               	vfmadd231ps	%ymm12, %ymm10, %ymm9 # ymm9 = (ymm10 * ymm12) + ymm9
+     804: c4 c2 15 b8 fa               	vfmadd231ps	%ymm10, %ymm13, %ymm7 # ymm7 = (ymm13 * ymm10) + ymm7
+     809: c4 42 25 b8 c4               	vfmadd231ps	%ymm12, %ymm11, %ymm8 # ymm8 = (ymm11 * ymm12) + ymm8
+     80e: c4 c2 25 b8 f5               	vfmadd231ps	%ymm13, %ymm11, %ymm6 # ymm6 = (ymm11 * ymm13) + ymm6
+     813: c4 02 7d 18 54 8c f8         	vbroadcastss	-0x8(%r12,%r9,4), %ymm10
+     81a: c4 02 7d 18 5c 8d f8         	vbroadcastss	-0x8(%r13,%r9,4), %ymm11
+     821: c4 42 2d b8 ce               	vfmadd231ps	%ymm14, %ymm10, %ymm9 # ymm9 = (ymm10 * ymm14) + ymm9
+     826: c4 c2 05 b8 fa               	vfmadd231ps	%ymm10, %ymm15, %ymm7 # ymm7 = (ymm15 * ymm10) + ymm7
+     82b: c4 42 25 b8 c6               	vfmadd231ps	%ymm14, %ymm11, %ymm8 # ymm8 = (ymm11 * ymm14) + ymm8
+     830: c4 c2 25 b8 f7               	vfmadd231ps	%ymm15, %ymm11, %ymm6 # ymm6 = (ymm11 * ymm15) + ymm6
+     835: c4 41 7c 10 56 a0            	vmovups	-0x60(%r14), %ymm10
+     83b: c4 41 7c 10 5e c0            	vmovups	-0x40(%r14), %ymm11
+     841: c4 02 7d 18 64 8c fc         	vbroadcastss	-0x4(%r12,%r9,4), %ymm12
+     848: c4 02 7d 18 6c 8d fc         	vbroadcastss	-0x4(%r13,%r9,4), %ymm13
+     84f: c4 42 1d b8 ca               	vfmadd231ps	%ymm10, %ymm12, %ymm9 # ymm9 = (ymm12 * ymm10) + ymm9
+     854: c4 c2 25 b8 fc               	vfmadd231ps	%ymm12, %ymm11, %ymm7 # ymm7 = (ymm11 * ymm12) + ymm7
+     859: c4 42 15 b8 c2               	vfmadd231ps	%ymm10, %ymm13, %ymm8 # ymm8 = (ymm13 * ymm10) + ymm8
+     85e: c4 c2 15 b8 f3               	vfmadd231ps	%ymm11, %ymm13, %ymm6 # ymm6 = (ymm13 * ymm11) + ymm6
+     863: c4 02 7d 18 14 8c            	vbroadcastss	(%r12,%r9,4), %ymm10
+     869: c4 02 7d 18 5c 8d 00         	vbroadcastss	(%r13,%r9,4), %ymm11
+     870: 49 83 c1 04                  	addq	$0x4, %r9
+     874: c4 41 7c 10 66 e0            	vmovups	-0x20(%r14), %ymm12
+     87a: c4 41 7c 10 2e               	vmovups	(%r14), %ymm13
+     87f: c4 42 2d b8 cc               	vfmadd231ps	%ymm12, %ymm10, %ymm9 # ymm9 = (ymm10 * ymm12) + ymm9
+     884: c4 c2 15 b8 fa               	vfmadd231ps	%ymm10, %ymm13, %ymm7 # ymm7 = (ymm13 * ymm10) + ymm7
+     889: c4 42 25 b8 c4               	vfmadd231ps	%ymm12, %ymm11, %ymm8 # ymm8 = (ymm11 * ymm12) + ymm8
+     88e: c4 c2 25 b8 f5               	vfmadd231ps	%ymm13, %ymm11, %ymm6 # ymm6 = (ymm11 * ymm13) + ymm6
+     893: 49 81 c6 00 01 00 00         	addq	$0x100, %r14            # imm = 0x100
+     89a: 4c 39 cb                     	cmpq	%r9, %rbx
+     89d: 0f 85 2d ff ff ff            	jne	0x7d0 <diskann_quantization::algorithms::kmeans::two_means::assign+0x7d0>
+     8a3: 48 83 7c 24 20 00            	cmpq	$0x0, 0x20(%rsp)
+     8a9: 74 4e                        	je	0x8f9 <diskann_quantization::algorithms::kmeans::two_means::assign+0x8f9>
+     8ab: 4f 8d 34 88                  	leaq	(%r8,%r9,4), %r14
+     8af: 49 c1 e1 06                  	shlq	$0x6, %r9
+     8b3: 49 01 d1                     	addq	%rdx, %r9
+     8b6: 31 ff                        	xorl	%edi, %edi
+     8b8: 0f 1f 84 00 00 00 00 00      	nopl	(%rax,%rax)
+     8c0: c4 41 7c 10 14 39            	vmovups	(%r9,%rdi), %ymm10
+     8c6: c4 41 7c 10 5c 39 20         	vmovups	0x20(%r9,%rdi), %ymm11
+     8cd: c4 42 7d 18 26               	vbroadcastss	(%r14), %ymm12
+     8d2: c4 02 7d 18 2c 1e            	vbroadcastss	(%r14,%r11), %ymm13
+     8d8: c4 42 1d b8 ca               	vfmadd231ps	%ymm10, %ymm12, %ymm9 # ymm9 = (ymm12 * ymm10) + ymm9
+     8dd: c4 c2 25 b8 fc               	vfmadd231ps	%ymm12, %ymm11, %ymm7 # ymm7 = (ymm11 * ymm12) + ymm7
+     8e2: c4 42 15 b8 c2               	vfmadd231ps	%ymm10, %ymm13, %ymm8 # ymm8 = (ymm13 * ymm10) + ymm8
+     8e7: c4 c2 15 b8 f3               	vfmadd231ps	%ymm11, %ymm13, %ymm6 # ymm6 = (ymm13 * ymm11) + ymm6
+     8ec: 49 83 c6 04                  	addq	$0x4, %r14
+     8f0: 48 83 c7 40                  	addq	$0x40, %rdi
+     8f4: 48 39 fd                     	cmpq	%rdi, %rbp
+     8f7: 75 c7                        	jne	0x8c0 <diskann_quantization::algorithms::kmeans::two_means::assign+0x8c0>
+     8f9: 49 83 fa 10                  	cmpq	$0x10, %r10
+     8fd: 41 b9 10 00 00 00            	movl	$0x10, %r9d
+     903: 4d 0f 42 ca                  	cmovbq	%r10, %r9
+     907: 49 83 fa 08                  	cmpq	$0x8, %r10
+     90b: bf 08 00 00 00               	movl	$0x8, %edi
+     910: 49 0f 42 fa                  	cmovbq	%r10, %rdi
+     914: c1 e7 05                     	shll	$0x5, %edi
+     917: c4 41 7c 5c d1               	vsubps	%ymm9, %ymm0, %ymm10
+     91c: c4 41 2c 5c c9               	vsubps	%ymm9, %ymm10, %ymm9
+     921: c4 41 74 5c d0               	vsubps	%ymm8, %ymm1, %ymm10
+     926: c4 41 2c 5c c0               	vsubps	%ymm8, %ymm10, %ymm8
+     92b: c4 41 3c c2 d1 11            	vcmplt_oqps	%ymm9, %ymm8, %ymm10
+     931: c4 c1 2d 72 d2 1f            	vpsrld	$0x1f, %ymm10, %ymm10
+     937: c5 34 c2 db 11               	vcmplt_oqps	%ymm3, %ymm9, %ymm11
+     93c: c5 34 c2 cc 1e               	vcmpgt_oqps	%ymm4, %ymm9, %ymm9
+     941: c4 41 34 54 cb               	vandps	%ymm11, %ymm9, %ymm9
+     946: c5 3c c2 db 11               	vcmplt_oqps	%ymm3, %ymm8, %ymm11
+     94b: c5 3c c2 c4 1e               	vcmpgt_oqps	%ymm4, %ymm8, %ymm8
+     950: c4 41 3c 54 c3               	vandps	%ymm11, %ymm8, %ymm8
+     955: c4 41 3c 54 c1               	vandps	%ymm9, %ymm8, %ymm8
+     95a: c4 41 6d 66 c0               	vpcmpgtd	%ymm8, %ymm2, %ymm8
+     95f: c5 3d ef c5                  	vpxor	%ymm5, %ymm8, %ymm8
+     963: c4 41 3d eb c2               	vpor	%ymm10, %ymm8, %ymm8
+     968: 4c 8d 35 00 00 00 00         	leaq	(%rip), %r14            # 0x96f <diskann_quantization::algorithms::kmeans::two_means::assign+0x96f>
+     96f: c4 21 7c 10 0c 37            	vmovups	(%rdi,%r14), %ymm9
+     975: c4 62 35 2e 06               	vmaskmovps	%ymm8, %ymm9, (%rsi)
+     97a: 49 83 fa 08                  	cmpq	$0x8, %r10
+     97e: 0f 86 ec fd ff ff            	jbe	0x770 <diskann_quantization::algorithms::kmeans::two_means::assign+0x770>
+     984: c5 74 5c c6                  	vsubps	%ymm6, %ymm1, %ymm8
+     988: c5 bc 5c f6                  	vsubps	%ymm6, %ymm8, %ymm6
+     98c: c5 7c 5c c7                  	vsubps	%ymm7, %ymm0, %ymm8
+     990: c5 bc 5c ff                  	vsubps	%ymm7, %ymm8, %ymm7
+     994: c5 4c c2 c7 11               	vcmplt_oqps	%ymm7, %ymm6, %ymm8
+     999: c4 c1 3d 72 d0 1f            	vpsrld	$0x1f, %ymm8, %ymm8
+     99f: c5 44 c2 cb 11               	vcmplt_oqps	%ymm3, %ymm7, %ymm9
+     9a4: c5 c4 c2 fc 1e               	vcmpgt_oqps	%ymm4, %ymm7, %ymm7
+     9a9: c5 b4 54 ff                  	vandps	%ymm7, %ymm9, %ymm7
+     9ad: c5 4c c2 cb 11               	vcmplt_oqps	%ymm3, %ymm6, %ymm9
+     9b2: c5 cc c2 f4 1e               	vcmpgt_oqps	%ymm4, %ymm6, %ymm6
+     9b7: c5 b4 54 f6                  	vandps	%ymm6, %ymm9, %ymm6
+     9bb: c5 cc 54 f7                  	vandps	%ymm7, %ymm6, %ymm6
+     9bf: c5 ed 66 f6                  	vpcmpgtd	%ymm6, %ymm2, %ymm6
+     9c3: c5 cd ef f5                  	vpxor	%ymm5, %ymm6, %ymm6
+     9c7: c5 bd eb f6                  	vpor	%ymm6, %ymm8, %ymm6
+     9cb: 49 8d 79 f8                  	leaq	-0x8(%r9), %rdi
+     9cf: 48 83 ff 08                  	cmpq	$0x8, %rdi
+     9d3: 41 be 08 00 00 00            	movl	$0x8, %r14d
+     9d9: 49 0f 43 fe                  	cmovaeq	%r14, %rdi
+     9dd: c1 e7 05                     	shll	$0x5, %edi
+     9e0: 4c 8d 35 00 00 00 00         	leaq	(%rip), %r14            # 0x9e7 <diskann_quantization::algorithms::kmeans::two_means::assign+0x9e7>
+     9e7: c4 a1 7c 10 3c 37            	vmovups	(%rdi,%r14), %ymm7
+     9ed: c4 e2 45 2e 76 20            	vmaskmovps	%ymm6, %ymm7, 0x20(%rsi)
+     9f3: e9 78 fd ff ff               	jmp	0x770 <diskann_quantization::algorithms::kmeans::two_means::assign+0x770>
+     9f8: 31 c0                        	xorl	%eax, %eax
+     9fa: e9 9a f6 ff ff               	jmp	0x99 <diskann_quantization::algorithms::kmeans::two_means::assign+0x99>
+     9ff: 4c 01 d8                     	addq	%r11, %rax
+     a02: 4c 8d 05 00 00 00 00         	leaq	(%rip), %r8             # 0xa09 <diskann_quantization::algorithms::kmeans::two_means::assign+0xa09>
+     a09: 48 89 c1                     	movq	%rax, %rcx
+     a0c: 4c 89 ca                     	movq	%r9, %rdx
+     a0f: c5 f8 77                     	vzeroupper
+     a12: e8 00 00 00 00               	callq	0xa17 <diskann_quantization::algorithms::kmeans::two_means::assign+0xa17>
+     a17: 0f 0b                        	ud2
