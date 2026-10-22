@@ -58,16 +58,20 @@ includes no SSD I/O, quantization, replication, or Mimir integration.
 | `builds[].splits`, `lists`, `empty_lists`, `max_list_size` | Amount of split work and resulting list layout |
 | `builds[].split_points` | Sum of split-working-set point visits; a point may contribute on multiple insertions |
 | `builds[].split_parent_histogram` | Split parents per nonempty insertion mapped to the number of insertions; includes zero-split batches. An insertion with P parents reassigns across 2P children |
+| `builds[].index_fingerprint` | Ordered list IDs, centroid bits, and membership IDs/order; computed outside timing |
 | `searches[].qps`, `total_seconds` | One complete sequential query pass, including result collection |
 | `searches[].latency_ns` | Per-query minimum, mean, median, p90, p99; includes graph traversal, posting scan, top-k, and query allocations |
 | `searches[].recall_at_k` | Unique correct returned IDs divided by `queries * k`; missing results count as misses |
 | `searches[].mean_points_scanned`, `scanned_fraction` | Posting vectors scored per query and fraction of the dataset |
 | `searches[].mean_lists_scanned`, `mean_centroid_comparisons` | Actual coarse-routing/search work |
 | `searches[].mean_results_returned` | Detects query settings that return fewer than k results |
+| `searches[].result_fingerprint` | Ordered result IDs over all queries in a pass; computed outside timing |
 
 Dataset generation/loading, groundtruth, result validation, and recall
 calculation are outside the timers. Output contains individual build and search
 repetitions, and the runner records the input configuration alongside results.
+Fingerprints use Rust's `DefaultHasher` for same-executable comparisons. They are
+not a cryptographic proof or a stable cross-version serialization format.
 
 `initial_centroids` samples distinct input rows; it is not a full k-means training
 phase. Each insertion only splits touched oversized parents once, following the
@@ -88,13 +92,16 @@ Replace the example's `dataset` object with:
   "kind": "files",
   "data": "base.fbin",
   "queries": "queries.fbin",
-  "groundtruth": "groundtruth.bin"
+  "groundtruth": "groundtruth.bin",
+  "data_type": "float32"
 }
 ```
 
 Add the data directory to the job file's top-level `search_directories`, or use
 absolute paths. Vector files contain two little-endian uint32 values `(rows,
-dimensions)`, followed by row-major float32 values. Groundtruth uses the same
+dimensions)`, followed by row-major values of `data_type`. The default is
+`float32`; `float16` loads IEEE FP16 data and queries and promotes each value
+exactly to FP32 before timing. No renormalization is performed. Groundtruth uses the same
 header followed by uint32 IDs; any trailing distance section is ignored. IDs
 must be zero-based row numbers into this exact base file. At least `k` unique
 valid IDs per query are required.

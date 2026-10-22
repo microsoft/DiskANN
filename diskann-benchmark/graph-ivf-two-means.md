@@ -1,5 +1,13 @@
 # Two-means paired-distance baseline
 
+This is the original synthetic-corpus experiment. The later
+[24-round arithmetic-mean study](graph-ivf-stages-means.md) found confidence
+intervals spanning zero for the two-means gain at every tested dimension.
+The [new strategy experiments](graph-ivf-two-means-experiments.md) extend the
+comparison to packing, multi-point kernels and dot-product formulations.
+The [FBV8 follow-up](graph-ivf-two-means-fbv8.md) includes a full corpus comparison.
+Do not treat the original small-run speedups below as a general guarantee.
+
 Measured on 2026-10-21 against the first stack layer, commit
 `3661de1b1216bfb45ceccecce49183d2585340d0` (PR #1502).
 

@@ -34,6 +34,23 @@ pub(super) fn split<I: Copy, L>(
     iterations: usize,
     rng: &mut StdRng,
 ) -> ANNResult<Children<I>> {
+    split_using(lists, dim, iterations, rng, fit_two_means)
+}
+
+pub(super) fn split_using<I: Copy, L>(
+    lists: &[ListView<'_, I, L>],
+    dim: usize,
+    iterations: usize,
+    rng: &mut StdRng,
+    mut fit: impl FnMut(
+        &[PointRef<'_, I>],
+        &mut [f32],
+        usize,
+        usize,
+        &mut StdRng,
+        &mut [f64],
+    ) -> ANNResult<()>,
+) -> ANNResult<Children<I>> {
     if lists.is_empty() || dim == 0 {
         return Err(ANNError::message(
             "IVF splitting needs a nonempty working set and positive dimension",
@@ -46,7 +63,7 @@ pub(super) fn split<I: Copy, L>(
         .iter()
         .zip(centroids.as_mut_slice().chunks_exact_mut(2 * dim))
     {
-        fit_two_means(&list.points, centers, dim, iterations, rng, &mut sums)?;
+        fit(&list.points, centers, dim, iterations, rng, &mut sums)?;
     }
     let two_means = two_means_start.elapsed();
 
@@ -75,7 +92,7 @@ pub(super) fn split<I: Copy, L>(
     })
 }
 
-fn fit_two_means<I>(
+pub(super) fn fit_two_means<I>(
     points: &[PointRef<'_, I>],
     centers: &mut [f32],
     dim: usize,
@@ -83,19 +100,36 @@ fn fit_two_means<I>(
     rng: &mut StdRng,
     sums: &mut [f64],
 ) -> ANNResult<()> {
-    fit_two_means_with(points, centers, dim, iterations, rng, sums, nearest_two)
+    fit_two_means_using(
+        points,
+        centers,
+        dim,
+        iterations,
+        rng,
+        sums,
+        &mut PairedPoint,
+    )
 }
 
-// A compile-time selector lets tests compare the original two-distance path
-// without duplicating Lloyd's state transitions or introducing dynamic dispatch.
-fn fit_two_means_with<I>(
+pub(super) trait TwoMeansIteration<I> {
+    fn assign_and_sum(
+        &mut self,
+        points: &[PointRef<'_, I>],
+        centers: &[f32],
+        dim: usize,
+        sums: &mut [f64],
+        counts: &mut [usize; 2],
+    ) -> ANNResult<()>;
+}
+
+pub(super) fn fit_two_means_using<I>(
     points: &[PointRef<'_, I>],
     centers: &mut [f32],
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
     sums: &mut [f64],
-    select: impl Fn(&[f32], &[f32], usize) -> usize,
+    strategy: &mut impl TwoMeansIteration<I>,
 ) -> ANNResult<()> {
     if points.len() < 2 {
         return Err(ANNError::message("an IVF split needs at least two points"));
@@ -107,15 +141,8 @@ fn fit_two_means_with<I>(
 
     for _ in 0..iterations.max(1) {
         sums.fill(0.0);
-        let mut counts = [0; 2];
-        for point in points {
-            let to = select(point.vector, centers, dim);
-            counts[to] += 1;
-            for (sum, &value) in sums[to * dim..(to + 1) * dim].iter_mut().zip(point.vector) {
-                // A finite mean must not overflow while accumulating its inputs.
-                *sum += f64::from(value);
-            }
-        }
+        let mut counts = [0usize; 2];
+        strategy.assign_and_sum(points, centers, dim, sums, &mut counts)?;
         for ((center, sum), count) in centers
             .chunks_exact_mut(dim)
             .zip(sums.chunks_exact(dim))
@@ -129,6 +156,84 @@ fn fit_two_means_with<I>(
         }
     }
     Ok(())
+}
+
+pub(super) fn sum_assignment(
+    point: &[f32],
+    to: usize,
+    dim: usize,
+    sums: &mut [f64],
+    counts: &mut [usize; 2],
+) {
+    counts[to] += 1;
+    for (sum, &value) in sums[to * dim..(to + 1) * dim].iter_mut().zip(point) {
+        // A finite mean must not overflow while accumulating its inputs.
+        *sum += f64::from(value);
+    }
+}
+
+struct PairedPoint;
+
+impl<I> TwoMeansIteration<I> for PairedPoint {
+    fn assign_and_sum(
+        &mut self,
+        points: &[PointRef<'_, I>],
+        centers: &[f32],
+        dim: usize,
+        sums: &mut [f64],
+        counts: &mut [usize; 2],
+    ) -> ANNResult<()> {
+        for point in points {
+            let to = nearest_two(point.vector, centers, dim);
+            sum_assignment(point.vector, to, dim, sums, counts);
+        }
+        Ok(())
+    }
+}
+
+// A compile-time selector lets tests compare the original two-distance path
+// without duplicating Lloyd's state transitions or introducing dynamic dispatch.
+#[cfg(test)]
+fn fit_two_means_with<I>(
+    points: &[PointRef<'_, I>],
+    centers: &mut [f32],
+    dim: usize,
+    iterations: usize,
+    rng: &mut StdRng,
+    sums: &mut [f64],
+    select: impl Fn(&[f32], &[f32], usize) -> usize,
+) -> ANNResult<()> {
+    struct PointSelector<F>(F);
+
+    impl<I, F> TwoMeansIteration<I> for PointSelector<F>
+    where
+        F: Fn(&[f32], &[f32], usize) -> usize,
+    {
+        fn assign_and_sum(
+            &mut self,
+            points: &[PointRef<'_, I>],
+            centers: &[f32],
+            dim: usize,
+            sums: &mut [f64],
+            counts: &mut [usize; 2],
+        ) -> ANNResult<()> {
+            for point in points {
+                let to = (self.0)(point.vector, centers, dim);
+                sum_assignment(point.vector, to, dim, sums, counts);
+            }
+            Ok(())
+        }
+    }
+
+    fit_two_means_using(
+        points,
+        centers,
+        dim,
+        iterations,
+        rng,
+        sums,
+        &mut PointSelector(select),
+    )
 }
 
 #[inline]

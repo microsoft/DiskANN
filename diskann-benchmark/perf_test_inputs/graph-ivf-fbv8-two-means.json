@@ -1,0 +1,36 @@
+{
+  "jobs": [
+    {
+      "type": "graph-ivf-two-means",
+      "content": {
+        "data": "fbv_8_normalized_dataset_958152.bin",
+        "data_type": "float16",
+        "bucket_sizes": [
+          32,
+          128,
+          512,
+          1024,
+          4096
+        ],
+        "dimensions": [
+          896
+        ],
+        "iterations": [
+          1,
+          5,
+          10
+        ],
+        "layouts": [
+          "contiguous",
+          "scattered"
+        ],
+        "seed": 42,
+        "repetitions": 21,
+        "warmup_repetitions": 2
+      }
+    }
+  ],
+  "search_directories": [
+    "data/fbv8_mimir"
+  ]
+}

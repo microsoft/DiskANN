@@ -21,6 +21,9 @@ mod clustering;
 mod index;
 pub mod pending;
 pub mod traits;
+#[cfg(feature = "ivf-two-means-benchmark")]
+#[doc(hidden)]
+pub mod two_means_benchmark;
 pub mod workingset;
 
 pub use index::{Config, ConfigError, IVFIndex, InsertStats};

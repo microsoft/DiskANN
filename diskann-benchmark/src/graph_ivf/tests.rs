@@ -10,6 +10,70 @@ use serde_json::{json, Value};
 
 use super::*;
 
+#[test]
+fn fp16_input_is_promoted_exactly_before_timing() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("half.bin");
+    let values = [
+        half::f16::from_f32(1.5),
+        half::f16::from_f32(-0.5),
+        half::f16::from_f32(2.0),
+        half::f16::from_f32(0.25),
+    ];
+    let mut file = File::create(&path).unwrap();
+    file.write_all(&2u32.to_le_bytes()).unwrap();
+    file.write_all(&2u32.to_le_bytes()).unwrap();
+    file.write_all(bytemuck::cast_slice(&values)).unwrap();
+    drop(file);
+    let loaded = load_vectors(&path, FileType::Float16).unwrap();
+    assert_eq!(loaded.as_slice(), [1.5, -0.5, 2.0, 0.25]);
+    assert!(load_vectors(&path, FileType::Float32).is_err());
+}
+
+#[cfg(feature = "ivf-two-means")]
+#[test]
+fn experimental_strategies_use_real_ivf_build_and_search() {
+    let mut raw = small_input();
+    raw["jobs"][0]["content"]["build"]["repetitions"] = json!(1);
+    let reference = run_cli(&raw).unwrap();
+    for strategy in diskann::ivf::two_means_benchmark::Strategy::ALL {
+        raw["jobs"][0]["content"]["build"]["two_means_strategy"] = json!(strategy.name());
+        let result = run_cli(&raw).unwrap();
+        let build = &result[0]["results"]["builds"][0];
+        assert_eq!(build["inserted"], 64);
+        assert_eq!(result[0]["results"]["searches"][2]["recall_at_k"], 1.0);
+        if matches!(
+            strategy,
+            diskann::ivf::two_means_benchmark::Strategy::Separate
+                | diskann::ivf::two_means_benchmark::Strategy::PairedPoint
+                | diskann::ivf::two_means_benchmark::Strategy::PackedPaired
+        ) {
+            assert_eq!(
+                build["index_fingerprint"],
+                reference[0]["results"]["builds"][0]["index_fingerprint"]
+            );
+            for (a, b) in result[0]["results"]["searches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(reference[0]["results"]["searches"].as_array().unwrap())
+            {
+                for field in [
+                    "recall_at_k",
+                    "result_fingerprint",
+                    "mean_points_scanned",
+                    "mean_lists_scanned",
+                    "mean_centroid_comparisons",
+                ] {
+                    assert_eq!(a[field], b[field]);
+                }
+            }
+        }
+    }
+    raw["jobs"][0]["content"]["build"]["two_means_strategy"] = json!("not-a-strategy");
+    assert!(run_cli(&raw).is_err());
+}
+
 fn small_input() -> Value {
     json!({
         "search_directories": [],
@@ -41,6 +105,90 @@ fn run_cli(input: &Value) -> anyhow::Result<Value> {
     )
     .run(&mut Memory::new())?;
     Ok(serde_json::from_reader(File::open(output_path)?)?)
+}
+
+#[test]
+#[cfg(feature = "ivf-two-means")]
+fn two_means_strategy_cli_covers_all_candidates_and_layouts() {
+    let input = json!({
+        "search_directories": [],
+        "jobs": [{
+            "type": "graph-ivf-two-means",
+            "content": {
+                "bucket_sizes": [17],
+                "dimensions": [9],
+                "iterations": [3],
+                "layouts": ["contiguous", "scattered"],
+                "seed": 7,
+                "repetitions": 2,
+                "warmup_repetitions": 0
+            }
+        }]
+    });
+    let output = run_cli(&input).unwrap();
+    let workloads = output[0]["results"]["workloads"].as_array().unwrap();
+    assert_eq!(workloads.len(), 2);
+    for workload in workloads {
+        let strategies = workload["strategies"].as_array().unwrap();
+        assert_eq!(strategies.len(), 7);
+        assert_eq!(strategies[1]["strategy"], "paired_point");
+        assert!(strategies.iter().all(|strategy| strategy["samples"] == 2));
+    }
+}
+
+#[cfg(feature = "ivf-two-means")]
+#[test]
+fn two_means_file_sampling_preserves_logical_rows_and_checks_shape() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("points.bin");
+    let mut file = File::create(&path).unwrap();
+    file.write_all(&19u32.to_le_bytes()).unwrap();
+    file.write_all(&9u32.to_le_bytes()).unwrap();
+    for i in 0..19 * 9 {
+        file.write_all(&half::f16::from_f32((i % 11) as f32 - 5.0).to_le_bytes())
+            .unwrap();
+    }
+    drop(file);
+    let mut input = json!({
+        "search_directories": [],
+        "jobs": [{
+            "type": "graph-ivf-two-means",
+            "content": {
+                "data": path, "data_type": "float16",
+                "bucket_sizes": [17], "dimensions": [9], "iterations": [3],
+                "layouts": ["contiguous", "scattered"], "seed": 7,
+                "repetitions": 2, "warmup_repetitions": 1
+            }
+        }]
+    });
+    let result = run_cli(&input).unwrap();
+    assert_eq!(result[0]["results"]["source"], "file_sample");
+    let workloads = result[0]["results"]["workloads"].as_array().unwrap();
+    for (a, b) in workloads[0]["strategies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(workloads[1]["strategies"].as_array().unwrap())
+    {
+        for field in [
+            "assignment_disagreements",
+            "center_bit_disagreements",
+            "max_center_absolute_error",
+            "min_reference_margin",
+        ] {
+            assert_eq!(a[field], b[field], "layout changed logical result: {field}");
+        }
+        assert_eq!(a["total_samples_ns"].as_array().unwrap().len(), 2);
+    }
+    input["jobs"][0]["content"]["dimensions"] = json!([8]);
+    assert!(run_cli(&input).is_err());
+    input["jobs"][0]["content"]["dimensions"] = json!([9]);
+    input["jobs"][0]["content"]["bucket_sizes"] = json!([20]);
+    assert!(run_cli(&input).is_err());
+    input["jobs"][0]["content"]["bucket_sizes"] = json!([1]);
+    assert!(run_cli(&input).is_err());
+    input["jobs"][0]["content"]["bucket_sizes"] = json!([]);
+    assert!(run_cli(&input).is_err());
 }
 
 #[test]

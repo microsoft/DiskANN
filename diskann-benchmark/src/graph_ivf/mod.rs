@@ -8,9 +8,12 @@
 
 mod provider;
 mod search;
+#[cfg(feature = "ivf-two-means")]
+mod two_means;
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{hash_map::DefaultHasher, BTreeMap, HashSet},
+    hash::{Hash, Hasher},
     hint::black_box,
     io::Write,
     time::{Duration, Instant},
@@ -31,7 +34,7 @@ use rand::{rngs::StdRng, seq::index, Rng, SeedableRng};
 use serde::Serialize;
 
 use crate::{
-    inputs::graph_ivf::{Dataset, GraphIvfBuild, Search},
+    inputs::graph_ivf::{Dataset, FileType, GraphIvfBuild, Search},
     utils::datafiles::{self, BinFile},
 };
 use provider::{Store, Strategy};
@@ -39,6 +42,15 @@ use search::CentroidGraph;
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("graph-ivf-static-f32", Static)?;
+    #[cfg(feature = "ivf-two-means")]
+    registry.register("graph-ivf-two-means-strategies", two_means::Strategies)?;
+    #[cfg(not(feature = "ivf-two-means"))]
+    registry.register_gated(
+        "graph-ivf-two-means",
+        "graph-ivf-two-means-strategies",
+        diskann_benchmark_runner::Features::new("ivf-two-means"),
+        "Complete two-means strategy comparison",
+    )?;
     Ok(())
 }
 
@@ -98,6 +110,7 @@ impl Benchmark for Static {
             result.repetition = repetition;
             // Membership validation and groundtruth never contribute to build/search timing.
             index.provider().validate_membership(data.nrows())?;
+            result.index_fingerprint = index_fingerprint(index.provider());
             writeln!(
                 output,
                 "Build {}: {:.3}s, {} lists, {} splits; two-means {:.6}s, reassignment {:.6}s, other IVF {:.6}s",
@@ -162,6 +175,8 @@ struct Results {
 #[derive(Serialize)]
 struct BuildResult {
     repetition: usize,
+    /// Same-binary fingerprint of ordered list IDs, centroid bits, and memberships.
+    index_fingerprint: String,
     ivf_seconds: f64,
     two_means_seconds: f64,
     reassignment_seconds: f64,
@@ -196,6 +211,8 @@ struct SearchResult {
     mean_lists_scanned: f64,
     mean_centroid_comparisons: f64,
     mean_results_returned: f64,
+    /// Same-binary fingerprint of all query result IDs in order, outside timing.
+    result_fingerprint: String,
 }
 
 async fn build(
@@ -218,6 +235,11 @@ async fn build(
             seed: settings.seed,
         },
     )?;
+    #[cfg(feature = "ivf-two-means")]
+    index.set_two_means_strategy(
+        diskann::ivf::two_means_benchmark::Strategy::parse(&settings.two_means_strategy)
+            .ok_or_else(|| anyhow::anyhow!("unknown two_means_strategy"))?,
+    );
     index
         .initialize(&Strategy, &DefaultContext, centroids.as_view())
         .await?;
@@ -250,6 +272,7 @@ async fn build(
     let store = index.provider();
     let result = BuildResult {
         repetition: 0,
+        index_fingerprint: String::new(),
         ivf_seconds: ivf.as_secs_f64(),
         two_means_seconds: two_means.as_secs_f64(),
         reassignment_seconds: reassignment.as_secs_f64(),
@@ -330,7 +353,9 @@ async fn measure_search(
             let mut centroid_comparisons = 0;
             let mut returned = 0;
             let mut latencies = Vec::with_capacity(samples.len());
+            let mut result_fingerprint = DefaultHasher::new();
             for ((result, latency), expected) in samples.into_iter().zip(truth.rows()) {
+                result.ids.hash(&mut result_fingerprint);
                 hits += recall_hits(&result.ids, expected, settings.k.get());
                 scanned += result.scanned;
                 lists += result.lists;
@@ -355,10 +380,24 @@ async fn measure_search(
                 mean_lists_scanned: lists as f64 / count,
                 mean_centroid_comparisons: centroid_comparisons as f64 / count,
                 mean_results_returned: returned as f64 / count,
+                result_fingerprint: format!("{:016x}", result_fingerprint.finish()),
             });
         }
     }
     Ok(results)
+}
+
+fn index_fingerprint(store: &Store) -> String {
+    let mut digest = DefaultHasher::new();
+    for (id, list) in &store.lists {
+        id.hash(&mut digest);
+        list.centroid.len().hash(&mut digest);
+        for value in &list.centroid {
+            value.to_bits().hash(&mut digest);
+        }
+        list.members.hash(&mut digest);
+    }
+    format!("{:016x}", digest.finish())
 }
 
 fn recall_hits(actual: &[u32], expected: &[u32], k: usize) -> usize {
@@ -392,18 +431,43 @@ fn load_data(
                 .transpose()?;
             Ok((data, queries))
         }
-        Dataset::Files { data, queries, .. } => {
-            let data = datafiles::load_dataset(BinFile(data))?;
+        Dataset::Files {
+            data,
+            queries,
+            data_type,
+            ..
+        } => {
+            let data = load_vectors(data, *data_type)?;
             let queries = if input.search.is_some() {
-                Some(datafiles::load_dataset(BinFile(
+                Some(load_vectors(
                     queries
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("missing queries file"))?,
-                ))?)
+                    *data_type,
+                )?)
             } else {
                 None
             };
             Ok((data, queries))
+        }
+    }
+}
+
+// Source conversion is outside all build/search timers. In particular, promoting
+// fp16 to fp32 is exact and does not renormalize or otherwise change coordinates.
+fn load_vectors(
+    path: &std::path::Path,
+    data_type: FileType,
+) -> anyhow::Result<rowmajor::Owned<f32>> {
+    match data_type {
+        FileType::Float32 => datafiles::load_dataset(BinFile(path)),
+        FileType::Float16 => {
+            let source = datafiles::load_dataset::<half::f16>(BinFile(path))?;
+            let mut data = rowmajor::Owned::try_from_element(source.nrows(), source.ncols(), 0.0)?;
+            for (output, &value) in data.as_mut_slice().iter_mut().zip(source.as_slice()) {
+                *output = value.to_f32();
+            }
+            Ok(data)
         }
     }
 }

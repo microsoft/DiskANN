@@ -1,0 +1,17 @@
+{
+  "jobs": [
+    {
+      "type": "graph-ivf-two-means",
+      "content": {
+        "bucket_sizes": [32, 128, 512, 1024, 4096],
+        "dimensions": [64, 128, 384, 768, 1536],
+        "iterations": [1, 5, 10],
+        "layouts": ["contiguous", "scattered"],
+        "seed": 42,
+        "repetitions": 7,
+        "warmup_repetitions": 1
+      }
+    }
+  ],
+  "search_directories": []
+}

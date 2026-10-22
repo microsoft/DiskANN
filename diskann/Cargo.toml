@@ -63,6 +63,10 @@ default = ["tracing"]
 # Enable PiPNN numerical kernels.
 pipnn = ["dep:diskann-linalg"]
 
+# Enable the internal Graph-IVF two-means strategy benchmark.
+# This is intentionally separate from the default library surface.
+ivf-two-means-benchmark = ["dep:diskann-linalg"]
+
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]
 

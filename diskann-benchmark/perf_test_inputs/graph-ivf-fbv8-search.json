@@ -1,0 +1,43 @@
+{
+  "jobs": [
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "kind": "files",
+          "data": "fbv_8_normalized_dataset_958152.bin",
+          "queries": "fbv_8_normalized_query_6380.bin",
+          "groundtruth": "fbv8_gt_recall_2000.bin",
+          "data_type": "float16"
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 4096,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 1,
+          "two_means_strategy": "paired_point"
+        },
+        "graph": {
+          "max_degree": 16,
+          "l_build": 64
+        },
+        "search": {
+          "k": 10,
+          "nprobe": [
+            4,
+            16,
+            64
+          ],
+          "l_search": 128,
+          "warmup_repetitions": 1,
+          "repetitions": 1
+        }
+      }
+    }
+  ],
+  "search_directories": [
+    "data/fbv8_mimir"
+  ]
+}

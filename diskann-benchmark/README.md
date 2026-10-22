@@ -6,6 +6,10 @@ easier by providing a "one click" runner for benchmarks with machine readable ou
 For a static build + search baseline of the new IVF implementation, see
 [Graph-IVF benchmark](graph-ivf.md). It includes a self-contained synthetic workload
 and does not require a dynamic runbook.
+The opt-in [two-means experiments](graph-ivf-two-means-experiments.md) compare
+paired L2, multi-point kernels, packing, SGEMM, and center-difference fitting.
+The [full FBV8 study](graph-ivf-two-means-fbv8.md) reports build means, numerical
+differences, and search quality, with retained samples.
 
 ## Usage
 

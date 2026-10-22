@@ -9,6 +9,8 @@ pub(crate) mod filters;
 pub(crate) mod flat;
 pub(crate) mod graph_index;
 pub(crate) mod graph_ivf;
+#[cfg(feature = "ivf-two-means")]
+pub(crate) mod graph_ivf_two_means;
 pub(crate) mod multi_vector;
 pub(crate) mod post_processor;
 pub(crate) mod save_and_load;

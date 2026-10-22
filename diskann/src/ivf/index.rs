@@ -58,6 +58,8 @@ pub struct IVFIndex<P: Provider> {
     provider: P,
     config: Config,
     rng: StdRng,
+    #[cfg(feature = "ivf-two-means-benchmark")]
+    two_means_strategy: super::two_means_benchmark::Strategy,
 }
 
 impl<P: Provider> IVFIndex<P> {
@@ -72,11 +74,20 @@ impl<P: Provider> IVFIndex<P> {
             provider,
             rng: StdRng::seed_from_u64(config.seed),
             config,
+            #[cfg(feature = "ivf-two-means-benchmark")]
+            two_means_strategy: super::two_means_benchmark::Strategy::PairedPoint,
         })
     }
 
     pub fn provider(&self) -> &P {
         &self.provider
+    }
+
+    /// Select a numerical experiment for benchmark builds. Default is paired L2.
+    #[cfg(feature = "ivf-two-means-benchmark")]
+    #[doc(hidden)]
+    pub fn set_two_means_strategy(&mut self, strategy: super::two_means_benchmark::Strategy) {
+        self.two_means_strategy = strategy;
     }
 
     /// Install initial empty lists and their centroids in one build operation.
@@ -140,6 +151,8 @@ impl<P: Provider> IVFIndex<P> {
         let provider = &mut self.provider;
         let config = self.config;
         let rng = &mut self.rng;
+        #[cfg(feature = "ivf-two-means-benchmark")]
+        let two_means_strategy = self.two_means_strategy;
 
         async move {
             if points.is_empty() {
@@ -181,6 +194,32 @@ impl<P: Provider> IVFIndex<P> {
                 let children = {
                     let dim = accessor.dim();
                     let view = accessor.fill(&parents).await?;
+                    #[cfg(feature = "ivf-two-means-benchmark")]
+                    {
+                        if two_means_strategy == super::two_means_benchmark::Strategy::PairedPoint {
+                            clustering::split(&view, dim, config.two_means_iterations, rng)?
+                        } else {
+                            clustering::split_using(
+                                &view,
+                                dim,
+                                config.two_means_iterations,
+                                rng,
+                                |points, centers, dim, iterations, rng, sums| {
+                                    super::two_means_benchmark::fit_into(
+                                        points,
+                                        centers,
+                                        dim,
+                                        iterations,
+                                        rng,
+                                        sums,
+                                        two_means_strategy,
+                                    )
+                                    .map(|_| ())
+                                },
+                            )?
+                        }
+                    }
+                    #[cfg(not(feature = "ivf-two-means-benchmark"))]
                     clustering::split(&view, dim, config.two_means_iterations, rng)?
                 };
                 two_means = children.timing.two_means;
