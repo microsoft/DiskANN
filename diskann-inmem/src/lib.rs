@@ -14,10 +14,10 @@ mod counters;
 mod epoch;
 mod freelist;
 mod ids;
-mod neighbors;
 mod prefetch;
 mod tag;
 
+pub mod neighbors;
 pub mod provider;
 pub mod repr;
 pub mod store;

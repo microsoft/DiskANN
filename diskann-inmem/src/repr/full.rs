@@ -170,6 +170,7 @@ impl<T> Config<T> {
             start_points,
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
+            embedded_start_points: None,
         })
     }
 
@@ -309,10 +310,8 @@ where
         let intrusive = Intrusive::config(bytes);
         let store = Store::new(layout, store, intrusive)?;
 
-        let start_ids = embedded_start_points.map_or_else(
-            || store.frozen(),
-            |embedded| embedded.iter()
-        );
+        let start_ids =
+            embedded_start_points.map_or_else(|| store.frozen(), |embedded| embedded.iter());
 
         // Initialize start points.
         for (i, row) in std::iter::zip(start_ids.clone(), start_points.rows()) {
@@ -422,6 +421,37 @@ where
             .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
 
         Ok(Guard::new(slot))
+    }
+}
+
+impl<T> repr::SetAt<&[T]> for Full<T>
+where
+    T: FullPrecision,
+{
+    type Guard<'a> = Guard<'a>;
+
+    fn set_at(&self, id: u32, v: &[T]) -> ANNResult<Guard<'_>> {
+        self.check_dim(v.len())?;
+
+        let mut slot = self
+            .store
+            .slot(id)
+            .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
+
+        slot.data()
+            .as_mut_slice()
+            .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
+
+        Ok(Guard::new(slot))
+    }
+}
+
+impl<T> repr::NeighborSnapshot for Full<T>
+where
+    T: FullPrecision,
+{
+    fn neighbor_snapshot(&mut self) -> crate::neighbors::Snapshot<'_> {
+        self.store.neighbors_mut().snapshot()
     }
 }
 

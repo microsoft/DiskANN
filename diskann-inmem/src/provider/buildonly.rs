@@ -7,7 +7,7 @@ use diskann::{ANNError, ANNResult, graph::glue};
 
 use crate::{
     counters::{Counters, LocalCounters},
-    num::MaxDegree,
+    num::{IdLimit, MaxDegree},
     repr,
 };
 
@@ -50,6 +50,10 @@ where
     /// Return the maximum number of neighbors that can be stored in the provider's graph.
     pub fn max_degree(&self) -> MaxDegree {
         self.representation.max_degree()
+    }
+
+    pub fn id_limit(&self) -> IdLimit {
+        self.representation.id_limit()
     }
 
     /// Return a [`crate::neighbors::Snapshot`] of the current adjacency lists.

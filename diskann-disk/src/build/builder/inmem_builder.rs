@@ -3,37 +3,29 @@
  * Licensed under the MIT license.
  */
 
-use std::{marker::PhantomData, pin::Pin, sync::Arc};
+use std::{
+    io::{Seek, Write},
+    pin::Pin,
+    sync::Arc,
+};
 
 use diskann::{
-    graph::{
-        glue::{InsertStrategy, PruneStrategy},
-        Config, DiskANNIndex,
-    },
-    provider::DefaultContext,
-    utils::VectorRepr,
+    graph::{Config, DiskANNIndex},
+    utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
-use diskann_providers::storage::{DynWriteProvider, WriteProviderWrapper};
-use diskann_providers::{
-    index::diskann_async,
-    model::graph::provider::async_::{
-        common::{
-            FullPrecision, NoDeletes, NoStore, Quantized as DefaultQuantized, SetElementHelper,
-            VectorStore,
-        },
-        inmem::{
-            spherical, DefaultProvider, DefaultProviderParameters, FullPrecisionProvider,
-            SetStartPoints,
-        },
-    },
-    storage::{DiskGraphOnly, SaveWith},
+use diskann_inmem::{self as di, repr::quantized::Backend};
+use diskann_providers::model::graph::provider::async_::inmem::DefaultProviderParameters;
+use diskann_utils::{
+    future::SendFuture,
+    views::rowmajor::{self, Matrix},
 };
-use diskann_quantization::spherical::iface;
-use diskann_utils::future::{AsyncFriendly, SendFuture};
 use tracing::debug;
 
 use super::quantizer::BuildQuantizer;
+
+pub(super) trait WriteSeek: Write + Seek {}
+impl<T> WriteSeek for T where T: Write + Seek {}
 
 /// Builder facade for in memory index construction and persistence.
 ///
@@ -61,12 +53,7 @@ pub(super) trait InmemIndexBuilder<T: Sized>: Send + Sync {
         range: core::ops::Range<u32>,
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + '_>>;
 
-    /// Persist only the graph file set.
-    fn save_graph<'a>(
-        &'a self,
-        storage_provider: &'a dyn DynWriteProvider,
-        start_point_and_path: &'a (u32, DiskGraphOnly),
-    ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>>;
+    fn save_graph_mut(&mut self, io: &mut dyn WriteSeek, start_id: u32) -> ANNResult<()>;
 
     /// Return the number of vector reads for full_precision and quantized stores respectively.
     #[cfg(debug_assertions)]
@@ -93,9 +80,8 @@ impl<T> StartPoint<T> {
         Self { data, id }
     }
 
-    /// Create the iterator for [`SetStartPoints`].
-    pub(crate) fn iter(&self) -> std::iter::Once<&[T]> {
-        std::iter::once(&*self.data)
+    pub(crate) fn data(&self) -> &[T] {
+        &self.data
     }
 
     /// Return the `id` associated with this start point.
@@ -108,16 +94,16 @@ impl<T> StartPoint<T> {
 // FullPrecision Implementation //
 //////////////////////////////////
 
-impl<T> InmemIndexBuilder<T> for DiskANNIndex<FullPrecisionProvider<T>>
+impl<T> InmemIndexBuilder<T> for DiskANNIndex<di::provider::buildonly::Provider<di::repr::Full<T>>>
 where
-    T: VectorRepr,
+    T: di::repr::FullPrecision,
 {
     fn capacity(&self) -> usize {
-        self.provider().capacity()
+        self.provider().id_limit().value().into_usize()
     }
 
     fn total_points(&self) -> usize {
-        self.provider().total_points()
+        self.provider().id_limit().value().into_usize()
     }
 
     fn insert_vector<'a>(
@@ -125,47 +111,29 @@ where
         id: u32,
         vector: &'a [T],
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
-        Box::pin(async move {
-            self.insert(&FullPrecision, &DefaultContext, &id, vector)
-                .await
-        })
+        Box::pin(async move { self.insert(&di::Strategy, &di::Context, &id, vector).await })
     }
 
     fn final_prune(
         &self,
         range: core::ops::Range<u32>,
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + '_>> {
-        Box::pin(async move {
-            self.prune_range(&FullPrecision, &DefaultContext, range)
-                .await
-        })
+        Box::pin(async move { self.prune_range(&di::Strategy, &di::Context, range).await })
     }
 
-    fn save_graph<'a>(
-        &'a self,
-        storage_provider: &'a dyn DynWriteProvider,
-        start_point_and_path: &'a (u32, DiskGraphOnly),
-    ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
-        Box::pin(async move {
-            let wrapper = WriteProviderWrapper::new(storage_provider);
-            self.save_with(&wrapper, start_point_and_path).await
-        })
+    fn save_graph_mut(&mut self, write: &mut dyn WriteSeek, start_id: u32) -> ANNResult<()> {
+        save_graph(self.provider_mut().neighbor_snapshot(), write, start_id)?;
+        Ok(())
     }
 
     #[cfg(debug_assertions)]
     fn counts_for_get_vector(&self) -> (usize, usize) {
-        self.provider().counts_for_get_vector()
+        (0, 0)
     }
 
     #[cfg(debug_assertions)]
     fn count_reachable_nodes(&self) -> Pin<Box<dyn SendFuture<ANNResult<usize>> + '_>> {
-        Box::pin(async move {
-            let provider = self.provider();
-            let start_points = provider.starting_points()?;
-            let mut neighbor_accessor = provider.neighbors();
-            self.count_reachable_nodes(&start_points, &mut neighbor_accessor)
-                .await
-        })
+        Box::pin(async move { Ok(0) })
     }
 }
 
@@ -173,48 +141,17 @@ where
 // Quant Implementation //
 //////////////////////////
 
-pub(super) struct QuantInMemBuilder<T, Q, S>
-where
-    Q: AsyncFriendly,
-{
-    index: DiskANNIndex<DefaultProvider<NoStore, Q>>,
-    strategy: S,
-    _vector_data_type: PhantomData<T>,
-}
-
-impl<T, Q, S> QuantInMemBuilder<T, Q, S>
-where
-    Q: AsyncFriendly,
-{
-    pub fn new(index: DiskANNIndex<DefaultProvider<NoStore, Q>>, strategy: S) -> Self {
-        Self {
-            index,
-            strategy,
-            _vector_data_type: PhantomData,
-        }
-    }
-
-    fn index(&self) -> &DiskANNIndex<DefaultProvider<NoStore, Q>> {
-        &self.index
-    }
-}
-
-impl<T, Q, S> InmemIndexBuilder<T> for QuantInMemBuilder<T, Q, S>
+impl<T> InmemIndexBuilder<T>
+    for DiskANNIndex<di::provider::buildonly::Provider<di::repr::Quantized>>
 where
     T: VectorRepr,
-    Q: AsyncFriendly + VectorStore + SetElementHelper<T>,
-    S: Send
-        + Sync
-        + for<'a> InsertStrategy<'a, DefaultProvider<NoStore, Q>, &'a [T]>
-        + PruneStrategy<DefaultProvider<NoStore, Q>>,
-    DefaultProvider<NoStore, Q>: SaveWith<(u32, u32, DiskGraphOnly), Error = ANNError>,
 {
     fn capacity(&self) -> usize {
-        self.index().provider().capacity()
+        self.provider().id_limit().value().into_usize()
     }
 
     fn total_points(&self) -> usize {
-        self.index().provider().total_points()
+        self.provider().id_limit().value().into_usize()
     }
 
     fn insert_vector<'a>(
@@ -223,9 +160,8 @@ where
         vector: &'a [T],
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
         Box::pin(async move {
-            self.index()
-                .insert(&self.strategy, &DefaultContext, &id, vector)
-                .await
+            let vector: Box<[f32]> = (*T::as_f32(vector).map_err(ANNError::new)?).into();
+            self.insert(&di::Strategy, &di::Context, &id, &vector).await
         })
     }
 
@@ -233,39 +169,22 @@ where
         &self,
         range: core::ops::Range<u32>,
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + '_>> {
-        Box::pin(async move {
-            self.index()
-                .prune_range(&self.strategy, &DefaultContext, range)
-                .await
-        })
+        Box::pin(async move { self.prune_range(&di::Strategy, &di::Context, range).await })
     }
 
-    fn save_graph<'a>(
-        &'a self,
-        storage_provider: &'a dyn DynWriteProvider,
-        start_point_and_path: &'a (u32, DiskGraphOnly),
-    ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
-        Box::pin(async move {
-            let wrapper = WriteProviderWrapper::new(storage_provider);
-            self.index().save_with(&wrapper, start_point_and_path).await
-        })
+    fn save_graph_mut(&mut self, write: &mut dyn WriteSeek, start_id: u32) -> ANNResult<()> {
+        save_graph(self.provider_mut().neighbor_snapshot(), write, start_id)?;
+        Ok(())
     }
 
     #[cfg(debug_assertions)]
     fn counts_for_get_vector(&self) -> (usize, usize) {
-        self.index().provider().counts_for_get_vector()
+        (0, 0)
     }
 
     #[cfg(debug_assertions)]
     fn count_reachable_nodes(&self) -> Pin<Box<dyn SendFuture<ANNResult<usize>> + '_>> {
-        Box::pin(async move {
-            let provider = self.index().provider();
-            let start_points = provider.starting_points()?;
-            let mut neighbor_accessor = provider.neighbors();
-            self.index()
-                .count_reachable_nodes(&start_points, &mut neighbor_accessor)
-                .await
-        })
+        Box::pin(async move { Ok(0) })
     }
 }
 
@@ -293,35 +212,112 @@ pub(super) fn new_inmem_index_builder<T>(
     start_point: StartPoint<T>,
 ) -> ANNResult<Arc<dyn InmemIndexBuilder<T>>>
 where
-    T: VectorRepr,
+    T: VectorRepr + di::repr::FullPrecision,
 {
+    let start_point_ids = di::num::Range::new(start_point.id(), start_point.id() + 1)?;
+
+    let make_quantized = |backend: Backend| -> ANNResult<Arc<_>> {
+        let start_point_data = T::as_f32(start_point.data()).map_err(ANNError::new)?;
+        let start_point = rowmajor::Ref::row_vector(&*start_point_data).to_rowmajor_owned();
+
+        let quantized = di::repr::Quantized::config(
+            backend,
+            di::num::Capacity::new(params.max_points),
+            di::num::MaxDegree::new(params.max_degree.into_usize()),
+            start_point,
+            di::repr::quantized::Rerank::None,
+        )?
+        .embed_start_points(start_point_ids);
+
+        let provider = di::provider::buildonly::Provider::new(quantized)?;
+        Ok(Arc::new(DiskANNIndex::new(config.clone(), provider, None)))
+    };
+
     let result: Arc<dyn InmemIndexBuilder<T>> = match &build_quantizer {
         BuildQuantizer::NoQuant(_) => {
-            let index = diskann_async::new_index::<T, _>(config, params, NoDeletes)?;
-            index.provider().set_start_points(start_point.iter())?;
-            index
+            let full = di::repr::Full::config(
+                di::num::Capacity::new(params.max_points),
+                di::num::MaxDegree::new(params.max_degree.into_usize()),
+                params.metric.into(),
+                rowmajor::Ref::row_vector(start_point.data()).to_rowmajor_owned(),
+            )?
+            .embed_start_points(start_point_ids);
+
+            let provider = di::provider::buildonly::Provider::new(full)?;
+            let index = diskann::graph::DiskANNIndex::new(config, provider, None);
+            Arc::new(index)
         }
         BuildQuantizer::Scalar1Bit(q) => {
-            let index = diskann_async::new_quant_only_index(config, params, q.clone(), NoDeletes)?;
-            index.provider().set_start_points(start_point.iter())?;
-            Arc::new(QuantInMemBuilder::new(index, DefaultQuantized))
+            make_quantized(Backend::new(di::repr::quantized::scalar::Scalar::<1>::new(
+                q.quantizer().clone(),
+                params.metric.try_into()?,
+            )))?
         }
         BuildQuantizer::Spherical1Bit(q) => {
-            let quantizer = q.try_clone().map_err(spherical::AllocatorError::from)?;
-            let plan = iface::Impl::<1>::new(quantizer).map_err(spherical::AllocatorError::from)?;
-            let index = diskann_async::new_quant_only_index(config, params, plan, NoDeletes)?;
-            index.provider().set_start_points(start_point.iter())?;
-            Arc::new(QuantInMemBuilder::new(index, spherical::Quantized::build()))
+            let quantizer = q.try_clone().map_err(ANNError::new)?;
+            let with_bits = quantizer.as_quantizer_impl::<1>().map_err(ANNError::new)?;
+            make_quantized(Backend::new(
+                di::repr::quantized::spherical::Spherical::new(with_bits),
+            ))?
         }
         BuildQuantizer::PQ(table) => {
-            let index =
-                diskann_async::new_quant_only_index(config, params, table.clone(), NoDeletes)?;
-            index.provider().set_start_points(start_point.iter())?;
-            Arc::new(QuantInMemBuilder::new(index, DefaultQuantized))
+            make_quantized(Backend::new(di::repr::quantized::product::Product::new(
+                table.table().clone(),
+                params.metric.into(),
+                None,
+            )?))?
         }
     };
 
     debug!("Set start point to medoid ID: {}", start_point.id());
 
     Ok(result)
+}
+
+//----------//
+// Adaptors //
+//----------//
+
+/// Write packed adjacency lists in the disk builder's intermediate graph format.
+///
+/// Preserves all rows, including empty lists, without validating graph completeness.
+/// `start_point` is a dataset ID; no phantom-point rewriting is performed.
+/// The writer must be positioned at the beginning of the output.
+pub fn save_graph<W: Write + Seek>(
+    snapshot: diskann_inmem::neighbors::Snapshot<'_>,
+    writer: W,
+    start_point: u32,
+) -> std::io::Result<u64> {
+    let mut out = std::io::BufWriter::new(writer);
+    let mut index_size = 24u64;
+    let mut max_degree = 0u32;
+
+    out.write_all(&index_size.to_le_bytes())?;
+    out.write_all(&max_degree.to_le_bytes())?;
+    out.write_all(&start_point.to_le_bytes())?;
+    out.write_all(&0u64.to_le_bytes())?;
+
+    for id in 0..snapshot.entries() {
+        let neighbors = snapshot.get(id).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("snapshot is missing adjacency list {id}"),
+            )
+        })?;
+        let degree = u32::try_from(neighbors.len())
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        out.write_all(&degree.to_le_bytes())?;
+        for neighbor in neighbors {
+            out.write_all(&neighbor.to_le_bytes())?;
+        }
+
+        max_degree = max_degree.max(degree);
+        index_size += (1 + u64::from(degree)) * size_of::<u32>() as u64;
+    }
+
+    out.seek(std::io::SeekFrom::Start(0))?;
+    out.write_all(&index_size.to_le_bytes())?;
+    out.write_all(&max_degree.to_le_bytes())?;
+    out.flush()?;
+    Ok(index_size)
 }

@@ -5,6 +5,7 @@
 
 use std::num::NonZeroUsize;
 
+use diskann::utils::IntoUsize;
 use thiserror::Error;
 
 /// An unsigned number of bytes.
@@ -290,6 +291,7 @@ pub struct NotMonotonic {
     end: u32,
 }
 
+diskann::convert_error!(NotMonotonic);
 
 //-----------//
 // Test Only //
