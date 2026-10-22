@@ -20,6 +20,7 @@ use diskann_benchmark_core::{
     streaming::{self, executors::bigann, Executor},
 };
 use diskann_benchmark_runner::{
+    self as dbr,
     benchmark::{MatchContext, Score},
     files::InputFile,
     output::Output,
@@ -49,6 +50,23 @@ use crate::{
     },
     utils::{datafiles, SimilarityMeasure},
 };
+
+// Temporary Working
+mod benchmark;
+mod full;
+mod product;
+mod scalar;
+mod spherical;
+
+trait FromRaw: Sized {
+    type Raw;
+    fn from_raw(raw: &Self::Raw) -> anyhow::Result<Self>;
+}
+
+trait FromRawWith: Sized {
+    type Raw;
+    fn from_raw(raw: &Self::Raw, checker: Option<&mut dbr::Checker>) -> anyhow::Result<Self>;
+}
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", Build::<f32>::new())?;

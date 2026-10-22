@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) mod datafiles;
 pub(crate) mod filters;
+pub(crate) mod progress;
 pub(crate) mod recall;
 pub(crate) mod streaming;
 pub(crate) mod tokio;
