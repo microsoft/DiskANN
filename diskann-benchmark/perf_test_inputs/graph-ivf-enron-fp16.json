@@ -1,0 +1,33 @@
+{
+  "search_directories": ["data/enron"],
+  "jobs": [
+    {
+      "type": "graph-ivf-build",
+      "content": {
+        "dataset": {
+          "data": "normalized_dim_384_vector_fp16_1087932_vectors.bin",
+          "queries": "query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "groundtruth": "groundtruth_recall_1000_query_1000.bin",
+          "data_type": "float16"
+        },
+        "build": {
+          "initial_centroids": 16,
+          "batch_size": 4096,
+          "split_threshold": 2048,
+          "two_means_iterations": 5,
+          "seed": 7,
+          "repetitions": 1,
+          "two_means_strategy": "paired_point"
+        },
+        "graph": {"max_degree": 16, "l_build": 64},
+        "search": {
+          "k": 10,
+          "nprobe": [4, 16, 64],
+          "l_search": 128,
+          "warmup_repetitions": 1,
+          "repetitions": 1
+        }
+      }
+    }
+  ]
+}

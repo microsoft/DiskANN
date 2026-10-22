@@ -1,7 +1,9 @@
 # Two-means paired-distance baseline
 
-This is the original synthetic-corpus experiment. The later
-[24-round arithmetic-mean study](graph-ivf-stages-means.md) found confidence
+This is the original synthetic-corpus experiment. Reproduce its legacy inputs
+with the recorded historical commits; the current static benchmark takes files
+only and no longer accepts the synthetic input schema. The later
+[24-round arithmetic-mean study](https://github.com/microsoft/DiskANN/blob/3e906e3a3990ae4ac1d0bed0308a6fd026fe4f10/diskann-benchmark/graph-ivf-stages-means.md) found confidence
 intervals spanning zero for the two-means gain at every tested dimension.
 The [new strategy experiments](graph-ivf-two-means-experiments.md) extend the
 comparison to packing, multi-point kernels and dot-product formulations.

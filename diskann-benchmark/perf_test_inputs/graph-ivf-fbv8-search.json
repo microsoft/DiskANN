@@ -4,7 +4,6 @@
       "type": "graph-ivf-build",
       "content": {
         "dataset": {
-          "kind": "files",
           "data": "fbv_8_normalized_dataset_958152.bin",
           "queries": "fbv_8_normalized_query_6380.bin",
           "groundtruth": "fbv8_gt_recall_2000.bin",

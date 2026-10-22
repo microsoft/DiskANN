@@ -7,7 +7,7 @@ not meet the requested unchanged recall/scan contract. **The default remains
 paired L2.** Packing alone
 does not establish an end-to-end gain; SGEMM is slower in the fitting phase.
 These results extend the [strategy implementation](graph-ivf-two-means-experiments.md)
-and the earlier [24-round synthetic study](graph-ivf-stages-means.md).
+and the earlier [24-round synthetic study](https://github.com/microsoft/DiskANN/blob/3e906e3a3990ae4ac1d0bed0308a6fd026fe4f10/diskann-benchmark/graph-ivf-stages-means.md).
 
 ## Corpus and protocol
 

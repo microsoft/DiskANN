@@ -40,10 +40,10 @@ impl Benchmark for Strategies {
         let corpus = input
             .data
             .as_ref()
-            .map(|file| super::load_vectors(file, input.data_type))
+            .map(|file| super::data::load_vectors(file, input.data_type))
             .transpose()?;
         if let Some(data) = &corpus {
-            super::validate_vectors(data.as_view(), "two-means corpus")?;
+            super::data::validate_vectors(data.as_view(), "two-means corpus")?;
             anyhow::ensure!(
                 input.dimensions.len() == 1 && input.dimensions[0].get() == data.ncols(),
                 "file dimension must exactly match the requested dimension"
