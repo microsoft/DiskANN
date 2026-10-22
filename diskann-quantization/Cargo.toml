@@ -20,6 +20,12 @@ flatbuffers = { version = "25.2.10", optional = true }
 half = { version = "2.6.0", features = ["bytemuck"] }
 diskann-utils = { workspace = true }
 
+# Detect L1/L2 cache sizes to size matrix-kernel tile budgets.
+[target.'cfg(any(all(target_arch = "x86", not(target_env = "sgx"), target_feature = "sse"), all(target_arch = "x86_64", not(target_env = "sgx"))))'.dependencies]
+raw-cpuid = "11.5"
+[target.'cfg(target_vendor = "apple")'.dependencies]
+libc = "0.2.148"
+
 [lints.clippy]
 allow_attributes = "warn"
 undocumented_unsafe_blocks = "warn"
