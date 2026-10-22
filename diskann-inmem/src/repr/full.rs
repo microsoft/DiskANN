@@ -118,6 +118,11 @@ pub struct Config<T> {
     start_points: rowmajor::Owned<T>,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
+
+    /// This embeds start points within the main data span instead of storing them at the end.
+    ///
+    /// Mainly, this is used to support static builds where the collection of data is fixed.
+    embedded_start_points: Option<crate::num::Range>,
 }
 
 const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(12).unwrap();
@@ -189,6 +194,21 @@ impl<T> Config<T> {
         self.start_points.ncols()
     }
 
+    pub fn embed_start_points(mut self, at: crate::num::Range) -> Self {
+        let (capacity, max_degree, _) = self.layout.destruct();
+        if at.end().into_usize() > capacity.value() {
+            todo!();
+        }
+
+        if at.len() != self.start_points.nrows() {
+            todo!();
+        }
+
+        self.layout = store::Layout::new(capacity, max_degree, 0);
+        self.embedded_start_points = Some(at);
+        self
+    }
+
     /// Construct a [`Full`] from the [`Config`].
     pub fn build(self) -> ANNResult<Full<T>>
     where
@@ -244,6 +264,8 @@ where
     store: Store<Intrusive>,
     metric: Metric,
     lookahead: Option<NonZeroUsize>,
+    // TODO: use `crate::num::Range`.
+    start_ids: std::ops::Range<u32>,
     _type: PhantomData<T>,
 }
 
@@ -280,14 +302,20 @@ where
             start_points,
             store,
             lookahead,
+            embedded_start_points,
         } = config;
 
         let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
         let intrusive = Intrusive::config(bytes);
         let store = Store::new(layout, store, intrusive)?;
 
+        let start_ids = embedded_start_points.map_or_else(
+            || store.frozen(),
+            |embedded| embedded.iter()
+        );
+
         // Initialize start points.
-        for (i, row) in std::iter::zip(store.frozen(), start_points.rows()) {
+        for (i, row) in std::iter::zip(start_ids.clone(), start_points.rows()) {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -306,6 +334,7 @@ where
             store,
             metric,
             lookahead,
+            start_ids,
             _type: PhantomData,
         })
     }
@@ -793,7 +822,7 @@ macro_rules! impl_full_precision {
                     expand_beam,
                     None,
                     provider,
-                    representation.store.frozen(),
+                    representation.start_ids.clone(),
                     counters,
                 ))
             }
