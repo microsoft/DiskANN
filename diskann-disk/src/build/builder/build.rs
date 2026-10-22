@@ -22,7 +22,7 @@ use diskann_providers::{
         graph::provider::async_::inmem::DefaultProviderParameters, IndexConfiguration,
         MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
     },
-    storage::{DiskGraphOnly, PQStorage},
+    storage::{PQStorage},
     utils::{
         create_thread_pool, find_medoid_with_sampling, RayonThreadPoolRef, VectorDataIterator,
         MAX_MEDOID_SAMPLE_SIZE,

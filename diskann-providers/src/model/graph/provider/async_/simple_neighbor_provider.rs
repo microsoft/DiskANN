@@ -13,7 +13,7 @@ use tracing::trace;
 
 use super::common::{AlignedMemoryVectorStore, TestCallCount};
 use crate::storage::{
-    self, AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith,
+    self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith,
 };
 
 pub struct SimpleNeighborProviderAsync {
@@ -204,36 +204,6 @@ impl SaveWith<(u32, AsyncIndexMetadata)> for SimpleNeighborProviderAsync {
     }
 }
 
-/// This implementation handles the conversion between async index and disk index format.
-/// Parameters:
-/// - `start_point`: The vector ID used during async index building (exceed max_point bounds)
-/// - `actual_start_point`: The real vector ID with identical vector values as `start_point`
-/// - `prefix`: Path prefix for the disk index files
-///
-/// The substitution of `start_point` with `actual_start_point` ensures compatibility
-/// with the on-disk format while preserving the correct entry point information.
-impl SaveWith<(u32, u32, DiskGraphOnly)> for SimpleNeighborProviderAsync {
-    type Ok = usize;
-    type Error = ANNError;
-
-    async fn save_with<P>(
-        &self,
-        provider: &P,
-        (imem_start_point, actual_start_point, metadata): &(u32, u32, DiskGraphOnly),
-    ) -> Result<Self::Ok, Self::Error>
-    where
-        P: StorageWriteProvider,
-    {
-        let graph = DiskAdaptor {
-            provider: self,
-            inmem_start_point: *imem_start_point,
-            actual_start_point: *actual_start_point,
-        };
-
-        storage::bin::save_graph(&graph, provider, *actual_start_point, metadata.prefix())
-    }
-}
-
 /// This is an adaptor for compatibility with the async index serialization.
 impl LoadWith<AsyncIndexMetadata> for SimpleNeighborProviderAsync {
     type Error = ANNError;
@@ -295,112 +265,6 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync {
     }
 }
 
-/// This adaptor translates between the in-memory async index representation
-/// and the on-disk index format during serialization.
-///
-/// Key differences between the formats:
-/// 1. The disk format does not support the virtual start point used by the in-memory index.
-/// 2. The in-memory index stores one virtual start point as an additional point, while the
-///    serialized disk graph omits it after remapping it to the actual medoid.
-///
-/// This adaptor handles these differences by:
-/// - Substituting the virtual start point ID with an actual dataset ID when found in adjacency lists
-/// - Merging the virtual start point's out-edges into the actual start point's adjacency list
-/// - Excluding the virtual point from the total count (subtracting 1 from length)
-/// - Setting additional_points to 0 because the virtual point is omitted from the serialized graph
-///
-/// Used with [`storage::bin::save_graph`] to persist an async index in standard DiskANN format.
-struct DiskAdaptor<'a> {
-    provider: &'a SimpleNeighborProviderAsync,
-    inmem_start_point: u32,
-    actual_start_point: u32,
-}
-
-impl DiskAdaptor<'_> {
-    /// The disk graph folds the virtual start point into `actual_start_point`, so the latter
-    /// must inherit the virtual start point's out-edges. Otherwise, disk search would begin
-    /// from a different neighborhood than in-memory search, and if `actual_start_point` only
-    /// linked to the virtual start point, it would have no out-edges at all.
-    ///
-    /// The virtual start point's edges come first because they are the edges in-memory search
-    /// expands first. The merged list is capped at the longer of the two in-memory lists so
-    /// the serialized max degree does not grow.
-    fn merged_start_point_adjacency_list(&self, own: &[u32]) -> ANNResult<Vec<u32>> {
-        let mut merged = AdjacencyList::new();
-        self.provider
-            .get_neighbors_sync(self.inmem_start_point as usize, &mut merged)?;
-
-        let cap = own.len().max(merged.len());
-        let is_start_point =
-            |n: &u32| *n == self.inmem_start_point || *n == self.actual_start_point;
-
-        merged.retain(|n| !is_start_point(n));
-        for neighbor in own.iter().copied().filter(|n| !is_start_point(n)) {
-            if merged.len() == cap {
-                break;
-            }
-            merged.push(neighbor);
-        }
-
-        Ok(merged.into())
-    }
-}
-
-impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
-    type Element = u32;
-    type Item<'item>
-        = Vec<u32>
-    where
-        Self: 'item;
-
-    fn get_adjacency_list(&self, i: usize) -> ANNResult<Self::Item<'_>> {
-        let mut list = AdjacencyList::new();
-        self.provider.get_neighbors_sync(i, &mut list)?;
-
-        let mut list: Vec<_> = list.into();
-        let node_id = u32::try_from(i)?;
-
-        if node_id == self.actual_start_point {
-            return self.merged_start_point_adjacency_list(&list);
-        }
-
-        let mut seen_actual_start_point = false;
-        list.retain_mut(|neighbor| {
-            if *neighbor == self.inmem_start_point {
-                *neighbor = self.actual_start_point;
-            }
-
-            if *neighbor == node_id {
-                return false;
-            }
-
-            if *neighbor != self.actual_start_point {
-                return true;
-            }
-
-            let first = !seen_actual_start_point;
-            seen_actual_start_point = true;
-            first
-        });
-
-        Ok(list)
-    }
-
-    fn total(&self) -> usize {
-        // Don't include any start points at the end.
-        self.provider.locks.len() - self.provider.num_start_points
-    }
-
-    /// Fixed to 0 for the disk format
-    fn additional_points(&self) -> u64 {
-        0
-    }
-
-    fn max_degree(&self) -> Option<u32> {
-        None
-    }
-}
-
 ///////////
 // Tests //
 ///////////
@@ -435,57 +299,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(new_adj_list, result);
-    }
-
-    #[test]
-    fn disk_adaptor_removes_duplicates_and_self_loops_after_remapping() {
-        let provider = SimpleNeighborProviderAsync::new(4, 1, 4, 1.0);
-        provider.set_neighbors_sync(0, &[4, 2, 1]).unwrap();
-        provider.set_neighbors_sync(1, &[4, 3]).unwrap();
-
-        let adaptor = DiskAdaptor {
-            provider: &provider,
-            inmem_start_point: 4,
-            actual_start_point: 1,
-        };
-
-        assert_eq!(adaptor.get_adjacency_list(0).unwrap(), vec![1, 2]);
-        assert_eq!(adaptor.get_adjacency_list(1).unwrap(), vec![3]);
-    }
-
-    #[test]
-    fn disk_adaptor_merges_virtual_start_point_edges_into_actual_start_point() {
-        let provider = SimpleNeighborProviderAsync::new(4, 1, 4, 1.0);
-        // The actual start point only links to the virtual start point, which links to
-        // everything else.
-        provider.set_neighbors_sync(0, &[4]).unwrap();
-        provider.set_neighbors_sync(1, &[4, 2]).unwrap();
-        provider.set_neighbors_sync(4, &[0, 1, 2, 3]).unwrap();
-
-        let adaptor = DiskAdaptor {
-            provider: &provider,
-            inmem_start_point: 4,
-            actual_start_point: 0,
-        };
-
-        assert_eq!(adaptor.get_adjacency_list(0).unwrap(), vec![1, 2, 3]);
-        assert_eq!(adaptor.get_adjacency_list(1).unwrap(), vec![0, 2]);
-    }
-
-    #[test]
-    fn disk_adaptor_caps_merged_start_point_edges() {
-        let provider = SimpleNeighborProviderAsync::new(6, 1, 4, 1.0);
-        provider.set_neighbors_sync(0, &[6, 4, 5]).unwrap();
-        provider.set_neighbors_sync(6, &[0, 1, 2, 3]).unwrap();
-
-        let adaptor = DiskAdaptor {
-            provider: &provider,
-            inmem_start_point: 6,
-            actual_start_point: 0,
-        };
-
-        // Inherited edges come first, and the list is no longer than the longest input list.
-        assert_eq!(adaptor.get_adjacency_list(0).unwrap(), vec![1, 2, 3, 4]);
     }
 
     #[tokio::test]
