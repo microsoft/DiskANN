@@ -233,6 +233,11 @@ impl Neighbors {
             Ok(())
         }
     }
+
+    /// Construct a [`Snapshot`] of `self`.
+    pub(crate) fn snapshot(&mut self) -> Snapshot<'_> {
+        Snapshot(self)
+    }
 }
 
 /// Errors returned by [`Neighbors::new`].
@@ -406,6 +411,39 @@ impl std::fmt::Debug for Lock<'_> {
             .field("capacity", &self.capacity)
             .field("lock", &())
             .finish()
+    }
+}
+
+//----------//
+// Snapshot //
+//----------//
+
+#[derive(Debug)]
+pub struct Snapshot<'a>(&'a mut Neighbors);
+
+impl<'a> Snapshot<'a> {
+    pub fn max_degree(&self) -> MaxDegree {
+        self.0.max_degree()
+    }
+
+    pub fn entries(&self) -> u32 {
+        self.0.entries()
+    }
+
+    pub fn get(&self, i: u32) -> Option<&[u32]> {
+        self.0.check(i).ok()?;
+
+        let (prefix, rest) =
+            unsafe { self.0.neighbors.get_unchecked(i.into_usize()) }.split(Bytes::size_of::<Id>());
+
+        debug_assert_eq!(prefix.len(), Bytes::size_of::<Id>());
+        debug_assert!(prefix.as_ptr().cast::<Id>().is_aligned());
+
+        let len: usize = unsafe { prefix.as_ptr().cast::<Id>().read() }
+            .into_usize()
+            .min(self.max_degree().value());
+
+        Some(unsafe { std::slice::from_raw_parts(rest.as_ptr().cast::<Id>(), len) })
     }
 }
 

@@ -51,6 +51,9 @@ use crate::{
     repr,
 };
 
+// Modules
+pub mod buildonly;
+
 /// Aggregate trait for the external ID type of [`Provider`].
 pub trait Id: Send + Sync + Hash + Eq + Clone + 'static {}
 

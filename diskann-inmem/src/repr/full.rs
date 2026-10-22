@@ -118,6 +118,11 @@ pub struct Config<T> {
     start_points: rowmajor::Owned<T>,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
+
+    /// This embeds start points within the main data span instead of storing them at the end.
+    ///
+    /// Mainly, this is used to support static builds where the collection of data is fixed.
+    embedded_start_points: Option<crate::num::Range>,
 }
 
 const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(12).unwrap();
@@ -165,6 +170,7 @@ impl<T> Config<T> {
             start_points,
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
+            embedded_start_points: None,
         })
     }
 
@@ -187,6 +193,21 @@ impl<T> Config<T> {
     /// Return the vector dimension of this configuration and the resulting [`Full`].
     pub fn dim(&self) -> usize {
         self.start_points.ncols()
+    }
+
+    pub fn embed_start_points(mut self, at: crate::num::Range) -> Self {
+        let (capacity, max_degree, _) = self.layout.destruct();
+        if at.end().into_usize() > capacity.value() {
+            todo!();
+        }
+
+        if at.len() != self.start_points.nrows() {
+            todo!();
+        }
+
+        self.layout = store::Layout::new(capacity, max_degree, 0);
+        self.embedded_start_points = Some(at);
+        self
     }
 
     /// Construct a [`Full`] from the [`Config`].
@@ -244,6 +265,8 @@ where
     store: Store<Intrusive>,
     metric: Metric,
     lookahead: Option<NonZeroUsize>,
+    // TODO: use `crate::num::Range`.
+    start_ids: std::ops::Range<u32>,
     _type: PhantomData<T>,
 }
 
@@ -280,14 +303,18 @@ where
             start_points,
             store,
             lookahead,
+            embedded_start_points,
         } = config;
 
         let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
         let intrusive = Intrusive::config(bytes);
         let store = Store::new(layout, store, intrusive)?;
 
+        let start_ids =
+            embedded_start_points.map_or_else(|| store.frozen(), |embedded| embedded.iter());
+
         // Initialize start points.
-        for (i, row) in std::iter::zip(store.frozen(), start_points.rows()) {
+        for (i, row) in std::iter::zip(start_ids.clone(), start_points.rows()) {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -306,6 +333,7 @@ where
             store,
             metric,
             lookahead,
+            start_ids,
             _type: PhantomData,
         })
     }
@@ -393,6 +421,37 @@ where
             .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
 
         Ok(Guard::new(slot))
+    }
+}
+
+impl<T> repr::SetAt<&[T]> for Full<T>
+where
+    T: FullPrecision,
+{
+    type Guard<'a> = Guard<'a>;
+
+    fn set_at(&self, id: u32, v: &[T]) -> ANNResult<Guard<'_>> {
+        self.check_dim(v.len())?;
+
+        let mut slot = self
+            .store
+            .slot(id)
+            .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
+
+        slot.data()
+            .as_mut_slice()
+            .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
+
+        Ok(Guard::new(slot))
+    }
+}
+
+impl<T> repr::NeighborSnapshot for Full<T>
+where
+    T: FullPrecision,
+{
+    fn neighbor_snapshot(&mut self) -> crate::neighbors::Snapshot<'_> {
+        self.store.neighbors_mut().snapshot()
     }
 }
 
@@ -793,7 +852,7 @@ macro_rules! impl_full_precision {
                     expand_beam,
                     None,
                     provider,
-                    representation.store.frozen(),
+                    representation.start_ids.clone(),
                     counters,
                 ))
             }

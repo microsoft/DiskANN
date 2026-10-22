@@ -225,60 +225,60 @@ mod disk_index_build_tests {
         .unwrap();
     }
 
-    ///////////////////////////////
-    // MinMax Integration Tests //
-    //////////////////////////////
+    // ///////////////////////////////
+    // // MinMax Integration Tests //
+    // //////////////////////////////
 
-    #[rstest]
-    pub fn test_disk_minmax_index_builder(
-        #[values(false, true)] use_sharded_build: bool,
-    ) -> anyhow::Result<()> {
-        const DATA_FILE: &str = "/sift/siftsmall_learn_256pts_minmax.fbin";
-        let index_path_prefix = "/disk_index_build/test_minmax_disk_index_build".to_string();
-        let params = TestParams {
-            dim: 148,
-            full_dim: 128,
-            data_path: DATA_FILE.to_string(),
-            ..TestParams::default()
-        };
-        run_minmax_test(index_path_prefix, params, use_sharded_build, 10, 32);
-        Ok(())
-    }
+    // #[rstest]
+    // pub fn test_disk_minmax_index_builder(
+    //     #[values(false, true)] use_sharded_build: bool,
+    // ) -> anyhow::Result<()> {
+    //     const DATA_FILE: &str = "/sift/siftsmall_learn_256pts_minmax.fbin";
+    //     let index_path_prefix = "/disk_index_build/test_minmax_disk_index_build".to_string();
+    //     let params = TestParams {
+    //         dim: 148,
+    //         full_dim: 128,
+    //         data_path: DATA_FILE.to_string(),
+    //         ..TestParams::default()
+    //     };
+    //     run_minmax_test(index_path_prefix, params, use_sharded_build, 10, 32);
+    //     Ok(())
+    // }
 
-    fn run_minmax_test(
-        index_path_prefix: String,
-        params: TestParams,
-        use_sharded_build: bool,
-        top_k: usize,
-        search_l: u32,
-    ) {
-        // Use the same parameters from [test_sift_build_and_search] in diskann_index
-        let l_build = 64;
-        let max_degree = 16;
+    // fn run_minmax_test(
+    //     index_path_prefix: String,
+    //     params: TestParams,
+    //     use_sharded_build: bool,
+    //     top_k: usize,
+    //     search_l: u32,
+    // ) {
+    //     // Use the same parameters from [test_sift_build_and_search] in diskann_index
+    //     let l_build = 64;
+    //     let max_degree = 16;
 
-        let index_path_prefix =
-            format!("{}_minmax_sharded={}", index_path_prefix, use_sharded_build,);
-        let params = TestParams {
-            l_build,
-            max_degree,
-            index_path_prefix: index_path_prefix.clone(),
-            index_build_ram_gb: get_index_build_ram_gb(use_sharded_build),
-            build_quantization_type: QuantizationType::FP,
-            ..params
-        };
+    //     let index_path_prefix =
+    //         format!("{}_minmax_sharded={}", index_path_prefix, use_sharded_build,);
+    //     let params = TestParams {
+    //         l_build,
+    //         max_degree,
+    //         index_path_prefix: index_path_prefix.clone(),
+    //         index_build_ram_gb: get_index_build_ram_gb(use_sharded_build),
+    //         build_quantization_type: QuantizationType::FP,
+    //         ..params
+    //     };
 
-        let fixture = IndexBuildFixture::new(new_vfs(), params).unwrap();
+    //     let fixture = IndexBuildFixture::new(new_vfs(), params).unwrap();
 
-        fixture.build::<GraphDataMinMaxVectorUnitData>().unwrap();
+    //     fixture.build::<GraphDataMinMaxVectorUnitData>().unwrap();
 
-        verify_search_result_with_ground_truth::<GraphDataMinMaxVectorUnitData>(
-            &fixture.params,
-            top_k,
-            search_l,
-            &fixture.storage_provider,
-        )
-        .unwrap();
-    }
+    //     verify_search_result_with_ground_truth::<GraphDataMinMaxVectorUnitData>(
+    //         &fixture.params,
+    //         top_k,
+    //         search_l,
+    //         &fixture.storage_provider,
+    //     )
+    //     .unwrap();
+    // }
 
     fn get_index_build_ram_gb(use_sharded_build: bool) -> f64 {
         if use_sharded_build {

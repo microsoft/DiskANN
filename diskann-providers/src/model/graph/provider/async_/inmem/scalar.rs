@@ -65,6 +65,10 @@ impl<const NBITS: usize> WithBits<NBITS> {
     pub fn new(quantizer: ScalarQuantizer) -> Self {
         Self { quantizer }
     }
+
+    pub fn quantizer(&self) -> &ScalarQuantizer {
+        &self.quantizer
+    }
 }
 
 //////////////

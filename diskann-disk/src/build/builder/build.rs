@@ -15,13 +15,14 @@ use diskann::{
     utils::{async_tools, VectorRepr, ONE},
     ANNResult,
 };
+use diskann_inmem as di;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
         graph::provider::async_::inmem::DefaultProviderParameters, IndexConfiguration,
         MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
     },
-    storage::{DiskGraphOnly, PQStorage},
+    storage::{PQStorage},
     utils::{
         create_thread_pool, find_medoid_with_sampling, RayonThreadPoolRef, VectorDataIterator,
         MAX_MEDOID_SAMPLE_SIZE,
@@ -65,7 +66,7 @@ where
 impl<'a, Data, StorageProvider> DiskIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr,
+    Data::VectorDataType: VectorRepr + di::repr::FullPrecision,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
 {
@@ -222,7 +223,7 @@ pub(super) async fn build_inmem_index<T, StorageProvider>(
     storage_provider: &StorageProvider,
 ) -> ANNResult<()>
 where
-    T: VectorRepr,
+    T: VectorRepr + di::repr::FullPrecision,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
 {
@@ -256,21 +257,22 @@ where
     let start_point =
         start_point_from_medoid::<T, _>(data_path, config.random_seed, storage_provider)?;
     let start_point_id = start_point.id();
-    let index =
+    let mut index =
         new_inmem_index_builder::<T>(index_config, provider_parameters, quantizer, start_point)?;
 
-    run_build(&index, dataset_iter, num_tasks).await?;
+    run_build(&index, dataset_iter, start_point_id, num_tasks).await?;
 
     #[cfg(debug_assertions)]
     log_build_stats::<_>(&index).await?;
 
     run_final_prune(&index, num_tasks).await?;
-    index
-        .save_graph(
-            storage_provider,
-            &(start_point_id, DiskGraphOnly::new(save_path)),
-        )
-        .await?;
+
+    let index = Arc::get_mut(&mut index).expect("There should be no clones wandering around");
+
+    index.save_graph_mut(
+        &mut storage_provider.create_for_write(save_path)?,
+        start_point_id,
+    )?;
 
     Ok(())
 }
@@ -326,6 +328,7 @@ where
 async fn run_build<T, I>(
     index: &Arc<dyn InmemIndexBuilder<T>>,
     iterator: Arc<Mutex<I>>,
+    start_id: u32,
     num_tasks: NonZeroUsize,
 ) -> ANNResult<()>
 where
@@ -352,7 +355,9 @@ where
                 match vector_data {
                     Some((i, (vector, _))) => {
                         let id = u32_try_from(i)?;
-                        index_clone.insert_vector(id, vector.as_ref()).await?;
+                        if id != start_id {
+                            index_clone.insert_vector(id, vector.as_ref()).await?;
+                        }
                     }
                     None => break,
                 }
