@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Optional buffering for operation-local list memberships.
+//! Pending memberships for the operation-local test provider.
 //!
 //! Appends do not materialize stored memberships. Replacement supersedes earlier
 //! appends, and retirement supersedes both. A provider can use this helper for

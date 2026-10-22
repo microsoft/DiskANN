@@ -32,7 +32,7 @@ pub trait Router<T>: Send {
     }
 
     /// Select `min(nprobe, len())` distinct live lists, nearest first.
-    fn route<F>(&self, query: &T, nprobe: NonZeroUsize, emit: F) -> impl SendFuture<ANNResult<()>>
+    fn route<F>(&self, query: T, nprobe: NonZeroUsize, emit: F) -> impl SendFuture<ANNResult<()>>
     where
         F: FnMut(&Self::Id, Self::Ret) + Send;
 }
@@ -58,7 +58,7 @@ pub trait NearestList: Send {
         F: FnMut(&Self::Id, f32) + Send;
 }
 
-pub trait BuildAccessor<T>: Send + Sized + HasIds {
+pub trait BuildAccessor<B>: Send + Sized + HasIds {
     type Nearest<'a>: NearestList<Id = Self::ListId>
     where
         Self: 'a;
@@ -83,9 +83,8 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
     /// Emit operation-local list sizes including pending appends. Lists may be emitted
     /// more than once, but each touched list must report its final size.
     /// Staged points and memberships remain unpublished until [`Self::finish`].
-    fn route<Itr, F>(&mut self, points: Itr, emit: F) -> impl SendFuture<ANNResult<()>>
+    fn route<F>(&mut self, points: B, emit: F) -> impl SendFuture<ANNResult<NonZeroUsize>>
     where
-        Itr: ExactSizeIterator<Item = T> + Clone + Send + Sync,
         F: FnMut(&Self::ListId, NonZeroUsize) + Send;
 
     /// Make requested list's members, data and centroids available
@@ -107,9 +106,9 @@ pub trait BuildAccessor<T>: Send + Sized + HasIds {
 // Strategy //
 //////////////
 
-pub trait BuildStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
+pub trait BuildStrategy<'a, B, C: ExecutionContext>: Send + Sync + HasIds {
     /// [`BuildAccessor`] used to insert new points, and performs splits if necessary.
-    type Accessor: BuildAccessor<T, Id = Self::Id, ListId = Self::ListId>;
+    type Accessor: BuildAccessor<B, Id = Self::Id, ListId = Self::ListId>;
 
     type Error: StandardError;
 

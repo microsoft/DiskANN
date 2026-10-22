@@ -17,7 +17,7 @@ use crate::{
     flat::DistancesUnordered,
     graph::SearchOutputBuffer,
     ivf::{
-        clustering::{RegionalNearest, SplitAndAssign, TwoMeans},
+        build::{SplitAndAssign, assignment::RegionalNearest, clustering::TwoMeans},
         region::AsMatRef,
         traits::BuildStrategy,
     },
@@ -75,41 +75,33 @@ impl<C: ExecutionContext> IVFIndex<C> {
         })
     }
 
-    pub fn insert_batch<'a, S, T, Itr>(
+    pub fn insert_batch<'a, S, B>(
         &'a mut self,
         strategy: &'a S,
         context: &'a C,
-        points: Itr,
+        points: B,
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
-        Itr: ExactSizeIterator<Item = T> + Clone + Send + Sync,
-        S: BuildStrategy<'a, T, C>,
-        S::Accessor: for<'b> BuildAccessor<T, VectorsRef<'b>: AsMatRef<f32>>,
-        T: Sync,
+        S: BuildStrategy<'a, B, C>,
+        S::Accessor: for<'b> BuildAccessor<B, VectorsRef<'b>: AsMatRef<f32>>,
+        B: Send + Sync,
     {
         let config = self.config;
 
         async move {
-            let inserted = points.len();
-            if inserted == 0 {
-                return Ok(InsertStats::default());
-            }
-
             let mut accessor = strategy.build_accessor(context).into_ann_result()?;
 
             let dim = accessor.dim();
 
             let mut parents = BTreeSet::new();
 
-            accessor
+            let inserted = accessor
                 .route(points, |&list, size| {
                     if size.get() > config.split_threshold.get() {
                         parents.insert(list);
                     }
                 })
                 .await?;
-
-            let splits = parents.len();
 
             if !parents.is_empty() {
                 let mut neighbors = BTreeSet::new();
@@ -146,7 +138,10 @@ impl<C: ExecutionContext> IVFIndex<C> {
 
             accessor.finish().await?;
 
-            Ok(InsertStats { inserted, splits })
+            Ok(InsertStats {
+                inserted: inserted.get(),
+                splits: parents.len(),
+            })
         }
     }
 
@@ -170,7 +165,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
             {
                 let router = accessor.router();
                 router
-                    .route(&query, nprobe, |id, scan| lists.push((*id, scan)))
+                    .route(query, nprobe, |id, scan| lists.push((*id, scan)))
                     .await?;
             }
 
