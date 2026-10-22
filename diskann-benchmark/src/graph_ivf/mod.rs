@@ -27,11 +27,11 @@ use diskann_benchmark_runner::{
 };
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
-use rand::{rngs::StdRng, seq::index, Rng, SeedableRng};
+use rand::{rngs::StdRng, seq::index, SeedableRng};
 use serde::Serialize;
 
 use crate::{
-    inputs::graph_ivf::{Dataset, GraphIvfBuild, Search},
+    inputs::graph_ivf::{GraphIvfBuild, Search},
     utils::datafiles::{self, BinFile},
 };
 use provider::{Store, Strategy};
@@ -376,48 +376,19 @@ fn recall_hits(actual: &[u32], expected: &[u32], k: usize) -> usize {
 fn load_data(
     input: &GraphIvfBuild,
 ) -> anyhow::Result<(rowmajor::Owned<f32>, Option<rowmajor::Owned<f32>>)> {
-    match &input.dataset {
-        Dataset::Synthetic {
-            vectors,
-            queries,
-            dimensions,
-            seed,
-        } => {
-            let mut rng = StdRng::seed_from_u64(*seed);
-            let data = random_matrix(vectors.get(), dimensions.get(), &mut rng)?;
-            let queries = input
-                .search
+    let data = datafiles::load_dataset(BinFile(&input.dataset.data))?;
+    let queries = if input.search.is_some() {
+        Some(datafiles::load_dataset(BinFile(
+            input
+                .dataset
+                .queries
                 .as_ref()
-                .map(|_| random_matrix(queries.get(), dimensions.get(), &mut rng))
-                .transpose()?;
-            Ok((data, queries))
-        }
-        Dataset::Files { data, queries, .. } => {
-            let data = datafiles::load_dataset(BinFile(data))?;
-            let queries = if input.search.is_some() {
-                Some(datafiles::load_dataset(BinFile(
-                    queries
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("missing queries file"))?,
-                ))?)
-            } else {
-                None
-            };
-            Ok((data, queries))
-        }
-    }
-}
-
-fn random_matrix(
-    rows: usize,
-    cols: usize,
-    rng: &mut StdRng,
-) -> anyhow::Result<rowmajor::Owned<f32>> {
-    let mut matrix = rowmajor::Owned::try_from_element(rows, cols, 0.0)?;
-    for x in matrix.as_mut_slice() {
-        *x = rng.random_range(-1.0..1.0);
-    }
-    Ok(matrix)
+                .ok_or_else(|| anyhow::anyhow!("missing queries file"))?,
+        ))?)
+    } else {
+        None
+    };
+    Ok((data, queries))
 }
 
 fn validate_vectors(data: rowmajor::Ref<'_, f32>, name: &str) -> anyhow::Result<()> {
@@ -442,11 +413,7 @@ fn load_groundtruth(
     queries: rowmajor::Ref<'_, f32>,
     k: usize,
 ) -> anyhow::Result<rowmajor::Owned<u32>> {
-    if let Dataset::Files {
-        groundtruth: Some(path),
-        ..
-    } = &input.dataset
-    {
+    if let Some(path) = &input.dataset.groundtruth {
         return datafiles::load_groundtruth(BinFile(path), Some(k));
     }
     let mut truth = rowmajor::Owned::try_from_element(queries.nrows(), k, 0)?;

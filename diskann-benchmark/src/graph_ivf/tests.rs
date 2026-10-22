@@ -11,13 +11,20 @@ use serde_json::{json, Value};
 use super::*;
 
 fn small_input() -> Value {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("test_data")
+        .join("disk_index_search");
     json!({
         "search_directories": [],
         "jobs": [{
             "type": "graph-ivf-build",
             "content": {
-                "dataset": {"kind": "synthetic", "vectors": 64, "queries": 8, "dimensions": 8, "seed": 42},
-                "build": {"initial_centroids": 2, "batch_size": 8, "split_threshold": 8, "two_means_iterations": 3, "seed": 7, "repetitions": 2},
+                "dataset": {
+                    "data": directory.join("disk_index_siftsmall_learn_256pts_data.fbin"),
+                    "queries": directory.join("disk_index_sample_query_10pts.fbin")
+                },
+                "build": {"initial_centroids": 2, "batch_size": 32, "split_threshold": 32, "two_means_iterations": 3, "seed": 7, "repetitions": 2},
                 "graph": {"max_degree": 16, "l_build": 64},
                 "search": {"k": 4, "nprobe": [1, 64], "l_search": 64, "warmup_repetitions": 1, "repetitions": 2}
             }
@@ -44,13 +51,61 @@ fn run_cli(input: &Value) -> anyhow::Result<Value> {
 }
 
 #[test]
+fn graph_ivf_repository_workloads_run_with_existing_datasets() {
+    use crate::inputs::Example;
+
+    let example: Value =
+        serde_json::from_str(include_str!("../../example/graph-ivf.json")).unwrap();
+    assert_eq!(
+        example["jobs"][0]["content"],
+        serde_json::to_value(GraphIvfBuild::example()).unwrap()
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    for (text, vectors, dimensions, queries) in [
+        (include_str!("../../example/graph-ivf.json"), 256, 128, 10),
+        (
+            include_str!("../../perf_test_inputs/graph-ivf-stages-build.json"),
+            10000,
+            192,
+            0,
+        ),
+        (
+            include_str!("../../perf_test_inputs/graph-ivf-stages-search.json"),
+            10000,
+            192,
+            100,
+        ),
+    ] {
+        let mut input: Value = serde_json::from_str(text).unwrap();
+        for directory in input["search_directories"].as_array_mut().unwrap() {
+            *directory = json!(root.join(directory.as_str().unwrap()));
+        }
+        let output = run_cli(&input).unwrap();
+        let results = &output[0]["results"];
+        assert_eq!(results["vectors"], vectors);
+        assert_eq!(results["dimensions"], dimensions);
+        for build in results["builds"].as_array().unwrap() {
+            assert_eq!(build["inserted"], vectors);
+            assert!(build["splits"].as_u64().unwrap() > 0);
+        }
+        let searches = results["searches"].as_array().unwrap();
+        assert_eq!(searches.is_empty(), queries == 0);
+        for search in searches {
+            assert_eq!(search["queries"], queries);
+            assert!(search["recall_at_k"].as_f64().unwrap() > 0.0);
+            assert_eq!(search["mean_results_returned"], 10.0);
+        }
+    }
+}
+
+#[test]
 fn graph_ivf_cli_reports_build_and_real_graph_search() {
     let output = run_cli(&small_input()).unwrap();
     let results = &output[0]["results"];
     let builds = results["builds"].as_array().unwrap();
     assert_eq!(builds.len(), 2);
     for build in builds {
-        assert_eq!(build["inserted"], 64);
+        assert_eq!(build["inserted"], 256);
         let splits = build["splits"].as_u64().unwrap();
         assert!(splits > 0);
         assert_eq!(build["lists"].as_u64().unwrap(), 2 + splits);
@@ -75,9 +130,9 @@ fn graph_ivf_cli_reports_build_and_real_graph_search() {
                 .sum::<u64>(),
             splits
         );
-        // Every split parent had more than eight points; reassignment may revisit
+        // Every split parent had more than 32 points; reassignment may revisit
         // points on subsequent batches, so this is not a distinct-point count.
-        assert!(build["split_points"].as_u64().unwrap() >= 9 * splits);
+        assert!(build["split_points"].as_u64().unwrap() >= 33 * splits);
     }
     let searches = results["searches"].as_array().unwrap();
     assert_eq!(searches.len(), 8);
@@ -85,11 +140,11 @@ fn graph_ivf_cli_reports_build_and_real_graph_search() {
         let scanned = search["mean_points_scanned"].as_f64().unwrap();
         if search["requested_nprobe"] == 64 {
             assert_eq!(search["recall_at_k"], 1.0);
-            assert_eq!(scanned, 64.0);
+            assert_eq!(scanned, 256.0);
             assert_eq!(search["mean_results_returned"], 4.0);
         } else {
             assert!(
-                scanned < 64.0,
+                scanned < 256.0,
                 "nprobe=1 must not silently scan the whole corpus"
             );
         }
@@ -99,8 +154,8 @@ fn graph_ivf_cli_reports_build_and_real_graph_search() {
 #[test]
 fn graph_ivf_unsplit_build_reports_zero_split_work() {
     let mut input = small_input();
-    input["jobs"][0]["content"]["build"]["split_threshold"] = json!(64);
-    input["jobs"][0]["content"]["build"]["batch_size"] = json!(15);
+    input["jobs"][0]["content"]["build"]["split_threshold"] = json!(256);
+    input["jobs"][0]["content"]["build"]["batch_size"] = json!(60);
     input["jobs"][0]["content"]["search"] = Value::Null;
     let output = run_cli(&input).unwrap();
     for build in output[0]["results"]["builds"].as_array().unwrap() {
@@ -109,9 +164,9 @@ fn graph_ivf_unsplit_build_reports_zero_split_work() {
         assert_eq!(build["two_means_seconds"], 0.0);
         assert_eq!(build["reassignment_seconds"], 0.0);
         assert_eq!(build["other_ivf_seconds"], build["ivf_seconds"]);
-        // Four full batches and a four-point tail are each counted once.
+        // Four full batches and a 16-point tail are each counted once.
         assert_eq!(build["split_parent_histogram"], json!({"0": 5}));
-        assert_eq!(build["inserted"], 64);
+        assert_eq!(build["inserted"], 256);
     }
 }
 
@@ -128,7 +183,7 @@ fn graph_ivf_split_preserves_points_and_full_probe_matches_oracle() {
             let truth = load_groundtruth(&input, data.as_view(), queries.as_view(), 4).unwrap();
             let (index, graph, result) = build(&input, data.as_view()).await.unwrap();
             assert!(result.splits > 0);
-            index.provider().validate_membership(64).unwrap();
+            index.provider().validate_membership(256).unwrap();
             for (id, vector) in data.rows().enumerate() {
                 assert_eq!(index.provider().vector(id as u32).unwrap(), vector);
             }
@@ -144,7 +199,7 @@ fn graph_ivf_split_preserves_points_and_full_probe_matches_oracle() {
                     .await
                     .unwrap();
                 assert_eq!(result.ids, expected);
-                assert_eq!(result.scanned, 64);
+                assert_eq!(result.scanned, 256);
             }
         });
 }
@@ -163,7 +218,7 @@ fn graph_ivf_rejects_invalid_measurement_inputs() {
     for (field, value) in [
         ("split_threshold", 1),
         ("batch_size", 0),
-        ("initial_centroids", 65),
+        ("initial_centroids", 257),
     ] {
         let mut input = small_input();
         input["jobs"][0]["content"]["build"][field] = json!(value);
@@ -173,7 +228,14 @@ fn graph_ivf_rejects_invalid_measurement_inputs() {
     input["jobs"][0]["content"]["search"]["l_search"] = json!(4);
     assert!(run_cli(&input).is_err());
     input["jobs"][0]["content"]["search"]["l_search"] = json!(64);
-    input["jobs"][0]["content"]["search"]["k"] = json!(65);
+    input["jobs"][0]["content"]["search"]["k"] = json!(257);
+    assert!(run_cli(&input).is_err());
+    let mut input = small_input();
+    input["jobs"][0]["content"]["dataset"]["queries"] = Value::Null;
+    assert!(run_cli(&input).is_err());
+    let mut input = small_input();
+    input["jobs"][0]["content"]["dataset"] =
+        json!({"kind": "synthetic", "vectors": 64, "queries": 8, "dimensions": 8, "seed": 42});
     assert!(run_cli(&input).is_err());
     let invalid = rowmajor::Owned::try_from_data(vec![f32::NAN].into_boxed_slice(), 1, 1).unwrap();
     assert!(validate_vectors(invalid.as_view(), "dataset").is_err());
@@ -218,14 +280,15 @@ fn graph_ivf_files_and_build_only_use_same_pipeline() {
         file.write_all(bytes).unwrap();
     }
     let mut job = small_input();
-    job["jobs"][0]["content"]["dataset"] = json!({"kind": "files", "data": data_path, "queries": query_path, "groundtruth": truth_path});
+    job["jobs"][0]["content"]["dataset"] =
+        json!({"data": data_path, "queries": query_path, "groundtruth": truth_path});
     job["jobs"][0]["content"]["build"]["repetitions"] = json!(1);
     let output = run_cli(&job).unwrap();
     assert_eq!(output[0]["results"]["searches"][2]["recall_at_k"], 1.0);
-    job["jobs"][0]["content"]["dataset"] = json!({"kind": "files", "data": data_path});
+    job["jobs"][0]["content"]["dataset"] = json!({"data": data_path});
     job["jobs"][0]["content"]["search"] = Value::Null;
     let output = run_cli(&job).unwrap();
-    assert_eq!(output[0]["results"]["builds"][0]["inserted"], 64);
+    assert_eq!(output[0]["results"]["builds"][0]["inserted"], 256);
     assert!(output[0]["results"]["searches"]
         .as_array()
         .unwrap()

@@ -4,7 +4,7 @@ The goal of the benchmarking infrastructure is to make performance testing and d
 easier by providing a "one click" runner for benchmarks with machine readable output.
 
 For a static build + search baseline of the new IVF implementation, see
-[Graph-IVF benchmark](graph-ivf.md). It includes a self-contained synthetic workload
+[Graph-IVF benchmark](graph-ivf.md). It reuses the SIFT small test dataset
 and does not require a dynamic runbook.
 
 ## Usage
@@ -508,4 +508,3 @@ for a successful or unsuccessful match with the enclosed value. Doing these two 
 error reporting in the event of a dispatch fail much easier for the user to understand and fix.
 
 Refer to implementations within the benchmarking framework for what some of this may look like.
-

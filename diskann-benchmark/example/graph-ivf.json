@@ -1,20 +1,18 @@
 {
-  "search_directories": [],
+  "search_directories": ["test_data/disk_index_search"],
   "jobs": [
     {
       "type": "graph-ivf-build",
       "content": {
         "dataset": {
-          "kind": "synthetic",
-          "vectors": 8192,
-          "queries": 128,
-          "dimensions": 128,
-          "seed": 42
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin"
         },
         "build": {
           "initial_centroids": 8,
-          "batch_size": 256,
-          "split_threshold": 512,
+          "batch_size": 64,
+          "split_threshold": 64,
           "two_means_iterations": 5,
           "seed": 7,
           "repetitions": 3

@@ -2,23 +2,24 @@
 
 This benchmark measures **build, then search** using the new `diskann::ivf`
 implementation. There are no deletes, mixed update/query stages, or runbooks.
-The default example generates seeded FP32 vectors and independent queries, so
-it runs without external datasets or Git LFS fixtures. The metric is squared L2
-and both phases run on one thread.
+The default example reuses the SIFT small FP32 vectors, queries, and groundtruth
+under `test_data/disk_index_search`, matching the other benchmark examples.
+The metric is squared L2 and both phases run on one thread.
 
 ## Run
 
 From the repository root:
 
 ```powershell
-cargo run --release -p diskann-benchmark -- run --input-file diskann-benchmark/example/graph-ivf.json --output-file target/graph-ivf-baseline.json
+git lfs pull
+cargo run --release -p diskann-benchmark -- run --input-file diskann-benchmark\example\graph-ivf.json --output-file target\graph-ivf-baseline.json
 ```
 
-The example builds 8,192 vectors of dimension 128 three times. Each build is
-followed by 128 queries at `nprobe = 1, 4, 16`, with one unmeasured warmup pass
-and five measured passes per setting. Increase the dataset and query counts
-for performance studies; this small synthetic example verifies the pipeline
-and does not represent production recall or throughput.
+The example builds 256 vectors of dimension 128 three times, inserting batches
+of 64 with a split threshold of 64. Each build is followed by 10 queries at
+`nprobe = 1, 4, 16`, with one unmeasured warmup pass and five measured passes
+per setting. This small example verifies the pipeline and does not represent
+production recall or throughput. Use the YFCC workloads below for larger runs.
 
 Set `search` to `null`, or omit it, to measure build only. Search always operates
 on the freshly built index; saving/loading an index is not included. Every build
@@ -65,7 +66,7 @@ includes no SSD I/O, quantization, replication, or Mimir integration.
 | `searches[].mean_lists_scanned`, `mean_centroid_comparisons` | Actual coarse-routing/search work |
 | `searches[].mean_results_returned` | Detects query settings that return fewer than k results |
 
-Dataset generation/loading, groundtruth, result validation, and recall
+Dataset loading, groundtruth, result validation, and recall
 calculation are outside the timers. Output contains individual build and search
 repetitions, and the runner records the input configuration alongside results.
 
@@ -79,13 +80,12 @@ fewer lists; `mean_lists_scanned` records what was actually scanned. Even asking
 for every list does not guarantee that an approximate centroid graph reaches
 all lists. There is no hidden exhaustive fallback.
 
-## Use real data
+## Use another dataset
 
 Replace the example's `dataset` object with:
 
 ```json
 {
-  "kind": "files",
   "data": "base.fbin",
   "queries": "queries.fbin",
   "groundtruth": "groundtruth.bin"
@@ -117,11 +117,6 @@ improvement cannot hide an end-to-end regression. The console prints each split
 phase separately. These are phase wall times, including each phase's setup and
 output work, rather than distance-kernel-only CPU time.
 
-The [three-layer phase comparison](graph-ivf-stages.md) records measured values,
-per-round variation, work histograms, and search-quality checks at batch size 4,096.
-The [24-round repeat study](graph-ivf-stages-means.md) adds arithmetic means,
-standard deviations, and paired-round confidence intervals while retaining stalls.
-
 The two phase durations are measured inside the real split call and returned in
 `InsertStats` after successful publication. No-split insertions report zero. Each
 split adds four clock reads, with no per-point timers. `other_ivf_seconds` is a
@@ -148,11 +143,13 @@ cargo test -p diskann-benchmark graph_ivf
 
 ## Batch size for phase comparisons
 
-The primary [build](perf_test_inputs/graph-ivf-stages-build.json) and
-[search](perf_test_inputs/graph-ivf-stages-search.json) workloads use **4,096**
-points per insert, 65,536 vectors, 16 initial centroids, split threshold 2,048,
-five Lloyd steps, and dimensions 128/384/768. Batch size is explicit, not a
-library default. The small runnable example remains a pipeline smoke test.
+The [build](perf_test_inputs/graph-ivf-stages-build.json) and
+[search](perf_test_inputs/graph-ivf-stages-search.json) workloads reuse YFCC's
+10,000 FP32 vectors of dimension 192 from `test_data/yfcc`. The search workload
+also uses its 100 queries and precomputed squared-L2 groundtruth. Both use
+**4,096** points per insert, 16 initial centroids, split threshold 2,048, and
+five Lloyd steps. Batch size is explicit, not a library default. The SIFT small
+example remains a pipeline smoke test.
 
 This choice follows the inspected PoC branch `u/adkrishnan/graph-ivf` at
 `90cb5cafc75199d407873141b3029610e33f653d`:
@@ -168,15 +165,15 @@ This choice follows the inspected PoC branch `u/adkrishnan/graph-ivf` at
   (4,096 points) are separate constants; neither sets the insert batch size.
 
 4,096 is a source-grounded starting workload, not an optimal batch-size claim.
-It leaves 16 insertion boundaries in this corpus, with more opportunity for
-joint splits than 1,024 without collapsing the build into only four batches as
-16,384 does. Record the histogram to see the actual candidate-set distribution.
-Retain 1,024 and 16,384 as sensitivity cases. A change in batch size can change
-partitions and recall; compare each optimization at the **same** batch size.
+It leaves three insertion boundaries in YFCC 10K, including the final partial
+batch. Record splits, split point visits, and the split-parent histogram to
+check how much split work this workload exercises; it is not a large-corpus
+stress test. A change in batch size can change partitions and recall; compare
+each optimization at the **same** batch size and on the same input files.
 The PoC and new provider-based algorithm also differ, so matching this parameter
 does not make their full algorithms or timings equivalent.
 
 ```powershell
-cargo run --release -p diskann-benchmark -- run --input-file diskann-benchmark/perf_test_inputs/graph-ivf-stages-build.json --output-file target/graph-ivf-stages-build.json
-cargo run --release -p diskann-benchmark -- run --input-file diskann-benchmark/perf_test_inputs/graph-ivf-stages-search.json --output-file target/graph-ivf-stages-search.json
+cargo run --release -p diskann-benchmark -- run --input-file diskann-benchmark\perf_test_inputs\graph-ivf-stages-build.json --output-file target\graph-ivf-stages-build.json
+cargo run --release -p diskann-benchmark -- run --input-file diskann-benchmark\perf_test_inputs\graph-ivf-stages-search.json --output-file target\graph-ivf-stages-search.json
 ```

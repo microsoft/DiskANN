@@ -23,21 +23,13 @@ pub(crate) struct GraphIvfBuild {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Dataset {
-    Synthetic {
-        vectors: NonZeroUsize,
-        queries: NonZeroUsize,
-        dimensions: NonZeroUsize,
-        seed: u64,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct Dataset {
     /// Float32 .bin vectors; groundtruth uses uint32 row IDs.
-    Files {
-        data: InputFile,
-        queries: Option<InputFile>,
-        /// If absent, compute exhaustive groundtruth outside all timers.
-        groundtruth: Option<InputFile>,
-    },
+    pub data: InputFile,
+    pub queries: Option<InputFile>,
+    /// If absent, compute exhaustive groundtruth outside all timers.
+    pub groundtruth: Option<InputFile>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,23 +78,15 @@ impl GraphIvfBuild {
                 "l_search must be >= every requested nprobe"
             );
         }
-        match &mut self.dataset {
-            Dataset::Synthetic { vectors, .. } => self.build.validate_rows(vectors.get())?,
-            Dataset::Files {
-                data,
-                queries,
-                groundtruth,
-            } => {
-                data.resolve(checker)?;
-                if self.search.is_some() {
-                    queries
-                        .as_mut()
-                        .ok_or_else(|| anyhow::anyhow!("search requires a queries file"))?
-                        .resolve(checker)?;
-                    if let Some(path) = groundtruth {
-                        path.resolve(checker)?;
-                    }
-                }
+        self.dataset.data.resolve(checker)?;
+        if self.search.is_some() {
+            self.dataset
+                .queries
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("search requires a queries file"))?
+                .resolve(checker)?;
+            if let Some(path) = &mut self.dataset.groundtruth {
+                path.resolve(checker)?;
             }
         }
         Ok(())
@@ -138,16 +122,17 @@ impl Graph {
 impl Example for GraphIvfBuild {
     fn example() -> Self {
         Self {
-            dataset: Dataset::Synthetic {
-                vectors: NonZeroUsize::new(8192).unwrap(),
-                queries: NonZeroUsize::new(128).unwrap(),
-                dimensions: NonZeroUsize::new(128).unwrap(),
-                seed: 42,
+            dataset: Dataset {
+                data: InputFile::new("disk_index_siftsmall_learn_256pts_data.fbin"),
+                queries: Some(InputFile::new("disk_index_sample_query_10pts.fbin")),
+                groundtruth: Some(InputFile::new(
+                    "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
+                )),
             },
             build: Build {
                 initial_centroids: NonZeroUsize::new(8).unwrap(),
-                batch_size: NonZeroUsize::new(256).unwrap(),
-                split_threshold: 512,
+                batch_size: NonZeroUsize::new(64).unwrap(),
+                split_threshold: 64,
                 two_means_iterations: NonZeroUsize::new(5).unwrap(),
                 seed: 7,
                 repetitions: NonZeroUsize::new(3).unwrap(),
