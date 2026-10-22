@@ -309,15 +309,6 @@ mod quantization {
             }
         }
     }
-
-    impl From<Rerank> for inmem::repr::spherical::Rerank {
-        fn from(rerank: Rerank) -> Self {
-            match rerank {
-                Rerank::None => inmem::repr::spherical::Rerank::None,
-                Rerank::F16 => inmem::repr::spherical::Rerank::F16,
-            }
-        }
-    }
 }
 
 mod spherical {
@@ -641,6 +632,7 @@ impl Test {
             alloc::GlobalAllocator,
             spherical::{PreScale, SphericalQuantizer},
         };
+        use inmem::repr::quantized::{Backend, Config, spherical::Spherical};
         use rand::SeedableRng;
 
         let DatasetView::F32(data) = data else {
@@ -665,25 +657,26 @@ impl Test {
         )?;
 
         // Step 2: Associate it with the target bit-width.
-        let quantizer = match bits {
-            spherical::Bits::One => quantizer.as_quantizer::<1>()?,
-            spherical::Bits::Two => quantizer.as_quantizer::<2>()?,
-            spherical::Bits::Four => quantizer.as_quantizer::<4>()?,
-        };
-
+        let capacity = Capacity::new(data.nrows());
+        let max_degree = MaxDegree::new(self.build.config.max_degree().get());
         let start_point = rowmajor::Owned::row_vector(Box::from(
             <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
         ));
+        let rerank = quantizer_rerank(rerank, self.data.metric);
 
-        // Step 3: Create the config.
-        let config = inmem::repr::Spherical::config(
-            quantizer,
-            Capacity::new(data.nrows()),
-            MaxDegree::new(self.build.config.max_degree().get()),
-            start_point,
-            rerank.into(),
-        )?;
+        let backend = match bits {
+            spherical::Bits::One => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<1>()?))
+            }
+            spherical::Bits::Two => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<2>()?))
+            }
+            spherical::Bits::Four => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?))
+            }
+        };
 
+        let config = Config::new(backend, capacity, max_degree, start_point, rerank)?;
         let index_config = self.build.config.clone();
 
         Ok(finish(Provider::new(config)?, index_config))
@@ -750,7 +743,7 @@ impl Test {
         rerank: quantization::Rerank,
     ) -> anyhow::Result<Arc<dyn Index>> {
         use diskann_quantization::{num::Positive, scalar as qscalar};
-        use inmem::repr::quantized::{Quantized, scalar::Scalar};
+        use inmem::repr::quantized::{Backend, Quantized, scalar::Scalar};
 
         let DatasetView::F32(data) = data else {
             anyhow::bail!("scalar quantization only supports f32 data");
@@ -772,40 +765,18 @@ impl Test {
             inmem::repr::quantized::scalar::Metric::try_from(self.data.metric)?
         };
 
+        let backend = match bits {
+            scalar::Bits::One => Backend::new(Scalar::<1>::new(quantizer, metric)),
+            scalar::Bits::Two => Backend::new(Scalar::<2>::new(quantizer, metric)),
+            scalar::Bits::Four => Backend::new(Scalar::<4>::new(quantizer, metric)),
+            scalar::Bits::Eight => Backend::new(Scalar::<8>::new(quantizer, metric)),
+        };
+
         let capacity = Capacity::new(data.nrows());
         let max_degree = MaxDegree::new(self.build.config.max_degree().get());
         let rerank = quantizer_rerank(rerank, self.data.metric);
 
-        let config = match bits {
-            scalar::Bits::One => Quantized::config(
-                Scalar::<1>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-            scalar::Bits::Two => Quantized::config(
-                Scalar::<2>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-            scalar::Bits::Four => Quantized::config(
-                Scalar::<4>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-            scalar::Bits::Eight => Quantized::config(
-                Scalar::<8>::new(quantizer, metric),
-                capacity,
-                max_degree,
-                start_point,
-                rerank,
-            )?,
-        };
+        let config = Quantized::config(backend, capacity, max_degree, start_point, rerank)?;
 
         let index_config = self.build.config.clone();
         Ok(finish(Provider::new(config)?, index_config))

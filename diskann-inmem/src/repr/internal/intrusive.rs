@@ -80,12 +80,6 @@ impl<'a, D, P> ExpandBeam<'a, D, P> {
         }
     }
 
-    /// Return the [`crate::epoch::Guard`] of the embedded reader.
-    #[cfg(feature = "quantization")]
-    pub(in crate::repr) fn guard(&self) -> &crate::epoch::Guard<'a> {
-        self.reader.guard()
-    }
-
     /// Wrap `self` in a `Box`.
     pub(in crate::repr) fn boxed(self) -> Box<Self> {
         Box::new(self)

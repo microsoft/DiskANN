@@ -30,6 +30,7 @@ use crate::{
 // Built-in quantizers
 pub mod product;
 pub mod scalar;
+pub mod spherical;
 
 /// Plug-in for a generalized quantizer compatible with [`Quantized`].
 ///
@@ -108,6 +109,16 @@ pub trait Quantizer: std::fmt::Debug + Send + Sync + 'static {
     {
         self.query_distance(query, visitor)
     }
+
+    /// Construct the [`Backend`] from `self`.
+    fn into_backend(self) -> Backend
+    where
+        Self: Sized,
+    {
+        Backend {
+            inner: inner::Quantizer::new(self),
+        }
+    }
 }
 
 /// Return the distance between two raw byte slices.
@@ -138,6 +149,52 @@ pub trait QueryDistanceVisitor<'a> {
     fn visit<D>(self, distance: D) -> Self::Output
     where
         D: QueryDistance + 'a;
+}
+
+/// The opaque backend quantizer for [`Quantized`].
+///
+/// This is left opaque to allow for future optimization and customization and is
+/// constructible from all types that implement [`Quantizer`] either through
+/// [`Quantizer::into_backend`] or the blanket implementation of [`IntoBackend`].
+///
+/// Since this type is [`IntoBackend`] for itself, it can be used as a type-erased container
+/// for multiple [`Quantizer`] implementations, which can simplify quantizer preparation.
+pub struct Backend {
+    inner: inner::Quantizer,
+}
+
+impl Backend {
+    /// Construct a new [`Backend`] using [`IntoBackend`].
+    pub fn new<T>(quantizer: T) -> Self
+    where
+        T: IntoBackend,
+    {
+        quantizer.into_backend()
+    }
+
+    fn into_inner(self) -> inner::Quantizer {
+        self.inner
+    }
+}
+
+/// Custom conversion to [`Backend`].
+pub trait IntoBackend {
+    fn into_backend(self) -> Backend;
+}
+
+impl IntoBackend for Backend {
+    fn into_backend(self) -> Backend {
+        self
+    }
+}
+
+impl<Q> IntoBackend for Q
+where
+    Q: Quantizer,
+{
+    fn into_backend(self) -> Backend {
+        Quantizer::into_backend(self)
+    }
 }
 
 /// Configuration for [`Quantized`].
@@ -185,10 +242,10 @@ impl Config {
         rerank: Rerank,
     ) -> Result<Self, ConfigError>
     where
-        T: Quantizer,
+        T: IntoBackend,
     {
         Self::new_inner(
-            inner::Quantizer::new(quantizer),
+            quantizer.into_backend().into_inner(),
             capacity,
             max_degree,
             start_points,
@@ -382,7 +439,7 @@ impl Quantized {
         rerank: Rerank,
     ) -> Result<Config, ConfigError>
     where
-        T: Quantizer,
+        T: IntoBackend,
     {
         Config::new(quantizer, capacity, max_degree, start_points, rerank)
     }
