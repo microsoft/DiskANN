@@ -1,5 +1,5 @@
 use crate::{
-    encode_bloom_label_index_jsonl, encode_label_index_jsonl,
+    encode_unified_label_index_jsonl,
     format::{LABEL_INDEX_FLAGS, LABEL_INDEX_MAGIC, LABEL_INDEX_VERSION},
     BloomFilterConfig, BloomQueryConfig, EncodedLabelIndex, EncodedLabelPointEvaluator,
     EncodedLabelQuery, FilterExpressionType,
@@ -35,7 +35,7 @@ fn encode_exact(documents: &str) -> (tempfile::TempDir, EncodedLabelIndex) {
     let input = dir.path().join("labels.jsonl");
     let output = dir.path().join("labels.bin");
     std::fs::write(&input, documents).unwrap();
-    encode_label_index_jsonl(&input, &output).unwrap();
+    encode_unified_label_index_jsonl(&input, &output, BloomFilterConfig::exact_only()).unwrap();
     let index = EncodedLabelIndex::load(output).unwrap();
     (dir, index)
 }
@@ -49,7 +49,7 @@ fn encode_bloom(documents: &str, exact_label_count: u32) -> (tempfile::TempDir, 
         .unwrap()
         .with_exact_label_count(exact_label_count)
         .unwrap();
-    encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
+    encode_unified_label_index_jsonl(&input, &output, config).unwrap();
     let index = EncodedLabelIndex::load(output).unwrap();
     (dir, index)
 }
@@ -298,7 +298,10 @@ fn invalid_input_is_rejected() {
     ] {
         let input = dir.path().join("labels.jsonl");
         std::fs::write(&input, documents).unwrap();
-        assert!(encode_label_index_jsonl(&input, &output).is_err());
+        assert!(
+            encode_unified_label_index_jsonl(&input, &output, BloomFilterConfig::exact_only())
+                .is_err()
+        );
     }
 }
 
@@ -340,7 +343,7 @@ fn wire_layout_has_metadata_summaries_then_payload() {
         .unwrap()
         .with_exact_label_count(2)
         .unwrap();
-    encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
+    encode_unified_label_index_jsonl(&input, &output, config).unwrap();
     let bytes = std::fs::read(&output).unwrap();
     let layout = layout(&bytes);
     assert_eq!(layout.exact_rows, 2);
@@ -362,7 +365,7 @@ fn encoded_file() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>, Layout) {
         .unwrap()
         .with_exact_label_count(2)
         .unwrap();
-    encode_bloom_label_index_jsonl(&input, &output, config).unwrap();
+    encode_unified_label_index_jsonl(&input, &output, config).unwrap();
     let bytes = std::fs::read(&output).unwrap();
     let layout = layout(&bytes);
     (dir, output, bytes, layout)

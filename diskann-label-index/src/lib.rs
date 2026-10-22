@@ -12,7 +12,7 @@ mod format;
 mod index;
 
 pub use bloom::BloomFilterConfig;
-pub use builder::{encode_bloom_label_index_jsonl, encode_label_index_jsonl};
+pub use builder::encode_unified_label_index_jsonl;
 pub use error::EncodedLabelIndexError;
 pub use index::{
     BloomQueryConfig, BloomVisitScratch, CnfEvaluator, DnfEvaluator, EncodedLabelIndex,

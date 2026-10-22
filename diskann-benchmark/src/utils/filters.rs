@@ -419,9 +419,7 @@ mod tests {
     use super::*;
     use std::{fs::File, io::Write};
 
-    use diskann_label_index::{
-        encode_bloom_label_index_jsonl, encode_label_index_jsonl, BloomFilterConfig,
-    };
+    use diskann_label_index::{encode_unified_label_index_jsonl, BloomFilterConfig};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -471,7 +469,12 @@ mod tests {
             ],
         );
 
-        encode_label_index_jsonl(&labels_jsonl, &bitslice_index).unwrap();
+        encode_unified_label_index_jsonl(
+            &labels_jsonl,
+            &bitslice_index,
+            BloomFilterConfig::exact_only(),
+        )
+        .unwrap();
 
         (
             dir,
@@ -575,7 +578,7 @@ mod tests {
     fn test_lazy_encoded_provider_accepts_bloom_index() {
         let (dir, dense_index, query_file) = encoded_fixture();
         let bloom_path = dir.path().join("labels.bloom.bin");
-        encode_bloom_label_index_jsonl(
+        encode_unified_label_index_jsonl(
             dir.path().join("labels.jsonl"),
             &bloom_path,
             BloomFilterConfig::new(128, 4).unwrap(),
@@ -610,7 +613,12 @@ mod tests {
                 r#"{"doc_id":1,"A":false,"B":true}"#,
             ],
         );
-        encode_label_index_jsonl(&labels_jsonl, &bitslice_index).unwrap();
+        encode_unified_label_index_jsonl(
+            &labels_jsonl,
+            &bitslice_index,
+            BloomFilterConfig::exact_only(),
+        )
+        .unwrap();
         let index = load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap();
         let source = vec!["A&B".to_string()].into_boxed_slice();
         let provider_a = Arc::new(LazyEncodedQueryProvider::new(index.clone(), source.clone()));
@@ -678,7 +686,12 @@ mod tests {
         let labels_jsonl = dir.path().join("labels.jsonl");
         let bitslice_index = dir.path().join("labels.bitslice");
         write_lines(&labels_jsonl, &[r#"{"doc_id":0,"A":true}"#]);
-        encode_label_index_jsonl(&labels_jsonl, &bitslice_index).unwrap();
+        encode_unified_label_index_jsonl(
+            &labels_jsonl,
+            &bitslice_index,
+            BloomFilterConfig::exact_only(),
+        )
+        .unwrap();
         let index = load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap();
         let error =
             validate_encoded_benchmark_labels(&index, &["missing".to_string()]).unwrap_err();

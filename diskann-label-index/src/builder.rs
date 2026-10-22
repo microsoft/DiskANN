@@ -53,7 +53,7 @@ struct RowMetadata {
     nonzero_word_count: u32,
 }
 
-/// Encode a JSONL label file with one exact row per label.
+/// Encode a JSONL label file as a unified exact/Bloom label index.
 ///
 /// Supported JSONL rows are:
 ///
@@ -61,34 +61,19 @@ struct RowMetadata {
 ///   `field=value`;
 /// - objects with a `labels` string array;
 /// - a raw string or string array, using the non-empty line number as the document ID.
-pub fn encode_label_index_jsonl(
-    input_path: impl AsRef<Path>,
-    output_path: impl AsRef<Path>,
-) -> Result<(), EncodedLabelIndexError> {
-    encode_unified_label_index(input_path.as_ref(), output_path.as_ref(), None)
-}
-
-/// Encode a JSONL label file with Bloom-only, exact-only, or hybrid rows.
 ///
-/// The accepted JSONL forms are identical to [`encode_label_index_jsonl`]. Each label hashes to
-/// `config.hash_count()` distinct rows in a fixed `config.bit_count()`-row vector bitmap. The
-/// highest-frequency labels can instead use exact rows. Payload and summary rows use one physical
-/// row space: exact rows first, followed by Bloom rows.
-pub fn encode_bloom_label_index_jsonl(
+/// An exact-label count of zero creates a Bloom-only index. A count greater than or equal to the
+/// discovered dictionary size creates an exact-only index. Intermediate values create a hybrid
+/// exact-prefix/Bloom layout.
+pub fn encode_unified_label_index_jsonl(
     input_path: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
     config: BloomFilterConfig,
 ) -> Result<(), EncodedLabelIndexError> {
-    encode_unified_label_index(input_path.as_ref(), output_path.as_ref(), Some(config))
-}
-
-fn encode_unified_label_index(
-    input_path: &Path,
-    output_path: &Path,
-    bloom_config: Option<BloomFilterConfig>,
-) -> Result<(), EncodedLabelIndexError> {
+    let input_path = input_path.as_ref();
+    let output_path = output_path.as_ref();
     let scanned = scan_label_jsonl(input_path)?;
-    let requested_exact = bloom_config.map_or(u32::MAX, BloomFilterConfig::exact_label_count);
+    let requested_exact = config.exact_label_count();
     let (
         ScannedLabels {
             labels,
@@ -99,12 +84,7 @@ fn encode_unified_label_index(
         exact_label_count,
     ) = order_dictionary(scanned, requested_exact)?;
     let has_bloom_rows = exact_label_count < labels.len();
-    let (bloom_row_count, hash_count, config) = if has_bloom_rows {
-        let config = bloom_config.ok_or_else(|| {
-            EncodedLabelIndexError::Invalid(
-                "Bloom configuration is required when not every label is exact".to_string(),
-            )
-        })?;
+    let (bloom_row_count, hash_count, bloom_config) = if has_bloom_rows {
         (
             config.bit_count() as usize,
             config.hash_count() as usize,
@@ -133,7 +113,7 @@ fn encode_unified_label_index(
         EncodedLabelIndexError::Invalid("cannot reserve label-row table".to_string())
     })?;
     label_rows.resize(label_row_count, u32::MAX);
-    if let Some(config) = config {
+    if let Some(config) = bloom_config {
         let logical_rows = build_bloom_label_rows(&labels[exact_label_count..], config)?;
         for (suffix_index, rows) in logical_rows.chunks_exact(hash_count).enumerate() {
             let label_id = exact_label_count + suffix_index;

@@ -32,6 +32,14 @@ impl BloomFilterConfig {
         })
     }
 
+    /// Create a configuration that stores every possible dictionary label as an exact row.
+    pub fn exact_only() -> Self {
+        Self {
+            exact_label_count: MAX_LABEL_COUNT as u32,
+            ..Self::default()
+        }
+    }
+
     /// Store the most frequent `exact_label_count` labels as exact rows instead of Bloom.
     pub fn with_exact_label_count(
         mut self,
