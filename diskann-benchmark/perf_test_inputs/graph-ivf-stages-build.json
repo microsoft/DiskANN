@@ -10,7 +10,7 @@
         "build": {
           "initial_centroids": 16,
           "batch_size": 4096,
-          "split_threshold": 2048,
+          "split_threshold": 512,
           "two_means_iterations": 5,
           "seed": 7,
           "repetitions": 13

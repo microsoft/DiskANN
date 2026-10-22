@@ -9,7 +9,7 @@ use std::{
 };
 
 use diskann::{
-    ivf::{Config, IVFIndex},
+    ivf::{Config, IVFIndex, InsertEvent, InsertPhase},
     provider::DefaultContext,
 };
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
@@ -56,14 +56,17 @@ pub(super) async fn build(
             .saturating_add(settings.batch_size.get())
             .min(data.nrows());
         let points: Vec<_> = (first..end).map(|i| (i as u32, data.row(i))).collect();
+        let mut timer = SplitTimer::default();
         let stats = index
-            .insert_batch(&Strategy, &DefaultContext, &points)
+            .insert_batch_observed(&Strategy, &DefaultContext, &points, |event| {
+                timer.observe(event);
+            })
             .await?;
         inserted += stats.inserted;
         splits += stats.splits;
         split_points += stats.split_points;
-        two_means += stats.two_means;
-        reassignment += stats.reassignment;
+        two_means += timer.two_means;
+        reassignment += timer.reassignment;
         *split_parent_histogram.entry(stats.splits).or_insert(0) += 1;
     }
     let ivf = start.elapsed();
@@ -103,4 +106,38 @@ pub(super) async fn build(
             .unwrap_or(0),
     };
     Ok((index, graph, result))
+}
+
+#[derive(Default)]
+struct SplitTimer {
+    started: Option<(InsertPhase, Instant)>,
+    two_means: Duration,
+    reassignment: Duration,
+}
+
+impl SplitTimer {
+    fn observe(&mut self, event: InsertEvent) {
+        match event {
+            InsertEvent::PhaseStarted(phase) => {
+                debug_assert!(self.started.is_none());
+                self.started = Some((phase, Instant::now()));
+            }
+            InsertEvent::PhaseFinished(phase) => {
+                let Some((started_phase, started)) = self.started.take() else {
+                    debug_assert!(false, "phase finish must follow a phase start");
+                    return;
+                };
+                debug_assert_eq!(started_phase, phase);
+                if started_phase != phase {
+                    return;
+                }
+                match phase {
+                    InsertPhase::TwoMeans => self.two_means += started.elapsed(),
+                    InsertPhase::Reassignment => self.reassignment += started.elapsed(),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
 }

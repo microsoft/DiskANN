@@ -55,6 +55,17 @@ fn run_cli(input: &Value) -> anyhow::Result<Value> {
     Ok(serde_json::from_reader(File::open(output_path)?)?)
 }
 
+fn build_work_signature(build: &Value) -> Value {
+    json!({
+        "splits": build["splits"],
+        "split_points": build["split_points"],
+        "split_parent_histogram": build["split_parent_histogram"],
+        "lists": build["lists"],
+        "empty_lists": build["empty_lists"],
+        "max_list_size": build["max_list_size"],
+    })
+}
+
 #[test]
 fn graph_ivf_repository_workloads_run_with_existing_datasets() {
     use crate::inputs::Example;
@@ -89,9 +100,30 @@ fn graph_ivf_repository_workloads_run_with_existing_datasets() {
         let results = &output[0]["results"];
         assert_eq!(results["vectors"], vectors);
         assert_eq!(results["dimensions"], dimensions);
-        for build in results["builds"].as_array().unwrap() {
+        let builds = results["builds"].as_array().unwrap();
+        for build in builds {
             assert_eq!(build["inserted"], vectors);
-            assert!(build["splits"].as_u64().unwrap() > 0);
+        }
+        if vectors == 10_000 {
+            let expected = build_work_signature(&builds[0]);
+            let histogram = expected["split_parent_histogram"].as_object().unwrap();
+            assert_eq!(
+                histogram.values().map(|n| n.as_u64().unwrap()).sum::<u64>(),
+                3
+            );
+            assert!(
+                histogram
+                    .keys()
+                    .all(|parents| parents.parse::<usize>().unwrap() > 1),
+                "every insertion must exercise multi-parent reassignment"
+            );
+            for build in builds {
+                assert_eq!(build_work_signature(build), expected);
+            }
+        } else {
+            assert!(builds
+                .iter()
+                .all(|build| build["splits"].as_u64().unwrap() > 0));
         }
         let searches = results["searches"].as_array().unwrap();
         assert_eq!(searches.is_empty(), queries == 0);

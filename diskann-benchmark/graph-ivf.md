@@ -29,8 +29,9 @@ repetition starts with a new provider, graph, and the same random seeds.
 
 The library currently exposes IVF initialization and batched insertion, but no
 IVF search API or reusable IVF provider. This benchmark therefore supplies
-private adapters under `src/graph_ivf/`. Library insertion statistics expose the
-two timed split phases so every optimization layer uses the same boundaries.
+private adapters under `src/graph_ivf/`. An opt-in library insertion observer
+exposes the two split-phase boundaries so every optimization layer uses the
+same measurements without adding clock reads to ordinary insertions.
 
 The module entry point only registers the benchmark. Execution orchestration,
 build timing, search measurement, data preparation, and result serialization are
@@ -123,12 +124,13 @@ improvement cannot hide an end-to-end regression. The console prints each split
 phase separately. These are phase wall times, including each phase's setup and
 output work, rather than distance-kernel-only CPU time.
 
-The two phase durations are measured inside the real split call and returned in
-`InsertStats` after successful publication. No-split insertions report zero. Each
-split adds four clock reads, with no per-point timers. `other_ivf_seconds` is a
-residual, not a separately profiled routing measurement. Timings are diagnostic
-and nondeterministic; compare work/quality fields separately. New `InsertStats`
-fields require updates to exhaustive struct construction or matching.
+The benchmark measures the real split call through
+`IVFIndex::insert_batch_observed`; ordinary `insert_batch` does not read a clock.
+An insertion containing one or more split parents adds four clock reads, with no
+per-point timers. No-split insertions report zero phase time. `InsertStats` keeps
+only deterministic work counts; the benchmark-local observer owns the
+nondeterministic durations. `other_ivf_seconds` is a residual, not a separately
+profiled routing measurement. Compare work and quality fields separately.
 
 A faster run is not sufficient evidence by itself. Check inserted count, splits,
 list sizes, split point visits, split-parent histograms, recall, scan counts, and
@@ -153,9 +155,13 @@ The [build](perf_test_inputs/graph-ivf-stages-build.json) and
 [search](perf_test_inputs/graph-ivf-stages-search.json) workloads reuse YFCC's
 10,000 FP32 vectors of dimension 192 from `test_data/yfcc`. The search workload
 also uses its 100 queries and precomputed squared-L2 groundtruth. Both use
-**4,096** points per insert, 16 initial centroids, split threshold 2,048, and
-five Lloyd steps. Batch size is explicit, not a library default. The SIFT small
-example remains a pipeline smoke test.
+**4,096** points per insert, 16 initial centroids, split threshold 512, and five
+Lloyd steps. Batch size is explicit, not a library default. The SIFT small
+example remains a pipeline smoke test. With the pinned seed and fixture, the
+three insertions each split multiple parents, exercising reassignment across
+more than two children. Tests require that shape and verify that every repeated
+build has the same split-work and final-layout signature; they do not pin one
+signature across future implementation or ISA changes.
 
 This choice follows the inspected PoC branch `u/adkrishnan/graph-ivf` at
 `90cb5cafc75199d407873141b3029610e33f653d`:
@@ -172,10 +178,11 @@ This choice follows the inspected PoC branch `u/adkrishnan/graph-ivf` at
 
 4,096 is a source-grounded starting workload, not an optimal batch-size claim.
 It leaves three insertion boundaries in YFCC 10K, including the final partial
-batch. Record splits, split point visits, and the split-parent histogram to
-check how much split work this workload exercises; it is not a large-corpus
-stress test. A change in batch size can change partitions and recall; compare
-each optimization at the **same** batch size and on the same input files.
+batch. The threshold is chosen to exercise multiple simultaneous split parents,
+not as a production tuning recommendation; this remains a small-corpus
+measurement rather than a stress test. A change in batch size or threshold can
+change partitions and recall; compare each optimization at the **same** settings
+and on the same input files.
 The PoC and new provider-based algorithm also differ, so matching this parameter
 does not make their full algorithms or timings equivalent.
 

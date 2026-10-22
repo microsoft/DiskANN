@@ -5,26 +5,20 @@
 
 //! Two-means fitting and region-wide assignment over borrowed point rows.
 
-use std::time::{Duration, Instant};
-
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{Rng, rngs::StdRng};
 
-use super::workingset::{ListView, PointRef};
+use super::{
+    observer::{InsertEvent, InsertPhase},
+    workingset::{ListView, PointRef},
+};
 use crate::{ANNError, ANNResult};
 
 pub(super) struct Children<I> {
     pub centroids: rowmajor::Owned<f32>,
     pub members: Vec<Vec<I>>,
-    pub timing: SplitTiming,
     pub point_count: usize,
-}
-
-#[derive(Debug, Default)]
-pub(super) struct SplitTiming {
-    pub two_means: Duration,
-    pub reassignment: Duration,
 }
 
 /// Fit two children per source, then assign every point across all children.
@@ -33,13 +27,14 @@ pub(super) fn split<I: Copy, L>(
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
+    observe: &mut impl FnMut(InsertEvent),
 ) -> ANNResult<Children<I>> {
     if lists.is_empty() || dim == 0 {
         return Err(ANNError::message(
             "IVF splitting needs a nonempty working set and positive dimension",
         ));
     }
-    let two_means_start = Instant::now();
+    observe(InsertEvent::PhaseStarted(InsertPhase::TwoMeans));
     let mut centroids = rowmajor::Owned::try_from_element(2 * lists.len(), dim, 0.0)?;
     let mut sums = vec![0.0; 2 * dim];
     for (list, centers) in lists
@@ -48,9 +43,9 @@ pub(super) fn split<I: Copy, L>(
     {
         fit_two_means(&list.points, centers, dim, iterations, rng, &mut sums)?;
     }
-    let two_means = two_means_start.elapsed();
+    observe(InsertEvent::PhaseFinished(InsertPhase::TwoMeans));
 
-    let reassignment_start = Instant::now();
+    observe(InsertEvent::PhaseStarted(InsertPhase::Reassignment));
     let count = lists.iter().map(|list| list.points.len()).sum();
     let mut assignments = Vec::with_capacity(count);
     let mut sizes = vec![0; centroids.nrows()];
@@ -63,14 +58,10 @@ pub(super) fn split<I: Copy, L>(
     for (point, to) in lists.iter().flat_map(|list| &list.points).zip(assignments) {
         members[to].push(point.id);
     }
-    let reassignment = reassignment_start.elapsed();
+    observe(InsertEvent::PhaseFinished(InsertPhase::Reassignment));
     Ok(Children {
         centroids,
         members,
-        timing: SplitTiming {
-            two_means,
-            reassignment,
-        },
         point_count: count,
     })
 }

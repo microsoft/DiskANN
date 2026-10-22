@@ -19,11 +19,13 @@
 
 mod clustering;
 mod index;
+mod observer;
 pub mod pending;
 pub mod traits;
 pub mod workingset;
 
 pub use index::{Config, ConfigError, IVFIndex, InsertStats};
+pub use observer::{InsertEvent, InsertPhase};
 
 #[cfg(test)]
 mod tests;

@@ -13,7 +13,7 @@ use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{SeedableRng, rngs::StdRng};
 
 use super::{
-    Config, IVFIndex, InsertStats, clustering,
+    Config, IVFIndex, InsertEvent, InsertPhase, InsertStats, clustering,
     pending::{Membership, PendingLists},
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
@@ -428,8 +428,6 @@ async fn initialize_and_append_publish_actual_memberships() {
             inserted: 3,
             splits: 0,
             split_points: 0,
-            two_means: std::time::Duration::ZERO,
-            reassignment: std::time::Duration::ZERO,
         }
     );
     assert_eq!(index.provider().lists[&1].members, [10_007, 10_008]);
@@ -471,18 +469,29 @@ async fn splitting_commits_children_and_ordinary_appends_once() {
         (6, &[11.0, 1.0][..]),
         (7, &[101.0, 0.0][..]),
     ];
-    let start = std::time::Instant::now();
-    let stats = require_send(index.insert_batch(&Strategy, &DefaultContext, &points))
-        .await
-        .unwrap();
+    let mut events = Vec::new();
+    let stats = require_send(index.insert_batch_observed(
+        &Strategy,
+        &DefaultContext,
+        &points,
+        |event| events.push(event),
+    ))
+    .await
+    .unwrap();
     let store = index.provider();
 
     assert_eq!(stats.inserted, 3);
     assert_eq!(stats.splits, 2);
     assert_eq!(stats.split_points, 6);
-    // A coarse clock may report zero for this tiny workload. Timings must be
-    // disjoint subsets of the insertion, not performance thresholds.
-    assert!(stats.two_means + stats.reassignment <= start.elapsed());
+    assert_eq!(
+        events,
+        [
+            InsertEvent::PhaseStarted(InsertPhase::TwoMeans),
+            InsertEvent::PhaseFinished(InsertPhase::TwoMeans),
+            InsertEvent::PhaseStarted(InsertPhase::Reassignment),
+            InsertEvent::PhaseFinished(InsertPhase::Reassignment),
+        ]
+    );
     assert_eq!(store.finishes, 1);
     assert_eq!(store.fills, 1);
     assert!(!store.lists.contains_key(&1));
@@ -680,7 +689,8 @@ fn assignment_can_cross_parent_boundaries() {
                 .collect(),
         },
     ];
-    let children = clustering::split(&view, 1, 10, &mut StdRng::seed_from_u64(7)).unwrap();
+    let children =
+        clustering::split(&view, 1, 10, &mut StdRng::seed_from_u64(7), &mut |_| {}).unwrap();
     assert!(
         children.members[2..]
             .iter()
@@ -702,8 +712,8 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
             })
             .collect(),
     }];
-    let zero = clustering::split(&view, 1, 0, &mut StdRng::seed_from_u64(7)).unwrap();
-    let one = clustering::split(&view, 1, 1, &mut StdRng::seed_from_u64(7)).unwrap();
+    let zero = clustering::split(&view, 1, 0, &mut StdRng::seed_from_u64(7), &mut |_| {}).unwrap();
+    let one = clustering::split(&view, 1, 1, &mut StdRng::seed_from_u64(7), &mut |_| {}).unwrap();
     assert_eq!(zero.centroids.as_slice(), one.centroids.as_slice());
     assert!(
         zero.centroids

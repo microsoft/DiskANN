@@ -5,7 +5,7 @@
 
 //! IVF policy and orchestration, independent of physical list storage.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 
 use diskann_utils::{
     future::SendFuture,
@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use super::{
     clustering,
+    observer::InsertEvent,
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
     },
@@ -44,12 +45,6 @@ pub struct InsertStats {
     /// Point visits in the split working set, including stored and new points.
     /// A point can contribute again in a later insertion if its list splits again.
     pub split_points: usize,
-    /// Wall time fitting two centroids per split parent, including fitting scratch.
-    /// Zero when no lists split; clock resolution can also produce zero.
-    pub two_means: Duration,
-    /// Wall time assigning all split points across all fitted children, including
-    /// assignment scratch and member-list materialization. Excludes provider I/O.
-    pub reassignment: Duration,
 }
 
 /// An IVF index with serialized mutation through the underlying provider.
@@ -137,6 +132,30 @@ impl<P: Provider> IVFIndex<P> {
         S: InsertStrategy<'a, P, T>,
         T: Sync,
     {
+        self.insert_batch_observed(strategy, context, points, |_| {})
+    }
+
+    /// Insert a batch while reporting split-phase boundaries to `observe`.
+    ///
+    /// The callback is not invoked when no lists split. Timing and aggregation are
+    /// deliberately left to the observer so ordinary insertions do not read a clock.
+    ///
+    /// # Errors
+    ///
+    /// Has the same failure behavior as [`Self::insert_batch`]. A phase-finished
+    /// event is emitted only when that phase succeeds.
+    pub fn insert_batch_observed<'a, S, T, O>(
+        &'a mut self,
+        strategy: &'a S,
+        context: &'a P::Context,
+        points: &'a [(P::ExternalId, T)],
+        mut observe: O,
+    ) -> impl SendFuture<ANNResult<InsertStats>>
+    where
+        S: InsertStrategy<'a, P, T>,
+        T: Sync,
+        O: FnMut(InsertEvent) + Send + 'a,
+    {
         let provider = &mut self.provider;
         let config = self.config;
         let rng = &mut self.rng;
@@ -175,16 +194,12 @@ impl<P: Provider> IVFIndex<P> {
             }
             let splits = parents.len();
             let mut split_points = 0;
-            let mut two_means = Duration::ZERO;
-            let mut reassignment = Duration::ZERO;
             if !parents.is_empty() {
                 let children = {
                     let dim = accessor.dim();
                     let view = accessor.fill(&parents).await?;
-                    clustering::split(&view, dim, config.two_means_iterations, rng)?
+                    clustering::split(&view, dim, config.two_means_iterations, rng, &mut observe)?
                 };
-                two_means = children.timing.two_means;
-                reassignment = children.timing.reassignment;
                 split_points = children.point_count;
                 for (centroid, members) in children.centroids.rows().zip(children.members) {
                     accessor.lists().create_list(centroid, members).await?;
@@ -200,8 +215,6 @@ impl<P: Provider> IVFIndex<P> {
                 inserted: points.len(),
                 splits,
                 split_points,
-                two_means,
-                reassignment,
             })
         }
     }
