@@ -58,8 +58,8 @@ pub struct IVFIndex<P: Provider> {
     provider: P,
     config: Config,
     rng: StdRng,
-    #[cfg(feature = "ivf-two-means-benchmark")]
-    two_means_strategy: super::two_means_benchmark::Strategy,
+    #[cfg(feature = "ivf-experimental")]
+    two_means_strategy: clustering::Strategy,
 }
 
 impl<P: Provider> IVFIndex<P> {
@@ -74,8 +74,8 @@ impl<P: Provider> IVFIndex<P> {
             provider,
             rng: StdRng::seed_from_u64(config.seed),
             config,
-            #[cfg(feature = "ivf-two-means-benchmark")]
-            two_means_strategy: super::two_means_benchmark::Strategy::PairedPoint,
+            #[cfg(feature = "ivf-experimental")]
+            two_means_strategy: clustering::Strategy::PairedPoint,
         })
     }
 
@@ -83,10 +83,11 @@ impl<P: Provider> IVFIndex<P> {
         &self.provider
     }
 
-    /// Select a numerical experiment for benchmark builds. Default is paired L2.
-    #[cfg(feature = "ivf-two-means-benchmark")]
+    /// Select an experimental clustering strategy. Default is paired L2.
+    /// Batched and dot-product strategies can change the resulting partition.
+    #[cfg(feature = "ivf-experimental")]
     #[doc(hidden)]
-    pub fn set_two_means_strategy(&mut self, strategy: super::two_means_benchmark::Strategy) {
+    pub fn set_two_means_strategy(&mut self, strategy: clustering::Strategy) {
         self.two_means_strategy = strategy;
     }
 
@@ -151,7 +152,7 @@ impl<P: Provider> IVFIndex<P> {
         let provider = &mut self.provider;
         let config = self.config;
         let rng = &mut self.rng;
-        #[cfg(feature = "ivf-two-means-benchmark")]
+        #[cfg(feature = "ivf-experimental")]
         let two_means_strategy = self.two_means_strategy;
 
         async move {
@@ -194,32 +195,17 @@ impl<P: Provider> IVFIndex<P> {
                 let children = {
                     let dim = accessor.dim();
                     let view = accessor.fill(&parents).await?;
-                    #[cfg(feature = "ivf-two-means-benchmark")]
+                    #[cfg(feature = "ivf-experimental")]
                     {
-                        if two_means_strategy == super::two_means_benchmark::Strategy::PairedPoint {
-                            clustering::split(&view, dim, config.two_means_iterations, rng)?
-                        } else {
-                            clustering::split_using(
-                                &view,
-                                dim,
-                                config.two_means_iterations,
-                                rng,
-                                |points, centers, dim, iterations, rng, sums| {
-                                    super::two_means_benchmark::fit_into(
-                                        points,
-                                        centers,
-                                        dim,
-                                        iterations,
-                                        rng,
-                                        sums,
-                                        two_means_strategy,
-                                    )
-                                    .map(|_| ())
-                                },
-                            )?
-                        }
+                        clustering::split_with_strategy(
+                            &view,
+                            dim,
+                            config.two_means_iterations,
+                            rng,
+                            two_means_strategy,
+                        )?
                     }
-                    #[cfg(not(feature = "ivf-two-means-benchmark"))]
+                    #[cfg(not(feature = "ivf-experimental"))]
                     clustering::split(&view, dim, config.two_means_iterations, rng)?
                 };
                 two_means = children.timing.two_means;

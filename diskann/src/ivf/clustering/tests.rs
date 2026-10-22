@@ -3,8 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, RngCore, SeedableRng};
 
+use super::two_means::{fit_two_means_with, nearest_two};
 use super::*;
 
 fn points(rows: &[Vec<f32>]) -> Vec<PointRef<'_, u32>> {

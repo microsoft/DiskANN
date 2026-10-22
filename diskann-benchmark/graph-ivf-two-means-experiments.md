@@ -5,6 +5,27 @@ IVF insertion path. The default library keeps paired L2. The experimental
 batched and dot-product strategies change floating-point evaluation order;
 they are not drop-in bitwise replacements.
 
+## Code boundaries
+
+`diskann/src/ivf/clustering/` owns splitting, the shared Lloyd state transitions,
+parent preparation and the assignment kernels. `two_means.rs` retains the
+default paired-L2 loop; `strategy.rs` prepares a parent once; `assignment.rs`
+and `batched.rs` implement the optional numerical alternatives. `IVFIndex`
+delegates to this module. Reusable paired-L2 primitives remain in
+`diskann-vector/src/distance/`.
+
+The library's opt-in feature is `ivf-experimental`. It exposes
+`clustering::{Strategy, TwoMeans}` and the index strategy selector, without CLI
+names, timers or benchmark result types. The benchmark's `ivf-two-means` feature
+enables it. JSON names and parsing live in `src/inputs/graph_ivf_two_means.rs`;
+complete-fit timing and final diagnostics live in
+`src/graph_ivf/two_means/measurement.rs`. Split-phase `InsertStats` timers remain
+part of the existing index instrumentation.
+
+The former hidden `ivf::two_means_benchmark` module and library feature
+`ivf-two-means-benchmark` were removed in this draft. All seven JSON strategy
+names, their order, and the paired default are unchanged.
+
 ## Implemented strategies and numerical contract
 
 | `two_means_strategy` | Assignment computation | Packing | Contract |
@@ -39,11 +60,19 @@ or quality tolerance hides that case.
 
 ## Measurement boundaries
 
-`graph-ivf-two-means` times scratch allocation, parent packing where needed,
+`graph-ivf-two-means` times shape validation, scratch allocation, parent packing where needed,
 seeding, every Lloyd assignment, selection, f64 accumulation, and center update.
 The same packed parent is reused across iterations; no packing cost is moved
 outside this interval. It reports raw sample times in execution order and
 arithmetic means. Strategy order rotates and reverses across rounds.
+
+The refactored harness reports `preparation_ns`: validation and coordinate
+packing within the full timer. The former `packing_ns` included coordinate
+packing and row-view creation, with shape validation outside the total timer.
+Row views and kernel scratch remain inside the complete-fit timer. These phase
+fields have different scopes; historical results are not renamed or pooled with
+new measurements. The ongoing ABBA build/search run keeps its frozen executable
+and original protocol, independent of source-file reorganization.
 
 Final diagnostic assignments use paired L2 against the fitted centers, outside
 the timer, matching the numerical distance used by final region reassignment.
@@ -123,7 +152,7 @@ silently accepted using a loose output tolerance.
 
 ```powershell
 cargo test -p diskann-vector paired_l2
-cargo test -p diskann --features ivf-two-means-benchmark two_means
+cargo test -p diskann --features ivf-experimental ivf::clustering
 cargo test -p diskann-benchmark --features ivf-two-means graph_ivf
 cargo clippy --workspace --all-targets --features diskann-benchmark/ivf-two-means -- -D warnings
 ```
@@ -134,6 +163,22 @@ to reject a NaN centroid, which the upstream implementation accepts. The test is
 unchanged. Focused passing tests are not a claim that the full suite is green.
 Scalar, V3 and V4 paths ran on this host; AArch64 Windows library/tests compile,
 but Neon execution and old-x86 emulation were unavailable.
+
+The clustering/benchmark refactor was checked against the original source at
+`c7e54d08` in one process: 7,812 complete-fit comparisons across seven strategies,
+coordinate/row tails, contiguous/scattered rows, cancellation-prone values and
+finite inputs that overflow distances. Center bits, f64 sum bits, RNG state and
+final assignments matched. A separate release check matched all seven strategies'
+YFCC build/search fingerprints, recall and logical scan counts (all 100 queries),
+plus 448 standalone strategy/workload diagnostic comparisons. These are
+correctness checks, not new performance estimates.
+
+The refactor passes 14 clustering tests, 12 feature-enabled benchmark tests and
+eight default benchmark tests; the full IVF suite remains 20 passed and the one
+NaN-initialization failure above. Formatting, default/feature-enabled workspace
+Clippy, a release build and AArch64 Windows test compilation pass. Separate LLVM
+profiles report 95.33% line coverage over selected library files and 93.63% over
+selected benchmark/input files; these local figures are not Codecov patch status.
 
 ## Decision boundary
 

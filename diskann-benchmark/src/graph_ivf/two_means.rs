@@ -5,10 +5,7 @@
 
 use std::{hint::black_box, io::Write};
 
-use diskann::ivf::{
-    two_means_benchmark::{self, Strategy},
-    workingset::PointRef,
-};
+use diskann::ivf::workingset::PointRef;
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, Score},
     utils::percentiles::{self, Percentiles},
@@ -18,7 +15,9 @@ use diskann_utils::views::rowmajor::{self, Matrix};
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
 
-use crate::inputs::graph_ivf_two_means::{GraphIvfTwoMeans, Layout};
+use crate::inputs::graph_ivf_two_means::{GraphIvfTwoMeans, Layout, TwoMeansStrategy as Strategy};
+
+mod measurement;
 
 pub(super) struct Strategies;
 
@@ -86,7 +85,7 @@ impl Benchmark for Strategies {
         }
         Ok(Results {
             threads: 1,
-            timing_scope: "scratch + pack + seed + distance/selection + ordered f64 sums + center updates; diagnostics excluded",
+            timing_scope: "validate + scratch + pack + seed + distance/selection + ordered f64 sums + center updates; diagnostics excluded",
             numerical_reference: "paired_point",
             source: if corpus.is_some() { "file_sample" } else { "synthetic_uniform" },
             workloads,
@@ -128,7 +127,7 @@ struct StrategyResult {
     strategy: &'static str,
     samples: usize,
     total_ns: Percentiles<u64>,
-    packing_ns: Percentiles<u64>,
+    preparation_ns: Percentiles<u64>,
     /// Preserve measurement order for paired analysis. No slow samples are discarded.
     total_samples_ns: Vec<u64>,
     packed_bytes: usize,
@@ -140,8 +139,8 @@ struct StrategyResult {
 
 struct Samples {
     totals: Vec<u64>,
-    packings: Vec<u64>,
-    last: Option<two_means_benchmark::Run>,
+    preparations: Vec<u64>,
+    last: Option<measurement::Run>,
 }
 
 fn run_workload(
@@ -152,8 +151,7 @@ fn run_workload(
     iterations: usize,
     mut output: &mut dyn Output,
 ) -> anyhow::Result<WorkloadResults> {
-    let reference =
-        two_means_benchmark::fit(points, dim, iterations, input.seed, Strategy::PairedPoint)?;
+    let reference = measurement::fit(points, dim, iterations, input.seed, Strategy::PairedPoint)?;
     let min_margin = reference
         .margins
         .iter()
@@ -164,7 +162,7 @@ fn run_workload(
         .iter()
         .map(|_| Samples {
             totals: Vec::new(),
-            packings: Vec::new(),
+            preparations: Vec::new(),
             last: None,
         })
         .collect();
@@ -176,7 +174,7 @@ fn run_workload(
             order.reverse();
         }
         for index in order {
-            let run = two_means_benchmark::fit(
+            let run = measurement::fit(
                 black_box(points),
                 dim,
                 iterations,
@@ -186,7 +184,7 @@ fn run_workload(
             let samples = &mut measurements[index];
             if round >= input.warmup_repetitions {
                 samples.totals.push(duration_ns(run.total));
-                samples.packings.push(duration_ns(run.packing));
+                samples.preparations.push(duration_ns(run.preparation));
                 samples.last = Some(black_box(run));
             } else {
                 black_box(run);
@@ -239,7 +237,7 @@ fn run_workload(
             strategy: strategy.name(),
             samples: samples.totals.len(),
             total_ns,
-            packing_ns: percentiles::compute_percentiles(&mut samples.packings)?,
+            preparation_ns: percentiles::compute_percentiles(&mut samples.preparations)?,
             total_samples_ns,
             packed_bytes: run.packed_bytes,
             assignment_disagreements,

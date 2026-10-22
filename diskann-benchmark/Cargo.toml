@@ -55,7 +55,7 @@ half = { workspace = true, features = ["rand_distr", "num-traits"] }
 default = []
 
 # Opt in to experimental IVF kernels and complete two-means measurements.
-ivf-two-means = ["diskann/ivf-two-means-benchmark"]
+ivf-two-means = ["diskann/ivf-experimental"]
 
 # Enable spherical-quantization based algorithms
 spherical-quantization = []

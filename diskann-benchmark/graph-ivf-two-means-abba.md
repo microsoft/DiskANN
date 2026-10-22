@@ -6,6 +6,15 @@ seven strategy selector and untimed fingerprints adapted to its new modules.
 The benchmark now uses the shared recall implementation. Numerical kernels,
 ordered f64 sums, seeds, fixed Lloyd steps and final reassignment are unchanged.
 
+The executable for this run was built from `c7e54d087313be33bdaaf4cdea791a61e703fb81`;
+its SHA256 is `f9c499237fa1a02660b5128979ebc8bad88249c659e9418dd2f9cfd82222f2ec`.
+The subsequent clustering/benchmark separation changes source paths and the
+standalone preparation timer. It does not replace this executable. Validate the
+recorded source hashes against that historical commit with the checkout's line
+endings, not against the refactored files. Keep the original provenance and
+samples; the ABBA timings describe the frozen version, not a measured speedup
+of the refactor. Refactor correctness checks are recorded separately.
+
 ## Fixed comparison
 
 | Dataset | Base vectors | Dimensions | Queries in every search pass | Source type |

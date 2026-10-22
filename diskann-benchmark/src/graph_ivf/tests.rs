@@ -334,7 +334,7 @@ fn experimental_strategies_use_real_ivf_build_and_search() {
     let mut raw = small_input();
     raw["jobs"][0]["content"]["build"]["repetitions"] = json!(1);
     let reference = run_cli(&raw).unwrap();
-    for strategy in diskann::ivf::two_means_benchmark::Strategy::ALL {
+    for strategy in crate::inputs::graph_ivf_two_means::TwoMeansStrategy::ALL {
         raw["jobs"][0]["content"]["build"]["two_means_strategy"] = json!(strategy.name());
         let result = run_cli(&raw).unwrap();
         let build = &result[0]["results"]["builds"][0];
@@ -342,9 +342,9 @@ fn experimental_strategies_use_real_ivf_build_and_search() {
         assert_eq!(result[0]["results"]["searches"][2]["recall_at_k"], 1.0);
         if matches!(
             strategy,
-            diskann::ivf::two_means_benchmark::Strategy::Separate
-                | diskann::ivf::two_means_benchmark::Strategy::PairedPoint
-                | diskann::ivf::two_means_benchmark::Strategy::PackedPaired
+            crate::inputs::graph_ivf_two_means::TwoMeansStrategy::Separate
+                | crate::inputs::graph_ivf_two_means::TwoMeansStrategy::PairedPoint
+                | crate::inputs::graph_ivf_two_means::TwoMeansStrategy::PackedPaired
         ) {
             assert_eq!(
                 build["index_fingerprint"],

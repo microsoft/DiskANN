@@ -5,6 +5,7 @@
 
 use std::num::NonZeroUsize;
 
+use diskann::ivf::clustering;
 use diskann_benchmark_runner::{files::InputFile, Checker};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +13,60 @@ use super::graph_ivf::FileType;
 use super::{as_input, Example};
 
 as_input!(GraphIvfTwoMeans);
+
+/// CLI spelling and experiment order are tooling concerns, separate from kernels.
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TwoMeansStrategy {
+    Separate,
+    #[default]
+    PairedPoint,
+    PackedPaired,
+    #[serde(rename = "batched_4")]
+    Batched4,
+    #[serde(rename = "batched_8")]
+    Batched8,
+    Sgemm,
+    CenterDifference,
+}
+
+impl TwoMeansStrategy {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Separate,
+        Self::PairedPoint,
+        Self::PackedPaired,
+        Self::Batched4,
+        Self::Batched8,
+        Self::Sgemm,
+        Self::CenterDifference,
+    ];
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Separate => "separate",
+            Self::PairedPoint => "paired_point",
+            Self::PackedPaired => "packed_paired",
+            Self::Batched4 => "batched_4",
+            Self::Batched8 => "batched_8",
+            Self::Sgemm => "sgemm",
+            Self::CenterDifference => "center_difference",
+        }
+    }
+}
+
+impl From<TwoMeansStrategy> for clustering::Strategy {
+    fn from(value: TwoMeansStrategy) -> Self {
+        match value {
+            TwoMeansStrategy::Separate => Self::Separate,
+            TwoMeansStrategy::PairedPoint => Self::PairedPoint,
+            TwoMeansStrategy::PackedPaired => Self::PackedPaired,
+            TwoMeansStrategy::Batched4 => Self::Batched4,
+            TwoMeansStrategy::Batched8 => Self::Batched8,
+            TwoMeansStrategy::Sgemm => Self::Sgemm,
+            TwoMeansStrategy::CenterDifference => Self::CenterDifference,
+        }
+    }
+}
 
 /// Matrix of complete two-means workloads.
 #[derive(Debug, Serialize, Deserialize)]

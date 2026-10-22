@@ -43,10 +43,7 @@ pub(super) async fn build(
         },
     )?;
     #[cfg(feature = "ivf-two-means")]
-    index.set_two_means_strategy(
-        diskann::ivf::two_means_benchmark::Strategy::parse(&settings.two_means_strategy)
-            .ok_or_else(|| anyhow::anyhow!("unknown two_means_strategy"))?,
-    );
+    index.set_two_means_strategy(settings.two_means_strategy.into());
     index
         .initialize(&Strategy, &DefaultContext, centroids.as_view())
         .await?;

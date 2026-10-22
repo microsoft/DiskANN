@@ -52,13 +52,8 @@ pub(crate) struct Build {
     pub seed: u64,
     pub repetitions: NonZeroUsize,
     #[cfg(feature = "ivf-two-means")]
-    #[serde(default = "default_two_means_strategy")]
-    pub two_means_strategy: String,
-}
-
-#[cfg(feature = "ivf-two-means")]
-fn default_two_means_strategy() -> String {
-    "paired_point".into()
+    #[serde(default)]
+    pub two_means_strategy: super::graph_ivf_two_means::TwoMeansStrategy,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,13 +79,6 @@ impl GraphIvfBuild {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        #[cfg(feature = "ivf-two-means")]
-        anyhow::ensure!(
-            diskann::ivf::two_means_benchmark::Strategy::parse(&self.build.two_means_strategy)
-                .is_some(),
-            "unknown two_means_strategy: {}",
-            self.build.two_means_strategy
-        );
         anyhow::ensure!(
             self.build.split_threshold >= 2,
             "split_threshold must be >= 2"
@@ -163,7 +151,7 @@ impl Example for GraphIvfBuild {
                 seed: 7,
                 repetitions: NonZeroUsize::new(3).unwrap(),
                 #[cfg(feature = "ivf-two-means")]
-                two_means_strategy: default_two_means_strategy(),
+                two_means_strategy: Default::default(),
             },
             graph: Graph {
                 max_degree: NonZeroUsize::new(16).unwrap(),
