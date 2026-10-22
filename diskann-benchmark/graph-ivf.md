@@ -32,6 +32,12 @@ IVF search API or reusable IVF provider. This benchmark therefore supplies
 private adapters under `src/graph_ivf/`. Library insertion statistics expose the
 two timed split phases so every optimization layer uses the same boundaries.
 
+The module entry point only registers the benchmark. Execution orchestration,
+build timing, search measurement, data preparation, and result serialization are
+separate concerns, following the other index benchmarks. File loading,
+percentiles, and recall reuse the existing benchmark utilities; the optional
+in-memory groundtruth oracle retains deterministic row-ID tie breaking.
+
 ```text
 FP32 rows
   -> IVFIndex::initialize + insert_batch

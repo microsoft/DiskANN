@@ -6,7 +6,7 @@
 //! Static search adapter until `diskann::ivf` exposes its own search API.
 //! DiskANN routes to centroid IDs; flat search scans only their posting lists.
 
-use std::num::NonZeroUsize;
+use std::{hint::black_box, num::NonZeroUsize, time::Instant};
 
 use diskann::{
     flat::{knn_search, DistancesUnordered},
@@ -14,6 +14,8 @@ use diskann::{
     provider::{DefaultContext, HasId},
     ANNResult,
 };
+use diskann_benchmark_core::recall::{self, GroundTruthMode};
+use diskann_benchmark_runner::utils::percentiles;
 use diskann_providers::{
     index::diskann_async::{self, MemoryIndex},
     model::graph::provider::async_::{
@@ -21,13 +23,102 @@ use diskann_providers::{
         inmem::{DefaultProviderParameters, SetStartPoints},
     },
 };
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{
     distance::{Metric, SquaredL2},
     PureDistanceFunction,
 };
 
-use super::provider::Store;
-use crate::inputs::graph_ivf::Graph;
+use super::{provider::Store, result::SearchResult};
+use crate::inputs::graph_ivf::{Graph, Search};
+
+pub(super) async fn measure_search(
+    store: &Store,
+    graph: &CentroidGraph,
+    queries: rowmajor::Ref<'_, f32>,
+    truth: rowmajor::Ref<'_, u32>,
+    settings: &Search,
+    build_repetition: usize,
+) -> anyhow::Result<Vec<SearchResult>> {
+    let mut results = Vec::new();
+    for nprobe in &settings.nprobe {
+        for _ in 0..settings.warmup_repetitions {
+            for query in queries.rows() {
+                black_box(
+                    graph
+                        .search(
+                            store,
+                            query,
+                            settings.k,
+                            nprobe.get(),
+                            settings.l_search.get(),
+                        )
+                        .await?,
+                );
+            }
+        }
+        for repetition in 0..settings.repetitions.get() {
+            let mut samples = Vec::with_capacity(queries.nrows());
+            let start = Instant::now();
+            for query in queries.rows() {
+                let query_start = Instant::now();
+                let result = graph
+                    .search(
+                        store,
+                        query,
+                        settings.k,
+                        nprobe.get(),
+                        settings.l_search.get(),
+                    )
+                    .await?;
+                let latency = query_start.elapsed().as_nanos() as u64;
+                samples.push((result, latency));
+            }
+            let total_seconds = start.elapsed().as_secs_f64();
+            let mut scanned = 0;
+            let mut lists = 0;
+            let mut centroid_comparisons = 0;
+            let mut returned = 0;
+            let mut latencies = Vec::with_capacity(samples.len());
+            let mut ids = Vec::with_capacity(samples.len());
+            for (result, latency) in samples {
+                scanned += result.scanned;
+                lists += result.lists;
+                centroid_comparisons += result.centroid_comparisons;
+                returned += result.ids.len();
+                latencies.push(latency);
+                ids.push(result.ids);
+            }
+            let recall = recall::knn(
+                &truth,
+                None,
+                &ids,
+                settings.k.get(),
+                settings.k.get(),
+                GroundTruthMode::Fixed,
+            )?;
+            let count = queries.nrows() as f64;
+            results.push(SearchResult {
+                build_repetition,
+                repetition,
+                k: settings.k.get(),
+                requested_nprobe: nprobe.get(),
+                effective_nprobe: nprobe.get().min(store.lists.len()),
+                queries: queries.nrows(),
+                total_seconds,
+                qps: count / total_seconds,
+                latency_ns: percentiles::compute_percentiles(&mut latencies)?,
+                recall_at_k: recall.average,
+                mean_points_scanned: scanned as f64 / count,
+                scanned_fraction: scanned as f64 / (count * store.len() as f64),
+                mean_lists_scanned: lists as f64 / count,
+                mean_centroid_comparisons: centroid_comparisons as f64 / count,
+                mean_results_returned: returned as f64 / count,
+            });
+        }
+    }
+    Ok(results)
+}
 
 pub(super) struct CentroidGraph {
     index: MemoryIndex<f32>,

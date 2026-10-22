@@ -3,12 +3,17 @@
  * Licensed under the MIT license.
  */
 
-use std::{fs::File, num::NonZeroUsize};
+use std::{fs::File, io::Write, num::NonZeroUsize};
 
 use diskann_benchmark_runner::{app::Commands, output::Memory};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use serde_json::{json, Value};
 
-use super::*;
+use super::{
+    build::build,
+    data::{load_data, load_groundtruth, validate_groundtruth, validate_vectors},
+};
+use crate::inputs::graph_ivf::GraphIvfBuild;
 
 fn small_input() -> Value {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -205,12 +210,17 @@ fn graph_ivf_split_preserves_points_and_full_probe_matches_oracle() {
 }
 
 #[test]
-fn graph_ivf_recall_does_not_reward_duplicates_or_short_results() {
-    let expected = [3, 8, 5, 2];
-    assert_eq!(recall_hits(&[3, 3, 3, 3], &expected, 4), 1);
-    assert_eq!(recall_hits(&[3], &expected, 4), 1);
-    assert_eq!(recall_hits(&[9, 10, 11, 12, 3], &expected, 4), 0);
-    assert_eq!(recall_hits(&[], &expected, 4), 0);
+fn graph_ivf_recall_keeps_full_denominator_for_short_results() {
+    let mut input = small_input();
+    input["jobs"][0]["content"]["search"]["k"] = json!(256);
+    input["jobs"][0]["content"]["search"]["nprobe"] = json!([1]);
+    let output = run_cli(&input).unwrap();
+    for search in output[0]["results"]["searches"].as_array().unwrap() {
+        let returned = search["mean_results_returned"].as_f64().unwrap();
+        assert!(returned > 0.0 && returned < 256.0);
+        let recall = search["recall_at_k"].as_f64().unwrap();
+        assert!((recall - returned / 256.0).abs() < 1e-12);
+    }
 }
 
 #[test]
