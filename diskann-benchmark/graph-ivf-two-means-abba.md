@@ -60,7 +60,7 @@ and resumption.
 
 ## Measurement environment
 
-The initial YFCC block and first Enron A overlapped an independently launched
+The initial YFCC round and first Enron A overlapped an independently launched
 cargo/benchmark job. All those samples remain retained and are identified in
 the evidence. Subsequent invocations wait until no cargo, rustc or other
 diskann-benchmark process is present, and sample competing processes every
@@ -70,3 +70,17 @@ not proof of an isolated machine.
 
 The provider remains in memory. Logical scans do not measure physical SSD I/O,
 Mimir persistence, cache misses or write amplification.
+
+## Analyze
+
+```powershell
+python diskann-benchmark/scripts/analyze_ivf_abba.py target/ivf-abba-20261022/runs --output target/ivf-abba-20261022/summary.json
+```
+
+Without `--allow-partial`, analysis fails until all 288 invocations are complete.
+Partial summaries count only completed ABBA blocks while retaining individual
+completed runs; they must not be reported as the final experiment. The analyzer
+checks exact strategies against their paired outputs and preserves approximate
+strategies' actual quality/work changes. Bootstrap intervals resample whole
+blocks; four blocks give only 256 distinct ordered draws, so intervals remain
+descriptive and do not establish universal speedups.
