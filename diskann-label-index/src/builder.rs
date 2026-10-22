@@ -53,6 +53,12 @@ struct RowMetadata {
     nonzero_word_count: u32,
 }
 
+struct EncodedRowSummaries {
+    words_per_row: usize,
+    row_metadata: Vec<RowMetadata>,
+    bits: Vec<u64>,
+}
+
 /// Encode a JSONL label file as a unified exact/Bloom label index.
 ///
 /// Supported JSONL rows are:
@@ -438,6 +444,69 @@ fn parse_direct_label_array(
         .collect()
 }
 
+fn encode_row_summaries(
+    payload_bits: &[u64],
+    payload_words_per_row: usize,
+    physical_row_count: usize,
+    exact_label_counts: &[u32],
+) -> Result<EncodedRowSummaries, EncodedLabelIndexError> {
+    let words_per_row = payload_words_per_row.div_ceil(64);
+    let summary_word_count = physical_row_count
+        .checked_mul(words_per_row)
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("label summary size overflow".to_string())
+        })?;
+    let mut bits = Vec::new();
+    bits.try_reserve_exact(summary_word_count).map_err(|_| {
+        EncodedLabelIndexError::Invalid("cannot reserve label summaries".to_string())
+    })?;
+    bits.resize(summary_word_count, 0u64);
+
+    let mut row_metadata = Vec::new();
+    row_metadata
+        .try_reserve_exact(physical_row_count)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve label row metadata".to_string())
+        })?;
+    for row in 0..physical_row_count {
+        let payload = &payload_bits[row * payload_words_per_row..(row + 1) * payload_words_per_row];
+        let mut valid_node_count = 0u32;
+        let mut nonzero_word_count = 0u32;
+        for (word_index, &word) in payload.iter().enumerate() {
+            valid_node_count =
+                valid_node_count
+                    .checked_add(word.count_ones())
+                    .ok_or_else(|| {
+                        EncodedLabelIndexError::Invalid(
+                            "row valid-node count exceeds u32".to_string(),
+                        )
+                    })?;
+            if word != 0 {
+                nonzero_word_count += 1;
+                bits[row * words_per_row + word_index / 64] |= 1u64 << (word_index % 64);
+            }
+        }
+        if exact_label_counts
+            .get(row)
+            .is_some_and(|&count| valid_node_count != count)
+        {
+            return Err(EncodedLabelIndexError::Invalid(
+                "exact row count does not match its label count".to_string(),
+            ));
+        }
+        row_metadata.push(RowMetadata {
+            valid_node_count,
+            nonzero_word_count,
+        });
+    }
+
+    Ok(EncodedRowSummaries {
+        words_per_row,
+        row_metadata,
+        bits,
+    })
+}
+
 fn write_label_index(
     path: &Path,
     num_vectors: u32,
@@ -525,52 +594,12 @@ fn write_label_index(
         )));
     }
 
-    let summary_words_per_row = words_per_row.div_ceil(64);
-    let summary_word_count = total_rows
-        .checked_mul(summary_words_per_row)
-        .ok_or_else(|| {
-            EncodedLabelIndexError::Invalid("label summary size overflow".to_string())
-        })?;
-    let mut summaries = Vec::new();
-    summaries
-        .try_reserve_exact(summary_word_count)
-        .map_err(|_| {
-            EncodedLabelIndexError::Invalid("cannot reserve label summaries".to_string())
-        })?;
-    summaries.resize(summary_word_count, 0u64);
-    let mut row_metadata = Vec::new();
-    row_metadata.try_reserve_exact(total_rows).map_err(|_| {
-        EncodedLabelIndexError::Invalid("cannot reserve label row metadata".to_string())
-    })?;
-    for row in 0..total_rows {
-        let payload = &bits[row * words_per_row..(row + 1) * words_per_row];
-        let mut valid_node_count = 0u32;
-        let mut nonzero_word_count = 0u32;
-        for (word_index, &word) in payload.iter().enumerate() {
-            valid_node_count =
-                valid_node_count
-                    .checked_add(word.count_ones())
-                    .ok_or_else(|| {
-                        EncodedLabelIndexError::Invalid(
-                            "row valid-node count exceeds u32".to_string(),
-                        )
-                    })?;
-            if word != 0 {
-                nonzero_word_count += 1;
-                summaries[row * summary_words_per_row + word_index / 64] |=
-                    1u64 << (word_index % 64);
-            }
-        }
-        if row < exact_label_count && valid_node_count != counts[row] {
-            return Err(EncodedLabelIndexError::Invalid(
-                "exact row count does not match its label count".to_string(),
-            ));
-        }
-        row_metadata.push(RowMetadata {
-            valid_node_count,
-            nonzero_word_count,
-        });
-    }
+    let summaries = encode_row_summaries(
+        bits,
+        words_per_row,
+        total_rows,
+        &counts[..exact_label_count],
+    )?;
 
     let mut writer = BufWriter::new(File::create(path)?);
     writer.write_all(&LABEL_INDEX_MAGIC)?;
@@ -598,7 +627,7 @@ fn write_label_index(
     )?;
     write_u32(&mut writer, 0)?;
     write_u64(&mut writer, words_per_row as u64)?;
-    write_u64(&mut writer, summary_words_per_row as u64)?;
+    write_u64(&mut writer, summaries.words_per_row as u64)?;
 
     for (label, &count) in labels.iter().zip(counts) {
         validate_label(label)?;
@@ -618,11 +647,11 @@ fn write_label_index(
         }
     }
 
-    for metadata in row_metadata {
+    for metadata in summaries.row_metadata {
         write_u32(&mut writer, metadata.valid_node_count)?;
         write_u32(&mut writer, metadata.nonzero_word_count)?;
     }
-    for word in summaries {
+    for word in summaries.bits {
         write_u64(&mut writer, word)?;
     }
     for word in bits {
