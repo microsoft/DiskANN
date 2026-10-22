@@ -385,6 +385,7 @@ where
 
 enum MaybeLazy<'a> {
     Lazy(&'a dyn std::fmt::Display),
+    Debug(&'a dyn std::fmt::Debug),
     Eager(String),
 }
 
@@ -392,6 +393,7 @@ impl std::fmt::Display for MaybeLazy<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Lazy(lazy) => write!(f, "{}", lazy),
+            Self::Debug(debug) => write!(f, "{:?}", debug),
             Self::Eager(s) => f.write_str(s),
         }
     }
@@ -410,6 +412,9 @@ impl std::fmt::Debug for MaybeLazy<'_> {
             Self::Lazy(o) => {
                 let as_display = AsDisplay(o);
                 f.debug_tuple("MaybeLazy::Lazy").field(&as_display).finish()
+            }
+            Self::Debug(o) => {
+                f.debug_tuple("MaybeLazy::Debug").field(o).finish()
             }
             Self::Eager(s) => f.debug_tuple("MaybeLazy::Eager").field(s).finish(),
         }
@@ -476,6 +481,12 @@ impl<'a> KeyValue<'a> {
     pub fn push(&mut self, key: &'a str, value: &'a dyn std::fmt::Display) {
         self.max_key_length = self.max_key_length.max(key.len());
         self.kv.push((key, MaybeLazy::Lazy(value)))
+    }
+
+    /// Push the key-value pair to `self` for formatting via [`std::fmt::Debug`].
+    pub fn push_debug(&mut self, key: &'a str, value: &'a dyn std::fmt::Debug) {
+        self.max_key_length = self.max_key_length.max(key.len());
+        self.kv.push((key, MaybeLazy::Debug(value)))
     }
 
     /// Push the key-value pair to `self` for formatting - eagerly formatting `value`.

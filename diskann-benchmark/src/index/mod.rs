@@ -9,7 +9,7 @@ mod build;
 mod search;
 mod streaming;
 
-mod benchmarks;
+// mod benchmarks;
 mod inmem;
 mod result;
 
@@ -19,7 +19,7 @@ mod bftree;
 mod inmem2;
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    benchmarks::register_benchmarks(registry)?;
+    // benchmarks::register_benchmarks(registry)?;
     bftree::register_benchmarks(registry)?;
 
     #[cfg(feature = "inmem2")]

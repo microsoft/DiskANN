@@ -5,7 +5,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    num::NonZeroUsize,
+    io::Write,
     sync::Arc,
 };
 
@@ -19,16 +19,17 @@ use diskann_benchmark_runner::{
     },
     Checker, Registry,
 };
-use diskann_utils::views::rowmajor;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
 
 use crate::utils::SimilarityMeasure;
 
 mod benchmark;
+
 mod full;
-// mod product;
-// mod scalar;
-// mod spherical;
+mod spherical;
+mod product;
+mod scalar;
 
 trait FromRaw: Sized {
     type Raw;
@@ -40,33 +41,31 @@ trait FromRawWith: Sized {
     fn from_raw_with(raw: &Self::Raw, checker: Option<&mut dbr::Checker>) -> anyhow::Result<Self>;
 }
 
-fn reborrow<'a, T>(x: &'a mut Option<&mut T>) -> Option<&'a mut T> {
+fn reborrow<'a, T>(x: &'a mut Option<&mut T>) -> Option<&'a mut T>
+where
+    T: ?Sized,
+{
     match x.as_mut() {
         Some(x) => Some(x),
         None => None,
     }
 }
 
-// Dispatch helper to make an item as used.
-fn accept_all<T>(_: &T) {}
+macro_rules! nz {
+    ($ident:ident = $value:literal) => {
+        const $ident: ::std::num::NonZeroUsize = ::std::num::NonZeroUsize::new($value).unwrap();
+    }
+}
+
+use nz;
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     full::register_benchmarks(registry)?;
+    spherical::register_benchmarks(registry)?;
+    scalar::register_benchmarks(registry)?;
+    product::register_benchmarks(registry)?;
     Ok(())
 }
-
-// pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-//     registry.register("inmem2-f32", Build::<f32>::new())?;
-//     registry.register("inmem2-f16", Build::<f16>::new())?;
-//     registry.register("inmem2-u8", Build::<u8>::new())?;
-//
-//     registry.register("inmem2-spherical", SphericalBuild)?;
-//     registry.register("inmem2-pq", ProductBuild)?;
-//     registry.register("inmem2-scalar", ScalarBuild)?;
-//
-//     registry.register("inmem2-f32-stream", StreamingBenchmark::<f32>::new())?;
-//     Ok(())
-// }
 
 ///////////////////
 // Shared Inputs //
@@ -288,11 +287,10 @@ impl Data {
     fn dispatch_params(&self) -> DataDispatchParams {
         DataDispatchParams {
             data_type: self.data_type,
-            distance: self.distance,
         }
     }
 
-    fn load<T>(&self) -> anyhow::Result<rowmajor::Owned<T>>
+    fn load<T>(&self, output: Option<&mut dyn dbr::Output>) -> anyhow::Result<rowmajor::Owned<T>>
     where
         T: AsDataType + bytemuck::Pod,
     {
@@ -304,14 +302,31 @@ impl Data {
             );
         }
 
-        crate::utils::datafiles::load_dataset(crate::utils::datafiles::BinFile(&self.data))
+        let data =
+            crate::utils::datafiles::load_dataset(crate::utils::datafiles::BinFile(&self.data))?;
+
+        if let Some(mut output) = output {
+            writeln!(
+                output,
+                "Loaded {} points of dim {} as type {} from {}\n",
+                data.nrows(),
+                data.ncols(),
+                T::DATA_TYPE,
+                self.data.display(),
+            )?;
+        }
+
+        Ok(data)
     }
 
-    fn load_arc<T>(&self) -> anyhow::Result<Arc<rowmajor::Owned<T>>>
+    fn load_arc<T>(
+        &self,
+        output: Option<&mut dyn dbr::Output>,
+    ) -> anyhow::Result<Arc<rowmajor::Owned<T>>>
     where
         T: AsDataType + bytemuck::Pod,
     {
-        self.load().map(Arc::new)
+        self.load(output).map(Arc::new)
     }
 }
 
@@ -350,62 +365,8 @@ impl Display for Data {
 #[derive(Debug, Clone, Copy)]
 struct DataDispatchParams {
     data_type: DataType,
-    distance: Metric,
 }
 
-//
-// #[derive(Debug)]
-// struct BuildParams {
-//     config: graph::Config,
-//     num_threads: NonZeroUsize,
-// }
-//
-// impl BuildParams {
-//     fn from_raw(raw: dto::BuildParams, metric: Metric) -> anyhow::Result<Self> {
-//         let dto::BuildParams {
-//             pruned_degree,
-//             max_degree,
-//             l_build,
-//             alpha,
-//             num_threads,
-//         } = raw;
-//
-//         let config = graph::config::Builder::new_with(
-//             pruned_degree,
-//             graph::config::MaxDegree::new(max_degree),
-//             l_build,
-//             metric.into(),
-//             |b| {
-//                 b.alpha(alpha);
-//             },
-//         )
-//         .build()?;
-//
-//         Ok(Self {
-//             config,
-//             num_threads,
-//         })
-//     }
-// }
-//
-// impl Display for BuildParams {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-//         let mut kv = KeyValue::new();
-//
-//         let pruned_degree = self.config.pruned_degree();
-//         let max_degree = self.config.max_degree();
-//         let alpha = self.config.alpha();
-//         let l_build = self.config.l_build();
-//
-//         kv.push("pruned_degree", &pruned_degree);
-//         kv.push("max_degree", &max_degree);
-//         kv.push("alpha", &alpha);
-//         kv.push("l_build", &l_build);
-//         kv.push("num_threads", &self.num_threads);
-//         write!(f, "{}", kv)
-//     }
-// }
-//
 // //--------------//
 // // Quantization //
 // //--------------//
@@ -848,457 +809,6 @@ struct DataDispatchParams {
 // // Benchmark //
 // ///////////////
 //
-// //---------------//
-// // FullPrecision //
-// //---------------//
-//
-// #[derive(Debug)]
-// struct Build<T>(std::marker::PhantomData<T>);
-//
-// impl<T> Build<T> {
-//     fn new() -> Self {
-//         Self(std::marker::PhantomData)
-//     }
-// }
-//
-// impl<T> Benchmark for Build<T>
-// where
-//     T: repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
-// {
-//     type Input = StaticBuild;
-//     type Output = ();
-//
-//     fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
-//         let mut score = context.success(0);
-//
-//         let DispatchParams {
-//             data_type,
-//             quantization,
-//             distance,
-//         } = input.dispatch_params();
-//
-//         accept_all(&distance);
-//
-//         if !matches!(quantization, Quantization::None) {
-//             score.fail(
-//                 2000,
-//                 &"quantization not supported for full-precision builds",
-//             );
-//         }
-//
-//         if !T::is_match(data_type) {
-//             score.fail(
-//                 1000,
-//                 &format_args!(
-//                     "expected data-type {}, instead got {}",
-//                     Quote(T::DATA_TYPE),
-//                     Quote(data_type)
-//                 ),
-//             )
-//         }
-//
-//         score
-//     }
-//
-//     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(
-//             f,
-//             "full-precision static build+search with data type {}",
-//             Quote(T::DATA_TYPE)
-//         )?;
-//
-//         Ok(())
-//     }
-//
-//     fn run(
-//         &self,
-//         input: &StaticBuild,
-//         checkpoint: Checkpoint<'_>,
-//         mut output: &mut dyn Output,
-//     ) -> anyhow::Result<()> {
-//         writeln!(output, "{input}\n")?;
-//
-//         // Load data.
-//         let data: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-//             &input.data.data,
-//         ))?);
-//
-//         let dim = data.ncols();
-//         let num_points = data.nrows();
-//         writeln!(output, "Loaded {num_points} points, dim={dim}")?;
-//
-//         // Compute the medoid of the dataset as the single start point.
-//         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-//         let config = Full::config(
-//             Capacity::new(num_points),
-//             MaxDegree::new(input.build.config.max_degree().get()),
-//             input.data.distance,
-//             start,
-//         )?;
-//
-//         let provider = Provider::<_, u32>::new(config)?;
-//         let index = Arc::new(DiskANNIndex::new(
-//             input.build.config.clone(),
-//             provider,
-//             None,
-//         ));
-//
-//         // Build via SingleInsert.
-//         let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
-//         let builder = build_core::graph::SingleInsert::new(
-//             index.clone(),
-//             data,
-//             Strategy,
-//             build_core::ids::Identity::<u32>::new(),
-//         );
-//
-//         let build_results = build_core::build_tracked(
-//             builder,
-//             build_core::Parallelism::dynamic(diskann::utils::ONE, input.build.num_threads),
-//             &rt,
-//             Some(&ProgressMeter::new(output)),
-//         )?;
-//
-//         let total_build_time = build_results.end_to_end_latency();
-//         writeln!(
-//             output,
-//             "\nBuild complete in {:.2}s",
-//             total_build_time.as_seconds()
-//         )?;
-//         checkpoint.checkpoint(&total_build_time)?;
-//
-//         // Search.
-//         let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(
-//             datafiles::BinFile(&input.search.queries),
-//         )?);
-//         let max_k = input.search.maximum_recall_k();
-//         let groundtruth = datafiles::load_groundtruth(
-//             datafiles::BinFile(&input.search.groundtruth),
-//             Some(max_k),
-//         )?;
-//
-//         writeln!(output, "Loaded {} queries\n", queries.nrows())?;
-//
-//         let knn = benchmark_core::search::graph::KNN::new(
-//             index,
-//             queries,
-//             benchmark_core::search::graph::Strategy::broadcast(Strategy),
-//         )?;
-//
-//         let results = _knn(
-//             &knn,
-//             &groundtruth,
-//             input.search.reps,
-//             &input.search.num_threads,
-//             &input.search.runs,
-//         )?;
-//
-//         let results = AggregatedSearchResults::Topk(results);
-//
-//         writeln!(output, "{}", results)?;
-//
-//         Ok(())
-//     }
-// }
-//
-// //-----------//
-// // Spherical //
-// //-----------//
-//
-// #[derive(Debug)]
-// struct SphericalBuild;
-//
-// impl Benchmark for SphericalBuild {
-//     type Input = StaticBuild;
-//     type Output = ();
-//
-//     fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
-//         let mut score = context.success(0);
-//
-//         let DispatchParams {
-//             data_type,
-//             quantization,
-//             distance,
-//         } = input.dispatch_params();
-//
-//         if !matches!(quantization, Quantization::Spherical(_)) {
-//             score.fail(2000, &"needed spherical-quantization");
-//         }
-//
-//         if distance == Metric::CosineNormalized {
-//             score.fail(
-//                 500,
-//                 &format_args!(
-//                     "{} is not supported for spherical quantization- use \"cosine\" instead",
-//                     Metric::CosineNormalized
-//                 ),
-//             );
-//         }
-//
-//         if !f32::is_match(data_type) {
-//             score.fail(
-//                 1000,
-//                 &format_args!(
-//                     "expected data-type {}, instead got {}",
-//                     Quote(f32::DATA_TYPE),
-//                     Quote(data_type)
-//                 ),
-//             )
-//         }
-//
-//         score
-//     }
-//
-//     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "spherical-quantized index build-and-search",)?;
-//
-//         Ok(())
-//     }
-//
-//     fn run(
-//         &self,
-//         input: &StaticBuild,
-//         checkpoint: Checkpoint<'_>,
-//         mut output: &mut dyn Output,
-//     ) -> anyhow::Result<()> {
-//         writeln!(output, "{input}\n")?;
-//
-//         let spherical = input.quantization.as_spherical().unwrap();
-//
-//         // Load data.
-//         let data: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
-//             datafiles::BinFile(&input.data.data),
-//         )?);
-//
-//         let dim = data.ncols();
-//         let num_points = data.nrows();
-//         writeln!(output, "Loaded {num_points} points, dim={dim}")?;
-//
-//         // Compute the medoid of the dataset as the single start point.
-//         let capacity = Capacity::new(num_points);
-//         let max_degree = MaxDegree::new(input.build.config.max_degree().get());
-//         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-//         let rerank = repr::quantized::Rerank::F16 {
-//             metric: input.data.distance.into(),
-//         };
-//
-//         let backend = spherical.train(data.as_view(), input.data.distance)?;
-//
-//         let config = repr::Quantized::config(backend, capacity, max_degree, start, rerank)?;
-//
-//         let provider = Provider::<_, u32>::new(config)?;
-//         let index = Arc::new(DiskANNIndex::new(
-//             input.build.config.clone(),
-//             provider,
-//             None,
-//         ));
-//
-//         // Build via SingleInsert.
-//         let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
-//         let builder = build_core::graph::SingleInsert::new(
-//             index.clone(),
-//             data,
-//             Strategy,
-//             build_core::ids::Identity::<u32>::new(),
-//         );
-//
-//         let build_results = build_core::build_tracked(
-//             builder,
-//             build_core::Parallelism::dynamic(diskann::utils::ONE, input.build.num_threads),
-//             &rt,
-//             Some(&ProgressMeter::new(output)),
-//         )?;
-//
-//         let total_build_time = build_results.end_to_end_latency();
-//         writeln!(
-//             output,
-//             "\nBuild complete in {:.2}s",
-//             total_build_time.as_seconds()
-//         )?;
-//         checkpoint.checkpoint(&total_build_time)?;
-//
-//         // Search.
-//         let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
-//             datafiles::BinFile(&input.search.queries),
-//         )?);
-//         let max_k = input.search.maximum_recall_k();
-//         let groundtruth = datafiles::load_groundtruth(
-//             datafiles::BinFile(&input.search.groundtruth),
-//             Some(max_k),
-//         )?;
-//
-//         writeln!(output, "Loaded {} queries\n", queries.nrows())?;
-//
-//         let knn = benchmark_core::search::graph::KNN::new(
-//             index,
-//             queries,
-//             benchmark_core::search::graph::Strategy::broadcast(Strategy),
-//         )?;
-//
-//         let results = _knn(
-//             &knn,
-//             &groundtruth,
-//             input.search.reps,
-//             &input.search.num_threads,
-//             &input.search.runs,
-//         )?;
-//
-//         let results = AggregatedSearchResults::Topk(results);
-//
-//         writeln!(output, "{}", results)?;
-//
-//         Ok(())
-//     }
-// }
-//
-// //----------------------//
-// // Product Quantization //
-// //----------------------//
-//
-// #[derive(Debug)]
-// struct ProductBuild;
-//
-// impl Benchmark for ProductBuild {
-//     type Input = StaticBuild;
-//     type Output = ();
-//
-//     fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
-//         let mut score = context.success(0);
-//
-//         let DispatchParams {
-//             data_type,
-//             quantization,
-//             distance,
-//         } = input.dispatch_params();
-//
-//         if !matches!(quantization, Quantization::Product(_)) {
-//             score.fail(2000, &"needed product-quantization");
-//         }
-//
-//         if !f32::is_match(data_type) {
-//             score.fail(
-//                 1000,
-//                 &format_args!(
-//                     "expected data-type {}, instead got {}",
-//                     Quote(f32::DATA_TYPE),
-//                     Quote(data_type)
-//                 ),
-//             )
-//         }
-//
-//         accept_all(&distance);
-//         score
-//     }
-//
-//     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "product-quantized index build-and-search",)?;
-//
-//         Ok(())
-//     }
-//
-//     fn run(
-//         &self,
-//         input: &StaticBuild,
-//         checkpoint: Checkpoint<'_>,
-//         mut output: &mut dyn Output,
-//     ) -> anyhow::Result<()> {
-//         writeln!(output, "{input}\n")?;
-//
-//         let product = input.quantization.as_product().unwrap();
-//
-//         // Load data.
-//         let data: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
-//             datafiles::BinFile(&input.data.data),
-//         )?);
-//
-//         let dim = data.ncols();
-//         let num_points = data.nrows();
-//         writeln!(output, "Loaded {num_points} points, dim={dim}")?;
-//
-//         let table = product.train(data.as_view(), input.build.num_threads)?;
-//         let quantizer = repr::quantized::product::Product::new(
-//             table,
-//             input.data.distance.into(),
-//             Some(input.build.num_threads),
-//         )?;
-//
-//         // Compute the medoid of the dataset as the single start point.
-//         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-//         let config = repr::quantized::Quantized::config(
-//             quantizer,
-//             Capacity::new(num_points),
-//             MaxDegree::new(input.build.config.max_degree().get()),
-//             start,
-//             repr::quantized::Rerank::F16 {
-//                 metric: input.data.distance.into(),
-//             },
-//         )?;
-//
-//         let provider = Provider::<_, u32>::new(config)?;
-//         let index = Arc::new(DiskANNIndex::new(
-//             input.build.config.clone(),
-//             provider,
-//             None,
-//         ));
-//
-//         // Build via SingleInsert.
-//         let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
-//         let builder = build_core::graph::SingleInsert::new(
-//             index.clone(),
-//             data,
-//             Strategy,
-//             build_core::ids::Identity::<u32>::new(),
-//         );
-//
-//         let build_results = build_core::build_tracked(
-//             builder,
-//             build_core::Parallelism::dynamic(diskann::utils::ONE, input.build.num_threads),
-//             &rt,
-//             Some(&ProgressMeter::new(output)),
-//         )?;
-//
-//         let total_build_time = build_results.end_to_end_latency();
-//         writeln!(
-//             output,
-//             "\nBuild complete in {:.2}s",
-//             total_build_time.as_seconds()
-//         )?;
-//         checkpoint.checkpoint(&total_build_time)?;
-//
-//         // Search.
-//         let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
-//             datafiles::BinFile(&input.search.queries),
-//         )?);
-//         let max_k = input.search.maximum_recall_k();
-//         let groundtruth = datafiles::load_groundtruth(
-//             datafiles::BinFile(&input.search.groundtruth),
-//             Some(max_k),
-//         )?;
-//
-//         writeln!(output, "Loaded {} queries\n", queries.nrows())?;
-//
-//         let knn = benchmark_core::search::graph::KNN::new(
-//             index,
-//             queries,
-//             benchmark_core::search::graph::Strategy::broadcast(Strategy),
-//         )?;
-//
-//         let results = _knn(
-//             &knn,
-//             &groundtruth,
-//             input.search.reps,
-//             &input.search.num_threads,
-//             &input.search.runs,
-//         )?;
-//
-//         let results = AggregatedSearchResults::Topk(results);
-//
-//         writeln!(output, "{}", results)?;
-//
-//         Ok(())
-//     }
-// }
-//
 // //--------//
 // // Scalar //
 // //-------//
@@ -1464,39 +974,6 @@ struct DataDispatchParams {
 //     }
 // }
 //
-// fn _knn(
-//     runner: &dyn crate::index::search::knn::Knn<u32>,
-//     groundtruth: &dyn benchmark_core::recall::Rows<u32>,
-//     reps: NonZeroUsize,
-//     num_threads: &[NonZeroUsize],
-//     instances: &[KnnInstance],
-// ) -> anyhow::Result<Vec<SearchResults>> {
-//     let mut results = Vec::new();
-//
-//     for num_threads in num_threads.iter() {
-//         for instance in instances.iter() {
-//             let setup = core_search::Setup {
-//                 threads: *num_threads,
-//                 tasks: *num_threads,
-//                 reps,
-//             };
-//
-//             let run = core_search::Run::new(instance.knn_params, setup);
-//
-//             let r = runner.search_all(
-//                 vec![run],
-//                 groundtruth,
-//                 instance.recall_k,
-//                 instance.knn_params.k_value().get(),
-//                 GroundTruthMode::Fixed,
-//             )?;
-//
-//             results.extend(r);
-//         }
-//     }
-//
-//     Ok(results)
-// }
 //
 // ///////////////
 // // Streaming //

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core as dbc;
 use diskann_benchmark_runner as dbr;
@@ -11,7 +11,7 @@ use diskann_utils::views::rowmajor;
 use diskann_vector as dv;
 use serde::Serialize;
 
-use crate::utils::progress::Progress;
+use crate::{index::inmem2::nz, utils::progress::Progress};
 
 pub(in crate::index::inmem2) mod dto {
     use super::*;
@@ -29,13 +29,13 @@ pub(in crate::index::inmem2) mod dto {
 
     impl Config {
         pub(in crate::index::inmem2) fn example() -> Self {
-            const EIGHT: NonZeroUsize = NonZeroUsize::new(8).unwrap();
+            nz!(NUM_THREADS = 8);
             Self {
                 pruned_degree: 28,
                 max_degree: 32,
                 l_build: 100,
                 alpha: 1.2,
-                num_threads: EIGHT,
+                num_threads: NUM_THREADS,
             }
         }
     }
@@ -156,7 +156,7 @@ where
     pub(in crate::index::inmem2) fn build<T>(
         &self,
         data: Arc<rowmajor::Owned<T>>,
-        output: &mut dyn dbr::Output,
+        mut output: &mut dyn dbr::Output,
     ) -> anyhow::Result<Stats>
     where
         dbc::build::graph::SingleInsert<DP, T, S>: dbc::build::Build<Output = ()>,
@@ -178,7 +178,9 @@ where
             Some(&Progress::new(output)),
         )?;
 
-        Stats::new(results)
+        let stats = Stats::new(results)?;
+        writeln!(output, "\n\n{}\n", stats)?;
+        Ok(stats)
     }
 }
 

@@ -12,7 +12,7 @@ use diskann_benchmark_runner::{
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::Matrix;
 
-use crate::index::inmem2::{self, accept_all, reborrow, FromRawWith};
+use crate::index::inmem2::{self, reborrow, FromRawWith};
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", RunBuildAndSearch::<f32>::new())?;
@@ -23,7 +23,7 @@ pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Resul
 // Static Build And Search //
 /////////////////////////////
 
-pub(super) mod dto {
+mod dto {
     use super::*;
 
     use serde::{Deserialize, Serialize};
@@ -137,10 +137,7 @@ where
 
         let inmem2::DataDispatchParams {
             data_type,
-            distance,
         } = input.data.dispatch_params();
-
-        accept_all(&distance);
 
         if !T::is_match(data_type) {
             score.fail(
@@ -172,10 +169,10 @@ where
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
     ) -> anyhow::Result<()> {
-        writeln!(output, "{}", input)?;
+        writeln!(output, "{}\n", input)?;
 
         // Load data.
-        let data = input.data.load_arc::<T>()?;
+        let data = input.data.load_arc::<T>(Some(output))?;
 
         // Compute the medoid of the dataset as the single start point.
         let start = diskann::graph::StartPointStrategy::Medoid.compute(data.as_view())?;
@@ -188,12 +185,10 @@ where
 
         let provider = di::Provider::<_, u32>::new(config)?;
         let engine = input.build.engine(provider, di::Strategy);
-
         let build = engine.build(data, output)?;
-        writeln!(output, "{}", build)?;
-
-        let search = input.search.search::<T, _>(engine.index().clone())?;
-        writeln!(output, "{}", search)?;
+        let search = input
+            .search
+            .search::<T, _>(engine.index().clone(), Some(output))?;
 
         Ok(())
     }

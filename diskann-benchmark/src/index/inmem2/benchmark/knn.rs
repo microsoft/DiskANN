@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{future::Future, num::NonZeroUsize, sync::Arc};
+use std::{future::Future, io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{utils::IntoUsize, ANNResult};
 use diskann_benchmark_core::{self as dbc};
@@ -11,7 +11,7 @@ use diskann_benchmark_runner::{self as dbr, files::InputFile, utils::MicroSecond
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::{self, Matrix};
 
-use crate::index::inmem2::FromRawWith;
+use crate::index::inmem2::{FromRawWith, nz};
 
 pub(in crate::index::inmem2) mod dto {
     use super::*;
@@ -19,7 +19,7 @@ pub(in crate::index::inmem2) mod dto {
 
     #[derive(Debug, Serialize, Deserialize)]
     pub(in crate::index::inmem2) struct KnnSweep {
-        pub(super) search_n: usize,
+        pub(super) search_n: NonZeroUsize,
         pub(super) search_l: Vec<usize>,
         pub(super) recall_k: NonZeroUsize,
     }
@@ -35,19 +35,20 @@ pub(in crate::index::inmem2) mod dto {
 
     impl KnnSearch {
         pub(in crate::index::inmem2) fn example() -> Self {
-            const FIVE: NonZeroUsize = NonZeroUsize::new(5).unwrap();
-            const EIGHT: NonZeroUsize = NonZeroUsize::new(5).unwrap();
-            const TEN: NonZeroUsize = NonZeroUsize::new(10).unwrap();
+            nz!(REPS = 5);
+            nz!(NUM_THREADS = 8);
+            nz!(SEARCH_N = 10);
+            nz!(RECALL_K = 10);
 
             Self {
                 queries: InputFile::new("path/to/queries"),
                 groundtruth: InputFile::new("path/to/groundtruth"),
-                reps: FIVE,
-                num_threads: vec![EIGHT],
+                reps: REPS,
+                num_threads: vec![NUM_THREADS],
                 runs: vec![KnnSweep {
-                    search_n: 10,
+                    search_n: SEARCH_N,
                     search_l: vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
-                    recall_k: TEN,
+                    recall_k: RECALL_K,
                 }],
             }
         }
@@ -57,7 +58,7 @@ pub(in crate::index::inmem2) mod dto {
 #[derive(Debug, Clone)]
 struct KnnInstance {
     knn: diskann::graph::search::Knn,
-    num_neighbors: usize,
+    num_neighbors: NonZeroUsize,
     recall_k: NonZeroUsize,
 }
 
@@ -131,7 +132,11 @@ impl KnnSearch {
         )
     }
 
-    pub(in crate::index::inmem2) fn search<T, S>(&self, engine: Arc<S>) -> anyhow::Result<Stats>
+    pub(in crate::index::inmem2) fn search<T, S>(
+        &self,
+        engine: Arc<S>,
+        output: Option<&mut dyn dbr::Output>,
+    ) -> anyhow::Result<Stats>
     where
         T: bytemuck::Pod + Send + Sync + 'static,
         S: Knn<T>,
@@ -160,13 +165,17 @@ impl KnnSearch {
             queries,
         };
 
-        let stats = dbc::search::search_all(
+        let stats = Stats(dbc::search::search_all(
             Arc::new(searcher),
             parameters,
             Aggregator::new(&groundtruth, dbc::recall::GroundTruthMode::Fixed),
-        )?;
+        )?);
 
-        Ok(Stats(stats))
+        if let Some(mut output) = output {
+            write!(output, "{}\n", stats)?;
+        }
+
+        Ok(stats)
     }
 }
 
@@ -264,7 +273,7 @@ where
     }
 
     fn id_count(&self, parameters: &KnnInstance) -> dbc::search::IdCount {
-        dbc::search::IdCount::Fixed(parameters.recall_k)
+        dbc::search::IdCount::Fixed(parameters.num_neighbors)
     }
 
     fn search<B>(
@@ -440,7 +449,7 @@ impl dbc::search::Aggregate<KnnInstance, u32, Counters> for Aggregator<'_> {
                 None,
                 first.ids().as_rows(),
                 knn.recall_k.get(),
-                knn.num_neighbors,
+                knn.num_neighbors.get(),
                 self.mode,
             )?,
             None => anyhow::bail!("Results must be non-empty"),
@@ -489,7 +498,7 @@ impl dbc::search::Aggregate<KnnInstance, u32, Counters> for Aggregator<'_> {
 
         Ok(Point {
             num_tasks: setup.tasks.get(),
-            search_n: knn.num_neighbors,
+            search_n: knn.num_neighbors.get(),
             search_l: knn.knn.l_value().get(),
             qps,
             search_latencies,
