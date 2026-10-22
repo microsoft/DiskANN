@@ -73,10 +73,10 @@ struct SummarizedWord {
 pub struct BloomQueryConfig {
     summary_cache_bound_percent: f64,
     summary_scan_max_word_percent: f64,
-    exact_point_prefetch_lookahead: usize,
+    point_prefetch_lookahead: usize,
 }
 
-const DEFAULT_EXACT_POINT_PREFETCH_LOOKAHEAD: usize = 32;
+const DEFAULT_POINT_PREFETCH_LOOKAHEAD: usize = 32;
 
 impl BloomQueryConfig {
     /// Create a query configuration with a 1% to 100% summary-cache bound.
@@ -92,7 +92,7 @@ impl BloomQueryConfig {
         Ok(Self {
             summary_cache_bound_percent,
             summary_scan_max_word_percent: 10.0,
-            exact_point_prefetch_lookahead: DEFAULT_EXACT_POINT_PREFETCH_LOOKAHEAD,
+            point_prefetch_lookahead: DEFAULT_POINT_PREFETCH_LOOKAHEAD,
         })
     }
 
@@ -112,12 +112,12 @@ impl BloomQueryConfig {
         Ok(self)
     }
 
-    /// Set the exact payload point-classification prefetch lookahead.
+    /// Set the payload point-classification prefetch lookahead.
     ///
     /// Zero disables prefetching. Nonzero values are used only on supported architectures and only
     /// by exact payload evaluators.
-    pub fn with_exact_point_prefetch_lookahead(mut self, lookahead: usize) -> Self {
-        self.exact_point_prefetch_lookahead = lookahead;
+    pub fn with_point_prefetch_lookahead(mut self, lookahead: usize) -> Self {
+        self.point_prefetch_lookahead = lookahead;
         self
     }
 
@@ -131,9 +131,9 @@ impl BloomQueryConfig {
         self.summary_scan_max_word_percent
     }
 
-    /// Return the exact payload point-classification prefetch lookahead.
-    pub fn exact_point_prefetch_lookahead(self) -> usize {
-        self.exact_point_prefetch_lookahead
+    /// Return the payload point-classification prefetch lookahead.
+    pub fn point_prefetch_lookahead(self) -> usize {
+        self.point_prefetch_lookahead
     }
 
     pub(crate) fn should_scan_summarized_words(
@@ -151,7 +151,7 @@ impl Default for BloomQueryConfig {
         Self {
             summary_cache_bound_percent: 1.0,
             summary_scan_max_word_percent: 10.0,
-            exact_point_prefetch_lookahead: DEFAULT_EXACT_POINT_PREFETCH_LOOKAHEAD,
+            point_prefetch_lookahead: DEFAULT_POINT_PREFETCH_LOOKAHEAD,
         }
     }
 }
@@ -220,43 +220,25 @@ struct CompiledPlan {
 
 #[derive(Debug)]
 enum PointPlan {
-    Dnf,
-    Cnf,
-    ExactAnd2Payload {
-        first_word_offset: usize,
-        second_word_offset: usize,
-    },
-    // Keep the four-offset summary plan out of line so PointPlan remains as compact as the
-    // payload-only plan. The allocation occurs once during query compilation.
-    ExactAnd2Summary(Box<ExactAnd2SummaryPlan>),
+    Dnf(Box<DnfPointPlan>),
+    Cnf(Box<CnfPointPlan>),
 }
 
 #[derive(Debug)]
-struct ExactAnd2SummaryPlan {
-    first_word_offset: usize,
-    second_word_offset: usize,
-    first_summary_word_offset: usize,
-    second_summary_word_offset: usize,
+struct DnfPointPlan {
+    clause_offsets: Box<[usize]>,
+    payload_offsets: Box<[usize]>,
+    summary_offsets: Box<[usize]>,
+    use_summary: bool,
 }
 
-#[derive(Clone, Copy)]
-struct GenericEvaluator<'a> {
-    num_vectors: u32,
-    payload: &'a LabelIndexPayload,
-    clause_offsets: &'a [usize],
-    label_ids: &'a [Option<u32>],
-    cache_rejections: bool,
-}
-
-impl std::fmt::Debug for GenericEvaluator<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GenericEvaluator")
-            .field("num_vectors", &self.num_vectors)
-            .field("num_clauses", &self.clause_offsets.len().saturating_sub(1))
-            .field("num_terminals", &self.label_ids.len())
-            .field("cache_rejections", &self.cache_rejections)
-            .finish()
-    }
+#[derive(Debug)]
+struct CnfPointPlan {
+    clause_offsets: Box<[usize]>,
+    terminal_offsets: Box<[usize]>,
+    payload_offsets: Box<[usize]>,
+    summary_offsets: Box<[usize]>,
+    use_summary: bool,
 }
 
 /// A point evaluator selected once from a compiled [`EncodedLabelQuery`].
@@ -265,51 +247,67 @@ impl std::fmt::Debug for GenericEvaluator<'_> {
 /// can be statically dispatched without checking the query mode for every vector ID.
 #[derive(Debug, Clone, Copy)]
 pub enum EncodedLabelPointEvaluator<'a> {
-    /// Two exact rows evaluated directly from the payload.
-    ExactAnd2Payload(ExactAnd2PayloadEvaluator<'a>),
-    /// Two exact rows guarded by compact nonzero-word summaries.
-    ExactAnd2Summary(ExactAnd2SummaryEvaluator<'a>),
-    /// A generic DNF evaluator.
-    Dnf(DnfEvaluator<'a>),
-    /// A generic CNF evaluator.
-    Cnf(CnfEvaluator<'a>),
+    /// A DNF evaluator that reads payload rows directly.
+    DnfPayload(DnfPayloadEvaluator<'a>),
+    /// A DNF evaluator that checks summary rows before payload rows.
+    DnfSummary(DnfSummaryEvaluator<'a>),
+    /// A CNF evaluator that reads payload rows directly.
+    CnfPayload(CnfPayloadEvaluator<'a>),
+    /// A CNF evaluator that checks summary rows before payload rows.
+    CnfSummary(CnfSummaryEvaluator<'a>),
 }
 
-/// A statically dispatched evaluator for two exact payload rows.
+/// A statically dispatched DNF evaluator for payload rows.
 #[derive(Debug, Clone, Copy)]
-pub struct ExactAnd2PayloadEvaluator<'a> {
+pub struct DnfPayloadEvaluator<'a> {
     num_vectors: u32,
     bits: &'a [u64],
-    first_word_offset: usize,
-    second_word_offset: usize,
+    clause_offsets: &'a [usize],
+    payload_offsets: &'a [usize],
+    prefetch_word_offset: Option<usize>,
     prefetch_lookahead: usize,
+    cache_rejections: bool,
 }
 
-/// A statically dispatched evaluator for two summary-guarded exact rows.
+/// A statically dispatched DNF evaluator for summary-guarded payload rows.
 #[derive(Debug, Clone, Copy)]
-pub struct ExactAnd2SummaryEvaluator<'a> {
+pub struct DnfSummaryEvaluator<'a> {
     num_vectors: u32,
     bits: &'a [u64],
     summary_bits: &'a [u64],
-    first_word_offset: usize,
-    second_word_offset: usize,
-    first_summary_word_offset: usize,
-    second_summary_word_offset: usize,
+    clause_offsets: &'a [usize],
+    payload_offsets: &'a [usize],
+    summary_offsets: &'a [usize],
+    cache_rejections: bool,
 }
 
-/// A statically dispatched generic DNF evaluator.
+/// A statically dispatched CNF evaluator for payload rows.
 #[derive(Debug, Clone, Copy)]
-pub struct DnfEvaluator<'a> {
-    inner: GenericEvaluator<'a>,
+pub struct CnfPayloadEvaluator<'a> {
+    num_vectors: u32,
+    bits: &'a [u64],
+    clause_offsets: &'a [usize],
+    terminal_offsets: &'a [usize],
+    payload_offsets: &'a [usize],
+    prefetch_word_offset: Option<usize>,
+    prefetch_lookahead: usize,
+    cache_rejections: bool,
 }
 
-/// A statically dispatched generic CNF evaluator.
+/// A statically dispatched CNF evaluator for summary-guarded payload rows.
 #[derive(Debug, Clone, Copy)]
-pub struct CnfEvaluator<'a> {
-    inner: GenericEvaluator<'a>,
+pub struct CnfSummaryEvaluator<'a> {
+    num_vectors: u32,
+    bits: &'a [u64],
+    summary_bits: &'a [u64],
+    clause_offsets: &'a [usize],
+    terminal_offsets: &'a [usize],
+    payload_offsets: &'a [usize],
+    summary_offsets: &'a [usize],
+    cache_rejections: bool,
 }
 
-const EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT: usize = 85;
+const POINT_SUMMARY_MIN_ZERO_PERCENT: usize = 85;
 
 /// Query-scoped evaluator compiled from an [`EncodedLabelIndex`].
 ///
@@ -339,8 +337,8 @@ impl std::fmt::Debug for EncodedLabelQuery<'_> {
                 &self.config.summary_scan_max_word_percent(),
             )
             .field(
-                "exact_point_prefetch_lookahead",
-                &self.config.exact_point_prefetch_lookahead(),
+                "point_prefetch_lookahead",
+                &self.config.point_prefetch_lookahead(),
             )
             .finish()
     }
@@ -354,33 +352,49 @@ impl EncodedLabelQuery<'_> {
     /// remains the [`diskann::graph::ext::labeled::CandidateLabelProvider`] used for exhaustive
     /// enumeration.
     pub fn point_evaluator(&self) -> EncodedLabelPointEvaluator<'_> {
+        let cache_rejections = self.should_cache_rejections();
         match &self.point_plan {
-            PointPlan::ExactAnd2Payload {
-                first_word_offset,
-                second_word_offset,
-            } => EncodedLabelPointEvaluator::ExactAnd2Payload(ExactAnd2PayloadEvaluator {
-                num_vectors: self.num_vectors,
-                bits: &self.payload.bits,
-                first_word_offset: *first_word_offset,
-                second_word_offset: *second_word_offset,
-                prefetch_lookahead: self.config.exact_point_prefetch_lookahead(),
-            }),
-            PointPlan::ExactAnd2Summary(plan) => {
-                EncodedLabelPointEvaluator::ExactAnd2Summary(ExactAnd2SummaryEvaluator {
+            PointPlan::Dnf(plan) if plan.use_summary => {
+                EncodedLabelPointEvaluator::DnfSummary(DnfSummaryEvaluator {
                     num_vectors: self.num_vectors,
                     bits: &self.payload.bits,
                     summary_bits: &self.payload.nonzero_words.bits,
-                    first_word_offset: plan.first_word_offset,
-                    second_word_offset: plan.second_word_offset,
-                    first_summary_word_offset: plan.first_summary_word_offset,
-                    second_summary_word_offset: plan.second_summary_word_offset,
+                    clause_offsets: &plan.clause_offsets,
+                    payload_offsets: &plan.payload_offsets,
+                    summary_offsets: &plan.summary_offsets,
+                    cache_rejections,
                 })
             }
-            PointPlan::Dnf => EncodedLabelPointEvaluator::Dnf(DnfEvaluator {
-                inner: self.generic_evaluator(),
+            PointPlan::Dnf(plan) => EncodedLabelPointEvaluator::DnfPayload(DnfPayloadEvaluator {
+                num_vectors: self.num_vectors,
+                bits: &self.payload.bits,
+                clause_offsets: &plan.clause_offsets,
+                payload_offsets: &plan.payload_offsets,
+                prefetch_word_offset: plan.payload_offsets.first().copied(),
+                prefetch_lookahead: self.config.point_prefetch_lookahead(),
+                cache_rejections,
             }),
-            PointPlan::Cnf => EncodedLabelPointEvaluator::Cnf(CnfEvaluator {
-                inner: self.generic_evaluator(),
+            PointPlan::Cnf(plan) if plan.use_summary => {
+                EncodedLabelPointEvaluator::CnfSummary(CnfSummaryEvaluator {
+                    num_vectors: self.num_vectors,
+                    bits: &self.payload.bits,
+                    summary_bits: &self.payload.nonzero_words.bits,
+                    clause_offsets: &plan.clause_offsets,
+                    terminal_offsets: &plan.terminal_offsets,
+                    payload_offsets: &plan.payload_offsets,
+                    summary_offsets: &plan.summary_offsets,
+                    cache_rejections,
+                })
+            }
+            PointPlan::Cnf(plan) => EncodedLabelPointEvaluator::CnfPayload(CnfPayloadEvaluator {
+                num_vectors: self.num_vectors,
+                bits: &self.payload.bits,
+                clause_offsets: &plan.clause_offsets,
+                terminal_offsets: &plan.terminal_offsets,
+                payload_offsets: &plan.payload_offsets,
+                prefetch_word_offset: plan.payload_offsets.first().copied(),
+                prefetch_lookahead: self.config.point_prefetch_lookahead(),
+                cache_rejections,
             }),
         }
     }
@@ -388,34 +402,23 @@ impl EncodedLabelQuery<'_> {
 
 impl EncodedLabelQuery<'_> {
     #[cfg(test)]
-    pub(crate) fn uses_exact_and2_point_plan(&self) -> bool {
-        matches!(
-            self.point_plan,
-            PointPlan::ExactAnd2Payload { .. } | PointPlan::ExactAnd2Summary(_)
-        )
+    pub(crate) fn point_plan_uses_summary(&self) -> bool {
+        match &self.point_plan {
+            PointPlan::Dnf(plan) => plan.use_summary,
+            PointPlan::Cnf(plan) => plan.use_summary,
+        }
     }
 
     #[cfg(test)]
-    pub(crate) fn exact_and2_rows(&self) -> Option<(usize, usize)> {
-        let (first_word_offset, second_word_offset) = match &self.point_plan {
-            PointPlan::ExactAnd2Payload {
-                first_word_offset,
-                second_word_offset,
-            } => (first_word_offset, second_word_offset),
-            PointPlan::ExactAnd2Summary(plan) => {
-                (&plan.first_word_offset, &plan.second_word_offset)
-            }
-            PointPlan::Dnf | PointPlan::Cnf => return None,
+    pub(crate) fn point_plan_payload_rows(&self) -> Vec<usize> {
+        let offsets = match &self.point_plan {
+            PointPlan::Dnf(plan) => &plan.payload_offsets,
+            PointPlan::Cnf(plan) => &plan.payload_offsets,
         };
-        Some((
-            *first_word_offset / self.payload.words_per_row,
-            *second_word_offset / self.payload.words_per_row,
-        ))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn exact_and2_uses_summary(&self) -> bool {
-        matches!(self.point_plan, PointPlan::ExactAnd2Summary(_))
+        offsets
+            .iter()
+            .map(|offset| offset / self.payload.words_per_row)
+            .collect()
     }
 
     /// Return a conservative bound on exact matching vectors, if exact label counts were stored.
@@ -460,56 +463,36 @@ impl EncodedLabelQuery<'_> {
             return false;
         }
         match &self.point_plan {
-            PointPlan::ExactAnd2Payload {
-                first_word_offset,
-                second_word_offset,
-            } => exact_and2_payload_matches(
-                &self.payload.bits,
-                *first_word_offset,
-                *second_word_offset,
-                vec_id,
-            ),
-            PointPlan::ExactAnd2Summary(plan) => exact_and2_summary_matches(
+            PointPlan::Dnf(plan) if plan.use_summary => dnf_summary_matches(
                 &self.payload.bits,
                 &self.payload.nonzero_words.bits,
-                plan.first_word_offset,
-                plan.second_word_offset,
-                plan.first_summary_word_offset,
-                plan.second_summary_word_offset,
+                &plan.clause_offsets,
+                &plan.payload_offsets,
+                &plan.summary_offsets,
                 vec_id,
             ),
-            PointPlan::Dnf => self.is_match_dnf(vec_id),
-            PointPlan::Cnf => self.is_match_cnf(vec_id),
-        }
-    }
-
-    #[inline(never)]
-    fn is_match_dnf(&self, vec_id: u32) -> bool {
-        dnf_matches(
-            self.payload.as_ref(),
-            &self.plan.clause_offsets,
-            &self.plan.label_ids,
-            vec_id,
-        )
-    }
-
-    #[inline(never)]
-    fn is_match_cnf(&self, vec_id: u32) -> bool {
-        cnf_matches(
-            self.payload.as_ref(),
-            &self.plan.clause_offsets,
-            &self.plan.label_ids,
-            vec_id,
-        )
-    }
-
-    fn generic_evaluator(&self) -> GenericEvaluator<'_> {
-        GenericEvaluator {
-            num_vectors: self.num_vectors,
-            payload: self.payload.as_ref(),
-            clause_offsets: &self.plan.clause_offsets,
-            label_ids: &self.plan.label_ids,
-            cache_rejections: self.should_cache_rejections(),
+            PointPlan::Dnf(plan) => dnf_payload_matches(
+                &self.payload.bits,
+                &plan.clause_offsets,
+                &plan.payload_offsets,
+                vec_id,
+            ),
+            PointPlan::Cnf(plan) if plan.use_summary => cnf_summary_matches(
+                &self.payload.bits,
+                &self.payload.nonzero_words.bits,
+                &plan.clause_offsets,
+                &plan.terminal_offsets,
+                &plan.payload_offsets,
+                &plan.summary_offsets,
+                vec_id,
+            ),
+            PointPlan::Cnf(plan) => cnf_payload_matches(
+                &self.payload.bits,
+                &plan.clause_offsets,
+                &plan.terminal_offsets,
+                &plan.payload_offsets,
+                vec_id,
+            ),
         }
     }
 
@@ -923,132 +906,165 @@ impl EncodedLabelQuery<'_> {
 }
 
 #[inline]
-fn terminal_matches(payload: &LabelIndexPayload, label_id: Option<u32>, vec_id: u32) -> bool {
-    let Some(label_id) = label_id.map(|id| id as usize) else {
-        return false;
-    };
-    let exact_row = payload.exact_row_by_label[label_id];
-    if exact_row != u32::MAX {
-        let word = payload.bits[exact_row as usize * payload.words_per_row + vec_id as usize / 64];
-        return word & (1u64 << (vec_id % 64)) != 0;
-    }
-    let row_offset = label_id * payload.hash_count;
-    payload.label_rows[row_offset..row_offset + payload.hash_count]
-        .iter()
-        .all(|&row| {
-            let word = payload.bits[row as usize * payload.words_per_row + vec_id as usize / 64];
-            word & (1u64 << (vec_id % 64)) != 0
-        })
-}
-
-#[inline(never)]
-fn dnf_matches(
-    payload: &LabelIndexPayload,
-    clause_offsets: &[usize],
-    label_ids: &[Option<u32>],
-    vec_id: u32,
-) -> bool {
-    let terminal_matches = |label_id| terminal_matches(payload, label_id, vec_id);
-    clause_offsets.windows(2).any(|clause| {
-        label_ids[clause[0]..clause[1]]
-            .iter()
-            .copied()
-            .all(terminal_matches)
-    })
-}
-
-#[inline(never)]
-fn cnf_matches(
-    payload: &LabelIndexPayload,
-    clause_offsets: &[usize],
-    label_ids: &[Option<u32>],
-    vec_id: u32,
-) -> bool {
-    let terminal_matches = |label_id| terminal_matches(payload, label_id, vec_id);
-    clause_offsets.windows(2).all(|clause| {
-        label_ids[clause[0]..clause[1]]
-            .iter()
-            .copied()
-            .any(terminal_matches)
-    })
-}
-
-#[inline]
-fn prefetch_exact_payload_word(bits: &[u64], first_word_offset: usize, vec_id: u32) {
+fn prefetch_payload_word(bits: &[u64], word_offset: usize, vec_id: u32) {
     #[cfg(target_arch = "x86_64")]
     {
         use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
 
         let word_index = vec_id as usize / 64;
-        // SAFETY: Exact point plans validate row offsets during query compilation, and callers
-        // validate `vec_id` against the index vector count before prefetching.
-        let ptr = unsafe { bits.as_ptr().add(first_word_offset + word_index) };
+        // SAFETY: Point plans validate row offsets during query compilation, and callers validate
+        // `vec_id` against the index vector count before prefetching.
+        let ptr = unsafe { bits.as_ptr().add(word_offset + word_index) };
         // SAFETY: `ptr` addresses a valid payload word. Prefetch is only a cache hint and does not
         // dereference the pointer architecturally.
         unsafe { _mm_prefetch(ptr.cast::<i8>(), _MM_HINT_T0) };
     }
 
     #[cfg(not(target_arch = "x86_64"))]
-    let _ = (bits, first_word_offset, vec_id);
+    let _ = (bits, word_offset, vec_id);
 }
 
 #[inline]
-fn exact_and2_payload_matches(
+fn dnf_payload_matches(
     bits: &[u64],
-    first_word_offset: usize,
-    second_word_offset: usize,
+    clause_offsets: &[usize],
+    payload_offsets: &[usize],
     vec_id: u32,
 ) -> bool {
     let word_index = vec_id as usize / 64;
     let mask = 1u64 << (vec_id % 64);
-    if bits[first_word_offset + word_index] & mask == 0 {
-        return false;
+    let mut clause_index = 0usize;
+    while clause_index + 1 < clause_offsets.len() {
+        let mut row_index = clause_offsets[clause_index];
+        let row_end = clause_offsets[clause_index + 1];
+        while row_index < row_end && bits[payload_offsets[row_index] + word_index] & mask != 0 {
+            row_index += 1;
+        }
+        if row_index == row_end {
+            return true;
+        }
+        clause_index += 1;
     }
-    bits[second_word_offset + word_index] & mask != 0
+    false
 }
 
 #[inline]
-fn exact_and2_summary_matches(
+fn dnf_summary_matches(
     bits: &[u64],
     summary_bits: &[u64],
-    first_word_offset: usize,
-    second_word_offset: usize,
-    first_summary_word_offset: usize,
-    second_summary_word_offset: usize,
+    clause_offsets: &[usize],
+    payload_offsets: &[usize],
+    summary_offsets: &[usize],
     vec_id: u32,
 ) -> bool {
     let word_index = vec_id as usize / 64;
     let summary_word_index = word_index / 64;
     let summary_mask = 1u64 << (word_index % 64);
-    if summary_bits[first_summary_word_offset + summary_word_index] & summary_mask == 0 {
-        return false;
-    }
     let mask = 1u64 << (vec_id % 64);
-    if bits[first_word_offset + word_index] & mask == 0 {
-        return false;
+    let mut clause_index = 0usize;
+    while clause_index + 1 < clause_offsets.len() {
+        let mut row_index = clause_offsets[clause_index];
+        let row_end = clause_offsets[clause_index + 1];
+        while row_index < row_end
+            && summary_bits[summary_offsets[row_index] + summary_word_index] & summary_mask != 0
+            && bits[payload_offsets[row_index] + word_index] & mask != 0
+        {
+            row_index += 1;
+        }
+        if row_index == row_end {
+            return true;
+        }
+        clause_index += 1;
     }
-    if summary_bits[second_summary_word_offset + summary_word_index] & summary_mask == 0 {
-        return false;
-    }
-    bits[second_word_offset + word_index] & mask != 0
+    false
 }
 
-impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for ExactAnd2PayloadEvaluator<'_> {
+#[inline]
+fn cnf_payload_matches(
+    bits: &[u64],
+    clause_offsets: &[usize],
+    terminal_offsets: &[usize],
+    payload_offsets: &[usize],
+    vec_id: u32,
+) -> bool {
+    let word_index = vec_id as usize / 64;
+    let mask = 1u64 << (vec_id % 64);
+    let mut clause_index = 0usize;
+    while clause_index + 1 < clause_offsets.len() {
+        let mut terminal = clause_offsets[clause_index];
+        let terminal_end = clause_offsets[clause_index + 1];
+        while terminal < terminal_end {
+            let mut row_index = terminal_offsets[terminal];
+            let row_end = terminal_offsets[terminal + 1];
+            while row_index < row_end && bits[payload_offsets[row_index] + word_index] & mask != 0 {
+                row_index += 1;
+            }
+            if row_index == row_end {
+                break;
+            }
+            terminal += 1;
+        }
+        if terminal == terminal_end {
+            return false;
+        }
+        clause_index += 1;
+    }
+    true
+}
+
+#[inline]
+fn cnf_summary_matches(
+    bits: &[u64],
+    summary_bits: &[u64],
+    clause_offsets: &[usize],
+    terminal_offsets: &[usize],
+    payload_offsets: &[usize],
+    summary_offsets: &[usize],
+    vec_id: u32,
+) -> bool {
+    let word_index = vec_id as usize / 64;
+    let summary_word_index = word_index / 64;
+    let summary_mask = 1u64 << (word_index % 64);
+    let mask = 1u64 << (vec_id % 64);
+    let mut clause_index = 0usize;
+    while clause_index + 1 < clause_offsets.len() {
+        let mut terminal = clause_offsets[clause_index];
+        let terminal_end = clause_offsets[clause_index + 1];
+        while terminal < terminal_end {
+            let mut row_index = terminal_offsets[terminal];
+            let row_end = terminal_offsets[terminal + 1];
+            while row_index < row_end
+                && summary_bits[summary_offsets[row_index] + summary_word_index] & summary_mask != 0
+                && bits[payload_offsets[row_index] + word_index] & mask != 0
+            {
+                row_index += 1;
+            }
+            if row_index == row_end {
+                break;
+            }
+            terminal += 1;
+        }
+        if terminal == terminal_end {
+            return false;
+        }
+        clause_index += 1;
+    }
+    true
+}
+
+impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for DnfPayloadEvaluator<'_> {
     #[inline]
     fn is_match(&self, id: u32) -> bool {
         id < self.num_vectors
-            && exact_and2_payload_matches(
-                self.bits,
-                self.first_word_offset,
-                self.second_word_offset,
-                id,
-            )
+            && dnf_payload_matches(self.bits, self.clause_offsets, self.payload_offsets, id)
     }
 
     #[inline]
     fn prefetch(&self, id: u32) {
         if id < self.num_vectors {
-            prefetch_exact_payload_word(self.bits, self.first_word_offset, id);
+            if let Some(offset) = self.prefetch_word_offset {
+                prefetch_payload_word(self.bits, offset, id);
+            }
         }
     }
 
@@ -1060,55 +1076,84 @@ impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for ExactAnd2PayloadE
             0
         }
     }
+
+    fn cache_rejections(&self) -> bool {
+        self.cache_rejections
+    }
 }
 
-impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for ExactAnd2SummaryEvaluator<'_> {
+impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for DnfSummaryEvaluator<'_> {
     #[inline]
     fn is_match(&self, id: u32) -> bool {
         id < self.num_vectors
-            && exact_and2_summary_matches(
+            && dnf_summary_matches(
                 self.bits,
                 self.summary_bits,
-                self.first_word_offset,
-                self.second_word_offset,
-                self.first_summary_word_offset,
-                self.second_summary_word_offset,
-                id,
-            )
-    }
-}
-
-impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for DnfEvaluator<'_> {
-    #[inline]
-    fn is_match(&self, id: u32) -> bool {
-        id < self.inner.num_vectors
-            && dnf_matches(
-                self.inner.payload,
-                self.inner.clause_offsets,
-                self.inner.label_ids,
+                self.clause_offsets,
+                self.payload_offsets,
+                self.summary_offsets,
                 id,
             )
     }
 
     fn cache_rejections(&self) -> bool {
-        self.inner.cache_rejections
+        self.cache_rejections
     }
 }
 
-impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for CnfEvaluator<'_> {
+impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for CnfPayloadEvaluator<'_> {
     #[inline]
     fn is_match(&self, id: u32) -> bool {
-        id < self.inner.num_vectors
-            && cnf_matches(
-                self.inner.payload,
-                self.inner.clause_offsets,
-                self.inner.label_ids,
+        id < self.num_vectors
+            && cnf_payload_matches(
+                self.bits,
+                self.clause_offsets,
+                self.terminal_offsets,
+                self.payload_offsets,
+                id,
+            )
+    }
+
+    #[inline]
+    fn prefetch(&self, id: u32) {
+        if id < self.num_vectors {
+            if let Some(offset) = self.prefetch_word_offset {
+                prefetch_payload_word(self.bits, offset, id);
+            }
+        }
+    }
+
+    #[inline]
+    fn prefetch_lookahead(&self) -> usize {
+        if cfg!(target_arch = "x86_64") {
+            self.prefetch_lookahead
+        } else {
+            0
+        }
+    }
+
+    fn cache_rejections(&self) -> bool {
+        self.cache_rejections
+    }
+}
+
+impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for CnfSummaryEvaluator<'_> {
+    #[inline]
+    fn is_match(&self, id: u32) -> bool {
+        id < self.num_vectors
+            && cnf_summary_matches(
+                self.bits,
+                self.summary_bits,
+                self.clause_offsets,
+                self.terminal_offsets,
+                self.payload_offsets,
+                self.summary_offsets,
                 id,
             )
     }
 
     fn cache_rejections(&self) -> bool {
-        self.inner.cache_rejections
+        self.cache_rejections
     }
 }
 
@@ -1618,102 +1663,180 @@ fn compile_plan<S: AsRef<str>>(
     })
 }
 
-fn generic_point_plan(expression_type: FilterExpressionType) -> PointPlan {
-    match expression_type {
-        FilterExpressionType::DNF => PointPlan::Dnf,
-        FilterExpressionType::CNF => PointPlan::Cnf,
-    }
-}
-
 fn compile_point_plan(
     plan: &CompiledPlan,
     payload: &LabelIndexPayload,
     counts: &[u32],
     summary_nonzero_words_per_row: &[u32],
 ) -> PointPlan {
-    if plan.expression_type != FilterExpressionType::DNF
-        || plan.clause_offsets.as_ref() != [0, 2]
-        || plan.label_ids.len() != 2
-    {
-        return generic_point_plan(plan.expression_type);
+    match plan.expression_type {
+        FilterExpressionType::DNF => PointPlan::Dnf(Box::new(compile_dnf_point_plan(
+            plan,
+            payload,
+            summary_nonzero_words_per_row,
+        ))),
+        FilterExpressionType::CNF => PointPlan::Cnf(Box::new(compile_cnf_point_plan(
+            plan,
+            payload,
+            counts,
+            summary_nonzero_words_per_row,
+        ))),
     }
-    let Some(left_label) = plan.label_ids[0].map(|id| id as usize) else {
-        return generic_point_plan(plan.expression_type);
-    };
-    let Some(right_label) = plan.label_ids[1].map(|id| id as usize) else {
-        return generic_point_plan(plan.expression_type);
-    };
-    let left_row = payload.exact_row_by_label[left_label];
-    let right_row = payload.exact_row_by_label[right_label];
-    if left_row == u32::MAX || right_row == u32::MAX {
-        return generic_point_plan(plan.expression_type);
+}
+
+fn label_physical_rows(payload: &LabelIndexPayload, label_id: usize, rows: &mut Vec<u32>) {
+    let exact_row = payload.exact_row_by_label[label_id];
+    if exact_row != u32::MAX {
+        rows.push(exact_row);
+        return;
     }
-    let Some(left_word_offset) = (left_row as usize).checked_mul(payload.words_per_row) else {
-        return generic_point_plan(plan.expression_type);
-    };
-    let Some(right_word_offset) = (right_row as usize).checked_mul(payload.words_per_row) else {
-        return generic_point_plan(plan.expression_type);
-    };
-    let count_swap = counts[left_label] > counts[right_label];
-    {
-        let summary = &payload.nonzero_words;
-        if let (Some(&left_nonzero), Some(&right_nonzero)) = (
-            summary_nonzero_words_per_row.get(left_row as usize),
-            summary_nonzero_words_per_row.get(right_row as usize),
-        ) {
-            let summary_swap = left_nonzero > right_nonzero;
-            let first_nonzero = if summary_swap {
-                right_nonzero
-            } else {
-                left_nonzero
-            } as usize;
-            let zero = payload.words_per_row.saturating_sub(first_nonzero);
-            if zero.saturating_mul(100)
-                >= payload
-                    .words_per_row
-                    .saturating_mul(EXACT_POINT_SUMMARY_MIN_ZERO_PERCENT)
-            {
-                let (first_row, second_row, first_word_offset, second_word_offset) = if summary_swap
-                {
-                    (
-                        right_row as usize,
-                        left_row as usize,
-                        right_word_offset,
-                        left_word_offset,
-                    )
-                } else {
-                    (
-                        left_row as usize,
-                        right_row as usize,
-                        left_word_offset,
-                        right_word_offset,
-                    )
-                };
-                let Some(first_summary_word_offset) = first_row.checked_mul(summary.words_per_row)
-                else {
-                    return generic_point_plan(plan.expression_type);
-                };
-                let Some(second_summary_word_offset) =
-                    second_row.checked_mul(summary.words_per_row)
-                else {
-                    return generic_point_plan(plan.expression_type);
-                };
-                return PointPlan::ExactAnd2Summary(Box::new(ExactAnd2SummaryPlan {
-                    first_word_offset,
-                    second_word_offset,
-                    first_summary_word_offset,
-                    second_summary_word_offset,
-                }));
-            }
+    let start = label_id * payload.hash_count;
+    rows.extend_from_slice(&payload.label_rows[start..start + payload.hash_count]);
+}
+
+fn sort_rows_by_valid_count(payload: &LabelIndexPayload, rows: &mut Vec<u32>) {
+    rows.sort_unstable_by_key(|&row| (payload.row_valid_counts[row as usize], row));
+    rows.dedup();
+}
+
+fn row_uses_summary(
+    payload: &LabelIndexPayload,
+    summary_nonzero_words_per_row: &[u32],
+    payload_offset: usize,
+) -> bool {
+    let row = payload_offset / payload.words_per_row;
+    let nonzero = summary_nonzero_words_per_row[row] as usize;
+    let zero = payload.words_per_row.saturating_sub(nonzero);
+    zero.saturating_mul(100)
+        >= payload
+            .words_per_row
+            .saturating_mul(POINT_SUMMARY_MIN_ZERO_PERCENT)
+}
+
+fn append_row_offsets(
+    payload: &LabelIndexPayload,
+    rows: &[u32],
+    payload_offsets: &mut Vec<usize>,
+    summary_offsets: &mut Vec<usize>,
+) {
+    payload_offsets.extend(rows.iter().map(|&row| row as usize * payload.words_per_row));
+    summary_offsets.extend(
+        rows.iter()
+            .map(|&row| row as usize * payload.nonzero_words.words_per_row),
+    );
+}
+
+fn compile_dnf_point_plan(
+    plan: &CompiledPlan,
+    payload: &LabelIndexPayload,
+    summary_nonzero_words_per_row: &[u32],
+) -> DnfPointPlan {
+    let mut clause_offsets = vec![0usize];
+    let mut payload_offsets = Vec::new();
+    let mut summary_offsets = Vec::new();
+    let mut clause_rows = Vec::new();
+
+    for clause in plan.clause_offsets.windows(2) {
+        clause_rows.clear();
+        let mut valid_clause = true;
+        for label_id in &plan.label_ids[clause[0]..clause[1]] {
+            let Some(label_id) = label_id.map(|id| id as usize) else {
+                valid_clause = false;
+                break;
+            };
+            label_physical_rows(payload, label_id, &mut clause_rows);
         }
+        if !valid_clause {
+            continue;
+        }
+        sort_rows_by_valid_count(payload, &mut clause_rows);
+        append_row_offsets(
+            payload,
+            &clause_rows,
+            &mut payload_offsets,
+            &mut summary_offsets,
+        );
+        clause_offsets.push(payload_offsets.len());
     }
-    let (first_word_offset, second_word_offset) = if count_swap {
-        (right_word_offset, left_word_offset)
-    } else {
-        (left_word_offset, right_word_offset)
-    };
-    PointPlan::ExactAnd2Payload {
-        first_word_offset,
-        second_word_offset,
+
+    let use_summary = clause_offsets.len() > 1
+        && clause_offsets.windows(2).all(|clause| {
+            clause[0] < clause[1]
+                && row_uses_summary(
+                    payload,
+                    summary_nonzero_words_per_row,
+                    payload_offsets[clause[0]],
+                )
+        });
+    DnfPointPlan {
+        clause_offsets: clause_offsets.into_boxed_slice(),
+        payload_offsets: payload_offsets.into_boxed_slice(),
+        summary_offsets: summary_offsets.into_boxed_slice(),
+        use_summary,
+    }
+}
+
+fn compile_cnf_point_plan(
+    plan: &CompiledPlan,
+    payload: &LabelIndexPayload,
+    counts: &[u32],
+    summary_nonzero_words_per_row: &[u32],
+) -> CnfPointPlan {
+    let mut clause_offsets = vec![0usize];
+    let mut terminal_offsets = vec![0usize];
+    let mut payload_offsets = Vec::new();
+    let mut summary_offsets = Vec::new();
+    let mut clause_labels = Vec::new();
+    let mut terminal_rows = Vec::new();
+
+    for clause in plan.clause_offsets.windows(2) {
+        clause_labels.clear();
+        clause_labels.extend(
+            plan.label_ids[clause[0]..clause[1]]
+                .iter()
+                .flatten()
+                .map(|&id| id as usize),
+        );
+        clause_labels.sort_unstable();
+        clause_labels.dedup();
+        clause_labels.sort_unstable_by(|&left, &right| {
+            counts[right]
+                .cmp(&counts[left])
+                .then_with(|| left.cmp(&right))
+        });
+
+        for &label_id in &clause_labels {
+            terminal_rows.clear();
+            label_physical_rows(payload, label_id, &mut terminal_rows);
+            sort_rows_by_valid_count(payload, &mut terminal_rows);
+            append_row_offsets(
+                payload,
+                &terminal_rows,
+                &mut payload_offsets,
+                &mut summary_offsets,
+            );
+            terminal_offsets.push(payload_offsets.len());
+        }
+        clause_offsets.push(terminal_offsets.len() - 1);
+    }
+
+    let use_summary = clause_offsets.windows(2).all(|clause| {
+        clause[0] < clause[1]
+            && (clause[0]..clause[1]).all(|terminal| {
+                let row = terminal_offsets[terminal];
+                row < terminal_offsets[terminal + 1]
+                    && row_uses_summary(
+                        payload,
+                        summary_nonzero_words_per_row,
+                        payload_offsets[row],
+                    )
+            })
+    });
+    CnfPointPlan {
+        clause_offsets: clause_offsets.into_boxed_slice(),
+        terminal_offsets: terminal_offsets.into_boxed_slice(),
+        payload_offsets: payload_offsets.into_boxed_slice(),
+        summary_offsets: summary_offsets.into_boxed_slice(),
+        use_summary,
     }
 }

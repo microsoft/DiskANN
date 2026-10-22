@@ -15,9 +15,9 @@ pub use bloom::BloomFilterConfig;
 pub use builder::encode_unified_label_index_jsonl;
 pub use error::EncodedLabelIndexError;
 pub use index::{
-    BloomQueryConfig, BloomVisitScratch, CnfEvaluator, DnfEvaluator, EncodedLabelIndex,
-    EncodedLabelPointEvaluator, EncodedLabelQuery, ExactAnd2PayloadEvaluator,
-    ExactAnd2SummaryEvaluator, FilterExpressionType,
+    BloomQueryConfig, BloomVisitScratch, CnfPayloadEvaluator, CnfSummaryEvaluator,
+    DnfPayloadEvaluator, DnfSummaryEvaluator, EncodedLabelIndex, EncodedLabelPointEvaluator,
+    EncodedLabelQuery, FilterExpressionType,
 };
 
 #[cfg(test)]

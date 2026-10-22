@@ -21,6 +21,15 @@ fn matching_ids(query: &impl QueryLabelProvider<u32>, num_vectors: u32) -> Vec<u
         .collect()
 }
 
+fn matching_point_ids(query: &EncodedLabelQuery<'_>, num_vectors: u32) -> Vec<u32> {
+    match query.point_evaluator() {
+        EncodedLabelPointEvaluator::DnfPayload(evaluator) => matching_ids(&evaluator, num_vectors),
+        EncodedLabelPointEvaluator::DnfSummary(evaluator) => matching_ids(&evaluator, num_vectors),
+        EncodedLabelPointEvaluator::CnfPayload(evaluator) => matching_ids(&evaluator, num_vectors),
+        EncodedLabelPointEvaluator::CnfSummary(evaluator) => matching_ids(&evaluator, num_vectors),
+    }
+}
+
 fn sample_documents() -> &'static str {
     concat!(
         "[\"A\",\"B\"]\n",
@@ -200,15 +209,13 @@ fn dictionary_order_is_count_then_label_bytes() {
 }
 
 #[test]
-fn exact_pair_compiles_payload_and_summary_evaluators() {
+fn dnf_compiles_payload_and_summary_evaluators() {
     let (_dir, dense) = encode_bloom("[\"A\",\"B\"]\n\"A\"\n\"A\"\n\"C\"\n", 2);
     let dense_query = compile(&dense, &["A&B"], FilterExpressionType::DNF);
-    assert!(dense_query.uses_exact_and2_point_plan());
-    assert_eq!(dense_query.exact_and2_rows(), Some((1, 0)));
-    assert!(!dense_query.exact_and2_uses_summary());
-    let EncodedLabelPointEvaluator::ExactAnd2Payload(payload) = dense_query.point_evaluator()
-    else {
-        panic!("dense exact pair should use payload evaluator");
+    assert_eq!(dense_query.point_plan_payload_rows(), [1, 0]);
+    assert!(!dense_query.point_plan_uses_summary());
+    let EncodedLabelPointEvaluator::DnfPayload(payload) = dense_query.point_evaluator() else {
+        panic!("dense DNF should use payload evaluator");
     };
     assert_eq!(matching_ids(&payload, dense.num_vectors()), vec![0]);
     assert_eq!(
@@ -221,15 +228,87 @@ fn exact_pair_compiles_payload_and_summary_evaluators() {
         .collect::<String>();
     let (_dir, sparse) = encode_bloom(&sparse_documents, 2);
     let sparse_query = compile(&sparse, &["A&B"], FilterExpressionType::DNF);
-    assert!(sparse_query.uses_exact_and2_point_plan());
-    assert_eq!(sparse_query.exact_and2_rows(), Some((1, 0)));
-    assert!(sparse_query.exact_and2_uses_summary());
-    let EncodedLabelPointEvaluator::ExactAnd2Summary(summary) = sparse_query.point_evaluator()
-    else {
-        panic!("sparse exact pair should use summary evaluator");
+    assert_eq!(sparse_query.point_plan_payload_rows(), [1, 0]);
+    assert!(sparse_query.point_plan_uses_summary());
+    let EncodedLabelPointEvaluator::DnfSummary(summary) = sparse_query.point_evaluator() else {
+        panic!("sparse DNF should use summary evaluator");
     };
     assert_eq!(matching_ids(&summary, sparse.num_vectors()), vec![0]);
     assert_eq!(QueryLabelProvider::prefetch_lookahead(&summary), 0);
+}
+
+#[test]
+fn general_dnf_and_cnf_plans_sort_for_short_circuiting() {
+    let documents = concat!(
+        "[\"A\",\"B\",\"D\"]\n",
+        "[\"A\",\"C\"]\n",
+        "[\"A\",\"C\"]\n",
+        "[\"B\",\"C\"]\n",
+        "\"C\"\n",
+    );
+    let (_dir, index) = encode_exact(documents);
+
+    let dnf = compile(&index, &["A&B&D", "C"], FilterExpressionType::DNF);
+    assert_eq!(dnf.point_plan_payload_rows(), [3, 2, 1, 0]);
+    let EncodedLabelPointEvaluator::DnfPayload(dnf_evaluator) = dnf.point_evaluator() else {
+        panic!("dense DNF should use payload evaluator");
+    };
+    assert_eq!(
+        matching_ids(&dnf_evaluator, index.num_vectors()),
+        vec![0, 1, 2, 3, 4]
+    );
+
+    let cnf = compile(&index, &["A|B|D", "C|B"], FilterExpressionType::CNF);
+    assert_eq!(cnf.point_plan_payload_rows(), [1, 2, 3, 0, 2]);
+    let EncodedLabelPointEvaluator::CnfPayload(cnf_evaluator) = cnf.point_evaluator() else {
+        panic!("dense CNF should use payload evaluator");
+    };
+    assert_eq!(
+        matching_ids(&cnf_evaluator, index.num_vectors()),
+        vec![0, 1, 2, 3]
+    );
+}
+
+#[test]
+fn general_evaluators_match_queries_across_storage_modes() {
+    let documents = concat!(
+        "[\"A\",\"B\"]\n",
+        "[\"A\",\"C\"]\n",
+        "[\"B\",\"D\"]\n",
+        "[\"C\",\"D\"]\n",
+        "[\"A\",\"D\"]\n",
+        "[\"B\",\"C\"]\n",
+        "[\"A\",\"B\",\"C\",\"D\"]\n",
+        "\"E\"\n",
+    );
+    for exact_count in [0, 2, 1_000_000] {
+        let (_dir, index) = encode_bloom(documents, exact_count);
+        let dnf = compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF);
+        assert_eq!(matching_ids(&dnf, index.num_vectors()), vec![0, 3, 6]);
+        assert_eq!(matching_point_ids(&dnf, index.num_vectors()), vec![0, 3, 6]);
+
+        let cnf = compile(&index, &["A|B", "C|D"], FilterExpressionType::CNF);
+        assert_eq!(matching_ids(&cnf, index.num_vectors()), vec![1, 2, 4, 5, 6]);
+        assert_eq!(
+            matching_point_ids(&cnf, index.num_vectors()),
+            vec![1, 2, 4, 5, 6]
+        );
+    }
+}
+
+#[test]
+fn sparse_cnf_compiles_summary_evaluator() {
+    let documents = std::iter::once("\"A\"\n")
+        .chain(std::iter::once("\"B\"\n"))
+        .chain(std::iter::repeat_n("\"C\"\n", 4094))
+        .collect::<String>();
+    let (_dir, index) = encode_exact(&documents);
+    let query = compile(&index, &["A|B"], FilterExpressionType::CNF);
+    assert!(query.point_plan_uses_summary());
+    let EncodedLabelPointEvaluator::CnfSummary(evaluator) = query.point_evaluator() else {
+        panic!("sparse CNF should use summary evaluator");
+    };
+    assert_eq!(matching_ids(&evaluator, index.num_vectors()), vec![0, 1]);
 }
 
 #[test]
@@ -322,11 +401,11 @@ fn bloom_query_configuration_is_applied() {
     let default = BloomQueryConfig::default();
     assert_eq!(default.summary_cache_bound_percent(), 1.0);
     assert_eq!(default.summary_scan_max_word_percent(), 10.0);
-    assert_eq!(default.exact_point_prefetch_lookahead(), 32);
+    assert_eq!(default.point_prefetch_lookahead(), 32);
     assert_eq!(
         default
-            .with_exact_point_prefetch_lookahead(8)
-            .exact_point_prefetch_lookahead(),
+            .with_point_prefetch_lookahead(8)
+            .point_prefetch_lookahead(),
         8
     );
     assert!(BloomQueryConfig::new(0.99).is_err());
