@@ -5,6 +5,7 @@
 
 use std::{
     collections::HashMap,
+    future::Future,
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicU64, AtomicUsize},
@@ -47,7 +48,7 @@ use diskann_utils::{
 use crate::search::pq::{PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
 use tokio::runtime::Runtime;
-use tracing::debug;
+use tracing::{debug, info_span, instrument::WithSubscriber, Instrument};
 
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
@@ -471,6 +472,7 @@ where
             > + Send
             + ?Sized,
     {
+        let _span = info_span!("diskann.disk.search.postprocess").entered();
         let provider = accessor.provider;
 
         let mut uncached_ids = Vec::new();
@@ -538,6 +540,7 @@ where
             > + Send
             + ?Sized,
     {
+        let _span = info_span!("diskann.disk.search.postprocess").entered();
         let provider = accessor.provider;
         let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
 
@@ -647,7 +650,8 @@ where
         _context: &DefaultContext,
         query: &'this [Data::VectorDataType],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        DiskAccessor::new(provider, query, self)
+        info_span!("diskann.disk.search.setup")
+            .in_scope(|| DiskAccessor::new(provider, query, self))
     }
 }
 
@@ -1139,6 +1143,16 @@ where
         })
     }
 
+    fn block_on_search<F: Future>(&self, parent: &tracing::Span, future: F) -> F::Output {
+        let execution = info_span!(parent: parent, "diskann.disk.search.execution");
+        self.runtime.block_on(
+            future
+                .instrument(execution)
+                .instrument(parent.clone())
+                .with_current_subscriber(),
+        )
+    }
+
     fn search_strategy<'a>(
         &'a self,
         io_tracker: &'a IOTracker,
@@ -1181,7 +1195,8 @@ where
                 "flat search list size must be greater than zero",
             )
         })?;
-        let mut visitor = DiskAccessor::new(self.index.provider(), query, strategy)?
+        let mut visitor = info_span!("diskann.disk.search.setup")
+            .in_scope(|| DiskAccessor::new(self.index.provider(), query, strategy))?
             .with_flat_scan_filter(vector_filter);
         let FlatSearchStats { cmps, result_count } = flat_knn_search(
             &mut visitor,
@@ -1392,6 +1407,20 @@ where
         mode: &SearchMode<'_>,
     ) -> ANNResult<SearchResultStats> {
         let l = search_list_size as usize;
+        let mode_name = match mode {
+            SearchMode::FlatScan { .. } => "flat_scan",
+            SearchMode::Graph { .. } => "graph",
+            SearchMode::InlineFilter { .. } => "inline_filter",
+            SearchMode::DiverseGraph { .. } => "diverse_graph",
+        };
+        let search_span = info_span!(
+            "diskann.disk.search",
+            diskann.search.mode = mode_name,
+            diskann.search.query_dimensions = query.len(),
+            diskann.search.k = k_value,
+            diskann.search.l = l,
+            diskann.search.beam_width = beam_width.unwrap_or(1),
+        );
 
         if l < k_value {
             return Err(diskann_error!(
@@ -1428,13 +1457,16 @@ where
                     PostprocessStrategy::AcceptAll,
                     cache_indexed_vectors,
                 );
-                self.runtime.block_on(self.flat_search(
-                    &strategy,
-                    query,
-                    filter.as_deref(),
-                    l,
-                    &mut result_output_buffer,
-                ))?
+                self.block_on_search(
+                    &search_span,
+                    self.flat_search(
+                        &strategy,
+                        query,
+                        filter.as_deref(),
+                        l,
+                        &mut result_output_buffer,
+                    ),
+                )?
             }
             SearchMode::Graph { filter } => {
                 let strategy = self.search_strategy(
@@ -1446,13 +1478,16 @@ where
                 );
                 let knn_search = Knn::new(l, beam_width)
                     .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
-                self.runtime.block_on(self.index.search(
-                    knn_search,
-                    &strategy,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                self.block_on_search(
+                    &search_span,
+                    self.index.search(
+                        knn_search,
+                        &strategy,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    ),
+                )?
             }
             SearchMode::InlineFilter { filter, adaptive_l } => {
                 // Strategy is passed by value into `filter_search` so that the
@@ -1464,14 +1499,17 @@ where
                     cache_indexed_vectors,
                 );
                 let knn_search = Knn::new(l, beam_width)?;
-                self.runtime.block_on(self.filter_search(
-                    strategy,
-                    query,
-                    knn_search,
-                    filter.as_ref(),
-                    adaptive_l.clone(),
-                    &mut result_output_buffer,
-                ))?
+                self.block_on_search(
+                    &search_span,
+                    self.filter_search(
+                        strategy,
+                        query,
+                        knn_search,
+                        filter.as_ref(),
+                        adaptive_l.clone(),
+                        &mut result_output_buffer,
+                    ),
+                )?
             }
             SearchMode::DiverseGraph { filter, params } => {
                 // Strategy installs the filter so `RerankAndFilter` would also
@@ -1486,14 +1524,17 @@ where
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(postprocess_config, *params),
                 );
-                self.runtime.block_on(self.index.search_with(
-                    knn_search,
-                    &strategy,
-                    processor,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                self.block_on_search(
+                    &search_span,
+                    self.index.search_with(
+                        knn_search,
+                        &strategy,
+                        processor,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    ),
+                )?
             }
         };
         query_stats.total_comparisons = stats.cmps;
@@ -1534,6 +1575,8 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 
 #[cfg(test)]
 mod disk_provider_tests {
+    use std::sync::Mutex;
+
     use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
         graph::search::{record::VisitedSearchRecord, Knn},
@@ -1551,6 +1594,16 @@ mod disk_provider_tests {
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
+    use tracing::{
+        field::{Field, Visit},
+        span::{Attributes, Id},
+        Subscriber,
+    };
+    use tracing_subscriber::{
+        layer::{Context, SubscriberExt},
+        registry::LookupSpan,
+        Layer,
+    };
     use vfs::OverlayFS;
 
     use super::*;
@@ -1600,6 +1653,135 @@ mod disk_provider_tests {
     // 0.015625. Allow one ULP for architecture-dependent SIMD accumulation;
     // an absolute tolerance of 1e-4 would require identical f32 results.
     const SIFT_DISTANCE_ABS_TOLERANCE: f32 = 0.02;
+
+    #[derive(Debug)]
+    struct RecordedSpan {
+        id: Id,
+        parent: Option<Id>,
+        name: &'static str,
+        fields: HashMap<&'static str, String>,
+        entered: bool,
+    }
+
+    impl Visit for RecordedSpan {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields.insert(field.name(), format!("{value:?}"));
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields.insert(field.name(), value.to_owned());
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SpanRecorder(Arc<Mutex<Vec<RecordedSpan>>>);
+
+    impl<S> Layer<S> for SpanRecorder
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+            let span = ctx.span(id).expect("new span must be registered");
+            let mut recorded = RecordedSpan {
+                id: id.clone(),
+                parent: span.parent().map(|parent| parent.id()),
+                name: attrs.metadata().name(),
+                fields: HashMap::new(),
+                entered: false,
+            };
+            attrs.record(&mut recorded);
+            self.0.lock().unwrap().push(recorded);
+        }
+
+        fn on_enter(&self, id: &Id, _ctx: Context<'_, S>) {
+            let mut spans = self.0.lock().unwrap();
+            let span = spans.iter_mut().find(|span| span.id == *id).unwrap();
+            span.entered = true;
+        }
+    }
+
+    #[rstest]
+    #[case("graph", SearchMode::graph)]
+    #[case("flat_scan", SearchMode::flat)]
+    #[case("diverse_graph", || SearchMode::diverse_graph(
+        DeterminantDiversityParams::new(2.0, 0.01).unwrap()
+    ))]
+    fn test_disk_search_tracing(
+        #[case] mode_name: &str,
+        #[case] make_mode: fn() -> SearchMode<'static>,
+        #[values(None, Some(4))] beam_width: Option<usize>,
+    ) {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let queries = load_source_data(storage_provider.as_ref(), TEST_QUERY_10PTS_128DIM);
+        let query = queries.row(0);
+        let recorder = SpanRecorder::default();
+        let subscriber = tracing_subscriber::registry().with(recorder.clone());
+        let caller_id = tracing::subscriber::with_default(subscriber, || {
+            let caller = info_span!("test.disk.search.caller");
+            caller.in_scope(|| {
+                search_engine
+                    .search(query, 10, 20, beam_width, make_mode())
+                    .unwrap();
+                assert_eq!(tracing::Span::current().id(), caller.id());
+            });
+            caller.id().unwrap()
+        });
+
+        let spans = recorder.0.lock().unwrap();
+        let roots: Vec<_> = spans
+            .iter()
+            .filter(|span| span.name == "diskann.disk.search")
+            .collect();
+        assert_eq!(roots.len(), 1, "search must emit one root span");
+        for root in roots {
+            assert!(root.entered, "{} must be entered", root.name);
+            assert_eq!(root.parent.as_ref(), Some(&caller_id));
+            assert_eq!(
+                root.fields,
+                HashMap::from([
+                    ("diskann.search.mode", mode_name.to_owned()),
+                    ("diskann.search.query_dimensions", query.len().to_string()),
+                    ("diskann.search.k", "10".to_owned()),
+                    ("diskann.search.l", "20".to_owned()),
+                    (
+                        "diskann.search.beam_width",
+                        beam_width.unwrap_or(1).to_string()
+                    ),
+                ])
+            );
+
+            let execution = spans
+                .iter()
+                .find(|span| {
+                    span.name == "diskann.disk.search.execution"
+                        && span.parent.as_ref() == Some(&root.id)
+                })
+                .expect("search must emit an execution span");
+            for name in [
+                "diskann.disk.search.setup",
+                "diskann.disk.search.postprocess",
+            ] {
+                assert!(
+                    spans.iter().any(|span| {
+                        span.name == name
+                            && span.parent.as_ref() == Some(&execution.id)
+                            && span.entered
+                    }),
+                    "execution must enter a {name} span"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_disk_search_k10_l20_single_or_multi_thread_100dim() {
