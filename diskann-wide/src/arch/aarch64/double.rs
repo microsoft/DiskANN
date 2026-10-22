@@ -15,7 +15,7 @@ use crate::{
 use super::{
     f16x8, f32x4, i8x16, i16x8, i32x4,
     masks::{mask8x16, mask16x8, mask32x4, mask64x2},
-    u8x16, u32x4, u64x2,
+    u8x8, u8x16, u16x8, u32x4, u64x2,
 };
 
 // Double Masks
@@ -164,6 +164,30 @@ impl From<i8x32> for i16x32 {
     }
 }
 
+impl From<u8x8> for f32x8 {
+    #[inline(always)]
+    fn from(value: u8x8) -> Self {
+        let u16s = u16x8::from(value);
+        Self::from(u16s)
+    }
+}
+
+impl From<u16x8> for f32x8 {
+    #[inline(always)]
+    fn from(value: u16x8) -> Self {
+        let LoHi { lo, hi } = value.split().map(From::from);
+        Self(lo, hi)
+    }
+}
+
+impl From<u8x16> for f32x16 {
+    #[inline(always)]
+    fn from(value: u8x16) -> Self {
+        let LoHi { lo, hi } = value.split();
+        Self::new(u16x8::from(lo).into(), u16x8::from(hi).into())
+    }
+}
+
 // (Potentially) Lossy
 impl crate::SIMDCast<f32> for f16x16 {
     type Cast = f32x16;
@@ -279,6 +303,11 @@ mod tests {
     }
 
     // u8s
+    mod test_u8x16 {
+        use super::*;
+        test_utils::ops::test_zipunzip!(u8x16 => u8x8, 0x78c92a4fe135db60, test_neon());
+    }
+
     mod test_u8x32 {
         use super::*;
         standard_tests!(u8x32, u8, 32);
@@ -469,6 +498,9 @@ mod tests {
     test_utils::ops::test_lossless_convert!(u8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x16 => i16x16, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u8x8 => f32x8, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u8x16 => f32x16, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u16x8 => f32x8, 0x84c1c6f05b169a20, test_neon());
 
     test_utils::ops::test_cast!(f16x8 => f32x8, 0xba8fe343fc9dbeff, test_neon());
     test_utils::ops::test_cast!(f16x16 => f32x16, 0xba8fe343fc9dbeff, test_neon());

@@ -108,6 +108,15 @@ pub enum TrainError {
     AllocatorError(#[from] AllocatorError),
 }
 
+#[derive(Debug, Clone, Copy, Error, PartialEq)]
+#[non_exhaustive]
+pub enum CentroidDistanceError {
+    #[error("centroid distance is not finite")]
+    NonFiniteDistance,
+    #[error("expected centroid to have length {expected}")]
+    DimensionMismatch { expected: usize },
+}
+
 impl<A> SphericalQuantizer<A>
 where
     A: Allocator,
@@ -140,12 +149,57 @@ where
         self.mean_norm
     }
 
-    /// Return the pre-scaling parameter for data. This value is multiplied to every
-    /// compressed vector to adjust its dynamic range.
+    /// Return the pre-scaling parameter for data. Non-cosine metrics multiply every
+    /// compressed vector by this value to adjust its dynamic range. Cosine ignores it.
     ///
     /// A value of 1.0 means that no scaling is occurring.
     pub fn pre_scale(&self) -> Positive<f32> {
         self.pre_scale
+    }
+
+    /// Compute the effective squared L2 distance of `centroid` relative to the
+    /// quantizer's internal shift.
+    ///
+    /// For squared L2 and inner product, the training centroid is recovered from the
+    /// pre-scaled shift before comparison. Cosine compares the supplied centroid
+    /// directly with the stored centroid without normalization or pre-scaling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `centroid.len()` is not equal to [`Self::input_dim`] or
+    /// the computed distance is non-finite.
+    pub fn centroid_squared_distance(
+        &self,
+        centroid: &[f32],
+    ) -> Result<f32, CentroidDistanceError> {
+        if centroid.len() != self.input_dim() {
+            return Err(CentroidDistanceError::DimensionMismatch {
+                expected: self.input_dim(),
+            });
+        }
+
+        let stored_scale = match self.metric {
+            SupportedMetric::Cosine => 1.0,
+            SupportedMetric::SquaredL2 | SupportedMetric::InnerProduct => {
+                self.pre_scale.into_inner()
+            }
+        };
+
+        let distance = centroid
+            .iter()
+            .zip(self.shift.iter())
+            .map(|(&candidate, &shift)| {
+                let training = shift / stored_scale;
+                let delta = candidate - training;
+                delta * delta
+            })
+            .sum::<f32>();
+
+        if !distance.is_finite() {
+            return Err(CentroidDistanceError::NonFiniteDistance);
+        }
+
+        Ok(distance)
     }
 
     /// Return a reference to the allocator used by this data structure.
@@ -197,10 +251,13 @@ where
             }
         };
 
-        // Transform the centroid by the pre-scale.
-        centroid
-            .iter_mut()
-            .for_each(|v| *v *= pre_scale.into_inner());
+        // Cosine preprocessing normalizes each vector, so pre-scaling does not affect
+        // cosine vectors or their centroid.
+        if metric != SupportedMetric::Cosine {
+            centroid
+                .iter_mut()
+                .for_each(|v| *v *= pre_scale.into_inner());
+        }
 
         Ok(SphericalQuantizer {
             shift: centroid,
@@ -228,8 +285,9 @@ where
     /// Additionally, vectors compressed when using the [`SupportedMetric::Cosine`] distance
     /// will be implicitly normalized before being compressed to enable better compression.
     ///
-    /// If argument `pre_scale` is given, then all vectors compressed by this quantizer will
-    /// first be scaled by this value. Note that if given, `pre_scale` **must** be positive.
+    /// If argument `pre_scale` is given, non-cosine vectors compressed by this quantizer
+    /// will first be scaled by this value. Cosine ignores `pre_scale`. Note that if given,
+    /// `pre_scale` **must** be positive.
     pub fn train<T, R>(
         data: rowmajor::Ref<T>,
         transform: TransformKind,
@@ -2605,6 +2663,75 @@ mod tests {
                 .is_ok(),
             "if this failed, the likely culprit is exceeding the value of the 16-bit correction terms"
         );
+    }
+
+    #[test]
+    fn centroid_squared_distance_validates_input() {
+        let quantizer = SphericalQuantizer::generate(
+            Poly::from_iter([2.0f32, 4.0].into_iter(), GlobalAllocator).unwrap(),
+            1.0,
+            TransformKind::Null,
+            SupportedMetric::SquaredL2,
+            Some(1.0),
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[2.0]),
+            Err(CentroidDistanceError::DimensionMismatch { expected: 2 })
+        );
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[f32::NAN, 4.0]),
+            Err(CentroidDistanceError::NonFiniteDistance)
+        );
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[f32::MAX, f32::MAX]),
+            Err(CentroidDistanceError::NonFiniteDistance)
+        );
+    }
+
+    #[test]
+    fn cosine_centroid_squared_distance_ignores_pre_scale() {
+        let quantizer = SphericalQuantizer::generate(
+            Poly::from_iter([0.5f32, 0.5].into_iter(), GlobalAllocator).unwrap(),
+            1.0,
+            TransformKind::Null,
+            SupportedMetric::Cosine,
+            Some(2.0),
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+
+        assert_eq!(quantizer.shift(), &[0.5, 0.5]);
+
+        let actual = quantizer.centroid_squared_distance(&[0.6, 0.4]).unwrap();
+        let expected = 0.02;
+        assert!((actual - expected).abs() <= 1.0e-6);
+    }
+
+    #[test]
+    fn non_cosine_centroid_squared_distance_removes_pre_scale() {
+        for metric in [SupportedMetric::SquaredL2, SupportedMetric::InnerProduct] {
+            let quantizer = SphericalQuantizer::generate(
+                Poly::from_iter([0.5f32, 0.5].into_iter(), GlobalAllocator).unwrap(),
+                1.0,
+                TransformKind::Null,
+                metric,
+                Some(2.0),
+                &mut StdRng::seed_from_u64(10),
+                GlobalAllocator,
+            )
+            .unwrap();
+
+            assert_eq!(quantizer.shift(), &[1.0, 1.0]);
+
+            let actual = quantizer.centroid_squared_distance(&[0.6, 0.4]).unwrap();
+            let expected = 0.02;
+            assert!((actual - expected).abs() <= 1.0e-6);
+        }
     }
 }
 

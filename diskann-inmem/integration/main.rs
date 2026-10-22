@@ -343,4 +343,82 @@ mod tests {
             "graph/spherical/four-bit-cosine-baseline.json",
         );
     }
+
+    //----------------------//
+    // Product Quantization //
+    //----------------------//
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_product_l2() {
+        run_regression_example(
+            "graph/product/l2.json",
+            "checks.json",
+            "graph/product/l2-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_product_ip() {
+        run_regression_example(
+            "graph/product/ip.json",
+            "checks.json",
+            "graph/product/ip-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn graph_product_cosine() {
+        run_regression_example(
+            "graph/product/cosine.json",
+            "checks.json",
+            "graph/product/cosine-baseline.json",
+        );
+    }
+
+    //---------------------//
+    // Scalar Quantization //
+    //---------------------//
+
+    #[test]
+    #[cfg(not(miri))]
+    fn graph_scalar_one() {
+        run_regression_example(
+            "graph/scalar/one-bit-l2.json",
+            "checks.json",
+            "graph/scalar/one-bit-l2-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_scalar_two() {
+        run_regression_example(
+            "graph/scalar/two-bit-cosine.json",
+            "checks.json",
+            "graph/scalar/two-bit-cosine-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_scalar_four() {
+        run_regression_example(
+            "graph/scalar/four-bit-ip.json",
+            "checks.json",
+            "graph/scalar/four-bit-ip-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_scalar_eight() {
+        run_regression_example(
+            "graph/scalar/eight-bit-l2.json",
+            "checks.json",
+            "graph/scalar/eight-bit-l2-baseline.json",
+        );
+    }
 }

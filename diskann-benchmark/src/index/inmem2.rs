@@ -30,12 +30,15 @@ use diskann_benchmark_runner::{
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
 use diskann_inmem::{
+    self as inmem,
     num::{Capacity, MaxDegree},
     repr::{self, Full, FullPrecision},
     Provider, Strategy,
 };
 use diskann_quantization::{
+    self as dq,
     alloc::{GlobalAllocator, Poly},
+    product::tables::BasicTable,
     spherical::iface,
 };
 use diskann_utils::views::rowmajor::{self, Matrix};
@@ -56,7 +59,10 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     registry.register("inmem2-f32", Build::<f32>::new())?;
     registry.register("inmem2-f16", Build::<f16>::new())?;
     registry.register("inmem2-u8", Build::<u8>::new())?;
+
     registry.register("inmem2-spherical", SphericalBuild)?;
+    registry.register("inmem2-pq", ProductBuild)?;
+    registry.register("inmem2-scalar", ScalarBuild)?;
 
     registry.register("inmem2-f32-stream", StreamingBenchmark::<f32>::new())?;
     Ok(())
@@ -109,6 +115,8 @@ mod dto {
     #[serde(rename_all = "kebab-case")]
     pub(super) enum Quantization {
         Spherical(Spherical),
+        Product(Product),
+        Scalar(Scalar),
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -122,6 +130,28 @@ mod dto {
     #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct Spherical {
         pub(super) bits: SphericalBits,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Product {
+        pub(super) chunks: NonZeroUsize,
+        pub(super) centers: NonZeroUsize,
+        pub(super) seed: u64,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) enum ScalarBits {
+        One,
+        Two,
+        Four,
+        Eight,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Scalar {
+        pub(super) bits: ScalarBits,
+        pub(super) standard_deviations: f64,
     }
 
     //-----------//
@@ -357,24 +387,44 @@ impl Display for BuildParams {
 enum Quantization {
     None,
     Spherical(Spherical),
+    Product(Product),
+    Scalar(Scalar),
 }
 
 impl Quantization {
-    fn from_raw(raw: Option<dto::Quantization>) -> Self {
-        if let Some(raw) = raw {
+    fn from_raw(raw: Option<dto::Quantization>) -> anyhow::Result<Self> {
+        let this = if let Some(raw) = raw {
             match raw {
                 dto::Quantization::Spherical(spherical) => {
                     Self::Spherical(Spherical::from_raw(spherical))
                 }
+                dto::Quantization::Product(product) => Self::Product(Product::from_raw(product)),
+                dto::Quantization::Scalar(scalar) => Self::Scalar(Scalar::from_raw(scalar)?),
             }
         } else {
             Self::None
-        }
+        };
+
+        Ok(this)
     }
 
     fn as_spherical(&self) -> Option<&Spherical> {
         match self {
             Self::Spherical(spherical) => Some(spherical),
+            _ => None,
+        }
+    }
+
+    fn as_product(&self) -> Option<&Product> {
+        match self {
+            Self::Product(product) => Some(product),
+            _ => None,
+        }
+    }
+
+    fn as_scalar(&self) -> Option<&Scalar> {
+        match self {
+            Self::Scalar(scalar) => Some(scalar),
             _ => None,
         }
     }
@@ -387,6 +437,16 @@ impl std::fmt::Display for Quantization {
             Self::Spherical(spherical) => {
                 let mut kv = KeyValue::new();
                 kv.push("spherical", spherical);
+                write!(f, "{}", kv)
+            }
+            Self::Product(product) => {
+                let mut kv = KeyValue::new();
+                kv.push("product", product);
+                write!(f, "{}", kv)
+            }
+            Self::Scalar(scalar) => {
+                let mut kv = KeyValue::new();
+                kv.push("scalar", scalar);
                 write!(f, "{}", kv)
             }
         }
@@ -478,6 +538,155 @@ impl std::fmt::Display for Spherical {
     }
 }
 
+#[derive(Debug)]
+struct Product {
+    chunks: NonZeroUsize,
+    centers: NonZeroUsize,
+    seed: u64,
+}
+
+impl Product {
+    fn from_raw(raw: dto::Product) -> Self {
+        let dto::Product {
+            chunks,
+            centers,
+            seed,
+        } = raw;
+
+        Self {
+            chunks,
+            centers,
+            seed,
+        }
+    }
+
+    fn train(
+        &self,
+        data: rowmajor::Ref<'_, f32>,
+        num_threads: NonZeroUsize,
+    ) -> anyhow::Result<BasicTable> {
+        use diskann_quantization::{
+            cancel::DontCancel,
+            product::{self, train::TrainQuantizer},
+            random,
+            views::ChunkOffsets,
+            Parallelism,
+        };
+
+        let trainer = product::train::LightPQTrainingParameters::new(self.centers.get(), 5);
+        let threadpool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads.get())
+            .build()?;
+
+        let Some(dim) = NonZeroUsize::new(data.ncols()) else {
+            anyhow::bail!("zero dimensional data is not supported");
+        };
+
+        threadpool.install(|| -> anyhow::Result<_> {
+            let table = trainer.train(
+                data,
+                ChunkOffsets::partition(dim, self.chunks)?.as_view(),
+                Parallelism::Rayon,
+                &random::StdRngBuilder::new(self.seed),
+                &DontCancel,
+            )?;
+
+            Ok(table)
+        })
+    }
+}
+
+impl std::fmt::Display for Product {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            chunks,
+            centers,
+            seed,
+        } = self;
+
+        let mut kv = KeyValue::new();
+        kv.push("chunks", chunks);
+        kv.push("centers", centers);
+        kv.push("seed", seed);
+
+        write!(f, "{}", kv)
+    }
+}
+
+#[derive(Debug)]
+enum ScalarBits {
+    One,
+    Two,
+    Four,
+    Eight,
+}
+
+impl ScalarBits {
+    fn from_raw(raw: dto::ScalarBits) -> Self {
+        match raw {
+            dto::ScalarBits::One => Self::One,
+            dto::ScalarBits::Two => Self::Two,
+            dto::ScalarBits::Four => Self::Four,
+            dto::ScalarBits::Eight => Self::Eight,
+        }
+    }
+}
+
+impl std::fmt::Display for ScalarBits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::One => write!(f, "1"),
+            Self::Two => write!(f, "2"),
+            Self::Four => write!(f, "4"),
+            Self::Eight => write!(f, "8"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Scalar {
+    bits: ScalarBits,
+    standard_deviations: dq::num::Positive<f64>,
+}
+
+impl Scalar {
+    fn from_raw(raw: dto::Scalar) -> anyhow::Result<Self> {
+        let dto::Scalar {
+            bits,
+            standard_deviations,
+        } = raw;
+
+        Ok(Self {
+            bits: ScalarBits::from_raw(bits),
+            standard_deviations: dq::num::Positive::new(standard_deviations)?,
+        })
+    }
+
+    fn train(&self, data: rowmajor::Ref<'_, f32>) -> anyhow::Result<dq::scalar::ScalarQuantizer> {
+        let trainer =
+            dq::scalar::train::ScalarQuantizationParameters::new(self.standard_deviations);
+        let quantizer = trainer.train(data);
+        Ok(quantizer)
+    }
+}
+
+impl std::fmt::Display for Scalar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            bits,
+            standard_deviations,
+        } = self;
+
+        let std = standard_deviations.into_inner();
+
+        let mut kv = KeyValue::new();
+        kv.push("bits", bits);
+        kv.push("standard_deviations", &std);
+
+        write!(f, "{}", kv)
+    }
+}
+
 //-------------//
 // StaticBuild //
 //-------------//
@@ -507,7 +716,7 @@ impl StaticBuild {
         let data = Data::from_raw(data, checker.as_deref_mut())?;
         let build = BuildParams::from_raw(build, data.distance)?;
         let search = KnnSearch::from_raw(search, checker)?;
-        let quantization = Quantization::from_raw(quantization);
+        let quantization = Quantization::from_raw(quantization)?;
 
         Ok(Self {
             data,
@@ -624,7 +833,7 @@ impl<T> Build<T> {
 
 impl<T> Benchmark for Build<T>
 where
-    T: diskann_inmem::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
+    T: repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = StaticBuild;
     type Output = ();
@@ -846,6 +1055,338 @@ impl Benchmark for SphericalBuild {
             start,
             repr::spherical::Rerank::F16,
         )?;
+
+        let provider = Provider::<_, u32>::new(config)?;
+        let index = Arc::new(DiskANNIndex::new(
+            input.build.config.clone(),
+            provider,
+            None,
+        ));
+
+        // Build via SingleInsert.
+        let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
+        let builder = build_core::graph::SingleInsert::new(
+            index.clone(),
+            data,
+            Strategy,
+            build_core::ids::Identity::<u32>::new(),
+        );
+
+        let build_results = build_core::build_tracked(
+            builder,
+            build_core::Parallelism::dynamic(diskann::utils::ONE, input.build.num_threads),
+            &rt,
+            Some(&ProgressMeter::new(output)),
+        )?;
+
+        let total_build_time = build_results.end_to_end_latency();
+        writeln!(
+            output,
+            "\nBuild complete in {:.2}s",
+            total_build_time.as_seconds()
+        )?;
+        checkpoint.checkpoint(&total_build_time)?;
+
+        // Search.
+        let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
+        let max_k = input.search.maximum_recall_k();
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&input.search.groundtruth),
+            Some(max_k),
+        )?;
+
+        writeln!(output, "Loaded {} queries\n", queries.nrows())?;
+
+        let knn = benchmark_core::search::graph::KNN::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(Strategy),
+        )?;
+
+        let results = _knn(
+            &knn,
+            &groundtruth,
+            input.search.reps,
+            &input.search.num_threads,
+            &input.search.runs,
+        )?;
+
+        let results = AggregatedSearchResults::Topk(results);
+
+        writeln!(output, "{}", results)?;
+
+        Ok(())
+    }
+}
+
+//----------------------//
+// Product Quantization //
+//----------------------//
+
+#[derive(Debug)]
+struct ProductBuild;
+
+impl Benchmark for ProductBuild {
+    type Input = StaticBuild;
+    type Output = ();
+
+    fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+
+        let DispatchParams {
+            data_type,
+            quantization,
+            distance,
+        } = input.dispatch_params();
+
+        if !matches!(quantization, Quantization::Product(_)) {
+            score.fail(2000, &"needed product-quantization");
+        }
+
+        if !f32::is_match(data_type) {
+            score.fail(
+                1000,
+                &format_args!(
+                    "expected data-type {}, instead got {}",
+                    Quote(f32::DATA_TYPE),
+                    Quote(data_type)
+                ),
+            )
+        }
+
+        accept_all(&distance);
+        score
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "product-quantized index build-and-search",)?;
+
+        Ok(())
+    }
+
+    fn run(
+        &self,
+        input: &StaticBuild,
+        checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<()> {
+        writeln!(output, "{input}\n")?;
+
+        let product = input.quantization.as_product().unwrap();
+
+        // Load data.
+        let data: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.data.data),
+        )?);
+
+        let dim = data.ncols();
+        let num_points = data.nrows();
+        writeln!(output, "Loaded {num_points} points, dim={dim}")?;
+
+        let table = product.train(data.as_view(), input.build.num_threads)?;
+        let quantizer = repr::quantized::product::Product::new(
+            table,
+            input.data.distance.into(),
+            Some(input.build.num_threads),
+        )?;
+
+        // Compute the medoid of the dataset as the single start point.
+        let start = StartPointStrategy::Medoid.compute(data.as_view())?;
+        let config = repr::quantized::Quantized::config(
+            quantizer,
+            Capacity::new(num_points),
+            MaxDegree::new(input.build.config.max_degree().get()),
+            start,
+            repr::quantized::Rerank::F16 {
+                metric: input.data.distance.into(),
+            },
+        )?;
+
+        let provider = Provider::<_, u32>::new(config)?;
+        let index = Arc::new(DiskANNIndex::new(
+            input.build.config.clone(),
+            provider,
+            None,
+        ));
+
+        // Build via SingleInsert.
+        let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
+        let builder = build_core::graph::SingleInsert::new(
+            index.clone(),
+            data,
+            Strategy,
+            build_core::ids::Identity::<u32>::new(),
+        );
+
+        let build_results = build_core::build_tracked(
+            builder,
+            build_core::Parallelism::dynamic(diskann::utils::ONE, input.build.num_threads),
+            &rt,
+            Some(&ProgressMeter::new(output)),
+        )?;
+
+        let total_build_time = build_results.end_to_end_latency();
+        writeln!(
+            output,
+            "\nBuild complete in {:.2}s",
+            total_build_time.as_seconds()
+        )?;
+        checkpoint.checkpoint(&total_build_time)?;
+
+        // Search.
+        let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
+        let max_k = input.search.maximum_recall_k();
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&input.search.groundtruth),
+            Some(max_k),
+        )?;
+
+        writeln!(output, "Loaded {} queries\n", queries.nrows())?;
+
+        let knn = benchmark_core::search::graph::KNN::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(Strategy),
+        )?;
+
+        let results = _knn(
+            &knn,
+            &groundtruth,
+            input.search.reps,
+            &input.search.num_threads,
+            &input.search.runs,
+        )?;
+
+        let results = AggregatedSearchResults::Topk(results);
+
+        writeln!(output, "{}", results)?;
+
+        Ok(())
+    }
+}
+
+//--------//
+// Scalar //
+//-------//
+
+#[derive(Debug)]
+struct ScalarBuild;
+
+impl Benchmark for ScalarBuild {
+    type Input = StaticBuild;
+    type Output = ();
+
+    fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+
+        let DispatchParams {
+            data_type,
+            quantization,
+            distance,
+        } = input.dispatch_params();
+
+        if !matches!(quantization, Quantization::Scalar(_)) {
+            score.fail(2000, &"needed scalar-quantization");
+        }
+
+        if distance == Metric::Cosine {
+            score.fail(
+                500,
+                &format_args!(
+                    "{} is not supported for scalar quantization- use \"cosine-normalized\" instead",
+                    Metric::Cosine
+                ),
+            );
+        }
+
+        if !f32::is_match(data_type) {
+            score.fail(
+                1000,
+                &format_args!(
+                    "expected data-type {}, instead got {}",
+                    Quote(f32::DATA_TYPE),
+                    Quote(data_type)
+                ),
+            )
+        }
+
+        score
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "scalar-quantized index build-and-search",)?;
+
+        Ok(())
+    }
+
+    fn run(
+        &self,
+        input: &StaticBuild,
+        checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<()> {
+        use repr::{quantized::scalar::Scalar, Quantized};
+
+        writeln!(output, "{input}\n")?;
+
+        let scalar = input.quantization.as_scalar().unwrap();
+
+        // Load data.
+        let data: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.data.data),
+        )?);
+
+        let dim = data.ncols();
+        let num_points = data.nrows();
+        writeln!(output, "Loaded {num_points} points, dim={dim}")?;
+
+        let quantizer = scalar.train(data.as_view())?;
+
+        // Compute the medoid of the dataset as the single start point.
+
+        let metric = repr::quantized::scalar::Metric::try_from(input.data.distance)?;
+
+        let capacity = Capacity::new(num_points);
+        let max_degree = MaxDegree::new(input.build.config.max_degree().get());
+        let start = StartPointStrategy::Medoid.compute(data.as_view())?;
+        let rerank = repr::quantized::Rerank::F16 {
+            metric: input.data.distance.into(),
+        };
+
+        let config = match scalar.bits {
+            ScalarBits::One => Quantized::config(
+                Scalar::<1>::new(quantizer, metric),
+                capacity,
+                max_degree,
+                start,
+                rerank,
+            )?,
+            ScalarBits::Two => Quantized::config(
+                Scalar::<2>::new(quantizer, metric),
+                capacity,
+                max_degree,
+                start,
+                rerank,
+            )?,
+            ScalarBits::Four => Quantized::config(
+                Scalar::<4>::new(quantizer, metric),
+                capacity,
+                max_degree,
+                start,
+                rerank,
+            )?,
+            ScalarBits::Eight => Quantized::config(
+                Scalar::<8>::new(quantizer, metric),
+                capacity,
+                max_degree,
+                start,
+                rerank,
+            )?,
+        };
 
         let provider = Provider::<_, u32>::new(config)?;
         let index = Arc::new(DiskANNIndex::new(
@@ -1389,7 +1930,7 @@ where
         //
         // Also, this is *way* more expensive than it needs to be because each delete creates
         // and then destroys an EBR guard.
-        let ctx = diskann_inmem::Context;
+        let ctx = inmem::Context;
         for id in ids.clone() {
             self.runtime
                 .block_on(self.index.provider().delete(&ctx, &(id as u32)))?;

@@ -2,7 +2,7 @@
 <package>
   <metadata>
     <id>diskann-garnet</id>
-    <version>6.0.0</version>
+    <version>8.0.1</version>
     <readme>docs/README.md</readme>
     <authors>Microsoft</authors>
     <projectUrl>https://github.com/microsoft/DiskANN</projectUrl>
@@ -15,6 +15,7 @@
     <file src="linux/libdiskann_garnet.so" target="runtimes/linux-x64/native/" />
     <file src="windows/diskann_garnet.dll" target="runtimes/win-x64/native/" />
     <file src="windows/diskann_garnet.pdb" target="runtimes/win-x64/native/" />
+    <file src="macos-arm64/libdiskann_garnet.dylib" target="runtimes/osx-arm64/native/" />
     <file src="docs/README.md" target="docs/" />
   </files>
 </package>
