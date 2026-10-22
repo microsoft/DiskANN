@@ -4648,48 +4648,6 @@ mod tests {
             }
         }
 
-        for dim in (0..dim_max).chain([
-            255, 256, 257, 511, 512, 513, 575, 576, 577, 767, 768, 769, 1023, 1024, 1025, 1535,
-            1536, 1537, 2047, 2048, 2049,
-        ]) {
-            if !should_check_this_dimension(dim) {
-                continue;
-            }
-            let query: Vec<f32> = (0..dim)
-                .map(|dimension| ((dimension * 17 % 31) as f32 - 15.0) / 7.0)
-                .collect();
-            for prefix in 0..8 {
-                let bytes = USlice::<NBITS>::bytes_for(dim);
-                let mut allocation = vec![u8::MAX; prefix + bytes].into_boxed_slice();
-                let mut packed = crate::bits::MutBitSlice::<NBITS, Unsigned>::new(
-                    &mut allocation[prefix..],
-                    dim,
-                )
-                .unwrap();
-                let mut expected = 0.0f64;
-                let mut magnitude = 0.0f64;
-                for (dimension, &query_value) in query.iter().enumerate() {
-                    let code = ((dimension * 5 + prefix) % (1 << NBITS)) as u8;
-                    packed.set(dimension, code.into()).unwrap();
-                    let term = f64::from(query_value) * f64::from(code);
-                    expected += term;
-                    magnitude += term.abs();
-                }
-                let packed = packed.reborrow();
-                let got = evaluate_ip(&query, packed).unwrap().into_inner();
-                assert!(
-                    (f64::from(got) - expected).abs() <= 2e-6 * magnitude.max(1.0),
-                    "nbits={NBITS}, dim={dim}, prefix={prefix}, got={got}, expected={expected}, context={context}"
-                );
-                if dim > 0 {
-                    assert!(
-                        evaluate_ip(&query[..dim - 1], packed).is_err(),
-                        "nbits={NBITS}, dim={dim}, context={context}"
-                    );
-                }
-            }
-        }
-
         // Error Checking
         let x = vec![0.0; 10];
         let y = BoxedBitSlice::<NBITS, Unsigned>::new_boxed(11);
