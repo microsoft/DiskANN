@@ -27,6 +27,15 @@ where
     }
 }
 
+/// Construct a constant `NonZeroUsize` - failing to compile if `$value` is zero.
+macro_rules! nz {
+    ($ident:ident = $value:literal) => {
+        const $ident: ::std::num::NonZeroUsize = ::std::num::NonZeroUsize::new($value).unwrap();
+    };
+}
+
+pub(crate) use nz;
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SimilarityMeasure {

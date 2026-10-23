@@ -11,7 +11,10 @@ use diskann_benchmark_runner::{self as dbr, files::InputFile, utils::MicroSecond
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::{self, Matrix};
 
-use crate::index::inmem2::{nz, FromRaw, FromRawWith};
+use crate::{
+    index::inmem2::common::{FromRaw, FromRawWith},
+    utils::nz,
+};
 
 pub(in crate::index::inmem2) mod dto {
     use super::*;
@@ -82,7 +85,7 @@ pub(in crate::index::inmem2) mod dto {
 }
 
 #[derive(Debug, Clone)]
-struct KnnInstance {
+pub(in crate::index::inmem2) struct KnnInstance {
     knn: diskann::graph::search::Knn,
     num_neighbors: NonZeroUsize,
     recall_k: NonZeroUsize,
@@ -131,13 +134,10 @@ pub(in crate::index::inmem2) struct Plan {
 
 impl Plan {
     fn new(reps: NonZeroUsize, num_threads: Vec<NonZeroUsize>, runs: Vec<KnnInstance>) -> Self {
-        let mut max_recall_k = NonZeroUsize::MIN;
         let sweep: Vec<_> = num_threads
             .iter()
             .flat_map(|num_threads| {
-                runs.iter().map(move |run| {
-                    max_recall_k = max_recall_k.max(run.recall_k);
-
+                runs.iter().map(|run| {
                     dbc::search::Run::new(
                         run.clone(),
                         dbc::search::Setup {
@@ -149,6 +149,12 @@ impl Plan {
                 })
             })
             .collect();
+
+        let max_recall_k = runs
+            .iter()
+            .map(|r| r.recall_k)
+            .max()
+            .unwrap_or(NonZeroUsize::MIN);
 
         Self {
             sweep,

@@ -12,7 +12,10 @@ use diskann_benchmark_runner::{
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::Matrix;
 
-use crate::index::inmem2::{self, reborrow, FromRawWith};
+use crate::{
+    index::inmem2::{self, common::FromRawWith},
+    utils::match_data_type,
+};
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", RunBuildAndSearch::<f32>::new())?;
@@ -31,7 +34,7 @@ mod dto {
 
     #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct BuildAndSearch {
-        pub(super) data: inmem2::dto::Data,
+        pub(super) data: inmem2::common::dto::Data,
         pub(super) build: inmem2::benchmark::build::dto::Config,
         pub(super) search: inmem2::benchmark::knn::dto::KnnSearch,
     }
@@ -39,7 +42,7 @@ mod dto {
     impl BuildAndSearch {
         pub(super) fn example() -> Self {
             Self {
-                data: inmem2::dto::Data::example(),
+                data: inmem2::common::dto::Data::example(),
                 build: inmem2::benchmark::build::dto::Config::example(),
                 search: inmem2::benchmark::knn::dto::KnnSearch::example(),
             }
@@ -53,7 +56,7 @@ mod dto {
 
 #[derive(Debug)]
 struct BuildAndSearch {
-    data: inmem2::Data,
+    data: inmem2::common::Data,
     build: inmem2::benchmark::build::Config,
     search: inmem2::benchmark::knn::KnnSearch,
 }
@@ -71,8 +74,8 @@ impl FromRawWith for BuildAndSearch {
             search,
         } = raw;
 
-        let data = inmem2::Data::from_raw_with(data, reborrow(&mut checker))?;
-        let build = inmem2::benchmark::build::Config::from_raw(build, data.distance)?;
+        let data = inmem2::common::Data::from_raw_with(data, checker.as_deref_mut())?;
+        let build = inmem2::benchmark::build::Config::from_raw(build, data.distance())?;
         let search = inmem2::benchmark::knn::KnnSearch::from_raw_with(search, checker)?;
 
         Ok(Self {
@@ -139,20 +142,7 @@ where
         context: &dbr::benchmark::MatchContext,
     ) -> dbr::benchmark::Score {
         let mut score = context.success(0);
-
-        let inmem2::DataDispatchParams { data_type } = input.data.dispatch_params();
-
-        if !T::is_match(data_type) {
-            score.fail(
-                1000,
-                &format_args!(
-                    "expected data-type {}, instead got {}",
-                    Quote(T::DATA_TYPE),
-                    Quote(data_type)
-                ),
-            )
-        }
-
+        match_data_type::<T>(&mut score, input.data.data_type());
         score
     }
 
@@ -182,7 +172,7 @@ where
         let config = di::repr::Full::config(
             di::num::Capacity::new(data.nrows()),
             di::num::MaxDegree::new(input.build.max_degree()),
-            input.data.distance,
+            input.data.distance(),
             start,
         )?;
 
@@ -204,6 +194,12 @@ where
 #[derive(Debug)]
 struct Stream {
     stream: inmem2::benchmark::bigann::Stream,
+}
+
+impl std::fmt::Display for Stream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.stream.fmt(f)
+    }
 }
 
 impl dbr::Input for Stream {
@@ -240,7 +236,7 @@ where
     T: di::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = Stream;
-    type Output = ();
+    type Output = inmem2::benchmark::bigann::Stats;
 
     fn try_match(
         &self,
@@ -280,7 +276,7 @@ where
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
     ) -> anyhow::Result<Self::Output> {
-        // writeln!(output, "{}\n", input)?;
+        writeln!(output, "{}\n", input)?;
 
         let Stream { stream } = input;
 
@@ -290,7 +286,7 @@ where
         // Compute the medoid of the dataset as the single start point.
         let start = diskann::graph::StartPointStrategy::Medoid.compute(data.as_view())?;
         let config = di::repr::Full::config(
-            di::num::Capacity::new(data.nrows()),
+            di::num::Capacity::new(stream.max_points()),
             di::num::MaxDegree::new(stream.max_degree()),
             stream.distance(),
             start,
@@ -299,8 +295,9 @@ where
         let provider = di::Provider::<_, u32>::new(config)?;
         let engine = stream.engine(provider)?;
         let runner = stream.runner(data)?;
-        runner.run(engine, output)?;
+        let stats = runner.run(engine, output)?;
 
-        Ok(())
+        writeln!(output, "{}", stats)?;
+        Ok(stats)
     }
 }

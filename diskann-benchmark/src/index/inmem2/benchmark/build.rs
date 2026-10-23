@@ -6,15 +6,18 @@
 use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core as dbc;
-use diskann_benchmark_runner as dbr;
+use diskann_benchmark_runner::{
+    self as dbr,
+    utils::{percentiles, MicroSeconds},
+};
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector as dv;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    index::inmem2::{nz, Index, Provider},
-    utils::progress::Progress,
+    index::inmem2::{Index, Provider},
+    utils::{nz, progress::Progress},
 };
 
 pub(in crate::index::inmem2) mod dto {
@@ -190,7 +193,7 @@ where
     pub(in crate::index::inmem2) fn build<T>(
         &self,
         data: Arc<rowmajor::Owned<T>>,
-        mut output: Option<&mut dyn dbr::Output>,
+        output: Option<&mut dyn dbr::Output>,
     ) -> anyhow::Result<Stats>
     where
         R: for<'a> di::repr::Insert<Query<'a> = &'a [T]>,
@@ -203,9 +206,9 @@ where
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(in crate::index::inmem2) struct Stats {
-    total_time: dbr::utils::MicroSeconds,
+    total_time: MicroSeconds,
     inserted: usize,
-    latencies: dbr::utils::percentiles::Percentiles<dbr::utils::MicroSeconds>,
+    latencies: percentiles::Percentiles<MicroSeconds>,
 }
 
 impl Stats {
@@ -224,6 +227,14 @@ impl Stats {
             inserted,
             latencies: dbr::utils::percentiles::compute_percentiles(&mut latencies)?,
         })
+    }
+
+    pub(in crate::index::inmem2) fn latencies(&self) -> &percentiles::Percentiles<MicroSeconds> {
+        &self.latencies
+    }
+
+    pub(in crate::index::inmem2) fn total_time(&self) -> MicroSeconds {
+        self.total_time
     }
 }
 

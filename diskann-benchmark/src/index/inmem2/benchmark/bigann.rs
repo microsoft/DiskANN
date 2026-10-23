@@ -4,14 +4,12 @@
  */
 
 use std::{
-    future::Future,
     io::Write,
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use diskann::{utils::IntoUsize, ANNResult};
 use diskann_benchmark_core::{
     self as dbc,
     streaming::{executors::bigann, Executor},
@@ -21,7 +19,7 @@ use diskann_benchmark_runner::{
     files::InputFile,
     utils::{
         datatype::{AsDataType, DataType},
-        MicroSeconds,
+        percentiles, MicroSeconds,
     },
 };
 use diskann_inmem::{self as di};
@@ -29,8 +27,15 @@ use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{self as dv};
 
 use crate::{
-    index::inmem2::{self, nz, reborrow, FromRaw, FromRawWith, Provider, check_data_type_load},
-    utils::SimilarityMeasure,
+    index::{
+        inmem2::{
+            self,
+            common::{FromRaw, FromRawWith},
+            Provider,
+        },
+        streaming::stats::GenericStats,
+    },
+    utils::{nz, SimilarityMeasure},
 };
 
 pub(in crate::index::inmem2) mod dto {
@@ -90,7 +95,7 @@ pub(in crate::index::inmem2) mod dto {
 #[derive(Debug)]
 struct RunBook {
     runbook: bigann::RunBook,
-    data: inmem2::Data,
+    data: inmem2::common::Data,
     queries: InputFile,
 
     // This is kept for display purposes.
@@ -132,9 +137,14 @@ impl FromRawWith for RunBook {
                 &mut bigann::ScanDirectory::new(&groundtruth)?,
             )?
         } else {
+            // If we're running in a context without a checker, then simply replicate the
+            // groundtruth directory everywhere.
+            //
+            // Running without a checker is generally only done as a sniff test, so we aren't
+            // too worried about enterind an invalid state.
             struct Copy<'a>(&'a Path);
             impl bigann::FindGroundtruth for Copy<'_> {
-                fn find_groundtruth(&mut self, stage: usize) -> anyhow::Result<PathBuf> {
+                fn find_groundtruth(&mut self, _stage: usize) -> anyhow::Result<PathBuf> {
                     Ok(self.0.to_owned())
                 }
             }
@@ -144,7 +154,7 @@ impl FromRawWith for RunBook {
 
         Ok(Self {
             runbook,
-            data: inmem2::Data::new(*data_type, data, (*distance).into()),
+            data: inmem2::common::Data::new(*data_type, data, (*distance).into()),
             queries,
             runbook_path,
             dataset: dataset.clone(),
@@ -195,6 +205,10 @@ impl Stream {
         self.build.max_degree()
     }
 
+    pub(in crate::index::inmem2) fn max_points(&self) -> usize {
+        self.runbook.runbook.max_points()
+    }
+
     pub(in crate::index::inmem2) fn load_data<T>(
         &self,
         output: Option<&mut dyn dbr::Output>,
@@ -207,12 +221,14 @@ impl Stream {
 
     fn load_queries_arc<T>(
         &self,
-        output: Option<&mut dyn dbr::Output>,
     ) -> anyhow::Result<Arc<rowmajor::Owned<T>>>
     where
         T: bytemuck::Pod,
     {
-        crate::utils::datafiles::load_dataset(crate::utils::datafiles::BinFile(&self.runbook.queries)).map(Arc::new)
+        crate::utils::datafiles::load_dataset(crate::utils::datafiles::BinFile(
+            &self.runbook.queries,
+        ))
+        .map(Arc::new)
     }
 
     pub(in crate::index::inmem2) fn engine<R>(
@@ -243,7 +259,7 @@ impl Stream {
     where
         T: bytemuck::Pod,
     {
-        let queries = self.load_queries_arc::<T>(None)?;
+        let queries = self.load_queries_arc::<T>()?;
         Ok(Runner {
             data,
             queries,
@@ -256,7 +272,7 @@ impl FromRawWith for Stream {
     type Raw = dto::Stream;
     fn from_raw_with(
         raw: &dto::Stream,
-        mut checker: Option<&mut dbr::Checker>,
+        checker: Option<&mut dbr::Checker>,
     ) -> anyhow::Result<Self> {
         let dto::Stream {
             runbook,
@@ -267,7 +283,7 @@ impl FromRawWith for Stream {
         } = raw;
 
         let runbook = RunBook::from_raw_with(runbook, checker)?;
-        let build = inmem2::benchmark::build::Config::from_raw(build, runbook.data.distance)?;
+        let build = inmem2::benchmark::build::Config::from_raw(build, runbook.data.distance())?;
         let search = inmem2::benchmark::knn::StreamingKnnSearch::from_raw(search)?;
 
         Ok(Self {
@@ -277,6 +293,27 @@ impl FromRawWith for Stream {
             delete_method: (*delete_method).into(),
             delete_num_to_replace: *delete_num_to_replace,
         })
+    }
+}
+
+impl std::fmt::Display for Stream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            build,
+            search,
+            runbook,
+            delete_method,
+            delete_num_to_replace,
+        } = self;
+
+        let mut kv = dbr::utils::fmt::KeyValue::new();
+
+        kv.push("runbook", runbook);
+        kv.push("build", build);
+        kv.push("search", search);
+        kv.push_debug("delete_method", delete_method);
+        kv.push("delete_num_to_replace", delete_num_to_replace);
+        kv.fmt(f)
     }
 }
 
@@ -292,7 +329,7 @@ impl<T> Runner<T> {
         mut self,
         engine: Engine<'_, di::repr::Full<T>>,
         mut output: &mut dyn dbr::Output,
-    ) -> anyhow::Result<()>
+    ) -> anyhow::Result<Stats>
     where
         T: di::repr::FullPrecision,
     {
@@ -307,7 +344,7 @@ impl<T> Runner<T> {
 
         let mut stream = bigann::WithData::new(engine, self.data, self.queries, load_groundtruth);
 
-        let mut results = Vec::new();
+        let mut steps = Vec::new();
         let stages = self.runbook.len();
         let mut i = 1;
         Executor::run_with(
@@ -320,12 +357,12 @@ impl<T> Runner<T> {
                     writeln!(output, "{}", o)?;
                     i += 1;
                 }
-                results.push(o);
+                steps.push(o);
                 Ok(())
             },
         )?;
 
-        Ok(())
+        Ok(Stats(steps))
     }
 }
 
@@ -390,7 +427,7 @@ where
             &self.runtime,
         )?;
 
-        Ok(Step::Delete)
+        Ok(Step::Delete(GenericStats::new("delete".into(), r)?))
     }
 
     fn replace(
@@ -440,11 +477,15 @@ pub(in crate::index::inmem2) enum Step {
     Search(inmem2::benchmark::knn::Stats),
     Insert(inmem2::benchmark::build::Stats),
     Replace(inmem2::benchmark::build::Stats),
-    Delete,
+    Delete(GenericStats),
     Maintain,
 }
 
 impl Step {
+    fn is_search(&self) -> bool {
+        matches!(self, Self::Search(_))
+    }
+
     fn is_maintain(&self) -> bool {
         matches!(self, Self::Maintain)
     }
@@ -454,7 +495,7 @@ impl Step {
             Self::Search(_) => "search",
             Self::Insert(_) => "insert",
             Self::Replace(_) => "replace",
-            Self::Delete => "delete",
+            Self::Delete(_) => "delete",
             Self::Maintain => "maintain",
         }
     }
@@ -472,125 +513,111 @@ impl std::fmt::Display for Step {
             Self::Replace(stats) => {
                 write!(f, "{}", stats)
             }
-            Self::Delete => Ok(()),
+            Self::Delete(stats) => {
+                write!(f, "{}", stats)
+            }
             Self::Maintain => Ok(()),
         }
     }
 }
 
-// #[derive(Debug, serde::Serialize)]
-// struct Stats(Vec<Step>);
+#[derive(Debug, serde::Serialize)]
+pub(in crate::index::inmem2) struct Stats(Vec<Step>);
 
-// /////////////
-// // Summary //
-// /////////////
-//
-// /// A [`std::fmt::Display`] helper for a collection of [`StreamStats`] results.
-// #[derive(Debug)]
-// pub(crate) struct Summary<I>(I);
-//
-// impl<I> Summary<I> {
-//     pub(crate) fn new(iter: I) -> Self {
-//         Self(iter)
-//     }
-// }
-//
-// impl<'a, I> std::fmt::Display for Summary<I>
-// where
-//     I: ExactSizeIterator<Item = &'a StreamStats> + Clone + 'a,
-// {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         let stats = &self.0;
-//
-//         // Break the results into "search" and everything else.
-//         //
-//         // For each of the search operations, count the number of results for each search.
-//         let search_stages = stats.clone().filter(|stage| stage.is_search()).count();
-//
-//         // Arithmetic cannot underflow because `search_stages` is strictly upper-bounded
-//         // by `stats.len()`.
-//         let other_rows = stats
-//             .clone()
-//             .filter(|s| !s.is_search())
-//             .map(|s| match s {
-//                 StreamStats::Maintain(phases) => phases.len(),
-//                 _ => 1,
-//             })
-//             .sum::<usize>();
-//         if other_rows != 0 {
-//             let header = [
-//                 "Stage",
-//                 "Operation",
-//                 "Mean Latency (us)",
-//                 "P90 Latency",
-//                 "P99 Latency",
-//             ];
-//
-//             let mut table = Table::new(header, other_rows);
-//             let mut row = 0;
-//             let mut stage: usize = 0;
-//             for s in stats.clone() {
-//                 match s {
-//                     // Search stats are formatter later.
-//                     StreamStats::Search(_) => {
-//                         stage += 1;
-//                         continue;
-//                     }
-//                     StreamStats::Insert(stats) | StreamStats::Replace(stats) => {
-//                         let mut r = table.row(row);
-//                         r.insert(stage, 0);
-//                         r.insert(stats.kind, 1);
-//                         r.insert(format!("{:.1}us", stats.insert_latencies.mean), 2);
-//                         r.insert(stats.insert_latencies.p90, 3);
-//                         r.insert(stats.insert_latencies.p99, 4);
-//
-//                         row += 1;
-//                         stage += 1;
-//                     }
-//                     StreamStats::Delete(stats) => {
-//                         let mut r = table.row(row);
-//                         r.insert(stage, 0);
-//                         r.insert(stats.kind.to_string(), 1);
-//                         r.insert(format!("{:.1}us", stats.latencies.mean), 2);
-//                         r.insert(stats.latencies.p90, 3);
-//                         r.insert(stats.latencies.p99, 4);
-//
-//                         row += 1;
-//                         stage += 1;
-//                     }
-//                     StreamStats::Maintain(phases) => {
-//                         for stats in phases {
-//                             let mut r = table.row(row);
-//                             r.insert(format!("{}-pre", stage), 0);
-//                             r.insert(stats.kind.to_string(), 1);
-//                             r.insert(format!("{:.1}us", stats.latencies.mean), 2);
-//                             r.insert(stats.latencies.p90, 3);
-//                             r.insert(stats.latencies.p99, 4);
-//                             row += 1;
-//                         }
-//                     }
-//                 }
-//             }
-//
-//             table.fmt(f)?;
-//             writeln!(f)?;
-//         }
-//
-//         // Write out the search results.
-//         if search_stages != 0 {
-//             let mut stage = 0;
-//             for s in stats.clone() {
-//                 if let StreamStats::Search(stats) = s {
-//                     writeln!(f, "Search Stage {}", stage)?;
-//                     writeln!(f, "{}", DisplayWrapper(&**stats))?;
-//                 }
-//
-//                 if !s.is_maintain() {
-//                     stage += 1;
-//                 }
-//             }
-//         }
-//
-//         Ok(())
-//     }
-// }
+impl std::fmt::Display for Stats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let steps = &self.0;
+
+        let search_steps = steps.iter().filter(|step| step.is_search()).count();
+
+        let other_rows = steps
+            .iter()
+            .filter(|s| !matches!(s, Step::Maintain | Step::Search(_)))
+            .count();
+
+        if other_rows != 0 {
+            let header = [
+                "Stage",
+                "Operation",
+                "Total Time (s)",
+                "Mean Latency (us)",
+                "P90 Latency",
+                "P99 Latency",
+            ];
+
+            let mut table = dbr::utils::fmt::Table::new(header, other_rows);
+            let mut row = 0;
+            let mut stage: usize = 0;
+
+            fn write_step(
+                row: &mut dbr::utils::fmt::Row<'_>,
+                stage: usize,
+                kind: &'static str,
+                total_time: MicroSeconds,
+                latencies: &percentiles::Percentiles<MicroSeconds>,
+            ) {
+                row.insert(stage, 0);
+                row.insert(kind, 1);
+                row.insert(total_time.as_seconds(), 2);
+                row.insert(format!("{:.1}us", latencies.mean), 3);
+                row.insert(latencies.p90, 4);
+                row.insert(latencies.p99, 5);
+            }
+
+            for s in steps.iter() {
+                match s {
+                    // Search stats are formatter later.
+                    Step::Search(_) => {
+                        stage += 1;
+                        continue;
+                    }
+                    Step::Insert(step) => {
+                        let mut r = table.row(row);
+                        write_step(&mut r, stage, "insert", step.total_time(), step.latencies());
+                        row += 1;
+                        stage += 1;
+                    }
+                    Step::Replace(step) => {
+                        let mut r = table.row(row);
+                        write_step(
+                            &mut r,
+                            stage,
+                            "replace",
+                            step.total_time(),
+                            step.latencies(),
+                        );
+                        row += 1;
+                        stage += 1;
+                    }
+                    Step::Delete(step) => {
+                        let mut r = table.row(row);
+                        write_step(&mut r, stage, "delete", step.total_time(), step.latencies());
+                        row += 1;
+                        stage += 1;
+                    }
+                    Step::Maintain => {}
+                }
+            }
+
+            table.fmt(f)?;
+            writeln!(f)?;
+        }
+
+        // Write out the search results.
+        if search_steps != 0 {
+            let mut stage = 0;
+            for s in steps.iter() {
+                if let Step::Search(step) = s {
+                    writeln!(f, "Search Stage {}", stage)?;
+                    writeln!(f, "{}", step)?;
+                }
+
+                if !s.is_maintain() {
+                    stage += 1;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}

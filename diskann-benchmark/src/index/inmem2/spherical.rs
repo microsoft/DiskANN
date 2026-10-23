@@ -5,17 +5,16 @@
 
 use std::io::Write;
 
-use diskann_benchmark_runner::{
-    self as dbr,
-    utils::{datatype::AsDataType, fmt::Quote},
-};
+use diskann_benchmark_runner::{self as dbr};
 use diskann_inmem::{self as di};
 use diskann_quantization::{self as dq};
 use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{self as dv};
 use rand::{rngs::StdRng, SeedableRng};
 
-use crate::index::inmem2::{self, reborrow, FromRawWith};
+use crate::{
+    index::inmem2::{self, common::FromRawWith},
+};
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register("inmem2-spherical", RunBuildAndSearch)?;
@@ -56,7 +55,7 @@ pub(super) mod dto {
 
     #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct BuildAndSearch {
-        pub(super) data: inmem2::dto::Data,
+        pub(super) data: inmem2::common::dto::Data,
         pub(super) build: inmem2::benchmark::build::dto::Config,
         pub(super) search: inmem2::benchmark::knn::dto::KnnSearch,
         pub(super) spherical: Spherical,
@@ -65,7 +64,7 @@ pub(super) mod dto {
     impl BuildAndSearch {
         pub(super) fn example() -> Self {
             Self {
-                data: inmem2::dto::Data::example(),
+                data: inmem2::common::dto::Data::example(),
                 build: inmem2::benchmark::build::dto::Config::example(),
                 search: inmem2::benchmark::knn::dto::KnnSearch::example(),
                 spherical: Spherical::example(),
@@ -127,7 +126,6 @@ impl Spherical {
         let Self { bits, seed, metric } = self;
 
         let mut rng = StdRng::seed_from_u64(*seed);
-
         let quantizer = dq::spherical::SphericalQuantizer::train(
             data,
             dq::algorithms::transforms::TransformKind::DoubleHadamard {
@@ -163,7 +161,7 @@ impl std::fmt::Display for Spherical {
 
 #[derive(Debug)]
 struct BuildAndSearch {
-    data: inmem2::Data,
+    data: inmem2::common::Data,
     build: inmem2::benchmark::build::Config,
     search: inmem2::benchmark::knn::KnnSearch,
     spherical: Spherical,
@@ -183,10 +181,14 @@ impl FromRawWith for BuildAndSearch {
             spherical,
         } = raw;
 
-        let data = inmem2::Data::from_raw_with(data, reborrow(&mut checker))?;
-        let build = inmem2::benchmark::build::Config::from_raw(build, data.distance)?;
+        let data = inmem2::common::Data::from_raw_with(data, checker.as_deref_mut())?;
+        if data.data_type() != dbr::utils::datatype::DataType::Float32 {
+            anyhow::bail!("quantization only supports f32 data");
+        }
+
+        let build = inmem2::benchmark::build::Config::from_raw(build, data.distance())?;
         let search = inmem2::benchmark::knn::KnnSearch::from_raw_with(search, checker)?;
-        let spherical = Spherical::from_raw(spherical, data.distance)?;
+        let spherical = Spherical::from_raw(spherical, data.distance())?;
 
         Ok(Self {
             data,
@@ -244,30 +246,14 @@ impl dbr::Benchmark for RunBuildAndSearch {
 
     fn try_match(
         &self,
-        input: &BuildAndSearch,
+        _input: &BuildAndSearch,
         context: &dbr::benchmark::MatchContext,
     ) -> dbr::benchmark::Score {
-        let mut score = context.success(0);
-
-        let inmem2::DataDispatchParams { data_type } = input.data.dispatch_params();
-
-        if !f32::is_match(data_type) {
-            score.fail(
-                1000,
-                &format_args!(
-                    "expected data-type {}, instead got {}",
-                    Quote(f32::DATA_TYPE),
-                    Quote(data_type)
-                ),
-            )
-        }
-
-        score
+        context.success(0)
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "spherical-quantized static build+search",)?;
-
         Ok(())
     }
 
@@ -279,23 +265,15 @@ impl dbr::Benchmark for RunBuildAndSearch {
     ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}\n", input)?;
 
-        // Load data.
         let data = input.data.load_arc::<f32>(Some(output))?;
         let quantizer = input.spherical.train(data.as_view())?;
-
-        // Compute the medoid of the dataset as the single start point.
-        let start = diskann::graph::StartPointStrategy::Medoid.compute(data.as_view())?;
-        let config = di::repr::Quantized::config(
+        let provider = inmem2::benchmark::quantized(
             quantizer,
-            di::num::Capacity::new(data.nrows()),
-            di::num::MaxDegree::new(input.build.max_degree()),
-            start,
-            di::repr::quantized::Rerank::F16 {
-                metric: input.data.distance.into(),
-            },
+            data.as_view(),
+            input.build.max_degree(),
+            input.data.distance(),
         )?;
 
-        let provider = di::Provider::<_, u32>::new(config)?;
         let engine = input.build.engine(provider);
         let build = engine.build(data, Some(output))?;
         let search = input

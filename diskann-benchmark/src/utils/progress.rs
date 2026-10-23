@@ -5,15 +5,17 @@
 
 use std::sync::Arc;
 
-use diskann_benchmark_core as dbc;
-use diskann_benchmark_runner as dbr;
+use diskann_benchmark_core::{self as dbc};
+use diskann_benchmark_runner::{self as dbr};
 use indicatif::{ProgressBar, ProgressStyle};
 
+/// An implementation of [`dbc::build::AsProgress`].
 pub(crate) struct Progress<'a> {
     output: &'a mut dyn dbr::Output,
 }
 
 impl<'a> Progress<'a> {
+    /// Create a new [`Progress`] to the selected `output`.
     pub(crate) fn new(output: &'a mut dyn dbr::Output) -> Self {
         Self { output }
     }
