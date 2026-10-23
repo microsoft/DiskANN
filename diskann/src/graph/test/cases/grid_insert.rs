@@ -211,6 +211,7 @@ fn run_searches(
             hops,
             result_count,
             range_search_second_round,
+            ..
         } = runtime
             .block_on(index.search(
                 params,

@@ -3,16 +3,22 @@
  * Licensed under the MIT license.
  */
 
-//! Dense, versioned label-index encoding and flat DNF/CNF query evaluation for DiskANN.
+//! Versioned label-index encoding and flat DNF/CNF query evaluation for DiskANN.
 
+mod bloom;
 mod builder;
 mod error;
 mod format;
 mod index;
 
-pub use builder::encode_label_index_jsonl;
+pub use bloom::BloomFilterConfig;
+pub use builder::encode_unified_label_index_jsonl;
 pub use error::EncodedLabelIndexError;
-pub use index::{EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType};
+pub use index::{
+    BloomQueryConfig, BloomVisitScratch, CnfPayloadEvaluator, CnfSummaryEvaluator,
+    DnfPayloadEvaluator, DnfSummaryEvaluator, EncodedLabelIndex, EncodedLabelPointEvaluator,
+    EncodedLabelQuery, FilterExpressionType,
+};
 
 #[cfg(test)]
 mod tests;

@@ -44,6 +44,22 @@ pub type FullPrecisionProvider<T, Q = NoStore, D = NoDeletes, Ctx = DefaultConte
 /// The default full-precision vector store.
 pub type FullPrecisionStore<T> = FastMemoryVectorProviderAsync<T>;
 
+fn filter_ids_with_predicate<'a, P>(
+    id_buffer: &'a mut AdjacencyList<u32>,
+    pred: &mut P,
+) -> &'a [u32]
+where
+    P: glue::HybridPredicate<u32>,
+{
+    let lookahead = pred.prefetch_lookahead();
+    if lookahead == 0 {
+        id_buffer.retain(|id| pred.eval_mut(id));
+    } else {
+        id_buffer.retain_with_prefetch(lookahead, pred);
+    }
+    id_buffer
+}
+
 /// A default full-precision vector store provider.
 #[derive(Clone)]
 pub struct CreateFullPrecision<T: VectorRepr> {
@@ -233,6 +249,26 @@ where
     type Id = u32;
 }
 
+impl<T, Q, Ctx> glue::RandomAccessQueryDistance for FullAccessor<'_, T, Q, NoDeletes, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    fn distance_to_id(&mut self, id: u32) -> ANNResult<f32> {
+        let index = id.into_usize();
+        if index >= self.provider.capacity() {
+            return Err(ANNError::message(
+                "exhaustive search vector ID exceeds the provider's base vectors",
+            ));
+        }
+        // SAFETY: The ID is a base vector in bounds. As with graph expansion,
+        // in-memory searches require no concurrent modification of this vector.
+        let vector = unsafe { self.provider.base_vectors.get_vector_sync(index) };
+        Ok(self.computer.evaluate_similarity(vector))
+    }
+}
+
 impl<T, Q, D, Ctx> glue::SearchAccessor for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -289,21 +325,21 @@ where
                     .neighbor_provider
                     .get_neighbors_sync(n.into_usize(), id_buffer)?;
 
-                id_buffer.retain(|i| pred.eval_mut(i));
-                let len = id_buffer.len();
+                let retained_ids = filter_ids_with_predicate(id_buffer, &mut pred);
+                let len = retained_ids.len();
                 let lookahead = self.provider.base_vectors.prefetch_lookahead();
 
                 // Prefetch the first few vectors.
-                for id in id_buffer.iter().take(lookahead) {
+                for id in retained_ids.iter().take(lookahead) {
                     self.provider.base_vectors.prefetch_hint(id.into_usize());
                 }
 
-                for (i, id) in id_buffer.iter().enumerate() {
+                for (i, id) in retained_ids.iter().enumerate() {
                     // Prefetch `lookahead` iterations ahead as long as it is safe.
                     if lookahead > 0 && i + lookahead < len {
                         self.provider
                             .base_vectors
-                            .prefetch_hint(id_buffer[i + lookahead].into_usize());
+                            .prefetch_hint(retained_ids[i + lookahead].into_usize());
                     }
 
                     // Invoke the passed closure on the full-precision vector.
@@ -319,6 +355,82 @@ where
         };
 
         std::future::ready(f())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct RecordingPredicate {
+        lookahead: usize,
+        prefetched: RefCell<Vec<u32>>,
+        evaluated: Vec<u32>,
+    }
+
+    impl glue::Predicate<u32> for RecordingPredicate {
+        fn eval(&self, item: &u32) -> bool {
+            item.is_multiple_of(2)
+        }
+
+        fn prefetch(&self, item: &u32) {
+            self.prefetched.borrow_mut().push(*item);
+        }
+
+        fn prefetch_lookahead(&self) -> usize {
+            self.lookahead
+        }
+    }
+
+    impl glue::PredicateMut<u32> for RecordingPredicate {
+        fn eval_mut(&mut self, item: &u32) -> bool {
+            self.evaluated.push(*item);
+            item.is_multiple_of(2)
+        }
+    }
+
+    impl glue::HybridPredicate<u32> for RecordingPredicate {}
+
+    fn ids() -> AdjacencyList<u32> {
+        let mut ids = AdjacencyList::new();
+        ids.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+        ids
+    }
+
+    #[test]
+    fn predicate_prefetch_filters_with_lookahead() {
+        let mut ids = ids();
+        let mut pred = RecordingPredicate {
+            lookahead: 2,
+            prefetched: RefCell::new(Vec::new()),
+            evaluated: Vec::new(),
+        };
+
+        let retained = filter_ids_with_predicate(&mut ids, &mut pred);
+
+        assert_eq!(retained, [2, 4, 6]);
+        assert_eq!(&*pred.prefetched.borrow(), &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(pred.evaluated, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(&*ids, &[2, 4, 6]);
+    }
+
+    #[test]
+    fn zero_lookahead_retains_in_place_without_prefetching() {
+        let mut ids = ids();
+        let mut pred = RecordingPredicate {
+            lookahead: 0,
+            prefetched: RefCell::new(Vec::new()),
+            evaluated: Vec::new(),
+        };
+
+        let retained = filter_ids_with_predicate(&mut ids, &mut pred);
+
+        assert_eq!(retained, [2, 4, 6]);
+        assert!(pred.prefetched.borrow().is_empty());
+        assert_eq!(pred.evaluated, [1, 2, 3, 4, 5, 6]);
     }
 }
 

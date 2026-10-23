@@ -6,6 +6,7 @@
 /// Operates entirely with full precision
 ///
 /// All indexing and search operations use the uncompressed full-precision vectors.
+/// Predicates that expose a nonzero prefetch lookahead prefetch their data before filtering.
 #[derive(Debug, Clone, Copy)]
 pub struct FullPrecision;
 

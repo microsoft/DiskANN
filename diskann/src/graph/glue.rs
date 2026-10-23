@@ -253,6 +253,15 @@ pub trait SearchAccessor: HasId + Send + Sync {
     }
 }
 
+/// Compute a query distance for an arbitrary indexed ID without traversing graph edges.
+///
+/// Accessors supporting exhaustive search opt into this trait. Invalid IDs must
+/// return an error rather than accessing a vector out of bounds.
+pub trait RandomAccessQueryDistance: HasId + Send + Sync {
+    /// Compute the same distance used by this accessor's graph search strategy.
+    fn distance_to_id(&mut self, id: Self::Id) -> ANNResult<f32>;
+}
+
 /// Mark that an ID has been accepted for purposes of filtering.
 ///
 /// See: [`Decision`], [`FilteredAccessor::expand_beam_accept_only`]
@@ -489,6 +498,19 @@ pub trait FilteredAccessor: HasId + Send + Sync {
 /// A predicate evaluating `item`.
 pub trait Predicate<T> {
     fn eval(&self, item: &T) -> bool;
+
+    /// Prefetch data needed to evaluate `item`.
+    ///
+    /// The default is a no-op. Callers may invoke this several iterations before [`eval`](Self::eval)
+    /// or [`PredicateMut::eval_mut`].
+    fn prefetch(&self, _item: &T) {}
+
+    /// Return how many iterations ahead callers should prefetch.
+    ///
+    /// The default disables predicate prefetching.
+    fn prefetch_lookahead(&self) -> usize {
+        0
+    }
 }
 
 /// A mutable predicate evaluating `item`.

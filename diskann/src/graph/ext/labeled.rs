@@ -52,20 +52,34 @@ where
     /// When used with [`Filtered`], callers may assume that `i` was yielded from a
     /// callback from [`glue::SearchAccessor::expand_beam`].
     fn is_match(&self, i: I) -> bool;
+
+    /// Prefetch data needed to classify `i`.
+    ///
+    /// The default is a no-op.
+    fn prefetch(&self, _i: I) {}
+
+    /// Return how many classifications ahead callers should prefetch.
+    ///
+    /// The default disables label prefetching.
+    fn prefetch_lookahead(&self) -> usize {
+        0
+    }
 }
 
-// Move this external to the `QueryLabelProvider` call so the indirect call has a slightly
-// simpler signature. Does it matter? Probably not.
-fn decide<T, I>(provider: &T, i: I) -> Decision<I>
+/// A label provider that can enumerate candidates for exhaustive filtered search.
+///
+/// The bound is conservative for true matches and may be much smaller than the number
+/// of candidates when membership is approximate. `visit_candidates` must yield each
+/// candidate at most once, exclude frozen graph start points, and include every true match.
+pub trait CandidateLabelProvider<I>: QueryLabelProvider<I>
 where
     I: VectorId,
-    T: QueryLabelProvider<I> + ?Sized,
 {
-    if provider.is_match(i) {
-        Decision::accept(i)
-    } else {
-        Decision::reject(i)
-    }
+    /// Return a conservative true-match bound, or `None` when counts are unavailable.
+    fn match_upper_bound(&self) -> Option<u64>;
+
+    /// Visit every candidate ID, including any approximate-filter false positives.
+    fn visit_candidates(&self, visit: impl FnMut(I));
 }
 
 /// A [`SearchStrategy`](glue::SearchStrategy) adaptor that creates a
@@ -184,6 +198,16 @@ where
     type Id = A::Id;
 }
 
+impl<A, L> glue::RandomAccessQueryDistance for FilteredAccessor<'_, A, L>
+where
+    A: glue::RandomAccessQueryDistance,
+    L: QueryLabelProvider<A::Id> + ?Sized,
+{
+    fn distance_to_id(&mut self, id: Self::Id) -> ANNResult<f32> {
+        self.inner.distance_to_id(id)
+    }
+}
+
 impl<'a, A, L> glue::FilteredAccessor for FilteredAccessor<'a, A, L>
 where
     A: glue::SearchAccessor,
@@ -193,8 +217,16 @@ where
     where
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
+        let labels = self.labels;
         self.inner
-            .start_point_distances(|id, distance| f(decide(self.labels, id), distance))
+            .start_point_distances(|id, distance| {
+                let decision = if labels.is_match(id) {
+                    Decision::accept(id)
+                } else {
+                    Decision::reject(id)
+                };
+                f(decision, distance);
+            })
             .await
     }
 
@@ -209,9 +241,15 @@ where
         P: glue::HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
+        let labels = self.labels;
         self.inner
             .expand_beam(ids, pred, |id, distance| {
-                on_neighbors(decide(self.labels, id), distance)
+                let decision = if labels.is_match(id) {
+                    Decision::accept(id)
+                } else {
+                    Decision::reject(id)
+                };
+                on_neighbors(decision, distance);
             })
             .await
     }
@@ -299,18 +337,32 @@ where
     fn eval(&self, item: &I) -> bool {
         self.inner.eval(item) && self.labels.is_match(*item)
     }
+
+    #[inline]
+    fn prefetch(&self, item: &I) {
+        self.labels.prefetch(*item);
+    }
+
+    #[inline]
+    fn prefetch_lookahead(&self) -> usize {
+        self.labels.prefetch_lookahead()
+    }
 }
 
 impl<P, I, L> glue::PredicateMut<I> for EvalFiltered<'_, P, L>
 where
-    P: glue::PredicateMut<Accept<I>>,
+    P: glue::Predicate<I> + glue::PredicateMut<Accept<I>>,
     I: VectorId,
     L: QueryLabelProvider<I> + ?Sized,
 {
     fn eval_mut(&mut self, item: &I) -> bool {
-        // Order must be `label` -> `inner` because we have to know an ID is accepted before
-        // passing it to `eval_mut`.
-        self.labels.is_match(*item) && self.inner.eval_mut(&Accept::new(*item))
+        if !self.inner.eval(item) {
+            return false;
+        }
+        if !self.labels.is_match(*item) {
+            return false;
+        }
+        self.inner.eval_mut(&Accept::new(*item))
     }
 }
 

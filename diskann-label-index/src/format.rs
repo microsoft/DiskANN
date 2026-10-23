@@ -4,6 +4,19 @@
  */
 
 //! Shared wire-format constants and validation helpers.
+//!
+//! The initial unified format uses little-endian values and these sections:
+//!
+//! 1. fixed header: dimensions, exact-prefix count, Bloom configuration, row lengths;
+//! 2. deterministic label dictionary: byte length, exact label count, UTF-8 bytes;
+//! 3. physical Bloom-row mappings for labels outside the exact prefix;
+//! 4. physical-row metadata: valid-node count and nonzero payload-word count;
+//! 5. all fixed-size summary rows, kept contiguous for cache locality;
+//! 6. all fixed-size payload rows.
+//!
+//! Physical rows always place exact Bitslice rows first and Bloom rows second. An exact count of
+//! zero is Bloom-only, an exact count equal to the dictionary length is Bitslice-only, and values
+//! between those bounds use the hybrid layout.
 
 use crate::error::EncodedLabelIndexError;
 use std::{
@@ -11,9 +24,9 @@ use std::{
     io::{self, BufReader, Read, Seek, Write},
 };
 
-pub(crate) const LABEL_INDEX_MAGIC: [u8; 8] = *b"DANLBL01";
+pub(crate) const LABEL_INDEX_MAGIC: [u8; 8] = *b"DANLBL02";
 pub(crate) const LABEL_INDEX_VERSION: u32 = 1;
-pub(crate) const BITSLICE_FORMAT: u32 = 0;
+pub(crate) const LABEL_INDEX_FLAGS: u32 = 0;
 pub(crate) const MAX_LABEL_COUNT: usize = 1_000_000;
 pub(crate) const MAX_LABEL_LENGTH: usize = 1 << 20;
 
@@ -47,7 +60,7 @@ pub(crate) fn validate_label(label: &str) -> Result<(), EncodedLabelIndexError> 
     Ok(())
 }
 
-pub(crate) fn validate_bitslice_padding(
+pub(crate) fn validate_row_padding(
     bits: &[u64],
     num_labels: usize,
     words_per_label: usize,
@@ -63,7 +76,7 @@ pub(crate) fn validate_bitslice_padding(
         let last_word = bits[(label_id + 1) * words_per_label - 1];
         if last_word & !valid_mask != 0 {
             return Err(EncodedLabelIndexError::Invalid(
-                "bitslice padding contains out-of-range vector IDs".to_string(),
+                "row padding contains out-of-range bits".to_string(),
             ));
         }
     }

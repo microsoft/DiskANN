@@ -137,10 +137,7 @@ where
             )
             .await?;
 
-        Ok(super::knn::Metrics {
-            comparisons: stats.cmps,
-            hops: stats.hops,
-        })
+        Ok(super::knn::Metrics::new(stats.cmps, stats.hops))
     }
 }
 
