@@ -5,9 +5,7 @@
 
 use std::{marker::PhantomData, num::NonZeroUsize, ptr::NonNull};
 
-#[cfg(feature = "rayon")]
-use crate::views::rowmajor::MatrixMut;
-use crate::views::rowmajor::{Layout, Matrix, Mut, Ref};
+use crate::views::rowmajor::{Layout, Matrix, MatrixMut, Mut, Ref};
 
 //------//
 // Rows //
@@ -189,6 +187,77 @@ impl<'a, T> Iterator for Windows<'a, T> {
 
 impl<T> ExactSizeIterator for Windows<'_, T> {}
 impl<T> std::iter::FusedIterator for Windows<'_, T> {}
+
+//------------//
+// WindowsMut //
+//------------//
+
+/// An iterator over disjoint mutable windows. See: [`MatrixMut::window_iter_mut`].
+#[derive(Debug)]
+pub struct WindowsMut<'a, T> {
+    ptr: NonNull<T>,
+    remaining: usize,
+    batchsize: NonZeroUsize,
+    ncols: usize,
+    _lifetime: PhantomData<&'a mut [T]>,
+}
+
+impl<'a, T> WindowsMut<'a, T> {
+    pub(super) fn new(mut matrix: Mut<'a, T>, batchsize: NonZeroUsize) -> Self {
+        let layout = matrix.layout();
+        Self {
+            ptr: matrix.as_nonnull_mut(),
+            remaining: layout.nrows(),
+            batchsize,
+            ncols: layout.ncols(),
+            _lifetime: PhantomData,
+        }
+    }
+}
+
+// SAFETY: `WindowsMut` owns an exclusive slice borrow, so sending it requires `T: Send`.
+unsafe impl<T: Send> Send for WindowsMut<'_, T> {}
+// SAFETY: Shared access to `WindowsMut` exposes only shared access to `T`.
+unsafe impl<T: Sync> Sync for WindowsMut<'_, T> {}
+
+impl<'a, T> Iterator for WindowsMut<'a, T> {
+    type Item = Mut<'a, T>;
+    fn next(&mut self) -> Option<Mut<'a, T>> {
+        if self.remaining == 0 {
+            None
+        } else {
+            let next_remaining = self.remaining.saturating_sub(self.batchsize.get());
+            let nrows = self.remaining - next_remaining;
+
+            // SAFETY: `self.ptr` starts the remaining suffix of a valid `Mut`, and `nrows`
+            // does not exceed that suffix. Keeping the parent's column count therefore
+            // produces a valid subview and a layout no larger than the parent layout.
+            // Previously yielded windows precede this suffix and overlap no elements.
+            let window = unsafe {
+                Mut {
+                    ptr: self.ptr,
+                    layout: Layout::new_unchecked(nrows, self.ncols),
+                    _lifetime: PhantomData,
+                }
+            };
+
+            // SAFETY: Advancing by the yielded window remains within or one past the
+            // original matrix span. The validated parent layout guarantees that the
+            // multiplication and pointer offset are representable.
+            self.ptr = unsafe { self.ptr.add(nrows * self.ncols) };
+            self.remaining = next_remaining;
+            Some(window)
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.remaining.div_ceil(self.batchsize.get());
+        (remaining, Some(remaining))
+    }
+}
+
+impl<T> ExactSizeIterator for WindowsMut<'_, T> {}
+impl<T> std::iter::FusedIterator for WindowsMut<'_, T> {}
 
 //--------//
 // ParMut //
