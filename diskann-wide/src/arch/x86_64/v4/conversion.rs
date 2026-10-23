@@ -8,8 +8,8 @@ use std::arch::x86_64::*;
 
 use super::{
     f16x8_::f16x8, f16x16_::f16x16, f32x8_::f32x8, f32x16_::f32x16, i8x16_::i8x16, i8x32_::i8x32,
-    i8x64_::i8x64, i16x8_::i16x8, i16x16_::i16x16, i16x32_::i16x32, i32x8_::i32x8, u8x16_::u8x16,
-    u8x32_::u8x32, u8x64_::u8x64, u32x8_::u32x8, u32x16_::u32x16, u64x8_::u64x8,
+    i8x64_::i8x64, i16x8_::i16x8, i16x16_::i16x16, i16x32_::i16x32, i32x8_::i32x8, i32x16_::i32x16,
+    u8x16_::u8x16, u8x32_::u8x32, u8x64_::u8x64, u32x8_::u32x8, u32x16_::u32x16, u64x8_::u64x8,
 };
 use crate::{SIMDCast, SIMDReinterpret, SIMDVector, arch::x86_64::v3, helpers};
 
@@ -78,6 +78,7 @@ helpers::unsafe_map_conversion!(u8x32, i16x32, _mm512_cvtepu8_epi16, "avx512bw")
 
 // i32 to f32
 helpers::unsafe_map_cast!(i32x8 => (f32, f32x8), _mm256_cvtepi32_ps, "avx");
+helpers::unsafe_map_cast!(i32x16 => (f32, f32x16), _mm512_cvtepi32_ps, "avx512f");
 
 helpers::unsafe_map_cast!(i16x16 => (u8, u8x16), _mm256_cvtepi16_epi8, "avx512bw,avx512vl");
 helpers::unsafe_map_cast!(i16x16 => (i8, i8x16), _mm256_cvtepi16_epi8, "avx512bw,avx512vl");
@@ -220,6 +221,7 @@ mod test_x86_conversions {
     test_utils::ops::test_cast!(f32x16 => f16x16, 0xb3cbae34def475df, V4::new_checked_uncached());
 
     test_utils::ops::test_cast!(i32x8 => f32x8, 0xde4fbf25c554b29e, V4::new_checked_uncached());
+    test_utils::ops::test_cast!(i32x16 => f32x16, 0x42ec9b7d219536a1, V4::new_checked_uncached());
 
     test_utils::ops::test_cast!(i16x16 => u8x16, 0x0f81df9e640b0269, V4::new_checked_uncached());
     test_utils::ops::test_cast!(i16x16 => i8x16, 0x4ab1546b9d0e4046, V4::new_checked_uncached());
