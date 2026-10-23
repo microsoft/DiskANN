@@ -5,16 +5,13 @@
 
 //! `Benchmark` and `Regression` impls for the multi-vector MaxSim factory.
 //!
-//! A single generic [`Kernel<T>`] carrier covers every element type accepted
-//! by [`MaxSimElement`]; `try_match` also rejects ISAs unavailable on the
-//! host so unsupported jobs fail at job-selection rather than mid-run.
+//! All element types share job selection, timing results and regression checks.
 
 use std::io::Write;
-use std::marker::PhantomData;
 
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, PassFail, Regression, Score},
-    utils::{datatype::AsDataType, num::relative_change},
+    utils::num::relative_change,
     Benchmark, Checkpoint, Output, Registry,
 };
 use diskann_quantization::multi_vector::{build_max_sim, BoxErase, MaxSimElement, MaxSimIsa};
@@ -23,33 +20,18 @@ use rand::distr::{Distribution, StandardUniform};
 use super::driver::{
     run_with_kernel, CheckResult, Comparison, Data, MultiVectorTolerance, RunResult,
 };
-use crate::inputs::multi_vector::MultiVectorOp;
+use crate::inputs::multi_vector::{ElementType, MultiVectorOp, Run};
 use crate::utils::DisplayWrapper;
 
-// ─────────────────────────────────────────────────────────────────────────
-//  Kernel<T> — generic carrier registered once per element type.
-// ─────────────────────────────────────────────────────────────────────────
-
 #[derive(Debug)]
-pub(super) struct Kernel<T>(PhantomData<T>);
+pub(super) struct Kernel;
 
-impl<T> Kernel<T> {
-    pub(super) const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<T> Benchmark for Kernel<T>
-where
-    T: MaxSimElement + AsDataType,
-    StandardUniform: Distribution<T>,
-{
+impl Benchmark for Kernel {
     type Input = MultiVectorOp;
     type Output = Vec<RunResult>;
 
     fn try_match(&self, from: &MultiVectorOp, context: &MatchContext) -> Score {
         let mut score = context.success(0);
-        crate::utils::match_data_type::<T>(&mut score, from.element_type);
         let isa: MaxSimIsa = from.isa.into();
         if !isa.is_available() {
             score.fail(1, &format_args!("ISA unavailable on this CPU: {}", isa));
@@ -66,24 +48,41 @@ where
         writeln!(output, "{}", input)?;
         let mut results = Vec::with_capacity(input.runs.len());
         for run in input.runs.iter() {
-            let data = Data::<T>::new(run)?;
-            let kernel = build_max_sim::<T, _>(input.isa.into(), data.queries.as_view(), BoxErase)?;
-            results.push(run_with_kernel(run, data.docs.as_view(), &*kernel));
+            let isa = input.isa.into();
+            let result = match input.element_type {
+                ElementType::Float32 => run_standard::<f32>(run, isa),
+                ElementType::Float16 => run_standard::<half::f16>(run, isa),
+                ElementType::Int8 => run_standard::<i8>(run, isa),
+                ElementType::MinMax {
+                    query_bits,
+                    doc_bits,
+                } => super::minmax::run(run, isa, query_bits, doc_bits),
+            }?;
+            results.push(result);
         }
         writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
         Ok(results)
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "- Element Type: {}", <T as AsDataType>::DATA_TYPE)
+        writeln!(f, "- Element Types: float32, float16, int8, minmax")
     }
 }
 
-impl<T> Regression for Kernel<T>
+fn run_standard<T>(run: &Run, isa: MaxSimIsa) -> anyhow::Result<RunResult>
 where
-    T: MaxSimElement + AsDataType,
+    T: MaxSimElement,
     StandardUniform: Distribution<T>,
 {
+    let data = Data::<T>::new(run)?;
+    let kernel = build_max_sim::<T, _>(isa, data.queries.as_view(), BoxErase)?;
+    let mut scores = vec![T::Score::default(); kernel.nrows()];
+    Ok(run_with_kernel(run, &mut scores, |scores| {
+        kernel.compute_max_sim(data.docs.as_view(), scores)
+    })?)
+}
+
+impl Regression for Kernel {
     type Tolerances = MultiVectorTolerance;
     type Pass = CheckResult;
     type Fail = CheckResult;
@@ -145,8 +144,6 @@ where
 // ─────────────────────────────────────────────────────────────────────────
 
 pub(super) fn register(registry: &mut Registry) -> anyhow::Result<()> {
-    registry.register_regression("multi-vector-op-f32", Kernel::<f32>::new())?;
-    registry.register_regression("multi-vector-op-f16", Kernel::<half::f16>::new())?;
-    registry.register_regression("multi-vector-op-i8", Kernel::<i8>::new())?;
+    registry.register_regression("multi-vector-op", Kernel)?;
     Ok(())
 }
