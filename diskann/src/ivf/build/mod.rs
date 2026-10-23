@@ -9,14 +9,14 @@ use std::fmt::Debug;
 
 use crate::{
     ANNError,
-    ivf::region::{RegionUpdate, RegionView},
+    ivf::region::{Update, View},
 };
 
 pub(crate) mod twomeans;
-pub(crate) use twomeans::TwoMeansSplitter;
+pub(crate) use twomeans::TwoMeansSplit;
 
 /// Replace parents and reassign their members together with selected neighbors.
-pub(crate) trait Split<I, L, R: RegionView<I, L>> {
+pub(crate) trait Split<I, L, R: View<I, L>> {
     type Error: Debug + Send + Sync + Into<ANNError>;
 
     /// Parents and neighbors must be distinct, disjoint filled sources.
@@ -26,7 +26,7 @@ pub(crate) trait Split<I, L, R: RegionView<I, L>> {
     ///
     /// A failure may leave partial private updates. The caller must discard the
     /// operation rather than finalize it.
-    fn split<U: RegionUpdate<I, L>>(
+    fn split<U: Update<I, L>>(
         &mut self,
         region: &R,
         update: &mut U,

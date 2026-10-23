@@ -17,7 +17,7 @@ use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use super::Split;
 use crate::{
     ANNError, ANNResult,
-    ivf::region::{AsMatRef, RegionUpdate, RegionView},
+    ivf::region::{AsMatRef, Update, View},
     utils::{TWO, VectorId},
 };
 
@@ -50,12 +50,12 @@ impl<L: Debug + Send + Sync + 'static> From<TwoMeansError<L>> for ANNError {
 /// centers to zero. One centroid matrix is allocated up front for all parents.
 /// Retained neighbors precede new children when resolving equal-distance assignments.
 /// All computation completes before any updates are recorded.
-pub struct TwoMeansSplitter {
+pub struct TwoMeansSplit {
     iterations: NonZeroUsize,
     dim: NonZeroUsize,
 }
 
-impl TwoMeansSplitter {
+impl TwoMeansSplit {
     pub fn new(iterations: NonZeroUsize, dim: NonZeroUsize) -> Self {
         Self { iterations, dim }
     }
@@ -64,7 +64,7 @@ impl TwoMeansSplitter {
     fn fit<I, L, R>(&self, region: &R, parents: &[L]) -> ANNResult<rowmajor::Owned<f32>>
     where
         L: VectorId,
-        R: RegionView<I, L>,
+        R: View<I, L>,
         for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
     {
         let rows = parents
@@ -122,16 +122,16 @@ struct Target<'a, L> {
 // Split //
 ///////////
 
-impl<I, L, R> Split<I, L, R> for TwoMeansSplitter
+impl<I, L, R> Split<I, L, R> for TwoMeansSplit
 where
     I: VectorId,
     L: VectorId,
-    R: RegionView<I, L>,
+    R: View<I, L>,
     for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
 {
     type Error = ANNError;
 
-    fn split<U: RegionUpdate<I, L>>(
+    fn split<U: Update<I, L>>(
         &mut self,
         region: &R,
         update: &mut U,
@@ -150,7 +150,7 @@ where
 
         for &neighbor in neighbors {
             let view = region
-                .get_view(neighbor)
+                .get_list(neighbor)
                 .ok_or(TwoMeansError::UnableToRetrieve(neighbor))?;
 
             targets.push(Target {
@@ -170,7 +170,7 @@ where
 
         for &list in parents.iter().chain(neighbors.iter()) {
             let view = region
-                .get_view(list)
+                .get_list(list)
                 .ok_or(TwoMeansError::UnableToRetrieve(list))?;
 
             let vectors = region

@@ -224,15 +224,15 @@ impl<'a> Region<'a> {
     }
 }
 
-impl RegionView<u32, u32> for Region<'_> {
+impl View<u32, u32> for Region<'_> {
     type VectorsRef<'a> = rowmajor::Ref<'a, f32>;
     type Vectors<'a>
         = rowmajor::Ref<'a, f32>
     where
         Self: 'a;
 
-    fn get_view(&self, list: u32) -> Option<View<'_, u32, u32>> {
-        self.sources.get(&list).map(|source| View {
+    fn get_list(&self, list: u32) -> Option<List<'_, u32, u32>> {
+        self.sources.get(&list).map(|source| List {
             id: list,
             centroid: &source.centroid,
             members: &source.members,
@@ -246,7 +246,7 @@ impl RegionView<u32, u32> for Region<'_> {
     }
 }
 
-impl RegionUpdate<u32, u32> for Update<'_> {
+impl crate::ivf::region::Update<u32, u32> for Update<'_> {
     fn set_members(&mut self, list: u32, members: &[u32]) -> ANNResult<()> {
         if self.fail_set_members {
             return Err(ANNError::message("injected set_members failure"));

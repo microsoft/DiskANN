@@ -9,7 +9,7 @@ use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
 
-use super::region::{RegionUpdate, RegionView};
+use super::region::{Update, View};
 use crate::{
     ANNResult, error::StandardError, flat::DistancesUnordered, provider::ExecutionContext,
     utils::VectorId,
@@ -65,11 +65,11 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
 
     type VectorsRef<'a>;
 
-    type Region<'a>: for<'b> RegionView<Self::Id, Self::ListId, VectorsRef<'b> = Self::VectorsRef<'b>>
+    type Region<'a>: for<'b> View<Self::Id, Self::ListId, VectorsRef<'b> = Self::VectorsRef<'b>>
     where
         Self: 'a;
 
-    type Update<'a>: RegionUpdate<Self::Id, Self::ListId>
+    type Update<'a>: Update<Self::Id, Self::ListId>
     where
         Self: 'a;
 

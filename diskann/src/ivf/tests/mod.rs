@@ -19,8 +19,8 @@ use self::{
 };
 use super::{
     Config, IVFIndex, InsertStats, ReassignCount,
-    build::{Split, TwoMeansSplitter, twomeans::TwoMeansError},
-    region::{AsMatRef, RegionUpdate, RegionView, View},
+    build::{Split, TwoMeansSplit, twomeans::TwoMeansError},
+    region::{AsMatRef, List, Update, View},
     traits::{
         BuildAccessor, BuildStrategy, HasIds, NearestList, Router, SearchAccessor, SearchStrategy,
     },
@@ -547,7 +547,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
         assert_eq!(emitted, [(1, 4)]);
         {
             let (region, mut update) = require_send(build.fill([1].into_iter())).await.unwrap();
-            let view = region.get_view(1).unwrap();
+            let view = region.get_list(1).unwrap();
             let vectors = region.get_vectors(1).unwrap();
             let source = &region.sources[&1];
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
@@ -560,7 +560,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
             assert_eq!(vectors.row(0), [0.0, 0.0]);
             assert_eq!(vectors.row(2), points[1].1);
             assert_eq!(vectors.row(3), points[0].1);
-            TwoMeansSplitter::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap())
+            TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap())
                 .split(&region, &mut update, &[1], &[])
                 .unwrap();
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
@@ -597,8 +597,8 @@ async fn borrowed_updates_share_pending_memberships_and_publish_on_finish() {
 
     {
         let (region, mut update) = require_send(build.fill([1, 2].into_iter())).await.unwrap();
-        let parent = region.get_view(1).unwrap();
-        let neighbor = region.get_view(2).unwrap();
+        let parent = region.get_list(1).unwrap();
+        let neighbor = region.get_list(2).unwrap();
         assert_eq!(parent.members, [10_000, 10_001, 10_005]);
         assert_eq!(neighbor.members, [10_002, 10_003, 10_006]);
         assert!(update.set_members(3, &[]).is_err());
@@ -955,8 +955,8 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
     let region = Region::new(&sources);
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
-    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-    TwoMeansSplitter::new(NonZeroUsize::new(5).unwrap(), ONE)
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), ONE)
         .split(&region, &mut update, &[1], &[2, 3, 4])
         .unwrap();
 
@@ -1004,12 +1004,12 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
     {
         let (region, mut update) = build.fill([1, 2].into_iter()).await.unwrap();
         assert!(
-            TwoMeansSplitter::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap(),)
+            TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap(),)
                 .split(&region, &mut update, &[1, 99], &[])
                 .is_err()
         );
         assert!(
-            TwoMeansSplitter::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap(),)
+            TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap(),)
                 .split(&region, &mut update, &[1], &[99])
                 .is_err()
         );
@@ -1018,7 +1018,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
         assert!(
             matches!(changes.as_slice(), [(1, Membership::Append(members))] if members == &[10_005])
         );
-        TwoMeansSplitter::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap())
+        TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap())
             .split(&region, &mut update, &[1], &[])
             .unwrap();
         assert_eq!(update.created.len(), 2);
@@ -1067,8 +1067,8 @@ fn assignment_can_cross_parent_boundaries() {
     let region = Region::new(&sources);
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
-    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-    TwoMeansSplitter::new(
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    TwoMeansSplit::new(
         NonZeroUsize::new(10).unwrap(),
         NonZeroUsize::new(1).unwrap(),
     )
@@ -1096,8 +1096,8 @@ fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
         let region = Region::new(&sources);
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
-        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-        TwoMeansSplitter::new(ONE, ONE)
+        let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+        TwoMeansSplit::new(ONE, ONE)
             .split(&region, &mut update, &[1], &[])
             .unwrap();
         assert_eq!(update.created.len(), 2);
@@ -1140,8 +1140,8 @@ fn two_means_prefers_neighbors_in_supplied_order_on_ties() {
     for neighbors in [[2, 3], [3, 2]] {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
-        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-        TwoMeansSplitter::new(ONE, ONE)
+        let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+        TwoMeansSplit::new(ONE, ONE)
             .split(&region, &mut update, &[1], &neighbors)
             .unwrap();
         assert_eq!(created.len(), 2);
@@ -1204,8 +1204,8 @@ fn two_means_reuses_splitter_across_regions() {
     let neighbors = [3, 4];
     let mut full_memberships = PendingLists::default();
     let mut full_created = Vec::new();
-    let mut full = Update::new(&sources, 1, &mut full_memberships, &mut full_created);
-    let mut splitter = TwoMeansSplitter::new(ONE, ONE);
+    let mut full = support::Update::new(&sources, 1, &mut full_memberships, &mut full_created);
+    let mut splitter = TwoMeansSplit::new(ONE, ONE);
     splitter
         .split(&region, &mut full, &parents, &neighbors)
         .unwrap();
@@ -1222,7 +1222,7 @@ fn two_means_reuses_splitter_across_regions() {
     assert_eq!(full.created[2].members, [2, 5, 7]);
     let mut repeated_memberships = PendingLists::default();
     let mut repeated_created = Vec::new();
-    let mut repeated = Update::new(
+    let mut repeated = support::Update::new(
         &sources,
         1,
         &mut repeated_memberships,
@@ -1237,7 +1237,8 @@ fn two_means_reuses_splitter_across_regions() {
     }
     let mut smaller_memberships = PendingLists::default();
     let mut smaller_created = Vec::new();
-    let mut smaller = Update::new(&sources, 1, &mut smaller_memberships, &mut smaller_created);
+    let mut smaller =
+        support::Update::new(&sources, 1, &mut smaller_memberships, &mut smaller_created);
     splitter.split(&region, &mut smaller, &[1], &[]).unwrap();
     assert_eq!(smaller.created.len(), 2);
     assert_eq!(smaller.created[0].members, [0]);
@@ -1261,8 +1262,8 @@ fn empty_split_records_no_updates() {
     let region = Region::new(&sources);
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
-    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-    let error = TwoMeansSplitter::new(ONE, ONE)
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    let error = TwoMeansSplit::new(ONE, ONE)
         .split(&region, &mut update, &[], &[])
         .unwrap_err();
     assert!(matches!(
@@ -1284,7 +1285,7 @@ fn region_vector_reborrows_share_source_storage() {
         },
     )]);
     let region = Region::new(&sources);
-    let view = region.get_view(1).unwrap();
+    let view = region.get_list(1).unwrap();
     assert!(std::ptr::eq(view.members, sources[&1].members.as_slice()));
     let vectors = region.get_vectors(1).unwrap();
     let reborrowed = vectors.reborrow();
@@ -1331,15 +1332,15 @@ fn two_means_handles_borrowed_batches() {
         reads: Cell<usize>,
     }
 
-    impl RegionView<u32, u32> for BatchRegion<'_> {
+    impl View<u32, u32> for BatchRegion<'_> {
         type VectorsRef<'a> = BatchRef<'a>;
         type Vectors<'a>
             = Batch<'a>
         where
             Self: 'a;
 
-        fn get_view(&self, list: u32) -> Option<View<'_, u32, u32>> {
-            self.inner.get_view(list)
+        fn get_list(&self, list: u32) -> Option<List<'_, u32, u32>> {
+            self.inner.get_list(list)
         }
 
         fn get_vectors(&self, list: u32) -> Option<Self::Vectors<'_>> {
@@ -1381,8 +1382,8 @@ fn two_means_handles_borrowed_batches() {
     ));
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
-    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-    TwoMeansSplitter::new(ONE, ONE)
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    TwoMeansSplit::new(ONE, ONE)
         .split(&region, &mut update, &[1], &[2])
         .unwrap();
     assert_eq!(region.reads.get(), 3);
@@ -1413,19 +1414,19 @@ fn split_accepts_native_batches_without_matrix_access() {
         vectors: &'a [[u8; 1]],
     }
 
-    impl RegionView<u32, u32> for NativeRegion<'_> {
+    impl View<u32, u32> for NativeRegion<'_> {
         type VectorsRef<'a> = &'a [[u8; 1]];
         type Vectors<'a>
             = NativeBatch<'a>
         where
             Self: 'a;
 
-        fn get_view(&self, list: u32) -> Option<View<'_, u32, u32>> {
-            self.inner.get_view(list)
+        fn get_list(&self, list: u32) -> Option<List<'_, u32, u32>> {
+            self.inner.get_list(list)
         }
 
         fn get_vectors(&self, list: u32) -> Option<Self::Vectors<'_>> {
-            self.inner.get_view(list).map(|_| NativeBatch(self.vectors))
+            self.inner.get_list(list).map(|_| NativeBatch(self.vectors))
         }
     }
 
@@ -1433,11 +1434,11 @@ fn split_accepts_native_batches_without_matrix_access() {
 
     impl<R> Split<u32, u32, R> for NativeSplit
     where
-        R: for<'a> RegionView<u32, u32, VectorsRef<'a> = &'a [[u8; 1]]>,
+        R: for<'a> View<u32, u32, VectorsRef<'a> = &'a [[u8; 1]]>,
     {
         type Error = ANNError;
 
-        fn split<U: RegionUpdate<u32, u32>>(
+        fn split<U: Update<u32, u32>>(
             &mut self,
             region: &R,
             update: &mut U,
@@ -1445,7 +1446,7 @@ fn split_accepts_native_batches_without_matrix_access() {
             neighbors: &[u32],
         ) -> ANNResult<()> {
             assert!(neighbors.is_empty());
-            let view = region.get_view(parents[0]).unwrap();
+            let view = region.get_list(parents[0]).unwrap();
             let vectors = region.get_vectors(parents[0]).unwrap();
             for (point, member) in vectors.reborrow().iter().zip(view.members) {
                 update.create(&[f32::from(point[0])], std::slice::from_ref(member))?;
@@ -1473,7 +1474,7 @@ fn split_accepts_native_batches_without_matrix_access() {
         assert!(std::ptr::eq(batch.reborrow(), vectors.as_slice()));
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
-        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
+        let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         splitter.split(&region, &mut update, &[1], &[]).unwrap();
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].centroid, [f32::from(offset)]);
@@ -1511,8 +1512,8 @@ fn two_means_matches_quantization_lloyds() {
     for iterations in [1, 5] {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
-        let mut update = Update::new(&sources, 2, &mut memberships, &mut created);
-        TwoMeansSplitter::new(
+        let mut update = support::Update::new(&sources, 2, &mut memberships, &mut created);
+        TwoMeansSplit::new(
             NonZeroUsize::new(iterations).unwrap(),
             NonZeroUsize::new(2).unwrap(),
         )
@@ -1549,8 +1550,8 @@ fn two_means_reports_insufficient_points_before_writing() {
         let region = Region::new(&sources);
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
-        let mut update = Update::new(&sources, 2, &mut memberships, &mut created);
-        let error = TwoMeansSplitter::new(ONE, NonZeroUsize::new(2).unwrap())
+        let mut update = support::Update::new(&sources, 2, &mut memberships, &mut created);
+        let error = TwoMeansSplit::new(ONE, NonZeroUsize::new(2).unwrap())
             .split(&region, &mut update, &[1], &[])
             .unwrap_err();
         assert!(matches!(
@@ -1575,8 +1576,8 @@ fn two_means_missing_vectors_preserves_typed_error_without_updates() {
     let region = Region::new(&sources);
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
-    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-    let error = TwoMeansSplitter::new(ONE, ONE)
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    let error = TwoMeansSplit::new(ONE, ONE)
         .split(&region, &mut update, &[1, 99], &[])
         .unwrap_err();
     assert!(matches!(
@@ -1610,9 +1611,9 @@ fn two_means_reports_missing_neighbors_before_writing() {
     for ids in [vec![99], vec![2, 99]] {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
-        let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
+        let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         let region = Region::new(&sources);
-        let error = TwoMeansSplitter::new(ONE, ONE)
+        let error = TwoMeansSplit::new(ONE, ONE)
             .split(&region, &mut update, &[1], &ids)
             .unwrap_err();
         assert!(matches!(
@@ -1647,8 +1648,8 @@ fn regional_assignment_prefers_first_when_all_distances_overflow() {
     let region = Region::new(&sources);
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
-    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-    TwoMeansSplitter::new(ONE, ONE)
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    TwoMeansSplit::new(ONE, ONE)
         .split(&region, &mut update, &[1], &[2])
         .unwrap();
     assert_eq!(created[0].members, [0]);

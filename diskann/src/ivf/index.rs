@@ -17,7 +17,7 @@ use crate::{
     flat::DistancesUnordered,
     graph::SearchOutputBuffer,
     ivf::{
-        build::{Split, TwoMeansSplitter},
+        build::{Split, TwoMeansSplit},
         region::AsMatRef,
         traits::BuildStrategy,
     },
@@ -127,7 +127,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
 
                 let (region, mut update) = accessor.fill(iter).await?;
 
-                TwoMeansSplitter::new(config.split_iterations, dim).split(
+                TwoMeansSplit::new(config.split_iterations, dim).split(
                     &region,
                     &mut update,
                     &parents.iter().copied().collect::<Vec<_>>(),
