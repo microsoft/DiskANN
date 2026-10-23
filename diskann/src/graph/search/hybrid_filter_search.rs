@@ -159,6 +159,118 @@ where
             _id: PhantomData,
         })
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn brute_force_search<'a, DP, S, T, O, PP, OB>(
+        &self,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
+        processor: PP,
+        context: &'a DP::Context,
+        query: T,
+        output: &mut OB,
+        bound: u64,
+    ) -> ANNResult<HybridSearchStats>
+    where
+        DP: DataProvider<InternalId = I>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor + RandomAccessQueryDistance>,
+        T: Copy + Send + Sync,
+        O: Send,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        if bound == 0 {
+            return Ok(HybridSearchStats {
+                stats: SearchStats {
+                    cmps: 0,
+                    hops: 0,
+                    result_count: 0,
+                    range_search_second_round: false,
+                },
+                timings: Some(HybridPhaseTimings::default()),
+            });
+        }
+
+        let scan_start = Instant::now();
+        let capacity = usize::try_from(bound)
+            .map_err(|_| ANNError::message("hybrid match bound exceeds usize"))?;
+        let mut candidates = Vec::new();
+        candidates
+            .try_reserve_exact(capacity)
+            .map_err(|_| ANNError::message("cannot reserve hybrid candidate IDs"))?;
+        let mut failure = None;
+        self.filter.visit_candidates(|id| {
+            if failure.is_some() {
+                return;
+            }
+            if candidates.len() == candidates.capacity() && candidates.try_reserve(1).is_err() {
+                failure = Some(ANNError::message("cannot grow hybrid candidate IDs"));
+                return;
+            }
+            candidates.push(id);
+        });
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        let candidate_scan = scan_start.elapsed();
+        let comparisons = u32::try_from(candidates.len()).map_err(|_| {
+            ANNError::message("hybrid candidate count exceeds search statistics capacity")
+        })?;
+
+        let distance_start = Instant::now();
+        let mut accessor = strategy
+            .search_accessor(&index.data_provider, context, query)
+            .into_ann_result()?;
+        let mut distances = Vec::new();
+        distances
+            .try_reserve_exact(candidates.len())
+            .map_err(|_| ANNError::message("cannot reserve hybrid candidate distances"))?;
+        for &id in &candidates {
+            distances.push(accessor.distance_to_id(id)?);
+        }
+        let distance_evaluation = distance_start.elapsed();
+
+        let topk_start = Instant::now();
+        let mut nearest = BinaryHeap::new();
+        nearest
+            .try_reserve(self.k.get())
+            .map_err(|_| ANNError::message("cannot reserve hybrid top-k search results"))?;
+        for (&id, &distance) in candidates.iter().zip(&distances) {
+            keep_nearest(&mut nearest, self.k.get(), Ranked { id, distance });
+        }
+        let ranked = nearest.into_sorted_vec();
+        let topk_selection = topk_start.elapsed();
+
+        let post_start = Instant::now();
+        let result_count = processor
+            .post_process(
+                &mut accessor,
+                query,
+                ranked
+                    .into_iter()
+                    .map(|candidate| Neighbor::new(candidate.id, candidate.distance)),
+                output,
+            )
+            .await
+            .into_ann_result()?;
+        let result_count = u32::try_from(result_count)
+            .map_err(|_| ANNError::message("hybrid search result count exceeds u32"))?;
+        Ok(HybridSearchStats {
+            stats: SearchStats {
+                cmps: comparisons,
+                hops: 0,
+                result_count,
+                range_search_second_round: false,
+            },
+            timings: Some(HybridPhaseTimings {
+                candidate_scan,
+                distance_evaluation,
+                topk_selection,
+                post_processing: post_start.elapsed(),
+                candidate_count: comparisons,
+            }),
+        })
+    }
 }
 
 impl<'a, DP, S, T, F> Search<'a, DP, S, T> for HybridFilterSearch<'_, DP::InternalId, F>
@@ -188,17 +300,6 @@ where
             let bound = self.filter.match_upper_bound().ok_or_else(|| {
                 ANNError::message("hybrid search requires exact per-label match counts")
             })?;
-            if bound == 0 {
-                return Ok(HybridSearchStats {
-                    stats: SearchStats {
-                        cmps: 0,
-                        hops: 0,
-                        result_count: 0,
-                        range_search_second_round: false,
-                    },
-                    timings: Some(HybridPhaseTimings::default()),
-                });
-            }
             if bound >= self.threshold.get() {
                 let stats = MultihopFilterSearch::new(self.inner)
                     .search(index, strategy, processor, context, query, output)
@@ -209,85 +310,8 @@ where
                 });
             }
 
-            let scan_start = Instant::now();
-            let capacity = usize::try_from(bound)
-                .map_err(|_| ANNError::message("hybrid match bound exceeds usize"))?;
-            let mut candidates = Vec::new();
-            candidates
-                .try_reserve_exact(capacity)
-                .map_err(|_| ANNError::message("cannot reserve hybrid candidate IDs"))?;
-            let mut failure = None;
-            self.filter.visit_candidates(|id| {
-                if failure.is_some() {
-                    return;
-                }
-                if candidates.len() == candidates.capacity() && candidates.try_reserve(1).is_err() {
-                    failure = Some(ANNError::message("cannot grow hybrid candidate IDs"));
-                    return;
-                }
-                candidates.push(id);
-            });
-            if let Some(error) = failure {
-                return Err(error);
-            }
-            let candidate_scan = scan_start.elapsed();
-            let comparisons = u32::try_from(candidates.len()).map_err(|_| {
-                ANNError::message("hybrid candidate count exceeds search statistics capacity")
-            })?;
-
-            let distance_start = Instant::now();
-            let mut accessor = strategy
-                .search_accessor(&index.data_provider, context, query)
-                .into_ann_result()?;
-            let mut distances = Vec::new();
-            distances
-                .try_reserve_exact(candidates.len())
-                .map_err(|_| ANNError::message("cannot reserve hybrid candidate distances"))?;
-            for &id in &candidates {
-                distances.push(accessor.distance_to_id(id)?);
-            }
-            let distance_evaluation = distance_start.elapsed();
-
-            let topk_start = Instant::now();
-            let mut nearest = BinaryHeap::new();
-            nearest
-                .try_reserve(self.k.get())
-                .map_err(|_| ANNError::message("cannot reserve hybrid top-k search results"))?;
-            for (&id, &distance) in candidates.iter().zip(&distances) {
-                keep_nearest(&mut nearest, self.k.get(), Ranked { id, distance });
-            }
-            let ranked = nearest.into_sorted_vec();
-            let topk_selection = topk_start.elapsed();
-
-            let post_start = Instant::now();
-            let result_count = processor
-                .post_process(
-                    &mut accessor,
-                    query,
-                    ranked
-                        .into_iter()
-                        .map(|candidate| Neighbor::new(candidate.id, candidate.distance)),
-                    output,
-                )
+            self.brute_force_search(index, strategy, processor, context, query, output, bound)
                 .await
-                .into_ann_result()?;
-            let result_count = u32::try_from(result_count)
-                .map_err(|_| ANNError::message("hybrid search result count exceeds u32"))?;
-            Ok(HybridSearchStats {
-                stats: SearchStats {
-                    cmps: comparisons,
-                    hops: 0,
-                    result_count,
-                    range_search_second_round: false,
-                },
-                timings: Some(HybridPhaseTimings {
-                    candidate_scan,
-                    distance_evaluation,
-                    topk_selection,
-                    post_processing: post_start.elapsed(),
-                    candidate_count: comparisons,
-                }),
-            })
         }
     }
 }
