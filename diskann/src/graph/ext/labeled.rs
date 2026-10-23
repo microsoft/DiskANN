@@ -265,9 +265,8 @@ where
         P: glue::Predicate<Self::Id> + glue::PredicateMut<Accept<Self::Id>> + Send + Sync,
         F: FnMut(Accept<Self::Id>, f32) + Send,
     {
-        let labels = self.labels;
         self.inner
-            .expand_beam(ids, EvalFiltered::new(pred, labels), |id, distance| {
+            .expand_beam(ids, EvalFiltered::new(pred, self.labels), |id, distance| {
                 on_neighbors(Accept::new(id), distance)
             })
             .await
