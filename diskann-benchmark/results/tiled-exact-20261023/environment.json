@@ -1,0 +1,10 @@
+{
+  "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+  "logical_processors_environment": "32",
+  "power_plan": "HP Optimized (Modern Standby), fb5220ff-7e1a-47aa-9a42-50ffbf45c673",
+  "frequency_control": "OS-managed; no fixed clocks or exclusive-host guarantee",
+  "affinity": 16,
+  "priority": "Normal",
+  "measurement_note": "No compilation/tests started during fit or ABBA measurements. Read-only progress/protocol checks and a PR metadata read occurred during ABBA. All samples including slow search passes retained. Runner checks cargo/rustc/benchmark overlaps at 30s intervals; absence of reports is not proof of absence of other desktop interference.",
+  "automation": "graph-ivf-abba remains PAUSED"
+}

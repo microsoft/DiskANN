@@ -1,0 +1,62 @@
+{
+  "cases": [
+    {
+      "dataset": "enron",
+      "dimension": 384,
+      "distance_bits": [
+        1052227496,
+        1052227495
+      ],
+      "exact": true,
+      "parent_ordinal": 77,
+      "parent_rows": 2057,
+      "point_step_decisions": 10285,
+      "previous_strategy": "transposed_dot_16",
+      "steps": 5
+    },
+    {
+      "dataset": "enron",
+      "dimension": 384,
+      "distance_bits": [
+        1053908102,
+        1053908102
+      ],
+      "exact": true,
+      "parent_ordinal": 75,
+      "parent_rows": 2147,
+      "point_step_decisions": 10735,
+      "previous_strategy": "transposed_l2_16",
+      "steps": 5
+    },
+    {
+      "dataset": "fbv8_mimir",
+      "dimension": 896,
+      "distance_bits": [
+        1046744124,
+        1046744136
+      ],
+      "exact": true,
+      "parent_ordinal": 3,
+      "parent_rows": 4715,
+      "point_step_decisions": 23575,
+      "previous_strategy": "transposed_dot_16",
+      "steps": 5
+    },
+    {
+      "dataset": "fbv8_mimir",
+      "dimension": 896,
+      "distance_bits": [
+        1055717735,
+        1055717740
+      ],
+      "exact": true,
+      "parent_ordinal": 11,
+      "parent_rows": 2361,
+      "point_step_decisions": 11805,
+      "previous_strategy": "transposed_l2_16",
+      "steps": 5
+    }
+  ],
+  "contract": "actual first-divergence point distance bits, original parent order and initial rows, five exact Lloyd steps",
+  "v4_supported": true
+}

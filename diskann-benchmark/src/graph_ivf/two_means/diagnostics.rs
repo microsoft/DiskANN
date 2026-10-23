@@ -5,7 +5,7 @@
 
 use diskann::ivf::{clustering::fit_with_assignment, workingset::PointRef};
 use diskann_vector::distance::SquaredL2;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::Serialize;
 
 use super::measurement::{Prepared, Strategy, BASELINE};
@@ -13,6 +13,8 @@ use super::measurement::{Prepared, Strategy, BASELINE};
 pub(super) struct Trace {
     steps: Vec<Step>,
     pub centers: Vec<f32>,
+    sums: Vec<f64>,
+    next_random: u64,
 }
 
 struct Step {
@@ -32,11 +34,12 @@ pub(super) fn trace(
     let mut centers = vec![0.0; 2 * dim];
     let mut sums = vec![0.0; 2 * dim];
     let mut steps = Vec::new();
+    let mut rng = StdRng::seed_from_u64(seed);
     fit_with_assignment(
         points,
         &mut centers,
         iterations,
-        &mut StdRng::seed_from_u64(seed),
+        &mut rng,
         &mut sums,
         |centers, out| {
             let fallbacks = prepared.assign(centers, out)?;
@@ -48,7 +51,12 @@ pub(super) fn trace(
             Ok(())
         },
     )?;
-    Ok(Trace { steps, centers })
+    Ok(Trace {
+        steps,
+        centers,
+        sums,
+        next_random: rng.next_u64(),
+    })
 }
 
 #[derive(Serialize)]
@@ -60,6 +68,18 @@ pub(super) struct Comparison {
     pub max_center_absolute_error: f64,
     pub min_reference_margin_f64: f64,
     pub fallback_points: usize,
+    pub final_sum_bit_disagreements: usize,
+    pub rng_equal: bool,
+}
+
+impl Comparison {
+    pub fn is_exact(&self) -> bool {
+        self.first_divergent_iteration.is_none()
+            && self.final_assignment_disagreements == 0
+            && self.final_center_bit_disagreements == 0
+            && self.final_sum_bit_disagreements == 0
+            && self.rng_equal
+    }
 }
 
 #[derive(Serialize)]
@@ -103,11 +123,24 @@ pub(super) fn compare(
     baseline: &Trace,
     candidate: &Trace,
 ) -> anyhow::Result<Comparison> {
+    anyhow::ensure!(
+        baseline.steps.len() == candidate.steps.len(),
+        "Lloyd step count changed"
+    );
+    anyhow::ensure!(
+        baseline.centers.len() == candidate.centers.len()
+            && baseline.sums.len() == candidate.sums.len(),
+        "diagnostic shape changed"
+    );
     let prepared = Prepared::new(points, dim, strategy)?;
     let mut same_centers = vec![0; points.len()];
     let mut steps = Vec::new();
     let mut first = None;
     for (i, (a, b)) in baseline.steps.iter().zip(&candidate.steps).enumerate() {
+        anyhow::ensure!(
+            a.assignments.len() == b.assignments.len() && a.centers.len() == b.centers.len(),
+            "step shape changed"
+        );
         let fallbacks = prepared.assign(&a.centers, &mut same_centers)?;
         let same_differences = a
             .assignments
@@ -192,6 +225,13 @@ pub(super) fn compare(
             .fold(0.0, f64::max),
         min_reference_margin_f64: min_margin,
         fallback_points: candidate.steps.iter().map(|step| step.fallbacks).sum(),
+        final_sum_bit_disagreements: baseline
+            .sums
+            .iter()
+            .zip(&candidate.sums)
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count(),
+        rng_equal: baseline.next_random == candidate.next_random,
     })
 }
 
@@ -200,7 +240,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn observes_finite_cancellation_at_the_first_divergent_step() {
+    fn exact_comparison_detects_intermediate_and_final_divergences() {
         let rows = [10001.0, 10000.0, 10000.25];
         let points: Vec<_> = rows
             .iter()
@@ -210,28 +250,21 @@ mod tests {
                 vector: std::slice::from_ref(v),
             })
             .collect();
-        let strategy = Strategy::TransposedDot;
-        let mut observed = false;
-        for seed in [7, 42, 2026] {
-            let a = trace(&points, 1, 5, seed, BASELINE).unwrap();
-            let b = trace(&points, 1, 5, seed, strategy).unwrap();
-            let comparison = compare(&points, 1, strategy, &a, &b).unwrap();
-            assert_eq!(comparison.steps.len(), 5);
-            assert_eq!(comparison.fallback_points, 0);
-            if let Some(first) = comparison.first_divergent_iteration {
-                assert!(comparison.steps[first].same_center_disagreements > 0);
-                let difference = comparison.steps[first]
-                    .first_same_center_difference
-                    .as_ref()
-                    .unwrap();
-                assert_eq!(difference.point_id, difference.row + 10);
-                assert!(difference.direct_l2_f64.iter().all(|d| d.is_finite()));
-                observed = true;
-            }
-        }
-        assert!(
-            observed,
-            "finite differences must not disappear from diagnostics"
-        );
+        let strategy = Strategy::TiledExact;
+        let a = trace(&points, 1, 5, 7, BASELINE).unwrap();
+        let mut b = trace(&points, 1, 5, 7, strategy).unwrap();
+        assert!(compare(&points, 1, strategy, &a, &b).unwrap().is_exact());
+        // A trajectory difference that later converges must still fail the gate.
+        b.steps[2].assignments[0] ^= 1;
+        let c = compare(&points, 1, strategy, &a, &b).unwrap();
+        assert!(!c.is_exact());
+        assert_eq!(c.first_divergent_iteration, Some(2));
+        assert_eq!(c.final_center_bit_disagreements, 0);
+        b.steps[2].assignments[0] ^= 1;
+        b.next_random ^= 1;
+        assert!(!compare(&points, 1, strategy, &a, &b).unwrap().is_exact());
+        b.next_random ^= 1;
+        b.sums[0] = b.sums[0].next_up();
+        assert!(!compare(&points, 1, strategy, &a, &b).unwrap().is_exact());
     }
 }

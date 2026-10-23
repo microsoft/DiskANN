@@ -1,0 +1,21 @@
+
+running 16 tests
+test graph_ivf::two_means::diagnostics::tests::exact_comparison_detects_intermediate_and_final_divergences ... ok
+test graph_ivf::two_means::measurement::tests::reports_packing_and_diagnostics_for_complete_fit ... ok
+test graph_ivf::tests::fp16_input_is_promoted_exactly_before_timing ... ok
+test graph_ivf::tests::exact_strategy_preserves_centroid_bits_and_ordered_members ... ok
+test graph_ivf::tests::graph_ivf_split_preserves_points_and_full_probe_matches_oracle ... ok
+test graph_ivf::tests::graph_ivf_unsplit_build_reports_zero_split_work ... ok
+test graph_ivf::tests::two_means_strategy_cli_covers_all_candidates_and_layouts ... ok
+test graph_ivf::tests::graph_ivf_rejects_invalid_measurement_inputs ... ok
+test graph_ivf::tests::graph_ivf_recall_keeps_full_denominator_for_short_results ... ok
+test graph_ivf::tests::two_means_abba_records_every_position_and_rejects_invalid_pairs ... ok
+test graph_ivf::tests::parent_replay_preserves_member_order_and_records_missing_ordinals ... ok
+test graph_ivf::tests::two_means_file_sampling_preserves_logical_rows_and_checks_shape ... ok
+test graph_ivf::tests::graph_ivf_files_and_build_only_use_same_pipeline ... ok
+test graph_ivf::tests::graph_ivf_cli_reports_build_and_real_graph_search ... ok
+test graph_ivf::tests::experimental_strategies_use_real_ivf_build_and_search ... ok
+test graph_ivf::tests::graph_ivf_repository_workloads_run_with_existing_datasets has been running for over 60 seconds
+test graph_ivf::tests::graph_ivf_repository_workloads_run_with_existing_datasets ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 4138.12s

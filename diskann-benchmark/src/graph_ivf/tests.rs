@@ -330,6 +330,36 @@ fn fp16_input_is_promoted_exactly_before_timing() {
 
 #[cfg(feature = "ivf-two-means")]
 #[test]
+fn exact_strategy_preserves_centroid_bits_and_ordered_members() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut input: GraphIvfBuild =
+                serde_json::from_value(small_input()["jobs"][0]["content"].clone()).unwrap();
+            let (data, _) = load_data(&input).unwrap();
+            let (a, _, _) = build(&input, data.as_view()).await.unwrap();
+            input.build.two_means_strategy =
+                crate::inputs::graph_ivf_two_means::TwoMeansStrategy::TiledExact;
+            let (b, _, _) = build(&input, data.as_view()).await.unwrap();
+            let a = a.provider();
+            let b = b.provider();
+            a.validate_membership(data.nrows()).unwrap();
+            b.validate_membership(data.nrows()).unwrap();
+            assert_eq!(a.lists.len(), b.lists.len());
+            for (id, a) in &a.lists {
+                let b = &b.lists[id];
+                assert_eq!(a.members, b.members);
+                assert_eq!(
+                    a.centroid.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    b.centroid.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                );
+            }
+        });
+}
+
+#[cfg(feature = "ivf-two-means")]
+#[test]
 fn experimental_strategies_use_real_ivf_build_and_search() {
     let mut raw = small_input();
     raw["jobs"][0]["content"]["build"]["repetitions"] = json!(1);
@@ -340,7 +370,7 @@ fn experimental_strategies_use_real_ivf_build_and_search() {
         let build = &result[0]["results"]["builds"][0];
         assert_eq!(build["inserted"], 256);
         assert_eq!(result[0]["results"]["searches"][2]["recall_at_k"], 1.0);
-        if strategy == crate::inputs::graph_ivf_two_means::TwoMeansStrategy::PairedPoint {
+        {
             assert_eq!(
                 build["index_fingerprint"],
                 reference[0]["results"]["builds"][0]["index_fingerprint"]
@@ -372,6 +402,8 @@ fn experimental_strategies_use_real_ivf_build_and_search() {
         "sgemm",
         "center_difference",
         "transposed_lloyd_reference",
+        "transposed_l2_16",
+        "transposed_dot_16",
     ] {
         raw["jobs"][0]["content"]["build"]["two_means_strategy"] = json!(removed);
         assert!(run_cli(&raw).is_err());
@@ -401,10 +433,10 @@ fn two_means_strategy_cli_covers_all_candidates_and_layouts() {
     assert_eq!(workloads.len(), 2);
     for workload in workloads {
         let strategies = workload["strategies"].as_array().unwrap();
-        assert_eq!(strategies.len(), 4);
+        assert_eq!(strategies.len(), 2);
         assert_eq!(strategies[0]["strategy"], "paired_point");
         assert!(strategies.iter().all(|strategy| strategy["samples"] == 2));
-        assert_eq!(workload["invocation_order"].as_array().unwrap().len(), 8);
+        assert_eq!(workload["invocation_order"].as_array().unwrap().len(), 4);
         for strategy in strategies {
             assert_eq!(strategy["status"], "complete");
             assert_eq!(
@@ -421,21 +453,16 @@ fn two_means_abba_records_every_position_and_rejects_invalid_pairs() {
     let mut input = json!({"search_directories": [], "jobs": [{"type": "graph-ivf-two-means", "content": {
         "bucket_sizes": [17], "dimensions": [9], "iterations": [3], "layouts": ["contiguous"],
         "seed": 7, "repetitions": 2, "warmup_repetitions": 1, "order": "abba",
-        "strategies": ["paired_point", "transposed_l2_16"]
+        "strategies": ["paired_point", "tiled_exact"]
     }}]});
     let result = run_cli(&input).unwrap();
     let workload = &result[0]["results"]["workloads"][0];
     let order = workload["invocation_order"].as_array().unwrap();
     assert_eq!(order.len(), 12);
     for (round, block) in order.chunks_exact(4).enumerate() {
-        for (position, expected) in [
-            "paired_point",
-            "transposed_l2_16",
-            "transposed_l2_16",
-            "paired_point",
-        ]
-        .iter()
-        .enumerate()
+        for (position, expected) in ["paired_point", "tiled_exact", "tiled_exact", "paired_point"]
+            .iter()
+            .enumerate()
         {
             assert_eq!(block[position]["strategy"], *expected);
             assert_eq!(block[position]["round"], round);
@@ -450,7 +477,7 @@ fn two_means_abba_records_every_position_and_rejects_invalid_pairs() {
     for pair in [
         json!([]),
         json!(["paired_point", "paired_point"]),
-        json!(["transposed_dot_16", "paired_point"]),
+        json!(["tiled_exact", "paired_point"]),
     ] {
         input["jobs"][0]["content"]["strategies"] = pair;
         assert!(run_cli(&input).is_err());

@@ -3,80 +3,57 @@
  * Licensed under the MIT license.
  */
 
-//! Opt-in fitting strategies. Numerical choices belong to the clustering algorithm;
-//! timing, diagnostic assignments, and CLI names belong to its callers.
+//! Opt-in fitting with the default distance arithmetic and shared Lloyd updates.
 
+use diskann_vector::distance::TwoPointSquaredL2;
 use rand::rngs::StdRng;
-
-use diskann_quantization::{
-    algorithms::kmeans::two_means as kernel, multi_vector::BlockTransposed,
-};
 
 use super::two_means::{
     TwoMeansIteration, fit_two_means, fit_two_means_using, nearest_two, sum_assignment,
 };
 use crate::{ANNError, ANNResult, ivf::workingset::PointRef};
 
-/// The baseline and block-transposed, cross-point SIMD candidates. Transposed
-/// candidates change the reduction order and may change partitions.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     #[default]
     PairedPoint,
-    TransposedL2,
-    TransposedDot,
+    /// Borrow two rows at a time, keeping each point's original reduction tree.
+    TiledExact,
 }
 
-/// One parent bucket prepared for a fitting strategy. Packing, where needed, is
-/// performed once and reused across all Lloyd steps. No measurements are collected.
+/// A validated parent bucket. The candidate selects an ISA once per preparation;
+/// it neither packs coordinates nor allocates per-point scratch.
 pub struct TwoMeans<'a, I> {
     points: &'a [PointRef<'a, I>],
     dim: usize,
-    strategy: Strategy,
-    packed: Option<BlockTransposed<f32, 16>>,
+    tiled: Option<TwoPointSquaredL2>,
 }
 
 impl<'a, I> TwoMeans<'a, I> {
-    /// Validate row shapes and copy coordinates only for strategies that need packing.
-    ///
-    /// The caller supplies finite coordinates. Transposed strategies
-    /// can change assignments even for finite inputs; they are not bitwise substitutes.
+    /// The caller supplies finite coordinates. Both strategies preserve baseline
+    /// distance bits, including overflow, on the compiled architecture.
     ///
     /// # Errors
-    /// Returns an error for fewer than two rows, inconsistent or zero dimensions,
-    /// or overflowing dimensions.
+    /// Rejects fewer than two rows, inconsistent/zero dimensions, or shape overflow.
     pub fn new(points: &'a [PointRef<'a, I>], dim: usize, strategy: Strategy) -> ANNResult<Self> {
         validate_shape(points, dim)?;
-        let packed = if strategy != Strategy::PairedPoint {
-            Some(
-                kernel::pack_rows(points.iter().map(|point| point.vector), dim)
-                    .map_err(ANNError::new)?,
-            )
-        } else {
-            None
-        };
         Ok(Self {
             points,
             dim,
-            strategy,
-            packed,
+            tiled: (strategy == Strategy::TiledExact).then(TwoPointSquaredL2::new),
         })
     }
 
-    /// Coordinate storage owned by this preparation, excluding scratch and row views.
+    /// Neither strategy owns a packed coordinate buffer.
     pub fn packed_bytes(&self) -> usize {
-        self.packed
-            .as_ref()
-            .map_or(0, |packed| std::mem::size_of_val(packed.as_slice()))
+        0
     }
 
-    /// Fit using caller-owned center and f64 sum buffers. Point order, seed draws,
-    /// fixed iteration count and empty-center behavior are shared with default IVF.
-    /// Transposed strategies use paired L2 for nonfinite scores; finite cancellation
-    /// remains observable. Both buffers must contain exactly two center rows.
+    /// Fit with original seeding, iteration count, ordered f64 sums and empty-center
+    /// behavior. Centers and sums are caller-owned; each must contain two full rows.
     ///
     /// # Errors
-    /// Returns an error for mismatched scratch dimensions or a failed kernel call.
+    /// Returns an error for mismatched scratch dimensions.
     pub fn fit_into(
         &self,
         centers: &mut [f32],
@@ -84,82 +61,82 @@ impl<'a, I> TwoMeans<'a, I> {
         rng: &mut StdRng,
         sums: &mut [f64],
     ) -> ANNResult<()> {
-        let dim = self.dim;
-        if centers.len() != 2 * dim || sums.len() != 2 * dim {
+        if centers.len() != 2 * self.dim || sums.len() != 2 * self.dim {
             return Err(ANNError::message(
                 "two-means scratch must contain two full center rows",
             ));
         }
-        match self.strategy {
-            Strategy::PairedPoint => {
-                fit_two_means(self.points, centers, dim, iterations, rng, sums)
-            }
-            Strategy::TransposedL2 | Strategy::TransposedDot => {
-                let mut assignment = TransposedAssignment {
-                    prepared: self,
-                    assignments: vec![0; self.points.len()],
-                };
-                fit_two_means_using(
-                    self.points,
-                    centers,
-                    dim,
-                    iterations,
-                    rng,
-                    sums,
-                    &mut assignment,
-                )
-            }
-        }
-    }
-
-    /// Assignment output bytes allocated once by each fit and reused across steps.
-    pub fn scratch_bytes(&self) -> usize {
-        if self.packed.is_some() {
-            self.points.len() * std::mem::size_of::<u32>()
+        if let Some(tiled) = &self.tiled {
+            fit_two_means_using(
+                self.points,
+                centers,
+                self.dim,
+                iterations,
+                rng,
+                sums,
+                &mut TiledAssignment(tiled),
+            )
         } else {
-            0
+            fit_two_means(self.points, centers, self.dim, iterations, rng, sums)
         }
     }
 
-    /// Assign at supplied centers without updating them; shared by fitting and diagnostics.
-    /// A nonfinite score is recomputed with baseline paired L2. Returns fallback count.
+    /// Neither strategy allocates an assignment array in the fitting path.
+    pub fn scratch_bytes(&self) -> usize {
+        0
+    }
+
+    /// Assign at supplied centers. The exact kernel needs no numerical fallback,
+    /// so the diagnostic fallback count is always zero.
     ///
     /// # Errors
-    /// Returns an error for mismatched centers or output shape, or a kernel failure.
+    /// Returns an error for mismatched centers or output shape.
     pub fn assign(&self, centers: &[f32], out: &mut [u32]) -> ANNResult<usize> {
         if centers.len() != 2 * self.dim || out.len() != self.points.len() {
             return Err(ANNError::message("two-means assignment shape mismatch"));
         }
-        if let Some(packed) = &self.packed {
-            let metric = match self.strategy {
-                Strategy::TransposedL2 => kernel::Metric::SquaredL2,
-                Strategy::TransposedDot => kernel::Metric::DotProduct,
-                Strategy::PairedPoint => unreachable!("paired strategy does not pack"),
-            };
-            kernel::assign(packed.as_view(), centers, metric, out).map_err(ANNError::new)?;
-            let mut fallbacks = 0;
-            for (point, to) in self.points.iter().zip(out) {
-                if *to == kernel::INVALID {
-                    *to = nearest_two(point.vector, centers, self.dim) as u32;
-                    fallbacks += 1;
-                }
-            }
-            Ok(fallbacks)
+        if let Some(tiled) = &self.tiled {
+            for_each_tiled(tiled, self.points, centers, self.dim, |row, to| {
+                out[row] = to as u32;
+            });
         } else {
             for (point, to) in self.points.iter().zip(out) {
                 *to = nearest_two(point.vector, centers, self.dim) as u32;
             }
-            Ok(0)
         }
+        Ok(0)
     }
 }
 
-struct TransposedAssignment<'a, 'b, I> {
-    prepared: &'b TwoMeans<'a, I>,
-    assignments: Vec<u32>,
+fn for_each_tiled<I>(
+    tiled: &TwoPointSquaredL2,
+    points: &[PointRef<'_, I>],
+    centers: &[f32],
+    dim: usize,
+    mut visit: impl FnMut(usize, usize),
+) {
+    let mut pairs = points.chunks_exact(2);
+    for (index, pair) in pairs.by_ref().enumerate() {
+        let distances = tiled.evaluate(
+            [pair[0].vector, pair[1].vector],
+            &centers[..dim],
+            &centers[dim..],
+        );
+        for (lane, [first, second]) in distances.into_iter().enumerate() {
+            visit(
+                2 * index + lane,
+                usize::from(second.total_cmp(&first).is_lt()),
+            );
+        }
+    }
+    if let [last] = pairs.remainder() {
+        visit(points.len() - 1, nearest_two(last.vector, centers, dim));
+    }
 }
 
-impl<I> TwoMeansIteration<I> for TransposedAssignment<'_, '_, I> {
+struct TiledAssignment<'a>(&'a TwoPointSquaredL2);
+
+impl<I> TwoMeansIteration<I> for TiledAssignment<'_> {
     fn assign_and_sum(
         &mut self,
         points: &[PointRef<'_, I>],
@@ -168,10 +145,10 @@ impl<I> TwoMeansIteration<I> for TransposedAssignment<'_, '_, I> {
         sums: &mut [f64],
         counts: &mut [usize; 2],
     ) -> ANNResult<()> {
-        self.prepared.assign(centers, &mut self.assignments)?;
-        for (point, &to) in points.iter().zip(&self.assignments) {
-            sum_assignment(point.vector, to as usize, dim, sums, counts);
-        }
+        for_each_tiled(self.0, points, centers, dim, |row, to| {
+            // The callback visits 0, 1, 2, ...; tiling never reorders the sums.
+            sum_assignment(points[row].vector, to, dim, sums, counts);
+        });
         Ok(())
     }
 }
@@ -188,12 +165,12 @@ fn validate_shape<I>(points: &[PointRef<'_, I>], dim: usize) -> ANNResult<()> {
     Ok(())
 }
 
-/// Fit with a caller-supplied assignment operation while preserving IVF's seeding,
-/// ordered f64 sums, fixed steps, and empty-center rule. Assignment scratch is
-/// allocated once and reused; the callback must write 0 or 1 for every point.
+/// Fit with caller-supplied assignment while preserving IVF's seeding, ordered
+/// f64 sums, fixed steps, and empty-center rule. Diagnostic scratch is allocated
+/// once; the callback must write 0 or 1 for every point.
 ///
 /// # Errors
-/// Rejects invalid shapes or center IDs and propagates assignment errors.
+/// Rejects invalid shapes/center IDs and propagates assignment errors.
 pub fn fit_with_assignment<I>(
     points: &[PointRef<'_, I>],
     centers: &mut [f32],
@@ -222,7 +199,7 @@ pub fn fit_with_assignment<I>(
             sums: &mut [f64],
             counts: &mut [usize; 2],
         ) -> ANNResult<()> {
-            self.out.fill(kernel::INVALID);
+            self.out.fill(u32::MAX);
             (self.assign)(centers, &mut self.out)?;
             if self.out.iter().any(|&id| id > 1) {
                 return Err(ANNError::message(
@@ -237,7 +214,7 @@ pub fn fit_with_assignment<I>(
     }
     let mut assignment = Assignment {
         assign,
-        out: vec![kernel::INVALID; points.len()],
+        out: vec![u32::MAX; points.len()],
     };
     fit_two_means_using(points, centers, dim, iterations, rng, sums, &mut assignment)
 }

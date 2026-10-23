@@ -1,0 +1,420 @@
+	.def	_RINvMs_NtNtNtCs7uL3bHLJGwM_12diskann_wide4arch6x86_642v4NtB5_2V410run_with_3NtNtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiled4TileARSfj2_B2g_B2g_AAfB2j_B2j_EB1k_;
+	.scl	3;
+	.type	32;
+	.endef
+	.section	.text,"xr",one_only,_RINvMs_NtNtNtCs7uL3bHLJGwM_12diskann_wide4arch6x86_642v4NtB5_2V410run_with_3NtNtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiled4TileARSfj2_B2g_B2g_AAfB2j_B2j_EB1k_,unique,75
+	.p2align	4
+_RINvMs_NtNtNtCs7uL3bHLJGwM_12diskann_wide4arch6x86_642v4NtB5_2V410run_with_3NtNtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiled4TileARSfj2_B2g_B2g_AAfB2j_B2j_EB1k_:
+.Lfunc_begin75:
+.seh_proc _RINvMs_NtNtNtCs7uL3bHLJGwM_12diskann_wide4arch6x86_642v4NtB5_2V410run_with_3NtNtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiled4TileARSfj2_B2g_B2g_AAfB2j_B2j_EB1k_
+	pushq	%rbp
+	.seh_pushreg %rbp
+	pushq	%r15
+	.seh_pushreg %r15
+	pushq	%r14
+	.seh_pushreg %r14
+	pushq	%r13
+	.seh_pushreg %r13
+	pushq	%r12
+	.seh_pushreg %r12
+	pushq	%rsi
+	.seh_pushreg %rsi
+	pushq	%rdi
+	.seh_pushreg %rdi
+	pushq	%rbx
+	.seh_pushreg %rbx
+	subq	$760, %rsp
+	.seh_stackalloc 760
+	leaq	128(%rsp), %rbp
+	.seh_setframe %rbp, 128
+	.seh_endprologue
+	andq	$-64, %rsp
+	movq	744(%rbp), %r15
+.Ltmp7341:
+	movq	%r8, 176(%rsp)
+	movq	%r9, 184(%rsp)
+.Ltmp7342:
+	cmpq	%r9, %r15
+	jne	.LBB75_1
+.Ltmp7343:
+	movq	%rdx, %r10
+	movq	8(%rdx), %rdx
+.Ltmp7344:
+	cmpq	%r15, %rdx
+	jne	.LBB75_2
+.Ltmp7345:
+	movq	24(%r10), %rdx
+.Ltmp7346:
+	cmpq	%r15, %rdx
+	jne	.LBB75_2
+.Ltmp7347:
+	movq	%r8, 96(%rsp)
+.Ltmp7348:
+	movq	%rcx, 128(%rsp)
+	movq	736(%rbp), %rcx
+.Ltmp7349:
+	leaq	320(%rsp), %r12
+	leaq	448(%rsp), %r13
+	movabsq	$2305843009213693920, %rax
+	andq	%r15, %rax
+	movq	%rax, 104(%rsp)
+	movabsq	$2305843009213693944, %rax
+.Ltmp7350:
+	andq	%r15, %rax
+	movq	%rax, 112(%rsp)
+.Ltmp7351:
+	vxorps	%xmm0, %xmm0, %xmm0
+	vmovaps	%zmm0, 640(%rsp)
+	vmovaps	%zmm0, 576(%rsp)
+	vmovaps	%zmm0, 512(%rsp)
+	vmovaps	%zmm0, 448(%rsp)
+	vmovaps	%zmm0, 384(%rsp)
+	vmovaps	%zmm0, 320(%rsp)
+	vmovaps	%zmm0, 256(%rsp)
+	vmovaps	%zmm0, 192(%rsp)
+	leaq	95(%rsp), %rax
+.Ltmp7352:
+	movq	%rax, 136(%rsp)
+	movq	%r10, 120(%rsp)
+.Ltmp7353:
+	movq	%r10, 144(%rsp)
+	leaq	176(%rsp), %rax
+	movq	%rax, 152(%rsp)
+	movq	%rcx, 160(%rsp)
+	movq	%r15, 168(%rsp)
+.Ltmp7354:
+	shrq	$5, %r15
+.Ltmp7355:
+	je	.LBB75_8
+.Ltmp7356:
+	shlq	$5, %r15
+.Ltmp7357:
+	xorl	%edi, %edi
+	leaq	136(%rsp), %rbx
+	leaq	192(%rsp), %rsi
+.Ltmp7358:
+	.p2align	4
+.LBB75_7:
+	leaq	32(%rdi), %r14
+.Ltmp7359:
+	movq	%rbx, %rcx
+	movq	%rdi, %rdx
+	movq	%rsi, %r8
+	vzeroupper
+	callq	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+	leaq	8(%rdi), %rdx
+	movq	%rbx, %rcx
+	movq	%r12, %r8
+	callq	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+	leaq	16(%rdi), %rdx
+	movq	%rbx, %rcx
+	movq	%r13, %r8
+	callq	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+	addq	$24, %rdi
+.Ltmp7360:
+	movq	%rbx, %rcx
+	movq	%rdi, %rdx
+	leaq	576(%rsp), %r8
+	callq	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+.Ltmp7361:
+	movq	%r14, %rdi
+.Ltmp7362:
+	cmpq	%r14, %r15
+	jne	.LBB75_7
+.Ltmp7363:
+.LBB75_8:
+	movq	%r12, %r14
+	leaq	576(%rsp), %r12
+	xorl	%esi, %esi
+.Ltmp7364:
+	movq	112(%rsp), %rdi
+.Ltmp7365:
+	movq	%rdi, %rax
+	movq	104(%rsp), %rbx
+	subq	%rbx, %rax
+	cmovaeq	%rax, %rsi
+.Ltmp7366:
+	jbe	.LBB75_10
+.Ltmp7367:
+	leaq	136(%rsp), %rcx
+	leaq	192(%rsp), %r8
+.Ltmp7368:
+	movq	%rbx, %rdx
+	vzeroupper
+	callq	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+.Ltmp7369:
+	cmpq	$8, %rsi
+	je	.LBB75_10
+.Ltmp7370:
+	movq	%rbx, %rdx
+	orq	$8, %rdx
+.Ltmp7371:
+	leaq	136(%rsp), %rcx
+.Ltmp7372:
+	movq	%r14, %r8
+	callq	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+.Ltmp7373:
+	cmpq	$16, %rsi
+	je	.LBB75_10
+.Ltmp7374:
+	movq	%rbx, %rdx
+	orq	$16, %rdx
+.Ltmp7375:
+	leaq	136(%rsp), %rcx
+.Ltmp7376:
+	movq	%r13, %r8
+	callq	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+.Ltmp7377:
+	cmpq	$24, %rsi
+	je	.LBB75_10
+.Ltmp7378:
+	orq	$24, %rbx
+.Ltmp7379:
+	leaq	136(%rsp), %rcx
+.Ltmp7380:
+	movq	%rbx, %rdx
+	movq	%r12, %r8
+	callq	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+.Ltmp7381:
+	cmpq	$32, %rsi
+	jne	.LBB75_20
+.Ltmp7382:
+.LBB75_10:
+	movq	744(%rbp), %r8
+	movl	%r8d, %eax
+	andb	$7, %al
+	movq	$-1, %rcx
+	shlxq	%rax, %rcx, %rax
+.Ltmp7383:
+	vxorps	%xmm0, %xmm0, %xmm0
+	movq	128(%rsp), %rcx
+	vmovups	%xmm0, (%rcx)
+.Ltmp7384:
+	vmovaps	192(%rsp), %zmm0
+	vmovaps	448(%rsp), %zmm1
+.Ltmp7385:
+	vaddps	320(%rsp), %zmm0, %zmm0
+.Ltmp7386:
+	vaddps	576(%rsp), %zmm1, %zmm1
+.Ltmp7387:
+	notb	%al
+	kmovd	%eax, %k1
+.Ltmp7388:
+	vaddps	%zmm1, %zmm0, %zmm1
+.Ltmp7389:
+	vextractf64x4	$1, %zmm1, %ymm0
+.Ltmp7390:
+	cmpq	%r8, %rdi
+	movq	120(%rsp), %rdx
+	jne	.LBB75_16
+.Ltmp7391:
+	vextractf128	$1, %ymm1, %xmm2
+.Ltmp7392:
+	vaddps	%xmm2, %xmm1, %xmm1
+.Ltmp7393:
+	vshufpd	$1, %xmm1, %xmm1, %xmm2
+.Ltmp7394:
+	vaddps	%xmm2, %xmm1, %xmm1
+.Ltmp7395:
+	vmovshdup	%xmm1, %xmm2
+.Ltmp7396:
+	vaddss	%xmm2, %xmm1, %xmm1
+.Ltmp7397:
+	vmovss	%xmm1, (%rcx)
+.Ltmp7398:
+	jmp	.LBB75_12
+.Ltmp7399:
+.LBB75_16:
+	movq	96(%rsp), %rax
+	vmovups	(%rax,%rdi,4), %ymm2 {%k1} {z}
+.Ltmp7400:
+	movq	(%rdx), %rax
+.Ltmp7401:
+	vmovups	(%rax,%rdi,4), %ymm3 {%k1} {z}
+.Ltmp7402:
+
+	.def	_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_;
+	.scl	3;
+	.type	32;
+	.endef
+	.section	.text,"xr",one_only,_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_,unique,163
+	.p2align	4
+_RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_:
+.Lfunc_begin159:
+.seh_proc _RNCNvXs0_NtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiledNtB7_4TileINtNtCs7uL3bHLJGwM_12diskann_wide4arch7Target3NtNtNtB1g_6x86_642v42V4AAfj2_B2n_ARSfB2n_B2v_B2v_E3run0Bd_
+	pushq	%rbp
+	.seh_pushreg %rbp
+	pushq	%r15
+	.seh_pushreg %r15
+	pushq	%r14
+	.seh_pushreg %r14
+	pushq	%r13
+	.seh_pushreg %r13
+	pushq	%r12
+	.seh_pushreg %r12
+	pushq	%rsi
+	.seh_pushreg %rsi
+	pushq	%rdi
+	.seh_pushreg %rdi
+	pushq	%rbx
+	.seh_pushreg %rbx
+	subq	$632, %rsp
+	.seh_stackalloc 632
+	leaq	128(%rsp), %rbp
+	.seh_setframe %rbp, 128
+	.seh_endprologue
+	andq	$-64, %rsp
+	movq	%r8, %rsi
+	movq	%rcx, %r15
+.Ltmp14465:
+	movq	8(%rcx), %rax
+	movq	(%rax), %rcx
+.Ltmp14466:
+	movq	16(%rax), %rax
+.Ltmp14467:
+	vmovups	(%rcx,%rdx,4), %ymm0
+.Ltmp14468:
+	vmovaps	%ymm0, 224(%rsp)
+.Ltmp14469:
+	movq	%rdx, 88(%rsp)
+.Ltmp14470:
+	vmovups	(%rax,%rdx,4), %ymm0
+.Ltmp14471:
+	vmovaps	%ymm0, 96(%rsp)
+.Ltmp14472:
+	leaq	320(%rsp), %rbx
+.Ltmp14473:
+	movq	%rbx, %rcx
+	vzeroupper
+	callq	_RNvNtNtNtCs55qC6OcLGgs_4core9core_arch3x867avx512f17__mm512_setzero_ps
+.Ltmp14474:
+	vmovaps	224(%rsp), %ymm0
+.Ltmp14475:
+	vmovaps	%ymm0, 128(%rsp)
+	leaq	384(%rsp), %r12
+	leaq	128(%rsp), %r14
+	movq	%r12, %rcx
+	movq	%rbx, %rdx
+	movq	%r14, %r8
+	vzeroupper
+	callq	_RINvNtNtNtCs55qC6OcLGgs_4core9core_arch3x868avx512dq18__mm512_insertf32x8Kl0_ECsdMBTL2HRpb2_14diskann_vector
+	vmovaps	96(%rsp), %ymm0
+	vmovaps	%ymm0, 128(%rsp)
+	leaq	320(%rsp), %rcx
+	leaq	128(%rsp), %r8
+	movq	%r12, %rdx
+	vzeroupper
+	callq	_RINvNtNtNtCs55qC6OcLGgs_4core9core_arch3x868avx512dq18__mm512_insertf32x8Kl1_ECsdMBTL2HRpb2_14diskann_vector
+	vmovaps	320(%rsp), %ymm0
+	vmovaps	%ymm0, 224(%rsp)
+.Ltmp14476:
+	vmovaps	352(%rsp), %ymm0
+.Ltmp14477:
+	vmovaps	%ymm0, 480(%rsp)
+.Ltmp14478:
+	movq	16(%r15), %rax
+	movq	24(%r15), %rcx
+.Ltmp14479:
+	movq	(%rax), %rax
+.Ltmp14480:
+	vxorps	%xmm0, %xmm0, %xmm0
+	vmovups	%xmm0, 448(%rsp)
+.Ltmp14481:
+	leaq	416(%rsp), %r13
+	movq	%rax, 416(%rsp)
+	movq	%rcx, 432(%rsp)
+	xorl	%r12d, %r12d
+	leaq	256(%rsp), %r15
+.Ltmp14482:
+	.p2align	4
+.LBB159_1:
+	leaq	64(%r12), %rdi
+.Ltmp14483:
+	movq	(%r13), %rax
+.Ltmp14484:
+	movq	88(%rsp), %rcx
+.Ltmp14485:
+	vmovups	(%rax,%rcx,4), %ymm0
+.Ltmp14486:
+	vmovaps	%ymm0, 96(%rsp)
+.Ltmp14487:
+	movq	%rbx, %rcx
+	vzeroupper
+	callq	_RNvNtNtNtCs55qC6OcLGgs_4core9core_arch3x867avx512f17__mm512_setzero_ps
+.Ltmp14488:
+	vmovaps	96(%rsp), %ymm0
+.Ltmp14489:
+	vmovaps	%ymm0, 256(%rsp)
+	movq	%r14, %rcx
+	movq	%rbx, %rdx
+	movq	%r15, %r8
+	vzeroupper
+	callq	_RINvNtNtNtCs55qC6OcLGgs_4core9core_arch3x868avx512dq18__mm512_insertf32x8Kl0_ECsdMBTL2HRpb2_14diskann_vector
+	vmovaps	96(%rsp), %ymm0
+	vmovaps	%ymm0, 256(%rsp)
+	movq	%rbx, %rcx
+	movq	%r14, %rdx
+	movq	%r15, %r8
+	vzeroupper
+	callq	_RINvNtNtNtCs55qC6OcLGgs_4core9core_arch3x868avx512dq18__mm512_insertf32x8Kl1_ECsdMBTL2HRpb2_14diskann_vector
+.Ltmp14490:
+	vmovaps	480(%rsp), %ymm0
+.Ltmp14491:
+	vmovaps	%ymm0, 160(%rsp)
+	vmovaps	224(%rsp), %ymm0
+	vmovaps	%ymm0, 128(%rsp)
+	movq	%r15, %rcx
+	movq	%r14, %rdx
+	movq	%rbx, %r8
+	vzeroupper
+	callq	_RNvNtNtNtCs55qC6OcLGgs_4core9core_arch3x867avx512f13__mm512_sub_ps
+	vmovaps	256(%rsp), %ymm0
+	vmovaps	288(%rsp), %ymm1
+.Ltmp14492:
+	vmovaps	(%rsi,%r12), %ymm2
+	vmovaps	32(%rsi,%r12), %ymm3
+.Ltmp14493:
+	vmovaps	%ymm1, 288(%rsp)
+	vmovaps	%ymm0, 256(%rsp)
+	vmovaps	%ymm1, 160(%rsp)
+	vmovaps	%ymm0, 128(%rsp)
+	vmovaps	%ymm3, 352(%rsp)
+	vmovaps	%ymm2, 320(%rsp)
+	leaq	512(%rsp), %rcx
+	movq	%r15, %rdx
+	movq	%r14, %r8
+	movq	%rbx, %r9
+	vzeroupper
+	callq	_RNvNtNtNtCs55qC6OcLGgs_4core9core_arch3x867avx512f15__mm512_fmadd_ps
+	vmovaps	512(%rsp), %ymm0
+	vmovaps	544(%rsp), %ymm1
+.Ltmp14494:
+	vmovaps	%ymm1, 32(%rsi,%r12)
+	vmovaps	%ymm0, (%rsi,%r12)
+.Ltmp14495:
+	addq	$16, %r13
+.Ltmp14496:
+	movq	%rdi, %r12
+.Ltmp14497:
+	cmpq	$128, %rdi
+.Ltmp14498:
+	jne	.LBB159_1
+.Ltmp14499:
+	.seh_startepilogue
+	leaq	504(%rbp), %rsp
+.Ltmp14500:
+	popq	%rbx
+	popq	%rdi
+	popq	%rsi
+.Ltmp14501:
+	popq	%r12
+	popq	%r13
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	.seh_endepilogue
+	vzeroupper
+	retq
+.Ltmp14502:
+.Lfunc_end159:
+	.seh_endproc

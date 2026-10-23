@@ -1,0 +1,7 @@
+{
+  "prior_directory": "target\\ivf-tiled-exact-20261023",
+  "prior_binary_sha256": "2675ff1afd858169aa6dabf03e3f17dde132554363a4136e5d999e8e9af5589d",
+  "finding": "The accumulating closure did not inline into V4::run. Each eight-coordinate block called a base-ISA closure with vector operation calls and spills. Complete fits regressed 9-18x although exactness passed.",
+  "fix": "Use an explicit inline(always) helper so the arithmetic stays within V4 target features. The generated hot loop contains zmm FMA and no calls; only length/panic cold branches call.",
+  "protocol": "Same input parameters, full fit matrix and quick full-build/query-scope ABBA. Preserve initial samples; do not pool different source/binary versions."
+}

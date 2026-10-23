@@ -8,11 +8,7 @@ use rand::{Rng, RngCore, SeedableRng};
 use super::super::two_means::nearest_two;
 use super::*;
 
-const STRATEGIES: [Strategy; 3] = [
-    Strategy::PairedPoint,
-    Strategy::TransposedL2,
-    Strategy::TransposedDot,
-];
+const STRATEGIES: [Strategy; 2] = [Strategy::PairedPoint, Strategy::TiledExact];
 
 fn refs(rows: &[Vec<f32>]) -> Vec<PointRef<'_, usize>> {
     rows.iter()
@@ -80,50 +76,31 @@ fn complete_fit_matches_independent_small_integer_means() {
         let mut centers: Vec<_> = fitted.chunks_exact(3).collect();
         centers.sort_by(|a, b| a[0].total_cmp(&b[0]));
         assert_eq!(centers, [&[-10.0; 3][..], &[10.0; 3][..]]);
-        assert_eq!(
-            prepared.packed_bytes(),
-            if strategy == Strategy::PairedPoint {
-                0
-            } else {
-                16 * 3 * 4
-            }
-        );
+        assert_eq!(prepared.packed_bytes(), 0);
     }
 }
 
 #[test]
-fn fallback_preserves_baseline_and_finite_cancellation_remains_visible() {
-    let rows = [vec![f32::MAX], vec![0.0]];
-    let points = refs(&rows);
-    for strategy in [Strategy::TransposedL2, Strategy::TransposedDot] {
-        let prepared = TwoMeans::new(&points, 1, strategy).unwrap();
-        let centers = [0.0, 1.0];
-        let mut out = [99; 2];
-        assert_eq!(prepared.assign(&centers, &mut out).unwrap(), 1);
-        assert_eq!(
-            out,
-            points
-                .iter()
-                .map(|point| nearest_two(point.vector, &centers, 1) as u32)
-                .collect::<Vec<_>>()
-                .as_slice()
-        );
-        assert_eq!(prepared.scratch_bytes(), 8);
-        assert!(prepared.assign(&centers[..1], &mut out).is_err());
-        assert!(prepared.assign(&centers, &mut out[..1]).is_err());
+fn exact_assignment_preserves_overflow_and_cancellation_choices() {
+    for rows in [
+        [vec![f32::MAX], vec![0.0]],
+        [vec![10000.25], vec![10000.25]],
+    ] {
+        let points = refs(&rows);
+        let prepared = TwoMeans::new(&points, 1, Strategy::TiledExact).unwrap();
+        for centers in [[0.0, 1.0], [10001.0, 10000.0]] {
+            let mut out = [99; 2];
+            assert_eq!(prepared.assign(&centers, &mut out).unwrap(), 0);
+            assert_eq!(
+                out,
+                rows.each_ref()
+                    .map(|row| nearest_two(row, &centers, 1) as u32)
+            );
+            assert_eq!(prepared.scratch_bytes(), 0);
+            assert!(prepared.assign(&centers[..1], &mut out).is_err());
+            assert!(prepared.assign(&centers, &mut out[..1]).is_err());
+        }
     }
-    let rows = [vec![10000.25], vec![10000.25]];
-    let points = refs(&rows);
-    let mut output = [99; 2];
-    assert_eq!(
-        TwoMeans::new(&points, 1, Strategy::TransposedDot)
-            .unwrap()
-            .assign(&[10001.0, 10000.0], &mut output)
-            .unwrap(),
-        0
-    );
-    assert_eq!(output, [0, 0]);
-    assert_eq!(nearest_two(&rows[0], &[10001.0, 10000.0], 1), 1);
 }
 
 #[test]
@@ -152,7 +129,7 @@ fn assignment_hook_preserves_empty_center_and_rejects_unwritten_ids() {
     assert_eq!(calls, 5);
     assert_eq!(centers, [0.0, rows[second][0]]);
     assert_eq!(seed.next_u64(), rng.next_u64());
-    for value in [2, kernel::INVALID] {
+    for value in [2, u32::MAX] {
         assert!(
             fit_with_assignment(
                 &points,
@@ -265,6 +242,70 @@ fn invalid_scratch_leaves_centers_sums_and_rng_unchanged() {
             assert!(centers.iter().all(|&value| value == 17.0));
             assert!(sums.iter().all(|&value| value == 19.0));
             assert_eq!(rng.next_u64(), expected.next_u64());
+        }
+    }
+}
+
+#[test]
+fn every_lloyd_step_preserves_assignments_counts_sum_bits_centers_and_rng() {
+    struct Checked(TwoPointSquaredL2);
+    impl TwoMeansIteration<usize> for Checked {
+        fn assign_and_sum(
+            &mut self,
+            points: &[PointRef<'_, usize>],
+            centers: &[f32],
+            dim: usize,
+            sums: &mut [f64],
+            counts: &mut [usize; 2],
+        ) -> ANNResult<()> {
+            let mut expected = vec![0.0; sums.len()];
+            let mut expected_counts = [0; 2];
+            for_each_tiled(&self.0, points, centers, dim, |row, to| {
+                let point = points[row].vector;
+                assert_eq!(to, nearest_two(point, centers, dim), "row={row}, dim={dim}");
+                sum_assignment(point, to, dim, &mut expected, &mut expected_counts);
+            });
+            TiledAssignment(&self.0).assign_and_sum(points, centers, dim, sums, counts)?;
+            assert_eq!(*counts, expected_counts);
+            assert_eq!(
+                sums.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+            );
+            Ok(())
+        }
+    }
+    for dim in [1, 3, 7, 8, 9, 31, 32, 33, 192, 384, 896] {
+        for n in [2, 3, 16, 17, 57] {
+            for seed in [7, 42, 2026] {
+                let mut data_rng = StdRng::seed_from_u64(seed ^ ((n as u64) << 32) ^ dim as u64);
+                let rows: Vec<Vec<f32>> = (0..n)
+                    .map(|_| (0..dim).map(|_| data_rng.random_range(-1.0..1.0)).collect())
+                    .collect();
+                let points = refs(&rows);
+                let mut a = vec![0.0; 2 * dim];
+                let mut b = a.clone();
+                let mut sa = vec![0.0; 2 * dim];
+                let mut sb = sa.clone();
+                let mut ra = StdRng::seed_from_u64(seed);
+                let mut rb = ra.clone();
+                fit_two_means(&points, &mut a, dim, 5, &mut ra, &mut sa).unwrap();
+                fit_two_means_using(
+                    &points,
+                    &mut b,
+                    dim,
+                    5,
+                    &mut rb,
+                    &mut sb,
+                    &mut Checked(TwoPointSquaredL2::new()),
+                )
+                .unwrap();
+                assert_eq!(
+                    a.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    b.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                );
+                assert_eq!(sa, sb);
+                assert_eq!(ra.next_u64(), rb.next_u64());
+            }
         }
     }
 }

@@ -8,4 +8,3 @@ pub(crate) use common::square_norm;
 
 pub mod lloyds;
 pub mod plusplus;
-pub mod two_means;

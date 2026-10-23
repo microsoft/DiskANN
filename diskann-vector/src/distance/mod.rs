@@ -7,6 +7,7 @@
 pub mod reference;
 
 mod paired;
+pub use paired::TwoPointSquaredL2;
 pub mod simd;
 
 pub mod implementations;

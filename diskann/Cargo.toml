@@ -31,7 +31,6 @@ diskann-wide = { workspace = true }
 # Optional Dependencies
 dashmap = { workspace = true, optional = true }
 diskann-linalg = { workspace = true, optional = true }
-diskann-quantization = { workspace = true, default-features = false, optional = true }
 
 [dev-dependencies]
 diskann-utils = { workspace = true, features = ["testing"] }
@@ -65,7 +64,7 @@ default = ["tracing"]
 pipnn = ["dep:diskann-linalg"]
 
 # Enable experimental Graph-IVF clustering strategies; paired L2 remains the default.
-ivf-experimental = ["dep:diskann-quantization"]
+ivf-experimental = []
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]

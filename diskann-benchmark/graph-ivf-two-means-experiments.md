@@ -1,90 +1,59 @@
-# Graph-IVF block-transposed two-means
+# Graph-IVF exact two-means experiment
 
-The active implementations are paired_point (default), transposed_l2_16 and
-transposed_dot_16. The earlier separate, packed_paired, batched_4/8, SGEMM and
-center_difference experiments have been removed from the active Rust and CLI
-paths. Their frozen executables and original results are historical evidence.
+The active strategies are paired_point (default) and tiled_exact. Earlier
+transposed L2/dot and controlled Lloyd reference paths are removed. Their frozen
+executables, reports and raw measurements remain historical evidence.
 
-## Code boundaries
+## Implementation and numerical contract
 
-- diskann-quantization/src/algorithms/kmeans/two_means.rs: direct packing from
-  borrowed rows into BlockTransposed<f32,16>, shape/overflow validation, and
-  four f32x8 accumulators (16 points, two centers, U=1). Outputs are 0/1 or INVALID.
-- diskann/src/ivf/clustering/strategy.rs: one preparation per parent; assignment
-  scratch reused across steps; nonfinite scores fall back to paired L2.
-  Initialization, ordered f64 sums, fixed steps and empty-center retention use
-  the shared fitter in clustering/two_means.rs. Final region-wide reassignment
-  is unchanged.
-- diskann-benchmark/src/graph_ivf/two_means/: complete-fit timing, per-iteration
-  diagnostics and independent parent capture/replay. No benchmark CLI, tracing
-  or timing code is added to the new low-level primitive.
+The vector primitive in diskann-vector/src/distance/paired/tiled.rs joins two
+independent eight-coordinate vectors into the halves of a sixteen-lane register.
+Each point retains the baseline's four accumulation chains, FMA, combine order,
+partial tail and eight-lane reduction. This does not use a sixteen-lane sum.
 
-The library feature is ivf-experimental; benchmark feature ivf-two-means enables
-it. The new optional quantization dependency disables its default features.
-The experiment does not switch the default IVF strategy.
+A V3/V4-compiled binary selects the wide implementation once per parent when the
+host supports V4. Scalar builds, AArch64 and V3-only hosts retain paired L2.
+There is no automatic promotion of scalar arithmetic to FMA. Equality refers
+to the compiled baseline on that configuration, not different compiled ISAs.
 
-## Numerical contract
+The IVF adapter borrows rows without packing, assigns pairs and sums points in
+original order. Odd last rows use paired. Seeding, fixed Lloyd steps, f64 sums,
+empty centers and final region-wide reassignment use the shared implementation.
+No epsilon or numerical fallback relaxes exactness.
 
-Both transposed candidates change floating-point reduction order. L2 uses direct
-squared differences. Dot compares norm(c)-dot(x,c)-dot(x,c) and omits the shared
-point norm. Finite cancellation may change decisions; overflow fallback does
-not fix it. Tests retain the x=10000.25, c0=10001, c1=10000 counterexample:
-true squared distances are 0.5625/0.0625, but dot scores tie and choose center 0.
-No epsilon hides this discrepancy.
+## Measurement
 
-Every valid score tie chooses center 0. Every nonfinite score triggers a paired
-recalculation of that point; padding does not become an assignment. Finite input,
-RNG consumption, iterations.max(1), original point order, f64 sums and empty
-centers retain the existing contracts. No NaN input ordering is introduced.
+Complete-fit schema version 3 includes validation, ISA selection, allocation,
+seeding, all distance/selection/sum/update work and internal scratch release.
+Returned centers remain alive. Data generation/loading and FP16 conversion are
+outside the timer. packed_bytes and strategy scratch_bytes are zero; reported
+fit scratch includes the two f64 sum rows.
 
-transposed_lloyd_reference wraps the existing distances_in_place and computes
-point norms and residuals. It is only a complete-fit reference, unavailable to
-index build/search. Bad IDs, nonfinite or negative residuals are recorded as
-failed/not applicable; their samples must not count as successful speedups.
+Separate deterministic fits compare every step at the same centers and along
+each strategy's own trajectory, final centers, assignments, sum bits and RNG.
+Any mismatch fails the benchmark. Tests also compare real ordered list members
+and centroid bits; fingerprints alone are diagnostic evidence, not a proof.
 
-## Measurements
+The ABBA runner defaults to tiled_exact. Historic strategy names are read as
+protocol data without reinterpreting saved results. Every candidate uses its own
+surrounding A samples; all slow samples remain. The analyzer rejects a changed
+index/quality/work fingerprint for an exact candidate.
 
-Complete-fit schema version 2 includes validation, packing, norm preparation,
-scratch allocation, seeding, all assignments/sums/updates, and scratch/packing
-release. Returned centers stay alive. Data loading, FP16 conversion and synthetic
-data generation are outside the timer. packing/preparation is included in total.
-packed_bytes includes padded rows; scratch_bytes includes f64 sums, assignments,
-and reference point norms, but excludes the returned center buffer.
+## Quick verification on 2026-10-23
 
-Diagnostics are separate deterministic fits after the timed rounds. They compare
-assignments under the baseline centers at every step and the two independent
-trajectories; first divergence includes row/point ID, paired distances and an
-independent f64 distance/margin. The final trace must match the timed fit.
+See [the revised plan](graph-ivf-transposed-two-means-plan.md) for the fixed protocol:
+18 complete-fit shapes, one warmup and four measured ABBA blocks; three complete
+dataset builds, one build+search ABBA per dataset. YFCC uses all 100 queries;
+Enron and FBV8 use the first 32 original queries and corresponding groundtruth
+rows for this explicitly scoped quick check. Search uses k10/L128/nprobe4/16/64.
+The original full-query experiment and paused automation are not resumed.
 
-The graph-ivf-two-means input accepts strategies and order (rotating or abba).
-Rotating defaults to all four implemented fitting paths; repetitions are rounds.
-ABBA requires exactly [paired_point, candidate]; repetitions and warmups count
-complete four-position blocks. Raw samples and explicit invocation order retain
-all values. A sample near the boundary is not evidence of universal bit equality.
+Final artifacts are in target/ivf-tiled-exact-20261023-final. An initial exact
+tile had an uninlined-closure code-generation defect; its fit samples are
+retained separately in target/ivf-tiled-exact-20261023 and are not pooled. The static provider is in
+memory with exhaustive build routing and a centroid graph built afterwards.
+Logical scan counts do not represent physical SSD I/O or Mimir performance.
+One build/search ABBA is preliminary evidence, not a stable speedup claim.
 
-The separate graph-ivf-parent-replay input performs a diagnostic baseline build,
-exports predetermined zero-based parent ordinals with row IDs, and replays the
-same parents for every fitting strategy and both layouts. Missing ordinals are
-reported. It uses a fresh fixed fit seed, not the original build RNG trajectory.
-Export build timings are discarded. Snapshot coordinates and IDs are retained.
-
-## Current comparison protocol
-
-The new experiment is target/ivf-transposed-20261022. A is paired_point in the
-same newly frozen executable as both B candidates. One full ABBA block per
-candidate on YFCC, Enron and fbv8_mimir gives 24 full build+search invocations.
-All queries (100 / 1000 / 6380) are used at nprobe 4/16/64 with one full warmup
-and one measured pass. Seed7, five Lloyd steps, batch4096, split2048, initial16,
-graph degree16/L64, k10/L128, one thread, affinity0x10 and Normal priority are fixed.
-
-The CLI runner accepts --reference and repeated --candidate. It checks executed
-settings, complete rows/query counts, affinity/priority and frozen binary/input
-hashes. Resume only reuses verified completed artifacts and refuses to overwrite
-incomplete output. Each B uses its own surrounding A runs. A single ABBA block
-has no confidence interval. Slow samples and changed quality/layout are retained.
-
-The static provider is in memory with exhaustive build routing and a centroid
-graph constructed afterwards. Logical scan counts are not physical SSD I/O or
-Mimir integration results. Historic 288-run evidence remains paused and separate.
-
-See graph-ivf-transposed-two-means-results.md for measured outcomes and provenance.
+See [the measured results](graph-ivf-tiled-exact-results-20261023.md) for the
+exactness checks, retained samples, build gains and unresolved search slowdown.

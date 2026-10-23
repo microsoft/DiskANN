@@ -15,7 +15,7 @@ import sys
 from run_ivf_experiment import sha256
 
 
-DEFAULT_CANDIDATES = ["transposed_l2_16", "transposed_dot_16"]
+DEFAULT_CANDIDATES = ["tiled_exact"]
 
 
 def strategy_names(reference, candidates):
@@ -225,7 +225,7 @@ def run():
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--dataset", action="append", default=[], metavar="NAME=INPUT")
     parser.add_argument("--reference", default="paired_point")
-    parser.add_argument("--candidate", action="append", default=[], help="Repeat for each candidate; defaults to the two transposed kernels")
+    parser.add_argument("--candidate", action="append", default=[], help="Repeat for each candidate; defaults to tiled_exact")
     parser.add_argument("--build-only", action="store_true", help="Disable search in new invocations")
     parser.add_argument("--continue-from", type=Path, help="Preserve the completed prefix of an existing protocol; requires --build-only")
     parser.add_argument("--prepare-only", action="store_true", help="Save and verify the plan without starting measurements")

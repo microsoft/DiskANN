@@ -73,7 +73,7 @@ def record(directory, entry, seconds=10):
 
 class BuildOnlyContinuationTests(unittest.TestCase):
     def test_parameterized_candidates_reject_confounded_protocols(self):
-        self.assertEqual(strategy_names("paired_point", []), ["transposed_l2_16", "transposed_dot_16"])
+        self.assertEqual(strategy_names("paired_point", []), ["tiled_exact"])
         self.assertEqual(strategy_names("original", ["new"]), ["new"])
         for candidates in [["paired_point"], ["a", "a"], ["a/b"], [""]]:
             with self.assertRaises(ValueError):
@@ -92,6 +92,27 @@ class BuildOnlyContinuationTests(unittest.TestCase):
         report = summarize(self.original, False)
         self.assertTrue(report["complete"])
         self.assertEqual(report["comparisons"][0]["complete_blocks"], 2)
+
+    def test_exact_candidate_rejects_layout_or_search_differences(self):
+        for entry in self.protocol["plan"]:
+            entry["candidate"] = "tiled_exact"
+            if entry["strategy"] == "packed_paired":
+                entry["strategy"] = "tiled_exact"
+            spec = json.loads(entry["input"])
+            spec["jobs"][0]["content"]["build"]["two_means_strategy"] = entry["strategy"]
+            entry["input"] = json.dumps(spec, indent=2) + "\n"
+            record(self.original, entry)
+        write_json(self.original / "protocol.json", self.protocol)
+        self.assertTrue(summarize(self.original, False)["complete"])
+        path = self.original / (self.protocol["plan"][1]["name"] + ".json")
+        saved = json.loads(path.read_text())
+        for section, field in [("builds", "index_fingerprint"), ("searches", "result_fingerprint")]:
+            changed = copy.deepcopy(saved)
+            changed[0]["results"][section][0][field] = "different"
+            write_json(path, changed)
+            with self.assertRaisesRegex(RuntimeError, "Exact strategy differs"):
+                summarize(self.original, False)
+        write_json(path, saved)
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

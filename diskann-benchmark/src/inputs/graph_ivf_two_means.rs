@@ -77,22 +77,18 @@ impl Example for GraphIvfParentReplay {
 pub(crate) enum TwoMeansStrategy {
     #[default]
     PairedPoint,
-    #[serde(rename = "transposed_l2_16")]
-    TransposedL2,
-    #[serde(rename = "transposed_dot_16")]
-    TransposedDot,
+    TiledExact,
 }
 
 impl TwoMeansStrategy {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 3] = [Self::PairedPoint, Self::TransposedL2, Self::TransposedDot];
+    pub(crate) const ALL: [Self; 2] = [Self::PairedPoint, Self::TiledExact];
 
     #[cfg(test)]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::PairedPoint => "paired_point",
-            Self::TransposedL2 => "transposed_l2_16",
-            Self::TransposedDot => "transposed_dot_16",
+            Self::TiledExact => "tiled_exact",
         }
     }
 }
@@ -101,8 +97,7 @@ impl From<TwoMeansStrategy> for clustering::Strategy {
     fn from(value: TwoMeansStrategy) -> Self {
         match value {
             TwoMeansStrategy::PairedPoint => Self::PairedPoint,
-            TwoMeansStrategy::TransposedL2 => Self::TransposedL2,
-            TwoMeansStrategy::TransposedDot => Self::TransposedDot,
+            TwoMeansStrategy::TiledExact => Self::TiledExact,
         }
     }
 }
@@ -111,29 +106,18 @@ impl From<TwoMeansStrategy> for clustering::Strategy {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FitStrategy {
     PairedPoint,
-    #[serde(rename = "transposed_l2_16")]
-    TransposedL2,
-    #[serde(rename = "transposed_dot_16")]
-    TransposedDot,
-    TransposedLloydReference,
+    TiledExact,
 }
 
 impl FitStrategy {
-    pub(crate) const ALL: [Self; 4] = [
-        Self::PairedPoint,
-        Self::TransposedL2,
-        Self::TransposedDot,
-        Self::TransposedLloydReference,
-    ];
+    pub(crate) const ALL: [Self; 2] = [Self::PairedPoint, Self::TiledExact];
     pub(crate) fn all() -> Vec<Self> {
         Self::ALL.to_vec()
     }
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::PairedPoint => "paired_point",
-            Self::TransposedL2 => "transposed_l2_16",
-            Self::TransposedDot => "transposed_dot_16",
-            Self::TransposedLloydReference => "transposed_lloyd_reference",
+            Self::TiledExact => "tiled_exact",
         }
     }
 }

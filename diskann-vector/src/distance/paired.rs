@@ -10,6 +10,9 @@ use super::{
     SquaredL2,
 };
 
+mod tiled;
+pub use tiled::TwoPointSquaredL2;
+
 impl SquaredL2 {
     /// Compute squared L2 distances from `point` to two centers, sharing point loads.
     ///

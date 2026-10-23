@@ -20,7 +20,7 @@ use crate::inputs::graph_ivf_two_means::{FitOrder, GraphIvfTwoMeans, Layout};
 mod diagnostics;
 mod measurement;
 pub(super) mod replay;
-use measurement::{Strategy, BASELINE};
+use measurement::BASELINE;
 
 pub(super) struct Strategies;
 
@@ -33,7 +33,7 @@ impl Benchmark for Strategies {
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Complete two-means: paired baseline, transposed L2/dot, controlled Lloyd reference"
+            "Complete two-means: paired baseline and exact two-point tiling"
         )
     }
     fn run(
@@ -90,9 +90,9 @@ impl Benchmark for Strategies {
             }
         }
         Ok(Results {
-            schema_version: 2,
+            schema_version: 3,
             threads: 1,
-            timing_scope: "validate + scratch + pack/norms + seed + distance/selection + ordered f64 sums + center updates + scratch/packing release; diagnostics run after all timed rounds",
+            timing_scope: "validate + ISA selection + scratch + seed + distance/selection + ordered f64 sums + center updates + scratch release; diagnostics run after all timed rounds",
             numerical_reference: "paired_point",
             source: if corpus.is_some() { "file_sample" } else { "synthetic_uniform" },
             workloads,
@@ -206,16 +206,7 @@ fn run_workload(
                 input.strategies[index],
             );
             let samples = &mut measurements[index];
-            let run = match run {
-                Ok(run) => run,
-                Err(error) if input.strategies[index] == Strategy::TransposedLloydReference => {
-                    samples
-                        .failures
-                        .push(format!("round {round}, position {position}: {error:#}"));
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+            let run = run?;
             if round >= input.warmup_repetitions {
                 samples.totals.push(duration_ns(run.total));
                 samples.preparations.push(duration_ns(run.preparation));
@@ -243,14 +234,13 @@ fn run_workload(
             }
             diagnostics::compare(points, dim, strategy, &reference, &trace)
         })();
-        let comparison = match comparison {
-            Ok(comparison) => Some(comparison),
-            Err(error) if strategy == Strategy::TransposedLloydReference => {
-                samples.failures.push(format!("diagnostic: {error:#}"));
-                None
-            }
-            Err(error) => return Err(error),
-        };
+        let comparison = comparison?;
+        anyhow::ensure!(
+            comparison.is_exact(),
+            "{} violates baseline equivalence",
+            strategy.name()
+        );
+        let comparison = Some(comparison);
         let total_samples_ns = samples.totals.clone();
         let total_ns = if samples.totals.is_empty() {
             None

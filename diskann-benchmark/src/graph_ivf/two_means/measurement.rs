@@ -8,23 +8,16 @@
 use std::time::{Duration, Instant};
 
 use diskann::{
-    ivf::{
-        clustering::{fit_with_assignment, TwoMeans},
-        workingset::PointRef,
-    },
-    ANNError, ANNResult,
+    ivf::{clustering::TwoMeans, workingset::PointRef},
+    ANNResult,
 };
-use diskann_quantization::algorithms::kmeans::two_means::LloydReference;
 use rand::{rngs::StdRng, SeedableRng};
 
 pub(super) use crate::inputs::graph_ivf_two_means::FitStrategy as Strategy;
 
 pub(super) const BASELINE: Strategy = Strategy::PairedPoint;
 
-pub(super) enum Prepared<'a> {
-    Index(TwoMeans<'a, usize>),
-    LloydReference(LloydReference),
-}
+pub(super) struct Prepared<'a>(TwoMeans<'a, usize>);
 
 impl<'a> Prepared<'a> {
     pub fn new(
@@ -32,53 +25,15 @@ impl<'a> Prepared<'a> {
         dim: usize,
         strategy: Strategy,
     ) -> ANNResult<Self> {
-        match strategy {
-            Strategy::TransposedLloydReference => {
-                LloydReference::new(points.iter().map(|p| p.vector), dim)
-                    .map(Self::LloydReference)
-                    .map_err(ANNError::new)
-            }
-            Strategy::PairedPoint => {
-                TwoMeans::new(points, dim, diskann::ivf::clustering::Strategy::PairedPoint)
-                    .map(Self::Index)
-            }
-            Strategy::TransposedL2 => TwoMeans::new(
-                points,
-                dim,
-                diskann::ivf::clustering::Strategy::TransposedL2,
-            )
-            .map(Self::Index),
-            Strategy::TransposedDot => TwoMeans::new(
-                points,
-                dim,
-                diskann::ivf::clustering::Strategy::TransposedDot,
-            )
-            .map(Self::Index),
-        }
+        let strategy = match strategy {
+            Strategy::PairedPoint => diskann::ivf::clustering::Strategy::PairedPoint,
+            Strategy::TiledExact => diskann::ivf::clustering::Strategy::TiledExact,
+        };
+        TwoMeans::new(points, dim, strategy).map(Self)
     }
 
     pub fn assign(&self, centers: &[f32], out: &mut [u32]) -> ANNResult<usize> {
-        match self {
-            Self::Index(prepared) => prepared.assign(centers, out),
-            Self::LloydReference(prepared) => {
-                prepared.assign(centers, out).map_err(ANNError::new)?;
-                Ok(0)
-            }
-        }
-    }
-
-    fn packed_bytes(&self) -> usize {
-        match self {
-            Self::Index(p) => p.packed_bytes(),
-            Self::LloydReference(p) => p.packed_bytes(),
-        }
-    }
-
-    fn scratch_bytes(&self, rows: usize) -> usize {
-        match self {
-            Self::Index(p) => p.scratch_bytes(),
-            Self::LloydReference(p) => p.scratch_bytes() + rows * std::mem::size_of::<u32>(),
-        }
+        self.0.assign(centers, out)
     }
 }
 
@@ -103,21 +58,11 @@ pub(super) fn fit(
     let mut centers = vec![0.0; 2 * dim];
     let mut sums = vec![0.0; 2 * dim];
     let mut rng = StdRng::seed_from_u64(seed);
-    match &prepared {
-        Prepared::Index(p) => p.fit_into(&mut centers, iterations, &mut rng, &mut sums)?,
-        Prepared::LloydReference(_) => fit_with_assignment(
-            points,
-            &mut centers,
-            iterations,
-            &mut rng,
-            &mut sums,
-            |centers, out| prepared.assign(centers, out).map(|_| ()),
-        )?,
-    }
-    let packed_bytes = prepared.packed_bytes();
-    let scratch_bytes =
-        prepared.scratch_bytes(points.len()) + std::mem::size_of_val(sums.as_slice());
-    drop(prepared);
+    prepared
+        .0
+        .fit_into(&mut centers, iterations, &mut rng, &mut sums)?;
+    let packed_bytes = prepared.0.packed_bytes();
+    let scratch_bytes = prepared.0.scratch_bytes() + std::mem::size_of_val(sums.as_slice());
     drop(sums);
     let total = start.elapsed();
     Ok(Run {

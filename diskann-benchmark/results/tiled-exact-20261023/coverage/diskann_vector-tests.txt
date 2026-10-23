@@ -1,0 +1,11 @@
+
+running 7 tests
+test distance::paired::tests::paired_l2_entry_and_lengths ... ok
+test distance::paired::tiled::tests::tiled_rejects_all_mismatched_shapes ... ok
+test distance::paired::tests::paired_l2_v3_matches_existing_and_integer_oracle ... ok
+test distance::paired::tests::paired_l2_v4_matches_existing_and_integer_oracle ... ok
+test distance::paired::tests::paired_l2_scalar_matches_existing_and_integer_oracle ... ok
+test distance::paired::tiled::tests::tiled_entry_matches_compiled_baseline_for_all_tails_and_extremes ... ok
+test distance::paired::tiled::tests::tiled_v3_and_v4_match_each_architectures_original_l2 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 156 filtered out; finished in 0.84s

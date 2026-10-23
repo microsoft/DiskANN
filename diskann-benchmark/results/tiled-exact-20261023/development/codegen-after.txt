@@ -1,0 +1,415 @@
+_RINvMs_NtNtNtCs7uL3bHLJGwM_12diskann_wide4arch6x86_642v4NtB5_2V410run_with_3NtNtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiled4TileARSfj2_B2g_B2g_AAfB2j_B2j_EB1k_:
+.Lfunc_begin75:
+.seh_proc _RINvMs_NtNtNtCs7uL3bHLJGwM_12diskann_wide4arch6x86_642v4NtB5_2V410run_with_3NtNtNtNtCsdMBTL2HRpb2_14diskann_vector8distance6paired5tiled4TileARSfj2_B2g_B2g_AAfB2j_B2j_EB1k_
+	pushq	%r14
+	.seh_pushreg %r14
+	pushq	%rsi
+	.seh_pushreg %rsi
+	pushq	%rdi
+	.seh_pushreg %rdi
+	pushq	%rbx
+	.seh_pushreg %rbx
+	subq	$40, %rsp
+	.seh_stackalloc 40
+	.seh_endprologue
+.Ltmp7341:
+	movq	120(%rsp), %r10
+.Ltmp7342:
+	cmpq	%r9, %r10
+	jne	.LBB75_1
+.Ltmp7343:
+	movq	8(%rdx), %rax
+.Ltmp7344:
+	cmpq	%r10, %rax
+	jne	.LBB75_2
+.Ltmp7345:
+	movq	24(%rdx), %rax
+.Ltmp7346:
+	cmpq	%r10, %rax
+	jne	.LBB75_2
+.Ltmp7347:
+	movq	112(%rsp), %r9
+.Ltmp7348:
+	movabsq	$2305843009213693920, %r11
+	andq	%r10, %r11
+	movabsq	$2305843009213693944, %rax
+.Ltmp7349:
+	andq	%r10, %rax
+.Ltmp7350:
+	movq	%r10, %rsi
+	shrq	$5, %rsi
+.Ltmp7351:
+	je	.LBB75_6
+.Ltmp7352:
+	movq	(%rdx), %rdi
+	movq	16(%rdx), %rbx
+	shlq	$7, %rsi
+.Ltmp7353:
+	vxorps	%xmm0, %xmm0, %xmm0
+	xorl	%r14d, %r14d
+	vxorps	%xmm2, %xmm2, %xmm2
+	vxorps	%xmm1, %xmm1, %xmm1
+	vxorps	%xmm3, %xmm3, %xmm3
+	vxorps	%xmm4, %xmm4, %xmm4
+	vxorps	%xmm5, %xmm5, %xmm5
+	vxorps	%xmm18, %xmm18, %xmm18
+	vxorps	%xmm19, %xmm19, %xmm19
+.Ltmp7354:
+	.p2align	4
+.LBB75_12:
+	vmovups	(%rdi,%r14), %ymm16
+.Ltmp7355:
+	vmovups	32(%rdi,%r14), %ymm17
+.Ltmp7356:
+	vmovups	64(%rdi,%r14), %ymm20
+.Ltmp7357:
+	vmovups	96(%rdi,%r14), %ymm21
+.Ltmp7358:
+	vinsertf64x4	$1, (%rbx,%r14), %zmm16, %zmm16
+.Ltmp7359:
+	vbroadcastf64x4	(%r8,%r14), %zmm22
+.Ltmp7360:
+	vsubps	%zmm22, %zmm16, %zmm22
+.Ltmp7361:
+	vfmadd231ps	%zmm22, %zmm22, %zmm19
+.Ltmp7362:
+	vbroadcastf64x4	(%r9,%r14), %zmm22
+.Ltmp7363:
+	vsubps	%zmm22, %zmm16, %zmm16
+.Ltmp7364:
+	vfmadd231ps	%zmm16, %zmm16, %zmm18
+.Ltmp7365:
+	vinsertf64x4	$1, 32(%rbx,%r14), %zmm17, %zmm16
+.Ltmp7366:
+	vbroadcastf64x4	32(%r8,%r14), %zmm17
+.Ltmp7367:
+	vsubps	%zmm17, %zmm16, %zmm17
+.Ltmp7368:
+	vfmadd231ps	%zmm17, %zmm17, %zmm5
+.Ltmp7369:
+	vbroadcastf64x4	32(%r9,%r14), %zmm17
+.Ltmp7370:
+	vsubps	%zmm17, %zmm16, %zmm16
+.Ltmp7371:
+	vfmadd231ps	%zmm16, %zmm16, %zmm4
+.Ltmp7372:
+	vinsertf64x4	$1, 64(%rbx,%r14), %zmm20, %zmm16
+.Ltmp7373:
+	vbroadcastf64x4	64(%r8,%r14), %zmm17
+.Ltmp7374:
+	vsubps	%zmm17, %zmm16, %zmm17
+.Ltmp7375:
+	vfmadd231ps	%zmm17, %zmm17, %zmm3
+.Ltmp7376:
+	vbroadcastf64x4	64(%r9,%r14), %zmm17
+.Ltmp7377:
+	vsubps	%zmm17, %zmm16, %zmm16
+.Ltmp7378:
+	vfmadd231ps	%zmm16, %zmm16, %zmm1
+.Ltmp7379:
+	vinsertf64x4	$1, 96(%rbx,%r14), %zmm21, %zmm16
+.Ltmp7380:
+	vbroadcastf64x4	96(%r8,%r14), %zmm17
+.Ltmp7381:
+	vsubps	%zmm17, %zmm16, %zmm17
+.Ltmp7382:
+	vfmadd231ps	%zmm17, %zmm17, %zmm2
+.Ltmp7383:
+	vbroadcastf64x4	96(%r9,%r14), %zmm17
+.Ltmp7384:
+	vsubps	%zmm17, %zmm16, %zmm16
+.Ltmp7385:
+	vfmadd231ps	%zmm16, %zmm16, %zmm0
+.Ltmp7386:
+	subq	$-128, %r14
+.Ltmp7387:
+	cmpq	%r14, %rsi
+	jne	.LBB75_12
+.Ltmp7388:
+	cmpq	%r11, %rax
+	jbe	.LBB75_8
+.Ltmp7389:
+.LBB75_15:
+	movl	%r10d, %esi
+	shrl	$3, %esi
+.Ltmp7390:
+	movq	(%rdx), %rbx
+	movq	16(%rdx), %rdi
+.Ltmp7391:
+	vmovups	(%rbx,%r11,4), %ymm16
+.Ltmp7392:
+	vinsertf64x4	$1, (%rdi,%r11,4), %zmm16, %zmm16
+.Ltmp7393:
+	vbroadcastf64x4	(%r8,%r11,4), %zmm17
+.Ltmp7394:
+	vsubps	%zmm17, %zmm16, %zmm20
+.Ltmp7395:
+	vfmadd213ps	%zmm19, %zmm20, %zmm20
+.Ltmp7396:
+	vbroadcastf64x4	(%r9,%r11,4), %zmm17
+.Ltmp7397:
+	andl	$3, %esi
+.Ltmp7398:
+	vsubps	%zmm17, %zmm16, %zmm16
+.Ltmp7399:
+	vfmadd213ps	%zmm18, %zmm16, %zmm16
+.Ltmp7400:
+	cmpl	$1, %esi
+	jne	.LBB75_17
+.Ltmp7401:
+	vmovaps	%zmm4, %zmm17
+	vmovaps	%zmm5, %zmm21
+	jmp	.LBB75_9
+.Ltmp7402:
+.LBB75_6:
+	vxorps	%xmm0, %xmm0, %xmm0
+.Ltmp7403:
+	vxorps	%xmm2, %xmm2, %xmm2
+	vxorps	%xmm1, %xmm1, %xmm1
+	vxorps	%xmm3, %xmm3, %xmm3
+	vxorps	%xmm4, %xmm4, %xmm4
+	vxorps	%xmm5, %xmm5, %xmm5
+	vxorps	%xmm18, %xmm18, %xmm18
+	vxorps	%xmm19, %xmm19, %xmm19
+.Ltmp7404:
+	cmpq	%r11, %rax
+	ja	.LBB75_15
+.Ltmp7405:
+.LBB75_8:
+	vmovaps	%zmm4, %zmm17
+	vmovaps	%zmm5, %zmm21
+	vmovaps	%zmm18, %zmm16
+	vmovaps	%zmm19, %zmm20
+.Ltmp7406:
+.LBB75_9:
+	vaddps	%zmm2, %zmm3, %zmm2
+.Ltmp7407:
+	vaddps	%zmm21, %zmm20, %zmm3
+.Ltmp7408:
+	vaddps	%zmm2, %zmm3, %zmm3
+.Ltmp7409:
+	vextractf64x4	$1, %zmm3, %ymm2
+.Ltmp7410:
+	vxorps	%xmm4, %xmm4, %xmm4
+	vmovups	%xmm4, (%rcx)
+	cmpq	%r10, %rax
+.Ltmp7411:
+	jne	.LBB75_10
+.Ltmp7412:
+	vextractf128	$1, %ymm3, %xmm4
+.Ltmp7413:
+	vaddps	%xmm4, %xmm3, %xmm4
+.Ltmp7414:
+	vshufpd	$1, %xmm4, %xmm4, %xmm5
+.Ltmp7415:
+	vaddps	%xmm5, %xmm4, %xmm4
+.Ltmp7416:
+	vextractf32x4	$3, %zmm3, %xmm3
+.Ltmp7417:
+	vaddps	%xmm3, %xmm2, %xmm2
+.Ltmp7418:
+	vshufpd	$1, %xmm2, %xmm2, %xmm3
+.Ltmp7419:
+	vaddps	%xmm3, %xmm2, %xmm2
+.Ltmp7420:
+	vmovshdup	%xmm2, %xmm3
+.Ltmp7421:
+	vaddss	%xmm3, %xmm2, %xmm2
+.Ltmp7422:
+	vmovss	%xmm2, 8(%rcx)
+.Ltmp7423:
+	vaddps	%zmm17, %zmm16, %zmm2
+.Ltmp7424:
+	vaddps	%zmm0, %zmm1, %zmm0
+.Ltmp7425:
+	vaddps	%zmm0, %zmm2, %zmm0
+.Ltmp7426:
+	vextractf128	$1, %ymm0, %xmm1
+.Ltmp7427:
+	vaddps	%xmm1, %xmm0, %xmm1
+.Ltmp7428:
+	vshufpd	$1, %xmm1, %xmm1, %xmm2
+.Ltmp7429:
+	vaddps	%xmm2, %xmm1, %xmm1
+.Ltmp7430:
+	vhaddps	%xmm1, %xmm4, %xmm1
+.Ltmp7431:
+	vextractf64x4	$1, %zmm0, %ymm0
+.Ltmp7432:
+	vshufps	$232, %xmm1, %xmm1, %xmm1
+.Ltmp7433:
+	vmovlps	%xmm1, (%rcx)
+.Ltmp7434:
+	jmp	.LBB75_14
+.Ltmp7435:
+.LBB75_10:
+	andb	$7, %r10b
+.Ltmp7436:
+	movq	$-1, %r11
+	shlxq	%r10, %r11, %r10
+	notb	%r10b
+	kmovd	%r10d, %k1
+.Ltmp7437:
+	vmovups	(%r8,%rax,4), %ymm4 {%k1} {z}
+.Ltmp7438:
+	movq	(%rdx), %r8
+.Ltmp7439:
+	movq	16(%rdx), %r10
+.Ltmp7440:
+	vmovups	(%r8,%rax,4), %ymm5 {%k1} {z}
+.Ltmp7441:
+	vsubps	%ymm4, %ymm5, %ymm5
+.Ltmp7442:
+	vfmadd213ps	%ymm3, %ymm5, %ymm5
+.Ltmp7443:
+	vextractf128	$1, %ymm5, %xmm3
+.Ltmp7444:
+	vaddps	%xmm3, %xmm5, %xmm3
+.Ltmp7445:
+	vmovups	(%r10,%rax,4), %ymm5 {%k1} {z}
+.Ltmp7446:
+	vsubps	%ymm4, %ymm5, %ymm4
+.Ltmp7447:
+	vshufpd	$1, %xmm3, %xmm3, %xmm5
+.Ltmp7448:
+	vfmadd213ps	%ymm2, %ymm4, %ymm4
+.Ltmp7449:
+	vextractf128	$1, %ymm4, %xmm2
+.Ltmp7450:
+	vaddps	%xmm2, %xmm4, %xmm2
+.Ltmp7451:
+	vshufpd	$1, %xmm2, %xmm2, %xmm4
+.Ltmp7452:
+	vaddps	%xmm4, %xmm2, %xmm2
+.Ltmp7453:
+	vmovshdup	%xmm2, %xmm4
+.Ltmp7454:
+	vaddss	%xmm4, %xmm2, %xmm2
+.Ltmp7455:
+	vmovss	%xmm2, 8(%rcx)
+.Ltmp7456:
+	vaddps	%xmm5, %xmm3, %xmm2
+.Ltmp7457:
+	vaddps	%zmm17, %zmm16, %zmm3
+.Ltmp7458:
+	vaddps	%zmm0, %zmm1, %zmm0
+.Ltmp7459:
+	vaddps	%zmm0, %zmm3, %zmm0
+.Ltmp7460:
+	vmovups	(%r9,%rax,4), %ymm1 {%k1} {z}
+.Ltmp7461:
+	movq	(%rdx), %r8
+.Ltmp7462:
+	vmovups	(%r8,%rax,4), %ymm3 {%k1} {z}
+.Ltmp7463:
+	vsubps	%ymm1, %ymm3, %ymm3
+.Ltmp7464:
+	vfmadd213ps	%ymm0, %ymm3, %ymm3
+.Ltmp7465:
+	vextractf128	$1, %ymm3, %xmm4
+.Ltmp7466:
+	vaddps	%xmm4, %xmm3, %xmm3
+.Ltmp7467:
+	vshufpd	$1, %xmm3, %xmm3, %xmm4
+.Ltmp7468:
+	vaddps	%xmm4, %xmm3, %xmm3
+.Ltmp7469:
+	vhaddps	%xmm3, %xmm2, %xmm2
+.Ltmp7470:
+	vextractf64x4	$1, %zmm0, %ymm3
+.Ltmp7471:
+	vshufps	$232, %xmm2, %xmm2, %xmm0
+.Ltmp7472:
+	vmovlps	%xmm0, (%rcx)
+.Ltmp7473:
+	movq	16(%rdx), %rdx
+.Ltmp7474:
+	vmovups	(%rdx,%rax,4), %ymm0 {%k1} {z}
+.Ltmp7475:
+	vsubps	%ymm1, %ymm0, %ymm0
+.Ltmp7476:
+	vfmadd213ps	%ymm3, %ymm0, %ymm0
+.Ltmp7477:
+.LBB75_14:
+	vextractf128	$1, %ymm0, %xmm1
+.Ltmp7478:
+	vaddps	%xmm1, %xmm0, %xmm0
+.Ltmp7479:
+	vshufpd	$1, %xmm0, %xmm0, %xmm1
+.Ltmp7480:
+	vaddps	%xmm1, %xmm0, %xmm0
+.Ltmp7481:
+	vmovshdup	%xmm0, %xmm1
+.Ltmp7482:
+	vaddss	%xmm1, %xmm0, %xmm0
+.Ltmp7483:
+	vmovss	%xmm0, 12(%rcx)
+.Ltmp7484:
+	.seh_startepilogue
+	addq	$40, %rsp
+	popq	%rbx
+	popq	%rdi
+	popq	%rsi
+	popq	%r14
+	.seh_endepilogue
+	vzeroupper
+	retq
+.Ltmp7485:
+.LBB75_17:
+	vmovups	32(%rbx,%r11,4), %ymm17
+.Ltmp7486:
+	vinsertf64x4	$1, 32(%rdi,%r11,4), %zmm17, %zmm17
+.Ltmp7487:
+	vbroadcastf64x4	32(%r8,%r11,4), %zmm18
+.Ltmp7488:
+	vsubps	%zmm18, %zmm17, %zmm21
+.Ltmp7489:
+	vbroadcastf64x4	32(%r9,%r11,4), %zmm18
+.Ltmp7490:
+	vfmadd213ps	%zmm5, %zmm21, %zmm21
+.Ltmp7491:
+	vsubps	%zmm18, %zmm17, %zmm17
+.Ltmp7492:
+	vfmadd213ps	%zmm4, %zmm17, %zmm17
+.Ltmp7493:
+	cmpl	$2, %esi
+	je	.LBB75_9
+.Ltmp7494:
+	cmpl	$3, %esi
+	jne	.LBB75_20
+.Ltmp7495:
+	vmovups	64(%rbx,%r11,4), %ymm4
+	vinsertf64x4	$1, 64(%rdi,%r11,4), %zmm4, %zmm4
+	vbroadcastf64x4	64(%r8,%r11,4), %zmm5
+	vsubps	%zmm5, %zmm4, %zmm5
+	vfmadd231ps	%zmm5, %zmm5, %zmm3
+.Ltmp7496:
+	vbroadcastf64x4	64(%r9,%r11,4), %zmm5
+	vsubps	%zmm5, %zmm4, %zmm4
+	vfmadd231ps	%zmm4, %zmm4, %zmm1
+.Ltmp7497:
+	jmp	.LBB75_9
+.Ltmp7498:
+.LBB75_1:
+	movq	%r10, %rax
+.Ltmp7499:
+.LBB75_2:
+	movq	%r9, %rcx
+	movq	%rax, %rdx
+.Ltmp7500:
+	callq	_RNvNtNtCsdMBTL2HRpb2_14diskann_vector8distance4simd17emit_length_error
+.Ltmp7501:
+	ud2
+.Ltmp7502:
+.LBB75_20:
+	leaq	anon.88f34ab20ed04a941fa48d8b65a79965.12(%rip), %r8
+.Ltmp7503:
+	movl	$4, %ecx
+	movl	$4, %edx
+.Ltmp7504:
+	vzeroupper
+	callq	_RNvNtCs55qC6OcLGgs_4core9panicking18panic_bounds_check
+.Ltmp7505:
+	ud2
+.Ltmp7506:
+.Lfunc_end75:

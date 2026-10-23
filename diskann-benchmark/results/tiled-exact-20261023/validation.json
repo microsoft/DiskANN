@@ -1,0 +1,57 @@
+{
+  "paired_tile_tests": {
+    "command": "cargo test -p diskann-vector paired",
+    "passed": 7,
+    "failed": 0
+  },
+  "clustering_tests": {
+    "command": "cargo test -p diskann --features ivf-experimental ivf::clustering",
+    "passed": 13,
+    "failed": 0
+  },
+  "experimental_benchmark_tests": {
+    "command": "cargo test -p diskann-benchmark --features ivf-two-means graph_ivf",
+    "passed": 16,
+    "failed": 0,
+    "final_source_confirmation": "All 16 tests also passed on the final instrumented source."
+  },
+  "default_benchmark_tests": {
+    "command": "cargo test -p diskann-benchmark graph_ivf",
+    "passed": 8,
+    "failed": 0
+  },
+  "python_tests": {
+    "command": "python -m unittest discover -s diskann-benchmark/scripts/tests -v",
+    "passed": 10,
+    "failed": 0
+  },
+  "baseline_compilation_tests": {
+    "command": "RUSTFLAGS=-C target-cpu=x86-64 cargo test -p diskann-vector paired --target-dir target/baseline-check --locked",
+    "passed": 7,
+    "failed": 0
+  },
+  "aarch64_compile": {
+    "command": "cargo check -p diskann-vector -p diskann --features ivf-experimental --all-targets --target aarch64-pc-windows-msvc --locked",
+    "passed": true,
+    "runtime_tested": false
+  },
+  "clippy_default": "cargo clippy --workspace --all-targets -- -D warnings: passed",
+  "clippy_experimental": "cargo clippy --workspace --all-targets --features diskann-benchmark/ivf-two-means -- -D warnings: passed",
+  "format": "cargo fmt --all: passed",
+  "default_ivf_suite": {
+    "command": "cargo test -p diskann --no-default-features ivf",
+    "passed": 11,
+    "failed": 1,
+    "failure": "invalid_initialization_and_uninitialized_insertion_fail, diskann/src/ivf/tests.rs:626",
+    "status": "Pre-existing NaN-initialization behavior; current initializer/test unchanged. Historical refactor full-ivf-tests.log records the same failure."
+  },
+  "coverage": {
+    "new_tile_lines_pct": 97.53,
+    "selected_vector_lines_pct": 96.57,
+    "selected_clustering_lines_pct": 91.57,
+    "selected_benchmark_lines_pct": 90.27,
+    "note": "Local selected-source coverage only; not a remote Codecov patch result. Final instrumented benchmark suite took 4138.12 s, after performance measurements."
+  },
+  "runtime_limits": "No Neon host execution or old-x86 SDE emulation.",
+  "current_performance_scope": "288 full-fit samples and 12 full builds, search files contain 100/32/32 queries; all measurements completed before coverage."
+}

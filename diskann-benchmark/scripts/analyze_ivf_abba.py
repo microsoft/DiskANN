@@ -179,7 +179,7 @@ def summarize(directory, allow_partial):
                 item["recall_delta_percentage_points"] = 100 * (b["recall_at_k"] - a["recall_at_k"])
                 item["vectors_scanned_change_pct"] = 100 * (b["mean_points_scanned"] / a["mean_points_scanned"] - 1)
             entry["search"].append(item)
-        if reference == "paired_point" and candidate in ["separate", "packed_paired"]:
+        if reference == "paired_point" and candidate in ["separate", "packed_paired", "tiled_exact"]:
             if not entry["identical_build_work"] or not all(s["identical_quality_work"] for s in entry["search"]):
                 raise RuntimeError(f"Exact strategy differs from paired: {dataset}/{candidate}")
         comparisons.append(entry)

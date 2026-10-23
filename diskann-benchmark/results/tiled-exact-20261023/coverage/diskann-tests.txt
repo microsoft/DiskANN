@@ -1,0 +1,17 @@
+
+running 13 tests
+test ivf::clustering::strategy::tests::exact_assignment_preserves_overflow_and_cancellation_choices ... ok
+test ivf::clustering::strategy::tests::assignment_hook_preserves_empty_center_and_rejects_unwritten_ids ... ok
+test ivf::clustering::strategy::tests::invalid_shapes_fail_before_kernel_access ... ok
+test ivf::clustering::strategy::tests::complete_fit_matches_independent_small_integer_means ... ok
+test ivf::clustering::strategy::tests::invalid_scratch_leaves_centers_sums_and_rng_unchanged ... ok
+test ivf::clustering::tests::two_means_invalid_work_does_not_consume_rng ... ok
+test ivf::clustering::tests::two_means_keeps_first_ties_infinity_and_empty_children ... ok
+test ivf::clustering::tests::two_means_known_means_and_reused_scratch ... ok
+test ivf::clustering::strategy::tests::identical_points_keep_ties_and_empty_centers_including_overflow ... ok
+test ivf::clustering::tests::split_preserves_all_child_centroids_and_membership_order ... ok
+test ivf::clustering::strategy::tests::separated_rows_preserve_means_sums_and_rng ... ok
+test ivf::clustering::strategy::tests::every_lloyd_step_preserves_assignments_counts_sum_bits_centers_and_rng ... ok
+test ivf::clustering::tests::two_means_preserves_centroid_bits_assignments_and_rng ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 336 filtered out; finished in 0.54s

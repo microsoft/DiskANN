@@ -1,0 +1,1331 @@
+[
+  {
+    "input": {
+      "content": {
+        "bucket_sizes": [
+          16384
+        ],
+        "data": null,
+        "data_type": "float32",
+        "dimensions": [
+          384
+        ],
+        "iterations": [
+          5
+        ],
+        "layouts": [
+          "contiguous",
+          "scattered"
+        ],
+        "order": "abba",
+        "repetitions": 1,
+        "seed": 7,
+        "strategies": [
+          "paired_point",
+          "tiled_exact"
+        ],
+        "warmup_repetitions": 0
+      },
+      "type": "graph-ivf-two-means"
+    },
+    "results": {
+      "numerical_reference": "paired_point",
+      "schema_version": 3,
+      "source": "synthetic_uniform",
+      "threads": 1,
+      "timing_scope": "validate + ISA selection + scratch + seed + distance/selection + ordered f64 sums + center updates + scratch release; diagnostics run after all timed rounds",
+      "workloads": [
+        {
+          "invocation_order": [
+            {
+              "position": 0,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            },
+            {
+              "position": 1,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 2,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 3,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            }
+          ],
+          "strategies": [
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 6.467388402597862e-08,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 6800.0,
+                "median": 6800.0,
+                "minimum": 5300,
+                "p90": 8300,
+                "p99": 8300
+              },
+              "samples": 2,
+              "scratch_bytes": 6144,
+              "status": "complete",
+              "strategy": "paired_point",
+              "total_ns": {
+                "mean": 5547250.0,
+                "median": 5547250.0,
+                "minimum": 5463400,
+                "p90": 5631100,
+                "p99": 5631100
+              },
+              "total_samples_ns": [
+                5631100,
+                5463400
+              ]
+            },
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 6.467388402597862e-08,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 12550.0,
+                "median": 12550.0,
+                "minimum": 6000,
+                "p90": 19100,
+                "p99": 19100
+              },
+              "samples": 2,
+              "scratch_bytes": 6144,
+              "status": "complete",
+              "strategy": "tiled_exact",
+              "total_ns": {
+                "mean": 5263300.0,
+                "median": 5263300.0,
+                "minimum": 5224200,
+                "p90": 5302400,
+                "p99": 5302400
+              },
+              "total_samples_ns": [
+                5302400,
+                5224200
+              ]
+            }
+          ],
+          "workload": {
+            "bucket_size": 16384,
+            "dimensions": 384,
+            "iterations": 5,
+            "layout": "contiguous"
+          }
+        },
+        {
+          "invocation_order": [
+            {
+              "position": 0,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            },
+            {
+              "position": 1,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 2,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 3,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            }
+          ],
+          "strategies": [
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 6.467388402597862e-08,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 9350.0,
+                "median": 9350.0,
+                "minimum": 8800,
+                "p90": 9900,
+                "p99": 9900
+              },
+              "samples": 2,
+              "scratch_bytes": 6144,
+              "status": "complete",
+              "strategy": "paired_point",
+              "total_ns": {
+                "mean": 18156050.0,
+                "median": 18156050.0,
+                "minimum": 18070000,
+                "p90": 18242100,
+                "p99": 18242100
+              },
+              "total_samples_ns": [
+                18242100,
+                18070000
+              ]
+            },
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 6.467388402597862e-08,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 9100.0,
+                "median": 9100.0,
+                "minimum": 9100,
+                "p90": 9100,
+                "p99": 9100
+              },
+              "samples": 2,
+              "scratch_bytes": 6144,
+              "status": "complete",
+              "strategy": "tiled_exact",
+              "total_ns": {
+                "mean": 11479850.0,
+                "median": 11479850.0,
+                "minimum": 11263100,
+                "p90": 11696600,
+                "p99": 11696600
+              },
+              "total_samples_ns": [
+                11263100,
+                11696600
+              ]
+            }
+          ],
+          "workload": {
+            "bucket_size": 16384,
+            "dimensions": 384,
+            "iterations": 5,
+            "layout": "scattered"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "bucket_sizes": [
+          4096
+        ],
+        "data": null,
+        "data_type": "float32",
+        "dimensions": [
+          384
+        ],
+        "iterations": [
+          5
+        ],
+        "layouts": [
+          "contiguous",
+          "scattered"
+        ],
+        "order": "abba",
+        "repetitions": 1,
+        "seed": 42,
+        "strategies": [
+          "paired_point",
+          "tiled_exact"
+        ],
+        "warmup_repetitions": 0
+      },
+      "type": "graph-ivf-two-means"
+    },
+    "results": {
+      "numerical_reference": "paired_point",
+      "schema_version": 3,
+      "source": "synthetic_uniform",
+      "threads": 1,
+      "timing_scope": "validate + ISA selection + scratch + seed + distance/selection + ordered f64 sums + center updates + scratch release; diagnostics run after all timed rounds",
+      "workloads": [
+        {
+          "invocation_order": [
+            {
+              "position": 0,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            },
+            {
+              "position": 1,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 2,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 3,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            }
+          ],
+          "strategies": [
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 0.000538347398801875,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 1100.0,
+                "median": 1100.0,
+                "minimum": 1100,
+                "p90": 1100,
+                "p99": 1100
+              },
+              "samples": 2,
+              "scratch_bytes": 6144,
+              "status": "complete",
+              "strategy": "paired_point",
+              "total_ns": {
+                "mean": 1309650.0,
+                "median": 1309650.0,
+                "minimum": 1288200,
+                "p90": 1331100,
+                "p99": 1331100
+              },
+              "total_samples_ns": [
+                1331100,
+                1288200
+              ]
+            },
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 0.000538347398801875,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 1900.0,
+                "median": 1900.0,
+                "minimum": 1700,
+                "p90": 2100,
+                "p99": 2100
+              },
+              "samples": 2,
+              "scratch_bytes": 6144,
+              "status": "complete",
+              "strategy": "tiled_exact",
+              "total_ns": {
+                "mean": 1119650.0,
+                "median": 1119650.0,
+                "minimum": 1104400,
+                "p90": 1134900,
+                "p99": 1134900
+              },
+              "total_samples_ns": [
+                1134900,
+                1104400
+              ]
+            }
+          ],
+          "workload": {
+            "bucket_size": 4096,
+            "dimensions": 384,
+            "iterations": 5,
+            "layout": "contiguous"
+          }
+        },
+        {
+          "invocation_order": [
+            {
+              "position": 0,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            },
+            {
+              "position": 1,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 2,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 3,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            }
+          ],
+          "strategies": [
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 0.000538347398801875,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 1400.0,
+                "median": 1400.0,
+                "minimum": 1100,
+                "p90": 1700,
+                "p99": 1700
+              },
+              "samples": 2,
+              "scratch_bytes": 6144,
+              "status": "complete",
+              "strategy": "paired_point",
+              "total_ns": {
+                "mean": 1925450.0,
+                "median": 1925450.0,
+                "minimum": 1421500,
+                "p90": 2429400,
+                "p99": 2429400
+              },
+              "total_samples_ns": [
+                2429400,
+                1421500
+              ]
+            },
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 0.000538347398801875,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 1600.0,
+                "median": 1600.0,
+                "minimum": 1500,
+                "p90": 1700,
+                "p99": 1700
+              },
+              "samples": 2,
+              "scratch_bytes": 6144,
+              "status": "complete",
+              "strategy": "tiled_exact",
+              "total_ns": {
+                "mean": 1175700.0,
+                "median": 1175700.0,
+                "minimum": 1162900,
+                "p90": 1188500,
+                "p99": 1188500
+              },
+              "total_samples_ns": [
+                1188500,
+                1162900
+              ]
+            }
+          ],
+          "workload": {
+            "bucket_size": 4096,
+            "dimensions": 384,
+            "iterations": 5,
+            "layout": "scattered"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "bucket_sizes": [
+          4096
+        ],
+        "data": null,
+        "data_type": "float32",
+        "dimensions": [
+          896
+        ],
+        "iterations": [
+          5
+        ],
+        "layouts": [
+          "contiguous",
+          "scattered"
+        ],
+        "order": "abba",
+        "repetitions": 1,
+        "seed": 2026,
+        "strategies": [
+          "paired_point",
+          "tiled_exact"
+        ],
+        "warmup_repetitions": 0
+      },
+      "type": "graph-ivf-two-means"
+    },
+    "results": {
+      "numerical_reference": "paired_point",
+      "schema_version": 3,
+      "source": "synthetic_uniform",
+      "threads": 1,
+      "timing_scope": "validate + ISA selection + scratch + seed + distance/selection + ordered f64 sums + center updates + scratch release; diagnostics run after all timed rounds",
+      "workloads": [
+        {
+          "invocation_order": [
+            {
+              "position": 0,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            },
+            {
+              "position": 1,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 2,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 3,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            }
+          ],
+          "strategies": [
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 0.0008033009806922564,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 1650.0,
+                "median": 1650.0,
+                "minimum": 1200,
+                "p90": 2100,
+                "p99": 2100
+              },
+              "samples": 2,
+              "scratch_bytes": 14336,
+              "status": "complete",
+              "strategy": "paired_point",
+              "total_ns": {
+                "mean": 3375900.0,
+                "median": 3375900.0,
+                "minimum": 3045400,
+                "p90": 3706400,
+                "p99": 3706400
+              },
+              "total_samples_ns": [
+                3706400,
+                3045400
+              ]
+            },
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 0.0008033009806922564,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 1950.0,
+                "median": 1950.0,
+                "minimum": 1900,
+                "p90": 2000,
+                "p99": 2000
+              },
+              "samples": 2,
+              "scratch_bytes": 14336,
+              "status": "complete",
+              "strategy": "tiled_exact",
+              "total_ns": {
+                "mean": 3113600.0,
+                "median": 3113600.0,
+                "minimum": 2520600,
+                "p90": 3706600,
+                "p99": 3706600
+              },
+              "total_samples_ns": [
+                2520600,
+                3706600
+              ]
+            }
+          ],
+          "workload": {
+            "bucket_size": 4096,
+            "dimensions": 896,
+            "iterations": 5,
+            "layout": "contiguous"
+          }
+        },
+        {
+          "invocation_order": [
+            {
+              "position": 0,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            },
+            {
+              "position": 1,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 2,
+              "round": 0,
+              "strategy": "tiled_exact",
+              "warmup": false
+            },
+            {
+              "position": 3,
+              "round": 0,
+              "strategy": "paired_point",
+              "warmup": false
+            }
+          ],
+          "strategies": [
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 0.0008033009806922564,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 3100.0,
+                "median": 3100.0,
+                "minimum": 2700,
+                "p90": 3500,
+                "p99": 3500
+              },
+              "samples": 2,
+              "scratch_bytes": 14336,
+              "status": "complete",
+              "strategy": "paired_point",
+              "total_ns": {
+                "mean": 6693400.0,
+                "median": 6693400.0,
+                "minimum": 5052800,
+                "p90": 8334000,
+                "p99": 8334000
+              },
+              "total_samples_ns": [
+                8334000,
+                5052800
+              ]
+            },
+            {
+              "diagnostics": {
+                "fallback_points": 0,
+                "final_assignment_disagreements": 0,
+                "final_center_bit_disagreements": 0,
+                "final_sum_bit_disagreements": 0,
+                "first_divergent_iteration": null,
+                "max_center_absolute_error": 0.0,
+                "min_reference_margin_f64": 0.0008033009806922564,
+                "rng_equal": true,
+                "steps": [
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 0,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 1,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 2,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 3,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  },
+                  {
+                    "center_bit_disagreements": 0,
+                    "fallback_points": 0,
+                    "first_same_center_difference": null,
+                    "iteration": 4,
+                    "same_center_disagreements": 0,
+                    "same_center_fallback_points": 0,
+                    "trajectory_disagreements": 0
+                  }
+                ]
+              },
+              "failures": [],
+              "packed_bytes": 0,
+              "preparation_ns": {
+                "mean": 3700.0,
+                "median": 3700.0,
+                "minimum": 3500,
+                "p90": 3900,
+                "p99": 3900
+              },
+              "samples": 2,
+              "scratch_bytes": 14336,
+              "status": "complete",
+              "strategy": "tiled_exact",
+              "total_ns": {
+                "mean": 5626200.0,
+                "median": 5626200.0,
+                "minimum": 5042100,
+                "p90": 6210300,
+                "p99": 6210300
+              },
+              "total_samples_ns": [
+                6210300,
+                5042100
+              ]
+            }
+          ],
+          "workload": {
+            "bucket_size": 4096,
+            "dimensions": 896,
+            "iterations": 5,
+            "layout": "scattered"
+          }
+        }
+      ]
+    }
+  }
+]
