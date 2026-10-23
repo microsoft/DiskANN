@@ -7,7 +7,7 @@
 use std::arch::x86_64::*;
 
 use super::{
-    f16x8, f16x16, f32x8, f32x16, i8x16, i8x32, i16x8, i16x16, i32x8, u8x16, u8x32, u32x8,
+    f16x8, f16x16, f32x8, f32x16, i8x16, i8x32, i16x8, i16x16, i32x8, i32x16, u8x16, u8x32, u32x8,
 };
 use crate::{LoHi, SIMDCast, SIMDReinterpret, SplitJoin, helpers};
 
@@ -80,6 +80,14 @@ impl SIMDCast<half::f16> for f32x16 {
     #[inline(always)]
     fn simd_cast(self) -> f16x16 {
         self.split().map(|x| -> f16x8 { x.simd_cast() }).join()
+    }
+}
+
+impl SIMDCast<f32> for i32x16 {
+    type Cast = f32x16;
+    #[inline(always)]
+    fn simd_cast(self) -> f32x16 {
+        self.split().map(|x| -> f32x8 { x.simd_cast() }).join()
     }
 }
 
@@ -177,4 +185,5 @@ mod test_x86_conversions {
     test_utils::ops::test_cast!(f32x16 => f16x16, 0x7b9c9afee7e6ac63, V3::new_checked_uncached());
 
     test_utils::ops::test_cast!(i32x8 => f32x8, 0xde4fbf25c554b29e, V3::new_checked_uncached());
+    test_utils::ops::test_cast!(i32x16 => f32x16, 0x83e571a946db20cf, V3::new_checked_uncached());
 }
