@@ -17,7 +17,7 @@ use crate::{
     flat::DistancesUnordered,
     graph::SearchOutputBuffer,
     ivf::{
-        build::{SplitAndAssign, assignment::RegionalNearest, clustering::TwoMeans},
+        build::{Split, TwoMeansSplitter},
         region::AsMatRef,
         traits::BuildStrategy,
     },
@@ -83,7 +83,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
         S: BuildStrategy<'a, B, C>,
-        S::Accessor: for<'b> BuildAccessor<B, VectorsRef<'b>: AsMatRef<f32>>,
+        S::Accessor: for<'b> BuildAccessor<B, VectorsRef<'b>: AsMatRef<'b, f32>>,
         B: Send + Sync,
     {
         let config = self.config;
@@ -127,8 +127,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
 
                 let (region, mut update) = accessor.fill(iter).await?;
 
-                let clusterer = TwoMeans::new(config.split_iterations, dim);
-                SplitAndAssign::new(clusterer, RegionalNearest).run(
+                TwoMeansSplitter::new(config.split_iterations, dim).split(
                     &region,
                     &mut update,
                     &parents.iter().copied().collect::<Vec<_>>(),

@@ -74,29 +74,38 @@ even when a region contains additional sources. It covers every source member
 exactly once, including pending appends to retained neighbors; other lists are
 unchanged. Explicit source IDs avoid requiring enumeration on the region view.
 
-The numerical stages receive source IDs and the region, and control retrieval and
-conversion of provider-defined vector handles without coordinator-built per-point
-reference tables. The built-in strategies borrow vector matrices and member
+The split operation receives parent IDs, neighbor IDs, the region, and its writer,
+and controls retrieval and conversion of provider-defined vector handles without
+per-point reference tables. The built-in strategy borrows vector matrices and member
 slices; a provider with scattered storage may pack rows during filling to satisfy
 their matrix interface. The built-in two-means fitter seeds the first two input
 rows and delegates to quantization's Lloyd routine, which
 builds internal transposed scratch and resets empty centers to zero. Its
 norm-based distance arithmetic does not preserve support for extreme finite
 coordinates whose squared norms overflow.
-The numerical driver separates regional fitting (`Clusterer`) from placement
-(`Assigner`). A clusterer declares its dimension and total number of centers for
-the source count, then fills coordinator-owned centroid scratch. Fitting receives
-only split parents; assignment receives the union of parents and retained neighbors.
-A borrowed destination catalog combines the completed rows with unchanged retained
-centroids; retained coordinates are not copied. The assigner receives the region,
-source IDs, destinations, and regional writer directly. It computes complete
-destination memberships before creating new lists, replacing retained memberships,
-and retiring replaced sources. The index still selects two-means and full regional
-nearest-centroid assignment. Restricted assignment can keep caller-supplied
-candidate relationships in its own state, but the index does not yet preserve those
-relationships or expose numerical strategy selection.
+`Split` is the complete numerical-policy boundary. The built-in `TwoMeansSplitter`
+implementation allocates one centroid matrix with two rows per parent up front,
+fits each parent into its mutable row window, then assigns
+the union of parents and neighbors to the nearest new or retained centroid.
+Equal-distance assignments prefer retained neighbors in supplied order, then
+children in parent and centroid order.
+Retained centroid coordinates are borrowed, not copied. Private helpers perform
+fitting and assignment; no intermediate buffer protocol or independent stage
+traits are required. After computation succeeds, the operation creates children,
+replaces neighbor memberships, and retires the explicit parents.
+The index currently selects this implementation directly. Other split strategies
+may use different vector representations or combine fitting and assignment
+differently. Restricted neighbor policies still require caller-supplied
+parent-neighbor relationships, which the index does not yet preserve.
 Alternative geometries must keep fitting, assignment, and provider routing
 compatible.
+
+`Split::Error` allows implementation-specific failures. `TwoMeansSplitter` returns
+`ANNError`, preserving typed errors for empty parent selections, centroid-count
+overflow, missing sources, and insufficient points. Providers supply dimensionally
+consistent vectors through infallible matrix-view conversion. Conversion of typed
+errors to `ANNError` records the caller location. All numerical failures abort
+before regional writes.
 
 Fitted centroids and assignment/member metadata need new storage. Providers can
 reuse the canonical batch and optional pending-membership helper, or implement

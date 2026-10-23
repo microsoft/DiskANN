@@ -538,6 +538,16 @@ pub unsafe trait MatrixMut: Matrix {
         })
     }
 
+    /// Divide the matrix into disjoint mutable sub-matrices with up to `batchsize`
+    /// rows and the same column count.
+    ///
+    /// The final window may have fewer rows. A matrix with zero columns still
+    /// yields windows with the corresponding row counts. Windows may coexist,
+    /// and their lifetime is tied to the mutable borrow of the matrix.
+    fn window_iter_mut(&mut self, batchsize: NonZeroUsize) -> iter::WindowsMut<'_, Self::Element> {
+        iter::WindowsMut::new(self.as_view_mut(), batchsize)
+    }
+
     //-------//
     // Rayon //
     //-------//
@@ -2478,8 +2488,94 @@ mod tests {
                     m.window_iter(NonZeroUsize::new(batchsize).unwrap()),
                     nrows.div_ceil(batchsize),
                 );
+                assert_exact_fused(
+                    m.window_iter_mut(NonZeroUsize::new(batchsize).unwrap()),
+                    nrows.div_ceil(batchsize),
+                );
             }
         }
+    }
+
+    #[test]
+    fn mutable_windows_are_disjoint_and_match_scalar_indexing() {
+        for (nrows, ncols) in [
+            (0, 0),
+            (0, 4),
+            (3, 0),
+            (1, 1),
+            (1, 4),
+            (4, 1),
+            (5, 3),
+            (6, 2),
+        ] {
+            let original = striped_matrix(nrows, ncols);
+            for batchsize in [1, 2, 3, usize::MAX] {
+                let mut matrix = original.clone();
+                {
+                    let mut view = matrix.as_view_mut();
+                    let windows: Vec<_> = view
+                        .window_iter_mut(NonZeroUsize::new(batchsize).unwrap())
+                        .collect();
+                    assert_eq!(windows.len(), nrows.div_ceil(batchsize));
+                    for (index, mut window) in windows.into_iter().enumerate() {
+                        let start = index * batchsize;
+                        assert_eq!(window.nrows(), batchsize.min(nrows - start));
+                        assert_eq!(window.ncols(), ncols);
+                        for (row, values) in window.rows_mut().enumerate() {
+                            for (col, value) in values.iter_mut().enumerate() {
+                                assert_eq!(*value, *original.element(start + row, col));
+                                *value += index + 1;
+                            }
+                        }
+                    }
+                }
+                for row in 0..nrows {
+                    for col in 0..ncols {
+                        assert_eq!(
+                            *matrix.element(row, col),
+                            original.element(row, col) + row / batchsize + 1,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mutable_windows_preserve_zero_sized_shapes() {
+        let mut matrix = Owned::from_element(5, 3, ());
+        let windows: Vec<_> = matrix
+            .window_iter_mut(NonZeroUsize::new(2).unwrap())
+            .collect();
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (window.nrows(), window.ncols()))
+                .collect::<Vec<_>>(),
+            [(2, 3), (2, 3), (1, 3)],
+        );
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| window.as_slice().len())
+                .collect::<Vec<_>>(),
+            [6, 6, 3],
+        );
+
+        let mut matrix = Owned::from_element(usize::MAX, 0, 0);
+        let ptr = matrix.as_ptr();
+        let mut windows = matrix.window_iter_mut(NonZeroUsize::new(usize::MAX - 1).unwrap());
+        assert_eq!(windows.len(), 2);
+        let first = windows.next().unwrap();
+        assert_eq!(windows.len(), 1);
+        let last = windows.next().unwrap();
+        assert_eq!(windows.len(), 0);
+        assert_eq!((first.nrows(), first.ncols()), (usize::MAX - 1, 0));
+        assert_eq!((last.nrows(), last.ncols()), (1, 0));
+        assert_eq!(first.as_ptr(), ptr);
+        assert_eq!(last.as_ptr(), ptr);
+        assert!(windows.next().is_none());
+        assert!(windows.next().is_none());
     }
 
     #[test]

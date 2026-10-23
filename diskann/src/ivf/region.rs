@@ -9,7 +9,7 @@ use std::fmt::Debug;
 
 use diskann_utils::{Reborrow, views::rowmajor};
 
-use crate::{ANNError, ANNResult};
+use crate::ANNResult;
 
 /// One source list's centroid and complete operation-local membership.
 ///
@@ -54,20 +54,16 @@ pub trait RegionUpdate<I, L>: Send {
     fn create(&mut self, centroid: &[f32], members: &[I]) -> ANNResult<()>;
 }
 
-pub trait AsMatRef<T> {
-    type Error: Send + Sync + Debug + Into<ANNError>;
-
-    fn as_view(&self) -> Result<rowmajor::Ref<'_, T>, Self::Error>;
+pub trait AsMatRef<'a, T> {
+    fn as_view(self) -> rowmajor::Ref<'a, T>;
 }
 
-impl<T> AsMatRef<T> for rowmajor::Ref<'_, T> {
-    type Error = crate::error::Infallible;
-
-    fn as_view(&self) -> Result<rowmajor::Ref<'_, T>, Self::Error> {
-        Ok(*self)
+impl<'a, T> AsMatRef<'a, T> for rowmajor::Ref<'a, T> {
+    fn as_view(self) -> rowmajor::Ref<'a, T> {
+        self
     }
 }
 
-pub trait AsMatMut<T>: AsMatRef<T> {
-    fn as_mut_view(&self) -> Result<rowmajor::Mut<'_, T>, Self::Error>;
+pub trait AsMatMut<'a, T>: AsMatRef<'a, T> {
+    fn as_mut_view(self) -> rowmajor::Mut<'a, T>;
 }
