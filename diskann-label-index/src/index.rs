@@ -69,6 +69,8 @@ pub struct BloomQueryConfig {
     point_prefetch_lookahead: usize,
 }
 
+const DEFAULT_SUMMARY_CACHE_BOUND_PERCENT: f64 = 1.0;
+const DEFAULT_SUMMARY_SCAN_MAX_WORD_PERCENT: f64 = 10.0;
 const DEFAULT_POINT_PREFETCH_LOOKAHEAD: usize = 32;
 
 impl BloomQueryConfig {
@@ -84,7 +86,7 @@ impl BloomQueryConfig {
         )?;
         Ok(Self {
             summary_cache_bound_percent,
-            summary_scan_max_word_percent: 10.0,
+            summary_scan_max_word_percent: DEFAULT_SUMMARY_SCAN_MAX_WORD_PERCENT,
             point_prefetch_lookahead: DEFAULT_POINT_PREFETCH_LOOKAHEAD,
         })
     }
@@ -142,8 +144,8 @@ impl BloomQueryConfig {
 impl Default for BloomQueryConfig {
     fn default() -> Self {
         Self {
-            summary_cache_bound_percent: 1.0,
-            summary_scan_max_word_percent: 10.0,
+            summary_cache_bound_percent: DEFAULT_SUMMARY_CACHE_BOUND_PERCENT,
+            summary_scan_max_word_percent: DEFAULT_SUMMARY_SCAN_MAX_WORD_PERCENT,
             point_prefetch_lookahead: DEFAULT_POINT_PREFETCH_LOOKAHEAD,
         }
     }
