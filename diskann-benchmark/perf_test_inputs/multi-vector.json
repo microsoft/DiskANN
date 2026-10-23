@@ -234,6 +234,126 @@
           { "num_query_vectors": 32, "num_doc_vectors": 32,   "dim": 512, "loops_per_measurement": 50,  "num_measurements": 50 }
         ]
       }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 8, "doc_bits": 4 } },
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 8, "doc_bits": 4 } },
+        "isa": "scalar",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 8, "doc_bits": 4 } },
+        "isa": "reference",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 8, "doc_bits": 1 } },
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 8, "doc_bits": 2 } },
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 8, "doc_bits": 6 } },
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 8, "doc_bits": 7 } },
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 8, "doc_bits": 8 } },
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 4, "doc_bits": 4 } },
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": { "minmax": { "query_bits": 1, "doc_bits": 8 } },
+        "isa": "auto",
+        "runs": [
+          { "num_query_vectors": 17, "num_doc_vectors": 9, "dim": 65, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10, "num_measurements": 50 }
+        ]
+      }
     }
   ]
 }

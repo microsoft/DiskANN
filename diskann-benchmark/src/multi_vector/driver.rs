@@ -14,9 +14,7 @@ use diskann_benchmark_runner::{
     },
     Checker, Input,
 };
-use diskann_quantization::multi_vector::{
-    Mat, MatRef, MaxSimElement, MaxSimKernel, Overflow, Standard,
-};
+use diskann_quantization::multi_vector::{Mat, MaxSimError, Overflow, Standard};
 use rand::{
     distr::{Distribution, StandardUniform},
     rngs::StdRng,
@@ -96,31 +94,30 @@ where
 // Timing harness   //
 //////////////////////
 
-pub(super) fn run_with_kernel<T: MaxSimElement>(
+pub(super) fn run_with_kernel<S>(
     run: &Run,
-    doc: MatRef<'_, Standard<T>>,
-    kernel: &dyn MaxSimKernel<T>,
-) -> RunResult {
-    let mut scores = vec![T::Score::default(); run.num_query_vectors.get()];
+    scores: &mut [S],
+    mut compute: impl FnMut(&mut [S]) -> Result<(), MaxSimError>,
+) -> Result<RunResult, MaxSimError> {
+    // Validate the call and warm the kernel before measuring steady-state latency.
+    compute(scores)?;
     let mut latencies = Vec::with_capacity(run.num_measurements.get());
 
     for _ in 0..run.num_measurements.get() {
         let start = std::time::Instant::now();
         for _ in 0..run.loops_per_measurement.get() {
-            kernel
-                .compute_max_sim(doc, &mut scores)
-                .expect("scores.len() == kernel.nrows() by construction");
-            std::hint::black_box(&mut scores);
+            compute(scores)?;
+            std::hint::black_box(&mut *scores);
         }
         latencies.push(start.elapsed().into());
     }
 
     let percentiles = percentiles::compute_percentiles(&mut latencies).unwrap();
-    RunResult {
+    Ok(RunResult {
         run: run.clone(),
         latencies,
         percentiles,
-    }
+    })
 }
 
 //////////////////////
