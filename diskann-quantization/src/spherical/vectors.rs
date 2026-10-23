@@ -1677,6 +1677,20 @@ mod tests {
     }
 
     #[test]
+    fn test_symmetric_distances_3bit() {
+        let mut rng = StdRng::seed_from_u64(0x68f8f52057f94399);
+        for dim in 1..MAX_DIM {
+            test_compensated_distance::<3>(
+                dim,
+                TRIALS_PER_DIM,
+                Approx::new(3.5e-3, 3.0e-3),
+                Approx::new(2.0e-3, 5.0e-4),
+                &mut rng,
+            );
+        }
+    }
+
+    #[test]
     fn test_symmetric_distances_4bit() {
         let mut rng = StdRng::seed_from_u64(0xb88d76ac4c58e923);
         for dim in 1..MAX_DIM {
@@ -1733,6 +1747,20 @@ mod tests {
     }
 
     #[test]
+    fn test_mixed_distances_3x3() {
+        let mut rng = StdRng::seed_from_u64(0x508554264eb7a51b);
+        for dim in 1..MAX_DIM {
+            test_mixed_compensated_distance::<3, 3, Dense>(
+                dim,
+                TRIALS_PER_DIM,
+                Approx::new(4.0e-3, 3.0e-3),
+                Approx::new(4.0e-3, 8.3e-2),
+                &mut rng,
+            );
+        }
+    }
+
+    #[test]
     fn test_mixed_distances_8x8() {
         let mut rng = StdRng::seed_from_u64(0x8acd8e4224c76c43);
         for dim in 1..MAX_DIM {
@@ -1766,6 +1794,20 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xa3ad61d3d03a0c5a);
         for dim in 1..MAX_DIM {
             test_full_distances::<2>(
+                dim,
+                TRIALS_PER_DIM,
+                Approx::new(2.0e-3, 1.1e-3),
+                Approx::new(7.0e-4, 1.0e-3),
+                &mut rng,
+            );
+        }
+    }
+
+    #[test]
+    fn test_full_distances_3bit() {
+        let mut rng = StdRng::seed_from_u64(0xa3ad61d3d03a0c5a);
+        for dim in 1..MAX_DIM {
+            test_full_distances::<3>(
                 dim,
                 TRIALS_PER_DIM,
                 Approx::new(2.0e-3, 1.1e-3),

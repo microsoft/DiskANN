@@ -139,6 +139,14 @@ impl SIMDDotProduct<u8x16, u8x16> for u32x4 {
 // Reinterprets //
 //////////////////
 
+impl SIMDReinterpret<u8x16> for u32x4 {
+    #[inline(always)]
+    fn reinterpret_simd(self) -> u8x16 {
+        // SAFETY: Allowed by the Neon architecture.
+        u8x16(unsafe { vreinterpretq_u8_u32(self.0) })
+    }
+}
+
 impl SIMDReinterpret<i8x16> for u32x4 {
     #[inline(always)]
     fn reinterpret_simd(self) -> i8x16 {
@@ -204,6 +212,7 @@ mod tests {
 
     // Reinterprets
     test_utils::ops::test_reinterpret!(u32x4 => i8x16, 0xbfad755f32d25e5c, test_neon());
+    test_utils::ops::test_reinterpret!(u32x4 => u8x16, 0xd56e9c21a7183b4f, test_neon());
 
     // Conversions
     test_utils::ops::test_lossless_convert!(u16x4 => u32x4, 0x2e07f4c89da53bb1, test_neon());

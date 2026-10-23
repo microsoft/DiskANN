@@ -111,8 +111,6 @@ pub trait Quantizer: std::fmt::Debug + Send + Sync + 'static {
     }
 
     /// Construct the [`Backend`] from `self`.
-    ///
-    /// This method is not implementable outside of `diskann-inmem`.
     fn into_backend(self) -> Backend
     where
         Self: Sized,
