@@ -34,8 +34,6 @@
 
 use std::marker::PhantomData;
 
-use hashbrown::HashSet;
-
 use crate::{
     ANNResult,
     graph::glue::{self, Accept, Decision},
@@ -66,14 +64,6 @@ where
     fn prefetch_lookahead(&self) -> usize {
         0
     }
-
-    /// Return whether rejected IDs are expensive enough to justify query-local caching.
-    ///
-    /// The default is `false`; implementations should opt in only when repeated point
-    /// classification is expected to cost more than hash-table maintenance.
-    fn cache_rejections(&self) -> bool {
-        false
-    }
 }
 
 /// A label provider that can enumerate candidates for exhaustive filtered search.
@@ -99,55 +89,32 @@ enum ClassificationPhase {
 }
 
 #[derive(Debug)]
-struct LabelDecisionCache<I> {
-    rejected: HashSet<I>,
+struct LabelClassificationTracker {
     stats: Option<glue::FilterClassificationStats>,
-    cache_rejections: bool,
 }
 
-impl<I> LabelDecisionCache<I> {
-    fn new(collect_stats: bool, cache_rejections: bool) -> Self {
+impl LabelClassificationTracker {
+    fn new(collect_stats: bool) -> Self {
         Self {
-            rejected: HashSet::new(),
             stats: collect_stats.then(glue::FilterClassificationStats::default),
-            cache_rejections,
         }
     }
-}
 
-impl<I> LabelDecisionCache<I>
-where
-    I: VectorId,
-{
-    fn decide<L>(&mut self, labels: &L, id: I, phase: ClassificationPhase) -> Decision<I>
+    fn decide<I, L>(&mut self, labels: &L, id: I, phase: ClassificationPhase) -> Decision<I>
     where
+        I: VectorId,
         L: QueryLabelProvider<I> + ?Sized,
     {
         if let Some(stats) = &mut self.stats {
             match phase {
-                ClassificationPhase::StartPoint => stats.start_point_requests += 1,
-                ClassificationPhase::FirstHop => stats.first_hop_requests += 1,
-            }
-        }
-        if self.cache_rejections && self.rejected.contains(&id) {
-            if let Some(stats) = &mut self.stats {
-                match phase {
-                    ClassificationPhase::StartPoint => {
-                        stats.start_point_cached_rejections += 1;
-                        stats.start_point_rejected += 1;
-                    }
-                    ClassificationPhase::FirstHop => {
-                        stats.first_hop_cached_rejections += 1;
-                        stats.first_hop_rejected += 1;
-                    }
+                ClassificationPhase::StartPoint => {
+                    stats.start_point_requests += 1;
+                    stats.start_point_evaluations += 1;
                 }
-            }
-            return Decision::reject(id);
-        }
-        if let Some(stats) = &mut self.stats {
-            match phase {
-                ClassificationPhase::StartPoint => stats.start_point_evaluations += 1,
-                ClassificationPhase::FirstHop => stats.first_hop_evaluations += 1,
+                ClassificationPhase::FirstHop => {
+                    stats.first_hop_requests += 1;
+                    stats.first_hop_evaluations += 1;
+                }
             }
         }
         if labels.is_match(id) {
@@ -241,9 +208,8 @@ where
         Ok(FilteredAccessor {
             inner,
             labels: self.labels,
-            label_cache: LabelDecisionCache::new(
+            label_classification: LabelClassificationTracker::new(
                 self.collect_classification_stats,
-                self.labels.cache_rejections(),
             ),
         })
     }
@@ -277,7 +243,7 @@ where
 {
     inner: A,
     labels: &'a L,
-    label_cache: LabelDecisionCache<A::Id>,
+    label_classification: LabelClassificationTracker,
 }
 
 impl<'a, A, L> FilteredAccessor<'a, A, L>
@@ -290,7 +256,7 @@ where
         Self {
             inner,
             labels,
-            label_cache: LabelDecisionCache::new(true, labels.cache_rejections()),
+            label_classification: LabelClassificationTracker::new(true),
         }
     }
 }
@@ -323,11 +289,11 @@ where
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
         let labels = self.labels;
-        let label_cache = &mut self.label_cache;
+        let label_classification = &mut self.label_classification;
         self.inner
             .start_point_distances(|id, distance| {
                 f(
-                    label_cache.decide(labels, id, ClassificationPhase::StartPoint),
+                    label_classification.decide(labels, id, ClassificationPhase::StartPoint),
                     distance,
                 )
             })
@@ -346,11 +312,11 @@ where
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
         let labels = self.labels;
-        let label_cache = &mut self.label_cache;
+        let label_classification = &mut self.label_classification;
         self.inner
             .expand_beam(ids, pred, |id, distance| {
                 on_neighbors(
-                    label_cache.decide(labels, id, ClassificationPhase::FirstHop),
+                    label_classification.decide(labels, id, ClassificationPhase::FirstHop),
                     distance,
                 )
             })
@@ -369,11 +335,11 @@ where
         F: FnMut(Accept<Self::Id>, f32) + Send,
     {
         let labels = self.labels;
-        let label_cache = &mut self.label_cache;
+        let label_classification = &mut self.label_classification;
         self.inner
             .expand_beam(
                 ids,
-                EvalFiltered::new(pred, labels, label_cache),
+                EvalFiltered::new(pred, labels, label_classification),
                 |id, distance| on_neighbors(Accept::new(id), distance),
             )
             .await
@@ -388,7 +354,7 @@ where
     }
 
     fn filter_classification_stats(&self) -> glue::FilterClassificationStats {
-        self.label_cache.stats.unwrap_or_default()
+        self.label_classification.stats.unwrap_or_default()
     }
 }
 
@@ -428,38 +394,34 @@ where
 /// A [`glue::HybridPredicate`] that uses an additional [`QueryLabelProvider`] to skip
 /// computing distances to items that do not satisfy the predicate.
 #[derive(Debug)]
-struct EvalFiltered<'a, P, L: ?Sized, I>
-where
-    I: VectorId,
-{
+struct EvalFiltered<'a, P, L: ?Sized> {
     inner: P,
     labels: &'a L,
-    label_cache: &'a mut LabelDecisionCache<I>,
+    label_classification: &'a mut LabelClassificationTracker,
 }
 
-impl<'a, P, L: ?Sized, I> EvalFiltered<'a, P, L, I>
-where
-    I: VectorId,
-{
-    fn new(inner: P, labels: &'a L, label_cache: &'a mut LabelDecisionCache<I>) -> Self {
+impl<'a, P, L: ?Sized> EvalFiltered<'a, P, L> {
+    fn new(
+        inner: P,
+        labels: &'a L,
+        label_classification: &'a mut LabelClassificationTracker,
+    ) -> Self {
         Self {
             inner,
             labels,
-            label_cache,
+            label_classification,
         }
     }
 }
 
-impl<P, I, L> glue::Predicate<I> for EvalFiltered<'_, P, L, I>
+impl<P, I, L> glue::Predicate<I> for EvalFiltered<'_, P, L>
 where
     P: glue::Predicate<I>,
     I: VectorId,
     L: QueryLabelProvider<I> + ?Sized,
 {
     fn eval(&self, item: &I) -> bool {
-        self.inner.eval(item)
-            && (!self.label_cache.cache_rejections || !self.label_cache.rejected.contains(item))
-            && self.labels.is_match(*item)
+        self.inner.eval(item) && self.labels.is_match(*item)
     }
 
     #[inline]
@@ -473,52 +435,39 @@ where
     }
 }
 
-impl<P, I, L> glue::PredicateMut<I> for EvalFiltered<'_, P, L, I>
+impl<P, I, L> glue::PredicateMut<I> for EvalFiltered<'_, P, L>
 where
     P: glue::Predicate<I> + glue::PredicateMut<Accept<I>>,
     I: VectorId,
     L: QueryLabelProvider<I> + ?Sized,
 {
     fn eval_mut(&mut self, item: &I) -> bool {
-        if let Some(stats) = &mut self.label_cache.stats {
+        if let Some(stats) = &mut self.label_classification.stats {
             stats.second_hop_requests += 1;
         }
         if !self.inner.eval(item) {
-            if let Some(stats) = &mut self.label_cache.stats {
+            if let Some(stats) = &mut self.label_classification.stats {
                 stats.second_hop_already_visited += 1;
             }
             return false;
         }
-        if self.label_cache.cache_rejections && self.label_cache.rejected.contains(item) {
-            if let Some(stats) = &mut self.label_cache.stats {
-                stats.second_hop_cached_rejections += 1;
-                stats.second_hop_rejected += 1;
-            }
-            return false;
-        }
-        if let Some(stats) = &mut self.label_cache.stats {
+        if let Some(stats) = &mut self.label_classification.stats {
             stats.second_hop_evaluations += 1;
         }
         if !self.labels.is_match(*item) {
-            if let Some(stats) = &mut self.label_cache.stats {
+            if let Some(stats) = &mut self.label_classification.stats {
                 stats.second_hop_rejected += 1;
-            }
-            if self.label_cache.cache_rejections
-                && self.label_cache.rejected.insert(*item)
-                && let Some(stats) = &mut self.label_cache.stats
-            {
-                stats.unique_rejected_ids += 1;
             }
             return false;
         }
-        if let Some(stats) = &mut self.label_cache.stats {
+        if let Some(stats) = &mut self.label_classification.stats {
             stats.second_hop_accepted += 1;
         }
         self.inner.eval_mut(&Accept::new(*item))
     }
 }
 
-impl<P, I, L> glue::HybridPredicate<I> for EvalFiltered<'_, P, L, I>
+impl<P, I, L> glue::HybridPredicate<I> for EvalFiltered<'_, P, L>
 where
     P: glue::Predicate<I> + glue::PredicateMut<Accept<I>>,
     I: VectorId,
@@ -685,8 +634,9 @@ mod tests {
     fn wrapper_predicate() {
         let filter = EvenFilter;
         let mut visited = HashSet::new();
-        let mut label_cache = LabelDecisionCache::new(true, filter.cache_rejections());
-        let mut wrapper = EvalFiltered::new(NotIn(&mut visited), &filter, &mut label_cache);
+        let mut label_classification = LabelClassificationTracker::new(true);
+        let mut wrapper =
+            EvalFiltered::new(NotIn(&mut visited), &filter, &mut label_classification);
 
         // eval: both inner (not visited) and label (even) must pass.
         assert!(wrapper.eval(&2), "2 is even and not visited");

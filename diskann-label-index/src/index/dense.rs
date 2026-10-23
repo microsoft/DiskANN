@@ -15,7 +15,6 @@ impl EncodedLabelQuery<'_> {
     /// remains the [`diskann::graph::ext::labeled::CandidateLabelProvider`] used for exhaustive
     /// enumeration.
     pub fn point_evaluator(&self) -> EncodedLabelPointEvaluator<'_> {
-        let cache_rejections = self.should_cache_rejections();
         match &self.point_plan {
             PointPlan::Dnf(plan) if plan.use_summary => {
                 EncodedLabelPointEvaluator::DnfSummary(DnfSummaryEvaluator {
@@ -25,7 +24,6 @@ impl EncodedLabelQuery<'_> {
                     clause_offsets: &plan.clause_offsets,
                     payload_offsets: &plan.payload_offsets,
                     summary_offsets: &plan.summary_offsets,
-                    cache_rejections,
                 })
             }
             PointPlan::Dnf(plan) => EncodedLabelPointEvaluator::DnfPayload(DnfPayloadEvaluator {
@@ -35,7 +33,6 @@ impl EncodedLabelQuery<'_> {
                 payload_offsets: &plan.payload_offsets,
                 prefetch_word_offset: plan.payload_offsets.first().copied(),
                 prefetch_lookahead: self.config.point_prefetch_lookahead(),
-                cache_rejections,
             }),
             PointPlan::Cnf(plan) if plan.use_summary => {
                 EncodedLabelPointEvaluator::CnfSummary(CnfSummaryEvaluator {
@@ -46,7 +43,6 @@ impl EncodedLabelQuery<'_> {
                     terminal_offsets: &plan.terminal_offsets,
                     payload_offsets: &plan.payload_offsets,
                     summary_offsets: &plan.summary_offsets,
-                    cache_rejections,
                 })
             }
             PointPlan::Cnf(plan) => EncodedLabelPointEvaluator::CnfPayload(CnfPayloadEvaluator {
@@ -57,7 +53,6 @@ impl EncodedLabelQuery<'_> {
                 payload_offsets: &plan.payload_offsets,
                 prefetch_word_offset: plan.payload_offsets.first().copied(),
                 prefetch_lookahead: self.config.point_prefetch_lookahead(),
-                cache_rejections,
             }),
         }
     }
@@ -157,14 +152,6 @@ impl EncodedLabelQuery<'_> {
                 vec_id,
             ),
         }
-    }
-
-    fn should_cache_rejections(&self) -> bool {
-        self.plan
-            .label_ids
-            .iter()
-            .flatten()
-            .any(|&id| self.payload.exact_row_by_label[id as usize] == u32::MAX)
     }
 }
 
@@ -339,10 +326,6 @@ impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for DnfPayloadEvaluat
             0
         }
     }
-
-    fn cache_rejections(&self) -> bool {
-        self.cache_rejections
-    }
 }
 
 impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for DnfSummaryEvaluator<'_> {
@@ -357,10 +340,6 @@ impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for DnfSummaryEvaluat
                 self.summary_offsets,
                 id,
             )
-    }
-
-    fn cache_rejections(&self) -> bool {
-        self.cache_rejections
     }
 }
 
@@ -394,10 +373,6 @@ impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for CnfPayloadEvaluat
             0
         }
     }
-
-    fn cache_rejections(&self) -> bool {
-        self.cache_rejections
-    }
 }
 
 impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for CnfSummaryEvaluator<'_> {
@@ -414,20 +389,12 @@ impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for CnfSummaryEvaluat
                 id,
             )
     }
-
-    fn cache_rejections(&self) -> bool {
-        self.cache_rejections
-    }
 }
 
 impl diskann::graph::ext::labeled::QueryLabelProvider<u32> for EncodedLabelQuery<'_> {
     #[inline]
     fn is_match(&self, id: u32) -> bool {
         EncodedLabelQuery::is_match(self, id)
-    }
-
-    fn cache_rejections(&self) -> bool {
-        self.should_cache_rejections()
     }
 }
 

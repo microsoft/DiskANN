@@ -235,7 +235,6 @@ pub struct DnfPayloadEvaluator<'a> {
     payload_offsets: &'a [usize],
     prefetch_word_offset: Option<usize>,
     prefetch_lookahead: usize,
-    cache_rejections: bool,
 }
 
 /// A statically dispatched DNF evaluator for summary-guarded payload rows.
@@ -247,7 +246,6 @@ pub struct DnfSummaryEvaluator<'a> {
     clause_offsets: &'a [usize],
     payload_offsets: &'a [usize],
     summary_offsets: &'a [usize],
-    cache_rejections: bool,
 }
 
 /// A statically dispatched CNF evaluator for payload rows.
@@ -260,7 +258,6 @@ pub struct CnfPayloadEvaluator<'a> {
     payload_offsets: &'a [usize],
     prefetch_word_offset: Option<usize>,
     prefetch_lookahead: usize,
-    cache_rejections: bool,
 }
 
 /// A statically dispatched CNF evaluator for summary-guarded payload rows.
@@ -273,7 +270,6 @@ pub struct CnfSummaryEvaluator<'a> {
     terminal_offsets: &'a [usize],
     payload_offsets: &'a [usize],
     summary_offsets: &'a [usize],
-    cache_rejections: bool,
 }
 
 const POINT_SUMMARY_MIN_ZERO_PERCENT: usize = 85;

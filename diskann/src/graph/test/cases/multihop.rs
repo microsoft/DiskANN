@@ -11,10 +11,7 @@
 //! - **Integration tests** go through `index.search(MultihopFilterSearch{...})` end-to-end
 //!   with baselines for regression protection.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 use diskann_vector::distance::Metric;
 
@@ -70,22 +67,6 @@ struct RejectAll;
 impl labeled::QueryLabelProvider<u32> for RejectAll {
     fn is_match(&self, _: u32) -> bool {
         false
-    }
-}
-
-#[derive(Debug, Default)]
-struct CountingEvenFilter {
-    calls: AtomicUsize,
-}
-
-impl labeled::QueryLabelProvider<u32> for CountingEvenFilter {
-    fn is_match(&self, id: u32) -> bool {
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        id.is_multiple_of(2)
-    }
-
-    fn cache_rejections(&self) -> bool {
-        true
     }
 }
 
@@ -278,37 +259,6 @@ fn reject_all_yields_nothing() {
     //
     // This mainly checks that search didn't explode.
     assert!(results.is_empty(), "all points are rejected");
-}
-
-#[test]
-fn cached_second_hop_rejection_can_still_become_a_first_hop_bridge() {
-    let start_id = 10u32;
-    let index = build_1d_index(
-        start_id,
-        10.0,
-        AdjacencyList::from_iter_untrusted([1, 2, 5]),
-        vec![
-            (1, vec![1.0], AdjacencyList::from_iter_untrusted([3])),
-            (2, vec![2.0], AdjacencyList::from_iter_untrusted([3])),
-            (3, vec![3.0], AdjacencyList::from_iter_untrusted([4])),
-            (4, vec![4.0], AdjacencyList::from_iter_untrusted([])),
-            (5, vec![5.0], AdjacencyList::from_iter_untrusted([3])),
-        ],
-        6,
-    );
-
-    let filter = CountingEvenFilter::default();
-    let (stats, results) = run(&index, &[4.0], 20, &filter);
-    let ids: Vec<_> = results.iter().map(|neighbor| *neighbor.id()).collect();
-
-    assert!(
-        ids.contains(&4),
-        "cached rejection 3 must remain eligible as a later first-hop bridge"
-    );
-    assert_eq!(stats.filter_classification.second_hop_cached_rejections, 1);
-    assert_eq!(stats.filter_classification.first_hop_cached_rejections, 1);
-    assert_eq!(stats.filter_classification.unique_rejected_ids, 1);
-    assert_eq!(filter.calls.load(Ordering::Relaxed), 6);
 }
 
 ///////////////////////////////

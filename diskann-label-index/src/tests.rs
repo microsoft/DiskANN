@@ -151,7 +151,6 @@ fn bloom_only_round_trip_has_no_false_negatives() {
     for expected in [0, 1, 2] {
         assert!(matches.contains(&expected));
     }
-    assert!(QueryLabelProvider::cache_rejections(&query));
 }
 
 #[test]
@@ -180,11 +179,6 @@ fn hybrid_round_trip_uses_exact_prefix_and_bloom_suffix() {
         ),
         vec![0, 3]
     );
-    assert!(QueryLabelProvider::cache_rejections(&compile(
-        &index,
-        &["C"],
-        FilterExpressionType::DNF
-    )));
 }
 
 #[test]

@@ -422,8 +422,6 @@ pub struct FilterClassificationStats {
     pub start_point_requests: u64,
     /// Label evaluations performed for start points.
     pub start_point_evaluations: u64,
-    /// Start-point rejections served from the query-local cache.
-    pub start_point_cached_rejections: u64,
     /// Start points accepted by the label filter.
     pub start_point_accepted: u64,
     /// Start points rejected by the label filter.
@@ -432,8 +430,6 @@ pub struct FilterClassificationStats {
     pub first_hop_requests: u64,
     /// Label evaluations performed for first-hop neighbors.
     pub first_hop_evaluations: u64,
-    /// First-hop rejections served from the query-local cache.
-    pub first_hop_cached_rejections: u64,
     /// First-hop neighbors accepted by the label filter.
     pub first_hop_accepted: u64,
     /// First-hop neighbors rejected by the label filter.
@@ -444,14 +440,10 @@ pub struct FilterClassificationStats {
     pub second_hop_already_visited: u64,
     /// Label evaluations performed for second-hop IDs.
     pub second_hop_evaluations: u64,
-    /// Second-hop rejections served from the query-local cache.
-    pub second_hop_cached_rejections: u64,
     /// Second-hop IDs accepted by the label filter.
     pub second_hop_accepted: u64,
     /// Second-hop IDs rejected by the label filter.
     pub second_hop_rejected: u64,
-    /// Distinct IDs inserted into the query-local rejected-label cache.
-    pub unique_rejected_ids: u64,
 }
 
 /// The main extension point for filtered-graph search.
