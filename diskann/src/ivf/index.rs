@@ -83,8 +83,8 @@ impl<P: Provider> IVFIndex<P> {
         &self.provider
     }
 
-    /// Select an experimental clustering strategy. Default is paired L2.
-    /// Batched and dot-product strategies can change the resulting partition.
+    /// Select an experimental clustering strategy. Both strategies preserve the
+    /// compiled baseline's distance arithmetic; paired L2 remains the default.
     #[cfg(feature = "ivf-experimental")]
     #[doc(hidden)]
     pub fn set_two_means_strategy(&mut self, strategy: clustering::Strategy) {

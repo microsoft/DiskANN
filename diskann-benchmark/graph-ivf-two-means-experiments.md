@@ -21,6 +21,23 @@ original order. Odd last rows use paired. Seeding, fixed Lloyd steps, f64 sums,
 empty centers and final region-wide reassignment use the shared implementation.
 No epsilon or numerical fallback relaxes exactness.
 
+## Code organization
+
+Distance kernels live in `diskann-vector/src/distance/paired/`. The shared Lloyd
+loop and opt-in assignment live in `diskann/src/ivf/clustering/`; the assignment
+hook for diagnostics is separate from the fitting path and reuses that loop.
+
+The benchmark follows the existing `graph_ivf` module layout: `two_means/mod.rs`
+registers the benchmark, `benchmarks.rs` schedules complete fits, `data.rs` prepares
+rows, `result.rs` defines output, and `measurement.rs` and `diagnostics.rs` keep
+timing separate from correctness checks. Sibling `graph_ivf/replay.rs` composes a
+diagnostic build with captured-parent replay. Static builds and complete fits use
+one input strategy enum in `src/inputs/graph_ivf_two_means.rs`.
+
+Feature-specific CLI tests are grouped in `graph_ivf/tests/experimental.rs` and
+reuse the static benchmark fixtures. Public library entry points, JSON job tags,
+schema version 3, timing boundaries and exactness checks are preserved.
+
 ## Measurement
 
 Complete-fit schema version 3 includes validation, ISA selection, allocation,

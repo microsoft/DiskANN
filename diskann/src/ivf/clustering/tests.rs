@@ -5,7 +5,7 @@
 
 use rand::{Rng, RngCore, SeedableRng};
 
-use super::two_means::{fit_two_means_with, nearest_two};
+use super::two_means::{TwoMeansIteration, fit_two_means_using, nearest_two, sum_assignment};
 use super::*;
 
 fn points(rows: &[Vec<f32>]) -> Vec<PointRef<'_, u32>> {
@@ -223,4 +223,48 @@ fn split_preserves_all_child_centroids_and_membership_order() {
         assert_eq!(children.members, members);
         assert_eq!(rng.next_u64(), reference_rng.next_u64());
     }
+}
+
+// A compile-time selector lets tests compare the original two-distance path
+// without duplicating Lloyd's state transitions or introducing dynamic dispatch.
+fn fit_two_means_with<I>(
+    points: &[PointRef<'_, I>],
+    centers: &mut [f32],
+    dim: usize,
+    iterations: usize,
+    rng: &mut StdRng,
+    sums: &mut [f64],
+    select: impl Fn(&[f32], &[f32], usize) -> usize,
+) -> ANNResult<()> {
+    struct PointSelector<F>(F);
+
+    impl<I, F> TwoMeansIteration<I> for PointSelector<F>
+    where
+        F: Fn(&[f32], &[f32], usize) -> usize,
+    {
+        fn assign_and_sum(
+            &mut self,
+            points: &[PointRef<'_, I>],
+            centers: &[f32],
+            dim: usize,
+            sums: &mut [f64],
+            counts: &mut [usize; 2],
+        ) -> ANNResult<()> {
+            for point in points {
+                let to = (self.0)(point.vector, centers, dim);
+                sum_assignment(point.vector, to, dim, sums, counts);
+            }
+            Ok(())
+        }
+    }
+
+    fit_two_means_using(
+        points,
+        centers,
+        dim,
+        iterations,
+        rng,
+        sums,
+        &mut PointSelector(select),
+    )
 }

@@ -25,20 +25,6 @@ use crate::inputs::graph_ivf::GraphIvfBuild;
 
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("graph-ivf-static-f32", Static)?;
-    #[cfg(feature = "ivf-two-means")]
-    registry.register(
-        "graph-ivf-two-means-strategies",
-        super::two_means::Strategies,
-    )?;
-    #[cfg(feature = "ivf-two-means")]
-    registry.register("graph-ivf-parent-replay", super::two_means::replay::Replay)?;
-    #[cfg(not(feature = "ivf-two-means"))]
-    registry.register_gated(
-        "graph-ivf-two-means",
-        "graph-ivf-two-means-strategies",
-        diskann_benchmark_runner::Features::new("ivf-two-means"),
-        "Complete two-means strategy comparison",
-    )?;
     Ok(())
 }
 

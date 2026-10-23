@@ -3,12 +3,16 @@
  * Licensed under the MIT license.
  */
 
-use diskann::ivf::{clustering::fit_with_assignment, workingset::PointRef};
+use diskann::ivf::{
+    clustering::{fit_with_assignment, TwoMeans},
+    workingset::PointRef,
+};
 use diskann_vector::distance::SquaredL2;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::Serialize;
 
-use super::measurement::{Prepared, Strategy, BASELINE};
+use super::BASELINE;
+use crate::inputs::graph_ivf_two_means::TwoMeansStrategy;
 
 pub(super) struct Trace {
     steps: Vec<Step>,
@@ -28,9 +32,9 @@ pub(super) fn trace(
     dim: usize,
     iterations: usize,
     seed: u64,
-    strategy: Strategy,
+    strategy: TwoMeansStrategy,
 ) -> anyhow::Result<Trace> {
-    let prepared = Prepared::new(points, dim, strategy)?;
+    let prepared = TwoMeans::new(points, dim, strategy.into())?;
     let mut centers = vec![0.0; 2 * dim];
     let mut sums = vec![0.0; 2 * dim];
     let mut steps = Vec::new();
@@ -119,7 +123,7 @@ fn distances(point: &[f32], centers: &[f32], dim: usize) -> [f64; 2] {
 pub(super) fn compare(
     points: &[PointRef<'_, usize>],
     dim: usize,
-    strategy: Strategy,
+    strategy: TwoMeansStrategy,
     baseline: &Trace,
     candidate: &Trace,
 ) -> anyhow::Result<Comparison> {
@@ -132,7 +136,7 @@ pub(super) fn compare(
             && baseline.sums.len() == candidate.sums.len(),
         "diagnostic shape changed"
     );
-    let prepared = Prepared::new(points, dim, strategy)?;
+    let prepared = TwoMeans::new(points, dim, strategy.into())?;
     let mut same_centers = vec![0; points.len()];
     let mut steps = Vec::new();
     let mut first = None;
@@ -195,7 +199,7 @@ pub(super) fn compare(
             fallback_points: b.fallbacks,
         });
     }
-    let paired = Prepared::new(points, dim, BASELINE)?;
+    let paired = TwoMeans::new(points, dim, BASELINE.into())?;
     let mut a = vec![0; points.len()];
     let mut b = a.clone();
     paired.assign(&baseline.centers, &mut a)?;
@@ -250,7 +254,7 @@ mod tests {
                 vector: std::slice::from_ref(v),
             })
             .collect();
-        let strategy = Strategy::TiledExact;
+        let strategy = TwoMeansStrategy::TiledExact;
         let a = trace(&points, 1, 5, 7, BASELINE).unwrap();
         let mut b = trace(&points, 1, 5, 7, strategy).unwrap();
         assert!(compare(&points, 1, strategy, &a, &b).unwrap().is_exact());

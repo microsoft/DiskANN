@@ -17,7 +17,7 @@ fn reports_packing_and_diagnostics_for_complete_fit() {
             vector: &[10.0; 3],
         },
     ];
-    for strategy in Strategy::ALL {
+    for strategy in TwoMeansStrategy::ALL {
         let run = fit(&points, 3, 3, 7, strategy).unwrap();
         assert!(run.preparation <= run.total);
         assert_ne!(run.centers[0], run.centers[3]);

@@ -35,7 +35,7 @@ pub(super) struct Store {
     pub lists: BTreeMap<u32, StoredList>,
     next_list: u32,
     #[cfg(feature = "ivf-two-means")]
-    pub capture: Option<Arc<std::sync::Mutex<super::two_means::replay::Capture>>>,
+    pub capture: Option<Arc<std::sync::Mutex<super::replay::Capture>>>,
 }
 
 impl Store {

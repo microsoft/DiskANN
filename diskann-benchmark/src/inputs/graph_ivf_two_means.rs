@@ -81,10 +81,12 @@ pub(crate) enum TwoMeansStrategy {
 }
 
 impl TwoMeansStrategy {
-    #[cfg(test)]
     pub(crate) const ALL: [Self; 2] = [Self::PairedPoint, Self::TiledExact];
 
-    #[cfg(test)]
+    pub(crate) fn all() -> Vec<Self> {
+        Self::ALL.to_vec()
+    }
+
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::PairedPoint => "paired_point",
@@ -102,26 +104,6 @@ impl From<TwoMeansStrategy> for clustering::Strategy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum FitStrategy {
-    PairedPoint,
-    TiledExact,
-}
-
-impl FitStrategy {
-    pub(crate) const ALL: [Self; 2] = [Self::PairedPoint, Self::TiledExact];
-    pub(crate) fn all() -> Vec<Self> {
-        Self::ALL.to_vec()
-    }
-    pub(crate) const fn name(self) -> &'static str {
-        match self {
-            Self::PairedPoint => "paired_point",
-            Self::TiledExact => "tiled_exact",
-        }
-    }
-}
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FitOrder {
@@ -134,8 +116,8 @@ pub(crate) enum FitOrder {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GraphIvfTwoMeans {
-    #[serde(default = "FitStrategy::all")]
-    pub strategies: Vec<FitStrategy>,
+    #[serde(default = "TwoMeansStrategy::all")]
+    pub strategies: Vec<TwoMeansStrategy>,
     #[serde(default)]
     pub order: FitOrder,
     /// Omit for synthetic rows. A file source is sampled without replacement.
@@ -156,6 +138,15 @@ pub(crate) struct GraphIvfTwoMeans {
 pub(crate) enum Layout {
     Contiguous,
     Scattered,
+}
+
+impl Layout {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Contiguous => "contiguous",
+            Self::Scattered => "scattered",
+        }
+    }
 }
 
 impl GraphIvfTwoMeans {
@@ -189,7 +180,7 @@ impl GraphIvfTwoMeans {
         );
         if self.order == FitOrder::Abba {
             anyhow::ensure!(
-                self.strategies.len() == 2 && self.strategies[0] == FitStrategy::PairedPoint,
+                self.strategies.len() == 2 && self.strategies[0] == TwoMeansStrategy::PairedPoint,
                 "ABBA needs exactly [paired_point, candidate]; repetitions count complete blocks"
             );
         }
@@ -200,7 +191,7 @@ impl GraphIvfTwoMeans {
 impl Example for GraphIvfTwoMeans {
     fn example() -> Self {
         Self {
-            strategies: FitStrategy::all(),
+            strategies: TwoMeansStrategy::all(),
             order: FitOrder::Rotating,
             data: None,
             data_type: FileType::Float32,

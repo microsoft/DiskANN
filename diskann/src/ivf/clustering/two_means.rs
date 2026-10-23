@@ -109,51 +109,6 @@ impl<I> TwoMeansIteration<I> for PairedPoint {
     }
 }
 
-// A compile-time selector lets tests compare the original two-distance path
-// without duplicating Lloyd's state transitions or introducing dynamic dispatch.
-#[cfg(test)]
-pub(super) fn fit_two_means_with<I>(
-    points: &[PointRef<'_, I>],
-    centers: &mut [f32],
-    dim: usize,
-    iterations: usize,
-    rng: &mut StdRng,
-    sums: &mut [f64],
-    select: impl Fn(&[f32], &[f32], usize) -> usize,
-) -> ANNResult<()> {
-    struct PointSelector<F>(F);
-
-    impl<I, F> TwoMeansIteration<I> for PointSelector<F>
-    where
-        F: Fn(&[f32], &[f32], usize) -> usize,
-    {
-        fn assign_and_sum(
-            &mut self,
-            points: &[PointRef<'_, I>],
-            centers: &[f32],
-            dim: usize,
-            sums: &mut [f64],
-            counts: &mut [usize; 2],
-        ) -> ANNResult<()> {
-            for point in points {
-                let to = (self.0)(point.vector, centers, dim);
-                sum_assignment(point.vector, to, dim, sums, counts);
-            }
-            Ok(())
-        }
-    }
-
-    fit_two_means_using(
-        points,
-        centers,
-        dim,
-        iterations,
-        rng,
-        sums,
-        &mut PointSelector(select),
-    )
-}
-
 #[inline]
 pub(super) fn nearest_two(point: &[f32], centers: &[f32], dim: usize) -> usize {
     let [first, second] = SquaredL2::evaluate_pair(point, &centers[..dim], &centers[dim..]);

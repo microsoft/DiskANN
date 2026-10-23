@@ -6,7 +6,12 @@
 //! Two independent eight-lane reductions share one sixteen-lane register.
 //! No reduction crosses the point boundary.
 
-use super::*;
+#[cfg(target_arch = "x86_64")]
+use diskann_wide::{arch::Target3, Architecture, SIMDVector};
+
+#[cfg(target_arch = "x86_64")]
+use super::simd::{self, SIMDSchema, L2};
+use super::SquaredL2;
 
 type Evaluate = fn([&[f32]; 2], &[f32], &[f32]) -> [[f32; 2]; 2];
 

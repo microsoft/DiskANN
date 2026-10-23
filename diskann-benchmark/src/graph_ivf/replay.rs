@@ -17,22 +17,27 @@ use std::{
 use diskann::ivf::workingset::{ListView, PointRef};
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, Score},
-    Benchmark, Checkpoint, Output,
+    Benchmark, Checkpoint, Output, Registry,
 };
 use diskann_utils::views::rowmajor::Matrix;
 use serde::Serialize;
 
-use super::{run_workload, Data, WorkloadResults};
+use super::two_means::{run_workload, Data, WorkloadResults};
 use crate::{
     graph_ivf::{
         build::build_with_store,
         data::{load_data, load_vectors, validate_vectors},
         provider::Store,
     },
-    inputs::graph_ivf_two_means::{GraphIvfParentReplay, GraphIvfTwoMeans, Layout},
+    inputs::{
+        graph_ivf::FileType,
+        graph_ivf_two_means::{
+            FitOrder, GraphIvfParentReplay, GraphIvfTwoMeans, Layout, TwoMeansStrategy,
+        },
+    },
 };
 
-pub(in crate::graph_ivf) struct Capture {
+pub(super) struct Capture {
     directory: PathBuf,
     selected: Vec<usize>,
     seen: usize,
@@ -51,7 +56,7 @@ struct Snapshot {
 }
 
 impl Capture {
-    pub(in crate::graph_ivf) fn record(
+    pub(super) fn record(
         &mut self,
         lists: &[ListView<'_, u32, u32>],
         inserted_so_far: usize,
@@ -107,10 +112,15 @@ impl Capture {
     }
 }
 
-pub(in crate::graph_ivf) struct Replay;
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register("graph-ivf-parent-replay", Replay)?;
+    Ok(())
+}
+
+struct Replay;
 
 #[derive(Serialize)]
-pub(in crate::graph_ivf) struct Results {
+struct Results {
     source: &'static str,
     capture_timing: &'static str,
     replay_seeding: &'static str,
@@ -129,15 +139,18 @@ struct Parent {
 impl Benchmark for Replay {
     type Input = GraphIvfParentReplay;
     type Output = Results;
+
     fn try_match(&self, _: &Self::Input, context: &MatchContext) -> Score {
         context.success(0)
     }
+
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "Diagnostic baseline build and replay of predetermined split parents"
         )
     }
+
     fn run(
         &self,
         input: &Self::Input,
@@ -185,20 +198,17 @@ impl Benchmark for Replay {
             .collect();
         let mut parents = Vec::new();
         for snapshot in capture.snapshots {
-            let matrix = load_vectors(
-                &snapshot.coordinates,
-                crate::inputs::graph_ivf::FileType::Float32,
-            )?;
+            let matrix = load_vectors(&snapshot.coordinates, FileType::Float32)?;
             let ids: Vec<usize> = serde_json::from_reader(File::open(&snapshot.ids_file)?)?;
             anyhow::ensure!(
                 ids.len() == matrix.nrows(),
                 "snapshot ID count differs from rows"
             );
             let config = GraphIvfTwoMeans {
-                strategies: crate::inputs::graph_ivf_two_means::FitStrategy::all(),
-                order: crate::inputs::graph_ivf_two_means::FitOrder::Rotating,
+                strategies: TwoMeansStrategy::all(),
+                order: FitOrder::Rotating,
                 data: None,
-                data_type: crate::inputs::graph_ivf::FileType::Float32,
+                data_type: FileType::Float32,
                 bucket_sizes: vec![NonZeroUsize::new(snapshot.rows)
                     .ok_or_else(|| anyhow::anyhow!("empty snapshot"))?],
                 dimensions: vec![NonZeroUsize::new(snapshot.dimensions)
