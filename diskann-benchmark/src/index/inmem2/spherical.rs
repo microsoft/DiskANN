@@ -3,16 +3,19 @@
  * Licensed under the MIT license.
  */
 
-use std::{io::Write};
+use std::io::Write;
 
+use diskann_benchmark_runner::{
+    self as dbr,
+    utils::{datatype::AsDataType, fmt::Quote},
+};
 use diskann_inmem::{self as di};
-use diskann_utils::views::rowmajor::{self, Matrix};
-use diskann_benchmark_runner::{self as dbr, utils::{fmt::Quote, datatype::AsDataType}};
 use diskann_quantization::{self as dq};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{self as dv};
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, SeedableRng};
 
-use crate::index::inmem2::{self, FromRawWith, reborrow};
+use crate::index::inmem2::{self, reborrow, FromRawWith};
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register("inmem2-spherical", RunBuildAndSearch)?;
@@ -109,10 +112,7 @@ struct Spherical {
 
 impl Spherical {
     fn from_raw(raw: &dto::Spherical, metric: dv::distance::Metric) -> anyhow::Result<Self> {
-        let dto::Spherical {
-            bits,
-            seed,
-        } = raw;
+        let dto::Spherical { bits, seed } = raw;
 
         Ok(Self {
             bits: Bits::from_raw(bits),
@@ -122,13 +122,9 @@ impl Spherical {
     }
 
     fn train(&self, data: rowmajor::Ref<'_, f32>) -> anyhow::Result<di::repr::quantized::Backend> {
-        use di::repr::quantized::{Backend, spherical::Spherical};
+        use di::repr::quantized::{spherical::Spherical, Backend};
 
-        let Self {
-            bits,
-            seed,
-            metric,
-        } = self;
+        let Self { bits, seed, metric } = self;
 
         let mut rng = StdRng::seed_from_u64(*seed);
 
@@ -146,9 +142,7 @@ impl Spherical {
         let quantizer = match bits {
             Bits::One => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<1>()?)),
             Bits::Two => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<2>()?)),
-            Bits::Four => {
-                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?))
-            }
+            Bits::Four => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?)),
         };
 
         Ok(quantizer)
@@ -157,11 +151,7 @@ impl Spherical {
 
 impl std::fmt::Display for Spherical {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            bits,
-            seed,
-            metric,
-        } = self;
+        let Self { bits, seed, metric } = self;
 
         let mut kv = dbr::utils::fmt::KeyValue::new();
         kv.push("bits", bits);
@@ -250,7 +240,7 @@ struct RunBuildAndSearch;
 
 impl dbr::Benchmark for RunBuildAndSearch {
     type Input = BuildAndSearch;
-    type Output = ();
+    type Output = inmem2::benchmark::BuildAndSearchStats;
 
     fn try_match(
         &self,
@@ -259,9 +249,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
     ) -> dbr::benchmark::Score {
         let mut score = context.success(0);
 
-        let inmem2::DataDispatchParams {
-            data_type,
-        } = input.data.dispatch_params();
+        let inmem2::DataDispatchParams { data_type } = input.data.dispatch_params();
 
         if !f32::is_match(data_type) {
             score.fail(
@@ -278,10 +266,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "spherical-quantized static build+search",
-        )?;
+        write!(f, "spherical-quantized static build+search",)?;
 
         Ok(())
     }
@@ -291,7 +276,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
         input: &BuildAndSearch,
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}\n", input)?;
 
         // Load data.
@@ -311,12 +296,12 @@ impl dbr::Benchmark for RunBuildAndSearch {
         )?;
 
         let provider = di::Provider::<_, u32>::new(config)?;
-        let engine = input.build.engine(provider, di::Strategy);
-        let build = engine.build(data, output)?;
+        let engine = input.build.engine(provider);
+        let build = engine.build(data, Some(output))?;
         let search = input
             .search
             .search::<f32, _>(engine.index().clone(), Some(output))?;
 
-        Ok(())
+        Ok(Self::Output { build, search })
     }
 }

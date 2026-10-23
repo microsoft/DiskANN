@@ -5,12 +5,15 @@
 
 use std::{io::Write, num::NonZeroUsize};
 
+use diskann_benchmark_runner::{
+    self as dbr,
+    utils::{datatype::AsDataType, fmt::Quote},
+};
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::{self, Matrix};
-use diskann_benchmark_runner::{self as dbr, utils::{fmt::Quote, datatype::AsDataType}};
 use diskann_vector::{self as dv};
 
-use crate::index::inmem2::{self, FromRawWith, reborrow, nz};
+use crate::index::inmem2::{self, nz, reborrow, FromRawWith};
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register("inmem2-pq", RunBuildAndSearch)?;
@@ -134,11 +137,8 @@ impl Product {
             Ok(table)
         })?;
 
-        let quantizer = di::repr::quantized::product::Product::new(
-            table,
-            *metric,
-            Some(*num_threads),
-        )?;
+        let quantizer =
+            di::repr::quantized::product::Product::new(table, *metric, Some(*num_threads))?;
 
         Ok(di::repr::quantized::Backend::new(quantizer))
     }
@@ -244,7 +244,7 @@ struct RunBuildAndSearch;
 
 impl dbr::Benchmark for RunBuildAndSearch {
     type Input = BuildAndSearch;
-    type Output = ();
+    type Output = inmem2::benchmark::BuildAndSearchStats;
 
     fn try_match(
         &self,
@@ -253,9 +253,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
     ) -> dbr::benchmark::Score {
         let mut score = context.success(0);
 
-        let inmem2::DataDispatchParams {
-            data_type,
-        } = input.data.dispatch_params();
+        let inmem2::DataDispatchParams { data_type } = input.data.dispatch_params();
 
         if !f32::is_match(data_type) {
             score.fail(
@@ -272,10 +270,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "product-quantized static build+search",
-        )?;
+        write!(f, "product-quantized static build+search",)?;
 
         Ok(())
     }
@@ -285,7 +280,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
         input: &BuildAndSearch,
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}\n", input)?;
 
         // Load data.
@@ -305,12 +300,12 @@ impl dbr::Benchmark for RunBuildAndSearch {
         )?;
 
         let provider = di::Provider::<_, u32>::new(config)?;
-        let engine = input.build.engine(provider, di::Strategy);
-        let build = engine.build(data, output)?;
+        let engine = input.build.engine(provider);
+        let build = engine.build(data, Some(output))?;
         let search = input
             .search
             .search::<f32, _>(engine.index().clone(), Some(output))?;
 
-        Ok(())
+        Ok(Self::Output { build, search })
     }
 }

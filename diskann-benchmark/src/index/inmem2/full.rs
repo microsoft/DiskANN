@@ -16,12 +16,13 @@ use crate::index::inmem2::{self, reborrow, FromRawWith};
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", RunBuildAndSearch::<f32>::new())?;
+    registry.register("inmem2-f32-stream", RunStream::<f32>::new())?;
     Ok(())
 }
 
-/////////////////////////////
-// Static Build And Search //
-/////////////////////////////
+//-----//
+// DTO //
+//-----//
 
 mod dto {
     use super::*;
@@ -45,6 +46,10 @@ mod dto {
         }
     }
 }
+
+//--------------//
+// Static Build //
+//--------------//
 
 #[derive(Debug)]
 struct BuildAndSearch {
@@ -126,7 +131,7 @@ where
     T: di::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = BuildAndSearch;
-    type Output = ();
+    type Output = inmem2::benchmark::BuildAndSearchStats;
 
     fn try_match(
         &self,
@@ -135,9 +140,7 @@ where
     ) -> dbr::benchmark::Score {
         let mut score = context.success(0);
 
-        let inmem2::DataDispatchParams {
-            data_type,
-        } = input.data.dispatch_params();
+        let inmem2::DataDispatchParams { data_type } = input.data.dispatch_params();
 
         if !T::is_match(data_type) {
             score.fail(
@@ -168,7 +171,7 @@ where
         input: &BuildAndSearch,
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}\n", input)?;
 
         // Load data.
@@ -184,11 +187,119 @@ where
         )?;
 
         let provider = di::Provider::<_, u32>::new(config)?;
-        let engine = input.build.engine(provider, di::Strategy);
-        let build = engine.build(data, output)?;
+        let engine = input.build.engine(provider);
+        let build = engine.build(data, Some(output))?;
         let search = input
             .search
             .search::<T, _>(engine.index().clone(), Some(output))?;
+
+        Ok(Self::Output { build, search })
+    }
+}
+
+//--------//
+// BigANN //
+//--------//
+
+#[derive(Debug)]
+struct Stream {
+    stream: inmem2::benchmark::bigann::Stream,
+}
+
+impl dbr::Input for Stream {
+    type Raw = inmem2::benchmark::bigann::dto::Stream;
+    fn tag() -> &'static str {
+        "inmem2-full-bigann-stream"
+    }
+
+    fn from_raw(raw: Self::Raw, checker: &mut dbr::Checker) -> anyhow::Result<Self> {
+        let stream = inmem2::benchmark::bigann::Stream::from_raw_with(&raw, Some(checker))?;
+        Ok(Self { stream })
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn example() -> Self::Raw {
+        Self::Raw::example()
+    }
+}
+
+#[derive(Debug)]
+struct RunStream<T>(std::marker::PhantomData<T>);
+
+impl<T> RunStream<T> {
+    fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T> dbr::Benchmark for RunStream<T>
+where
+    T: di::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
+{
+    type Input = Stream;
+    type Output = ();
+
+    fn try_match(
+        &self,
+        input: &Stream,
+        context: &dbr::benchmark::MatchContext,
+    ) -> dbr::benchmark::Score {
+        let mut score = context.success(0);
+
+        let data_type = input.stream.data_type();
+        if !T::is_match(data_type) {
+            score.fail(
+                1000,
+                &format_args!(
+                    "expected data-type {}, instead got {}",
+                    Quote(T::DATA_TYPE),
+                    Quote(data_type)
+                ),
+            )
+        }
+
+        score
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "full-precision streaming with data type {}",
+            Quote(T::DATA_TYPE)
+        )?;
+
+        Ok(())
+    }
+
+    fn run(
+        &self,
+        input: &Stream,
+        _checkpoint: dbr::Checkpoint<'_>,
+        mut output: &mut dyn dbr::Output,
+    ) -> anyhow::Result<Self::Output> {
+        // writeln!(output, "{}\n", input)?;
+
+        let Stream { stream } = input;
+
+        // Load data.
+        let data = stream.load_data::<T>(Some(output))?;
+
+        // Compute the medoid of the dataset as the single start point.
+        let start = diskann::graph::StartPointStrategy::Medoid.compute(data.as_view())?;
+        let config = di::repr::Full::config(
+            di::num::Capacity::new(data.nrows()),
+            di::num::MaxDegree::new(stream.max_degree()),
+            stream.distance(),
+            start,
+        )?;
+
+        let provider = di::Provider::<_, u32>::new(config)?;
+        let engine = stream.engine(provider)?;
+        let runner = stream.runner(data)?;
+        runner.run(engine, output)?;
 
         Ok(())
     }

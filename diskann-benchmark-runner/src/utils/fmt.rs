@@ -413,9 +413,7 @@ impl std::fmt::Debug for MaybeLazy<'_> {
                 let as_display = AsDisplay(o);
                 f.debug_tuple("MaybeLazy::Lazy").field(&as_display).finish()
             }
-            Self::Debug(o) => {
-                f.debug_tuple("MaybeLazy::Debug").field(o).finish()
-            }
+            Self::Debug(o) => f.debug_tuple("MaybeLazy::Debug").field(o).finish(),
             Self::Eager(s) => f.debug_tuple("MaybeLazy::Eager").field(s).finish(),
         }
     }

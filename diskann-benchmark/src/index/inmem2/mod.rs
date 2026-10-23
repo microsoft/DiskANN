@@ -27,9 +27,9 @@ use crate::utils::SimilarityMeasure;
 mod benchmark;
 
 mod full;
-mod spherical;
 mod product;
 mod scalar;
+mod spherical;
 
 trait FromRaw: Sized {
     type Raw;
@@ -51,13 +51,32 @@ where
     }
 }
 
-macro_rules! nz {
-    ($ident:ident = $value:literal) => {
-        const $ident: ::std::num::NonZeroUsize = ::std::num::NonZeroUsize::new($value).unwrap();
+#[track_caller]
+fn check_data_type_load<T>(data_type: DataType) -> anyhow::Result<()>
+where
+    T: AsDataType,
+{
+    if !T::is_match(data_type) {
+        Err(anyhow::anyhow!(
+            "attempted to load {} data as {}",
+            data_type,
+            T::DATA_TYPE
+        ))
+    } else {
+        Ok(())
     }
 }
 
+macro_rules! nz {
+    ($ident:ident = $value:literal) => {
+        const $ident: ::std::num::NonZeroUsize = ::std::num::NonZeroUsize::new($value).unwrap();
+    };
+}
+
 use nz;
+
+type Provider<T> = diskann_inmem::Provider<T, u32>;
+type Index<T> = diskann::graph::DiskANNIndex<Provider<T>>;
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     full::register_benchmarks(registry)?;
@@ -92,53 +111,6 @@ mod dto {
             }
         }
     }
-
-    // //--------------//
-    // // Quantization //
-    // //--------------//
-
-    // #[derive(Debug, Serialize, Deserialize)]
-    // #[serde(rename_all = "kebab-case")]
-    // pub(super) enum Quantization {
-    //     Spherical(Spherical),
-    //     Product(Product),
-    //     Scalar(Scalar),
-    // }
-
-    // #[derive(Debug, Serialize, Deserialize)]
-    // #[serde(rename_all = "kebab-case")]
-    // pub(super) enum SphericalBits {
-    //     One,
-    //     Two,
-    //     Four,
-    // }
-
-    // #[derive(Debug, Serialize, Deserialize)]
-    // pub(super) struct Spherical {
-    //     pub(super) bits: SphericalBits,
-    // }
-
-    // #[derive(Debug, Serialize, Deserialize)]
-    // pub(super) struct Product {
-    //     pub(super) chunks: NonZeroUsize,
-    //     pub(super) centers: NonZeroUsize,
-    //     pub(super) seed: u64,
-    // }
-
-    // #[derive(Debug, Serialize, Deserialize)]
-    // #[serde(rename_all = "kebab-case")]
-    // pub(super) enum ScalarBits {
-    //     One,
-    //     Two,
-    //     Four,
-    //     Eight,
-    // }
-
-    // #[derive(Debug, Serialize, Deserialize)]
-    // pub(super) struct Scalar {
-    //     pub(super) bits: ScalarBits,
-    //     pub(super) standard_deviations: f64,
-    // }
 
     // //-----------//
     // // Streaming //
@@ -182,100 +154,6 @@ mod dto {
     // }
 }
 
-// #[derive(Debug, Clone)]
-// struct KnnInstance {
-//     knn_params: core_search::graph::KnnParams,
-//     recall_k: usize,
-// }
-//
-// impl KnnInstance {
-//     fn flatten(runs: &[dto::KnnSweep]) -> anyhow::Result<Vec<Self>> {
-//         runs.iter()
-//             .flat_map(|sweep| {
-//                 let search_n = sweep.search_n;
-//                 let recall_k = sweep.recall_k;
-//
-//                 sweep
-//                     .search_l
-//                     .iter()
-//                     .map(move |search_l| -> anyhow::Result<_> {
-//                         let knn_params = core_search::graph::KnnParams::new(search_n, *search_l)?;
-//                         Ok(KnnInstance {
-//                             knn_params,
-//                             recall_k,
-//                         })
-//                     })
-//             })
-//             .collect()
-//     }
-// }
-//
-// impl Display for KnnInstance {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-//         write!(
-//             f,
-//             "knn = {}, search_l = {}, beam_width = {}",
-//             self.recall_k,
-//             self.knn_params.knn.l_value(),
-//             self.knn_params.knn.beam_width(),
-//         )
-//     }
-// }
-//
-// #[derive(Debug)]
-// struct KnnSearch {
-//     queries: InputFile,
-//     groundtruth: InputFile,
-//     reps: NonZeroUsize,
-//     num_threads: Vec<NonZeroUsize>,
-//     runs: Vec<KnnInstance>,
-// }
-//
-// impl KnnSearch {
-//     fn from_raw(raw: dto::KnnSearch, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
-//         let dto::KnnSearch {
-//             mut queries,
-//             mut groundtruth,
-//             reps,
-//             num_threads,
-//             runs,
-//         } = raw;
-//
-//         if let Some(checker) = checker {
-//             queries.resolve(checker)?;
-//             groundtruth.resolve(checker)?;
-//         }
-//
-//         Ok(Self {
-//             queries,
-//             groundtruth,
-//             reps,
-//             num_threads,
-//             runs: KnnInstance::flatten(&runs)?,
-//         })
-//     }
-//
-//     fn maximum_recall_k(&self) -> usize {
-//         self.runs.iter().map(|r| r.recall_k).max().unwrap_or(0)
-//     }
-// }
-//
-// impl Display for KnnSearch {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-//         let mut kv = KeyValue::new();
-//         kv.push("queries", &self.queries);
-//         kv.push("groundtruth", &self.groundtruth);
-//         kv.push("reps", &self.reps);
-//
-//         let num_threads = Delimit::new(self.num_threads.iter(), ", ");
-//         kv.push("num_threads", &num_threads);
-//
-//         let runs = Delimit::new(self.runs.iter(), "\n").to_string();
-//         kv.push("runs", &runs);
-//         write!(f, "{}", kv)
-//     }
-// }
-
 #[derive(Debug)]
 struct Data {
     data_type: DataType,
@@ -284,6 +162,22 @@ struct Data {
 }
 
 impl Data {
+    fn new(data_type: DataType, data: InputFile, distance: Metric) -> Self {
+        Self {
+            data_type,
+            data,
+            distance,
+        }
+    }
+
+    fn distance(&self) -> Metric {
+        self.distance
+    }
+
+    fn data_type(&self) -> DataType {
+        self.data_type
+    }
+
     fn dispatch_params(&self) -> DataDispatchParams {
         DataDispatchParams {
             data_type: self.data_type,
@@ -294,13 +188,7 @@ impl Data {
     where
         T: AsDataType + bytemuck::Pod,
     {
-        if !T::is_match(self.data_type) {
-            anyhow::bail!(
-                "attempted to load {} data as {}",
-                self.data_type,
-                T::DATA_TYPE
-            );
-        }
+        check_data_type_load::<T>(self.data_type)?;
 
         let data =
             crate::utils::datafiles::load_dataset(crate::utils::datafiles::BinFile(&self.data))?;
@@ -344,11 +232,7 @@ impl FromRawWith for Data {
             data.resolve(checker)?;
         }
 
-        Ok(Self {
-            data_type: *data_type,
-            data,
-            distance: (*distance).into(),
-        })
+        Ok(Self::new(*data_type, data, (*distance).into()))
     }
 }
 
@@ -367,614 +251,6 @@ struct DataDispatchParams {
     data_type: DataType,
 }
 
-// //--------------//
-// // Quantization //
-// //--------------//
-//
-// #[derive(Debug)]
-// enum Quantization {
-//     None,
-//     Spherical(Spherical),
-//     Product(Product),
-//     Scalar(Scalar),
-// }
-//
-// impl Quantization {
-//     fn from_raw(raw: Option<dto::Quantization>) -> anyhow::Result<Self> {
-//         let this = if let Some(raw) = raw {
-//             match raw {
-//                 dto::Quantization::Spherical(spherical) => {
-//                     Self::Spherical(Spherical::from_raw(spherical))
-//                 }
-//                 dto::Quantization::Product(product) => Self::Product(Product::from_raw(product)),
-//                 dto::Quantization::Scalar(scalar) => Self::Scalar(Scalar::from_raw(scalar)?),
-//             }
-//         } else {
-//             Self::None
-//         };
-//
-//         Ok(this)
-//     }
-//
-//     fn as_spherical(&self) -> Option<&Spherical> {
-//         match self {
-//             Self::Spherical(spherical) => Some(spherical),
-//             _ => None,
-//         }
-//     }
-//
-//     fn as_product(&self) -> Option<&Product> {
-//         match self {
-//             Self::Product(product) => Some(product),
-//             _ => None,
-//         }
-//     }
-//
-//     fn as_scalar(&self) -> Option<&Scalar> {
-//         match self {
-//             Self::Scalar(scalar) => Some(scalar),
-//             _ => None,
-//         }
-//     }
-// }
-//
-// impl std::fmt::Display for Quantization {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             Self::None => write!(f, "none"),
-//             Self::Spherical(spherical) => {
-//                 let mut kv = KeyValue::new();
-//                 kv.push("spherical", spherical);
-//                 write!(f, "{}", kv)
-//             }
-//             Self::Product(product) => {
-//                 let mut kv = KeyValue::new();
-//                 kv.push("product", product);
-//                 write!(f, "{}", kv)
-//             }
-//             Self::Scalar(scalar) => {
-//                 let mut kv = KeyValue::new();
-//                 kv.push("scalar", scalar);
-//                 write!(f, "{}", kv)
-//             }
-//         }
-//     }
-// }
-//
-// #[derive(Debug)]
-// enum SphericalBits {
-//     One,
-//     Two,
-//     Four,
-// }
-//
-// impl SphericalBits {
-//     fn from_raw(raw: dto::SphericalBits) -> Self {
-//         match raw {
-//             dto::SphericalBits::One => Self::One,
-//             dto::SphericalBits::Two => Self::Two,
-//             dto::SphericalBits::Four => Self::Four,
-//         }
-//     }
-// }
-//
-// impl std::fmt::Display for SphericalBits {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             Self::One => write!(f, "1"),
-//             Self::Two => write!(f, "2"),
-//             Self::Four => write!(f, "4"),
-//         }
-//     }
-// }
-//
-// #[derive(Debug)]
-// struct Spherical {
-//     bits: SphericalBits,
-// }
-//
-// impl Spherical {
-//     fn from_raw(raw: dto::Spherical) -> Self {
-//         let dto::Spherical { bits } = raw;
-//
-//         Self {
-//             bits: SphericalBits::from_raw(bits),
-//         }
-//     }
-//
-//     fn train(
-//         &self,
-//         data: rowmajor::Ref<'_, f32>,
-//         metric: Metric,
-//     ) -> anyhow::Result<inmem::repr::quantized::Backend> {
-//         use diskann_quantization::{algorithms::transforms, spherical};
-//         use inmem::repr::quantized::{spherical::Spherical, Backend};
-//         use rand::SeedableRng;
-//
-//         let mut rng = rand::rngs::StdRng::seed_from_u64(0x7);
-//
-//         let quantizer = spherical::SphericalQuantizer::train(
-//             data,
-//             transforms::TransformKind::DoubleHadamard {
-//                 target_dim: transforms::TargetDim::Same,
-//             },
-//             metric
-//                 .try_into()
-//                 .context("internal error - dispatch should reject invalid metrics")?,
-//             spherical::PreScale::ReciprocalMeanNorm,
-//             &mut rng,
-//             GlobalAllocator,
-//         )?;
-//
-//         let quantizer = match self.bits {
-//             SphericalBits::One => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<1>()?)),
-//             SphericalBits::Two => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<2>()?)),
-//             SphericalBits::Four => {
-//                 Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?))
-//             }
-//         };
-//
-//         Ok(quantizer)
-//     }
-// }
-//
-// impl std::fmt::Display for Spherical {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         let Self { bits } = self;
-//
-//         let mut kv = KeyValue::new();
-//         kv.push("bits", bits);
-//
-//         write!(f, "{}", kv)
-//     }
-// }
-//
-// #[derive(Debug)]
-// struct Product {
-//     chunks: NonZeroUsize,
-//     centers: NonZeroUsize,
-//     seed: u64,
-// }
-//
-// impl Product {
-//     fn from_raw(raw: dto::Product) -> Self {
-//         let dto::Product {
-//             chunks,
-//             centers,
-//             seed,
-//         } = raw;
-//
-//         Self {
-//             chunks,
-//             centers,
-//             seed,
-//         }
-//     }
-//
-//     fn train(
-//         &self,
-//         data: rowmajor::Ref<'_, f32>,
-//         num_threads: NonZeroUsize,
-//     ) -> anyhow::Result<BasicTable> {
-//         use diskann_quantization::{
-//             cancel::DontCancel,
-//             product::{self, train::TrainQuantizer},
-//             random,
-//             views::ChunkOffsets,
-//             Parallelism,
-//         };
-//
-//         let trainer = product::train::LightPQTrainingParameters::new(self.centers.get(), 5);
-//         let threadpool = rayon::ThreadPoolBuilder::new()
-//             .num_threads(num_threads.get())
-//             .build()?;
-//
-//         let Some(dim) = NonZeroUsize::new(data.ncols()) else {
-//             anyhow::bail!("zero dimensional data is not supported");
-//         };
-//
-//         threadpool.install(|| -> anyhow::Result<_> {
-//             let table = trainer.train(
-//                 data,
-//                 ChunkOffsets::partition(dim, self.chunks)?.as_view(),
-//                 Parallelism::Rayon,
-//                 &random::StdRngBuilder::new(self.seed),
-//                 &DontCancel,
-//             )?;
-//
-//             Ok(table)
-//         })
-//     }
-// }
-//
-// impl std::fmt::Display for Product {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         let Self {
-//             chunks,
-//             centers,
-//             seed,
-//         } = self;
-//
-//         let mut kv = KeyValue::new();
-//         kv.push("chunks", chunks);
-//         kv.push("centers", centers);
-//         kv.push("seed", seed);
-//
-//         write!(f, "{}", kv)
-//     }
-// }
-//
-// #[derive(Debug)]
-// enum ScalarBits {
-//     One,
-//     Two,
-//     Four,
-//     Eight,
-// }
-//
-// impl ScalarBits {
-//     fn from_raw(raw: dto::ScalarBits) -> Self {
-//         match raw {
-//             dto::ScalarBits::One => Self::One,
-//             dto::ScalarBits::Two => Self::Two,
-//             dto::ScalarBits::Four => Self::Four,
-//             dto::ScalarBits::Eight => Self::Eight,
-//         }
-//     }
-// }
-//
-// impl std::fmt::Display for ScalarBits {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             Self::One => write!(f, "1"),
-//             Self::Two => write!(f, "2"),
-//             Self::Four => write!(f, "4"),
-//             Self::Eight => write!(f, "8"),
-//         }
-//     }
-// }
-//
-// #[derive(Debug)]
-// struct Scalar {
-//     bits: ScalarBits,
-//     standard_deviations: dq::num::Positive<f64>,
-// }
-//
-// impl Scalar {
-//     fn from_raw(raw: dto::Scalar) -> anyhow::Result<Self> {
-//         let dto::Scalar {
-//             bits,
-//             standard_deviations,
-//         } = raw;
-//
-//         Ok(Self {
-//             bits: ScalarBits::from_raw(bits),
-//             standard_deviations: dq::num::Positive::new(standard_deviations)?,
-//         })
-//     }
-//
-//     fn train(&self, data: rowmajor::Ref<'_, f32>) -> anyhow::Result<dq::scalar::ScalarQuantizer> {
-//         let trainer =
-//             dq::scalar::train::ScalarQuantizationParameters::new(self.standard_deviations);
-//         let quantizer = trainer.train(data);
-//         Ok(quantizer)
-//     }
-// }
-//
-// impl std::fmt::Display for Scalar {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         let Self {
-//             bits,
-//             standard_deviations,
-//         } = self;
-//
-//         let std = standard_deviations.into_inner();
-//
-//         let mut kv = KeyValue::new();
-//         kv.push("bits", bits);
-//         kv.push("standard_deviations", &std);
-//
-//         write!(f, "{}", kv)
-//     }
-// }
-//
-// //-------------//
-// // StaticBuild //
-// //-------------//
-//
-// #[derive(Debug)]
-// struct StaticBuild {
-//     data: Data,
-//     build: BuildParams,
-//     search: KnnSearch,
-//     quantization: Quantization,
-//
-//     // The serialized representation of the original input.
-//     input: serde_json::Value,
-// }
-//
-// impl StaticBuild {
-//     fn from_raw(raw: dto::StaticBuild, mut checker: Option<&mut Checker>) -> anyhow::Result<Self> {
-//         let input = serde_json::to_value(&raw)?;
-//
-//         let dto::StaticBuild {
-//             data,
-//             build,
-//             search,
-//             quantization,
-//         } = raw;
-//
-//         let data = Data::from_raw(data, checker.as_deref_mut())?;
-//         let build = BuildParams::from_raw(build, data.distance)?;
-//         let search = KnnSearch::from_raw(search, checker)?;
-//         let quantization = Quantization::from_raw(quantization)?;
-//
-//         Ok(Self {
-//             data,
-//             build,
-//             search,
-//             quantization,
-//             input,
-//         })
-//     }
-//
-//     fn dispatch_params(&self) -> DispatchParams<'_> {
-//         DispatchParams {
-//             data_type: self.data.data_type,
-//             quantization: &self.quantization,
-//             distance: self.data.distance,
-//         }
-//     }
-// }
-//
-// #[derive(Debug)]
-// struct DispatchParams<'a> {
-//     /// The type of the dataset.
-//     data_type: DataType,
-//     /// The quantization used by the dataset.
-//     quantization: &'a Quantization,
-//     /// The metric being used.
-//     distance: Metric,
-// }
-//
-// impl Display for StaticBuild {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-//         let Self {
-//             data,
-//             build,
-//             search,
-//             quantization,
-//             input: _input,
-//         } = self;
-//
-//         let mut kv = KeyValue::new();
-//         kv.push("data", &data);
-//         kv.push("build", &build);
-//         kv.push("search", &search);
-//         kv.push("quantization", &quantization);
-//
-//         write!(f, "{}", kv)
-//     }
-// }
-//
-// impl Input for StaticBuild {
-//     type Raw = dto::StaticBuild;
-//
-//     fn tag() -> &'static str {
-//         "inmem2"
-//     }
-//
-//     fn from_raw(raw: Self::Raw, checker: &mut Checker) -> anyhow::Result<Self> {
-//         Self::from_raw(raw, Some(checker))
-//     }
-//
-//     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-//         Ok(self.input.clone())
-//     }
-//
-//     fn example() -> Self::Raw {
-//         const FOUR: NonZeroUsize = NonZeroUsize::new(4).unwrap();
-//         const THREE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
-//
-//         dto::StaticBuild {
-//             data: dto::Data {
-//                 data_type: DataType::Float32,
-//                 data: InputFile::new("path/to/data"),
-//                 distance: SimilarityMeasure::SquaredL2,
-//             },
-//             build: dto::BuildParams {
-//                 pruned_degree: 28,
-//                 max_degree: 32,
-//                 l_build: 100,
-//                 alpha: 1.2,
-//                 num_threads: FOUR,
-//             },
-//             search: dto::KnnSearch {
-//                 queries: InputFile::new("path/to/queries"),
-//                 groundtruth: InputFile::new("path/to/groundtruth"),
-//                 reps: THREE,
-//                 num_threads: vec![FOUR],
-//                 runs: vec![dto::KnnSweep {
-//                     search_n: 10,
-//                     search_l: vec![10, 20, 30, 40, 50],
-//                     recall_k: 10,
-//                 }],
-//             },
-//             quantization: None,
-//         }
-//     }
-// }
-//
-// ///////////////
-// // Benchmark //
-// ///////////////
-//
-// //--------//
-// // Scalar //
-// //-------//
-//
-// #[derive(Debug)]
-// struct ScalarBuild;
-//
-// impl Benchmark for ScalarBuild {
-//     type Input = StaticBuild;
-//     type Output = ();
-//
-//     fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
-//         let mut score = context.success(0);
-//
-//         let DispatchParams {
-//             data_type,
-//             quantization,
-//             distance,
-//         } = input.dispatch_params();
-//
-//         if !matches!(quantization, Quantization::Scalar(_)) {
-//             score.fail(2000, &"needed scalar-quantization");
-//         }
-//
-//         if distance == Metric::Cosine {
-//             score.fail(
-//                 500,
-//                 &format_args!(
-//                     "{} is not supported for scalar quantization- use \"cosine-normalized\" instead",
-//                     Metric::Cosine
-//                 ),
-//             );
-//         }
-//
-//         if !f32::is_match(data_type) {
-//             score.fail(
-//                 1000,
-//                 &format_args!(
-//                     "expected data-type {}, instead got {}",
-//                     Quote(f32::DATA_TYPE),
-//                     Quote(data_type)
-//                 ),
-//             )
-//         }
-//
-//         score
-//     }
-//
-//     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "scalar-quantized index build-and-search",)?;
-//
-//         Ok(())
-//     }
-//
-//     fn run(
-//         &self,
-//         input: &StaticBuild,
-//         checkpoint: Checkpoint<'_>,
-//         mut output: &mut dyn Output,
-//     ) -> anyhow::Result<()> {
-//         use repr::{
-//             quantized::{scalar::Scalar, Backend},
-//             Quantized,
-//         };
-//
-//         writeln!(output, "{input}\n")?;
-//
-//         let scalar = input.quantization.as_scalar().unwrap();
-//
-//         // Load data.
-//         let data: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
-//             datafiles::BinFile(&input.data.data),
-//         )?);
-//
-//         let dim = data.ncols();
-//         let num_points = data.nrows();
-//         writeln!(output, "Loaded {num_points} points, dim={dim}")?;
-//
-//         let quantizer = scalar.train(data.as_view())?;
-//
-//         // Compute the medoid of the dataset as the single start point.
-//
-//         let metric = repr::quantized::scalar::Metric::try_from(input.data.distance)?;
-//
-//         let capacity = Capacity::new(num_points);
-//         let max_degree = MaxDegree::new(input.build.config.max_degree().get());
-//         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-//         let rerank = repr::quantized::Rerank::F16 {
-//             metric: input.data.distance.into(),
-//         };
-//
-//         let backend = match scalar.bits {
-//             ScalarBits::One => Backend::new(Scalar::<1>::new(quantizer, metric)),
-//             ScalarBits::Two => Backend::new(Scalar::<2>::new(quantizer, metric)),
-//             ScalarBits::Four => Backend::new(Scalar::<4>::new(quantizer, metric)),
-//             ScalarBits::Eight => Backend::new(Scalar::<8>::new(quantizer, metric)),
-//         };
-//
-//         let config = Quantized::config(backend, capacity, max_degree, start, rerank)?;
-//
-//         let provider = Provider::<_, u32>::new(config)?;
-//         let index = Arc::new(DiskANNIndex::new(
-//             input.build.config.clone(),
-//             provider,
-//             None,
-//         ));
-//
-//         // Build via SingleInsert.
-//         let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
-//         let builder = build_core::graph::SingleInsert::new(
-//             index.clone(),
-//             data,
-//             Strategy,
-//             build_core::ids::Identity::<u32>::new(),
-//         );
-//
-//         let build_results = build_core::build_tracked(
-//             builder,
-//             build_core::Parallelism::dynamic(diskann::utils::ONE, input.build.num_threads),
-//             &rt,
-//             Some(&ProgressMeter::new(output)),
-//         )?;
-//
-//         let total_build_time = build_results.end_to_end_latency();
-//         writeln!(
-//             output,
-//             "\nBuild complete in {:.2}s",
-//             total_build_time.as_seconds()
-//         )?;
-//         checkpoint.checkpoint(&total_build_time)?;
-//
-//         // Search.
-//         let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
-//             datafiles::BinFile(&input.search.queries),
-//         )?);
-//         let max_k = input.search.maximum_recall_k();
-//         let groundtruth = datafiles::load_groundtruth(
-//             datafiles::BinFile(&input.search.groundtruth),
-//             Some(max_k),
-//         )?;
-//
-//         writeln!(output, "Loaded {} queries\n", queries.nrows())?;
-//
-//         let knn = benchmark_core::search::graph::KNN::new(
-//             index,
-//             queries,
-//             benchmark_core::search::graph::Strategy::broadcast(Strategy),
-//         )?;
-//
-//         let results = _knn(
-//             &knn,
-//             &groundtruth,
-//             input.search.reps,
-//             &input.search.num_threads,
-//             &input.search.runs,
-//         )?;
-//
-//         let results = AggregatedSearchResults::Topk(results);
-//
-//         writeln!(output, "{}", results)?;
-//
-//         Ok(())
-//     }
-// }
-//
-//
 // ///////////////
 // // Streaming //
 // ///////////////

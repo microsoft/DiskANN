@@ -3,15 +3,18 @@
  * Licensed under the MIT license.
  */
 
-use std::{io::Write};
+use std::io::Write;
 
+use diskann_benchmark_runner::{
+    self as dbr,
+    utils::{datatype::AsDataType, fmt::Quote},
+};
 use diskann_inmem::{self as di};
-use diskann_utils::views::rowmajor::{self, Matrix};
-use diskann_benchmark_runner::{self as dbr, utils::{fmt::Quote, datatype::AsDataType}};
 use diskann_quantization::{self as dq};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{self as dv};
 
-use crate::index::inmem2::{self, FromRawWith, reborrow};
+use crate::index::inmem2::{self, reborrow, FromRawWith};
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register("inmem2-scalar", RunBuildAndSearch)?;
@@ -108,10 +111,7 @@ struct Scalar {
 
 impl Scalar {
     fn from_raw(raw: &dto::Scalar, metric: dv::distance::Metric) -> anyhow::Result<Self> {
-        let dto::Scalar {
-            bits,
-            std,
-        } = raw;
+        let dto::Scalar { bits, std } = raw;
 
         Ok(Self {
             bits: Bits::from_raw(bits),
@@ -121,37 +121,27 @@ impl Scalar {
     }
 
     fn train(&self, data: rowmajor::Ref<'_, f32>) -> anyhow::Result<di::repr::quantized::Backend> {
-        use di::repr::quantized::{Backend, scalar::Scalar};
+        use di::repr::quantized::{scalar::Scalar, Backend};
 
-        let Self {
-            bits,
-            std,
-            metric,
-        } = self;
+        let Self { bits, std, metric } = self;
 
+        let trainer = dq::scalar::train::ScalarQuantizationParameters::new(*std);
+        let quantizer = trainer.train(data);
 
-         let trainer =
-             dq::scalar::train::ScalarQuantizationParameters::new(*std);
-         let quantizer = trainer.train(data);
-
-         let backend = match bits {
+        let backend = match bits {
             Bits::One => Backend::new(Scalar::<1>::new(quantizer, *metric)),
             Bits::Two => Backend::new(Scalar::<2>::new(quantizer, *metric)),
             Bits::Four => Backend::new(Scalar::<4>::new(quantizer, *metric)),
             Bits::Eight => Backend::new(Scalar::<8>::new(quantizer, *metric)),
-         };
+        };
 
-         Ok(backend)
-     }
+        Ok(backend)
+    }
 }
 
 impl std::fmt::Display for Scalar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            bits,
-            std,
-            metric,
-        } = self;
+        let Self { bits, std, metric } = self;
 
         let mut kv = dbr::utils::fmt::KeyValue::new();
         kv.push("bits", bits);
@@ -218,7 +208,6 @@ impl std::fmt::Display for BuildAndSearch {
     }
 }
 
-
 impl dbr::Input for BuildAndSearch {
     type Raw = dto::BuildAndSearch;
     fn tag() -> &'static str {
@@ -243,7 +232,7 @@ struct RunBuildAndSearch;
 
 impl dbr::Benchmark for RunBuildAndSearch {
     type Input = BuildAndSearch;
-    type Output = ();
+    type Output = inmem2::benchmark::BuildAndSearchStats;
 
     fn try_match(
         &self,
@@ -252,9 +241,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
     ) -> dbr::benchmark::Score {
         let mut score = context.success(0);
 
-        let inmem2::DataDispatchParams {
-            data_type,
-        } = input.data.dispatch_params();
+        let inmem2::DataDispatchParams { data_type } = input.data.dispatch_params();
 
         if !f32::is_match(data_type) {
             score.fail(
@@ -271,10 +258,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "scalar-quantized static build+search",
-        )?;
+        write!(f, "scalar-quantized static build+search",)?;
 
         Ok(())
     }
@@ -284,7 +268,7 @@ impl dbr::Benchmark for RunBuildAndSearch {
         input: &BuildAndSearch,
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}\n", input)?;
 
         // Load data.
@@ -304,12 +288,12 @@ impl dbr::Benchmark for RunBuildAndSearch {
         )?;
 
         let provider = di::Provider::<_, u32>::new(config)?;
-        let engine = input.build.engine(provider, di::Strategy);
-        let build = engine.build(data, output)?;
+        let engine = input.build.engine(provider);
+        let build = engine.build(data, Some(output))?;
         let search = input
             .search
             .search::<f32, _>(engine.index().clone(), Some(output))?;
 
-        Ok(())
+        Ok(Self::Output { build, search })
     }
 }

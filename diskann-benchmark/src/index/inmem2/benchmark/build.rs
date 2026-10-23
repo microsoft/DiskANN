@@ -7,11 +7,15 @@ use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core as dbc;
 use diskann_benchmark_runner as dbr;
-use diskann_utils::views::rowmajor;
+use diskann_inmem::{self as di};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector as dv;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::{index::inmem2::nz, utils::progress::Progress};
+use crate::{
+    index::inmem2::{nz, Index, Provider},
+    utils::progress::Progress,
+};
 
 pub(in crate::index::inmem2) mod dto {
     use super::*;
@@ -43,8 +47,8 @@ pub(in crate::index::inmem2) mod dto {
 
 #[derive(Debug, Clone)]
 pub(in crate::index::inmem2) struct Config {
-    pub(in crate::index::inmem2) config: diskann::graph::Config,
-    pub(in crate::index::inmem2) num_threads: NonZeroUsize,
+    config: diskann::graph::Config,
+    num_threads: NonZeroUsize,
 }
 
 impl Config {
@@ -77,13 +81,17 @@ impl Config {
         })
     }
 
+    pub(in crate::index::inmem2) fn num_threads(&self) -> NonZeroUsize {
+        self.num_threads
+    }
+
     pub(in crate::index::inmem2) fn max_degree(&self) -> usize {
         self.config.max_degree().get()
     }
 
-    pub(in crate::index::inmem2) fn engine<DP, S>(&self, provider: DP, strategy: S) -> Engine<DP, S>
+    pub(in crate::index::inmem2) fn engine<R>(&self, provider: Provider<R>) -> Engine<R>
     where
-        DP: diskann::provider::DataProvider,
+        R: di::repr::Representation,
     {
         let Self {
             config,
@@ -96,9 +104,7 @@ impl Config {
                 provider,
                 None,
             )),
-            strategy,
             *num_threads,
-            self.clone(),
         )
     }
 }
@@ -121,70 +127,81 @@ impl std::fmt::Display for Config {
     }
 }
 
-pub(in crate::index::inmem2) struct Engine<DP, S>
+#[derive(Debug)]
+pub(in crate::index::inmem2) struct Engine<R>
 where
-    DP: diskann::provider::DataProvider,
+    R: Send + Sync + 'static,
 {
-    index: Arc<diskann::graph::DiskANNIndex<DP>>,
-    strategy: S,
+    index: Arc<Index<R>>,
     num_threads: NonZeroUsize,
-    config: Config,
 }
 
-impl<DP, S> Engine<DP, S>
+impl<R> Engine<R>
 where
-    DP: diskann::provider::DataProvider,
+    R: di::repr::Representation,
 {
-    fn new(
-        index: Arc<diskann::graph::DiskANNIndex<DP>>,
-        strategy: S,
-        num_threads: NonZeroUsize,
-        config: Config,
-    ) -> Self {
-        Self {
-            index,
-            strategy,
-            num_threads,
-            config,
-        }
+    fn new(index: Arc<Index<R>>, num_threads: NonZeroUsize) -> Self {
+        Self { index, num_threads }
     }
 
-    pub(in crate::index::inmem2) fn index(&self) -> &Arc<diskann::graph::DiskANNIndex<DP>> {
+    pub(in crate::index::inmem2) fn index(&self) -> &Arc<Index<R>> {
         &self.index
     }
 
-    pub(in crate::index::inmem2) fn build<T>(
+    pub(in crate::index::inmem2) fn build_for<T>(
         &self,
         data: Arc<rowmajor::Owned<T>>,
-        mut output: &mut dyn dbr::Output,
+        ids: std::ops::Range<u32>,
+        mut output: Option<&mut dyn dbr::Output>,
     ) -> anyhow::Result<Stats>
     where
-        dbc::build::graph::SingleInsert<DP, T, S>: dbc::build::Build<Output = ()>,
-        DP: diskann::provider::DataProvider<InternalId = u32, ExternalId = u32>,
-        S: Clone,
+        R: for<'a> di::repr::Insert<Query<'a> = &'a [T]>,
+        T: Clone + Send + Sync + 'static,
     {
         let rt = dbc::tokio::runtime(self.num_threads.get())?;
         let runner = dbc::build::graph::SingleInsert::new(
             self.index.clone(),
             data,
-            self.strategy.clone(),
-            dbc::build::ids::Identity::<u32>::new(),
+            di::Strategy,
+            dbc::build::ids::Range::<u32>::new(ids),
         );
+
+        let progress = match output.as_mut() {
+            Some(o) => Some(Progress::new(*o)),
+            None => None,
+        };
 
         let results = dbc::build::build_tracked(
             runner,
             dbc::build::Parallelism::dynamic(diskann::utils::ONE, self.num_threads),
             &rt,
-            Some(&Progress::new(output)),
+            progress
+                .as_ref()
+                .map(|v| -> &dyn dbc::build::AsProgress { v }),
         )?;
 
         let stats = Stats::new(results)?;
-        writeln!(output, "\n\n{}\n", stats)?;
+        if let Some(mut output) = output {
+            writeln!(output, "\n\n{}\n", stats)?;
+        }
         Ok(stats)
+    }
+
+    pub(in crate::index::inmem2) fn build<T>(
+        &self,
+        data: Arc<rowmajor::Owned<T>>,
+        mut output: Option<&mut dyn dbr::Output>,
+    ) -> anyhow::Result<Stats>
+    where
+        R: for<'a> di::repr::Insert<Query<'a> = &'a [T]>,
+        T: Clone + Send + Sync + 'static,
+    {
+        let nrows = data.nrows() as u32;
+        self.build_for(data, 0..nrows, output)
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(in crate::index::inmem2) struct Stats {
     total_time: dbr::utils::MicroSeconds,
     inserted: usize,
