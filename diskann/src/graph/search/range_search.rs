@@ -264,7 +264,6 @@ where
                 hops: stats.hops,
                 result_count: result_count as u32,
                 range_search_second_round: stats.range_search_second_round,
-                filter_classification: Default::default(),
             })
         }
     }

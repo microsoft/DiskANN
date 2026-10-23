@@ -1005,7 +1005,6 @@ where
             hops: 0,
             result_count: result_count as u32,
             range_search_second_round: false,
-            filter_classification: Default::default(),
         })
     }
 

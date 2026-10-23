@@ -124,8 +124,7 @@ fn run(
         let stats = index
             .search_with(
                 multihop,
-                &labeled::Filtered::new(test_provider::Strategy::new(), filter)
-                    .with_classification_stats(),
+                &labeled::Filtered::new(test_provider::Strategy::new(), filter),
                 graph::glue::CopyIds,
                 &test_provider::Context::new(),
                 query,

@@ -195,7 +195,6 @@ where
                         hops: 0,
                         result_count: 0,
                         range_search_second_round: false,
-                        filter_classification: Default::default(),
                     },
                     timings: Some(HybridPhaseTimings::default()),
                 });
@@ -280,7 +279,6 @@ where
                     hops: 0,
                     result_count,
                     range_search_second_round: false,
-                    filter_classification: Default::default(),
                 },
                 timings: Some(HybridPhaseTimings {
                     candidate_scan,

@@ -82,58 +82,15 @@ where
     fn visit_candidates(&self, visit: impl FnMut(I));
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ClassificationPhase {
-    StartPoint,
-    FirstHop,
-}
-
-#[derive(Debug)]
-struct LabelClassificationTracker {
-    stats: Option<glue::FilterClassificationStats>,
-}
-
-impl LabelClassificationTracker {
-    fn new(collect_stats: bool) -> Self {
-        Self {
-            stats: collect_stats.then(glue::FilterClassificationStats::default),
-        }
-    }
-
-    fn decide<I, L>(&mut self, labels: &L, id: I, phase: ClassificationPhase) -> Decision<I>
-    where
-        I: VectorId,
-        L: QueryLabelProvider<I> + ?Sized,
-    {
-        if let Some(stats) = &mut self.stats {
-            match phase {
-                ClassificationPhase::StartPoint => {
-                    stats.start_point_requests += 1;
-                    stats.start_point_evaluations += 1;
-                }
-                ClassificationPhase::FirstHop => {
-                    stats.first_hop_requests += 1;
-                    stats.first_hop_evaluations += 1;
-                }
-            }
-        }
-        if labels.is_match(id) {
-            if let Some(stats) = &mut self.stats {
-                match phase {
-                    ClassificationPhase::StartPoint => stats.start_point_accepted += 1,
-                    ClassificationPhase::FirstHop => stats.first_hop_accepted += 1,
-                }
-            }
-            Decision::accept(id)
-        } else {
-            if let Some(stats) = &mut self.stats {
-                match phase {
-                    ClassificationPhase::StartPoint => stats.start_point_rejected += 1,
-                    ClassificationPhase::FirstHop => stats.first_hop_rejected += 1,
-                }
-            }
-            Decision::reject(id)
-        }
+fn classify<I, L>(labels: &L, id: I) -> Decision<I>
+where
+    I: VectorId,
+    L: QueryLabelProvider<I> + ?Sized,
+{
+    if labels.is_match(id) {
+        Decision::accept(id)
+    } else {
+        Decision::reject(id)
     }
 }
 
@@ -155,7 +112,6 @@ where
 {
     strategy: S,
     labels: &'a L,
-    collect_classification_stats: bool,
     _id: PhantomData<fn(I)>,
 }
 
@@ -172,15 +128,8 @@ where
         Self {
             strategy,
             labels,
-            collect_classification_stats: false,
             _id: PhantomData,
         }
-    }
-
-    /// Collect label-classification statistics for this search.
-    pub fn with_classification_stats(mut self) -> Self {
-        self.collect_classification_stats = true;
-        self
     }
 
     /// Return the contained [`QueryLabelProvider`].
@@ -208,9 +157,6 @@ where
         Ok(FilteredAccessor {
             inner,
             labels: self.labels,
-            label_classification: LabelClassificationTracker::new(
-                self.collect_classification_stats,
-            ),
         })
     }
 }
@@ -243,7 +189,6 @@ where
 {
     inner: A,
     labels: &'a L,
-    label_classification: LabelClassificationTracker,
 }
 
 impl<'a, A, L> FilteredAccessor<'a, A, L>
@@ -253,11 +198,7 @@ where
 {
     #[cfg(test)]
     pub(crate) fn new(inner: A, labels: &'a L) -> Self {
-        Self {
-            inner,
-            labels,
-            label_classification: LabelClassificationTracker::new(true),
-        }
+        Self { inner, labels }
     }
 }
 
@@ -289,14 +230,8 @@ where
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
         let labels = self.labels;
-        let label_classification = &mut self.label_classification;
         self.inner
-            .start_point_distances(|id, distance| {
-                f(
-                    label_classification.decide(labels, id, ClassificationPhase::StartPoint),
-                    distance,
-                )
-            })
+            .start_point_distances(|id, distance| f(classify(labels, id), distance))
             .await
     }
 
@@ -312,13 +247,9 @@ where
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
         let labels = self.labels;
-        let label_classification = &mut self.label_classification;
         self.inner
             .expand_beam(ids, pred, |id, distance| {
-                on_neighbors(
-                    label_classification.decide(labels, id, ClassificationPhase::FirstHop),
-                    distance,
-                )
+                on_neighbors(classify(labels, id), distance)
             })
             .await
     }
@@ -335,13 +266,10 @@ where
         F: FnMut(Accept<Self::Id>, f32) + Send,
     {
         let labels = self.labels;
-        let label_classification = &mut self.label_classification;
         self.inner
-            .expand_beam(
-                ids,
-                EvalFiltered::new(pred, labels, label_classification),
-                |id, distance| on_neighbors(Accept::new(id), distance),
-            )
+            .expand_beam(ids, EvalFiltered::new(pred, labels), |id, distance| {
+                on_neighbors(Accept::new(id), distance)
+            })
             .await
     }
 
@@ -351,10 +279,6 @@ where
 
     fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         self.inner.num_starting_points()
-    }
-
-    fn filter_classification_stats(&self) -> glue::FilterClassificationStats {
-        self.label_classification.stats.unwrap_or_default()
     }
 }
 
@@ -397,20 +321,11 @@ where
 struct EvalFiltered<'a, P, L: ?Sized> {
     inner: P,
     labels: &'a L,
-    label_classification: &'a mut LabelClassificationTracker,
 }
 
 impl<'a, P, L: ?Sized> EvalFiltered<'a, P, L> {
-    fn new(
-        inner: P,
-        labels: &'a L,
-        label_classification: &'a mut LabelClassificationTracker,
-    ) -> Self {
-        Self {
-            inner,
-            labels,
-            label_classification,
-        }
+    fn new(inner: P, labels: &'a L) -> Self {
+        Self { inner, labels }
     }
 }
 
@@ -442,26 +357,11 @@ where
     L: QueryLabelProvider<I> + ?Sized,
 {
     fn eval_mut(&mut self, item: &I) -> bool {
-        if let Some(stats) = &mut self.label_classification.stats {
-            stats.second_hop_requests += 1;
-        }
         if !self.inner.eval(item) {
-            if let Some(stats) = &mut self.label_classification.stats {
-                stats.second_hop_already_visited += 1;
-            }
             return false;
-        }
-        if let Some(stats) = &mut self.label_classification.stats {
-            stats.second_hop_evaluations += 1;
         }
         if !self.labels.is_match(*item) {
-            if let Some(stats) = &mut self.label_classification.stats {
-                stats.second_hop_rejected += 1;
-            }
             return false;
-        }
-        if let Some(stats) = &mut self.label_classification.stats {
-            stats.second_hop_accepted += 1;
         }
         self.inner.eval_mut(&Accept::new(*item))
     }
@@ -634,9 +534,7 @@ mod tests {
     fn wrapper_predicate() {
         let filter = EvenFilter;
         let mut visited = HashSet::new();
-        let mut label_classification = LabelClassificationTracker::new(true);
-        let mut wrapper =
-            EvalFiltered::new(NotIn(&mut visited), &filter, &mut label_classification);
+        let mut wrapper = EvalFiltered::new(NotIn(&mut visited), &filter);
 
         // eval: both inner (not visited) and label (even) must pass.
         assert!(wrapper.eval(&2), "2 is even and not visited");

@@ -99,9 +99,6 @@ pub struct SearchStats {
 
     /// Whether the range search continued to the second round
     pub range_search_second_round: bool,
-
-    /// Label-classification statistics for filtered graph searches.
-    pub filter_classification: glue::FilterClassificationStats,
 }
 
 /// Result from [`DiskANNIndex::get_undeleted_neighbors`].
@@ -2859,7 +2856,6 @@ impl InternalSearchStats {
             hops: self.hops,
             result_count,
             range_search_second_round: self.range_search_second_round,
-            filter_classification: glue::FilterClassificationStats::default(),
         }
     }
 }
