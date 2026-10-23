@@ -82,18 +82,6 @@ where
     fn visit_candidates(&self, visit: impl FnMut(I));
 }
 
-fn classify<I, L>(labels: &L, id: I) -> Decision<I>
-where
-    I: VectorId,
-    L: QueryLabelProvider<I> + ?Sized,
-{
-    if labels.is_match(id) {
-        Decision::accept(id)
-    } else {
-        Decision::reject(id)
-    }
-}
-
 /// A [`SearchStrategy`](glue::SearchStrategy) adaptor that creates a
 /// [`FilteredAccessor`](glue::FilteredAccessor) using a [`QueryLabelProvider`].
 ///
@@ -231,7 +219,14 @@ where
     {
         let labels = self.labels;
         self.inner
-            .start_point_distances(|id, distance| f(classify(labels, id), distance))
+            .start_point_distances(|id, distance| {
+                let decision = if labels.is_match(id) {
+                    Decision::accept(id)
+                } else {
+                    Decision::reject(id)
+                };
+                f(decision, distance);
+            })
             .await
     }
 
@@ -249,7 +244,12 @@ where
         let labels = self.labels;
         self.inner
             .expand_beam(ids, pred, |id, distance| {
-                on_neighbors(classify(labels, id), distance)
+                let decision = if labels.is_match(id) {
+                    Decision::accept(id)
+                } else {
+                    Decision::reject(id)
+                };
+                on_neighbors(decision, distance);
             })
             .await
     }
