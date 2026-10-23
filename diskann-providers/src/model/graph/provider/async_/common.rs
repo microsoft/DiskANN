@@ -16,7 +16,7 @@ use crate::{
     storage::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
 
-pub use diskann::graph::strategy::{FullPrecision, PrefetchFullPrecision, Quantized};
+pub use diskann::graph::strategy::{FullPrecision, Quantized};
 
 /// Represents a range of start points for an index.
 /// The range includes `start` and excludes `end`.

@@ -30,7 +30,7 @@ use crate::model::graph::provider::async_::{
     FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
     common::{
         CreateVectorStore, FullPrecision, NoDeletes, NoStore, Panics, PrefetchCacheLineLevel,
-        PrefetchFullPrecision, SetElementHelper,
+        SetElementHelper,
     },
     inmem::DefaultProvider,
     postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
@@ -325,21 +325,21 @@ where
                     .neighbor_provider
                     .get_neighbors_sync(n.into_usize(), id_buffer)?;
 
-                id_buffer.retain(|id| pred.eval_mut(id));
-                let len = id_buffer.len();
+                let retained_ids = filter_ids_with_predicate(id_buffer, &mut pred);
+                let len = retained_ids.len();
                 let lookahead = self.provider.base_vectors.prefetch_lookahead();
 
                 // Prefetch the first few vectors.
-                for id in id_buffer.iter().take(lookahead) {
+                for id in retained_ids.iter().take(lookahead) {
                     self.provider.base_vectors.prefetch_hint(id.into_usize());
                 }
 
-                for (i, id) in id_buffer.iter().enumerate() {
+                for (i, id) in retained_ids.iter().enumerate() {
                     // Prefetch `lookahead` iterations ahead as long as it is safe.
                     if lookahead > 0 && i + lookahead < len {
                         self.provider
                             .base_vectors
-                            .prefetch_hint(id_buffer[i + lookahead].into_usize());
+                            .prefetch_hint(retained_ids[i + lookahead].into_usize());
                     }
 
                     // Invoke the passed closure on the full-precision vector.
@@ -348,138 +348,6 @@ where
                     // concurrent mutation.
                     let v = unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) };
                     let distance = self.computer.evaluate_similarity(v);
-                    on_neighbors(*id, distance);
-                }
-            }
-            Ok(())
-        };
-
-        std::future::ready(f())
-    }
-}
-
-/// A full-precision accessor that prefetches predicate data before neighbor filtering.
-pub struct PrefetchFullAccessor<'a, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-{
-    inner: FullAccessor<'a, T, Q, D, Ctx>,
-}
-
-impl<'a, T, Q, D, Ctx> PrefetchFullAccessor<'a, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>, query: &[T]) -> Self {
-        Self {
-            inner: FullAccessor::new(provider, query),
-        }
-    }
-}
-
-impl<T, Q, D, Ctx> GetFullPrecision for PrefetchFullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-{
-    type Repr = T;
-
-    fn as_full_precision(&self) -> &FullPrecisionStore<T> {
-        self.inner.as_full_precision()
-    }
-}
-
-impl<T, Q, D, Ctx> HasId for PrefetchFullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-{
-    type Id = u32;
-}
-
-impl<T, Q, Ctx> glue::RandomAccessQueryDistance for PrefetchFullAccessor<'_, T, Q, NoDeletes, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    fn distance_to_id(&mut self, id: u32) -> ANNResult<f32> {
-        self.inner.distance_to_id(id)
-    }
-}
-
-impl<T, Q, D, Ctx> glue::SearchAccessor for PrefetchFullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
-        self.inner.starting_points()
-    }
-
-    fn num_starting_points(&self) -> impl Future<Output = ANNResult<usize>> {
-        self.inner.num_starting_points()
-    }
-
-    fn start_point_distances<F>(
-        &mut self,
-        f: F,
-    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
-    where
-        F: FnMut(Self::Id, f32) + Send,
-    {
-        self.inner.start_point_distances(f)
-    }
-
-    fn expand_beam<Itr, P, F>(
-        &mut self,
-        ids: Itr,
-        mut pred: P,
-        mut on_neighbors: F,
-    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
-    where
-        Itr: Iterator<Item = Self::Id> + Send,
-        P: glue::HybridPredicate<Self::Id> + Send + Sync,
-        F: FnMut(Self::Id, f32) + Send,
-    {
-        let f = move || -> ANNResult<()> {
-            let id_buffer = &mut self.inner.id_buffer;
-            for n in ids {
-                self.inner
-                    .provider
-                    .neighbor_provider
-                    .get_neighbors_sync(n.into_usize(), id_buffer)?;
-
-                let retained_ids = filter_ids_with_predicate(id_buffer, &mut pred);
-                let len = retained_ids.len();
-                let lookahead = self.inner.provider.base_vectors.prefetch_lookahead();
-
-                for id in retained_ids.iter().take(lookahead) {
-                    self.inner
-                        .provider
-                        .base_vectors
-                        .prefetch_hint(id.into_usize());
-                }
-
-                for (i, id) in retained_ids.iter().enumerate() {
-                    if lookahead > 0 && i + lookahead < len {
-                        self.inner
-                            .provider
-                            .base_vectors
-                            .prefetch_hint(retained_ids[i + lookahead].into_usize());
-                    }
-
-                    // SAFETY: In-memory searches require no concurrent mutation of this vector.
-                    let vector = unsafe {
-                        self.inner
-                            .provider
-                            .base_vectors
-                            .get_vector_sync(id.into_usize())
-                    };
-                    let distance = self.inner.computer.evaluate_similarity(vector);
                     on_neighbors(*id, distance);
                 }
             }
@@ -580,20 +448,6 @@ where
     type Checker = D;
     fn as_deletion_check(&self) -> &D {
         &self.provider.deleted
-    }
-}
-
-impl<'a, T, Q, D, Ctx> AsDeletionCheck for PrefetchFullAccessor<'a, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    type Checker = D;
-
-    fn as_deletion_check(&self) -> &D {
-        self.inner.as_deletion_check()
     }
 }
 
@@ -753,40 +607,8 @@ where
     }
 }
 
-impl<'a, T, Q, D, Ctx> SearchStrategy<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
-    for PrefetchFullPrecision
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    type SearchAccessor = PrefetchFullAccessor<'a, T, Q, D, Ctx>;
-    type SearchAccessorError = Panics;
-
-    fn search_accessor(
-        &'a self,
-        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
-        _context: &'a Ctx,
-        query: &'a [T],
-    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        Ok(PrefetchFullAccessor::new(provider, query))
-    }
-}
-
 impl<'a, T, Q, D, Ctx> DefaultPostProcessor<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
     for FullPrecision
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
-}
-
-impl<'a, T, Q, D, Ctx> DefaultPostProcessor<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
-    for PrefetchFullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
