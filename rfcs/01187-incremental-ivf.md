@@ -13,8 +13,8 @@ The implementation in [the IVF module](../diskann/src/ivf/mod.rs) follows the
 graph index's coarse accessor boundaries. The index owns routing policy,
 overflow selection, two-means fitting, and regional assignment. Providers supply:
 
-1. Point routing through a `Router`, and nearest-list selection through
-   `RouterAndNearest`.
+1. Point routing through `BuildAccessor::route`, and nearest-list selection through
+   `NearestList`.
 2. A scoped `BuildAccessor` that stages ordinary appends, returns their resulting
    sizes, fills requested sources, and publishes the operation.
 3. A read-only `RegionView` for filled source data and an independent

@@ -10,18 +10,17 @@ use std::{collections::BTreeSet, marker::PhantomData, num::NonZeroUsize};
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::traits::{BuildAccessor, NearestList, Router, SearchAccessor, SearchStrategy};
+use super::traits::{BuildAccessor, NearestList, SearchAccessor, SearchStrategy};
 use crate::{
     ANNResult,
-    error::{ErrorExt, IntoANNResult},
-    flat::DistancesUnordered,
+    error::IntoANNResult,
     graph::SearchOutputBuffer,
     ivf::{
         build::{Split, TwoMeansSplit},
         region::AsMatRef,
         traits::BuildStrategy,
     },
-    neighbor::{Neighbor, NeighborPriorityQueue},
+    neighbor::NeighborPriorityQueue,
     provider::ExecutionContext,
 };
 
@@ -144,6 +143,11 @@ impl<C: ExecutionContext> IVFIndex<C> {
         }
     }
 
+    /// Append the best `k` candidates from the provider-selected lists to `output`.
+    ///
+    /// # Errors
+    ///
+    /// Accessor construction or scan failures leave `output` unchanged.
     pub fn search<'a, S, T, OB>(
         &'a self,
         strategy: &'a S,
@@ -160,23 +164,10 @@ impl<C: ExecutionContext> IVFIndex<C> {
     {
         async move {
             let accessor = strategy.search_accessor(context, query).into_ann_result()?;
-            let mut lists = Vec::new();
-            {
-                let router = accessor.router();
-                router
-                    .route(query, nprobe, |id, scan| lists.push((*id, scan)))
-                    .await?;
-            }
+            let mut queue = NeighborPriorityQueue::new(k.get());
+            accessor.scan(nprobe, &mut queue).await?;
 
-            let mut best = NeighborPriorityQueue::new(k.get());
-
-            for (_, scan) in lists.iter_mut() {
-                scan.distances_unordered(|id, dist| best.insert(Neighbor::new(id, dist)))
-                    .await
-                    .escalate("why")?;
-            }
-
-            Ok(output.extend(best.iter()))
+            Ok(output.extend(queue.iter()))
         }
     }
 }

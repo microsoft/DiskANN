@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Storage boundaries for IVF construction.
+//! Storage boundaries for IVF construction and search.
 
 use std::num::NonZeroUsize;
 
@@ -11,30 +11,16 @@ use diskann_utils::future::SendFuture;
 
 use super::region::{Update, View};
 use crate::{
-    ANNResult, error::StandardError, flat::DistancesUnordered, provider::ExecutionContext,
+    ANNResult,
+    error::StandardError,
+    neighbor::{Neighbor, NeighborPriorityQueue, NeighborPriorityQueueIdType},
+    provider::ExecutionContext,
     utils::VectorId,
 };
 
 pub trait HasIds {
     type Id: VectorId;
     type ListId: VectorId;
-}
-
-/// Centroid selection within one build operation.
-pub trait Router<T>: Send {
-    type Id;
-    type Ret;
-
-    fn len(&self) -> usize;
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Select `min(nprobe, len())` distinct live lists, nearest first.
-    fn route<F>(&self, query: T, nprobe: NonZeroUsize, emit: F) -> impl SendFuture<ANNResult<()>>
-    where
-        F: FnMut(&Self::Id, Self::Ret) + Send;
 }
 
 pub trait NearestList: Send {
@@ -120,7 +106,7 @@ pub trait BuildStrategy<'a, B, C: ExecutionContext>: Send + Sync + HasIds {
 ////////////
 
 pub trait SearchStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
-    /// [`BuildAccessor`] used to insert new points, and performs splits if necessary.
+    /// Query-bound accessor responsible for list selection and scanning.
     type Accessor: SearchAccessor<T, ListId = Self::ListId, Id = Self::Id>;
 
     type Error: StandardError;
@@ -128,14 +114,47 @@ pub trait SearchStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds
     fn search_accessor(&'a self, context: &'a C, query: T) -> Result<Self::Accessor, Self::Error>;
 }
 
+/// Candidate collection with independent partial states for partitioned scans.
+pub trait Accumulator<I>: Send + Sized {
+    /// Create an empty accumulator with the same selection policy and configuration.
+    fn empty_like(&self) -> Self;
+
+    /// Consider one candidate for inclusion in the results.
+    fn push(&mut self, id: I, distance: f32);
+
+    /// Combine a compatible partial state, such as one created by [`Self::empty_like`].
+    fn merge(&mut self, other: Self);
+}
+
+/// Queue-backed accumulation requires unique candidate IDs across partial states.
+/// Equal-distance selections may depend on merge order.
+impl<I: NeighborPriorityQueueIdType> Accumulator<I> for NeighborPriorityQueue<I> {
+    fn empty_like(&self) -> Self {
+        Self::new(self.search_l())
+    }
+
+    fn push(&mut self, id: I, distance: f32) {
+        self.insert(Neighbor::new(id, distance));
+    }
+
+    fn merge(&mut self, other: Self) {
+        for neighbor in other.iter() {
+            self.insert(neighbor);
+        }
+    }
+}
+
 pub trait SearchAccessor<T: Sync>: Send + Sized + HasIds {
-    type Router<'a>: Router<T, Id = Self::ListId, Ret = Self::Dist<'a>>
+    /// Scan the `min(nprobe, live_list_count)` lists nearest the accessor's query.
+    ///
+    /// Implementations own selection and scheduling, and may reduce independent
+    /// accumulators from parallel scans into `results`.
+    ///
+    /// # Errors
+    ///
+    /// A failure may leave partial results. The caller must discard them rather
+    /// than publish them as a completed search.
+    fn scan<A>(&self, nprobe: NonZeroUsize, results: &mut A) -> impl SendFuture<ANNResult<()>>
     where
-        Self: 'a;
-
-    type Dist<'a>: DistancesUnordered<Id = Self::Id>
-    where
-        Self: 'a;
-
-    fn router(&self) -> Self::Router<'_>;
+        A: Accumulator<Self::Id>;
 }

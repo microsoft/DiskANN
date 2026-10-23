@@ -3,7 +3,12 @@
  * Licensed under the MIT license.
  */
 
-use std::{cell::Cell, collections::BTreeMap, future::Future, num::NonZeroUsize};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    num::NonZeroUsize,
+};
 
 use diskann_utils::{
     Reborrow,
@@ -22,15 +27,15 @@ use super::{
     build::{Split, TwoMeansSplit, twomeans::TwoMeansError},
     region::{AsMatRef, List, Update, View},
     traits::{
-        BuildAccessor, BuildStrategy, HasIds, NearestList, Router, SearchAccessor, SearchStrategy,
+        Accumulator, BuildAccessor, BuildStrategy, HasIds, NearestList, SearchAccessor,
+        SearchStrategy,
     },
 };
 use crate::{
     ANNError, ANNResult,
-    flat::DistancesUnordered,
     graph::{IdDistance, SearchOutputBuffer},
-    neighbor::{BackInserter, Neighbor},
-    provider::{DefaultContext, HasId},
+    neighbor::{BackInserter, Neighbor, NeighborPriorityQueue},
+    provider::DefaultContext,
     utils::ONE,
 };
 
@@ -49,7 +54,7 @@ async fn routing_callbacks_emit_ranked_results() {
         for limit in [1, 2, usize::MAX] {
             let mut emitted = Vec::new();
             require_send(router.route(
-                (9, &[6u8, 0][..]),
+                &[6u8, 0][..],
                 NonZeroUsize::new(limit).unwrap(),
                 |id, distance| emitted.push((*id, distance)),
             ))
@@ -152,7 +157,7 @@ async fn routing_preserves_native_inputs_and_id_order() {
     let router = build.nearest();
     for (point, expected) in points.iter().zip([2, 1, 1]) {
         let mut selected = Vec::new();
-        require_send(router.route(*point, ONE, |&id, _| selected.push(id)))
+        require_send(router.route(point.1, ONE, |&id, _| selected.push(id)))
             .await
             .unwrap();
         assert_eq!(selected, [expected]);
@@ -707,6 +712,108 @@ async fn uninitialized_insertion_fails() {
     assert_eq!(strategy.store().finishes, 0);
 }
 
+#[test]
+fn accumulator_empty_like_preserves_search_limit_not_capacity() {
+    let mut best = NeighborPriorityQueue::auto_resizable_with_search_param_l(2);
+    for id in 0..3 {
+        best.push(id, id as f32);
+    }
+    assert!(best.capacity() > best.search_l());
+
+    let empty = best.empty_like();
+    assert_eq!(empty.search_l(), 2);
+    assert_eq!(empty.capacity(), 2);
+    assert_eq!(empty.size(), 0);
+    assert_eq!(best.size(), 3);
+}
+
+#[test]
+fn accumulator_merges_partitioned_top_k() {
+    let candidates = [
+        (0, 9.0),
+        (1, 1.0),
+        (2, 4.0),
+        (3, 7.0),
+        (4, 3.0),
+        (5, 8.0),
+        (6, 5.0),
+        (7, 2.0),
+    ];
+    for k in [1, 3, 16] {
+        let mut reference = NeighborPriorityQueue::new(k);
+        reference.insert(Neighbor::new(99, -1.0));
+        for &(id, distance) in &candidates {
+            reference.insert(Neighbor::new(id, distance));
+        }
+        let expected: Vec<_> = reference.iter().map(Neighbor::as_tuple).collect();
+
+        for chunk_size in [1, 3, candidates.len()] {
+            for reverse in [false, true] {
+                let mut best = NeighborPriorityQueue::new(k);
+                best.push(99, -1.0);
+                let mut partials: Vec<_> = candidates
+                    .chunks(chunk_size)
+                    .map(|chunk| {
+                        let mut partial = best.empty_like();
+                        assert_eq!(partial.search_l(), k);
+                        assert_eq!(partial.size(), 0);
+                        for &(id, distance) in chunk {
+                            partial.push(id, distance);
+                        }
+                        assert!(partial.size() <= k);
+                        partial
+                    })
+                    .collect();
+                if reverse {
+                    partials.reverse();
+                }
+                for partial in partials {
+                    best.merge(partial);
+                }
+                let empty = best.empty_like();
+                best.merge(empty);
+                assert_eq!(
+                    best.iter().map(Neighbor::as_tuple).collect::<Vec<_>>(),
+                    expected,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn accumulator_preserves_infinite_distances_and_ignores_nan() {
+    let mut best = NeighborPriorityQueue::new(3);
+    let mut left = best.empty_like();
+    left.push(1, f32::INFINITY);
+    left.push(2, f32::NAN);
+    let mut right = best.empty_like();
+    right.push(3, 1.0);
+    right.push(4, f32::INFINITY);
+
+    best.merge(left);
+    best.merge(right);
+    assert_eq!(
+        best.iter()
+            .map(|neighbor| *neighbor.distance())
+            .collect::<Vec<_>>(),
+        [1.0, f32::INFINITY, f32::INFINITY],
+    );
+    assert_eq!(
+        best.iter()
+            .map(|neighbor| *neighbor.id())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([1, 3, 4]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "cannot merge accumulators with different search limits")]
+fn accumulator_rejects_incompatible_limits() {
+    let mut best = NeighborPriorityQueue::<u32>::new(2);
+    best.merge(NeighborPriorityQueue::new(1));
+}
+
 #[tokio::test]
 async fn search_scans_selected_lists_and_returns_the_best_k() {
     let mut store = seeded();
@@ -841,6 +948,7 @@ async fn search_failures_do_not_publish_partial_results() {
         ("nonfinite", "invalid query vector"),
         ("route", "injected routing failure"),
         ("scan", "missing point 10003"),
+        ("later_scan", "missing point 10001"),
     ] {
         let mut store = seeded();
         if case == "route" {
@@ -848,6 +956,9 @@ async fn search_failures_do_not_publish_partial_results() {
         }
         if case == "scan" {
             store.points.remove(&10_003);
+        }
+        if case == "later_scan" {
+            store.points.remove(&10_001);
         }
         let (index, strategy) = index(store, 2);
         let mut query = [7.5f32, 0.0];
@@ -859,13 +970,18 @@ async fn search_failures_do_not_publish_partial_results() {
         } else {
             &query[..]
         };
+        let nprobe = if case == "later_scan" {
+            NonZeroUsize::new(3).unwrap()
+        } else {
+            ONE
+        };
         let mut output = vec![Neighbor::new(42, -1.0)];
         let error = require_send(index.search(
             &strategy,
             &DefaultContext,
             query,
             NonZeroUsize::new(3).unwrap(),
-            ONE,
+            nprobe,
             &mut output,
         ))
         .await

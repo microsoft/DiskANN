@@ -92,46 +92,15 @@ impl Coarse<'_> {
         }
         selected.len()
     }
-}
-
-impl<T: Copy + Into<f32> + Sync> Router<(u32, &[T])> for Coarse<'_> {
-    type Id = u32;
-    type Ret = f32;
-
-    fn len(&self) -> usize {
-        self.stored.len()
-    }
-
-    fn route<F>(
+    pub(super) fn route<T, F>(
         &self,
-        query: (u32, &[T]),
+        query: &[T],
         nprobe: NonZeroUsize,
         emit: F,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        F: FnMut(&Self::Id, f32) + Send,
-    {
-        async move {
-            if self.fail_route {
-                return Err(ANNError::message("injected routing failure"));
-            }
-            self.select(query.1, nprobe, |_| true, emit);
-            Ok(())
-        }
-    }
-}
-
-impl<T: Copy + Into<f32> + Sync> Router<&[T]> for Coarse<'_> {
-    type Id = u32;
-    type Ret = f32;
-
-    fn len(&self) -> usize {
-        self.stored.len()
-    }
-
-    fn route<F>(&self, query: &[T], nprobe: NonZeroUsize, emit: F) -> impl SendFuture<ANNResult<()>>
-    where
-        F: FnMut(&Self::Id, f32) + Send,
+        T: Copy + Into<f32> + Sync,
+        F: FnMut(&u32, f32) + Send,
     {
         async move {
             if self.fail_route {
@@ -325,8 +294,7 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
                 .ok_or_else(|| ANNError::message("cannot insert an empty batch"))?;
             let mut staged = BTreeMap::new();
             let mut routed = BTreeMap::<u32, Vec<u32>>::new();
-            for &point in points {
-                let (external, vector) = point;
+            for &(external, vector) in points {
                 if vector.len() != self.store.dim
                     || !vector.iter().all(|&value| value.into().is_finite())
                 {
@@ -345,7 +313,7 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
                 {
                     let router = self.nearest();
                     router
-                        .route(point, ONE, |&list, _| {
+                        .route(vector, ONE, |&list, _| {
                             count += 1;
                             routed.entry(list).or_default().push(id);
                         })
@@ -525,33 +493,15 @@ pub(super) struct Search<'p, 'q, T> {
     pub(super) query: &'q [T],
 }
 
-pub(super) struct SearchRouter<'a, T> {
-    pub(super) store: &'a Store,
-    pub(super) query: &'a [T],
-}
-
-pub(super) struct ListScan<'a, T> {
-    pub(super) store: &'a Store,
-    pub(super) list: u32,
-    pub(super) query: &'a [T],
-}
-
-impl<'a, T: Copy + Into<f32> + Sync> Router<&[T]> for SearchRouter<'a, T> {
+impl<T> HasIds for Search<'_, '_, T> {
     type Id = u32;
-    type Ret = ListScan<'a, T>;
+    type ListId = u32;
+}
 
-    fn len(&self) -> usize {
-        self.store.lists.len()
-    }
-
-    fn route<F>(
-        &self,
-        query: &[T],
-        nprobe: NonZeroUsize,
-        mut emit: F,
-    ) -> impl SendFuture<ANNResult<()>>
+impl<'q, T: Copy + Into<f32> + Send + Sync> SearchAccessor<&'q [T]> for Search<'_, 'q, T> {
+    fn scan<A>(&self, nprobe: NonZeroUsize, results: &mut A) -> impl SendFuture<ANNResult<()>>
     where
-        F: FnMut(&Self::Id, Self::Ret) + Send,
+        A: Accumulator<Self::Id>,
     {
         async move {
             if self.store.fail_route {
@@ -562,75 +512,27 @@ impl<'a, T: Copy + Into<f32> + Sync> Router<&[T]> for SearchRouter<'a, T> {
                 fail_route: false,
                 fail_nearest: false,
             };
-            coarse.select(
-                query,
-                nprobe,
-                |_| true,
-                |id, _| {
-                    emit(
-                        id,
-                        ListScan {
-                            store: self.store,
-                            list: *id,
-                            query: self.query,
-                        },
-                    );
-                },
-            );
-            Ok(())
-        }
-    }
-}
+            let mut selected = Vec::new();
+            coarse.select(self.query, nprobe, |_| true, |id, _| selected.push(*id));
 
-impl<T> HasId for ListScan<'_, T> {
-    type Id = u32;
-}
-
-impl<T: Copy + Into<f32> + Sync> DistancesUnordered for ListScan<'_, T> {
-    type Error = ANNError;
-
-    fn distances_unordered<F>(&mut self, mut emit: F) -> impl SendFuture<ANNResult<()>>
-    where
-        F: FnMut(Self::Id, f32) + Send,
-    {
-        async move {
-            let list = self
-                .store
-                .lists
-                .get(&self.list)
-                .ok_or_else(|| ANNError::message(format!("unknown list {}", self.list)))?;
-            for id in &list.members {
-                let vector = self
+            for list in selected {
+                let source = self
                     .store
-                    .points
-                    .get(id)
-                    .ok_or_else(|| ANNError::message(format!("missing point {id}")))?;
-                emit(*id, squared_distance(self.query, vector));
+                    .lists
+                    .get(&list)
+                    .ok_or_else(|| ANNError::message(format!("unknown list {list}")))?;
+                let mut partial = results.empty_like();
+                for id in &source.members {
+                    let vector = self
+                        .store
+                        .points
+                        .get(id)
+                        .ok_or_else(|| ANNError::message(format!("missing point {id}")))?;
+                    partial.push(*id, squared_distance(self.query, vector));
+                }
+                results.merge(partial);
             }
             Ok(())
-        }
-    }
-}
-
-impl<T> HasIds for Search<'_, '_, T> {
-    type Id = u32;
-    type ListId = u32;
-}
-
-impl<'q, T: Copy + Into<f32> + Send + Sync> SearchAccessor<&'q [T]> for Search<'_, 'q, T> {
-    type Router<'a>
-        = SearchRouter<'a, T>
-    where
-        Self: 'a;
-    type Dist<'a>
-        = ListScan<'a, T>
-    where
-        Self: 'a;
-
-    fn router(&self) -> Self::Router<'_> {
-        SearchRouter {
-            store: &self.store,
-            query: self.query,
         }
     }
 }

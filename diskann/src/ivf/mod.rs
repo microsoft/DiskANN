@@ -7,16 +7,16 @@
 //!
 //! The index routes points, splits oversized lists, and assigns their members to
 //! replacement centroids. Providers supply routing and operation-local appends
-//! through [`traits::BuildAccessor`], borrowed inputs through [`region::RegionView`],
-//! and regional writes through [`region::RegionUpdate`].
+//! through [`traits::BuildAccessor`], borrowed inputs through [`region::View`],
+//! and regional writes through [`region::Update`].
 //!
 //! Neighbor selection uses [`traits::NearestList`] before filling the unique
 //! union of parents and retained neighbors. Children are fitted only from parent
 //! points, then all gathered points are reassigned across every child and retained
 //! neighbor centroid. This permits movement between retained neighbors as well.
 //! Parent centroids are not assignment candidates; retained centroids are unchanged.
-//! [`build::Split`] owns fitting, assignment, and regional updates as one operation.
-//! The built-in [`build::TwoMeansSplitter`] fits each parent independently, then assigns
+//! Regional splitting owns fitting, assignment, and updates as one operation.
+//! The built-in two-means implementation fits each parent independently, then assigns
 //! all gathered points to their nearest destination. Child centroids are owned;
 //! retained centroids and source vectors remain borrowed.
 //!
@@ -28,12 +28,16 @@
 //! context.
 //! Providers choose their own storage, publication, and failure-recovery mechanisms.
 //!
+//! A query-bound [`traits::SearchAccessor`] selects and scans lists, controlling its
+//! own scheduling. It can reduce independent [`traits::Accumulator`] states before
+//! returning. The index writes the final top-k only after the scan succeeds.
+//!
 //! This first implementation supports batch insertion into an already initialized
 //! provider, with two-means splitting and optional neighborhood reassignment.
 //! Setting [`Config::reassign_count`] to [`ReassignCount::None`] preserves
 //! parent-only splitting.
 //! Each touched parent is split once; neighbors that become oversized are not
-//! recursively split. Search scans routed lists and collects their nearest points.
+//! recursively split.
 //! Initialization, deletion, and colocation are not implemented.
 
 pub mod build;
