@@ -219,9 +219,7 @@ impl Stream {
         self.runbook.data.load(output)
     }
 
-    fn load_queries_arc<T>(
-        &self,
-    ) -> anyhow::Result<Arc<rowmajor::Owned<T>>>
+    fn load_queries_arc<T>(&self) -> anyhow::Result<Arc<rowmajor::Owned<T>>>
     where
         T: bytemuck::Pod,
     {
@@ -238,13 +236,11 @@ impl Stream {
     where
         R: di::repr::Representation,
     {
-        let build = self.build.engine(provider);
+        let build = self.build.engine(provider)?;
         let num_threads = self.build.num_threads();
-        let runtime = dbc::tokio::runtime(num_threads.get())?;
 
         Ok(Engine {
             build,
-            runtime,
             num_threads,
             search: &self.search,
             delete_method: self.delete_method,
@@ -372,7 +368,6 @@ where
     R: di::repr::Representation,
 {
     build: inmem2::benchmark::build::Engine<R>,
-    runtime: tokio::runtime::Runtime,
     num_threads: NonZeroUsize,
     search: &'a inmem2::benchmark::knn::StreamingKnnSearch,
     delete_method: diskann::graph::InplaceDeleteMethod,
@@ -424,7 +419,7 @@ where
                 Some(diskann::utils::ONE),
                 self.num_threads,
             ),
-            &self.runtime,
+            self.build.runtime(),
         )?;
 
         Ok(Step::Delete(GenericStats::new("delete".into(), r)?))
@@ -441,7 +436,7 @@ where
         // Also, this is *way* more expensive than it needs to be because each delete creates
         // and then destroys an EBR guard.
         for id in ids.clone() {
-            self.runtime.block_on(
+            self.build.runtime().block_on(
                 self.build
                     .index()
                     .provider()

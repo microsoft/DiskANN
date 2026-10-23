@@ -177,7 +177,7 @@ where
         )?;
 
         let provider = di::Provider::<_, u32>::new(config)?;
-        let engine = input.build.engine(provider);
+        let engine = input.build.engine(provider)?;
         let build = engine.build(data, Some(output))?;
         let search = input
             .search

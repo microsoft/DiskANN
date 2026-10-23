@@ -85,13 +85,13 @@ pub(in crate::index::inmem2) mod dto {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::index::inmem2) struct KnnInstance {
+pub(in crate::index::inmem2) struct Parameters {
     knn: diskann::graph::search::Knn,
     num_neighbors: NonZeroUsize,
     recall_k: NonZeroUsize,
 }
 
-impl KnnInstance {
+impl Parameters {
     fn flatten_from_raw(raw: &[dto::KnnSweep]) -> anyhow::Result<Vec<Self>> {
         raw.iter()
             .flat_map(|sweep| {
@@ -103,7 +103,7 @@ impl KnnInstance {
 
                 search_l.iter().map(move |search_l| -> anyhow::Result<_> {
                     let knn = diskann::graph::search::Knn::new(*search_l, None)?;
-                    Ok(KnnInstance {
+                    Ok(Parameters {
                         knn,
                         num_neighbors: *search_n,
                         recall_k: *recall_k,
@@ -114,7 +114,7 @@ impl KnnInstance {
     }
 }
 
-impl std::fmt::Display for KnnInstance {
+impl std::fmt::Display for Parameters {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -128,12 +128,12 @@ impl std::fmt::Display for KnnInstance {
 
 #[derive(Debug)]
 pub(in crate::index::inmem2) struct Plan {
-    sweep: Vec<dbc::search::Run<KnnInstance>>,
+    sweep: Vec<dbc::search::Run<Parameters>>,
     max_recall_k: NonZeroUsize,
 }
 
 impl Plan {
-    fn new(reps: NonZeroUsize, num_threads: Vec<NonZeroUsize>, runs: Vec<KnnInstance>) -> Self {
+    fn new(reps: NonZeroUsize, num_threads: Vec<NonZeroUsize>, runs: Vec<Parameters>) -> Self {
         let sweep: Vec<_> = num_threads
             .iter()
             .flat_map(|num_threads| {
@@ -270,7 +270,7 @@ impl FromRawWith for KnnSearch {
         let plan = Plan::new(
             *reps,
             num_threads.clone(),
-            KnnInstance::flatten_from_raw(runs)?,
+            Parameters::flatten_from_raw(runs)?,
         );
 
         Ok(Self {
@@ -326,7 +326,7 @@ impl FromRaw for StreamingKnnSearch {
         let plan = Plan::new(
             *reps,
             num_threads.clone(),
-            KnnInstance::flatten_from_raw(runs)?,
+            Parameters::flatten_from_raw(runs)?,
         );
 
         Ok(Self(plan))
@@ -361,7 +361,7 @@ impl Counters {
 pub(in crate::index::inmem2) trait Knn<T>: Send + Sync + 'static {
     fn knn<B>(
         &self,
-        parameters: &KnnInstance,
+        parameters: &Parameters,
         query: &[T],
         buffer: &mut B,
     ) -> impl Future<Output = ANNResult<Counters>> + Send
@@ -380,20 +380,20 @@ where
     T: Send + Sync + 'static,
 {
     type Id = u32;
-    type Parameters = KnnInstance;
+    type Parameters = Parameters;
     type Output = Counters;
 
     fn num_queries(&self) -> usize {
         self.queries.nrows()
     }
 
-    fn id_count(&self, parameters: &KnnInstance) -> dbc::search::IdCount {
+    fn id_count(&self, parameters: &Parameters) -> dbc::search::IdCount {
         dbc::search::IdCount::Fixed(parameters.num_neighbors)
     }
 
     fn search<B>(
         &self,
-        parameters: &KnnInstance,
+        parameters: &Parameters,
         buffer: &mut B,
         index: usize,
     ) -> impl Future<Output = ANNResult<Counters>> + Send
@@ -410,7 +410,7 @@ where
 {
     async fn knn<B>(
         &self,
-        parameters: &KnnInstance,
+        parameters: &Parameters,
         query: &[T],
         buffer: &mut B,
     ) -> ANNResult<Counters>
@@ -428,7 +428,7 @@ where
 impl Knn<f32> for diskann::graph::DiskANNIndex<di::Provider<di::repr::Quantized, u32>> {
     async fn knn<B>(
         &self,
-        parameters: &KnnInstance,
+        parameters: &Parameters,
         query: &[f32],
         buffer: &mut B,
     ) -> ANNResult<Counters>
@@ -546,16 +546,16 @@ impl<'a> Aggregator<'a> {
     }
 }
 
-impl dbc::search::Aggregate<KnnInstance, u32, Counters> for Aggregator<'_> {
+impl dbc::search::Aggregate<Parameters, u32, Counters> for Aggregator<'_> {
     type Output = Point;
 
     fn aggregate(
         &mut self,
-        run: dbc::search::Run<KnnInstance>,
+        run: dbc::search::Run<Parameters>,
         mut results: Vec<dbc::search::SearchResults<u32, Counters>>,
     ) -> anyhow::Result<Point> {
         let setup = run.setup();
-        let knn: &KnnInstance = run.parameters();
+        let knn: &Parameters = run.parameters();
 
         // Compute the recall using just the first result.
         let recall = match results.first() {

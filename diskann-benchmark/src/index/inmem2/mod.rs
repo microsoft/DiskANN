@@ -8,9 +8,7 @@ use diskann_benchmark_runner::{self as dbr};
 mod benchmark;
 
 mod full;
-mod product;
-mod scalar;
-mod spherical;
+mod quantized;
 
 mod common;
 
@@ -26,8 +24,6 @@ type Index<T> = diskann::graph::DiskANNIndex<Provider<T>>;
 
 pub(crate) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     full::register_benchmarks(registry)?;
-    spherical::register_benchmarks(registry)?;
-    scalar::register_benchmarks(registry)?;
-    product::register_benchmarks(registry)?;
+    quantized::register_benchmarks(registry)?;
     Ok(())
 }

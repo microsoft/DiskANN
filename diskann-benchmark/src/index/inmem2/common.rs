@@ -22,11 +22,16 @@ use diskann_vector::distance::Metric;
 
 use crate::utils::{datafiles::check_data_type_load, SimilarityMeasure};
 
+/// Parse from a raw DTO.
 pub(super) trait FromRaw: Sized {
     type Raw;
     fn from_raw(raw: &Self::Raw) -> anyhow::Result<Self>;
 }
 
+/// Parse from a raw DTO with a [`dbr::Checker`].
+///
+/// The checker is optional to allow for tests to check that examples parse correctly, even
+/// if their associated files don't exist.
 pub(super) trait FromRawWith: Sized {
     type Raw;
     fn from_raw_with(raw: &Self::Raw, checker: Option<&mut dbr::Checker>) -> anyhow::Result<Self>;
@@ -155,5 +160,19 @@ impl Display for Data {
         kv.push("data", &self.data);
         kv.push("distance", &self.distance);
         write!(f, "{}", kv)
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_example() {
+        assert!(Data::from_raw_with(&dto::Data::example(), None).is_ok());
     }
 }
