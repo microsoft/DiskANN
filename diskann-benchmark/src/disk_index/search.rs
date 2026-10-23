@@ -38,76 +38,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchMode, DiskSearchPhase, DiskSearchStrategy},
+    inputs::disk::{DiskIndexLoad, DiskSearchMode, DiskSearchPhase},
     inputs::post_processor::TopkPostProcessor,
     utils::{datafiles, SimilarityMeasure},
 };
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(super) struct DiskSearchStats {
     pub(super) num_threads: usize,
     pub(super) beam_width: usize,
     pub(super) recall_at: u32,
-    pub(crate) search_strategy: DiskSearchStrategy,
     pub(crate) distance: SimilarityMeasure,
     pub(super) num_nodes_to_cache: Option<usize>,
     pub(super) search_results_per_l: Vec<DiskSearchResult>,
     span_metrics: serde_json::Value,
-}
-
-#[derive(Deserialize)]
-struct RawDiskSearchStats {
-    num_threads: usize,
-    beam_width: usize,
-    recall_at: u32,
-    #[serde(default)]
-    search_strategy: Option<DiskSearchStrategy>,
-    #[serde(default)]
-    is_flat_search: Option<bool>,
-    distance: SimilarityMeasure,
-    #[serde(default)]
-    uses_vector_filters: Option<bool>,
-    num_nodes_to_cache: Option<usize>,
-    search_results_per_l: Vec<DiskSearchResult>,
-    span_metrics: serde_json::Value,
-}
-
-impl<'de> Deserialize<'de> for DiskSearchStats {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = RawDiskSearchStats::deserialize(deserializer)?;
-        let search_strategy = if let Some(strategy) = raw.search_strategy {
-            strategy
-        } else if let Some(is_flat) = raw.is_flat_search {
-            let uses_vector_filters = raw.uses_vector_filters.unwrap_or(false);
-            if is_flat {
-                DiskSearchStrategy::Flat {
-                    uses_vector_filters,
-                }
-            } else {
-                DiskSearchStrategy::Graph {
-                    uses_vector_filters,
-                }
-            }
-        } else {
-            return Err(serde::de::Error::custom(
-                "missing search_strategy or legacy is_flat_search",
-            ));
-        };
-
-        Ok(Self {
-            num_threads: raw.num_threads,
-            beam_width: raw.beam_width,
-            recall_at: raw.recall_at,
-            search_strategy,
-            distance: raw.distance,
-            num_nodes_to_cache: raw.num_nodes_to_cache,
-            search_results_per_l: raw.search_results_per_l,
-            span_metrics: raw.span_metrics,
-        })
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -469,7 +413,6 @@ where
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
-        search_strategy: search_params.search_mode.strategy(),
         distance: search_params.distance,
         num_nodes_to_cache: search_params.num_nodes_to_cache,
         search_results_per_l,
@@ -552,7 +495,6 @@ impl fmt::Display for DiskSearchStats {
         writeln!(f, "Threads,          : {}", self.num_threads)?;
         writeln!(f, "Beam width,       : {}", self.beam_width)?;
         writeln!(f, "Recall at,        : {}", self.recall_at)?;
-        writeln!(f, "Search strategy,  : {}", self.search_strategy)?;
         writeln!(f, "Distance,         : {}", self.distance)?;
         writeln!(
             f,
@@ -604,57 +546,6 @@ impl fmt::Display for DiskSearchStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn legacy_search_stats_deserialize_to_strategy() {
-        let stats: DiskSearchStats = serde_json::from_value(serde_json::json!({
-            "num_threads": 1,
-            "beam_width": 4,
-            "recall_at": 10,
-            "is_flat_search": false,
-            "distance": "squared_l2",
-            "num_nodes_to_cache": null,
-            "search_results_per_l": [],
-            "span_metrics": {}
-        }))
-        .unwrap();
-
-        assert!(matches!(
-            stats.search_strategy,
-            DiskSearchStrategy::Graph {
-                uses_vector_filters: false
-            }
-        ));
-    }
-
-    #[test]
-    fn new_search_stats_serialize_only_complete_strategy() {
-        let stats: DiskSearchStats = serde_json::from_value(serde_json::json!({
-            "num_threads": 1,
-            "beam_width": 4,
-            "recall_at": 10,
-            "search_strategy": {
-                "mode": "graph-inline-filter",
-                "adaptive_l": {
-                    "sample_count": 10,
-                    "scale_factor": 16.0
-                }
-            },
-            "is_flat_search": false,
-            "uses_vector_filters": true,
-            "distance": "squared_l2",
-            "num_nodes_to_cache": null,
-            "search_results_per_l": [],
-            "span_metrics": {}
-        }))
-        .unwrap();
-
-        let value = serde_json::to_value(stats).unwrap();
-        assert_eq!(value["search_strategy"]["mode"], "graph-inline-filter");
-        assert_eq!(value["search_strategy"]["adaptive_l"]["sample_count"], 10);
-        assert!(value.get("is_flat_search").is_none());
-        assert!(value.get("uses_vector_filters").is_none());
-    }
 
     #[test]
     fn inline_search_mode_requires_query_filter() {

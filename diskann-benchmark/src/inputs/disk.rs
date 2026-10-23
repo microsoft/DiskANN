@@ -65,8 +65,8 @@ pub(crate) struct DiskIndexBuild {
 
 /// Disk search mode, modeled after the four backend search strategies.
 /// Null optional settings are treated as absent.
-/// Parsing rejects incompatible recognized options but ignores unknown fields.
-#[derive(Debug, Clone, Serialize)]
+/// Fields that do not belong to the selected mode are ignored.
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub(crate) enum DiskSearchMode {
     /// Brute-force flat scan, optionally restricted by a per-query vector filter.
@@ -89,80 +89,6 @@ pub(crate) enum DiskSearchMode {
     GraphDiverse {
         #[serde(default)]
         vector_filters_file: Option<InputFile>,
-        post_processor: TopkPostProcessor,
-    },
-}
-
-impl<'de> Deserialize<'de> for DiskSearchMode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "kebab-case")]
-        enum Mode {
-            Flat,
-            Graph,
-            GraphInlineFilter,
-            GraphDiverse,
-        }
-        #[derive(Deserialize)]
-        struct RawMode {
-            mode: Mode,
-            vector_filters_file: Option<InputFile>,
-            adaptive_l: Option<AdaptiveL>,
-            post_processor: Option<TopkPostProcessor>,
-        }
-        let raw = RawMode::deserialize(deserializer)?;
-        if raw.adaptive_l.is_some() && !matches!(raw.mode, Mode::GraphInlineFilter) {
-            return Err(serde::de::Error::custom(
-                "adaptive_l is only supported with mode graph-inline-filter",
-            ));
-        }
-        if raw.post_processor.is_some() && !matches!(raw.mode, Mode::GraphDiverse) {
-            return Err(serde::de::Error::custom(
-                "post_processor is only supported with mode graph-diverse",
-            ));
-        }
-        Ok(match raw.mode {
-            Mode::Flat => Self::Flat {
-                vector_filters_file: raw.vector_filters_file,
-            },
-            Mode::Graph => Self::Graph {
-                vector_filters_file: raw.vector_filters_file,
-            },
-            Mode::GraphInlineFilter => Self::GraphInlineFilter {
-                vector_filters_file: raw
-                    .vector_filters_file
-                    .ok_or_else(|| serde::de::Error::missing_field("vector_filters_file"))?,
-                adaptive_l: raw.adaptive_l,
-            },
-            Mode::GraphDiverse => Self::GraphDiverse {
-                vector_filters_file: raw.vector_filters_file,
-                post_processor: raw
-                    .post_processor
-                    .ok_or_else(|| serde::de::Error::missing_field("post_processor"))?,
-            },
-        })
-    }
-}
-
-/// Path-independent search metadata written to benchmark results.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case")]
-pub(crate) enum DiskSearchStrategy {
-    Flat {
-        uses_vector_filters: bool,
-    },
-    Graph {
-        uses_vector_filters: bool,
-    },
-    GraphInlineFilter {
-        #[serde(default)]
-        adaptive_l: Option<AdaptiveL>,
-    },
-    GraphDiverse {
-        uses_vector_filters: bool,
         post_processor: TopkPostProcessor,
     },
 }
@@ -199,31 +125,6 @@ impl DiskSearchMode {
         match self {
             Self::GraphDiverse { post_processor, .. } => Some(post_processor),
             _ => None,
-        }
-    }
-
-    pub(crate) fn strategy(&self) -> DiskSearchStrategy {
-        match self {
-            Self::Flat {
-                vector_filters_file,
-            } => DiskSearchStrategy::Flat {
-                uses_vector_filters: vector_filters_file.is_some(),
-            },
-            Self::Graph {
-                vector_filters_file,
-            } => DiskSearchStrategy::Graph {
-                uses_vector_filters: vector_filters_file.is_some(),
-            },
-            Self::GraphInlineFilter { adaptive_l, .. } => DiskSearchStrategy::GraphInlineFilter {
-                adaptive_l: adaptive_l.clone(),
-            },
-            Self::GraphDiverse {
-                vector_filters_file,
-                post_processor,
-            } => DiskSearchStrategy::GraphDiverse {
-                uses_vector_filters: vector_filters_file.is_some(),
-                post_processor: post_processor.clone(),
-            },
         }
     }
 
@@ -268,35 +169,32 @@ impl DiskSearchMode {
 
 impl fmt::Display for DiskSearchMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.strategy().fmt(f)
-    }
-}
-
-impl fmt::Display for DiskSearchStrategy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Flat {
-                uses_vector_filters: false,
+                vector_filters_file: None,
             } => write!(f, "flat"),
             Self::Flat {
-                uses_vector_filters: true,
+                vector_filters_file: Some(_),
             } => write!(f, "flat + vector-filter"),
             Self::Graph {
-                uses_vector_filters: false,
+                vector_filters_file: None,
             } => write!(f, "graph"),
             Self::Graph {
-                uses_vector_filters: true,
+                vector_filters_file: Some(_),
             } => write!(f, "graph + vector-filter"),
-            Self::GraphInlineFilter { adaptive_l: None } => write!(f, "graph inline-filter"),
+            Self::GraphInlineFilter {
+                adaptive_l: None, ..
+            } => write!(f, "graph inline-filter"),
             Self::GraphInlineFilter {
                 adaptive_l: Some(_),
+                ..
             } => write!(f, "graph inline-filter + adaptive-l"),
             Self::GraphDiverse {
-                uses_vector_filters: false,
+                vector_filters_file: None,
                 ..
             } => write!(f, "graph diverse"),
             Self::GraphDiverse {
-                uses_vector_filters: true,
+                vector_filters_file: Some(_),
                 ..
             } => write!(f, "graph diverse + vector-filter"),
         }
@@ -362,36 +260,12 @@ mod tests {
     }
 
     #[test]
-    fn incompatible_search_options_are_rejected() {
-        let adaptive = serde_json::json!({ "sample_count": 1, "scale_factor": 2.0 });
-        let diverse =
-            serde_json::json!({ "type": "determinant-diversity", "power": 2.0, "eta": 1.0 });
-        for (mode, option, value) in [
-            ("flat", "adaptive_l", adaptive.clone()),
-            ("graph", "adaptive_l", adaptive.clone()),
-            ("graph-diverse", "adaptive_l", adaptive),
-            ("flat", "post_processor", diverse.clone()),
-            ("graph", "post_processor", diverse.clone()),
-            ("graph-inline-filter", "post_processor", diverse.clone()),
-        ] {
-            let mut input =
-                serde_json::json!({ "mode": mode, "vector_filters_file": "filters.bin" });
-            if mode == "graph-diverse" {
-                input["post_processor"] = diverse.clone();
-            }
-            input[option] = value;
-            let error = serde_json::from_value::<DiskSearchMode>(input).unwrap_err();
-            assert!(error
-                .to_string()
-                .contains(&format!("{option} is only supported")));
-        }
-    }
-
-    #[test]
     fn unknown_fields_and_null_optional_settings_are_accepted() {
         let mode: DiskSearchMode = serde_json::from_value(serde_json::json!({
             "mode": "flat", "future_option": { "enabled": true },
-            "adaptive_l": null, "post_processor": null
+            "vector_filters_file": null,
+            "adaptive_l": { "sample_count": 1, "scale_factor": 2.0 },
+            "post_processor": "ignored for flat mode"
         }))
         .unwrap();
         assert!(matches!(mode, DiskSearchMode::Flat { .. }));
@@ -407,23 +281,6 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<DiskSearchMode>(input).is_err());
         }
-    }
-
-    #[test]
-    fn search_strategy_omits_filter_file_paths() {
-        let mode: DiskSearchMode = serde_json::from_str(
-            r#"{
-                "mode": "graph-inline-filter",
-                "vector_filters_file": "private/filters.bin",
-                "adaptive_l": { "sample_count": 1, "scale_factor": 2.0 }
-            }"#,
-        )
-        .unwrap();
-
-        let value = serde_json::to_value(mode.strategy()).unwrap();
-        assert_eq!(value["mode"], "graph-inline-filter");
-        assert!(value.get("vector_filters_file").is_none());
-        assert_eq!(value["adaptive_l"]["sample_count"], 1);
     }
 }
 

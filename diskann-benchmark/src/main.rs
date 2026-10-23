@@ -902,11 +902,11 @@ mod tests {
         let raw = value_from_file(&example_directory().join("disk-index-filter.json"));
         let results = run_integration_test_with_results(raw);
 
-        let strategy = &results[0]["results"]["search"]["search_strategy"];
-        assert_eq!(strategy["mode"], "graph-inline-filter");
-        assert_eq!(strategy["adaptive_l"]["sample_count"], 10);
+        let mode = &results[0]["input"]["content"]["search_phase"]["search_mode"];
+        assert_eq!(mode["mode"], "graph-inline-filter");
+        assert_eq!(mode["adaptive_l"]["sample_count"], 10);
         assert_eq!(
-            results[1]["results"]["search"]["search_strategy"]["mode"],
+            results[1]["input"]["content"]["search_phase"]["search_mode"]["mode"],
             "flat"
         );
     }
