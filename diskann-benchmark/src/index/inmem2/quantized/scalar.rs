@@ -15,7 +15,7 @@ mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
+    #[serde(rename_all = "kebab-case", deny_unknown_fields)]
     pub(super) enum Bits {
         One,
         Two,
@@ -24,6 +24,7 @@ mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2::quantized) struct Scalar {
         pub(super) bits: Bits,
         pub(super) std: f64,
@@ -80,7 +81,7 @@ pub(super) struct Scalar {
 
 impl inmem2::quantized::Quantizer for Scalar {
     const KIND: &'static str = "scalar";
-    const TAG: &'static str = "inmem2-sq-build";
+    const TAG: &'static str = "inmem2-sq-static";
 
     type Raw = dto::Scalar;
 

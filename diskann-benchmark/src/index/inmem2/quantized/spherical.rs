@@ -16,7 +16,7 @@ mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
+    #[serde(rename_all = "kebab-case", deny_unknown_fields)]
     pub(super) enum Bits {
         One,
         Two,
@@ -24,6 +24,7 @@ mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2::quantized) struct Spherical {
         pub(super) bits: Bits,
         pub(super) seed: u64,
@@ -77,7 +78,7 @@ pub(super) struct Spherical {
 
 impl inmem2::quantized::Quantizer for Spherical {
     const KIND: &'static str = "spherical";
-    const TAG: &'static str = "inmem2-sphq-build";
+    const TAG: &'static str = "inmem2-sphq-static";
 
     type Raw = dto::Spherical;
 

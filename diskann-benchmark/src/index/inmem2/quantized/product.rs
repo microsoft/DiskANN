@@ -18,6 +18,7 @@ pub(super) mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2::quantized) struct Product {
         pub(super) chunks: NonZeroUsize,
         pub(super) centers: NonZeroUsize,
@@ -52,7 +53,7 @@ pub(super) struct Product {
 
 impl inmem2::quantized::Quantizer for Product {
     const KIND: &'static str = "product";
-    const TAG: &'static str = "inmem2-pq-build";
+    const TAG: &'static str = "inmem2-pq-static";
 
     type Raw = dto::Product;
 

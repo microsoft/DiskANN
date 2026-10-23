@@ -3,6 +3,20 @@
  * Licensed under the MIT license.
  */
 
+//! Support for BigANN style runbooks.
+//!
+//! This is currently limited to full-precision data due to unfortunate trait interactions
+//! within [`diskann`].
+//!
+//! Suggested workflow is to use [`BigANN`] to load up a whole runbook, including all build
+//! a parameters, groundtruth files, and search parameters.
+//!
+//! [`BigANN::engine`] is use to create an [`Engine`], which is a wrapper around an index
+//! containing the necessary machinery for build steps, search steps, and deletion steps.
+//!
+//! [`BigANN::runner`] creates a [`Runner`], which actually executes the runbook steps and
+//! aggregates the results. Provide the [`Engine`] to [`Runner::run`] for fun and profit.
+
 use std::{
     io::Write,
     num::NonZeroUsize,
@@ -28,11 +42,7 @@ use diskann_vector::{self as dv};
 
 use crate::{
     index::{
-        inmem2::{
-            self,
-            common::{FromRaw, FromRawWith},
-            Provider,
-        },
+        inmem2::{self, common::FromRawWith, Provider},
         streaming::stats::GenericStats,
     },
     utils::{nz, SimilarityMeasure},
@@ -44,6 +54,7 @@ pub(in crate::index::inmem2) mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub(super) struct RunBook {
         pub(super) runbook: InputFile,
         pub(super) dataset: String,
@@ -69,21 +80,22 @@ pub(in crate::index::inmem2) mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub(in crate::index::inmem2) struct Stream {
+    #[serde(deny_unknown_fields)]
+    pub(in crate::index::inmem2) struct BigANN {
         pub(super) build: inmem2::benchmark::build::dto::Config,
-        pub(super) search: inmem2::benchmark::knn::dto::StreamingKnnSearch,
+        pub(super) search: inmem2::benchmark::knn::dto::StreamingKnn,
         pub(super) runbook: RunBook,
         pub(super) delete_method: crate::inputs::graph_index::InplaceDeleteMethod,
         pub(super) delete_num_to_replace: NonZeroUsize,
     }
 
-    impl Stream {
+    impl BigANN {
         pub(in crate::index::inmem2) fn example() -> Self {
             nz!(TO_REPLACE = 3);
 
             Self {
                 build: inmem2::benchmark::build::dto::Config::example(),
-                search: inmem2::benchmark::knn::dto::StreamingKnnSearch::example(),
+                search: inmem2::benchmark::knn::dto::StreamingKnn::example(),
                 runbook: RunBook::example(),
                 delete_method: crate::inputs::graph_index::InplaceDeleteMethod::TwoHopAndOneHop,
                 delete_num_to_replace: TO_REPLACE,
@@ -133,7 +145,7 @@ impl FromRawWith for RunBook {
 
             bigann::RunBook::load(
                 &runbook_path,
-                &dataset,
+                dataset,
                 &mut bigann::ScanDirectory::new(&groundtruth)?,
             )?
         } else {
@@ -149,7 +161,7 @@ impl FromRawWith for RunBook {
                 }
             }
 
-            bigann::RunBook::load(&runbook_path, &dataset, &mut Copy(groundtruth.as_ref()))?
+            bigann::RunBook::load(&runbook_path, dataset, &mut Copy(groundtruth.as_ref()))?
         };
 
         Ok(Self {
@@ -183,32 +195,45 @@ impl std::fmt::Display for RunBook {
     }
 }
 
+/// A parsed BigANN style runbook with:
+///
+/// * Index build parameters.
+/// * Index search parameters for all search points.
+/// * Runbook with data, queries, and groundtruth.
+/// * Inplace Deletion parameters.
 #[derive(Debug)]
-pub(in crate::index::inmem2) struct Stream {
+pub(in crate::index::inmem2) struct BigANN {
     build: inmem2::benchmark::build::Config,
-    search: inmem2::benchmark::knn::StreamingKnnSearch,
+    search: inmem2::benchmark::knn::Plan,
     runbook: RunBook,
     delete_method: diskann::graph::InplaceDeleteMethod,
     delete_num_to_replace: NonZeroUsize,
 }
 
-impl Stream {
+impl BigANN {
+    /// Return the [`dv::distance::Metric`] used by the underlying dataset.
     pub(in crate::index::inmem2) fn distance(&self) -> dv::distance::Metric {
         self.runbook.data.distance()
     }
 
+    /// Return the [`DataType`] of the full-precision data.
     pub(in crate::index::inmem2) fn data_type(&self) -> DataType {
         self.runbook.data.data_type()
     }
 
+    /// Return the maximum degree for index build.
     pub(in crate::index::inmem2) fn max_degree(&self) -> usize {
         self.build.max_degree()
     }
 
+    /// Return the maximun number of active points in the runbook.
     pub(in crate::index::inmem2) fn max_points(&self) -> usize {
         self.runbook.runbook.max_points()
     }
 
+    /// Load the backing dataset.
+    ///
+    /// This method errors if `T` is not the correct datatype.
     pub(in crate::index::inmem2) fn load_data<T>(
         &self,
         output: Option<&mut dyn dbr::Output>,
@@ -229,6 +254,7 @@ impl Stream {
         .map(Arc::new)
     }
 
+    /// Create an [`Engine`] for the build, delete, and search steps.
     pub(in crate::index::inmem2) fn engine<R>(
         &self,
         provider: Provider<R>,
@@ -248,6 +274,7 @@ impl Stream {
         })
     }
 
+    /// Create a [`Runner`] for executing the runbook steps.
     pub(in crate::index::inmem2) fn runner<T>(
         &self,
         data: rowmajor::Owned<T>,
@@ -264,13 +291,13 @@ impl Stream {
     }
 }
 
-impl FromRawWith for Stream {
-    type Raw = dto::Stream;
+impl FromRawWith for BigANN {
+    type Raw = dto::BigANN;
     fn from_raw_with(
-        raw: &dto::Stream,
+        raw: &dto::BigANN,
         checker: Option<&mut dbr::Checker>,
     ) -> anyhow::Result<Self> {
-        let dto::Stream {
+        let dto::BigANN {
             runbook,
             build,
             search,
@@ -280,7 +307,7 @@ impl FromRawWith for Stream {
 
         let runbook = RunBook::from_raw_with(runbook, checker)?;
         let build = inmem2::benchmark::build::Config::from_raw(build, runbook.data.distance())?;
-        let search = inmem2::benchmark::knn::StreamingKnnSearch::from_raw(search)?;
+        let search = inmem2::benchmark::knn::Plan::from_streaming(search)?;
 
         Ok(Self {
             runbook,
@@ -292,7 +319,7 @@ impl FromRawWith for Stream {
     }
 }
 
-impl std::fmt::Display for Stream {
+impl std::fmt::Display for BigANN {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             build,
@@ -313,6 +340,7 @@ impl std::fmt::Display for Stream {
     }
 }
 
+/// A runbook executor.
 #[derive(Debug)]
 pub(in crate::index::inmem2) struct Runner<T> {
     data: rowmajor::Owned<T>,
@@ -321,6 +349,7 @@ pub(in crate::index::inmem2) struct Runner<T> {
 }
 
 impl<T> Runner<T> {
+    /// Execute all steps of the runbook on [`Engine`].
     pub(in crate::index::inmem2) fn run(
         mut self,
         engine: Engine<'_, di::repr::Full<T>>,
@@ -362,6 +391,11 @@ impl<T> Runner<T> {
     }
 }
 
+/// A wrapper around an index, providing;
+///
+/// * A tokio runtime to use for all build operations.
+/// * Parameters for the search phases.
+/// * Deletion parameters.
 #[derive(Debug)]
 pub(in crate::index::inmem2) struct Engine<'a, R>
 where
@@ -369,7 +403,7 @@ where
 {
     build: inmem2::benchmark::build::Engine<R>,
     num_threads: NonZeroUsize,
-    search: &'a inmem2::benchmark::knn::StreamingKnnSearch,
+    search: &'a inmem2::benchmark::knn::Plan,
     delete_method: diskann::graph::InplaceDeleteMethod,
     delete_num_to_replace: NonZeroUsize,
 }
@@ -468,6 +502,7 @@ where
 
 /// Statistics reported for each step in a streaming pipeline.
 #[derive(Debug, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::index::inmem2) enum Step {
     Search(inmem2::benchmark::knn::Stats),
     Insert(inmem2::benchmark::build::Stats),
@@ -517,6 +552,7 @@ impl std::fmt::Display for Step {
 }
 
 #[derive(Debug, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::index::inmem2) struct Stats(Vec<Step>);
 
 impl std::fmt::Display for Stats {

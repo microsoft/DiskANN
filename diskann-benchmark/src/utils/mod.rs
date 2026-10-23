@@ -28,12 +28,14 @@ where
 }
 
 /// Construct a constant `NonZeroUsize` - failing to compile if `$value` is zero.
+#[cfg(feature = "inmem2")]
 macro_rules! nz {
     ($ident:ident = $value:literal) => {
         const $ident: ::std::num::NonZeroUsize = ::std::num::NonZeroUsize::new($value).unwrap();
     };
 }
 
+#[cfg(feature = "inmem2")]
 pub(crate) use nz;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

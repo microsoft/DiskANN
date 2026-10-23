@@ -11,6 +11,7 @@ pub(in crate::index::inmem2) mod knn;
 ///
 /// Build statistics cover insertion, excluding data loading and quantizer training.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::index::inmem2) struct BuildAndSearchStats {
     pub(in crate::index::inmem2) build: build::Stats,
     pub(in crate::index::inmem2) search: knn::Stats,

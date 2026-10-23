@@ -34,6 +34,7 @@ pub(in crate::index::inmem2) mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2) struct Config {
         pub(super) pruned_degree: usize,
         pub(super) max_degree: usize,
@@ -224,11 +225,7 @@ where
             dbc::build::ids::Range::<u32>::new(ids),
         );
 
-        let progress = match output.as_mut() {
-            Some(o) => Some(Progress::new(*o)),
-            None => None,
-        };
-
+        let progress = output.as_mut().map(|o| Progress::new(*o));
         let results = dbc::build::build_tracked(
             runner,
             dbc::build::Parallelism::dynamic(diskann::utils::ONE, self.num_threads),
@@ -270,6 +267,7 @@ where
 
 /// Stats for [`Engine::build`] and [`Engine::build_for`].
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::index::inmem2) struct Stats {
     total_time: MicroSeconds,
     inserted: usize,

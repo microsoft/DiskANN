@@ -8,7 +8,7 @@ use std::{io::Read, path::Path};
 use anyhow::Context;
 use bit_set::BitSet;
 use diskann::utils::IntoUsize;
-use diskann_benchmark_runner::utils::datatype::{AsDataType, DataType};
+use diskann_benchmark_runner::utils::datatype::DataType;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use serde::{Deserialize, Serialize};
@@ -17,10 +17,11 @@ pub(crate) struct BinFile<'a>(pub(crate) &'a Path);
 
 /// In a loading context, check that `T` matches `data_type`, returning a descriptive
 /// error if they do not match.
+#[cfg(feature = "inmem2")]
 #[track_caller]
 pub(crate) fn check_data_type_load<T>(data_type: DataType) -> anyhow::Result<()>
 where
-    T: AsDataType,
+    T: diskann_benchmark_runner::utils::datatype::AsDataType,
 {
     if !T::is_match(data_type) {
         Err(anyhow::anyhow!(

@@ -22,12 +22,6 @@ use diskann_vector::distance::Metric;
 
 use crate::utils::{datafiles::check_data_type_load, SimilarityMeasure};
 
-/// Parse from a raw DTO.
-pub(super) trait FromRaw: Sized {
-    type Raw;
-    fn from_raw(raw: &Self::Raw) -> anyhow::Result<Self>;
-}
-
 /// Parse from a raw DTO with a [`dbr::Checker`].
 ///
 /// The checker is optional to allow for tests to check that examples parse correctly, even
@@ -43,6 +37,7 @@ pub(super) mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2) struct Data {
         pub(super) data_type: DataType,
         pub(super) data: InputFile,

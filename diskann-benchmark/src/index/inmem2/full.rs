@@ -33,10 +33,11 @@ mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub(super) struct BuildAndSearch {
         pub(super) data: inmem2::common::dto::Data,
         pub(super) build: inmem2::benchmark::build::dto::Config,
-        pub(super) search: inmem2::benchmark::knn::dto::KnnSearch,
+        pub(super) search: inmem2::benchmark::knn::dto::Knn,
     }
 
     impl BuildAndSearch {
@@ -44,7 +45,7 @@ mod dto {
             Self {
                 data: inmem2::common::dto::Data::example(),
                 build: inmem2::benchmark::build::dto::Config::example(),
-                search: inmem2::benchmark::knn::dto::KnnSearch::example(),
+                search: inmem2::benchmark::knn::dto::Knn::example(),
             }
         }
     }
@@ -58,7 +59,7 @@ mod dto {
 struct BuildAndSearch {
     data: inmem2::common::Data,
     build: inmem2::benchmark::build::Config,
-    search: inmem2::benchmark::knn::KnnSearch,
+    search: inmem2::benchmark::knn::Knn,
 }
 
 impl FromRawWith for BuildAndSearch {
@@ -76,7 +77,7 @@ impl FromRawWith for BuildAndSearch {
 
         let data = inmem2::common::Data::from_raw_with(data, checker.as_deref_mut())?;
         let build = inmem2::benchmark::build::Config::from_raw(build, data.distance())?;
-        let search = inmem2::benchmark::knn::KnnSearch::from_raw_with(search, checker)?;
+        let search = inmem2::benchmark::knn::Knn::from_raw_with(search, checker)?;
 
         Ok(Self {
             data,
@@ -104,7 +105,7 @@ impl std::fmt::Display for BuildAndSearch {
 impl dbr::Input for BuildAndSearch {
     type Raw = dto::BuildAndSearch;
     fn tag() -> &'static str {
-        "inmem2-full-build"
+        "inmem2-fp-static"
     }
 
     fn from_raw(raw: Self::Raw, checker: &mut dbr::Checker) -> anyhow::Result<Self> {
@@ -193,7 +194,7 @@ where
 
 #[derive(Debug)]
 struct Stream {
-    stream: inmem2::benchmark::bigann::Stream,
+    stream: inmem2::benchmark::bigann::BigANN,
 }
 
 impl std::fmt::Display for Stream {
@@ -203,13 +204,13 @@ impl std::fmt::Display for Stream {
 }
 
 impl dbr::Input for Stream {
-    type Raw = inmem2::benchmark::bigann::dto::Stream;
+    type Raw = inmem2::benchmark::bigann::dto::BigANN;
     fn tag() -> &'static str {
-        "inmem2-full-bigann-stream"
+        "inmem2-fp-bigann-stream"
     }
 
     fn from_raw(raw: Self::Raw, checker: &mut dbr::Checker) -> anyhow::Result<Self> {
-        let stream = inmem2::benchmark::bigann::Stream::from_raw_with(&raw, Some(checker))?;
+        let stream = inmem2::benchmark::bigann::BigANN::from_raw_with(&raw, Some(checker))?;
         Ok(Self { stream })
     }
 
@@ -244,19 +245,7 @@ where
         context: &dbr::benchmark::MatchContext,
     ) -> dbr::benchmark::Score {
         let mut score = context.success(0);
-
-        let data_type = input.stream.data_type();
-        if !T::is_match(data_type) {
-            score.fail(
-                1000,
-                &format_args!(
-                    "expected data-type {}, instead got {}",
-                    Quote(T::DATA_TYPE),
-                    Quote(data_type)
-                ),
-            )
-        }
-
+        match_data_type::<T>(&mut score, input.stream.data_type());
         score
     }
 

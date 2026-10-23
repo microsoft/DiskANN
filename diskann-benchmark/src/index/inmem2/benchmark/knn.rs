@@ -3,6 +3,22 @@
  * Licensed under the MIT license.
  */
 
+//! Utilities for setting up and running KNN style searches.
+//!
+//! The recommended flow is to instantiate a [`Knn`]. This provides utilities for loading
+//! both groundtruth elements and queries. [`Knn::search`] is used to actually run the KNN
+//! search and aggregate results in [`Stats`].
+//!
+//! For a slightly lower level interface where queries and groundtruth elements are provided
+//! externally, [`Plan`] can be used to queue up a collection of operating points, with
+//! [`Plan::search`] running the parameter sweep.
+//!
+//! To make an index Knn compatible, use the [`Search`] trait. This is used as a bridge
+//! to [`dbc::search::Search`]. We don't use the graph methods in [`diskann_benchmark_core`]
+//! directly since we're leaving open the possibility of tweaking strategies and search
+//! parameters at a finer level of granularity than [`diskann_benchmark_core`] allows at
+//! the time of writing.
+
 use std::{future::Future, io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{utils::IntoUsize, ANNResult};
@@ -11,32 +27,31 @@ use diskann_benchmark_runner::{self as dbr, files::InputFile, utils::MicroSecond
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::{self, Matrix};
 
-use crate::{
-    index::inmem2::common::{FromRaw, FromRawWith},
-    utils::nz,
-};
+use crate::{index::inmem2::common::FromRawWith, utils::nz};
 
 pub(in crate::index::inmem2) mod dto {
     use super::*;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub(in crate::index::inmem2) struct KnnSweep {
+    #[serde(deny_unknown_fields)]
+    pub(super) struct Sweep {
         pub(super) search_n: NonZeroUsize,
         pub(super) search_l: Vec<usize>,
         pub(super) recall_k: NonZeroUsize,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub(in crate::index::inmem2) struct KnnSearch {
+    #[serde(deny_unknown_fields)]
+    pub(in crate::index::inmem2) struct Knn {
         pub(super) queries: InputFile,
         pub(super) groundtruth: InputFile,
         pub(super) reps: NonZeroUsize,
         pub(super) num_threads: Vec<NonZeroUsize>,
-        pub(super) runs: Vec<KnnSweep>,
+        pub(super) runs: Vec<Sweep>,
     }
 
-    impl KnnSearch {
+    impl Knn {
         pub(in crate::index::inmem2) fn example() -> Self {
             nz!(REPS = 5);
             nz!(NUM_THREADS = 8);
@@ -48,7 +63,7 @@ pub(in crate::index::inmem2) mod dto {
                 groundtruth: InputFile::new("path/to/groundtruth"),
                 reps: REPS,
                 num_threads: vec![NUM_THREADS],
-                runs: vec![KnnSweep {
+                runs: vec![Sweep {
                     search_n: SEARCH_N,
                     search_l: vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
                     recall_k: RECALL_K,
@@ -58,13 +73,14 @@ pub(in crate::index::inmem2) mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub(in crate::index::inmem2) struct StreamingKnnSearch {
+    #[serde(deny_unknown_fields)]
+    pub(in crate::index::inmem2) struct StreamingKnn {
         pub(super) reps: NonZeroUsize,
         pub(super) num_threads: Vec<NonZeroUsize>,
-        pub(super) runs: Vec<KnnSweep>,
+        pub(super) runs: Vec<Sweep>,
     }
 
-    impl StreamingKnnSearch {
+    impl StreamingKnn {
         pub(in crate::index::inmem2) fn example() -> Self {
             nz!(REPS = 5);
             nz!(NUM_THREADS = 8);
@@ -74,7 +90,7 @@ pub(in crate::index::inmem2) mod dto {
             Self {
                 reps: REPS,
                 num_threads: vec![NUM_THREADS],
-                runs: vec![KnnSweep {
+                runs: vec![Sweep {
                     search_n: SEARCH_N,
                     search_l: vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
                     recall_k: RECALL_K,
@@ -84,6 +100,7 @@ pub(in crate::index::inmem2) mod dto {
     }
 }
 
+/// Parameters for a single instance of KNN search and recall computation.
 #[derive(Debug, Clone)]
 pub(in crate::index::inmem2) struct Parameters {
     knn: diskann::graph::search::Knn,
@@ -91,41 +108,8 @@ pub(in crate::index::inmem2) struct Parameters {
     recall_k: NonZeroUsize,
 }
 
-impl Parameters {
-    fn flatten_from_raw(raw: &[dto::KnnSweep]) -> anyhow::Result<Vec<Self>> {
-        raw.iter()
-            .flat_map(|sweep| {
-                let dto::KnnSweep {
-                    search_n,
-                    search_l,
-                    recall_k,
-                } = sweep;
-
-                search_l.iter().map(move |search_l| -> anyhow::Result<_> {
-                    let knn = diskann::graph::search::Knn::new(*search_l, None)?;
-                    Ok(Parameters {
-                        knn,
-                        num_neighbors: *search_n,
-                        recall_k: *recall_k,
-                    })
-                })
-            })
-            .collect()
-    }
-}
-
-impl std::fmt::Display for Parameters {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "knn = {}, search_l = {}, beam_width = {}",
-            self.recall_k,
-            self.knn.l_value(),
-            self.knn.beam_width(),
-        )
-    }
-}
-
+/// A flattened and validated list of parameters for which a range of KNN searches will
+/// be run.
 #[derive(Debug)]
 pub(in crate::index::inmem2) struct Plan {
     sweep: Vec<dbc::search::Run<Parameters>>,
@@ -133,125 +117,203 @@ pub(in crate::index::inmem2) struct Plan {
 }
 
 impl Plan {
-    fn new(reps: NonZeroUsize, num_threads: Vec<NonZeroUsize>, runs: Vec<Parameters>) -> Self {
-        let sweep: Vec<_> = num_threads
-            .iter()
-            .flat_map(|num_threads| {
-                runs.iter().map(|run| {
-                    dbc::search::Run::new(
-                        run.clone(),
+    /// Construct a new [`Plan`] by flattening the product of:
+    ///
+    /// * `num_threads`: To enable thread sweeps.
+    /// * `runs`: For different `recall_k`/`search_n` regimes.
+    /// * `runs.search_l`: For conducting search over multiple window sizes.
+    ///
+    /// Requires non-empty thread counts, runs, and search windows.
+    /// Validates that each `recall_k` does not exceed its `search_n` and that the
+    /// [`diskann::graph::search::Knn`] structs are accepted.
+    fn new(
+        reps: NonZeroUsize,
+        num_threads: &[NonZeroUsize],
+        runs: &[dto::Sweep],
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !num_threads.is_empty(),
+            "search thread counts cannot be empty"
+        );
+        anyhow::ensure!(!runs.is_empty(), "search runs cannot be empty");
+
+        let mut sweep = Vec::new();
+        let mut max_recall_k = NonZeroUsize::MIN;
+
+        for &threads in num_threads {
+            for (position, run) in runs.iter().enumerate() {
+                anyhow::ensure!(
+                    !run.search_l.is_empty(),
+                    "run {} of {} has no search windows",
+                    position + 1,
+                    runs.len(),
+                );
+
+                if run.recall_k > run.search_n {
+                    anyhow::bail!(
+                        "run {} of {} has recall_k ({}) greater than search_n ({})",
+                        position + 1,
+                        runs.len(),
+                        run.recall_k,
+                        run.search_n,
+                    );
+                }
+
+                for &search_l in &run.search_l {
+                    let parameters = Parameters {
+                        knn: diskann::graph::search::Knn::new(search_l, None)?,
+                        num_neighbors: run.search_n,
+                        recall_k: run.recall_k,
+                    };
+                    max_recall_k = max_recall_k.max(run.recall_k);
+                    sweep.push(dbc::search::Run::new(
+                        parameters,
                         dbc::search::Setup {
-                            threads: *num_threads,
-                            tasks: *num_threads,
+                            threads,
+                            tasks: threads,
                             reps,
                         },
-                    )
-                })
-            })
-            .collect();
+                    ));
+                }
+            }
+        }
 
-        let max_recall_k = runs
-            .iter()
-            .map(|r| r.recall_k)
-            .max()
-            .unwrap_or(NonZeroUsize::MIN);
-
-        Self {
+        Ok(Self {
             sweep,
             max_recall_k,
-        }
+        })
     }
 
-    fn max_recall_k(&self) -> NonZeroUsize {
-        self.max_recall_k
+    /// Flatten the parameters in `streaming` into a full plan.
+    pub(in crate::index::inmem2) fn from_streaming(
+        streaming: &dto::StreamingKnn,
+    ) -> anyhow::Result<Self> {
+        let dto::StreamingKnn {
+            reps,
+            num_threads,
+            runs,
+        } = streaming;
+        Self::new(*reps, num_threads, runs)
     }
 
-    fn search<T, S>(
+    /// Run each search point in `self` over `index` aggregating all results.
+    ///
+    /// Queries must be non-empty and have the same row count as `groundtruth`.
+    pub(in crate::index::inmem2) fn search<T, S>(
         &self,
-        engine: Arc<S>,
+        index: Arc<S>,
         queries: Arc<rowmajor::Owned<T>>,
         groundtruth: &dyn dbc::recall::Rows<u32>,
         output: Option<&mut dyn dbr::Output>,
     ) -> anyhow::Result<Stats>
     where
         T: Send + Sync + 'static,
-        S: Knn<T>,
+        S: Search<T>,
     {
-        let searcher = Search {
-            knn: engine,
-            queries,
-        };
+        anyhow::ensure!(queries.nrows() != 0, "search queries cannot be empty");
+        anyhow::ensure!(
+            queries.nrows() == groundtruth.nrows(),
+            "query/groundtruth row mismatch: queries = {}, groundtruth = {}",
+            queries.nrows(),
+            groundtruth.nrows(),
+        );
 
-        let stats = Stats(dbc::search::search_all(
+        let searcher = Searcher { index, queries };
+
+        let raw = dbc::search::search_all(
             Arc::new(searcher),
             self.sweep.iter().cloned(),
             Aggregator::new(groundtruth, dbc::recall::GroundTruthMode::Fixed),
-        )?);
+        )?;
 
+        let stats = Stats(raw);
         if let Some(mut output) = output {
-            write!(output, "{}\n", stats)?;
+            writeln!(output, "{}", stats)?;
         }
 
         Ok(stats)
     }
 }
 
-///////////////
-// KnnSearch //
-///////////////
+impl std::fmt::Display for Plan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let header = [
+            "Threads",
+            "Tasks",
+            "Reps",
+            "Search L",
+            "Recall K",
+            "Search N",
+            "Beam Width",
+        ];
+        let mut table = dbr::utils::fmt::Table::new(header, self.sweep.len());
 
+        for (i, run) in self.sweep.iter().enumerate() {
+            let setup = run.setup();
+            let parameters = run.parameters();
+            let mut row = table.row(i);
+            row.insert(setup.threads, 0);
+            row.insert(setup.tasks, 1);
+            row.insert(setup.reps, 2);
+            row.insert(parameters.knn.l_value(), 3);
+            row.insert(parameters.recall_k, 4);
+            row.insert(parameters.num_neighbors, 5);
+            row.insert(parameters.knn.beam_width(), 6);
+        }
+
+        write!(f, "{}", table)
+    }
+}
+
+/////////
+// Knn //
+/////////
+
+/// A prepared Knn search with queries and groundtruth on disk.
 #[derive(Debug)]
-pub(in crate::index::inmem2) struct KnnSearch {
+pub(in crate::index::inmem2) struct Knn {
     queries: InputFile,
     groundtruth: InputFile,
     plan: Plan,
 }
 
-impl KnnSearch {
-    fn queries<T>(&self) -> anyhow::Result<rowmajor::Owned<T>>
-    where
-        T: bytemuck::Pod,
-    {
-        crate::utils::datafiles::load_dataset(crate::utils::datafiles::BinFile(&self.queries))
-    }
-
+impl Knn {
     fn queries_arc<T>(&self) -> anyhow::Result<Arc<rowmajor::Owned<T>>>
     where
         T: bytemuck::Pod,
     {
-        self.queries::<T>().map(Arc::new)
+        crate::utils::datafiles::load_dataset(crate::utils::datafiles::BinFile(&self.queries))
+            .map(Arc::new)
     }
 
     fn groundtruth(&self) -> anyhow::Result<rowmajor::Owned<u32>> {
         crate::utils::datafiles::load_groundtruth(
             crate::utils::datafiles::BinFile(&self.groundtruth),
-            Some(self.plan.max_recall_k().get()),
+            Some(self.plan.max_recall_k.get()),
         )
     }
 
+    /// Run a Knn search on `index`. Queries and groundtruth will be loaded from disk.
     pub(in crate::index::inmem2) fn search<T, S>(
         &self,
-        engine: Arc<S>,
+        index: Arc<S>,
         output: Option<&mut dyn dbr::Output>,
     ) -> anyhow::Result<Stats>
     where
         T: bytemuck::Pod + Send + Sync + 'static,
-        S: Knn<T>,
+        S: Search<T>,
     {
         let queries = self.queries_arc::<T>()?;
         let groundtruth = self.groundtruth()?;
-        self.plan.search(engine, queries, &groundtruth, output)
+        self.plan.search(index, queries, &groundtruth, output)
     }
 }
 
-impl FromRawWith for KnnSearch {
-    type Raw = dto::KnnSearch;
+impl FromRawWith for Knn {
+    type Raw = dto::Knn;
 
-    fn from_raw_with(
-        raw: &dto::KnnSearch,
-        checker: Option<&mut dbr::Checker>,
-    ) -> anyhow::Result<Self> {
-        let dto::KnnSearch {
+    fn from_raw_with(raw: &dto::Knn, checker: Option<&mut dbr::Checker>) -> anyhow::Result<Self> {
+        let dto::Knn {
             queries,
             groundtruth,
             reps,
@@ -267,11 +329,7 @@ impl FromRawWith for KnnSearch {
             groundtruth.resolve(checker)?;
         }
 
-        let plan = Plan::new(
-            *reps,
-            num_threads.clone(),
-            Parameters::flatten_from_raw(runs)?,
-        );
+        let plan = Plan::new(*reps, num_threads, runs)?;
 
         Ok(Self {
             queries,
@@ -281,61 +339,19 @@ impl FromRawWith for KnnSearch {
     }
 }
 
-impl std::fmt::Display for KnnSearch {
+impl std::fmt::Display for Knn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            queries,
+            groundtruth,
+            plan,
+        } = self;
+
         let mut kv = dbr::utils::fmt::KeyValue::new();
-        kv.push("queries", &self.queries);
-        kv.push("groundtruth", &self.groundtruth);
+        kv.push("queries", queries);
+        kv.push("groundtruth", groundtruth);
+        kv.push("plan", plan);
         write!(f, "{}", kv)
-    }
-}
-
-////////////////////////
-// StreamingKnnSearch //
-////////////////////////
-
-#[derive(Debug)]
-pub(in crate::index::inmem2) struct StreamingKnnSearch(Plan);
-
-impl StreamingKnnSearch {
-    pub(in crate::index::inmem2) fn search<T, S>(
-        &self,
-        engine: Arc<S>,
-        queries: Arc<rowmajor::Owned<T>>,
-        groundtruth: &dyn dbc::recall::Rows<u32>,
-        output: Option<&mut dyn dbr::Output>,
-    ) -> anyhow::Result<Stats>
-    where
-        S: Knn<T>,
-        T: Send + Sync + 'static,
-    {
-        self.0.search(engine, queries, groundtruth, output)
-    }
-}
-
-impl FromRaw for StreamingKnnSearch {
-    type Raw = dto::StreamingKnnSearch;
-
-    fn from_raw(raw: &dto::StreamingKnnSearch) -> anyhow::Result<Self> {
-        let dto::StreamingKnnSearch {
-            reps,
-            num_threads,
-            runs,
-        } = raw;
-
-        let plan = Plan::new(
-            *reps,
-            num_threads.clone(),
-            Parameters::flatten_from_raw(runs)?,
-        );
-
-        Ok(Self(plan))
-    }
-}
-
-impl std::fmt::Display for StreamingKnnSearch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Ok(())
     }
 }
 
@@ -358,7 +374,10 @@ impl Counters {
     }
 }
 
-pub(in crate::index::inmem2) trait Knn<T>: Send + Sync + 'static {
+/// We use this with [`Searcher`] to implement [`dbc::search::Search`].
+pub(in crate::index::inmem2) trait Search<T>:
+    Send + Sync + 'static
+{
     fn knn<B>(
         &self,
         parameters: &Parameters,
@@ -369,14 +388,15 @@ pub(in crate::index::inmem2) trait Knn<T>: Send + Sync + 'static {
         B: diskann::graph::SearchOutputBuffer<u32> + Send;
 }
 
-struct Search<K, T> {
-    knn: Arc<K>,
+/// New-type adaptor for [`dbc::search::Search`].
+struct Searcher<K, T> {
+    index: Arc<K>,
     queries: Arc<rowmajor::Owned<T>>,
 }
 
-impl<K, T> dbc::search::Search for Search<K, T>
+impl<K, T> dbc::search::Search for Searcher<K, T>
 where
-    K: Knn<T>,
+    K: Search<T>,
     T: Send + Sync + 'static,
 {
     type Id = u32;
@@ -400,11 +420,11 @@ where
     where
         B: diskann::graph::SearchOutputBuffer<u32> + Send,
     {
-        self.knn.knn(parameters, self.queries.row(index), buffer)
+        self.index.knn(parameters, self.queries.row(index), buffer)
     }
 }
 
-impl<T> Knn<T> for diskann::graph::DiskANNIndex<di::Provider<di::repr::Full<T>, u32>>
+impl<T> Search<T> for diskann::graph::DiskANNIndex<di::Provider<di::repr::Full<T>, u32>>
 where
     T: di::repr::FullPrecision,
 {
@@ -425,7 +445,7 @@ where
     }
 }
 
-impl Knn<f32> for diskann::graph::DiskANNIndex<di::Provider<di::repr::Quantized, u32>> {
+impl Search<f32> for diskann::graph::DiskANNIndex<di::Provider<di::repr::Quantized, u32>> {
     async fn knn<B>(
         &self,
         parameters: &Parameters,
@@ -443,12 +463,13 @@ impl Knn<f32> for diskann::graph::DiskANNIndex<di::Provider<di::repr::Quantized,
     }
 }
 
-///////////////
-// DBC stuff //
-///////////////
+///////////
+// Stats //
+///////////
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub(in crate::index::inmem2) struct Stats(Vec<Point>);
+#[serde(deny_unknown_fields)]
+pub(in crate::index::inmem2) struct Stats(Vec<RunStats>);
 
 impl std::fmt::Display for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -456,7 +477,7 @@ impl std::fmt::Display for Stats {
     }
 }
 
-fn format_stats_table(f: &mut dyn std::fmt::Write, stats: &[Point]) -> std::fmt::Result {
+fn format_stats_table(f: &mut dyn std::fmt::Write, stats: &[RunStats]) -> std::fmt::Result {
     use crate::utils::MaybeDisplay;
 
     if stats.is_empty() {
@@ -465,7 +486,8 @@ fn format_stats_table(f: &mut dyn std::fmt::Write, stats: &[Point]) -> std::fmt:
 
     let header = &[
         "Ls",
-        "KNN",
+        "Recall K",
+        "Search N",
         "Avg cmps",
         "Avg hops",
         "QPS - mean(max)",
@@ -479,54 +501,71 @@ fn format_stats_table(f: &mut dyn std::fmt::Write, stats: &[Point]) -> std::fmt:
     stats.iter().enumerate().for_each(|(i, r)| {
         let mut row = table.row(i);
 
+        let mut buf = Vec::<f64>::new();
+
         row.insert(r.search_l, 0);
-        row.insert(r.search_n, 1);
-        row.insert(r.mean_cmps, 2);
-        row.insert(r.mean_hops, 3);
+        row.insert(r.recall_k, 1);
+        row.insert(r.search_n, 2);
+        row.insert(r.mean_cmps, 3);
+        row.insert(r.mean_hops, 4);
+
+        buf.clear();
+        buf.extend(r.reps.iter().map(|r| r.qps));
         row.insert(
             format!(
                 "{:.1} ({:.1})",
-                MaybeDisplay(dbr::utils::percentiles::mean(&r.qps), "missing"),
-                MaybeDisplay(dbr::utils::percentiles::max_f64(&r.qps), "missing"),
-            ),
-            4,
-        );
-        row.insert(
-            format!(
-                "{:.1}us ({:.1}us)",
-                MaybeDisplay(dbr::utils::percentiles::mean(&r.mean_latencies), "missing"),
-                MaybeDisplay(
-                    dbr::utils::percentiles::max_f64(&r.mean_latencies),
-                    "missing"
-                ),
+                MaybeDisplay(dbr::utils::percentiles::mean(&buf), "missing"),
+                MaybeDisplay(dbr::utils::percentiles::max_f64(&buf), "missing"),
             ),
             5,
         );
+
+        buf.clear();
+        buf.extend(r.reps.iter().map(|r| r.mean_latency));
         row.insert(
             format!(
-                "{:.1}us ({:.1})",
-                MaybeDisplay(dbr::utils::percentiles::mean(&r.p99_latencies), "missing"),
-                MaybeDisplay(r.p99_latencies.iter().max(), "missing"),
+                "{:.1}us ({:.1}us)",
+                MaybeDisplay(dbr::utils::percentiles::mean(&buf), "missing"),
+                MaybeDisplay(dbr::utils::percentiles::max_f64(&buf), "missing"),
             ),
             6,
         );
-        row.insert(format!("{:3}", r.recall.average), 7);
-        row.insert(r.num_tasks, 8);
+
+        buf.clear();
+        buf.extend(r.reps.iter().map(|r| r.p99_latency.as_f64()));
+        row.insert(
+            format!(
+                "{:.1}us ({:.1})",
+                MaybeDisplay(dbr::utils::percentiles::mean(&buf), "missing"),
+                MaybeDisplay(dbr::utils::percentiles::max_f64(&buf), "missing"),
+            ),
+            7,
+        );
+        row.insert(format!("{:3}", r.recall.average), 8);
+        row.insert(r.num_tasks, 9);
     });
 
     write!(f, "{}", table)
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub(in crate::index::inmem2) struct Point {
+#[serde(deny_unknown_fields)]
+struct RepetitionStats {
+    qps: f64,
+    end_to_end_latency: MicroSeconds,
+    mean_latency: f64,
+    p90_latency: MicroSeconds,
+    p99_latency: MicroSeconds,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::index::inmem2) struct RunStats {
     num_tasks: usize,
     search_n: usize,
     search_l: usize,
-    qps: Vec<f64>,
-    search_latencies: Vec<MicroSeconds>,
-    mean_latencies: Vec<f64>,
-    p90_latencies: Vec<MicroSeconds>,
-    p99_latencies: Vec<MicroSeconds>,
+    recall_k: usize,
+    reps: Vec<RepetitionStats>,
     recall: crate::utils::recall::RecallMetrics,
     mean_cmps: f64,
     mean_hops: f64,
@@ -547,13 +586,13 @@ impl<'a> Aggregator<'a> {
 }
 
 impl dbc::search::Aggregate<Parameters, u32, Counters> for Aggregator<'_> {
-    type Output = Point;
+    type Output = RunStats;
 
     fn aggregate(
         &mut self,
         run: dbc::search::Run<Parameters>,
         mut results: Vec<dbc::search::SearchResults<u32, Counters>>,
-    ) -> anyhow::Result<Point> {
+    ) -> anyhow::Result<RunStats> {
         let setup = run.setup();
         let knn: &Parameters = run.parameters();
 
@@ -570,34 +609,23 @@ impl dbc::search::Aggregate<Parameters, u32, Counters> for Aggregator<'_> {
             None => anyhow::bail!("Results must be non-empty"),
         };
 
-        let mut mean_latencies = Vec::with_capacity(results.len());
-        let mut p90_latencies = Vec::with_capacity(results.len());
-        let mut p99_latencies = Vec::with_capacity(results.len());
-
-        results.iter_mut().for_each(|r| {
-            match dbr::utils::percentiles::compute_percentiles(r.latencies_mut()) {
-                Ok(values) => {
-                    let dbr::utils::percentiles::Percentiles { mean, p90, p99, .. } = values;
-                    mean_latencies.push(mean);
-                    p90_latencies.push(p90);
-                    p99_latencies.push(p99);
-                }
-                Err(_) => {
-                    let zero = MicroSeconds::new(0);
-                    mean_latencies.push(0.0);
-                    p90_latencies.push(zero);
-                    p99_latencies.push(zero);
-                }
-            }
-        });
-
         let num_queries = recall.num_queries as f64;
-        let qps: Vec<f64> = results
-            .iter()
-            .map(|r| num_queries / r.end_to_end_latency().as_seconds())
-            .collect();
+        let mut reps = Vec::with_capacity(results.len());
+        results.iter_mut().try_for_each(|r| -> anyhow::Result<()> {
+            let percentiles = dbr::utils::percentiles::compute_percentiles(r.latencies_mut())?;
+            let end_to_end_latency = r.end_to_end_latency();
+            let qps = num_queries / end_to_end_latency.as_seconds();
+            let rep = RepetitionStats {
+                qps,
+                end_to_end_latency,
+                mean_latency: percentiles.mean,
+                p90_latency: percentiles.p90,
+                p99_latency: percentiles.p99,
+            };
 
-        let search_latencies = results.iter().map(|r| r.end_to_end_latency()).collect();
+            reps.push(rep);
+            Ok(())
+        })?;
 
         let mean_cmps = dbc::utils::average_all(
             results
@@ -611,18 +639,133 @@ impl dbc::search::Aggregate<Parameters, u32, Counters> for Aggregator<'_> {
                 .flat_map(|r| r.output().iter().map(|o| o.hops)),
         );
 
-        Ok(Point {
+        Ok(RunStats {
             num_tasks: setup.tasks.get(),
             search_n: knn.num_neighbors.get(),
             search_l: knn.knn.l_value().get(),
-            qps,
-            search_latencies,
-            mean_latencies,
-            p90_latencies,
-            p99_latencies,
+            recall_k: knn.recall_k.get(),
+            reps,
             recall: crate::utils::recall::RecallMetrics::from(&recall),
             mean_cmps,
             mean_hops,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_expands_sweeps_in_thread_order() {
+        nz!(REPS = 3);
+        nz!(ONE = 1);
+        nz!(TWO = 2);
+        nz!(FOUR = 4);
+        nz!(TEN = 10);
+
+        let runs = [
+            dto::Sweep {
+                search_n: TEN,
+                search_l: vec![20, 30],
+                recall_k: TWO,
+            },
+            dto::Sweep {
+                search_n: FOUR,
+                search_l: vec![40],
+                recall_k: FOUR,
+            },
+        ];
+        let plan = Plan::new(REPS, &[ONE, FOUR], &runs).unwrap();
+        let actual: Vec<_> = plan
+            .sweep
+            .iter()
+            .map(|run| {
+                let setup = run.setup();
+                let parameters = run.parameters();
+                (
+                    setup.threads.get(),
+                    setup.tasks.get(),
+                    setup.reps.get(),
+                    parameters.knn.l_value().get(),
+                    parameters.num_neighbors.get(),
+                    parameters.recall_k.get(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            actual,
+            [
+                (1, 1, 3, 20, 10, 2),
+                (1, 1, 3, 30, 10, 2),
+                (1, 1, 3, 40, 4, 4),
+                (4, 4, 3, 20, 10, 2),
+                (4, 4, 3, 30, 10, 2),
+                (4, 4, 3, 40, 4, 4),
+            ]
+        );
+        assert_eq!(plan.max_recall_k, FOUR);
+    }
+
+    #[test]
+    fn plan_display() {
+        nz!(ONE = 1);
+        nz!(TWO = 2);
+        nz!(THREE = 3);
+        nz!(FOUR = 4);
+        nz!(TEN = 10);
+
+        let plan = Plan {
+            sweep: vec![
+                dbc::search::Run::new(
+                    Parameters {
+                        knn: diskann::graph::search::Knn::new(20, Some(2)).unwrap(),
+                        num_neighbors: TEN,
+                        recall_k: FOUR,
+                    },
+                    dbc::search::Setup {
+                        threads: TWO,
+                        tasks: FOUR,
+                        reps: THREE,
+                    },
+                ),
+                dbc::search::Run::new(
+                    Parameters {
+                        knn: diskann::graph::search::Knn::new(30, Some(1)).unwrap(),
+                        num_neighbors: FOUR,
+                        recall_k: TWO,
+                    },
+                    dbc::search::Setup {
+                        threads: FOUR,
+                        tasks: TWO,
+                        reps: ONE,
+                    },
+                ),
+            ],
+            max_recall_k: FOUR,
+        };
+        let formatted = plan.to_string();
+        let rows: Vec<Vec<_>> = formatted
+            .lines()
+            .filter(|line| line.contains(','))
+            .map(|line| line.split(',').map(str::trim).collect())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                vec![
+                    "Threads",
+                    "Tasks",
+                    "Reps",
+                    "Search L",
+                    "Recall K",
+                    "Search N",
+                    "Beam Width",
+                ],
+                vec!["2", "4", "3", "20", "4", "10", "2"],
+                vec!["4", "2", "1", "30", "2", "4", "1"],
+            ]
+        );
     }
 }

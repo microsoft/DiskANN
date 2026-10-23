@@ -27,19 +27,34 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 
     #[cfg(not(feature = "inmem2"))]
     {
-        registry.register_gated(
-            "inmem2",
-            "inmem2",
-            diskann_benchmark_runner::Features::new("inmem2"),
-            "Index build-and-search using version 2 of the inmem index",
-        )?;
+        let features = diskann_benchmark_runner::Features::new("inmem2");
 
-        registry.register_gated(
-            "inmem2-streaming",
-            "inmem2-stream",
-            diskann_benchmark_runner::Features::new("inmem2"),
-            "Streaming runs using version 2 of the inmem index",
-        )?;
+        let benches = [
+            (
+                "inmem2-fp-bigann-stream",
+                "Streaming runs using `diskann-inmem`",
+            ),
+            (
+                "inmem2-fp-static",
+                "Index build and search using `diskann-inmem` (full precison)",
+            ),
+            (
+                "inmem2-pq-static",
+                "Index build and search using `diskann-inmem` (product quantization)",
+            ),
+            (
+                "inmem2-sphq-static",
+                "Index build and search using `diskann-inmem` (spherical quantization)",
+            ),
+            (
+                "inmem2-sq-static",
+                "Index build and search using `diskann-inmem` (scalar quantization)",
+            ),
+        ];
+
+        for (tag, bench) in benches {
+            registry.register_gated(tag, "inmem2", features.clone(), bench)?;
+        }
     }
 
     Ok(())

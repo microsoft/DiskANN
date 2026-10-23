@@ -23,11 +23,17 @@ mod spherical;
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register(
-        "inmem2-sphq",
+        "inmem2-sphq-static",
         RunBuildAndSearch::<spherical::Spherical>::new(),
     )?;
-    registry.register("inmem2-pq", RunBuildAndSearch::<product::Product>::new())?;
-    registry.register("inmem2-sq", RunBuildAndSearch::<scalar::Scalar>::new())?;
+    registry.register(
+        "inmem2-pq-static",
+        RunBuildAndSearch::<product::Product>::new(),
+    )?;
+    registry.register(
+        "inmem2-sq-static",
+        RunBuildAndSearch::<scalar::Scalar>::new(),
+    )?;
     Ok(())
 }
 
@@ -58,10 +64,11 @@ pub(super) mod dto {
     use serde::Deserialize;
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2) struct BuildAndSearch<Q> {
         pub(super) data: inmem2::common::dto::Data,
         pub(super) build: inmem2::benchmark::build::dto::Config,
-        pub(super) search: inmem2::benchmark::knn::dto::KnnSearch,
+        pub(super) search: inmem2::benchmark::knn::dto::Knn,
         pub(super) quantizer: Q,
     }
 
@@ -70,7 +77,7 @@ pub(super) mod dto {
             Self {
                 data: inmem2::common::dto::Data::example(),
                 build: inmem2::benchmark::build::dto::Config::example(),
-                search: inmem2::benchmark::knn::dto::KnnSearch::example(),
+                search: inmem2::benchmark::knn::dto::Knn::example(),
                 quantizer,
             }
         }
@@ -81,7 +88,7 @@ pub(super) mod dto {
 struct BuildAndSearch<Q> {
     data: inmem2::common::Data,
     build: inmem2::benchmark::build::Config,
-    search: inmem2::benchmark::knn::KnnSearch,
+    search: inmem2::benchmark::knn::Knn,
     quantizer: Q,
 }
 
@@ -108,7 +115,7 @@ where
         }
 
         let build = inmem2::benchmark::build::Config::from_raw(build, data.distance())?;
-        let search = inmem2::benchmark::knn::KnnSearch::from_raw_with(search, checker)?;
+        let search = inmem2::benchmark::knn::Knn::from_raw_with(search, checker)?;
         let quantizer = Q::from_raw(quantizer, data.distance())?;
 
         Ok(Self {
@@ -225,7 +232,7 @@ fn run_quantized(
     dataset: Arc<rowmajor::Owned<f32>>,
     data: &inmem2::common::Data,
     build: &inmem2::benchmark::build::Config,
-    search: &inmem2::benchmark::knn::KnnSearch,
+    search: &inmem2::benchmark::knn::Knn,
     output: &mut dyn dbr::Output,
 ) -> anyhow::Result<inmem2::benchmark::BuildAndSearchStats> {
     let start = diskann::graph::StartPointStrategy::Medoid.compute(dataset.as_view())?;
