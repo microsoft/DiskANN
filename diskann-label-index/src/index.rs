@@ -388,11 +388,64 @@ impl EncodedLabelIndex {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LabelIndexHeader {
+    num_vectors: u32,
+    num_labels: usize,
+    exact_label_count: usize,
+    hash_count: usize,
+    physical_row_count: usize,
+    words_per_row: usize,
+    summary_words_per_row: usize,
+}
+
+struct LoadedLabelMappings {
+    labels: Box<[String]>,
+    label_ids: HashMap<String, u32>,
+    counts: Arc<[u32]>,
+    label_rows: Box<[u32]>,
+    exact_row_by_label: Box<[u32]>,
+}
+
+struct LoadedLabelRows {
+    row_valid_counts: Box<[u32]>,
+    row_nonzero_word_counts: Arc<[u32]>,
+    summary: BloomWordSummary,
+    payload_bits: Box<[u64]>,
+}
+
 fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexError> {
     let file = File::open(path)?;
     let file_len = file.metadata()?.len();
     let mut reader = BufReader::new(file);
 
+    let header = read_label_index_header(&mut reader)?;
+    let mappings = read_label_mappings(&mut reader, file_len, header)?;
+    let rows = read_label_rows(&mut reader, file_len, header, &mappings.counts)?;
+    let payload = LabelIndexPayload {
+        words_per_row: header.words_per_row,
+        hash_count: header.hash_count,
+        bits: rows.payload_bits,
+        label_rows: mappings.label_rows,
+        exact_row_by_label: mappings.exact_row_by_label,
+        exact_label_count: header.exact_label_count,
+        row_valid_counts: rows.row_valid_counts,
+        nonzero_words: rows.summary,
+    };
+
+    Ok(EncodedLabelIndex {
+        labels: mappings.labels,
+        label_ids: mappings.label_ids,
+        counts: mappings.counts,
+        summary_nonzero_words_per_row: rows.row_nonzero_word_counts,
+        num_vectors: header.num_vectors,
+        payload: Arc::new(payload),
+    })
+}
+
+fn read_label_index_header(
+    reader: &mut BufReader<File>,
+) -> Result<LabelIndexHeader, EncodedLabelIndexError> {
     let mut magic = [0u8; LABEL_INDEX_MAGIC.len()];
     reader.read_exact(&mut magic)?;
     if magic != LABEL_INDEX_MAGIC {
@@ -400,20 +453,20 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
             "invalid label-index file magic".to_string(),
         ));
     }
-    let version = read_u32(&mut reader)?;
+    let version = read_u32(reader)?;
     if version != LABEL_INDEX_VERSION {
         return Err(EncodedLabelIndexError::Invalid(format!(
             "unsupported label-index version {version}"
         )));
     }
-    let flags = read_u32(&mut reader)?;
+    let flags = read_u32(reader)?;
     if flags != LABEL_INDEX_FLAGS {
         return Err(EncodedLabelIndexError::Invalid(format!(
             "unsupported label-index flags {flags}"
         )));
     }
 
-    let num_vectors = u32::try_from(read_u64(&mut reader)?).map_err(|_| {
+    let num_vectors = u32::try_from(read_u64(reader)?).map_err(|_| {
         EncodedLabelIndexError::Invalid("label-index vector count exceeds u32".to_string())
     })?;
     if num_vectors == 0 {
@@ -421,7 +474,7 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
             "label-index vector count cannot be zero".to_string(),
         ));
     }
-    let num_labels = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+    let num_labels = usize::try_from(read_u64(reader)?).map_err(|_| {
         EncodedLabelIndexError::Invalid("label-index label count exceeds usize".to_string())
     })?;
     if num_labels == 0 || num_labels > MAX_LABEL_COUNT {
@@ -429,16 +482,16 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
             "label-index label count {num_labels} is outside 1..={MAX_LABEL_COUNT}"
         )));
     }
-    let exact_label_count = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
+    let exact_label_count = usize::try_from(read_u32(reader)?).map_err(|_| {
         EncodedLabelIndexError::Invalid("exact label count exceeds usize".to_string())
     })?;
-    let bloom_row_count = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
+    let bloom_row_count = usize::try_from(read_u32(reader)?).map_err(|_| {
         EncodedLabelIndexError::Invalid("Bloom row count exceeds usize".to_string())
     })?;
-    let hash_count = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
+    let hash_count = usize::try_from(read_u32(reader)?).map_err(|_| {
         EncodedLabelIndexError::Invalid("Bloom hash count exceeds usize".to_string())
     })?;
-    let reserved = read_u32(&mut reader)?;
+    let reserved = read_u32(reader)?;
     if reserved != 0 {
         return Err(EncodedLabelIndexError::Invalid(format!(
             "label-index reserved field is {reserved}, expected 0"
@@ -475,7 +528,7 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
         ));
     }
 
-    let words_per_row = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+    let words_per_row = usize::try_from(read_u64(reader)?).map_err(|_| {
         EncodedLabelIndexError::Invalid("payload row length exceeds usize".to_string())
     })?;
     let expected_words_per_row = (num_vectors as usize).div_ceil(64);
@@ -484,7 +537,7 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
             "payload row has {words_per_row} words; expected {expected_words_per_row}"
         )));
     }
-    let summary_words_per_row = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+    let summary_words_per_row = usize::try_from(read_u64(reader)?).map_err(|_| {
         EncodedLabelIndexError::Invalid("summary row length exceeds usize".to_string())
     })?;
     let expected_summary_words = words_per_row.div_ceil(64);
@@ -494,11 +547,27 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
         )));
     }
 
-    let minimum_dictionary_bytes = num_labels.checked_mul(8).ok_or_else(|| {
+    Ok(LabelIndexHeader {
+        num_vectors,
+        num_labels,
+        exact_label_count,
+        hash_count,
+        physical_row_count,
+        words_per_row,
+        summary_words_per_row,
+    })
+}
+
+fn read_label_mappings(
+    reader: &mut BufReader<File>,
+    file_len: u64,
+    header: LabelIndexHeader,
+) -> Result<LoadedLabelMappings, EncodedLabelIndexError> {
+    let minimum_dictionary_bytes = header.num_labels.checked_mul(8).ok_or_else(|| {
         EncodedLabelIndexError::Invalid("label dictionary size overflow".to_string())
     })?;
     ensure_remaining(
-        &mut reader,
+        reader,
         file_len,
         minimum_dictionary_bytes,
         "label dictionary",
@@ -506,31 +575,32 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
     let mut labels = Vec::new();
     let mut counts = Vec::new();
     let mut label_ids = HashMap::new();
-    labels.try_reserve_exact(num_labels).map_err(|_| {
+    labels.try_reserve_exact(header.num_labels).map_err(|_| {
         EncodedLabelIndexError::Invalid("cannot reserve label dictionary".to_string())
     })?;
     counts
-        .try_reserve_exact(num_labels)
+        .try_reserve_exact(header.num_labels)
         .map_err(|_| EncodedLabelIndexError::Invalid("cannot reserve label counts".to_string()))?;
-    label_ids.try_reserve(num_labels).map_err(|_| {
+    label_ids.try_reserve(header.num_labels).map_err(|_| {
         EncodedLabelIndexError::Invalid("cannot reserve label lookup map".to_string())
     })?;
-    for id in 0..num_labels {
-        let len = usize::try_from(read_u32(&mut reader)?).map_err(|_| {
+    for id in 0..header.num_labels {
+        let len = usize::try_from(read_u32(reader)?).map_err(|_| {
             EncodedLabelIndexError::Invalid("label length exceeds usize".to_string())
         })?;
-        let count = read_u32(&mut reader)?;
+        let count = read_u32(reader)?;
         if len > MAX_LABEL_LENGTH {
             return Err(EncodedLabelIndexError::Invalid(format!(
                 "label length {len} exceeds limit {MAX_LABEL_LENGTH}"
             )));
         }
-        if count == 0 || count > num_vectors {
+        if count == 0 || count > header.num_vectors {
             return Err(EncodedLabelIndexError::Invalid(format!(
-                "label count {count} is outside 1..={num_vectors}"
+                "label count {count} is outside 1..={}",
+                header.num_vectors
             )));
         }
-        ensure_remaining(&mut reader, file_len, len, "label bytes")?;
+        ensure_remaining(reader, file_len, len, "label bytes")?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(len).map_err(|_| {
             EncodedLabelIndexError::Invalid("cannot reserve label bytes".to_string())
@@ -552,9 +622,12 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
         counts.push(count);
     }
 
-    let total_label_rows = num_labels.checked_mul(hash_count).ok_or_else(|| {
-        EncodedLabelIndexError::Invalid("label-row table size overflow".to_string())
-    })?;
+    let total_label_rows = header
+        .num_labels
+        .checked_mul(header.hash_count)
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("label-row table size overflow".to_string())
+        })?;
     let mut label_rows = Vec::new();
     label_rows
         .try_reserve_exact(total_label_rows)
@@ -564,39 +637,39 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
     label_rows.resize(total_label_rows, u32::MAX);
     let mut exact_row_by_label = Vec::new();
     exact_row_by_label
-        .try_reserve_exact(num_labels)
+        .try_reserve_exact(header.num_labels)
         .map_err(|_| {
             EncodedLabelIndexError::Invalid("cannot reserve exact-row table".to_string())
         })?;
-    exact_row_by_label.resize(num_labels, u32::MAX);
+    exact_row_by_label.resize(header.num_labels, u32::MAX);
     for (label_id, exact_row) in exact_row_by_label
         .iter_mut()
-        .take(exact_label_count)
+        .take(header.exact_label_count)
         .enumerate()
     {
         *exact_row = u32::try_from(label_id).map_err(|_| {
             EncodedLabelIndexError::Invalid("exact row index exceeds u32".to_string())
         })?;
     }
-    let mapping_count = (num_labels - exact_label_count)
-        .checked_mul(hash_count)
+    let mapping_count = (header.num_labels - header.exact_label_count)
+        .checked_mul(header.hash_count)
         .ok_or_else(|| {
             EncodedLabelIndexError::Invalid("Bloom mapping count overflow".to_string())
         })?;
     ensure_remaining(
-        &mut reader,
+        reader,
         file_len,
         mapping_count.checked_mul(4).ok_or_else(|| {
             EncodedLabelIndexError::Invalid("Bloom mapping byte size overflow".to_string())
         })?,
         "Bloom label-row mappings",
     )?;
-    for label_id in exact_label_count..num_labels {
-        let start = label_id * hash_count;
-        for hash_index in 0..hash_count {
-            let row = read_u32(&mut reader)?;
-            if row < exact_label_count as u32
-                || row as usize >= physical_row_count
+    for label_id in header.exact_label_count..header.num_labels {
+        let start = label_id * header.hash_count;
+        for hash_index in 0..header.hash_count {
+            let row = read_u32(reader)?;
+            if row < header.exact_label_count as u32
+                || row as usize >= header.physical_row_count
                 || label_rows[start..start + hash_index].contains(&row)
             {
                 return Err(EncodedLabelIndexError::Invalid(
@@ -607,10 +680,25 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
         }
     }
 
+    Ok(LoadedLabelMappings {
+        labels: labels.into_boxed_slice(),
+        label_ids,
+        counts: Arc::from(counts),
+        label_rows: label_rows.into_boxed_slice(),
+        exact_row_by_label: exact_row_by_label.into_boxed_slice(),
+    })
+}
+
+fn read_label_rows(
+    reader: &mut BufReader<File>,
+    file_len: u64,
+    header: LabelIndexHeader,
+    label_counts: &[u32],
+) -> Result<LoadedLabelRows, EncodedLabelIndexError> {
     ensure_remaining(
-        &mut reader,
+        reader,
         file_len,
-        physical_row_count.checked_mul(8).ok_or_else(|| {
+        header.physical_row_count.checked_mul(8).ok_or_else(|| {
             EncodedLabelIndexError::Invalid("row metadata byte size overflow".to_string())
         })?,
         "row metadata",
@@ -618,19 +706,21 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
     let mut row_valid_counts = Vec::new();
     let mut row_nonzero_word_counts = Vec::new();
     row_valid_counts
-        .try_reserve_exact(physical_row_count)
+        .try_reserve_exact(header.physical_row_count)
         .map_err(|_| {
             EncodedLabelIndexError::Invalid("cannot reserve row valid counts".to_string())
         })?;
     row_nonzero_word_counts
-        .try_reserve_exact(physical_row_count)
+        .try_reserve_exact(header.physical_row_count)
         .map_err(|_| {
             EncodedLabelIndexError::Invalid("cannot reserve row nonzero counts".to_string())
         })?;
-    for _ in 0..physical_row_count {
-        let valid_node_count = read_u32(&mut reader)?;
-        let nonzero_word_count = read_u32(&mut reader)?;
-        if valid_node_count > num_vectors || nonzero_word_count as usize > words_per_row {
+    for _ in 0..header.physical_row_count {
+        let valid_node_count = read_u32(reader)?;
+        let nonzero_word_count = read_u32(reader)?;
+        if valid_node_count > header.num_vectors
+            || nonzero_word_count as usize > header.words_per_row
+        {
             return Err(EncodedLabelIndexError::Invalid(
                 "row metadata exceeds index dimensions".to_string(),
             ));
@@ -638,29 +728,32 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
         row_valid_counts.push(valid_node_count);
         row_nonzero_word_counts.push(nonzero_word_count);
     }
-    if row_valid_counts[..exact_label_count] != counts[..exact_label_count] {
+    if row_valid_counts[..header.exact_label_count] != label_counts[..header.exact_label_count] {
         return Err(EncodedLabelIndexError::Invalid(
             "exact row valid count does not match label count".to_string(),
         ));
     }
 
     let summary_bits = read_payload(
-        &mut reader,
+        reader,
         file_len,
-        physical_row_count,
-        summary_words_per_row,
+        header.physical_row_count,
+        header.summary_words_per_row,
         "label summary",
     )?;
-    let summarized_words = u32::try_from(words_per_row).map_err(|_| {
+    let summarized_words = u32::try_from(header.words_per_row).map_err(|_| {
         EncodedLabelIndexError::Invalid("payload row word count exceeds u32".to_string())
     })?;
     validate_row_padding(
         &summary_bits,
-        physical_row_count,
-        summary_words_per_row,
+        header.physical_row_count,
+        header.summary_words_per_row,
         summarized_words,
     )?;
-    for (row, summary) in summary_bits.chunks_exact(summary_words_per_row).enumerate() {
+    for (row, summary) in summary_bits
+        .chunks_exact(header.summary_words_per_row)
+        .enumerate()
+    {
         let nonzero = summary.iter().map(|word| word.count_ones()).sum::<u32>();
         if nonzero != row_nonzero_word_counts[row] {
             return Err(EncodedLabelIndexError::Invalid(
@@ -670,17 +763,17 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
     }
 
     let payload_bits = read_payload(
-        &mut reader,
+        reader,
         file_len,
-        physical_row_count,
-        words_per_row,
+        header.physical_row_count,
+        header.words_per_row,
         "label payload",
     )?;
     validate_row_padding(
         &payload_bits,
-        physical_row_count,
-        words_per_row,
-        num_vectors,
+        header.physical_row_count,
+        header.words_per_row,
+        header.num_vectors,
     )?;
     if reader.read(&mut [0u8; 1])? != 0 {
         return Err(EncodedLabelIndexError::Invalid(
@@ -694,35 +787,24 @@ fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexE
         .ok_or_else(|| {
             EncodedLabelIndexError::Invalid("row nonzero word count overflow".to_string())
         })?;
-    let total_payload_words = physical_row_count
-        .checked_mul(words_per_row)
+    let total_payload_words = header
+        .physical_row_count
+        .checked_mul(header.words_per_row)
         .ok_or_else(|| {
             EncodedLabelIndexError::Invalid("payload word count overflow".to_string())
         })?;
     let summary = BloomWordSummary {
-        words_per_row: summary_words_per_row,
+        words_per_row: header.summary_words_per_row,
         bits: summary_bits.into_boxed_slice(),
-        scan_useful: exact_label_count > 0
+        scan_useful: header.exact_label_count > 0
             || total_nonzero_words.saturating_mul(4) <= total_payload_words,
     };
-    let payload = LabelIndexPayload {
-        words_per_row,
-        hash_count,
-        bits: payload_bits.into_boxed_slice(),
-        label_rows: label_rows.into_boxed_slice(),
-        exact_row_by_label: exact_row_by_label.into_boxed_slice(),
-        exact_label_count,
-        row_valid_counts: row_valid_counts.into_boxed_slice(),
-        nonzero_words: summary,
-    };
 
-    Ok(EncodedLabelIndex {
-        labels: labels.into_boxed_slice(),
-        label_ids,
-        counts: Arc::from(counts),
-        summary_nonzero_words_per_row: Arc::from(row_nonzero_word_counts),
-        num_vectors,
-        payload: Arc::new(payload),
+    Ok(LoadedLabelRows {
+        row_valid_counts: row_valid_counts.into_boxed_slice(),
+        row_nonzero_word_counts: Arc::from(row_nonzero_word_counts),
+        summary,
+        payload_bits: payload_bits.into_boxed_slice(),
     })
 }
 
