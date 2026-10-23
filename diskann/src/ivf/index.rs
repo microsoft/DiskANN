@@ -131,8 +131,8 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 SplitAndAssign::new(clusterer, RegionalNearest).run(
                     &region,
                     &mut update,
-                    &parents,
-                    &neighbors,
+                    &parents.iter().copied().collect::<Vec<_>>(),
+                    &neighbors.iter().copied().collect::<Vec<_>>(),
                 )?;
             };
 

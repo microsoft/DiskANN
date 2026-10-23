@@ -15,8 +15,9 @@
 //! points, then all gathered points are reassigned across every child and retained
 //! neighbor centroid. This permits movement between retained neighbors as well.
 //! Parent centroids are not assignment candidates; retained centroids are unchanged.
-//! [`build::SplitAndAssign`] separates per-parent fitting from whole-region assignment.
-//! Fitting writes a fixed number of children per parent into reusable centroid
+//! [`build::SplitAndAssign`] separates regional fitting from assignment. Each
+//! numerical stage receives source IDs and the region and controls vector access.
+//! Fitting declares its total output size and fills coordinator-owned centroid
 //! scratch. Assignment borrows those rows and retained centroids, groups members,
 //! and records writes directly through the regional update object.
 //! The index currently selects [`build::clustering::TwoMeans`] and

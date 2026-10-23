@@ -3,12 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, BTreeSet},
-    future::Future,
-    num::NonZeroUsize,
-};
+use std::{cell::Cell, collections::BTreeMap, future::Future, num::NonZeroUsize};
 
 use diskann_utils::{
     Reborrow,
@@ -572,7 +567,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 ),
                 assignment::RegionalNearest,
             )
-            .run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new())
+            .run(&region, &mut update, &[1], &[])
             .unwrap();
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
             assert_eq!(vectors.row(2), points[1].1);
@@ -971,12 +966,7 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
         clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(1).unwrap()),
         assignment::RegionalNearest,
     )
-    .run(
-        &region,
-        &mut update,
-        &BTreeSet::from([1]),
-        &BTreeSet::from([2, 3, 4]),
-    )
+    .run(&region, &mut update, &[1], &[2, 3, 4])
     .unwrap();
 
     let mut centers: Vec<_> = update.created.iter().map(|list| list.centroid[0]).collect();
@@ -1030,12 +1020,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 ),
                 assignment::RegionalNearest,
             )
-            .run(
-                &region,
-                &mut update,
-                &BTreeSet::from([1, 99]),
-                &BTreeSet::new()
-            )
+            .run(&region, &mut update, &[1, 99], &[])
             .is_err()
         );
         assert!(
@@ -1046,12 +1031,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 ),
                 assignment::RegionalNearest,
             )
-            .run(
-                &region,
-                &mut update,
-                &BTreeSet::from([1]),
-                &BTreeSet::from([99])
-            )
+            .run(&region, &mut update, &[1], &[99])
             .is_err()
         );
         assert!(update.created.is_empty());
@@ -1063,7 +1043,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             clustering::TwoMeans::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap()),
             assignment::RegionalNearest,
         )
-        .run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new())
+        .run(&region, &mut update, &[1], &[])
         .unwrap();
         assert_eq!(update.created.len(), 2);
     }
@@ -1119,12 +1099,7 @@ fn assignment_can_cross_parent_boundaries() {
         ),
         assignment::RegionalNearest,
     )
-    .run(
-        &region,
-        &mut update,
-        &BTreeSet::from([1, 2]),
-        &BTreeSet::new(),
-    )
+    .run(&region, &mut update, &[1, 2], &[])
     .unwrap();
     assert!(
         update.created[2..]
@@ -1153,7 +1128,7 @@ fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
             clustering::TwoMeans::new(NonZeroUsize::new(1).unwrap(), NonZeroUsize::new(1).unwrap()),
             assignment::RegionalNearest,
         )
-        .run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new())
+        .run(&region, &mut update, &[1], &[])
         .unwrap();
         assert_eq!(update.created.len(), 2);
         assert_eq!(update.created[0].centroid, [value]);
@@ -1167,19 +1142,29 @@ fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
 fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     struct RowsAsCenters;
 
-    impl<'v> clustering::Clusterer<rowmajor::Ref<'v, f32>> for RowsAsCenters {
+    impl<R> clustering::Clusterer<u32, u32, R> for RowsAsCenters
+    where
+        R: for<'a> RegionView<u32, u32, VectorsRef<'a> = rowmajor::Ref<'a, f32>>,
+    {
         fn fit(
             &mut self,
-            points: rowmajor::Ref<'v, f32>,
+            sources: &[u32],
+            region: &R,
             mut dst: rowmajor::Mut<'_, f32>,
         ) -> ANNResult<()> {
-            assert_eq!(points.nrows(), dst.nrows());
-            dst.as_mut_slice().copy_from_slice(points.as_slice());
+            assert_eq!(dst.nrows(), sources.len() * 2);
+            assert_eq!(dst.ncols(), 1);
+            for (&source, centers) in sources.iter().zip(dst.as_mut_slice().chunks_exact_mut(2)) {
+                let vectors = region.get_vectors(source).unwrap();
+                let points = vectors.reborrow();
+                assert_eq!(points.nrows(), 2);
+                centers.copy_from_slice(points.as_slice());
+            }
             Ok(())
         }
 
-        fn num_centers(&self) -> NonZeroUsize {
-            NonZeroUsize::new(2).unwrap()
+        fn num_centers(&self, sources: usize) -> Option<usize> {
+            sources.checked_mul(2)
         }
 
         fn dim(&self) -> NonZeroUsize {
@@ -1297,8 +1282,8 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     ]
     .into();
     let region = Region::new(&sources);
-    let parents = BTreeSet::from([1, 2]);
-    let neighbors = BTreeSet::from([3, 4]);
+    let parents = [1, 2];
+    let neighbors = [3, 4];
     let mut full_memberships = PendingLists::default();
     let mut full_created = Vec::new();
     let mut full = Update::new(&sources, 1, &mut full_memberships, &mut full_created);
@@ -1357,12 +1342,7 @@ fn split_strategies_support_in_place_fitting_and_source_local_candidates() {
     let mut smaller_created = Vec::new();
     let mut smaller = Update::new(&sources, 1, &mut smaller_memberships, &mut smaller_created);
     splitter
-        .run::<_, _, Region<'_>, _>(
-            &region,
-            &mut smaller,
-            &BTreeSet::from([1]),
-            &BTreeSet::new(),
-        )
+        .run::<_, _, Region<'_>, _>(&region, &mut smaller, &[1], &[])
         .unwrap();
     assert_eq!(smaller.created.len(), 2);
     assert_eq!(smaller.created[0].members, [0]);
@@ -1390,8 +1370,8 @@ fn numerical_strategy_failures_record_no_updates() {
         CountOverflow,
     }
 
-    impl<V> clustering::Clusterer<V> for InvalidFit {
-        fn fit(&mut self, _: V, _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
+    impl<I, L, R: RegionView<I, L>> clustering::Clusterer<I, L, R> for InvalidFit {
+        fn fit(&mut self, _: &[L], _: &R, _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
             match self {
                 Self::Error => Err(ANNError::message("injected fitting failure")),
                 Self::CountOverflow => {
@@ -1400,12 +1380,11 @@ fn numerical_strategy_failures_record_no_updates() {
             }
         }
 
-        fn num_centers(&self) -> NonZeroUsize {
-            NonZeroUsize::new(match self {
+        fn num_centers(&self, sources: usize) -> Option<usize> {
+            sources.checked_mul(match self {
                 Self::CountOverflow => usize::MAX,
                 Self::Error => 2,
             })
-            .unwrap()
         }
 
         fn dim(&self) -> NonZeroUsize {
@@ -1445,8 +1424,8 @@ fn numerical_strategy_failures_record_no_updates() {
     )]
     .into();
     let region = Region::new(&sources);
-    let parents = BTreeSet::from([1]);
-    let neighbors = BTreeSet::new();
+    let parents = [1];
+    let neighbors = [];
     for (clusterer, expected) in [
         (InvalidFit::Error, "injected fitting failure"),
         (InvalidFit::CountOverflow, "centroid count overflow"),
@@ -1454,17 +1433,29 @@ fn numerical_strategy_failures_record_no_updates() {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-        let selected = if matches!(clusterer, InvalidFit::CountOverflow) {
-            BTreeSet::from([1, 2])
+        let selected: &[u32] = if matches!(clusterer, InvalidFit::CountOverflow) {
+            &[1, 2]
         } else {
-            parents.clone()
+            &parents
         };
         let error = SplitAndAssign::new(clusterer, assignment::RegionalNearest)
-            .run(&region, &mut update, &selected, &neighbors)
+            .run(&region, &mut update, selected, &neighbors)
             .unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
         assert_unwritten(update);
     }
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
+    let error = SplitAndAssign::new(
+        clustering::TwoMeans::new(ONE, ONE),
+        assignment::RegionalNearest,
+    )
+    .run(&region, &mut update, &[], &neighbors)
+    .unwrap_err();
+    assert!(error.to_string().contains("at least one parent"), "{error}");
+    assert_unwritten(update);
+
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
@@ -1597,7 +1588,7 @@ fn split_driver_reuses_clusterer_with_fallible_borrowed_batches() {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
-        let result = driver.run(&region, &mut update, &BTreeSet::from([1]), &BTreeSet::new());
+        let result = driver.run(&region, &mut update, &[1], &[]);
         if let Some(count) = fail_on {
             let error = result.unwrap_err();
             assert!(
@@ -1659,16 +1650,28 @@ fn split_driver_accepts_native_batches_without_matrix_access() {
 
     struct NativeCenters;
 
-    impl<'v> clustering::Clusterer<&'v [[u8; 1]]> for NativeCenters {
-        fn fit(&mut self, points: &'v [[u8; 1]], mut dst: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
-            for (point, center) in points.iter().zip(dst.rows_mut()) {
-                center[0] = point[0].into();
+    impl<R> clustering::Clusterer<u32, u32, R> for NativeCenters
+    where
+        R: for<'a> RegionView<u32, u32, VectorsRef<'a> = &'a [[u8; 1]]>,
+    {
+        fn fit(
+            &mut self,
+            sources: &[u32],
+            region: &R,
+            mut dst: rowmajor::Mut<'_, f32>,
+        ) -> ANNResult<()> {
+            for (&source, centers) in sources.iter().zip(dst.as_mut_slice().chunks_exact_mut(2)) {
+                let vectors = region.get_vectors(source).unwrap();
+                let points = vectors.reborrow();
+                for (point, center) in points.iter().zip(centers) {
+                    *center = point[0].into();
+                }
             }
             Ok(())
         }
 
-        fn num_centers(&self) -> NonZeroUsize {
-            NonZeroUsize::new(2).unwrap()
+        fn num_centers(&self, sources: usize) -> Option<usize> {
+            sources.checked_mul(2)
         }
 
         fn dim(&self) -> NonZeroUsize {
@@ -1718,12 +1721,7 @@ fn split_driver_accepts_native_batches_without_matrix_access() {
         let mut created = Vec::new();
         let mut update = Update::new(&sources, 1, &mut memberships, &mut created);
         driver
-            .run::<_, _, NativeRegion<'_>, _>(
-                &region,
-                &mut update,
-                &BTreeSet::from([1]),
-                &BTreeSet::new(),
-            )
+            .run::<_, _, NativeRegion<'_>, _>(&region, &mut update, &[1], &[])
             .unwrap();
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].centroid, [f32::from(offset)]);
@@ -1741,11 +1739,20 @@ fn split_driver_accepts_native_batches_without_matrix_access() {
 fn two_means_matches_quantization_lloyds() {
     use clustering::{Clusterer, TwoMeans};
 
-    let points = matrix(&[[0.0, 2.0], [2.0, 4.0], [6.0, 6.0], [10.0, 12.0]]);
+    let sources = BTreeMap::from([(
+        1,
+        Source {
+            centroid: vec![0.0, 0.0],
+            members: vec![0, 1, 2, 3],
+            vectors: matrix(&[[0.0, 2.0], [2.0, 4.0], [6.0, 6.0], [10.0, 12.0]]),
+        },
+    )]);
+    let region = Region::new(&sources);
+    let points = sources[&1].vectors.as_view();
     for iterations in [1, 5] {
-        let mut expected = points.as_view().subview(0..2).unwrap().to_rowmajor_owned();
+        let mut expected = points.subview(0..2).unwrap().to_rowmajor_owned();
         let _ = diskann_quantization::algorithms::kmeans::lloyds::lloyds(
-            points.as_view(),
+            points,
             expected.as_view_mut(),
             iterations,
         );
@@ -1755,7 +1762,7 @@ fn two_means_matches_quantization_lloyds() {
             NonZeroUsize::new(iterations).unwrap(),
             NonZeroUsize::new(2).unwrap(),
         )
-        .fit(points.as_view(), actual.as_view_mut())
+        .fit(&[1], &region, actual.as_view_mut())
         .unwrap();
         assert_eq!(actual.as_slice(), expected.as_slice());
     }
@@ -1765,14 +1772,22 @@ fn two_means_matches_quantization_lloyds() {
 fn two_means_fits_only_the_destination_window() {
     use clustering::{Clusterer, TwoMeans};
 
-    let points = matrix(&[[0.0, 2.0], [2.0, 4.0], [10.0, 12.0], [12.0, 14.0]]);
+    let sources = BTreeMap::from([(
+        1,
+        Source {
+            centroid: vec![0.0, 0.0],
+            members: vec![0, 1, 2, 3],
+            vectors: matrix(&[[0.0, 2.0], [2.0, 4.0], [10.0, 12.0], [12.0, 14.0]]),
+        },
+    )]);
+    let region = Region::new(&sources);
     let mut scratch = rowmajor::Owned::from_element(4, 2, -1.0);
     let mut clusterer = TwoMeans::new(
         NonZeroUsize::new(10).unwrap(),
         NonZeroUsize::new(2).unwrap(),
     );
     clusterer
-        .fit(points.as_view(), scratch.subview_mut(1..3).unwrap())
+        .fit(&[1], &region, scratch.subview_mut(1..3).unwrap())
         .unwrap();
     assert_eq!(scratch.row(0), [-1.0, -1.0]);
     assert_eq!(scratch.row(3), [-1.0, -1.0]);
@@ -1787,8 +1802,17 @@ fn two_means_fits_only_the_destination_window() {
         (matrix(&[[0.0, 2.0], [1.0, 3.0]]), 1, 2),
         (matrix(&[[0.0, 2.0], [1.0, 3.0]]), 2, 1),
     ] {
+        let sources = BTreeMap::from([(
+            1,
+            Source {
+                centroid: vec![0.0; points.ncols()],
+                members: (0..).take(points.nrows()).collect(),
+                vectors: points,
+            },
+        )]);
+        let region = Region::new(&sources);
         let mut dst = rowmajor::Owned::from_element(rows, dim, -1.0);
-        assert!(clusterer.fit(points.as_view(), dst.as_view_mut()).is_err());
+        assert!(clusterer.fit(&[1], &region, dst.as_view_mut()).is_err());
         assert!(dst.as_slice().iter().all(|&value| value == -1.0));
     }
 }
