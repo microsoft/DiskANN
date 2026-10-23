@@ -12,6 +12,7 @@ const NAME: &str = "spherical-exhaustive-search";
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register(NAME, imp::SphericalQ::<1>)?;
     registry.register(NAME, imp::SphericalQ::<2>)?;
+    registry.register(NAME, imp::SphericalQ::<3>)?;
     registry.register(NAME, imp::SphericalQ::<4>)?;
     registry.register(NAME, imp::SphericalQ::<8>)?;
 

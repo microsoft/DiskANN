@@ -81,7 +81,7 @@
 //! |               |               | `       ` |           |               |           |           |
 //! | `&[f32]`      | `USlice<1>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Optimized |
 //! | `&[f32]`      | `USlice<2>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Optimized |
-//! | `&[f32]`      | `USlice<3>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<3>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
 //! | `&[f32]`      | `USlice<4>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Optimized |
 //! | `&[f32]`      | `USlice<5>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `&[f32]`      | `USlice<6>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
@@ -3452,6 +3452,97 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<f32>, &[f32], US
     }
 }
 
+/// Decode eight consecutive codes from each 24-bit group. Interior loads overlap by one
+/// byte; the final group is loaded separately so no padding or readable metadata is needed.
+#[cfg(target_arch = "x86_64")]
+impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<f32>, &[f32], USlice<'_, 3>>
+    for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::x86_64::V3,
+        x: &[f32],
+        y: USlice<'_, 3>,
+    ) -> MathematicalResult<f32> {
+        let len = check_lengths!(x, y)?;
+        diskann_wide::alias!(f32s = <diskann_wide::arch::x86_64::V3>::f32x8);
+        diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
+
+        let shifts = i32s::from_array(arch, [0, 3, 6, 9, 12, 15, 18, 21]);
+        let mask = i32s::splat(arch, 7);
+        let decode =
+            |word: u32| -> f32s { ((i32s::splat(arch, word as i32) >> shifts) & mask).simd_cast() };
+        let px = x.as_ptr();
+        let py = y.as_ptr();
+        let mut s0 = f32s::default(arch);
+        let mut s1 = f32s::default(arch);
+        let mut s2 = f32s::default(arch);
+        let mut s3 = f32s::default(arch);
+        let mut i = 0;
+
+        while len - i > 32 {
+            // SAFETY: At least 33 dimensions remain: 32 query values and 13 packed
+            // bytes are readable. The last window covers bytes [9, 13).
+            unsafe {
+                let packed = py.add(3 * (i / 8));
+                let c0 = decode(packed.cast::<u32>().read_unaligned());
+                let c1 = decode(packed.add(3).cast::<u32>().read_unaligned());
+                let c2 = decode(packed.add(6).cast::<u32>().read_unaligned());
+                let c3 = decode(packed.add(9).cast::<u32>().read_unaligned());
+                s0 = f32s::load_simd(arch, px.add(i)).mul_add_simd(c0, s0);
+                s1 = f32s::load_simd(arch, px.add(i + 8)).mul_add_simd(c1, s1);
+                s2 = f32s::load_simd(arch, px.add(i + 16)).mul_add_simd(c2, s2);
+                s3 = f32s::load_simd(arch, px.add(i + 24)).mul_add_simd(c3, s3);
+            }
+            i += 32;
+        }
+        // Leave at least one dimension after each pair: its byte makes the second
+        // overlapping u32 load valid, even when the packed slice has no trailing storage.
+        if len - i > 16 {
+            // SAFETY: At least 17 dimensions remain: 16 query values and 7 packed bytes
+            // are readable. The two windows cover bytes [0, 4) and [3, 7).
+            unsafe {
+                let packed = py.add(3 * (i / 8));
+                let c0 = decode(packed.cast::<u32>().read_unaligned());
+                let c1 = decode(packed.add(3).cast::<u32>().read_unaligned());
+                s0 = f32s::load_simd(arch, px.add(i)).mul_add_simd(c0, s0);
+                s1 = f32s::load_simd(arch, px.add(i + 8)).mul_add_simd(c1, s1);
+            }
+            i += 16;
+        }
+        if len - i > 8 {
+            // SAFETY: At least 9 dimensions remain, so 8 query values and 4 packed
+            // bytes are readable at these offsets.
+            unsafe {
+                let codes = decode(py.add(3 * (i / 8)).cast::<u32>().read_unaligned());
+                s0 = f32s::load_simd(arch, px.add(i)).mul_add_simd(codes, s0);
+            }
+            i += 8;
+        }
+        let tail = len - i;
+        if tail != 0 {
+            let finish = |word| {
+                // SAFETY: There are `tail` query values remaining; inactive lanes are zero.
+                let query = unsafe { f32s::load_simd_first(arch, px.add(i), tail) };
+                s0 = query.mul_add_simd(decode(word), s0);
+            };
+            // SAFETY: The remaining 1..=8 codes occupy ceil(3 * tail / 8) bytes.
+            // Each helper reads precisely that many bytes, with no alignment requirement.
+            unsafe {
+                let packed = py.add(3 * (i / 8)).cast::<u32>();
+                match tail {
+                    1..=2 => load_one(packed, finish),
+                    3..=5 => load_two(packed, finish),
+                    _ => load_three(packed, finish),
+                }
+            }
+        }
+        let sum = (s0 + s1) + (s2 + s3);
+        Ok(MV::new(sum.sum_tree()))
+    }
+}
+
 /// The strategy here is similar to the 1 and 2-bit strategies. However, instead of using
 /// `_mm256_permutevar_ps`, we now go directly for 32-bit integer to 32-bit floating point.
 ///
@@ -3927,7 +4018,7 @@ macro_rules! ip_retarget {
 }
 
 #[cfg(target_arch = "x86_64")]
-ip_retarget!(diskann_wide::arch::x86_64::V3, 3, 5, 6, 7, 8);
+ip_retarget!(diskann_wide::arch::x86_64::V3, 5, 6, 7, 8);
 
 #[cfg(target_arch = "x86_64")]
 ip_retarget!(diskann_wide::arch::x86_64::V4, 1, 2, 3, 4, 5, 6, 7, 8);

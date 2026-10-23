@@ -244,7 +244,7 @@ macro_rules! create_vector_store {
     };
 }
 
-create_vector_store!(1, 2, 4);
+create_vector_store!(1, 2, 3, 4);
 
 ////////////////
 // SetElement //
@@ -920,8 +920,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_query_computer_variants() {
+    fn check_query_computer_variants<const NBITS: usize>(layout: spherical::iface::QueryLayout)
+    where
+        spherical::iface::Impl<NBITS>:
+            spherical::iface::Quantizer + spherical::iface::Constructible,
+    {
         let input_dim = 128;
         let mut rng = StdRng::seed_from_u64(0x5abccaa184dfdb93);
         let data = dataset(10, input_dim, &mut rng);
@@ -930,7 +933,7 @@ mod tests {
         //
         // This is just a sanity check on the computers.
         {
-            let store = make_store::<1>(data.as_view(), SupportedMetric::SquaredL2, &mut rng);
+            let store = make_store::<NBITS>(data.as_view(), SupportedMetric::SquaredL2, &mut rng);
             let max_relative_error = 0.2;
 
             for (i, r) in data.rows().enumerate() {
@@ -938,9 +941,7 @@ mod tests {
             }
 
             for (i, a) in data.rows().enumerate() {
-                let computer = store
-                    .query_computer(a, spherical::iface::QueryLayout::FourBitTransposed, false)
-                    .unwrap();
+                let computer = store.query_computer(a, layout, false).unwrap();
                 for (j, b) in data.rows().enumerate() {
                     if i == j {
                         continue;
@@ -972,7 +973,8 @@ mod tests {
         // This is just a sanity check on the computers. Since the bit-level dot product
         // is pretty inaccurate, we just check for matching signs at this level.
         {
-            let store = make_store::<1>(data.as_view(), SupportedMetric::InnerProduct, &mut rng);
+            let store =
+                make_store::<NBITS>(data.as_view(), SupportedMetric::InnerProduct, &mut rng);
 
             for (i, r) in data.rows().enumerate() {
                 store.set_vector(i, r).unwrap();
@@ -982,9 +984,7 @@ mod tests {
             let mut total = 0;
 
             for (i, a) in data.rows().enumerate() {
-                let computer = store
-                    .query_computer(a, spherical::iface::QueryLayout::FourBitTransposed, true)
-                    .unwrap();
+                let computer = store.query_computer(a, layout, true).unwrap();
                 for (j, b) in data.rows().enumerate() {
                     if i == j {
                         continue;
@@ -1007,6 +1007,22 @@ mod tests {
                 signs_match,
                 total,
             );
+        }
+    }
+
+    #[test]
+    fn test_query_computer_variants() {
+        check_query_computer_variants::<1>(spherical::iface::QueryLayout::FourBitTransposed);
+    }
+
+    #[test]
+    fn test_query_computer_variants_3bit() {
+        for layout in [
+            spherical::iface::QueryLayout::SameAsData,
+            spherical::iface::QueryLayout::ScalarQuantized,
+            spherical::iface::QueryLayout::FullPrecision,
+        ] {
+            check_query_computer_variants::<3>(layout);
         }
     }
 
