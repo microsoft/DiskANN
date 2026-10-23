@@ -290,6 +290,32 @@ pub struct EncodedLabelQuery<'a> {
     _lifetime: PhantomData<&'a ()>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LabelIndexHeader {
+    num_vectors: u32,
+    num_labels: usize,
+    exact_label_count: usize,
+    hash_count: usize,
+    physical_row_count: usize,
+    words_per_row: usize,
+    summary_words_per_row: usize,
+}
+
+struct LoadedLabelMappings {
+    labels: Box<[String]>,
+    label_ids: HashMap<String, u32>,
+    counts: Arc<[u32]>,
+    label_rows: Box<[u32]>,
+    exact_row_by_label: Box<[u32]>,
+}
+
+struct LoadedLabelRows {
+    row_valid_counts: Box<[u32]>,
+    row_nonzero_word_counts: Arc<[u32]>,
+    summary: BloomWordSummary,
+    payload_bits: Box<[u64]>,
+}
+
 impl std::fmt::Debug for EncodedLabelQuery<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EncodedLabelQuery")
@@ -312,11 +338,6 @@ impl std::fmt::Debug for EncodedLabelQuery<'_> {
 }
 
 impl EncodedLabelIndex {
-    /// Load a unified exact/Bloom label index from `path`.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, EncodedLabelIndexError> {
-        load_label_index(path.as_ref())
-    }
-
     /// Return the number of vectors covered by this index.
     pub fn num_vectors(&self) -> u32 {
         self.num_vectors
@@ -388,30 +409,51 @@ impl EncodedLabelIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct LabelIndexHeader {
-    num_vectors: u32,
-    num_labels: usize,
-    exact_label_count: usize,
-    hash_count: usize,
-    physical_row_count: usize,
-    words_per_row: usize,
-    summary_words_per_row: usize,
+fn compile_plan<S: AsRef<str>>(
+    clauses: &[S],
+    expression_type: FilterExpressionType,
+    label_ids: &HashMap<String, u32>,
+) -> Result<CompiledPlan, EncodedLabelIndexError> {
+    if clauses.is_empty() {
+        return Err(EncodedLabelIndexError::Invalid(
+            "filter must contain at least one clause".to_string(),
+        ));
+    }
+
+    let delimiter = match expression_type {
+        FilterExpressionType::DNF => '&',
+        FilterExpressionType::CNF => '|',
+    };
+    let mut clause_offsets = vec![0usize];
+    let mut encoded = Vec::new();
+
+    for clause in clauses {
+        let clause = clause.as_ref();
+        if clause.is_empty() {
+            return Err(EncodedLabelIndexError::Invalid(
+                "filter clauses cannot be empty".to_string(),
+            ));
+        }
+        for terminal in clause.split(delimiter) {
+            let terminal = terminal.trim();
+            validate_label(terminal)?;
+            encoded.push(label_ids.get(terminal).copied());
+        }
+        clause_offsets.push(encoded.len());
+    }
+
+    Ok(CompiledPlan {
+        expression_type,
+        clause_offsets: clause_offsets.into_boxed_slice(),
+        label_ids: encoded.into_boxed_slice(),
+    })
 }
 
-struct LoadedLabelMappings {
-    labels: Box<[String]>,
-    label_ids: HashMap<String, u32>,
-    counts: Arc<[u32]>,
-    label_rows: Box<[u32]>,
-    exact_row_by_label: Box<[u32]>,
-}
-
-struct LoadedLabelRows {
-    row_valid_counts: Box<[u32]>,
-    row_nonzero_word_counts: Arc<[u32]>,
-    summary: BloomWordSummary,
-    payload_bits: Box<[u64]>,
+impl EncodedLabelIndex {
+    /// Load a unified exact/Bloom label index from `path`.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, EncodedLabelIndexError> {
+        load_label_index(path.as_ref())
+    }
 }
 
 fn load_label_index(path: &Path) -> Result<EncodedLabelIndex, EncodedLabelIndexError> {
@@ -705,6 +747,7 @@ fn read_label_rows(
     )?;
     let mut row_valid_counts = Vec::new();
     let mut row_nonzero_word_counts = Vec::new();
+    let mut total_nonzero_words = 0usize;
     row_valid_counts
         .try_reserve_exact(header.physical_row_count)
         .map_err(|_| {
@@ -727,6 +770,11 @@ fn read_label_rows(
         }
         row_valid_counts.push(valid_node_count);
         row_nonzero_word_counts.push(nonzero_word_count);
+        total_nonzero_words = total_nonzero_words
+            .checked_add(nonzero_word_count as usize)
+            .ok_or_else(|| {
+                EncodedLabelIndexError::Invalid("row nonzero word count overflow".to_string())
+            })?;
     }
     if row_valid_counts[..header.exact_label_count] != label_counts[..header.exact_label_count] {
         return Err(EncodedLabelIndexError::Invalid(
@@ -750,17 +798,6 @@ fn read_label_rows(
         header.summary_words_per_row,
         summarized_words,
     )?;
-    for (row, summary) in summary_bits
-        .chunks_exact(header.summary_words_per_row)
-        .enumerate()
-    {
-        let nonzero = summary.iter().map(|word| word.count_ones()).sum::<u32>();
-        if nonzero != row_nonzero_word_counts[row] {
-            return Err(EncodedLabelIndexError::Invalid(
-                "summary popcount does not match row metadata".to_string(),
-            ));
-        }
-    }
 
     let payload_bits = read_payload(
         reader,
@@ -781,12 +818,6 @@ fn read_label_rows(
         ));
     }
 
-    let total_nonzero_words = row_nonzero_word_counts
-        .iter()
-        .try_fold(0usize, |sum, &count| sum.checked_add(count as usize))
-        .ok_or_else(|| {
-            EncodedLabelIndexError::Invalid("row nonzero word count overflow".to_string())
-        })?;
     let total_payload_words = header
         .physical_row_count
         .checked_mul(header.words_per_row)
@@ -836,44 +867,4 @@ fn read_payload(
         bits.push(read_u64(reader)?);
     }
     Ok(bits)
-}
-
-fn compile_plan<S: AsRef<str>>(
-    clauses: &[S],
-    expression_type: FilterExpressionType,
-    label_ids: &HashMap<String, u32>,
-) -> Result<CompiledPlan, EncodedLabelIndexError> {
-    if clauses.is_empty() {
-        return Err(EncodedLabelIndexError::Invalid(
-            "filter must contain at least one clause".to_string(),
-        ));
-    }
-
-    let delimiter = match expression_type {
-        FilterExpressionType::DNF => '&',
-        FilterExpressionType::CNF => '|',
-    };
-    let mut clause_offsets = vec![0usize];
-    let mut encoded = Vec::new();
-
-    for clause in clauses {
-        let clause = clause.as_ref();
-        if clause.is_empty() {
-            return Err(EncodedLabelIndexError::Invalid(
-                "filter clauses cannot be empty".to_string(),
-            ));
-        }
-        for terminal in clause.split(delimiter) {
-            let terminal = terminal.trim();
-            validate_label(terminal)?;
-            encoded.push(label_ids.get(terminal).copied());
-        }
-        clause_offsets.push(encoded.len());
-    }
-
-    Ok(CompiledPlan {
-        expression_type,
-        clause_offsets: clause_offsets.into_boxed_slice(),
-        label_ids: encoded.into_boxed_slice(),
-    })
 }

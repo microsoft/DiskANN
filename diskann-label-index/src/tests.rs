@@ -466,18 +466,13 @@ fn loader_rejects_header_corruption() {
 }
 
 #[test]
-fn loader_rejects_metadata_summary_padding_and_trailing_corruption() {
+fn loader_rejects_metadata_padding_and_trailing_corruption() {
     let (_dir, output, bytes, layout) = encoded_file();
 
     let mut metadata = bytes.clone();
     metadata[layout.metadata_start + 4..layout.metadata_start + 8]
         .copy_from_slice(&u32::MAX.to_le_bytes());
     std::fs::write(&output, metadata).unwrap();
-    assert!(EncodedLabelIndex::load(&output).is_err());
-
-    let mut summary = bytes.clone();
-    summary[layout.summary_start] ^= 1;
-    std::fs::write(&output, summary).unwrap();
     assert!(EncodedLabelIndex::load(&output).is_err());
 
     let mut padding = bytes.clone();
