@@ -27,7 +27,7 @@ use super::{
     build::{Split, TwoMeansSplit, twomeans::TwoMeansError},
     region::{AsMatRef, List, Update, View},
     traits::{
-        Accumulator, BuildAccessor, BuildStrategy, HasIds, NearestList, SearchAccessor,
+        Accumulator, BuildAccessor, BuildStrategy, HasIds, Nearest, SearchAccessor,
         SearchStrategy,
     },
 };

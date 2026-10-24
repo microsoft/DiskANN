@@ -112,7 +112,7 @@ impl Coarse<'_> {
     }
 }
 
-impl NearestList for Coarse<'_> {
+impl Nearest for Coarse<'_> {
     type Id = u32;
 
     fn find<P, F>(

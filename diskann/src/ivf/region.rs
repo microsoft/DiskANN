@@ -7,7 +7,7 @@
 
 use std::fmt::Debug;
 
-use diskann_utils::{Reborrow, views::rowmajor};
+use diskann_utils::{Reborrow, views::rowmajor::{self}};
 
 use crate::ANNResult;
 
@@ -66,8 +66,4 @@ impl<'a, T> AsMatRef<'a, T> for rowmajor::Ref<'a, T> {
     fn as_view(self) -> rowmajor::Ref<'a, T> {
         self
     }
-}
-
-pub trait AsMatMut<'a, T>: AsMatRef<'a, T> {
-    fn as_mut_view(self) -> rowmajor::Mut<'a, T>;
 }

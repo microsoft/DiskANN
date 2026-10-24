@@ -165,7 +165,6 @@ where
         }));
 
         // Assign
-
         let mut memberships = vec![Vec::new(); targets.len()];
 
         for &list in parents.iter().chain(neighbors.iter()) {
@@ -185,7 +184,6 @@ where
         }
 
         // Update
-
         for (target, members) in targets.iter().zip(&memberships) {
             match target.target {
                 TargetKind::New => update.create(target.centroid, members)?,

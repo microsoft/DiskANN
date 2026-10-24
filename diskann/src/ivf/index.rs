@@ -10,7 +10,7 @@ use std::{collections::BTreeSet, marker::PhantomData, num::NonZeroUsize};
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::traits::{BuildAccessor, NearestList, SearchAccessor, SearchStrategy};
+use super::traits::{BuildAccessor, Nearest, SearchAccessor, SearchStrategy};
 use crate::{
     ANNResult,
     error::IntoANNResult,

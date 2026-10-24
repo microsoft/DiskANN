@@ -23,7 +23,7 @@ pub trait HasIds {
     type ListId: VectorId;
 }
 
-pub trait NearestList: Send {
+pub trait Nearest: Send {
     type Id;
     /// Select `nprobe` distinct live lists nearest to `id`'s centroid, that pass the filter.
     ///
@@ -45,7 +45,7 @@ pub trait NearestList: Send {
 }
 
 pub trait BuildAccessor<B>: Send + Sized + HasIds {
-    type Nearest<'a>: NearestList<Id = Self::ListId>
+    type Nearest<'a>: Nearest<Id = Self::ListId>
     where
         Self: 'a;
 
@@ -126,8 +126,6 @@ pub trait Accumulator<I>: Send + Sized {
     fn merge(&mut self, other: Self);
 }
 
-/// Queue-backed accumulation requires unique candidate IDs across partial states.
-/// Equal-distance selections may depend on merge order.
 impl<I: NeighborPriorityQueueIdType> Accumulator<I> for NeighborPriorityQueue<I> {
     fn empty_like(&self) -> Self {
         Self::new(self.search_l())
@@ -147,13 +145,9 @@ impl<I: NeighborPriorityQueueIdType> Accumulator<I> for NeighborPriorityQueue<I>
 pub trait SearchAccessor<T: Sync>: Send + Sized + HasIds {
     /// Scan the `min(nprobe, live_list_count)` lists nearest the accessor's query.
     ///
-    /// Implementations own selection and scheduling, and may reduce independent
-    /// accumulators from parallel scans into `results`.
-    ///
     /// # Errors
     ///
-    /// A failure may leave partial results. The caller must discard them rather
-    /// than publish them as a completed search.
+    /// A failure may leave partial results. 
     fn scan<A>(&self, nprobe: NonZeroUsize, results: &mut A) -> impl SendFuture<ANNResult<()>>
     where
         A: Accumulator<Self::Id>;
