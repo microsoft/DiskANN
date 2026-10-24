@@ -652,9 +652,19 @@ impl dbc::search::Aggregate<Parameters, u32, Counters> for Aggregator<'_> {
     }
 }
 
+///////////
+// tests //
+///////////
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_example_parses() {
+        assert!(Plan::from_streaming(&dto::StreamingKnn::example()).is_ok());
+        assert!(Knn::from_raw_with(&dto::Knn::example(), None).is_ok());
+    }
 
     #[test]
     fn plan_expands_sweeps_in_thread_order() {

@@ -255,3 +255,33 @@ fn run_quantized(
 
     Ok(inmem2::benchmark::BuildAndSearchStats { build, search })
 }
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_examples_parse() {
+        assert!(BuildAndSearch::<product::Product>::from_raw_with(
+            &dto::BuildAndSearch::example(product::Product::example()),
+            None
+        )
+        .is_ok());
+
+        assert!(BuildAndSearch::<spherical::Spherical>::from_raw_with(
+            &dto::BuildAndSearch::example(spherical::Spherical::example()),
+            None
+        )
+        .is_ok());
+
+        assert!(BuildAndSearch::<scalar::Scalar>::from_raw_with(
+            &dto::BuildAndSearch::example(scalar::Scalar::example()),
+            None
+        )
+        .is_ok());
+    }
+}

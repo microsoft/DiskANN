@@ -159,7 +159,7 @@ impl Display for Data {
 }
 
 ///////////
-// Tests //
+// tests //
 ///////////
 
 #[cfg(test)]

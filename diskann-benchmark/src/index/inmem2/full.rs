@@ -290,3 +290,17 @@ where
         Ok(stats)
     }
 }
+
+///////////
+// tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_example_parses() {
+        assert!(BuildAndSearch::from_raw_with(&dto::BuildAndSearch::example(), None,).is_ok());
+    }
+}

@@ -150,3 +150,21 @@ impl std::fmt::Display for Product {
         write!(f, "{}", kv)
     }
 }
+
+///////////
+// tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_example_parses() {
+        assert!(<Product as inmem2::quantized::Quantizer>::from_raw(
+            &dto::Product::example(),
+            dv::distance::Metric::L2
+        )
+        .is_ok());
+    }
+}

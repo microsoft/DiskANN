@@ -131,3 +131,21 @@ impl std::fmt::Display for Scalar {
         kv.fmt(f)
     }
 }
+
+///////////
+// tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_example_parses() {
+        assert!(<Scalar as inmem2::quantized::Quantizer>::from_raw(
+            &dto::Scalar::example(),
+            dv::distance::Metric::L2
+        )
+        .is_ok());
+    }
+}

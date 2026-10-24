@@ -134,3 +134,21 @@ impl std::fmt::Display for Spherical {
         kv.fmt(f)
     }
 }
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_example_parses() {
+        assert!(<Spherical as inmem2::quantized::Quantizer>::from_raw(
+            &dto::Spherical::example(),
+            dv::distance::Metric::L2
+        )
+        .is_ok());
+    }
+}
