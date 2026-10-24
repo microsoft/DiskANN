@@ -5,7 +5,7 @@
   "output_directory": null,
   "jobs": [
     {
-      "type": "inmem2",
+      "type": "inmem2-fp-static",
       "content": {
         "build": {
           "alpha": 1.2,
@@ -18,50 +18,6 @@
           "data": "disk_index_siftsmall_learn_256pts_data.fbin",
           "data_type": "float32",
           "distance": "squared_l2"
-        },
-        "quantization": null,
-        "search": {
-          "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
-          "num_threads": [
-            4
-          ],
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "reps": 3,
-          "runs": [
-            {
-              "recall_k": 10,
-              "search_l": [
-                10,
-                20,
-                30,
-                40,
-                50
-              ],
-              "search_n": 10
-            }
-          ]
-        }
-      }
-    },
-    {
-      "type": "inmem2",
-      "content": {
-        "build": {
-          "alpha": 1.2,
-          "l_build": 100,
-          "max_degree": 32,
-          "num_threads": 4,
-          "pruned_degree": 28
-        },
-        "data": {
-          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-          "data_type": "float32",
-          "distance": "squared_l2"
-        },
-        "quantization": {
-          "spherical": {
-            "bits": "four"
-          }
         },
         "search": {
           "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
@@ -87,7 +43,7 @@
       }
     },
     {
-      "type": "inmem2",
+      "type": "inmem2-sphq-static",
       "content": {
         "build": {
           "alpha": 1.2,
@@ -101,12 +57,9 @@
           "data_type": "float32",
           "distance": "squared_l2"
         },
-        "quantization": {
-          "product": {
-            "chunks": 32,
-            "centers": 32,
-            "seed": 1
-          }
+        "quantizer": {
+          "bits": "four",
+          "seed": 42
         },
         "search": {
           "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
@@ -132,7 +85,7 @@
       }
     },
     {
-      "type": "inmem2",
+      "type": "inmem2-pq-static",
       "content": {
         "build": {
           "alpha": 1.2,
@@ -146,11 +99,53 @@
           "data_type": "float32",
           "distance": "squared_l2"
         },
-        "quantization": {
-          "scalar": {
-            "standard_deviations": 1.5,
-            "bits": "eight"
-          }
+        "quantizer": {
+          "chunks": 32,
+          "centers": 32,
+          "seed": 1,
+          "num_threads": 4
+        },
+        "search": {
+          "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
+          "num_threads": [
+            4
+          ],
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "reps": 3,
+          "runs": [
+            {
+              "recall_k": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50
+              ],
+              "search_n": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "inmem2-sq-static",
+      "content": {
+        "build": {
+          "alpha": 1.2,
+          "l_build": 100,
+          "max_degree": 32,
+          "num_threads": 4,
+          "pruned_degree": 28
+        },
+        "data": {
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "data_type": "float32",
+          "distance": "squared_l2"
+        },
+        "quantizer": {
+          "std": 1.5,
+          "bits": "eight"
         },
         "search": {
           "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",

@@ -24,10 +24,9 @@ use diskann_utils::{
     future::AsyncFriendly,
     views::rowmajor::{self, Matrix},
 };
-use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
-use crate::inputs::graph_index::IndexBuild;
+use crate::{inputs::graph_index::IndexBuild, utils::progress::Progress};
 
 ///////////////////////////////
 // Start Point Configuration //
@@ -80,7 +79,7 @@ where
                     NonZeroUsize::new(input.num_threads()).unwrap(),
                 ),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::SingleInsert, results)?)
@@ -97,7 +96,7 @@ where
                 runner,
                 build_core::Parallelism::sequential(multi_insert.batch_size),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::MultiInsert, results)?)
@@ -135,7 +134,7 @@ where
                     NonZeroUsize::new(input.num_threads()).unwrap(),
                 ),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::SingleInsert, results)?)
@@ -205,42 +204,6 @@ impl std::fmt::Display for BuildStats {
             "Insert Latencies:\n  average: {}us\n      p90: {}\n      p99: {}\n\n",
             self.insert_latencies.mean, self.insert_latencies.p90, self.insert_latencies.p99,
         )
-    }
-}
-
-pub struct ProgressMeter<'a> {
-    output: &'a mut dyn Output,
-}
-
-impl<'a> ProgressMeter<'a> {
-    pub fn new(output: &'a mut dyn Output) -> Self {
-        Self { output }
-    }
-}
-
-impl build_core::AsProgress for ProgressMeter<'_> {
-    fn as_progress(&self, max: usize) -> Arc<dyn build_core::Progress> {
-        let target = self.output.draw_target();
-        let meter = ProgressBar::with_draw_target(Some(max as u64), target);
-        meter.set_style(
-            ProgressStyle::with_template("Building [{elapsed_precise}] {wide_bar} {percent}")
-                .expect("This format should be valid"),
-        );
-        Arc::new(Meter { meter })
-    }
-}
-
-#[derive(Debug)]
-struct Meter {
-    meter: ProgressBar,
-}
-
-impl build_core::Progress for Meter {
-    fn progress(&self, handled: usize) {
-        self.meter.inc(handled as u64)
-    }
-    fn finish(&self) {
-        self.meter.finish()
     }
 }
 
