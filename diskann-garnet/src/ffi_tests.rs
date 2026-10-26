@@ -19,15 +19,16 @@ mod tests {
     use rand::seq::SliceRandom;
 
     use crate::{
-        ImportResult, Index, IndexState, InsertResult, Overflow, VectorQuantType,
-        backfill_quant_vectors, build_quant_table, can_import, card, check_external_id_valid,
-        check_internal_id_valid, create_index, drop_index, finish_import,
+        Index, IndexState, InsertResult, Overflow, VectorQuantType, backfill_quant_vectors,
+        build_quant_table, can_import, card, check_external_id_valid, check_internal_id_valid,
+        create_index, drop_index, finish_import,
         garnet::{Context, Term, WriteCallback},
         import_term, insert,
         provider::DEFAULT_START_POINT_ID,
         quantization::{GarnetQuantizer, MinMax8Bit, Spherical1Bit, Spherical2Bit, Spherical4Bit},
         remove, search_vector, set_attribute, set_quant_state,
         test_utils::{STORE, Store, q8_state_with_identity_transform},
+        verify_import,
     };
 
     /// Creates an index with default test values and returns (index_ptr, Context).
@@ -361,6 +362,65 @@ mod tests {
     }
 
     #[test]
+    fn import_api_rejects_invalid_requests() {
+        assert!(!unsafe { verify_import(0, ptr::null(), 0, 1) });
+        assert!(!unsafe { finish_import(0, ptr::null()) });
+
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        import_single_vector(&ctx, index_ptr, None);
+        for (task_idx, task_count) in [(0, 0), (1, 1)] {
+            assert!(!unsafe { verify_import(ctx.get(), index_ptr, task_idx, task_count) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+        }
+        assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+        assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+        assert!(!unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
+        unsafe { drop_index(ctx.get(), index_ptr) };
+    }
+
+    #[test]
+    fn verify_import_rejects_missing_terms() {
+        let quantizer = MinMax8Bit::new(2, Metric::L2).unwrap();
+        let state = quantizer.serialize().unwrap();
+        for term in [
+            Term::Quantized,
+            Term::Neighbors,
+            Term::ExtMap,
+            Term::IntMap,
+            // Deleting this term causes a read failure during FSM is_free
+            Term::Metadata,
+        ] {
+            let store = Store::new();
+            let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Q8);
+            assert!(unsafe { set_quant_state(ctx.get(), index_ptr, state.as_ptr(), state.len()) });
+            import_single_vector(&ctx, index_ptr, Some(&quantizer));
+            let key = if matches!(term, Term::Metadata) {
+                bytemuck::bytes_of(&[u32::from_be_bytes(*b"_fsm"), 0]).to_vec()
+            } else {
+                1u32.to_ne_bytes().to_vec()
+            };
+            let context = ctx.term(term).get();
+            let value = store.get(context, &key).unwrap();
+            assert!(store.delete(context, &key));
+            assert!(
+                !unsafe { verify_import(ctx.get(), index_ptr, 0, 1) },
+                "{term:?}"
+            );
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+
+            store.set(context, &key, &value);
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+            let (ids, distances) = do_search(&ctx, index_ptr, &[1.0, 2.0], 1, None);
+            assert_eq!(ids, [1]);
+            assert_eq!(distances, [0.0]);
+            unsafe { drop_index(ctx.get(), index_ptr) };
+        }
+    }
+
+    #[test]
     fn can_import_tracks_eligibility() {
         for quant_type in [VectorQuantType::NoQuant, VectorQuantType::Q8] {
             let store = Store::new();
@@ -445,10 +505,7 @@ mod tests {
                 });
             }
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::TaskFailed)
-            );
+            assert!(!unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(&ctx, index_ptr);
             unsafe { drop_index(ctx.get(), index_ptr) };
@@ -456,10 +513,7 @@ mod tests {
             let (index_ptr, ctx) = create_test_index(&store, quant_type);
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(&ctx, index_ptr);
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::TaskFailed)
-            );
+            assert!(!unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
 
             // Repair the incomplete vector and retry validation on this handle.
             import_single_vector(
@@ -469,10 +523,9 @@ mod tests {
                     .as_ref()
                     .map(|quantizer| quantizer as &dyn GarnetQuantizer),
             );
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::Success)
-            );
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
             assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
             assert!(unsafe {
@@ -504,6 +557,10 @@ mod tests {
             assert_eq!(
                 unsafe { card(ctx.get(), index_ptr) },
                 u64::from(insert_vector)
+            );
+            assert_eq!(
+                unsafe { finish_import(ctx.get(), index_ptr) },
+                insert_vector
             );
             unsafe { drop_index(ctx.get(), index_ptr) };
         }
@@ -551,10 +608,7 @@ mod tests {
         check_import_terms_and_finish_with(VectorQuantType::NoQuant, None, |ctx, index_ptr| {
             const TASK_COUNT: usize = 104;
             let index = unsafe { &*index_ptr.cast::<Index>() };
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, TASK_COUNT) },
-                0
-            );
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, TASK_COUNT) });
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(ctx, index_ptr);
             let snapshot = STORE.with(Clone::clone);
@@ -571,17 +625,14 @@ mod tests {
                         });
                         barrier.wait();
                         for task_idx in (worker + 1..TASK_COUNT - 1).step_by(4) {
-                            assert_eq!(
-                                unsafe {
-                                    finish_import(
-                                        ctx.get(),
-                                        ptr::from_ref(index).cast(),
-                                        task_idx,
-                                        TASK_COUNT,
-                                    )
-                                },
-                                0
-                            );
+                            assert!(unsafe {
+                                verify_import(
+                                    ctx.get(),
+                                    ptr::from_ref(index).cast(),
+                                    task_idx,
+                                    TASK_COUNT,
+                                )
+                            });
                         }
                     });
                 }
@@ -592,10 +643,10 @@ mod tests {
                 index.state.load(Ordering::Acquire),
                 IndexState::NoStartPoints as usize
             );
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, TASK_COUNT - 1, TASK_COUNT) },
-                0
-            );
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, TASK_COUNT - 1, TASK_COUNT) });
+            assert_ordinary_operations_blocked(ctx, index_ptr);
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, TASK_COUNT) });
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
             assert_eq!(
                 index.state.load(Ordering::Acquire),
                 IndexState::Ready as usize
@@ -623,31 +674,36 @@ mod tests {
                 }
         }
 
-        let store = Store::new();
-        let (mut index_ptr, ctx) = create_test_index_with_write_callback(
-            &store,
-            VectorQuantType::NoQuant,
-            Metric::L2 as i32,
-            write,
-        );
-        assert!(!index_ptr.is_null());
-        import_single_vector(&ctx, index_ptr, None);
-        // Finalization only writes ImportStatus::Disabled; start points were imported.
-        FAIL_WRITE.store(true, Ordering::Release);
-        assert_eq!(
-            unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-            u8::from(ImportResult::FinishFailed)
-        );
-        assert!(!FAIL_WRITE.load(Ordering::Acquire));
         for reopen in [false, true] {
+            let store = Store::new();
+            let (mut index_ptr, ctx) = create_test_index_with_write_callback(
+                &store,
+                VectorQuantType::NoQuant,
+                Metric::L2 as i32,
+                write,
+            );
+            assert!(!index_ptr.is_null());
+            import_single_vector(&ctx, index_ptr, None);
+            // Finalization only writes ImportStatus::Disabled; start points were imported.
+            FAIL_WRITE.store(true, Ordering::Release);
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+            assert!(FAIL_WRITE.load(Ordering::Acquire));
+            assert!(!unsafe { finish_import(ctx.get(), index_ptr) });
+            assert!(!FAIL_WRITE.load(Ordering::Acquire));
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
             if reopen {
                 unsafe { drop_index(ctx.get(), index_ptr) };
                 index_ptr = create_test_index(&store, VectorQuantType::NoQuant).0;
             }
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(&ctx, index_ptr);
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+            assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
+            let (ids, distances) = do_search(&ctx, index_ptr, &[1.0, 2.0], 1, None);
+            assert_eq!(ids, [1]);
+            assert_eq!(distances, [0.0]);
+            unsafe { drop_index(ctx.get(), index_ptr) };
         }
-        unsafe { drop_index(ctx.get(), index_ptr) };
     }
 
     #[test]
@@ -689,10 +745,7 @@ mod tests {
         assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
         FAIL_WRITE.store(true, Ordering::Release);
-        assert_eq!(
-            unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-            u8::from(ImportResult::TaskFailed)
-        );
+        assert!(!unsafe { finish_import(ctx.get(), index_ptr) });
         assert!(!FAIL_WRITE.load(Ordering::Acquire));
         assert!(unsafe { can_import(ctx.get(), index_ptr) });
         STORE.with(|store| {
@@ -717,10 +770,7 @@ mod tests {
             &start_id,
             bytemuck::cast_slice(&[0u32; 21]),
         ));
-        assert_eq!(
-            unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-            u8::from(ImportResult::Success)
-        );
+        assert!(unsafe { finish_import(ctx.get(), index_ptr) });
         assert!(!unsafe { can_import(ctx.get(), index_ptr) });
         assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
         unsafe { drop_index(ctx.get(), index_ptr) };
@@ -728,12 +778,7 @@ mod tests {
 
     #[test]
     fn finish_import_requires_start_point() {
-        for (quant_type, task_count) in [
-            (VectorQuantType::NoQuant, 1),
-            (VectorQuantType::NoQuant, 4),
-            (VectorQuantType::Q8, 1),
-            (VectorQuantType::Q8, 4),
-        ] {
+        for quant_type in [VectorQuantType::NoQuant, VectorQuantType::Q8] {
             let store = Store::new();
             let (mut index_ptr, ctx) = create_test_index(&store, quant_type);
             if quant_type == VectorQuantType::Q8 {
@@ -743,29 +788,17 @@ mod tests {
                     set_quant_state(ctx.get(), index_ptr, state.as_ptr(), state.len())
                 });
             }
-            for task_idx in 0..task_count {
-                assert!(unsafe { can_import(ctx.get(), index_ptr) });
-                let expected = if task_idx + 1 == task_count {
-                    ImportResult::FinishFailed
-                } else {
-                    ImportResult::Success
-                };
-                assert_eq!(
-                    unsafe { finish_import(ctx.get(), index_ptr, task_idx, task_count) },
-                    u8::from(expected)
-                );
-                assert!(
-                    store
-                        .get(
-                            ctx.term(Term::Vector).get(),
-                            &DEFAULT_START_POINT_ID.to_ne_bytes(),
-                        )
-                        .is_none()
-                );
-                if task_idx + 1 < task_count {
-                    assert_ordinary_operations_blocked(&ctx, index_ptr);
-                }
-            }
+            assert!(!unsafe { verify_import(ctx.get(), index_ptr, 0, 4) });
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 1, 4) });
+            assert!(!unsafe { finish_import(ctx.get(), index_ptr) });
+            assert!(
+                store
+                    .get(
+                        ctx.term(Term::Vector).get(),
+                        &DEFAULT_START_POINT_ID.to_ne_bytes(),
+                    )
+                    .is_none()
+            );
             for reopen in [false, true] {
                 if reopen {
                     unsafe { drop_index(ctx.get(), index_ptr) };
@@ -891,12 +924,15 @@ mod tests {
         quant_type: VectorQuantType,
         quantizer: Option<&dyn GarnetQuantizer>,
     ) {
-        check_import_terms_and_finish_with(quant_type, quantizer, |ctx, index_ptr| {
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::Success)
-            );
-        });
+        for verify in [false, true] {
+            check_import_terms_and_finish_with(quant_type, quantizer, |ctx, index_ptr| {
+                if verify {
+                    assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+                    assert_ordinary_operations_blocked(ctx, index_ptr);
+                }
+                assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+            });
+        }
     }
 
     fn check_import_terms_and_finish_with(
@@ -1117,6 +1153,7 @@ mod tests {
                 check_external_id_valid(ctx.get(), index_ptr, added_id.as_ptr(), added_id.len())
             });
 
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
             let (ids, distances) = do_search(&ctx, index_ptr, &[50.0; 2], 5, None);
             assert_eq!(ids.first(), Some(&50), "nearest vector: by_term={by_term}");
             let mut sorted_ids = ids;
@@ -1125,9 +1162,17 @@ mod tests {
             assert_eq!(distances.len(), 5);
             assert!(distances.iter().all(|distance| distance.is_finite()));
 
-            unsafe {
-                drop_index(ctx.get(), index_ptr);
-            }
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+            assert_eq!(
+                unsafe { card(ctx.get(), index_ptr) },
+                VECTOR_COUNT as u64 + 1
+            );
+            let (ids, distances) = do_search(&ctx, index_ptr, &[50.0; 2], 1, None);
+            assert_eq!(ids, [50]);
+            assert_eq!(distances, [0.0]);
+            unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
 

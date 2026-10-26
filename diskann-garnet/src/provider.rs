@@ -44,7 +44,7 @@ use std::{
     mem,
     ops::{Deref, DerefMut, Range},
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
 };
@@ -324,8 +324,8 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     import_status: AtomicImportStatus,
     /// Serializes state transition for imports.
     import_transition: Mutex<()>,
-    /// Per job tracker for import verification
-    imports_completed: OnceLock<Vec<AtomicBool>>,
+    /// Serializes finalization and remembers success on this provider instance.
+    import_finalized: Mutex<bool>,
     /// Pool of pre-allocated buffers to use for neighbor lists
     id_buffer_pool: ObjectPool<AdjList>,
     /// Pool of pre-allocated buffers to use for IDs
@@ -591,7 +591,12 @@ impl<T: VectorRepr> GarnetProvider<T> {
             training_lock: Mutex::new(()),
             import_status: AtomicImportStatus::new(import_status),
             import_transition: Mutex::new(()),
-            imports_completed: OnceLock::new(),
+            import_finalized: Mutex::new(
+                import_status == ImportStatus::Disabled
+                    && start_point_cache.contains_key(&start_point_id)
+                    && neighbor_cache.contains_key(&start_point_id)
+                    && (!all_quantized || start_point_quant_cache.contains_key(&start_point_id)),
+            ),
             id_buffer_pool,
             filtered_ids_pool,
             filtered_decisions_pool,
@@ -1350,27 +1355,25 @@ impl<T: VectorRepr> GarnetProvider<T> {
         }
     }
 
-    /// Finalizes the import.
+    /// Verify one partition of an import.
     ///
-    /// Callers must finish all term writes before starting verification tasks.
-    /// The last successful task publishes `ImportStatus::Disabled` only after
-    /// finalization and persistence. Start points must be supplied even when no
-    /// ordinary vectors were imported.
-    pub(crate) fn finish_import(
+    /// Term writes must finish before verification starts. Task zero also checks
+    /// the start point.
+    pub(crate) fn verify_import(
         &self,
         context: &Context,
         task_idx: usize,
         task_count: usize,
-    ) -> (bool, Option<bool>) {
+    ) -> bool {
         let log_failure = |message: std::fmt::Arguments<'_>| {
             self.callbacks.log(
                 context,
-                &format!("Error: finish import task {task_idx}/{task_count}: {message}"),
+                &format!("Error: verify import task {task_idx}/{task_count}: {message}"),
             );
         };
-        if !self.begin_import(context) {
+        if !self.can_import(context) {
             log_failure(format_args!("imports not enabled"));
-            return (false, None);
+            return false;
         }
 
         let max_id = self.fsm.max_id();
@@ -1382,23 +1385,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
             } else {
                 log_failure(format_args!("invalid task split"));
 
-                return (false, None);
+                return false;
             };
-
-        let imports_completed = self
-            .imports_completed
-            .get_or_init(|| (0..task_count).map(|_| AtomicBool::new(false)).collect());
-        if imports_completed.len() != task_count {
-            log_failure(format_args!(
-                "task count changed; expected {}",
-                imports_completed.len()
-            ));
-            return (false, None);
-        }
-        let task_completed = &imports_completed[task_idx];
-        if task_completed.load(Ordering::Acquire) {
-            return (true, None);
-        }
 
         let ids = if empty_import { 0..0 } else { start_id..end_id };
         for id in ids {
@@ -1411,7 +1399,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 Ok(false) => (),
                 Err(error) => {
                     log_failure(format_args!("FSM check failed: id={id}, {error}"));
-                    return (false, None);
+                    return false;
                 }
             }
 
@@ -1421,7 +1409,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 self.dim * mem::size_of::<T>(),
             ) {
                 log_failure(format_args!("missing vector: id={id}"));
-                return (false, None);
+                return false;
             }
             if self.is_quantized()
                 && !self.callbacks.exists_iid(
@@ -1431,7 +1419,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 )
             {
                 log_failure(format_args!("missing quantized vector: id={id}"));
-                return (false, None);
+                return false;
             }
             if !self.callbacks.exists_iid(
                 &context.term(Term::Neighbors),
@@ -1439,7 +1427,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 (self.max_degree + 1) * mem::size_of::<u32>(),
             ) {
                 log_failure(format_args!("missing neighbors: id={id}"));
-                return (false, None);
+                return false;
             }
             let eid = match self
                 .callbacks
@@ -1448,7 +1436,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 Some(v) => GarnetId::from(v.as_slice()),
                 None => {
                     log_failure(format_args!("missing external-ID mapping: id={id}"));
-                    return (false, None);
+                    return false;
                 }
             };
             if !self
@@ -1456,87 +1444,42 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 .exists_eid(&context.term(Term::IntMap), &eid, mem::size_of::<u32>())
             {
                 log_failure(format_args!("missing internal-ID mapping: id={id}"));
-                return (false, None);
+                return false;
             }
         }
 
-        // Mark each task once and elect the finalizer under the same lock, so neither
-        // duplicate calls nor concurrent completions can finalize the import twice.
-        let import_finished = {
-            let _transition = self.import_transition.lock();
-            if task_completed.load(Ordering::Acquire) {
-                return (true, None);
-            }
-            task_completed.store(true, Ordering::Release);
-            imports_completed
-                .iter()
-                .all(|completed| completed.load(Ordering::Acquire))
-        };
-
-        let mut finish_result = None;
-        if import_finished {
-            let mut v = match Poly::broadcast(0u8, self.dim * mem::size_of::<T>(), AlignToEight) {
-                Ok(v) => v,
-                Err(error) => {
-                    log_failure(format_args!("start point allocation failed: {error}"));
-                    return (true, Some(false));
+        if task_idx == 0 {
+            for (term, bytes) in [
+                (Term::Vector, self.dim * mem::size_of::<T>()),
+                (
+                    Term::Neighbors,
+                    (self.max_degree + 1) * mem::size_of::<u32>(),
+                ),
+                (Term::Quantized, self.quantizer().map_or(0, |q| q.bytes())),
+            ] {
+                if matches!(term, Term::Quantized) && self.quantizer.is_none() {
+                    continue;
                 }
-            };
-            if !self.callbacks.read_single_iid(
-                &context.term(Term::Vector),
-                self.start_point_id,
-                &mut v,
-            ) {
-                log_failure(format_args!(
-                    "start point read failed: id={}",
-                    self.start_point_id
-                ));
-                return (true, Some(false));
-            }
-            let qv = if let Some(quantizer) = &self.quantizer {
-                let qv_len = quantizer.bytes();
-                let mut qv = match Poly::broadcast(0u8, qv_len, AlignToEight) {
-                    Ok(v) => v,
-                    Err(error) => {
-                        log_failure(format_args!(
-                            "quantized start point allocation failed: {error}"
-                        ));
-                        return (true, Some(false));
-                    }
-                };
-
-                if !self.callbacks.read_single_iid(
-                    &context.term(Term::Quantized),
-                    self.start_point_id,
-                    &mut qv,
-                ) {
+                let mut valid = false;
+                self.callbacks.read_multi_lpiid::<_, u8>(
+                    &context.term(term),
+                    &[4, self.start_point_id],
+                    bytes,
+                    |_, data| {
+                        valid = data.len() == bytes
+                            && (!matches!(term, Term::Neighbors)
+                                || bytemuck::pod_read_unaligned::<u32>(
+                                    &data[bytes - mem::size_of::<u32>()..],
+                                ) as usize
+                                    <= self.max_degree);
+                    },
+                );
+                if !valid {
                     log_failure(format_args!(
-                        "quantized start point read failed: id={}",
-                        self.start_point_id
+                        "missing or invalid start point term: {term:?}"
                     ));
-                    return (true, Some(false));
+                    return false;
                 }
-
-                Some(qv)
-            } else {
-                None
-            };
-            let mut ns = vec![0u32; self.max_degree + 1];
-            if !self.callbacks.read_single_iid(
-                &context.term(Term::Neighbors),
-                self.start_point_id,
-                &mut ns,
-            ) {
-                log_failure(format_args!(
-                    "start point neighbors read failed: id={}",
-                    self.start_point_id
-                ));
-                return (true, Some(false));
-            }
-            let ns_len = ns[self.max_degree] as usize;
-            if ns_len > self.max_degree {
-                log_failure(format_args!("start point neighbor count exceeds degree"));
-                return (true, Some(false));
             }
             for term in [Term::Attributes, Term::ExtMap] {
                 if self
@@ -1544,29 +1487,107 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     .exists_iid(&context.term(term), self.start_point_id, 0)
                 {
                     log_failure(format_args!("unexpected start point term: {term:?}"));
-                    return (true, Some(false));
+                    return false;
                 }
             }
-
-            self.start_point_cache.insert(self.start_point_id, v);
-            if let Some(qv) = qv {
-                self.start_point_quant_cache.insert(self.start_point_id, qv);
-            }
-            self.neighbor_cache
-                .insert(self.start_point_id, ns[0..ns_len].to_vec());
-
-            let finalized = self.transition_import_status(
-                context,
-                ImportStatus::Importing,
-                ImportStatus::Disabled,
-            );
-            if !finalized {
-                log_failure(format_args!("status update failed"));
-            }
-            finish_result = Some(finalized);
         }
 
-        (true, finish_result)
+        true
+    }
+
+    /// Finalize the import.
+    ///
+    /// Term writes must finish first. Verification is optional. Start-point
+    /// terms are required even when no ordinary vectors were imported.
+    /// Concurrent calls serialize.
+    pub(crate) fn finish_import(&self, context: &Context) -> bool {
+        let mut finalized = self.import_finalized.lock();
+        if *finalized {
+            return true;
+        }
+        let log_failure = |message: std::fmt::Arguments<'_>| {
+            self.callbacks
+                .log(context, &format!("Error: finish import: {message}"));
+        };
+        if !self.begin_import(context) {
+            log_failure(format_args!("imports not enabled"));
+            return false;
+        }
+
+        let mut v = match Poly::broadcast(0u8, self.dim * mem::size_of::<T>(), AlignToEight) {
+            Ok(v) => v,
+            Err(error) => {
+                log_failure(format_args!("start point allocation failed: {error}"));
+                return false;
+            }
+        };
+        if !self
+            .callbacks
+            .read_single_iid(&context.term(Term::Vector), self.start_point_id, &mut v)
+        {
+            log_failure(format_args!(
+                "start point read failed: id={}",
+                self.start_point_id
+            ));
+            return false;
+        }
+        let qv = if let Some(quantizer) = &self.quantizer {
+            let mut qv = match Poly::broadcast(0u8, quantizer.bytes(), AlignToEight) {
+                Ok(v) => v,
+                Err(error) => {
+                    log_failure(format_args!(
+                        "quantized start point allocation failed: {error}"
+                    ));
+                    return false;
+                }
+            };
+            if !self.callbacks.read_single_iid(
+                &context.term(Term::Quantized),
+                self.start_point_id,
+                &mut qv,
+            ) {
+                log_failure(format_args!(
+                    "quantized start point read failed: id={}",
+                    self.start_point_id
+                ));
+                return false;
+            }
+            Some(qv)
+        } else {
+            None
+        };
+        let mut ns = vec![0u32; self.max_degree + 1];
+        if !self.callbacks.read_single_iid(
+            &context.term(Term::Neighbors),
+            self.start_point_id,
+            &mut ns,
+        ) {
+            log_failure(format_args!(
+                "start point neighbors read failed: id={}",
+                self.start_point_id
+            ));
+            return false;
+        }
+        let ns_len = ns[self.max_degree] as usize;
+        if ns_len > self.max_degree {
+            log_failure(format_args!("start point neighbor count exceeds degree"));
+            return false;
+        }
+        ns.truncate(ns_len);
+
+        self.start_point_cache.insert(self.start_point_id, v);
+        if let Some(qv) = qv {
+            self.start_point_quant_cache.insert(self.start_point_id, qv);
+        }
+        self.neighbor_cache.insert(self.start_point_id, ns);
+
+        if !self.transition_import_status(context, ImportStatus::Importing, ImportStatus::Disabled)
+        {
+            log_failure(format_args!("status update failed"));
+            return false;
+        }
+        *finalized = true;
+        true
     }
 
     /// Returns the quantizer associated with the index.
@@ -3315,6 +3336,53 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_finish_import_serializes() {
+        let context = ParallelContext::new(Arc::new(DashMap::new()));
+        let ctx = context.context();
+        let provider = GarnetProvider::<f32>::new(
+            2,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            10,
+            DEFAULT_START_POINT_ID,
+            ParallelContext::callbacks(),
+            &ctx,
+        )
+        .unwrap();
+        for (term, value) in [
+            (Term::Vector, bytemuck::cast_slice(&[0.0f32; 2])),
+            (Term::Neighbors, bytemuck::cast_slice(&[0u32; 11])),
+        ] {
+            assert!(provider.import_term(&ctx, term, &DEFAULT_START_POINT_ID.to_ne_bytes(), value));
+        }
+
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        context.control.lock().pause = Some((Term::Metadata as u64, entered_tx, resume_rx));
+        let (finished_tx, finished_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let first = scope.spawn(|| provider.finish_import(&ctx));
+            entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            // Check lock ownership while the first caller is persisting completion.
+            let holds_finalization_lock = provider.import_finalized.try_lock().is_none();
+            let second = scope.spawn(|| {
+                finished_tx.send(provider.finish_import(&ctx)).unwrap();
+            });
+            let early_completion = finished_rx.recv_timeout(Duration::from_millis(50));
+            resume_tx.send(()).unwrap();
+            assert!(first.join().unwrap());
+            second.join().unwrap();
+            assert!(holds_finalization_lock);
+            assert!(matches!(
+                early_completion,
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ));
+            assert!(finished_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        });
+        assert!(!provider.can_import(&ctx));
+    }
+
+    #[test]
     fn import_admission_serializes_initial_transition() {
         for (import_first, import_second) in [(false, true), (true, false), (false, false)] {
             let store = Arc::new(DashMap::new());
@@ -4391,7 +4459,15 @@ mod tests {
                 assert_eq!(provider.fsm.total_used(), 0);
                 assert_eq!(provider.fsm.max_id(), 0);
                 assert!(!provider.start_points_exist());
-                assert_eq!(provider.finish_import(&ctx, 0, 1), (true, Some(true)));
+                for term in [Term::Attributes, Term::ExtMap] {
+                    store.set(ctx.term(term).get(), &id_bytes, b"unexpected");
+                    assert!(!provider.verify_import(&ctx, 0, 1));
+                    assert!(provider.can_import(&ctx));
+                    assert!(!provider.disable_import(&ctx));
+                    assert!(store.delete(ctx.term(term).get(), &id_bytes));
+                }
+                assert!(provider.verify_import(&ctx, 0, 1));
+                assert!(provider.finish_import(&ctx));
                 assert!(provider.start_points_exist());
                 assert_eq!(
                     provider.get_full_vector(&ctx, start_point_id).unwrap(),
@@ -4441,8 +4517,17 @@ mod tests {
                 }
             }
 
-            assert_eq!(provider.finish_import(&ctx, 0, 1), (true, Some(false)));
-            assert!(!provider.start_points_exist());
+            assert!(provider.verify_import(&ctx, 1, 4));
+            assert!(!provider.verify_import(&ctx, 0, 4));
+            assert!(!provider.finish_import(&ctx));
+            let term = [Term::Vector, Term::Neighbors, Term::Quantized][missing_term];
+            store.set(
+                ctx.term(term).get(),
+                &DEFAULT_START_POINT_ID.to_ne_bytes(),
+                &[0u8],
+            );
+            assert!(!provider.verify_import(&ctx, 0, 4));
+            assert!(!provider.finish_import(&ctx));
         }
     }
 
@@ -4484,10 +4569,8 @@ mod tests {
                 );
             }
 
-            assert_eq!(
-                provider.finish_import(&ctx, 0, 1),
-                (true, Some(expected_success))
-            );
+            assert_eq!(provider.verify_import(&ctx, 0, 1), expected_success);
+            assert_eq!(provider.finish_import(&ctx), expected_success);
             assert_eq!(provider.start_points_exist(), expected_success);
         }
     }
