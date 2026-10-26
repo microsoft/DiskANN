@@ -141,6 +141,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+      - name: "clippy --workspace --all-targets --release"
+        run: cargo clippy --locked --workspace --all-targets --no-deps --release --config "$RUST_CONFIG" -- -Dwarnings
 
   clippy-features:
     strategy:
@@ -157,13 +159,24 @@ jobs:
       - name: Install Rust
         run: rustup show && rustup component add clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: "clippy --workspace --all-targets"
+      - name: "clippy --workspace --all-targets --all-features"
         run: |
           set -euxo pipefail
           cargo clippy --locked --workspace \
             --all-targets \
             --all-features \
             --no-deps \
+            --config "$RUST_CONFIG" \
+            -- -Dwarnings
+
+      - name: "clippy --workspace --all-targets --all-features --release"
+        run: |
+          set -euxo pipefail
+          cargo clippy --locked --workspace \
+            --all-targets \
+            --all-features \
+            --no-deps \
+            --release \
             --config "$RUST_CONFIG" \
             -- -Dwarnings
 
@@ -202,6 +215,13 @@ jobs:
               --no-default-features \
               --all-targets \
               --profile test \
+              --no-deps \
+              --config "$RUST_CONFIG" \
+              -- -Dwarnings
+            cargo clippy --locked --package "$crate" \
+              --no-default-features \
+              --all-targets \
+              --release \
               --no-deps \
               --config "$RUST_CONFIG" \
               -- -Dwarnings
@@ -284,6 +304,10 @@ jobs:
         run: |
           cd vectorset
           cargo clippy --locked --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+      - name: "vectorset: clippy --all-targets --release"
+        run: |
+          cd vectorset
+          cargo clippy --locked --all-targets --no-deps --config "$RUST_CONFIG" --release -- -Dwarnings
 
   vectorset-build:
     strategy:
