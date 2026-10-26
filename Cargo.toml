@@ -88,7 +88,7 @@ dashmap = "6.1.0"
 futures-util = { version = "0.3.31", default-features = false }
 half = "2.6.0"
 hashbrown = "0.16.0"
-iai-callgrind = "0.16.1"
+gungraun = "0.20.0"
 itertools = "0.13.0"
 num-traits = "0.2.15"
 num_cpus = "1.16.0"

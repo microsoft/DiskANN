@@ -13,13 +13,13 @@ use std::hint::black_box;
 
 use crate::utils::{AlignedDataset, AlignedVector, DatasetArgs, InlineBarrier, Static};
 
-iai_callgrind::library_benchmark_group!(
-    name = cosine_normalized_f32_iai;
+gungraun::library_benchmark_group!(
+    name = cosine_normalized_f32_gungraun;
     benchmarks = benchmark_f32_v2, benchmark_f32_v2_sized,
 );
 
-iai_callgrind::library_benchmark_group!(
-    name = cosine_normalized_f16_iai;
+gungraun::library_benchmark_group!(
+    name = cosine_normalized_f16_gungraun;
     benchmarks = benchmark_f16_v2, benchmark_f16_v2_sized,
 );
 
@@ -48,7 +48,7 @@ fn setup_benchmark_f32() -> (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>) 
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = setup_benchmark_f32)]
+#[gungraun::library_benchmark(setup = setup_benchmark_f32)]
 pub(crate) fn benchmark_f32_v2(data: (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -61,7 +61,7 @@ pub(crate) fn benchmark_f32_v2(data: (AlignedDataset<f32>, AlignedVector<f32>, V
     black_box(output);
 }
 
-#[iai_callgrind::library_benchmark(setup = setup_benchmark_f32)]
+#[gungraun::library_benchmark(setup = setup_benchmark_f32)]
 pub(crate) fn benchmark_f32_v2_sized(data: (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
     let query_sized: &[f32; DIM_104] = query.as_slice().try_into().unwrap();
@@ -100,7 +100,7 @@ fn setup_benchmark_f16() -> (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>) 
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = setup_benchmark_f16)]
+#[gungraun::library_benchmark(setup = setup_benchmark_f16)]
 pub(crate) fn benchmark_f16_v2(data: (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -112,7 +112,7 @@ pub(crate) fn benchmark_f16_v2(data: (AlignedDataset<f16>, AlignedVector<f16>, V
     black_box(output);
 }
 
-#[iai_callgrind::library_benchmark(setup = setup_benchmark_f16)]
+#[gungraun::library_benchmark(setup = setup_benchmark_f16)]
 pub(crate) fn benchmark_f16_v2_sized(data: (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
     let query_sized: &[f16; DIM_384] = query.as_slice().try_into().unwrap();
