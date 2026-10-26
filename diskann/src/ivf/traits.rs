@@ -18,6 +18,9 @@ use crate::{
     utils::VectorId,
 };
 
+//////////////
+/// HasIds ///
+//////////////
 pub trait HasIds {
     type Id: VectorId;
     type ListId: VectorId;
@@ -126,6 +129,17 @@ pub trait Accumulator<I>: Send + Sized {
     fn merge(&mut self, other: Self);
 }
 
+pub trait SearchAccessor<T: Sync>: Send + Sized + HasIds {
+    /// Scan the `min(nprobe, live_list_count)` lists nearest the accessor's query.
+    ///
+    /// # Errors
+    ///
+    /// A failure may leave partial results.
+    fn scan<A>(&self, nprobe: NonZeroUsize, results: &mut A) -> impl SendFuture<ANNResult<()>>
+    where
+        A: Accumulator<Self::Id>;
+}
+
 impl<I: NeighborPriorityQueueIdType> Accumulator<I> for NeighborPriorityQueue<I> {
     fn empty_like(&self) -> Self {
         Self::new(self.search_l())
@@ -140,15 +154,4 @@ impl<I: NeighborPriorityQueueIdType> Accumulator<I> for NeighborPriorityQueue<I>
             self.insert(neighbor);
         }
     }
-}
-
-pub trait SearchAccessor<T: Sync>: Send + Sized + HasIds {
-    /// Scan the `min(nprobe, live_list_count)` lists nearest the accessor's query.
-    ///
-    /// # Errors
-    ///
-    /// A failure may leave partial results. 
-    fn scan<A>(&self, nprobe: NonZeroUsize, results: &mut A) -> impl SendFuture<ANNResult<()>>
-    where
-        A: Accumulator<Self::Id>;
 }

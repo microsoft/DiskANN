@@ -16,6 +16,7 @@ use diskann_utils::{
     views::rowmajor::{self, Matrix, MatrixMut},
 };
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
+use hashbrown::HashSet;
 use tokio::sync::{Mutex, MutexGuard};
 
 use self::{
@@ -27,8 +28,7 @@ use super::{
     build::{Split, TwoMeansSplit, twomeans::TwoMeansError},
     region::{AsMatRef, List, Update, View},
     traits::{
-        Accumulator, BuildAccessor, BuildStrategy, HasIds, Nearest, SearchAccessor,
-        SearchStrategy,
+        Accumulator, BuildAccessor, BuildStrategy, HasIds, Nearest, SearchAccessor, SearchStrategy,
     },
 };
 use crate::{
@@ -193,6 +193,50 @@ async fn routing_reports_sizes_including_previous_pending_appends() {
     assert_eq!(store.points[&10_005], [1.0, 0.0]);
     assert_eq!(store.points[&10_006], [2.0, 0.0]);
     assert_eq!(store.finishes, 1);
+}
+
+#[test]
+fn membership_deltas_compose_with_pending_appends_and_removals() {
+    let stored = [1, 2, 3];
+    let mut pending = PendingLists::<u32, u32>::default();
+    pending.append(7, vec![4, 5]).unwrap();
+    pending.remove(7, &[2, 4]).unwrap();
+    assert_eq!(
+        pending.members(7, &stored).unwrap().collect::<Vec<_>>(),
+        [1, 3, 5]
+    );
+    assert_eq!(pending.list_size(7, stored.len()).unwrap(), 3);
+
+    pending.append(7, vec![2, 4]).unwrap();
+    assert_eq!(
+        pending.members(7, &stored).unwrap().collect::<Vec<_>>(),
+        [1, 2, 3, 5, 4]
+    );
+    assert_eq!(pending.list_size(7, stored.len()).unwrap(), 5);
+
+    pending.remove(7, &[1, 5]).unwrap();
+    pending.remove(7, &[2, 3, 4]).unwrap();
+    assert_eq!(pending.members(7, &stored).unwrap().count(), 0);
+    assert_eq!(pending.list_size(7, stored.len()).unwrap(), 0);
+    pending.retire(7).unwrap();
+    assert!(pending.members(7, &stored).is_err());
+    assert!(pending.list_size(7, stored.len()).is_err());
+    assert!(pending.append(7, vec![6]).is_err());
+    assert!(pending.remove(7, &[1]).is_err());
+    assert!(pending.retire(7).is_err());
+    assert!(matches!(
+        pending.into_changes().collect::<Vec<_>>().as_slice(),
+        [(7, Membership::Retire)]
+    ));
+}
+
+#[test]
+fn membership_sizes_reject_overflow_and_excess_removals() {
+    let mut pending = PendingLists::<u32, u32>::default();
+    pending.append(1, vec![4]).unwrap();
+    assert!(pending.list_size(1, usize::MAX).is_err());
+    pending.remove(2, &[1]).unwrap();
+    assert!(pending.list_size(2, 0).is_err());
 }
 
 #[tokio::test]
@@ -450,7 +494,7 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
     assert!(!store.lists.contains_key(&1));
     assert_eq!(store.lists.len(), 4);
     assert_eq!(store.lists[&2].centroid, [5.0, 0.0]);
-    assert_eq!(store.lists[&2].members, [10_005, 10_006, 10_002, 10_008]);
+    assert_eq!(store.lists[&2].members, [10_002, 10_008, 10_005, 10_006]);
     assert!(store.lists[&2].members.len() > 3);
     assert!(
         store
@@ -570,7 +614,8 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 .unwrap();
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
             assert_eq!(vectors.row(2), points[1].1);
-            assert!(update.set_members(1, &[]).is_err());
+            assert!(update.remove_members(1, &[10_000]).is_err());
+            assert!(update.append_members(1, &[10_000]).is_err());
         }
         assert_eq!(build.dim().get(), 2);
         assert_eq!(build.created.len(), 2);
@@ -606,10 +651,12 @@ async fn borrowed_updates_share_pending_memberships_and_publish_on_finish() {
         let neighbor = region.get_list(2).unwrap();
         assert_eq!(parent.members, [10_000, 10_001, 10_005]);
         assert_eq!(neighbor.members, [10_002, 10_003, 10_006]);
-        assert!(update.set_members(3, &[]).is_err());
+        assert!(update.remove_members(3, &[]).is_err());
+        assert!(update.append_members(3, &[]).is_err());
         assert!(update.retire(3).is_err());
 
-        update.set_members(2, &[10_002, 10_003, 10_005]).unwrap();
+        update.remove_members(2, &[10_006]).unwrap();
+        update.append_members(2, &[10_005]).unwrap();
         update
             .create(&[1.0, 0.0], &[10_000, 10_001, 10_006])
             .unwrap();
@@ -630,6 +677,15 @@ async fn borrowed_updates_share_pending_memberships_and_publish_on_finish() {
     assert_eq!(build.store.next_list, 4);
     assert_eq!(build.store.finishes, 0);
 
+    {
+        let (region, _) = build.fill([2].into_iter()).await.unwrap();
+        assert_eq!(
+            region.get_list(2).unwrap().members,
+            [10_002, 10_003, 10_005]
+        );
+        assert_eq!(region.get_vectors(2).unwrap().row(2), points[0].1);
+    }
+
     require_send(build.finish()).await.unwrap();
     let store = strategy.store();
     assert!(!store.lists.contains_key(&1));
@@ -644,41 +700,58 @@ async fn borrowed_updates_share_pending_memberships_and_publish_on_finish() {
 }
 
 #[tokio::test]
+async fn whole_list_transfer_appends_then_retires_without_deleting_vectors() {
+    let strategy = Strategy::new(seeded());
+    let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
+    {
+        let (region, mut update) = build.fill([1, 2].into_iter()).await.unwrap();
+        update
+            .append_members(2, region.get_list(1).unwrap().members)
+            .unwrap();
+        update.retire(1).unwrap();
+    }
+    require_send(build.finish()).await.unwrap();
+    let store = strategy.store();
+    assert!(!store.lists.contains_key(&1));
+    assert_eq!(store.lists[&2].members, [10_002, 10_003, 10_000, 10_001]);
+    assert_eq!(store.lists[&2].centroid, [11.0, 0.0]);
+    assert_eq!(store.lists[&3].members, [10_004]);
+    assert_eq!(store.points.len(), 5);
+    assert_eq!(store.finishes, 1);
+}
+
+#[tokio::test]
 async fn failed_planning_or_publication_is_not_reported_as_success() {
-    for (fail_nearest, fail_fill, fail_create, fail_set_members, fail_retire, fail_finish) in [
-        (true, false, false, false, false, false),
-        (false, true, false, false, false, false),
-        (false, false, true, false, false, false),
-        (false, false, false, true, false, false),
-        (false, false, false, false, true, false),
-        (false, false, false, false, false, true),
+    for failure in [
+        "nearest",
+        "fill",
+        "create",
+        "remove_members",
+        "append_members",
+        "retire",
+        "finish",
     ] {
         let mut store = seeded();
-        store.fail_nearest = fail_nearest;
-        store.fail_fill = fail_fill;
-        store.fail_create = fail_create;
-        store.fail_set_members = fail_set_members;
-        store.fail_retire = fail_retire;
-        store.fail_finish = fail_finish;
+        store.points.insert(10_001, vec![11.0, 0.0]);
+        store.points.insert(10_002, vec![1.0, 0.0]);
+        store.fail_nearest = failure == "nearest";
+        store.fail_fill = failure == "fill";
+        store.fail_create = failure == "create";
+        store.fail_remove_members = failure == "remove_members";
+        store.fail_append_members = failure == "append_members";
+        store.fail_retire = failure == "retire";
+        store.fail_finish = failure == "finish";
         let (mut index, strategy) = index_with_neighbors(store, 2, 2);
         let points: [(u32, &[f32]); 1] = [(5, &[1.0, 1.0][..])];
         let error = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
             .await
             .unwrap_err();
-        let expected = if fail_nearest {
-            "injected nearest failure"
-        } else if fail_fill {
-            "injected fill failure"
-        } else if fail_create {
-            "injected create failure"
-        } else if fail_set_members {
-            "injected set_members failure"
-        } else if fail_retire {
-            "injected retire failure"
-        } else {
-            "injected finish failure"
-        };
-        assert!(error.to_string().contains(expected), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("injected {failure} failure")),
+            "{error}"
+        );
         let store = strategy.store();
         assert_eq!(store.finishes, 0);
         assert_eq!(store.lists[&1].members, [10_000, 10_001]);
@@ -1088,11 +1161,19 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
     assert_eq!(child_members, [0]);
     let mut changes: BTreeMap<_, _> = std::mem::take(update.memberships).into_changes().collect();
     assert!(matches!(changes.remove(&1), Some(Membership::Retire)));
-    for (id, expected) in [(2, vec![]), (3, vec![2, 3]), (4, vec![1])] {
-        let Some(Membership::Replace(members)) = changes.remove(&id) else {
-            panic!("expected replacement for retained list {id}");
+    for (id, expected_removed, expected_appended) in [
+        (2, vec![2], vec![]),
+        (3, vec![], vec![2]),
+        (4, vec![], vec![1]),
+    ] {
+        let Some(Membership::Delta { removed, appended }) = changes.remove(&id) else {
+            panic!("expected delta for retained list {id}");
         };
-        assert_eq!(members, expected);
+        assert_eq!(
+            removed,
+            expected_removed.into_iter().collect::<HashSet<_>>()
+        );
+        assert_eq!(appended, expected_appended);
     }
     assert!(changes.is_empty());
 }
@@ -1132,7 +1213,8 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
         assert!(update.created.is_empty());
         let changes: Vec<_> = update.memberships.clone().into_changes().collect();
         assert!(
-            matches!(changes.as_slice(), [(1, Membership::Append(members))] if members == &[10_005])
+            matches!(changes.as_slice(), [(1, Membership::Delta { removed, appended })]
+                if removed.is_empty() && appended == &[10_005])
         );
         TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap())
             .split(&region, &mut update, &[1], &[])
@@ -1269,11 +1351,13 @@ fn two_means_prefers_neighbors_in_supplied_order_on_ties() {
         assert!(matches!(changes[&1], Membership::Retire));
         assert!(matches!(
             &changes[&neighbors[0]],
-            Membership::Replace(members) if members == &[0, neighbors[0], neighbors[1]]
+            Membership::Delta { removed, appended }
+                if removed.is_empty() && appended == &[0, neighbors[1]]
         ));
         assert!(matches!(
             &changes[&neighbors[1]],
-            Membership::Replace(members) if members.is_empty()
+            Membership::Delta { removed, appended }
+                if removed.len() == 1 && removed.contains(&neighbors[1]) && appended.is_empty()
         ));
     }
 }
@@ -1363,11 +1447,15 @@ fn two_means_reuses_splitter_across_regions() {
     for parent in [1, 2] {
         assert!(matches!(changes.remove(&parent), Some(Membership::Retire)));
     }
-    for (id, expected) in [(3, vec![6]), (4, vec![])] {
-        let Some(Membership::Replace(members)) = changes.remove(&id) else {
-            panic!("expected replacement for retained list {id}");
+    for (id, expected_removed) in [(3, vec![4, 5]), (4, vec![7])] {
+        let Some(Membership::Delta { removed, appended }) = changes.remove(&id) else {
+            panic!("expected delta for retained list {id}");
         };
-        assert_eq!(members, expected);
+        assert_eq!(
+            removed,
+            expected_removed.into_iter().collect::<HashSet<_>>()
+        );
+        assert!(appended.is_empty());
     }
     assert!(changes.is_empty());
 }
@@ -1510,7 +1598,8 @@ fn two_means_handles_borrowed_batches() {
     assert_eq!(created[1].members, [1]);
     let changes: BTreeMap<_, _> = memberships.into_changes().collect();
     assert!(matches!(changes[&1], Membership::Retire));
-    assert!(matches!(&changes[&2], Membership::Replace(members) if members == &[2]));
+    assert!(!changes.contains_key(&2));
+    assert_eq!(changes.len(), 1);
 }
 
 #[test]
@@ -1771,5 +1860,6 @@ fn regional_assignment_prefers_first_when_all_distances_overflow() {
     assert_eq!(created[0].members, [0]);
     assert_eq!(created[1].members, [1]);
     let changes: BTreeMap<_, _> = memberships.into_changes().collect();
-    assert!(matches!(&changes[&2], Membership::Replace(members) if members == &[2]));
+    assert!(!changes.contains_key(&2));
+    assert_eq!(changes.len(), 1);
 }

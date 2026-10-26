@@ -10,7 +10,7 @@
 //! through [`traits::BuildAccessor`], borrowed inputs through [`region::View`],
 //! and regional writes through [`region::Update`].
 //!
-//! Neighbor selection uses [`traits::NearestList`] before filling the unique
+//! Neighbor selection uses [`traits::Nearest`] before filling the unique
 //! union of parents and retained neighbors. Children are fitted only from parent
 //! points, then all gathered points are reassigned across every child and retained
 //! neighbor centroid. This permits movement between retained neighbors as well.
@@ -21,7 +21,7 @@
 //! retained centroids and source vectors remain borrowed.
 //!
 //! Clustering finishes reading its inputs before recording child creation and
-//! parent retirement and neighbor membership replacement through the separate
+//! parent retirement and neighbor membership deltas through the separate
 //! update object. The region's input
 //! borrows end before the accessor finalizes regional writes and ordinary appends
 //! together. Providers may buffer writes or apply them inside a private operation

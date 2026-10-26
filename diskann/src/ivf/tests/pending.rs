@@ -5,27 +5,29 @@
 
 //! Pending memberships for the operation-local test provider.
 //!
-//! Appends do not materialize stored memberships. Replacement supersedes earlier
-//! appends, and retirement supersedes both. A provider can use this helper for
+//! Deltas do not materialize stored memberships. Removal cancels pending appends,
+//! and retirement supersedes membership edits. A provider can use this helper for
 //! read-your-writes behavior and consume it when publishing its build operation.
 //! It is not the algorithm's commit protocol; providers may implement that behavior
 //! with their own storage or transactions instead.
 
-use hashbrown::{HashMap, hash_map::Entry};
+use hashbrown::{HashMap, HashSet, hash_map::Entry};
 
 use crate::{ANNError, ANNResult, utils::VectorId};
 
 /// A pending change relative to a list's stored membership.
 #[derive(Debug, Clone)]
 pub enum Membership<I> {
-    Append(Vec<I>),
-    Replace(Vec<I>),
+    Delta {
+        removed: HashSet<I>,
+        appended: Vec<I>,
+    },
     Retire,
 }
 
 /// Membership state without vector storage or centroid-ID allocation.
 ///
-/// Callers supply stored sizes and members, and validate that list IDs exist.
+/// Callers supply stored sizes and members, and validate list IDs and membership edits.
 #[derive(Debug, Default, Clone)]
 pub struct PendingLists<I: VectorId, L: VectorId> {
     changes: HashMap<L, Membership<I>>,
@@ -35,11 +37,14 @@ impl<I: VectorId, L: VectorId> PendingLists<I, L> {
     pub fn append(&mut self, list: L, members: Vec<I>) -> ANNResult<()> {
         match self.changes.entry(list) {
             Entry::Vacant(entry) => {
-                entry.insert(Membership::Append(members));
+                entry.insert(Membership::Delta {
+                    removed: HashSet::new(),
+                    appended: members,
+                });
             }
             Entry::Occupied(mut entry) => match entry.get_mut() {
-                Membership::Append(current) | Membership::Replace(current) => {
-                    current.extend(members);
+                Membership::Delta { removed, appended } => {
+                    appended.extend(members.into_iter().filter(|id| !removed.remove(id)));
                 }
                 Membership::Retire => return Err(retired(list)),
             },
@@ -47,11 +52,26 @@ impl<I: VectorId, L: VectorId> PendingLists<I, L> {
         Ok(())
     }
 
-    pub fn set(&mut self, list: L, members: Vec<I>) -> ANNResult<()> {
-        if self.is_retired(list) {
-            return Err(retired(list));
+    pub fn remove(&mut self, list: L, members: &[I]) -> ANNResult<()> {
+        let mut removed: HashSet<_> = members.iter().copied().collect();
+        match self.changes.entry(list) {
+            Entry::Vacant(entry) => {
+                entry.insert(Membership::Delta {
+                    removed,
+                    appended: Vec::new(),
+                });
+            }
+            Entry::Occupied(mut entry) => match entry.get_mut() {
+                Membership::Delta {
+                    removed: current,
+                    appended,
+                } => {
+                    appended.retain(|id| !removed.remove(id));
+                    current.extend(removed);
+                }
+                Membership::Retire => return Err(retired(list)),
+            },
         }
-        self.changes.insert(list, Membership::Replace(members));
         Ok(())
     }
 
@@ -70,10 +90,14 @@ impl<I: VectorId, L: VectorId> PendingLists<I, L> {
     pub fn list_size(&self, list: L, stored_size: usize) -> ANNResult<usize> {
         match self.changes.get(&list) {
             None => Ok(stored_size),
-            Some(Membership::Append(members)) => stored_size
-                .checked_add(members.len())
-                .ok_or_else(|| ANNError::message(format!("IVF list {list} size overflows usize"))),
-            Some(Membership::Replace(members)) => Ok(members.len()),
+            Some(Membership::Delta { removed, appended }) => {
+                let remaining = stored_size.checked_sub(removed.len()).ok_or_else(|| {
+                    ANNError::message(format!("IVF list {list} removes more than its stored size"))
+                })?;
+                remaining.checked_add(appended.len()).ok_or_else(|| {
+                    ANNError::message(format!("IVF list {list} size overflows usize"))
+                })
+            }
             Some(Membership::Retire) => Err(retired(list)),
         }
     }
@@ -84,13 +108,16 @@ impl<I: VectorId, L: VectorId> PendingLists<I, L> {
         list: L,
         stored: &'a [I],
     ) -> ANNResult<impl Iterator<Item = I> + Clone + 'a> {
-        let (head, tail): (&[I], &[I]) = match self.changes.get(&list) {
-            None => (stored, &[]),
-            Some(Membership::Append(members)) => (stored, members),
-            Some(Membership::Replace(members)) => (members, &[]),
+        let (removed, appended): (Option<&HashSet<I>>, &[I]) = match self.changes.get(&list) {
+            None => (None, &[]),
+            Some(Membership::Delta { removed, appended }) => (Some(removed), appended),
             Some(Membership::Retire) => return Err(retired(list)),
         };
-        Ok(head.iter().chain(tail).copied())
+        Ok(stored
+            .iter()
+            .filter(move |id| removed.is_none_or(|removed| !removed.contains(*id)))
+            .chain(appended)
+            .copied())
     }
 
     /// Consume pending state. The iteration order is unspecified.

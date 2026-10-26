@@ -14,9 +14,13 @@ use crate::{
 
 pub(crate) mod twomeans;
 pub(crate) use twomeans::TwoMeansSplit;
+mod utils;
 
 /// Replace parents and reassign their members together with selected neighbors.
-pub(crate) trait Split<I, L, R: View<I, L>> {
+pub(crate) trait Split<I, L, R>
+where
+    R: View<I, L>,
+{
     type Error: Debug + Send + Sync + Into<ANNError>;
 
     /// Parents and neighbors must be distinct, disjoint filled sources.

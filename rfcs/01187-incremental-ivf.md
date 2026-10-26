@@ -18,7 +18,7 @@ overflow selection, two-means fitting, and regional assignment. Providers supply
 2. A scoped `BuildAccessor` that stages ordinary appends, returns their resulting
    sizes, fills requested sources, and publishes the operation.
 3. A read-only `RegionView` for filled source data and an independent
-   `RegionUpdate` for list creation, complete membership replacement, and
+   `RegionUpdate` for list creation, membership removal and append, and
    retirement.
 
 Typed point preparation belongs to the insertion strategy, not to the core
@@ -41,11 +41,13 @@ Two children are fitted per parent, using only that parent's complete membership
 All children are fitted before final assignment. Every gathered point is then
 assigned across all new children and retained neighbor centroids; parent
 centroids are not candidates. Retained lists keep their identities and centroids
-while receiving complete replacement memberships. This full regional policy
+while receiving only membership removals and appends for points that move.
+Unchanged members require no writes. This full regional policy
 permits parent-to-neighbor, neighbor-to-child, cross-parent, and neighbor-to-neighbor
 movement. It is broader than the superseded per-parent candidate policy below.
-The algorithm computes complete centroid and member groups before writing child
-creation, retained memberships, and parent retirement through the update object.
+The algorithm computes child centroids, initial memberships, and retained-list
+deltas before writing child creation, retained edits, and parent retirement through
+the update object.
 Ordinary appends and splitting are published together, never as separate commits.
 Each parent is split once per insertion; this is not a recursive size-balancing
 operation, and retained neighbors are not split if reassignment makes them
@@ -66,8 +68,10 @@ Regional writes may be buffered or applied eagerly inside the provider's private
 operation context. An update object may own storage access or a transaction
 handle; it need not be a passive edit buffer. Such writes must preserve live
 source views, and successful finalization publishes one coherent result.
-Providers coordinate accessor-side appends and regional writes so complete
-replacement or retirement supersedes relevant earlier appends.
+Providers compose regional edits with accessor-side appends. Removing a pending
+append cancels it, reappending a removed stored member restores it, and retirement
+supersedes earlier membership edits. Membership removal does not delete vector
+storage, and membership order is provider-defined.
 
 The built-in split reads and edits only explicitly selected parents and neighbors,
 even when a region contains additional sources. It covers every source member

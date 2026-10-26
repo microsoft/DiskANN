@@ -14,11 +14,11 @@ use diskann_utils::{
 };
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 
-use super::Split;
+use super::{Split, utils::Buckets};
 use crate::{
     ANNError, ANNResult,
     ivf::region::{AsMatRef, Update, View},
-    utils::{TWO, VectorId},
+    utils::TWO,
 };
 
 ////////////
@@ -31,8 +31,8 @@ pub(crate) enum TwoMeansError<L> {
     UnableToRetrieve(L),
     #[error("IVF two-means needs at least two points in list {list:?}, got {actual}")]
     NotEnoughPoints { list: L, actual: usize },
-    #[error("Centroid count overflows for {0} parents")]
-    Overflow(usize),
+    #[error("Centroid count overflows for {parents} parents and {neighbors} neighbors")]
+    Overflow { parents: usize, neighbors: usize },
     #[error("Parents is empty")]
     EmptyParents,
 }
@@ -45,11 +45,6 @@ impl<L: Debug + Send + Sync + 'static> From<TwoMeansError<L>> for ANNError {
 }
 
 /// Two-means per parent followed by nearest-centroid assignment over the region.
-///
-/// Seeds are the first two rows of each parent. Lloyd iterations reset empty
-/// centers to zero. One centroid matrix is allocated up front for all parents.
-/// Retained neighbors precede new children when resolving equal-distance assignments.
-/// All computation completes before any updates are recorded.
 pub struct TwoMeansSplit {
     iterations: NonZeroUsize,
     dim: NonZeroUsize,
@@ -60,21 +55,21 @@ impl TwoMeansSplit {
         Self { iterations, dim }
     }
 
-    /// Fit and output the centroids given by the region and the parents.
-    fn fit<I, L, R>(&self, region: &R, parents: &[L]) -> ANNResult<rowmajor::Owned<f32>>
+    /// Fit two children per parent into consecutive row pairs of `children`.
+    fn fit<I, L, R>(
+        &self,
+        region: &R,
+        parents: &[L],
+        mut children: rowmajor::Mut<'_, f32>,
+    ) -> ANNResult<()>
     where
-        L: VectorId,
+        L: Copy + Debug + Send + Sync + 'static,
         R: View<I, L>,
         for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
     {
-        let rows = parents
-            .len()
-            .checked_mul(TWO.get())
-            .ok_or(TwoMeansError::<L>::Overflow(parents.len()))?;
+        debug_assert!(parents.len() > 0);
 
-        let mut centers = rowmajor::Owned::try_from_element(rows, self.dim.get(), 0.0)?;
-
-        for (&list, mut dst) in parents.iter().zip(centers.window_iter_mut(TWO)) {
+        for (&list, mut dst) in parents.iter().zip(children.window_iter_mut(TWO)) {
             let vectors = region
                 .get_vectors(list)
                 .ok_or(TwoMeansError::UnableToRetrieve(list))?;
@@ -94,28 +89,8 @@ impl TwoMeansSplit {
             let _ = lloyds(points, dst, self.iterations.get());
         }
 
-        Ok(centers)
+        Ok(())
     }
-}
-
-/////////////
-// Targets //
-/////////////
-
-#[derive(Clone, Copy)]
-/// Defines the category of the target centroid.
-enum TargetKind<L> {
-    // Existing centroid, from a neighbor for example
-    Exists(L),
-    // New centroid as a result of a split.
-    New,
-}
-
-#[derive(Clone)]
-/// Target object holding the target kind and reference to centroid vector.
-struct Target<'a, L> {
-    target: TargetKind<L>,
-    centroid: &'a [f32],
 }
 
 ///////////
@@ -124,8 +99,8 @@ struct Target<'a, L> {
 
 impl<I, L, R> Split<I, L, R> for TwoMeansSplit
 where
-    I: VectorId,
-    L: VectorId,
+    I: Copy,
+    L: Copy + Debug + Send + Sync + 'static,
     R: View<I, L>,
     for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
 {
@@ -142,32 +117,38 @@ where
             return Err(TwoMeansError::<L>::EmptyParents.into());
         }
 
-        // Fit children
+        let (p, n) = (parents.len(), neighbors.len());
 
-        let children = self.fit(region, parents)?;
+        // Centroids: retained neighbors, then two children per parent.
+        let rows = p
+            .checked_mul(TWO.get())
+            .and_then(|children| children.checked_add(n))
+            .ok_or(TwoMeansError::<L>::Overflow {
+                parents: p,
+                neighbors: n,
+            })?;
 
-        let mut targets = Vec::new();
+        let mut centroids = rowmajor::Owned::try_from_element(rows, self.dim.get(), 0.0)?;
 
-        for &neighbor in neighbors {
+        for (&list, row) in neighbors.iter().zip(centroids.rows_mut()) {
             let view = region
-                .get_list(neighbor)
-                .ok_or(TwoMeansError::UnableToRetrieve(neighbor))?;
+                .get_list(list)
+                .ok_or(TwoMeansError::UnableToRetrieve(list))?;
 
-            targets.push(Target {
-                target: TargetKind::Exists(neighbor),
-                centroid: view.centroid,
-            });
+            row.copy_from_slice(view.centroid);
         }
 
-        targets.extend(children.rows().map(|centroid| Target {
-            target: TargetKind::New,
-            centroid,
-        }));
+        #[expect(clippy::expect_used, reason = "`n <= rows`")]
+        let children = centroids
+            .subview_mut(n..rows)
+            .expect("children follow neighbors");
 
-        // Assign
-        let mut memberships = vec![Vec::new(); targets.len()];
+        self.fit(region, parents, children)?;
 
-        for &list in parents.iter().chain(neighbors.iter()) {
+        // Assign: moved points are bucketed by source, keyed by their destination rows.
+        let mut moved = Buckets::new();
+
+        for (s, &list) in parents.iter().chain(neighbors).enumerate() {
             let view = region
                 .get_list(list)
                 .ok_or(TwoMeansError::UnableToRetrieve(list))?;
@@ -176,21 +157,35 @@ where
                 .get_vectors(list)
                 .ok_or(TwoMeansError::UnableToRetrieve(list))?;
 
-            let points = vectors.reborrow().as_view();
+            // A neighbor's own row is its index among neighbors; parents have none.
+            let home = s.checked_sub(p);
 
-            for (&id, point) in view.members.iter().zip(points.rows()) {
-                memberships[nearest(point, &targets)].push(id);
+            for (&id, point) in view.members.iter().zip(vectors.reborrow().as_view().rows()) {
+                let destination = nearest(point, centroids.as_view());
+
+                if Some(destination) != home {
+                    moved.push(id, destination);
+                }
             }
+
+            moved.seal();
         }
 
         // Update
-        for (target, members) in targets.iter().zip(&memberships) {
-            match target.target {
-                TargetKind::New => update.create(target.centroid, members)?,
-                TargetKind::Exists(list) => update.set_members(list, members)?,
-            };
-        }
+        let incoming = moved.regroup(rows);
 
+        for (i, &list) in neighbors.iter().enumerate() {
+            // SAFETY: `moved` sealed one bucket per parent and neighbor, and `incoming`
+            // has `rows = n + 2p` buckets; `i < n`.
+            unsafe {
+                update.remove_members(list, moved.get_unchecked(p + i))?;
+                update.append_members(list, incoming.get_unchecked(i))?;
+            }
+        }
+        for (i, centroid) in centroids.as_view().rows().enumerate().skip(n) {
+            // SAFETY: `i < rows`, the number of buckets in `incoming`.
+            update.create(centroid, unsafe { incoming.get_unchecked(i) })?;
+        }
         for &parent in parents {
             update.retire(parent)?;
         }
@@ -198,13 +193,13 @@ where
     }
 }
 
-/// Destinations are nonempty; the earliest wins ties, including infinite distances.
+/// Index of the nearest centroid; the earliest row wins ties, including infinite distances.
 #[inline(always)]
-fn nearest<L>(point: &[f32], targets: &[Target<'_, L>]) -> usize {
+fn nearest(point: &[f32], centroids: rowmajor::Ref<'_, f32>) -> usize {
     let mut best = 0;
-    let mut distance: f32 = SquaredL2::evaluate(point, targets[0].centroid);
-    for (index, target) in targets.iter().enumerate().skip(1) {
-        let candidate = SquaredL2::evaluate(point, target.centroid);
+    let mut distance: f32 = SquaredL2::evaluate(point, centroids.row(0));
+    for (index, centroid) in centroids.rows().enumerate().skip(1) {
+        let candidate = SquaredL2::evaluate(point, centroid);
         if candidate < distance {
             best = index;
             distance = candidate;

@@ -24,7 +24,8 @@ pub(super) struct Store {
     pub(super) fail_nearest: bool,
     pub(super) fail_fill: bool,
     pub(super) fail_create: bool,
-    pub(super) fail_set_members: bool,
+    pub(super) fail_remove_members: bool,
+    pub(super) fail_append_members: bool,
     pub(super) fail_retire: bool,
     pub(super) fail_finish: bool,
 }
@@ -152,7 +153,8 @@ pub(super) struct Update<'a> {
     pub(super) memberships: &'a mut PendingLists<u32, u32>,
     pub(super) created: &'a mut Vec<StoredList>,
     pub(super) fail_create: bool,
-    pub(super) fail_set_members: bool,
+    pub(super) fail_remove_members: bool,
+    pub(super) fail_append_members: bool,
     pub(super) fail_retire: bool,
 }
 
@@ -169,7 +171,8 @@ impl<'a> Update<'a> {
             memberships,
             created,
             fail_create: false,
-            fail_set_members: false,
+            fail_remove_members: false,
+            fail_append_members: false,
             fail_retire: false,
         }
     }
@@ -216,12 +219,26 @@ impl View<u32, u32> for Region<'_> {
 }
 
 impl crate::ivf::region::Update<u32, u32> for Update<'_> {
-    fn set_members(&mut self, list: u32, members: &[u32]) -> ANNResult<()> {
-        if self.fail_set_members {
-            return Err(ANNError::message("injected set_members failure"));
+    fn remove_members(&mut self, list: u32, members: &[u32]) -> ANNResult<()> {
+        if self.fail_remove_members {
+            return Err(ANNError::message("injected remove_members failure"));
         }
         self.check_list(list)?;
-        self.memberships.set(list, members.to_vec())
+        if members.is_empty() {
+            return Ok(());
+        }
+        self.memberships.remove(list, members)
+    }
+
+    fn append_members(&mut self, list: u32, members: &[u32]) -> ANNResult<()> {
+        if self.fail_append_members {
+            return Err(ANNError::message("injected append_members failure"));
+        }
+        self.check_list(list)?;
+        if members.is_empty() {
+            return Ok(());
+        }
+        self.memberships.append(list, members.to_vec())
     }
 
     fn retire(&mut self, list: u32) -> ANNResult<()> {
@@ -395,7 +412,8 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
                 &mut self.created,
             );
             update.fail_create = self.store.fail_create;
-            update.fail_set_members = self.store.fail_set_members;
+            update.fail_remove_members = self.store.fail_remove_members;
+            update.fail_append_members = self.store.fail_append_members;
             update.fail_retire = self.store.fail_retire;
             Ok((Region::new(&self.sources), update))
         }
@@ -423,16 +441,10 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
             }
             for (id, change) in self.pending.into_changes() {
                 match change {
-                    Membership::Append(members) => {
-                        self.store
-                            .lists
-                            .get_mut(&id)
-                            .unwrap()
-                            .members
-                            .extend(members);
-                    }
-                    Membership::Replace(members) => {
-                        self.store.lists.get_mut(&id).unwrap().members = members;
+                    Membership::Delta { removed, appended } => {
+                        let members = &mut self.store.lists.get_mut(&id).unwrap().members;
+                        members.retain(|id| !removed.contains(id));
+                        members.extend(appended);
                     }
                     Membership::Retire => {
                         self.store.lists.remove(&id).unwrap();

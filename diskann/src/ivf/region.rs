@@ -7,14 +7,14 @@
 
 use std::fmt::Debug;
 
-use diskann_utils::{Reborrow, views::rowmajor::{self}};
+use diskann_utils::{
+    Reborrow,
+    views::rowmajor::{self},
+};
 
 use crate::ANNResult;
 
-/// One source list's centroid and complete operation-local membership.
-///
-/// Only reference metadata is owned; point and centroid coordinates are borrowed.
-/// A region may include both split targets and neighboring lists.
+/// One source list's centroid and membership list.
 #[derive(Debug)]
 pub struct List<'a, I, L> {
     pub id: L,
@@ -36,18 +36,19 @@ pub trait View<I, L>: Send {
     fn get_list(&self, i: L) -> Option<List<'_, I, L>>;
 
     /// Borrow canonical rows in the same order as the source's member IDs.
-    ///
-    /// There is one row per member, including pending accessor appends. Coordinates
-    /// have the accessor's canonical dimension and are finite.
     fn get_vectors(&self, i: L) -> Option<Self::Vectors<'_>>;
 }
 
 /// Regional writes for one build operation.
 pub trait Update<I, L>: Send {
-    /// Record a complete membership replacement.
-    fn set_members(&mut self, i: L, ids: &[I]) -> ANNResult<()>;
+    /// Append distinct IDs that are not already members of the operation-local list.
+    fn append_members(&mut self, i: L, ids: &[I]) -> ANNResult<()>;
+    /// Remove membership without deleting the underlying vectors.
+    ///
+    /// IDs must be distinct current members of the operation-local list.
+    fn remove_members(&mut self, i: L, ids: &[I]) -> ANNResult<()>;
 
-    /// Record retirement of a source list and its centroid.
+    /// Retire a source list and its centroid, superseding earlier membership changes.
     fn retire(&mut self, i: L) -> ANNResult<()>;
 
     /// Record a new centroid and its complete membership.
