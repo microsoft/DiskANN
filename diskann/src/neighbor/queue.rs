@@ -284,7 +284,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Get the lower bound of the neighbor - the index of the first neighbor
     /// that has a distance greater than or equal to the target neighbor
     /// PERFORMANCE: This function is performance critical - please benchmark any changes
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(not(target_arch = "x86_64"))]
     fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
         let target = nbr.distance;
 
