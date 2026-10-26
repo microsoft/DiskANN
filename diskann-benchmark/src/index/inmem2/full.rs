@@ -19,6 +19,8 @@ use crate::{
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", RunBuildAndSearch::<f32>::new())?;
+    registry.register("inmem2-f16", RunBuildAndSearch::<half::f16>::new())?;
+    registry.register("inmem2-u8", RunBuildAndSearch::<u8>::new())?;
     registry.register("inmem2-f32-stream", RunStream::<f32>::new())?;
     Ok(())
 }
@@ -60,6 +62,8 @@ struct BuildAndSearch {
     data: inmem2::common::Data,
     build: inmem2::benchmark::build::Config,
     search: inmem2::benchmark::knn::Knn,
+    // The raw input.
+    raw: serde_json::Value,
 }
 
 impl FromRawWith for BuildAndSearch {
@@ -83,6 +87,7 @@ impl FromRawWith for BuildAndSearch {
             data,
             build,
             search,
+            raw: serde_json::to_value(raw)?,
         })
     }
 }
@@ -93,6 +98,7 @@ impl std::fmt::Display for BuildAndSearch {
             data,
             build,
             search,
+            raw: _,
         } = self;
         let mut kv = dbr::utils::fmt::KeyValue::new();
         kv.push("data", &data);
@@ -113,7 +119,7 @@ impl dbr::Input for BuildAndSearch {
     }
 
     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::Value::Null)
+        Ok(self.raw.clone())
     }
 
     fn example() -> Self::Raw {
@@ -195,6 +201,8 @@ where
 #[derive(Debug)]
 struct Stream {
     stream: inmem2::benchmark::bigann::BigANN,
+    // The raw input.
+    raw: serde_json::Value,
 }
 
 impl std::fmt::Display for Stream {
@@ -211,11 +219,14 @@ impl dbr::Input for Stream {
 
     fn from_raw(raw: Self::Raw, checker: &mut dbr::Checker) -> anyhow::Result<Self> {
         let stream = inmem2::benchmark::bigann::BigANN::from_raw_with(&raw, Some(checker))?;
-        Ok(Self { stream })
+        Ok(Self {
+            stream,
+            raw: serde_json::to_value(raw)?,
+        })
     }
 
     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::Value::Null)
+        Ok(self.raw.clone())
     }
 
     fn example() -> Self::Raw {
@@ -267,7 +278,7 @@ where
     ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}\n", input)?;
 
-        let Stream { stream } = input;
+        let Stream { stream, raw: _ } = input;
 
         // Load data.
         let data = stream.load_data::<T>(Some(output))?;

@@ -90,6 +90,8 @@ struct BuildAndSearch<Q> {
     build: inmem2::benchmark::build::Config,
     search: inmem2::benchmark::knn::Knn,
     quantizer: Q,
+    // The raw input.
+    raw: serde_json::Value,
 }
 
 impl<Q> FromRawWith for BuildAndSearch<Q>
@@ -123,6 +125,7 @@ where
             build,
             search,
             quantizer,
+            raw: serde_json::to_value(raw)?,
         })
     }
 }
@@ -137,6 +140,7 @@ where
             build,
             search,
             quantizer,
+            raw: _,
         } = self;
 
         let mut kv = dbr::utils::fmt::KeyValue::new();
@@ -164,7 +168,7 @@ where
     }
 
     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::Value::Null)
+        Ok(self.raw.clone())
     }
 
     fn example() -> Self::Raw {

@@ -33,6 +33,15 @@ pub(in crate::index::inmem2) mod dto {
     use super::*;
     use serde::{Deserialize, Serialize};
 
+    /// A sweep retrieving [`Self::search_n`] nearest neighbors during Knn search. All
+    /// values of [`Self::search_l`] will be used sequentially. Afterward, [`Self::recall_k`]
+    /// will be used to compute the `K-recall-at-N` for all search results.
+    ///
+    /// Requires:
+    ///
+    /// * `search_n >= search_l` for all provided `search_l`s.
+    /// * `search_n > = recall_k`.
+    /// * `search_l` must be non-empty.
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(super) struct Sweep {
@@ -160,6 +169,15 @@ impl Plan {
                 }
 
                 for &search_l in &run.search_l {
+                    anyhow::ensure!(
+                        search_l >= run.search_n.get(),
+                        "run {} of {} has search_l ({}) less than search_n ({})",
+                        position + 1,
+                        runs.len(),
+                        search_l,
+                        run.search_n,
+                    );
+
                     let parameters = Parameters {
                         knn: diskann::graph::search::Knn::new(search_l, None)?,
                         num_neighbors: run.search_n,
