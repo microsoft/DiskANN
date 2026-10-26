@@ -857,6 +857,7 @@ mod pq_test {
         assert!(!table.get_pq_table().contains(&f32::MAX));
     }
 
+    #[cfg(not(coverage))]
     #[rstest]
     #[case(false, 16)]
     #[case(false, 32)]
@@ -1182,6 +1183,7 @@ mod pq_test {
         assert_eq!(result, vec!(0.3, 0.4, 0.5, 1.3, 1.4, 1.5));
     }
 
+    #[cfg(not(coverage))]
     #[rstest]
     #[case("l2", 31)]
     #[case("l2", 32)]
