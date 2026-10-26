@@ -18,7 +18,6 @@ diskann-wide.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
-iai-callgrind.workspace = true
 rand.workspace = true
 criterion.workspace = true
 rand_distr.workspace = true
@@ -27,10 +26,6 @@ bytemuck = { workspace = true, features = ["must_cast"] }
 
 [[bench]]
 name = "bench_main"
-harness = false
-
-[[bench]]
-name = "bench_main_vector_iai"
 harness = false
 
 [lints]
