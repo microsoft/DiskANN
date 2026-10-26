@@ -16,7 +16,7 @@
 //! keeps its distance. The job adds the edges of each source point to the locked
 //! reservoir of that point.
 
-use parking_lot::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -124,7 +124,10 @@ where
                 &candidates,
             )
         })?;
-    Ok(candidates.into_iter().map(Mutex::into_inner).collect())
+    Ok(candidates
+        .into_iter()
+        .map(|list| list.into_inner().unwrap_or_else(PoisonError::into_inner))
+        .collect())
 }
 
 /// Add the selected pairs of all leaves, with their distances, to the HashPrune
@@ -216,6 +219,7 @@ where
     for (&point_id, additions) in point_ids.iter().zip(&buffers.local_adjacency) {
         candidates[point_id as usize]
             .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .extend_from_slice(additions);
     }
     Ok(())
@@ -598,7 +602,7 @@ mod tests {
 
         candidates
             .into_iter()
-            .map(|row| Vec::from(row.into_inner()))
+            .map(|row| Vec::from(row.into_inner().unwrap_or_else(PoisonError::into_inner)))
             .collect()
     }
 
