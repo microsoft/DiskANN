@@ -16,7 +16,7 @@ use crate::{
     error::IntoANNResult,
     graph::SearchOutputBuffer,
     ivf::{
-        build::{Split, TwoMeansSplit},
+        split::{Plan, Split, TwoMeansSplit},
         region::AsMatRef,
         traits::BuildStrategy,
     },
@@ -103,34 +103,29 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 .await?;
 
             if !parents.is_empty() {
-                let mut neighbors = BTreeSet::new();
+                let mut plan = Plan::new(parents.iter().copied());
 
                 if let ReassignCount::Count(n) = config.reassign_count {
                     let router = accessor.nearest();
 
-                    for &pid in parents.iter() {
+                    for &parent in &parents {
                         router
                             .find(
-                                pid,
+                                parent,
                                 n,
-                                |id| !parents.contains(id),
-                                |id, _| {
-                                    neighbors.insert(*id);
-                                },
+                                |id| !parents.contains(&id),
+                                |id, _| plan.link(parent, id),
                             )
                             .await?;
                     }
                 }
 
-                let iter = parents.iter().chain(neighbors.iter()).copied();
-
-                let (region, mut update) = accessor.fill(iter).await?;
+                let (region, mut update) = accessor.fill(plan.lists()).await?;
 
                 TwoMeansSplit::new(config.split_iterations, dim).split(
                     &region,
                     &mut update,
-                    &parents.iter().copied().collect::<Vec<_>>(),
-                    &neighbors.iter().copied().collect::<Vec<_>>(),
+                    &plan,
                 )?;
             };
 

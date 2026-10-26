@@ -25,7 +25,7 @@ use self::{
 };
 use super::{
     Config, IVFIndex, InsertStats, ReassignCount,
-    build::{Split, TwoMeansSplit, twomeans::TwoMeansError},
+    split::{Plan, Split, TwoMeansSplit, policies::twomeans::TwoMeansError},
     region::{AsMatRef, List, Update, View},
     traits::{
         Accumulator, BuildAccessor, BuildStrategy, HasIds, Nearest, SearchAccessor, SearchStrategy,
@@ -56,7 +56,7 @@ async fn routing_callbacks_emit_ranked_results() {
             require_send(router.route(
                 &[6u8, 0][..],
                 NonZeroUsize::new(limit).unwrap(),
-                |id, distance| emitted.push((*id, distance)),
+                |id, distance| emitted.push((id, distance)),
             ))
             .await
             .unwrap();
@@ -84,8 +84,8 @@ async fn nearest_callbacks_filter_before_limiting_and_count_emitted_results() {
         let count = require_send(nearest.find(
             1,
             NonZeroUsize::new(limit).unwrap(),
-            |id| !excluded.contains(id),
-            |id, distance| emitted.push((*id, distance)),
+            |id| !excluded.contains(&id),
+            |id, distance| emitted.push((id, distance)),
         ))
         .await
         .unwrap();
@@ -111,7 +111,7 @@ async fn nearest_lookup_failures_do_not_emit_results() {
             id,
             ONE,
             |_| true,
-            |id, distance| emitted.push((*id, distance)),
+            |id, distance| emitted.push((id, distance)),
         ))
         .await
         .unwrap_err();
@@ -157,7 +157,7 @@ async fn routing_preserves_native_inputs_and_id_order() {
     let router = build.nearest();
     for (point, expected) in points.iter().zip([2, 1, 1]) {
         let mut selected = Vec::new();
-        require_send(router.route(point.1, ONE, |&id, _| selected.push(id)))
+        require_send(router.route(point.1, ONE, |id, _| selected.push(id)))
             .await
             .unwrap();
         assert_eq!(selected, [expected]);
@@ -610,7 +610,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
             assert_eq!(vectors.row(2), points[1].1);
             assert_eq!(vectors.row(3), points[0].1);
             TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap())
-                .split(&region, &mut update, &[1], &[])
+                .split(&region, &mut update, &plan(&[1], &[]))
                 .unwrap();
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
             assert_eq!(vectors.row(2), points[1].1);
@@ -1146,7 +1146,7 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), ONE)
-        .split(&region, &mut update, &[1], &[2, 3, 4])
+        .split(&region, &mut update, &plan(&[1], &[2, 3, 4]))
         .unwrap();
 
     let mut centers: Vec<_> = update.created.iter().map(|list| list.centroid[0]).collect();
@@ -1202,12 +1202,12 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
         let (region, mut update) = build.fill([1, 2].into_iter()).await.unwrap();
         assert!(
             TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap(),)
-                .split(&region, &mut update, &[1, 99], &[])
+                .split(&region, &mut update, &plan(&[1, 99], &[]))
                 .is_err()
         );
         assert!(
             TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap(),)
-                .split(&region, &mut update, &[1], &[99])
+                .split(&region, &mut update, &plan(&[1], &[99]))
                 .is_err()
         );
         assert!(update.created.is_empty());
@@ -1217,7 +1217,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 if removed.is_empty() && appended == &[10_005])
         );
         TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), NonZeroUsize::new(2).unwrap())
-            .split(&region, &mut update, &[1], &[])
+            .split(&region, &mut update, &plan(&[1], &[]))
             .unwrap();
         assert_eq!(update.created.len(), 2);
     }
@@ -1270,7 +1270,7 @@ fn assignment_can_cross_parent_boundaries() {
         NonZeroUsize::new(10).unwrap(),
         NonZeroUsize::new(1).unwrap(),
     )
-    .split(&region, &mut update, &[1, 2], &[])
+    .split(&region, &mut update, &plan(&[1, 2], &[]))
     .unwrap();
     assert!(
         update.created[2..]
@@ -1296,7 +1296,7 @@ fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         TwoMeansSplit::new(ONE, ONE)
-            .split(&region, &mut update, &[1], &[])
+            .split(&region, &mut update, &plan(&[1], &[]))
             .unwrap();
         assert_eq!(update.created.len(), 2);
         assert_eq!(update.created[0].centroid, [value]);
@@ -1340,7 +1340,7 @@ fn two_means_prefers_neighbors_in_supplied_order_on_ties() {
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         TwoMeansSplit::new(ONE, ONE)
-            .split(&region, &mut update, &[1], &neighbors)
+            .split(&region, &mut update, &plan(&[1], &neighbors))
             .unwrap();
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].centroid, [-1.0]);
@@ -1407,7 +1407,7 @@ fn two_means_reuses_splitter_across_regions() {
     let mut full = support::Update::new(&sources, 1, &mut full_memberships, &mut full_created);
     let mut splitter = TwoMeansSplit::new(ONE, ONE);
     splitter
-        .split(&region, &mut full, &parents, &neighbors)
+        .split(&region, &mut full, &plan(&parents, &neighbors))
         .unwrap();
     assert_eq!(
         full.created
@@ -1429,7 +1429,7 @@ fn two_means_reuses_splitter_across_regions() {
         &mut repeated_created,
     );
     splitter
-        .split(&region, &mut repeated, &parents, &neighbors)
+        .split(&region, &mut repeated, &plan(&parents, &neighbors))
         .unwrap();
     for (first, repeated) in full.created.iter().zip(repeated.created.iter()) {
         assert_eq!(first.centroid, repeated.centroid);
@@ -1439,7 +1439,9 @@ fn two_means_reuses_splitter_across_regions() {
     let mut smaller_created = Vec::new();
     let mut smaller =
         support::Update::new(&sources, 1, &mut smaller_memberships, &mut smaller_created);
-    splitter.split(&region, &mut smaller, &[1], &[]).unwrap();
+    splitter
+        .split(&region, &mut smaller, &plan(&[1], &[]))
+        .unwrap();
     assert_eq!(smaller.created.len(), 2);
     assert_eq!(smaller.created[0].members, [0]);
     assert_eq!(smaller.created[1].members, [1]);
@@ -1468,7 +1470,7 @@ fn empty_split_records_no_updates() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let error = TwoMeansSplit::new(ONE, ONE)
-        .split(&region, &mut update, &[], &[])
+        .split(&region, &mut update, &plan(&[], &[]))
         .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<TwoMeansError<u32>>(),
@@ -1588,7 +1590,7 @@ fn two_means_handles_borrowed_batches() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     TwoMeansSplit::new(ONE, ONE)
-        .split(&region, &mut update, &[1], &[2])
+        .split(&region, &mut update, &plan(&[1], &[2]))
         .unwrap();
     assert_eq!(region.reads.get(), 3);
     assert_eq!(created.len(), 2);
@@ -1647,16 +1649,16 @@ fn split_accepts_native_batches_without_matrix_access() {
             &mut self,
             region: &R,
             update: &mut U,
-            parents: &[u32],
-            neighbors: &[u32],
+            plan: &Plan<u32>,
         ) -> ANNResult<()> {
-            assert!(neighbors.is_empty());
-            let view = region.get_list(parents[0]).unwrap();
-            let vectors = region.get_vectors(parents[0]).unwrap();
+            assert!(plan.neighbors().is_empty());
+            let parent = plan.parents()[0];
+            let view = region.get_list(parent).unwrap();
+            let vectors = region.get_vectors(parent).unwrap();
             for (point, member) in vectors.reborrow().iter().zip(view.members) {
                 update.create(&[f32::from(point[0])], std::slice::from_ref(member))?;
             }
-            update.retire(parents[0])
+            update.retire(parent)
         }
     }
 
@@ -1680,7 +1682,9 @@ fn split_accepts_native_batches_without_matrix_access() {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-        splitter.split(&region, &mut update, &[1], &[]).unwrap();
+        splitter
+            .split(&region, &mut update, &plan(&[1], &[]))
+            .unwrap();
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].centroid, [f32::from(offset)]);
         assert_eq!(created[0].members, [0]);
@@ -1722,7 +1726,7 @@ fn two_means_matches_quantization_lloyds() {
             NonZeroUsize::new(iterations).unwrap(),
             NonZeroUsize::new(2).unwrap(),
         )
-        .split(&region, &mut update, &[1, 2], &[])
+        .split(&region, &mut update, &plan(&[1, 2], &[]))
         .unwrap();
         assert_eq!(created.len(), 4);
         for (source, actual) in sources.values().zip(created.chunks_exact(2)) {
@@ -1757,7 +1761,7 @@ fn two_means_reports_insufficient_points_before_writing() {
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 2, &mut memberships, &mut created);
         let error = TwoMeansSplit::new(ONE, NonZeroUsize::new(2).unwrap())
-            .split(&region, &mut update, &[1], &[])
+            .split(&region, &mut update, &plan(&[1], &[]))
             .unwrap_err();
         assert!(matches!(
             error.downcast_ref::<TwoMeansError<u32>>().unwrap(),
@@ -1783,7 +1787,7 @@ fn two_means_missing_vectors_preserves_typed_error_without_updates() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let error = TwoMeansSplit::new(ONE, ONE)
-        .split(&region, &mut update, &[1, 99], &[])
+        .split(&region, &mut update, &plan(&[1, 99], &[]))
         .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<TwoMeansError<u32>>(),
@@ -1819,7 +1823,7 @@ fn two_means_reports_missing_neighbors_before_writing() {
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         let region = Region::new(&sources);
         let error = TwoMeansSplit::new(ONE, ONE)
-            .split(&region, &mut update, &[1], &ids)
+            .split(&region, &mut update, &plan(&[1], &ids))
             .unwrap_err();
         assert!(matches!(
             error.downcast_ref::<TwoMeansError<u32>>(),
@@ -1855,7 +1859,7 @@ fn regional_assignment_prefers_first_when_all_distances_overflow() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     TwoMeansSplit::new(ONE, ONE)
-        .split(&region, &mut update, &[1], &[2])
+        .split(&region, &mut update, &plan(&[1], &[2]))
         .unwrap();
     assert_eq!(created[0].members, [0]);
     assert_eq!(created[1].members, [1]);

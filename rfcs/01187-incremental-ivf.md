@@ -34,8 +34,10 @@ Insertion provisionally appends points and identifies oversized parents. With
 every split parent, then fills the unique union of parents and neighbors once.
 Nearest-list queries may return the queried parent or other split parents;
 these consume query slots, so fewer than `n` retained neighbors may remain.
-Shared neighbors are filled once. Parents and neighbors are ordered sets, and
-filling accepts their chained ID iterator without collecting another vector.
+Shared neighbors are filled once. A split plan lists parents first, then distinct
+neighbors in discovery order, and records each parent's neighborhood. Filling
+borrows the plan's list IDs. The built-in two-means split ignores neighborhoods
+and assigns across the whole region; future splits may restrict movement to them.
 
 Two children are fitted per parent, using only that parent's complete membership.
 All children are fitted before final assignment. Every gathered point is then

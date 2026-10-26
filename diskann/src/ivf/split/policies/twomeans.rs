@@ -14,11 +14,13 @@ use diskann_utils::{
 };
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 
-use super::{Split, utils::Buckets};
 use crate::{
     ANNError, ANNResult,
-    ivf::region::{AsMatRef, Update, View},
-    utils::TWO,
+    ivf::{
+        region::{AsMatRef, Update, View},
+        split::{Plan, Split, plan::Buckets},
+    },
+    utils::{TWO, VectorId},
 };
 
 ////////////
@@ -63,7 +65,7 @@ impl TwoMeansSplit {
         mut children: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()>
     where
-        L: Copy + Debug + Send + Sync + 'static,
+        L: VectorId,
         R: View<I, L>,
         for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
     {
@@ -100,7 +102,7 @@ impl TwoMeansSplit {
 impl<I, L, R> Split<I, L, R> for TwoMeansSplit
 where
     I: Copy,
-    L: Copy + Debug + Send + Sync + 'static,
+    L: VectorId,
     R: View<I, L>,
     for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
 {
@@ -110,9 +112,10 @@ where
         &mut self,
         region: &R,
         update: &mut U,
-        parents: &[L],
-        neighbors: &[L],
+        plan: &Plan<L>,
     ) -> ANNResult<()> {
+        let (parents, neighbors) = (plan.parents(), plan.neighbors());
+
         if parents.is_empty() {
             return Err(TwoMeansError::<L>::EmptyParents.into());
         }
@@ -148,7 +151,7 @@ where
         // Assign: moved points are bucketed by source, keyed by their destination rows.
         let mut moved = Buckets::new();
 
-        for (s, &list) in parents.iter().chain(neighbors).enumerate() {
+        for (s, list) in plan.lists().enumerate() {
             let view = region
                 .get_list(list)
                 .ok_or(TwoMeansError::UnableToRetrieve(list))?;
@@ -161,10 +164,10 @@ where
             let home = s.checked_sub(p);
 
             for (&id, point) in view.members.iter().zip(vectors.reborrow().as_view().rows()) {
-                let destination = nearest(point, centroids.as_view());
+                let dst = nearest(point, centroids.as_view());
 
-                if Some(destination) != home {
-                    moved.push(id, destination);
+                if Some(dst) != home {
+                    moved.push(id, dst);
                 }
             }
 

@@ -12,9 +12,11 @@ use crate::{
     ivf::region::{Update, View},
 };
 
-pub(crate) mod twomeans;
-pub(crate) use twomeans::TwoMeansSplit;
-mod utils;
+pub(crate) mod plan;
+pub(crate) mod policies;
+
+pub(crate) use plan::Plan;
+pub(crate) use policies::TwoMeansSplit;
 
 /// Replace parents and reassign their members together with selected neighbors.
 pub(crate) trait Split<I, L, R>
@@ -23,8 +25,8 @@ where
 {
     type Error: Debug + Send + Sync + Into<ANNError>;
 
-    /// Parents and neighbors must be distinct, disjoint filled sources.
-    /// Other filled sources must not be edited.
+    /// Every list in `plan` must be filled. Other filled sources must not be edited.
+    /// Implementations choose whether to restrict movement to parent neighborhoods.
     ///
     /// # Errors
     ///
@@ -34,7 +36,6 @@ where
         &mut self,
         region: &R,
         update: &mut U,
-        parents: &[L],
-        neighbors: &[L],
+        plan: &Plan<L>,
     ) -> Result<(), Self::Error>;
 }

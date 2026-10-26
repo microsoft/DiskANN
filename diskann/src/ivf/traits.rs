@@ -28,7 +28,8 @@ pub trait HasIds {
 
 pub trait Nearest: Send {
     type Id;
-    /// Select `nprobe` distinct live lists nearest to `id`'s centroid, that pass the filter.
+    /// Select `nprobe` distinct live lists nearest to `id`'s centroid,
+    /// that pass the filter and invoke callback.
     ///
     /// Results are nearest first and may include `id` itself.
     ///
@@ -43,8 +44,8 @@ pub trait Nearest: Send {
         emit: F,
     ) -> impl SendFuture<ANNResult<usize>>
     where
-        P: Fn(&Self::Id) -> bool + Send,
-        F: FnMut(&Self::Id, f32) + Send;
+        P: Fn(Self::Id) -> bool + Send,
+        F: FnMut(Self::Id, f32) + Send;
 }
 
 pub trait BuildAccessor<B>: Send + Sized + HasIds {
@@ -108,15 +109,6 @@ pub trait BuildStrategy<'a, B, C: ExecutionContext>: Send + Sync + HasIds {
 // Search //
 ////////////
 
-pub trait SearchStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
-    /// Query-bound accessor responsible for list selection and scanning.
-    type Accessor: SearchAccessor<T, ListId = Self::ListId, Id = Self::Id>;
-
-    type Error: StandardError;
-
-    fn search_accessor(&'a self, context: &'a C, query: T) -> Result<Self::Accessor, Self::Error>;
-}
-
 /// Candidate collection with independent partial states for partitioned scans.
 pub trait Accumulator<I>: Send + Sized {
     /// Create an empty accumulator with the same selection policy and configuration.
@@ -127,6 +119,15 @@ pub trait Accumulator<I>: Send + Sized {
 
     /// Combine a compatible partial state, such as one created by [`Self::empty_like`].
     fn merge(&mut self, other: Self);
+}
+
+pub trait SearchStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
+    /// Query-bound accessor responsible for list selection and scanning.
+    type Accessor: SearchAccessor<T, ListId = Self::ListId, Id = Self::Id>;
+
+    type Error: StandardError;
+
+    fn search_accessor(&'a self, context: &'a C, query: T) -> Result<Self::Accessor, Self::Error>;
 }
 
 pub trait SearchAccessor<T: Sync>: Send + Sized + HasIds {

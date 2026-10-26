@@ -10,8 +10,9 @@
 //! through [`traits::BuildAccessor`], borrowed inputs through [`region::View`],
 //! and regional writes through [`region::Update`].
 //!
-//! Neighbor selection uses [`traits::Nearest`] before filling the unique
-//! union of parents and retained neighbors. Children are fitted only from parent
+//! Neighbor selection uses [`traits::Nearest`] to build a split plan that records
+//! each parent's neighborhood, then fills the unique union of parents and retained
+//! neighbors. Children are fitted only from parent
 //! points, then all gathered points are reassigned across every child and retained
 //! neighbor centroid. This permits movement between retained neighbors as well.
 //! Parent centroids are not assignment candidates; retained centroids are unchanged.
@@ -40,7 +41,7 @@
 //! recursively split.
 //! Initialization, deletion, and colocation are not implemented.
 
-pub mod build;
+pub mod split;
 pub mod index;
 pub mod region;
 pub mod traits;

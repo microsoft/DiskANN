@@ -77,19 +77,19 @@ impl Coarse<'_> {
     fn select<T, P, F>(&self, query: &[T], nprobe: NonZeroUsize, pred: P, mut emit: F) -> usize
     where
         T: Copy + Into<f32>,
-        P: Fn(&u32) -> bool,
-        F: FnMut(&u32, f32),
+        P: Fn(u32) -> bool,
+        F: FnMut(u32, f32),
     {
         let mut selected: Vec<_> = self
             .stored
             .iter()
-            .filter(|(id, _)| pred(id))
+            .filter(|(id, _)| pred(**id))
             .map(|(&id, list)| (id, squared_distance(query, &list.centroid)))
             .collect();
         selected.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         selected.truncate(nprobe.get());
         for (id, distance) in &selected {
-            emit(id, *distance);
+            emit(*id, *distance);
         }
         selected.len()
     }
@@ -101,7 +101,7 @@ impl Coarse<'_> {
     ) -> impl SendFuture<ANNResult<()>>
     where
         T: Copy + Into<f32> + Sync,
-        F: FnMut(&u32, f32) + Send,
+        F: FnMut(u32, f32) + Send,
     {
         async move {
             if self.fail_route {
@@ -124,8 +124,8 @@ impl Nearest for Coarse<'_> {
         emit: F,
     ) -> impl SendFuture<ANNResult<usize>>
     where
-        P: Fn(&Self::Id) -> bool + Send,
-        F: FnMut(&Self::Id, f32) + Send,
+        P: Fn(Self::Id) -> bool + Send,
+        F: FnMut(Self::Id, f32) + Send,
     {
         async move {
             if self.fail_nearest {
@@ -330,7 +330,7 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
                 {
                     let router = self.nearest();
                     router
-                        .route(vector, ONE, |&list, _| {
+                        .route(vector, ONE, |list, _| {
                             count += 1;
                             routed.entry(list).or_default().push(id);
                         })
@@ -525,7 +525,7 @@ impl<'q, T: Copy + Into<f32> + Send + Sync> SearchAccessor<&'q [T]> for Search<'
                 fail_nearest: false,
             };
             let mut selected = Vec::new();
-            coarse.select(self.query, nprobe, |_| true, |id, _| selected.push(*id));
+            coarse.select(self.query, nprobe, |_| true, |id, _| selected.push(id));
 
             for list in selected {
                 let source = self
@@ -635,4 +635,15 @@ pub(super) fn seeded() -> Store {
 
 pub(super) fn require_send<F: Future + Send>(future: F) -> F {
     future
+}
+
+/// A plan in which every parent selected every neighbor.
+pub(super) fn plan(parents: &[u32], neighbors: &[u32]) -> Plan<u32> {
+    let mut plan = Plan::new(parents.iter().copied());
+    for &parent in parents {
+        for &neighbor in neighbors {
+            plan.link(parent, neighbor);
+        }
+    }
+    plan
 }
