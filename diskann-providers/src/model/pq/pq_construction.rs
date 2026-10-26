@@ -497,20 +497,22 @@ mod pq_test {
     };
 
     use crate::storage::VirtualStorageProvider;
+    #[cfg(not(coverage))]
     use approx::assert_relative_eq;
     use diskann::utils::IntoUsize;
     use diskann_utils::test_data_root;
+    #[cfg(not(coverage))]
     use rand_distr::{Distribution, Uniform};
     use rstest::rstest;
+    #[cfg(not(coverage))]
     use vfs::OverlayFS;
 
     use super::*;
+    #[cfg(not(coverage))]
+    use crate::{model::pq::debug, utils::ParallelIteratorInPool};
     use crate::{
-        model::{
-            FixedChunkPQTable,
-            pq::{METADATA_SIZE, debug},
-        },
-        utils::{ParallelIteratorInPool, create_thread_pool_for_test, read_bin_from},
+        model::{FixedChunkPQTable, pq::METADATA_SIZE},
+        utils::{create_thread_pool_for_test, read_bin_from},
     };
 
     /// Test helper: Gets all instances of a chunk from the training data for all records
