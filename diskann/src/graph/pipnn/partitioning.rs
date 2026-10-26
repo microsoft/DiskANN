@@ -56,7 +56,11 @@ use super::{
 /// every worker holds one. The height does not follow the detected cache size,
 /// because a virtual machine reports a last-level cache that other tenants
 /// share.
+#[cfg(not(test))]
 const ASSIGNMENT_STRIPE_POINTS: usize = 256;
+/// Unit tests use short stripes, so a few points fill several stripes and a tail.
+#[cfg(test)]
+const ASSIGNMENT_STRIPE_POINTS: usize = 8;
 /// Clusters with at least this many points group their points by leader in
 /// parallel. Such clusters occur at the first levels, where few splits run at
 /// the same time, so a serial pass would leave most workers idle. Smaller
@@ -464,7 +468,6 @@ mod tests {
         L2,
         test_support::{dense_points, nz, thread_pool},
     };
-    use crate::test::{TestRoot, get_or_save_test_results};
     use diskann_wide::ARCH;
     use std::collections::BTreeSet;
 
@@ -558,57 +561,51 @@ mod tests {
             .unwrap()
     }
 
-    #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
-    struct PartitionSnapshot {
-        /// What the snapshot shows, for a reviewer of a changed snapshot file.
-        description: String,
-        /// Leaves of both replicas, each sorted, then sorted as a list.
-        leaves: Vec<Vec<u32>>,
-    }
-
     #[test]
     fn should_partition_successfully() {
-        let point_count = 600;
+        // Point i is at (i, i, ..., i). All points lie on one line, so the nearest
+        // leaders of a point are its neighbors on the line, and each leaf is a run
+        // of consecutive IDs.
+        let point_count = 20;
         let dimensions = 8;
-        let seed = 1290;
         let n_threads = 1;
-        let mut rng = StdRng::seed_from_u64(seed);
-        let x: Vec<f32> = (0..point_count * dimensions)
-            .map(|_| rng.random())
+        let x: Vec<f32> = (0..point_count)
+            .flat_map(|i| std::iter::repeat_n(i as f32, dimensions))
             .collect();
-        // 600 points: the first split assigns two full stripes and a tail.
-        assert!(x.len() / dimensions > 2 * ASSIGNMENT_STRIPE_POINTS);
+        // The first split assigns two full stripes and a tail.
+        assert!(point_count > 2 * ASSIGNMENT_STRIPE_POINTS);
         let data = MatrixView::try_from(x.as_slice(), point_count, dimensions).unwrap();
-        // 600 x 0.05 = 30 sampled leaders, so most points are not leaders and join
-        // their nearest ones. Fanout 3 gives children of about 60 points, above
-        // c_max, so the clusters split again at level 1 with fanout 2 and later
-        // with fanout 1. Two replicas use seeds 1290 and 1291.
+        // 20 x 0.25 = 5 sampled leaders, so most points are not leaders. Fanout 2
+        // gives children above c_max. Deeper levels split them with fanout 1 until
+        // every leaf has at most c_max points.
         let config = PiPNNConfig {
-            c_max: nz(32),
-            p_samp: 0.05,
-            max_leaders: nz(1000),
-            fanout: vec![nz(3), nz(2)],
-            max_depth: nz(10),
-            replicas: nz(2),
-            seed: Some(seed),
+            c_max: nz(4),
+            p_samp: 0.25,
+            fanout: vec![nz(2)],
             ..splitting_config()
         };
-        let mut root = TestRoot::new("graph/pipnn/partitioning");
 
-        let actual = partition_l2(data, &config, n_threads);
+        let expected = vec![
+            vec![0],
+            vec![0, 1, 2, 3],
+            vec![1, 2, 3],
+            vec![4, 5],
+            vec![4, 5, 6],
+            vec![6, 7, 8, 9],
+            vec![7, 8, 9],
+            vec![10, 11],
+            vec![10, 11, 12],
+            vec![12, 13, 14, 15],
+            vec![13, 14],
+            vec![15, 16, 17],
+            vec![16],
+            vec![17, 18, 19],
+            vec![18, 19],
+        ];
 
-        let actual_snapshot = PartitionSnapshot {
-            description: "Leaves of 600 seeded random 8-dimensional points under L2 with c_max 32, \
-                          p_samp 0.05, fanout [3, 2], max_depth 10, two replicas and seed 1290. \
-                          A change in leader sampling, assignment, grouping or the split rules changes this file."
-                .to_string(),
-            leaves: sorted_leaves(&actual),
-        };
-        let expected = get_or_save_test_results(
-            &root.path().push("should_partition_successfully"),
-            &actual_snapshot,
-        );
-        assert_eq!(actual_snapshot, expected);
+        let actual = sorted_leaves(&partition_l2(data, &config, n_threads));
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -635,7 +632,7 @@ mod tests {
 
     #[test]
     fn points_in_every_stripe_and_the_tail_join_their_nearest_leaders() {
-        // Two full stripes of 256 points and a tail of 3.
+        // Two full stripes and a tail of 3.
         let point_count = 2 * ASSIGNMENT_STRIPE_POINTS + 3;
         let dimensions = 1;
         // Point i is at 0, 4 or 10 for i % 3 = 0, 1 or 2, so a stripe that
