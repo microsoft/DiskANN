@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+use super::quantizer::{mean_split, scale_range};
 use super::vectors::{DataMutRef, DataRef, MinMaxCompensation};
 use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
@@ -17,13 +18,19 @@ use thiserror::Error;
 ///
 /// A positive `grid_scale` is used to (optionally) tighten or widen the
 /// reconstruction range that the target codes span before re-quantization.
-/// `grid_scale == 1.0` preserves the source reconstruction range exactly
-/// (legacy behavior). `grid_scale < 1.0` narrows the range, dedicating more
-/// resolution to interior values at the cost of clipping the extremes;
+/// For multi-bit targets, `grid_scale == 1.0` preserves the source range,
+/// `grid_scale < 1.0` narrows the range, dedicating more
+/// resolution to interior values at the cost of clipping the extremes, and
 /// `grid_scale > 1.0` widens the range (coarser steps, no clipping).
 ///
+/// One-bit targets match [`super::MinMaxQuantizer`]: values are split at the vector
+/// mean to compute two group averages. `grid_scale` scales the range between
+/// these averages around its midpoint. Codes are chosen by rounding to the
+/// nearest reconstruction level, rather than by comparing with the vector mean.
+/// Empty vectors use the scaled source range instead.
+///
 /// # Notes
-/// - Currently this API only supports the following conversions: 8 -> 4, 8 -> 2, 4 -> 2
+/// - Supported conversions: 8 -> 4, 8 -> 2, 4 -> 2, 8 -> 1, 4 -> 1, 2 -> 1.
 ///
 /// # Example
 ///
@@ -58,8 +65,8 @@ pub struct Recompressor {
 impl Recompressor {
     /// Construct a new `Recompressor` with the given positive `grid_scale`.
     ///
-    /// `grid_scale == 1.0` reproduces the legacy behavior of preserving the
-    /// source reconstruction range exactly.
+    /// `grid_scale == 1.0` preserves the source range for multi-bit targets
+    /// and uses the group-mean range for nonempty one-bit targets.
     pub fn new(grid_scale: Positive<f32>) -> Self {
         Self { grid_scale }
     }
@@ -83,7 +90,7 @@ pub enum RecompressError {
     },
 }
 
-/// Macro to implement `CompressInto<DataRef<'_, N>, DataMutRef<'_, M>>` for M > 1.
+/// Implement a supported conversion using the recompression kernel.
 macro_rules! impl_recompress {
     ($n:literal -> $m:literal) => {
         impl<'a, 'b> CompressInto<DataRef<'a, $n>, DataMutRef<'b, $m>> for Recompressor
@@ -107,12 +114,19 @@ macro_rules! impl_recompress {
 impl_recompress!(8 -> 4);
 impl_recompress!(8 -> 2);
 impl_recompress!(4 -> 2);
+impl_recompress!(8 -> 1);
+impl_recompress!(4 -> 1);
+impl_recompress!(2 -> 1);
 
-////////////////////////////////////
-// Recompression Kernel for M > 1 //
-////////////////////////////////////
+//////////////////////////
+// Recompression Kernel //
+//////////////////////////
 
-/// Recompress N-bit codes to M-bit codes where M > 1.
+/// Recompress N-bit codes to M-bit codes.
+///
+/// Nonempty one-bit targets split the values at their mean and round at the
+/// midpoint, using the same helpers as [`crate::minmax::MinMaxQuantizer`].
+/// Multi-bit targets and empty vectors use the source-range calculation below.
 ///
 /// Recall from the algorithm for minmax described in
 /// [`crate::minmax::MinMaxQuantizer`], the encoding of a vector
@@ -148,14 +162,14 @@ impl_recompress!(4 -> 2);
 #[inline(always)]
 fn recompress_kernel<const N: usize, const M: usize>(
     from: DataRef<'_, N>,
-    mut to: DataMutRef<'_, M>,
+    to: DataMutRef<'_, M>,
     grid_scale: f32,
 ) -> Result<(), RecompressError>
 where
     Unsigned: Representation<N> + Representation<M>,
 {
     const { assert!(N > M, "source bit width must exceed target bits") };
-    const { assert!(M > 1, "target bit width must exceed 1") };
+    const { assert!(M >= 1, "target bit width must be at least 1") };
 
     // Validate dimensions
     let dim = from.len();
@@ -169,60 +183,74 @@ where
     let src_meta = from.meta();
     let src_a = src_meta.a;
     let src_b = src_meta.b;
-
-    let scale_n = bit_scale::<N>();
-    let scale_m = bit_scale::<M>();
-
-    // re-center the source reconstruction range by `grid_scale`.
-    let offset = scale_n * (1.0 - grid_scale) * 0.5;
-    let code_scale = scale_m / (scale_n * grid_scale);
-
-    // new_a / new_b in source-value space.
-    let new_a = src_a / code_scale;
-    let new_b = src_b + src_a * offset;
-
-    // Single pass: encode and compute statistics
     let from_vec = from.vector();
+    let old_codes = (0..dim).map(|i| {
+        // SAFETY: `i < dim == from_vec.len()`.
+        unsafe { from_vec.get_unchecked(i) as f32 }
+    });
+
+    if M == 1 && dim > 0 {
+        // Split the reconstructed values at their mean.
+        let values = old_codes.map(|code| code * src_a + src_b);
+        let (lower, upper) = mean_split(values.clone());
+        let (min, max) = scale_range(lower, upper, grid_scale);
+        // Keep the step above zero when all values are equal.
+        let (new_a, new_b) = ((max - min).max(1e-8), min);
+        let new_codes = values.map(|value| ((value - new_b) / new_a).clamp(0.0, 1.0).round());
+        write_codes(to, new_a, new_b, new_codes);
+    } else {
+        let scale_n = bit_scale::<N>();
+        let scale_m = bit_scale::<M>();
+
+        // re-center the source reconstruction range by `grid_scale`.
+        let offset = scale_n * (1.0 - grid_scale) * 0.5;
+        let code_scale = scale_m / (scale_n * grid_scale);
+        let new_codes = old_codes.map(|code| {
+            let new_code = ((code - offset) * code_scale)
+                .round_ties_even()
+                .clamp(0.0, scale_m) as u8;
+            f32::from(new_code)
+        });
+        write_codes(to, src_a / code_scale, src_b + src_a * offset, new_codes);
+    }
+
+    Ok(())
+}
+
+/// Write `new_codes` to `to` and set the matching metadata.
+#[inline(always)]
+fn write_codes<const M: usize>(
+    mut to: DataMutRef<'_, M>,
+    a: f32,
+    b: f32,
+    new_codes: impl Iterator<Item = f32>,
+) where
+    Unsigned: Representation<M>,
+{
+    let dim = to.vector().len();
     let mut to_vec = to.vector_mut();
 
     let mut code_sum: f32 = 0.0;
     let mut norm_squared: f32 = 0.0;
 
-    for i in 0..dim {
-        // Read source code
-        // SAFETY: we checked that `dim == from.len() == src.len()`
-        let old_code = unsafe { from_vec.get_unchecked(i) };
-        let old_code_f = old_code as f32;
+    for (i, code) in (0..dim).zip(new_codes) {
+        // SAFETY: `i < dim == to_vec.len()`.
+        unsafe { to_vec.set_unchecked(i, code as u8) };
 
-        // new code
-        let new_code = ((old_code_f - offset) * code_scale)
-            .round_ties_even()
-            .clamp(0.0, scale_m) as u8;
-
-        // Write destination code
-        // SAFETY: we checked that `dim == from.len() == src.len()`
-        unsafe { to_vec.set_unchecked(i, new_code) };
-
-        // Accumulate statistics using the actual truncated integer code
-        let new_code_f = new_code as f32;
-        code_sum += new_code_f;
+        code_sum += code;
 
         // Reconstruct value for norm computation
-        let v_m = new_code_f * new_a + new_b;
-
-        norm_squared += v_m * v_m;
+        let value = code * a + b;
+        norm_squared += value * value;
     }
 
-    // Construct metadata
     to.set_meta(MinMaxCompensation {
         dim: dim as u32,
-        b: new_b,
-        a: new_a,
-        n: new_a * code_sum,
+        b,
+        a,
+        n: a * code_sum,
         norm_squared,
     });
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -375,6 +403,177 @@ mod recompress_tests {
     test_recompress_pair!(recompress_8_to_4, 8 -> 4, 0xabc123def456);
     test_recompress_pair!(recompress_8_to_2, 8 -> 2, 0xdef456abc123);
     test_recompress_pair!(recompress_4_to_2, 4 -> 2, 0x456def123abc);
+
+    fn data_with_codes<const N: usize>(codes: &[i64], a: f32, b: f32) -> Data<N>
+    where
+        Unsigned: Representation<N>,
+    {
+        let mut source = Data::<N>::new_boxed(codes.len());
+        source.set_meta(MinMaxCompensation {
+            dim: codes.len() as u32,
+            a,
+            b,
+            ..Default::default()
+        });
+        for (i, &code) in codes.iter().enumerate() {
+            source.vector_mut().set(i, code).unwrap();
+        }
+        source
+    }
+
+    fn check_one_bit<const N: usize>(source: DataRef<'_, N>, grid_scale: f32)
+    where
+        Unsigned: Representation<N>,
+        Recompressor: for<'a, 'b> CompressInto<
+                DataRef<'a, N>,
+                DataMutRef<'b, 1>,
+                Output = (),
+                Error = RecompressError,
+            >,
+    {
+        let dim = source.len();
+        let mut decoded = vec![0.0; dim];
+        source.decompress_into(&mut decoded).unwrap();
+        let scale = Positive::new(grid_scale).unwrap();
+        let quantizer = MinMaxQuantizer::new(
+            Transform::Null(NullTransform::new(NonZeroUsize::new(dim).unwrap())),
+            scale,
+        );
+        let mut expected = Data::<1>::new_boxed(dim);
+        quantizer
+            .compress_into(decoded.as_slice(), expected.reborrow_mut())
+            .unwrap();
+        let mut actual = Data::<1>::new_boxed(dim);
+        Recompressor::new(scale)
+            .compress_into(source, actual.reborrow_mut())
+            .unwrap();
+
+        assert_eq!(actual.meta(), expected.meta());
+        for i in 0..dim {
+            assert_eq!(
+                actual.vector().get(i).unwrap(),
+                expected.vector().get(i).unwrap(),
+                "code mismatch at dimension {i}"
+            );
+        }
+    }
+
+    macro_rules! test_one_bit {
+        ($name:ident, $n:literal) => {
+            mod $name {
+                use super::*;
+
+                #[test]
+                fn matches_quantizer() {
+                    let mut rng = StdRng::seed_from_u64(0x123abc + $n);
+                    let distribution = Uniform::new_inclusive(0i64, (1 << $n) - 1).unwrap();
+                    let dimensions: &[usize] = if cfg!(miri) {
+                        &[1, 7, 8, 9, 17]
+                    } else {
+                        &[1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 256, 384, 769, 896]
+                    };
+                    for &dim in dimensions {
+                        for _ in 0..TRIALS {
+                            let codes: Vec<_> =
+                                distribution.sample_iter(&mut rng).take(dim).collect();
+                            for (a, b) in [(0.25, -3.0), (-0.125, 2.0), (1e-10, -1e-10)] {
+                                let source = data_with_codes::<$n>(&codes, a, b);
+                                for &scale in GRID_SCALES {
+                                    check_one_bit(source.reborrow(), scale);
+                                }
+                            }
+                        }
+                    }
+                    for (codes, a, b) in [
+                        (&[0, 0, 0][..], 0.0, 0.0),
+                        (&[1, 1, 1][..], 0.0, 42.5),
+                        (&[1, 1, 1][..], 0.0, -42.5),
+                        (&[0, 0, 0][..], 1e38, 1.5),
+                        (&[0, 1, 2][..], 1.0, 0.0),
+                        (&[0, 0, 0, 1, 3][..], 1.0, 0.0),
+                    ] {
+                        let source = data_with_codes::<$n>(codes, a, b);
+                        for &scale in GRID_SCALES {
+                            check_one_bit(source.reborrow(), scale);
+                        }
+                    }
+                }
+
+                #[test]
+                fn mean_split_and_midpoint_rounding() {
+                    for (codes, expected_codes, a, n, norm_squared) in [
+                        (&[0, 1, 2][..], &[0, 1, 1][..], 1.5, 3.0, 4.5),
+                        (&[0, 0, 0, 1, 3][..], &[0, 0, 0, 1, 1][..], 2.0, 4.0, 8.0),
+                    ] {
+                        let source = data_with_codes::<$n>(codes, 1.0, 0.0);
+                        let mut destination = Data::<1>::new_boxed(codes.len());
+                        Recompressor::new(Positive::new(1.0).unwrap())
+                            .compress_into(source.reborrow(), destination.reborrow_mut())
+                            .unwrap();
+                        assert_eq!(
+                            destination.meta(),
+                            MinMaxCompensation {
+                                dim: codes.len() as u32,
+                                b: 0.0,
+                                a,
+                                n,
+                                norm_squared,
+                            }
+                        );
+                        for (i, &expected) in expected_codes.iter().enumerate() {
+                            assert_eq!(destination.vector().get(i).unwrap(), expected);
+                        }
+                    }
+                }
+
+                #[test]
+                fn dimension_mismatch_preserves_destination() {
+                    let source = data_with_codes::<$n>(&[0, 1], 1.0, 0.0);
+                    for dim in [0, 1, 3] {
+                        let mut destination = data_with_codes::<1>(&vec![1; dim], 2.0, 7.0);
+                        let original = destination.meta();
+                        assert_eq!(
+                            Recompressor::new(Positive::new(1.0).unwrap())
+                                .compress_into(source.reborrow(), destination.reborrow_mut()),
+                            Err(RecompressError::DimensionMismatch { src: 2, dst: dim })
+                        );
+                        assert_eq!(destination.meta(), original);
+                        for i in 0..dim {
+                            assert_eq!(destination.vector().get(i).unwrap(), 1);
+                        }
+                    }
+                }
+
+                #[test]
+                fn empty_vector_uses_source_range() {
+                    let source = data_with_codes::<$n>(&[], 1.0 / ((1 << $n) - 1) as f32, -0.5);
+                    for (grid_scale, a, b) in
+                        [(1.0, 1.0, -0.5), (0.5, 0.5, -0.25), (2.0, 2.0, -1.0)]
+                    {
+                        let mut destination = data_with_codes::<1>(&[], 7.0, 9.0);
+                        Recompressor::new(Positive::new(grid_scale).unwrap())
+                            .compress_into(source.reborrow(), destination.reborrow_mut())
+                            .unwrap();
+                        assert_eq!(destination.len(), 0);
+                        assert_eq!(
+                            destination.meta(),
+                            MinMaxCompensation {
+                                dim: 0,
+                                a,
+                                b,
+                                n: 0.0,
+                                norm_squared: 0.0,
+                            }
+                        );
+                    }
+                }
+            }
+        };
+    }
+
+    test_one_bit!(one_bit_8_to_1, 8);
+    test_one_bit!(one_bit_4_to_1, 4);
+    test_one_bit!(one_bit_2_to_1, 2);
 
     #[test]
     fn test_dimension_mismatch_error() {
