@@ -16,6 +16,10 @@ use std::{io::Write, num::NonZeroUsize, sync::Arc};
 use diskann_benchmark_core::{self as dbc};
 use diskann_benchmark_runner::{
     self as dbr,
+    report::{
+        tolerance::{FmtSpec, MaxRelativeIncrease},
+        Report,
+    },
     utils::{percentiles, MicroSeconds},
 };
 use diskann_inmem::{self as di};
@@ -55,6 +59,23 @@ pub(in crate::index::inmem2) mod dto {
                 l_build: L_BUILD,
                 alpha: 1.2,
                 num_threads: NUM_THREADS,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(in crate::index::inmem2) struct Tolerance {
+        /// This is the maximum amount of slow-down accepted.
+        pub(super) build_time: MaxRelativeIncrease,
+    }
+
+    impl Tolerance {
+        pub(in crate::index::inmem2) fn example() -> Self {
+            const BUILD_TIME: MaxRelativeIncrease = MaxRelativeIncrease::new(0.05).unwrap();
+
+            Self {
+                build_time: BUILD_TIME,
             }
         }
     }
@@ -325,6 +346,38 @@ impl std::fmt::Display for Stats {
         kv.push("Insert Latencies", &latencies);
 
         write!(f, "{}", kv)
+    }
+}
+
+//-------------//
+// Regresssion //
+//-------------//
+
+#[derive(Debug)]
+pub(in crate::index::inmem2) struct Tolerance {
+    build_time: MaxRelativeIncrease,
+}
+
+impl Tolerance {
+    pub(in crate::index::inmem2) fn from_raw(raw: &dto::Tolerance) -> Self {
+        let dto::Tolerance { build_time } = *raw;
+        Self { build_time }
+    }
+
+    pub(in crate::index::inmem2) fn check(&self, old: &Stats, new: &Stats) -> Report {
+        let Self { build_time } = self;
+        let mut builder = Report::builder();
+        builder.push("vectors", Report::equal(old.inserted, new.inserted));
+        builder.push(
+            "build_time (s)",
+            Report::lower_is_better(
+                build_time,
+                old.total_time.as_seconds(),
+                new.total_time.as_seconds(),
+                FmtSpec::new().with_precision(3),
+            ),
+        );
+        builder.finish()
     }
 }
 
