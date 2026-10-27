@@ -5,14 +5,14 @@
 
 use diskann::graph::search::Knn;
 use diskann_benchmark_core::recall::{RecallMetrics, Rows};
-use diskann_benchmark_runner::utils::fmt::KeyValue;
+use diskann_benchmark_runner::{report::Report, utils::fmt::KeyValue};
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     index::{Counters, Index, KnnSearch},
     support::{
-        check::{CheckMatch, Match, check_all_fields},
+        check::{CheckMatch, check_all_fields},
         datatype::DatasetView,
     },
 };
@@ -95,7 +95,7 @@ impl From<RecallMetrics> for KnnRecall {
 }
 
 impl CheckMatch for KnnRecall {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,
@@ -133,7 +133,7 @@ impl std::fmt::Display for KnnStats {
 }
 
 impl CheckMatch for KnnStats {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,
