@@ -1107,27 +1107,24 @@ mod tests {
         prune: &mut repr::internal::intrusive::Prune<'_, repr::test::TestDistance>,
         ids: &[u32],
     ) {
-        let mut items: HashMap<u32, Option<repr::PruneKey>> =
-            ids.iter().map(|id| (*id, None)).collect();
-
-        let processed = <_ as repr::Prune>::prepare(prune, items.iter_mut()).unwrap();
-        assert_eq!(processed, items.values().filter(|i| i.is_some()).count());
-
-        // Ensure that `prepare` agrees with `points`.
-        for (k, v) in items.iter() {
-            match v {
-                Some(_) => assert!(points.contains_key(k)),
-                None => assert!(!points.contains_key(k)),
-            }
-        }
-
-        fn filter((k, v): (&u32, &Option<repr::PruneKey>)) -> Option<(u32, repr::PruneKey)> {
-            v.map(|v| (*k, v))
-        }
-
         // Ensure that distances agree.
-        for (k0, v0) in items.iter().filter_map(filter) {
-            for (k1, v1) in items.iter().filter_map(filter) {
+        for &k0 in ids.iter() {
+            let v0 = <_ as repr::Prune>::get(prune, k0);
+            if !points.contains_key(&k0) {
+                assert!(v0.is_none(), "Failed for key {}", k0);
+                continue;
+            }
+
+            let v0 = v0.unwrap();
+            for &k1 in ids.iter() {
+                let v1 = <_ as repr::Prune>::get(prune, k1);
+                if !points.contains_key(&k1) {
+                    assert!(v1.is_none(), "Failed for key {}", k1);
+                    continue;
+                }
+
+                let v1 = v1.unwrap();
+
                 // Manually implement `TestDistance`.
                 let expected = points[&k0] + points[&k1];
                 let got = <_ as repr::Prune>::evaluate(prune, v0, v1);
@@ -1262,13 +1259,10 @@ mod tests {
 
         // Prune
         {
-            let mut prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
-            let mut points: HashMap<u32, Option<repr::PruneKey>> =
-                [(internal_query, None), (start_id, None)]
-                    .into_iter()
-                    .collect();
-            prune.prepare(points.iter_mut()).unwrap();
-            let got = prune.evaluate(points[&internal_query].unwrap(), points[&start_id].unwrap());
+            let prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
+            let query = prune.get(internal_query).unwrap();
+            let start = prune.get(start_id).unwrap();
+            let got = prune.evaluate(query, start);
             assert!(
                 approx_eq(expected, got),
                 "{ctx} - expected {expected}, got {got}"

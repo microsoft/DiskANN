@@ -7,7 +7,7 @@
 //!
 //! A simplified interface for [`crate::Provider`] to use for building a graph index.
 
-use std::num::NonZeroU16;
+use std::{num::NonZeroU16, marker::PhantomData, ptr::NonNull};
 
 use diskann::{ANNResult, neighbor::Neighbor};
 use thiserror::Error;
@@ -242,50 +242,16 @@ pub(crate) trait Prune: Send + Sync + std::fmt::Debug {
     /// [`PruneKey`]s and may assume these slots are initialized to `None`.
     ///
     /// Returns the total number of internal IDs that were successfully buffered.
-    fn prepare(
-        &mut self,
-        items: hashbrown::hash_map::IterMut<'_, u32, Option<PruneKey>>,
-    ) -> ANNResult<usize>;
+    fn get(
+        &self,
+        id: u32,
+    ) -> Option<&[u8]>;
 
     /// Compute the distance between the elements referenced by the two [`PruneKey`]s.
     ///
     /// Implementations may assume that `a` and `b` were produced by the most recent call to
     /// [`Self::prepare`] and are allowed to panic if this is violated. This property may
     /// **not** be relied on for `unsafe` code.
-    fn evaluate(&self, a: PruneKey, b: PruneKey) -> f32;
+    fn evaluate(&self, a: &[u8], b: &[u8]) -> f32;
 }
 
-/// A [`Prune`]-local miniature internal ID.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PruneKey(NonZeroU16);
-
-impl PruneKey {
-    const ONE: Self = Self(NonZeroU16::new(1).unwrap());
-
-    /// Return the initial [`PruneKey`] in a sequence.
-    pub(crate) fn counter() -> Self {
-        Self::ONE
-    }
-
-    /// Increment `self` by 1.
-    ///
-    /// Overflows if called approximately 2^16 times.
-    pub(crate) fn increment(self) -> Result<Self, Overflow> {
-        match self.0.checked_add(1) {
-            Some(v) => Ok(Self(v)),
-            None => Err(Overflow),
-        }
-    }
-
-    /// Return the zero-based index represented by this key.
-    pub(crate) fn index(self) -> usize {
-        usize::from(self.0.get()) - 1
-    }
-}
-
-/// Incrementing a [`PruneKey`] overflowed.
-#[derive(Debug, Error)]
-#[error("prune list exceeded u16::MAX")]
-pub(crate) struct Overflow;
-
-diskann::convert_error!(Overflow);

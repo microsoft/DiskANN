@@ -182,17 +182,6 @@ pub(in crate::repr) struct Prune<'a, D> {
     /// The distance computation. Ensure this is only provided with slices of length
     /// `reader.bytes()`.
     distance: D,
-
-    /// Buffered pointers to slices in `reader`. These
-    ///
-    /// * Must come from slices yielded by `reader`.
-    ///
-    /// * Must have a length of exactly `reader.bytes()`.
-    ///
-    /// * Have no lifetime because they need to be outlived `reader`. We only materialize
-    ///   them as slices in internal methods taking `&[mut] self` where we know the reader
-    ///   is valid.
-    buffer: Vec<*const u8>,
 }
 
 impl<'a, D> Prune<'a, D> {
@@ -206,7 +195,6 @@ impl<'a, D> Prune<'a, D> {
         Self {
             reader,
             distance,
-            buffer: Vec::new(),
         }
     }
 
@@ -225,44 +213,11 @@ impl<D> repr::Prune for Prune<'_, D>
 where
     D: RawDistance,
 {
-    fn prepare(
-        &mut self,
-        items: hashbrown::hash_map::IterMut<'_, u32, Option<repr::PruneKey>>,
-    ) -> ANNResult<usize> {
-        let mut counter = repr::PruneKey::counter();
-        self.buffer.clear();
-        self.buffer.reserve(items.len());
-
-        for (id, key) in items {
-            if let Some(v) = self.reader.read(id.into_usize()) {
-                self.buffer.push(v.as_ptr());
-
-                *key = Some(counter);
-
-                // Potential overflow issue - but it's exceedingly unlikely that
-                // someone will provide a prune list exceeding `u16::MAX`.
-                //
-                // In addition, `diskann` limits this bound as well.
-                counter = counter.increment()?;
-            }
-        }
-
-        Ok(counter.index())
+    fn get(&self, id: u32) -> Option<&[u8]> {
+        self.reader.read(id.into_usize())
     }
 
-    fn evaluate(&self, a: repr::PruneKey, b: repr::PruneKey) -> f32 {
-        let len = self.reader.bytes().value();
-
-        // SAFETY: The only way a pointer ends up in `self.buffer` is from `self.prepare`,
-        // where they are obtained from slices returned from `self.reader`.
-        //
-        // Further, `self.reader` must be retained for the lifetime of `self`. Thus, they
-        // point to valid data of length `len` and are protected from concurrent mutation.
-        let a = unsafe { std::slice::from_raw_parts(self.buffer[a.index()], len) };
-
-        // SAFETY: See above.
-        let b = unsafe { std::slice::from_raw_parts(self.buffer[b.index()], len) };
-
+    fn evaluate(&self, a: &[u8], b: &[u8]) -> f32 {
         #[expect(
             clippy::expect_used,
             reason = "diskann currently does not support fallible prune"

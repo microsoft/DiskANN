@@ -427,7 +427,6 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
     prune: Box<dyn repr::Prune + 'a>,
-    keys: hashbrown::HashMap<u32, Option<repr::PruneKey>>,
     neighbors: &'a Neighbors,
     counters: LocalCounters<'a>,
 }
@@ -440,7 +439,6 @@ impl<'a> PruneAccessor<'a> {
     ) -> Self {
         Self {
             prune,
-            keys: hashbrown::HashMap::new(),
             neighbors,
             counters,
         }
@@ -468,18 +466,18 @@ impl<'a> Distance<'a> {
 /// An opaque element-ref for [`PruneAccessor`].
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-pub struct ElementRef(repr::PruneKey);
+pub struct ElementRef<'a>(&'a [u8]);
 
-impl<'a> diskann_utils::Reborrow<'a> for ElementRef {
-    type Target = ElementRef;
+impl<'a> diskann_utils::Reborrow<'a> for ElementRef<'_> {
+    type Target = ElementRef<'a>;
     fn reborrow(&'a self) -> Self {
-        *self
+        Self(self.0)
     }
 }
 
-impl diskann_vector::DistanceFunction<ElementRef, ElementRef, f32> for Distance<'_> {
+impl diskann_vector::DistanceFunction<ElementRef<'_>, ElementRef<'_>, f32> for Distance<'_> {
     #[inline]
-    fn evaluate_similarity(&self, x: ElementRef, y: ElementRef) -> f32 {
+    fn evaluate_similarity(&self, x: ElementRef<'_>, y: ElementRef<'_>) -> f32 {
         self.counters.distance_ref(1);
         self.prune.evaluate(x.0, y.0)
     }
@@ -495,7 +493,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     where
         Self: 'a;
 
-    type ElementRef<'a> = ElementRef;
+    type ElementRef<'a> = ElementRef<'a>;
 
     type View<'a>
         = &'a Self
@@ -513,16 +511,11 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
 
     async fn fill<'a, Itr>(
         &'a mut self,
-        itr: Itr,
+        _itr: Itr,
     ) -> ANNResult<(Self::View<'a>, Self::Distance<'a>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {
-        self.keys.clear();
-        self.keys.extend(itr.map(|i| (i, None)));
-        let count: usize = self.prune.prepare(self.keys.iter_mut())?;
-        self.counters.get_vector(count as u64);
-
         Ok((self, Distance::new(&*self.prune, self.counters.fork())))
     }
 }
@@ -585,14 +578,14 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
 }
 
 impl workingset::View<u32> for &PruneAccessor<'_> {
-    type ElementRef<'a> = ElementRef;
+    type ElementRef<'a> = ElementRef<'a>;
     type Element<'a>
-        = ElementRef
+        = ElementRef<'a>
     where
         Self: 'a;
 
-    fn get(&self, id: u32) -> Option<ElementRef> {
-        self.keys.get(&id)?.map(ElementRef)
+    fn get(&self, id: u32) -> Option<ElementRef<'_>> {
+        self.prune.get(id).map(ElementRef)
     }
 }
 
