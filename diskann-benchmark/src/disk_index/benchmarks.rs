@@ -88,6 +88,7 @@ where
                         DiskIndexLoad {
                             data_type: build.data_type,
                             load_path: build.save_path.clone(),
+                            search_quantization: build.search_quantization,
                         },
                     )
                 }),

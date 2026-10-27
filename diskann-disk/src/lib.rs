@@ -22,4 +22,5 @@ pub use build::{
 pub mod data_model;
 pub mod search;
 pub mod storage;
+pub use storage::quant::SearchQuantization;
 pub mod utils;
