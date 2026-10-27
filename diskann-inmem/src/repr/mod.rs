@@ -7,10 +7,7 @@
 //!
 //! A simplified interface for [`crate::Provider`] to use for building a graph index.
 
-use std::num::NonZeroU16;
-
 use diskann::{ANNResult, neighbor::Neighbor};
-use thiserror::Error;
 
 use crate::{
     counters::LocalCounters,
@@ -225,67 +222,39 @@ pub(crate) trait PostProcess: Send + Sync + std::fmt::Debug {
 
 /// Trait-object-based implementation for [`diskann::graph::glue::PruneAccessor`].
 ///
-/// [`Self::prepare`] assigns a [`PruneKey`] to each retrieved entry, allowing implementations
-/// to buffer data in a representation suitable for pruning. A prune session consists of one
-/// call to [`Self::prepare`] followed by calls to [`Self::evaluate`] using the keys it
-/// produced.
+/// Currently, we return raw slices to the underlying data. Limitations in the prune contract
+/// prevent us from doing any thing fancier.
 ///
-/// [`Self::prepare`] can be called multiple times for a single [`Prune`] object.
-/// Implementations may assume that each call starts a new prune session and do not need to
-/// buffer entries from all calls.
+/// ## Musings
+///
+/// Returning raw slices prevents us from doing something like hybrid pruning for PQ. At
+/// least not without some unpleasantness in `evaluate`. We accept this limitation for now
+/// since the performance of returning a raw slice is too tempting to give up.
+///
+/// A slightly better interface may be to use something like:
+/// ```text
+/// struct ElementRef<'a> {
+///     ptr: NonNull<()>,
+///     _lifetime: PhantomData<&'a ()>,
+/// }
+/// ```
+/// allowing us to store something slightly slimmer. However, because
+/// [`diskann::graph::glue::PruneAccessor::fill`] is a public method and
+/// [`diskann_vector::DistanceFunction`] is a safe trait with a safe method, we cannot
+/// expose these raw pointers soundly as someone in safe code could mix and match pointers.
+///
+/// At least slices have their length tagged. Our internal code does not yet do unsafe things
+/// assuming the lengths of two slices are the same. It would be nice to get there though.
 pub(crate) trait Prune: Send + Sync + std::fmt::Debug {
-    /// Prepare items for pruning.
+    /// The the data associated with `id`.
     ///
-    /// The `items` iterator contains all the internal IDs that need to be pruned as keys.
-    /// Each value in `items` is an output slot that should be populated with a [`PruneKey`]
-    /// if retrieval succeeds. Implementations are responsible for providing unique
-    /// [`PruneKey`]s and may assume these slots are initialized to `None`.
-    ///
-    /// Returns the total number of internal IDs that were successfully buffered.
-    fn prepare(
-        &mut self,
-        items: hashbrown::hash_map::IterMut<'_, u32, Option<PruneKey>>,
-    ) -> ANNResult<usize>;
+    /// Return `None` if `id` is unreadable (including out-of-bounds).
+    fn get(&self, id: u32) -> Option<&[u8]>;
 
-    /// Compute the distance between the elements referenced by the two [`PruneKey`]s.
+    /// Compute the distance between the two raw elements.
     ///
-    /// Implementations may assume that `a` and `b` were produced by the most recent call to
+    /// Implementations may assume that `a` and `b` were produced by a call to
     /// [`Self::prepare`] and are allowed to panic if this is violated. This property may
     /// **not** be relied on for `unsafe` code.
-    fn evaluate(&self, a: PruneKey, b: PruneKey) -> f32;
+    fn evaluate(&self, a: &[u8], b: &[u8]) -> f32;
 }
-
-/// A [`Prune`]-local miniature internal ID.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PruneKey(NonZeroU16);
-
-impl PruneKey {
-    const ONE: Self = Self(NonZeroU16::new(1).unwrap());
-
-    /// Return the initial [`PruneKey`] in a sequence.
-    pub(crate) fn counter() -> Self {
-        Self::ONE
-    }
-
-    /// Increment `self` by 1.
-    ///
-    /// Overflows if called approximately 2^16 times.
-    pub(crate) fn increment(self) -> Result<Self, Overflow> {
-        match self.0.checked_add(1) {
-            Some(v) => Ok(Self(v)),
-            None => Err(Overflow),
-        }
-    }
-
-    /// Return the zero-based index represented by this key.
-    pub(crate) fn index(self) -> usize {
-        usize::from(self.0.get()) - 1
-    }
-}
-
-/// Incrementing a [`PruneKey`] overflowed.
-#[derive(Debug, Error)]
-#[error("prune list exceeded u16::MAX")]
-pub(crate) struct Overflow;
-
-diskann::convert_error!(Overflow);
