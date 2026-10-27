@@ -10,6 +10,7 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+erased-serde = "0.4.11"
 half = { workspace = true }
 indicatif = "0.18.3"
 serde = { workspace = true, features = ["derive"] }
@@ -25,6 +26,7 @@ expect_used = "warn"
 panic = "warn"
 
 [dev-dependencies]
+diskann-utils = { workspace = true, features = ["testing"], default-features = false }
 tempfile.workspace = true
 
 [features]
