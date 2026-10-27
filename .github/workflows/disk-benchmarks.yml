@@ -116,11 +116,13 @@ jobs:
           mkdir -p baseline/target/tmp
           cp -r diskann_rust/target/tmp/${{ matrix.data_dir }} baseline/target/tmp/
 
+      # TODO: After #1232 merges, restore ../diskann_rust/ as the baseline input prefix
+      # so both runs use the same config once main supports the new search_mode schema.
       - name: Run baseline benchmark
         working-directory: baseline
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../diskann_rust/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark
