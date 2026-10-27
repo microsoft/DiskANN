@@ -192,10 +192,7 @@ impl<'a, D> Prune<'a, D> {
     /// [`store::intrusive::Reader::bytes`] will be passed to `distance`. However, unsafe
     /// code may not rely on this.
     pub(in crate::repr) fn new(reader: store::intrusive::Reader<'a>, distance: D) -> Self {
-        Self {
-            reader,
-            distance,
-        }
+        Self { reader, distance }
     }
 
     /// Wrap `self` in a `Box`.

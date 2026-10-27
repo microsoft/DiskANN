@@ -291,7 +291,7 @@ pub(super) fn test_prune(
     for slot_id0 in ids.iter() {
         let v0 = {
             let v = accessor.get(slot_id0.value());
-            if distances.contains_key(&(*slot_id0, *slot_id0)) {
+            if !distances.contains_key(&(*slot_id0, *slot_id0)) {
                 assert!(v.is_none(), "failed on {}", slot_id0);
                 continue;
             }
@@ -301,7 +301,7 @@ pub(super) fn test_prune(
         for slot_id1 in ids.iter() {
             let v1 = {
                 let v = accessor.get(slot_id1.value());
-                if distances.contains_key(&(*slot_id1, *slot_id1)) {
+                if !distances.contains_key(&(*slot_id1, *slot_id1)) {
                     assert!(v.is_none(), "failed on {}", slot_id1);
                     continue;
                 }

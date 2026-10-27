@@ -585,6 +585,7 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
         Self: 'a;
 
     fn get(&self, id: u32) -> Option<ElementRef<'_>> {
+        self.counters.get_vector_ref(1);
         self.prune.get(id).map(ElementRef)
     }
 }
