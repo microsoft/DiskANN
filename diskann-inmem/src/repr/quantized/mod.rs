@@ -207,6 +207,11 @@ pub struct Config {
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
     rerank: Rerank,
+
+    /// This embeds start points within the main data span instead of storing them at the end.
+    ///
+    /// Mainly, this is used to support static builds where the collection of data is fixed.
+    embedded_start_points: Option<crate::num::Range>,
 }
 
 impl Config {
@@ -281,6 +286,7 @@ impl Config {
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
             rerank,
+            embedded_start_points: None,
         })
     }
 
@@ -297,6 +303,21 @@ impl Config {
     /// cache. Passing `None` disables prefetching.
     pub fn prefetch(mut self, lookahead: Option<NonZeroUsize>) -> Self {
         self.lookahead = lookahead;
+        self
+    }
+
+    pub fn embed_start_points(mut self, at: crate::num::Range) -> Self {
+        let (capacity, max_degree, _) = self.layout.destruct();
+        if at.end().into_usize() > capacity.value() {
+            todo!();
+        }
+
+        if at.len() != self.start_points.nrows() {
+            todo!();
+        }
+
+        self.layout = store::Layout::new(capacity, max_degree, 0);
+        self.embedded_start_points = Some(at);
         self
     }
 
@@ -420,6 +441,8 @@ pub struct Quantized {
     store: Store<Cons<Intrusive, Optional<Simple>>>,
     quantizer: inner::Quantizer,
     lookahead: Option<NonZeroUsize>,
+    // TODO: use `crate::num::Range`.
+    start_ids: std::ops::Range<u32>,
     reranker: repr::internal::quantization::Reranker,
 }
 
@@ -454,6 +477,7 @@ impl Quantized {
             store,
             lookahead,
             rerank,
+            embedded_start_points,
         } = config;
 
         let (reranker, rerank_config) = match rerank {
@@ -468,18 +492,20 @@ impl Quantized {
         let slots = cons::Config::new(Intrusive::config(quantizer.bytes()), rerank_config);
 
         let store = Store::new(layout, store, slots)?;
+        let start_ids =
+            embedded_start_points.map_or_else(|| store.frozen(), |embedded| embedded.iter());
+
         let this = Self {
             store,
             quantizer,
             lookahead,
             reranker,
+            start_ids: start_ids.clone(),
         };
 
         // Initialize start points.
         let num_start_points = start_points.nrows();
-        for (i, (slot_index, row)) in
-            std::iter::zip(this.store.frozen(), start_points.rows()).enumerate()
-        {
+        for (i, (slot_index, row)) in std::iter::zip(start_ids, start_points.rows()).enumerate() {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -572,7 +598,7 @@ impl Quantized {
             expand_beam,
             post_process,
             provider,
-            self.store.frozen(),
+            self.start_ids.clone(),
             counters,
         ))
     }
@@ -613,6 +639,38 @@ impl repr::Set<&[f32]> for Quantized {
 
         self.set(v, slot.data())?;
         Ok(Guard::new(slot))
+    }
+}
+
+impl repr::SetAt<&[f32]> for Quantized {
+    type Guard<'a> = Guard<'a>;
+
+    fn set_at(&self, id: u32, v: &[f32]) -> ANNResult<Guard<'_>> {
+        // Easy check to reject invalid vectors before acquiring an epoch guard.
+        let vlen = v.len();
+        let dim = self.dim();
+        if vlen != dim {
+            return Err(ANNError::message(lazy_format!(
+                move,
+                "vector dim {} does not match quantizer dim {}",
+                vlen,
+                dim
+            )));
+        }
+
+        let mut slot = self
+            .store
+            .slot(id)
+            .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
+
+        self.set(v, slot.data())?;
+        Ok(Guard::new(slot))
+    }
+}
+
+impl repr::NeighborSnapshot for Quantized {
+    fn neighbor_snapshot(&mut self) -> crate::neighbors::Snapshot<'_> {
+        self.store.neighbors_mut().snapshot()
     }
 }
 

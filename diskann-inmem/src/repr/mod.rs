@@ -100,6 +100,18 @@ pub trait Set<T>: Representation {
     fn set(&self, element: T) -> ANNResult<Self::Guard<'_>>;
 }
 
+pub trait SetAt<T>: Representation {
+    #[doc(hidden)]
+    type Guard<'a>: Guard;
+
+    #[doc(hidden)]
+    fn set_at(&self, id: u32, element: T) -> ANNResult<Self::Guard<'_>>;
+}
+
+pub trait NeighborSnapshot: Representation {
+    fn neighbor_snapshot(&mut self) -> crate::neighbors::Snapshot<'_>;
+}
+
 /// An insert guard for [`Set`] providing deferred commitment of pending writes.
 ///
 /// Guards provide several services:

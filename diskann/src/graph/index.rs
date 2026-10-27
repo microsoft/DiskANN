@@ -222,6 +222,10 @@ where
         &self.data_provider
     }
 
+    pub fn provider_mut(&mut self) -> &mut DP {
+        &mut self.data_provider
+    }
+
     /// Insert a vector into the index with the given `id` and `vector`.
     pub fn insert<'a, S, T>(
         &'a self,

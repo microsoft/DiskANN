@@ -11,7 +11,7 @@ use diskann::{
 };
 use diskann_utils::{future::AsyncFriendly, lazy_format};
 
-use super::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
+use super::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith};
 use crate::model::{
     configuration::IndexConfiguration,
     graph::provider::async_::{
@@ -40,30 +40,6 @@ where
             .save_with(provider, &(start_id, ctx_prefix.clone()))
             .await?;
 
-        Ok(())
-    }
-}
-
-// This implementation saves only graph and not the vector/quant data.
-impl<U, V, D> SaveWith<(u32, DiskGraphOnly)> for DiskANNIndex<DefaultProvider<U, V, D>>
-where
-    U: AsyncFriendly,
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    DefaultProvider<U, V, D>: SaveWith<(u32, u32, DiskGraphOnly), Error = ANNError>,
-{
-    type Ok = ();
-    type Error = ANNError;
-
-    async fn save_with<P>(&self, provider: &P, ctx_prefix: &(u32, DiskGraphOnly)) -> ANNResult<()>
-    where
-        P: StorageWriteProvider,
-    {
-        let start_id = get_and_validate_single_starting_point(&self.data_provider)?;
-
-        self.data_provider
-            .save_with(provider, &(start_id, ctx_prefix.0, ctx_prefix.1.clone()))
-            .await?;
         Ok(())
     }
 }

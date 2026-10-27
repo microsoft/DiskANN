@@ -5,6 +5,9 @@
 
 use std::num::NonZeroUsize;
 
+use diskann::utils::IntoUsize;
+use thiserror::Error;
+
 /// An unsigned number of bytes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Bytes(usize);
@@ -226,6 +229,69 @@ impl IdLimit {
         self.value() as usize
     }
 }
+
+/// A [`std::ops::Range`] that is guaranteed to be monotonic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Range {
+    start: u32,
+    end: u32,
+}
+
+impl Range {
+    pub fn new(start: u32, end: u32) -> Result<Self, NotMonotonic> {
+        if start > end {
+            Err(NotMonotonic { start, end })
+        } else {
+            Ok(Self { start, end })
+        }
+    }
+
+    pub fn start(&self) -> u32 {
+        self.start
+    }
+
+    pub fn end(&self) -> u32 {
+        self.end
+    }
+
+    pub fn len(&self) -> usize {
+        // Since we assert monotonicity, we don't worry about underflowing.
+        (self.end - self.start).into_usize()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn iter(&self) -> std::ops::Range<u32> {
+        self.start()..self.end()
+    }
+}
+
+impl TryFrom<std::ops::Range<u32>> for Range {
+    type Error = NotMonotonic;
+    fn try_from(range: std::ops::Range<u32>) -> Result<Self, NotMonotonic> {
+        Self::new(range.start, range.end)
+    }
+}
+
+impl IntoIterator for Range {
+    type Item = u32;
+    type IntoIter = std::ops::Range<u32>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("range start {} is greater than end {}", self.start, self.end)]
+pub struct NotMonotonic {
+    start: u32,
+    end: u32,
+}
+
+diskann::convert_error!(NotMonotonic);
 
 //-----------//
 // Test Only //

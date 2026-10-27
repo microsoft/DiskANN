@@ -11,6 +11,7 @@ use std::{
 use crate::data_model::GraphDataType;
 use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{utils::VectorRepr, ANNResult};
+use diskann_inmem as di;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{IndexConfiguration, GRAPH_SLACK_FACTOR, MAX_PQ_TRAINING_SET_SIZE},
@@ -85,7 +86,7 @@ where
 impl<'a, Data, StorageProvider> MergedVamanaIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr,
+    Data::VectorDataType: VectorRepr + di::repr::FullPrecision,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProvider as StorageReadProvider>::Reader: Send,
 {
@@ -667,7 +668,7 @@ pub(crate) mod disk_index_builder_tests {
 
         pub fn build<T>(&self) -> ANNResult<()>
         where
-            T: GraphDataType<VectorIdType = u32>,
+            T: GraphDataType<VectorIdType = u32, VectorDataType: di::repr::FullPrecision>,
             StorageProvider::Reader: std::marker::Send + Read,
         {
             // Create disk index build parameters
