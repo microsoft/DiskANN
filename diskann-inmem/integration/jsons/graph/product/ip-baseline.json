@@ -49,7 +49,7 @@
         "append_neighbors": 128225,
         "distance": 5596404,
         "get_neighbors": 384814,
-        "get_vector": 2467136,
+        "get_vector": 3131891,
         "query_distance": 1545792,
         "set_neighbors": 41655,
         "set_vector": 10000
