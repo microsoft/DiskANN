@@ -9,7 +9,10 @@
 
 use std::{io::Write, marker::PhantomData, sync::Arc};
 
-use diskann_benchmark_runner::{self as dbr};
+use diskann_benchmark_runner::{
+    self as dbr,
+    report::{Finished, Report},
+};
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
@@ -22,15 +25,15 @@ mod scalar;
 mod spherical;
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
-    registry.register(
+    registry.register_regression(
         "inmem2-sphq-static",
         RunBuildAndSearch::<spherical::Spherical>::new(),
     )?;
-    registry.register(
+    registry.register_regression(
         "inmem2-pq-static",
         RunBuildAndSearch::<product::Product>::new(),
     )?;
-    registry.register(
+    registry.register_regression(
         "inmem2-sq-static",
         RunBuildAndSearch::<scalar::Scalar>::new(),
     )?;
@@ -258,6 +261,28 @@ fn run_quantized(
     let search = search.search::<f32, _>(engine.index().clone(), Some(output))?;
 
     Ok(inmem2::benchmark::BuildAndSearchStats { build, search })
+}
+
+impl<Q> dbr::benchmark::Regression for RunBuildAndSearch<Q>
+where
+    Q: Quantizer,
+{
+    type Tolerances = inmem2::benchmark::Tolerance;
+    type Pass = Finished;
+    type Fail = Finished;
+
+    fn check(
+        &self,
+        tolerances: &inmem2::benchmark::Tolerance,
+        _input: &BuildAndSearch<Q>,
+        before: &inmem2::benchmark::BuildAndSearchStats,
+        after: &inmem2::benchmark::BuildAndSearchStats,
+    ) -> anyhow::Result<dbr::benchmark::PassFail<Finished, Finished>> {
+        let mut builder = Report::builder();
+        builder.push("quantization", Report::info(Q::KIND));
+        builder.push("result", tolerances.check(before, after));
+        Ok(builder.finish().pass_fail())
+    }
 }
 
 ///////////

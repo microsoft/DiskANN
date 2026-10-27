@@ -7,6 +7,7 @@ use std::io::Write;
 
 use diskann_benchmark_runner::{
     self as dbr,
+    report::Finished,
     utils::{datatype::AsDataType, fmt::Quote},
 };
 use diskann_inmem::{self as di};
@@ -18,9 +19,10 @@ use crate::{
 };
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
-    registry.register("inmem2-f32", RunBuildAndSearch::<f32>::new())?;
-    registry.register("inmem2-f16", RunBuildAndSearch::<half::f16>::new())?;
-    registry.register("inmem2-u8", RunBuildAndSearch::<u8>::new())?;
+    registry.register_regression("inmem2-f32", RunBuildAndSearch::<f32>::new())?;
+    registry.register_regression("inmem2-f16", RunBuildAndSearch::<half::f16>::new())?;
+    registry.register_regression("inmem2-u8", RunBuildAndSearch::<u8>::new())?;
+
     registry.register("inmem2-f32-stream", RunStream::<f32>::new())?;
     Ok(())
 }
@@ -191,6 +193,25 @@ where
             .search::<T, _>(engine.index().clone(), Some(output))?;
 
         Ok(Self::Output { build, search })
+    }
+}
+
+impl<T> dbr::benchmark::Regression for RunBuildAndSearch<T>
+where
+    T: di::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
+{
+    type Tolerances = inmem2::benchmark::Tolerance;
+    type Pass = Finished;
+    type Fail = Finished;
+
+    fn check(
+        &self,
+        tolerances: &Self::Tolerances,
+        _input: &Self::Input,
+        before: &Self::Output,
+        after: &Self::Output,
+    ) -> anyhow::Result<dbr::benchmark::PassFail<Finished, Finished>> {
+        Ok(tolerances.check(before, after).pass_fail())
     }
 }
 
