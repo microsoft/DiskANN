@@ -251,6 +251,8 @@ pub struct PiPNNConfig {
     /// Larger values make leaves overlap more, so each point gets candidates
     /// from more leaves. The number of leaves and the leaf build time grow with
     /// the product of the values.
+    /// Put larger values first: a large first fanout sends each point to more
+    /// distinct regions of the dataset and gives more distinct candidates.
     pub fanout: Vec<NonZeroUsize>,
     /// Maximum number of split levels. A cluster that is still larger than
     /// `c_max` after `max_depth` splits is cut into equal leaves in point
