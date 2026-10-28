@@ -469,8 +469,7 @@ mod pipnn_tests {
                 "c_max": 17,
                 "p_samp": 0.5,
                 "fanout": [2],
-                "k": 1,
-                "replicas": 1
+                "k": 1
             }
         }))
         .unwrap();

@@ -22,8 +22,7 @@
             "c_max": 64,
             "p_samp": 0.05,
             "fanout": [4, 2],
-            "k": 2,
-            "replicas": 1
+            "k": 2
           }
         },
         "search_phase": {
