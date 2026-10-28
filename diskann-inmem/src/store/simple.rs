@@ -293,7 +293,7 @@ mod tests {
     };
 
     use crate::{
-        num::{Capacity, MaxDegree},
+        num::MaxDegree,
         store::{self, Store},
     };
 
@@ -306,9 +306,8 @@ mod tests {
     ) -> Result<Store<Simple>, store::StoreError> {
         let store = Store::new(
             store::Layout::new(
-                Capacity::new(entries),
+                IdLimit::new((entries + frozen).try_into().unwrap()),
                 MaxDegree::new(0),
-                frozen.try_into().unwrap(),
             ),
             store::Config::__exhaustive(
                 NonZeroUsize::new(10).unwrap(),
@@ -317,8 +316,8 @@ mod tests {
             Config::new(Bytes::new(entry_bytes)),
         )?;
 
-        for (base, id) in store.frozen().enumerate() {
-            let mut slot = store.slot(id).unwrap();
+        for (base, id) in (entries..(entries + frozen)).enumerate() {
+            let mut slot = store.slot(id.try_into().unwrap()).unwrap();
             slot.data().as_mut_slice().fill(base as u8);
             slot.freeze();
         }
@@ -334,9 +333,7 @@ mod tests {
     fn frozen_range_follows_writable_slots() {
         let s = store(4, 8, 2).unwrap();
 
-        // Writable slots are [0, 4); frozen points occupy [4, 6).
-        assert_eq!(s.frozen(), 4..6);
-
+        assert_eq!(s.id_limit().value(), 6);
         let reader = s.guard(|intrusive, guard| intrusive.reader(guard)).unwrap();
         for i in 0..4 {
             assert!(!s.can_read_approximate(i).unwrap());
@@ -438,7 +435,7 @@ mod tests {
         // An untouched writable slot is AVAILABLE, which is a reserved state.
         assert_matches!(s.retire(0), Err(store::RetireError::SlotIsReserved { .. }));
         // A frozen slot is likewise reserved.
-        let frozen = s.frozen().start as usize;
+        let frozen = 4;
         assert_matches!(
             s.retire(frozen),
             Err(store::RetireError::SlotIsReserved { .. })
@@ -493,10 +490,10 @@ mod tests {
             count += 1;
         }
 
-        assert_eq!(count, s.writable().len());
+        assert_eq!(count, entries);
 
         // Now that all slots are claimed - retire all slots.
-        for i in s.writable() {
+        for i in 0..entries {
             s.retire(i.into_usize()).unwrap();
         }
 
@@ -507,6 +504,6 @@ mod tests {
             count += 1;
         }
 
-        assert_eq!(count, s.writable().len());
+        assert_eq!(count, entries);
     }
 }

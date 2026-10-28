@@ -47,7 +47,7 @@ use crate::{
     counters::{Counters, LocalCounters},
     ids::IdMap,
     neighbors::Neighbors,
-    num::{IdLimit, MaxDegree},
+    num::{IdLimit, MaxDegree, Range},
     repr,
 };
 
@@ -292,7 +292,7 @@ pub struct SearchAccessor<'a> {
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
-    start_points: std::ops::Range<u32>,
+    start_points: Range,
     counters: LocalCounters<'a>,
 }
 
@@ -302,7 +302,7 @@ impl<'a> SearchAccessor<'a> {
         expand_beam: Box<dyn repr::ExpandBeam + 'a>,
         post_process: Option<Box<dyn repr::PostProcess + 'a>>,
         provider: &'a (dyn std::any::Any + Send + Sync),
-        start_points: std::ops::Range<u32>,
+        start_points: Range,
         counters: LocalCounters<'a>,
     ) -> Self {
         let id_limit = expand_beam.id_limit();
@@ -338,7 +338,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     fn starting_points(
         &self,
     ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send {
-        std::future::ready(Ok(self.start_points.clone().collect()))
+        std::future::ready(Ok(self.start_points.iter().collect()))
     }
 
     fn start_point_distances<F>(
@@ -349,7 +349,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
         F: FnMut(Self::Id, f32) + Send,
     {
         let work = move || {
-            for p in self.start_points.clone() {
+            for p in self.start_points {
                 match self.expand_beam.evaluate(p)? {
                     Some(distance) => {
                         // Counters are no-ops without `integration-test`.

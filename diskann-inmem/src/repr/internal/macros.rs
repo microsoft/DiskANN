@@ -29,7 +29,7 @@ macro_rules! representation {
             }
 
             fn capacity(&self) -> Capacity {
-                self.store.capacity()
+                self.capacity
             }
         }
     };
