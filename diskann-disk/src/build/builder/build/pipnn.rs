@@ -139,7 +139,6 @@ mod tests {
             fanout: vec![nz(10), nz(3)],
             max_depth: nz(10),
             k: nz(2),
-            replicas: nz(1),
             hash_prune: Some(crate::HashPruneParameters::default()),
         }
     }

@@ -10,8 +10,7 @@
 //! `fanout` nearest leaders. The points of one leader form a child cluster, so
 //! children overlap when `fanout > 1`. A child with at most `c_max` points is a
 //! leaf; a larger child is split again at the next level. `fanout[level]` gives
-//! the fanout of each level, and levels after the schedule use fanout 1. Each
-//! replica repeats the process with a different seed.
+//! the fanout of each level, and levels after the schedule use fanout 1.
 //!
 //! The recursion stops at `max_depth` levels. A cluster that is still larger
 //! than `c_max` at that level is cut into equal leaves in point order, and the
@@ -61,11 +60,6 @@ const ASSIGNMENT_STRIPE_POINTS: usize = 256;
 /// Unit tests use short stripes, so a few points fill several stripes and a tail.
 #[cfg(test)]
 const ASSIGNMENT_STRIPE_POINTS: usize = 8;
-/// Clusters with at least this many points group their points by leader in
-/// parallel. Such clusters occur at the first levels, where few splits run at
-/// the same time, so a serial pass would leave most workers idle. Smaller
-/// clusters group serially, because the parallel pass costs more than it saves.
-const PARALLEL_GROUPING_MIN_POINTS: usize = 100_000;
 
 /// A cluster with more than `c_max` points that waits for its split.
 struct Cluster {
@@ -110,10 +104,13 @@ impl AsPooled<()> for StripeBuffers {
 /// lease, not the pool lock.
 type StripeBufferPool = ObjectPool<StripeBuffers>;
 
-/// Build the leaves of all replicas.
+/// Partition the dataset into leaves.
 ///
 /// A point whose distances to all leaders of a split are not rankable, for
 /// example a NaN vector, joins no child of that split.
+///
+/// The loop ends: each split sends its clusters one level deeper, and a
+/// cluster at `max_depth` becomes leaves.
 pub(super) fn partition<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -125,53 +122,14 @@ where
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
-    let mut leaves = Vec::new();
-    let mut cut_points = 0;
-    let stripe_buffers = StripeBufferPool::new((), 0, None);
-    // Replica `r` uses seed `base + r`. `StdRng::seed_from_u64` gives
-    // independent streams for adjacent seeds.
-    let base_seed = config.seed.unwrap_or_else(rand::random);
-    for replica in 0..config.replicas.get() {
-        let seed = base_seed.wrapping_add(replica as u64);
-        let (mut replica_leaves, replica_cut_points) =
-            partition_replica::<A, M, T>(arch, data, dimensions, config, seed, &stripe_buffers)?;
-        leaves.append(&mut replica_leaves);
-        cut_points += replica_cut_points;
-    }
-    if cut_points > 0 {
-        tracing::warn!(
-            cut_points,
-            "PiPNN cut {cut_points} points into leaves in point order because their clusters \
-             were still larger than c_max at max_depth; these leaves group points arbitrarily \
-             and can lower recall"
-        );
-    }
-    Ok(leaves)
-}
-
-/// Split one replica, one level at a time, until every cluster is a leaf.
-///
-/// The loop ends: each split sends its clusters one level deeper, and a
-/// cluster at `max_depth` becomes leaves.
-fn partition_replica<A, M, T>(
-    arch: A,
-    data: MatrixView<'_, T>,
-    dimensions: usize,
-    config: &PiPNNConfig,
-    seed: u64,
-    stripe_buffers: &StripeBufferPool,
-) -> ANNResult<(Vec<Vec<u32>>, usize)>
-where
-    A: Simd,
-    M: PartitionMetric,
-    T: VectorRepr + Send + Sync,
-{
     let initial_point_ids = (0..data.nrows() as u32).collect();
     let c_max = config.c_max.get();
     if data.nrows() <= c_max {
-        return Ok((vec![initial_point_ids], 0));
+        return Ok(vec![initial_point_ids]);
     }
 
+    let seed = config.seed.unwrap_or_else(rand::random);
+    let stripe_buffers = StripeBufferPool::new((), 0, None);
     let mut leaves = Vec::new();
     let mut cut_points = 0;
     let mut pending = vec![Cluster {
@@ -184,7 +142,7 @@ where
         let splits: ANNResult<Vec<_>> = pending
             .into_par_iter()
             .map(|cluster| {
-                split_cluster::<A, M, T>(arch, data, dimensions, config, cluster, stripe_buffers)
+                split_cluster::<A, M, T>(arch, data, dimensions, config, cluster, &stripe_buffers)
             })
             .collect();
 
@@ -196,7 +154,15 @@ where
         }
         pending = next_level;
     }
-    Ok((leaves, cut_points))
+    if cut_points > 0 {
+        tracing::warn!(
+            cut_points,
+            "PiPNN cut {cut_points} points into leaves in point order because their clusters \
+             were still larger than c_max at max_depth; these leaves group points arbitrarily \
+             and can lower recall"
+        );
+    }
+    Ok(leaves)
 }
 
 /// Split one cluster into leaves and clusters for the next level.
@@ -398,48 +364,9 @@ where
 
 /// Group the points by assigned leader. Unassigned slots join no child.
 ///
-/// Both paths keep the input order of the points inside each child, because the
-/// next split samples its leaders by position.
+/// Each child keeps the input order of its points, because the next split
+/// samples its leaders by position.
 fn group_by_leader(
-    points: &[u32],
-    assignments: MatrixView<'_, u32>,
-    leaders: usize,
-) -> Vec<Vec<u32>> {
-    if points.len() < PARALLEL_GROUPING_MIN_POINTS {
-        return group_by_leader_serial(points, assignments, leaders);
-    }
-
-    let chunk_points = points.len().div_ceil(rayon::current_num_threads());
-    // Group each chunk of points on its own. Indexed collection keeps the chunk
-    // order.
-    let locals: Vec<_> = points
-        .par_chunks(chunk_points)
-        .zip(assignments.par_window_iter(chunk_points))
-        .map(|(points, assignments)| group_by_leader_serial(points, assignments, leaders))
-        .collect();
-
-    let mut sizes = vec![0usize; leaders];
-    for local in &locals {
-        for (size, cluster) in sizes.iter_mut().zip(local) {
-            *size += cluster.len();
-        }
-    }
-
-    // Join the chunk parts of each child in chunk order.
-    sizes
-        .into_par_iter()
-        .enumerate()
-        .map(|(leader, size)| {
-            let mut cluster = Vec::with_capacity(size);
-            for local in &locals {
-                cluster.extend_from_slice(&local[leader]);
-            }
-            cluster
-        })
-        .collect()
-}
-
-fn group_by_leader_serial(
     points: &[u32],
     assignments: MatrixView<'_, u32>,
     leaders: usize,
@@ -466,7 +393,7 @@ mod tests {
     use super::*;
     use crate::graph::pipnn::{
         L2,
-        test_support::{dense_points, nz, thread_pool},
+        test_support::{nz, thread_pool},
     };
     use diskann_wide::ARCH;
     use std::collections::BTreeSet;
@@ -501,7 +428,6 @@ mod tests {
             fanout: vec![nz(2)],
             max_depth: nz(10),
             leaf_k: nz(1),
-            replicas: nz(1),
             seed: Some(1290),
         }
     }
@@ -874,36 +800,5 @@ mod tests {
 
             assert_eq!(sorted_leaves(&actual), [vec![0, 1, 2]], "c_max {c_max}");
         }
-    }
-
-    #[test]
-    fn replicas_use_different_seeds() {
-        // With one seed for every replica, the second replica would repeat the
-        // leaves of the first.
-        let point_count = 33;
-        let dimensions = 17;
-        let seed = 1290;
-        let n_threads = 1;
-        let values = dense_points(point_count, dimensions, seed);
-        let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
-        let config = PiPNNConfig {
-            c_max: nz(8),
-            p_samp: 0.25,
-            fanout: vec![nz(1)],
-            ..splitting_config()
-        };
-        let sorted_leaves_with = |replicas| {
-            let config = PiPNNConfig {
-                replicas: nz(replicas),
-                ..config.clone()
-            };
-            let leaves = partition_l2(data, &config, n_threads);
-            sorted_leaves(&leaves)
-        };
-
-        let one_replica = sorted_leaves_with(1);
-        let two_replicas = sorted_leaves_with(2);
-
-        assert!(two_replicas.iter().any(|leaf| !one_replica.contains(leaf)));
     }
 }

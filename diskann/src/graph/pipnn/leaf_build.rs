@@ -536,7 +536,7 @@ mod tests {
         // x[i] = i² is the one-dimensional vector of point i, so each point's
         // nearest point is an index neighbor.
         let x = [0.0, 1.0, 4.0, 9.0, 16.0];
-        // The leaves overlap, and the last one repeats the first, as a replica does.
+        // The leaves overlap, and the last one repeats the first.
         let leaves = vec![vec![0, 1, 2], vec![1, 2, 3], vec![2, 3, 4], vec![0, 1, 2]];
         let k = 1;
         let n_threads = 1;
