@@ -36,20 +36,23 @@ pub(in crate::index::inmem2) mod dto {
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2) struct Config {
-        pub(super) pruned_degree: usize,
-        pub(super) max_degree: usize,
-        pub(super) l_build: usize,
+        pub(super) pruned_degree: NonZeroUsize,
+        pub(super) max_degree: NonZeroUsize,
+        pub(super) l_build: NonZeroUsize,
         pub(super) alpha: f32,
         pub(super) num_threads: NonZeroUsize,
     }
 
     impl Config {
         pub(in crate::index::inmem2) fn example() -> Self {
+            nz!(PRUNED_DEGREE = 28);
+            nz!(MAX_DEGREE = 32);
+            nz!(L_BUILD = 100);
             nz!(NUM_THREADS = 8);
             Self {
-                pruned_degree: 28,
-                max_degree: 32,
-                l_build: 100,
+                pruned_degree: PRUNED_DEGREE,
+                max_degree: MAX_DEGREE,
+                l_build: L_BUILD,
                 alpha: 1.2,
                 num_threads: NUM_THREADS,
             }
@@ -81,9 +84,9 @@ impl Config {
         } = raw;
 
         let config = diskann::graph::config::Builder::new_with(
-            *pruned_degree,
-            diskann::graph::config::MaxDegree::new(*max_degree),
-            *l_build,
+            pruned_degree.get(),
+            diskann::graph::config::MaxDegree::new(max_degree.get()),
+            l_build.get(),
             metric.into(),
             |b| {
                 b.alpha(*alpha);

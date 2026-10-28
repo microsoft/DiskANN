@@ -8,14 +8,14 @@
 //! This is currently limited to full-precision data due to unfortunate trait interactions
 //! within [`diskann`].
 //!
-//! Suggested workflow is to use [`BigANN`] to load up a whole runbook, including all build
-//! a parameters, groundtruth files, and search parameters.
+//! Suggested workflow is to use [`Streaming`] to load up a whole runbook, including all
+//! build a parameters, groundtruth files, and search parameters.
 //!
-//! [`BigANN::engine`] is use to create an [`Engine`], which is a wrapper around an index
+//! [`Streaming::engine`] is use to create an [`Engine`], which is a wrapper around an index
 //! containing the necessary machinery for build steps, search steps, and deletion steps.
 //!
-//! [`BigANN::runner`] creates a [`Runner`], which actually executes the runbook steps and
-//! aggregates the results. Provide the [`Engine`] to [`Runner::run`] for fun and profit.
+//! [`Streaming::runner`] creates a [`Runner`], which actually executes the runbook steps
+//! and aggregates the results. Provide the [`Engine`] to [`Runner::run`] for fun and profit.
 
 use std::{
     io::Write,
@@ -81,7 +81,7 @@ pub(in crate::index::inmem2) mod dto {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub(in crate::index::inmem2) struct BigANN {
+    pub(in crate::index::inmem2) struct Streaming {
         pub(super) build: inmem2::benchmark::build::dto::Config,
         pub(super) search: inmem2::benchmark::knn::dto::StreamingKnn,
         pub(super) runbook: RunBook,
@@ -89,7 +89,7 @@ pub(in crate::index::inmem2) mod dto {
         pub(super) delete_num_to_replace: NonZeroUsize,
     }
 
-    impl BigANN {
+    impl Streaming {
         pub(in crate::index::inmem2) fn example() -> Self {
             nz!(TO_REPLACE = 3);
 
@@ -153,7 +153,7 @@ impl FromRawWith for RunBook {
             // groundtruth directory everywhere.
             //
             // Running without a checker is generally only done as a sniff test, so we aren't
-            // too worried about enterind an invalid state.
+            // too worried about entering an invalid state.
             struct Copy<'a>(&'a Path);
             impl bigann::FindGroundtruth for Copy<'_> {
                 fn find_groundtruth(&mut self, _stage: usize) -> anyhow::Result<PathBuf> {
@@ -202,7 +202,7 @@ impl std::fmt::Display for RunBook {
 /// * Runbook with data, queries, and groundtruth.
 /// * Inplace Deletion parameters.
 #[derive(Debug)]
-pub(in crate::index::inmem2) struct BigANN {
+pub(in crate::index::inmem2) struct Streaming {
     build: inmem2::benchmark::build::Config,
     search: inmem2::benchmark::knn::Plan,
     runbook: RunBook,
@@ -210,7 +210,7 @@ pub(in crate::index::inmem2) struct BigANN {
     delete_num_to_replace: NonZeroUsize,
 }
 
-impl BigANN {
+impl Streaming {
     /// Return the [`dv::distance::Metric`] used by the underlying dataset.
     pub(in crate::index::inmem2) fn distance(&self) -> dv::distance::Metric {
         self.runbook.data.distance()
@@ -291,13 +291,13 @@ impl BigANN {
     }
 }
 
-impl FromRawWith for BigANN {
-    type Raw = dto::BigANN;
+impl FromRawWith for Streaming {
+    type Raw = dto::Streaming;
     fn from_raw_with(
-        raw: &dto::BigANN,
+        raw: &dto::Streaming,
         checker: Option<&mut dbr::Checker>,
     ) -> anyhow::Result<Self> {
-        let dto::BigANN {
+        let dto::Streaming {
             runbook,
             build,
             search,
@@ -319,7 +319,7 @@ impl FromRawWith for BigANN {
     }
 }
 
-impl std::fmt::Display for BigANN {
+impl std::fmt::Display for Streaming {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             build,
@@ -597,7 +597,7 @@ impl std::fmt::Display for Stats {
 
             for s in steps.iter() {
                 match s {
-                    // Search stats are formatter later.
+                    // Search stats are formatted later.
                     Step::Search(_) => {
                         stage += 1;
                         continue;

@@ -194,13 +194,13 @@ where
     }
 }
 
-//--------//
-// BigANN //
-//--------//
+//-----------//
+// Streaming //
+//-----------//
 
 #[derive(Debug)]
 struct Stream {
-    stream: inmem2::benchmark::bigann::BigANN,
+    stream: inmem2::benchmark::bigann::Streaming,
     // The raw input.
     raw: serde_json::Value,
 }
@@ -212,13 +212,13 @@ impl std::fmt::Display for Stream {
 }
 
 impl dbr::Input for Stream {
-    type Raw = inmem2::benchmark::bigann::dto::BigANN;
+    type Raw = inmem2::benchmark::bigann::dto::Streaming;
     fn tag() -> &'static str {
         "inmem2-fp-bigann-stream"
     }
 
     fn from_raw(raw: Self::Raw, checker: &mut dbr::Checker) -> anyhow::Result<Self> {
-        let stream = inmem2::benchmark::bigann::BigANN::from_raw_with(&raw, Some(checker))?;
+        let stream = inmem2::benchmark::bigann::Streaming::from_raw_with(&raw, Some(checker))?;
         Ok(Self {
             stream,
             raw: serde_json::to_value(raw)?,

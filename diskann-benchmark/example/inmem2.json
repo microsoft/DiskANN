@@ -129,7 +129,7 @@
       }
     },
     {
-      "type": "inmem2-sq-static",
+      "type": "inmem2-scq-static",
       "content": {
         "build": {
           "alpha": 1.2,

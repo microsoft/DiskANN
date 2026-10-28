@@ -46,7 +46,7 @@ pub(in crate::index::inmem2) mod dto {
     #[serde(deny_unknown_fields)]
     pub(super) struct Sweep {
         pub(super) search_n: NonZeroUsize,
-        pub(super) search_l: Vec<usize>,
+        pub(super) search_l: Vec<NonZeroUsize>,
         pub(super) recall_k: NonZeroUsize,
     }
 
@@ -67,6 +67,11 @@ pub(in crate::index::inmem2) mod dto {
             nz!(SEARCH_N = 10);
             nz!(RECALL_K = 10);
 
+            let search_l: Vec<_> = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+                .map(|v| NonZeroUsize::new(v).expect("it's not zero"))
+                .into_iter()
+                .collect();
+
             Self {
                 queries: InputFile::new("path/to/queries"),
                 groundtruth: InputFile::new("path/to/groundtruth"),
@@ -74,7 +79,7 @@ pub(in crate::index::inmem2) mod dto {
                 num_threads: vec![NUM_THREADS],
                 runs: vec![Sweep {
                     search_n: SEARCH_N,
-                    search_l: vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+                    search_l,
                     recall_k: RECALL_K,
                 }],
             }
@@ -96,12 +101,17 @@ pub(in crate::index::inmem2) mod dto {
             nz!(SEARCH_N = 10);
             nz!(RECALL_K = 10);
 
+            let search_l: Vec<_> = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+                .map(|v| NonZeroUsize::new(v).expect("it's not zero"))
+                .into_iter()
+                .collect();
+
             Self {
                 reps: REPS,
                 num_threads: vec![NUM_THREADS],
                 runs: vec![Sweep {
                     search_n: SEARCH_N,
-                    search_l: vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+                    search_l,
                     recall_k: RECALL_K,
                 }],
             }
@@ -170,7 +180,7 @@ impl Plan {
 
                 for &search_l in &run.search_l {
                     anyhow::ensure!(
-                        search_l >= run.search_n.get(),
+                        search_l.get() >= run.search_n.get(),
                         "run {} of {} has search_l ({}) less than search_n ({})",
                         position + 1,
                         runs.len(),
@@ -179,7 +189,7 @@ impl Plan {
                     );
 
                     let parameters = Parameters {
-                        knn: diskann::graph::search::Knn::new(search_l, None)?,
+                        knn: diskann::graph::search::Knn::new(search_l.get(), None)?,
                         num_neighbors: run.search_n,
                         recall_k: run.recall_k,
                     };
@@ -692,15 +702,17 @@ mod tests {
         nz!(FOUR = 4);
         nz!(TEN = 10);
 
+        let to_nz = |x| NonZeroUsize::new(x).unwrap();
+
         let runs = [
             dto::Sweep {
                 search_n: TEN,
-                search_l: vec![20, 30],
+                search_l: vec![to_nz(20), to_nz(30)],
                 recall_k: TWO,
             },
             dto::Sweep {
                 search_n: FOUR,
-                search_l: vec![40],
+                search_l: vec![to_nz(40)],
                 recall_k: FOUR,
             },
         ];

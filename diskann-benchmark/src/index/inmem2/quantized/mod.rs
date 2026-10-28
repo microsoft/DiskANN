@@ -5,7 +5,7 @@
 
 //! [`diskann_inmem`]'s quantizer interface is rather uniform. This structure is reflected
 //! here with common [`dbr::Input`] and [`dbr::Benchmark`] infrastructure with slight
-//! variations to support the different quantizer's training needs.
+//! variations to support the different quantizers' training needs.
 
 use std::{io::Write, marker::PhantomData, sync::Arc};
 
@@ -31,7 +31,7 @@ pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Resul
         RunBuildAndSearch::<product::Product>::new(),
     )?;
     registry.register(
-        "inmem2-sq-static",
+        "inmem2-scq-static",
         RunBuildAndSearch::<scalar::Scalar>::new(),
     )?;
     Ok(())

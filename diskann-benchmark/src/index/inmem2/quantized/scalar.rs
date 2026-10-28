@@ -81,7 +81,7 @@ pub(super) struct Scalar {
 
 impl inmem2::quantized::Quantizer for Scalar {
     const KIND: &'static str = "scalar";
-    const TAG: &'static str = "inmem2-sq-static";
+    const TAG: &'static str = "inmem2-scq-static";
 
     type Raw = dto::Scalar;
 

@@ -47,7 +47,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
                 "Index build and search using `diskann-inmem` (spherical quantization)",
             ),
             (
-                "inmem2-sq-static",
+                "inmem2-scq-static",
                 "Index build and search using `diskann-inmem` (scalar quantization)",
             ),
         ];
