@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::{
     counters::LocalCounters,
-    num::{Bytes, Capacity, IdLimit, MaxDegree},
+    num::{Bytes, Capacity, IdLimit, MaxDegree, Range},
     repr,
     store::{
         self, Store,
@@ -204,7 +204,7 @@ pub struct Config {
     quantizer: inner::Quantizer,
     capacity: Capacity,
     start_points: rowmajor::Owned<f32>,
-    start_point_ids: std::ops::Range<u32>,
+    start_point_ids: Range,
     layout: store::Layout,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
@@ -272,14 +272,10 @@ impl Config {
             return Err(ConfigError::empty_start_points());
         }
 
-        let id_limit: u32 = capacity
-            .value()
-            .checked_add(num_start_points)
-            .and_then(|v| u32::try_from(v).ok())
+        let start_point_ids = Range::start_plus_usize(capacity.value(), num_start_points)
             .ok_or_else(|| ConfigError::too_many_points(capacity, num_start_points))?;
 
-        // The numeric cast is fine because `capacity` is no greater than `id_limit`.
-        let start_point_ids = (capacity.value() as u32)..id_limit;
+        let id_limit = start_point_ids.end();
         Ok(Self {
             quantizer,
             capacity,
@@ -437,7 +433,7 @@ const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 pub struct Quantized {
     store: Store<Cons<Intrusive, Optional<Simple>>>,
     capacity: Capacity,
-    start_point_ids: std::ops::Range<u32>,
+    start_point_ids: Range,
     quantizer: inner::Quantizer,
     lookahead: Option<NonZeroUsize>,
     reranker: repr::internal::quantization::Reranker,
@@ -493,7 +489,7 @@ impl Quantized {
         let this = Self {
             store,
             capacity,
-            start_point_ids: start_point_ids.clone(),
+            start_point_ids,
             quantizer,
             lookahead,
             reranker,
@@ -596,7 +592,7 @@ impl Quantized {
             expand_beam,
             post_process,
             provider,
-            self.start_point_ids.clone(),
+            self.start_point_ids,
             counters,
         ))
     }
@@ -1136,7 +1132,7 @@ mod tests {
         }
 
         // Insert frozen points.
-        for (slot, point) in quantized.start_point_ids.clone().zip(start_points.rows()) {
+        for (slot, point) in std::iter::zip(quantized.start_point_ids, start_points.rows()) {
             reference.insert(LogicalId(slot.into_usize()), SlotId(slot), point);
         }
 

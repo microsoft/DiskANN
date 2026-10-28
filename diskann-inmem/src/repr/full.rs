@@ -57,7 +57,7 @@ use thiserror::Error;
 use crate::{
     counters::LocalCounters,
     epoch,
-    num::{Bytes, Capacity, IdLimit, MaxDegree},
+    num::{Bytes, Capacity, IdLimit, MaxDegree, Range},
     prefetch::{self, Prefetch},
     repr::{self, internal::Calf},
     store::{
@@ -117,7 +117,7 @@ pub struct Config<T> {
     capacity: Capacity,
     metric: Metric,
     start_points: rowmajor::Owned<T>,
-    start_point_ids: std::ops::Range<u32>,
+    start_point_ids: Range,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
 }
@@ -157,17 +157,14 @@ impl<T> Config<T> {
         }
 
         let num_start_points = start_points.nrows();
-        let id_limit: u32 = capacity
-            .value()
-            .checked_add(num_start_points)
-            .and_then(|v| u32::try_from(v).ok())
-            .ok_or(ConfigError::TooManyPoints {
+        let start_point_ids = Range::start_plus_usize(capacity.value(), num_start_points).ok_or(
+            ConfigError::TooManyPoints {
                 capacity,
                 num_start_points,
-            })?;
+            },
+        )?;
 
-        // The numeric cast is fine because `capacity` is no greater than `id_limit`.
-        let start_point_ids = (capacity.value() as u32)..id_limit;
+        let id_limit = start_point_ids.end();
         Ok(Self {
             layout: store::Layout::new(IdLimit::new(id_limit), max_degree),
             capacity,
@@ -260,7 +257,7 @@ where
     T: 'static,
 {
     store: Store<Intrusive>,
-    start_point_ids: std::ops::Range<u32>,
+    start_point_ids: Range,
     capacity: Capacity,
     metric: Metric,
     lookahead: Option<NonZeroUsize>,
@@ -309,7 +306,7 @@ where
         let store = Store::new(layout, store, intrusive)?;
 
         // Initialize start points.
-        for (i, row) in std::iter::zip(start_point_ids.clone(), start_points.rows()) {
+        for (i, row) in std::iter::zip(start_point_ids, start_points.rows()) {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -817,7 +814,7 @@ macro_rules! impl_full_precision {
                     expand_beam,
                     None,
                     provider,
-                    representation.start_point_ids.clone(),
+                    representation.start_point_ids,
                     counters,
                 ))
             }
