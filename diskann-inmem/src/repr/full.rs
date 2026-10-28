@@ -57,7 +57,7 @@ use thiserror::Error;
 use crate::{
     counters::LocalCounters,
     epoch,
-    num::{Bytes, Capacity, IdLimit, MaxDegree},
+    num::{Bytes, Capacity, IdLimit, MaxDegree, Range},
     prefetch::{self, Prefetch},
     repr::{self, internal::Calf},
     store::{
@@ -114,8 +114,10 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
 #[derive(Debug, Clone)]
 pub struct Config<T> {
     layout: store::Layout,
+    capacity: Capacity,
     metric: Metric,
     start_points: rowmajor::Owned<T>,
+    start_point_ids: Range,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
 }
@@ -143,11 +145,6 @@ impl<T> Config<T> {
         metric: Metric,
         start_points: rowmajor::Owned<T>,
     ) -> Result<Self, ConfigError> {
-        let num_start_points: u32 = match start_points.nrows().try_into() {
-            Ok(points) => points,
-            Err(_) => return Err(ConfigError::TooManyStartPoints(start_points.nrows())),
-        };
-
         // Check that we won't overflow when computing the number of bytes required for each
         // data point. This can happen if `start_points` has 0 rows but a large number of
         // columns.
@@ -159,10 +156,21 @@ impl<T> Config<T> {
             return Err(ConfigError::DimTooLarge(start_points.ncols()));
         }
 
+        let num_start_points = start_points.nrows();
+        let start_point_ids = Range::start_plus_usize(capacity.value(), num_start_points).ok_or(
+            ConfigError::TooManyPoints {
+                capacity,
+                num_start_points,
+            },
+        )?;
+
+        let id_limit = start_point_ids.end();
         Ok(Self {
-            layout: store::Layout::new(capacity, max_degree, num_start_points),
+            layout: store::Layout::new(IdLimit::new(id_limit), max_degree),
+            capacity,
             metric,
             start_points,
+            start_point_ids,
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
         })
@@ -202,8 +210,15 @@ impl<T> Config<T> {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ConfigError {
-    #[error("{} start points exceed `u32::MAX`", 0)]
-    TooManyStartPoints(usize),
+    #[error(
+        "requested number of points ({} + {} start points) exceeds u32::MAX",
+        capacity,
+        num_start_points
+    )]
+    TooManyPoints {
+        capacity: Capacity,
+        num_start_points: usize,
+    },
     #[error(
         "the number of bytes to hold {}-dimensional data exceeds `usize::MAX`",
         0
@@ -242,6 +257,8 @@ where
     T: 'static,
 {
     store: Store<Intrusive>,
+    start_point_ids: Range,
+    capacity: Capacity,
     metric: Metric,
     lookahead: Option<NonZeroUsize>,
     _type: PhantomData<T>,
@@ -276,8 +293,10 @@ where
     {
         let Config {
             layout,
+            capacity,
             metric,
             start_points,
+            start_point_ids,
             store,
             lookahead,
         } = config;
@@ -287,7 +306,7 @@ where
         let store = Store::new(layout, store, intrusive)?;
 
         // Initialize start points.
-        for (i, row) in std::iter::zip(store.frozen(), start_points.rows()) {
+        for (i, row) in std::iter::zip(start_point_ids, start_points.rows()) {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -304,6 +323,8 @@ where
 
         Ok(Self {
             store,
+            start_point_ids,
+            capacity,
             metric,
             lookahead,
             _type: PhantomData,
@@ -793,7 +814,7 @@ macro_rules! impl_full_precision {
                     expand_beam,
                     None,
                     provider,
-                    representation.store.frozen(),
+                    representation.start_point_ids,
                     counters,
                 ))
             }
