@@ -204,11 +204,10 @@ crate::convert_error!(PiPNNConfigError);
 /// The DiskANN graph [`Config`] supplies the degree, alpha, and prune kind.
 ///
 /// The default configuration is `c_max = 512`, `p_samp = 0.005`,
-/// `max_leaders = 1000`, `fanout = [10, 3]`, `max_depth = 10`, `leaf_k = 2`
-/// and `replicas = 1`.
+/// `max_leaders = 1000`, `fanout = [10, 3]`, `max_depth = 10` and `leaf_k = 2`.
 /// Each point then joins about 30 leaves, the product of the fanout values.
-/// Larger `c_max`, fanout values, `leaf_k` and `replicas` all give each point
-/// more or nearer candidates, which raises recall and makes the build slower.
+/// Larger `c_max`, fanout values and `leaf_k` all give each point more or
+/// nearer candidates, which raises recall and makes the build slower.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PiPNNConfig {
     /// Maximum number of points in a leaf. A larger leaf holds more of the true
@@ -244,10 +243,6 @@ pub struct PiPNNConfig {
     /// selected pair adds a candidate in both directions. A larger value gives
     /// more candidates and makes final pruning slower.
     pub leaf_k: NonZeroUsize,
-    /// Number of independent partitionings of the dataset. Each replica repeats
-    /// the partition and leaf work with new leaders, which adds candidates and
-    /// build time.
-    pub replicas: NonZeroUsize,
     /// Seed of leader sampling. The same seed gives the same leaves. `None`
     /// draws a seed from the operating system, so each build samples new leaves.
     pub seed: Option<u64>,
@@ -647,7 +642,6 @@ mod construction_tests {
             fanout: vec![nz(2)],
             max_depth: nz(10),
             leaf_k: nz(1),
-            replicas: nz(1),
             seed: Some(1290),
         }
     }
@@ -683,7 +677,6 @@ mod construction_tests {
             fanout: vec![nz(10), nz(3)],
             max_depth: nz(10),
             leaf_k: nz(2),
-            replicas: nz(1),
             seed: Some(1290),
         }
     }
