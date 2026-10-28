@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Concrete regional split policies.
+//! Regional split policies.
 
 pub(crate) mod twomeans;
 pub(crate) use twomeans::TwoMeansSplit;

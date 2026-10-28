@@ -12,13 +12,13 @@
 //!
 //! Neighbor selection uses [`traits::Nearest`] to build a split plan that records
 //! each parent's neighborhood, then fills the unique union of parents and retained
-//! neighbors. Children are fitted only from parent
-//! points, then all gathered points are reassigned across every child and retained
-//! neighbor centroid. This permits movement between retained neighbors as well.
+//! neighbors. Children are fitted only from parent points. Each parent's points
+//! are then reassigned to the nearest of its children and its linked neighbors, and
+//! each neighbor's points stay or move to the nearest child of a parent linked to it.
 //! Parent centroids are not assignment candidates; retained centroids are unchanged.
 //! Regional splitting owns fitting, assignment, and updates as one operation.
 //! The built-in two-means implementation fits each parent independently, then assigns
-//! all gathered points to their nearest destination. Child centroids are owned;
+//! each point within its list's neighborhood. Child centroids are owned;
 //! retained centroids and source vectors remain borrowed.
 //!
 //! Clustering finishes reading its inputs before recording child creation and
@@ -41,9 +41,9 @@
 //! recursively split.
 //! Initialization, deletion, and colocation are not implemented.
 
-pub mod split;
 pub mod index;
 pub mod region;
+pub mod split;
 pub mod traits;
 
 pub use index::{Config, ConfigError, IVFIndex, InsertStats, ReassignCount};

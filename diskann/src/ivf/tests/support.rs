@@ -286,10 +286,6 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
     where
         Self: 'a;
 
-    fn dim(&self) -> NonZeroUsize {
-        NonZeroUsize::new(self.store.dim).unwrap()
-    }
-
     fn nearest(&mut self) -> Self::Nearest<'_> {
         Coarse {
             stored: &self.store.lists,
@@ -304,7 +300,7 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
         mut emit: F,
     ) -> impl SendFuture<ANNResult<NonZeroUsize>>
     where
-        F: FnMut(&Self::ListId, NonZeroUsize) + Send,
+        F: FnMut(Self::ListId, NonZeroUsize) + Send,
     {
         async move {
             let inserted = NonZeroUsize::new(points.len())
@@ -353,7 +349,7 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
                 self.pending.append(list, members)?;
                 let size = NonZeroUsize::new(self.pending.list_size(list, size)?)
                     .ok_or_else(|| ANNError::message("appending must leave a nonempty list"))?;
-                emit(&list, size);
+                emit(list, size);
             }
             Ok(inserted)
         }
@@ -380,8 +376,7 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
                     .get(&list)
                     .ok_or_else(|| ANNError::message(format!("unknown list {list}")))?;
                 let members: Vec<_> = self.pending.members(list, &stored.members)?.collect();
-                let mut vectors =
-                    rowmajor::Owned::from_element(members.len(), self.dim().get(), 0.0);
+                let mut vectors = rowmajor::Owned::from_element(members.len(), self.store.dim, 0.0);
                 for (&id, row) in members.iter().zip(vectors.rows_mut()) {
                     if let Some(vector) = self.staged.get(&id) {
                         for (dst, &src) in row.iter_mut().zip(vector) {
@@ -583,6 +578,7 @@ pub(super) fn index_with_neighbors(
     neighbors: usize,
 ) -> (IVFIndex<DefaultContext>, Strategy) {
     let index = IVFIndex::new(Config {
+        dim: NonZeroUsize::new(store.dim).expect("test stores have a positive dimension"),
         split_threshold: NonZeroUsize::new(threshold).unwrap(),
         reassign_count: NonZeroUsize::new(neighbors)
             .map_or(ReassignCount::None, ReassignCount::Count),

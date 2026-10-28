@@ -5,7 +5,7 @@
 
 //! Two-means splitting and nearest-centroid regional assignment.
 
-use std::{fmt::Debug, num::NonZeroUsize};
+use std::{fmt::Debug, hash::Hash, iter, marker::PhantomData, num::NonZeroUsize, option::Iter};
 
 use diskann_quantization::algorithms::kmeans::lloyds::lloyds;
 use diskann_utils::{
@@ -18,35 +18,34 @@ use crate::{
     ANNError, ANNResult,
     ivf::{
         region::{AsMatRef, Update, View},
-        split::{Plan, Split, plan::Buckets},
+        split::{
+            Plan, Split,
+            plan::{Buckets, Destinations, Dst},
+        },
     },
     utils::{TWO, VectorId},
 };
 
-////////////
-// Errors //
-////////////
-
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum TwoMeansError<L> {
-    #[error("IVF two-means could not retrieve list {0:?} from the region")]
+pub(crate) enum SplitError<L> {
+    #[error("Split could not retrieve list {0:?} from the region")]
     UnableToRetrieve(L),
-    #[error("IVF two-means needs at least two points in list {list:?}, got {actual}")]
+    #[error("Split in list {list:?} does not have enough points, got {actual}")]
     NotEnoughPoints { list: L, actual: usize },
-    #[error("Centroid count overflows for {parents} parents and {neighbors} neighbors")]
-    Overflow { parents: usize, neighbors: usize },
+    #[error("Child centroid count overflows for {0} parents")]
+    Overflow(usize),
     #[error("Parents is empty")]
     EmptyParents,
 }
 
-impl<L: Debug + Send + Sync + 'static> From<TwoMeansError<L>> for ANNError {
+impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
     #[track_caller]
-    fn from(error: TwoMeansError<L>) -> Self {
+    fn from(error: SplitError<L>) -> Self {
         Self::new(error)
     }
 }
 
-/// Two-means per parent followed by nearest-centroid assignment over the region.
+/// Two-means per parent followed by nearest-centroid assignment within each neighborhood.
 pub struct TwoMeansSplit {
     iterations: NonZeroUsize,
     dim: NonZeroUsize,
@@ -57,31 +56,27 @@ impl TwoMeansSplit {
         Self { iterations, dim }
     }
 
-    /// Fit two children per parent into consecutive row pairs of `children`.
-    fn fit<I, L, R>(
-        &self,
-        region: &R,
-        parents: &[L],
-        mut children: rowmajor::Mut<'_, f32>,
-    ) -> ANNResult<()>
+    /// Fit two children per parent, in parent order.
+    fn fit<I, L, R>(&self, region: &R, parents: &[L]) -> ANNResult<rowmajor::Owned<f32>>
     where
         L: VectorId,
         R: View<I, L>,
         for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
     {
-        debug_assert!(parents.len() > 0);
+        let mut children =
+            rowmajor::Owned::try_from_element(parents.len() * TWO.get(), self.dim.get(), 0.0)?;
 
         for (&list, mut dst) in parents.iter().zip(children.window_iter_mut(TWO)) {
             let vectors = region
                 .get_vectors(list)
-                .ok_or(TwoMeansError::UnableToRetrieve(list))?;
+                .ok_or(SplitError::UnableToRetrieve(list))?;
 
             let points = vectors.reborrow().as_view();
 
             dst.as_mut_slice().copy_from_slice(
                 points
                     .subview(0..TWO.get())
-                    .ok_or(TwoMeansError::NotEnoughPoints {
+                    .ok_or(SplitError::NotEnoughPoints {
                         list,
                         actual: points.nrows(),
                     })?
@@ -89,6 +84,37 @@ impl TwoMeansSplit {
             );
 
             let _ = lloyds(points, dst, self.iterations.get());
+        }
+
+        Ok(children)
+    }
+
+    fn assign<'a, I, L, R, F>(
+        &self,
+        list: L,
+        region: &R,
+        itr: &[(Dst, &'a [f32])],
+        default: (Dst, &'a [f32]), // default to map to.
+        mut cb: F,
+    ) -> ANNResult<()>
+    where
+        F: FnMut(I, Dst),
+        R: View<I, L>,
+        L: VectorId,
+        I: Copy,
+        for<'b> R::VectorsRef<'b>: AsMatRef<'b, f32>,
+    {
+        let view = region
+            .get_list(list)
+            .ok_or(SplitError::UnableToRetrieve(list))?;
+
+        let vectors = region
+            .get_vectors(list)
+            .ok_or(SplitError::UnableToRetrieve(list))?;
+
+        for (&id, point) in view.members.iter().zip(vectors.reborrow().as_view().rows()) {
+            let dst = nearest(point, default, itr);
+            cb(id, dst);
         }
 
         Ok(())
@@ -114,99 +140,108 @@ where
         update: &mut U,
         plan: &Plan<L>,
     ) -> ANNResult<()> {
-        let (parents, neighbors) = (plan.parents(), plan.neighbors());
+        let parents = plan.parents();
+        let neighbors = plan.neighbors();
 
         if parents.is_empty() {
-            return Err(TwoMeansError::<L>::EmptyParents.into());
+            return Err(SplitError::<L>::EmptyParents.into());
         }
 
-        let (p, n) = (parents.len(), neighbors.len());
+        let children = self.fit(region, parents)?;
 
-        // Centroids: retained neighbors, then two children per parent.
-        let rows = p
-            .checked_mul(TWO.get())
-            .and_then(|children| children.checked_add(n))
-            .ok_or(TwoMeansError::<L>::Overflow {
-                parents: p,
-                neighbors: n,
+        // Collect the centroids for the neighbors once
+        let centroids_n = plan
+            .neighbors()
+            .iter()
+            .map(|n| {
+                region
+                    .get_list(*n)
+                    .map(|list| list.centroid)
+                    .ok_or(SplitError::UnableToRetrieve(*n))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let k = TWO;
+
+        let child =
+            |p: usize| (k.get() * p..k.get() * (p + 1)).map(|c| (Dst::Child(c), children.row(c)));
+
+        let neighbor = |n: usize| (Dst::Neighbor(n), centroids_n[n]);
+
+        let layout = Destinations {
+            neighbors: plan.neighbors().len(),
+            children: children.nrows(),
+        };
+        let mut moved = Buckets::new(layout);
+
+        // Assign the parents
+        for (source, &list) in parents.iter().enumerate() {
+            let mut itr = plan
+                .parent_links(source)
+                .iter()
+                .map(|&n| neighbor(n))
+                .chain(child(source))
+                .collect::<Vec<_>>();
+
+            let first = itr.pop().ok_or(SplitError::<L>::EmptyParents)?;
+
+            self.assign(list, region, itr.as_slice(), first, |id, dst| {
+                moved.push(id, dst);
             })?;
 
-        let mut centroids = rowmajor::Owned::try_from_element(rows, self.dim.get(), 0.0)?;
+            moved.seal();
 
-        for (&list, row) in neighbors.iter().zip(centroids.rows_mut()) {
-            let view = region
-                .get_list(list)
-                .ok_or(TwoMeansError::UnableToRetrieve(list))?;
-
-            row.copy_from_slice(view.centroid);
+            update.retire(list)?; // Retire parent
         }
 
-        #[expect(clippy::expect_used, reason = "`n <= rows`")]
-        let children = centroids
-            .subview_mut(n..rows)
-            .expect("children follow neighbors");
+        // Assign the neighbors
+        for (source, &list) in neighbors.iter().enumerate() {
+            let itr = plan
+                .neighbor_links(source)
+                .iter()
+                .flat_map(|&p| child(p))
+                .collect::<Vec<_>>();
 
-        self.fit(region, parents, children)?;
+            let mut remove = Vec::new();
 
-        // Assign: moved points are bucketed by source, keyed by their destination rows.
-        let mut moved = Buckets::new();
-
-        for (s, list) in plan.lists().enumerate() {
-            let view = region
-                .get_list(list)
-                .ok_or(TwoMeansError::UnableToRetrieve(list))?;
-
-            let vectors = region
-                .get_vectors(list)
-                .ok_or(TwoMeansError::UnableToRetrieve(list))?;
-
-            // A neighbor's own row is its index among neighbors; parents have none.
-            let home = s.checked_sub(p);
-
-            for (&id, point) in view.members.iter().zip(vectors.reborrow().as_view().rows()) {
-                let dst = nearest(point, centroids.as_view());
-
-                if Some(dst) != home {
+            self.assign(list, region, itr.as_slice(), neighbor(source), |id, dst| {
+                if dst != Dst::Neighbor(source) {
                     moved.push(id, dst);
+                    remove.push(id);
                 }
-            }
+            })?;
 
             moved.seal();
+
+            update.remove_members(list, &remove)?; // remove the members moving out.
         }
 
-        // Update
-        let incoming = moved.regroup(rows);
+        let incoming = moved.group();
 
-        for (i, &list) in neighbors.iter().enumerate() {
-            // SAFETY: `moved` sealed one bucket per parent and neighbor, and `incoming`
-            // has `rows = n + 2p` buckets; `i < n`.
-            unsafe {
-                update.remove_members(list, moved.get_unchecked(p + i))?;
-                update.append_members(list, incoming.get_unchecked(i))?;
-            }
+        for (row, &list) in neighbors.iter().enumerate() {
+            update.append_members(list, incoming.get(Dst::Neighbor(row)))?;
         }
-        for (i, centroid) in centroids.as_view().rows().enumerate().skip(n) {
-            // SAFETY: `i < rows`, the number of buckets in `incoming`.
-            update.create(centroid, unsafe { incoming.get_unchecked(i) })?;
+
+        for (row, child) in children.rows().enumerate() {
+            update.create(child, incoming.get(Dst::Child(row)))?;
         }
-        for &parent in parents {
-            update.retire(parent)?;
-        }
+
         Ok(())
     }
 }
 
-/// Index of the nearest centroid; the earliest row wins ties, including infinite distances.
+/// Return the nearest candidate; the first wins ties, including infinite distances.
+/// `candidates` must be nonempty.
 #[inline(always)]
-fn nearest(point: &[f32], centroids: rowmajor::Ref<'_, f32>) -> usize {
-    let mut best = 0;
-    let mut distance: f32 = SquaredL2::evaluate(point, centroids.row(0));
-    for (index, centroid) in centroids.rows().enumerate().skip(1) {
-        let candidate = SquaredL2::evaluate(point, centroid);
-        if candidate < distance {
-            best = index;
-            distance = candidate;
+fn nearest<'a>(point: &[f32], default: (Dst, &'a [f32]), itr: &[(Dst, &'a [f32])]) -> Dst {
+    let mut dst = default.0;
+    let mut min = SquaredL2::evaluate(point, default.1);
+    for row in itr {
+        let dist: f32 = SquaredL2::evaluate(point, row.1);
+        if dist < min {
+            min = dist;
+            dst = row.0;
         }
     }
-    best
+    dst
 }

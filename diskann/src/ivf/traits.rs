@@ -63,9 +63,6 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
     where
         Self: 'a;
 
-    /// Positive dimension of all canonical points and centroids.
-    fn dim(&self) -> NonZeroUsize;
-
     fn nearest(&mut self) -> Self::Nearest<'_>;
 
     /// Stage points and append their internal IDs to exactly one routed list each.
@@ -75,7 +72,7 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
     /// Staged points and memberships remain unpublished until [`Self::finish`].
     fn route<F>(&mut self, points: B, emit: F) -> impl SendFuture<ANNResult<NonZeroUsize>>
     where
-        F: FnMut(&Self::ListId, NonZeroUsize) + Send;
+        F: FnMut(Self::ListId, NonZeroUsize) + Send;
 
     /// Make requested list's members, data and centroids available
     /// for split and assignment, and register updates to the region.

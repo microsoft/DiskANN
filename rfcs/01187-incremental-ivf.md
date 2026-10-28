@@ -35,18 +35,19 @@ every split parent, then fills the unique union of parents and neighbors once.
 Nearest-list queries may return the queried parent or other split parents;
 these consume query slots, so fewer than `n` retained neighbors may remain.
 Shared neighbors are filled once. A split plan lists parents first, then distinct
-neighbors in discovery order, and records each parent's neighborhood. Filling
-borrows the plan's list IDs. The built-in two-means split ignores neighborhoods
-and assigns across the whole region; future splits may restrict movement to them.
+neighbors in discovery order, and links each parent with the neighbors selected for
+it. Filling borrows the plan's list IDs, and the built-in two-means split restricts
+movement to these links.
 
 Two children are fitted per parent, using only that parent's complete membership.
-All children are fitted before final assignment. Every gathered point is then
-assigned across all new children and retained neighbor centroids; parent
-centroids are not candidates. Retained lists keep their identities and centroids
-while receiving only membership removals and appends for points that move.
-Unchanged members require no writes. This full regional policy
-permits parent-to-neighbor, neighbor-to-child, cross-parent, and neighbor-to-neighbor
-movement. It is broader than the superseded per-parent candidate policy below.
+All children are fitted before final assignment. Each parent's points are then
+assigned to the nearest of its two children and its linked neighbors. Each
+neighbor's points stay, or move to the nearest child of a parent linked to it;
+parent centroids are not candidates. Retained lists keep their identities and
+centroids while receiving only membership removals and appends for points that move.
+Unchanged members require no writes. This local policy permits parent-to-neighbor
+and neighbor-to-child movement, but not neighbor-to-neighbor or direct cross-parent
+movement; a shared neighbor's points may move to children of any parent linked to it.
 The algorithm computes child centroids, initial memberships, and retained-list
 deltas before writing child creation, retained edits, and parent retirement through
 the update object.
@@ -89,20 +90,24 @@ rows and delegates to quantization's Lloyd routine, which
 builds internal transposed scratch and resets empty centers to zero. Its
 norm-based distance arithmetic does not preserve support for extreme finite
 coordinates whose squared norms overflow.
-`Split` is the complete numerical-policy boundary. The built-in `TwoMeansSplitter`
-implementation allocates one centroid matrix with two rows per parent up front,
-fits each parent into its mutable row window, then assigns
-the union of parents and neighbors to the nearest new or retained centroid.
-Equal-distance assignments prefer retained neighbors in supplied order, then
-children in parent and centroid order.
-Retained centroid coordinates are borrowed, not copied. Private helpers perform
-fitting and assignment; no intermediate buffer protocol or independent stage
-traits are required. After computation succeeds, the operation creates children,
-replaces neighbor memberships, and retires the explicit parents.
+`Split` is the complete numerical-policy boundary. The built-in `TwoMeansSplit`
+implementation allocates one child-centroid matrix and fits each parent into its
+two-row mutable window. A shared reassignment routine accepts fitted rows and a
+nonzero child count per parent, so other fixed-k fitters can reuse neighborhood
+assignment and membership updates without implementing another protocol.
+Reassignment borrows both retained and child centroids through a flat table of
+slice references, then assigns each point to the nearest centroid of its own or
+a linked list.
+Equal-distance assignments prefer earlier rows: retained neighbors in plan order,
+then children in parent and centroid order, so a neighbor's own centroid wins ties.
+Centroid coordinates are not copied during reassignment. No intermediate buffer
+protocol or independent stage traits are required. After computation succeeds,
+the operation records retained-list membership deltas, creates children, and
+retires the explicit parents.
 The index currently selects this implementation directly. Other split strategies
 may use different vector representations or combine fitting and assignment
-differently. Restricted neighbor policies still require caller-supplied
-parent-neighbor relationships, which the index does not yet preserve.
+differently. Restricted neighbor policies use the caller-supplied
+parent-neighbor relationships preserved in the split plan.
 Alternative geometries must keep fitting, assignment, and provider routing
 compatible.
 

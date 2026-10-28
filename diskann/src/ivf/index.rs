@@ -16,8 +16,8 @@ use crate::{
     error::IntoANNResult,
     graph::SearchOutputBuffer,
     ivf::{
-        split::{Plan, Split, TwoMeansSplit},
         region::AsMatRef,
+        split::{Plan, Split, TwoMeansSplit},
         traits::BuildStrategy,
     },
     neighbor::NeighborPriorityQueue,
@@ -33,6 +33,8 @@ pub enum ReassignCount {
 /// Parameters for incremental two-means splitting.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
+    /// Dimension of every canonical point and centroid supplied by the provider.
+    pub dim: NonZeroUsize,
     /// Split a touched list when its pending membership exceeds this size.
     pub split_threshold: NonZeroUsize,
     /// Nearest-list query count per split parent, before filtering split parents.
@@ -90,12 +92,10 @@ impl<C: ExecutionContext> IVFIndex<C> {
         async move {
             let mut accessor = strategy.build_accessor(context).into_ann_result()?;
 
-            let dim = accessor.dim();
-
             let mut parents = BTreeSet::new();
 
             let inserted = accessor
-                .route(points, |&list, size| {
+                .route(points, |list, size| {
                     if size.get() > config.split_threshold.get() {
                         parents.insert(list);
                     }
@@ -120,9 +120,15 @@ impl<C: ExecutionContext> IVFIndex<C> {
                     }
                 }
 
-                let (region, mut update) = accessor.fill(plan.lists()).await?;
+                let iter = plan
+                    .parents()
+                    .iter()
+                    .chain(plan.neighbors().iter())
+                    .copied();
 
-                TwoMeansSplit::new(config.split_iterations, dim).split(
+                let (region, mut update) = accessor.fill(iter).await?;
+
+                TwoMeansSplit::new(config.split_iterations, config.dim).split(
                     &region,
                     &mut update,
                     &plan,

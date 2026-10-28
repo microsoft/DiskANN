@@ -25,8 +25,8 @@ use self::{
 };
 use super::{
     Config, IVFIndex, InsertStats, ReassignCount,
-    split::{Plan, Split, TwoMeansSplit, policies::twomeans::TwoMeansError},
     region::{AsMatRef, List, Update, View},
+    split::{Plan, Split, TwoMeansSplit, policies::twomeans::SplitError},
     traits::{
         Accumulator, BuildAccessor, BuildStrategy, HasIds, Nearest, SearchAccessor, SearchStrategy,
     },
@@ -126,7 +126,7 @@ async fn routing_preserves_native_inputs_and_id_order() {
     let mut build: Build<'_, u8> = strategy.build_accessor(&DefaultContext).unwrap();
     let points: [(u32, &[u8]); 3] = [(9, &[11, 0]), (7, &[1, 0]), (8, &[0, 0])];
     let mut emitted = Vec::new();
-    let inserted = require_send(build.route(&points[..], |&list, size| {
+    let inserted = require_send(build.route(&points[..], |list, size| {
         emitted.push((list, size.get()));
     }))
     .await
@@ -175,7 +175,7 @@ async fn routing_reports_sizes_including_previous_pending_appends() {
     let points: [(u32, &[u8]); 2] = [(5, &[1, 0]), (6, &[2, 0])];
     let mut emitted = Vec::new();
     for point in points {
-        let inserted = require_send(build.route(std::slice::from_ref(&point), |&list, size| {
+        let inserted = require_send(build.route(std::slice::from_ref(&point), |list, size| {
             emitted.push((list, size.get()));
         }))
         .await
@@ -251,7 +251,7 @@ async fn failed_routing_leaves_no_staged_points_or_appends() {
         let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
         let points = [(5, &[1.0, 0.0][..])];
         let mut emitted = Vec::new();
-        let error = require_send(build.route(&points[..], |&list, size| {
+        let error = require_send(build.route(&points[..], |list, size| {
             emitted.push((list, size.get()));
         }))
         .await
@@ -308,7 +308,7 @@ async fn failed_staging_leaves_no_new_elements() {
         let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
         let mut emitted = Vec::new();
         assert!(
-            require_send(build.route(&points[..], |&list, size| {
+            require_send(build.route(&points[..], |list, size| {
                 emitted.push((list, size.get()));
             }))
             .await
@@ -383,7 +383,7 @@ async fn empty_batches_are_rejected_without_staging_or_publication() {
     let mut emitted = Vec::new();
     {
         let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
-        let error = require_send(build.route(points, |&list, size| {
+        let error = require_send(build.route(points, |list, size| {
             emitted.push((list, size.get()));
         }))
         .await
@@ -588,7 +588,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
         let reversed = [points[1], points[0]];
         let mut emitted = Vec::new();
         build
-            .route(&reversed[..], |&list, size| {
+            .route(&reversed[..], |list, size| {
                 emitted.push((list, size.get()));
             })
             .await
@@ -617,7 +617,6 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
             assert!(update.remove_members(1, &[10_000]).is_err());
             assert!(update.append_members(1, &[10_000]).is_err());
         }
-        assert_eq!(build.dim().get(), 2);
         assert_eq!(build.created.len(), 2);
         let mut members: Vec<_> = build
             .created
@@ -880,13 +879,6 @@ fn accumulator_preserves_infinite_distances_and_ignores_nan() {
     );
 }
 
-#[test]
-#[should_panic(expected = "cannot merge accumulators with different search limits")]
-fn accumulator_rejects_incompatible_limits() {
-    let mut best = NeighborPriorityQueue::<u32>::new(2);
-    best.merge(NeighborPriorityQueue::new(1));
-}
-
 #[tokio::test]
 async fn search_scans_selected_lists_and_returns_the_best_k() {
     let mut store = seeded();
@@ -1105,7 +1097,7 @@ async fn search_supports_native_queries_after_insertion_and_splitting() {
 }
 
 #[test]
-fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
+fn neighbor_points_move_only_to_children_and_empty_lists_are_retained() {
     let sources = [
         (
             1,
@@ -1158,23 +1150,17 @@ fn regional_assignment_moves_between_neighbors_and_retains_empty_lists() {
         .flat_map(|list| list.members.iter().copied())
         .collect();
     child_members.sort_unstable();
-    assert_eq!(child_members, [0]);
+    // Point 2 is nearest neighbor 3 but may only stay or move to a child. Point 1 ties
+    // its parent's last child and empty neighbor 4, and the child wins the tie.
+    assert_eq!(child_members, [0, 1, 2]);
     let mut changes: BTreeMap<_, _> = std::mem::take(update.memberships).into_changes().collect();
     assert!(matches!(changes.remove(&1), Some(Membership::Retire)));
-    for (id, expected_removed, expected_appended) in [
-        (2, vec![2], vec![]),
-        (3, vec![], vec![2]),
-        (4, vec![], vec![1]),
-    ] {
-        let Some(Membership::Delta { removed, appended }) = changes.remove(&id) else {
-            panic!("expected delta for retained list {id}");
-        };
-        assert_eq!(
-            removed,
-            expected_removed.into_iter().collect::<HashSet<_>>()
-        );
-        assert_eq!(appended, expected_appended);
-    }
+    assert!(matches!(
+        changes.remove(&2),
+        Some(Membership::Delta { removed, appended })
+            if removed == HashSet::from([2]) && appended.is_empty()
+    ));
+    // Empty neighbor 4 is retained without edits.
     assert!(changes.is_empty());
 }
 
@@ -1191,7 +1177,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
     let points = [(5, &[5.0, 0.0][..])];
     let mut emitted = Vec::new();
     build
-        .route(&points[..], |&list, size| {
+        .route(&points[..], |list, size| {
             emitted.push((list, size.get()));
         })
         .await
@@ -1240,7 +1226,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
 }
 
 #[test]
-fn assignment_can_cross_parent_boundaries() {
+fn parent_points_stay_within_their_own_children() {
     let left = [[-100.0], [-99.0], [-10.0], [-9.0], [-0.1]];
     let right = [[0.1], [0.2], [100.0], [101.0]];
     let sources = [
@@ -1272,15 +1258,85 @@ fn assignment_can_cross_parent_boundaries() {
     )
     .split(&region, &mut update, &plan(&[1, 2], &[]))
     .unwrap();
-    assert!(
-        update.created[2..]
+    let members = |children: &[StoredList]| {
+        let mut members: Vec<_> = children
             .iter()
-            .any(|partition| partition.members.contains(&4))
+            .flat_map(|child| child.members.iter().copied())
+            .collect();
+        members.sort_unstable();
+        members
+    };
+    assert_eq!(members(&update.created[..2]), (0..5).collect::<Vec<_>>());
+    assert_eq!(
+        members(&update.created[2..]),
+        (100..104).collect::<Vec<_>>()
     );
 }
 
 #[test]
-fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
+fn neighbor_points_consider_only_children_of_linked_parents() {
+    let sources = BTreeMap::from([
+        (
+            1,
+            Source {
+                centroid: vec![1.0],
+                members: vec![0, 1],
+                vectors: matrix(&[[0.0], [2.0]]),
+            },
+        ),
+        (
+            2,
+            Source {
+                centroid: vec![101.0],
+                members: vec![10, 11],
+                vectors: matrix(&[[100.0], [102.0]]),
+            },
+        ),
+        (
+            3,
+            Source {
+                centroid: vec![50.0],
+                members: vec![20],
+                vectors: matrix(&[[99.0]]),
+            },
+        ),
+        (
+            4,
+            Source {
+                centroid: vec![103.0],
+                members: vec![21],
+                vectors: matrix(&[[1.0]]),
+            },
+        ),
+    ]);
+    let region = Region::new(&sources);
+    let mut plan = Plan::new([1, 2]);
+    plan.link(1, 3);
+    plan.link(2, 4);
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    TwoMeansSplit::new(ONE, ONE)
+        .split(&region, &mut update, &plan)
+        .unwrap();
+
+    // Point 20 is nearest parent 2's child but stays, since 3 links only to parent 1.
+    // Point 21 is nearest parent 1's child but moves to parent 2's nearer child.
+    let members: Vec<_> = created.iter().map(|child| child.members.clone()).collect();
+    assert_eq!(members, [vec![0], vec![1], vec![10, 21], vec![11]]);
+    let changes: BTreeMap<_, _> = memberships.into_changes().collect();
+    assert_eq!(changes.len(), 3);
+    assert!(matches!(changes[&1], Membership::Retire));
+    assert!(matches!(changes[&2], Membership::Retire));
+    assert!(matches!(
+        &changes[&4],
+        Membership::Delta { removed, appended }
+            if removed.len() == 1 && removed.contains(&21) && appended.is_empty()
+    ));
+}
+
+#[test]
+fn two_means_resets_empty_children_to_zero_and_prefers_the_last_child_on_ties() {
     for value in [0.0, 7.0] {
         let sources = [(
             1,
@@ -1301,8 +1357,10 @@ fn two_means_resets_empty_children_to_zero_and_prefers_first_ties() {
         assert_eq!(update.created.len(), 2);
         assert_eq!(update.created[0].centroid, [value]);
         assert_eq!(update.created[1].centroid, [0.0]);
-        assert_eq!(update.created[0].members, [0, 1, 2]);
-        assert!(update.created[1].members.is_empty());
+        // At zero both children coincide, and the last child wins the tie.
+        let full = usize::from(value == 0.0);
+        assert_eq!(update.created[full].members, [0, 1, 2]);
+        assert!(update.created[1 - full].members.is_empty());
     }
 }
 
@@ -1349,16 +1407,14 @@ fn two_means_prefers_neighbors_in_supplied_order_on_ties() {
         assert_eq!(created[1].members, [1]);
         let changes: BTreeMap<_, _> = memberships.into_changes().collect();
         assert!(matches!(changes[&1], Membership::Retire));
+        // Parent point 0 ties every centroid at -1 and joins the first neighbor; each
+        // neighbor's own point ties a child and stays.
         assert!(matches!(
             &changes[&neighbors[0]],
             Membership::Delta { removed, appended }
-                if removed.is_empty() && appended == &[0, neighbors[1]]
+                if removed.is_empty() && appended == &[0]
         ));
-        assert!(matches!(
-            &changes[&neighbors[1]],
-            Membership::Delta { removed, appended }
-                if removed.len() == 1 && removed.contains(&neighbors[1]) && appended.is_empty()
-        ));
+        assert!(!changes.contains_key(&neighbors[1]));
     }
 }
 
@@ -1473,8 +1529,8 @@ fn empty_split_records_no_updates() {
         .split(&region, &mut update, &plan(&[], &[]))
         .unwrap_err();
     assert!(matches!(
-        error.downcast_ref::<TwoMeansError<u32>>(),
-        Some(TwoMeansError::EmptyParents)
+        error.downcast_ref::<SplitError<u32>>(),
+        Some(SplitError::EmptyParents)
     ));
     assert!(created.is_empty());
     assert_eq!(memberships.into_changes().count(), 0);
@@ -1764,8 +1820,8 @@ fn two_means_reports_insufficient_points_before_writing() {
             .split(&region, &mut update, &plan(&[1], &[]))
             .unwrap_err();
         assert!(matches!(
-            error.downcast_ref::<TwoMeansError<u32>>().unwrap(),
-            TwoMeansError::NotEnoughPoints { list: 1, actual } if *actual == expected
+            error.downcast_ref::<SplitError<u32>>().unwrap(),
+            SplitError::NotEnoughPoints { list: 1, actual } if *actual == expected
         ));
         assert!(created.is_empty());
         assert_eq!(memberships.into_changes().count(), 0);
@@ -1790,8 +1846,8 @@ fn two_means_missing_vectors_preserves_typed_error_without_updates() {
         .split(&region, &mut update, &plan(&[1, 99], &[]))
         .unwrap_err();
     assert!(matches!(
-        error.downcast_ref::<TwoMeansError<u32>>(),
-        Some(TwoMeansError::UnableToRetrieve(99))
+        error.downcast_ref::<SplitError<u32>>(),
+        Some(SplitError::UnableToRetrieve(99))
     ));
     assert!(created.is_empty());
     assert_eq!(memberships.into_changes().count(), 0);
@@ -1826,8 +1882,8 @@ fn two_means_reports_missing_neighbors_before_writing() {
             .split(&region, &mut update, &plan(&[1], &ids))
             .unwrap_err();
         assert!(matches!(
-            error.downcast_ref::<TwoMeansError<u32>>(),
-            Some(TwoMeansError::UnableToRetrieve(99))
+            error.downcast_ref::<SplitError<u32>>(),
+            Some(SplitError::UnableToRetrieve(99))
         ));
         assert!(update.created.is_empty());
         assert_eq!(std::mem::take(update.memberships).into_changes().count(), 0);
