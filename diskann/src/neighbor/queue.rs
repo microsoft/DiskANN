@@ -288,8 +288,8 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
         let target = nbr.distance;
 
-        for i in 0..self.size {
-            if self.distances[i] >= target {
+        for (i, d) in self.distances.iter().take(self.size).enumerate() {
+            if *d >= target {
                 return i;
             }
         }
