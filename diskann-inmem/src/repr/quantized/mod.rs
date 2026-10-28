@@ -202,7 +202,9 @@ where
 pub struct Config {
     /// The underlying quantizer for the compressed store.
     quantizer: inner::Quantizer,
+    capacity: Capacity,
     start_points: rowmajor::Owned<f32>,
+    start_point_ids: std::ops::Range<u32>,
     layout: store::Layout,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
@@ -265,19 +267,25 @@ impl Config {
             return Err(ConfigError::dim_mismatch(dim, start_points.ncols()));
         }
 
-        if start_points.nrows() == 0 {
+        let num_start_points = start_points.nrows();
+        if num_start_points == 0 {
             return Err(ConfigError::empty_start_points());
         }
 
-        let num_start_points: u32 = start_points
-            .nrows()
-            .try_into()
-            .map_err(|_| ConfigError::too_many_start_points(start_points.nrows()))?;
+        let id_limit: u32 = capacity
+            .value()
+            .checked_add(num_start_points)
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or_else(|| ConfigError::too_many_points(capacity, num_start_points))?;
 
+        // The numeric cast is fine because `capacity` is no greater than `id_limit`.
+        let start_point_ids = (capacity.value() as u32)..id_limit;
         Ok(Self {
             quantizer,
+            capacity,
             start_points,
-            layout: store::Layout::new(capacity, max_degree, num_start_points),
+            start_point_ids,
+            layout: store::Layout::new(IdLimit::new(id_limit), max_degree),
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
             rerank,
@@ -339,9 +347,12 @@ impl ConfigError {
         }
     }
 
-    fn too_many_start_points(num_start_points: usize) -> Self {
+    fn too_many_points(capacity: Capacity, num_start_points: usize) -> Self {
         Self {
-            inner: ConfigErrorInner::TooManyStartPoints { num_start_points },
+            inner: ConfigErrorInner::TooManyPoints {
+                capacity,
+                num_start_points,
+            },
         }
     }
 }
@@ -359,8 +370,15 @@ enum ConfigErrorInner {
     },
     #[error("at least one start point must be provided")]
     EmptyStartPoints,
-    #[error("{} start points exceed u32::MAX", num_start_points)]
-    TooManyStartPoints { num_start_points: usize },
+    #[error(
+        "requested number of points ({} + {} start points) exceeds u32::MAX",
+        capacity,
+        num_start_points
+    )]
+    TooManyPoints {
+        capacity: Capacity,
+        num_start_points: usize,
+    },
 }
 
 /// Choose how data is reranked.
@@ -418,6 +436,8 @@ const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 #[derive(Debug)]
 pub struct Quantized {
     store: Store<Cons<Intrusive, Optional<Simple>>>,
+    capacity: Capacity,
+    start_point_ids: std::ops::Range<u32>,
     quantizer: inner::Quantizer,
     lookahead: Option<NonZeroUsize>,
     reranker: repr::internal::quantization::Reranker,
@@ -449,7 +469,9 @@ impl Quantized {
 
         let Config {
             quantizer,
+            capacity,
             start_points,
+            start_point_ids,
             layout,
             store,
             lookahead,
@@ -470,6 +492,8 @@ impl Quantized {
         let store = Store::new(layout, store, slots)?;
         let this = Self {
             store,
+            capacity,
+            start_point_ids: start_point_ids.clone(),
             quantizer,
             lookahead,
             reranker,
@@ -478,7 +502,7 @@ impl Quantized {
         // Initialize start points.
         let num_start_points = start_points.nrows();
         for (i, (slot_index, row)) in
-            std::iter::zip(this.store.frozen(), start_points.rows()).enumerate()
+            std::iter::zip(start_point_ids, start_points.rows()).enumerate()
         {
             #[expect(
                 clippy::expect_used,
@@ -572,7 +596,7 @@ impl Quantized {
             expand_beam,
             post_process,
             provider,
-            self.store.frozen(),
+            self.start_point_ids.clone(),
             counters,
         ))
     }
@@ -1112,7 +1136,7 @@ mod tests {
         }
 
         // Insert frozen points.
-        for (slot, point) in quantized.store.frozen().zip(start_points.rows()) {
+        for (slot, point) in quantized.start_point_ids.clone().zip(start_points.rows()) {
             reference.insert(LogicalId(slot.into_usize()), SlotId(slot), point);
         }
 
@@ -1409,7 +1433,9 @@ mod tests {
         .unwrap_err();
 
         let msg = err.to_string();
-        assert_contains!(msg, "start points exceed u32::MAX");
+        assert_contains!(msg, "number of points");
+        assert_contains!(msg, "start points");
+        assert_contains!(msg, "exceeds u32::MAX");
     }
 
     #[test]
