@@ -61,8 +61,8 @@ impl PruneWorkspace {
         // Sort before mapping: changing the element type can change the unstable
         // sort's order for equal distances, and therefore RobustPrune's choices.
         let sorted = SortedNeighbors::new(&mut self.candidates, graph.max_occlusion_size().get());
-        // A list never holds its source: leaf build only pairs two distinct points
-        // of one leaf. So every candidate stays.
+        // RobustPrune skips `None` candidates. PiPNN has none to skip: leaf build
+        // never pairs a point with itself, and every vector is in memory.
         let mapped = sorted.map_in(&mut self.mapped_candidates, |&candidate| Some(candidate));
         self.states.clear();
         self.states.resize(sorted.len(), prune::State::default());
