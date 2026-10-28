@@ -18,7 +18,7 @@ use diskann_utils::{
 use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 
-use super::PQData;
+use super::{spherical::supported_metric, PQData};
 use crate::{
     error::{diskann_error, ErrorKind},
     storage::disk_index_reader::DiskIndexReader,
@@ -156,7 +156,7 @@ impl SearchData {
             plan, source_dim, ..
         } = &self.0
         {
-            if *source_dim != dim || Some(plan.metric()) != metric.try_into().ok() {
+            if *source_dim != dim || Some(plan.metric()) != supported_metric(metric).ok() {
                 return Err(ANNError::message(
                     "Spherical quantizer dimension or metric does not match disk graph",
                 ));

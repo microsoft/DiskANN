@@ -156,15 +156,11 @@ where
             get_disk_index_file(ctx.quant_load_context.metadata.prefix())
         );
 
-        let caching_strategy = if ctx.num_nodes_to_cache > 0 {
-            CachingStrategy::StaticCacheWithBfsNodes(ctx.num_nodes_to_cache)
-        } else {
-            CachingStrategy::None
-        };
+        // This temporary factory only reads metadata and validates a Q3 vector.
         let vertex_provider_factory =
             DiskVertexProviderFactory::<Data, AlignedFileReaderFactory>::from_disk_index_path(
                 get_disk_index_file(ctx.quant_load_context.metadata.prefix()),
-                caching_strategy,
+                CachingStrategy::None,
             )?;
         let graph_header = vertex_provider_factory.get_header()?;
 
@@ -1682,6 +1678,20 @@ mod disk_provider_tests {
                 .unwrap();
             assert_eq!(explicit.search_data.quantization(), quantization);
         }
+        // Loading PQ only needs the header. A cache request must not trigger BFS
+        // through graph sectors that the temporary factory will never retain.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(get_disk_index_file(&prefix))
+            .unwrap()
+            .set_len(4096)
+            .unwrap();
+        runtime
+            .block_on(DiskProvider::<GraphDataF32VectorUnitData>::load_with(
+                &FileStorageProvider,
+                &context,
+            ))
+            .unwrap();
         context.num_points = 255;
         let error = runtime
             .block_on(DiskProvider::<GraphDataF32VectorUnitData>::load_with(
@@ -3060,6 +3070,147 @@ mod disk_provider_tests {
         };
         assert_same(&graph_before, &graph_after);
         assert_same(&flat_before, &flat_after);
+    }
+
+    #[rstest]
+    #[case(SearchQuantization::PQ, SearchQuantization::SphericalQ3)]
+    #[case(SearchQuantization::SphericalQ3, SearchQuantization::PQ)]
+    fn rebuild_invalidates_other_search_backend(
+        #[case] initial: SearchQuantization,
+        #[case] replacement: SearchQuantization,
+    ) {
+        use diskann_utils::io::write_bin;
+        use std::io::Write;
+
+        let mut fixture = IndexBuildFixture::new(
+            VirtualStorageProvider::new_overlay(test_data_root()),
+            TestParams {
+                search_quantization: initial,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        fixture.build::<GraphDataF32VectorUnitData>().unwrap();
+        let prefix = fixture.params.index_path_prefix.clone();
+        SearchData::load(&prefix, initial, fixture.storage_provider.as_ref()).unwrap();
+
+        let mut source = load_source_data(fixture.storage_provider.as_ref(), TEST_DATA_FILE);
+        // Keep the shape but change the vectors, so shape checks cannot detect stale codes.
+        for value in source.as_mut_slice() {
+            *value += 17.0;
+        }
+        {
+            let mut writer = fixture
+                .storage_provider
+                .create_for_write("/disk_index_build/replacement.bin")
+                .unwrap();
+            write_bin(source.as_view(), &mut writer).unwrap();
+            writer.flush().unwrap();
+        }
+        fixture.params.data_path = "/disk_index_build/replacement.bin".into();
+        fixture.params.search_quantization = replacement;
+        fixture.build::<GraphDataF32VectorUnitData>().unwrap();
+        for path in initial.paths(&prefix) {
+            assert!(!fixture.storage_provider.exists(&path));
+        }
+        assert!(SearchData::load(&prefix, initial, fixture.storage_provider.as_ref()).is_err());
+        let data = Arc::new(
+            SearchData::load(&prefix, replacement, fixture.storage_provider.as_ref()).unwrap(),
+        );
+        let factory = DiskVertexProviderFactory::<GraphDataF32VectorUnitData, _>::new(
+            VirtualAlignedReaderFactory::new(
+                get_disk_index_file(&prefix),
+                Arc::clone(&fixture.storage_provider),
+            ),
+            CachingStrategy::None,
+        )
+        .unwrap();
+        let engine =
+            DiskIndexSearcher::new_with_search_data(1, usize::MAX, data, factory, Metric::L2, None)
+                .unwrap();
+        let result = engine
+            .search(source.row(0), 1, 256, None, SearchMode::flat())
+            .unwrap();
+        assert_eq!(result.results[0].vertex_id, 0);
+        assert_eq!(result.results[0].distance, 0.0);
+    }
+
+    #[rstest]
+    #[case(false)]
+    #[case(true)]
+    fn spherical_q3_cosine_normalized_build_load_and_rerank(#[case] cache_nodes: bool) {
+        use diskann_utils::{io::write_bin, views::rowmajor::MatrixMut};
+        use std::io::Write;
+
+        let storage = VirtualStorageProvider::new_overlay(test_data_root());
+        let mut source = load_source_data(&storage, TEST_DATA_FILE);
+        for row in source.rows_mut() {
+            let norm = row.iter().map(|value| value * value).sum::<f32>().sqrt();
+            for value in row {
+                *value /= norm;
+            }
+        }
+        {
+            let mut writer = storage
+                .create_for_write("/disk_index_build/normalized.bin")
+                .unwrap();
+            write_bin(source.as_view(), &mut writer).unwrap();
+            writer.flush().unwrap();
+        }
+        let fixture = IndexBuildFixture::new(
+            storage,
+            TestParams {
+                search_quantization: SearchQuantization::SphericalQ3,
+                metric: Metric::CosineNormalized,
+                data_path: "/disk_index_build/normalized.bin".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        fixture.build::<GraphDataF32VectorUnitData>().unwrap();
+        let prefix = &fixture.params.index_path_prefix;
+        let data = Arc::new(
+            SearchData::load(
+                prefix,
+                SearchQuantization::SphericalQ3,
+                fixture.storage_provider.as_ref(),
+            )
+            .unwrap(),
+        );
+        let factory = DiskVertexProviderFactory::<GraphDataF32VectorUnitData, _>::new(
+            VirtualAlignedReaderFactory::new(
+                get_disk_index_file(prefix),
+                Arc::clone(&fixture.storage_provider),
+            ),
+            if cache_nodes {
+                CachingStrategy::StaticCacheWithBfsNodes(32)
+            } else {
+                CachingStrategy::None
+            },
+        )
+        .unwrap();
+        let engine = DiskIndexSearcher::new_with_search_data(
+            1,
+            usize::MAX,
+            data,
+            factory,
+            Metric::CosineNormalized,
+            None,
+        )
+        .unwrap();
+        assert_eq!(engine.index.provider().metric, Metric::CosineNormalized);
+        let query = source.row(0);
+        let exact = <f32 as VectorRepr>::distance(Metric::CosineNormalized, Some(source.ncols()));
+        for mode in [SearchMode::graph(), SearchMode::flat()] {
+            let result = engine.search(query, 10, 256, None, mode).unwrap();
+            assert_eq!(result.stats.result_count, 10);
+            assert_eq!(result.results[0].vertex_id, 0);
+            for result in result.results {
+                let expected =
+                    exact.evaluate_similarity(query, source.row(result.vertex_id as usize));
+                assert!((result.distance - expected).abs() < 1.0e-6);
+            }
+        }
     }
 
     #[rstest]

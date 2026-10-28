@@ -15,10 +15,10 @@ use diskann_providers::{
 };
 use diskann_quantization::{
     algorithms::transforms::{TargetDim, TransformKind},
-    alloc::{GlobalAllocator, ScopedAllocator},
+    alloc::{GlobalAllocator, Poly, ScopedAllocator},
     spherical::{
         iface::{self, Quantizer},
-        PreScale, SphericalQuantizer,
+        PreScale, SphericalQuantizer, SupportedMetric, UnsupportedMetric,
     },
 };
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
@@ -27,6 +27,14 @@ use diskann_vector::distance::Metric;
 use super::{
     validate_data_generation_input, QuantCompressor, QuantDataGenerator, SearchQuantization,
 };
+
+pub(super) fn supported_metric(metric: Metric) -> Result<SupportedMetric, UnsupportedMetric> {
+    match metric {
+        Metric::CosineNormalized => Metric::Cosine,
+        metric => metric,
+    }
+    .try_into()
+}
 
 struct SphericalGenerationContext<'a, Storage> {
     data_path: &'a str,
@@ -51,6 +59,7 @@ where
     type CompressorContext = SphericalGenerationContext<'a, Storage>;
 
     fn new(context: &Self::CompressorContext) -> ANNResult<Self> {
+        let metric = supported_metric(context.metric).bridge_err()?;
         let mut rng = create_rnd_provider_from_optional_seed(context.seed).create_rnd();
         let (training, count, dim) = gen_random_slice::<T, _>(
             context.data_path,
@@ -58,16 +67,34 @@ where
             context.storage,
             &mut rng,
         )?;
-        let quantizer = SphericalQuantizer::train(
-            rowmajor::Ref::try_from_data(&training, count, dim).bridge_err()?,
-            TransformKind::DoubleHadamard {
-                target_dim: TargetDim::Natural,
-            },
-            context.metric.try_into().bridge_err()?,
-            PreScale::ReciprocalMeanNorm,
-            &mut rng,
-            GlobalAllocator,
-        )
+        let transform = TransformKind::DoubleHadamard {
+            target_dim: TargetDim::Natural,
+        };
+        let quantizer = if count > 0
+            && metric != SupportedMetric::Cosine
+            && training.iter().all(|&value| value == 0.0)
+        {
+            // Zero vectors can be encoded, but training requires a positive mean norm.
+            // Unit scale and a zero centroid also work if later vectors are nonzero.
+            SphericalQuantizer::generate(
+                Poly::broadcast(0.0, dim, GlobalAllocator).map_err(ANNError::new)?,
+                1.0,
+                transform,
+                metric,
+                None,
+                &mut rng,
+                GlobalAllocator,
+            )
+        } else {
+            SphericalQuantizer::train(
+                rowmajor::Ref::try_from_data(&training, count, dim).bridge_err()?,
+                transform,
+                metric,
+                PreScale::ReciprocalMeanNorm,
+                &mut rng,
+                GlobalAllocator,
+            )
+        }
         .map_err(ANNError::new)?;
         let plan: Box<dyn Quantizer> =
             Box::new(iface::Impl::<3>::new(quantizer).map_err(ANNError::new)?);
@@ -127,6 +154,11 @@ where
     Storage: StorageReadProvider + StorageWriteProvider,
 {
     let metadata = validate_data_generation_input(storage, data_path, max_block_size)?;
+    if metadata.ndims() == 0 {
+        return Err(ANNError::message(
+            "Cannot generate spherical data with zero dimensions",
+        ));
+    }
     let [quantizer_path, codes_path] = SearchQuantization::SphericalQ3.paths(prefix);
     let context = SphericalGenerationContext {
         data_path,
@@ -172,6 +204,7 @@ mod tests {
     #[case(Metric::L2)]
     #[case(Metric::InnerProduct)]
     #[case(Metric::Cosine)]
+    #[case(Metric::CosineNormalized)]
     fn spherical_q3_roundtrip_matches_inmem_distance(#[case] metric: Metric) {
         let storage = VirtualStorageProvider::new_memory();
         let vectors = dataset(&storage);
@@ -250,6 +283,128 @@ mod tests {
             .unwrap();
         assert!(scratch.distances(&data, &[37], |_, _| {}).is_err());
         assert!(SearchData::load("/missing", SearchQuantization::SphericalQ3, &storage).is_err());
+    }
+
+    #[rstest]
+    #[case(Metric::L2)]
+    #[case(Metric::InnerProduct)]
+    fn spherical_q3_zero_norm_roundtrip(#[case] metric: Metric) {
+        let storage = VirtualStorageProvider::new_memory();
+        let vectors = rowmajor::Owned::from_element(37, 13, 0.0f32);
+        {
+            let mut writer = storage.create_for_write("/zeros.bin").unwrap();
+            write_bin(vectors.as_view(), &mut writer).unwrap();
+            writer.flush().unwrap();
+        }
+        let pool = create_thread_pool_for_test();
+        generate_spherical_q3::<f32, _>(
+            "/index",
+            "/zeros.bin",
+            metric,
+            Some(7),
+            &storage,
+            pool.as_ref(),
+            8,
+        )
+        .unwrap();
+        let data = SearchData::load("/index", SearchQuantization::SphericalQ3, &storage).unwrap();
+        data.validate(13, 37, metric).unwrap();
+        let mut scratch = QuantizedScratch::new(&data, 37).unwrap();
+        for query in [[0.0; 13], [1.0; 13]] {
+            scratch.prepare_query(&data, metric, &query).unwrap();
+            let expected = if metric == Metric::L2 {
+                query.iter().map(|value| value * value).sum::<f32>()
+            } else {
+                0.0
+            };
+            let mut count = 0;
+            scratch
+                .distances(&data, &(0..37).collect::<Vec<_>>(), |distance, _| {
+                    assert!(distance.is_finite());
+                    assert!((distance - expected).abs() < 0.02);
+                    count += 1;
+                })
+                .unwrap();
+            assert_eq!(count, 37);
+        }
+    }
+
+    #[test]
+    fn spherical_q3_zero_dimensions_preserve_sidecars() {
+        use std::io::Read;
+
+        fn check<T: VectorRepr>() {
+            let storage = VirtualStorageProvider::new_memory();
+            {
+                let mut writer = storage.create_for_write("/zero-dim.bin").unwrap();
+                diskann_utils::io::Metadata::new(37, 0)
+                    .unwrap()
+                    .write(&mut writer)
+                    .unwrap();
+                writer.flush().unwrap();
+            }
+            let paths = [SearchQuantization::PQ, SearchQuantization::SphericalQ3]
+                .into_iter()
+                .flat_map(|quantization| quantization.paths("/index"))
+                .collect::<Vec<_>>();
+            for path in &paths {
+                let mut writer = storage.create_for_write(path).unwrap();
+                writer.write_all(b"existing sidecar").unwrap();
+                writer.flush().unwrap();
+            }
+            let pool = create_thread_pool_for_test();
+            let error = generate_spherical_q3::<T, _>(
+                "/index",
+                "/zero-dim.bin",
+                Metric::L2,
+                Some(7),
+                &storage,
+                pool.as_ref(),
+                8,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("zero dimensions"));
+            for path in &paths {
+                let mut bytes = Vec::new();
+                storage
+                    .open_reader(path)
+                    .unwrap()
+                    .read_to_end(&mut bytes)
+                    .unwrap();
+                assert_eq!(bytes, b"existing sidecar");
+            }
+        }
+        check::<f32>();
+        check::<i8>();
+        check::<u8>();
+    }
+
+    #[rstest]
+    #[case(f32::NAN)]
+    #[case(f32::INFINITY)]
+    #[case(1.0e-40)]
+    fn spherical_q3_invalid_norm_is_not_treated_as_zero(#[case] value: f32) {
+        let storage = VirtualStorageProvider::new_memory();
+        let vectors = rowmajor::Owned::from_element(37, 13, value);
+        {
+            let mut writer = storage.create_for_write("/data.bin").unwrap();
+            write_bin(vectors.as_view(), &mut writer).unwrap();
+            writer.flush().unwrap();
+        }
+        let pool = create_thread_pool_for_test();
+        assert!(generate_spherical_q3::<f32, _>(
+            "/index",
+            "/data.bin",
+            Metric::L2,
+            Some(7),
+            &storage,
+            pool.as_ref(),
+            8,
+        )
+        .is_err());
+        for path in SearchQuantization::SphericalQ3.paths("/index") {
+            assert!(!storage.exists(&path));
+        }
     }
 
     #[test]

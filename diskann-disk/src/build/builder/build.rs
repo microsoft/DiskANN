@@ -218,6 +218,17 @@ where
     }
 
     fn create_disk_layout(&mut self) -> ANNResult<()> {
+        // The other backend still describes the previous dataset, even if its shape
+        // matches. Invalidate it before replacing the graph and propagate deletion errors.
+        let unused_quantization = match self.disk_build_param.search_quantization() {
+            SearchQuantization::PQ => SearchQuantization::SphericalQ3,
+            SearchQuantization::SphericalQ3 => SearchQuantization::PQ,
+        };
+        for path in unused_quantization.paths(&self.index_writer.get_index_path_prefix()) {
+            if self.storage_provider.exists(&path) {
+                self.storage_provider.delete(&path)?;
+            }
+        }
         self.index_writer
             .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
         self.index_writer
