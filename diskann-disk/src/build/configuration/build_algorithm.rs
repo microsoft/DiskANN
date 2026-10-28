@@ -33,8 +33,6 @@ pub struct PiPNNParameters {
     pub max_depth: NonZeroUsize,
     /// Number of nearest neighbors selected within each leaf.
     pub k: NonZeroUsize,
-    /// Number of independent partition passes.
-    pub replicas: NonZeroUsize,
 }
 
 #[cfg(feature = "pipnn")]
@@ -55,7 +53,6 @@ impl Default for PiPNNParameters {
             fanout: FANOUT.to_vec(),
             max_depth: MAX_DEPTH,
             k: K,
-            replicas: NonZeroUsize::MIN,
         }
     }
 }
@@ -70,7 +67,6 @@ impl From<&PiPNNParameters> for diskann::graph::pipnn::PiPNNConfig {
             fanout: config.fanout.clone(),
             max_depth: config.max_depth,
             leaf_k: config.k,
-            replicas: config.replicas,
             // The disk builder sets the seed from `IndexConfiguration::random_seed`.
             seed: None,
         }
@@ -136,7 +132,6 @@ mod tests {
         );
         assert_eq!(config.max_depth.get(), 10);
         assert_eq!(config.k.get(), 3);
-        assert_eq!(config.replicas.get(), 1);
         assert!(
             serde_json::from_str::<BuildAlgorithm>(r#"{"algorithm":"PiPNN","l_max":72}"#).is_err()
         );
