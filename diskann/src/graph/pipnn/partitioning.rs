@@ -782,6 +782,42 @@ mod tests {
     }
 
     #[test]
+    fn identical_vectors_are_cut_into_leaves_at_max_depth() {
+        let point_count = 20;
+        let dimensions = 8;
+        let n_threads = 1;
+        let x = vec![1.0_f32; point_count * dimensions];
+        let data = MatrixView::try_from(x.as_slice(), point_count, dimensions).unwrap();
+        // 20 x 0.25 = 5 leaders, so fanout 2 does not defer the first split.
+        // All distances tie, so each point picks the same two leaders. This gives
+        // two copies of the whole cluster. Later levels use fanout 1 and repeat
+        // each copy until max_depth cuts its 20 points into five leaves of four
+        // points in input order.
+        let config = PiPNNConfig {
+            c_max: nz(4),
+            p_samp: 0.25,
+            fanout: vec![nz(2)],
+            ..splitting_config()
+        };
+        let expected = vec![
+            vec![0, 1, 2, 3],
+            vec![0, 1, 2, 3],
+            vec![4, 5, 6, 7],
+            vec![4, 5, 6, 7],
+            vec![8, 9, 10, 11],
+            vec![8, 9, 10, 11],
+            vec![12, 13, 14, 15],
+            vec![12, 13, 14, 15],
+            vec![16, 17, 18, 19],
+            vec![16, 17, 18, 19],
+        ];
+
+        let actual = sorted_leaves(&partition_l2(data, &config, n_threads));
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn data_within_cmax_is_one_leaf() {
         // x[i] is the one-dimensional vector of point i.
         // The dataset fits c_max, so it returns as one leaf without splitting.
