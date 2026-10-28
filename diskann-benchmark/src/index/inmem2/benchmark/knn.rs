@@ -38,7 +38,6 @@ pub(in crate::index::inmem2) mod dto {
     /// will be used to compute the `K-recall-at-N` for all search results.
     ///
     /// Requires:
-    ///
     /// * `search_n >= search_l` for all provided `search_l`s.
     /// * `search_n > = recall_k`.
     /// * `search_l` must be non-empty.
