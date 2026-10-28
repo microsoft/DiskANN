@@ -9,8 +9,6 @@ mod internal_docs {
     //! A concurrent in-memory data store for driving [`slots::Slots`].
     //!
     //! This supports concurrent data access, deletes, and inserts through a safe interface.
-    //! Data is stored internally in slots indexed from `[0..N)` with `K` points reserved at the
-    //! end at positions `[N..N+K)`.
     //!
     //! ## Reading
     //!

@@ -128,8 +128,7 @@ impl<T> Config<T> {
     /// Create a new [`Config`] for a [`Full`].
     ///
     /// The resulting store will hold `capacity` writable items and `start_points.nrows()`
-    /// frozen points at internal IDs `[capacity, capacity + start_points.nrows())`. The
-    /// dimensionality of the full-precision data will be inferred from
+    /// frozen points. The dimensionality of the full-precision data will be inferred from
     /// `start_points.ncols()`.
     ///
     /// The associated graph will be bounded with `max_degree` and `metric` will be used to
