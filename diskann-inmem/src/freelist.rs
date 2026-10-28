@@ -66,6 +66,8 @@ use std::{
 use crossbeam_queue::ArrayQueue;
 use diskann::utils::IntoUsize;
 
+use crate::num::IdLimit;
+
 // NOTE: We want the scan size to be relatively big. Each tag occupied just a single byte,
 // so a scan needs to be at least 64 to ensure a thread is working with just a single cache
 // line.
@@ -81,7 +83,7 @@ pub(crate) struct Freelist {
 
     // The highest ID the freelist manages. IDs `>= max` are rejected by `push`/`append`
     // and the minting path will not yield them.
-    max: u32,
+    id_limit: IdLimit,
 
     // The next `unminted` Id. This becomes unused once this reaches `max`.
     next: AtomicU32,
@@ -91,15 +93,15 @@ pub(crate) struct Freelist {
 }
 
 impl Freelist {
-    /// Construct a new [`Freelist`] that manages `max` ids.
+    /// Construct a new [`Freelist`] that manages `id_limit` ids.
     ///
     /// The internal fast recycled list will hold up to `recycled` items.
     ///
     /// The memory occupied by this struct is `O(recycled)`.
-    pub(crate) fn new(max: u32, recycled: NonZeroU32) -> Self {
+    pub(crate) fn new(id_limit: IdLimit, recycled: NonZeroU32) -> Self {
         Self {
             recycled: ArrayQueue::new(recycled.get().into_usize()),
-            max,
+            id_limit,
             next: AtomicU32::new(0),
             scan_bucket: AtomicU32::new(0),
         }
@@ -115,7 +117,7 @@ impl Freelist {
 
         // Missed in the recycled buffer. Try pulling from the high-water mark.
         let mut next = self.next.load(Ordering::Relaxed);
-        while next < self.max {
+        while next < self.id_limit.value() {
             match self
                 .next
                 .compare_exchange(next, next + 1, Ordering::Relaxed, Ordering::Relaxed)
@@ -143,11 +145,11 @@ impl Freelist {
     /// This is managed such that multiple threads calling this function will receive
     /// disjoint ranges to scan.
     pub(crate) fn scan(&self) -> Scan {
-        if self.max == 0 {
+        if self.id_limit.value() == 0 {
             return Scan { start: 0, stop: 0 };
         }
 
-        let num_buckets = self.max.div_ceil(SCAN_SIZE);
+        let num_buckets = self.id_limit.value().div_ceil(SCAN_SIZE);
 
         // It's possible that if `scan_bucket` wraps, we do a bit of redundant scanning.
         //
@@ -156,8 +158,8 @@ impl Freelist {
 
         let start = bucket * SCAN_SIZE;
         let stop = match start.checked_add(SCAN_SIZE) {
-            Some(stop) => stop.min(self.max),
-            None => self.max,
+            Some(stop) => stop.min(self.id_limit.value()),
+            None => self.id_limit.value(),
         };
 
         Scan { start, stop }
@@ -167,9 +169,9 @@ impl Freelist {
     ///
     /// If `false` is returned, it is likely because the internal recycle buffer is full.
     ///
-    /// IDs at or above [`Self::max`] are discarded.
+    /// IDs at or above [`Self::id_limit`] are discarded.
     pub(crate) fn push(&self, id: u32) -> bool {
-        if id < self.max {
+        if id < self.id_limit.value() {
             self.recycled.push(id).is_ok()
         } else {
             false
@@ -246,7 +248,7 @@ mod tests {
     use std::{collections::HashSet, sync::Barrier, thread};
 
     fn freelist(max: u32, recycled: u32) -> Freelist {
-        Freelist::new(max, NonZeroU32::new(recycled).unwrap())
+        Freelist::new(IdLimit::new(max), NonZeroU32::new(recycled).unwrap())
     }
 
     //---------//
@@ -381,7 +383,7 @@ mod tests {
     #[test]
     fn concurrent_pop_yields_unique_ids() {
         let max = 4096u32;
-        let fl = Freelist::new(max, NonZeroU32::new(8).unwrap());
+        let fl = Freelist::new(IdLimit::new(max), NonZeroU32::new(8).unwrap());
         let nthreads = 8;
         let barrier = Barrier::new(nthreads);
 
@@ -410,7 +412,7 @@ mod tests {
     #[test]
     fn concurrent_scan_partitions_one_pass() {
         let max = SCAN_SIZE * 4;
-        let fl = Freelist::new(max, NonZeroU32::new(4).unwrap());
+        let fl = Freelist::new(IdLimit::new(max), NonZeroU32::new(4).unwrap());
         let num_buckets = max.div_ceil(SCAN_SIZE) as usize;
         let nthreads = num_buckets;
         let barrier = Barrier::new(nthreads);
