@@ -22,9 +22,9 @@ Only one run is allowed at a time (`cancel-in-progress: true`).
 
 ## Runner storage
 
-Both disk benchmark workflows require runner-managed NVMe storage mounted at
-the default path `/mnt/azure_nvme_temp`. Setup fails if that path is not a mount
-point. The workflows do not initialize disks or fall back to another path.
+Both disk benchmark workflows reuse the unique mounted filesystem on a
+non-system NVMe disk, as reported by `lsblk`. Setup fails if none or multiple
+are found. The workflows do not initialize disks or fall back to system storage.
 
 ## Datasets
 

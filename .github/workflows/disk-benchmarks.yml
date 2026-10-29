@@ -81,11 +81,21 @@ jobs:
       - name: Use mounted high-speed NVMe SSD
         shell: bash
         run: |
-          nvme_mount=/mnt/azure_nvme_temp
-          if ! mountpoint -q "$nvme_mount"; then
-            echo "::error::Expected runner-managed NVMe storage mounted at $nvme_mount."
-            exit 1
-          fi
+          nvme_mount=$(lsblk --json --output NAME,TYPE,TRAN,MOUNTPOINTS | python3 -c '
+          import json, sys
+          def mounts(device):
+              return [p for p in device["mountpoints"] if p] + [
+                  p for child in device.get("children", []) for p in mounts(child)]
+          candidates = []
+          for disk in json.load(sys.stdin)["blockdevices"]:
+              if disk["type"] == "disk" and disk["tran"] == "nvme":
+                  paths = mounts(disk)
+                  if not any(p in ("/", "/boot", "/boot/efi") for p in paths):
+                      candidates.extend(paths)
+          if len(candidates) != 1:
+              sys.exit("::error::Expected exactly one mounted non-system NVMe filesystem.")
+          print(candidates[0])
+          ')
           echo "Using NVMe storage at $nvme_mount"
           sudo mkdir -p "$nvme_mount/diskann_rust" "$nvme_mount/baseline"
           sudo chown "$(id -u):$(id -g)" "$nvme_mount/diskann_rust" "$nvme_mount/baseline"
