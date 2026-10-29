@@ -63,6 +63,7 @@ use std::{
 };
 
 use crossbeam_queue::SegQueue;
+use crossbeam_utils::CachePadded;
 use diskann::utils::IntoUsize;
 use parking_lot::{Mutex, MutexGuard};
 
@@ -119,25 +120,6 @@ struct Inner {
     // * Anything else = "guarded".
     guards: Box<[GuardSlot]>,
 
-    // A hint for the next available registration slot.
-    hint: AtomicUsize,
-
-    // The current epoch. This begins at 1 (to not be conflated with the 0 state in `guards`)
-    // and increments over time.
-    //
-    // NOTE: This can **only** be mutated in `try_advance`.
-    //
-    // Additionally, the logic in the module ensures that there are at most two active epochs
-    // at any given time. It is only safe to advance an epoch if *all* readers belong to the
-    // current `epoch`.
-    epoch: AtomicU64,
-
-    // We can only retire a single generation at a time.
-    //
-    // This guard avoids situations where two threads concurrently advance the epoch and
-    // hand out overlapping `Drain`s referring to the same retiring queue.
-    drain: Mutex<()>,
-
     // We use four queues for storing retiring items. The rationale is documented below.
     //
     // ```
@@ -156,6 +138,25 @@ struct Inner {
     //
     // We cycle among the queues in a round-robin manner.
     retiring: Box<[SegQueue<u32>; 4]>,
+
+    // We can only retire a single generation at a time.
+    //
+    // This guard avoids situations where two threads concurrently advance the epoch and
+    // hand out overlapping `Drain`s referring to the same retiring queue.
+    drain: CachePadded<Mutex<()>>,
+
+    // A hint for the next available registration slot.
+    hint: CachePadded<AtomicUsize>,
+
+    // The current epoch. This begins at 1 (to not be conflated with the 0 state in `guards`)
+    // and increments over time.
+    //
+    // NOTE: This can **only** be mutated in `try_advance`.
+    //
+    // Additionally, the logic in the module ensures that there are at most two active epochs
+    // at any given time. It is only safe to advance an epoch if *all* readers belong to the
+    // current `epoch`.
+    epoch: CachePadded<AtomicU64>,
 }
 
 impl Inner {
@@ -194,10 +195,10 @@ impl Registry {
             guards: std::iter::repeat_with(Default::default)
                 .take(capacity.get())
                 .collect(),
-            hint: AtomicUsize::new(0),
-            epoch: AtomicU64::new(1),
             retiring: Box::new(core::array::from_fn(|_| SegQueue::new())),
-            drain: Mutex::new(()),
+            drain: CachePadded::new(Mutex::new(())),
+            hint: CachePadded::new(AtomicUsize::new(0)),
+            epoch: CachePadded::new(AtomicU64::new(1)),
         };
 
         Self {

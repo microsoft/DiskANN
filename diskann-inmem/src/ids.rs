@@ -5,6 +5,7 @@
 
 use std::hash::Hash;
 
+use crossbeam_utils::CachePadded;
 use dashmap::{
     DashMap,
     mapref::entry::{self, OccupiedEntry},
@@ -17,6 +18,8 @@ use crate::num::Capacity;
 
 const SHARD_SIZE: usize = 1024;
 
+type BackShard<I> = CachePadded<RwLock<Box<[Option<I>]>>>;
+
 /// Bidirectional mapping between an external id `I` and a dense internal `u32` id.
 #[derive(Debug)]
 pub(crate) struct IdMap<I>
@@ -28,7 +31,7 @@ where
 
     // Since we know the internal IDs are contiguous from `[0..self.capacity)`, we can
     // use a lighter-weight `backward` ID map than a full `DashMap`.
-    backward: Vec<RwLock<Box<[Option<I>]>>>,
+    backward: Vec<BackShard<I>>,
     capacity: Capacity,
 }
 
@@ -39,7 +42,7 @@ where
     pub(crate) fn new(capacity: Capacity) -> Self {
         let backward = std::iter::repeat_with(|| {
             let shard = std::iter::repeat_with(|| None).take(SHARD_SIZE).collect();
-            RwLock::new(shard)
+            CachePadded::new(RwLock::new(shard))
         })
         .take(capacity.value().div_ceil(SHARD_SIZE))
         .collect();
@@ -149,9 +152,10 @@ where
 
     fn shard(&self, i: u32) -> Shard {
         let i = i.into_usize();
+        let num_shards = self.backward.len();
         Shard {
-            outer: i / SHARD_SIZE,
-            inner: i % SHARD_SIZE,
+            outer: i % num_shards,
+            inner: i / num_shards,
         }
     }
 

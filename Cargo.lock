@@ -629,6 +629,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "crossbeam-queue",
+ "crossbeam-utils",
  "dashmap",
  "diskann",
  "diskann-benchmark-core",
