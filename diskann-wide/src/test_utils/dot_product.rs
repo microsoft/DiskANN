@@ -3,7 +3,12 @@
  * Licensed under the MIT license.
  */
 
-use crate::{Const, SIMDDotProduct, SIMDVector, SupportedLaneCount, reference::ReferenceScalarOps};
+use half::f16;
+
+use crate::{
+    Const, SIMDDotProduct, SIMDVector, SupportedLaneCount, reference::ReferenceScalarOps,
+    reference::cast_f16_to_f32,
+};
 
 /////////////////////////
 // Expected Reductions //
@@ -27,6 +32,13 @@ pub(crate) trait ExpectedDot<To, Left, Right, const EVERY: usize> {
             left.try_into().unwrap(),
             right.try_into().unwrap(),
         )
+    }
+}
+
+// Each half-precision pair is promoted and fused with one f32 accumulator lane.
+impl ExpectedDot<f32, f16, f16, 1> for DotSchema {
+    fn expected_dot_impl(accumulator: f32, left: &[f16; 1], right: &[f16; 1]) -> f32 {
+        cast_f16_to_f32(left[0]).expected_fma_(cast_f16_to_f32(right[0]), accumulator)
     }
 }
 
@@ -157,7 +169,12 @@ pub(crate) fn test_dot_product_impl<
     let iter = std::iter::zip(left.chunks(EVERY), right.chunks(EVERY)).enumerate();
     for (i, (l, r)) in iter {
         let expected = DotSchema::expected_dot(accumulator[i], l, r);
-        assert_eq!(expected, result[i])
+        // NaNs compare unequal to themselves, but both paths should produce NaN.
+        #[allow(clippy::eq_op)]
+        if expected != expected && result[i] != result[i] {
+            continue;
+        }
+        assert_eq!(expected, result[i]);
     }
 }
 

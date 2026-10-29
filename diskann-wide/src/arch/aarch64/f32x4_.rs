@@ -139,7 +139,7 @@ impl SIMDDotProduct<f16x4> for f32x4 {
                         acc = inout(vreg) acc,
                         left = in(vreg) left,
                         right = in(vreg) right,
-                        options(nomem, nostack)
+                        options(pure, nomem, nostack)
                     );
                 }
                 acc
@@ -242,15 +242,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_f16_dot_product() {
-        if let Some(arch) = test_neon() {
-            let left = f16x4::from_array(arch, [1.0, 2.0, -3.0, 4.0].map(f16::from_f32));
-            let right = f16x4::from_array(arch, [2.0, -1.0, 0.5, 0.25].map(f16::from_f32));
-            let acc = f32x4::from_array(arch, [0.5, 1.0, 2.0, -3.0]);
-            assert_eq!(acc.dot_simd(left, right).to_array(), [2.5, -1.0, 0.5, -2.0]);
-        }
-    }
+    test_utils::dot_product::test_dot_product!(
+        (f16x4, f16x4) => f32x4,
+        0x8f36d1c4b529a70e,
+        Some(test_neon().expect("FHM dot-product test requires Neon with fhm"))
+    );
 
     // Ops
     test_utils::ops::test_add!(f32x4, 0xcd7a8fea9a3fb727, test_neon());
