@@ -47,7 +47,7 @@ use crate::{
     counters::{Counters, LocalCounters},
     ids::IdMap,
     neighbors::Neighbors,
-    num::{IdLimit, MaxDegree},
+    num::{IdLimit, MaxDegree, Range},
     repr,
 };
 
@@ -145,18 +145,6 @@ where
     ) -> Result<Self::InternalId, Self::Error> {
         match self.mapping.to_internal(gid) {
             Some(id) => Ok(id),
-            None => Err(ANNError::message("no mapping")),
-        }
-    }
-
-    /// Translate an internal id to its corresponding external id.
-    fn to_external_id(
-        &self,
-        _context: &Self::Context,
-        id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error> {
-        match self.mapping.to_external(id) {
-            Some(gid) => Ok(gid),
             None => Err(ANNError::message("no mapping")),
         }
     }
@@ -292,7 +280,7 @@ pub struct SearchAccessor<'a> {
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
-    start_points: std::ops::Range<u32>,
+    start_points: Range,
     counters: LocalCounters<'a>,
 }
 
@@ -302,7 +290,7 @@ impl<'a> SearchAccessor<'a> {
         expand_beam: Box<dyn repr::ExpandBeam + 'a>,
         post_process: Option<Box<dyn repr::PostProcess + 'a>>,
         provider: &'a (dyn std::any::Any + Send + Sync),
-        start_points: std::ops::Range<u32>,
+        start_points: Range,
         counters: LocalCounters<'a>,
     ) -> Self {
         let id_limit = expand_beam.id_limit();
@@ -338,7 +326,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     fn starting_points(
         &self,
     ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send {
-        std::future::ready(Ok(self.start_points.clone().collect()))
+        std::future::ready(Ok(self.start_points.iter().collect()))
     }
 
     fn start_point_distances<F>(
@@ -349,7 +337,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
         F: FnMut(Self::Id, f32) + Send,
     {
         let work = move || {
-            for p in self.start_points.clone() {
+            for p in self.start_points {
                 match self.expand_beam.evaluate(p)? {
                     Some(distance) => {
                         // Counters are no-ops without `integration-test`.
@@ -888,10 +876,6 @@ mod tests {
             let i = (10 * i + 1) as u64;
             let internal = index.provider().to_internal_id(&Context, &i).unwrap();
             assert_ne!(internal as u64, i);
-            assert_eq!(
-                index.provider().to_external_id(&Context, internal).unwrap(),
-                i
-            );
 
             assert!(
                 !index
@@ -913,7 +897,6 @@ mod tests {
 
         // Assert that out-of-bounds translations returns errors.
         assert!(index.provider().to_internal_id(&Context, &0).is_err());
-        assert!(index.provider().to_external_id(&Context, 26).is_err());
 
         // Searches should return something reasonable.
         let knn = Knn::new(10, None).unwrap();

@@ -219,7 +219,7 @@ mod tests {
 
     use crate::{
         counters::Counters,
-        num::{Capacity, LogicalId, MaxDegree, SlotId},
+        num::{IdLimit, LogicalId, MaxDegree, SlotId},
         repr::test::Reference,
         store::Store,
     };
@@ -235,7 +235,7 @@ mod tests {
         };
 
         let store = Store::new(
-            store::Layout::new(Capacity::new(10), MaxDegree::new(0), 0),
+            store::Layout::new(IdLimit::new(10), MaxDegree::new(0)),
             store::Config::new(),
             config,
         )
