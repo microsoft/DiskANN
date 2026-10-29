@@ -161,7 +161,7 @@ pub(crate) enum Src {
 
 /// Destination of a moved point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Dst {
+pub(crate) enum Dst {
     /// Fitted child, by row.
     Child(usize),
     /// Retained neighbor, by index in [`Plan::neighbors`].

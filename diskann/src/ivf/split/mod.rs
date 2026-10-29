@@ -15,7 +15,7 @@ use crate::{
 pub(crate) mod plan;
 pub(crate) mod policies;
 
-pub(crate) use plan::Plan;
+pub(crate) use plan::{Dst, Plan};
 pub(crate) use policies::TwoMeansSplit;
 
 /// Replace parents and reassign their members together with selected neighbors.

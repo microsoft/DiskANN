@@ -17,7 +17,7 @@ use crate::{
     graph::SearchOutputBuffer,
     ivf::{
         region::AsMatRef,
-        split::{Plan, Split, TwoMeansSplit},
+        split::{self, Plan, Split, TwoMeansSplit, policies},
         traits::BuildStrategy,
     },
     neighbor::NeighborPriorityQueue,
@@ -123,11 +123,12 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 let lists = plan.sources().map(|(_, list)| list);
                 let (region, mut update) = accessor.fill(lists).await?;
 
-                TwoMeansSplit::new(config.split_iterations, config.dim).split(
-                    &region,
-                    &mut update,
-                    &plan,
-                )?;
+                TwoMeansSplit::new(
+                    config.split_iterations,
+                    config.dim,
+                    policies::NearestCentroid,
+                )
+                .split(&region, &mut update, &plan)?;
             };
 
             accessor.finish().await?;

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Two-means splitting and nearest-centroid regional assignment.
+//! Two-means splitting with assignment restricted to plan neighborhoods.
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
@@ -12,7 +12,6 @@ use diskann_utils::{
     Reborrow,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
-use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 
 use crate::{
     ANNError, ANNResult,
@@ -21,6 +20,7 @@ use crate::{
         split::{
             Plan, Split,
             plan::{Buckets, Destinations, Dst, Src},
+            policies::{Assign, NearestCentroid},
         },
     },
     utils::{TWO, VectorId},
@@ -43,15 +43,20 @@ impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
     }
 }
 
-/// Two-means per parent followed by nearest-centroid assignment within each neighborhood.
-pub struct TwoMeansSplit {
+/// Two-means per parent, then assignment within each neighborhood by `A`.
+pub struct TwoMeansSplit<A = NearestCentroid> {
     iterations: NonZeroUsize,
     dim: NonZeroUsize,
+    assign: A,
 }
 
-impl TwoMeansSplit {
-    pub fn new(iterations: NonZeroUsize, dim: NonZeroUsize) -> Self {
-        Self { iterations, dim }
+impl<A> TwoMeansSplit<A> {
+    pub fn new(iterations: NonZeroUsize, dim: NonZeroUsize, assign: A) -> Self {
+        Self {
+            iterations,
+            dim,
+            assign,
+        }
     }
 
     /// Fit two children per parent, in parent order.
@@ -88,30 +93,35 @@ impl TwoMeansSplit {
     }
 }
 
-///////////////
-// Centroids //
-///////////////
+/////////////
+// Targets //
+/////////////
 
-/// Destination centroids of one split: borrowed neighbor centroids and fitted children.
-struct Centroids<'a> {
+/// Destination centroids of one split: neighbor centroids and children.
+///
+/// A simple struct to to zip a centroid id or a neighbor id with
+/// it's appropriate centroid vector in order to use for assignment.
+struct Targets<'a> {
     neighbors: Vec<&'a [f32]>,
     children: &'a rowmajor::Owned<f32>,
     /// Children per parent.
     k: NonZeroUsize,
 }
 
-impl<'a> Centroids<'a> {
-    fn new<I: 'a, L, R>(
+impl<'a> Targets<'a> {
+    fn new<I, L, R>(
         region: &'a R,
-        neighbors: &[L],
+        plan: &Plan<L>,
         children: &'a rowmajor::Owned<f32>,
         k: NonZeroUsize,
     ) -> ANNResult<Self>
     where
         L: VectorId,
         R: View<I, L>,
+        I: 'a,
     {
-        let neighbors = neighbors
+        let neighbors = plan
+            .neighbors()
             .iter()
             .map(|&list| {
                 region
@@ -132,8 +142,8 @@ impl<'a> Centroids<'a> {
     fn extend(&self, src: Src, out: &mut Vec<(Dst, &'a [f32])>) {
         match src {
             Src::Parent(p) => {
-                let (k, children) = (self.k.get(), self.children);
-                out.extend((k * p..k * (p + 1)).map(|c| (Dst::Child(c), children.row(c))));
+                let range = self.k.get() * p..self.k.get() * (p + 1);
+                out.extend(range.map(|c| (Dst::Child(c), self.children.row(c))));
             }
             Src::Neighbor(n) => out.push((Dst::Neighbor(n), self.neighbors[n])),
         }
@@ -144,11 +154,12 @@ impl<'a> Centroids<'a> {
 // Split //
 ///////////
 
-impl<I, L, R> Split<I, L, R> for TwoMeansSplit
+impl<I, L, R, A> Split<I, L, R> for TwoMeansSplit<A>
 where
     I: Copy,
     L: VectorId,
     R: View<I, L>,
+    A: for<'a> Assign<R::VectorsRef<'a>>,
     for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
 {
     type Error = ANNError;
@@ -166,7 +177,7 @@ where
         }
 
         let children = self.fit(region, plan.parents())?;
-        let centroids = Centroids::new(region, neighbors, &children, TWO)?;
+        let centroids = Targets::new(region, plan, &children, TWO)?;
 
         let mut moved = Buckets::new(Destinations {
             neighbors: neighbors.len(),
@@ -198,13 +209,12 @@ where
                 Src::Neighbor(n) => Some(Dst::Neighbor(n)),
             };
 
-            for (&id, point) in view.members.iter().zip(vectors.reborrow().as_view().rows()) {
-                let dst = nearest(point, &candidates);
-
-                if Some(dst) != home {
-                    moved.push(id, dst);
-                }
-            }
+            self.assign
+                .assign(view.members, vectors.reborrow(), &candidates, |id, dst| {
+                    if Some(dst) != home {
+                        moved.push(id, dst);
+                    }
+                });
 
             let left = moved.seal();
 
@@ -227,24 +237,4 @@ where
 
         Ok(())
     }
-}
-
-/// The nearest candidate; the earliest wins ties, including infinite distances.
-///
-/// # Panics
-///
-/// Panics if `candidates` is empty.
-#[inline(always)]
-fn nearest(point: &[f32], candidates: &[(Dst, &[f32])]) -> Dst {
-    let (mut best, first) = candidates[0];
-    let mut min: f32 = SquaredL2::evaluate(point, first);
-    for &(dst, centroid) in &candidates[1..] {
-        let distance: f32 = SquaredL2::evaluate(point, centroid);
-        if distance < min {
-            min = distance;
-            best = dst;
-        }
-    }
-
-    best
 }

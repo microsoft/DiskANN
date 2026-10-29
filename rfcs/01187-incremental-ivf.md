@@ -94,13 +94,15 @@ coordinates whose squared norms overflow.
 `Split` is the complete numerical-policy boundary. The built-in `TwoMeansSplit`
 implementation allocates one child-centroid matrix and fits each parent into its
 two-row mutable window. The split plan gives the lists linked to each list. Every
-list is assigned in one pass: each point moves to the nearest destination owned by
-its own list or a linked list, where a parent owns its children and a neighbor owns
-its own centroid. A list's own destinations are compared first, then its links in
-link order, and the earliest wins ties, so neighbors keep tied points and a
-parent's tied points join its first child. Retained centroids are borrowed and
-children are read in place, so no centroid coordinates are copied. No intermediate
-buffer protocol or independent stage traits are required.
+list is assigned in one pass. Its candidates are the destinations owned by the list
+itself, then by each linked list in link order, where a parent owns its children and
+a neighbor owns its own centroid. An `Assign` implementation receives one list's
+members, vectors, and candidates, and emits one destination per member; the split
+records moves and leaves a neighbor's points that stay home unedited. The default
+`NearestCentroid` picks the nearest candidate and the earliest wins ties, so
+neighbors keep tied points and a parent's tied points join its first child.
+Retained centroids are borrowed and children are read in place, so no centroid
+coordinates are copied. No intermediate buffer protocol is required.
 The index currently selects this implementation directly. Other split strategies
 may use different vector representations or combine fitting and assignment
 differently. Restricted neighbor policies use the caller-supplied
