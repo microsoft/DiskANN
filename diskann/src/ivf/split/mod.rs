@@ -16,7 +16,7 @@ pub(crate) mod plan;
 pub(crate) mod policies;
 
 pub(crate) use plan::{Dst, Plan};
-pub(crate) use policies::TwoMeansSplit;
+pub(crate) use policies::KMeansSplit;
 
 /// Replace parents and reassign their members together with selected neighbors.
 pub(crate) trait Split<I, L, R>
@@ -32,10 +32,7 @@ where
     ///
     /// A failure may leave partial private updates. The caller must discard the
     /// operation rather than finalize it.
-    fn split<U>(
-        &mut self,
-        region: &R,
-        update: &mut U,
-        plan: &Plan<L>,
-    ) -> Result<(), Self::Error> where U: Update<I, L>;
+    fn split<U>(&mut self, region: &R, update: &mut U, plan: &Plan<L>) -> Result<(), Self::Error>
+    where
+        U: Update<I, L>;
 }

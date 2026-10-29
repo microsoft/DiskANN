@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Two-means splitting with assignment restricted to plan neighborhoods.
+//! k-means splitting with assignment restricted to plan neighborhoods.
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
@@ -24,9 +24,8 @@ use crate::{
             policies::{Assign, NearestCentroid},
         },
     },
-    utils::{TWO, VectorId},
+    utils::VectorId,
 };
-
 
 ////////////
 // Errors //
@@ -43,6 +42,20 @@ pub(crate) enum SplitError<L> {
 impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
     #[track_caller]
     fn from(error: SplitError<L>) -> Self {
+        Self::new(error)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Expected at least {required} points to seed, got {actual}")]
+pub(crate) struct NotEnoughPoints {
+    pub(crate) actual: usize,
+    pub(crate) required: usize,
+}
+
+impl From<NotEnoughPoints> for ANNError {
+    #[track_caller]
+    fn from(error: NotEnoughPoints) -> Self {
         Self::new(error)
     }
 }
@@ -68,20 +81,6 @@ pub(crate) trait Seed {
         points: rowmajor::Ref<'_, f32>,
         centers: rowmajor::Mut<'_, f32>,
     ) -> Result<(), Self::Error>;
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("Expected at least {required} points to seed, got {actual}")]
-pub(crate) struct NotEnoughPoints {
-    pub(crate) actual: usize,
-    pub(crate) required: usize,
-}
-
-impl From<NotEnoughPoints> for ANNError {
-    #[track_caller]
-    fn from(error: NotEnoughPoints) -> Self {
-        Self::new(error)
-    }
 }
 
 /// Seeds with the first rows of `points`.
@@ -113,21 +112,30 @@ impl Seed for FirstPoints {
     }
 }
 
-//////////////
-// TwoMeans //
-//////////////
+////////////
+// KMeans //
+////////////
 
-/// Two-means per parent, seeded by `S`, then assignment within each neighborhood by `A`.
-pub struct TwoMeansSplit<A = NearestCentroid, S = FirstPoints> {
+/// k-means per parent, seeded by `S`, then assignment within each neighborhood by `A`.
+pub struct KMeansSplit<A = NearestCentroid, S = FirstPoints> {
+    /// Children per parent.
+    k: NonZeroUsize,
     iterations: NonZeroUsize,
     dim: NonZeroUsize,
     assign: A,
     seed: S,
 }
 
-impl<A, S: Seed> TwoMeansSplit<A, S> {
-    pub fn new(iterations: NonZeroUsize, dim: NonZeroUsize, assign: A, seed: S) -> Self {
+impl<A, S: Seed> KMeansSplit<A, S> {
+    pub fn new(
+        k: NonZeroUsize,
+        iterations: NonZeroUsize,
+        dim: NonZeroUsize,
+        assign: A,
+        seed: S,
+    ) -> Self {
         Self {
+            k,
             iterations,
             dim,
             assign,
@@ -135,7 +143,7 @@ impl<A, S: Seed> TwoMeansSplit<A, S> {
         }
     }
 
-    /// Fit two children per parent, in parent order.
+    /// Fit `k` children per parent, in parent order.
     fn fit<I, L, R>(&mut self, region: &R, parents: &[L]) -> ANNResult<rowmajor::Owned<f32>>
     where
         L: VectorId,
@@ -143,9 +151,9 @@ impl<A, S: Seed> TwoMeansSplit<A, S> {
         for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
     {
         let mut children =
-            rowmajor::Owned::try_from_element(parents.len() * TWO.get(), self.dim.get(), 0.0)?;
+            rowmajor::Owned::try_from_element(parents.len() * self.k.get(), self.dim.get(), 0.0)?;
 
-        for (&list, mut dst) in parents.iter().zip(children.window_iter_mut(TWO)) {
+        for (&list, mut dst) in parents.iter().zip(children.window_iter_mut(self.k)) {
             let vectors = region
                 .get_vectors(list)
                 .ok_or(SplitError::UnableToRetrieve(list))?;
@@ -225,7 +233,7 @@ impl<'a> Targets<'a> {
 // Split //
 ///////////
 
-impl<I, L, R, A, S> Split<I, L, R> for TwoMeansSplit<A, S>
+impl<I, L, R, A, S> Split<I, L, R> for KMeansSplit<A, S>
 where
     I: Copy,
     L: VectorId,
@@ -249,7 +257,7 @@ where
         }
 
         let children = self.fit(region, plan.parents())?;
-        let targets = Targets::new(region, plan, &children, TWO)?;
+        let targets = Targets::new(region, plan, &children, self.k)?;
 
         let mut moved = Buckets::new(Destinations {
             neighbors: neighbors.len(),

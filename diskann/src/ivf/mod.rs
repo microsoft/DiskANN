@@ -17,7 +17,7 @@
 //! each neighbor's points stay or move to the nearest child of a parent linked to it.
 //! Parent centroids are not assignment candidates; retained centroids are unchanged.
 //! Regional splitting owns fitting, assignment, and updates as one operation.
-//! The built-in two-means implementation fits each parent independently, then assigns
+//! The built-in k-means implementation fits each parent independently, then assigns
 //! each point within its list's neighborhood. Child centroids are owned;
 //! retained centroids and source vectors remain borrowed.
 //!
@@ -34,7 +34,7 @@
 //! returning. The index writes the final top-k only after the scan succeeds.
 //!
 //! This first implementation supports batch insertion into an already initialized
-//! provider, with two-means splitting and optional neighborhood reassignment.
+//! provider, with k-means splitting and optional neighborhood reassignment.
 //! Setting [`Config::reassign_count`] to [`ReassignCount::None`] preserves
 //! parent-only splitting.
 //! Each touched parent is split once; neighbors that become oversized are not

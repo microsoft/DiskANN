@@ -10,8 +10,8 @@ use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 
 use crate::ivf::{region::AsMatRef, split::Dst};
 
-pub(crate) mod twomeans;
-pub(crate) use twomeans::{FirstPoints, TwoMeansSplit};
+pub(crate) mod kmeans;
+pub(crate) use kmeans::{FirstPoints, KMeansSplit};
 
 ////////////
 // Assign //

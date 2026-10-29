@@ -17,7 +17,7 @@ use crate::{
     graph::SearchOutputBuffer,
     ivf::{
         region::AsMatRef,
-        split::{self, Plan, Split, TwoMeansSplit, policies},
+        split::{self, KMeansSplit, Plan, Split, policies},
         traits::BuildStrategy,
     },
     neighbor::NeighborPriorityQueue,
@@ -30,13 +30,15 @@ pub enum ReassignCount {
     Count(NonZeroUsize),
 }
 
-/// Parameters for incremental two-means splitting.
+/// Parameters for incremental k-means splitting.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
     /// Dimension of every canonical point and centroid supplied by the provider.
     pub dim: NonZeroUsize,
     /// Split a touched list when its pending membership exceeds this size.
     pub split_threshold: NonZeroUsize,
+    /// Number of children `k` that each split parent is replaced with.
+    pub split_k: NonZeroUsize,
     /// Nearest-list query count per split parent, before filtering split parents.
     ///
     /// - [`ReassignCount::None`] corresponds to no neighborhood gathering.
@@ -123,7 +125,8 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 let lists = plan.sources().map(|(_, list)| list);
                 let (region, mut update) = accessor.fill(lists).await?;
 
-                TwoMeansSplit::new(
+                KMeansSplit::new(
+                    config.split_k,
                     config.split_iterations,
                     config.dim,
                     policies::NearestCentroid,

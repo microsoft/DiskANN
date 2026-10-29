@@ -36,12 +36,12 @@ Nearest-list queries may return the queried parent or other split parents;
 these consume query slots, so fewer than `n` retained neighbors may remain.
 Shared neighbors are filled once. A split plan lists parents first, then distinct
 neighbors in discovery order, and links each parent with the neighbors selected for
-it. Filling borrows the plan's list IDs, and the built-in two-means split restricts
+it. Filling borrows the plan's list IDs, and the built-in k-means split restricts
 movement to these links.
 
-Two children are fitted per parent, using only that parent's complete membership.
-All children are fitted before final assignment. Each parent's points are then
-assigned to the nearest of its two children and its linked neighbors. Each
+`Config::split_k` children are fitted per parent, using only that parent's complete
+membership. All children are fitted before final assignment. Each parent's points
+are then assigned to the nearest of its children and its linked neighbors. Each
 neighbor's points stay, or move to the nearest child of a parent linked to it;
 parent centroids are not candidates. Retained lists keep their identities and
 centroids while receiving only membership removals and appends for points that move.
@@ -86,16 +86,17 @@ The split operation receives parent IDs, neighbor IDs, the region, and its write
 and controls retrieval and conversion of provider-defined vector handles without
 per-point reference tables. The built-in strategy borrows vector matrices and member
 slices; a provider with scattered storage may pack rows during filling to satisfy
-their matrix interface. The built-in two-means fitter requires at least two points
-per parent, asks a `Seed` implementation for the initial centers, and delegates to
-quantization's Lloyd routine, which
+their matrix interface. The built-in k-means fitter asks a `Seed` implementation
+for each parent's `k` initial centers, and delegates to quantization's Lloyd
+routine, which
 builds internal transposed scratch and resets empty centers to zero. Seeding may
-fail, and the default `FirstPoints` seeds with the first two input rows. Lloyd's
+fail; the default `FirstPoints` seeds with the first `k` input rows and fails when a
+parent has fewer than `k` points. Lloyd's
 norm-based distance arithmetic does not preserve support for extreme finite
 coordinates whose squared norms overflow.
-`Split` is the complete numerical-policy boundary. The built-in `TwoMeansSplit`
+`Split` is the complete numerical-policy boundary. The built-in `KMeansSplit`
 implementation allocates one child-centroid matrix and fits each parent into its
-two-row mutable window. The split plan gives the lists linked to each list. Every
+`k`-row mutable window. The split plan gives the lists linked to each list. Every
 list is assigned in one pass. Its candidates are the destinations owned by the list
 itself, then by each linked list in link order, where a parent owns its children and
 a neighbor owns its own centroid. An `Assign` implementation receives one list's
@@ -112,9 +113,9 @@ parent-neighbor relationships preserved in the split plan.
 Alternative geometries must keep fitting, assignment, and provider routing
 compatible.
 
-`Split::Error` allows implementation-specific failures. `TwoMeansSplitter` returns
-`ANNError`, preserving typed errors for empty parent selections, centroid-count
-overflow, missing sources, and insufficient points. Providers supply dimensionally
+`Split::Error` allows implementation-specific failures. `KMeansSplit` returns
+`ANNError`, preserving typed errors for empty parent selections, missing sources,
+and seeding failures such as insufficient points. Providers supply dimensionally
 consistent vectors through infallible matrix-view conversion. Conversion of typed
 errors to `ANNError` records the caller location. All numerical failures abort
 before regional writes.

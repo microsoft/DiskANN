@@ -580,6 +580,7 @@ pub(super) fn index_with_neighbors(
     let index = IVFIndex::new(Config {
         dim: NonZeroUsize::new(store.dim).expect("test stores have a positive dimension"),
         split_threshold: NonZeroUsize::new(threshold).unwrap(),
+        split_k: TWO,
         reassign_count: NonZeroUsize::new(neighbors)
             .map_or(ReassignCount::None, ReassignCount::Count),
         split_iterations: NonZeroUsize::new(5).unwrap(),
