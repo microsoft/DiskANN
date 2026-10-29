@@ -645,12 +645,7 @@ impl Test {
             transforms::TransformKind::DoubleHadamard {
                 target_dim: transforms::TargetDim::Same,
             },
-            self.data.metric.try_into().map_err(|_| {
-                anyhow::anyhow!(
-                    "metric {} not supported for spherical quantization",
-                    self.data.metric
-                )
-            })?,
+            self.data.metric.into(),
             PreScale::ReciprocalMeanNorm,
             &mut rand::rngs::StdRng::seed_from_u64(0xc0ff33),
             GlobalAllocator,
