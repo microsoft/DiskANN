@@ -385,6 +385,7 @@ where
 
 enum MaybeLazy<'a> {
     Lazy(&'a dyn std::fmt::Display),
+    Debug(&'a dyn std::fmt::Debug),
     Eager(String),
 }
 
@@ -392,6 +393,7 @@ impl std::fmt::Display for MaybeLazy<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Lazy(lazy) => write!(f, "{}", lazy),
+            Self::Debug(debug) => write!(f, "{:?}", debug),
             Self::Eager(s) => f.write_str(s),
         }
     }
@@ -411,6 +413,7 @@ impl std::fmt::Debug for MaybeLazy<'_> {
                 let as_display = AsDisplay(o);
                 f.debug_tuple("MaybeLazy::Lazy").field(&as_display).finish()
             }
+            Self::Debug(o) => f.debug_tuple("MaybeLazy::Debug").field(o).finish(),
             Self::Eager(s) => f.debug_tuple("MaybeLazy::Eager").field(s).finish(),
         }
     }
@@ -476,6 +479,12 @@ impl<'a> KeyValue<'a> {
     pub fn push(&mut self, key: &'a str, value: &'a dyn std::fmt::Display) {
         self.max_key_length = self.max_key_length.max(key.len());
         self.kv.push((key, MaybeLazy::Lazy(value)))
+    }
+
+    /// Push the key-value pair to `self` for formatting via [`std::fmt::Debug`].
+    pub fn push_debug(&mut self, key: &'a str, value: &'a dyn std::fmt::Debug) {
+        self.max_key_length = self.max_key_length.max(key.len());
+        self.kv.push((key, MaybeLazy::Debug(value)))
     }
 
     /// Push the key-value pair to `self` for formatting - eagerly formatting `value`.
@@ -740,6 +749,20 @@ string,        ,   string
     // KeyValue //
     //----------//
 
+    struct Snoop;
+
+    impl std::fmt::Display for Snoop {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "display")
+        }
+    }
+
+    impl std::fmt::Debug for Snoop {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "debug")
+        }
+    }
+
     // Strip a preceding newline if it exists.
     fn process(x: &str) -> &str {
         let x = x.strip_prefix('\n').unwrap_or(x);
@@ -764,10 +787,14 @@ string,        ,   string
         let mut kv = KeyValue::new();
         kv.push("a", &1);
         kv.push("hello", &"world");
+        kv.push("display", &Snoop);
+        kv.push_debug("debug", &Snoop);
         let expected = process(
             r#"
-a:     1
-hello: world
+a:       1
+hello:   world
+display: display
+debug:   debug
 "#,
         );
         assert_eq!(kv.to_string(), expected);
@@ -816,9 +843,13 @@ another line: 1
 
     #[test]
     fn maybe_lazy_debug() {
-        let x = MaybeLazy::Lazy(&1);
+        let x = MaybeLazy::Lazy(&Snoop);
         let dbg = format!("{:?}", x);
-        assert_eq!(dbg, "MaybeLazy::Lazy(1)");
+        assert_eq!(dbg, "MaybeLazy::Lazy(display)");
+
+        let x = MaybeLazy::Debug(&Snoop);
+        let dbg = format!("{:?}", x);
+        assert_eq!(dbg, "MaybeLazy::Debug(debug)");
 
         let x = MaybeLazy::Eager("hello".into());
         let dbg = format!("{:?}", x);

@@ -5,9 +5,9 @@
 
 use diskann_benchmark_core as benchmark_core;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub(crate) struct RecallMetrics {
     /// The `k` value for `k-recall-at-n`.
