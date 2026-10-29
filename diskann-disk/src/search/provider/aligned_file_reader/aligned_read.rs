@@ -21,7 +21,7 @@ pub trait Alignment {
 }
 
 macro_rules! alignment_marker {
-    ($name:ident, $value:expr_2021) => {
+    ($name:ident, $value:expr) => {
         #[doc = concat!("Alignment witness for ", stringify!($value), " bytes.")]
         #[derive(Debug, Clone, Copy)]
         pub struct $name;
