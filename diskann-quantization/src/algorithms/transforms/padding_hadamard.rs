@@ -369,7 +369,9 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
-    use crate::{alloc::GlobalAllocator, test_util::Check};
+    use crate::alloc::GlobalAllocator;
+    #[cfg(not(miri))]
+    use crate::test_util::Check;
 
     // Since we use a slightly non-obvious strategy for applying the +/-1 permutation, we
     // test its behavior explicitly.
