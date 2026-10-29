@@ -711,3 +711,5 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
     assert_eq!(zero.members[0], [0, 1, 2]);
     assert!(zero.members[1].is_empty());
 }
+
+mod search;
