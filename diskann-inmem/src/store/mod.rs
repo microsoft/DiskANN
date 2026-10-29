@@ -82,6 +82,7 @@ use crate::{
 
 // Unconditional
 pub(crate) mod intrusive;
+pub(crate) mod sidecar;
 pub(crate) mod slots;
 
 // Quantization

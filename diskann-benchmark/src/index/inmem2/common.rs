@@ -45,6 +45,13 @@ pub(super) mod dto {
     }
 
     impl Data {
+        pub(in crate::index::inmem2) fn example_u8() -> Self {
+            Self {
+                data_type: <u8 as AsDataType>::DATA_TYPE,
+                ..Self::example()
+            }
+        }
+
         pub(in crate::index::inmem2) fn example() -> Self {
             Self {
                 data_type: DataType::Float32,

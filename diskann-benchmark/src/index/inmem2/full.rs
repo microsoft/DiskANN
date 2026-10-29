@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::io::Write;
+use std::{io::Write, num::NonZeroUsize};
 
 use diskann_benchmark_runner::{
     self as dbr,
@@ -19,11 +19,8 @@ use crate::{
 };
 
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
-    registry.register_regression("inmem2-f32", RunBuildAndSearch::<f32>::new())?;
-    registry.register_regression("inmem2-f16", RunBuildAndSearch::<half::f16>::new())?;
     registry.register_regression("inmem2-u8", RunBuildAndSearch::<u8>::new())?;
-
-    registry.register("inmem2-f32-stream", RunStream::<f32>::new())?;
+    registry.register_regression("inmem2-f32", RunBuildAndSearch::<f32>::new())?;
     Ok(())
 }
 
@@ -36,20 +33,39 @@ mod dto {
 
     use serde::{Deserialize, Serialize};
 
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    pub(super) struct Prefetch {
+        pub(super) bitmap_lookahead: usize,
+        pub(super) data_lookahead: usize,
+    }
+
+    impl Default for Prefetch {
+        fn default() -> Self {
+            Self {
+                bitmap_lookahead: 24,
+                data_lookahead: 12,
+            }
+        }
+    }
+
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(super) struct BuildAndSearch {
         pub(super) data: inmem2::common::dto::Data,
         pub(super) build: inmem2::benchmark::build::dto::Config,
         pub(super) search: inmem2::benchmark::knn::dto::Knn,
+        #[serde(default)]
+        pub(super) prefetch: Prefetch,
     }
 
     impl BuildAndSearch {
         pub(super) fn example() -> Self {
             Self {
-                data: inmem2::common::dto::Data::example(),
+                data: inmem2::common::dto::Data::example_u8(),
                 build: inmem2::benchmark::build::dto::Config::example(),
                 search: inmem2::benchmark::knn::dto::Knn::example(),
+                prefetch: Prefetch::default(),
             }
         }
     }
@@ -64,6 +80,7 @@ struct BuildAndSearch {
     data: inmem2::common::Data,
     build: inmem2::benchmark::build::Config,
     search: inmem2::benchmark::knn::Knn,
+    prefetch: dto::Prefetch,
     // The raw input.
     raw: serde_json::Value,
 }
@@ -79,6 +96,7 @@ impl FromRawWith for BuildAndSearch {
             data,
             build,
             search,
+            prefetch,
         } = raw;
 
         let data = inmem2::common::Data::from_raw_with(data, checker.as_deref_mut())?;
@@ -89,6 +107,7 @@ impl FromRawWith for BuildAndSearch {
             data,
             build,
             search,
+            prefetch: *prefetch,
             raw: serde_json::to_value(raw)?,
         })
     }
@@ -100,12 +119,15 @@ impl std::fmt::Display for BuildAndSearch {
             data,
             build,
             search,
+            prefetch,
             raw: _,
         } = self;
         let mut kv = dbr::utils::fmt::KeyValue::new();
         kv.push("data", &data);
         kv.push("build", &build);
         kv.push("search", &search);
+        kv.push("bitmap lookahead", &prefetch.bitmap_lookahead);
+        kv.push("data lookahead", &prefetch.data_lookahead);
         write!(f, "{}", kv)
     }
 }
@@ -183,7 +205,9 @@ where
             di::num::MaxDegree::new(input.build.max_degree()),
             input.data.distance(),
             start,
-        )?;
+        )?
+        .prefetch(NonZeroUsize::new(input.prefetch.data_lookahead))
+        .bitmap_prefetch(NonZeroUsize::new(input.prefetch.bitmap_lookahead));
 
         let provider = di::Provider::<_, u32>::new(config)?;
         let engine = input.build.engine(provider)?;
@@ -212,114 +236,6 @@ where
         after: &Self::Output,
     ) -> anyhow::Result<dbr::benchmark::PassFail<Finished, Finished>> {
         Ok(tolerances.check(before, after).pass_fail())
-    }
-}
-
-//--------//
-// BigANN //
-//--------//
-
-#[derive(Debug)]
-struct Stream {
-    stream: inmem2::benchmark::bigann::BigANN,
-    // The raw input.
-    raw: serde_json::Value,
-}
-
-impl std::fmt::Display for Stream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.stream.fmt(f)
-    }
-}
-
-impl dbr::Input for Stream {
-    type Raw = inmem2::benchmark::bigann::dto::BigANN;
-    fn tag() -> &'static str {
-        "inmem2-fp-bigann-stream"
-    }
-
-    fn from_raw(raw: Self::Raw, checker: &mut dbr::Checker) -> anyhow::Result<Self> {
-        let stream = inmem2::benchmark::bigann::BigANN::from_raw_with(&raw, Some(checker))?;
-        Ok(Self {
-            stream,
-            raw: serde_json::to_value(raw)?,
-        })
-    }
-
-    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(self.raw.clone())
-    }
-
-    fn example() -> Self::Raw {
-        Self::Raw::example()
-    }
-}
-
-#[derive(Debug)]
-struct RunStream<T>(std::marker::PhantomData<T>);
-
-impl<T> RunStream<T> {
-    fn new() -> Self {
-        Self(std::marker::PhantomData)
-    }
-}
-
-impl<T> dbr::Benchmark for RunStream<T>
-where
-    T: di::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
-{
-    type Input = Stream;
-    type Output = inmem2::benchmark::bigann::Stats;
-
-    fn try_match(
-        &self,
-        input: &Stream,
-        context: &dbr::benchmark::MatchContext,
-    ) -> dbr::benchmark::Score {
-        let mut score = context.success(0);
-        match_data_type::<T>(&mut score, input.stream.data_type());
-        score
-    }
-
-    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "full-precision streaming with data type {}",
-            Quote(T::DATA_TYPE)
-        )?;
-
-        Ok(())
-    }
-
-    fn run(
-        &self,
-        input: &Stream,
-        _checkpoint: dbr::Checkpoint<'_>,
-        mut output: &mut dyn dbr::Output,
-    ) -> anyhow::Result<Self::Output> {
-        writeln!(output, "{}\n", input)?;
-
-        let Stream { stream, raw: _ } = input;
-
-        // Load data.
-        let data = stream.load_data::<T>(Some(output))?;
-
-        // Compute the medoid of the dataset as the single start point.
-        let start = diskann::graph::StartPointStrategy::Medoid.compute(data.as_view())?;
-        let config = di::repr::Full::config(
-            di::num::Capacity::new(stream.max_points()),
-            di::num::MaxDegree::new(stream.max_degree()),
-            stream.distance(),
-            start,
-        )?;
-
-        let provider = di::Provider::<_, u32>::new(config)?;
-        let engine = stream.engine(provider)?;
-        let runner = stream.runner(data)?;
-        let stats = runner.run(engine, output)?;
-
-        writeln!(output, "{}", stats)?;
-        Ok(stats)
     }
 }
 

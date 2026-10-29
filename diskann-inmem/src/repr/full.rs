@@ -6,7 +6,7 @@
 //! # Full-Precision
 //!
 //! A concurrent data store for [`crate::Provider`] enabling full-precision searches and
-//! inserts for collections consisting of `f32`, `f16`, `u8`, or `i8` data types.
+//! inserts for collections consisting of `u8` data.
 //!
 //! The [`FullPrecision`] generic bound can be used to constrain these data types.
 
@@ -14,8 +14,8 @@ mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
     //!
-    //! * [`crate::repr::internal::intrusive::ExpandBeam`]: For index search.
-    //! * [`crate::repr::internal::intrusive::Prune`]: For index construction.
+    //! * [`crate::repr::internal::sidecar::ExpandBeam`]: For index search.
+    //! * [`crate::repr::internal::sidecar::Prune`]: For index construction.
     //!
     //! These two structs are modular with respect to their exact distance function and
     //! prefetcher. Since [`super::repr::ExpandBeam`] and [`super::repr::Prune`] are
@@ -41,7 +41,6 @@ use diskann::{ANNError, ANNResult, utils::IntoUsize};
 use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{
     UnalignedSlice,
-    conversion::SliceCast,
     distance::{
         Cosine, CosineNormalized, Distance as VDistance, InnerProduct, Metric, Specialize,
         SquaredL2,
@@ -62,9 +61,8 @@ use crate::{
     repr::{self, internal::Calf},
     store::{
         self, Store,
-        intrusive::{self, Intrusive},
+        sidecar::{self, Sidecar},
     },
-    tag::AtomicTag,
 };
 
 /// Construct an [`UnalignedSlice`] over `bytes`.
@@ -118,9 +116,11 @@ pub struct Config<T> {
     start_points: rowmajor::Owned<T>,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
+    bitmap_lookahead: Option<NonZeroUsize>,
 }
 
 const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(12).unwrap();
+const DEFAULT_BITMAP_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(24).unwrap();
 
 impl<T> Config<T> {
     /// Create a new [`Config`] for a [`Full`].
@@ -165,6 +165,7 @@ impl<T> Config<T> {
             start_points,
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
+            bitmap_lookahead: Some(DEFAULT_BITMAP_LOOKAHEAD),
         })
     }
 
@@ -181,6 +182,13 @@ impl<T> Config<T> {
     /// cache. Passing `None` disables prefetching.
     pub fn prefetch(mut self, lookahead: Option<NonZeroUsize>) -> Self {
         self.lookahead = lookahead;
+        self
+    }
+
+    /// Set readability bitmap prefetch lookahead independently of payload prefetch.
+    /// Passing `None` disables bitmap prefetching.
+    pub fn bitmap_prefetch(mut self, lookahead: Option<NonZeroUsize>) -> Self {
+        self.bitmap_lookahead = lookahead;
         self
     }
 
@@ -241,9 +249,10 @@ pub struct Full<T>
 where
     T: 'static,
 {
-    store: Store<Intrusive>,
+    store: Store<Sidecar>,
     metric: Metric,
     lookahead: Option<NonZeroUsize>,
+    bitmap_lookahead: Option<NonZeroUsize>,
     _type: PhantomData<T>,
 }
 
@@ -280,11 +289,12 @@ where
             start_points,
             store,
             lookahead,
+            bitmap_lookahead,
         } = config;
 
         let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
-        let intrusive = Intrusive::config(bytes);
-        let store = Store::new(layout, store, intrusive)?;
+        let sidecar = Sidecar::config(bytes);
+        let store = Store::new(layout, store, sidecar)?;
 
         // Initialize start points.
         for (i, row) in std::iter::zip(store.frozen(), start_points.rows()) {
@@ -306,6 +316,7 @@ where
             store,
             metric,
             lookahead,
+            bitmap_lookahead,
             _type: PhantomData,
         })
     }
@@ -341,8 +352,8 @@ where
         }
     }
 
-    fn reader(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
-        self.store.guard(|intrusive, guard| intrusive.reader(guard))
+    fn reader(&self) -> Result<sidecar::Reader<'_>, epoch::Unavailable> {
+        self.store.guard(|sidecar, guard| sidecar.reader(guard))
     }
 }
 
@@ -371,7 +382,7 @@ repr::internal::macros::representation!(
 
 repr::internal::macros::set_guard!(
     /// A [`repr::Guard`] for [`Full`].
-    for<'a> intrusive::Exclusive<'a>
+    for<'a> sidecar::Exclusive<'a>
 );
 
 impl<T> repr::Set<&[T]> for Full<T>
@@ -543,12 +554,13 @@ where
 // Expand Beam (Search) //
 //----------------------//
 
-/// A temporary precursor for [`repr::internal::intrusive::ExpandBeam`] to simplify macros.
+/// A temporary precursor for [`repr::internal::sidecar::ExpandBeam`] to simplify macros.
 #[derive(Debug)]
 struct IntoExpandBeam<'a, T, U> {
     query: Calf<'a, [T]>,
-    reader: store::intrusive::Reader<'a>,
+    reader: store::sidecar::Reader<'a>,
     lookahead: Option<NonZeroUsize>,
+    bitmap_lookahead: Option<NonZeroUsize>,
     _data: PhantomData<U>,
 }
 
@@ -563,6 +575,7 @@ impl<'a, T, U> IntoExpandBeam<'a, T, U> {
             query,
             reader,
             lookahead,
+            bitmap_lookahead: full.bitmap_lookahead,
             _data: PhantomData,
         })
     }
@@ -571,16 +584,17 @@ impl<'a, T, U> IntoExpandBeam<'a, T, U> {
         self,
         distance: D,
         prefetch: P,
-    ) -> repr::internal::intrusive::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
+    ) -> repr::internal::sidecar::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
     where
         D: Distance<T, U>,
         P: Prefetch,
     {
-        repr::internal::intrusive::ExpandBeam::new(
+        repr::internal::sidecar::ExpandBeam::new(
             self.reader,
             QueryDistance::new(self.query, distance),
             prefetch,
             self.lookahead,
+            self.bitmap_lookahead,
         )
     }
 }
@@ -603,7 +617,7 @@ diskann::convert_error!(ExpandBeamError);
 /////////////////
 
 const fn compute_bytes<T>(dim: usize) -> usize {
-    dim * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
+    dim * std::mem::size_of::<T>()
 }
 
 macro_rules! expand_beam {
@@ -623,9 +637,9 @@ macro_rules! expand_beam {
 }
 
 macro_rules! prune {
-    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::intrusive::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
+    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::sidecar::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
     ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
-        repr::internal::intrusive::Prune::new(
+        repr::internal::sidecar::Prune::new(
             $reader,
             Pure::<$self, $self, Specialize<$N, $f>>::new(),
         )
@@ -649,49 +663,7 @@ impl FullPrecisionImpl for f32 {
                 }
             }
             Metric::InnerProduct => expand_beam!(into, InnerProduct),
-            Metric::Cosine => expand_beam!(into, Cosine),
-            Metric::CosineNormalized => expand_beam!(into, CosineNormalized),
-        };
-
-        Ok(output)
-    }
-
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
-
-        let output: Box<dyn repr::Prune> = match full.metric {
-            Metric::L2 => prune!(Self, reader, SquaredL2),
-            Metric::InnerProduct => prune!(Self, reader, InnerProduct),
-            Metric::Cosine => prune!(Self, reader, Cosine),
-            Metric::CosineNormalized => prune!(Self, reader, CosineNormalized),
-        };
-
-        Ok(output)
-    }
-}
-
-impl FullPrecisionImpl for f16 {
-    fn make_expand_beam<'a>(
-        full: &'a Full<f16>,
-        query: &'a [f16],
-    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
-        let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, full.dim()).collect();
-        diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
-        let query = Calf::Owned(as_f32);
-
-        let into = IntoExpandBeam::new(full, query)?;
-
-        let output: Box<dyn repr::ExpandBeam> = match full.metric {
-            Metric::L2 => {
-                if full.dim() == 100 {
-                    expand_beam!(into, { f16, 100, SquaredL2 })
-                } else {
-                    expand_beam!(into, SquaredL2)
-                }
-            }
-            Metric::InnerProduct => expand_beam!(into, InnerProduct),
-            Metric::Cosine => expand_beam!(into, Cosine),
-            Metric::CosineNormalized => expand_beam!(into, CosineNormalized),
+            Metric::Cosine | Metric::CosineNormalized => expand_beam!(into, Cosine),
         };
 
         Ok(output)
@@ -747,34 +719,6 @@ impl FullPrecisionImpl for u8 {
     }
 }
 
-impl FullPrecisionImpl for i8 {
-    fn make_expand_beam<'a>(
-        full: &'a Full<i8>,
-        query: &'a [i8],
-    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
-        let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
-
-        let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
-
-        let output: Box<dyn repr::ExpandBeam + 'a> = into
-            .into_expand_beam(distance, prefetch::Loop::new())
-            .boxed();
-
-        Ok(output)
-    }
-
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
-
-        let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
-
-        let output: Box<dyn repr::Prune> =
-            repr::internal::intrusive::Prune::new(reader, distance).boxed();
-
-        Ok(output)
-    }
-}
-
 /// We use a macro to stamp out implementations of [`FullPrecision`] instead of using a
 /// blanket implementation from [`FullPrecisionImpl`] to make implementations more
 /// discoverable through the generated rust-doc.
@@ -816,7 +760,7 @@ macro_rules! impl_full_precision {
     }
 }
 
-impl_full_precision!(f32, f16, u8, i8);
+impl_full_precision!(f32, u8);
 
 ///////////
 // Tests //
