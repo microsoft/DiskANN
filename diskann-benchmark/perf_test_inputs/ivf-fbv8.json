@@ -1,0 +1,29 @@
+{
+  "search_directories": ["target/tmp/fbv8_mimir"],
+  "jobs": [
+    {
+      "type": "ivf-build-search",
+      "content": {
+        "data": "fbv_8_normalized_dataset_958152.bin",
+        "data_type": "float16",
+        "format": "bin",
+        "build": {
+          "batch_size": 1024,
+          "split_threshold": 2048,
+          "iterations": 20,
+          "seed": 7,
+          "num_threads": 1
+        },
+        "search": {
+          "queries": "fbv_8_normalized_query_6380.bin",
+          "groundtruth": "fbv8_gt_recall_2000.bin",
+          "k": 1000,
+          "nprobe": [1, 2, 4, 8, 16, 32],
+          "reps": 1,
+          "query_limit": null,
+          "full_probe_queries": 8
+        }
+      }
+    }
+  ]
+}
