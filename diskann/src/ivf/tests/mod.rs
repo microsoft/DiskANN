@@ -28,7 +28,10 @@ use super::{
     region::{AsMatRef, List, Update, View},
     split::{
         Dst, Plan, Split, TwoMeansSplit,
-        policies::{Assign, NearestCentroid, twomeans::SplitError},
+        policies::{
+            Assign, FirstPoints, NearestCentroid,
+            twomeans::{NotEnoughPoints, Seed, SplitError},
+        },
     },
     traits::{
         Accumulator, BuildAccessor, BuildStrategy, HasIds, Nearest, SearchAccessor, SearchStrategy,
@@ -616,6 +619,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 NonZeroUsize::new(5).unwrap(),
                 NonZeroUsize::new(2).unwrap(),
                 NearestCentroid,
+                FirstPoints,
             )
             .split(&region, &mut update, &plan(&[1], &[]))
             .unwrap();
@@ -1144,9 +1148,14 @@ fn neighbor_points_move_only_to_children_and_empty_lists_are_retained() {
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    TwoMeansSplit::new(NonZeroUsize::new(5).unwrap(), ONE, NearestCentroid)
-        .split(&region, &mut update, &plan(&[1], &[2, 3, 4]))
-        .unwrap();
+    TwoMeansSplit::new(
+        NonZeroUsize::new(5).unwrap(),
+        ONE,
+        NearestCentroid,
+        FirstPoints,
+    )
+    .split(&region, &mut update, &plan(&[1], &[2, 3, 4]))
+    .unwrap();
 
     let mut centers: Vec<_> = update.created.iter().map(|list| list.centroid[0]).collect();
     centers.sort_by(f32::total_cmp);
@@ -1197,7 +1206,8 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             TwoMeansSplit::new(
                 NonZeroUsize::new(5).unwrap(),
                 NonZeroUsize::new(2).unwrap(),
-                NearestCentroid
+                NearestCentroid,
+                FirstPoints
             )
             .split(&region, &mut update, &plan(&[1, 99], &[]))
             .is_err()
@@ -1206,7 +1216,8 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             TwoMeansSplit::new(
                 NonZeroUsize::new(5).unwrap(),
                 NonZeroUsize::new(2).unwrap(),
-                NearestCentroid
+                NearestCentroid,
+                FirstPoints
             )
             .split(&region, &mut update, &plan(&[1], &[99]))
             .is_err()
@@ -1221,6 +1232,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             NonZeroUsize::new(5).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             NearestCentroid,
+            FirstPoints,
         )
         .split(&region, &mut update, &plan(&[1], &[]))
         .unwrap();
@@ -1275,6 +1287,7 @@ fn parent_points_stay_within_their_own_children() {
         NonZeroUsize::new(10).unwrap(),
         NonZeroUsize::new(1).unwrap(),
         NearestCentroid,
+        FirstPoints,
     )
     .split(&region, &mut update, &plan(&[1, 2], &[]))
     .unwrap();
@@ -1336,7 +1349,7 @@ fn neighbor_points_consider_only_children_of_linked_parents() {
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    TwoMeansSplit::new(ONE, ONE, NearestCentroid)
+    TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints)
         .split(&region, &mut update, &plan)
         .unwrap();
 
@@ -1400,7 +1413,7 @@ fn two_means_delegates_assignment_to_its_assigner() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let seen = RefCell::new(Vec::new());
-    TwoMeansSplit::new(ONE, ONE, First(&seen))
+    TwoMeansSplit::new(ONE, ONE, First(&seen), FirstPoints)
         .split(&region, &mut update, &plan(&[1], &[2]))
         .unwrap();
 
@@ -1421,6 +1434,85 @@ fn two_means_delegates_assignment_to_its_assigner() {
 }
 
 #[test]
+fn two_means_fits_from_its_seeder() {
+    /// Seeds with the parent's points in reverse order.
+    struct Reversed;
+
+    impl Seed for Reversed {
+        type Error = ANNError;
+
+        fn seed(
+            &mut self,
+            points: rowmajor::Ref<'_, f32>,
+            mut centers: rowmajor::Mut<'_, f32>,
+        ) -> ANNResult<()> {
+            let rows = (0..centers.nrows()).rev();
+            for (row, center) in rows.zip(centers.rows_mut()) {
+                center.copy_from_slice(points.row(row));
+            }
+            Ok(())
+        }
+    }
+
+    let sources = BTreeMap::from([(
+        1,
+        Source {
+            centroid: vec![0.0],
+            members: vec![0, 1],
+            vectors: matrix(&[[-1.0], [1.0]]),
+        },
+    )]);
+    let region = Region::new(&sources);
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    TwoMeansSplit::new(ONE, ONE, NearestCentroid, Reversed)
+        .split(&region, &mut update, &plan(&[1], &[]))
+        .unwrap();
+
+    // `FirstPoints` would put -1 first; reversed seeds keep that order through Lloyd's.
+    assert_eq!(created[0].centroid, [1.0]);
+    assert_eq!(created[0].members, [1]);
+    assert_eq!(created[1].centroid, [-1.0]);
+    assert_eq!(created[1].members, [0]);
+}
+
+#[test]
+fn two_means_reports_seeding_failures_before_writing() {
+    struct Fails;
+
+    impl Seed for Fails {
+        type Error = ANNError;
+
+        fn seed(&mut self, _: rowmajor::Ref<'_, f32>, _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
+            Err(ANNError::message("injected seeding failure"))
+        }
+    }
+
+    let sources = BTreeMap::from([(
+        1,
+        Source {
+            centroid: vec![0.0],
+            members: vec![0, 1],
+            vectors: matrix(&[[-1.0], [1.0]]),
+        },
+    )]);
+    let region = Region::new(&sources);
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    let error = TwoMeansSplit::new(ONE, ONE, NearestCentroid, Fails)
+        .split(&region, &mut update, &plan(&[1], &[]))
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("injected seeding failure"), "{error}");
+    assert!(error.contains("while seeding list 1"), "{error}");
+    assert!(created.is_empty());
+    assert_eq!(memberships.into_changes().count(), 0);
+}
+
+#[test]
 fn two_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties() {
     for value in [0.0, 7.0] {
         let sources = [(
@@ -1436,7 +1528,7 @@ fn two_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties()
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-        TwoMeansSplit::new(ONE, ONE, NearestCentroid)
+        TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints)
             .split(&region, &mut update, &plan(&[1], &[]))
             .unwrap();
         assert_eq!(update.created.len(), 2);
@@ -1480,7 +1572,7 @@ fn two_means_ties_keep_points_in_their_own_neighborhood_first() {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-        TwoMeansSplit::new(ONE, ONE, NearestCentroid)
+        TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints)
             .split(&region, &mut update, &plan(&[1], &neighbors))
             .unwrap();
         assert_eq!(created.len(), 2);
@@ -1539,7 +1631,7 @@ fn two_means_reuses_splitter_across_regions() {
     let mut full_memberships = PendingLists::default();
     let mut full_created = Vec::new();
     let mut full = support::Update::new(&sources, 1, &mut full_memberships, &mut full_created);
-    let mut splitter = TwoMeansSplit::new(ONE, ONE, NearestCentroid);
+    let mut splitter = TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints);
     splitter
         .split(&region, &mut full, &plan(&parents, &neighbors))
         .unwrap();
@@ -1603,7 +1695,7 @@ fn empty_split_records_no_updates() {
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    let error = TwoMeansSplit::new(ONE, ONE, NearestCentroid)
+    let error = TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints)
         .split(&region, &mut update, &plan(&[], &[]))
         .unwrap_err();
     assert!(matches!(
@@ -1723,7 +1815,7 @@ fn two_means_handles_borrowed_batches() {
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    TwoMeansSplit::new(ONE, ONE, NearestCentroid)
+    TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints)
         .split(&region, &mut update, &plan(&[1], &[2]))
         .unwrap();
     assert_eq!(region.reads.get(), 3);
@@ -1860,6 +1952,7 @@ fn two_means_matches_quantization_lloyds() {
             NonZeroUsize::new(iterations).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             NearestCentroid,
+            FirstPoints,
         )
         .split(&region, &mut update, &plan(&[1, 2], &[]))
         .unwrap();
@@ -1895,13 +1988,20 @@ fn two_means_reports_insufficient_points_before_writing() {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 2, &mut memberships, &mut created);
-        let error = TwoMeansSplit::new(ONE, NonZeroUsize::new(2).unwrap(), NearestCentroid)
-            .split(&region, &mut update, &plan(&[1], &[]))
-            .unwrap_err();
+        let error = TwoMeansSplit::new(
+            ONE,
+            NonZeroUsize::new(2).unwrap(),
+            NearestCentroid,
+            FirstPoints,
+        )
+        .split(&region, &mut update, &plan(&[1], &[]))
+        .unwrap_err();
         assert!(matches!(
-            error.downcast_ref::<SplitError<u32>>().unwrap(),
-            SplitError::NotEnoughPoints { list: 1, actual } if *actual == expected
+            error.downcast_ref::<NotEnoughPoints>(),
+            Some(NotEnoughPoints { actual, required: 2 }) if *actual == expected
         ));
+        let message = error.to_string();
+        assert!(message.contains("while seeding list 1"), "{message}");
         assert!(created.is_empty());
         assert_eq!(memberships.into_changes().count(), 0);
     }
@@ -1921,7 +2021,7 @@ fn two_means_missing_vectors_preserves_typed_error_without_updates() {
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    let error = TwoMeansSplit::new(ONE, ONE, NearestCentroid)
+    let error = TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints)
         .split(&region, &mut update, &plan(&[1, 99], &[]))
         .unwrap_err();
     assert!(matches!(
@@ -1957,7 +2057,7 @@ fn two_means_reports_missing_neighbors_before_writing() {
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         let region = Region::new(&sources);
-        let error = TwoMeansSplit::new(ONE, ONE, NearestCentroid)
+        let error = TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints)
             .split(&region, &mut update, &plan(&[1], &ids))
             .unwrap_err();
         assert!(matches!(
@@ -1993,7 +2093,7 @@ fn regional_assignment_prefers_first_when_all_distances_overflow() {
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    TwoMeansSplit::new(ONE, ONE, NearestCentroid)
+    TwoMeansSplit::new(ONE, ONE, NearestCentroid, FirstPoints)
         .split(&region, &mut update, &plan(&[1], &[2]))
         .unwrap();
     assert_eq!(created[0].members, [0]);

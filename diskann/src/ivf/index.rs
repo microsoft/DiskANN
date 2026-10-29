@@ -127,6 +127,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
                     config.split_iterations,
                     config.dim,
                     policies::NearestCentroid,
+                    policies::FirstPoints,
                 )
                 .split(&region, &mut update, &plan)?;
             };

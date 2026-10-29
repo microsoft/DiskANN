@@ -86,9 +86,11 @@ The split operation receives parent IDs, neighbor IDs, the region, and its write
 and controls retrieval and conversion of provider-defined vector handles without
 per-point reference tables. The built-in strategy borrows vector matrices and member
 slices; a provider with scattered storage may pack rows during filling to satisfy
-their matrix interface. The built-in two-means fitter seeds the first two input
-rows and delegates to quantization's Lloyd routine, which
-builds internal transposed scratch and resets empty centers to zero. Its
+their matrix interface. The built-in two-means fitter requires at least two points
+per parent, asks a `Seed` implementation for the initial centers, and delegates to
+quantization's Lloyd routine, which
+builds internal transposed scratch and resets empty centers to zero. Seeding may
+fail, and the default `FirstPoints` seeds with the first two input rows. Lloyd's
 norm-based distance arithmetic does not preserve support for extreme finite
 coordinates whose squared norms overflow.
 `Split` is the complete numerical-policy boundary. The built-in `TwoMeansSplit`

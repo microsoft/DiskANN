@@ -9,12 +9,13 @@ use std::{fmt::Debug, num::NonZeroUsize};
 
 use diskann_quantization::algorithms::kmeans::lloyds::lloyds;
 use diskann_utils::{
-    Reborrow,
+    Reborrow, ReborrowMut,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
 
 use crate::{
     ANNError, ANNResult,
+    error::{IntoANNResult, ann_error::ErrorContext},
     ivf::{
         region::{AsMatRef, Update, View},
         split::{
@@ -26,12 +27,15 @@ use crate::{
     utils::{TWO, VectorId},
 };
 
+
+////////////
+// Errors //
+////////////
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SplitError<L> {
     #[error("Split could not retrieve list {0:?} from the region")]
     UnableToRetrieve(L),
-    #[error("Split in list {list:?} does not have enough points, got {actual}")]
-    NotEnoughPoints { list: L, actual: usize },
     #[error("Parents is empty")]
     EmptyParents,
 }
@@ -43,24 +47,96 @@ impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
     }
 }
 
-/// Two-means per parent, then assignment within each neighborhood by `A`.
-pub struct TwoMeansSplit<A = NearestCentroid> {
+//////////
+// Seed //
+//////////
+
+/// Chooses initial centroids for one parent's points.
+pub(crate) trait Seed {
+    /// Error type for seeding algorithm
+    type Error: Debug + Send + Sync + Into<ANNError>;
+
+    /// Fill every row of `centers` with an initial centroid for `points`.
+    ///
+    /// `points` must have at least as many rows as `centers`.
+    ///
+    /// # Errors
+    ///
+    /// - Fails if no initial centroids can be chosen.
+    fn seed(
+        &mut self,
+        points: rowmajor::Ref<'_, f32>,
+        centers: rowmajor::Mut<'_, f32>,
+    ) -> Result<(), Self::Error>;
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Expected at least {required} points to seed, got {actual}")]
+pub(crate) struct NotEnoughPoints {
+    pub(crate) actual: usize,
+    pub(crate) required: usize,
+}
+
+impl From<NotEnoughPoints> for ANNError {
+    #[track_caller]
+    fn from(error: NotEnoughPoints) -> Self {
+        Self::new(error)
+    }
+}
+
+/// Seeds with the first rows of `points`.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct FirstPoints;
+
+impl Seed for FirstPoints {
+    type Error = NotEnoughPoints;
+
+    fn seed(
+        &mut self,
+        points: rowmajor::Ref<'_, f32>,
+        mut centers: rowmajor::Mut<'_, f32>,
+    ) -> Result<(), Self::Error> {
+        let n = points.nrows();
+        let k = centers.nrows();
+
+        if n < k {
+            return Err(NotEnoughPoints {
+                actual: n,
+                required: k,
+            });
+        }
+
+        let first = &points.as_slice()[..centers.as_slice().len()];
+        centers.as_mut_slice().copy_from_slice(first);
+
+        Ok(())
+    }
+}
+
+//////////////
+// TwoMeans //
+//////////////
+
+/// Two-means per parent, seeded by `S`, then assignment within each neighborhood by `A`.
+pub struct TwoMeansSplit<A = NearestCentroid, S = FirstPoints> {
     iterations: NonZeroUsize,
     dim: NonZeroUsize,
     assign: A,
+    seed: S,
 }
 
-impl<A> TwoMeansSplit<A> {
-    pub fn new(iterations: NonZeroUsize, dim: NonZeroUsize, assign: A) -> Self {
+impl<A, S: Seed> TwoMeansSplit<A, S> {
+    pub fn new(iterations: NonZeroUsize, dim: NonZeroUsize, assign: A, seed: S) -> Self {
         Self {
             iterations,
             dim,
             assign,
+            seed,
         }
     }
 
     /// Fit two children per parent, in parent order.
-    fn fit<I, L, R>(&self, region: &R, parents: &[L]) -> ANNResult<rowmajor::Owned<f32>>
+    fn fit<I, L, R>(&mut self, region: &R, parents: &[L]) -> ANNResult<rowmajor::Owned<f32>>
     where
         L: VectorId,
         R: View<I, L>,
@@ -76,15 +152,10 @@ impl<A> TwoMeansSplit<A> {
 
             let points = vectors.reborrow().as_view();
 
-            dst.as_mut_slice().copy_from_slice(
-                points
-                    .subview(0..TWO.get())
-                    .ok_or(SplitError::NotEnoughPoints {
-                        list,
-                        actual: points.nrows(),
-                    })?
-                    .as_slice(),
-            );
+            self.seed
+                .seed(points, dst.reborrow_mut())
+                .into_ann_result()
+                .with_context(|| format!("while seeding list {list:?}"))?;
 
             let _ = lloyds(points, dst, self.iterations.get());
         }
@@ -154,12 +225,13 @@ impl<'a> Targets<'a> {
 // Split //
 ///////////
 
-impl<I, L, R, A> Split<I, L, R> for TwoMeansSplit<A>
+impl<I, L, R, A, S> Split<I, L, R> for TwoMeansSplit<A, S>
 where
     I: Copy,
     L: VectorId,
     R: View<I, L>,
     A: for<'a> Assign<R::VectorsRef<'a>>,
+    S: Seed,
     for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
 {
     type Error = ANNError;
@@ -177,7 +249,7 @@ where
         }
 
         let children = self.fit(region, plan.parents())?;
-        let centroids = Targets::new(region, plan, &children, TWO)?;
+        let targets = Targets::new(region, plan, &children, TWO)?;
 
         let mut moved = Buckets::new(Destinations {
             neighbors: neighbors.len(),
@@ -190,10 +262,10 @@ where
             candidates.clear();
 
             // Add the src to be expanded, and then expand the neighborhood
-            centroids.extend(src, &mut candidates);
+            targets.extend(src, &mut candidates);
 
             for s in plan.neighborhood(src) {
-                centroids.extend(s, &mut candidates);
+                targets.extend(s, &mut candidates);
             }
 
             let view = region
