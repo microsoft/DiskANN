@@ -5,7 +5,7 @@
 
 use benchmarks_iai::aligned_file_reader_bench_iai::aligned_file_reader_bench_iai;
 use benchmarks_iai::kmeans_bench_iai::kmeans_bench_iai;
-use iai_callgrind::{main, Callgrind, EventKind, LibraryBenchmarkConfig};
+use iai_callgrind::{Callgrind, EventKind, LibraryBenchmarkConfig, main};
 
 mod benchmarks_iai;
 

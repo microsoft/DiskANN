@@ -6,13 +6,13 @@
 use std::{marker::PhantomData, pin::Pin, sync::Arc};
 
 use diskann::{
+    ANNError, ANNResult,
     graph::{
-        glue::{InsertStrategy, PruneStrategy},
         Config, DiskANNIndex,
+        glue::{InsertStrategy, PruneStrategy},
     },
     provider::DefaultContext,
     utils::VectorRepr,
-    ANNError, ANNResult,
 };
 use diskann_providers::storage::{DynWriteProvider, WriteProviderWrapper};
 use diskann_providers::{
@@ -23,8 +23,8 @@ use diskann_providers::{
             VectorStore,
         },
         inmem::{
-            spherical, DefaultProvider, DefaultProviderParameters, FullPrecisionProvider,
-            SetStartPoints,
+            DefaultProvider, DefaultProviderParameters, FullPrecisionProvider, SetStartPoints,
+            spherical,
         },
     },
     storage::{DiskGraphOnly, SaveWith},

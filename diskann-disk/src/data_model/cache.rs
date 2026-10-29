@@ -5,10 +5,10 @@
 
 use crate::{
     data_model::GraphDataType,
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
 };
-use diskann::{graph::AdjacencyList, ANNResult};
-use hashbrown::{hash_map::Entry::Occupied, HashMap};
+use diskann::{ANNResult, graph::AdjacencyList};
+use hashbrown::{HashMap, hash_map::Entry::Occupied};
 
 pub struct Cache<Data: GraphDataType<VectorIdType = u32>> {
     // Maintains the mapping of vector_id to index in the global cached nodes list.
@@ -264,9 +264,11 @@ mod tests {
 
         // Wrong dimention Insert fails.
         let wrong_dimentions_vector = vec![1.0; 11];
-        assert!(cache
-            .insert(&vector_id, &wrong_dimentions_vector, adjacency_list, ())
-            .is_err());
+        assert!(
+            cache
+                .insert(&vector_id, &wrong_dimentions_vector, adjacency_list, ())
+                .is_err()
+        );
     }
 
     #[rstest]

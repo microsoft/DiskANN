@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use diskann::ANNResult;
 use diskann_quantization::num::PowerOfTwo;
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 /// Type-level memory-alignment witness for [`AlignedRead`]. Each implementor is
 /// a unit type carrying a single `PowerOfTwo` value.
@@ -21,7 +21,7 @@ pub trait Alignment {
 }
 
 macro_rules! alignment_marker {
-    ($name:ident, $value:expr) => {
+    ($name:ident, $value:expr_2021) => {
         #[doc = concat!("Alignment witness for ", stringify!($value), " bytes.")]
         #[derive(Debug, Clone, Copy)]
         pub struct $name;
@@ -96,7 +96,7 @@ mod tests {
     use super::*;
     use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
-    use crate::error::{error_kind, ErrorKind};
+    use crate::error::{ErrorKind, error_kind};
 
     fn aligned_512(len: usize) -> Poly<[u8], AlignedAllocator> {
         Poly::broadcast(0u8, len, AlignedAllocator::A512).unwrap()

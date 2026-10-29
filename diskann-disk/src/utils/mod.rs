@@ -20,4 +20,4 @@ pub use kmeans::{k_means_clustering, k_meanspp_selecting_pivots, run_lloyds};
 pub mod instrumentation;
 
 pub mod statistics;
-pub use statistics::{get_mean_stats, get_percentile_stats, get_sum_stats, QueryStatistics};
+pub use statistics::{QueryStatistics, get_mean_stats, get_percentile_stats, get_sum_stats};

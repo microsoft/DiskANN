@@ -6,7 +6,7 @@
 pub mod traits;
 
 mod aligned_read;
-pub use aligned_read::{AlignedRead, Alignment, A1, A512};
+pub use aligned_read::{A1, A512, AlignedRead, Alignment};
 
 #[cfg(all(not(miri), any(target_os = "linux", target_os = "windows")))]
 mod platform;

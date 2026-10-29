@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use super::{GraphLayoutVersion, GraphMetadata};
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 /// GraphHeader. The header is stored in the first sector of the disk index file, or the first segment of the JET stream.
 pub struct GraphHeader {
@@ -153,7 +153,7 @@ mod tests {
     use super::*;
     use crate::{
         data_model::{GraphHeader, GraphLayoutVersion, GraphMetadata},
-        error::{error_kind, ErrorKind},
+        error::{ErrorKind, error_kind},
     };
 
     #[test]

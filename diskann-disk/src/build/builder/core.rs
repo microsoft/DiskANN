@@ -10,13 +10,13 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use byteorder::{LittleEndian, ReadBytesExt};
-use diskann::{utils::VectorRepr, ANNResult};
+use diskann::{ANNResult, utils::VectorRepr};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{IndexConfiguration, GRAPH_SLACK_FACTOR, MAX_PQ_TRAINING_SET_SIZE},
+    model::{GRAPH_SLACK_FACTOR, IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE},
     utils::{
-        load_metadata_from_file, RayonThreadPoolRef, SampleVectorReader, SamplingDensity,
-        READ_WRITE_BLOCK_SIZE,
+        READ_WRITE_BLOCK_SIZE, RayonThreadPoolRef, SampleVectorReader, SamplingDensity,
+        load_metadata_from_file,
     },
 };
 use diskann_quantization::spherical::DataRef;
@@ -25,12 +25,12 @@ use rand::seq::SliceRandom;
 use tracing::info;
 
 use crate::{
+    DiskIndexBuildParameters, QuantizationType, SphericalBits,
     build::builder::{build::build_inmem_index, quantizer::BuildQuantizer},
     disk_index_build_parameter::BYTES_IN_GB,
     storage::DiskIndexWriter,
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
     utils::partition_with_ram_budget,
-    DiskIndexBuildParameters, QuantizationType, SphericalBits,
 };
 
 /// Overhead factor for RAM estimation during index build (10% buffer).
@@ -347,8 +347,8 @@ where
         }
 
         let vamana_index_frozen: u64 = 0; // as of now the functionality to merge many overlapping vamana
-                                          // indices is supported only for bulk indices without frozen point.
-                                          // Hence the final index will also not have any frozen points.
+        // indices is supported only for bulk indices without frozen point.
+        // Hence the final index will also not have any frozen points.
         merged_vamana_cached_writer.write_all(&vamana_index_frozen.to_le_bytes())?;
 
         info!("Starting merge");
@@ -546,9 +546,9 @@ pub(crate) mod disk_index_builder_tests {
 
     use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
-        graph::config,
-        utils::{IntoUsize, VectorRepr, ONE},
         ANNResult,
+        graph::config,
+        utils::{IntoUsize, ONE, VectorRepr},
     };
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::storage::{
@@ -557,8 +557,8 @@ pub(crate) mod disk_index_builder_tests {
 
     use diskann_utils::test_data_root;
     use diskann_vector::{
-        distance::Metric::{self, L2},
         DistanceFunction,
+        distance::Metric::{self, L2},
     };
     use rstest::rstest;
     use vfs::OverlayFS;
@@ -875,9 +875,11 @@ pub(crate) mod disk_index_builder_tests {
             fixture.params.index_path_prefix
         );
         assert!(!fixture.storage_provider.exists(&mem_index_file_path));
-        assert!(!fixture
-            .storage_provider
-            .exists(&mem_index_associated_data_path));
+        assert!(
+            !fixture
+                .storage_provider
+                .exists(&mem_index_associated_data_path)
+        );
 
         // assert index files are expected.
         fixture.compare_disk_index_with_associated_data(

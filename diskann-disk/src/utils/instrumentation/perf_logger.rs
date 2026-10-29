@@ -6,9 +6,8 @@ use std::fmt;
 
 #[cfg(feature = "perf_test")]
 use opentelemetry::{
-    global,
-    trace::{get_active_span, Tracer},
-    KeyValue,
+    KeyValue, global,
+    trace::{Tracer, get_active_span},
 };
 use tracing::info;
 

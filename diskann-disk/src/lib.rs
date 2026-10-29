@@ -15,8 +15,8 @@ pub mod error;
 
 pub mod build;
 pub use build::{
-    disk_index_build_parameter, filter_parameter, DiskIndexBuildParameters, QuantizationType,
-    SphericalBits,
+    DiskIndexBuildParameters, QuantizationType, SphericalBits, disk_index_build_parameter,
+    filter_parameter,
 };
 
 pub mod data_model;

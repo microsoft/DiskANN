@@ -9,7 +9,7 @@ use diskann::ANNResult;
 use diskann_providers::storage::StorageReadProvider;
 use tracing::info;
 
-use crate::search::provider::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, A1};
+use crate::search::provider::aligned_file_reader::{A1, AlignedRead, traits::AlignedFileReader};
 
 pub struct StorageProviderAlignedFileReader {
     data: Vec<u8>,

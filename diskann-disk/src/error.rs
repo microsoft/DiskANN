@@ -121,7 +121,7 @@ impl std::fmt::Display for ErrorKind {
 ///
 /// Since this is an internal macro, see the tests for usage.
 macro_rules! diskann_error {
-    ($kind:expr, $var:ident) => {
+    ($kind:expr_2021, $var:ident) => {
         ::diskann::ANNError::new(
             $crate::error::Error::from_display(
                 $kind,
@@ -129,7 +129,7 @@ macro_rules! diskann_error {
             )
         )
     };
-    ($kind:expr, $($args:tt)*) => {
+    ($kind:expr_2021, $($args:tt)*) => {
         ::diskann::ANNError::new(
             $crate::error::Error::from_args(
                 $kind,
