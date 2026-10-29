@@ -713,3 +713,5 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
 }
 
 mod search;
+
+mod metrics;

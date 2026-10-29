@@ -19,12 +19,14 @@
 
 mod clustering;
 mod index;
+mod metrics;
 pub mod pending;
 mod search;
 pub mod traits;
 pub mod workingset;
 
 pub use index::{Config, ConfigError, IVFIndex, InsertStats};
+pub use metrics::BuildMetrics;
 pub use search::{SearchProvider, SearchResult};
 
 #[cfg(test)]

@@ -5,6 +5,8 @@
 
 //! Two-means fitting and region-wide assignment over borrowed point rows.
 
+use std::time::{Duration, Instant};
+
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{Rng, rngs::StdRng};
@@ -15,6 +17,8 @@ use crate::{ANNError, ANNResult};
 pub(super) struct Children<I> {
     pub centroids: rowmajor::Owned<f32>,
     pub members: Vec<Vec<I>>,
+    pub fit_time: Duration,
+    pub assignment_time: Duration,
 }
 
 /// Fit two children per source, then assign every point across all children.
@@ -30,6 +34,7 @@ pub(super) fn split<I: Copy, L>(
         ));
     }
     let mut centroids = rowmajor::Owned::try_from_element(2 * lists.len(), dim, 0.0)?;
+    let fit_start = Instant::now();
     let mut sums = vec![0.0; 2 * dim];
     for (list, centers) in lists
         .iter()
@@ -38,6 +43,8 @@ pub(super) fn split<I: Copy, L>(
         fit_two_means(&list.points, centers, dim, iterations, rng, &mut sums)?;
     }
 
+    let fit_time = fit_start.elapsed();
+    let assignment_start = Instant::now();
     let count = lists.iter().map(|list| list.points.len()).sum();
     let mut assignments = Vec::with_capacity(count);
     let mut sizes = vec![0; centroids.nrows()];
@@ -46,11 +53,17 @@ pub(super) fn split<I: Copy, L>(
         assignments.push(to);
         sizes[to] += 1;
     }
+    let assignment_time = assignment_start.elapsed();
     let mut members: Vec<Vec<I>> = sizes.into_iter().map(Vec::with_capacity).collect();
     for (point, to) in lists.iter().flat_map(|list| &list.points).zip(assignments) {
         members[to].push(point.id);
     }
-    Ok(Children { centroids, members })
+    Ok(Children {
+        centroids,
+        members,
+        fit_time,
+        assignment_time,
+    })
 }
 
 fn fit_two_means<I>(
