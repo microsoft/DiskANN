@@ -5,9 +5,9 @@
 use std::io::{BufWriter, Read, Seek, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
+use diskann::{ANNResult, error::IntoANNResult, utils::VectorRepr};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::utils::{gen_random_slice, RayonThreadPoolRef, READ_WRITE_BLOCK_SIZE};
+use diskann_providers::utils::{READ_WRITE_BLOCK_SIZE, RayonThreadPoolRef, gen_random_slice};
 
 use crate::utils::{compute_closest_centers, k_meanspp_selecting_pivots, run_lloyds};
 use rand::Rng;
@@ -15,7 +15,7 @@ use tracing::info;
 
 use crate::{
     disk_index_build_parameter::BYTES_IN_GB,
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     storage::DiskIndexWriter,
 };
 

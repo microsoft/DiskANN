@@ -7,36 +7,35 @@ use std::{
     collections::HashMap,
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicU64, AtomicUsize},
         Arc,
+        atomic::{AtomicU64, AtomicUsize},
     },
     time::Instant,
 };
 
 use crate::data_model::GraphDataType;
 use diskann::{
+    ANNError, ANNResult,
     error::IntoANNResult,
-    flat::{knn_search as flat_knn_search, DistancesUnordered, SearchStats as FlatSearchStats},
+    flat::{DistancesUnordered, SearchStats as FlatSearchStats, knn_search as flat_knn_search},
     graph::{
-        self,
+        self, DiskANNIndex,
         ext::labeled::{self, QueryLabelProvider},
         glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
         search::{AdaptiveL, InlineFilterSearch, Knn},
         search_output_buffer::{self, BufferState, IdDistanceAssociatedData},
-        DiskANNIndex,
     },
     neighbor::{self, Neighbor},
     provider::{DataProvider, DefaultContext, HasId, NoopGuard},
     utils::{IntoUsize, VectorRepr},
-    ANNError, ANNResult,
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     model::{
         compute_pq_distance,
-        graph::provider::{determinant_diversity, DeterminantDiversityParams},
+        graph::provider::{DeterminantDiversityParams, determinant_diversity},
     },
-    storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
+    storage::{LoadWith, get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
 };
 use diskann_utils::{
     future::SendFuture,
@@ -45,13 +44,13 @@ use diskann_utils::{
 };
 
 use crate::search::pq::{PQData, PQScratch};
-use diskann_vector::{distance::Metric, DistanceFunction};
+use diskann_vector::{DistanceFunction, distance::Metric};
 use tokio::runtime::Runtime;
 use tracing::debug;
 
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     search::{
         provider::{
             aligned_file_reader::AlignedFileReaderFactory,
@@ -1536,13 +1535,13 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 mod disk_provider_tests {
     use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
-        graph::search::{record::VisitedSearchRecord, Knn},
+        graph::search::{Knn, record::VisitedSearchRecord},
         utils::IntoUsize,
     };
     use diskann_providers::storage::{
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
-    use diskann_providers::utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool};
+    use diskann_providers::utils::{PQPathNames, ParallelIteratorInPool, create_thread_pool};
     use diskann_utils::{
         io::read_bin,
         test_data_root,
@@ -1556,7 +1555,7 @@ mod disk_provider_tests {
     use super::*;
     use crate::{
         build::builder::core::disk_index_builder_tests::{IndexBuildFixture, TestParams},
-        error::{error_kind, ErrorKind},
+        error::{ErrorKind, error_kind},
         search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
         utils::QueryStatistics,
     };
@@ -1573,8 +1572,7 @@ mod disk_provider_tests {
         "/disk_index_search/disk_index_10pts_idx_uint32_truth_search_res.bin";
     /// Search results for an index built by the current builder, unlike
     /// [`TEST_TRUTH_RESULT_10PTS_128DIM`], which matches the prebuilt [`TEST_INDEX_128DIM`].
-    const TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM: &str =
-        "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_associated_data_10pts_truth_search_res.bin";
+    const TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM: &str = "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_associated_data_10pts_truth_search_res.bin";
     const TEST_QUERY_10PTS_128DIM: &str = "/disk_index_search/disk_index_sample_query_10pts.fbin";
 
     const TEST_INDEX_PREFIX_100DIM: &str = "/disk_index_search/256pts_100dim_f32_truth_Index";
@@ -2836,10 +2834,12 @@ mod disk_provider_tests {
             );
         }
 
-        assert!(result
-            .results
-            .windows(2)
-            .all(|pair| pair[0].distance <= pair[1].distance));
+        assert!(
+            result
+                .results
+                .windows(2)
+                .all(|pair| pair[0].distance <= pair[1].distance)
+        );
         assert_eq!(result.stats.cmps, 256);
         assert_eq!(result.stats.result_count, 10);
     }

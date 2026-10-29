@@ -12,40 +12,40 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use diskann::{
-    utils::{async_tools, VectorRepr, ONE},
     ANNResult,
+    utils::{ONE, VectorRepr, async_tools},
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
-        graph::provider::async_::inmem::DefaultProviderParameters, IndexConfiguration,
-        MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
+        IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
+        graph::provider::async_::inmem::DefaultProviderParameters,
     },
     storage::{DiskGraphOnly, PQStorage},
     utils::{
-        create_thread_pool, find_medoid_with_sampling, RayonThreadPoolRef, VectorDataIterator,
-        MAX_MEDOID_SAMPLE_SIZE,
+        MAX_MEDOID_SAMPLE_SIZE, RayonThreadPoolRef, VectorDataIterator, create_thread_pool,
+        find_medoid_with_sampling,
     },
 };
 use tokio::task::JoinSet;
 use tracing::{debug, info};
 
 use crate::{
+    DiskIndexBuildParameters,
     build::builder::{
-        core::{determine_build_strategy, IndexBuildStrategy, MergedVamanaIndexBuilder},
-        inmem_builder::{new_inmem_index_builder, InmemIndexBuilder, StartPoint},
+        core::{IndexBuildStrategy, MergedVamanaIndexBuilder, determine_build_strategy},
+        inmem_builder::{InmemIndexBuilder, StartPoint, new_inmem_index_builder},
         quantizer::BuildQuantizer,
         tokio::create_runtime,
     },
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     storage::{
-        quant::{
-            validate_data_generation_input, PQGeneration, PQGenerationContext, QuantDataGenerator,
-        },
         DiskIndexWriter,
+        quant::{
+            PQGeneration, PQGenerationContext, QuantDataGenerator, validate_data_generation_input,
+        },
     },
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
-    DiskIndexBuildParameters,
 };
 
 pub struct DiskIndexBuilder<'a, Data, StorageProvider>

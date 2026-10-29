@@ -4,13 +4,12 @@
  */
 
 use diskann_disk::search::provider::aligned_file_reader::{
-    traits::{AlignedFileReader, AlignedReaderFactory},
     AlignedFileReaderFactory, AlignedRead,
+    traits::{AlignedFileReader, AlignedReaderFactory},
 };
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
-pub const TEST_INDEX_PATH: &str =
-    "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
+pub const TEST_INDEX_PATH: &str = "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
 
 // MAX_IO_CONCURRENCY copied from the LinuxAlignedFileReader
 const MAX_IO_CONCURRENCY: usize = 128;

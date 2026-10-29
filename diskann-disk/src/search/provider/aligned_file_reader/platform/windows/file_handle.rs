@@ -5,7 +5,7 @@
 use std::{ffi::CString, io, ptr};
 
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE},
+    Foundation::{CloseHandle, GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{
         CreateFileA, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OVERLAPPED, FILE_FLAG_RANDOM_ACCESS,
         FILE_SHARE_READ, OPEN_EXISTING,

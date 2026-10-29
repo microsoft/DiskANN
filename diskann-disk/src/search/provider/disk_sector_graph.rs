@@ -12,8 +12,8 @@ use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
 use crate::{
     data_model::GraphHeader,
-    error::{diskann_error, ErrorKind},
-    search::provider::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, Alignment},
+    error::{ErrorKind, diskann_error},
+    search::provider::aligned_file_reader::{AlignedRead, Alignment, traits::AlignedFileReader},
 };
 
 const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
@@ -208,7 +208,7 @@ mod disk_sector_graph_test {
     use crate::{
         data_model::{GraphLayoutVersion, GraphMetadata},
         search::provider::aligned_file_reader::{
-            traits::AlignedReaderFactory, AlignedFileReaderFactory,
+            AlignedFileReaderFactory, traits::AlignedReaderFactory,
         },
     };
 

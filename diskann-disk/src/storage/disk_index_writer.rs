@@ -13,13 +13,13 @@ use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     storage::{get_mem_index_file, path_utility::*},
-    utils::{save_bytes, READ_WRITE_BLOCK_SIZE},
+    utils::{READ_WRITE_BLOCK_SIZE, save_bytes},
 };
 use tracing::info;
 
 use crate::{
     data_model::{GraphHeader, GraphMetadata},
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
 };
 
 // Struct DiskIndexWriterState maintains the state of the process of creating a disk
@@ -230,7 +230,8 @@ impl DiskIndexWriter {
                     return Err(diskann_error!(
                         ErrorKind::IndexError,
                         "Number of points in dataset file ({}) does not match number of points in associated data file ({}).",
-                        state.num_pts, associated_data_num_pts
+                        state.num_pts,
+                        associated_data_num_pts
                     ));
                 }
 
@@ -687,8 +688,7 @@ mod disk_index_storage_test {
         const TEST_DATA_FILE_HIGH_DIM: &str = "/disk_index_misc/rand_float_1024D_1K_norm1.0.bin";
         const DISK_INDEX_PATH_PREFIX_HIGH_DIM: &str =
             "/disk_index_misc/disk_index_rand_float_1024D_1Kpts_R4_L50_A1.2_index_writer";
-        const TRUTH_DISK_LAYOUT_HIGH_DIM: &str =
-            "/disk_index_misc/truth_disk_index_rand_float_1024D_1Kpts_R4_L50_A1.2_index_writer.index";
+        const TRUTH_DISK_LAYOUT_HIGH_DIM: &str = "/disk_index_misc/truth_disk_index_rand_float_1024D_1Kpts_R4_L50_A1.2_index_writer.index";
 
         let disk_layout_file = {
             let storage = DiskIndexWriter::new(

@@ -10,7 +10,7 @@ use diskann_providers::model::FixedChunkPQTable;
 use diskann_quantization::{error::Format, product::TransposedTable};
 use diskann_utils::views::rowmajor::{self, Matrix};
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 #[derive(Debug)]
 pub struct PQData {

@@ -10,7 +10,7 @@ use std::io;
 use std::ptr;
 
 use windows_sys::Win32::{
-    Foundation::{GetLastError, ERROR_IO_PENDING, WAIT_TIMEOUT},
+    Foundation::{ERROR_IO_PENDING, GetLastError, WAIT_TIMEOUT},
     Storage::FileSystem::ReadFile,
     System::IO::{GetQueuedCompletionStatus, OVERLAPPED},
 };
