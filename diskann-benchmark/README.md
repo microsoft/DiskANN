@@ -5,40 +5,6 @@ easier by providing a "one click" runner for benchmarks with machine readable ou
 
 ## Usage
 
-### Multi-vector MaxSim
-
-Run the portable smoke examples with:
-
-```sh
-cargo run --release -p diskann-benchmark --features multi-vector -- run --input-file diskann-benchmark/example/multi-vector.json --output-file multi-vector-output.json
-```
-
-The `multi-vector-op` input accepts `element_type` values `"float32"`, `"float16"`,
-`"int8"`, or a MinMax representation with independent query/document widths (1–8):
-
-```json
-{
-  "type": "multi-vector-op",
-  "content": {
-    "element_type": { "minmax": { "query_bits": 8, "doc_bits": 4 } },
-    "isa": "auto",
-    "runs": [
-      { "num_query_vectors": 32, "num_doc_vectors": 64, "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 }
-    ]
-  }
-}
-```
-
-All representations share the ISA options, result format and regression checks.
-MinMax quantization, query preparation and warmup happen before timing. Each run reuses
-one document and score buffer; `ns/IP` reports time per query/document vector pair.
-
-For longer runs, use `perf_test_inputs/multi-vector.json` with ISAs supported by the host.
-Compare results from the same configuration and machine using `check verify` / `check run`
-with `perf_test_inputs/multi-vector-tolerance.json`.
-
-### Graph benchmarks
-
 To get started, run
 ```sh
 cargo run --release --package diskann-benchmark -- skeleton

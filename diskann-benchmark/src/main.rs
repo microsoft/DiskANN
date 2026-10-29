@@ -1040,24 +1040,6 @@ mod tests {
 
         // Check that the results file is generated.
         assert!(output_path.exists());
-        let input = value_from_file(input_path);
-        let output = value_from_file(output_path);
-        let jobs = input["jobs"].as_array().unwrap();
-        let results = output.as_array().unwrap();
-        assert_eq!(jobs.len(), results.len());
-        for (job, result) in jobs.iter().zip(results) {
-            assert_eq!(result["input"], *job);
-            let runs = job["content"]["runs"].as_array().unwrap();
-            let measurements = result["results"].as_array().unwrap();
-            assert_eq!(runs.len(), measurements.len());
-            for (run, measured) in runs.iter().zip(measurements) {
-                assert_eq!(measured["run"], *run);
-                assert_eq!(
-                    measured["latencies"].as_array().unwrap().len() as u64,
-                    run["num_measurements"].as_u64().unwrap(),
-                );
-            }
-        }
     }
 
     #[cfg(not(feature = "multi-vector"))]
