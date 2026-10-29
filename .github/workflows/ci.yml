@@ -14,10 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pass additional arguments to cargo using `--config build.rustflags=["...", "..."]`.
-  #
-  # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
-  RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
+  # Append to target-specific rustflags without replacing `.cargo/config.toml` settings.
+  RUST_CONFIG: 'target."cfg(all())".rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
 

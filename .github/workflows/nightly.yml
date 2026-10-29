@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
+  RUST_CONFIG: 'target."cfg(all())".rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
 
