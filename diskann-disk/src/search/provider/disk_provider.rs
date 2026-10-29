@@ -117,15 +117,6 @@ where
     ) -> Result<Self::InternalId, Self::Error> {
         Ok(*gid)
     }
-
-    /// Translate an internal id its corresponding external id.
-    fn to_external_id(
-        &self,
-        _context: &DefaultContext,
-        id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error> {
-        Ok(id)
-    }
 }
 
 impl<Data> LoadWith<AsyncDiskLoadContext> for DiskProvider<Data>
@@ -2098,14 +2089,6 @@ mod disk_provider_tests {
             create_disk_index_searcher::<GraphDataF32VectorU32Data>(params, &storage_provider);
 
         // minor validation tests to improve code coverage
-        assert_eq!(
-            search_engine
-                .index
-                .data_provider
-                .to_external_id(ctx, 0)
-                .unwrap(),
-            0
-        );
         assert_eq!(
             search_engine
                 .index

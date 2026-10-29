@@ -681,15 +681,6 @@ impl provider::DataProvider for Provider {
             Err(InvalidId::External(*gid))
         }
     }
-
-    fn to_external_id(&self, _context: &Context, id: u32) -> Result<u32, InvalidId> {
-        let valid = self.terms.contains_key(&id);
-        if valid {
-            Ok(id)
-        } else {
-            Err(InvalidId::Internal(id))
-        }
-    }
 }
 
 impl provider::Delete for Provider {
@@ -1744,23 +1735,12 @@ mod tests {
         for i in 0u32..3u32 {
             let internal = provider.to_internal_id(&context, &i).unwrap();
             assert_eq!(internal, i);
-
-            let external = provider.to_external_id(&context, i).unwrap();
-            assert_eq!(external, i);
         }
 
         let err = provider.to_internal_id(&context, &5).unwrap_err();
         let message = err.to_string();
         assert_eq!(
             message, "external id 5 is not initialized",
-            "got {}",
-            message
-        );
-
-        let err = provider.to_external_id(&context, 5).unwrap_err();
-        let message = err.to_string();
-        assert_eq!(
-            message, "internal id 5 is not initialized",
             "got {}",
             message
         );
