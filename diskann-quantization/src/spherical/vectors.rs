@@ -153,31 +153,22 @@ impl SupportedMetric {
     }
 }
 
-impl TryFrom<diskann_vector::distance::Metric> for SupportedMetric {
-    type Error = UnsupportedMetric;
-    fn try_from(metric: diskann_vector::distance::Metric) -> Result<Self, Self::Error> {
+impl From<diskann_vector::distance::Metric> for SupportedMetric {
+    fn from(metric: diskann_vector::distance::Metric) -> Self {
         use diskann_vector::distance::Metric;
         match metric {
-            Metric::L2 => Ok(Self::SquaredL2),
-            Metric::InnerProduct => Ok(Self::InnerProduct),
-            Metric::Cosine => Ok(Self::Cosine),
-            unsupported => Err(UnsupportedMetric(unsupported)),
+            Metric::L2 => Self::SquaredL2,
+            Metric::InnerProduct => Self::InnerProduct,
+            Metric::Cosine | Metric::CosineNormalized => Self::Cosine,
         }
     }
 }
 
 impl PartialEq<diskann_vector::distance::Metric> for SupportedMetric {
     fn eq(&self, metric: &diskann_vector::distance::Metric) -> bool {
-        match Self::try_from(*metric) {
-            Ok(m) => *self == m,
-            Err(_) => false,
-        }
+        *self == Self::from(*metric)
     }
 }
-
-#[derive(Debug, Clone, Copy, Error)]
-#[error("metric {0:?} is not supported for spherical quantization")]
-pub struct UnsupportedMetric(pub(crate) diskann_vector::distance::Metric);
 
 #[cfg(feature = "flatbuffers")]
 #[cfg_attr(docsrs, doc(cfg(feature = "flatbuffers")))]
@@ -1003,31 +994,15 @@ mod tests {
 
     #[test]
     fn supported_metric() {
-        assert_eq!(
-            SupportedMetric::try_from(Metric::L2).unwrap(),
-            SupportedMetric::SquaredL2
-        );
-        assert_eq!(
-            SupportedMetric::try_from(Metric::InnerProduct).unwrap(),
-            SupportedMetric::InnerProduct
-        );
-        assert_eq!(
-            SupportedMetric::try_from(Metric::Cosine).unwrap(),
-            SupportedMetric::Cosine
-        );
-        assert!(matches!(
-            SupportedMetric::try_from(Metric::CosineNormalized),
-            Err(UnsupportedMetric(Metric::CosineNormalized))
-        ));
-
-        assert_eq!(SupportedMetric::SquaredL2, Metric::L2);
-        assert_ne!(SupportedMetric::SquaredL2, Metric::InnerProduct);
-        assert_ne!(SupportedMetric::SquaredL2, Metric::Cosine);
-        assert_ne!(SupportedMetric::SquaredL2, Metric::CosineNormalized);
-
-        assert_ne!(SupportedMetric::InnerProduct, Metric::L2);
-        assert_eq!(SupportedMetric::InnerProduct, Metric::InnerProduct);
-        assert_ne!(SupportedMetric::SquaredL2, Metric::Cosine);
+        for (metric, expected) in [
+            (Metric::L2, SupportedMetric::SquaredL2),
+            (Metric::InnerProduct, SupportedMetric::InnerProduct),
+            (Metric::Cosine, SupportedMetric::Cosine),
+            (Metric::CosineNormalized, SupportedMetric::Cosine),
+        ] {
+            assert_eq!(SupportedMetric::from(metric), expected);
+            assert_eq!(expected, metric);
+        }
         assert_ne!(SupportedMetric::SquaredL2, Metric::CosineNormalized);
     }
 

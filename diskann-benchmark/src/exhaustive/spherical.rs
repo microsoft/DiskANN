@@ -111,7 +111,7 @@ mod imp {
             let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                 data.as_view(),
                 (&input.transform_kind).into(),
-                metric.try_into()?,
+                metric.into(),
                 input.pre_scale.try_into()?,
                 &mut rand::rngs::StdRng::seed_from_u64(input.seed),
                 GlobalAllocator,
@@ -497,10 +497,11 @@ mod imp {
             let allow_rescale = self.measure == SimilarityMeasure::InnerProduct;
             Ok(store
                 .plan
-                .fused_query_computer(
+                .fused_query_computer_with_hints(
                     query,
                     self.layout.into(),
-                    allow_rescale,
+                    diskann_quantization::spherical::InputHints::new()
+                        .with_maybe_out_of_distribution(allow_rescale),
                     GlobalAllocator,
                     ScopedAllocator::global(),
                 )

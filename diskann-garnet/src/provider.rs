@@ -25,7 +25,7 @@ use diskann::{
 };
 use diskann_quantization::{
     alloc::{AllocatorError, Poly},
-    spherical::SupportedMetric,
+    spherical::InputHints,
 };
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
@@ -349,6 +349,15 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
 }
 
 impl<T: VectorRepr> GarnetProvider<T> {
+    // Determine hints before as_f32 erases the source representation. Only native f32
+    // storage inherits the caller's normalized-cosine promise; converted integers do not.
+    fn input_hints(&self) -> InputHints {
+        InputHints::new().with_normalized(
+            self.metric_type == Metric::CosineNormalized
+                && TypeId::of::<T>() == TypeId::of::<f32>(),
+        )
+    }
+
     pub(crate) fn new(
         dim: usize,
         quant_type: VectorQuantType,
@@ -472,9 +481,6 @@ impl<T: VectorRepr> GarnetProvider<T> {
             | VectorQuantType::XSpherical4
             | VectorQuantType::XSpherical4I8
             | VectorQuantType::XSpherical4U8 => {
-                SupportedMetric::try_from(metric_type)
-                    .map_err(|_| GarnetProviderError::InvalidQuantizer)?;
-
                 let valid_type = match quant_type {
                     VectorQuantType::XSpherical2 | VectorQuantType::XSpherical4 => {
                         TypeId::of::<T>() == TypeId::of::<f32>()
@@ -714,7 +720,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let mut qpoint = vec![0u8; quantizer.bytes()];
                 let point_f32 =
                     T::as_f32(point).map_err(|e| GarnetQuantizerError::Compression(Box::new(e)))?;
-                quantizer.compress(&point_f32, &mut qpoint)?;
+                quantizer.compress_with_hints(&point_f32, &mut qpoint, self.input_hints())?;
 
                 if !self.callbacks.write_iid(
                     &context.term(Term::Quantized),
@@ -903,7 +909,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             Ok(v) => v,
             Err(_) => return false,
         };
-        match quantizer.train(self.metric_type, view) {
+        match quantizer.train_with_hints(self.metric_type, view, self.input_hints()) {
             Ok(()) => {
                 let quant_state = if let Ok(s) = quantizer.serialize() {
                     s
@@ -995,7 +1001,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
             if T::as_f32_into(&v, &mut f).is_err() {
                 continue;
             }
-            if quantizer.compress(&f, &mut q).is_err() {
+            if quantizer
+                .compress_with_hints(&f, &mut q, self.input_hints())
+                .is_err()
+            {
                 continue;
             };
 
@@ -1016,7 +1025,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
             // The final thread to finish backfilling will add the quantized started points.
             if let Some(v) = self.start_point_cache.get(&self.start_point_id)
                 && let Ok(v_f32) = T::as_f32(bytemuck::cast_slice::<u8, T>(&v))
-                && quantizer.compress(&v_f32, &mut q).is_ok()
+                && quantizer
+                    .compress_with_hints(&v_f32, &mut q, self.input_hints())
+                    .is_ok()
             {
                 let _ = self.callbacks.write_iid(
                     &context.term(Term::Quantized),
@@ -1859,7 +1870,7 @@ impl<T: VectorRepr> SetElement<(&[T], &[u8])> for GarnetProvider<T> {
                 let element_f32 = T::as_f32(element.0).map_err(|e| {
                     GarnetProviderError::Quantizer(GarnetQuantizerError::Compression(Box::new(e)))
                 })?;
-                quantizer.compress(&element_f32, &mut quant)?;
+                quantizer.compress_with_hints(&element_f32, &mut quant, self.input_hints())?;
                 self.callbacks
                     .write_iid(&context.term(Term::Quantized), internal_id.id(), &quant)
                     .then_some(())
@@ -2032,7 +2043,10 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
             })?;
 
             quantizer
-                .query_computer(&from_f32)
+                .query_computer_with_hints(
+                    &from_f32,
+                    provider.input_hints().with_maybe_out_of_distribution(true),
+                )
                 .map_err(|e| GarnetQuantizerError::QueryComputer(Box::new(e)))?
         } else {
             GarnetQueryComputer::new(FullPrecisionQueryDistance::<T>(T::query_distance(
@@ -4315,6 +4329,66 @@ mod tests {
             provider.start_point_id,
             provider.quant_vector_size(),
         ));
+    }
+
+    #[tokio::test]
+    async fn spherical_normalized_cosine_integer_fallback() {
+        use super::DynamicAccessor;
+        use diskann::utils::VectorRepr;
+        use diskann_vector::PreprocessedDistanceFunction;
+        for (kind, dim) in [
+            (VectorQuantType::XSpherical4U8, 2),
+            (VectorQuantType::XSpherical4U8, 8),
+        ] {
+            let store = Store::new();
+            let ctx = Context::new(0);
+            let provider = GarnetProvider::<u8>::new(
+                dim,
+                kind,
+                Metric::CosineNormalized,
+                10,
+                DEFAULT_START_POINT_ID,
+                store.callbacks(),
+                &ctx,
+            )
+            .unwrap();
+            let (a, b, q) = if dim == 2 {
+                (vec![3u8, 0], vec![4u8, 1], vec![1u8, 0])
+            } else {
+                (vec![0u8; 8], vec![254u8; 8], vec![127u8; 8])
+            };
+            provider.maybe_set_start_point(&ctx, &b).unwrap();
+            let quantizer = provider.quantizer.as_ref().unwrap();
+            for id in 1..=quantizer.required_vectors() as u32 {
+                let external_id = GarnetId::from(&id.to_ne_bytes()[..]);
+                let vector = if id % 2 == 0 { &a } else { &b };
+                provider
+                    .set_element(&ctx, &external_id, (vector.as_slice(), &[]))
+                    .await
+                    .unwrap()
+                    .complete()
+                    .await;
+            }
+            assert!(provider.train_quantizer(&ctx));
+            assert!(provider.backfill_quant_vectors(&ctx, 0, 1));
+            let accessor = DynamicAccessor::new(&provider, &ctx, &q, true).unwrap();
+            let mut distances = Vec::new();
+            for vector in [&a, &b] {
+                let mut code = vec![0u8; quantizer.bytes()];
+                let converted = <u8 as VectorRepr>::as_f32(vector).unwrap();
+                quantizer
+                    .compress_with_hints(&converted, &mut code, provider.input_hints())
+                    .unwrap();
+                distances.push(accessor.computer.evaluate_similarity(&code));
+            }
+            if dim == 2 {
+                assert!(distances[0] < distances[1], "{distances:?}");
+                assert!(distances[0].abs() < 0.02);
+                assert!((distances[1] - (1.0 - 4.0 / 17.0f32.sqrt())).abs() < 0.02);
+            } else {
+                assert!(distances[1].abs() < 0.02, "{distances:?}");
+            }
+        }
     }
 
     #[test]
