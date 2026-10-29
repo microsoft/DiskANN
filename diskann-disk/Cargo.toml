@@ -74,7 +74,6 @@ diskann-providers = { workspace = true, default-features = false, features = [
 ] }
 diskann-utils = { workspace = true, features = ["testing"] }
 criterion.workspace = true
-iai-callgrind.workspace = true
 diskann = { workspace = true }
 approx.workspace = true
 proptest.workspace = true
@@ -89,10 +88,6 @@ experimental_diversity_search = [
 
 [[bench]]
 name = "bench_main"
-harness = false
-
-[[bench]]
-name = "bench_main_iai"
 harness = false
 
 # Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
