@@ -78,17 +78,28 @@ jobs:
     steps:
       # Kept inline because this must run before checkout, but local action.yml
       # files are only available after checkout.
-      - name: Mount high-speed NVMe SSD
+      - name: Use mounted high-speed NVMe SSD
         shell: bash
         run: |
-          sudo mkdir -p /mnt/nvme
-          sudo lsblk
-          sudo mkfs.ext4 /dev/nvme0n1
-          sudo mount /dev/nvme0n1 /mnt/nvme
-          sudo chmod 777 /mnt/nvme
-          mkdir -p /mnt/nvme/diskann_rust /mnt/nvme/baseline
-          ln -s /mnt/nvme/diskann_rust diskann_rust
-          ln -s /mnt/nvme/baseline baseline
+          lsblk
+          # The runner initializes local NVMe storage; use its actual mount.
+          nvme_mount=$(findmnt --real --raw --noheadings --output SOURCE,TARGET |
+            awk '$1 ~ "^/dev/nvme0n1(p[0-9]+)?$" { print $2 }')
+          if [[ -z "$nvme_mount" || "$nvme_mount" == *$'\n'* ||
+                "$nvme_mount" == / || "$nvme_mount" == /boot* ]]; then
+            echo "::error::Expected one mounted data filesystem on /dev/nvme0n1 or its partition."
+            exit 1
+          fi
+          if ! findmnt --mountpoint "$nvme_mount" --noheadings --output SOURCE |
+              grep -Eq '^/dev/nvme0n1(p[0-9]+)?$'; then
+            echo "::error::NVMe mount path does not resolve to the expected device."
+            exit 1
+          fi
+          echo "Using NVMe storage at $nvme_mount"
+          sudo mkdir -p "$nvme_mount/diskann_rust" "$nvme_mount/baseline"
+          sudo chown "$(id -u):$(id -g)" "$nvme_mount/diskann_rust" "$nvme_mount/baseline"
+          ln -s "$nvme_mount/diskann_rust" diskann_rust
+          ln -s "$nvme_mount/baseline" baseline
 
       - name: Checkout current branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

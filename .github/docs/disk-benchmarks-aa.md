@@ -20,6 +20,14 @@ for reliable benchmarking.
 
 Only one run is allowed at a time (`cancel-in-progress: true`).
 
+## Runner storage
+
+Both disk benchmark workflows require the runner to provide a mounted data
+filesystem on `/dev/nvme0n1` or one of its partitions. They discover the mount
+from the device source and place the checkouts and benchmark data there.
+Setup fails if that mount is missing, ambiguous, or a system mount. The workflows
+do not format or mount disks and do not fall back to OS or resource storage.
+
 ## Datasets
 
 Two datasets are benchmarked in parallel via a matrix strategy
