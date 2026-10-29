@@ -79,6 +79,7 @@ bftree = ["dep:diskann-bftree"]
 disk-index = [
     "diskann-disk/perf_test",
     "dep:diskann-disk",
+    "dep:diskann-inmem",
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",
     "dep:scopeguard",
