@@ -530,6 +530,7 @@ version = "0.61.0"
 dependencies = [
  "anyhow",
  "clap",
+ "diskann-utils",
  "half",
  "indicatif",
  "serde",

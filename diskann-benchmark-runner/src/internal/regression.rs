@@ -297,7 +297,7 @@ impl Raw {
     ) -> anyhow::Result<Parsed<'a>> {
         // Attempt to parse raw tolerances into registered tolerance inputs.
         let num_checks = self.checks.len();
-        let mut checker = Checker::new(vec![], None);
+        let mut checker = Checker::new(vec![], None)?;
         let inner = self
             .checks
             .into_iter()
