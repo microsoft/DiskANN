@@ -260,6 +260,112 @@ is running. This incremental saving allows benchmarks to be interrupted without 
 In addition to the machine-readable JSON output files, a (hopefully) helpful summary of the
 results will be printed to `stdout`.
 
+### IVF Build and Search
+
+The `ivf-index` benchmark accepts `ivf-build-search` inputs. Run its self-contained
+[smoke example](example/ivf-index.json) from the repository root:
+
+```sh
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/ivf-index.json --output-file ivf-output.json
+```
+
+`data: null` selects fixed synthetic data (4,096 base vectors, 128 held-out queries,
+32 dimensions). For real data, set `data` and `search.queries`, and list their directory
+in `search_directories`. The [FBV8 input](perf_test_inputs/ivf-fbv8.json) supplies a real-data
+configuration; update its search directory before running:
+
+```sh
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/perf_test_inputs/ivf-fbv8.json --output-file ivf-fbv8-output.json
+```
+
+| Vector file | `format` | `data_type` |
+|---|---|---|
+| FP16 bin (`f16bin`) | `bin` | `float16` |
+| FP32 bin (`f32bin`) | `bin` | `float32` |
+| fvecs | `fvecs` | `float32` |
+
+FP16 values are promoted exactly to FP32 without renormalization. Construction keeps the
+input order, uses the first row as its initial centroid, and uses `build.seed` for splitting.
+The default `build.split_mode` is `baseline`: paired L2, stable-bit early stopping and
+ordered f64 mean accumulation preserve the original index behavior on the same ISA.
+`build.num_threads` defaults to 1; larger caller pools require the `ivf-parallel` feature.
+Search uses one query thread. Set `search: null` to run only construction.
+
+The complete `projection-gemm` scheme requires `ivf-experimental-compute`, which enables
+the existing optional `diskann-linalg` dependency. Use separate workload inputs for the
+baseline and the final scheme. For a four-thread comparison, set the final scheme's build
+fields to:
+
+```json
+{
+  "build": {
+    "split_mode": "projection-gemm",
+    "num_threads": 4
+  }
+}
+```
+
+The baseline control uses `split_mode: "baseline"` and the same `num_threads: 4`.
+Keep the dataset, seed, batch size, split threshold and iteration limit identical. Run each
+comparison input with both features enabled:
+
+```sh
+cargo run --release --package diskann-benchmark --features ivf-experimental-compute,ivf-parallel -- run --input-file path/to/comparison.json --output-file ivf-comparison-output.json
+```
+
+| `build.split_mode` | Local two-means | Joint assignment across all fitted children |
+|---|---|---|
+| `baseline` (default) | Paired L2 | Paired L2 |
+| `projection-gemm` | One SIMD dot product per point and Lloyd iteration | Tiled SGEMM |
+
+Projection compares each point with the separating hyperplane between two centers. SGEMM
+packs fixed global point tiles and shares translated centers across jobs. With both IVF
+features enabled, `build.num_threads` sets the caller-pool budget for fitting and eligible
+SGEMM reassignment jobs. Each SGEMM call uses the sequential Faer wrapper
+(`Par::Seq`), so it creates no additional pool or nested parallelism. Small center sets use
+paired L2, and non-finite arithmetic falls back to paired L2. Finite rounding differences
+can change assignments, later centers and partitions.
+Check exact layout preservation for the baseline and repeatability within each mode; compare
+recall and candidate cost across modes on the same queries and nprobe grid. Full probing
+checks membership and search correctness, not approximate-search quality.
+
+`search.query_limit` selects a query prefix; null uses all queries. `search.groundtruth`
+accepts a bin ID matrix, optionally followed by distances; null computes exact groundtruth.
+`search.k` sets both the number of returned neighbors and the recall cutoff: recall@k compares
+the returned top-k IDs with the first k IDs of each groundtruth row. The FBV8 truth file stores
+2,000 neighbors per query. The default and supplied configurations use k=1000 to measure
+recall@1000 against the first 1,000 groundtruth IDs.
+Full-list probing must match independently computed f32 L2 flat top-k results. Recall is
+always measured against the supplied truth when present, so precision or ranking differences
+can make even full-probe recall less than 100%. Its query count
+defaults to all queries and can be limited with `search.full_probe_queries`, without limiting
+the requested fixed-nprobe runs. Each result reports its actual query count.
+
+Build timing retains the original regions: `build_ms` includes initialization and point-reference
+preparation; `insert_ms` covers successful insertions; `split_ms` covers clustering; `fit_ms`
+covers local two-means; and `assignment_ms` covers region-wide labels and counts, excluding
+member scattering. These timers are nested, so they must not be added together. Input loading,
+benchmark validation, truth computation and checkpoints are outside build timing.
+
+Build totals and split events include `gemm_calls`, `gemm_points`, `projection_points` and
+`numeric_fallbacks`. These count tile calls, labels selected from finite SGEMM scores, successful
+projection classifications across Lloyd iterations, and classifications retried with paired L2
+because of non-finite arithmetic, respectively. Counts measure work rather than unique IDs.
+Small-center direct assignment is not a numerical fallback. Packing, norms, scratch allocation
+and fallback work stay inside their respective phase timers.
+
+`gemm_parallel_jobs` counts coarse GEMM jobs scheduled through the caller-pool parallel
+path. It measures dispatch activity; it does not establish simultaneous thread utilization.
+Each job can execute several tiles, whose SGEMM calls are counted by `gemm_calls`.
+
+Search uses the shared `Search`/`Aggregate` framework. Each nprobe configuration has one complete
+warmup, excluded from `search.reps` measured repetitions. QPS is reported separately for each
+measured repetition using its batch end-to-end latency. Recall is computed outside the
+timed search batch.
+
+This measures in-memory IVF-Flat with a private provider and exact centroid selection. It does
+not measure centroid-graph routing, Mimir production throughput or SSD I/O.
+
 ### Streaming Runs
 Running the benchmark on a streaming workload is similar to other registered benchmarks,
 relying on the file formats and streaming runbooks of `big-ann-benchmarks`

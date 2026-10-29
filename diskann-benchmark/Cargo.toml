@@ -54,6 +54,10 @@ half = { workspace = true, features = ["rand_distr", "num-traits"] }
 [features]
 default = []
 
+# Enable IVF split computation modes and caller-pool parallelism.
+ivf-experimental-compute = ["diskann/ivf-experimental-compute"]
+ivf-parallel = ["diskann/ivf-parallel"]
+
 # Enable spherical-quantization based algorithms
 spherical-quantization = []
 

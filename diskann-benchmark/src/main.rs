@@ -11,6 +11,7 @@ mod filters;
 mod flat;
 mod index;
 mod inputs;
+mod ivf;
 mod multi_vector;
 mod utils;
 
@@ -55,6 +56,7 @@ impl Cli {
         disk_index::register_benchmarks(&mut registry)?;
         flat::register_benchmarks(&mut registry)?;
         index::register_benchmarks(&mut registry)?;
+        ivf::register_benchmarks(&mut registry)?;
         filters::register_benchmarks(&mut registry)?;
         multi_vector::register_benchmarks(&mut registry)?;
 
@@ -320,6 +322,64 @@ mod tests {
     fn flat_search_integration() {
         let raw = value_from_file(&example_directory().join("flat-index.json"));
         run_integration_test(raw);
+    }
+
+    #[test]
+    fn ivf_build_search_integration() {
+        let mut raw = value_from_file(&example_directory().join("ivf-index.json"));
+        raw["jobs"][0]["content"]["search"]["query_limit"] = serde_json::json!(16);
+        raw["jobs"][0]["content"]["search"]["full_probe_queries"] = serde_json::json!(4);
+        let mut build_only = raw["jobs"][0].clone();
+        build_only["content"]["search"] = serde_json::Value::Null;
+        raw["jobs"].as_array_mut().unwrap().push(build_only);
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn ivf_supplied_truth_is_used_for_recall() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let data_path = tempdir.path().join("data.bin");
+        let query_path = tempdir.path().join("queries.bin");
+        let truth_path = tempdir.path().join("truth.bin");
+        let data = [
+            3u32.to_le_bytes(),
+            1u32.to_le_bytes(),
+            0.0f32.to_le_bytes(),
+            1.0f32.to_le_bytes(),
+            2.0f32.to_le_bytes(),
+        ]
+        .concat();
+        std::fs::write(&data_path, data).unwrap();
+        std::fs::write(
+            &query_path,
+            [1u32.to_le_bytes(), 1u32.to_le_bytes(), 0.0f32.to_le_bytes()].concat(),
+        )
+        .unwrap();
+        // Canonical top-2 is [0, 1]; external truth deliberately overlaps by one ID.
+        std::fs::write(&truth_path, [1u32, 2, 2, 0].map(u32::to_le_bytes).concat()).unwrap();
+        let mut raw = value_from_file(&example_directory().join("ivf-index.json"));
+        let content = &mut raw["jobs"][0]["content"];
+        content["data"] = serde_json::json!(data_path);
+        content["search"]["queries"] = serde_json::json!(query_path);
+        content["search"]["groundtruth"] = serde_json::json!(truth_path);
+        content["search"]["k"] = serde_json::json!(2);
+        content["search"]["nprobe"] = serde_json::json!([1]);
+        let input_path = tempdir.path().join("input.json");
+        let output_path = tempdir.path().join("output.json");
+        save_to_file(&input_path, &raw);
+        let command = Commands::Run {
+            input_file: input_path,
+            output_file: output_path.clone(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        Cli::from_commands(command, true)
+            .run(&mut Memory::new())
+            .unwrap();
+        let results = value_from_file(&output_path);
+        let search = &results[0]["results"]["search"][0];
+        assert_eq!(search["full_probe"], true);
+        assert_eq!(search["recall"]["average"], 0.5);
     }
 
     ////////////////////////////
