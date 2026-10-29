@@ -60,7 +60,7 @@ pub(super) fn build_disk_index<T, StorageProviderType>(
     params: &DiskIndexBuild,
 ) -> anyhow::Result<DiskBuildStats>
 where
-    T: VectorRepr,
+    T: VectorRepr + diskann_inmem::repr::FullPrecision,
     StorageProviderType: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProviderType as StorageReadProvider>::Reader: std::marker::Send,
 {

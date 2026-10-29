@@ -52,7 +52,7 @@ where
 
 impl<T> Benchmark for DiskIndex<T>
 where
-    T: VectorRepr + AsDataType,
+    T: VectorRepr + AsDataType + diskann_inmem::repr::FullPrecision,
 {
     type Input = DiskIndexOperation;
     type Output = DiskIndexStats;
@@ -286,7 +286,7 @@ fn check_metric(
 
 impl<T> Regression for DiskIndex<T>
 where
-    T: VectorRepr + AsDataType,
+    T: VectorRepr + AsDataType + diskann_inmem::repr::FullPrecision,
 {
     type Tolerances = DiskIndexTolerance;
     type Pass = DiskIndexCheckResult;
