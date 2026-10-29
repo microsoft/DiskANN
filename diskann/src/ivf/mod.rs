@@ -25,7 +25,7 @@ mod search;
 pub mod traits;
 pub mod workingset;
 
-pub use clustering::TwoMeansMode;
+pub use clustering::{ReassignmentMode, TwoMeansMode};
 pub use index::{Config, ConfigError, IVFIndex, InsertStats};
 pub use metrics::BuildMetrics;
 pub use search::{SearchProvider, SearchResult};
