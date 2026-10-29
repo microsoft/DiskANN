@@ -9,24 +9,30 @@ use std::time::{Duration, Instant};
 
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
-use rand::{Rng, rngs::StdRng};
+use rand::rngs::StdRng;
 
-use super::workingset::{ListView, PointRef};
+use super::{metrics::ComputeStats, workingset::ListView};
+
 use crate::{ANNError, ANNResult};
+
+mod two_means;
+pub use two_means::TwoMeansMode;
 
 pub(super) struct Children<I> {
     pub centroids: rowmajor::Owned<f32>,
     pub members: Vec<Vec<I>>,
     pub fit_time: Duration,
     pub assignment_time: Duration,
+    pub compute: ComputeStats,
 }
 
 /// Fit two children per source, then assign every point across all children.
-pub(super) fn split<I: Copy, L>(
+pub(super) fn split<I: Copy + Sync, L: Sync>(
     lists: &[ListView<'_, I, L>],
     dim: usize,
     iterations: usize,
     rng: &mut StdRng,
+    mode: TwoMeansMode,
 ) -> ANNResult<Children<I>> {
     if lists.is_empty() || dim == 0 {
         return Err(ANNError::message(
@@ -35,13 +41,7 @@ pub(super) fn split<I: Copy, L>(
     }
     let mut centroids = rowmajor::Owned::try_from_element(2 * lists.len(), dim, 0.0)?;
     let fit_start = Instant::now();
-    let mut sums = vec![0.0; 2 * dim];
-    for (list, centers) in lists
-        .iter()
-        .zip(centroids.as_mut_slice().chunks_exact_mut(2 * dim))
-    {
-        fit_two_means(&list.points, centers, dim, iterations, rng, &mut sums)?;
-    }
+    let compute = two_means::fit(lists, centroids.as_mut_slice(), dim, iterations, rng, mode)?;
 
     let fit_time = fit_start.elapsed();
     let assignment_start = Instant::now();
@@ -63,49 +63,8 @@ pub(super) fn split<I: Copy, L>(
         members,
         fit_time,
         assignment_time,
+        compute,
     })
-}
-
-fn fit_two_means<I>(
-    points: &[PointRef<'_, I>],
-    centers: &mut [f32],
-    dim: usize,
-    iterations: usize,
-    rng: &mut StdRng,
-    sums: &mut [f64],
-) -> ANNResult<()> {
-    if points.len() < 2 {
-        return Err(ANNError::message("an IVF split needs at least two points"));
-    }
-    let first = rng.random_range(0..points.len());
-    let second = (first + rng.random_range(1..points.len())) % points.len();
-    centers[..dim].copy_from_slice(points[first].vector);
-    centers[dim..].copy_from_slice(points[second].vector);
-
-    for _ in 0..iterations.max(1) {
-        sums.fill(0.0);
-        let mut counts = [0; 2];
-        for point in points {
-            let to = nearest(point.vector, centers, dim);
-            counts[to] += 1;
-            for (sum, &value) in sums[to * dim..(to + 1) * dim].iter_mut().zip(point.vector) {
-                // A finite mean must not overflow while accumulating its inputs.
-                *sum += f64::from(value);
-            }
-        }
-        for ((center, sum), count) in centers
-            .chunks_exact_mut(dim)
-            .zip(sums.chunks_exact(dim))
-            .zip(counts)
-        {
-            if count != 0 {
-                for (value, &sum) in center.iter_mut().zip(sum) {
-                    *value = (sum / count as f64) as f32;
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Prefer the first centroid on ties. `centers` contains at least one full row.
@@ -120,4 +79,12 @@ fn nearest(point: &[f32], centers: &[f32], dim: usize) -> usize {
         }
     }
     best
+}
+
+#[cfg(feature = "ivf-parallel")]
+pub(super) fn use_parallel(coordinate_visits: usize) -> bool {
+    // Only use a caller's active Rayon pool. Do not implicitly create a global pool.
+    coordinate_visits >= 262_144
+        && rayon::current_thread_index().is_some()
+        && rayon::current_num_threads() > 1
 }

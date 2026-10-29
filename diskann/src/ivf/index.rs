@@ -15,7 +15,7 @@ use rand::{SeedableRng, rngs::StdRng};
 use thiserror::Error;
 
 use super::{
-    clustering,
+    clustering::{self, TwoMeansMode},
     metrics::BuildMetrics,
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
@@ -29,6 +29,7 @@ pub struct Config {
     /// Split a touched list when its pending membership exceeds this size.
     pub split_threshold: usize,
     /// Lloyd steps per parent. Zero still performs one step.
+    /// Stop early only when centroid bits no longer change.
     pub two_means_iterations: usize,
     pub seed: u64,
 }
@@ -51,6 +52,7 @@ pub struct IVFIndex<P: Provider> {
     config: Config,
     rng: StdRng,
     metrics: BuildMetrics,
+    two_means_mode: TwoMeansMode,
 }
 
 impl<P: Provider> IVFIndex<P> {
@@ -66,6 +68,7 @@ impl<P: Provider> IVFIndex<P> {
             rng: StdRng::seed_from_u64(config.seed),
             config,
             metrics: BuildMetrics::default(),
+            two_means_mode: TwoMeansMode::Baseline,
         })
     }
 
@@ -75,6 +78,21 @@ impl<P: Provider> IVFIndex<P> {
 
     pub fn build_metrics(&self) -> &BuildMetrics {
         &self.metrics
+    }
+
+    /// Select the fitting kernel for subsequent insertions. Projection may change
+    /// partitions through rounding; region-wide reassignment is unaffected.
+    ///
+    /// # Errors
+    /// Projection requires the `ivf-experimental-compute` feature.
+    pub fn set_two_means_mode(&mut self, mode: TwoMeansMode) -> ANNResult<()> {
+        if mode != TwoMeansMode::Baseline && !cfg!(feature = "ivf-experimental-compute") {
+            return Err(ANNError::message(
+                "enable ivf-experimental-compute for projection fitting",
+            ));
+        }
+        self.two_means_mode = mode;
+        Ok(())
     }
 
     /// Install initial empty lists and their centroids in one build operation.
@@ -139,6 +157,7 @@ impl<P: Provider> IVFIndex<P> {
         let config = self.config;
         let rng = &mut self.rng;
         let metrics = &mut self.metrics;
+        let two_means_mode = self.two_means_mode;
 
         async move {
             if points.is_empty() {
@@ -181,12 +200,20 @@ impl<P: Provider> IVFIndex<P> {
                     let view = accessor.fill(&parents).await?;
                     measured.split_points = view.iter().map(|list| list.points.len()).sum();
                     let split_start = Instant::now();
-                    let children = clustering::split(&view, dim, config.two_means_iterations, rng)?;
+                    let children = clustering::split(
+                        &view,
+                        dim,
+                        config.two_means_iterations,
+                        rng,
+                        two_means_mode,
+                    )?;
                     measured.split_time = split_start.elapsed();
                     measured.fit_time = children.fit_time;
                     measured.assignment_time = children.assignment_time;
                     measured.split_calls = 1;
                     measured.split_parents = splits;
+                    measured.projection_points = children.compute.projection_points;
+                    measured.numeric_fallbacks = children.compute.numeric_fallbacks;
                     children
                 };
                 for (centroid, members) in children.centroids.rows().zip(children.members) {
@@ -205,6 +232,8 @@ impl<P: Provider> IVFIndex<P> {
             metrics.split_calls += measured.split_calls;
             metrics.split_parents += measured.split_parents;
             metrics.split_points += measured.split_points;
+            metrics.projection_points += measured.projection_points;
+            metrics.numeric_fallbacks += measured.numeric_fallbacks;
 
             Ok(InsertStats {
                 inserted: points.len(),

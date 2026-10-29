@@ -13,7 +13,7 @@ use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{SeedableRng, rngs::StdRng};
 
 use super::{
-    Config, IVFIndex, InsertStats, clustering,
+    Config, IVFIndex, InsertStats, TwoMeansMode, clustering,
     pending::{Membership, PendingLists},
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
@@ -22,6 +22,8 @@ use super::{
     workingset::{Batch, ListView, PointRef, WorkingSet},
 };
 use crate::{ANNError, ANNResult, provider::DefaultContext};
+
+mod replay;
 
 #[derive(Debug)]
 struct StoredList {
@@ -677,7 +679,14 @@ fn assignment_can_cross_parent_boundaries() {
                 .collect(),
         },
     ];
-    let children = clustering::split(&view, 1, 10, &mut StdRng::seed_from_u64(7)).unwrap();
+    let children = clustering::split(
+        &view,
+        1,
+        10,
+        &mut StdRng::seed_from_u64(7),
+        TwoMeansMode::Baseline,
+    )
+    .unwrap();
     assert!(
         children.members[2..]
             .iter()
@@ -699,8 +708,22 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
             })
             .collect(),
     }];
-    let zero = clustering::split(&view, 1, 0, &mut StdRng::seed_from_u64(7)).unwrap();
-    let one = clustering::split(&view, 1, 1, &mut StdRng::seed_from_u64(7)).unwrap();
+    let zero = clustering::split(
+        &view,
+        1,
+        0,
+        &mut StdRng::seed_from_u64(7),
+        TwoMeansMode::Baseline,
+    )
+    .unwrap();
+    let one = clustering::split(
+        &view,
+        1,
+        1,
+        &mut StdRng::seed_from_u64(7),
+        TwoMeansMode::Baseline,
+    )
+    .unwrap();
     assert_eq!(zero.centroids.as_slice(), one.centroids.as_slice());
     assert!(
         zero.centroids
@@ -712,6 +735,5 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
     assert!(zero.members[1].is_empty());
 }
 
-mod search;
-
 mod metrics;
+mod search;

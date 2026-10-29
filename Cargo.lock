@@ -448,6 +448,7 @@ dependencies = [
  "num-traits",
  "pin-project",
  "rand",
+ "rayon",
  "relative-path 2.0.1",
  "rstest",
  "serde",
