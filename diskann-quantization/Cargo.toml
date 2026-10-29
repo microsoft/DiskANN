@@ -25,6 +25,8 @@ diskann-utils = { workspace = true }
 raw-cpuid = "11.5"
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = "0.2.148"
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_SystemInformation"] }
 
 [lints.clippy]
 allow_attributes = "warn"
@@ -42,8 +44,16 @@ serde_json = { workspace = true }
 trybuild = "1.0.120"
 rand_distr = { workspace = true }
 
+[[bin]]
+name = "detect-cache"
+path = "detect-cache/main.rs"
+required-features = ["cache-diagnostics"]
+
 [features]
 default = ["rayon"]
+
+# Expose cache internals to the detect-cache binary.
+cache-diagnostics = []
 
 # Add support for linear-algebran enhanced routines.
 linalg = ["dep:diskann-linalg"]
