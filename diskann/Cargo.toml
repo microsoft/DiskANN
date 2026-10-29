@@ -70,12 +70,12 @@ tracing = ["dep:tracing"]
 # Enable testing providers.
 testing = ["dep:dashmap"]
 
-# Parallelize large IVF two-means fits inside a caller's active Rayon pool.
+# Parallelize large IVF fits and reassignment jobs inside a caller's active Rayon pool.
 # Calls outside a Rayon pool and small workloads stay serial.
 ivf-parallel = ["dep:rayon"]
 
 # Enable split kernels whose floating-point rounding can change partitions.
-ivf-experimental-compute = []
+ivf-experimental-compute = ["dep:diskann-linalg"]
 
 # Enable experimental diversity search
 experimental_diversity_search = []

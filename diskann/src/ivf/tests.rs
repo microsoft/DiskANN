@@ -13,7 +13,7 @@ use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::{SeedableRng, rngs::StdRng};
 
 use super::{
-    Config, IVFIndex, InsertStats, TwoMeansMode, clustering,
+    Config, IVFIndex, InsertStats, ReassignmentMode, TwoMeansMode, clustering,
     pending::{Membership, PendingLists},
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
@@ -685,6 +685,7 @@ fn assignment_can_cross_parent_boundaries() {
         10,
         &mut StdRng::seed_from_u64(7),
         TwoMeansMode::Baseline,
+        ReassignmentMode::Baseline,
     )
     .unwrap();
     assert!(
@@ -714,6 +715,7 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
         0,
         &mut StdRng::seed_from_u64(7),
         TwoMeansMode::Baseline,
+        ReassignmentMode::Baseline,
     )
     .unwrap();
     let one = clustering::split(
@@ -722,6 +724,7 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
         1,
         &mut StdRng::seed_from_u64(7),
         TwoMeansMode::Baseline,
+        ReassignmentMode::Baseline,
     )
     .unwrap();
     assert_eq!(zero.centroids.as_slice(), one.centroids.as_slice());
@@ -737,3 +740,5 @@ fn two_means_keeps_empty_children_finite_and_prefers_first_ties() {
 
 mod metrics;
 mod search;
+
+mod reassignment;

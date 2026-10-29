@@ -8,14 +8,15 @@
 use std::time::{Duration, Instant};
 
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
-use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use rand::rngs::StdRng;
 
 use super::{metrics::ComputeStats, workingset::ListView};
 
 use crate::{ANNError, ANNResult};
 
+mod reassignment;
 mod two_means;
+pub use reassignment::ReassignmentMode;
 pub use two_means::TwoMeansMode;
 
 pub(super) struct Children<I> {
@@ -33,6 +34,7 @@ pub(super) fn split<I: Copy + Sync, L: Sync>(
     iterations: usize,
     rng: &mut StdRng,
     mode: TwoMeansMode,
+    reassignment_mode: ReassignmentMode,
 ) -> ANNResult<Children<I>> {
     if lists.is_empty() || dim == 0 {
         return Err(ANNError::message(
@@ -41,18 +43,21 @@ pub(super) fn split<I: Copy + Sync, L: Sync>(
     }
     let mut centroids = rowmajor::Owned::try_from_element(2 * lists.len(), dim, 0.0)?;
     let fit_start = Instant::now();
-    let compute = two_means::fit(lists, centroids.as_mut_slice(), dim, iterations, rng, mode)?;
+    let mut compute = two_means::fit(lists, centroids.as_mut_slice(), dim, iterations, rng, mode)?;
 
     let fit_time = fit_start.elapsed();
     let assignment_start = Instant::now();
     let count = lists.iter().map(|list| list.points.len()).sum();
     let mut assignments = Vec::with_capacity(count);
     let mut sizes = vec![0; centroids.nrows()];
-    for point in lists.iter().flat_map(|list| &list.points) {
-        let to = nearest(point.vector, centroids.as_slice(), dim);
-        assignments.push(to);
-        sizes[to] += 1;
-    }
+    compute.merge(reassignment::assign(
+        lists,
+        centroids.as_slice(),
+        dim,
+        reassignment_mode,
+        &mut assignments,
+        &mut sizes,
+    )?);
     let assignment_time = assignment_start.elapsed();
     let mut members: Vec<Vec<I>> = sizes.into_iter().map(Vec::with_capacity).collect();
     for (point, to) in lists.iter().flat_map(|list| &list.points).zip(assignments) {
@@ -65,20 +70,6 @@ pub(super) fn split<I: Copy + Sync, L: Sync>(
         assignment_time,
         compute,
     })
-}
-
-/// Prefer the first centroid on ties. `centers` contains at least one full row.
-fn nearest(point: &[f32], centers: &[f32], dim: usize) -> usize {
-    let mut best = 0;
-    let mut best_distance: f32 = SquaredL2::evaluate(point, &centers[..dim]);
-    for (index, center) in centers.chunks_exact(dim).enumerate().skip(1) {
-        let distance: f32 = SquaredL2::evaluate(point, center);
-        if distance.total_cmp(&best_distance).is_lt() {
-            best = index;
-            best_distance = distance;
-        }
-    }
-    best
 }
 
 #[cfg(feature = "ivf-parallel")]

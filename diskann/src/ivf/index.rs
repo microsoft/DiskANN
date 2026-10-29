@@ -15,7 +15,7 @@ use rand::{SeedableRng, rngs::StdRng};
 use thiserror::Error;
 
 use super::{
-    clustering::{self, TwoMeansMode},
+    clustering::{self, ReassignmentMode, TwoMeansMode},
     metrics::BuildMetrics,
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
@@ -53,6 +53,7 @@ pub struct IVFIndex<P: Provider> {
     rng: StdRng,
     metrics: BuildMetrics,
     two_means_mode: TwoMeansMode,
+    reassignment_mode: ReassignmentMode,
 }
 
 impl<P: Provider> IVFIndex<P> {
@@ -69,6 +70,7 @@ impl<P: Provider> IVFIndex<P> {
             config,
             metrics: BuildMetrics::default(),
             two_means_mode: TwoMeansMode::Baseline,
+            reassignment_mode: ReassignmentMode::Baseline,
         })
     }
 
@@ -92,6 +94,21 @@ impl<P: Provider> IVFIndex<P> {
             ));
         }
         self.two_means_mode = mode;
+        Ok(())
+    }
+
+    /// Select region-wide reassignment for subsequent insertions. GEMM may change
+    /// partitions through rounding; the two-means fitting policy is unaffected.
+    ///
+    /// # Errors
+    /// GEMM requires the `ivf-experimental-compute` feature.
+    pub fn set_reassignment_mode(&mut self, mode: ReassignmentMode) -> ANNResult<()> {
+        if mode != ReassignmentMode::Baseline && !cfg!(feature = "ivf-experimental-compute") {
+            return Err(ANNError::message(
+                "enable ivf-experimental-compute for GEMM reassignment",
+            ));
+        }
+        self.reassignment_mode = mode;
         Ok(())
     }
 
@@ -158,6 +175,7 @@ impl<P: Provider> IVFIndex<P> {
         let rng = &mut self.rng;
         let metrics = &mut self.metrics;
         let two_means_mode = self.two_means_mode;
+        let reassignment_mode = self.reassignment_mode;
 
         async move {
             if points.is_empty() {
@@ -206,12 +224,16 @@ impl<P: Provider> IVFIndex<P> {
                         config.two_means_iterations,
                         rng,
                         two_means_mode,
+                        reassignment_mode,
                     )?;
                     measured.split_time = split_start.elapsed();
                     measured.fit_time = children.fit_time;
                     measured.assignment_time = children.assignment_time;
                     measured.split_calls = 1;
                     measured.split_parents = splits;
+                    measured.gemm_calls = children.compute.gemm_calls;
+                    measured.gemm_parallel_jobs = children.compute.gemm_parallel_jobs;
+                    measured.gemm_points = children.compute.gemm_points;
                     measured.projection_points = children.compute.projection_points;
                     measured.numeric_fallbacks = children.compute.numeric_fallbacks;
                     children
@@ -232,6 +254,9 @@ impl<P: Provider> IVFIndex<P> {
             metrics.split_calls += measured.split_calls;
             metrics.split_parents += measured.split_parents;
             metrics.split_points += measured.split_points;
+            metrics.gemm_calls += measured.gemm_calls;
+            metrics.gemm_parallel_jobs += measured.gemm_parallel_jobs;
+            metrics.gemm_points += measured.gemm_points;
             metrics.projection_points += measured.projection_points;
             metrics.numeric_fallbacks += measured.numeric_fallbacks;
 
