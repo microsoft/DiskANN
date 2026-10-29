@@ -28,9 +28,7 @@ use diskann_providers::{
     },
 };
 use tokio::task::JoinSet;
-#[cfg(debug_assertions)]
-use tracing::debug;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::{
     build::builder::{
