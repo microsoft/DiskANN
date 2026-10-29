@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Incremental IVF construction.
+//! Incremental IVF construction and basic IVF-Flat search.
 //!
 //! The index routes points, splits oversized lists, and assigns their members to
 //! replacement centroids. Providers supply centroid selection, logical list
@@ -14,16 +14,18 @@
 //! Providers choose their own storage, publication, and failure-recovery mechanisms.
 //!
 //! This first implementation supports initialization and batch insertion with
-//! two-means splitting. Search, neighborhood reassignment, deletion, and colocation
-//! are not implemented.
+//! two-means splitting and read-only L2 search. Neighborhood reassignment,
+//! deletion, and colocation are not implemented.
 
 mod clustering;
 mod index;
 pub mod pending;
+mod search;
 pub mod traits;
 pub mod workingset;
 
 pub use index::{Config, ConfigError, IVFIndex, InsertStats};
+pub use search::{SearchProvider, SearchResult};
 
 #[cfg(test)]
 mod tests;
