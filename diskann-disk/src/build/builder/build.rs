@@ -40,12 +40,13 @@ use crate::{
     error::{diskann_error, ErrorKind},
     storage::{
         quant::{
-            validate_data_generation_input, PQGeneration, PQGenerationContext, QuantDataGenerator,
+            generate_spherical_q3, validate_data_generation_input, PQGeneration,
+            PQGenerationContext, QuantDataGenerator,
         },
         DiskIndexWriter,
     },
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
-    DiskIndexBuildParameters,
+    DiskIndexBuildParameters, SearchQuantization,
 };
 
 pub struct DiskIndexBuilder<'a, Data, StorageProvider>
@@ -140,6 +141,18 @@ where
         let max_block_size = self.disk_build_param.data_compression_chunk_vector_count();
         validate_data_generation_input(self.storage_provider, &data_path, max_block_size)?;
 
+        if self.disk_build_param.search_quantization() == SearchQuantization::SphericalQ3 {
+            return generate_spherical_q3::<Data::VectorDataType, _>(
+                &self.index_writer.get_index_path_prefix(),
+                &data_path,
+                self.index_configuration.dist_metric,
+                self.index_configuration.random_seed,
+                self.storage_provider,
+                pool,
+                max_block_size,
+            );
+        }
+
         let num_points = self.index_configuration.max_points;
         let num_chunks = self.disk_build_param.search_pq_chunks();
 
@@ -205,6 +218,17 @@ where
     }
 
     fn create_disk_layout(&mut self) -> ANNResult<()> {
+        // The other backend still describes the previous dataset, even if its shape
+        // matches. Invalidate it before replacing the graph and propagate deletion errors.
+        let unused_quantization = match self.disk_build_param.search_quantization() {
+            SearchQuantization::PQ => SearchQuantization::SphericalQ3,
+            SearchQuantization::SphericalQ3 => SearchQuantization::PQ,
+        };
+        for path in unused_quantization.paths(&self.index_writer.get_index_path_prefix()) {
+            if self.storage_provider.exists(&path) {
+                self.storage_provider.delete(&path)?;
+            }
+        }
         self.index_writer
             .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
         self.index_writer

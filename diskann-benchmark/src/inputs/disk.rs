@@ -50,10 +50,31 @@ pub(crate) enum DiskIndexSource {
     Build(DiskIndexBuild),
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum SearchQuantization {
+    #[default]
+    PQ,
+    SphericalQ3,
+}
+
+impl SearchQuantization {
+    pub(crate) fn paths(self, prefix: &str) -> [String; 2] {
+        match self {
+            Self::PQ => [get_pq_pivot_file(prefix), get_compressed_pq_file(prefix)],
+            Self::SphericalQ3 => [
+                format!("{prefix}_spherical_q3_quantizer.bin"),
+                format!("{prefix}_spherical_q3_compressed.bin"),
+            ],
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct DiskIndexLoad {
     pub(crate) data_type: DataType,
     pub(crate) load_path: String,
+    #[serde(default)]
+    pub(crate) search_quantization: SearchQuantization,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -69,6 +90,8 @@ pub(crate) struct DiskIndexBuild {
     pub(crate) num_pq_chunks: NonZeroUsize,
     #[cfg(feature = "disk-index")]
     pub(crate) quantization_type: QuantizationType,
+    #[serde(default)]
+    pub(crate) search_quantization: SearchQuantization,
     pub(crate) save_path: String,
 }
 
@@ -193,12 +216,10 @@ impl DiskIndexOperation {
 
 impl DiskIndexLoad {
     pub(crate) fn validate(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
+        let [quantizer, codes] = self.search_quantization.paths(&self.load_path);
         let files = [
-            (get_pq_pivot_file(&self.load_path), "pq pivot file"),
-            (
-                get_compressed_pq_file(&self.load_path),
-                "compressed pq file",
-            ),
+            (quantizer, "search quantizer file"),
+            (codes, "compressed search data file"),
             (get_disk_index_file(&self.load_path), "disk index file"),
         ];
 
@@ -343,6 +364,7 @@ impl Example for DiskIndexOperation {
             num_pq_chunks: NonZeroUsize::new(16).unwrap(),
             #[cfg(feature = "disk-index")]
             quantization_type: QuantizationType::PQ { num_chunks: 16 },
+            search_quantization: SearchQuantization::PQ,
             save_path: "sample_index_l50_r32".to_string(),
         };
 
@@ -403,6 +425,11 @@ impl DiskIndexLoad {
     fn summarize_fields(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_field!(f, "Data Type", self.data_type)?;
         write_field!(f, "Load Path", self.load_path)?;
+        write_field!(
+            f,
+            "Search Quantization",
+            format!("{:?}", self.search_quantization)
+        )?;
         Ok(())
     }
 }
@@ -425,6 +452,11 @@ impl DiskIndexBuild {
         write_field!(f, "Build Threads", self.num_threads)?;
         write_field!(f, "Build RAM Limit GB", self.build_ram_limit_gb)?;
         write_field!(f, "PQ Chunks", self.num_pq_chunks)?;
+        write_field!(
+            f,
+            "Search Quantization",
+            format!("{:?}", self.search_quantization)
+        )?;
         #[cfg(feature = "disk-index")]
         match &self.quantization_type {
             QuantizationType::FP => write_field!(f, "Quantization", "full precision")?,
@@ -512,5 +544,94 @@ impl fmt::Display for DiskSearchPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Disk Index Search Phase")?;
         self.summarize_fields(f)
+    }
+}
+
+#[cfg(test)]
+mod quantization_tests {
+    use super::*;
+
+    #[test]
+    fn disk_search_quantization_is_opt_in() {
+        let load: DiskIndexLoad = serde_json::from_value(serde_json::json!({
+            "data_type": "float32", "load_path": "index"
+        }))
+        .unwrap();
+        assert_eq!(load.search_quantization, SearchQuantization::PQ);
+        for quantization in [SearchQuantization::PQ, SearchQuantization::SphericalQ3] {
+            let load: DiskIndexLoad = serde_json::from_value(serde_json::json!({
+                "data_type": "float32",
+                "load_path": "index",
+                "search_quantization": quantization
+            }))
+            .unwrap();
+            assert_eq!(load.search_quantization, quantization);
+            let serialized = serde_json::to_value(&load).unwrap();
+            assert_eq!(
+                serialized["search_quantization"],
+                serde_json::to_value(quantization).unwrap()
+            );
+        }
+        assert!(serde_json::from_value::<DiskIndexLoad>(serde_json::json!({
+            "data_type": "float32", "load_path": "index",
+            "search_quantization": "SphericalQ4"
+        }))
+        .is_err());
+        let mut build = serde_json::to_value(DiskIndexOperation::example()).unwrap();
+        build["source"]
+            .as_object_mut()
+            .unwrap()
+            .remove("search_quantization");
+        let legacy: DiskIndexOperation = serde_json::from_value(build.clone()).unwrap();
+        let DiskIndexSource::Build(legacy) = legacy.source else {
+            panic!("wrong source")
+        };
+        assert_eq!(legacy.search_quantization, SearchQuantization::PQ);
+        build["source"]["search_quantization"] = serde_json::json!("SphericalQ3");
+        let spherical: DiskIndexOperation = serde_json::from_value(build.clone()).unwrap();
+        let DiskIndexSource::Build(spherical) = spherical.source else {
+            panic!("wrong source")
+        };
+        assert_eq!(
+            spherical.search_quantization,
+            SearchQuantization::SphericalQ3
+        );
+        build["source"]["search_quantization"] = serde_json::json!("SphericalQ4");
+        assert!(serde_json::from_value::<DiskIndexOperation>(build).is_err());
+    }
+
+    #[test]
+    fn spherical_example_selects_q3_search_only() {
+        let example: serde_json::Value =
+            serde_json::from_str(include_str!("../../example/disk-index-spherical-q3.json"))
+                .unwrap();
+        let operation: DiskIndexOperation =
+            serde_json::from_value(example["jobs"][0]["content"].clone()).unwrap();
+        let DiskIndexSource::Build(build) = operation.source else {
+            panic!("wrong source")
+        };
+        assert_eq!(build.search_quantization, SearchQuantization::SphericalQ3);
+        #[cfg(feature = "disk-index")]
+        assert_eq!(build.quantization_type, QuantizationType::FP);
+    }
+
+    #[test]
+    #[cfg(feature = "disk-index")]
+    fn search_quantization_matches_backend_format() {
+        for (input, expected) in [
+            (SearchQuantization::PQ, diskann_disk::SearchQuantization::PQ),
+            (
+                SearchQuantization::SphericalQ3,
+                diskann_disk::SearchQuantization::SphericalQ3,
+            ),
+        ] {
+            let backend: diskann_disk::SearchQuantization = input.into();
+            assert_eq!(backend, expected);
+            assert_eq!(input.paths("index"), backend.paths("index"));
+            assert_eq!(
+                serde_json::to_value(input).unwrap(),
+                serde_json::to_value(backend).unwrap()
+            );
+        }
     }
 }

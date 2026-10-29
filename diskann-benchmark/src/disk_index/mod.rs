@@ -12,6 +12,15 @@ cfg_if::cfg_if! {
         mod search;
         mod json_spancollector;
 
+        impl From<crate::inputs::disk::SearchQuantization> for diskann_disk::SearchQuantization {
+            fn from(quantization: crate::inputs::disk::SearchQuantization) -> Self {
+                match quantization {
+                    crate::inputs::disk::SearchQuantization::PQ => Self::PQ,
+                    crate::inputs::disk::SearchQuantization::SphericalQ3 => Self::SphericalQ3,
+                }
+            }
+        }
+
         /// Register disk index benchmarks when the `disk-index` feature is enabled.
         pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
             benchmarks::register_benchmarks(registry)

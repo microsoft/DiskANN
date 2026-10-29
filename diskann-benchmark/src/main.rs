@@ -780,6 +780,123 @@ mod tests {
         run_integration_test(raw);
     }
 
+    #[test]
+    #[cfg(feature = "disk-index")]
+    fn disk_index_spherical_q3_integration() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let prefix = tempdir
+            .path()
+            .join("spherical")
+            .to_string_lossy()
+            .into_owned();
+        let mut raw = value_from_file(&example_directory().join("disk-index-spherical-q3.json"));
+        prefix_search_directories(&mut raw, &root_directory());
+        raw["jobs"][0]["content"]["source"]["save_path"] = serde_json::json!(prefix);
+        for phase in ["build", "load"] {
+            if phase == "load" {
+                raw["jobs"][0]["content"]["source"] = serde_json::json!({
+                    "disk-index-source": "Load",
+                    "data_type": "float32",
+                    "load_path": prefix,
+                    "search_quantization": "SphericalQ3"
+                });
+                raw["jobs"][0]["content"]["search_phase"]["is_flat_search"] =
+                    serde_json::json!(true);
+            }
+            let input_path = tempdir.path().join(format!("{phase}.json"));
+            let output_path = tempdir.path().join(format!("{phase}-output.json"));
+            save_to_file(&input_path, &raw);
+            let command = Commands::Run {
+                input_file: input_path,
+                output_file: output_path.clone(),
+                dry_run: false,
+                allow_debug: true,
+            };
+            Cli::from_commands(command, true)
+                .run(&mut Memory::new())
+                .unwrap();
+            let results: Vec<Value> = load_from_file(&output_path);
+            assert_eq!(results.len(), 1);
+            assert_eq!(
+                results[0]["results"]["search"]["search_quantization"],
+                "SphericalQ3"
+            );
+        }
+        for path in diskann_disk::SearchQuantization::PQ.paths(&prefix) {
+            assert!(!std::path::Path::new(&path).exists());
+        }
+    }
+
+    #[test]
+    fn disk_index_load_validates_selected_quantization() {
+        for (quantization, quantizer_suffix, codes_suffix) in [
+            (None, "_pq_pivots.bin", "_pq_compressed.bin"),
+            (Some("PQ"), "_pq_pivots.bin", "_pq_compressed.bin"),
+            (
+                Some("SphericalQ3"),
+                "_spherical_q3_quantizer.bin",
+                "_spherical_q3_compressed.bin",
+            ),
+        ] {
+            let tempdir = tempfile::tempdir().unwrap();
+            let prefix = tempdir.path().join("index").to_string_lossy().into_owned();
+            let quantizer_path = format!("{prefix}{quantizer_suffix}");
+            let queries = tempdir.path().join("queries.bin");
+            let groundtruth = tempdir.path().join("groundtruth.bin");
+            for path in [
+                quantizer_path.clone(),
+                format!("{prefix}{codes_suffix}"),
+                format!("{prefix}_disk.index"),
+                queries.to_string_lossy().into_owned(),
+                groundtruth.to_string_lossy().into_owned(),
+            ] {
+                std::fs::write(path, []).unwrap();
+            }
+            let mut raw =
+                value_from_file(&example_directory().join("disk-index-spherical-q3.json"));
+            raw["jobs"][0]["content"]["source"] = serde_json::json!({
+                "disk-index-source": "Load", "data_type": "float32", "load_path": prefix
+            });
+            if let Some(quantization) = quantization {
+                raw["jobs"][0]["content"]["source"]["search_quantization"] =
+                    serde_json::json!(quantization);
+            }
+            raw["jobs"][0]["content"]["search_phase"]["queries"] = serde_json::json!(queries);
+            raw["jobs"][0]["content"]["search_phase"]["groundtruth"] =
+                serde_json::json!(groundtruth);
+            let input_path = tempdir.path().join("input.json");
+            save_to_file(&input_path, &raw);
+            let cli = Cli::from_commands(
+                Commands::Run {
+                    input_file: input_path,
+                    output_file: tempdir.path().join("output.json"),
+                    dry_run: true,
+                    allow_debug: true,
+                },
+                true,
+            );
+            let mut output = Memory::new();
+            let result = cli.run(&mut output);
+            #[cfg(feature = "disk-index")]
+            result.unwrap();
+            #[cfg(not(feature = "disk-index"))]
+            {
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("could not find a benchmark"));
+                assert!(String::from_utf8(output.into_inner())
+                    .unwrap()
+                    .contains("feature \"disk-index\""));
+            }
+            std::fs::remove_file(&quantizer_path).unwrap();
+            let error = cli.run(&mut Memory::new()).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains(&quantizer_path));
+            assert!(message.contains("does not exist"));
+        }
+    }
+
     /// Filtered disk search end-to-end: drives the disk-index backend through
     /// `disk-index-filter.json`
     #[test]

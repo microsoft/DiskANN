@@ -7,5 +7,6 @@
 
 pub mod pq;
 pub mod provider;
+pub(crate) mod quantization;
 pub mod search_mode;
 pub mod traits;
