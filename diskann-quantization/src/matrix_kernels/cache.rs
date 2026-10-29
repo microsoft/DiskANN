@@ -3,44 +3,53 @@
  * Licensed under the MIT license.
  */
 
-//! L1d / L2 cache size probe used by the matrix-kernel drivers.
-//! Success and failure are memoized. Returns `None` when the probe is unavailable
-//! or cannot determine both cache sizes.
+//! Hardware L1d/L2 cache detection for matrix-kernel budgets.
+//!
+//! Prefer OS cache enumeration, selecting the smallest capacity at each level to
+//! avoid oversized tile budgets across heterogeneous cores.
+//! L1d and L2 may come from different core types.
+//!
+//! Fall back to x86 CPUID, which samples the executing CPU.
+//!
+//! Each source must provide both levels. If all sources fail, return `None`;
+//! the budget layer supplies fallback estimates.
 //!
 //! Adapted from the cache detection in
 //! [gemm-common 0.18.2](https://github.com/sarah-quinones/gemm/blob/a9d8ed36e51ba039ffe8cb2512925202612e19fd/gemm-common/src/cache.rs).
-//!
-//! Follows the upstream order: Linux sysfs/lscpu, Apple sysctl, then x86 CPUID.
-//! Only L1d/L2 capacities are retained, including upstream's per-sharing-CPU
-//! normalization. Incomplete probes continue to the next source instead of
-//! filling missing levels with defaults. Budget conversion and fallback
-//! estimates stay outside the probe.
 
-use std::sync::OnceLock;
+use std::{num::NonZeroUsize, sync::OnceLock};
 
+/// Capacity and sharing information for a hardware cache instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct CacheInfo {
-    /// L1 **d**ata cache size in bytes.
-    pub l1d_bytes: usize,
-    /// L2 capacity in bytes.
-    pub l2_bytes: usize,
+pub struct CacheLevel {
+    /// Total capacity in bytes.
+    pub bytes: NonZeroUsize,
+    /// Number of sharing logical CPUs, if known.
+    pub logical_sharers: Option<NonZeroUsize>,
 }
 
-impl CacheInfo {
-    fn new(l1d_bytes: usize, l2_bytes: usize) -> Option<Self> {
-        (l1d_bytes > 0 && l2_bytes > 0).then_some(Self {
-            l1d_bytes,
-            l2_bytes,
-        })
+/// Detected L1d and L2 caches, selected independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HardwareCache {
+    /// Diagnostic source label; its format may change.
+    pub source: &'static str,
+    /// L1 data cache.
+    pub l1d: CacheLevel,
+    /// L2 cache.
+    pub l2: CacheLevel,
+}
+
+impl HardwareCache {
+    /// Detect once per process, caching both success and failure.
+    ///
+    /// Returns `None` if either level is unavailable or when running under Miri.
+    pub fn detect() -> Option<Self> {
+        static CACHED: OnceLock<Option<HardwareCache>> = OnceLock::new();
+        *CACHED.get_or_init(detect_uncached)
     }
 }
 
-pub(super) fn cache_info() -> Option<CacheInfo> {
-    static CACHED: OnceLock<Option<CacheInfo>> = OnceLock::new();
-    *CACHED.get_or_init(detect_uncached)
-}
-
-fn detect_uncached() -> Option<CacheInfo> {
+fn detect_uncached() -> Option<HardwareCache> {
     if cfg!(miri) {
         return None;
     }
@@ -55,6 +64,11 @@ fn detect_uncached() -> Option<CacheInfo> {
         return Some(info);
     }
 
+    #[cfg(target_os = "windows")]
+    if let Some(info) = windows::cache_info() {
+        return Some(info);
+    }
+
     #[cfg(any(
         all(target_arch = "x86", not(target_env = "sgx"), target_feature = "sse"),
         all(target_arch = "x86_64", not(target_env = "sgx")),
@@ -66,47 +80,72 @@ fn detect_uncached() -> Option<CacheInfo> {
     None
 }
 
+impl CacheLevel {
+    fn new(bytes: usize, logical_sharers: Option<NonZeroUsize>) -> Option<Self> {
+        Some(Self {
+            bytes: NonZeroUsize::new(bytes)?,
+            logical_sharers,
+        })
+    }
+}
+
+// Keep the cache with the smallest capacity. For equal capacities, prefer more sharers.
+// Prefer a known sharer count over an unknown count. Keep both fields from the same cache.
+fn update_min(current: &mut Option<CacheLevel>, candidate: CacheLevel) {
+    if current.is_none_or(|old| {
+        candidate.bytes < old.bytes
+            || (candidate.bytes == old.bytes && candidate.logical_sharers > old.logical_sharers)
+    }) {
+        *current = Some(candidate);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{CacheLevel, update_min};
+    use std::num::NonZeroUsize;
+
     #[test]
-    #[cfg(not(miri))]
-    fn detects_current_cache() {
-        let info = super::cache_info()
-            .expect("expected L1d and L2 cache detection to succeed on this host");
-        println!(
-            "Detected cache sizes (bytes): L1d={}, L2={}",
-            info.l1d_bytes, info.l2_bytes,
-        );
-        assert!(info.l1d_bytes > 0, "{info:?}");
-        assert!(info.l2_bytes > 0, "{info:?}");
+    fn selects_smallest_capacity_then_most_sharers() {
+        let candidates = [
+            CacheLevel::new(64 * 1024, NonZeroUsize::new(8)).unwrap(),
+            CacheLevel::new(32 * 1024, NonZeroUsize::new(2)).unwrap(),
+            CacheLevel::new(48 * 1024, NonZeroUsize::new(4)).unwrap(),
+            CacheLevel::new(32 * 1024, NonZeroUsize::new(4)).unwrap(),
+            CacheLevel::new(32 * 1024, None).unwrap(),
+        ];
+        for reverse in [false, true] {
+            let mut selected = None;
+            for i in 0..candidates.len() {
+                let i = if reverse { candidates.len() - 1 - i } else { i };
+                update_min(&mut selected, candidates[i]);
+            }
+            let selected = selected.unwrap();
+            assert_eq!(selected.bytes.get(), 32 * 1024);
+            assert_eq!(selected.logical_sharers, NonZeroUsize::new(4));
+        }
     }
 }
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::fs;
+    use std::{fs, num::NonZeroUsize};
 
-    use super::CacheInfo;
+    use super::{CacheLevel, HardwareCache, update_min};
 
-    pub(super) fn cache_info() -> Option<CacheInfo> {
+    pub(super) fn cache_info() -> Option<HardwareCache> {
         from_sysfs().or_else(from_lscpu)
     }
 
-    // /sys/devices/system/cpu/
-    // `-- cpuX/                       X is a logical CPU ID.
-    //     `-- cache/
-    //         `-- indexY/             Y is an entry index, not the cache level.
-    //             |-- level          e.g. "1" or "2"
-    //             |-- type           "Data", "Instruction", or "Unified"
-    //             |-- size           e.g. "32K" (total size of this cache)
-    //             |-- shared_cpu_list  e.g. "0-1" (logical CPUs sharing it)
-    //             `-- coherency_line_size  e.g. "64" (bytes)
+    // /sys/devices/system/cpu/cpuX/cache/indexY/
+    //     |-- level            "1", "2", ...
+    //     |-- type             "Data", "Instruction", or "Unified"
+    //     |-- size             e.g. "32K"
+    //     `-- shared_cpu_list  e.g. "0-1"
     //
-    // Each cpuX can expose several indexY entries; shared caches can appear
-    // under multiple CPUs. Read level/type rather than inferring them from Y.
-    fn from_sysfs() -> Option<CacheInfo> {
-        let mut sizes = [0; 2];
-        let mut line_sizes = [64; 2];
+    // Y is an entry index, not a cache level. Shared caches may appear under multiple CPUs.
+    fn from_sysfs() -> Option<HardwareCache> {
+        let mut caches = [None; 2];
 
         for cpu_x in fs::read_dir("/sys/devices/system/cpu").ok()? {
             let cpu_x = cpu_x.ok()?.path();
@@ -120,7 +159,7 @@ mod linux {
             if !cache.is_dir() {
                 continue;
             }
-            'index: for index_y in fs::read_dir(cache).ok()? {
+            for index_y in fs::read_dir(cache).ok()? {
                 let index_y = index_y.ok()?.path();
                 if !index_y.is_dir() {
                     continue;
@@ -132,65 +171,38 @@ mod linux {
                     continue;
                 }
 
-                let mut cache_bytes = 0usize;
-                let mut cache_line_bytes = 64;
-                let mut level: usize = 0;
-                let mut shared_count: usize = 0;
-
-                for entry in fs::read_dir(index_y).ok()? {
-                    let entry = entry.ok()?.path();
-                    let Some(name) = entry.file_name() else {
-                        continue;
-                    };
-                    let contents = fs::read_to_string(&entry).ok()?;
-                    let contents = contents.trim();
-                    if name == "type" && !matches!(contents, "Data" | "Unified") {
-                        continue 'index;
-                    }
-                    if name == "shared_cpu_list" {
-                        let Some(contents) = shared_cpu_count(contents) else {
-                            continue 'index;
-                        };
-                        shared_count = contents;
-                    }
-                    if name == "level" {
-                        let Ok(contents) = contents.parse::<usize>() else {
-                            continue 'index;
-                        };
-                        level = contents;
-                    }
-                    if name == "coherency_line_size" {
-                        let Ok(contents) = contents.parse::<usize>() else {
-                            continue 'index;
-                        };
-                        cache_line_bytes = contents;
-                    }
-                    if name == "size" {
-                        let Some(contents) = parse_size(contents) else {
-                            continue 'index;
-                        };
-                        cache_bytes = contents;
-                    }
+                let cache_type = fs::read_to_string(index_y.join("type")).ok()?;
+                if !matches!(cache_type.trim(), "Data" | "Unified") {
+                    continue;
                 }
-
-                // Preserve upstream's preference for entries with larger cache lines.
-                if level > 0 && level <= 2 && cache_line_bytes >= line_sizes[level - 1] {
-                    let Some(size) = cache_bytes.checked_div(shared_count) else {
-                        continue;
-                    };
-                    if size == 0 {
-                        continue;
-                    }
-                    sizes[level - 1] = size;
-                    line_sizes[level - 1] = cache_line_bytes;
+                let level = fs::read_to_string(index_y.join("level")).ok()?;
+                let selected = match level.trim().parse::<usize>() {
+                    Ok(1) => &mut caches[0],
+                    Ok(2) => &mut caches[1],
+                    _ => continue,
+                };
+                let size = fs::read_to_string(index_y.join("size")).ok()?;
+                let Some(bytes) = parse_size(size.trim()) else {
+                    continue;
+                };
+                let logical_sharers = fs::read_to_string(index_y.join("shared_cpu_list"))
+                    .ok()
+                    .and_then(|contents| shared_cpu_count(contents.trim()))
+                    .and_then(NonZeroUsize::new);
+                if let Some(cache) = CacheLevel::new(bytes, logical_sharers) {
+                    update_min(selected, cache);
                 }
             }
         }
 
-        CacheInfo::new(sizes[0], sizes[1])
+        Some(HardwareCache {
+            source: "linux-sysfs",
+            l1d: caches[0]?,
+            l2: caches[1]?,
+        })
     }
 
-    fn from_lscpu() -> Option<CacheInfo> {
+    fn from_lscpu() -> Option<HardwareCache> {
         let output = std::process::Command::new("lscpu")
             .arg("-B")
             .arg("-C=type,level,one-size")
@@ -200,21 +212,26 @@ mod linux {
             return None;
         }
         let stdout = std::str::from_utf8(&output.stdout).ok()?;
-        let mut l1d = 0;
-        let mut l2 = 0;
+        let mut l1d = None;
+        let mut l2 = None;
         for line in stdout.lines().skip(1) {
             let mut fields = line.split_whitespace();
             if !matches!(fields.next(), Some("Data" | "Unified")) {
                 continue;
             }
-            let size = match fields.next()? {
+            let cache = match fields.next()? {
                 "1" => &mut l1d,
                 "2" => &mut l2,
                 _ => continue,
             };
-            *size = fields.next()?.parse().ok()?;
+            let candidate = CacheLevel::new(fields.next()?.parse().ok()?, None)?;
+            update_min(cache, candidate);
         }
-        CacheInfo::new(l1d, l2)
+        Some(HardwareCache {
+            source: "lscpu",
+            l1d: l1d?,
+            l2: l2?,
+        })
     }
 
     fn parse_size(contents: &str) -> Option<usize> {
@@ -248,7 +265,13 @@ mod linux {
 
     #[cfg(test)]
     mod tests {
-        use super::{parse_size, shared_cpu_count};
+        use super::{cache_info, parse_size, shared_cpu_count};
+
+        #[test]
+        fn detects_cache_from_linux() {
+            let info = cache_info().expect("Linux should report both L1 data and L2 caches");
+            println!("{info:#?}");
+        }
 
         #[test]
         fn parse_size_preserves_sysfs_syntax() {
@@ -291,22 +314,37 @@ mod linux {
 
 #[cfg(target_vendor = "apple")]
 mod apple {
+    //! Query `hw.perflevelN.*` for each core type, following Apple's
+    //! [Determining system capabilities](https://developer.apple.com/documentation/kernel/1387446-sysctlbyname/determining_system_capabilities).
+
     use core::ffi::{CStr, c_void};
+    use std::{ffi::CString, num::NonZeroUsize};
 
-    use super::CacheInfo;
+    use super::{CacheLevel, HardwareCache, update_min};
 
-    pub(super) fn cache_info() -> Option<CacheInfo> {
-        let l1d = sysctl_uint(c"hw.perflevel0.l1dcachesize")?;
-        let total = sysctl_uint(c"hw.perflevel0.l2cachesize")?;
-        let cpus = sysctl_uint(c"hw.perflevel0.cpusperl2")?;
-        CacheInfo::new(
-            usize::try_from(l1d).ok()?,
-            usize::try_from(total.checked_div(cpus)?).ok()?,
-        )
+    pub(super) fn cache_info() -> Option<HardwareCache> {
+        let mut l1d = None;
+        let mut l2 = None;
+        for level in 0..sysctl_uint(c"hw.nperflevels")? {
+            let read = |field| {
+                let name = CString::new(format!("hw.perflevel{level}.{field}")).ok()?;
+                usize::try_from(sysctl_uint(&name)?).ok()
+            };
+
+            let candidate = CacheLevel::new(read("l1dcachesize")?, None)?;
+            update_min(&mut l1d, candidate);
+            let l2_sharers = read("cpusperl2").and_then(NonZeroUsize::new);
+            let candidate = CacheLevel::new(read("l2cachesize")?, l2_sharers)?;
+            update_min(&mut l2, candidate);
+        }
+        Some(HardwareCache {
+            source: "apple-sysctl",
+            l1d: l1d?,
+            l2: l2?,
+        })
     }
 
-    /// Reads an integer sysctl reported as either 4- or 8-byte: cache sizes are
-    /// 64-bit, but topology counts like `cpusperl2` are 32-bit.
+    // Cache sizes are 64-bit; topology counts such as `cpusperl2` are 32-bit.
     fn sysctl_uint(name: &CStr) -> Option<u64> {
         let mut buf = [0u8; 8];
         let mut size = buf.len();
@@ -331,6 +369,129 @@ mod apple {
             _ => None,
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::cache_info;
+
+        #[test]
+        fn detects_cache_from_apple() {
+            let info = cache_info().expect("Apple sysctl should report both L1 data and L2 caches");
+            println!("{info:#?}");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows {
+    //! Read cache capacities and sharing masks with
+    //! [`GetLogicalProcessorInformationEx`](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getlogicalprocessorinformationex).
+
+    use std::{num::NonZeroUsize, ptr, slice};
+
+    use windows_sys::Win32::{
+        Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError, WIN32_ERROR},
+        System::SystemInformation::{
+            CacheData, CacheUnified, GetLogicalProcessorInformationEx, RelationCache,
+            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX as ProcessorInfo,
+        },
+    };
+
+    use super::{CacheLevel, HardwareCache, update_min};
+    use crate::alloc::{AlignedAllocator, Poly};
+
+    pub(super) fn cache_info() -> Option<HardwareCache> {
+        let mut length = 0;
+        if read_cache_records(ptr::null_mut(), &mut length) != Err(ERROR_INSUFFICIENT_BUFFER) {
+            return None;
+        }
+
+        loop {
+            let allocated = length;
+            if allocated == 0 {
+                return None;
+            }
+            let mut buffer = Poly::broadcast(0u8, allocated as usize, AlignedAllocator::A8).ok()?;
+            match read_cache_records(buffer.as_mut_ptr().cast(), &mut length) {
+                Ok(()) => {
+                    // SAFETY: Windows wrote complete records into the aligned buffer.
+                    return unsafe { from_records(buffer.as_ptr().cast(), length as usize) };
+                }
+                // Retry if topology changes require a larger buffer.
+                Err(ERROR_INSUFFICIENT_BUFFER) if length > allocated => {}
+                Err(_) => return None,
+            }
+        }
+    }
+
+    fn read_cache_records(buffer: *mut ProcessorInfo, length: &mut u32) -> Result<(), WIN32_ERROR> {
+        // SAFETY: The caller guarantees buffer validity; `length` is a valid reference.
+        // Read the error immediately on failure.
+        unsafe {
+            if GetLogicalProcessorInformationEx(RelationCache, buffer, length) != 0 {
+                Ok(())
+            } else {
+                Err(GetLastError())
+            }
+        }
+    }
+
+    /// # Safety
+    /// The first `length` bytes must form complete, aligned Windows processor records.
+    unsafe fn from_records(raw_buf: *const ProcessorInfo, length: usize) -> Option<HardwareCache> {
+        let mut caches = [None; 2];
+        let mut i = 0;
+        // SAFETY: The caller guarantees valid records, including their sizes and group masks.
+        unsafe {
+            while i < length {
+                let p = raw_buf.byte_add(i);
+                i += (*p).Size as usize;
+                if (*p).Relationship != RelationCache {
+                    continue;
+                }
+                let cache = &(*p).Anonymous.Cache;
+                if (cache.Type != CacheData && cache.Type != CacheUnified)
+                    || !matches!(cache.Level, 1 | 2)
+                {
+                    continue;
+                }
+                // Older Windows uses a single GroupMask and leaves GroupCount reserved/zero.
+                let count = usize::from(cache.GroupCount).max(1);
+                let groups = slice::from_raw_parts(
+                    ptr::addr_of!((*p).Anonymous.Cache.Anonymous.GroupMask),
+                    count,
+                );
+                // Unhandled corner case: 32-bit processes under WOW64 on systems with more than
+                // 64 logical processors may receive affinity masks folded from 64 to 32 bits.
+                // We count the returned masks as-is, so sharing counts may be inaccurate.
+                let logical_sharers = NonZeroUsize::new(
+                    groups
+                        .iter()
+                        .map(|group| group.Mask.count_ones() as usize)
+                        .sum(),
+                );
+                if let Some(level) = CacheLevel::new(cache.CacheSize as usize, logical_sharers) {
+                    update_min(&mut caches[usize::from(cache.Level) - 1], level);
+                }
+            }
+        }
+        Some(HardwareCache {
+            source: "windows",
+            l1d: caches[0]?,
+            l2: caches[1]?,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::cache_info;
+
+        #[test]
+        fn detects_cache_from_windows() {
+            let info = cache_info().expect("Windows should report both L1 data and L2 caches");
+            println!("{info:#?}");
+        }
+    }
 }
 
 #[cfg(any(
@@ -338,34 +499,35 @@ mod apple {
     all(target_arch = "x86_64", not(target_env = "sgx"))
 ))]
 mod cpuid {
+    use super::{CacheLevel, HardwareCache};
     use raw_cpuid::{Associativity, CacheType, CpuId};
 
-    use super::CacheInfo;
-
-    pub(super) fn cache_info() -> Option<CacheInfo> {
+    pub(super) fn cache_info() -> Option<HardwareCache> {
         let cpuid = CpuId::new();
         match cpuid.get_vendor_info()?.as_str() {
             "GenuineIntel" => {
-                let params = cpuid.get_cache_parameters()?;
-                let mut l1d = 0;
-                let mut l2 = 0;
-
-                for cache in params {
+                let mut l1d = None;
+                let mut l2 = None;
+                for cache in cpuid.get_cache_parameters()? {
                     if !matches!(cache.cache_type(), CacheType::Data | CacheType::Unified) {
                         continue;
                     }
-                    let size = match cache.level() {
+                    let selected = match cache.level() {
                         1 => &mut l1d,
                         2 => &mut l2,
                         _ => continue,
                     };
-                    *size = cache.associativity()
+                    let bytes = cache.associativity()
                         * cache.physical_line_partitions()
                         * cache.coherency_line_size()
                         * cache.sets();
+                    *selected = CacheLevel::new(bytes, None);
                 }
-
-                CacheInfo::new(l1d, l2)
+                Some(HardwareCache {
+                    source: "cpuid",
+                    l1d: l1d?,
+                    l2: l2?,
+                })
             }
             "AuthenticAMD" => {
                 let l1 = cpuid.get_l1_cache_and_tlb_info()?;
@@ -379,12 +541,26 @@ mod cpuid {
                 ) {
                     return None;
                 }
-                CacheInfo::new(
-                    usize::from(l1.dcache_size()) * 1024,
-                    usize::from(l2.l2cache_size()) * 1024,
-                )
+                Some(HardwareCache {
+                    source: "cpuid",
+                    l1d: CacheLevel::new(usize::from(l1.dcache_size()) * 1024, None)?,
+                    l2: CacheLevel::new(usize::from(l2.l2cache_size()) * 1024, None)?,
+                })
             }
             _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::cache_info;
+
+        #[test]
+        fn detects_cache_from_cpuid() {
+            let info = cache_info().expect("CPUID should report both L1 data and L2 caches");
+            println!("{info:#?}");
+            assert_eq!(info.l1d.logical_sharers, None);
+            assert_eq!(info.l2.logical_sharers, None);
         }
     }
 }

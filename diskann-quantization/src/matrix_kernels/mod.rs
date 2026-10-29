@@ -47,6 +47,9 @@ mod util;
 pub(crate) use driver::Drive;
 pub(crate) use num::DimK;
 
+#[cfg(feature = "cache-diagnostics")]
+pub use cache::{CacheLevel, HardwareCache};
+
 /// Cache budgets for matrix-kernel blocking.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Cache {
@@ -55,12 +58,9 @@ pub(crate) struct Cache {
 }
 
 impl Cache {
-    const FALLBACK: cache::CacheInfo = cache::CacheInfo {
-        l1d_bytes: 48_000,
-        l2_bytes: 1_250_000,
-    };
+    const FALLBACK: Self = Self::from_cache_sizes(48_000, 1_250_000);
 
-    fn new(l1: NonZeroUsize, l2: NonZeroUsize) -> Self {
+    const fn new(l1: NonZeroUsize, l2: NonZeroUsize) -> Self {
         Self { l1, l2 }
     }
 
@@ -74,17 +74,19 @@ impl Cache {
         self.l2
     }
 
-    /// Derive budgets from memoized CPU cache sizes, using [`Self::FALLBACK`]
-    /// estimates if detection fails.
+    /// Detect cache budgets, using [`Self::FALLBACK`] if probing fails.
     ///
     /// Use 75% of L1d and 50% of L2 for the kernel working set.
     pub(crate) fn detect() -> Self {
-        Self::from_info(cache::cache_info().unwrap_or(Self::FALLBACK))
+        cache::HardwareCache::detect().map_or(Self::FALLBACK, |info| {
+            Self::from_cache_sizes(info.l1d.bytes.get(), info.l2.bytes.get())
+        })
     }
 
-    fn from_info(info: cache::CacheInfo) -> Self {
-        let l1 = num::value_or_one(info.l1d_bytes * 3 / 4);
-        let l2 = num::value_or_one(info.l2_bytes / 2);
+    /// Derive budgets from hardware cache capacities.
+    const fn from_cache_sizes(l1d_bytes: usize, l2_bytes: usize) -> Self {
+        let l1 = num::value_or_one(l1d_bytes * 3 / 4);
+        let l2 = num::value_or_one(l2_bytes / 2);
         Self::new(l1, l2)
     }
 }
@@ -98,7 +100,7 @@ mod test_util;
 
 #[cfg(test)]
 mod tests {
-    use super::{Cache, cache::CacheInfo};
+    use super::Cache;
 
     #[test]
     fn cache_budgets_scale_detected_sizes() {
@@ -110,10 +112,7 @@ mod tests {
             (0, 0, 1, 1),
             (1, 1, 1, 1),
         ] {
-            let cache = Cache::from_info(CacheInfo {
-                l1d_bytes,
-                l2_bytes,
-            });
+            let cache = Cache::from_cache_sizes(l1d_bytes, l2_bytes);
             assert_eq!(cache.l1().get(), l1_budget);
             assert_eq!(cache.l2().get(), l2_budget);
         }
