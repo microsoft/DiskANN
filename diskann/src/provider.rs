@@ -142,13 +142,6 @@ pub trait DataProvider: Sized + Send + Sync + 'static {
         context: &Self::Context,
         gid: &Self::ExternalId,
     ) -> Result<Self::InternalId, Self::Error>;
-
-    /// Translate an internal id to its corresponding external id.
-    fn to_external_id(
-        &self,
-        context: &Self::Context,
-        id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error>;
 }
 
 ////////////
