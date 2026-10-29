@@ -5,7 +5,7 @@
 
 //! IVF policy and orchestration, independent of physical list storage.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 use diskann_utils::{
     future::SendFuture,
@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use super::{
     clustering,
+    metrics::BuildMetrics,
     traits::{
         BuildAccessor, BuildStrategy, CoarseAccessor, InsertStrategy, ListAccessor, Provider,
     },
@@ -49,6 +50,7 @@ pub struct IVFIndex<P: Provider> {
     provider: P,
     config: Config,
     rng: StdRng,
+    metrics: BuildMetrics,
 }
 
 impl<P: Provider> IVFIndex<P> {
@@ -63,11 +65,16 @@ impl<P: Provider> IVFIndex<P> {
             provider,
             rng: StdRng::seed_from_u64(config.seed),
             config,
+            metrics: BuildMetrics::default(),
         })
     }
 
     pub fn provider(&self) -> &P {
         &self.provider
+    }
+
+    pub fn build_metrics(&self) -> &BuildMetrics {
+        &self.metrics
     }
 
     /// Install initial empty lists and their centroids in one build operation.
@@ -131,11 +138,14 @@ impl<P: Provider> IVFIndex<P> {
         let provider = &mut self.provider;
         let config = self.config;
         let rng = &mut self.rng;
+        let metrics = &mut self.metrics;
 
         async move {
             if points.is_empty() {
                 return Ok(InsertStats::default());
             }
+            let insert_start = Instant::now();
+            let mut measured = BuildMetrics::default();
             let mut accessor = strategy
                 .build_accessor(provider, context)
                 .into_ann_result()?;
@@ -169,7 +179,15 @@ impl<P: Provider> IVFIndex<P> {
                 let children = {
                     let dim = accessor.dim();
                     let view = accessor.fill(&parents).await?;
-                    clustering::split(&view, dim, config.two_means_iterations, rng)?
+                    measured.split_points = view.iter().map(|list| list.points.len()).sum();
+                    let split_start = Instant::now();
+                    let children = clustering::split(&view, dim, config.two_means_iterations, rng)?;
+                    measured.split_time = split_start.elapsed();
+                    measured.fit_time = children.fit_time;
+                    measured.assignment_time = children.assignment_time;
+                    measured.split_calls = 1;
+                    measured.split_parents = splits;
+                    children
                 };
                 for (centroid, members) in children.centroids.rows().zip(children.members) {
                     accessor.lists().create_list(centroid, members).await?;
@@ -180,6 +198,13 @@ impl<P: Provider> IVFIndex<P> {
             }
 
             accessor.finish().await?;
+            metrics.insert_time += insert_start.elapsed();
+            metrics.split_time += measured.split_time;
+            metrics.fit_time += measured.fit_time;
+            metrics.assignment_time += measured.assignment_time;
+            metrics.split_calls += measured.split_calls;
+            metrics.split_parents += measured.split_parents;
+            metrics.split_points += measured.split_points;
 
             Ok(InsertStats {
                 inserted: points.len(),
