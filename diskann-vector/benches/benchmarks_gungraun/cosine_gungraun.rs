@@ -12,23 +12,23 @@ use rand_distr::{Distribution, Normal, StandardUniform};
 use std::hint::black_box;
 
 use crate::utils::{AlignedDataset, AlignedVector, DatasetArgs, InlineBarrier, Static};
-iai_callgrind::library_benchmark_group!(
-    name = cosine_i8_iai;
+gungraun::library_benchmark_group!(
+    name = cosine_i8_gungraun;
     benchmarks = cosine_i8_v2,
 );
 
-iai_callgrind::library_benchmark_group!(
-    name = cosine_u8_iai;
+gungraun::library_benchmark_group!(
+    name = cosine_u8_gungraun;
     benchmarks = cosine_u8_v2,
 );
 
-iai_callgrind::library_benchmark_group!(
-    name = cosine_f32_iai;
+gungraun::library_benchmark_group!(
+    name = cosine_f32_gungraun;
     benchmarks = cosine_f32_v2,
 );
 
-iai_callgrind::library_benchmark_group!(
-    name = cosine_f16_iai;
+gungraun::library_benchmark_group!(
+    name = cosine_f16_gungraun;
     benchmarks = cosine_f16_v2,
 );
 fn cosine_i8_common() -> (AlignedDataset<i8>, AlignedVector<i8>, Vec<f32>) {
@@ -55,7 +55,7 @@ fn cosine_i8_common() -> (AlignedDataset<i8>, AlignedVector<i8>, Vec<f32>) {
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = cosine_i8_common)]
+#[gungraun::library_benchmark(setup = cosine_i8_common)]
 fn cosine_i8_v2(data: (AlignedDataset<i8>, AlignedVector<i8>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
     let query_sized: &[i8; 128] = query.as_slice().try_into().unwrap();
@@ -94,7 +94,7 @@ fn cosine_u8_common() -> (AlignedDataset<u8>, AlignedVector<u8>, Vec<f32>) {
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = cosine_u8_common)]
+#[gungraun::library_benchmark(setup = cosine_u8_common)]
 fn cosine_u8_v2(data: (AlignedDataset<u8>, AlignedVector<u8>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
     let query_sized: &[u8; 128] = query.as_slice().try_into().unwrap();
@@ -133,7 +133,7 @@ fn cosine_f32_common() -> (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>) {
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = cosine_f32_common)]
+#[gungraun::library_benchmark(setup = cosine_f32_common)]
 fn cosine_f32_v2(data: (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
     let query_sized: &[f32; 104] = query.as_slice().try_into().unwrap();
@@ -172,7 +172,7 @@ fn cosine_f16_common() -> (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>) {
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = cosine_f16_common)]
+#[gungraun::library_benchmark(setup = cosine_f16_common)]
 fn cosine_f16_v2(data: (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
     let func = InlineBarrier::new(Cosine {});
