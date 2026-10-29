@@ -265,11 +265,17 @@ mod linux {
 
     #[cfg(test)]
     mod tests {
-        use super::{cache_info, parse_size, shared_cpu_count};
+        use super::{cache_info, from_lscpu, parse_size, shared_cpu_count};
 
         #[test]
         fn detects_cache_from_linux() {
             let info = cache_info().expect("Linux should report both L1 data and L2 caches");
+            println!("{info:#?}");
+        }
+
+        #[test]
+        fn detects_cache_from_lscpu() {
+            let info = from_lscpu().expect("lscpu should report both L1 data and L2 caches");
             println!("{info:#?}");
         }
 
@@ -557,10 +563,13 @@ mod cpuid {
 
         #[test]
         fn detects_cache_from_cpuid() {
-            let info = cache_info().expect("CPUID should report both L1 data and L2 caches");
+            // CPUID may not report cache sizes, for example when running under SDE.
+            let info = cache_info();
             println!("{info:#?}");
-            assert_eq!(info.l1d.logical_sharers, None);
-            assert_eq!(info.l2.logical_sharers, None);
+            if let Some(info) = info {
+                assert_eq!(info.l1d.logical_sharers, None);
+                assert_eq!(info.l2.logical_sharers, None);
+            }
         }
     }
 }
