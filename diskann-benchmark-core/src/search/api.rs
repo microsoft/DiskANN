@@ -346,7 +346,7 @@ pub struct Setup {
 }
 
 /// A single run of search containing a [`Setup`] and [`Search::Parameters`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Run<P> {
     parameters: P,
     setup: Setup,

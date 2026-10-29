@@ -64,14 +64,6 @@ where
     ) -> Result<Self::InternalId, Self::Error> {
         self.inner_provider.to_internal_id(context, gid)
     }
-
-    fn to_external_id(
-        &self,
-        context: &Self::Context,
-        id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error> {
-        self.inner_provider.to_external_id(context, id)
-    }
 }
 
 impl<'a, VT, DP, AS> SetElement<Document<'a, VT>> for DocumentProvider<DP, AS>

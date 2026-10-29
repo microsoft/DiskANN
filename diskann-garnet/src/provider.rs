@@ -1735,6 +1735,17 @@ impl<T: VectorRepr> GarnetProvider<T> {
         }
     }
 
+    /// Convert the internal `id` into an external one.
+    fn to_external_id(&self, context: &Context, id: u32) -> Result<GarnetId, GarnetProviderError> {
+        match self
+            .callbacks
+            .read_varsize_iid(&context.term(Term::ExtMap), id)
+        {
+            Some(eid) => Ok(eid.into()),
+            None => Err(GarnetProviderError::Garnet(GarnetError::Read)),
+        }
+    }
+
     /// Provides an estimate of quantizer state size.
     /// This is allowed to be wrong, but should ideally be an overestimate.
     #[cfg(test)]
@@ -1764,16 +1775,6 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
             return Err(GarnetProviderError::Garnet(GarnetError::Read));
         }
         Ok(id)
-    }
-
-    fn to_external_id(&self, context: &Context, id: u32) -> Result<Self::ExternalId, Self::Error> {
-        match self
-            .callbacks
-            .read_varsize_iid(&context.term(Term::ExtMap), id)
-        {
-            Some(eid) => Ok(eid.into()),
-            None => Err(GarnetProviderError::Garnet(GarnetError::Read)),
-        }
     }
 }
 
