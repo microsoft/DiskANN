@@ -8,6 +8,8 @@ pub mod reference;
 
 pub mod simd;
 
+mod batch;
+
 pub mod implementations;
 pub use implementations::{Cosine, CosineNormalized, FullL2, InnerProduct, Specialize, SquaredL2};
 

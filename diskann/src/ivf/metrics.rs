@@ -20,4 +20,23 @@ pub struct BuildMetrics {
     pub split_calls: usize,
     pub split_parents: usize,
     pub split_points: usize,
+    /// Successful projection classifications across all Lloyd iterations.
+    pub projection_points: usize,
+    /// Classifications recomputed with direct L2 after non-finite arithmetic.
+    pub numeric_fallbacks: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct ComputeStats {
+    /// Successful projection classifications across all Lloyd iterations.
+    pub projection_points: usize,
+    /// Non-finite classifications recomputed with direct L2.
+    pub numeric_fallbacks: usize,
+}
+
+impl ComputeStats {
+    pub fn merge(&mut self, other: Self) {
+        self.projection_points += other.projection_points;
+        self.numeric_fallbacks += other.numeric_fallbacks;
+    }
 }
