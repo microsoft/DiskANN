@@ -58,18 +58,9 @@ jobs:
       - name: Use mounted high-speed NVMe SSD
         shell: bash
         run: |
-          lsblk
-          # The runner initializes local NVMe storage; use its actual mount.
-          nvme_mount=$(findmnt --real --raw --noheadings --output SOURCE,TARGET |
-            awk '$1 ~ "^/dev/nvme0n1(p[0-9]+)?$" { print $2 }')
-          if [[ -z "$nvme_mount" || "$nvme_mount" == *$'\n'* ||
-                "$nvme_mount" == / || "$nvme_mount" == /boot* ]]; then
-            echo "::error::Expected one mounted data filesystem on /dev/nvme0n1 or its partition."
-            exit 1
-          fi
-          if ! findmnt --mountpoint "$nvme_mount" --noheadings --output SOURCE |
-              grep -Eq '^/dev/nvme0n1(p[0-9]+)?$'; then
-            echo "::error::NVMe mount path does not resolve to the expected device."
+          nvme_mount=/mnt/azure_nvme_temp
+          if ! mountpoint -q "$nvme_mount"; then
+            echo "::error::Expected runner-managed NVMe storage mounted at $nvme_mount."
             exit 1
           fi
           echo "Using NVMe storage at $nvme_mount"
