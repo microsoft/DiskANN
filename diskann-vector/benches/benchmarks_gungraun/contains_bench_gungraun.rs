@@ -6,14 +6,14 @@ use diskann_vector::contains::ContainsSimd;
 use rand::{distr::Uniform, prelude::Distribution, rngs::StdRng, Rng, SeedableRng};
 use std::hint::black_box;
 
-iai_callgrind::library_benchmark_group!(
-    name = benchmark_contains_bench_iai;
+gungraun::library_benchmark_group!(
+    name = benchmark_contains_bench_gungraun;
     benchmarks = benchmark_contains,
 );
 
 type DataTuple = (Box<[u32]>, Box<[u32]>, Box<[u32]>);
 
-#[iai_callgrind::library_benchmark(setup = setup_data)]
+#[gungraun::library_benchmark(setup = setup_data)]
 pub(crate) fn benchmark_contains(data: DataTuple) {
     let (data1, data2, data3) = data;
 

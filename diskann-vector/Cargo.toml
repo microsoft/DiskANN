@@ -18,7 +18,7 @@ diskann-wide.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
-iai-callgrind.workspace = true
+gungraun.workspace = true
 rand.workspace = true
 criterion.workspace = true
 rand_distr.workspace = true
@@ -30,7 +30,7 @@ name = "bench_main"
 harness = false
 
 [[bench]]
-name = "bench_main_vector_iai"
+name = "bench_main_vector_gungraun"
 harness = false
 
 [lints]
@@ -38,4 +38,3 @@ clippy.allow_attributes = "warn"
 # Commenting out for now. It would give warnings.
 # clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"
-

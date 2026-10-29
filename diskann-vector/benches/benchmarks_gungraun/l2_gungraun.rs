@@ -13,23 +13,23 @@ use rand_distr::{Distribution, Normal, StandardUniform};
 
 use crate::utils::{AlignedDataset, AlignedVector, DatasetArgs, InlineBarrier, Static};
 
-iai_callgrind::library_benchmark_group!(
-    name = l2_f32_iai;
+gungraun::library_benchmark_group!(
+    name = l2_f32_gungraun;
     benchmarks = benchmark_f32_v2, benchmark_f32_v2_sized,
 );
 
-iai_callgrind::library_benchmark_group!(
-    name = l2_f16_iai;
+gungraun::library_benchmark_group!(
+    name = l2_f16_gungraun;
     benchmarks = benchmark_f16_v2, benchmark_f16_v2_sized,
 );
 
-iai_callgrind::library_benchmark_group!(
-    name = l2_i8_iai;
+gungraun::library_benchmark_group!(
+    name = l2_i8_gungraun;
     benchmarks = benchmark_i8_v2, benchmark_i8_v2_sized,
 );
 
-iai_callgrind::library_benchmark_group!(
-    name = l2_u8_iai;
+gungraun::library_benchmark_group!(
+    name = l2_u8_gungraun;
     benchmarks = benchmark_u8_v2, benchmark_u8_v2_sized,
 );
 
@@ -58,7 +58,7 @@ fn prepare_benchmark_f32() -> (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = prepare_benchmark_f32)]
+#[gungraun::library_benchmark(setup = prepare_benchmark_f32)]
 pub fn benchmark_f32_v2(data: (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -71,7 +71,7 @@ pub fn benchmark_f32_v2(data: (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>
     black_box(output);
 }
 
-#[iai_callgrind::library_benchmark(setup = prepare_benchmark_f32)]
+#[gungraun::library_benchmark(setup = prepare_benchmark_f32)]
 pub fn benchmark_f32_v2_sized(data: (AlignedDataset<f32>, AlignedVector<f32>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -110,7 +110,7 @@ fn prepare_benchmark_f16() -> (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = prepare_benchmark_f16)]
+#[gungraun::library_benchmark(setup = prepare_benchmark_f16)]
 pub fn benchmark_f16_v2(data: (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -122,7 +122,7 @@ pub fn benchmark_f16_v2(data: (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>
     black_box(output);
 }
 
-#[iai_callgrind::library_benchmark(setup = prepare_benchmark_f16)]
+#[gungraun::library_benchmark(setup = prepare_benchmark_f16)]
 pub fn benchmark_f16_v2_sized(data: (AlignedDataset<f16>, AlignedVector<f16>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -161,7 +161,7 @@ fn prepare_benchmark_i8() -> (AlignedDataset<i8>, AlignedVector<i8>, Vec<f32>) {
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = prepare_benchmark_i8)]
+#[gungraun::library_benchmark(setup = prepare_benchmark_i8)]
 pub fn benchmark_i8_v2(data: (AlignedDataset<i8>, AlignedVector<i8>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -173,7 +173,7 @@ pub fn benchmark_i8_v2(data: (AlignedDataset<i8>, AlignedVector<i8>, Vec<f32>)) 
     black_box(output);
 }
 
-#[iai_callgrind::library_benchmark(setup = prepare_benchmark_i8)]
+#[gungraun::library_benchmark(setup = prepare_benchmark_i8)]
 pub fn benchmark_i8_v2_sized(data: (AlignedDataset<i8>, AlignedVector<i8>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -212,7 +212,7 @@ fn prepare_benchmark_u8() -> (AlignedDataset<u8>, AlignedVector<u8>, Vec<f32>) {
     (dataset, query, output)
 }
 
-#[iai_callgrind::library_benchmark(setup = prepare_benchmark_u8)]
+#[gungraun::library_benchmark(setup = prepare_benchmark_u8)]
 pub fn benchmark_u8_v2(data: (AlignedDataset<u8>, AlignedVector<u8>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
@@ -224,7 +224,7 @@ pub fn benchmark_u8_v2(data: (AlignedDataset<u8>, AlignedVector<u8>, Vec<f32>)) 
     black_box(output);
 }
 
-#[iai_callgrind::library_benchmark(setup = prepare_benchmark_u8)]
+#[gungraun::library_benchmark(setup = prepare_benchmark_u8)]
 pub fn benchmark_u8_v2_sized(data: (AlignedDataset<u8>, AlignedVector<u8>, Vec<f32>)) {
     let (dataset, query, mut output) = data;
 
