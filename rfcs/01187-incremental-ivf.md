@@ -48,9 +48,10 @@ centroids while receiving only membership removals and appends for points that m
 Unchanged members require no writes. This local policy permits parent-to-neighbor
 and neighbor-to-child movement, but not neighbor-to-neighbor or direct cross-parent
 movement; a shared neighbor's points may move to children of any parent linked to it.
-The algorithm computes child centroids, initial memberships, and retained-list
-deltas before writing child creation, retained edits, and parent retirement through
-the update object.
+All children are fitted before any write. Each list's retirement or departing
+members are recorded once that list is assigned; incoming memberships and children
+are recorded after every list is assigned. A failure may leave partial private
+updates, which the caller discards.
 Ordinary appends and splitting are published together, never as separate commits.
 Each parent is split once per insertion; this is not a recursive size-balancing
 operation, and retained neighbors are not split if reassignment makes them
@@ -92,18 +93,14 @@ norm-based distance arithmetic does not preserve support for extreme finite
 coordinates whose squared norms overflow.
 `Split` is the complete numerical-policy boundary. The built-in `TwoMeansSplit`
 implementation allocates one child-centroid matrix and fits each parent into its
-two-row mutable window. A shared reassignment routine accepts fitted rows and a
-nonzero child count per parent, so other fixed-k fitters can reuse neighborhood
-assignment and membership updates without implementing another protocol.
-Reassignment borrows both retained and child centroids through a flat table of
-slice references, then assigns each point to the nearest centroid of its own or
-a linked list.
-Equal-distance assignments prefer earlier rows: retained neighbors in plan order,
-then children in parent and centroid order, so a neighbor's own centroid wins ties.
-Centroid coordinates are not copied during reassignment. No intermediate buffer
-protocol or independent stage traits are required. After computation succeeds,
-the operation records retained-list membership deltas, creates children, and
-retires the explicit parents.
+two-row mutable window. The split plan gives the lists linked to each list. Every
+list is assigned in one pass: each point moves to the nearest destination owned by
+its own list or a linked list, where a parent owns its children and a neighbor owns
+its own centroid. A list's own destinations are compared first, then its links in
+link order, and the earliest wins ties, so neighbors keep tied points and a
+parent's tied points join its first child. Retained centroids are borrowed and
+children are read in place, so no centroid coordinates are copied. No intermediate
+buffer protocol or independent stage traits are required.
 The index currently selects this implementation directly. Other split strategies
 may use different vector representations or combine fitting and assignment
 differently. Restricted neighbor policies use the caller-supplied

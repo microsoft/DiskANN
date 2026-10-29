@@ -6,27 +6,21 @@
 //! Lists taking part in one regional split, the neighborhood of each parent, and the
 //! bucketed storage that split policies share.
 
-use std::{hash::Hash, iter::FusedIterator, slice};
+use std::hash::Hash;
 
 use hashbrown::{HashMap, hash_map::Entry};
 
 /// Distinct parents and retained neighbors in one split, and the links between them.
 ///
-/// Lists are identified by their position in [`Self::lists`]: parents first, then
-/// neighbors, each in insertion order. Links are symmetric and only join a parent to a
-/// neighbor: a parent links to the neighbors selected for it, and a neighbor links to
-/// the parents that selected it.
+/// Parents and neighbors are each indexed in insertion order; see [`Src`]. Links are
+/// symmetric and only join a parent to a neighbor: a parent links to the neighbors
+/// selected for it, and a neighbor links to the parents that selected it.
 #[derive(Debug, Clone)]
 pub(crate) struct Plan<L> {
-    parents: Vec<L>,
-    neighbors: Vec<L>,
-    /// Position of every list.
-    positions: HashMap<L, usize>,
-    /// Linked positions of every list, in link order.
-    /// linking parent index -> indexes of neighbors linked  
-    parent_links: Vec<Vec<usize>>,
-    /// linking neighbor index -> indexes of parents linked
-    neighbor_links: Vec<Vec<usize>>,
+    /// Parents, each linked to neighbor indices.
+    parents: Links<L>,
+    /// Neighbors, each linked to parent indices.
+    neighbors: Links<L>,
 }
 
 impl<L> Plan<L>
@@ -36,47 +30,52 @@ where
     /// Start a plan for `parents`. Repeated parents are recorded once.
     pub(crate) fn new<P: IntoIterator<Item = L>>(parents: P) -> Self {
         let parents = parents.into_iter();
-        let capacity = parents.size_hint().0;
 
         let mut plan = Self {
-            parents: Vec::with_capacity(capacity),
-            neighbors: Vec::new(),
-            positions: HashMap::with_capacity(capacity),
-            parent_links: Vec::with_capacity(capacity),
-            neighbor_links: Vec::with_capacity(capacity),
+            parents: Links::with_capacity(parents.size_hint().0),
+            neighbors: Links::with_capacity(0),
         };
-
         for parent in parents {
-            if let Entry::Vacant(entry) = plan.positions.entry(parent) {
-                entry.insert(plan.parent_links.len());
-
-                plan.parents.push(parent);
-                plan.parent_links.push(Vec::new());
-            }
+            plan.parents.insert(parent);
         }
 
         plan
     }
 
     pub(crate) fn parents(&self) -> &[L] {
-        &self.parents
+        &self.parents.ids
     }
 
     pub(crate) fn neighbors(&self) -> &[L] {
-        &self.neighbors
+        &self.neighbors.ids
     }
 
-    /// Positions linked to the list at position `s`, in link order.
+    /// Every list in the plan: parents, then neighbors.
+    pub(crate) fn sources(&self) -> impl Iterator<Item = (Src, L)> + Clone + '_ {
+        let parents = self.parents.ids.iter().enumerate();
+        let neighbors = self.neighbors.ids.iter().enumerate();
+
+        let piter = parents.map(|(p, &list)| (Src::Parent(p), list));
+        let niter = neighbors.map(|(n, &list)| (Src::Neighbor(n), list));
+
+        piter.chain(niter)
+    }
+
+    /// Lists linked to `src`, in link order.
     ///
     /// # Panics
     ///
-    /// Panics if `s` is not less than `self.lists().len()`.
-    pub(crate) fn parent_links(&self, s: usize) -> &[usize] {
-        &self.parent_links[s]
-    }
+    /// Panics if `src` is not in the plan.
+    pub(crate) fn neighborhood(&self, src: Src) -> impl Iterator<Item = Src> + '_ {
+        let links = match src {
+            Src::Parent(p) => &self.parents.links[p],
+            Src::Neighbor(n) => &self.neighbors.links[n],
+        };
 
-    pub(crate) fn neighbor_links(&self, s: usize) -> &[usize] {
-        &self.neighbor_links[s]
+        links.iter().map(move |&i| match src {
+            Src::Parent(_) => Src::Neighbor(i),
+            Src::Neighbor(_) => Src::Parent(i),
+        })
     }
 
     /// Link `parent` and `list`; a list not seen before becomes a neighbor.
@@ -87,28 +86,73 @@ where
     ///
     /// Panics if `parent` is not a parent, or if `list` is a parent.
     pub(crate) fn link(&mut self, parent: L, list: L) {
-        let i = self.positions.get(&parent).copied().unwrap_or(usize::MAX);
+        let p = self.parents.positions.get(&parent).copied();
+        assert!(p.is_some(), "Plans can only link from a parent");
         assert!(
-            i < self.parents.len(),
-            "IVF plans can only link from a parent"
+            !self.parents.positions.contains_key(&list),
+            "Plans cannot link two parents"
         );
 
-        let j = match self.positions.entry(list) {
-            Entry::Occupied(entry) => *entry.get(),
-            Entry::Vacant(entry) => {
-                entry.insert(self.neighbor_links.len());
-                self.neighbors.push(list);
-                self.neighbor_links.push(Vec::new());
-
-                self.neighbor_links.len() - 1
-            }
-        };
-
-        if !self.parent_links[i].contains(&j) {
-            self.parent_links[i].push(j);
-            self.neighbor_links[j].push(i);
+        let (p, n) = (p.unwrap_or_default(), self.neighbors.insert(list));
+        if self.parents.link(p, n) {
+            self.neighbors.link(n, p);
         }
     }
+}
+
+/// Distinct lists in insertion order, each with its links to lists on the other side
+/// of a [`Plan`].
+#[derive(Debug, Clone)]
+struct Links<L> {
+    ids: Vec<L>,
+    /// Index of every list in `ids`.
+    positions: HashMap<L, usize>,
+    /// Linked indices of every list, in link order.
+    links: Vec<Vec<usize>>,
+}
+
+impl<L> Links<L>
+where
+    L: Copy + Eq + Hash,
+{
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            ids: Vec::with_capacity(capacity),
+            positions: HashMap::with_capacity(capacity),
+            links: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// The index of `id`, added at the end if it is new.
+    fn insert(&mut self, id: L) -> usize {
+        match self.positions.entry(id) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                entry.insert(self.ids.len());
+                self.ids.push(id);
+                self.links.push(Vec::new());
+
+                self.ids.len() - 1
+            }
+        }
+    }
+
+    /// Link list `i` to index `j`; returns `false` if they are already linked.
+    fn link(&mut self, i: usize, j: usize) -> bool {
+        let new = !self.links[i].contains(&j);
+        if new {
+            self.links[i].push(j);
+        }
+
+        new
+    }
+}
+
+/// A list taking part in a split, by index in [`Plan::parents`] or [`Plan::neighbors`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Src {
+    Parent(usize),
+    Neighbor(usize),
 }
 
 /////////////
@@ -210,9 +254,12 @@ impl<I: Copy, L: Layout> Buckets<I, L> {
         self.keys.push(index);
     }
 
-    /// Close the open source bucket.
-    pub(super) fn seal(&mut self) {
+    /// Close the open source bucket and return its items.
+    pub(super) fn seal(&mut self) -> &[I] {
+        let start = self.offsets[self.offsets.len() - 1];
         self.offsets.push(self.items.len());
+
+        &self.items[start..]
     }
 
     /// Stable grouping of every recorded item, sealed or not, by key.
@@ -265,7 +312,6 @@ impl<I, L: Layout> Groups<I, L> {
     /// Panics if `key` is outside the layout.
     pub(super) fn get(&self, key: L::Key) -> &[I] {
         let index = self.layout.index(key);
-        // SAFETY: index correctly returned
 
         let start = self.offsets[index];
         let end = self.offsets[index + 1];
@@ -276,10 +322,16 @@ impl<I, L: Layout> Groups<I, L> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Buckets, Destinations, Dst, Layout, Plan};
+    use super::{Buckets, Destinations, Dst, Layout, Plan, Src};
+
+    fn neighborhood(plan: &Plan<u32>, src: Src) -> Vec<Src> {
+        plan.neighborhood(src).collect()
+    }
 
     #[test]
     fn links_are_symmetric_distinct_and_in_order() {
+        use Src::{Neighbor, Parent};
+
         let mut plan = Plan::new([5_u32, 3, 5]);
         for (parent, list) in [(5, 9), (3, 7), (5, 7), (5, 9)] {
             plan.link(parent, list);
@@ -287,10 +339,20 @@ mod tests {
 
         assert_eq!(plan.parents(), [5, 3]);
         assert_eq!(plan.neighbors(), [9, 7]);
-        assert_eq!(plan.parent_links(0), [0, 1]);
-        assert_eq!(plan.parent_links(1), [1]);
-        assert_eq!(plan.neighbor_links(0), [0]);
-        assert_eq!(plan.neighbor_links(1), [1, 0]);
+        assert_eq!(
+            plan.sources().collect::<Vec<_>>(),
+            [
+                (Parent(0), 5),
+                (Parent(1), 3),
+                (Neighbor(0), 9),
+                (Neighbor(1), 7)
+            ]
+        );
+
+        assert_eq!(neighborhood(&plan, Parent(0)), [Neighbor(0), Neighbor(1)]);
+        assert_eq!(neighborhood(&plan, Parent(1)), [Neighbor(1)]);
+        assert_eq!(neighborhood(&plan, Neighbor(0)), [Parent(0)]);
+        assert_eq!(neighborhood(&plan, Neighbor(1)), [Parent(1), Parent(0)]);
     }
 
     #[test]
@@ -298,15 +360,37 @@ mod tests {
         let plan = Plan::new([1_u32, 2]);
         assert_eq!(plan.parents(), [1, 2]);
         assert!(plan.neighbors().is_empty());
-        assert!(plan.parent_links(1).is_empty());
-        assert!(Plan::<u32>::new([]).parents().is_empty());
+        assert!(neighborhood(&plan, Src::Parent(1)).is_empty());
+        assert_eq!(Plan::<u32>::new([]).sources().count(), 0);
     }
 
     #[test]
-    #[should_panic(expected = "IVF plans can only link from a parent")]
+    #[should_panic(expected = "Plans can only link from a parent")]
     fn links_require_a_parent() {
         let mut plan = Plan::new([1_u32]);
         plan.link(2, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Plans can only link from a parent")]
+    fn neighbors_cannot_link_as_parents() {
+        let mut plan = Plan::new([1_u32]);
+        plan.link(1, 2);
+        plan.link(2, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Plans cannot link two parents")]
+    fn parents_cannot_link_parents() {
+        let mut plan = Plan::new([1_u32, 2]);
+        plan.link(1, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Plans cannot link two parents")]
+    fn parents_cannot_link_themselves() {
+        let mut plan = Plan::new([1_u32]);
+        plan.link(1, 1);
     }
 
     #[test]
@@ -322,10 +406,10 @@ mod tests {
         ] {
             moved.push(item, key);
         }
-        moved.seal();
-        moved.seal();
+        assert_eq!(moved.seal(), [10, 11, 12]);
+        assert!(moved.seal().is_empty());
         moved.push(13, Dst::Child(0));
-        moved.seal();
+        assert_eq!(moved.seal(), [13]);
         moved.push(14, Dst::Neighbor(1));
         assert_eq!(moved.len(), 3);
 

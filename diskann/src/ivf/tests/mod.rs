@@ -1336,7 +1336,7 @@ fn neighbor_points_consider_only_children_of_linked_parents() {
 }
 
 #[test]
-fn two_means_resets_empty_children_to_zero_and_prefers_the_last_child_on_ties() {
+fn two_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties() {
     for value in [0.0, 7.0] {
         let sources = [(
             1,
@@ -1357,15 +1357,13 @@ fn two_means_resets_empty_children_to_zero_and_prefers_the_last_child_on_ties() 
         assert_eq!(update.created.len(), 2);
         assert_eq!(update.created[0].centroid, [value]);
         assert_eq!(update.created[1].centroid, [0.0]);
-        // At zero both children coincide, and the last child wins the tie.
-        let full = usize::from(value == 0.0);
-        assert_eq!(update.created[full].members, [0, 1, 2]);
-        assert!(update.created[1 - full].members.is_empty());
+        assert_eq!(update.created[0].members, [0, 1, 2]);
+        assert!(update.created[1].members.is_empty());
     }
 }
 
 #[test]
-fn two_means_prefers_neighbors_in_supplied_order_on_ties() {
+fn two_means_ties_keep_points_in_their_own_neighborhood_first() {
     let sources = BTreeMap::from([
         (
             1,
@@ -1402,19 +1400,14 @@ fn two_means_prefers_neighbors_in_supplied_order_on_ties() {
             .unwrap();
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].centroid, [-1.0]);
-        assert!(created[0].members.is_empty());
         assert_eq!(created[1].centroid, [1.0]);
+        // Parent point 0 ties every centroid at -1 and joins its parent's first child;
+        // each neighbor's own point ties that child and stays, whatever the link order.
+        assert_eq!(created[0].members, [0]);
         assert_eq!(created[1].members, [1]);
         let changes: BTreeMap<_, _> = memberships.into_changes().collect();
         assert!(matches!(changes[&1], Membership::Retire));
-        // Parent point 0 ties every centroid at -1 and joins the first neighbor; each
-        // neighbor's own point ties a child and stays.
-        assert!(matches!(
-            &changes[&neighbors[0]],
-            Membership::Delta { removed, appended }
-                if removed.is_empty() && appended == &[0]
-        ));
-        assert!(!changes.contains_key(&neighbors[1]));
+        assert_eq!(changes.len(), 1);
     }
 }
 

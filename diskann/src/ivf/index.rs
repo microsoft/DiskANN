@@ -120,13 +120,8 @@ impl<C: ExecutionContext> IVFIndex<C> {
                     }
                 }
 
-                let iter = plan
-                    .parents()
-                    .iter()
-                    .chain(plan.neighbors().iter())
-                    .copied();
-
-                let (region, mut update) = accessor.fill(iter).await?;
+                let lists = plan.sources().map(|(_, list)| list);
+                let (region, mut update) = accessor.fill(lists).await?;
 
                 TwoMeansSplit::new(config.split_iterations, config.dim).split(
                     &region,

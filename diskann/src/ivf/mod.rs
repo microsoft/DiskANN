@@ -21,9 +21,9 @@
 //! each point within its list's neighborhood. Child centroids are owned;
 //! retained centroids and source vectors remain borrowed.
 //!
-//! Clustering finishes reading its inputs before recording child creation and
-//! parent retirement and neighbor membership deltas through the separate
-//! update object. The region's input
+//! Splitting fits every child before recording parent retirement, neighbor
+//! membership deltas, and child creation through the separate update object.
+//! The region's input
 //! borrows end before the accessor finalizes regional writes and ordinary appends
 //! together. Providers may buffer writes or apply them inside a private operation
 //! context.
