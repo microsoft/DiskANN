@@ -13,7 +13,7 @@ use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
 use crate::minmax::{self, Data};
 use crate::multi_vector::matrix::{
-    Defaulted, NewCloned, NewMut, NewOwned, NewRef, Repr, ReprMut, ReprOwned, SliceError,
+    Defaulted, NewMut, NewOwned, NewRef, Repr, ReprMut, ReprOwned, SliceError,
 };
 use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
 use crate::scalar::InputContainsNaN;
@@ -181,21 +181,6 @@ where
         // logic in `Self as ReprOwned`.
         let mat = unsafe { Mat::from_raw_parts(self, ptr) };
         Ok(mat)
-    }
-}
-
-impl<const NBITS: usize> NewCloned for MinMaxMeta<NBITS>
-where
-    Unsigned: Representation<NBITS>,
-{
-    fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
-        // SAFETY: The view covers repr.bytes() initialized bytes of canonical storage.
-        let bytes = unsafe { std::slice::from_raw_parts(v.as_raw_ptr(), v.repr().bytes()) };
-        let owned: Box<[u8]> = bytes.into();
-
-        // SAFETY: The copy retains the representation's layout and uses the same
-        // Box<[u8]> allocation that ReprOwned::drop reconstructs.
-        unsafe { Mat::from_raw_parts(*v.repr(), utils::box_into_nonnull(owned).cast::<u8>()) }
     }
 }
 
@@ -388,47 +373,6 @@ mod tests {
 
     mod construction {
         use super::*;
-
-        fn test_new_cloned<const NBITS: usize>()
-        where
-            Unsigned: Representation<NBITS>,
-        {
-            for (rows, dim) in [(0, 7), (3, 0), (3, 7)] {
-                let repr = MinMaxMeta::<NBITS>::new(rows, dim);
-                let mut bytes: Vec<u8> = (0..repr.bytes())
-                    .map(|i| i.wrapping_mul(17) as u8)
-                    .collect();
-                let view = MatRef::new(repr, &bytes).unwrap();
-                let cloned = view.to_owned();
-                assert_eq!(cloned.num_vectors(), rows);
-                assert_eq!(cloned.repr().intrinsic_dim(), dim);
-                let expected: Vec<_> = view
-                    .rows()
-                    .map(|row| {
-                        (
-                            bytemuck::bytes_of(&row.meta()).to_vec(),
-                            (0..dim)
-                                .map(|i| row.vector().get(i).unwrap())
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect();
-
-                bytes.fill(0);
-                drop(bytes);
-                for (row, (meta, codes)) in cloned.rows().zip(expected) {
-                    assert_eq!(bytemuck::bytes_of(&row.meta()), meta);
-                    assert_eq!(
-                        (0..dim)
-                            .map(|i| row.vector().get(i).unwrap())
-                            .collect::<Vec<_>>(),
-                        codes
-                    );
-                }
-            }
-        }
-
-        expand_to_bitrates!(new_cloned, test_new_cloned);
 
         /// Tests NewOwned (Mat::new with Defaulted) for various dimensions and sizes.
         fn test_new_owned<const NBITS: usize>()

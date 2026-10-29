@@ -134,8 +134,7 @@ mod vectors;
 /////////////
 
 pub use multi::{
-    MinMaxErase, MinMaxKernel, MinMaxKernelFactory, MinMaxMaxSimKernel, MinMaxMeta,
-    build_minmax_max_sim,
+    MinMaxKernel, MinMaxKernelFactory, MinMaxMaxSim, MinMaxMeta, build_minmax_max_sim,
 };
 pub use quantizer::{L2Loss, MinMaxQuantizer};
 pub use recompress::{RecompressError, Recompressor};
