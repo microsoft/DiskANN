@@ -1,0 +1,42 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+# Point diskann_rust and baseline at a per-run directory on /dev/nvme0n1.
+# 1ES runners may already mount that disk (seen at /mnt/storage). Format it
+# only when it is blank.
+
+name: Prepare NVMe workspace
+description: Reuse, mount, or format /dev/nvme0n1 and link the benchmark workspaces to it
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare NVMe workspace
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT /dev/nvme0n1
+
+        nvme_mount="$(lsblk -nr -o MOUNTPOINT /dev/nvme0n1 | awk 'NF { print; exit }')"
+        if [ -n "${nvme_mount}" ]; then
+          echo "Reusing existing NVMe mount at ${nvme_mount}"
+          data_mount="${nvme_mount}"
+        else
+          sudo mkdir -p /mnt/nvme
+          fs_dev="$(lsblk -nr -o PATH,FSTYPE /dev/nvme0n1 | awk '$2 != "" { print $1; exit }')"
+          if [ -n "${fs_dev}" ]; then
+            echo "Mounting existing NVMe filesystem ${fs_dev}"
+            sudo mount "${fs_dev}" /mnt/nvme
+          else
+            echo "Formatting blank NVMe /dev/nvme0n1"
+            sudo mkfs.ext4 /dev/nvme0n1
+            sudo mount /dev/nvme0n1 /mnt/nvme
+          fi
+          data_mount=/mnt/nvme
+        fi
+
+        work="${data_mount}/diskann-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        sudo mkdir -p "${work}/diskann_rust" "${work}/baseline"
+        sudo chown -R "$(id -u):$(id -g)" "${work}"
+        ln -sfn "${work}/diskann_rust" diskann_rust
+        ln -sfn "${work}/baseline" baseline
