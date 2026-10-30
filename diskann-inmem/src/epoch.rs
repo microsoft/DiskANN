@@ -35,10 +35,10 @@
 //! ## Primitives
 //!
 //! Actors call [`Registry::guard`] to receive a [`Guard`]. This guard protects items
-//! at its creation epoch. Any items that the "retired" while the guard is held will be
-//! buffered until the guard is destroyed.
+//! at its creation epoch. Any items "retired" while the guard is held will be buffered
+//! until the guard is destroyed.
 //!
-//! To retire item, [`Registry::retire`] is used to receive a [`Retire`]. This behaves
+//! To retire an item, [`Registry::retire`] is used to receive a [`Retire`]. This behaves
 //! exactly like a [`Guard`] with the extra capability of retiring items. All items retired
 //! through [`Retire::retire`] will be buffered until the [`Registry`] can prove that all
 //! guards (correctly using the data structure) that could have observed the retired item
