@@ -35,9 +35,14 @@
 //! ## Primitives
 //!
 //! Actors call [`Registry::guard`] to receive a [`Guard`]. This guard protects items
-//! at its creation epoch. Any items pushed to [`Guard::retire`] will be buffered until the
-//! [`Registry`] can prove that all [`Guard`]s (correctly using the data structure) that
-//! could have observed the retired item have been destroyed.
+//! at its creation epoch. Any items that the "retired" while the guard is held will be
+//! buffered until the guard is destroyed.
+//!
+//! To retire item, [`Registry::retire`] is used to receive a [`Retire`]. This behaves
+//! exactly like a [`Guard`] with the extra capability of retiring items. All items retired
+//! through [`Retire::retire`] will be buffered until the [`Registry`] can prove that all
+//! guards (correctly using the data structure) that could have observed the retired item
+//! have been destroyed.
 //!
 //! Items can be reclaimed via [`Registry::try_advance`]. If successful, a [`Drain`] of
 //! such items will be returned for processing.
@@ -52,7 +57,8 @@
 //! [`Guard`] is acquired, then shared among multiple dataset readers.
 //!
 //! Finally, [`RegistryHandle`]s can be created with [`Registry::handle`]. Such a handle may
-//! check that a [`Guard`] actually belongs to registry.
+//! check that a [`Guard`] actually belongs to registry with
+//! [`RegistryHandle::assert_guard_belongs`].
 
 use std::{
     num::NonZeroUsize,
@@ -237,6 +243,15 @@ impl Registry {
         self.guard_inner(NoDelay)
     }
 
+    /// Register the caller with `self` to construct a [`Retire`].
+    ///
+    /// Items passed to the returned [`Retire`] will be queued and held until any registry
+    /// guard that would have observed the retirement has been dropped.
+    pub(crate) fn retire(&self) -> Result<Retire<'_>, Unavailable> {
+        let guard = self.guard()?;
+        Ok(Retire { guard })
+    }
+
     #[inline]
     fn guard_inner<T>(&self, mut delay: T) -> Result<Guard<'_>, Unavailable>
     where
@@ -298,9 +313,9 @@ impl Registry {
                     slot: guard_slot,
                     registry: &self.inner,
                     #[cfg(test)]
-                    epoch,
+                    test_epoch: epoch,
                     #[cfg(test)]
-                    slot_index: slot,
+                    test_slot_index: slot,
                 });
             }
         }
@@ -466,32 +481,24 @@ fn guard_does_not_belong(_handle: &RegistryHandle, _guard: &Guard<'_>) -> ! {
 /// A handle registering the caller as a reader at a particular epoch.
 ///
 /// While this guard is held, the [`Registry`] will not advance past the guard's epoch, and
-/// any items retired through *any* guard at that epoch (or earlier) will not be reclaimed.
+/// any items retired through *any* [`Retire`] at that epoch (or earlier) will not be reclaimed.
 ///
 /// Obtained via [`Registry::guard`].
+///
+/// See also: [`Retire`]
 #[derive(Debug)]
 pub(crate) struct Guard<'a> {
     slot: &'a GuardSlot,
     registry: &'a Inner,
 
     #[cfg(test)]
-    pub(super) epoch: u64,
+    test_epoch: u64,
 
     #[cfg(test)]
-    slot_index: usize,
+    test_slot_index: usize,
 }
 
 impl<'a> Guard<'a> {
-    /// Retire the id `i` at this guard's epoch.
-    ///
-    /// `i` is a caller-defined id (typically an index into external storage). It will be
-    /// returned from a future [`Drain`] once the registry has advanced far enough that no
-    /// reader could observe it.
-    #[inline]
-    pub(crate) fn retire(&self, i: u32) {
-        self.queue().push(i)
-    }
-
     /// Cheaply clone `self` into another [`Guard`] with the same lifetime.
     ///
     /// The epoch associated with the original [`Guard`] will be released only when all
@@ -510,9 +517,9 @@ impl<'a> Guard<'a> {
             slot: self.slot,
             registry: self.registry,
             #[cfg(test)]
-            epoch: self.epoch,
+            test_epoch: self.test_epoch,
             #[cfg(test)]
-            slot_index: self.slot_index,
+            test_slot_index: self.test_slot_index,
         }
     }
 
@@ -520,8 +527,9 @@ impl<'a> Guard<'a> {
         self.slot.epoch.load(Ordering::Relaxed)
     }
 
-    fn queue(&self) -> &SegQueue<u32> {
-        &self.registry.retiring[queue(self.epoch())]
+    #[cfg(test)]
+    pub(super) fn test_epoch(&self) -> u64 {
+        self.test_epoch
     }
 }
 
@@ -541,6 +549,48 @@ impl Drop for Guard<'_> {
         }
     }
 }
+
+//--------//
+// Retire //
+//--------//
+
+/// A handle registering the caller as a reader at a particular epoch.
+///
+/// While this guard is held, the [`Registry`] will not advance past the guard's epoch, and
+/// any items retired through *any* guard at that epoch (or earlier) will not be reclaimed.
+///
+/// Obtained via [`Registry::retire`].
+///
+/// See also: [`Retire`]
+#[derive(Debug)]
+pub(crate) struct Retire<'a> {
+    guard: Guard<'a>,
+}
+
+impl<'a> Retire<'a> {
+    /// Retire the id `i` at this guard's epoch.
+    ///
+    /// `i` is a caller-defined id (typically an index into external storage). It will be
+    /// returned from a future [`Drain`] once the registry has advanced far enough that no
+    /// reader could observe it.
+    #[inline]
+    pub(crate) fn retire(&self, i: u32) {
+        self.queue().push(i)
+    }
+
+    fn queue(&self) -> &SegQueue<u32> {
+        &self.guard.registry.retiring[queue(self.guard.epoch())]
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_epoch(&self) -> u64 {
+        self.guard.test_epoch()
+    }
+}
+
+//-------//
+// Drain //
+//-------//
 
 /// An iterator over ids that are safe to reclaim, returned from [`Registry::try_advance`].
 ///
@@ -585,6 +635,10 @@ impl Iterator for Drain<'_> {
 // that no-one is writing into the queue, which would otherwise invalidate the exact-size
 // iterator guarantee.
 impl ExactSizeIterator for Drain<'_> {}
+
+//-------//
+// Error //
+//-------//
 
 /// Returned by [`Registry::guard`] when all guard slots are occupied.
 #[derive(Debug)]
@@ -685,10 +739,26 @@ mod tests {
 
         let guard = registry.guard().unwrap();
 
+        // Push an item into the retire queue.
+        //
+        // This should be prevented from being released until all clones get dropped.
+        {
+            let retire = registry.retire().unwrap();
+            retire.retire(10);
+        }
+
         // With one guard active at the current - we should be able to advance the epoch.
         {
             let drain = registry.try_advance().unwrap();
             assert!(drain.is_empty());
+        }
+
+        // Push another item in the next epoch.
+        //
+        // This should be prevented from being released until all clones get dropped.
+        {
+            let retire = registry.retire().unwrap();
+            retire.retire(20);
         }
 
         // Now that we have advanced the epoch, the old guard should prevent epoch advandement.
@@ -708,7 +778,6 @@ mod tests {
         );
 
         // Retire into `clone` and then drop it.
-        clone.retire(10);
         std::mem::drop(clone);
 
         registry.assert_no_workers();
@@ -718,10 +787,19 @@ mod tests {
             assert!(drain.is_empty());
         }
 
+        // Retrieve the item that was retired while the guards were active.
         {
             let drain = registry.try_advance().unwrap();
             let ids: Vec<_> = drain.collect();
             assert_eq!(&*ids, &[10]);
+        }
+
+        // Retrieve the item that was retired while the guards were active but in the epoch
+        // **after** the guards.
+        {
+            let drain = registry.try_advance().unwrap();
+            let ids: Vec<_> = drain.collect();
+            assert_eq!(&*ids, &[20]);
         }
     }
 
@@ -742,7 +820,7 @@ mod tests {
             // Thread A
             s.spawn(|| {
                 let g = registry.guard_inner(delay).unwrap();
-                assert_eq!(g.slot_index, 1);
+                assert_eq!(g.test_slot_index, 1);
                 seq.wait_for(1);
             });
 
@@ -754,10 +832,10 @@ mod tests {
                     let delay =
                         TestGuardDelay::default().with_post_fence(|| thread_b_loop_count += 1);
                     let g = registry.guard_inner(delay).unwrap();
-                    assert_eq!(g.slot_index, 1);
+                    assert_eq!(g.test_slot_index, 1);
                 }
                 let g = registry.guard_inner(NoDelay).unwrap();
-                assert_eq!(g.slot_index, 0);
+                assert_eq!(g.test_slot_index, 0);
                 seq.advance_past(0);
                 seq.advance_past(1);
             });
@@ -786,6 +864,7 @@ mod tests {
         std::thread::scope(|s| {
             let handle = s.spawn(|| {
                 let guard = registry.guard_inner(delay).unwrap();
+                let guard = Retire { guard };
 
                 // Since we hit the CAS loop - this serves as a sanity check that we have
                 // the correct drain buffer.
@@ -830,7 +909,7 @@ mod tests {
             // The generation should be the last set one - even though this thread was
             // parked during the transition.
             let r = handle.join().unwrap();
-            assert_eq!(r.epoch, expected);
+            assert_eq!(r.guard.test_epoch(), expected);
             assert_eq!(registry.waiting(), expected);
         });
 
@@ -875,12 +954,12 @@ mod tests {
         assert!(matches!(registry.guard(), Err(Unavailable)));
 
         // Dropping a guard releases its slot.
-        let freed_slot = g0.slot_index;
+        let freed_slot = g0.test_slot_index;
         drop(g0);
 
         let g2 = registry.guard().unwrap();
         assert_eq!(
-            g2.slot_index, freed_slot,
+            g2.test_slot_index, freed_slot,
             "newly freed slot should be reclaimed"
         );
 
@@ -906,8 +985,8 @@ mod tests {
             (g2, g3)
         };
 
-        assert_eq!(g2.slot_index, 2);
-        assert_eq!(g3.slot_index, 3);
+        assert_eq!(g2.test_slot_index, 2);
+        assert_eq!(g3.test_slot_index, 3);
 
         let f = || {
             // Keep wrapping and hitting the first two guard slots.
@@ -915,8 +994,8 @@ mod tests {
                 let g0 = registry.guard().unwrap();
                 let g1 = registry.guard().unwrap();
 
-                let s0 = g0.slot_index;
-                let s1 = g1.slot_index;
+                let s0 = g0.test_slot_index;
+                let s1 = g1.test_slot_index;
 
                 // Due to how the hint works, the slots could be acquired in either order.
                 if s0 < s1 {
@@ -993,8 +1072,8 @@ mod tests {
 
         // Helper: register, retire one item, drop. Returns the generation we retired at.
         let retire_at = |id: u32| {
-            let g = registry.guard().unwrap();
-            let epoch = g.epoch;
+            let g = registry.retire().unwrap();
+            let epoch = g.guard.test_epoch();
             g.retire(id);
             epoch
         };
@@ -1057,6 +1136,14 @@ mod tests {
         }
 
         registry.assert_no_workers();
+    }
+
+    #[test]
+    fn test_unavailable_display() {
+        assert_eq!(
+            Unavailable.to_string(),
+            "all available registry guard slots are occupied",
+        );
     }
 
     //-------------//

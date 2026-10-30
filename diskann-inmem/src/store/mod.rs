@@ -417,7 +417,7 @@ where
 
         let guard = self
             .registry
-            .guard()
+            .retire()
             .map_err(RetireError::GuardUnavailable)?;
 
         let retiring = Tag::RETIRING;

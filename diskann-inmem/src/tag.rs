@@ -71,7 +71,7 @@ use crate::num::{Bytes, IdLimit};
 ///
 /// * [`Tag::PUBLISHED`] -> [`Tag::RETIRING`]: Must be done while under a
 ///   [`Guard`](super::epoch::Guard) and may be done with relaxed atomics. Writes to
-///   associated data may not be made. Place into [`Guard::retire`](super::epoch::Guard::retire)
+///   associated data may not be made. Place into [`Retire::retire`](super::epoch::Retire::retire)
 ///   for final reclamation.
 ///
 /// * [`Tag::RETIRING`] -> [`Tag::AVAILABLE`]: May only be done if the corresponding slot is
