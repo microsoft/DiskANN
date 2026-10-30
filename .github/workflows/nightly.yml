@@ -116,13 +116,17 @@ jobs:
     name: miri-test
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      # rustc +nightly-2026-05-21 --version reports:
+      # rustc 1.97.0-nightly (b954122bb 2026-05-20)
+      MIRI_TOOLCHAIN: nightly-2026-05-21
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
 
       - name: Install Rust nightly with miri
-        run: rustup toolchain install nightly --component miri
+        run: rustup toolchain install "$MIRI_TOOLCHAIN" --component miri
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
@@ -135,7 +139,7 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
         run: |
-          cargo +nightly miri nextest run --locked --config "$RUST_CONFIG" \
+          cargo +"$MIRI_TOOLCHAIN" miri nextest run --locked --config "$RUST_CONFIG" \
               --package diskann-quantization \
               --package diskann-utils
 
@@ -145,6 +149,6 @@ jobs:
         # One selection over two full groups and one pair scan over two full groups
         # reach all three unsafe group loads in the top-k module.
         run: |
-          cargo +nightly miri test --locked -p diskann --features pipnn --lib --config "$RUST_CONFIG" -- \
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p diskann --features pipnn --lib --config "$RUST_CONFIG" -- \
             graph::pipnn::topk::tests::selection_returns_distinct_candidates_when_distances_tie \
             graph::pipnn::topk::tests::a_single_pair_updates_exactly_its_two_endpoints::case_1_finite
