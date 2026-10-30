@@ -8,6 +8,7 @@ use half::f16;
 use crate::{
     Const, SIMDDotProduct, SIMDVector, SupportedLaneCount, reference::ReferenceScalarOps,
     reference::cast_f16_to_f32,
+    test_utils::common::ScalarTraits,
 };
 
 /////////////////////////
@@ -147,7 +148,7 @@ pub(crate) fn test_dot_product_impl<
     Left: SIMDVector<Arch = To::Arch, ConstLanes = Const<FROM_N>>,
     Right: SIMDVector<Arch = To::Arch, ConstLanes = Const<FROM_N>>,
     DotSchema: ExpectedDot<To::Scalar, Left::Scalar, Right::Scalar, EVERY>,
-    To::Scalar: PartialEq + Copy,
+    To::Scalar: ScalarTraits,
     Left::Scalar: Copy,
     Right::Scalar: Copy,
 {
@@ -169,12 +170,7 @@ pub(crate) fn test_dot_product_impl<
     let iter = std::iter::zip(left.chunks(EVERY), right.chunks(EVERY)).enumerate();
     for (i, (l, r)) in iter {
         let expected = DotSchema::expected_dot(accumulator[i], l, r);
-        // NaNs compare unequal to themselves, but both paths should produce NaN.
-        #[allow(clippy::eq_op)]
-        if expected != expected && result[i] != result[i] {
-            continue;
-        }
-        assert_eq!(expected, result[i]);
+        assert!(expected.exact_eq(result[i]));
     }
 }
 
