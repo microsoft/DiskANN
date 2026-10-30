@@ -128,8 +128,7 @@ impl<T> Config<T> {
     /// Create a new [`Config`] for a [`Full`].
     ///
     /// The resulting store will hold `capacity` writable items and `start_points.nrows()`
-    /// frozen points at internal IDs `[capacity, capacity + start_points.nrows())`. The
-    /// dimensionality of the full-precision data will be inferred from
+    /// frozen points. The dimensionality of the full-precision data will be inferred from
     /// `start_points.ncols()`.
     ///
     /// The associated graph will be bounded with `max_degree` and `metric` will be used to
@@ -153,20 +152,22 @@ impl<T> Config<T> {
             .checked_mul(std::mem::size_of::<T>())
             .is_none()
         {
-            return Err(ConfigError::DimTooLarge(start_points.ncols()));
+            return Err(ConfigError::dim_too_large(start_points.ncols()));
         }
 
         let num_start_points = start_points.nrows();
-        let start_point_ids = Range::start_plus_usize(capacity.value(), num_start_points).ok_or(
-            ConfigError::TooManyPoints {
-                capacity,
-                num_start_points,
-            },
-        )?;
+        let too_many_points = || ConfigError::too_many_points(capacity, num_start_points);
+        let start_point_ids =
+            Range::start_plus_usize(0, num_start_points).ok_or_else(too_many_points)?;
 
-        let id_limit = start_point_ids.end();
+        let id_limit = capacity
+            .value()
+            .checked_add(num_start_points)
+            .and_then(|id_limit| u32::try_from(id_limit).map(IdLimit::new).ok())
+            .ok_or_else(too_many_points)?;
+
         Ok(Self {
-            layout: store::Layout::new(IdLimit::new(id_limit), max_degree),
+            layout: store::Layout::new(id_limit, max_degree),
             capacity,
             metric,
             start_points,
@@ -208,8 +209,37 @@ impl<T> Config<T> {
 
 /// Errors that can arise when constructing [`Config`].
 #[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum ConfigError {
+#[error(transparent)]
+pub struct ConfigError {
+    inner: ConfigErrorInner,
+}
+
+impl ConfigError {
+    fn dim_too_large(dim: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::DimTooLarge(dim),
+        }
+    }
+
+    fn too_many_points(capacity: Capacity, num_start_points: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::TooManyPoints {
+                capacity,
+                num_start_points,
+            },
+        }
+    }
+}
+
+diskann::convert_error!(ConfigError);
+
+#[derive(Debug, Error)]
+enum ConfigErrorInner {
+    #[error(
+        "the number of bytes to hold {}-dimensional data exceeds `usize::MAX`",
+        0
+    )]
+    DimTooLarge(usize),
     #[error(
         "requested number of points ({} + {} start points) exceeds u32::MAX",
         capacity,
@@ -219,14 +249,7 @@ pub enum ConfigError {
         capacity: Capacity,
         num_start_points: usize,
     },
-    #[error(
-        "the number of bytes to hold {}-dimensional data exceeds `usize::MAX`",
-        0
-    )]
-    DimTooLarge(usize),
 }
-
-diskann::convert_error!(ConfigError);
 
 impl<T> repr::RepresentationConfig for Config<T>
 where
@@ -932,20 +955,17 @@ mod tests {
         let points: HashMap<u32, f32> = {
             let reader = full.reader().unwrap();
             assert_eq!(
-                reader.read(capacity.value()).unwrap(),
+                reader.read(0).unwrap(),
                 bytemuck::bytes_of(&start_points[0])
             );
             assert_eq!(
-                reader.read(capacity.value() + 1).unwrap(),
+                reader.read(1).unwrap(),
                 bytemuck::bytes_of(&start_points[1])
             );
 
-            [
-                (capacity.value() as u32, start_points[0]),
-                ((capacity.value() + 1) as u32, start_points[1]),
-            ]
-            .into_iter()
-            .collect()
+            [(0, start_points[0]), (1, start_points[1])]
+                .into_iter()
+                .collect()
         };
 
         (full, points)
@@ -1258,8 +1278,8 @@ mod tests {
         )
         .unwrap();
 
-        let start_id: u32 = 1;
-
+        // We know the internal start IDs begin at 0. This is not a stability guarantee.
+        let start_id: u32 = 0;
         let internal_query = {
             let guard = <_ as repr::Set<&[T]>>::set(&full, &query).unwrap();
             let id = <_ as repr::Guard>::id(&guard);

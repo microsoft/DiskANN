@@ -7,6 +7,23 @@
 //!
 //! A simplified interface for [`crate::Provider`] to use for building a graph index.
 
+mod internal_docs {
+    //! # Start Point Handling
+    //!
+    //! By default, start points get located at the beginning of the physical slot space.
+    //! So if a [`super::Representation`] has 10 start points, they will be located at
+    //! physical slots `0..10`.
+    //!
+    //! While we do not **guarantee** this for external users, this has some nice properties
+    //! with respect to serialization. Serialization can compact an index to remove deleted
+    //! holes - and the serialized graph can be re-loaded in either the compact form or in
+    //! a form that adds extra room to enable insertions.
+    //!
+    //! With the start points located at the beginning, a serialized graph can be reloaded
+    //! at any size and the internal edges to not need any processing to handle start point
+    //! relocation.
+}
+
 use std::num::NonZeroU16;
 
 use diskann::{ANNResult, neighbor::Neighbor};
@@ -57,7 +74,7 @@ pub trait RepresentationConfig {
 ///
 /// A representation owns the adjacency lists and vector data for a concurrent in-memory graph
 /// index. Representations are expected to be indexed using `u32` IDs from
-/// `0..self.id_limit()`, with internal IDs in `0..self.capacity()` available for writing.
+/// `0..self.id_limit()` with `self.capacity()` slots available for writing.
 ///
 /// See also:
 ///
