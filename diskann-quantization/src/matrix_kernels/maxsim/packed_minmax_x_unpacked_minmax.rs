@@ -17,6 +17,7 @@ use std::{
     ops::{Add, Mul},
 };
 
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_wide::{
     Const, SIMDCast, SIMDDotProduct, SIMDMinMax, SIMDReinterpret, SIMDVector, SupportedLaneCount,
     arch::{Architecture, Scalar, Target},
@@ -32,7 +33,7 @@ use crate::{
         ptr::Slice,
         util::LoadStore,
     },
-    minmax::MinMaxMeta,
+    minmax::{Coefficients, DataRef, MinMaxMeta},
     multi_vector::{BlockTransposed, MatRef, Overflow},
 };
 
@@ -51,31 +52,21 @@ diskann_wide::alias!(u32x8<W> = u32x8);
 diskann_wide::alias!(u32x16<W> = u32x16);
 
 // Signed backends determine the shared accumulation limit.
-const fn max_k<const A_BITS: usize, const B_BITS: usize>() -> usize {
-    assert!(A_BITS > 0 && A_BITS <= 8 && B_BITS > 0 && B_BITS <= 8);
-    (i32::MAX as usize) / (((1 << A_BITS) - 1) * ((1 << B_BITS) - 1))
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct Coefficients<T> {
-    a: T,
-    b: T,
-    n: T,
+pub(crate) const fn max_k(a_bits: usize, b_bits: usize) -> usize {
+    assert!(a_bits > 0 && a_bits <= 8 && b_bits > 0 && b_bits <= 8);
+    (i32::MAX as usize) / (((1 << a_bits) - 1) * ((1 << b_bits) - 1))
 }
 
 #[derive(Debug)]
-pub(crate) struct PackedA<T: Copy, const A_BITS: usize, const MR: usize, const PACK: usize>
-where
-    Unsigned: Representation<A_BITS>,
-{
+pub(crate) struct PackedA<T: Copy, const MR: usize, const PACK: usize> {
     codes: BlockTransposed<T, MR, PACK>,
     meta: Vec<Coefficients<[f32; MR]>>,
+    a_bits: usize,
 }
 
-impl<T, const A_BITS: usize, const MR: usize, const PACK: usize> PackedA<T, A_BITS, MR, PACK>
+impl<T, const MR: usize, const PACK: usize> PackedA<T, MR, PACK>
 where
     T: Copy + Default + From<u8>,
-    Unsigned: Representation<A_BITS>,
 {
     /// Zero-pad partial rows and K packs.
     ///
@@ -83,7 +74,12 @@ where
     ///
     /// Returns [`Overflow`] if the packed data or coefficient allocation size overflows.
     #[expect(clippy::expect_used)]
-    pub(crate) fn new(a: MatRef<'_, MinMaxMeta<A_BITS>>) -> Result<Self, Overflow> {
+    pub(crate) fn new<const A_BITS: usize>(
+        a: MatRef<'_, MinMaxMeta<A_BITS>>,
+    ) -> Result<Self, Overflow>
+    where
+        Unsigned: Representation<A_BITS>,
+    {
         let k = a.repr().intrinsic_dim();
         let mut codes = BlockTransposed::try_new(a.num_vectors(), k)?;
         let panels = codes.num_blocks();
@@ -111,7 +107,11 @@ where
                 dst.set(j, T::from(unsafe { v.get_unchecked(j) } as u8));
             }
         }
-        Ok(Self { codes, meta })
+        Ok(Self {
+            codes,
+            meta,
+            a_bits: A_BITS,
+        })
     }
 
     fn as_view(&self) -> Option<AView<'_, T, MR, PACK>> {
@@ -167,34 +167,25 @@ struct APanel<'a, T, const MR: usize, const PACK: usize> {
 pub(crate) struct Driver<
     'a,
     W: ExtraWide<MR, PACK>,
-    const B_BITS: usize,
     const MR: usize,
     const NR: usize,
     const PACK: usize,
-> where
-    Unsigned: Representation<B_BITS>,
-{
+> {
     arch: W,
     a: AView<'a, W::AElem, MR, PACK>,
-    b: MatRef<'a, MinMaxMeta<B_BITS>>,
+    b: rowmajor::Ref<'a, u8>,
+    decode_tile: DecodeTileFn<W, W::BElem>,
     c: &'a mut [f32],
     b_rows_per_tile: NonZeroUsize,
 }
 
-impl<
-    'a,
-    W: ExtraWide<MR, PACK>,
-    const B_BITS: usize,
-    const MR: usize,
-    const NR: usize,
-    const PACK: usize,
-> Driver<'a, W, B_BITS, MR, NR, PACK>
-where
-    Unsigned: Representation<B_BITS>,
+impl<'a, W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: usize>
+    Driver<'a, W, MR, NR, PACK>
 {
     /// # Panics
     ///
-    /// Panics if K exceeds the accumulator limit for these bit widths.
+    /// Panics if K exceeds the accumulator limit for these bit widths or the
+    /// canonical document storage size overflows.
     /// Valid integer dot products may still round when converted to f32.
     ///
     /// # Safety
@@ -202,15 +193,15 @@ where
     /// A must have nonzero row count and dimension, B must have the same dimension,
     /// and C must have exactly A's logical row count.
     #[expect(clippy::expect_used)]
-    pub(crate) unsafe fn new<const A_BITS: usize>(
+    pub(crate) unsafe fn new<const B_BITS: usize>(
         arch: W,
-        a: &'a PackedA<W::AElem, A_BITS, MR, PACK>,
+        a: &'a PackedA<W::AElem, MR, PACK>,
         b: MatRef<'a, MinMaxMeta<B_BITS>>,
         c: &'a mut [f32],
         cache: Cache,
     ) -> Self
     where
-        Unsigned: Representation<A_BITS>,
+        Unsigned: Representation<B_BITS>,
         Self: driver::Drive,
     {
         const {
@@ -221,15 +212,19 @@ where
         };
         let rows = a.codes.nrows();
         let a_bytes = a.panel_bytes();
+        let a_bits = a.a_bits;
         let a = a.as_view().expect("A and K must be nonempty");
         let dim = a.k.value().get();
         bounds::check_eq!(bounds::Bound::new(b.repr().intrinsic_dim()), a.k);
         bounds::check_eq!(bounds::Bound::new(c.len()), rows);
-        let max = const { max_k::<A_BITS, B_BITS>() };
+        let max = max_k(a_bits, B_BITS);
         assert!(
             dim <= max,
-            "contraction dimension {dim} exceeds the MinMax{A_BITS} x MinMax{B_BITS} limit of {max}",
+            "contraction dimension {dim} exceeds the MinMax{a_bits} x MinMax{B_BITS} limit of {max}",
         );
+        let b = b
+            .as_canonical_view()
+            .expect("canonical document storage size must not overflow");
         let b_rows_per_tile = Params::new(
             cache,
             a_bytes,
@@ -241,17 +236,22 @@ where
             arch,
             a,
             b,
+            decode_tile: |arch: W, source, k, codes, coefficients| {
+                arch.run(
+                    #[inline(always)]
+                    || decode_tile::<B_BITS, _>(source, k, codes, coefficients, W::convert_b),
+                )
+            },
             c,
             b_rows_per_tile,
         }
     }
 }
 
-impl<W, const B_BITS: usize, const MR: usize, const NR: usize, const PACK: usize> driver::Drive
-    for Driver<'_, W, B_BITS, MR, NR, PACK>
+impl<W, const MR: usize, const NR: usize, const PACK: usize> driver::Drive
+    for Driver<'_, W, MR, NR, PACK>
 where
     W: ExtraWide<MR, PACK> + LoadStore<f32, MR>,
-    Unsigned: Representation<B_BITS>,
     for<'a> PanelKernel<'a, W, MR, NR, PACK>: driver::PanelKernel,
 {
     fn drive(&mut self) {
@@ -261,18 +261,23 @@ where
                 self.c.fill(f32::NEG_INFINITY);
                 let mut scratch = BScratch::<W::BElem>::default();
                 let mut start = 0;
-                while let Some(remaining) = NonZeroUsize::new(self.b.num_vectors() - start) {
+                while let Some(remaining) = NonZeroUsize::new(self.b.nrows() - start) {
                     let count = remaining.min(self.b_rows_per_tile);
-                    // SAFETY: The driver contract fixes B's K; remaining/count bound this tile.
-                    let b = unsafe {
-                        scratch.prepare::<B_BITS, PACK>(
-                            self.b,
-                            start,
-                            count,
-                            self.a.k,
-                            W::convert_b,
-                        )
-                    };
+                    #[expect(
+                        clippy::expect_used,
+                        reason = "count is bounded by the remaining rows"
+                    )]
+                    let source = self
+                        .b
+                        .subview(start..start + count.get())
+                        .expect("B tile in bounds");
+                    let b = scratch.prepare::<PACK>(
+                        source,
+                        self.a.k,
+                        |source, k, codes, coefficients| {
+                            (self.decode_tile)(self.arch, source, k, codes, coefficients)
+                        },
+                    );
                     self.a.visit_panels(|a, panel| {
                         let row = panel * MR;
                         let end = (row + MR).min(self.c.len());
@@ -294,6 +299,53 @@ where
 struct BScratch<T> {
     codes: Vec<T>,
     meta: Vec<Coefficients<f32>>,
+}
+
+// Only decoding is specialized by bit width; allocation, padding, and tile views are shared.
+type DecodeTileFn<W, T> = fn(
+    arch: W,
+    source: rowmajor::Ref<'_, u8>,
+    k: DimK,
+    codes: rowmajor::Mut<'_, T>,
+    coefficients: &mut [Coefficients<f32>],
+);
+
+/// Decode canonical rows into the logical columns of an already allocated tile.
+/// Inlined into the selected architecture's target-feature entry.
+#[inline(always)]
+#[expect(
+    clippy::expect_used,
+    reason = "the driver supplies canonical rows and output dimensions are checked"
+)]
+fn decode_tile<const B_BITS: usize, T>(
+    source: rowmajor::Ref<'_, u8>,
+    k: DimK,
+    mut codes: rowmajor::Mut<'_, T>,
+    coefficients: &mut [Coefficients<f32>],
+    mut convert: impl FnMut(u8) -> T,
+) where
+    Unsigned: Representation<B_BITS>,
+{
+    let dim = k.value().get();
+    assert_eq!(source.nrows(), codes.nrows(), "one output row per document");
+    assert_eq!(
+        source.nrows(),
+        coefficients.len(),
+        "one coefficient record per document"
+    );
+    assert!(
+        dim <= codes.ncols(),
+        "tile rows must hold the logical dimension"
+    );
+
+    for ((bytes, dst), meta) in source.rows().zip(codes.rows_mut()).zip(coefficients) {
+        let row =
+            DataRef::<B_BITS>::from_canonical_front(bytes, dim).expect("canonical document row");
+        *meta = row.meta().into();
+        row.vector()
+            .decode_into(&mut dst[..dim], &mut convert)
+            .expect("B output must match the logical code count");
+    }
 }
 
 /// Codes and coefficients share row order; code rows are zero-padded to PACK.
@@ -349,43 +401,33 @@ fn padded_k<const PACK: usize>(k: DimK) -> DimK {
 }
 
 impl<T: Copy + Default> BScratch<T> {
-    /// Padding bypasses `convert`.
+    /// Prepare a nonempty tile. The decoder writes logical columns; padding bypasses it.
     ///
-    /// # Safety
+    /// # Panics
     ///
-    /// B's dimension must equal K, and `start..start + count` must be in bounds.
+    /// Panics if the source tile is empty or its output storage size overflows.
     #[expect(clippy::expect_used)]
-    unsafe fn prepare<const B_BITS: usize, const PACK: usize>(
+    fn prepare<const PACK: usize>(
         &mut self,
-        b: MatRef<'_, MinMaxMeta<B_BITS>>,
-        start: usize,
-        count: NonZeroUsize,
+        source: rowmajor::Ref<'_, u8>,
         k: DimK,
-        mut convert: impl FnMut(u8) -> T,
-    ) -> BTile<'_, T, PACK>
-    where
-        Unsigned: Representation<B_BITS>,
-    {
+        decode: impl FnOnce(rowmajor::Ref<'_, u8>, DimK, rowmajor::Mut<'_, T>, &mut [Coefficients<f32>]),
+    ) -> BTile<'_, T, PACK> {
+        let count = NonZeroUsize::new(source.nrows()).expect("B tile must be nonempty");
         let dim = k.value().get();
         let physical_k = padded_k::<PACK>(k);
         let stride = physical_k.value().get();
         self.codes.resize(count.get() * stride, T::default());
         self.meta.resize(count.get(), Coefficients::default());
-        for i in 0..count.get() {
-            // SAFETY: The caller guarantees that the tile range is in bounds.
-            let row = unsafe { b.get_row_unchecked(start + i) };
-            let meta = row.meta();
-            self.meta[i] = Coefficients {
-                a: meta.a,
-                b: meta.b,
-                n: meta.n,
-            };
-            let dst = &mut self.codes[i * stride..(i + 1) * stride];
-            row.vector()
-                .decode_into(&mut dst[..dim], &mut convert)
-                .expect("B output must match the logical code count");
-            dst[dim..].fill(T::default());
+        let mut codes = rowmajor::Mut::try_from_data(&mut self.codes, count.get(), stride)
+            .expect("resized tile storage matches its shape");
+        // Empty per-row fills can still lower to memset calls.
+        if dim < stride {
+            for dst in codes.rows_mut() {
+                dst[dim..].fill(T::default());
+            }
         }
+        decode(source, k, codes, &mut self.meta);
         BTile {
             // SAFETY: The buffers contain count rows, each with stride initialized codes.
             codes: unsafe { unpacked::View::new(Slice::new(&self.codes), count, physical_k) },
@@ -628,11 +670,13 @@ fn compensated_max_into<I, F, const MR: usize, const NR: usize>(
     let mut best = F::from_array(arch, *scores);
     for (acc, b) in acc.into_iter().zip(docs) {
         let dot = acc.simd_cast();
-        let a_b = F::splat(arch, b.a);
-        let b_b = F::splat(arch, b.b);
-        let n_b = F::splat(arch, b.n);
+        let b = Coefficients {
+            a: F::splat(arch, b.a),
+            b: F::splat(arch, b.b),
+            n: F::splat(arch, b.n),
+        };
         let dim = F::splat(arch, k as f32);
-        let ip = ((a.a * a_b) * dot + a.n * b_b) + n_b * a.b + (a.b * b_b) * dim;
+        let ip = a.compensate_inner_product(b, dot, dim);
         best = best.max_simd_standard(ip);
     }
     *scores = best.to_array();
@@ -1362,27 +1406,26 @@ mod tests {
     fn checked_driver<
         'a,
         W,
-        const A_BITS: usize,
         const B_BITS: usize,
         const MR: usize,
         const NR: usize,
         const PACK: usize,
     >(
         arch: W,
-        a: &'a PackedA<W::AElem, A_BITS, MR, PACK>,
+        a: &'a PackedA<W::AElem, MR, PACK>,
         b: MatRef<'a, MinMaxMeta<B_BITS>>,
         c: &'a mut [f32],
-    ) -> Driver<'a, W, B_BITS, MR, NR, PACK>
+    ) -> Driver<'a, W, MR, NR, PACK>
     where
         W: ExtraWide<MR, PACK> + LoadStore<f32, MR>,
-        Unsigned: Representation<A_BITS> + Representation<B_BITS>,
+        Unsigned: Representation<B_BITS>,
         for<'b> PanelKernel<'b, W, MR, NR, PACK>: driver::PanelKernel,
     {
         assert!(a.codes.nrows() > 0 && a.codes.ncols() > 0);
         assert_eq!(a.codes.nrows(), c.len());
         assert_eq!(a.codes.ncols(), b.repr().intrinsic_dim());
         // SAFETY: Nonempty A/K, matching dimensions and output length were checked above.
-        unsafe { Driver::<W, B_BITS, MR, NR, PACK>::new(arch, a, b, c, Cache::detect()) }
+        unsafe { Driver::<W, MR, NR, PACK>::new(arch, a, b, c, Cache::detect()) }
     }
 
     fn assert_driver_contract<
@@ -1403,10 +1446,10 @@ mod tests {
             for k in [shape.k, shape.k.next_multiple_of(PACK)] {
                 let a = random_minmax_matrix::<8>(shape.total_a_rows, k, &mut rng);
                 let b = random_minmax_matrix::<B_BITS>(shape.total_b_cols, k, &mut rng);
-                let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
+                let packed = PackedA::<W::AElem, MR, PACK>::new::<8>(a.as_view()).unwrap();
                 let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
                 let mut guarded = vec![654321.0; a.num_vectors() + 2];
-                let mut driver = checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
+                let mut driver = checked_driver::<_, B_BITS, MR, NR, PACK>(
                     arch,
                     &packed,
                     b.as_view(),
@@ -1430,9 +1473,9 @@ mod tests {
 
         let a = random_minmax_matrix::<8>(MR + 1, 5, &mut rng);
         let b = random_minmax_matrix::<B_BITS>(0, 5, &mut rng);
-        let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
+        let packed = PackedA::<W::AElem, MR, PACK>::new::<8>(a.as_view()).unwrap();
         let mut c = vec![f32::INFINITY; a.num_vectors()];
-        driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
+        driver::Drive::drive(&mut checked_driver::<_, B_BITS, MR, NR, PACK>(
             arch,
             &packed,
             b.as_view(),
@@ -1467,6 +1510,73 @@ mod tests {
         mat
     }
 
+    #[test]
+    fn decodes_documents_once_per_tile() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        fn counting_decode<const B_BITS: usize>(
+            _: Scalar,
+            source: rowmajor::Ref<'_, u8>,
+            k: DimK,
+            codes: rowmajor::Mut<'_, i16>,
+            coefficients: &mut [Coefficients<f32>],
+        ) where
+            Unsigned: Representation<B_BITS>,
+        {
+            CALLS.fetch_add(1, Ordering::Relaxed);
+            decode_tile::<B_BITS, _>(source, k, codes, coefficients, i16::from);
+        }
+
+        fn check<const B_BITS: usize>()
+        where
+            Unsigned: Representation<B_BITS>,
+        {
+            let mut rng = StdRng::seed_from_u64(0xf9380b5db7cb9e41);
+            for rows in [1, 17] {
+                for docs in [0, 1, 4, 5, 11] {
+                    let a = random_minmax_matrix::<B_BITS>(rows, 5, &mut rng);
+                    let b = random_minmax_matrix::<B_BITS>(docs, 5, &mut rng);
+                    let packed = PackedA::<i16, 8, 2>::new(a.as_view()).unwrap();
+                    let expected = reference_max_inner_products(a.as_view(), b.as_view());
+                    let mut scores = vec![f32::NAN; rows];
+                    let mut driver = checked_driver::<_, B_BITS, 8, 2, 2>(
+                        Scalar::new(),
+                        &packed,
+                        b.as_view(),
+                        &mut scores,
+                    );
+                    driver.b_rows_per_tile = NonZeroUsize::new(4).unwrap();
+                    driver.decode_tile = counting_decode::<B_BITS>;
+                    CALLS.store(0, Ordering::Relaxed);
+                    for iteration in 1..=2 {
+                        driver::Drive::drive(&mut driver);
+                        assert_eq!(
+                            CALLS.load(Ordering::Relaxed),
+                            iteration * docs.div_ceil(4),
+                            "B_BITS={B_BITS}, rows={rows}, docs={docs}",
+                        );
+                        assert_scores_close(
+                            driver.c,
+                            &expected,
+                            format_args!("B_BITS={B_BITS}, rows={rows}, docs={docs}"),
+                        );
+                    }
+                }
+            }
+        }
+
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+        check::<5>();
+        check::<6>();
+        check::<7>();
+        check::<8>();
+    }
+
     fn assert_compensated_reduction<
         W,
         const B_BITS: usize,
@@ -1496,10 +1606,10 @@ mod tests {
                 norm_squared: 0.0,
             });
         }
-        let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
+        let packed = PackedA::<W::AElem, MR, PACK>::new::<8>(a.as_view()).unwrap();
         let mut c = vec![0.0; MR + 1];
         let mut driver =
-            checked_driver::<_, 8, B_BITS, MR, NR, PACK>(arch, &packed, b.as_view(), &mut c);
+            checked_driver::<_, B_BITS, MR, NR, PACK>(arch, &packed, b.as_view(), &mut c);
         // The first tile contains competing raw dots; its compensated winner must survive the tail.
         driver.b_rows_per_tile = NonZeroUsize::new(NR).unwrap();
         driver::Drive::drive(&mut driver);
@@ -1507,8 +1617,8 @@ mod tests {
 
         let a = constant_minmax_matrix::<8>(MR + 1, 3, 1, 1.0, -2.0);
         let b = constant_minmax_matrix::<B_BITS>((NR - 1).max(1), 3, 1, 1.0, 0.0);
-        let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
-        driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
+        let packed = PackedA::<W::AElem, MR, PACK>::new::<8>(a.as_view()).unwrap();
+        driver::Drive::drive(&mut checked_driver::<_, B_BITS, MR, NR, PACK>(
             arch,
             &packed,
             b.as_view(),
@@ -1522,12 +1632,12 @@ mod tests {
     #[test]
     fn accumulator_is_exact_at_dimension_limit() {
         let arch = Scalar::new();
-        let k = max_k::<8, 8>();
+        let k = max_k(8, 8);
         let a = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
         let b = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
-        let packed = PackedA::<i16, 8, 8, 2>::new(a.as_view()).unwrap();
+        let packed = PackedA::<i16, 8, 2>::new(a.as_view()).unwrap();
         let mut c = [0.0];
-        driver::Drive::drive(&mut checked_driver::<_, 8, 8, 8, 2, 2>(
+        driver::Drive::drive(&mut checked_driver::<_, 8, 8, 2, 2>(
             arch,
             &packed,
             b.as_view(),
@@ -1605,14 +1715,14 @@ mod tests {
     {
         for (m, k) in [(0, 0), (0, 5), (3, 0)] {
             let a = constant_minmax_matrix::<A_BITS>(m, k, 0, 1.0, 0.0);
-            let packed = PackedA::<T, A_BITS, MR, PACK>::new(a.as_view()).unwrap();
+            let packed = PackedA::<T, MR, PACK>::new(a.as_view()).unwrap();
             assert_eq!(packed.codes.nrows(), m);
             assert_eq!(packed.codes.ncols(), k);
             assert!(packed.as_view().is_none());
         }
         let mut rng = StdRng::seed_from_u64(0x0ae4b97f2c186d35);
         let a = random_minmax_matrix::<A_BITS>(MR + 1, 5, &mut rng);
-        let packed = PackedA::<T, A_BITS, MR, PACK>::new(a.as_view()).unwrap();
+        let packed = PackedA::<T, MR, PACK>::new(a.as_view()).unwrap();
         let padded_cols = 5usize.div_ceil(PACK) * PACK;
         assert_eq!(packed.codes.nrows(), MR + 1);
         assert_eq!(packed.codes.ncols(), 5);
@@ -1676,7 +1786,7 @@ mod tests {
                 assert_eq!(BScratch::<T>::row_bytes::<PACK>(dim).value(), b_bytes);
                 for rows in [1, 16, 17] {
                     let a = constant_minmax_matrix::<8>(rows, k, 0, 1.0, 0.0);
-                    let packed = PackedA::<T, 8, 16, PACK>::new(a.as_view()).unwrap();
+                    let packed = PackedA::<T, 16, PACK>::new(a.as_view()).unwrap();
                     assert_eq!(packed.panel_bytes().value(), a_bytes);
                 }
             }
@@ -1691,7 +1801,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x9f23ea1640b187ac);
         let a = random_minmax_matrix::<8>(9, 3, &mut rng);
         let b = random_minmax_matrix::<8>(11, 3, &mut rng);
-        let packed = PackedA::<i16, 8, 8, 2>::new(a.as_view()).unwrap();
+        let packed = PackedA::<i16, 8, 2>::new(a.as_view()).unwrap();
         // This budget gives different rounded tiles for compact and canonical metadata.
         let cache = Cache::new(
             NonZeroUsize::new(packed.panel_bytes().value() + 81).unwrap(),
@@ -1700,9 +1810,8 @@ mod tests {
         let expected = reference_max_inner_products(a.as_view(), b.as_view());
         let mut scores = vec![f32::NAN; a.num_vectors()];
         // SAFETY: A is nonempty; both inputs have K=3 and scores covers every A row.
-        let mut driver = unsafe {
-            Driver::<_, 8, 8, 2, 2>::new::<8>(arch, &packed, b.as_view(), &mut scores, cache)
-        };
+        let mut driver =
+            unsafe { Driver::<_, 8, 2, 2>::new(arch, &packed, b.as_view(), &mut scores, cache) };
         assert_eq!(driver.b_rows_per_tile.get(), 6);
         driver::Drive::drive(&mut driver);
         assert_scores_close(driver.c, &expected, format_args!("compact metadata tiling"));
@@ -1740,16 +1849,13 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xda7bc35e83012e29);
         let source = random_minmax_matrix::<4>(5, k.value().get(), &mut rng);
         let mut scratch = BScratch::<u8>::default();
-        // SAFETY: The tile covers all five rows of source, whose dimension is K.
-        let tile = unsafe {
-            scratch.prepare::<4, 4>(
-                source.as_view(),
-                0,
-                NonZeroUsize::new(5).unwrap(),
-                k,
-                |code| code,
-            )
-        };
+        let tile = scratch.prepare::<4>(
+            source.as_view().as_canonical_view().unwrap(),
+            k,
+            |source, k, codes, coefficients| {
+                decode_tile::<4, _>(source, k, codes, coefficients, |code| code);
+            },
+        );
         let mut actual = Vec::new();
         let visit = |codes: unpacked::Panel<'_, u8, 2>, start| {
             // SAFETY: The tile's traversal supplies this panel and its offset.
@@ -1806,23 +1912,21 @@ mod tests {
                 });
             }
             let b = MatRef::new(MinMaxMeta::<B_BITS>::new(3, dim), bytes).unwrap();
+            let source = b.as_canonical_view().unwrap();
             for (start, count) in [(0, 3), (2, 1), (1, 2)] {
                 scratch.codes.fill(sentinel);
                 scratch.meta.fill(Coefficients::default());
                 let mut conversions = 0;
-                // SAFETY: The selected range is within B, which has dimension K.
-                let tile = unsafe {
-                    scratch.prepare::<B_BITS, PACK>(
-                        b,
-                        start,
-                        NonZeroUsize::new(count).unwrap(),
-                        k,
-                        |code| {
+                let tile = scratch.prepare::<PACK>(
+                    source.subview(start..start + count).unwrap(),
+                    k,
+                    |source, k, codes, coefficients| {
+                        decode_tile::<B_BITS, _>(source, k, codes, coefficients, |code| {
                             conversions += 1;
                             convert(code)
-                        },
-                    )
-                };
+                        });
+                    },
+                );
                 assert_eq!(conversions, count * dim);
                 let padded = padded_k::<PACK>(k);
                 let row_len = padded.value().get();
@@ -1877,9 +1981,9 @@ mod tests {
             let a = random_minmax_matrix::<8>(m, k, &mut rng);
             let b = random_minmax_matrix::<B_BITS>(n, k, &mut rng);
             let expected = reference_max_inner_products::<8, B_BITS>(a.as_view(), b.as_view());
-            let packed = PackedA::<W::AElem, 8, MR, PACK>::new(a.as_view()).unwrap();
+            let packed = PackedA::<W::AElem, MR, PACK>::new::<8>(a.as_view()).unwrap();
             let mut c = vec![f32::INFINITY; m];
-            driver::Drive::drive(&mut checked_driver::<_, 8, B_BITS, MR, NR, PACK>(
+            driver::Drive::drive(&mut checked_driver::<_, B_BITS, MR, NR, PACK>(
                 arch,
                 &packed,
                 b.as_view(),
@@ -2115,7 +2219,7 @@ mod tests {
         fn assert_dimension_limit<const A_BITS: usize, const B_BITS: usize>() {
             let max_a = (1u64 << A_BITS) - 1;
             let max_b = (1u64 << B_BITS) - 1;
-            let limit = max_k::<A_BITS, B_BITS>() as u64;
+            let limit = max_k(A_BITS, B_BITS) as u64;
             assert!(limit * max_a * max_b <= i32::MAX as u64);
             assert!((limit + 1) * max_a * max_b > i32::MAX as u64);
         }
@@ -2243,14 +2347,14 @@ mod tests {
             where
                 Unsigned: Representation<A_BITS> + Representation<B_BITS>,
             {
-                let k = max_k::<8, 8>() + 1;
+                let k = max_k(8, 8) + 1;
                 let max_a = (1 << A_BITS) - 1;
                 let max_b = (1 << B_BITS) - 1;
                 let a = constant_minmax_matrix::<A_BITS>(1, k, max_a, 1.0, 0.0);
                 let b = constant_minmax_matrix::<B_BITS>(1, k, max_b, 1.0, 0.0);
-                let packed = PackedA::<i16, A_BITS, 16, 2>::new(a.as_view()).unwrap();
+                let packed = PackedA::<i16, 16, 2>::new(a.as_view()).unwrap();
                 let mut c = [0.0];
-                driver::Drive::drive(&mut checked_driver::<_, A_BITS, B_BITS, 16, 2, 2>(
+                driver::Drive::drive(&mut checked_driver::<_, B_BITS, 16, 2, 2>(
                     Scalar::new(),
                     &packed,
                     b.as_view(),
@@ -2258,7 +2362,7 @@ mod tests {
                 ));
                 assert_eq!(c[0], (k as i64 * max_a * max_b) as f32);
             }
-            check::<1, 8>();
+            check::<1, 1>();
             check::<8, 1>();
         }
     }
@@ -2296,11 +2400,11 @@ mod tests {
                     meta.n = (k as i64 * code) as f32;
                     row.set_meta(meta);
                 }
-                let a = PackedA::<W::AElem, 8, 16, PACK>::new(a.as_view()).unwrap();
+                let a = PackedA::<W::AElem, 16, PACK>::new(a.as_view()).unwrap();
                 let mut c = vec![f32::NAN; 17];
                 for code in boundary_codes {
                     let b = constant_minmax_matrix::<8>(1, k, code, 1.0, 0.0);
-                    driver::Drive::drive(&mut checked_driver::<W, 8, 8, 16, NR, PACK>(
+                    driver::Drive::drive(&mut checked_driver::<W, 8, 16, NR, PACK>(
                         arch,
                         &a,
                         b.as_view(),
@@ -2358,12 +2462,12 @@ mod tests {
         #[test]
         #[should_panic(expected = "exceeds the MinMax8 x MinMax8 limit")]
         fn driver_rejects_k_above_accumulator_limit() {
-            let k = max_k::<8, 8>() + 1;
+            let k = max_k(8, 8) + 1;
             let a = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
             let b = constant_minmax_matrix::<8>(1, k, 255, 1.0, 0.0);
-            let a = PackedA::<i16, 8, 16, 2>::new(a.as_view()).unwrap();
+            let a = PackedA::<i16, 16, 2>::new(a.as_view()).unwrap();
             let mut c = [0.0];
-            let _ = checked_driver::<_, 8, 8, 16, 2, 2>(Scalar::new(), &a, b.as_view(), &mut c);
+            let _ = checked_driver::<_, 8, 16, 2, 2>(Scalar::new(), &a, b.as_view(), &mut c);
         }
     }
 }
