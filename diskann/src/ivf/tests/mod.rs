@@ -27,10 +27,10 @@ use super::{
     Config, IVFIndex, InsertStats, ReassignCount,
     region::{AsMatRef, List, Update, View},
     split::{
-        Dst, KMeansSplit, Plan, Split,
+        KMeansSplit, Linked, Links, Reassign, Split,
         policies::{
-            Assign, FirstPoints, NearestCentroid,
-            kmeans::{NotEnoughPoints, Seed, SplitError},
+            Assign, FirstPoints, NearestCentroid, SplitError,
+            kmeans::{NotEnoughPoints, Seed},
         },
     },
     traits::{
@@ -52,11 +52,7 @@ mod support;
 async fn routing_callbacks_emit_ranked_results() {
     let expected: [(u32, f32); 3] = [(1, 25.0), (2, 25.0), (3, 8836.0)];
     for store in [seeded(), Store::default()] {
-        let router = Coarse {
-            stored: &store.lists,
-            fail_route: false,
-            fail_nearest: false,
-        };
+        let router = Coarse::new(&store.lists);
         for limit in [1, 2, usize::MAX] {
             let mut emitted = Vec::new();
             require_send(router.route(
@@ -75,11 +71,7 @@ async fn routing_callbacks_emit_ranked_results() {
 #[tokio::test]
 async fn nearest_callbacks_filter_before_limiting_and_count_emitted_results() {
     let store = seeded();
-    let nearest = Coarse {
-        stored: &store.lists,
-        fail_route: false,
-        fail_nearest: false,
-    };
+    let nearest = Coarse::new(&store.lists);
     for (limit, excluded, expected) in [
         (1, vec![1], vec![(2, 100.0_f32)]),
         (2, vec![1], vec![(2, 100.0), (3, 9801.0)]),
@@ -108,9 +100,8 @@ async fn nearest_lookup_failures_do_not_emit_results() {
         (true, 1, "injected nearest failure"),
     ] {
         let nearest = Coarse {
-            stored: &store.lists,
-            fail_route: false,
             fail_nearest,
+            ..Coarse::new(&store.lists)
         };
         let mut emitted = Vec::new();
         let error = require_send(nearest.find(
@@ -471,6 +462,7 @@ async fn splitting_commits_children_and_ordinary_appends_once() {
     );
     assert_eq!(store.finishes, 1);
     assert_eq!(store.fills, 1);
+    assert_eq!(store.update_finishes, 1);
     assert!(!store.lists.contains_key(&1));
     assert!(!store.lists.contains_key(&2));
     assert_eq!(store.lists.len(), 5);
@@ -530,20 +522,19 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
             splits: 1
         }
     );
-    assert_eq!(store.fills, 1);
+    // Parent 1 is split first, then its children 4 and 5 are filled with lists 2 and 3.
+    assert_eq!(store.fills, 2);
+    assert_eq!(store.update_finishes, 2);
     assert_eq!(store.finishes, 1);
-    assert_eq!(store.filled_lists, [1, 2, 3]);
+    assert_eq!(store.filled_lists, [1, 4, 5, 2, 3]);
     assert!(!store.lists.contains_key(&1));
     assert_eq!(store.lists.len(), 4);
+    // Points 10_005 and 10_006 move from child 4 to list 2, and 10_003 from list 2 to
+    // child 5; list 2 keeps its pending append 10_008 once.
+    assert_eq!(store.lists[&4].members, [10_000, 10_007]);
+    assert_eq!(store.lists[&5].members, [10_001, 10_003]);
     assert_eq!(store.lists[&2].centroid, [5.0, 0.0]);
     assert_eq!(store.lists[&2].members, [10_002, 10_008, 10_005, 10_006]);
-    assert!(store.lists[&2].members.len() > 3);
-    assert!(
-        store
-            .lists
-            .iter()
-            .any(|(&id, list)| { id >= 4 && list.members.contains(&10_003) })
-    );
     assert_eq!(store.lists[&3].centroid, [100.0, 0.0]);
     assert_eq!(store.lists[&3].members, [10_004]);
     let mut members: Vec<_> = store
@@ -556,69 +547,124 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
 }
 
 #[tokio::test]
-async fn neighborhood_selection_filters_parents_and_fills_the_union_once() {
-    for (centers, one_candidate) in [
-        (vec![], vec![]),
-        (vec![100.0, 200.0, 300.0], vec![3]),
-        (vec![0.0, 12.0, 200.0], vec![3, 4]),
-    ] {
-        for count in [0, 1, 2, 3, 4, usize::MAX] {
-            let mut store = seeded();
-            if centers.is_empty() {
-                store.lists.remove(&3);
-                store.points.remove(&10_004);
-            } else {
-                store.lists.get_mut(&3).unwrap().centroid = vec![centers[0], 0.0];
-                for (id, &center) in (4..).zip(&centers[1..]) {
-                    store.lists.insert(
-                        id,
-                        StoredList {
-                            centroid: vec![center, 0.0],
-                            members: Vec::new(),
-                        },
-                    );
-                }
+async fn reassignment_links_each_child_to_its_nearest_other_lists() {
+    for count in [0, 1, 2, 3, 4, usize::MAX] {
+        let mut store = seeded();
+        store.lists.insert(
+            4,
+            StoredList {
+                centroid: vec![200.0, 0.0],
+                members: Vec::new(),
+            },
+        );
+        store.next_list = 5;
+        store.fail_nearest = count == 0;
+        let (mut index, strategy) = index_with_neighbors(store, 2, count);
+        let points: [(u32, &[f32]); 2] = [(5, &[0.5, 0.0][..]), (6, &[10.5, 0.0][..])];
+        let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
+            .await
+            .unwrap();
+        let store = strategy.store();
+        assert_eq!(
+            stats,
+            InsertStats {
+                inserted: 2,
+                splits: 2
             }
-            store.next_list = 3 + centers.len() as u32;
-            store.fail_nearest = count == 0;
-            let (mut index, strategy) = index_with_neighbors(store, 2, count);
-            let points: [(u32, &[f32]); 2] = [(5, &[1.0, 1.0][..]), (6, &[11.0, 1.0][..])];
-            let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-                .await
-                .unwrap();
-            let store = strategy.store();
-            let neighbors = match (count, centers.len()) {
-                (0, _) | (_, 0) => vec![],
-                (1, _) => one_candidate.clone(),
-                (2, _) => vec![3, 4],
-                _ => vec![3, 4, 5],
-            };
-            let sources: Vec<_> = [1, 2].into_iter().chain(neighbors).collect();
-            assert_eq!(store.filled_lists, sources);
-            assert_eq!(store.fills, 1);
-            assert_eq!(store.finishes, 1);
-            assert_eq!(
-                stats,
-                InsertStats {
-                    inserted: 2,
-                    splits: 2
-                }
-            );
-            assert!(!store.lists.contains_key(&1));
-            assert!(!store.lists.contains_key(&2));
-            assert_eq!(store.lists.len(), 4 + centers.len());
-            for (id, &center) in (3..).zip(&centers) {
-                assert_eq!(store.lists[&id].centroid, [center, 0.0]);
-            }
-            let mut members: Vec<_> = store
-                .lists
-                .values()
-                .flat_map(|list| list.members.iter().copied())
-                .collect();
-            members.sort_unstable();
-            assert_eq!(members, store.points.keys().copied().collect::<Vec<_>>());
-        }
+        );
+
+        // Parents 1 and 2 split into children 5, 6 and 7, 8. Each child is linked to the
+        // other parent's children first, then to lists 3 and 4; never to its sibling,
+        // which is nearer, or to a retired parent.
+        let reassigned: &[u32] = match count {
+            0 => &[],
+            1 | 2 => &[5, 6, 7, 8],
+            3 => &[5, 6, 7, 8, 3],
+            _ => &[5, 6, 7, 8, 3, 4],
+        };
+        let filled: Vec<_> = [1, 2].iter().chain(reassigned).copied().collect();
+        assert_eq!(store.filled_lists, filled);
+        assert_eq!(store.fills, if count == 0 { 1 } else { 2 });
+        assert_eq!(store.update_finishes, store.fills);
+        assert_eq!(store.finishes, 1);
+
+        // Every point is already nearest its own list, so reassignment moves nothing.
+        assert!(!store.lists.contains_key(&1));
+        assert!(!store.lists.contains_key(&2));
+        let members: Vec<_> = store
+            .lists
+            .iter()
+            .map(|(&id, list)| (id, list.members.clone()))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                (3, vec![10_004]),
+                (4, vec![]),
+                (5, vec![10_000, 10_005]),
+                (6, vec![10_001]),
+                (7, vec![10_002, 10_006]),
+                (8, vec![10_003]),
+            ]
+        );
+        assert_eq!(store.lists[&3].centroid, [100.0, 0.0]);
+        assert_eq!(store.lists[&4].centroid, [200.0, 0.0]);
     }
+}
+
+#[tokio::test]
+async fn children_of_different_parents_exchange_points() {
+    let store = Store {
+        dim: 1,
+        points: [
+            (10_000, vec![0.0]),
+            (10_001, vec![40.0]),
+            (10_002, vec![62.0]),
+            (10_003, vec![100.0]),
+        ]
+        .into(),
+        lists: [
+            (
+                1,
+                StoredList {
+                    centroid: vec![45.0],
+                    members: vec![10_000, 10_001],
+                },
+            ),
+            (
+                2,
+                StoredList {
+                    centroid: vec![81.0],
+                    members: vec![10_002, 10_003],
+                },
+            ),
+        ]
+        .into(),
+        next_list: 3,
+        ..Store::default()
+    };
+    let (mut index, strategy) = index_with_neighbors(store, 2, 1);
+    let points: [(u32, &[f32]); 2] = [(4, &[60.0][..]), (5, &[64.0][..])];
+    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
+        .await
+        .unwrap();
+    assert_eq!(
+        stats,
+        InsertStats {
+            inserted: 2,
+            splits: 2
+        }
+    );
+
+    // Parent 1 splits into children 3 ([0]) and 4 ([40, 60]), and parent 2 into 5
+    // ([62, 64]) and 6 ([100]). Point 60 is nearer child 5 than its own child 4.
+    let store = strategy.store();
+    assert_eq!(store.filled_lists, [1, 2, 3, 4, 5, 6]);
+    assert_eq!(store.lists.len(), 4);
+    assert_eq!(store.lists[&3].members, [10_000]);
+    assert_eq!(store.lists[&4].members, [10_001]);
+    assert_eq!(store.lists[&5].members, [10_002, 10_005, 10_004]);
+    assert_eq!(store.lists[&6].members, [10_003]);
 }
 
 #[tokio::test]
@@ -658,7 +704,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 NearestCentroid,
                 FirstPoints,
             )
-            .split(&region, &mut update, &plan(&[1], &[]))
+            .split(&region, &mut update, &[1], |_, _| {})
             .unwrap();
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
             assert_eq!(vectors.row(2), points[1].1);
@@ -744,6 +790,60 @@ async fn borrowed_updates_share_pending_memberships_and_publish_on_finish() {
     assert_eq!(store.lists.len(), 3);
     assert_eq!(store.next_list, 5);
     assert_eq!(store.finishes, 1);
+}
+
+#[tokio::test]
+async fn finished_updates_are_visible_to_later_fills_and_lookups() {
+    let strategy = Strategy::new(seeded());
+    let mut build: Build<'_, f32> = strategy.build_accessor(&DefaultContext).unwrap();
+    let child = {
+        let (_, mut update) = build.fill([1].into_iter()).await.unwrap();
+        let child = update.create(&[1.0, 0.0], &[10_000, 10_001]).unwrap();
+        update.retire(1).unwrap();
+        require_send(update.finish()).await.unwrap();
+        child
+    };
+    assert_eq!(child, 4);
+
+    // Lookups can start from the created list and never return the retired one.
+    let all = NonZeroUsize::new(usize::MAX).unwrap();
+    let mut found = Vec::new();
+    require_send(
+        build
+            .nearest()
+            .find(child, all, |_| true, |id, _| found.push(id)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(found, [4, 2, 3]);
+    assert!(
+        build
+            .nearest()
+            .find(1, all, |_| true, |_, _| {})
+            .await
+            .is_err()
+    );
+
+    // Fills include the created list, which later updates can edit, but not the retired one.
+    assert!(build.fill([1].into_iter()).await.is_err());
+    {
+        let (region, mut update) = build.fill([child, 2].into_iter()).await.unwrap();
+        let view = region.get_list(child).unwrap();
+        assert_eq!(view.centroid, [1.0, 0.0]);
+        assert_eq!(view.members, [10_000, 10_001]);
+        assert_eq!(region.get_vectors(child).unwrap().row(1), [2.0, 0.0]);
+        update.remove_members(child, &[10_001]).unwrap();
+        update.append_members(2, &[10_001]).unwrap();
+        require_send(update.finish()).await.unwrap();
+    }
+
+    require_send(build.finish()).await.unwrap();
+    let store = strategy.store();
+    assert!(!store.lists.contains_key(&1));
+    assert_eq!(store.lists[&4].centroid, [1.0, 0.0]);
+    assert_eq!(store.lists[&4].members, [10_000]);
+    assert_eq!(store.lists[&2].members, [10_002, 10_003, 10_001]);
+    assert_eq!(store.update_finishes, 2);
 }
 
 #[tokio::test]
@@ -1145,16 +1245,8 @@ async fn search_supports_native_queries_after_insertion_and_splitting() {
 }
 
 #[test]
-fn neighbor_points_move_only_to_children_and_empty_lists_are_retained() {
-    let sources = [
-        (
-            1,
-            Source {
-                centroid: vec![0.0],
-                members: vec![0, 1],
-                vectors: matrix(&[[-10.0], [10.0]]),
-            },
-        ),
+fn reassignment_moves_points_only_along_links_and_keeps_empty_lists() {
+    let sources = BTreeMap::from([
         (
             2,
             Source {
@@ -1179,43 +1271,46 @@ fn neighbor_points_move_only_to_children_and_empty_lists_are_retained() {
                 vectors: matrix::<1>(&[]),
             },
         ),
-    ]
-    .into();
+        (
+            10,
+            Source {
+                centroid: vec![-10.0],
+                members: vec![0],
+                vectors: matrix(&[[-10.0]]),
+            },
+        ),
+        (
+            11,
+            Source {
+                centroid: vec![10.0],
+                members: vec![1],
+                vectors: matrix(&[[10.0]]),
+            },
+        ),
+    ]);
     let region = Region::new(&sources);
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    KMeansSplit::new(
-        TWO,
-        NonZeroUsize::new(5).unwrap(),
-        ONE,
-        NearestCentroid,
-        FirstPoints,
-    )
-    .split(&region, &mut update, &plan(&[1], &[2, 3, 4]))
-    .unwrap();
+    let links = support::links(&[(10, 2), (10, 3), (10, 4), (11, 2), (11, 3), (11, 4)]);
+    Linked::new(NearestCentroid)
+        .reassign(&region, &mut update, &links)
+        .unwrap();
 
-    let mut centers: Vec<_> = update.created.iter().map(|list| list.centroid[0]).collect();
-    centers.sort_by(f32::total_cmp);
-    assert_eq!(centers, [-10.0, 10.0]);
-    let mut child_members: Vec<_> = update
-        .created
-        .iter()
-        .flat_map(|list| list.members.iter().copied())
-        .collect();
-    child_members.sort_unstable();
-    // Point 2 is nearest neighbor 3 but may only stay or move to a child. Point 1 ties
-    // its parent's last child and empty neighbor 4, and the child wins the tie.
-    assert_eq!(child_members, [0, 1, 2]);
-    let mut changes: BTreeMap<_, _> = std::mem::take(update.memberships).into_changes().collect();
-    assert!(matches!(changes.remove(&1), Some(Membership::Retire)));
+    // Point 2 is nearest list 3, which it is not linked to, so it moves to list 11. Point 1
+    // ties empty list 4 and stays; list 4 is retained without edits.
+    assert!(created.is_empty());
+    let changes: BTreeMap<_, _> = memberships.into_changes().collect();
+    assert_eq!(changes.len(), 2);
     assert!(matches!(
-        changes.remove(&2),
-        Some(Membership::Delta { removed, appended })
-            if removed == HashSet::from([2]) && appended.is_empty()
+        &changes[&2],
+        Membership::Delta { removed, appended }
+            if *removed == HashSet::from([2]) && appended.is_empty()
     ));
-    // Empty neighbor 4 is retained without edits.
-    assert!(changes.is_empty());
+    assert!(matches!(
+        &changes[&11],
+        Membership::Delta { removed, appended } if removed.is_empty() && appended == &[2]
+    ));
 }
 
 #[tokio::test]
@@ -1248,19 +1343,13 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 NearestCentroid,
                 FirstPoints
             )
-            .split(&region, &mut update, &plan(&[1, 99], &[]))
+            .split(&region, &mut update, &[1, 99], |_, _| {})
             .is_err()
         );
         assert!(
-            KMeansSplit::new(
-                TWO,
-                NonZeroUsize::new(5).unwrap(),
-                NonZeroUsize::new(2).unwrap(),
-                NearestCentroid,
-                FirstPoints
-            )
-            .split(&region, &mut update, &plan(&[1], &[99]))
-            .is_err()
+            Linked::new(NearestCentroid)
+                .reassign(&region, &mut update, &support::links(&[(1, 99)]))
+                .is_err()
         );
         assert!(update.created.is_empty());
         let changes: Vec<_> = update.memberships.clone().into_changes().collect();
@@ -1275,7 +1364,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             NearestCentroid,
             FirstPoints,
         )
-        .split(&region, &mut update, &plan(&[1], &[]))
+        .split(&region, &mut update, &[1], |_, _| {})
         .unwrap();
         assert_eq!(update.created.len(), 2);
     }
@@ -1324,6 +1413,7 @@ fn parent_points_stay_within_their_own_children() {
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    let mut children = Vec::new();
     KMeansSplit::new(
         TWO,
         NonZeroUsize::new(10).unwrap(),
@@ -1331,8 +1421,11 @@ fn parent_points_stay_within_their_own_children() {
         NearestCentroid,
         FirstPoints,
     )
-    .split(&region, &mut update, &plan(&[1, 2], &[]))
+    .split(&region, &mut update, &[1, 2], |parent, child| {
+        children.push((parent, child))
+    })
     .unwrap();
+    assert_eq!(children, [(1, 3), (1, 4), (2, 5), (2, 6)]);
     let members = |children: &[StoredList]| {
         let mut members: Vec<_> = children
             .iter()
@@ -1349,79 +1442,17 @@ fn parent_points_stay_within_their_own_children() {
 }
 
 #[test]
-fn neighbor_points_consider_only_children_of_linked_parents() {
-    let sources = BTreeMap::from([
-        (
-            1,
-            Source {
-                centroid: vec![1.0],
-                members: vec![0, 1],
-                vectors: matrix(&[[0.0], [2.0]]),
-            },
-        ),
-        (
-            2,
-            Source {
-                centroid: vec![101.0],
-                members: vec![10, 11],
-                vectors: matrix(&[[100.0], [102.0]]),
-            },
-        ),
-        (
-            3,
-            Source {
-                centroid: vec![50.0],
-                members: vec![20],
-                vectors: matrix(&[[99.0]]),
-            },
-        ),
-        (
-            4,
-            Source {
-                centroid: vec![103.0],
-                members: vec![21],
-                vectors: matrix(&[[1.0]]),
-            },
-        ),
-    ]);
-    let region = Region::new(&sources);
-    let mut plan = Plan::new([1, 2]);
-    plan.link(1, 3);
-    plan.link(2, 4);
-    let mut memberships = PendingLists::default();
-    let mut created = Vec::new();
-    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &plan)
-        .unwrap();
-
-    // Point 20 is nearest parent 2's child but stays, since 3 links only to parent 1.
-    // Point 21 is nearest parent 1's child but moves to parent 2's nearer child.
-    let members: Vec<_> = created.iter().map(|child| child.members.clone()).collect();
-    assert_eq!(members, [vec![0], vec![1], vec![10, 21], vec![11]]);
-    let changes: BTreeMap<_, _> = memberships.into_changes().collect();
-    assert_eq!(changes.len(), 3);
-    assert!(matches!(changes[&1], Membership::Retire));
-    assert!(matches!(changes[&2], Membership::Retire));
-    assert!(matches!(
-        &changes[&4],
-        Membership::Delta { removed, appended }
-            if removed.len() == 1 && removed.contains(&21) && appended.is_empty()
-    ));
-}
-
-#[test]
-fn two_means_delegates_assignment_to_its_assigner() {
+fn assignment_is_delegated_to_the_assigner() {
     /// Records the candidates of every list and sends each point to the first one.
-    struct First<'a>(&'a RefCell<Vec<Vec<Dst>>>);
+    struct First<'a>(&'a RefCell<Vec<Vec<usize>>>);
 
     impl<'v, V: AsMatRef<'v, f32>> Assign<V> for First<'_> {
         fn assign<I: Copy>(
             &self,
             members: &[I],
             points: V,
-            candidates: &[(Dst, &[f32])],
-            mut emit: impl FnMut(I, Dst),
+            candidates: &[(usize, &[f32])],
+            mut emit: impl FnMut(I, usize),
         ) {
             assert_eq!(members.len(), points.as_view().nrows());
             let dsts = candidates.iter().map(|&(dst, _)| dst).collect();
@@ -1451,72 +1482,61 @@ fn two_means_delegates_assignment_to_its_assigner() {
         ),
     ]);
     let region = Region::new(&sources);
+    let seen = RefCell::new(Vec::new());
+
+    // Splitting offers a parent's own children.
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    let seen = RefCell::new(Vec::new());
     KMeansSplit::new(TWO, ONE, ONE, First(&seen), FirstPoints)
-        .split(&region, &mut update, &plan(&[1], &[2]))
+        .split(&region, &mut update, &[1], |_, _| {})
         .unwrap();
-
-    // Each list sees its own destinations first, then those of its links.
-    assert_eq!(
-        seen.into_inner(),
-        [
-            vec![Dst::Child(0), Dst::Child(1), Dst::Neighbor(0)],
-            vec![Dst::Neighbor(0), Dst::Child(0), Dst::Child(1)],
-        ]
-    );
-    // Parent points follow the assigner; the neighbor's point stays without edits.
+    assert_eq!(seen.take(), [vec![0, 1]]);
     assert_eq!(created[0].members, [0, 1]);
     assert!(created[1].members.is_empty());
-    let changes: BTreeMap<_, _> = memberships.into_changes().collect();
-    assert_eq!(changes.len(), 1);
-    assert!(matches!(changes[&1], Membership::Retire));
+
+    // Reassignment offers a list's own centroid, then those of its links.
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    Linked::new(First(&seen))
+        .reassign(&region, &mut update, &support::links(&[(1, 2)]))
+        .unwrap();
+    assert_eq!(seen.take(), [vec![0, 1], vec![1, 0]]);
+    // Every point is sent to its own list, so nothing changes.
+    assert_eq!(memberships.into_changes().count(), 0);
 }
 
 #[test]
 fn k_means_fits_and_assigns_k_children_per_parent() {
-    let sources = BTreeMap::from([
-        (
-            1,
-            Source {
-                centroid: vec![0.0],
-                members: (0..6).collect(),
-                vectors: matrix(&[[-10.0], [0.0], [10.0], [-9.0], [1.0], [11.0]]),
-            },
-        ),
-        (
-            2,
-            Source {
-                centroid: vec![100.0],
-                members: vec![20, 21],
-                vectors: matrix(&[[10.4], [99.0]]),
-            },
-        ),
-    ]);
+    let sources = BTreeMap::from([(
+        1,
+        Source {
+            centroid: vec![0.0],
+            members: (0..6).collect(),
+            vectors: matrix(&[[-10.0], [0.0], [10.0], [-9.0], [1.0], [11.0]]),
+        },
+    )]);
     let region = Region::new(&sources);
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    let mut children = Vec::new();
     let k = NonZeroUsize::new(3).unwrap();
     KMeansSplit::new(k, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &plan(&[1], &[2]))
+        .split(&region, &mut update, &[1], |parent, child| {
+            children.push((parent, child))
+        })
         .unwrap();
 
+    assert_eq!(children, [(1, 2), (1, 3), (1, 4)]);
     let centroids: Vec<_> = created.iter().map(|child| child.centroid[0]).collect();
     assert_eq!(centroids, [-9.5, 0.5, 10.5]);
-    // Neighbor point 20 joins the third child; point 21 stays with its neighbor.
     let members: Vec<_> = created.iter().map(|child| child.members.clone()).collect();
-    assert_eq!(members, [vec![0, 3], vec![1, 4], vec![2, 5, 20]]);
+    assert_eq!(members, [vec![0, 3], vec![1, 4], vec![2, 5]]);
     let changes: BTreeMap<_, _> = memberships.into_changes().collect();
-    assert_eq!(changes.len(), 2);
+    assert_eq!(changes.len(), 1);
     assert!(matches!(changes[&1], Membership::Retire));
-    assert!(matches!(
-        &changes[&2],
-        Membership::Delta { removed, appended }
-            if *removed == HashSet::from([20]) && appended.is_empty()
-    ));
 }
 
 #[test]
@@ -1535,7 +1555,7 @@ fn k_means_needs_k_points_per_parent() {
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let k = NonZeroUsize::new(3).unwrap();
     let error = KMeansSplit::new(k, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &plan(&[1], &[]))
+        .split(&region, &mut update, &[1], |_, _| {})
         .unwrap_err();
 
     assert!(matches!(
@@ -1583,7 +1603,7 @@ fn two_means_fits_from_its_seeder() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, Reversed)
-        .split(&region, &mut update, &plan(&[1], &[]))
+        .split(&region, &mut update, &[1], |_, _| {})
         .unwrap();
 
     // `FirstPoints` would put -1 first; reversed seeds keep that order through Lloyd's.
@@ -1618,7 +1638,7 @@ fn two_means_reports_seeding_failures_before_writing() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let error = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, Fails)
-        .split(&region, &mut update, &plan(&[1], &[]))
+        .split(&region, &mut update, &[1], |_, _| {})
         .unwrap_err()
         .to_string();
 
@@ -1645,7 +1665,7 @@ fn two_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties()
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-            .split(&region, &mut update, &plan(&[1], &[]))
+            .split(&region, &mut update, &[1], |_, _| {})
             .unwrap();
         assert_eq!(update.created.len(), 2);
         assert_eq!(update.created[0].centroid, [value]);
@@ -1656,14 +1676,14 @@ fn two_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties()
 }
 
 #[test]
-fn two_means_ties_keep_points_in_their_own_neighborhood_first() {
+fn reassignment_breaks_ties_by_own_list_then_link_order() {
     let sources = BTreeMap::from([
         (
             1,
             Source {
-                centroid: vec![0.0],
-                members: vec![0, 1],
-                vectors: matrix(&[[-1.0], [1.0]]),
+                centroid: vec![5.0],
+                members: vec![0],
+                vectors: matrix(&[[-1.0]]),
             },
         ),
         (
@@ -1671,7 +1691,7 @@ fn two_means_ties_keep_points_in_their_own_neighborhood_first() {
             Source {
                 centroid: vec![-1.0],
                 members: vec![2],
-                vectors: matrix(&[[-1.0]]),
+                vectors: matrix(&[[2.0]]),
             },
         ),
         (
@@ -1679,34 +1699,38 @@ fn two_means_ties_keep_points_in_their_own_neighborhood_first() {
             Source {
                 centroid: vec![-1.0],
                 members: vec![3],
-                vectors: matrix(&[[-1.0]]),
+                vectors: matrix(&[[2.0]]),
             },
         ),
     ]);
     let region = Region::new(&sources);
-    for neighbors in [[2, 3], [3, 2]] {
+    for (pairs, first) in [([(1, 2), (1, 3)], 2), ([(1, 3), (1, 2)], 3)] {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-        KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-            .split(&region, &mut update, &plan(&[1], &neighbors))
+        Linked::new(NearestCentroid)
+            .reassign(&region, &mut update, &support::links(&pairs))
             .unwrap();
-        assert_eq!(created.len(), 2);
-        assert_eq!(created[0].centroid, [-1.0]);
-        assert_eq!(created[1].centroid, [1.0]);
-        // Parent point 0 ties every centroid at -1 and joins its parent's first child;
-        // each neighbor's own point ties that child and stays, whatever the link order.
-        assert_eq!(created[0].members, [0]);
-        assert_eq!(created[1].members, [1]);
+
+        // Point 0 ties lists 2 and 3 and joins the one linked first. Points 2 and 3 tie
+        // their own list and list 1, and stay.
         let changes: BTreeMap<_, _> = memberships.into_changes().collect();
-        assert!(matches!(changes[&1], Membership::Retire));
-        assert_eq!(changes.len(), 1);
+        assert_eq!(changes.len(), 2);
+        assert!(matches!(
+            &changes[&1],
+            Membership::Delta { removed, appended }
+                if *removed == HashSet::from([0]) && appended.is_empty()
+        ));
+        assert!(matches!(
+            &changes[&first],
+            Membership::Delta { removed, appended } if removed.is_empty() && appended == &[0]
+        ));
     }
 }
 
 #[test]
 fn two_means_reuses_splitter_across_regions() {
-    let sources = [
+    let sources = BTreeMap::from([
         (
             1,
             Source {
@@ -1723,33 +1747,14 @@ fn two_means_reuses_splitter_across_regions() {
                 vectors: matrix(&[[100.0], [110.0]]),
             },
         ),
-        (
-            3,
-            Source {
-                centroid: vec![105.0],
-                members: vec![4, 5, 6],
-                vectors: matrix(&[[9.9], [100.1], [105.0]]),
-            },
-        ),
-        (
-            4,
-            Source {
-                centroid: vec![1000.0],
-                members: vec![7],
-                vectors: matrix(&[[100.2]]),
-            },
-        ),
-    ]
-    .into();
+    ]);
     let region = Region::new(&sources);
-    let parents = [1, 2];
-    let neighbors = [3, 4];
     let mut full_memberships = PendingLists::default();
     let mut full_created = Vec::new();
     let mut full = support::Update::new(&sources, 1, &mut full_memberships, &mut full_created);
     let mut splitter = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints);
     splitter
-        .split(&region, &mut full, &plan(&parents, &neighbors))
+        .split(&region, &mut full, &[1, 2], |_, _| {})
         .unwrap();
     assert_eq!(
         full.created
@@ -1758,10 +1763,12 @@ fn two_means_reuses_splitter_across_regions() {
             .collect::<Vec<_>>(),
         [-10.0, 10.0, 100.0, 110.0]
     );
-    assert_eq!(full.created[0].members, [0]);
-    assert_eq!(full.created[1].members, [1, 4]);
-    assert_eq!(full.created[3].members, [3]);
-    assert_eq!(full.created[2].members, [2, 5, 7]);
+    let members: Vec<_> = full
+        .created
+        .iter()
+        .map(|list| list.members.clone())
+        .collect();
+    assert_eq!(members, [vec![0], vec![1], vec![2], vec![3]]);
     let mut repeated_memberships = PendingLists::default();
     let mut repeated_created = Vec::new();
     let mut repeated = support::Update::new(
@@ -1771,7 +1778,7 @@ fn two_means_reuses_splitter_across_regions() {
         &mut repeated_created,
     );
     splitter
-        .split(&region, &mut repeated, &plan(&parents, &neighbors))
+        .split(&region, &mut repeated, &[1, 2], |_, _| {})
         .unwrap();
     for (first, repeated) in full.created.iter().zip(repeated.created.iter()) {
         assert_eq!(first.centroid, repeated.centroid);
@@ -1782,26 +1789,16 @@ fn two_means_reuses_splitter_across_regions() {
     let mut smaller =
         support::Update::new(&sources, 1, &mut smaller_memberships, &mut smaller_created);
     splitter
-        .split(&region, &mut smaller, &plan(&[1], &[]))
+        .split(&region, &mut smaller, &[1], |_, _| {})
         .unwrap();
     assert_eq!(smaller.created.len(), 2);
     assert_eq!(smaller.created[0].members, [0]);
     assert_eq!(smaller.created[1].members, [1]);
-    let mut changes: BTreeMap<_, _> = std::mem::take(full.memberships).into_changes().collect();
+    let changes: BTreeMap<_, _> = std::mem::take(full.memberships).into_changes().collect();
+    assert_eq!(changes.len(), 2);
     for parent in [1, 2] {
-        assert!(matches!(changes.remove(&parent), Some(Membership::Retire)));
+        assert!(matches!(changes[&parent], Membership::Retire));
     }
-    for (id, expected_removed) in [(3, vec![4, 5]), (4, vec![7])] {
-        let Some(Membership::Delta { removed, appended }) = changes.remove(&id) else {
-            panic!("expected delta for retained list {id}");
-        };
-        assert_eq!(
-            removed,
-            expected_removed.into_iter().collect::<HashSet<_>>()
-        );
-        assert!(appended.is_empty());
-    }
-    assert!(changes.is_empty());
 }
 
 #[test]
@@ -1812,7 +1809,7 @@ fn empty_split_records_no_updates() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let error = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &plan(&[], &[]))
+        .split(&region, &mut update, &[], |_, _| {})
         .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<SplitError<u32>>(),
@@ -1932,9 +1929,10 @@ fn two_means_handles_borrowed_batches() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &plan(&[1], &[2]))
+        .split(&region, &mut update, &[1], |_, _| {})
         .unwrap();
-    assert_eq!(region.reads.get(), 3);
+    // Fitting and assigning the parent each read its vectors once.
+    assert_eq!(region.reads.get(), 2);
     assert_eq!(created.len(), 2);
     assert_eq!(created[0].centroid, [-1.0]);
     assert_eq!(created[0].members, [0]);
@@ -1942,8 +1940,17 @@ fn two_means_handles_borrowed_batches() {
     assert_eq!(created[1].members, [1]);
     let changes: BTreeMap<_, _> = memberships.into_changes().collect();
     assert!(matches!(changes[&1], Membership::Retire));
-    assert!(!changes.contains_key(&2));
     assert_eq!(changes.len(), 1);
+
+    // Reassignment reads each linked list's vectors once.
+    let mut memberships = PendingLists::default();
+    let mut created = Vec::new();
+    let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+    Linked::new(NearestCentroid)
+        .reassign(&region, &mut update, &support::links(&[(1, 2)]))
+        .unwrap();
+    assert_eq!(region.reads.get(), 4);
+    assert_eq!(memberships.into_changes().count(), 0);
 }
 
 #[test]
@@ -1987,18 +1994,23 @@ fn split_accepts_native_batches_without_matrix_access() {
     {
         type Error = ANNError;
 
-        fn split<U: Update<u32, u32>>(
+        fn split<U, F>(
             &mut self,
             region: &R,
             update: &mut U,
-            plan: &Plan<u32>,
-        ) -> ANNResult<()> {
-            assert!(plan.neighbors().is_empty());
-            let parent = plan.parents()[0];
+            parents: &[u32],
+            mut emit: F,
+        ) -> ANNResult<()>
+        where
+            U: Update<u32, u32>,
+            F: FnMut(u32, u32),
+        {
+            let parent = parents[0];
             let view = region.get_list(parent).unwrap();
             let vectors = region.get_vectors(parent).unwrap();
             for (point, member) in vectors.reborrow().iter().zip(view.members) {
-                update.create(&[f32::from(point[0])], std::slice::from_ref(member))?;
+                let child = update.create(&[f32::from(point[0])], std::slice::from_ref(member))?;
+                emit(parent, child);
             }
             update.retire(parent)
         }
@@ -2024,9 +2036,13 @@ fn split_accepts_native_batches_without_matrix_access() {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
+        let mut children = Vec::new();
         splitter
-            .split(&region, &mut update, &plan(&[1], &[]))
+            .split(&region, &mut update, &[1], |parent, child| {
+                children.push((parent, child))
+            })
             .unwrap();
+        assert_eq!(children, [(1, 2), (1, 3)]);
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].centroid, [f32::from(offset)]);
         assert_eq!(created[0].members, [0]);
@@ -2071,7 +2087,7 @@ fn two_means_matches_quantization_lloyds() {
             NearestCentroid,
             FirstPoints,
         )
-        .split(&region, &mut update, &plan(&[1, 2], &[]))
+        .split(&region, &mut update, &[1, 2], |_, _| {})
         .unwrap();
         assert_eq!(created.len(), 4);
         for (source, actual) in sources.values().zip(created.chunks_exact(2)) {
@@ -2112,7 +2128,7 @@ fn two_means_reports_insufficient_points_before_writing() {
             NearestCentroid,
             FirstPoints,
         )
-        .split(&region, &mut update, &plan(&[1], &[]))
+        .split(&region, &mut update, &[1], |_, _| {})
         .unwrap_err();
         assert!(matches!(
             error.downcast_ref::<NotEnoughPoints>(),
@@ -2140,7 +2156,7 @@ fn two_means_missing_vectors_preserves_typed_error_without_updates() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let error = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &plan(&[1, 99], &[]))
+        .split(&region, &mut update, &[1, 99], |_, _| {})
         .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<SplitError<u32>>(),
@@ -2151,7 +2167,7 @@ fn two_means_missing_vectors_preserves_typed_error_without_updates() {
 }
 
 #[test]
-fn two_means_reports_missing_neighbors_before_writing() {
+fn reassignment_reports_missing_lists() {
     let sources = BTreeMap::from([
         (
             1,
@@ -2170,25 +2186,26 @@ fn two_means_reports_missing_neighbors_before_writing() {
             },
         ),
     ]);
-    for ids in [vec![99], vec![2, 99]] {
+    let region = Region::new(&sources);
+    for pairs in [vec![(1, 99)], vec![(1, 2), (1, 99)]] {
         let mut memberships = PendingLists::default();
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-        let region = Region::new(&sources);
-        let error = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-            .split(&region, &mut update, &plan(&[1], &ids))
+        let error = Linked::new(NearestCentroid)
+            .reassign(&region, &mut update, &support::links(&pairs))
             .unwrap_err();
         assert!(matches!(
             error.downcast_ref::<SplitError<u32>>(),
             Some(SplitError::UnableToRetrieve(99))
         ));
-        assert!(update.created.is_empty());
-        assert_eq!(std::mem::take(update.memberships).into_changes().count(), 0);
+        // List 1, the first one reassigned, links to the missing list, so nothing is written.
+        assert!(created.is_empty());
+        assert_eq!(memberships.into_changes().count(), 0);
     }
 }
 
 #[test]
-fn regional_assignment_prefers_first_when_all_distances_overflow() {
+fn reassignment_keeps_points_home_when_all_distances_overflow() {
     let sources = BTreeMap::from([
         (
             1,
@@ -2211,12 +2228,10 @@ fn regional_assignment_prefers_first_when_all_distances_overflow() {
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
-    KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &plan(&[1], &[2]))
+    Linked::new(NearestCentroid)
+        .reassign(&region, &mut update, &support::links(&[(1, 2)]))
         .unwrap();
-    assert_eq!(created[0].members, [0]);
-    assert_eq!(created[1].members, [1]);
-    let changes: BTreeMap<_, _> = memberships.into_changes().collect();
-    assert!(!changes.contains_key(&2));
-    assert_eq!(changes.len(), 1);
+
+    // Point 2 is infinitely far from both centroids and stays in its own list.
+    assert_eq!(memberships.into_changes().count(), 0);
 }

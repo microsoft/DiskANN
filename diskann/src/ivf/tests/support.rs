@@ -19,6 +19,8 @@ pub(super) struct Store {
     pub(super) next_list: u32,
     pub(super) finishes: usize,
     pub(super) fills: usize,
+    /// Updates finished by published build operations.
+    pub(super) update_finishes: usize,
     pub(super) filled_lists: Vec<u32>,
     pub(super) fail_route: bool,
     pub(super) fail_nearest: bool,
@@ -53,11 +55,17 @@ pub(super) struct Build<'p, T> {
     pub(super) staged: BTreeMap<u32, Vec<T>>,
     pub(super) sources: BTreeMap<u32, Source>,
     pub(super) fills: Cell<usize>,
+    pub(super) update_finishes: usize,
     pub(super) filled_lists: Vec<u32>,
 }
 
 pub(super) struct Coarse<'a> {
     pub(super) stored: &'a BTreeMap<u32, StoredList>,
+    /// Lists created by the build operation, numbered from `next_list`.
+    pub(super) created: &'a [StoredList],
+    pub(super) next_list: u32,
+    /// Pending changes of the build operation, whose retired lists are skipped.
+    pub(super) pending: Option<&'a PendingLists<u32, u32>>,
     pub(super) fail_route: bool,
     pub(super) fail_nearest: bool,
 }
@@ -73,7 +81,29 @@ fn squared_distance<T: Copy + Into<f32>>(query: &[T], vector: &[f32]) -> f32 {
         .sum()
 }
 
-impl Coarse<'_> {
+impl<'a> Coarse<'a> {
+    /// A router over published lists only.
+    pub(super) fn new(stored: &'a BTreeMap<u32, StoredList>) -> Self {
+        Self {
+            stored,
+            created: &[],
+            next_list: 0,
+            pending: None,
+            fail_route: false,
+            fail_nearest: false,
+        }
+    }
+
+    /// Published and created lists, without retired ones.
+    fn lists(&self) -> impl Iterator<Item = (u32, &'a StoredList)> + '_ {
+        let stored = self.stored.iter().map(|(&id, list)| (id, list));
+        let created = (self.next_list..).zip(self.created);
+
+        stored
+            .chain(created)
+            .filter(|&(id, _)| self.pending.is_none_or(|pending| !pending.is_retired(id)))
+    }
+
     fn select<T, P, F>(&self, query: &[T], nprobe: NonZeroUsize, pred: P, mut emit: F) -> usize
     where
         T: Copy + Into<f32>,
@@ -81,10 +111,9 @@ impl Coarse<'_> {
         F: FnMut(u32, f32),
     {
         let mut selected: Vec<_> = self
-            .stored
-            .iter()
-            .filter(|(id, _)| pred(**id))
-            .map(|(&id, list)| (id, squared_distance(query, &list.centroid)))
+            .lists()
+            .filter(|&(id, _)| pred(id))
+            .map(|(id, list)| (id, squared_distance(query, &list.centroid)))
             .collect();
         selected.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         selected.truncate(nprobe.get());
@@ -132,9 +161,10 @@ impl Nearest for Coarse<'_> {
                 return Err(ANNError::message("injected nearest failure"));
             }
             let query = &self
-                .stored
-                .get(&id)
+                .lists()
+                .find(|&(list, _)| list == id)
                 .ok_or_else(|| ANNError::message(format!("unknown list {id}")))?
+                .1
                 .centroid;
             Ok(self.select(query, nprobe, pred, emit))
         }
@@ -152,6 +182,10 @@ pub(super) struct Update<'a> {
     pub(super) sources: &'a BTreeMap<u32, Source>,
     pub(super) memberships: &'a mut PendingLists<u32, u32>,
     pub(super) created: &'a mut Vec<StoredList>,
+    /// ID of the first list created in the build operation.
+    pub(super) next_list: u32,
+    /// Counts finished updates of the build operation.
+    pub(super) finishes: Option<&'a mut usize>,
     pub(super) fail_create: bool,
     pub(super) fail_remove_members: bool,
     pub(super) fail_append_members: bool,
@@ -165,11 +199,16 @@ impl<'a> Update<'a> {
         memberships: &'a mut PendingLists<u32, u32>,
         created: &'a mut Vec<StoredList>,
     ) -> Self {
+        // Number created lists after every source.
+        let next_list = sources.last_key_value().map_or(0, |(&id, _)| id + 1);
+
         Self {
             dim,
             sources,
             memberships,
             created,
+            next_list,
+            finishes: None,
             fail_create: false,
             fail_remove_members: false,
             fail_append_members: false,
@@ -249,18 +288,32 @@ impl crate::ivf::region::Update<u32, u32> for Update<'_> {
         self.memberships.retire(list)
     }
 
-    fn create(&mut self, centroid: &[f32], members: &[u32]) -> ANNResult<()> {
+    fn create(&mut self, centroid: &[f32], members: &[u32]) -> ANNResult<u32> {
         if self.fail_create {
             return Err(ANNError::message("injected create failure"));
         }
         if centroid.len() != self.dim || !centroid.iter().all(|value| value.is_finite()) {
             return Err(ANNError::message("invalid centroid"));
         }
+        let id = u32::try_from(self.created.len())
+            .ok()
+            .and_then(|count| self.next_list.checked_add(count))
+            .ok_or_else(|| ANNError::message("list ID overflow"))?;
         self.created.push(StoredList {
             centroid: centroid.to_vec(),
             members: members.to_vec(),
         });
-        Ok(())
+        Ok(id)
+    }
+
+    fn finish(self) -> impl SendFuture<ANNResult<()>> {
+        // Writes already apply to the build operation, so finishing only counts.
+        async move {
+            if let Some(finishes) = self.finishes {
+                *finishes += 1;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -289,6 +342,9 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
     fn nearest(&mut self) -> Self::Nearest<'_> {
         Coarse {
             stored: &self.store.lists,
+            created: &self.created,
+            next_list: self.store.next_list,
+            pending: Some(&self.pending),
             fail_route: self.store.fail_route,
             fail_nearest: self.store.fail_nearest,
         }
@@ -370,10 +426,11 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
             self.filled_lists.extend(lists.clone());
             self.sources.clear();
             for list in lists {
-                let stored = self
-                    .store
-                    .lists
-                    .get(&list)
+                // Lists created in this operation are numbered from `next_list`.
+                let stored = list
+                    .checked_sub(self.store.next_list)
+                    .and_then(|i| self.created.get(i as usize))
+                    .or_else(|| self.store.lists.get(&list))
                     .ok_or_else(|| ANNError::message(format!("unknown list {list}")))?;
                 let members: Vec<_> = self.pending.members(list, &stored.members)?.collect();
                 let mut vectors = rowmajor::Owned::from_element(members.len(), self.store.dim, 0.0);
@@ -406,6 +463,8 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
                 &mut self.pending,
                 &mut self.created,
             );
+            update.next_list = self.store.next_list;
+            update.finishes = Some(&mut self.update_finishes);
             update.fail_create = self.store.fail_create;
             update.fail_remove_members = self.store.fail_remove_members;
             update.fail_append_members = self.store.fail_append_members;
@@ -449,6 +508,7 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
             self.store.next_list = next_list;
             self.store.finishes += 1;
             self.store.fills += self.fills.get();
+            self.store.update_finishes += self.update_finishes;
             self.store.filled_lists = self.filled_lists;
             Ok(())
         }
@@ -490,6 +550,7 @@ impl<'a, T: Copy + Into<f32> + Send + Sync> BuildStrategy<'a, &[(u32, &[T])], De
             staged: BTreeMap::new(),
             sources: BTreeMap::new(),
             fills: Cell::new(0),
+            update_finishes: 0,
             filled_lists: Vec::new(),
         })
     }
@@ -514,11 +575,7 @@ impl<'q, T: Copy + Into<f32> + Send + Sync> SearchAccessor<&'q [T]> for Search<'
             if self.store.fail_route {
                 return Err(ANNError::message("injected routing failure"));
             }
-            let coarse = Coarse {
-                stored: &self.store.lists,
-                fail_route: false,
-                fail_nearest: false,
-            };
+            let coarse = Coarse::new(&self.store.lists);
             let mut selected = Vec::new();
             coarse.select(self.query, nprobe, |_| true, |id, _| selected.push(id));
 
@@ -634,13 +691,11 @@ pub(super) fn require_send<F: Future + Send>(future: F) -> F {
     future
 }
 
-/// A plan in which every parent selected every neighbor.
-pub(super) fn plan(parents: &[u32], neighbors: &[u32]) -> Plan<u32> {
-    let mut plan = Plan::new(parents.iter().copied());
-    for &parent in parents {
-        for &neighbor in neighbors {
-            plan.link(parent, neighbor);
-        }
+/// Links in which every `from` list is recorded first, in order.
+pub(super) fn links(pairs: &[(u32, u32)]) -> Links<u32> {
+    let mut links = Links::new(pairs.iter().map(|&(from, _)| from));
+    for &(from, to) in pairs {
+        links.link(from, to);
     }
-    plan
+    links
 }

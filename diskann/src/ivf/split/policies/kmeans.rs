@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! k-means splitting with assignment restricted to plan neighborhoods.
+//! k-means splitting: each parent is replaced by `k` fitted children.
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
@@ -13,16 +13,13 @@ use diskann_utils::{
     views::rowmajor::{self, Matrix, MatrixMut},
 };
 
+use super::{Assign, Buckets, NearestCentroid, SplitError};
 use crate::{
     ANNError, ANNResult,
-    error::{IntoANNResult, ann_error::ErrorContext},
+    error::{ErrorContext, IntoANNResult},
     ivf::{
         region::{AsMatRef, Update, View},
-        split::{
-            Plan, Split,
-            plan::{Buckets, Destinations, Dst, Src},
-            policies::{Assign, NearestCentroid},
-        },
+        split::Split,
     },
     utils::VectorId,
 };
@@ -30,21 +27,6 @@ use crate::{
 ////////////
 // Errors //
 ////////////
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum SplitError<L> {
-    #[error("Split could not retrieve list {0:?} from the region")]
-    UnableToRetrieve(L),
-    #[error("Parents is empty")]
-    EmptyParents,
-}
-
-impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
-    #[track_caller]
-    fn from(error: SplitError<L>) -> Self {
-        Self::new(error)
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 #[error("Expected at least {required} points to seed, got {actual}")]
@@ -70,12 +52,6 @@ pub(crate) trait Seed {
     type Error: Debug + Send + Sync + Into<ANNError>;
 
     /// Fill every row of `centers` with an initial centroid for `points`.
-    ///
-    /// `points` must have at least as many rows as `centers`.
-    ///
-    /// # Errors
-    ///
-    /// - Fails if no initial centroids can be chosen.
     fn seed(
         &mut self,
         points: rowmajor::Ref<'_, f32>,
@@ -116,7 +92,8 @@ impl Seed for FirstPoints {
 // KMeans //
 ////////////
 
-/// k-means per parent, seeded by `S`, then assignment within each neighborhood by `A`.
+/// k-means per parent, seeded by `S`, with each parent's points assigned to its own
+/// children by `A`.
 pub struct KMeansSplit<A = NearestCentroid, S = FirstPoints> {
     /// Children per parent.
     k: NonZeroUsize,
@@ -172,63 +149,6 @@ impl<A, S: Seed> KMeansSplit<A, S> {
     }
 }
 
-/////////////
-// Targets //
-/////////////
-
-/// Destination centroids of one split: neighbor centroids and children.
-///
-/// A simple struct to to zip a centroid id or a neighbor id with
-/// it's appropriate centroid vector in order to use for assignment.
-struct Targets<'a> {
-    neighbors: Vec<&'a [f32]>,
-    children: &'a rowmajor::Owned<f32>,
-    /// Children per parent.
-    k: NonZeroUsize,
-}
-
-impl<'a> Targets<'a> {
-    fn new<I, L, R>(
-        region: &'a R,
-        plan: &Plan<L>,
-        children: &'a rowmajor::Owned<f32>,
-        k: NonZeroUsize,
-    ) -> ANNResult<Self>
-    where
-        L: VectorId,
-        R: View<I, L>,
-        I: 'a,
-    {
-        let neighbors = plan
-            .neighbors()
-            .iter()
-            .map(|&list| {
-                region
-                    .get_list(list)
-                    .map(|view| view.centroid)
-                    .ok_or(SplitError::UnableToRetrieve(list))
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
-            neighbors,
-            children,
-            k,
-        })
-    }
-
-    /// Append the destinations owned by `src`: a parent's children or a neighbor's centroid.
-    fn extend(&self, src: Src, out: &mut Vec<(Dst, &'a [f32])>) {
-        match src {
-            Src::Parent(p) => {
-                let range = self.k.get() * p..self.k.get() * (p + 1);
-                out.extend(range.map(|c| (Dst::Child(c), self.children.row(c))));
-            }
-            Src::Neighbor(n) => out.push((Dst::Neighbor(n), self.neighbors[n])),
-        }
-    }
-}
-
 ///////////
 // Split //
 ///////////
@@ -244,76 +164,55 @@ where
 {
     type Error = ANNError;
 
-    fn split<U: Update<I, L>>(
+    fn split<U, F>(
         &mut self,
         region: &R,
         update: &mut U,
-        plan: &Plan<L>,
-    ) -> ANNResult<()> {
-        let neighbors = plan.neighbors();
-
-        if plan.parents().is_empty() {
+        parents: &[L],
+        mut emit: F,
+    ) -> ANNResult<()>
+    where
+        U: Update<I, L>,
+        F: FnMut(L, L),
+    {
+        if parents.is_empty() {
             return Err(SplitError::<L>::EmptyParents.into());
         }
 
-        let children = self.fit(region, plan.parents())?;
-        let targets = Targets::new(region, plan, &children, self.k)?;
+        let children = self.fit(region, parents)?;
+        let k = self.k.get();
 
-        let mut moved = Buckets::new(Destinations {
-            neighbors: neighbors.len(),
-            children: children.nrows(),
-        });
-
+        let mut moved = Buckets::new(children.nrows());
         let mut candidates = Vec::new();
 
-        for (src, list) in plan.sources() {
+        // Each parent's points move to the nearest of its own children.
+        for (p, &parent) in parents.iter().enumerate() {
             candidates.clear();
-
-            // Add the src to be expanded, and then expand the neighborhood
-            targets.extend(src, &mut candidates);
-
-            for s in plan.neighborhood(src) {
-                targets.extend(s, &mut candidates);
-            }
+            candidates.extend((k * p..k * (p + 1)).map(|c| (c, children.row(c))));
 
             let view = region
-                .get_list(list)
-                .ok_or(SplitError::UnableToRetrieve(list))?;
+                .get_list(parent)
+                .ok_or(SplitError::UnableToRetrieve(parent))?;
             let vectors = region
-                .get_vectors(list)
-                .ok_or(SplitError::UnableToRetrieve(list))?;
-
-            // A neighbor's points may stay put; a parent's points always move.
-            let home = match src {
-                Src::Parent(_) => None,
-                Src::Neighbor(n) => Some(Dst::Neighbor(n)),
-            };
+                .get_vectors(parent)
+                .ok_or(SplitError::UnableToRetrieve(parent))?;
 
             self.assign
-                .assign(view.members, vectors.reborrow(), &candidates, |id, dst| {
-                    if Some(dst) != home {
-                        moved.push(id, dst);
-                    }
+                .assign(view.members, vectors.reborrow(), &candidates, |id, c| {
+                    moved.push(id, c)
                 });
-
-            let left = moved.seal();
-
-            match src {
-                // Retire parent
-                Src::Parent(_) => update.retire(list)?,
-                // Remove members from neighbor
-                Src::Neighbor(_) => update.remove_members(list, left)?,
-            }
+            
+            update.retire(parent)?;
         }
 
         let incoming = moved.group();
 
-        for (n, &list) in neighbors.iter().enumerate() {
-            update.append_members(list, incoming.get(Dst::Neighbor(n)))?;
-        }
         for (c, child) in children.rows().enumerate() {
-            update.create(child, incoming.get(Dst::Child(c)))?;
+            // We cluster every parent into exactly `k` clusters, so integer division gives us the parent
+            let p = c / k; 
+            emit(parents[p], update.create(child, incoming.get(c))?);
         }
+
 
         Ok(())
     }

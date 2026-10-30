@@ -5,7 +5,11 @@
 
 //! IVF policy and orchestration, independent of physical list storage.
 
-use std::{collections::BTreeSet, marker::PhantomData, num::NonZeroUsize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
+    num::NonZeroUsize,
+};
 
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
@@ -16,8 +20,8 @@ use crate::{
     error::IntoANNResult,
     graph::SearchOutputBuffer,
     ivf::{
-        region::AsMatRef,
-        split::{self, KMeansSplit, Plan, Split, policies},
+        region::{AsMatRef, Update},
+        split::{KMeansSplit, Linked, Links, Reassign, Split, policies},
         traits::BuildStrategy,
     },
     neighbor::NeighborPriorityQueue,
@@ -39,10 +43,10 @@ pub struct Config {
     pub split_threshold: NonZeroUsize,
     /// Number of children `k` that each split parent is replaced with.
     pub split_k: NonZeroUsize,
-    /// Nearest-list query count per split parent, before filtering split parents.
+    /// Nearest-list query count per child of a split, excluding its siblings.
     ///
-    /// - [`ReassignCount::None`] corresponds to no neighborhood gathering.
-    /// - [`ReassignCount::Count`] coresponds to a non-zero neighborhood size to be gathered.
+    /// - [`ReassignCount::None`] skips reassignment.
+    /// - [`ReassignCount::Count`] lets each child exchange points with that many lists.
     pub reassign_count: ReassignCount,
     /// Positive number of Lloyd steps per parent.
     pub split_iterations: NonZeroUsize,
@@ -105,36 +109,71 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 .await?;
 
             if !parents.is_empty() {
-                let mut plan = Plan::new(parents.iter().copied());
+                let parents: Vec<_> = parents.iter().copied().collect();
 
-                if let ReassignCount::Count(n) = config.reassign_count {
-                    let router = accessor.nearest();
+                // Split: replace every parent with fitted children.
+                let mut children = Vec::new();
+                {
+                    let (region, mut update) = accessor.fill(parents.iter().copied()).await?;
 
-                    for &parent in &parents {
-                        router
-                            .find(
-                                parent,
-                                n,
-                                |id| !parents.contains(&id),
-                                |id, _| plan.link(parent, id),
-                            )
-                            .await?;
-                    }
+                    KMeansSplit::new(
+                        config.split_k,
+                        config.split_iterations,
+                        config.dim,
+                        policies::NearestCentroid,
+                        policies::FirstPoints,
+                    )
+                    .split(
+                        &region,
+                        &mut update,
+                        &parents,
+                        |parent, child| children.push((parent, child)),
+                    )?;
+
+                    update.finish().await?;
                 }
 
-                let lists = plan.sources().map(|(_, list)| list);
-                let (region, mut update) = accessor.fill(lists).await?;
+                // Reassign: each child exchanges points with its nearest lists, other than
+                // its siblings.
+                if let ReassignCount::Count(n) = config.reassign_count {
+                    // Each child's parent, to recognize siblings.
+                    let parent_of: BTreeMap<_, _> = children
+                        .iter()
+                        .map(|&(parent, child)| (child, parent))
+                        .collect();
 
-                KMeansSplit::new(
-                    config.split_k,
-                    config.split_iterations,
-                    config.dim,
-                    policies::NearestCentroid,
-                    policies::FirstPoints,
-                )
-                .split(&region, &mut update, &plan)?;
+                    let mut links = Links::new(children.iter().map(|&(_, child)| child));
+                    
+                    {
+                        let router = accessor.nearest();
+
+                        for (parent, child) in children {
+                            // Skip the child itself and its siblings
+                            router
+                                .find(
+                                    child,
+                                    n,
+                                    |id| parent_of.get(&id) != Some(&parent),
+                                    |id, _| links.link(child, id),
+                                )
+                                .await?;
+                        }
+                    }
+
+                    let lists = links.lists().iter().copied();
+                    let (region, mut update) = accessor.fill(lists).await?;
+
+                    Linked::new(policies::NearestCentroid).reassign(
+                        &region,
+                        &mut update,
+                        &links,
+                    )?;
+
+                    update.finish().await?;
+                }
             };
 
+            // Commit the updates registered from the split and re-assign operations.
             accessor.finish().await?;
 
             Ok(InsertStats {

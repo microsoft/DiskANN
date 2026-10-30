@@ -31,8 +31,6 @@ pub trait Nearest: Send {
     /// Select `nprobe` distinct live lists nearest to `id`'s centroid,
     /// that pass the filter and invoke callback.
     ///
-    /// Results are nearest first and may include `id` itself.
-    ///
     /// # Errors
     ///
     /// Fails if `id` is not live or the provider cannot complete the lookup.
@@ -49,11 +47,11 @@ pub trait Nearest: Send {
 }
 
 pub trait BuildAccessor<B>: Send + Sized + HasIds {
+    type VectorsRef<'a>;
+
     type Nearest<'a>: Nearest<Id = Self::ListId>
     where
         Self: 'a;
-
-    type VectorsRef<'a>;
 
     type Region<'a>: for<'b> View<Self::Id, Self::ListId, VectorsRef<'b> = Self::VectorsRef<'b>>
     where
@@ -74,10 +72,12 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
     where
         F: FnMut(Self::ListId, NonZeroUsize) + Send;
 
-    /// Make requested list's members, data and centroids available
-    /// for split and assignment, and register updates to the region.
+    /// Make the requested lists' members, vectors and centroids available via 
+    /// a [`View`] object, and return an [`Update`] to register changes to them.
     ///
-    /// Writes recorded through the update handle remain pending until [`Self::finish`].
+    /// The [`View`] returned by any future calls to `fill` are consistent 
+    /// with any updates registered via [`Update::finish`] during the lifetime of this accessor.
+    /// The updates may not be committed until [`Self::finish`] is called.
     fn fill<Itr>(
         &mut self,
         lists: Itr,
@@ -128,7 +128,7 @@ pub trait SearchStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds
 }
 
 pub trait SearchAccessor<T: Sync>: Send + Sized + HasIds {
-    /// Scan the `min(nprobe, live_list_count)` lists nearest the accessor's query.
+    /// Scan the `nprobe` lists nearest the accessor's query.
     ///
     /// # Errors
     ///
