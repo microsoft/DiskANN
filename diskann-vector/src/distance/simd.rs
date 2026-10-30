@@ -7,7 +7,7 @@
 use diskann_wide::arch::x86_64::{V3, V4};
 
 #[cfg(target_arch = "aarch64")]
-use diskann_wide::arch::aarch64::{algorithms, Neon};
+use diskann_wide::arch::aarch64::Neon;
 
 use diskann_wide::{
     arch::Scalar, Architecture, Const, Constant, Emulated, SIMDAbs, SIMDDotProduct, SIMDMulAdd,
@@ -1227,7 +1227,7 @@ impl SIMDSchema<i8, i8, V3> for L2 {
 #[cfg(target_arch = "aarch64")]
 impl SIMDSchema<i8, i8, Neon> for L2 {
     type SIMDWidth = Const<16>;
-    type Accumulator = <Neon as Architecture>::i32x8;
+    type Accumulator = <Neon as Architecture>::u32x4;
     type Left = diskann_wide::arch::aarch64::i8x16;
     type Right = diskann_wide::arch::aarch64::i8x16;
     type Return = f32;
@@ -1245,7 +1245,10 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
         y: Self::Right,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        algorithms::squared_euclidean_accum_i8x16(x, y, acc)
+        // Signed absolute differences occupy unsigned byte lanes (0..=255).
+        // Squaring them with unsigned dot product preserves the full result.
+        let diff = acc.arch().vabdq_s8(x, y);
+        acc.dot_simd(diff, diff)
     }
 
     #[inline(always)]
@@ -1261,13 +1264,13 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
             x,
             y,
             len.min(Self::SIMDWidth::value() - 1),
-            0i32,
-            |acc, x: i8, y: i8| -> i32 {
+            0u32,
+            |acc, x: i8, y: i8| -> u32 {
                 let c = (x as i32) - (y as i32);
-                acc + c * c
+                acc + (c * c) as u32
             },
         );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
     }
 
     // Perform a final reduction.
@@ -1405,7 +1408,7 @@ impl SIMDSchema<u8, u8, V3> for L2 {
 #[cfg(target_arch = "aarch64")]
 impl SIMDSchema<u8, u8, Neon> for L2 {
     type SIMDWidth = Const<16>;
-    type Accumulator = <Neon as Architecture>::u32x8;
+    type Accumulator = <Neon as Architecture>::u32x4;
     type Left = diskann_wide::arch::aarch64::u8x16;
     type Right = diskann_wide::arch::aarch64::u8x16;
     type Return = f32;
@@ -1423,7 +1426,8 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
         y: Self::Right,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        algorithms::squared_euclidean_accum_u8x16(x, y, acc)
+        let diff = acc.arch().vabdq_u8(x, y);
+        acc.dot_simd(diff, diff)
     }
 
     #[inline(always)]
@@ -1445,7 +1449,7 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
                 acc + ((c * c) as u32)
             },
         );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
     }
 
     // Perform a final reduction.

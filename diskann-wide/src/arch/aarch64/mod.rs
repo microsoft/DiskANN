@@ -13,8 +13,6 @@ use crate::{
     },
 };
 
-pub mod algorithms;
-
 mod internal;
 
 pub mod f16x4_;
