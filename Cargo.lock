@@ -450,6 +450,7 @@ dependencies = [
  "bytemuck",
  "dashmap",
  "diskann-linalg",
+ "diskann-quantization",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",
