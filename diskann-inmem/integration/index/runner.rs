@@ -11,6 +11,7 @@ use diskann_benchmark_runner::{
     Checker, Checkpoint, Output, Registry, RegistryError,
     benchmark::{MatchContext, PassFail, Regression, Score},
     files::InputFile,
+    report::{Finished, Report},
     utils::fmt::Indent,
 };
 use diskann_utils::views::rowmajor::{self, Matrix};
@@ -26,7 +27,7 @@ use diskann_inmem::{
 use crate::{
     index::{Counters, Index},
     support::{
-        check::{CheckMatch, Match, check_all_fields},
+        check::{CheckMatch, check_all_fields},
         datatype::{self, DataType, Dataset, DatasetView},
         io::load_and_convert,
         tolerance,
@@ -952,8 +953,8 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 
 impl Regression for FullPrecision {
     type Tolerances = tolerance::Empty;
-    type Pass = Match;
-    type Fail = Match;
+    type Pass = Finished;
+    type Fail = Finished;
 
     fn check(
         &self,
@@ -990,7 +991,7 @@ impl std::fmt::Display for BuildAndSearch {
 }
 
 impl CheckMatch for BuildAndSearch {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,
