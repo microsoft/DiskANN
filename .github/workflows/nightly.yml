@@ -79,7 +79,7 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --locked --workspace --config "$RUST_CONFIG"
+          cargo nextest run --locked --workspace --no-fail-fast --config "$RUST_CONFIG"
           cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
   test-workspace-features:
@@ -108,6 +108,7 @@ jobs:
           set -euxo pipefail
           cargo nextest run --locked --workspace \
             --all-features \
+            --no-fail-fast \
             --config "$RUST_CONFIG"
 
           cargo test --locked --doc --workspace --all-features --config "$RUST_CONFIG"
