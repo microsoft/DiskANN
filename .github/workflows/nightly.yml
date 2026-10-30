@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
+  RUST_CONFIG: 'target."cfg(all())".rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
 
@@ -132,12 +132,12 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: miri
-        run: |
-          cargo +nightly miri nextest run --locked \
-              --package diskann-quantization \
-              --package diskann-utils
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+        run: |
+          cargo +nightly miri nextest run --locked --config "$RUST_CONFIG" \
+              --package diskann-quantization \
+              --package diskann-utils
 
       - name: PiPNN top-k group loads
         env:
@@ -145,6 +145,6 @@ jobs:
         # One selection over two full groups and one pair scan over two full groups
         # reach all three unsafe group loads in the top-k module.
         run: |
-          cargo +nightly miri test --locked -p diskann --features pipnn --lib -- \
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib --config "$RUST_CONFIG" -- \
             graph::pipnn::topk::tests::selection_returns_distinct_candidates_when_distances_tie \
             graph::pipnn::topk::tests::a_single_pair_updates_exactly_its_two_endpoints::case_1_finite

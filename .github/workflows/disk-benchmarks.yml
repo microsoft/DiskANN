@@ -41,6 +41,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  RUST_CONFIG: 'target."cfg(all())".rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   PERF_INPUTS: diskann-benchmark/perf_test_inputs
 
@@ -124,14 +125,14 @@ jobs:
       - name: Run current branch benchmark
         working-directory: diskann_rust
         run: |
-          cargo run -p diskann-benchmark --features disk-index --release -- \
+          cargo run -p diskann-benchmark --features disk-index --release --config "$RUST_CONFIG" -- \
             run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Validate benchmark results
         working-directory: diskann_rust
         run: |
-          cargo run -p diskann-benchmark --features disk-index --release -- \
+          cargo run -p diskann-benchmark --features disk-index --release --config "$RUST_CONFIG" -- \
             check run \
             --tolerances ${{ env.PERF_INPUTS }}/disk-index-tolerances.json \
             --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \

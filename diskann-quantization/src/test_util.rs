@@ -208,6 +208,7 @@ pub(crate) fn create_test_problem(nrows: usize, ncols: usize, rng: &mut StdRng) 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Check {
     /// Assert two floating point numbers are within a set number of ULPs oeachother.
+    #[cfg(not(miri))]
     Ulp(usize),
 
     /// Assert two floating point numbers `x` and `y` satisfy:
@@ -225,6 +226,7 @@ pub(crate) enum Check {
 }
 
 impl Check {
+    #[cfg(not(miri))]
     pub(crate) const fn ulp(ulp: usize) -> Self {
         Self::Ulp(ulp)
     }
@@ -248,6 +250,7 @@ impl Check {
     /// a useful diagnostic.
     pub(crate) fn check(&self, got: f32, expected: f32) -> Result<(), CheckFailed> {
         match self {
+            #[cfg(not(miri))]
             Self::Ulp(ulp) => {
                 if within_ulp(got, expected, *ulp) {
                     Ok(())
@@ -300,6 +303,7 @@ impl Check {
 
 #[derive(Debug, Clone, Copy, Error)]
 pub(crate) enum CheckFailed {
+    #[cfg(not(miri))]
     #[error("not within {ulp} ulp - got {got}, expected {expected}")]
     Ulp { ulp: usize, got: f32, expected: f32 },
     #[error("not exact got {got}, expected {expected}")]
@@ -318,6 +322,7 @@ pub(crate) enum CheckFailed {
     },
 }
 
+#[cfg(not(miri))]
 fn within_ulp(mut got: f32, expected: f32, ulp: usize) -> bool {
     if got == expected {
         true

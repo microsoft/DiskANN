@@ -14,10 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pass additional arguments to cargo using `--config build.rustflags=["...", "..."]`.
-  #
-  # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
-  RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
+  # Append to target-specific rustflags without replacing `.cargo/config.toml` settings.
+  RUST_CONFIG: 'target."cfg(all())".rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
 
@@ -141,6 +139,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+      - name: "clippy --workspace --all-targets --release"
+        run: cargo clippy --locked --workspace --all-targets --no-deps --release --config "$RUST_CONFIG" -- -Dwarnings
 
   clippy-features:
     strategy:
@@ -157,13 +157,24 @@ jobs:
       - name: Install Rust
         run: rustup show && rustup component add clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: "clippy --workspace --all-targets"
+      - name: "clippy --workspace --all-targets --all-features"
         run: |
           set -euxo pipefail
           cargo clippy --locked --workspace \
             --all-targets \
             --all-features \
             --no-deps \
+            --config "$RUST_CONFIG" \
+            -- -Dwarnings
+
+      - name: "clippy --workspace --all-targets --all-features --release"
+        run: |
+          set -euxo pipefail
+          cargo clippy --locked --workspace \
+            --all-targets \
+            --all-features \
+            --no-deps \
+            --release \
             --config "$RUST_CONFIG" \
             -- -Dwarnings
 
@@ -205,6 +216,13 @@ jobs:
               --no-deps \
               --config "$RUST_CONFIG" \
               -- -Dwarnings
+            cargo clippy --locked --package "$crate" \
+              --no-default-features \
+              --all-targets \
+              --release \
+              --no-deps \
+              --config "$RUST_CONFIG" \
+              -- -Dwarnings
           done
 
   codeql:
@@ -229,7 +247,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Build workspace
-        run: cargo build --workspace --locked --profile test
+        run: cargo build --workspace --locked --profile test --config "$RUST_CONFIG"
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
@@ -245,9 +263,9 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: "workspace docs (including private items)"
-        run: cargo doc --locked --workspace --no-deps --all-features --document-private-items
+        run: cargo doc --locked --workspace --no-deps --all-features --document-private-items --config "$RUST_CONFIG"
         env:
-          RUSTDOCFLAGS: -D rustdoc::all
+          RUSTDOCFLAGS: -Dwarnings -D rustdoc::all
 
   vectorset-fmt:
     name: vectorset format check
@@ -284,6 +302,10 @@ jobs:
         run: |
           cd vectorset
           cargo clippy --locked --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+      - name: "vectorset: clippy --all-targets --release"
+        run: |
+          cd vectorset
+          cargo clippy --locked --all-targets --no-deps --config "$RUST_CONFIG" --release -- -Dwarnings
 
   vectorset-build:
     strategy:
@@ -302,8 +324,8 @@ jobs:
       - name: "vectorset: build debug & release"
         run: |
           cd vectorset
-          cargo build --locked
-          cargo build --locked --release
+          cargo build --locked --config "$RUST_CONFIG"
+          cargo build --locked --release --config "$RUST_CONFIG"
 
   # Test micro-architecture detection and dispatching.
   #
@@ -428,7 +450,7 @@ jobs:
       - name: "SDE Tests (AVX-512)"
         run: |
           set -euxo pipefail
-          cargo test --locked \
+          cargo test --locked --config "$RUST_CONFIG" \
             --package diskann-wide \
             --package diskann-vector \
             --package diskann-quantization \
@@ -538,7 +560,7 @@ jobs:
 
       - name: Generate miri code coverage
         env:
-          RUSTFLAGS: "--cfg=miri"
+          RUSTFLAGS: "-Dwarnings --cfg=miri"
         run: |
           cargo +nightly llvm-cov nextest --locked \
             --package diskann-quantization \
@@ -603,7 +625,7 @@ jobs:
 
       - name: Generate current LLVM lines
         working-directory: pr
-        run: cargo llvm-lines --package diskann-benchmark --all-features --release | head -100 | tee ../current-llvm-lines.txt
+        run: cargo llvm-lines --package diskann-benchmark --all-features --release --config "$RUST_CONFIG" | head -100 | tee ../current-llvm-lines.txt
 
       - name: Compare LLVM lines
         run: bash pr/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt
