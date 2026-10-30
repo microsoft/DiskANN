@@ -23,7 +23,15 @@ use std::{future::Future, io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{utils::IntoUsize, ANNResult};
 use diskann_benchmark_core::{self as dbc};
-use diskann_benchmark_runner::{self as dbr, files::InputFile, utils::MicroSeconds};
+use diskann_benchmark_runner::{
+    self as dbr,
+    files::InputFile,
+    report::{
+        tolerance::{FmtSpec, MaxAbsoluteDecrease, MaxRelativeDecrease},
+        Check, Report,
+    },
+    utils::MicroSeconds,
+};
 use diskann_inmem::{self as di};
 use diskann_utils::views::rowmajor::{self, Matrix};
 
@@ -113,6 +121,27 @@ pub(in crate::index::inmem2) mod dto {
                     search_l,
                     recall_k: RECALL_K,
                 }],
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(in crate::index::inmem2) struct Tolerance {
+        /// The amount of decrease in QPS that is acceptable.
+        pub(super) qps: MaxRelativeDecrease,
+        /// The amount of decrease in recall that is acceptable.
+        pub(super) recall: MaxAbsoluteDecrease,
+    }
+
+    impl Tolerance {
+        pub(in crate::index::inmem2) fn example() -> Self {
+            const QPS: MaxRelativeDecrease = MaxRelativeDecrease::new(0.05).unwrap();
+            const RECALL: MaxAbsoluteDecrease = MaxAbsoluteDecrease::try_from_f64(0.01).unwrap();
+
+            Self {
+                qps: QPS,
+                recall: RECALL,
             }
         }
     }
@@ -676,6 +705,68 @@ impl dbc::search::Aggregate<Parameters, u32, Counters> for Aggregator<'_> {
             mean_cmps,
             mean_hops,
         })
+    }
+}
+
+//------------//
+// Regression //
+//------------//
+
+#[derive(Debug)]
+pub(in crate::index::inmem2) struct Tolerance {
+    qps: MaxRelativeDecrease,
+    recall: MaxAbsoluteDecrease,
+}
+
+impl Tolerance {
+    pub(in crate::index::inmem2) fn from_raw(raw: &dto::Tolerance) -> Self {
+        let dto::Tolerance { qps, recall } = *raw;
+        Self { qps, recall }
+    }
+
+    pub(in crate::index::inmem2) fn check(&self, old: &Stats, new: &Stats) -> Report {
+        let Stats(old) = old;
+        let Stats(new) = new;
+
+        if old.len() != new.len() {
+            return Report::error(format_args!(
+                "mismatch number of runs - old = {}, new = {}",
+                old.len(),
+                new.len(),
+            ));
+        }
+
+        let Self { qps, recall } = self;
+        let qps_spec = FmtSpec::new().with_precision(0);
+        let recall_spec = FmtSpec::new().with_precision(4);
+
+        let headers = ["L", "K", "N", "Thr", "QPS (max)", "Recall"];
+        let mut table = Report::table(headers);
+        for (old, new) in std::iter::zip(old.iter(), new.iter()) {
+            let mut row = table.new_row();
+            row.push(Check::equal(old.search_l, new.search_l));
+            row.push(Check::equal(old.recall_k, new.recall_k));
+            row.push(Check::equal(old.search_n, new.search_n));
+            row.push(Check::equal(old.num_tasks, new.num_tasks));
+
+            // We expect these fields to be non-empty. If they are empty, we receive 0.0,
+            // which gets propagated to the check and results in an error.
+            let old_qps = old.reps.iter().fold(0.0f64, |max, s| max.max(s.qps));
+            let new_qps = new.reps.iter().fold(0.0f64, |max, s| max.max(s.qps));
+            row.push(Check::higher_is_better(qps, old_qps, new_qps, qps_spec));
+
+            // Recall
+            row.push(Check::higher_is_better(
+                recall,
+                old.recall.average,
+                new.recall.average,
+                recall_spec,
+            ));
+
+            table.push_row(row).unwrap();
+        }
+
+        table.finish()
     }
 }
 

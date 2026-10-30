@@ -462,8 +462,14 @@ impl std::fmt::Debug for MaybeLazy<'_> {
 /// ```
 #[derive(Debug, Default)]
 pub struct KeyValue<'a> {
-    kv: Vec<(&'a str, MaybeLazy<'a>)>,
+    kv: Vec<(&'a str, Nesting, MaybeLazy<'a>)>,
     max_key_length: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Nesting {
+    Auto,
+    Forced,
 }
 
 impl<'a> KeyValue<'a> {
@@ -478,13 +484,13 @@ impl<'a> KeyValue<'a> {
     /// Push the key-value pair to `self` for formatting.
     pub fn push(&mut self, key: &'a str, value: &'a dyn std::fmt::Display) {
         self.max_key_length = self.max_key_length.max(key.len());
-        self.kv.push((key, MaybeLazy::Lazy(value)))
+        self.kv.push((key, Nesting::Auto, MaybeLazy::Lazy(value)))
     }
 
     /// Push the key-value pair to `self` for formatting via [`std::fmt::Debug`].
     pub fn push_debug(&mut self, key: &'a str, value: &'a dyn std::fmt::Debug) {
         self.max_key_length = self.max_key_length.max(key.len());
-        self.kv.push((key, MaybeLazy::Debug(value)))
+        self.kv.push((key, Nesting::Auto, MaybeLazy::Debug(value)))
     }
 
     /// Push the key-value pair to `self` for formatting - eagerly formatting `value`.
@@ -493,7 +499,28 @@ impl<'a> KeyValue<'a> {
         D: std::fmt::Display,
     {
         self.max_key_length = self.max_key_length.max(key.len());
-        self.kv.push((key, MaybeLazy::Eager(value.to_string())))
+        self.kv
+            .push((key, Nesting::Auto, MaybeLazy::Eager(value.to_string())))
+    }
+
+    /// Push the key-value pair to `self` for formatting - eagerly formatting `value`.
+    pub fn push_eager_nested<D>(&mut self, key: &'a str, value: D)
+    where
+        D: std::fmt::Display,
+    {
+        self.max_key_length = self.max_key_length.max(key.len());
+        self.kv
+            .push((key, Nesting::Forced, MaybeLazy::Eager(value.to_string())))
+    }
+
+    /// Return the number of pending key-value pairs.
+    pub fn len(&self) -> usize {
+        self.kv.len()
+    }
+
+    /// Return `true` if there are no key-value pairs.
+    pub fn is_empty(&self) -> bool {
+        self.kv.is_empty()
     }
 }
 
@@ -501,9 +528,14 @@ impl std::fmt::Display for KeyValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let width = self.max_key_length;
         let mut prefix = "";
-        for (k, v) in self.kv.iter() {
+        for (k, nesting, v) in self.kv.iter() {
             let rendered = v.to_string();
-            if rendered.contains('\n') {
+            let nest = match nesting {
+                Nesting::Forced => true,
+                Nesting::Auto => rendered.contains('\n'),
+            };
+
+            if nest {
                 write!(f, "{}{}:\n{}", prefix, k, Indent::new(&rendered, 2))?
             } else {
                 // Left-align the key and pad so that all single-line values line up in a
