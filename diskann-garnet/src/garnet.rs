@@ -282,8 +282,10 @@ impl Callbacks {
         let length_hint = value.len() as u32;
         let mut found = false;
         let mut cb = |_, data: &[u8]| {
-            found = true;
-            value.copy_from_slice(data);
+            if data.len() == value.len() {
+                value.copy_from_slice(data);
+                found = true;
+            }
         };
 
         unsafe {

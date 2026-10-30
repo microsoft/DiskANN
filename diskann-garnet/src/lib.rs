@@ -1416,81 +1416,58 @@ pub unsafe extern "C" fn import_term(
     index.inner.import_term(&ctx, term, id, value)
 }
 
-/// Return type for `finish_import()`.
+/// Verify a partition of the imported terms.
 ///
-/// `Success` is returned if the tasks succeeds, and if the final task, if the finalization
-/// succeeds. `TaskFailed` indicates that the task's portion of the work failed, but can be
-/// retried. `FinishFailed` means the task finished successfully but finalization failed; the
-/// task cannot be retried.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ImportResult {
-    Success,
-    TaskFailed,
-    FinishFailed,
-}
-
-impl From<ImportResult> for u8 {
-    fn from(value: ImportResult) -> Self {
-        match value {
-            ImportResult::Success => 0,
-            ImportResult::TaskFailed => 1,
-            ImportResult::FinishFailed => 2,
-        }
-    }
-}
-
-#[cfg(test)]
-impl From<u8> for ImportResult {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => ImportResult::Success,
-            1 => ImportResult::TaskFailed,
-            2 => ImportResult::FinishFailed,
-            _ => panic!("bad ImportResult ({value})"),
-        }
-    }
-}
-
-/// Finalize import.
+/// All term writes must finish before verification starts. Each call checks its
+/// partition anew; task zero also verifies the configured start point.
 ///
-/// After terms are imported, this is used to verify the graph and enable the index.
-///
-/// Returns 0 if the task succeeds and if the final task finalizes the index. Returns 1 when
-/// the task failed, which can be retried. Returns 2 when the task succeeded but index
-/// finalization has failed, which cannot be retried.
+/// Returns true if this partition verifies successfully, false otherwise.
 ///
 /// # Safety
 ///
-/// FFI
+/// A non-null `index_ptr` must be a live index returned by `create_index`. The
+/// index and callbacks must outlive this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn finish_import(
+pub unsafe extern "C" fn verify_import(
     ctx: u64,
     index_ptr: *const c_void,
     task_idx: usize,
     task_count: usize,
-) -> u8 {
+) -> bool {
     if index_ptr.is_null() {
-        return ImportResult::TaskFailed.into();
+        return false;
     }
-
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
+    index.inner.verify_import(&ctx, task_idx, task_count)
+}
 
-    let (result, completed) = index.inner.finish_import(&ctx, task_idx, task_count);
-    if result && completed == Some(true) {
+/// Finalize an imported index.
+///
+/// All term writes must finish first. Verification is optional. Required
+/// start-point terms must be readable even if no user vectors were imported.
+/// Concurrent calls on the same handle serialize. Once one succeeds, subsequent
+/// calls on that handle return true.
+///
+/// Returns true on success. Failure does not enable an unfinished import.
+///
+/// # Safety
+///
+/// A non-null `index_ptr` must be a live index returned by `create_index`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn finish_import(ctx: u64, index_ptr: *const c_void) -> bool {
+    if index_ptr.is_null() {
+        return false;
+    }
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+    let result = index.inner.finish_import(&ctx);
+    if result {
         index
             .state
             .store(IndexState::Ready as usize, Ordering::Release);
     }
-
-    match (result, completed) {
-        (true, None) | (true, Some(true)) => ImportResult::Success,
-        (false, None) | (false, Some(false)) => ImportResult::TaskFailed,
-        // This variant is a special case that happens when an empty index is finalized.
-        (false, Some(true)) => ImportResult::Success,
-        (true, Some(false)) => ImportResult::FinishFailed,
-    }
-    .into()
+    result
 }
 
 #[cfg(test)]

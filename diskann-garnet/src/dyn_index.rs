@@ -120,15 +120,11 @@ pub(crate) trait DynIndex: Send + Sync {
     /// Import an index term.
     fn import_term(&self, context: &Context, term: Term, id: &[u8], value: &[u8]) -> bool;
 
+    /// Verify one import partition.
+    fn verify_import(&self, context: &Context, task_idx: usize, task_count: usize) -> bool;
+
     /// Finalize an import.
-    /// Returns task success and the optional finalization outcome. An empty import returns
-    /// `(false, Some(true))` so the FFI keeps start points uninitialized.
-    fn finish_import(
-        &self,
-        context: &Context,
-        task_idx: usize,
-        task_count: usize,
-    ) -> (bool, Option<bool>);
+    fn finish_import(&self, context: &Context) -> bool;
 }
 
 impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
@@ -359,14 +355,13 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         self.inner.provider().import_term(context, term, id, value)
     }
 
-    fn finish_import(
-        &self,
-        context: &Context,
-        task_idx: usize,
-        task_count: usize,
-    ) -> (bool, Option<bool>) {
+    fn verify_import(&self, context: &Context, task_idx: usize, task_count: usize) -> bool {
         self.inner
             .provider()
-            .finish_import(context, task_idx, task_count)
+            .verify_import(context, task_idx, task_count)
+    }
+
+    fn finish_import(&self, context: &Context) -> bool {
+        self.inner.provider().finish_import(context)
     }
 }
