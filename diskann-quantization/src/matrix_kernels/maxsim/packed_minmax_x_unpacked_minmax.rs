@@ -51,7 +51,7 @@ diskann_wide::alias!(u32x8<W> = u32x8);
 diskann_wide::alias!(u32x16<W> = u32x16);
 
 // Signed backends determine the shared accumulation limit.
-const fn max_k<const A_BITS: usize, const B_BITS: usize>() -> usize {
+pub(crate) const fn max_k<const A_BITS: usize, const B_BITS: usize>() -> usize {
     assert!(A_BITS > 0 && A_BITS <= 8 && B_BITS > 0 && B_BITS <= 8);
     (i32::MAX as usize) / (((1 << A_BITS) - 1) * ((1 << B_BITS) - 1))
 }
