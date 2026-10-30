@@ -744,13 +744,16 @@ dependencies = [
  "diskann-wide",
  "flatbuffers",
  "half",
+ "libc",
  "rand",
  "rand_distr",
+ "raw-cpuid",
  "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "trybuild",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
