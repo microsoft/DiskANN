@@ -254,7 +254,7 @@ pub(crate) trait Prune: Send + Sync + std::fmt::Debug {
     /// Compute the distance between the two raw elements.
     ///
     /// Implementations may assume that `a` and `b` were produced by a call to
-    /// [`Self::prepare`] and are allowed to panic if this is violated. This property may
+    /// [`Self::get`] and are allowed to panic if this is violated. This property may
     /// **not** be relied on for `unsafe` code.
     fn evaluate(&self, a: &[u8], b: &[u8]) -> f32;
 }

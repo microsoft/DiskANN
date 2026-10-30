@@ -388,6 +388,12 @@ impl<'a> Reader<'a> {
         unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
     }
 
+    /// Return the number of bytes for each entry.
+    #[expect(unused, reason = "this is a reasonable method to have - it's just not used")]
+    pub(crate) fn bytes(&self) -> Bytes {
+        self.unpadded.unchecked_sub(AtomicTag::SIZE)
+    }
+
     /// Return the number of bytes plus the atomic tag.
     pub(crate) fn bytes_plus_tag(&self) -> Bytes {
         self.unpadded
