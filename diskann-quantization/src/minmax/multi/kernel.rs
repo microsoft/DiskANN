@@ -3,12 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::rowmajor;
-
 use crate::{
     bits::{Representation, Unsigned},
-    minmax::{MinMaxCompensation, MinMaxMeta},
-    multi_vector::{MatRef, MaxSimError, Overflow},
+    minmax::MinMaxMeta,
+    multi_vector::{MatRef, MaxSimError},
 };
 
 /// An owned MinMax query with a backend selected at construction.
@@ -59,7 +57,7 @@ where
     ) -> Result<(), MaxSimError>;
 
     #[cfg(test)]
-    fn type_id(&self) -> std::any::TypeId {
+    fn inner_type_id(&self) -> std::any::TypeId {
         std::any::TypeId::of::<Self>()
     }
 }
@@ -95,31 +93,4 @@ where
         return Ok(false);
     }
     Ok(true)
-}
-
-/// Borrow canonical MinMax storage as a checked row-major byte view.
-pub(super) fn canonical_view<const NBITS: usize>(
-    matrix: MatRef<'_, MinMaxMeta<NBITS>>,
-) -> Result<rowmajor::Ref<'_, u8>, Overflow>
-where
-    Unsigned: Representation<NBITS>,
-{
-    let rows = matrix.num_vectors();
-    let dim = matrix.repr().intrinsic_dim();
-    let overflow = || Overflow::for_type::<u8>(rows, dim);
-    let stride = dim
-        .checked_mul(NBITS)
-        .ok_or_else(overflow)?
-        .div_ceil(8)
-        .checked_add(size_of::<MinMaxCompensation>())
-        .ok_or_else(overflow)?;
-    Overflow::check::<u8>(rows, stride)?;
-    // SAFETY: MatRef supplies the canonical initialized span. Arithmetic is checked before
-    // reading the pointer, including legacy shapes that could wrap in release builds.
-    let bytes = unsafe { std::slice::from_raw_parts(matrix.as_raw_ptr(), rows * stride) };
-    #[expect(
-        clippy::expect_used,
-        reason = "the checked dimensions match the slice length"
-    )]
-    Ok(rowmajor::Ref::try_from_data(bytes, rows, stride).expect("validated canonical rows"))
 }

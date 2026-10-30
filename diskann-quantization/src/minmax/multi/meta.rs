@@ -7,15 +7,17 @@
 
 use std::ptr::NonNull;
 
+use diskann_utils::views::rowmajor;
+
 use super::super::MinMaxQuantizer;
 use super::super::vectors::DataMutRef;
 use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
-use crate::minmax::{self, Data};
+use crate::minmax::{self, Data, MinMaxCompensation};
 use crate::multi_vector::matrix::{
     Defaulted, NewMut, NewOwned, NewRef, Repr, ReprMut, ReprOwned, SliceError,
 };
-use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
+use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Overflow, Standard};
 use crate::scalar::InputContainsNaN;
 use crate::utils;
 
@@ -59,6 +61,33 @@ where
 
     fn bytes(&self) -> usize {
         std::mem::size_of::<u8>() * self.nrows() * self.ncols()
+    }
+}
+
+impl<'a, const NBITS: usize> MatRef<'a, MinMaxMeta<NBITS>>
+where
+    Unsigned: Representation<NBITS>,
+{
+    /// Borrow canonical storage as a checked row-major byte view.
+    pub(crate) fn as_canonical_view(&self) -> Result<rowmajor::Ref<'a, u8>, Overflow> {
+        let rows = self.num_vectors();
+        let dim = self.repr().intrinsic_dim();
+        let overflow = || Overflow::for_type::<u8>(rows, dim);
+        let stride = dim
+            .checked_mul(NBITS)
+            .ok_or_else(overflow)?
+            .div_ceil(8)
+            .checked_add(size_of::<MinMaxCompensation>())
+            .ok_or_else(overflow)?;
+        Overflow::check::<u8>(rows, stride)?;
+        // SAFETY: MatRef supplies the canonical initialized span for 'a. Arithmetic is
+        // checked first, including legacy shapes that could wrap in release builds.
+        let bytes = unsafe { std::slice::from_raw_parts(self.as_raw_ptr(), rows * stride) };
+        #[expect(
+            clippy::expect_used,
+            reason = "the checked dimensions match the slice length"
+        )]
+        Ok(rowmajor::Ref::try_from_data(bytes, rows, stride).expect("validated canonical rows"))
     }
 }
 

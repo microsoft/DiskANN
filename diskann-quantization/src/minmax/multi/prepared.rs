@@ -20,28 +20,25 @@ use crate::{
     multi_vector::{MatRef, MaxSimError, Overflow},
 };
 
-// Fix ISA and packing layout, leaving only the input bit widths generic.
+// Fix ISA and packing layout; query bit widths are needed only during packing.
 macro_rules! prepared_kernel {
     ($name:ident, $arch:ty, $element:ty, $mr:literal, $nr:literal, $pack:literal) => {
         #[derive(Debug)]
-        pub(super) struct $name<const A_BITS: usize, const B_BITS: usize>
-        where
-            Unsigned: Representation<A_BITS>,
-        {
+        pub(super) struct $name<const B_BITS: usize> {
             arch: $arch,
-            query: PackedA<$element, A_BITS, $mr, $pack>,
+            query: PackedA<$element, $mr, $pack>,
             rows: usize,
             dim: usize,
         }
 
-        impl<const A_BITS: usize, const B_BITS: usize> $name<A_BITS, B_BITS>
-        where
-            Unsigned: Representation<A_BITS> + Representation<B_BITS>,
-        {
-            pub(super) fn new(
+        impl<const B_BITS: usize> $name<B_BITS> {
+            pub(super) fn new<const A_BITS: usize>(
                 arch: $arch,
                 query: MatRef<'_, MinMaxMeta<A_BITS>>,
-            ) -> Result<Self, Overflow> {
+            ) -> Result<Self, Overflow>
+            where
+                Unsigned: Representation<A_BITS>,
+            {
                 Ok(Self {
                     arch,
                     query: PackedA::new(query)?,
@@ -51,10 +48,9 @@ macro_rules! prepared_kernel {
             }
         }
 
-        impl<const A_BITS: usize, const B_BITS: usize> MinMaxMaxSimKernel<B_BITS>
-            for $name<A_BITS, B_BITS>
+        impl<const B_BITS: usize> MinMaxMaxSimKernel<B_BITS> for $name<B_BITS>
         where
-            Unsigned: Representation<A_BITS> + Representation<B_BITS>,
+            Unsigned: Representation<B_BITS>,
         {
             fn nrows(&self) -> usize {
                 self.rows
@@ -71,7 +67,7 @@ macro_rules! prepared_kernel {
                 // SAFETY: Validation establishes nonempty A, positive K, matching dimensions
                 // and exactly one output per query row. Packing and ISA selection are fixed.
                 let mut driver = unsafe {
-                    Driver::<$arch, B_BITS, $mr, $nr, $pack>::new(
+                    Driver::<$arch, $mr, $nr, $pack>::new(
                         self.arch,
                         &self.query,
                         document,

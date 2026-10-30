@@ -10,7 +10,7 @@ use diskann_wide::arch::aarch64::Neon;
 use diskann_wide::arch::x86_64::{V3, V4};
 
 use super::{
-    kernel::{MinMaxMaxSim, MinMaxMaxSimKernel, canonical_view},
+    kernel::{MinMaxMaxSim, MinMaxMaxSimKernel},
     prepared,
     reference::ReferenceKernel,
 };
@@ -27,6 +27,9 @@ use crate::{
 /// fall back. `Reference` uses an independent scalar implementation.
 ///
 /// Kernels return negative maximum inner products, matching the MaxSim distance convention.
+///
+/// Supports equal query/document bit widths from 1 through 8, plus 8-bit queries
+/// with 1-, 2-, or 4-bit documents. Other combinations fail to compile.
 ///
 /// # Errors
 ///
@@ -89,31 +92,31 @@ macro_rules! factory {
                 let query = query.0;
                 validate_query::<$a, $b>(query)?;
                 let inner: Box<dyn MinMaxMaxSimKernel<$b>> = match RuntimeArch::resolve(isa)? {
-                    RuntimeArch::Scalar(a) => Box::new(prepared::$scalar::<$a, $b>::new(a, query)?),
+                    RuntimeArch::Scalar(a) => Box::new(prepared::$scalar::<$b>::new(a, query)?),
                     #[cfg(target_arch = "x86_64")]
-                    RuntimeArch::V3(a) => Box::new(prepared::$v3::<$a, $b>::new(a, query)?),
+                    RuntimeArch::V3(a) => Box::new(prepared::$v3::<$b>::new(a, query)?),
                     #[cfg(target_arch = "x86_64")]
-                    RuntimeArch::V4(a) => Box::new(prepared::$v4::<$a, $b>::new(a, query)?),
+                    RuntimeArch::V4(a) => Box::new(prepared::$v4::<$b>::new(a, query)?),
                     #[cfg(target_arch = "aarch64")]
-                    RuntimeArch::Neon(a) => Box::new(prepared::NeonBytes::<$a, $b>::new(a, query)?),
+                    RuntimeArch::Neon(a) => Box::new(prepared::NeonBytes::<$b>::new(a, query)?),
                     RuntimeArch::Reference => Box::new(ReferenceKernel::<$a, $b>::new(query)?),
                 };
                 Ok(MinMaxMaxSim { inner })
             }
         }
     };
-    ($($a:literal),+ $(,)?) => {$(
-        factory!($a, 1, ScalarBytes, V3Bytes, V4Bytes);
-        factory!($a, 2, ScalarBytes, V3Bytes, V4Bytes);
-        factory!($a, 3, ScalarBytes, V3Bytes, V4Bytes);
-        factory!($a, 4, ScalarBytes, V3Bytes, V4Bytes);
-        factory!($a, 5, ScalarBytes, V3Bytes, V4Bytes);
-        factory!($a, 6, ScalarBytes, V3Bytes, V4Bytes);
-        factory!($a, 7, ScalarBytes, V3Words, V4Bytes);
-        factory!($a, 8, ScalarWords, V3Words, V4Words);
-    )+};
 }
-factory!(1, 2, 3, 4, 5, 6, 7, 8);
+factory!(1, 1, ScalarBytes, V3Bytes, V4Bytes);
+factory!(2, 2, ScalarBytes, V3Bytes, V4Bytes);
+factory!(3, 3, ScalarBytes, V3Bytes, V4Bytes);
+factory!(4, 4, ScalarBytes, V3Bytes, V4Bytes);
+factory!(5, 5, ScalarBytes, V3Bytes, V4Bytes);
+factory!(6, 6, ScalarBytes, V3Bytes, V4Bytes);
+factory!(7, 7, ScalarBytes, V3Words, V4Bytes);
+factory!(8, 8, ScalarWords, V3Words, V4Words);
+factory!(8, 1, ScalarBytes, V3Bytes, V4Bytes);
+factory!(8, 2, ScalarBytes, V3Bytes, V4Bytes);
+factory!(8, 4, ScalarBytes, V3Bytes, V4Bytes);
 
 fn validate_query<const A_BITS: usize, const B_BITS: usize>(
     query: MatRef<'_, MinMaxMeta<A_BITS>>,
@@ -122,11 +125,11 @@ where
     Unsigned: Representation<A_BITS> + Representation<B_BITS>,
 {
     let dim = query.repr().intrinsic_dim();
-    let limit = max_k::<A_BITS, B_BITS>();
+    let limit = max_k(A_BITS, B_BITS);
     if dim > limit {
         return Err(BuildMaxSimError::DimTooLarge(dim, limit));
     }
-    canonical_view(query)?;
+    query.as_canonical_view()?;
     Ok(())
 }
 
@@ -286,27 +289,18 @@ mod tests {
     }
 
     #[test]
-    fn matches_reference_across_bit_widths() {
-        macro_rules! row {
-            ($a:literal) => {
-                assert_matches_reference::<$a, 1>();
-                assert_matches_reference::<$a, 2>();
-                assert_matches_reference::<$a, 3>();
-                assert_matches_reference::<$a, 4>();
-                assert_matches_reference::<$a, 5>();
-                assert_matches_reference::<$a, 6>();
-                assert_matches_reference::<$a, 7>();
-                assert_matches_reference::<$a, 8>();
-            };
-        }
-        row!(1);
-        row!(2);
-        row!(3);
-        row!(4);
-        row!(5);
-        row!(6);
-        row!(7);
-        row!(8);
+    fn matches_reference_across_supported_bit_widths() {
+        assert_matches_reference::<1, 1>();
+        assert_matches_reference::<2, 2>();
+        assert_matches_reference::<3, 3>();
+        assert_matches_reference::<4, 4>();
+        assert_matches_reference::<5, 5>();
+        assert_matches_reference::<6, 6>();
+        assert_matches_reference::<7, 7>();
+        assert_matches_reference::<8, 8>();
+        assert_matches_reference::<8, 1>();
+        assert_matches_reference::<8, 2>();
+        assert_matches_reference::<8, 4>();
     }
 
     #[test]
@@ -379,7 +373,7 @@ mod tests {
 
     #[test]
     fn rejects_excessive_dimensions() {
-        let limit = max_k::<8, 8>();
+        let limit = max_k(8, 8);
         let dim = limit + 1;
         let query = MatRef::new(MinMaxMeta::<8>::new(0, dim), &[] as &[u8]).unwrap();
         for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
@@ -410,56 +404,78 @@ mod tests {
 
     #[test]
     fn selects_backend_and_layout() {
-        fn assert_layout<const B_BITS: usize, K: 'static>(
-            isa: MaxSimIsa,
-            query: QueryMatRef<'_, MinMaxMeta<8>>,
-        ) where
-            Unsigned: MinMaxKernelFactory<8, B_BITS>,
+        fn assert_layout<const A_BITS: usize, const B_BITS: usize, K: 'static>(isa: MaxSimIsa)
+        where
+            Unsigned: MinMaxKernelFactory<A_BITS, B_BITS>,
         {
+            let query = matrix::<A_BITS>(1, 3);
             assert_eq!(
-                build_minmax_max_sim::<8, B_BITS>(isa, query)
+                build_minmax_max_sim::<A_BITS, B_BITS>(isa, query.as_view().into())
                     .unwrap()
                     .inner
-                    .type_id(),
+                    .inner_type_id(),
                 std::any::TypeId::of::<K>(),
-                "{isa}, B_BITS={B_BITS}",
+                "{isa}, A_BITS={A_BITS}, B_BITS={B_BITS}",
             );
         }
 
-        let query = matrix::<8>(1, 3);
-        let query = QueryMatRef::from(query.as_view());
-        assert_layout::<7, prepared::ScalarBytes<8, 7>>(MaxSimIsa::Scalar, query);
-        assert_layout::<8, prepared::ScalarWords<8, 8>>(MaxSimIsa::Scalar, query);
+        assert_layout::<7, 7, prepared::ScalarBytes<7>>(MaxSimIsa::Scalar);
+        assert_layout::<8, 8, prepared::ScalarWords<8>>(MaxSimIsa::Scalar);
         #[cfg(target_arch = "x86_64")]
         {
             if V3::new_checked().is_some() {
-                assert_layout::<6, prepared::V3Bytes<8, 6>>(MaxSimIsa::X86_64_V3, query);
-                assert_layout::<7, prepared::V3Words<8, 7>>(MaxSimIsa::X86_64_V3, query);
+                assert_layout::<6, 6, prepared::V3Bytes<6>>(MaxSimIsa::X86_64_V3);
+                assert_layout::<7, 7, prepared::V3Words<7>>(MaxSimIsa::X86_64_V3);
             }
             if V4::new_checked().is_some() {
-                assert_layout::<7, prepared::V4Bytes<8, 7>>(MaxSimIsa::X86_64_V4, query);
-                assert_layout::<8, prepared::V4Words<8, 8>>(MaxSimIsa::X86_64_V4, query);
+                assert_layout::<7, 7, prepared::V4Bytes<7>>(MaxSimIsa::X86_64_V4);
+                assert_layout::<8, 8, prepared::V4Words<8>>(MaxSimIsa::X86_64_V4);
             }
         }
         #[cfg(target_arch = "aarch64")]
         if Neon::new_checked().is_some() {
-            assert_layout::<8, prepared::NeonBytes<8, 8>>(MaxSimIsa::Neon, query);
+            assert_layout::<8, 8, prepared::NeonBytes<8>>(MaxSimIsa::Neon);
         }
     }
 
     #[test]
-    fn handles_nonfinite_scores() {
+    fn prepared_type_is_independent_of_query_bit_width() {
         fn check<const B_BITS: usize>()
         where
-            Unsigned: MinMaxKernelFactory<8, B_BITS>,
+            Unsigned: MinMaxKernelFactory<B_BITS, B_BITS> + MinMaxKernelFactory<8, B_BITS>,
+        {
+            let narrow = matrix::<B_BITS>(1, 3);
+            let wide = matrix::<8>(1, 3);
+            for isa in available_isas().filter(|&isa| isa != MaxSimIsa::Reference) {
+                let narrow =
+                    build_minmax_max_sim::<B_BITS, B_BITS>(isa, narrow.as_view().into()).unwrap();
+                let wide = build_minmax_max_sim::<8, B_BITS>(isa, wide.as_view().into()).unwrap();
+                assert_eq!(
+                    narrow.inner.inner_type_id(),
+                    wide.inner.inner_type_id(),
+                    "{isa}, B_BITS={B_BITS}",
+                );
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<4>();
+    }
+
+    #[test]
+    fn handles_nonfinite_scores() {
+        fn check<const A_BITS: usize, const B_BITS: usize>()
+        where
+            Unsigned: MinMaxKernelFactory<A_BITS, B_BITS>,
         {
             let max_code = (1i64 << B_BITS) - 1;
-            let query = constant_matrix::<8>(1, 5, 255);
+            let max_query = (1i64 << A_BITS) - 1;
+            let query = constant_matrix::<A_BITS>(1, 5, max_query);
             let mut document = constant_matrix::<B_BITS>(2, 5, max_code);
-            let finite_score = -(5 * 255 * max_code) as f32;
+            let finite_score = -(5 * max_query * max_code) as f32;
             for isa in available_isas() {
                 let kernel =
-                    build_minmax_max_sim::<8, B_BITS>(isa, query.as_view().into()).unwrap();
+                    build_minmax_max_sim::<A_BITS, B_BITS>(isa, query.as_view().into()).unwrap();
                 let mut scores = [0.0];
                 for (scale, expected) in [
                     (1.0, finite_score),
@@ -492,9 +508,10 @@ mod tests {
                 );
             }
         }
-        check::<6>();
-        check::<7>();
-        check::<8>();
+        check::<6, 6>();
+        check::<7, 7>();
+        check::<8, 8>();
+        check::<8, 4>();
     }
 
     #[cfg(not(debug_assertions))]

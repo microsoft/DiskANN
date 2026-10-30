@@ -138,6 +138,7 @@ pub use multi::{
 };
 pub use quantizer::{L2Loss, MinMaxQuantizer};
 pub use recompress::{RecompressError, Recompressor};
+pub(crate) use vectors::Coefficients;
 pub use vectors::{
     Data, DataMutRef, DataRef, DecompressError, FullQuery, FullQueryMeta, FullQueryMut,
     FullQueryRef, MetaParseError, MinMaxCompensation, MinMaxCosine, MinMaxCosineNormalized,
