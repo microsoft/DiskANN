@@ -361,21 +361,23 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_product_ip() {
-        run_regression_example(
-            "graph/product/ip.json",
-            "checks.json",
-            "graph/product/ip-baseline.json",
-        );
+        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "graph/product/ip-baseline-macos.json"
+        } else {
+            "graph/product/ip-baseline.json"
+        };
+        run_regression_example("graph/product/ip.json", "checks.json", baseline);
     }
 
     #[test]
     #[cfg(not(miri))]
     fn graph_product_cosine() {
-        run_regression_example(
-            "graph/product/cosine.json",
-            "checks.json",
-            "graph/product/cosine-baseline.json",
-        );
+        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "graph/product/cosine-baseline-macos.json"
+        } else {
+            "graph/product/cosine-baseline.json"
+        };
+        run_regression_example("graph/product/cosine.json", "checks.json", baseline);
     }
 
     //---------------------//
