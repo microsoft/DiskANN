@@ -1804,12 +1804,7 @@ impl SIMDSchema<Half, Half, Neon> for IP {
         y: Self::Right,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        diskann_wide::alias!(f32s = <Neon>::f32x4);
-
-        let x: f32s = x.into();
-        let y: f32s = y.into();
-
-        x.mul_add_simd(y, acc)
+        acc.dot_simd(x, y)
     }
 
     #[inline(always)]
