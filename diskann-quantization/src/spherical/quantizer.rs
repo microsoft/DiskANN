@@ -19,7 +19,7 @@ use thiserror::Error;
 
 use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, DataMeta, DataMetaError, DataMut,
-    FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric, iface,
+    FullQueryMeta, FullQueryMut, InputHints, QueryMeta, QueryMut, SupportedMetric, iface,
 };
 use crate::{
     AsFunctor, CompressIntoWith,
@@ -30,7 +30,9 @@ use crate::{
     alloc::{Allocator, AllocatorError, GlobalAllocator, Poly, ScopedAllocator, TryClone},
     bits::{PermutationStrategy, Representation, Unsigned},
     num::Positive,
-    utils::{CannotBeEmpty, compute_means_and_average_norm, compute_normalized_means},
+    utils::{
+        CannotBeEmpty, compute_means, compute_means_and_average_norm, compute_normalized_means,
+    },
 };
 #[cfg(feature = "flatbuffers")]
 use crate::{
@@ -300,6 +302,33 @@ where
         T: Copy + Into<f64> + Into<f32>,
         R: Rng,
     {
+        Self::train_with_hints(
+            data,
+            transform,
+            metric,
+            pre_scale,
+            InputHints::new(),
+            rng,
+            allocator,
+        )
+    }
+
+    /// Train with properties of the supplied rows. Only cosine uses the normalization hint.
+    ///
+    /// See [`Self::train`] for errors and the input/metric contract.
+    pub fn train_with_hints<T, R>(
+        data: rowmajor::Ref<T>,
+        transform: TransformKind,
+        metric: SupportedMetric,
+        pre_scale: PreScale,
+        hints: InputHints,
+        rng: &mut R,
+        allocator: A,
+    ) -> Result<Self, TrainError>
+    where
+        T: Copy + Into<f64> + Into<f32>,
+        R: Rng,
+    {
         // An inner implementation erasing the type of the random number generator to
         // cut down on excess monomorphization.
         #[inline(never)]
@@ -308,6 +337,7 @@ where
             transform: TransformKind,
             metric: SupportedMetric,
             pre_scale: PreScale,
+            hints: InputHints,
             rng: &mut dyn RngCore,
             allocator: A,
         ) -> Result<SphericalQuantizer<A>, TrainError>
@@ -325,6 +355,11 @@ where
                 SupportedMetric::SquaredL2 | SupportedMetric::InnerProduct => {
                     compute_means_and_average_norm(data)
                 }
+                SupportedMetric::Cosine if hints.normalized() => (
+                    compute_means(data)
+                        .map_err(|_: CannotBeEmpty| TrainError::DataCannotBeEmpty)?,
+                    1.0,
+                ),
                 SupportedMetric::Cosine => (
                     compute_normalized_means(data)
                         .map_err(|_: CannotBeEmpty| TrainError::DataCannotBeEmpty)?,
@@ -381,7 +416,7 @@ where
             )
         }
 
-        train(data, transform, metric, pre_scale, rng, allocator)
+        train(data, transform, metric, pre_scale, hints, rng, allocator)
     }
 
     /// Rescale the argument `v` to be in the rough dynamic range of the training dataset.
@@ -401,18 +436,33 @@ where
     fn preprocess<'a>(
         &self,
         data: &[f32],
+        hints: InputHints,
         allocator: ScopedAllocator<'a>,
     ) -> Result<Preprocessed<'a>, CompressionError> {
         assert_eq!(data.len(), self.input_dim(), "Data dimension is incorrect.");
 
-        // Fold in pre-scaling with the potential norm corretion for cosine.
-        //
-        // NOTE: When we're computing Cosine Similarity, we normalize the vector. As such,
-        // the `pre_scale` parameter become irrelvant since it just gets normalized away.
+        // Keep the operation order of rescale followed by pre-scale, without allocating
+        // a separate copy of the query. Combining the factors can overflow unnecessarily.
+        let rescale =
+            if self.metric == SupportedMetric::InnerProduct && hints.maybe_out_of_distribution() {
+                let norm = if hints.normalized() {
+                    1.0
+                } else {
+                    FastL2Norm.evaluate(data)
+                };
+                if norm == 0.0 {
+                    None
+                } else {
+                    Some(self.mean_norm.into_inner() / norm)
+                }
+            } else {
+                None
+            };
         let scale = self.pre_scale.into_inner();
-        let mul: f32 = match self.metric {
+        let mul = match self.metric {
+            SupportedMetric::Cosine if hints.normalized() => 1.0,
             SupportedMetric::Cosine => {
-                let norm: f32 = (FastL2Norm).evaluate(data);
+                let norm = FastL2Norm.evaluate(data);
                 if norm == 0.0 { 1.0 } else { 1.0 / norm }
             }
             SupportedMetric::SquaredL2 | SupportedMetric::InnerProduct => scale,
@@ -420,7 +470,13 @@ where
 
         // Center the vector and compute the squared norm of the shifted vector.
         let shifted = Poly::from_iter(
-            std::iter::zip(data.iter(), self.shift.iter()).map(|(&f, &s)| mul * f - s),
+            std::iter::zip(data.iter(), self.shift.iter()).map(|(&f, &s)| {
+                let f = match rescale {
+                    Some(r) => f * r,
+                    None => f,
+                };
+                mul * f - s
+            }),
             allocator,
         )?;
 
@@ -441,6 +497,28 @@ where
             shifted_norm,
             inner_product_with_centroid,
         })
+    }
+
+    /// Compress with per-input properties. For stored data, leave the distribution hint unset.
+    /// Set it only when encoding a query (including queries encoded with a data layout).
+    ///
+    /// Errors are the same as [`CompressIntoWith::compress_into_with`].
+    pub fn compress_into_with_hints<'a, T>(
+        &self,
+        from: &'a [f32],
+        into: T,
+        hints: InputHints,
+        scratch: ScopedAllocator<'a>,
+    ) -> Result<(), CompressionError>
+    where
+        Self: CompressIntoWith<
+                &'a [f32],
+                T,
+                (ScopedAllocator<'a>, InputHints),
+                Error = CompressionError,
+            >,
+    {
+        self.compress_into_with(from, into, (scratch, hints))
     }
 
     /// Construct an [`iface::Impl`] `self`.
@@ -808,7 +886,25 @@ impl FinishCompressing for DataMut<'_, 8> {
 // Data Compression //
 //////////////////////
 
-impl<A> CompressIntoWith<&[f32], FullQueryMut<'_>, ScopedAllocator<'_>> for SphericalQuantizer<A>
+impl<'a, A, T> CompressIntoWith<&'a [f32], T, ScopedAllocator<'a>> for SphericalQuantizer<A>
+where
+    A: Allocator,
+    Self:
+        CompressIntoWith<&'a [f32], T, (ScopedAllocator<'a>, InputHints), Error = CompressionError>,
+{
+    type Error = CompressionError;
+    fn compress_into_with(
+        &self,
+        from: &'a [f32],
+        into: T,
+        scratch: ScopedAllocator<'a>,
+    ) -> Result<(), Self::Error> {
+        self.compress_into_with_hints(from, into, InputHints::new(), scratch)
+    }
+}
+
+impl<A> CompressIntoWith<&[f32], FullQueryMut<'_>, (ScopedAllocator<'_>, InputHints)>
+    for SphericalQuantizer<A>
 where
     A: Allocator,
 {
@@ -830,13 +926,13 @@ where
         &self,
         from: &[f32],
         mut into: FullQueryMut<'_>,
-        allocator: ScopedAllocator<'_>,
+        (allocator, hints): (ScopedAllocator<'_>, InputHints),
     ) -> Result<(), Self::Error> {
         let input_dim = self.shift.len();
         let output_dim = self.output_dim();
         check_dims(input_dim, output_dim, from.len(), into.len())?;
 
-        let mut preprocessed = self.preprocess(from, allocator)?;
+        let mut preprocessed = self.preprocess(from, hints, allocator)?;
 
         // If the preprocessed norm is zero, then we tried to compress the center directly.
         // In this case, we can get the correct behavior by setting `into` to all zeros.
@@ -885,7 +981,8 @@ where
     }
 }
 
-impl<const NBITS: usize, A> CompressIntoWith<&[f32], DataMut<'_, NBITS>, ScopedAllocator<'_>>
+impl<const NBITS: usize, A>
+    CompressIntoWith<&[f32], DataMut<'_, NBITS>, (ScopedAllocator<'_>, InputHints)>
     for SphericalQuantizer<A>
 where
     A: Allocator,
@@ -910,13 +1007,13 @@ where
         &self,
         from: &[f32],
         mut into: DataMut<'_, NBITS>,
-        allocator: ScopedAllocator<'_>,
+        (allocator, hints): (ScopedAllocator<'_>, InputHints),
     ) -> Result<(), Self::Error> {
         let input_dim = self.shift.len();
         let output_dim = self.output_dim();
         check_dims(input_dim, output_dim, from.len(), into.len())?;
 
-        let mut preprocessed = self.preprocess(from, allocator)?;
+        let mut preprocessed = self.preprocess(from, hints, allocator)?;
 
         if preprocessed.shifted_norm == 0.0 {
             into.set_meta(DataMeta::default());
@@ -1210,7 +1307,7 @@ fn maximize_cosine_similarity(
 ///////////////////////
 
 impl<const NBITS: usize, Perm, A>
-    CompressIntoWith<&[f32], QueryMut<'_, NBITS, Perm>, ScopedAllocator<'_>>
+    CompressIntoWith<&[f32], QueryMut<'_, NBITS, Perm>, (ScopedAllocator<'_>, InputHints)>
     for SphericalQuantizer<A>
 where
     Unsigned: Representation<NBITS>,
@@ -1235,13 +1332,13 @@ where
         &self,
         from: &[f32],
         mut into: QueryMut<'_, NBITS, Perm>,
-        allocator: ScopedAllocator<'_>,
+        (allocator, hints): (ScopedAllocator<'_>, InputHints),
     ) -> Result<(), Self::Error> {
         let input_dim = self.shift.len();
         let output_dim = self.output_dim();
         check_dims(input_dim, output_dim, from.len(), into.len())?;
 
-        let mut preprocessed = self.preprocess(from, allocator)?;
+        let mut preprocessed = self.preprocess(from, hints, allocator)?;
 
         if preprocessed.shifted_norm == 0.0 {
             into.set_meta(QueryMeta::default());
@@ -1325,6 +1422,109 @@ where
 #[cfg(not(miri))]
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn normalized_hints_skip_input_norm_only() {
+        use super::*;
+        let normalized = InputHints::new().with_normalized(true);
+        // Deliberately non-unit inputs distinguish the fast path from normalization.
+        let data = rowmajor::Owned::from_fn(2, 2, |rc| [[2.0f32, 0.0], [0.0, 4.0]][rc.row][rc.col]);
+        let quantizer = SphericalQuantizer::train_with_hints(
+            data.as_view(),
+            TransformKind::Null,
+            SupportedMetric::Cosine,
+            PreScale::Some(Positive::new(2.0).unwrap()),
+            normalized,
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+        assert_eq!(quantizer.shift(), &[1.0, 2.0]);
+        assert_eq!(quantizer.mean_norm().into_inner(), 1.0);
+        let result = quantizer
+            .preprocess(&[3.0, 4.0], normalized, ScopedAllocator::global())
+            .unwrap();
+        assert_eq!(&*result.shifted, &[2.0, 2.0]);
+        assert!((result.shifted_norm - 8.0f32.sqrt()).abs() < 1e-6);
+
+        let empty = rowmajor::Owned::from_element(0, 2, 0.0f32);
+        for hints in [InputHints::new(), normalized] {
+            let err = SphericalQuantizer::train_with_hints(
+                empty.as_view(),
+                TransformKind::Null,
+                SupportedMetric::Cosine,
+                PreScale::None,
+                hints,
+                &mut StdRng::seed_from_u64(10),
+                GlobalAllocator,
+            )
+            .unwrap_err();
+            assert!(matches!(err, TrainError::DataCannotBeEmpty));
+        }
+    }
+
+    #[test]
+    fn normalized_ip_query_uses_training_mean_and_prescale() {
+        use super::*;
+        let data =
+            rowmajor::Owned::from_fn(2, 2, |rc| [[3.0f32, 4.0], [-3.0, -4.0]][rc.row][rc.col]);
+        let quantizer = SphericalQuantizer::train(
+            data.as_view(),
+            TransformKind::Null,
+            SupportedMetric::InnerProduct,
+            PreScale::Some(Positive::new(0.5).unwrap()),
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+        let hints = InputHints::new()
+            .with_normalized(true)
+            .with_maybe_out_of_distribution(true);
+        let result = quantizer
+            .preprocess(&[0.6, 0.8], hints, ScopedAllocator::global())
+            .unwrap();
+        assert_eq!(&*result.shifted, &[1.5, 2.0]);
+        let zero = quantizer
+            .preprocess(&[0.0; 2], hints, ScopedAllocator::global())
+            .unwrap();
+        assert_eq!(&*zero.shifted, &[0.0; 2]);
+    }
+
+    #[test]
+    fn query_rescale_does_not_overflow_combined_scale() {
+        let data = rowmajor::Owned::from_fn(2, 2, |rc| {
+            if rc.col == 1 {
+                0.0f32
+            } else if rc.row == 0 {
+                1.0e-10
+            } else {
+                -1.0e-10
+            }
+        });
+        let quantizer = SphericalQuantizer::train(
+            data.as_view(),
+            TransformKind::Null,
+            SupportedMetric::InnerProduct,
+            PreScale::Some(Positive::new(1.0e29).unwrap()),
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+        let raw = [1.0e-20, 0.0];
+        let mut manual = raw;
+        quantizer.rescale(&mut manual);
+        let expected = quantizer
+            .preprocess(&manual, InputHints::new(), ScopedAllocator::global())
+            .unwrap();
+        let actual = quantizer
+            .preprocess(
+                &raw,
+                InputHints::new().with_maybe_out_of_distribution(true),
+                ScopedAllocator::global(),
+            )
+            .unwrap();
+        assert_eq!(&*actual.shifted, &*expected.shifted);
+    }
+
     use super::*;
 
     use std::fmt::Display;
@@ -1650,7 +1850,9 @@ mod tests {
                 } = q.meta();
 
                 let shifted_square_norm = metric_specific;
-                let mut preprocessed = quantizer.preprocess(v, scoped_global).unwrap();
+                let mut preprocessed = quantizer
+                    .preprocess(v, InputHints::new(), scoped_global)
+                    .unwrap();
                 preprocessed
                     .shifted
                     .iter_mut()
@@ -1899,7 +2101,9 @@ mod tests {
                 } = q.meta();
 
                 let inner_product_with_centroid = metric_specific;
-                let mut preprocessed = quantizer.preprocess(v, scoped_global).unwrap();
+                let mut preprocessed = quantizer
+                    .preprocess(v, InputHints::new(), scoped_global)
+                    .unwrap();
                 preprocessed
                     .shifted
                     .iter_mut()
@@ -2140,7 +2344,9 @@ mod tests {
                 } = q.meta();
 
                 let inner_product_with_centroid = metric_specific;
-                let mut preprocessed = quantizer.preprocess(v, scoped_global).unwrap();
+                let mut preprocessed = quantizer
+                    .preprocess(v, InputHints::new(), scoped_global)
+                    .unwrap();
                 preprocessed
                     .shifted
                     .iter_mut()

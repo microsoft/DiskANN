@@ -14,7 +14,7 @@ use diskann_quantization::{
     minmax::{self, MinMaxQuantizer},
     num::POSITIVE_ONE_F32,
     spherical::{
-        self, Data, PreScale, SphericalQuantizer, SupportedMetric,
+        self, Data, InputHints, PreScale, SphericalQuantizer, SupportedMetric,
         iface::{self, Opaque, OpaqueMut, Quantizer},
     },
 };
@@ -66,6 +66,30 @@ pub(crate) trait GarnetQuantizer: Send + Sync {
     fn distance_computer(&self) -> Result<GarnetDistanceComputer, GarnetQuantizerError>;
     /// Returns a query computer for comparing distances to a particular query
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError>;
+    /// Input-aware entry points; quantizers without these optimizations use their defaults.
+    fn train_with_hints(
+        &self,
+        metric: Metric,
+        data: rowmajor::Ref<f32>,
+        _hints: InputHints,
+    ) -> Result<(), GarnetQuantizerError> {
+        self.train(metric, data)
+    }
+    fn compress_with_hints(
+        &self,
+        v: &[f32],
+        into: &mut [u8],
+        _hints: InputHints,
+    ) -> Result<(), GarnetQuantizerError> {
+        self.compress(v, into)
+    }
+    fn query_computer_with_hints(
+        &self,
+        query: &[f32],
+        _hints: InputHints,
+    ) -> Result<GarnetQueryComputer, GarnetQuantizerError> {
+        self.query_computer(query)
+    }
     // Serialize the quantizer state.
     fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError>;
     // Deserialize the quantizer state.
@@ -122,20 +146,25 @@ where
         self.inner.read().is_some()
     }
 
-    fn train(
+    fn train(&self, metric: Metric, data: rowmajor::Ref<f32>) -> Result<(), GarnetQuantizerError> {
+        self.train_with_hints(metric, data, InputHints::new())
+    }
+
+    fn train_with_hints(
         &self,
         metric_type: Metric,
         data: rowmajor::Ref<f32>,
+        hints: InputHints,
     ) -> Result<(), GarnetQuantizerError> {
         let mut rng = rand::rng();
-        let quantizer = SphericalQuantizer::train(
+        let quantizer = SphericalQuantizer::train_with_hints(
             data.as_view(),
             TransformKind::DoubleHadamard {
                 target_dim: diskann_quantization::algorithms::transforms::TargetDim::Same,
             },
-            SupportedMetric::try_from(metric_type)
-                .map_err(|e| GarnetQuantizerError::Training(Box::new(e)))?,
+            SupportedMetric::from(metric_type),
             PreScale::ReciprocalMeanNorm,
+            hints,
             &mut rng,
             GlobalAllocator,
         )
@@ -151,11 +180,21 @@ where
     }
 
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError> {
+        self.compress_with_hints(v, into, InputHints::new())
+    }
+
+    fn compress_with_hints(
+        &self,
+        v: &[f32],
+        into: &mut [u8],
+        hints: InputHints,
+    ) -> Result<(), GarnetQuantizerError> {
         let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
-            spherical::iface::Quantizer::<GlobalAllocator>::compress(
+            spherical::iface::Quantizer::<GlobalAllocator>::compress_with_hints(
                 quantizer,
                 v,
+                hints,
                 OpaqueMut::new(into),
                 ScopedAllocator::global(),
             )
@@ -179,13 +218,24 @@ where
     }
 
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError> {
+        self.query_computer_with_hints(
+            query,
+            InputHints::new().with_maybe_out_of_distribution(true),
+        )
+    }
+
+    fn query_computer_with_hints(
+        &self,
+        query: &[f32],
+        hints: InputHints,
+    ) -> Result<GarnetQueryComputer, GarnetQuantizerError> {
         let guard = self.inner.read();
         if let Some(quantizer) = &*guard {
             let computer = quantizer
-                .fused_query_computer(
+                .fused_query_computer_with_hints(
                     query,
                     iface::QueryLayout::FullPrecision,
-                    true,
+                    hints,
                     GlobalAllocator,
                     ScopedAllocator::global(),
                 )
