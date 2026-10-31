@@ -116,7 +116,6 @@ jobs:
   miri:
     name: miri-test
     runs-on: ubuntu-latest
-    continue-on-error: true
     env:
       # rustc +nightly-2026-05-21 --version reports:
       # rustc 1.97.0-nightly (b954122bb 2026-05-20)
