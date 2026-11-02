@@ -7,6 +7,15 @@
 
 use crate::num::Bytes;
 
+/// Prefetch the cache line associated with `ptr` into L0 cache.
+///
+/// # Safety
+///
+/// `ptr` must point to valid, readable memory.
+pub(crate) unsafe fn prefetch_cacheline(ptr: *const u8) {
+    diskann_vector::prefetch_cache_line(ptr.cast::<i8>());
+}
+
 /// A validated [`Prefetch`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checked<P>(P);
@@ -179,17 +188,16 @@ unsafe impl<const BYTES: usize> Prefetch for Unrolled<BYTES> {
 pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
     // Fetch the final location (the one containing the tag) first.
     let stride = Bytes::CACHELINE.value();
-    let ptr = ptr.cast::<i8>();
     let lines = len.div_ceil(stride);
     if lines == 0 {
         return;
     }
 
     // SAFETY: Inherited from caller.
-    unsafe { diskann_vector::prefetch_cache_line(ptr.add(stride * (lines - 1))) };
+    unsafe { prefetch_cacheline(ptr.add(stride * (lines - 1))) };
     for i in 0..(lines - 1) {
         // SAFETY: Inherited from caller.
-        unsafe { diskann_vector::prefetch_cache_line(ptr.add(stride * i)) };
+        unsafe { prefetch_cacheline(ptr.add(stride * i)) };
     }
 }
 

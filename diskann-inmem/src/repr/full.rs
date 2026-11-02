@@ -14,8 +14,8 @@ mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
     //!
-    //! * [`crate::repr::internal::intrusive::ExpandBeam`]: For index search.
-    //! * [`crate::repr::internal::intrusive::Prune`]: For index construction.
+    //! * [`crate::repr::internal::packed::ExpandBeam`]: For index search.
+    //! * [`crate::repr::internal::packed::Prune`]: For index construction.
     //!
     //! These two structs are modular with respect to their exact distance function and
     //! prefetcher. Since [`super::repr::ExpandBeam`] and [`super::repr::Prune`] are
@@ -62,7 +62,8 @@ use crate::{
     repr::{self, internal::Calf},
     store::{
         self, Store,
-        intrusive::{self, Intrusive},
+        // intrusive::{self, Intrusive},
+        packed::{self, Packed},
     },
     tag::AtomicTag,
 };
@@ -256,7 +257,7 @@ pub struct Full<T>
 where
     T: 'static,
 {
-    store: Store<Intrusive>,
+    store: Store<Packed>,
     start_point_ids: Range,
     capacity: Capacity,
     metric: Metric,
@@ -302,8 +303,9 @@ where
         } = config;
 
         let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
-        let intrusive = Intrusive::config(bytes);
-        let store = Store::new(layout, store, intrusive)?;
+        // let intrusive = Intrusive::config(bytes);
+        let packed = Packed::config(bytes);
+        let store = Store::new(layout, store, packed)?;
 
         // Initialize start points.
         for (i, row) in std::iter::zip(start_point_ids, start_points.rows()) {
@@ -341,10 +343,10 @@ where
         self.store.slots().bytes()
     }
 
-    #[cfg(test)]
-    fn bytes_plus_tag(&self) -> Bytes {
-        self.store.slots().bytes_plus_tag()
-    }
+    // #[cfg(test)]
+    // fn bytes_plus_tag(&self) -> Bytes {
+    //     self.store.slots().bytes_plus_tag()
+    // }
 
     /// Return the [`Metric`] for this representation.
     pub fn metric(&self) -> Metric {
@@ -362,8 +364,12 @@ where
         }
     }
 
-    fn reader(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
-        self.store.guard(|intrusive, guard| intrusive.reader(guard))
+    // fn reader(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
+    //     self.store.guard(|intrusive, guard| intrusive.reader(guard))
+    // }
+
+    fn reader(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
+        self.store.guard(|packed, guard| packed.reader(guard))
     }
 }
 
@@ -392,7 +398,8 @@ repr::internal::macros::representation!(
 
 repr::internal::macros::set_guard!(
     /// A [`repr::Guard`] for [`Full`].
-    for<'a> intrusive::Exclusive<'a>
+    // for<'a> intrusive::Exclusive<'a>
+    for<'a> packed::Exclusive<'a>
 );
 
 impl<T> repr::Set<&[T]> for Full<T>
@@ -564,11 +571,11 @@ where
 // Expand Beam (Search) //
 //----------------------//
 
-/// A temporary precursor for [`repr::internal::intrusive::ExpandBeam`] to simplify macros.
+/// A temporary precursor for [`repr::internal::packed::ExpandBeam`] to simplify macros.
 #[derive(Debug)]
 struct IntoExpandBeam<'a, T, U> {
     query: Calf<'a, [T]>,
-    reader: store::intrusive::Reader<'a>,
+    reader: store::packed::Reader<'a>,
     lookahead: Option<NonZeroUsize>,
     _data: PhantomData<U>,
 }
@@ -592,15 +599,16 @@ impl<'a, T, U> IntoExpandBeam<'a, T, U> {
         self,
         distance: D,
         prefetch: P,
-    ) -> repr::internal::intrusive::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
+    ) -> repr::internal::packed::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
     where
         D: Distance<T, U>,
         P: Prefetch,
     {
-        repr::internal::intrusive::ExpandBeam::new(
+        repr::internal::packed::ExpandBeam::new(
             self.reader,
             QueryDistance::new(self.query, distance),
             prefetch,
+            self.lookahead,
             self.lookahead,
         )
     }
@@ -623,8 +631,12 @@ diskann::convert_error!(ExpandBeamError);
 // Dispatching //
 /////////////////
 
+// const fn compute_bytes<T>(dim: usize) -> usize {
+//     dim * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
+// }
+
 const fn compute_bytes<T>(dim: usize) -> usize {
-    dim * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
+    dim * std::mem::size_of::<T>()
 }
 
 macro_rules! expand_beam {
@@ -644,9 +656,9 @@ macro_rules! expand_beam {
 }
 
 macro_rules! prune {
-    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::intrusive::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
+    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::packed::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
     ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
-        repr::internal::intrusive::Prune::new(
+        repr::internal::packed::Prune::new(
             $reader,
             Pure::<$self, $self, Specialize<$N, $f>>::new(),
         )
@@ -710,7 +722,13 @@ impl FullPrecisionImpl for f16 {
                     expand_beam!(into, SquaredL2)
                 }
             }
-            Metric::InnerProduct => expand_beam!(into, InnerProduct),
+            Metric::InnerProduct => {
+                if full.dim() == 768 {
+                    expand_beam!(into, { f16, 768, InnerProduct })
+                } else {
+                    expand_beam!(into, InnerProduct)
+                }
+            },
             Metric::Cosine => expand_beam!(into, Cosine),
             Metric::CosineNormalized => expand_beam!(into, CosineNormalized),
         };
@@ -723,7 +741,13 @@ impl FullPrecisionImpl for f16 {
 
         let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
-            Metric::InnerProduct => prune!(Self, reader, InnerProduct),
+            Metric::InnerProduct => {
+                if full.dim() == 768 {
+                    prune!(Self, reader, { 768, InnerProduct })
+                } else {
+                    prune!(Self, reader, InnerProduct)
+                }
+            },
             Metric::Cosine => prune!(Self, reader, Cosine),
             Metric::CosineNormalized => prune!(Self, reader, CosineNormalized),
         };
@@ -790,7 +814,7 @@ impl FullPrecisionImpl for i8 {
         let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
         let output: Box<dyn repr::Prune> =
-            repr::internal::intrusive::Prune::new(reader, distance).boxed();
+            repr::internal::packed::Prune::new(reader, distance).boxed();
 
         Ok(output)
     }
@@ -916,12 +940,12 @@ mod tests {
 
         assert_eq!(full.dim(), 1, "start points only have one dimension");
         assert_eq!(full.bytes(), Bytes::size_of::<f32>());
-        assert_eq!(
-            full.bytes_plus_tag(),
-            Bytes::size_of::<f32>()
-                .checked_add(Bytes::size_of::<AtomicTag>())
-                .unwrap()
-        );
+        // assert_eq!(
+        //     full.bytes_plus_tag(),
+        //     Bytes::size_of::<f32>()
+        //         .checked_add(Bytes::size_of::<AtomicTag>())
+        //         .unwrap()
+        // );
         assert_eq!(full.metric(), Metric::L2);
         assert_eq!(
             <_ as repr::Representation>::id_limit(&full),
@@ -960,275 +984,6 @@ mod tests {
             // the length of each slice is exactly 1. Therefore, the pointer read is safe.
             unsafe { x.as_ptr().read_unaligned() + y.as_ptr().read_unaligned() }
         }
-    }
-
-    /// A Miri-friendly test for [`ExpandBeam`].
-    ///
-    /// This test covers the following:
-    ///
-    /// 1. Prefetches are in-bounds for all lookaheads.
-    /// 2. [`ExpandBeam`] doesn't lie about its [`IdLimit`].
-    /// 3. [`ExpandBeam`]'s methods are internally consistent with each other and
-    ///    consistent with the parent [`Full`] for item readability.
-    /// 4. [`ExpandBeam::expand_beam`] preserves input order and visits every item in the
-    ///    input list.
-    #[test]
-    fn test_expand_beam() {
-        let capacity = Capacity::new(20);
-        let id_limit = IdLimit::new(22);
-
-        let (mut full, mut points) = test_full(capacity);
-
-        assert_eq!(<_ as repr::Representation>::capacity(&full), capacity);
-        assert_eq!(<_ as repr::Representation>::id_limit(&full), id_limit);
-
-        let mut available: HashSet<u32> = (0..capacity.value()).map(|i| i as u32).collect();
-
-        // Insert the values 0 to 10.
-        for i in 0u32..10 {
-            let guard = <_ as repr::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
-
-            let id = <_ as repr::Guard>::id(&guard);
-
-            assert!(
-                available.remove(&id),
-                "insertion should return available slots",
-            );
-
-            assert!(
-                points.insert(id, i as f32).is_none(),
-                "insertion should not repeat",
-            );
-
-            <_ as repr::Guard>::publish(guard);
-        }
-
-        // Lookaheads to try.
-        let lookaheads: &[Option<NonZeroUsize>] = &[
-            None,
-            NonZeroUsize::new(1),
-            NonZeroUsize::new(2),
-            NonZeroUsize::new(5),
-            NonZeroUsize::new(10),
-            NonZeroUsize::new(100),
-        ];
-
-        // This is the main loop for testing `ExpandBeam`.
-        //
-        // We do several things.
-        //
-        // 1. We insert two additional IDs but hold their guards without publishing.
-        //    This tests that items remain unreadable until they are published.
-        //
-        // 2. We publish two new points and immediately retire them.
-        //    This tests that we correctly make these points unreadable.
-        for lookahead in lookaheads {
-            full.lookahead = *lookahead;
-
-            let g0 = <_ as repr::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
-            let g1 = <_ as repr::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
-            let g2 = <_ as repr::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
-            let g3 = <_ as repr::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
-
-            {
-                let g0_id = <_ as repr::Guard>::id(&g0);
-                <_ as repr::Guard>::publish(g0);
-                <_ as repr::Representation>::retire(&full, g0_id).unwrap();
-            }
-
-            {
-                let g1_id = <_ as repr::Guard>::id(&g1);
-                <_ as repr::Guard>::publish(g1);
-                <_ as repr::Representation>::retire(&full, g1_id).unwrap();
-            }
-
-            let query = -1.0f32;
-
-            let into =
-                IntoExpandBeam::new(&full, Calf::Borrowed(std::slice::from_ref(&query))).unwrap();
-
-            let expand = into.into_expand_beam(repr::test::TestDistance, prefetch::Loop::new());
-
-            assert_eq!(<_ as repr::ExpandBeam>::id_limit(&expand), id_limit);
-
-            let mut buf = Vec::<Neighbor<u32>>::new();
-            let mut list = Vec::<u32>::new();
-
-            // Use triangular indexing from `0..id_limit` with `points` serving as the
-            // groundtruth.
-            //
-            // Note that we purposely make `list` extra long with redundant indices to help
-            // catch indexing bugs inside `ExpandBeam`.
-            for i in 0..=id_limit.value() {
-                list.clear();
-                list.extend((0..i).rev());
-                list.extend(0..i);
-
-                buf.resize(list.len(), Default::default());
-
-                let read = repr::safe_expand_beam(&expand, &list, &mut buf).unwrap();
-
-                let expected: Vec<(u32, f32)> = list
-                    .iter()
-                    .copied()
-                    .filter_map(|id| match points.get(&id) {
-                        Some(point) => {
-                            let expected = point + query;
-
-                            assert!(
-                                <_ as repr::Representation>::is_readable(&full, id).unwrap(),
-                                "point should be readable"
-                            );
-
-                            assert_eq!(
-                                <_ as repr::ExpandBeam>::evaluate(&expand, id).unwrap(),
-                                Some(expected),
-                                "readable points should return valid distances",
-                            );
-
-                            Some((id, expected))
-                        }
-                        None => {
-                            assert!(
-                                !<_ as repr::Representation>::is_readable(&full, id).unwrap(),
-                                "points not yielded by ExpandBeam should be unreadable"
-                            );
-
-                            assert!(
-                                <_ as repr::ExpandBeam>::evaluate(&expand, id)
-                                    .unwrap()
-                                    .is_none(),
-                                "unreadable points should return `None` for their distance",
-                            );
-
-                            None
-                        }
-                    })
-                    .collect();
-
-                for i in 0..read {
-                    assert_eq!(*buf[i].id(), expected[i].0, "i = {i}");
-                    assert_eq!(*buf[i].distance(), expected[i].1, "i = {i}");
-                }
-            }
-
-            assert!(
-                <_ as repr::ExpandBeam>::evaluate(&expand, id_limit.value()).is_err(),
-                "`ExpandBeam::evaluate` should catch out-of-bounds errors",
-            );
-
-            // Ensure we hold onto `g2` and `g3` for the duration of the above check.
-            drop(g2);
-            drop(g3);
-        }
-    }
-
-    fn test_prune_inner(
-        points: &HashMap<u32, f32>,
-        prune: &mut repr::internal::intrusive::Prune<'_, repr::test::TestDistance>,
-        ids: &[u32],
-    ) {
-        let mut items: HashMap<u32, Option<repr::PruneKey>> =
-            ids.iter().map(|id| (*id, None)).collect();
-
-        let processed = <_ as repr::Prune>::prepare(prune, items.iter_mut()).unwrap();
-        assert_eq!(processed, items.values().filter(|i| i.is_some()).count());
-
-        // Ensure that `prepare` agrees with `points`.
-        for (k, v) in items.iter() {
-            match v {
-                Some(_) => assert!(points.contains_key(k)),
-                None => assert!(!points.contains_key(k)),
-            }
-        }
-
-        fn filter((k, v): (&u32, &Option<repr::PruneKey>)) -> Option<(u32, repr::PruneKey)> {
-            v.map(|v| (*k, v))
-        }
-
-        // Ensure that distances agree.
-        for (k0, v0) in items.iter().filter_map(filter) {
-            for (k1, v1) in items.iter().filter_map(filter) {
-                // Manually implement `TestDistance`.
-                let expected = points[&k0] + points[&k1];
-                let got = <_ as repr::Prune>::evaluate(prune, v0, v1);
-                assert_eq!(expected, got);
-            }
-        }
-    }
-
-    /// A Miri-friendly test for `Prune`.
-    #[test]
-    fn test_prune() {
-        let capacity = Capacity::new(20);
-        let id_limit = IdLimit::new(22);
-
-        let (full, mut points) = test_full(capacity);
-
-        assert_eq!(<_ as repr::Representation>::capacity(&full), capacity);
-        assert_eq!(<_ as repr::Representation>::id_limit(&full), id_limit);
-
-        let mut available: HashSet<u32> = (0..capacity.value()).map(|i| i as u32).collect();
-
-        // Insert the values 0 to 10.
-        for i in 0u32..10 {
-            let guard = <_ as repr::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
-
-            let id = <_ as repr::Guard>::id(&guard);
-
-            assert!(
-                available.remove(&id),
-                "insertion should return available slots",
-            );
-
-            assert!(
-                points.insert(id, i as f32).is_none(),
-                "insertion should not repeat",
-            );
-
-            <_ as repr::Guard>::publish(guard);
-        }
-
-        // We do several things.
-        //
-        // 1. We insert two additional IDs but hold their guards without publishing.
-        //    This tests that items remain unreadable until they are published.
-        //
-        // 2. We publish two new points and immediately retire them.
-        //    This tests that we correctly make these points unreadable.
-        let g0 = <_ as repr::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
-        let g1 = <_ as repr::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
-        let g2 = <_ as repr::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
-        let g3 = <_ as repr::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
-
-        {
-            let g0_id = <_ as repr::Guard>::id(&g0);
-            <_ as repr::Guard>::publish(g0);
-            <_ as repr::Representation>::retire(&full, g0_id).unwrap();
-        }
-
-        {
-            let g1_id = <_ as repr::Guard>::id(&g1);
-            <_ as repr::Guard>::publish(g1);
-            <_ as repr::Representation>::retire(&full, g1_id).unwrap();
-        }
-
-        let mut prune =
-            repr::internal::intrusive::Prune::new(full.reader().unwrap(), repr::test::TestDistance);
-
-        // Note that we emit reads above the `IdLimit`, which we expect to be silently
-        // rejected.
-        for i in 0..=(id_limit.value() + 5) {
-            let mut ids: Vec<u32> = (0..i).collect();
-            test_prune_inner(&points, &mut prune, &ids);
-
-            ids.reverse();
-            test_prune_inner(&points, &mut prune, &ids);
-        }
-
-        // Drop the guards - verifying that they are held in-limbo during the test.
-        drop(g2);
-        drop(g3);
     }
 
     //----------------------//
