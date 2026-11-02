@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann::{utils::VectorRepr, ANNResult};
+use diskann::{ANNResult, utils::VectorRepr};
 use diskann_utils::views::rowmajor;
 
 /// A quantizer constructed once and shared across compression batches.

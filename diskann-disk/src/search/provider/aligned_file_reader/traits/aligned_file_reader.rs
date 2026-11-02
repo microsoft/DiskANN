@@ -5,7 +5,7 @@
 
 use diskann::ANNResult;
 
-use crate::search::provider::aligned_file_reader::{aligned_read::Alignment, AlignedRead};
+use crate::search::provider::aligned_file_reader::{AlignedRead, aligned_read::Alignment};
 
 pub trait AlignedFileReader: Send + Sync {
     /// Alignment requirement applied to every `AlignedRead<u8, Self::Alignment>`
