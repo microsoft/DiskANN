@@ -2003,6 +2003,7 @@ where
     /// - [`crate::graph::search::Knn`]: Standard k-NN graph-based search
     /// - [`crate::graph::search::MultihopFilterSearch`]: Label-filtered search with multi-hop expansion
     /// - [`crate::graph::search::InlineFilterSearch`]: Inline filtered search with optional adaptive L sizing
+    /// - [`crate::graph::search::PathSeer`]: Two-phase filtered search for in-memory graphs
     /// - [`crate::graph::search::Range`]: Range-based search within a distance radius
     /// - [`crate::graph::search::Diverse`]: Diversity-aware search (feature-gated)
     ///

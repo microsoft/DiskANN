@@ -164,12 +164,12 @@ pub(crate) mod tests {
         graph::{
             self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
-            ext::labeled::QueryLabelProvider,
+            ext::labeled::{self, QueryLabelProvider},
             glue::{
                 self, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
                 MultiInsertStrategy, SearchStrategy,
             },
-            search::Range,
+            search::{Knn, PathSeer, Range},
             search_output_buffer,
         },
         neighbor::{self, Neighbor},
@@ -1047,6 +1047,52 @@ pub(crate) mod tests {
         fn is_match(&self, id: u32) -> bool {
             id.is_multiple_of(2)
         }
+    }
+
+    #[tokio::test]
+    async fn pathseer_searches_in_memory_full_precision_index() {
+        #[derive(Debug)]
+        struct LastTwo;
+        impl QueryLabelProvider<u32> for LastTwo {
+            fn is_match(&self, id: u32) -> bool {
+                id == 2 || id == 3
+            }
+        }
+
+        let (config, params) = simplified_builder(2, 2, Metric::L2, 1, 4, no_modify).unwrap();
+        let index = new_index::<f32, _>(config, params, NoDeletes).unwrap();
+        populate_data(
+            &index.data_provider,
+            &DefaultContext,
+            &[vec![1.0], vec![2.0], vec![3.0], vec![4.0], vec![0.0]],
+        )
+        .await;
+        let neighbors = [
+            AdjacencyList::from_iter_untrusted([2]),
+            AdjacencyList::from_iter_untrusted([3]),
+            AdjacencyList::new(),
+            AdjacencyList::new(),
+            AdjacencyList::from_iter_untrusted([0, 1]),
+        ];
+        populate_graph(&mut index.provider().neighbors(), &neighbors).await;
+
+        let mut output = Vec::<Neighbor<u32>>::new();
+        let stats = index
+            .search_with(
+                PathSeer::new(Knn::new_default(2).unwrap()),
+                &labeled::Filtered::new(FullPrecision, &LastTwo),
+                glue::CopyIds,
+                &DefaultContext,
+                &[3.0f32][..],
+                &mut output,
+            )
+            .await
+            .unwrap();
+        assert_eq!(stats.result_count, 2);
+        assert_eq!(
+            output.iter().map(|point| *point.id()).collect::<Vec<_>>(),
+            [2, 3]
+        );
     }
 
     async fn test_beta_filtering(

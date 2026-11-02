@@ -206,6 +206,12 @@ pub struct Provider {
     pub(crate) append_neighbors: Counter,
 }
 
+impl provider::PathSeerGraph for Provider {
+    fn pathseer_neighbors(&self, id: u32, neighbors: &mut AdjacencyList<u32>) -> ANNResult<()> {
+        self.get_neighbors(id, neighbors)
+    }
+}
+
 impl Provider {
     /// Create a new [`Provider`].
     ///

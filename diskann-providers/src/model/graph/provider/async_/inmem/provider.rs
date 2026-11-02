@@ -11,7 +11,7 @@ use diskann::{
     graph::AdjacencyList,
     provider::{
         DataProvider, DefaultAccessor, DefaultContext, Delete, ElementStatus, ExecutionContext,
-        NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
+        NeighborAccessor, NeighborAccessorMut, NoopGuard, PathSeerGraph, SetElement,
     },
     utils::{IntoUsize, ONE, VectorRepr},
 };
@@ -581,6 +581,19 @@ where
         gid: &Self::ExternalId,
     ) -> Result<Self::InternalId, Self::Error> {
         Ok(*gid)
+    }
+}
+
+impl<U, V, D, Ctx> PathSeerGraph for DefaultProvider<U, V, D, Ctx>
+where
+    U: AsyncFriendly,
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    fn pathseer_neighbors(&self, id: u32, neighbors: &mut AdjacencyList<u32>) -> ANNResult<()> {
+        self.neighbor_provider
+            .get_neighbors_sync(id.into_usize(), neighbors)
     }
 }
 
