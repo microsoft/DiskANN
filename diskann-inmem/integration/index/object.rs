@@ -10,14 +10,14 @@ use diskann::{
     neighbor::Neighbor,
     utils::IntoUsize,
 };
-use diskann_benchmark_runner::utils::fmt::KeyValue;
+use diskann_benchmark_runner::{report::Report, utils::fmt::KeyValue};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_inmem::{Context, Provider, Strategy, integration, repr};
 
 use crate::support::{
-    check::{CheckMatch, Match, check_all_fields},
+    check::{CheckMatch, check_all_fields},
     datatype::{AsDataType, FromSlice, Slice},
 };
 
@@ -73,16 +73,13 @@ impl std::fmt::Display for KnnSearch {
 }
 
 impl CheckMatch for KnnSearch {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,
             { hops, cmps },
         );
-
-        builder.finish_with_remark(Some(
-            "check assumes deterministic (usually single-threaded) execution".into(),
-        ))
+        builder.finish()
     }
 }
 
@@ -161,7 +158,7 @@ impl From<integration::counters::CounterSnapshot> for Counters {
 }
 
 impl CheckMatch for Counters {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,
@@ -175,10 +172,7 @@ impl CheckMatch for Counters {
                 append_neighbors
             }
         );
-
-        builder.finish_with_remark(Some(
-            "check assumes deterministic (usually single-threaded) execution".into(),
-        ))
+        builder.finish()
     }
 }
 

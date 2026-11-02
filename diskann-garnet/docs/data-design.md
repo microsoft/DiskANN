@@ -90,7 +90,7 @@ The are several terms in the index used for internal state management of the dis
 
 Only a single start point is supported. Its internal ID is fixed when the provider is created and defaults to `DEFAULT_START_POINT_ID` (`u32::MAX`). During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
 
-Imports must supply the full vector, neighbor list, and (for quantized indexes) quantized vector at the configured start-point ID. Finalization validates these terms and populates the caches. The neighbor count must fit the configured degree.
+Imports must supply the full vector, neighbor list, and (for quantized indexes) quantized vector at the configured start-point ID. The neighbor count must fit the configured degree. Finalization populates the caches.
 
 Start points have no associated attributes or ID mappings and are not counted as active vectors.
 
@@ -127,9 +127,11 @@ Quantizer state can only be replaced while no ordinary IDs are occupied in the F
 
 When no saved status exists, an empty index starts `Ready` if it is unquantized or has supplied quantizer state, and `Disabled` otherwise. The initial status is persisted before writing Q8's generated default table, so that table cannot enable imports on reopen. Successfully supplying quantizer state during creation publishes `Ready` after setup completes. A saved status is restored rather than inferred from the absence of a start point.
 
-The first ordinary operation transitions `Ready` to `Disabled`; the first accepted imported term transitions `Ready` to `Importing`. More terms can then arrive in parallel, but ordinary operations fail until all verification tasks and finalization succeed. The last successful task transitions `Importing` to `Disabled`. Empty finalization also waits for every task and does not create a start point. Failed verification or finalization leaves an active import `Importing`.
+The first ordinary operation transitions `Ready` to `Disabled`; the first accepted imported term transitions `Ready` to `Importing`. More terms can then arrive in parallel, but ordinary operations fail until finalization succeeds. Optional `verify_import` calls check their partitions without changing status. `finish_import` loads the imported start point into caches and transitions `Importing` to `Disabled`. Missing start-point terms or a failed finalization leave the import `Importing`. A failed verification never changes import status.
 
-Status transitions persist the new byte before publishing it with an atomic compare-exchange, under a transition-only mutex. A failed metadata write does not publish the new in-memory status. Ordinary operations in `Disabled` only load the atomic status; admitted term writes and verification workers do not hold the transition mutex. Callers must finish all term writes before starting finalization.
+Status transitions persist the new byte before publishing it with an atomic compare-exchange, under a transition-only mutex. A failed metadata write does not publish the new in-memory status. Ordinary operations in `Disabled` only load the atomic status; admitted term writes and verification workers do not hold the transition mutex. Callers must finish all term writes before verification or finalization. Ordinary operations may begin after finalization succeeds.
+
+Concurrent `finish_import` calls serialize; once one succeeds, subsequent calls on that handle return success as well.
 
 The former Boolean format did not distinguish ready indexes from unfinished imports; finish those imports before upgrading.
 

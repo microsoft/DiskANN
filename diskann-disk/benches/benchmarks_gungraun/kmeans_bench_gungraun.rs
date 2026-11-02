@@ -14,9 +14,9 @@ const DIM: usize = 4;
 const NUM_CENTERS: usize = 256;
 const MAX_KMEANS_REPS: usize = 12;
 
-iai_callgrind::library_benchmark_group!(
-    name = kmeans_bench_iai;
-    benchmarks = benchmark_kmeans_iai, snrm2_benchmark_rust_iai,
+gungraun::library_benchmark_group!(
+    name = kmeans_bench_gungraun;
+    benchmarks = benchmark_kmeans_gungraun, snrm2_benchmark_rust_gungraun,
 );
 
 fn setup_data() -> (Vec<f32>, RayonThreadPool) {
@@ -28,8 +28,8 @@ fn setup_data() -> (Vec<f32>, RayonThreadPool) {
 
     (data, pool)
 }
-#[iai_callgrind::library_benchmark(setup = setup_data)]
-pub fn benchmark_kmeans_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
+#[gungraun::library_benchmark(setup = setup_data)]
+pub fn benchmark_kmeans_gungraun((data, pool): (Vec<f32>, RayonThreadPool)) {
     let mut centers: Vec<f32> = vec![0.0; NUM_CENTERS * DIM];
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
     k_means_clustering(
@@ -47,8 +47,8 @@ pub fn benchmark_kmeans_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
     black_box(centers);
 }
 
-#[iai_callgrind::library_benchmark(setup = setup_data)]
-pub fn snrm2_benchmark_rust_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
+#[gungraun::library_benchmark(setup = setup_data)]
+pub fn snrm2_benchmark_rust_gungraun((data, pool): (Vec<f32>, RayonThreadPool)) {
     let mut docs_l2sq = vec![0.0; NUM_POINTS];
     compute_vecs_l2sq(&mut docs_l2sq, black_box(&data), DIM, pool.as_ref())
         .expect("compute_vecs_l2sq call failed");

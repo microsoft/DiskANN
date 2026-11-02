@@ -148,18 +148,6 @@ where
             None => Err(ANNError::message("no mapping")),
         }
     }
-
-    /// Translate an internal id to its corresponding external id.
-    fn to_external_id(
-        &self,
-        _context: &Self::Context,
-        id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error> {
-        match self.mapping.to_external(id) {
-            Some(gid) => Ok(gid),
-            None => Err(ANNError::message("no mapping")),
-        }
-    }
 }
 
 // TODO: The element-status checks here are profoundly approximate because we try to avoid
@@ -888,10 +876,6 @@ mod tests {
             let i = (10 * i + 1) as u64;
             let internal = index.provider().to_internal_id(&Context, &i).unwrap();
             assert_ne!(internal as u64, i);
-            assert_eq!(
-                index.provider().to_external_id(&Context, internal).unwrap(),
-                i
-            );
 
             assert!(
                 !index
@@ -913,7 +897,6 @@ mod tests {
 
         // Assert that out-of-bounds translations returns errors.
         assert!(index.provider().to_internal_id(&Context, &0).is_err());
-        assert!(index.provider().to_external_id(&Context, 26).is_err());
 
         // Searches should return something reasonable.
         let knn = Knn::new(10, None).unwrap();

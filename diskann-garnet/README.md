@@ -51,15 +51,21 @@ Existing DiskANN graphs can be loaded without rebuilding them through `VADD`:
 
 1. Create an empty set with `XVCREATE`, supplying `QUANT_STATE` for a quantized index.
 2. Load its terms with `XVIMPORT`. Terms may be imported in any order and in parallel.
-3. Wait for all term imports to complete, then call `XVIMPORT key FINISH` before normal use.
+3. Wait for all term imports to complete. At the FFI layer, optionally call `verify_import(context, index, task_idx, task_count)` for each partition to check integrity. Task 0 also checks the configured start point.
+4. Call `finish_import(context, index)` before normal use to finalize the index.
 
 Internal IDs may also arrive in any order. Importing a high ID creates all missing
 free-space-map blocks through that ID; each block covers 65,536 IDs and uses 8 KiB.
-The start point is created during finalization and is excluded from FSM accounting.
+The start-point vector, neighbors, and required quantized vector must be imported,
+even with no user vectors. Finalization caches these terms; it does not create a
+start point. The start point is excluded from FSM accounting.
 
 At the FFI layer, `can_import` checks eligibility.
 
-Ordinary operations (`card`, search, ID checks) and `FINISH` permanently disable importing.
+Ordinary operations (`card`, search, ID checks) disable importing on an eligible
+empty index. Once importing begins, they fail until finalization succeeds.
+Successful `finish_import` permanently disables importing; `verify_import` never
+changes import status.
 
 See the [FFI reference](docs/ffi-design.rs) and [data design](docs/data-design.md)
 for API and term formats.
