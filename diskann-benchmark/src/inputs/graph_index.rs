@@ -269,7 +269,7 @@ impl MultihopFilterSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AdaptiveL {
     pub(crate) sample_count: NonZeroUsize,
     pub(crate) scale_factor: f64,
