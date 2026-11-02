@@ -9,10 +9,10 @@ use std::{
     time::Instant,
 };
 
-use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
+use diskann::{ANNResult, error::IntoANNResult, utils::VectorRepr};
 use diskann_providers::{
     storage::{StorageReadProvider, StorageWriteProvider},
-    utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
+    utils::{BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef, load_metadata_from_file},
 };
 use diskann_utils::{
     io::Metadata,
@@ -22,7 +22,7 @@ use rayon::iter::IndexedParallelIterator;
 use tracing::info;
 
 use crate::{
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     storage::quant::compressor::QuantCompressor,
 };
 
@@ -205,7 +205,7 @@ mod generator_tests {
     use diskann::utils::read_exact_into;
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::utils::create_thread_pool_for_test;
-    use diskann_utils::io::{write_bin, Metadata};
+    use diskann_utils::io::{Metadata, write_bin};
     use rstest::rstest;
     use vfs::{FileSystem, MemoryFS};
 

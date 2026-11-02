@@ -161,8 +161,8 @@ fn read_job(
 
     loop {
         let mut reads = Vec::<&Data>::new();
-        let guard = registry.guard().unwrap();
-        if guard.epoch >= stop_at {
+        let guard = registry.retire().unwrap();
+        if guard.test_epoch() >= stop_at {
             break;
         }
 
@@ -177,7 +177,7 @@ fn read_job(
 
                     std::thread::yield_now();
                     records.push(Record {
-                        epoch: guard.epoch,
+                        epoch: guard.test_epoch(),
                         index: i,
                         data: *read,
                     });

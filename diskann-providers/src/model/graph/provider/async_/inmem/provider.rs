@@ -582,15 +582,6 @@ where
     ) -> Result<Self::InternalId, Self::Error> {
         Ok(*gid)
     }
-
-    /// Translate an internal id its corresponding external id.
-    fn to_external_id(
-        &self,
-        _context: &Self::Context,
-        id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error> {
-        Ok(id)
-    }
 }
 
 /// Support deletes when we have a valid delete provider.
@@ -760,7 +751,6 @@ mod tests {
 
         let iter = provider.iter();
         for i in iter.clone() {
-            assert_eq!(provider.to_external_id(ctx, i).unwrap(), i);
             assert_eq!(provider.to_internal_id(ctx, &i).unwrap(), i);
             assert_eq!(
                 provider.status_by_internal_id(ctx, i).await.unwrap(),

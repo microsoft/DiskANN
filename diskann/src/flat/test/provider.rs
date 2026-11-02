@@ -256,14 +256,6 @@ impl provider::DataProvider for Provider {
             Err(InvalidId(*gid))
         }
     }
-
-    fn to_external_id(&self, _ctx: &Context, id: u32) -> Result<u32, InvalidId> {
-        if (id as usize) < self.items.nrows() {
-            Ok(id)
-        } else {
-            Err(InvalidId(id))
-        }
-    }
 }
 
 /////////////
