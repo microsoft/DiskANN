@@ -3,20 +3,15 @@
  * Licensed under the MIT license.
  */
 
+use diskann::neighbor::Neighbor;
 use hashbrown::{HashMap, hash_map::Entry};
 
 use crate::{
-    num::{LogicalId, SlotId},
+    num::{IdLimit, LogicalId, SlotId},
     repr,
 };
 
-#[cfg(feature = "quantization")]
-use diskann::neighbor::Neighbor;
-
-#[cfg(feature = "quantization")]
-use crate::num::IdLimit;
-
-/// A test distance that simply sums scalar floating point values.
+/// A test distance that simply sums values as slices of `f32`.
 #[derive(Debug)]
 pub(super) struct TestDistance;
 
@@ -24,30 +19,45 @@ impl repr::internal::RawDistance for TestDistance {
     type Error = diskann::error::Infallible;
 
     fn eval(&self, x: &[u8], y: &[u8]) -> Result<f32, Self::Error> {
-        let x: f32 = bytemuck::pod_read_unaligned(x);
-        let y: f32 = bytemuck::pod_read_unaligned(y);
-        Ok(x + y)
+        assert_eq!(x.len(), y.len());
+        assert!(x.len().is_multiple_of(4));
+        assert!(y.len().is_multiple_of(4));
+
+        let mut sum: f32 = 0.0;
+        for (x, y) in std::iter::zip(x.chunks_exact(4), y.chunks_exact(4)) {
+            let x: f32 = bytemuck::pod_read_unaligned(x);
+            let y: f32 = bytemuck::pod_read_unaligned(y);
+            sum += x + y;
+        }
+
+        Ok(sum)
     }
 }
 
 /// A test query distance that simply sums scalar floating point values.
 #[derive(Debug)]
-pub(super) struct TestQueryDistance {
-    query: f32,
+pub(super) struct TestQueryDistance<'a> {
+    query: &'a [f32],
 }
 
-impl TestQueryDistance {
-    pub(super) fn new(query: f32) -> Self {
+impl<'a> TestQueryDistance<'a> {
+    pub(super) fn new(query: &'a [f32]) -> Self {
         Self { query }
     }
 }
 
-impl repr::internal::RawQueryDistance for TestQueryDistance {
+impl repr::internal::RawQueryDistance for TestQueryDistance<'_> {
     type Error = diskann::error::Infallible;
 
     fn eval(&self, x: &[u8]) -> Result<f32, Self::Error> {
-        let x: f32 = bytemuck::pod_read_unaligned(x);
-        Ok(self.query + x)
+        assert_eq!(x.len(), std::mem::size_of_val(self.query));
+
+        let mut sum = 0.0;
+        for (q, x) in std::iter::zip(self.query.iter(), x.chunks_exact(4)) {
+            let x: f32 = bytemuck::pod_read_unaligned(x);
+            sum += q + x;
+        }
+        Ok(sum)
     }
 }
 
@@ -92,9 +102,11 @@ impl Reference {
                     logical, slot
                 ),
             },
-            Entry::Occupied(_) => panic!(
-                "reference already contains a mapping for {:?}/{:?}",
-                logical, slot
+            Entry::Occupied(o) => panic!(
+                "reference already contains a mapping for {:?}/{:?}: {:?}",
+                logical,
+                slot,
+                o.get()
             ),
         }
     }
@@ -104,7 +116,6 @@ impl Reference {
     /// # Panics
     ///
     /// Panics if no mapping for `logical` exists.
-    #[cfg(feature = "quantization")]
     pub(super) fn delete(&mut self, logical: LogicalId) -> SlotId {
         let slot = match self.id.remove(&logical) {
             Some(slot) => slot,
@@ -140,6 +151,13 @@ impl Reference {
             Some(id) => id,
             None => panic!("no logical id for {:?}", id),
         }
+    }
+
+    /// Return an iterator over the contents of the reference.
+    pub(super) fn iter(&self) -> impl Iterator<Item = (LogicalId, SlotId, &[f32])> {
+        self.data
+            .iter()
+            .map(|(slot_id, (logical_id, data))| (*logical_id, *slot_id, &**data))
     }
 }
 
@@ -194,7 +212,6 @@ impl ReferenceLookup for LogicalId {
 /// * [`ExpandBeam::expand_beam`]: Provide all `ids` to `expand_beam`. Verify that ids not
 ///   present in `distances` get removed and all remaining ids are present and have a
 ///   distance value equal to the corresponding entry in `distances`.
-#[cfg(feature = "quantization")]
 pub(super) fn test_expand_beam(
     accessor: &dyn repr::ExpandBeam,
     id_limit: IdLimit,
@@ -280,7 +297,6 @@ pub(super) fn test_expand_beam(
 /// (0, 0), (0, 1), (0, 2)
 /// (1, 0), (1, 1), (1, 2)
 /// (2, 0), (2, 1), (2, 2)
-#[cfg(feature = "quantization")]
 pub(super) fn test_prune(
     accessor: &mut dyn repr::Prune,
     distances: HashMap<(SlotId, SlotId), f32>,
