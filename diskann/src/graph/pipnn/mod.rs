@@ -224,7 +224,7 @@ crate::convert_error!(PiPNNConfigError);
 /// The DiskANN graph [`Config`] supplies the degree, alpha, and prune kind.
 ///
 /// The default configuration is `c_max = 512`, `p_samp = 0.005`,
-/// `max_leaders = 1000`, `fanout = [10, 3]`, `max_depth = 10` and `leaf_k = 2`.
+/// `max_leaders = 1000`, `fanout = [10, 3]`, `max_depth = 30` and `leaf_k = 2`.
 /// Each point then joins about 30 leaves, the product of the fanout values.
 /// Larger `c_max`, fanout values and `leaf_k` all give each point more or
 /// nearer candidates, which raises recall and makes the build slower.

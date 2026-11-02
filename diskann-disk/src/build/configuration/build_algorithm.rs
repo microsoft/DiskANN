@@ -81,7 +81,7 @@ impl Default for PiPNNParameters {
             NonZeroUsize::new(10).unwrap(),
             NonZeroUsize::new(3).unwrap(),
         ];
-        const MAX_DEPTH: NonZeroUsize = NonZeroUsize::new(10).unwrap();
+        const MAX_DEPTH: NonZeroUsize = NonZeroUsize::new(30).unwrap();
         const K: NonZeroUsize = NonZeroUsize::new(2).unwrap();
         Self {
             c_max: C_MAX,
@@ -168,7 +168,7 @@ mod tests {
             config.fanout.iter().map(|f| f.get()).collect::<Vec<_>>(),
             [10, 3]
         );
-        assert_eq!(config.max_depth.get(), 10);
+        assert_eq!(config.max_depth.get(), 30);
         assert_eq!(config.k.get(), 3);
         assert_eq!(config.hash_prune, None);
 
