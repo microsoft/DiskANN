@@ -90,8 +90,11 @@ impl Bytes {
 //////////////
 
 // Return `x` as a `NonZeroUsize` or `NonZeroUsize::MIN` if `x` is zero.
-pub(super) fn value_or_one(x: usize) -> NonZeroUsize {
-    NonZeroUsize::new(x).unwrap_or(NonZeroUsize::MIN)
+pub(super) const fn value_or_one(x: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(x) {
+        Some(value) => value,
+        None => NonZeroUsize::MIN,
+    }
 }
 
 macro_rules! newtype {
