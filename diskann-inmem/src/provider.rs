@@ -102,7 +102,7 @@ where
         C: repr::RepresentationConfig<Representation = R>,
     {
         let representation = <_ as repr::RepresentationConfig>::build(config)?;
-        let mapping = IdMap::new(representation.capacity());
+        let mapping = IdMap::new(representation.id_limit());
 
         Ok(Self {
             representation,
@@ -846,10 +846,6 @@ mod tests {
         )
         .unwrap();
 
-        // let full = Full::<f32>::new(grid.dim().into(), Metric::L2);
-
-        // let config = Config::new(grid.num_points(size), degree);
-
         let provider = Provider::<_, u64>::new(config).unwrap();
         assert_eq!(provider.max_degree(), MaxDegree::new(degree));
 
@@ -875,7 +871,12 @@ mod tests {
         for i in 0..data.nrows() {
             let i = (10 * i + 1) as u64;
             let internal = index.provider().to_internal_id(&Context, &i).unwrap();
-            assert_ne!(internal as u64, i);
+            assert_ne!(
+                internal as u64,
+                i + 1,
+                "this relies on the start points being located at the beginning of the id space\
+                 this is **NOT** guaranteed",
+            );
 
             assert!(
                 !index
