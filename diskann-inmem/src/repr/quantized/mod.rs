@@ -272,16 +272,22 @@ impl Config {
             return Err(ConfigError::empty_start_points());
         }
 
-        let start_point_ids = Range::start_plus_usize(capacity.value(), num_start_points)
-            .ok_or_else(|| ConfigError::too_many_points(capacity, num_start_points))?;
+        let too_many_points = || ConfigError::too_many_points(capacity, num_start_points);
+        let start_point_ids =
+            Range::start_plus_usize(0, num_start_points).ok_or_else(too_many_points)?;
 
-        let id_limit = start_point_ids.end();
+        let id_limit = capacity
+            .value()
+            .checked_add(num_start_points)
+            .and_then(|id_limit| u32::try_from(id_limit).map(IdLimit::new).ok())
+            .ok_or_else(too_many_points)?;
+
         Ok(Self {
             quantizer,
             capacity,
             start_points,
             start_point_ids,
-            layout: store::Layout::new(IdLimit::new(id_limit), max_degree),
+            layout: store::Layout::new(id_limit, max_degree),
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
             rerank,
@@ -1117,6 +1123,10 @@ mod tests {
         let quantized = config.build().unwrap();
 
         assert_eq!(repr::Representation::id_limit(&quantized), TEST_LIMIT);
+        assert_eq!(
+            repr::Representation::capacity(&quantized).value(),
+            data.nrows()
+        );
         assert_eq!(quantized.dim(), usize::from(grid.dim()));
 
         let mut reference = Reference::new(grid.dim().into());
@@ -1131,9 +1141,15 @@ mod tests {
             }
         }
 
-        // Insert frozen points.
+        // Insert frozen points into the reference.
+        //
+        // We give frozen points logical IDs at the end of the ID space.
         for (slot, point) in std::iter::zip(quantized.start_point_ids, start_points.rows()) {
-            reference.insert(LogicalId(slot.into_usize()), SlotId(slot), point);
+            reference.insert(
+                LogicalId(slot.into_usize() + data.nrows()),
+                SlotId(slot),
+                point,
+            );
         }
 
         (quantized, reference)
@@ -1508,7 +1524,8 @@ mod tests {
         );
 
         // Free up one slot.
-        repr::Representation::retire(&quantized, 0).unwrap();
+        let slot = quantized.start_point_ids.end();
+        repr::Representation::retire(&quantized, slot).unwrap();
 
         // Insert something that is incompressible.
         let err = repr::Set::set(&quantized, &[f32::INFINITY, f32::INFINITY]).unwrap_err();
@@ -1516,6 +1533,6 @@ mod tests {
 
         // If we insert again, this should succeed.
         let guard = repr::Set::set(&quantized, &[1.0, 2.0]).unwrap();
-        assert_eq!(repr::Guard::id(&guard), 0);
+        assert_eq!(repr::Guard::id(&guard), slot);
     }
 }
