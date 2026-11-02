@@ -22,10 +22,13 @@ pub(crate) use reassign::Linked;
 // Errors //
 ////////////
 
+/// Errors reported by the split and reassignment policies.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SplitError<L> {
+    /// The list was not filled into the region.
     #[error("Split could not retrieve list {0:?} from the region")]
     UnableToRetrieve(L),
+    /// A split was requested with no parents.
     #[error("Parents is empty")]
     EmptyParents,
 }
@@ -43,8 +46,8 @@ impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
 
 /// Chooses a destination for every point of one list, reading points as `V`.
 pub(crate) trait Assign<V> {
-    /// Assign points to candidates and call `emit` exactly once per member, with the
-    /// destination of one of `candidates`.
+    /// Call `emit(member, key)` once per member, choosing `key` from the `(key, centroid)`
+    /// pairs of `candidates`. With no candidates, nothing is emitted.
     fn assign<I>(
         &self,
         members: &[I],
@@ -55,9 +58,7 @@ pub(crate) trait Assign<V> {
         I: Copy;
 }
 
-/// Assigns each point to its nearest candidate by squared L2.
-///
-/// The earliest candidate wins ties, including infinite distances.
+/// Naive double-loop assignment of each point to its nearest candidate by squared L2.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct NearestCentroid;
 
@@ -109,11 +110,12 @@ where
 // Buckets //
 /////////////
 
-/// Items recorded in consecutive source buckets, each destined for a key below `count`.
+/// Items recorded in consecutive source buckets, each mapped to a key below `count`.
 ///
-/// Invariants:
-/// - `items` and `keys` have equal lengths, and every key is less than `count`.
-/// - `offsets` starts at zero, is non-decreasing, and ends at most at `items.len()`.
+/// # Invariants
+///
+/// * `items` and `keys` have equal lengths, and every key is less than `count`.
+/// * `offsets` starts at zero, is non-decreasing, and ends at most at `items.len()`.
 #[derive(Debug, Clone)]
 struct Buckets<I> {
     count: usize,

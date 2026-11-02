@@ -28,6 +28,7 @@ use crate::{
 // Errors //
 ////////////
 
+/// A parent has fewer points than the children it must seed.
 #[derive(Debug, thiserror::Error)]
 #[error("Expected at least {required} points to seed, got {actual}")]
 pub(crate) struct NotEnoughPoints {
@@ -48,7 +49,7 @@ impl From<NotEnoughPoints> for ANNError {
 
 /// Chooses initial centroids for one parent's points.
 pub(crate) trait Seed {
-    /// Error type for seeding algorithm
+    /// The error returned by a failed seeding.
     type Error: Debug + Send + Sync + Into<ANNError>;
 
     /// Fill every row of `centers` with an initial centroid for `points`.
@@ -60,6 +61,8 @@ pub(crate) trait Seed {
 }
 
 /// Seeds with the first rows of `points`.
+///
+/// Fails with [`NotEnoughPoints`] if `points` has fewer rows than `centers`.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct FirstPoints;
 
@@ -92,18 +95,31 @@ impl Seed for FirstPoints {
 // KMeans //
 ////////////
 
-/// k-means per parent, seeded by `S`, with each parent's points assigned to its own
-/// children by `A`.
+/// Splits each parent into `k` children, fitted by k-means over the parent's points.
+///
+/// # Algorithm
+///
+/// 1. Fit `k` children per parent: seed them with `S`, then run Lloyd's iterations over
+///    the parent's points. Fitting finishes for every parent before anything is written,
+///    so its failures leave the update untouched.
+///
+/// 2. For each parent, assign its points among its own children with `A`, then retire it.
+///
+/// 3. Create the children in parent order, each holding the points assigned to it.
 pub struct KMeansSplit<A = NearestCentroid, S = FirstPoints> {
     /// Children per parent.
     k: NonZeroUsize,
+    /// Lloyd iterations per parent.
     iterations: NonZeroUsize,
+    /// Dimension of the points and children.
     dim: NonZeroUsize,
     assign: A,
     seed: S,
 }
 
 impl<A, S: Seed> KMeansSplit<A, S> {
+    /// Construct a policy that splits each parent into `k` children of dimension `dim`,
+    /// fitted with `iterations` Lloyd iterations.
     pub fn new(
         k: NonZeroUsize,
         iterations: NonZeroUsize,
@@ -120,7 +136,8 @@ impl<A, S: Seed> KMeansSplit<A, S> {
         }
     }
 
-    /// Fit `k` children per parent, in parent order.
+    /// Fit `k` children per parent. The children of the parent at index `p` are rows
+    /// `k * p..k * (p + 1)` of the returned matrix.
     fn fit<I, L, R>(&mut self, region: &R, parents: &[L]) -> ANNResult<rowmajor::Owned<f32>>
     where
         L: VectorId,
@@ -185,7 +202,7 @@ where
         let mut moved = Buckets::new(children.nrows());
         let mut candidates = Vec::new();
 
-        // Each parent's points move to the nearest of its own children.
+        // Each parent's points move to one of its own children, chosen by `A`.
         for (p, &parent) in parents.iter().enumerate() {
             candidates.clear();
             candidates.extend((k * p..k * (p + 1)).map(|c| (c, children.row(c))));
@@ -201,18 +218,17 @@ where
                 .assign(view.members, vectors.reborrow(), &candidates, |id, c| {
                     moved.push(id, c)
                 });
-            
+
             update.retire(parent)?;
         }
 
         let incoming = moved.group();
 
         for (c, child) in children.rows().enumerate() {
-            // We cluster every parent into exactly `k` clusters, so integer division gives us the parent
-            let p = c / k; 
+            // Every parent has exactly `k` children, so child `c` belongs to parent `c / k`.
+            let p = c / k;
             emit(parents[p], update.create(child, incoming.get(c))?);
         }
-
 
         Ok(())
     }

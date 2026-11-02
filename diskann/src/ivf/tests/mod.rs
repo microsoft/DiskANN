@@ -3,6 +3,12 @@
  * Licensed under the MIT license.
  */
 
+//! Tests for IVF insertion, search, and the split policies.
+//!
+//! Index-level tests run [`IVFIndex`] against the provider in [`support`], whose `fail_*`
+//! flags inject a failure into each provider call. Policy tests run the split and
+//! reassignment policies directly on hand-built regions.
+
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
@@ -24,7 +30,7 @@ use self::{
     support::*,
 };
 use super::{
-    Config, IVFIndex, InsertStats, ReassignCount,
+    Config, ConfigError, IVFIndex, InsertStats, ReassignCount,
     region::{AsMatRef, List, Update, View},
     split::{
         KMeansSplit, Linked, Links, Reassign, Split,
@@ -47,6 +53,10 @@ use crate::{
 
 mod pending;
 mod support;
+
+///////////////////
+// Test Provider //
+///////////////////
 
 #[tokio::test]
 async fn routing_callbacks_emit_ranked_results() {
@@ -236,6 +246,10 @@ fn membership_sizes_reject_overflow_and_excess_removals() {
     assert!(pending.list_size(2, 0).is_err());
 }
 
+///////////////
+// Insertion //
+///////////////
+
 #[tokio::test]
 async fn failed_routing_leaves_no_staged_points_or_appends() {
     for fail_route in [false, true] {
@@ -402,6 +416,41 @@ async fn empty_batches_are_rejected_without_staging_or_publication() {
     assert_eq!(store.fills, 0);
 }
 
+#[test]
+fn new_rejects_splits_that_cannot_shrink_or_seed_lists() {
+    let config = |split_threshold: usize, split_k: usize| Config {
+        dim: ONE,
+        split_threshold: NonZeroUsize::new(split_threshold).unwrap(),
+        split_k: NonZeroUsize::new(split_k).unwrap(),
+        reassign_count: ReassignCount::None,
+        split_iterations: ONE,
+    };
+    let new = IVFIndex::<DefaultContext>::new;
+
+    // `IVFIndex<DefaultContext>` is not `Debug`, so take the error with `err`.
+    let error = new(config(4, 1)).err().unwrap();
+    assert!(matches!(error, ConfigError::TooFewChildren(1)));
+    assert_eq!(error.to_string(), "split_k must be at least 2, got 1");
+
+    let error = new(config(2, 4)).err().unwrap();
+    assert!(matches!(
+        error,
+        ConfigError::TooManyChildren {
+            split_k: 4,
+            split_threshold: 2
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "split_k (4) must be at most split_threshold + 1 (2 + 1)"
+    );
+
+    // A split list has more than `split_threshold` points, one to seed each child.
+    assert!(new(config(2, 3)).is_ok());
+    assert!(new(config(1, 2)).is_ok());
+    assert!(new(config(usize::MAX, usize::MAX)).is_ok());
+}
+
 #[tokio::test]
 async fn splitting_uses_the_configured_number_of_children() {
     let strategy = Strategy::new(seeded());
@@ -411,7 +460,6 @@ async fn splitting_uses_the_configured_number_of_children() {
         split_k: NonZeroUsize::new(3).unwrap(),
         reassign_count: ReassignCount::None,
         split_iterations: ONE,
-        seed: 7,
     })
     .unwrap();
     let points: [(u32, &[f32]); 1] = [(5, &[1.0, 1.0][..])];
@@ -932,6 +980,10 @@ async fn uninitialized_insertion_fails() {
     assert_eq!(strategy.store().finishes, 0);
 }
 
+////////////
+// Search //
+////////////
+
 #[test]
 fn accumulator_empty_like_preserves_search_limit_not_capacity() {
     let mut best = NeighborPriorityQueue::auto_resizable_with_search_param_l(2);
@@ -1243,6 +1295,10 @@ async fn search_supports_native_queries_after_insertion_and_splitting() {
         [(10_005, 0.0)]
     );
 }
+
+//////////////
+// Policies //
+//////////////
 
 #[test]
 fn reassignment_moves_points_only_along_links_and_keeps_empty_lists() {
@@ -1570,7 +1626,7 @@ fn k_means_needs_k_points_per_parent() {
 }
 
 #[test]
-fn two_means_fits_from_its_seeder() {
+fn k_means_fits_from_its_seeder() {
     /// Seeds with the parent's points in reverse order.
     struct Reversed;
 
@@ -1614,7 +1670,7 @@ fn two_means_fits_from_its_seeder() {
 }
 
 #[test]
-fn two_means_reports_seeding_failures_before_writing() {
+fn k_means_reports_seeding_failures_before_writing() {
     struct Fails;
 
     impl Seed for Fails {
@@ -1649,7 +1705,7 @@ fn two_means_reports_seeding_failures_before_writing() {
 }
 
 #[test]
-fn two_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties() {
+fn k_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties() {
     for value in [0.0, 7.0] {
         let sources = [(
             1,
@@ -1729,7 +1785,7 @@ fn reassignment_breaks_ties_by_own_list_then_link_order() {
 }
 
 #[test]
-fn two_means_reuses_splitter_across_regions() {
+fn k_means_reuses_splitter_across_regions() {
     let sources = BTreeMap::from([
         (
             1,
@@ -1843,7 +1899,7 @@ fn region_vector_reborrows_share_source_storage() {
 }
 
 #[test]
-fn two_means_handles_borrowed_batches() {
+fn k_means_handles_borrowed_batches() {
     struct Batch<'a> {
         vectors: rowmajor::Ref<'a, f32>,
         reads: &'a Cell<usize>,
@@ -2056,7 +2112,7 @@ fn split_accepts_native_batches_without_matrix_access() {
 }
 
 #[test]
-fn two_means_matches_quantization_lloyds() {
+fn k_means_matches_quantization_lloyds() {
     let sources = BTreeMap::from([
         (
             1,
@@ -2106,7 +2162,7 @@ fn two_means_matches_quantization_lloyds() {
 }
 
 #[test]
-fn two_means_reports_insufficient_points_before_writing() {
+fn k_means_reports_insufficient_points_before_writing() {
     for points in [matrix::<2>(&[]), matrix(&[[0.0, 2.0]])] {
         let expected = points.nrows();
         let sources = BTreeMap::from([(
@@ -2142,7 +2198,7 @@ fn two_means_reports_insufficient_points_before_writing() {
 }
 
 #[test]
-fn two_means_missing_vectors_preserves_typed_error_without_updates() {
+fn k_means_missing_vectors_preserves_typed_error_without_updates() {
     let sources = BTreeMap::from([(
         1,
         Source {

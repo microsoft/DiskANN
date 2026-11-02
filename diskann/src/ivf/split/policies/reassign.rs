@@ -17,16 +17,29 @@ use crate::{
     utils::VectorId,
 };
 
-
 ////////////
 // Linked //
 ////////////
-/// Each point stays or moves to a list linked to its own, as chosen by `A`.
+
+/// Reassigns points between linked lists, choosing destinations with `A`.
+///
+/// # Algorithm
+///
+/// For each list, in the order of [`Links::lists`]:
+///
+/// 1. Offer each member the list's own centroid first, then the centroids of its linked
+///    lists in link order, and let `A` choose among them.
+///
+/// 2. Remove the members that move.
+///
+/// After every list is processed, append each moved point to its destination. Each point
+/// is considered once, from the list it was filled in, and no centroid changes.
 pub struct Linked<A = NearestCentroid> {
     assign: A,
 }
 
 impl<A> Linked<A> {
+    /// Construct a policy that chooses destinations with `assign`.
     pub fn new(assign: A) -> Self {
         Self { assign }
     }
@@ -61,7 +74,7 @@ where
                 .get_vectors(list)
                 .ok_or(SplitError::UnableToRetrieve(list))?;
 
-            // A point can stay if the current centroid is closer.
+            // Offer the list's own centroid first, so points can stay in place.
             candidates.clear();
             candidates.push((i, view.centroid));
 

@@ -3,25 +3,46 @@
  * Licensed under the MIT license.
  */
 
+//! An in-memory test provider, and helpers to build stores, regions, and links.
+//!
+//! [`Strategy`] keeps the published lists and points in a [`Store`] behind a lock. Every
+//! accessor holds the lock until it is dropped, so operations never overlap. A build
+//! operation stages its changes in [`Build`] and applies them to the store only in
+//! [`BuildAccessor::finish`], so a dropped operation publishes nothing. The provider
+//! rejects:
+//!
+//! * a second accessor while the lock is held,
+//! * empty batches, invalid or duplicate points, and points with no live list to join,
+//! * writes to lists that were not filled, and changes to retired lists, and
+//! * centroids of the wrong dimension or with non-finite entries.
+
 use super::*;
 
+/// A published list.
 #[derive(Debug, Clone)]
 pub(super) struct StoredList {
     pub(super) centroid: Vec<f32>,
     pub(super) members: Vec<u32>,
 }
 
+/// Published provider state, with counters and failure injection for assertions.
 #[derive(Debug, Default)]
 pub(super) struct Store {
     pub(super) dim: usize,
+    /// Published points, by internal ID.
     pub(super) points: BTreeMap<u32, Vec<f32>>,
     pub(super) lists: BTreeMap<u32, StoredList>,
+    /// ID of the first list the next build operation creates.
     pub(super) next_list: u32,
+    /// Published build operations.
     pub(super) finishes: usize,
+    /// Fills made by published build operations.
     pub(super) fills: usize,
     /// Updates finished by published build operations.
     pub(super) update_finishes: usize,
+    /// Lists filled by the last published build operation, in fill order.
     pub(super) filled_lists: Vec<u32>,
+    // Each flag injects a failure into the matching provider call.
     pub(super) fail_route: bool,
     pub(super) fail_nearest: bool,
     pub(super) fail_fill: bool,
@@ -33,12 +54,15 @@ pub(super) struct Store {
 }
 
 impl Store {
+    /// Return the internal ID of published point `id`. Internal IDs are external IDs plus
+    /// 10 000.
     pub(super) fn to_internal_id(&self, _: &DefaultContext, id: &u32) -> ANNResult<u32> {
         id.checked_add(10_000)
             .filter(|id| self.points.contains_key(id))
             .ok_or_else(|| ANNError::message("point is not visible"))
     }
 
+    /// Return the external ID of published point `id`.
     pub(super) fn to_external_id(&self, _: &DefaultContext, id: u32) -> ANNResult<u32> {
         if !self.points.contains_key(&id) {
             return Err(ANNError::message("point is not visible"));
@@ -48,17 +72,25 @@ impl Store {
     }
 }
 
+/// The build accessor. It holds the store's lock, and stages the changes of its operation
+/// until [`BuildAccessor::finish`] applies them.
 pub(super) struct Build<'p, T> {
     pub(super) store: MutexGuard<'p, Store>,
+    /// Membership changes of the operation.
     pub(super) pending: PendingLists<u32, u32>,
+    /// Lists created by the operation, numbered from `store.next_list`.
     pub(super) created: Vec<StoredList>,
+    /// Routed points, by internal ID.
     pub(super) staged: BTreeMap<u32, Vec<T>>,
+    /// Lists filled by the latest fill.
     pub(super) sources: BTreeMap<u32, Source>,
+    // Counters added to the store when the operation is published.
     pub(super) fills: Cell<usize>,
     pub(super) update_finishes: usize,
     pub(super) filled_lists: Vec<u32>,
 }
 
+/// Routing and nearest-list lookup, by squared L2 distance between centroids.
 pub(super) struct Coarse<'a> {
     pub(super) stored: &'a BTreeMap<u32, StoredList>,
     /// Lists created by the build operation, numbered from `next_list`.
@@ -104,6 +136,8 @@ impl<'a> Coarse<'a> {
             .filter(|&(id, _)| self.pending.is_none_or(|pending| !pending.is_retired(id)))
     }
 
+    /// Emit up to `nprobe` lists accepted by `pred`, nearest `query` first and then by ID,
+    /// and return how many were emitted.
     fn select<T, P, F>(&self, query: &[T], nprobe: NonZeroUsize, pred: P, mut emit: F) -> usize
     where
         T: Copy + Into<f32>,
@@ -122,6 +156,8 @@ impl<'a> Coarse<'a> {
         }
         selected.len()
     }
+
+    /// Emit the `nprobe` lists nearest `query`.
     pub(super) fn route<T, F>(
         &self,
         query: &[T],
@@ -171,12 +207,14 @@ impl Nearest for Coarse<'_> {
     }
 }
 
+/// A filled list: its centroid, members, and their vectors.
 pub(super) struct Source {
     pub(super) centroid: Vec<f32>,
     pub(super) members: Vec<u32>,
     pub(super) vectors: rowmajor::Owned<f32>,
 }
 
+/// The update of one stage, recording changes in pending memberships and created lists.
 pub(super) struct Update<'a> {
     pub(super) dim: usize,
     pub(super) sources: &'a BTreeMap<u32, Source>,
@@ -193,13 +231,14 @@ pub(super) struct Update<'a> {
 }
 
 impl<'a> Update<'a> {
+    /// Return an update that records changes to `sources` in `memberships` and `created`,
+    /// numbering created lists after the last source.
     pub(super) fn new(
         sources: &'a BTreeMap<u32, Source>,
         dim: usize,
         memberships: &'a mut PendingLists<u32, u32>,
         created: &'a mut Vec<StoredList>,
     ) -> Self {
-        // Number created lists after every source.
         let next_list = sources.last_key_value().map_or(0, |(&id, _)| id + 1);
 
         Self {
@@ -216,6 +255,7 @@ impl<'a> Update<'a> {
         }
     }
 
+    /// Fail unless `list` was filled.
     fn check_list(&self, list: u32) -> ANNResult<()> {
         if self.sources.contains_key(&list) {
             Ok(())
@@ -225,6 +265,7 @@ impl<'a> Update<'a> {
     }
 }
 
+/// A view over filled lists.
 pub(super) struct Region<'a> {
     pub(super) sources: &'a BTreeMap<u32, Source>,
 }
@@ -515,6 +556,7 @@ impl<'p, 'b, 'v, T: Copy + Into<f32> + Send + Sync> BuildAccessor<&'b [(u32, &'v
     }
 }
 
+/// The test provider: a [`Store`] behind a lock that every accessor holds.
 pub(super) struct Strategy {
     pub(super) store: Mutex<Store>,
 }
@@ -526,6 +568,7 @@ impl Strategy {
         }
     }
 
+    /// Lock the store for assertions. Panics if an accessor holds the lock.
     pub(super) fn store(&self) -> MutexGuard<'_, Store> {
         self.store.try_lock().unwrap()
     }
@@ -556,6 +599,7 @@ impl<'a, T: Copy + Into<f32> + Send + Sync> BuildStrategy<'a, &[(u32, &[T])], De
     }
 }
 
+/// The search accessor. It holds the store's lock and scans published lists.
 pub(super) struct Search<'p, 'q, T> {
     pub(super) store: MutexGuard<'p, Store>,
     pub(super) query: &'q [T],
@@ -620,15 +664,19 @@ impl<'a, 'q, T: Copy + Into<f32> + Send + Sync> SearchStrategy<'a, &'q [T], Defa
     }
 }
 
+/// Return a matrix with one row per element of `rows`.
 pub(super) fn matrix<const D: usize>(rows: &[[f32; D]]) -> rowmajor::Owned<f32> {
     let data: Box<[f32]> = rows.iter().flatten().copied().collect();
     rowmajor::Owned::try_from_data(data, rows.len(), D).unwrap()
 }
 
+/// Return an index over `store` that splits lists with more than `threshold` members into
+/// two children, without reassignment, and the strategy holding `store`.
 pub(super) fn index(store: Store, threshold: usize) -> (IVFIndex<DefaultContext>, Strategy) {
     index_with_neighbors(store, threshold, 0)
 }
 
+/// Like [`index`], but each child exchanges points with up to `neighbors` nearby lists.
 pub(super) fn index_with_neighbors(
     store: Store,
     threshold: usize,
@@ -641,12 +689,12 @@ pub(super) fn index_with_neighbors(
         reassign_count: NonZeroUsize::new(neighbors)
             .map_or(ReassignCount::None, ReassignCount::Count),
         split_iterations: NonZeroUsize::new(5).unwrap(),
-        seed: 7,
     })
     .unwrap();
     (index, Strategy::new(store))
 }
 
+/// Return a 2-dimensional store with five points on the x axis, in three published lists.
 pub(super) fn seeded() -> Store {
     Store {
         dim: 2,
@@ -687,6 +735,7 @@ pub(super) fn seeded() -> Store {
     }
 }
 
+/// Check at compile time that `future` is `Send`.
 pub(super) fn require_send<F: Future + Send>(future: F) -> F {
     future
 }

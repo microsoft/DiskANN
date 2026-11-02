@@ -18,10 +18,12 @@ use crate::{ANNError, ANNResult, utils::VectorId};
 /// A pending change relative to a list's stored membership.
 #[derive(Debug, Clone)]
 pub enum Membership<I> {
+    /// Members removed from, and appended to, the stored membership.
     Delta {
         removed: HashSet<I>,
         appended: Vec<I>,
     },
+    /// The list is retired.
     Retire,
 }
 
@@ -34,6 +36,9 @@ pub struct PendingLists<I: VectorId, L: VectorId> {
 }
 
 impl<I: VectorId, L: VectorId> PendingLists<I, L> {
+    /// Append `members` to `list`, cancelling pending removals of the same IDs.
+    ///
+    /// Fails if `list` is retired.
     pub fn append(&mut self, list: L, members: Vec<I>) -> ANNResult<()> {
         match self.changes.entry(list) {
             Entry::Vacant(entry) => {
@@ -52,6 +57,9 @@ impl<I: VectorId, L: VectorId> PendingLists<I, L> {
         Ok(())
     }
 
+    /// Remove `members` from `list`, cancelling pending appends of the same IDs.
+    ///
+    /// Fails if `list` is retired.
     pub fn remove(&mut self, list: L, members: &[I]) -> ANNResult<()> {
         let mut removed: HashSet<_> = members.iter().copied().collect();
         match self.changes.entry(list) {
@@ -75,6 +83,7 @@ impl<I: VectorId, L: VectorId> PendingLists<I, L> {
         Ok(())
     }
 
+    /// Retire `list`, discarding its pending changes. Fails if it is already retired.
     pub fn retire(&mut self, list: L) -> ANNResult<()> {
         if self.is_retired(list) {
             return Err(retired(list));
@@ -83,10 +92,14 @@ impl<I: VectorId, L: VectorId> PendingLists<I, L> {
         Ok(())
     }
 
+    /// Return `true` if `list` is retired.
     pub fn is_retired(&self, list: L) -> bool {
         matches!(self.changes.get(&list), Some(Membership::Retire))
     }
 
+    /// Return the size of `list`, given the size of its stored membership.
+    ///
+    /// Fails if `list` is retired, or if its pending changes do not fit that size.
     pub fn list_size(&self, list: L, stored_size: usize) -> ANNResult<usize> {
         match self.changes.get(&list) {
             None => Ok(stored_size),

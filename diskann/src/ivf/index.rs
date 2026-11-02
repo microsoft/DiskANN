@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! IVF policy and orchestration, independent of physical list storage.
+//! [`IVFIndex`] and its configuration.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -28,43 +28,60 @@ use crate::{
     provider::ExecutionContext,
 };
 
+/// Number of nearby lists each child of a split considers doing re-assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReassignCount {
+    /// Skip reassignment
     None,
+    /// Link each child to `Count` nearest lists, other than its siblings.
     Count(NonZeroUsize),
 }
 
-/// Parameters for incremental k-means splitting.
+/// Configuration of an [`IVFIndex`].
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
-    /// Dimension of every canonical point and centroid supplied by the provider.
+    /// Dimension of the vectors and centroids that providers fill.
     pub dim: NonZeroUsize,
-    /// Split a touched list when its pending membership exceeds this size.
+    /// Split a list when routing leaves it with more than this many members.
     pub split_threshold: NonZeroUsize,
-    /// Number of children `k` that each split parent is replaced with.
+    /// Number of children that replace each split list.
     pub split_k: NonZeroUsize,
-    /// Nearest-list query count per child of a split, excluding its siblings.
-    ///
-    /// - [`ReassignCount::None`] skips reassignment.
-    /// - [`ReassignCount::Count`] lets each child exchange points with that many lists.
+    /// Number of nearby lists each child considers for re-assignment after a split.
     pub reassign_count: ReassignCount,
-    /// Positive number of Lloyd steps per parent.
+    /// Number of Lloyd iterations that fit the children of each split list.
     pub split_iterations: NonZeroUsize,
-    pub seed: u64,
 }
 
+/// Error returned by [`IVFIndex::new`] for an invalid [`Config`].
 #[derive(Debug, Error)]
-#[error("split_threshold must be at least 2, got {0}")]
-pub struct ConfigError(pub usize);
+pub enum ConfigError {
+    /// [`Config::split_k`] is 1, so splitting would not shrink a list.
+    #[error("split_k must be at least 2, got {0}")]
+    TooFewChildren(usize),
+    /// [`Config::split_k`] exceeds the smallest size of a split list.
+    #[error("split_k ({split_k}) must be at most split_threshold + 1 ({split_threshold} + 1)")]
+    TooManyChildren {
+        split_k: usize,
+        split_threshold: usize,
+    },
+}
 
 /// Work successfully published by one insertion.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct InsertStats {
+    /// Number of points inserted.
     pub inserted: usize,
+    /// Number of lists split.
     pub splits: usize,
 }
 
-/// An IVF index with serialized mutation through the underlying provider.
+/// An incremental IVF index.
+///
+/// The index holds only its [`Config`]. Points and lists live in a provider, reached
+/// through the strategy passed to each call; see the [module documentation](crate::ivf).
+///
+/// Providers shared by several indexes must still keep build operations apart;
+/// see [`BuildStrategy::build_accessor`].
 #[derive(Debug)]
 pub struct IVFIndex<C: ExecutionContext> {
     config: Config,
@@ -72,16 +89,39 @@ pub struct IVFIndex<C: ExecutionContext> {
 }
 
 impl<C: ExecutionContext> IVFIndex<C> {
+    /// Construct an index with `config`.
+    ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the split threshold is less than two.
+    /// Fails if [`Config::split_k`] is less than 2, or greater than
+    /// [`Config::split_threshold`] plus one.
     pub fn new(config: Config) -> Result<Self, ConfigError> {
+        let (split_k, split_threshold) = (config.split_k.get(), config.split_threshold.get());
+
+        if split_k < 2 {
+            return Err(ConfigError::TooFewChildren(split_k));
+        }
+        if split_k - 1 > split_threshold {
+            return Err(ConfigError::TooManyChildren {
+                split_k,
+                split_threshold,
+            });
+        }
+
         Ok(Self {
             config,
-            phantom: PhantomData::default(),
+            phantom: PhantomData,
         })
     }
 
+    /// Insert a batch of points as one build operation, splitting every list that routing
+    /// leaves with more than [`Config::split_threshold`] members and then re-assigning
+    /// points if [`ReassignCount`] in `config` is not zero.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the batch is empty, or if a provider call or split fails. Any failure
+    /// abandons the operation: the accessor is dropped without being finished.
     pub fn insert_batch<'a, S, B>(
         &'a mut self,
         strategy: &'a S,
@@ -133,7 +173,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
                     update.finish().await?;
                 }
 
-                // Reassign: each child exchanges points with its nearest lists, other than
+                // Reassign: each child potentially excahnges points with its nearest lists, other than
                 // its siblings.
                 if let ReassignCount::Count(n) = config.reassign_count {
                     // Each child's parent, to recognize siblings.
@@ -143,12 +183,12 @@ impl<C: ExecutionContext> IVFIndex<C> {
                         .collect();
 
                     let mut links = Links::new(children.iter().map(|&(_, child)| child));
-                    
+
                     {
                         let router = accessor.nearest();
 
                         for (parent, child) in children {
-                            // Skip the child itself and its siblings
+                            // Skip the child itself and its siblings.
                             router
                                 .find(
                                     child,
@@ -173,7 +213,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
                 }
             };
 
-            // Commit the updates registered from the split and re-assign operations.
+            // Publish the routed points and the changes of both stages.
             accessor.finish().await?;
 
             Ok(InsertStats {
@@ -183,11 +223,13 @@ impl<C: ExecutionContext> IVFIndex<C> {
         }
     }
 
-    /// Append the best `k` candidates from the provider-selected lists to `output`.
+    /// Search the `nprobe` lists nearest `query`, and append the best `k` members found to
+    /// `output`, nearest first. Return the number of results appended.
     ///
     /// # Errors
     ///
-    /// Accessor construction or scan failures leave `output` unchanged.
+    /// Fails if the accessor cannot be created or the scan fails, leaving `output`
+    /// unchanged.
     pub fn search<'a, S, T, OB>(
         &'a self,
         strategy: &'a S,

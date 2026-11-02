@@ -11,8 +11,7 @@ use hashbrown::{HashMap, hash_map::Entry};
 
 /// Distinct lists in insertion order and the symmetric links between them.
 ///
-/// Lists are identified by their index in [`Self::lists`]. During reassignment, a list's
-/// points may move only to lists it links to.
+/// Lists are identified by their index in [`Self::lists`].
 #[derive(Debug, Clone)]
 pub(crate) struct Links<L> {
     ids: Vec<L>,
@@ -43,10 +42,12 @@ where
         links
     }
 
+    /// Return the recorded lists, in insertion order.
     pub(crate) fn lists(&self) -> &[L] {
         &self.ids
     }
 
+    /// Return the number of recorded lists.
     pub(crate) fn len(&self) -> usize {
         self.ids.len()
     }
