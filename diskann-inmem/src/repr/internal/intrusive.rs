@@ -39,7 +39,7 @@ pub(in crate::repr) struct ExpandBeam<'a, D, P> {
     /// `reader.bytes()`.
     distance: D,
 
-    /// Prefetcher. This must be compatible with `reader.bytes_plus_tag()` and is checked
+    /// Prefetcher. This must be compatible with `reader.prefetch_bytes()` and is checked
     /// in [`Self::new`].
     prefetch: prefetch::Checked<P>,
 
@@ -55,7 +55,7 @@ impl<'a, D, P> ExpandBeam<'a, D, P> {
     ///
     /// # Panics
     ///
-    /// Panics if `prefetch` is not compatible with [`store::intrusive::Reader::bytes_plus_tag`].
+    /// Panics if `prefetch` is not compatible with [`store::intrusive::Reader::prefetch_bytes`].
     pub(in crate::repr) fn new(
         reader: store::intrusive::Reader<'a>,
         distance: D,
@@ -69,7 +69,7 @@ impl<'a, D, P> ExpandBeam<'a, D, P> {
             clippy::expect_used,
             reason = "internal APIs should only provide valid prefetchers"
         )]
-        let prefetch = prefetch::Checked::new(prefetch, reader.bytes_plus_tag())
+        let prefetch = prefetch::Checked::new(prefetch, reader.prefetch_bytes())
             .expect("internal APIs should only provide valid prefetchers");
 
         Self {
@@ -123,11 +123,13 @@ where
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
             // as the validity of the prefetch bounds.
             //
-            // We validated `self.prefetch` with `self.reader.bytes_with_tag()` upon construction.
+            // We validated `self.prefetch` with `self.reader.prefetch_bytes()` upon construction.
             //
-            // We do not materialize the `RawSlice` as a reference.
+            // The `RawSlice` and tag pointer are only used for prefetching.
             unsafe {
-                let raw = self.reader.read_raw_unchecked(j.into_usize());
+                let (raw, tag) = self.reader.read_for_prefetch(j.into_usize());
+
+                prefetch::prefetch_cacheline(tag);
                 self.prefetch.prefetch(raw.as_ptr(), raw.len());
             }
         }
@@ -140,14 +142,15 @@ where
                 // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
                 // well as the validity of the prefetch bounds.
                 //
-                // We validated `self.prefetch` with `self.reader.bytes_with_tag()` upon
+                // We validated `self.prefetch` with `self.reader.prefetch_bytes()` upon
                 // construction.
                 //
-                // We do not materialize the `RawSlice` as a reference.
+                // The `RawSlice` and tag pointer are only used for prefetching.
                 unsafe {
-                    let raw = self
+                    let (raw, tag) = self
                         .reader
-                        .read_raw_unchecked(list.get_unchecked(j).into_usize());
+                        .read_for_prefetch(list.get_unchecked(j).into_usize());
+                    prefetch::prefetch_cacheline(tag);
                     self.prefetch.prefetch(raw.as_ptr(), raw.len());
                 }
                 j += 1;

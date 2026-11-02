@@ -148,6 +148,15 @@ impl Intrusive {
         self.unpadded
     }
 
+    /// Return the number of bytes needed to prefetch the data portion of each entry without
+    /// fetching the cacheline on which the entry's tag resides.
+    pub(crate) const fn prefetch_bytes_for(bytes: Bytes) -> Bytes {
+        const CACHELINE: usize = (Bytes::CACHELINE).value();
+
+        // Don't overthink it - LLVM recognizes what's happening here and emits an `and`.
+        Bytes::new(CACHELINE * (bytes.value() / CACHELINE))
+    }
+
     /// Return a [`Reader`] over [`Self`].
     ///
     /// # Panics
@@ -372,20 +381,45 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Return the raw data slice for index `i` without any race guarantees.
+    /// Return the raw data slice for index `i` in two parts without any race guarantees.
     ///
-    /// This includes both the data **and** the intrusive tag.
+    /// The first piece consists of a [`RawSlice`] of length [`Self::prefetch_bytes`].
+    /// The second piece is a pointer to the cache line containing the intrusive concurrency
+    /// tag.
     ///
     /// # Safety
     ///
     /// The index `i` must satisfy [`Self::is_in_bounds`].
     ///
-    /// The returned [`RawSlice`] may only be used for prefetching. Callers must never
-    /// materialize it as a proper slice or reference.
+    /// The returned [`RawSlice`] and tag pointer may only be used for prefetching. Callers
+    /// must never materialize either as a proper slice or reference.
     #[inline]
-    pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> RawSlice<'_> {
-        // SAFETY: Inherited from caller: `i` is in bounds.
-        unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
+    pub(crate) unsafe fn read_for_prefetch(&self, i: usize) -> (RawSlice<'_>, *const u8) {
+        // SAFETY: Caller asserts `i` is in-bounds.
+        let raw = unsafe { self.buffer.get_unchecked(i) };
+
+        // SAFETY: The `AtomicTag` is located at the offset of `self.bytes()` for each entry.
+        // So the pointer arithmetic is valid.
+        let tag_ptr = unsafe { raw.as_ptr().add(self.bytes().value()) };
+
+        // SAFETY: `self.prefetch_bytes() <= self.bytes() < self.buffer.stride()`.
+        //
+        // Therefore, the truncation is valid.
+        let data = unsafe { raw.truncate_unchecked(self.prefetch_bytes()) };
+
+        (data, tag_ptr)
+    }
+
+    /// Return the number of bytes that are disjoint from the tag for prefetch purposes.
+    ///
+    /// The formula for calculating this is:
+    /// ```math
+    /// Bytes::CACHELINE * (self.bytes() / Bytes::CACHELINE)
+    /// ```
+    /// This may be less than `bytes` if the size of each entry is such that the intrusive
+    /// tag shares a cache line with the data.
+    pub(crate) fn prefetch_bytes(&self) -> Bytes {
+        Intrusive::prefetch_bytes_for(self.bytes())
     }
 
     /// Return the number of bytes for each entry.

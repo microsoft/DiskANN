@@ -64,7 +64,6 @@ use crate::{
         self, Store,
         intrusive::{self, Intrusive},
     },
-    tag::AtomicTag,
 };
 
 /// Construct an [`UnalignedSlice`] over `bytes`.
@@ -647,7 +646,7 @@ diskann::convert_error!(ExpandBeamError);
 /////////////////
 
 const fn compute_bytes<T>(dim: usize) -> usize {
-    dim * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
+    Intrusive::prefetch_bytes_for(Bytes::new(dim * std::mem::size_of::<T>())).value()
 }
 
 macro_rules! expand_beam {
@@ -877,6 +876,8 @@ mod tests {
     use diskann_vector::distance::DistanceProvider;
     use hashbrown::{HashMap, HashSet};
     use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    use crate::tag::AtomicTag;
 
     /// Generate random elements of a representation's data type from a seeded RNG.
     trait Sample: bytemuck::Pod {
