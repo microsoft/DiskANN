@@ -87,6 +87,7 @@ criterion = "0.5.1"
 crossbeam-queue = { version = "0.3.12", default-features = false }
 crossbeam-utils = { version = "0.8.23", default-features = false }
 dashmap = "6.1.0"
+erased-serde = "0.4.11"
 futures-util = { version = "0.3.31", default-features = false }
 half = "2.6.0"
 hashbrown = "0.16.0"

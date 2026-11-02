@@ -389,8 +389,12 @@ impl<'a> Reader<'a> {
     }
 
     /// Return the number of bytes for each entry.
+    #[expect(
+        unused,
+        reason = "this is a reasonable method to have - it's just not used"
+    )]
     pub(crate) fn bytes(&self) -> Bytes {
-        self.bytes_plus_tag().unchecked_sub(AtomicTag::SIZE)
+        self.unpadded.unchecked_sub(AtomicTag::SIZE)
     }
 
     /// Return the number of bytes plus the atomic tag.

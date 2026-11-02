@@ -50,7 +50,7 @@
         "append_neighbors": 125092,
         "distance": 4903759,
         "get_neighbors": 401105,
-        "get_vector": 3459145,
+        "get_vector": 3990928,
         "query_distance": 2651349,
         "set_neighbors": 35323,
         "set_vector": 10000
@@ -173,7 +173,7 @@
         "append_neighbors": 125092,
         "distance": 4903759,
         "get_neighbors": 401105,
-        "get_vector": 3459145,
+        "get_vector": 3990928,
         "query_distance": 2651349,
         "set_neighbors": 35323,
         "set_vector": 10000
