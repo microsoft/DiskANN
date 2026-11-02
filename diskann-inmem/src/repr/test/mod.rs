@@ -287,33 +287,36 @@ pub(super) fn test_prune(
     ids: &[SlotId],
     ctx: &dyn std::fmt::Display,
 ) {
-    let num_present_ids = ids
-        .iter()
-        .filter(|&&slot_id| distances.contains_key(&(slot_id, slot_id)))
-        .count();
-
-    let mut items: HashMap<u32, Option<repr::PruneKey>> =
-        ids.iter().map(|slot_id| (slot_id.value(), None)).collect();
-
-    let count = accessor.prepare(items.iter_mut()).unwrap();
-    assert_eq!(count, num_present_ids, "{ctx}");
-
     let mut visited = 0;
     for slot_id0 in ids.iter() {
-        if let Some(key0) = items[&slot_id0.value()] {
-            for slot_id1 in ids.iter() {
-                if let Some(key1) = items[&slot_id1.value()] {
-                    let d = accessor.evaluate(key0, key1);
-                    let expected = distances[&(*slot_id0, *slot_id1)];
-                    assert_eq!(
-                        d, expected,
-                        "failed for {} x {} -- {}",
-                        slot_id0, slot_id1, ctx
-                    );
-
-                    visited += 1;
-                }
+        let v0 = {
+            let v = accessor.get(slot_id0.value());
+            if !distances.contains_key(&(*slot_id0, *slot_id0)) {
+                assert!(v.is_none(), "failed on {}", slot_id0);
+                continue;
             }
+            v.unwrap()
+        };
+
+        for slot_id1 in ids.iter() {
+            let v1 = {
+                let v = accessor.get(slot_id1.value());
+                if !distances.contains_key(&(*slot_id1, *slot_id1)) {
+                    assert!(v.is_none(), "failed on {}", slot_id1);
+                    continue;
+                }
+                v.unwrap()
+            };
+
+            let d = accessor.evaluate(v0, v1);
+            let expected = distances[&(*slot_id0, *slot_id1)];
+            assert_eq!(
+                d, expected,
+                "failed for {} x {} -- {}",
+                slot_id0, slot_id1, ctx
+            );
+
+            visited += 1;
         }
     }
 
