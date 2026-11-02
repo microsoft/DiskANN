@@ -13,3 +13,10 @@ pub use pq::PQData;
 
 mod compressor;
 pub use compressor::QuantCompressor;
+
+mod search_data;
+pub(crate) use search_data::SearchDataInner;
+pub use search_data::{SearchData, SearchQuantization};
+
+mod spherical;
+pub use spherical::generate_spherical_q3;

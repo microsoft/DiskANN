@@ -11,6 +11,7 @@ use diskann::ANNError;
 use thiserror::Error;
 
 use super::QuantizationType;
+use crate::SearchQuantization;
 
 use crate::error::{diskann_error, ErrorKind};
 
@@ -112,8 +113,11 @@ pub struct DiskIndexBuildParameters {
     /// Limit on the memory allowed for building the index.
     build_memory_limit: MemoryBudget,
 
-    /// Number of PQ chunks stored in-memory for search and to be generated during build.
+    /// PQ chunk count used only when the search backend is PQ.
     search_pq_chunks: NumPQChunks,
+
+    /// Quantizer for in-memory search data, independent of graph-build quantization.
+    search_quantization: SearchQuantization,
 
     /// QuantizationType used to instantiate quantized DataProvider for DiskANN Index during build.
     build_quantization: QuantizationType,
@@ -132,9 +136,21 @@ impl DiskIndexBuildParameters {
         Self {
             build_memory_limit,
             search_pq_chunks,
+            search_quantization: SearchQuantization::PQ,
             build_quantization,
             data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
         }
+    }
+
+    /// Select the search-side quantizer independently of the graph-build quantizer.
+    pub fn with_search_quantization(mut self, quantization: SearchQuantization) -> Self {
+        self.search_quantization = quantization;
+        self
+    }
+
+    /// Get the search-side quantizer, which defaults to PQ.
+    pub fn search_quantization(&self) -> SearchQuantization {
+        self.search_quantization
     }
 
     /// Set the number of vectors processed per data-compression chunk.
@@ -156,7 +172,7 @@ impl DiskIndexBuildParameters {
         &self.build_quantization
     }
 
-    /// Get user specified PQ chunks count for in-memory search data.
+    /// Get the PQ chunk count; ignored when search uses SphericalQ3.
     pub fn search_pq_chunks(&self) -> NumPQChunks {
         self.search_pq_chunks
     }
@@ -194,6 +210,13 @@ mod dataset_test {
         );
 
         assert_eq!(result.search_pq_chunks().get(), num_pq_chunks.get());
+        assert_eq!(result.search_quantization(), SearchQuantization::PQ);
+        assert_eq!(
+            result
+                .with_search_quantization(SearchQuantization::SphericalQ3)
+                .search_quantization(),
+            SearchQuantization::SphericalQ3
+        );
         assert_eq!(
             result.data_compression_chunk_vector_count(),
             DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT

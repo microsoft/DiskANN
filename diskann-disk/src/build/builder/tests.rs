@@ -107,6 +107,47 @@ mod disk_index_build_tests {
         }
     }
 
+    #[test]
+    fn sidecar_deletion_failure_preserves_disk_graph() {
+        use diskann_providers::storage::{get_disk_index_file, FileStorageProvider};
+        use diskann_utils::test_data_root;
+
+        let storage = FileStorageProvider;
+        let tempdir = tempfile::tempdir().unwrap();
+        let params = TestParams {
+            index_path_prefix: tempdir.path().join("index").to_string_lossy().into_owned(),
+            data_path: test_data_root()
+                .join(
+                    super::super::core::disk_index_builder_tests::TEST_DATA_FILE
+                        .trim_start_matches('/'),
+                )
+                .to_string_lossy()
+                .into_owned(),
+            ..TestParams::default()
+        };
+        let graph_path = get_disk_index_file(&params.index_path_prefix);
+        storage
+            .create_for_write(&graph_path)
+            .unwrap()
+            .write_all(b"existing graph")
+            .unwrap();
+        let [quantizer_path, _] =
+            crate::SearchQuantization::SphericalQ3.paths(&params.index_path_prefix);
+        // A directory cannot be deleted as a sidecar file. The builder must
+        // return that storage error before opening the graph for replacement.
+        std::fs::create_dir(&quantizer_path).unwrap();
+        let fixture = IndexBuildFixture::new(storage, params).unwrap();
+        assert!(fixture.build::<GraphDataF32VectorUnitData>().is_err());
+        let mut bytes = Vec::new();
+        fixture
+            .storage_provider
+            .open_reader(&graph_path)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, b"existing graph");
+    }
+
     #[rstest]
     fn test_spherical_disk_index_builder_with_metric(
         #[values(Metric::InnerProduct, Metric::Cosine)] metric: Metric,

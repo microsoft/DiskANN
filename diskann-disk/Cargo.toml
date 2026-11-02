@@ -22,7 +22,7 @@ diskann-utils = { workspace = true }
 diskann-providers = { workspace = true }
 diskann-vector = { workspace = true }
 diskann-linalg = { workspace = true }
-diskann-quantization = { workspace = true, features = ["rayon"] }
+diskann-quantization = { workspace = true, features = ["rayon", "flatbuffers"] }
 
 # Shared dependencies from main diskann crate
 anyhow.workspace = true

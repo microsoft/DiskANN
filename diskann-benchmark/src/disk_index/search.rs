@@ -4,7 +4,12 @@
  */
 
 use rayon::prelude::*;
-use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, time::Instant};
+use std::{
+    collections::HashSet,
+    fmt,
+    sync::{atomic::AtomicBool, Arc},
+    time::Instant,
+};
 
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
@@ -20,14 +25,12 @@ use diskann_disk::{
         },
         search_mode::SearchMode,
     },
-    storage::disk_index_reader::DiskIndexReader,
+    storage::quant::SearchData,
     utils::{instrumentation::PerfLogger, statistics, QueryStatistics},
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    storage::{
-        get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, FileStorageProvider,
-    },
+    storage::get_disk_index_file,
     utils::{create_thread_pool, ParallelIteratorInPool},
 };
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
@@ -36,12 +39,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
+    inputs::disk::{DiskIndexLoad, DiskSearchPhase, SearchQuantization},
     utils::{datafiles, SimilarityMeasure},
 };
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(super) struct DiskSearchStats {
+    #[serde(default)]
+    pub(super) search_quantization: SearchQuantization,
     pub(super) num_threads: usize,
     pub(super) beam_width: usize,
     pub(super) recall_at: u32,
@@ -207,11 +212,13 @@ where
     )?;
 
     // Setup disk index components
-    let pivot_path = get_pq_pivot_file(&index_load.load_path);
-    let pq_data_path = get_compressed_pq_file(&index_load.load_path);
     let disk_index_path = get_disk_index_file(&index_load.load_path);
 
-    let index_reader = DiskIndexReader::new(pivot_path, pq_data_path, &FileStorageProvider)?;
+    let search_data = Arc::new(SearchData::load(
+        &index_load.load_path,
+        index_load.search_quantization.into(),
+        storage_provider,
+    )?);
 
     let caching_strategy = if let Some(num_nodes) = search_params.num_nodes_to_cache {
         CachingStrategy::StaticCacheWithBfsNodes(num_nodes)
@@ -222,14 +229,14 @@ where
     let vertex_provider_factory =
         DiskVertexProviderFactory::from_disk_index_path(disk_index_path, caching_strategy)?;
 
-    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new(
+    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new_with_search_data(
         search_params.num_threads,
         if let Some(lim) = search_params.search_io_limit {
             lim
         } else {
             usize::MAX
         },
-        &index_reader,
+        search_data,
         vertex_provider_factory,
         search_params.distance.into(),
         None,
@@ -347,6 +354,7 @@ where
     global::set_tracer_provider(previous_tracer_provider);
 
     Ok(DiskSearchStats {
+        search_quantization: index_load.search_quantization,
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
@@ -402,6 +410,8 @@ impl fmt::Display for DiskSearchStats {
         let fmt_us = |v: f64| -> String { format!("{:.1}us", v) };
         let fmt_pct = |v: f64| -> String { format!("{:.1}%", v) };
 
+        writeln!(f, "Search Quantization: {:?}", self.search_quantization)?;
+
         let cols: [(&str, usize); 14] = [
             ("L", 2),
             ("KNN", 3),
@@ -412,7 +422,7 @@ impl fmt::Display for DiskSearchStats {
             ("IOs", 6),
             ("IO (us)", 10),
             ("CPU (us)", 10),
-            ("PQ Preprocess (us)", 20),
+            ("Quant Preprocess (us)", 21),
             ("Mean Comps", 11),
             ("Mean Hops", 10),
             ("Cache Hit %", 12),
