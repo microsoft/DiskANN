@@ -265,15 +265,19 @@ mod linux {
 
     #[cfg(test)]
     mod tests {
-        use super::{cache_info, from_lscpu, parse_size, shared_cpu_count};
+        #[cfg(not(miri))]
+        use super::{cache_info, from_lscpu};
+        use super::{parse_size, shared_cpu_count};
 
         #[test]
+        #[cfg(not(miri))]
         fn detects_cache_from_linux() {
             let info = cache_info().expect("Linux should report both L1 data and L2 caches");
             println!("{info:#?}");
         }
 
         #[test]
+        #[cfg(not(miri))]
         fn detects_cache_from_lscpu() {
             let info = from_lscpu().expect("lscpu should report both L1 data and L2 caches");
             println!("{info:#?}");
@@ -376,7 +380,7 @@ mod apple {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     mod tests {
         use super::cache_info;
 
@@ -488,7 +492,7 @@ mod windows {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     mod tests {
         use super::cache_info;
 
@@ -557,7 +561,7 @@ mod cpuid {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     mod tests {
         use super::cache_info;
 
