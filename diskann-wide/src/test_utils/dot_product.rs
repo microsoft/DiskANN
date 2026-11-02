@@ -7,8 +7,7 @@ use half::f16;
 
 use crate::{
     Const, SIMDDotProduct, SIMDVector, SupportedLaneCount, reference::ReferenceScalarOps,
-    reference::cast_f16_to_f32,
-    test_utils::common::ScalarTraits,
+    reference::cast_f16_to_f32, test_utils::common::ScalarTraits,
 };
 
 /////////////////////////
