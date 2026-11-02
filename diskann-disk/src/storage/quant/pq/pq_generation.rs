@@ -8,17 +8,17 @@ use std::{marker::PhantomData, time::Instant};
 use diskann::utils::VectorRepr;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{pq::generate_pq_pivots, GeneratePivotArguments},
+    model::{GeneratePivotArguments, pq::generate_pq_pivots},
     storage::PQStorage,
     utils::RayonThreadPoolRef,
 };
-use diskann_quantization::{error::Format, product::TransposedTable, CompressInto};
+use diskann_quantization::{CompressInto, error::Format, product::TransposedTable};
 use diskann_utils::views::rowmajor;
 use diskann_vector::distance::Metric;
 use tracing::info;
 
 use crate::{
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     storage::quant::compressor::QuantCompressor,
 };
 
@@ -162,12 +162,12 @@ mod pq_generation_tests {
     use std::io::{Read, Write};
 
     use diskann::ANNError;
-    use diskann_providers::model::pq::generate_pq_pivots;
     use diskann_providers::model::GeneratePivotArguments;
+    use diskann_providers::model::pq::generate_pq_pivots;
     use diskann_providers::storage::{
         PQStorage, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
-    use diskann_providers::utils::{create_thread_pool_for_test, RayonThreadPoolRef};
+    use diskann_providers::utils::{RayonThreadPoolRef, create_thread_pool_for_test};
     use diskann_utils::{
         io::{read_bin, write_bin},
         test_data_root,

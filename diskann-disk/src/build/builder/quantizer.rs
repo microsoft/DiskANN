@@ -9,11 +9,11 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
     model::{
-        graph::provider::async_::{common::NoStore, inmem::WithBits},
         FixedChunkPQTable, IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE,
+        graph::provider::async_::{common::NoStore, inmem::WithBits},
     },
     storage::{PQStorage, SQStorage},
-    utils::{create_thread_pool, gen_random_slice, BridgeErr, PQPathNames},
+    utils::{BridgeErr, PQPathNames, create_thread_pool, gen_random_slice},
 };
 use diskann_quantization::{
     algorithms::transforms::{TargetDim, TransformKind},
@@ -25,8 +25,8 @@ use diskann_utils::views::rowmajor;
 use tracing::info;
 
 use crate::{
-    error::{diskann_error, ErrorKind},
     QuantizationType, SphericalBits,
+    error::{ErrorKind, diskann_error},
 };
 
 /// Quantizer types used specifically for async disk index building.

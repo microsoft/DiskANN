@@ -12,7 +12,7 @@ use hashbrown::HashMap;
 
 use crate::{
     data_model::GraphHeader,
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     search::{
         provider::{
             aligned_file_reader::traits::AlignedFileReader, disk_sector_graph::DiskSectorGraph,
@@ -281,10 +281,11 @@ mod disk_vertex_provider_tests {
     use vfs::OverlayFS;
 
     use crate::{
+        QuantizationType,
         build::builder::build::DiskIndexBuilder,
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{
-            DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
+            DISK_SECTOR_LEN, DiskIndexBuildParameters, MemoryBudget, NumPQChunks,
         },
         search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
         search::{
@@ -292,7 +293,6 @@ mod disk_vertex_provider_tests {
             traits::{VertexProvider, VertexProviderFactory},
         },
         storage::DiskIndexWriter,
-        QuantizationType,
     };
 
     fn generate_disk_index_with_associated_data<StorageProviderType>(

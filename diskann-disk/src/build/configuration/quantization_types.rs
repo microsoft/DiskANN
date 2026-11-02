@@ -7,13 +7,12 @@ use std::{fmt, fmt::Display, str::FromStr};
 
 use diskann_quantization::num::Positive;
 use serde::{
-    de::{self, Visitor},
     Deserializer, Serializer,
+    de::{self, Visitor},
 };
 use thiserror::Error;
 
-const EXPECTED_QUANTIZATION_TEMPLATE: &str =
-    "Expected 'FP', 'PQ_N', 'SQ_NBITS'(STDDEV=2.0 by default), 'SQ_NBITS_STDDEV', or 'SPHERICAL_NBITS', got: ";
+const EXPECTED_QUANTIZATION_TEMPLATE: &str = "Expected 'FP', 'PQ_N', 'SQ_NBITS'(STDDEV=2.0 by default), 'SQ_NBITS_STDDEV', or 'SPHERICAL_NBITS', got: ";
 
 /// - `PQ`: Product Quantization with a specified number of chunks.
 /// - `SQ`: Scalar Quantization with a specified number of bits per dimension and a standard deviation.
