@@ -11,7 +11,10 @@ use diskann::{
     utils::IntoUsize,
 };
 use diskann_benchmark_runner::{
-    report::{Report, tolerance::{MaxRelativeChange, FmtSpec}},
+    report::{
+        Report,
+        tolerance::{FmtSpec, MaxRelativeChange},
+    },
     utils::fmt::KeyValue,
 };
 use serde::{Deserialize, Serialize};
@@ -19,9 +22,7 @@ use thiserror::Error;
 
 use diskann_inmem::{Context, Provider, Strategy, integration, repr};
 
-use crate::support::{
-    datatype::{AsDataType, FromSlice, Slice},
-};
+use crate::support::datatype::{AsDataType, FromSlice, Slice};
 
 pub(crate) trait Index {
     fn search<'a>(
@@ -163,11 +164,16 @@ impl CheckCounters {
 
         let fmt = FmtSpec::new();
         let mut builder = Report::builder();
-        builder.push("hops", Report::equal_with_tolerance(tol, *hops, new.hops, fmt));
-        builder.push("cmps", Report::equal_with_tolerance(tol, *cmps, new.cmps, fmt));
+        builder.push(
+            "hops",
+            Report::equal_with_tolerance(tol, *hops, new.hops, fmt),
+        );
+        builder.push(
+            "cmps",
+            Report::equal_with_tolerance(tol, *cmps, new.cmps, fmt),
+        );
         builder.finish()
     }
-
 
     pub(crate) fn check(&self, old: &Counters, new: &Counters) -> Report {
         let Self(tol) = self;

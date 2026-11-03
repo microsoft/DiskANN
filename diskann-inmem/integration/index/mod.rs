@@ -7,7 +7,7 @@ mod object;
 mod runner;
 mod tests;
 
-use object::{Counters, CheckCounters, Index, KnnSearch};
+use object::{CheckCounters, Counters, Index, KnnSearch};
 
 use diskann_benchmark_runner::{Registry, RegistryError};
 

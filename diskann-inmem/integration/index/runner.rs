@@ -25,7 +25,7 @@ use diskann_inmem::{
 };
 
 use crate::{
-    index::{Counters, CheckCounters, Index},
+    index::{CheckCounters, Counters, Index},
     support::{
         datatype::{self, DataType, Dataset, DatasetView},
         io::load_and_convert,
@@ -1018,10 +1018,7 @@ impl CheckBuildAndSearch {
         } = self;
         let BuildAndSearch { build, knn } = old;
         let mut builder = Report::builder();
-        builder.push(
-            "build",
-            check_build.check(build, &new.build)
-        );
+        builder.push("build", check_build.check(build, &new.build));
 
         if knn.len() != new.knn.len() {
             builder.push(

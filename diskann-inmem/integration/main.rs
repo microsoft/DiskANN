@@ -243,10 +243,11 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn graph_index_full() {
+        // Full precision is relatively stable across architectures.
         run_regression_example(
-            "integration.json",
-            "checks.json",
-            "integration-baseline.json",
+            "graph/full/integration.json",
+            "graph/full/checks.json",
+            "graph/full/integration-baseline.json",
         );
     }
 
@@ -257,9 +258,11 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn graph_spherical_one_bit_l2() {
+        // Looser checks: biggest observed change is in the number of neighbors retrieved
+        // during search.
         run_regression_example(
             "graph/spherical/one-bit-l2.json",
-            "checks.json",
+            "graph/spherical/checks-loose.json",
             "graph/spherical/one-bit-l2-baseline.json",
         );
     }
@@ -269,7 +272,7 @@ mod tests {
     fn graph_spherical_one_bit_ip() {
         run_regression_example(
             "graph/spherical/one-bit-ip.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/one-bit-ip-baseline.json",
         );
     }
@@ -277,9 +280,11 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_one_bit_cosine() {
+        // Looser checks: biggest observed change is in the number of neighbors retrieved
+        // during search.
         run_regression_example(
             "graph/spherical/one-bit-cosine.json",
-            "checks.json",
+            "graph/spherical/checks-loose.json",
             "graph/spherical/one-bit-cosine-baseline.json",
         );
     }
@@ -287,9 +292,11 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_two_bit_l2() {
+        // Looser checks: biggest observed change is in the number of neighbors retrieved
+        // during search.
         run_regression_example(
             "graph/spherical/two-bit-l2.json",
-            "checks.json",
+            "graph/spherical/checks-loose.json",
             "graph/spherical/two-bit-l2-baseline.json",
         );
     }
@@ -299,7 +306,7 @@ mod tests {
     fn graph_spherical_two_bit_ip() {
         run_regression_example(
             "graph/spherical/two-bit-ip.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/two-bit-ip-baseline.json",
         );
     }
@@ -307,9 +314,13 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_two_bit_cosine() {
+        // Looser checks: For some reason, 2-bit spherical cosine exhibits the most
+        // difference between architectures.
+        //
+        // This uses a special looser tolerance to accomdate just this case.
         run_regression_example(
             "graph/spherical/two-bit-cosine.json",
-            "checks.json",
+            "graph/spherical/checks-two-bit-cosine.json",
             "graph/spherical/two-bit-cosine-baseline.json",
         );
     }
@@ -319,7 +330,7 @@ mod tests {
     fn graph_spherical_four_bit_l2() {
         run_regression_example(
             "graph/spherical/four-bit-l2.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/four-bit-l2-baseline.json",
         );
     }
@@ -329,7 +340,7 @@ mod tests {
     fn graph_spherical_four_bit_ip() {
         run_regression_example(
             "graph/spherical/four-bit-ip.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/four-bit-ip-baseline.json",
         );
     }
@@ -339,7 +350,7 @@ mod tests {
     fn graph_spherical_four_bit_cosine() {
         run_regression_example(
             "graph/spherical/four-bit-cosine.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/four-bit-cosine-baseline.json",
         );
     }
@@ -353,7 +364,7 @@ mod tests {
     fn graph_product_l2() {
         run_regression_example(
             "graph/product/l2.json",
-            "checks.json",
+            "graph/product/checks.json",
             "graph/product/l2-baseline.json",
         );
     }
@@ -363,7 +374,7 @@ mod tests {
     fn graph_product_ip() {
         run_regression_example(
             "graph/product/ip.json",
-            "checks.json",
+            "graph/product/checks.json",
             "graph/product/ip-baseline.json",
         );
     }
@@ -371,9 +382,10 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn graph_product_cosine() {
+        // Cosine uses separate, slightly looser bounds.
         run_regression_example(
             "graph/product/cosine.json",
-            "checks.json",
+            "graph/product/checks-cosine.json",
             "graph/product/cosine-baseline.json",
         );
     }
@@ -387,7 +399,7 @@ mod tests {
     fn graph_scalar_one() {
         run_regression_example(
             "graph/scalar/one-bit-l2.json",
-            "checks.json",
+            "graph/scalar/checks.json",
             "graph/scalar/one-bit-l2-baseline.json",
         );
     }
@@ -397,7 +409,7 @@ mod tests {
     fn graph_scalar_two() {
         run_regression_example(
             "graph/scalar/two-bit-cosine.json",
-            "checks.json",
+            "graph/scalar/checks.json",
             "graph/scalar/two-bit-cosine-baseline.json",
         );
     }
@@ -407,7 +419,7 @@ mod tests {
     fn graph_scalar_four() {
         run_regression_example(
             "graph/scalar/four-bit-ip.json",
-            "checks.json",
+            "graph/scalar/checks.json",
             "graph/scalar/four-bit-ip-baseline.json",
         );
     }
@@ -417,7 +429,7 @@ mod tests {
     fn graph_scalar_eight() {
         run_regression_example(
             "graph/scalar/eight-bit-l2.json",
-            "checks.json",
+            "graph/scalar/checks.json",
             "graph/scalar/eight-bit-l2-baseline.json",
         );
     }

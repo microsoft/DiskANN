@@ -5,15 +5,19 @@
 
 use diskann::graph::search::Knn;
 use diskann_benchmark_core::recall::{RecallMetrics, Rows};
-use diskann_benchmark_runner::{report::{Report, tolerance::{FmtSpec, MaxAbsoluteChange}}, utils::fmt::KeyValue};
+use diskann_benchmark_runner::{
+    report::{
+        Report,
+        tolerance::{FmtSpec, MaxAbsoluteChange},
+    },
+    utils::fmt::KeyValue,
+};
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    index::{Counters, CheckCounters, Index, KnnSearch},
-    support::{
-        datatype::DatasetView,
-    },
+    index::{CheckCounters, Counters, Index, KnnSearch},
+    support::datatype::DatasetView,
 };
 
 pub(super) fn insert(
@@ -111,21 +115,29 @@ struct CheckKnnRecall {
 impl CheckKnnRecall {
     fn example() -> Self {
         const RECALL: MaxAbsoluteChange = MaxAbsoluteChange::try_from_f64(0.001).unwrap();
-        Self {
-            recall: RECALL,
-        }
+        Self { recall: RECALL }
     }
 
     fn check(&self, old: &KnnRecall, new: &KnnRecall) -> Report {
-        let Self { recall: check_recall } = self;
-        let KnnRecall { recall_k, recall_n, num_queries, average } = old;
+        let Self {
+            recall: check_recall,
+        } = self;
+        let KnnRecall {
+            recall_k,
+            recall_n,
+            num_queries,
+            average,
+        } = old;
 
         let fmt = FmtSpec::new().with_precision(4);
         let mut builder = Report::builder();
         builder.push("recall_k", Report::equal(*recall_k, new.recall_k));
         builder.push("recall_n", Report::equal(*recall_n, new.recall_n));
         builder.push("num_queries", Report::equal(*num_queries, new.num_queries));
-        builder.push("average", Report::equal_with_tolerance(check_recall, *average, new.average, fmt));
+        builder.push(
+            "average",
+            Report::equal_with_tolerance(check_recall, *average, new.average, fmt),
+        );
         builder.finish()
     }
 }
@@ -162,8 +174,15 @@ impl KnnDiff {
     }
 
     pub(crate) fn check(&self, old: &KnnStats, new: &KnnStats) -> Report {
-        let Self { recall: check_recall, counters: check_counters } = self;
-        let KnnStats { recall, counters, misc } = old;
+        let Self {
+            recall: check_recall,
+            counters: check_counters,
+        } = self;
+        let KnnStats {
+            recall,
+            counters,
+            misc,
+        } = old;
 
         let mut builder = Report::builder();
         builder.push("recall", check_recall.check(recall, &new.recall));

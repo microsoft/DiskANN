@@ -10,20 +10,20 @@
         "content": {
           "build": {
             "max-relative-change": {
-              "decrease": 0.0025,
-              "increase": 0.0025
+              "decrease": 0.0008,
+              "increase": 0.0008
             }
           },
           "knn": {
             "counters": {
               "max-relative-change": {
-                "decrease": 0.0003,
-                "increase": 0.0003
+                "decrease": 0.014,
+                "increase": 0.014
               }
             },
             "recall": {
               "recall": {
-                "max-absolute-change": 0.001
+                "max-absolute-change": 0.0011
               }
             }
           }
