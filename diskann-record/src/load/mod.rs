@@ -9,6 +9,11 @@
 //! primitive-like leaves, [`Loadable`]) and obtain an [`Object`] / [`Context`] from which
 //! they extract individual fields and side-car artifacts.
 //!
+//! Implement [`Loader`] to supply runtime settings or resources without changing the
+//! saved format. Decode a shared saved-data type with [`Context::load`], then build the
+//! result using those settings. Ordinary [`Load`] implementations can use the same
+//! saved-data type with defaults.
+//!
 //! The generic entry point is `load`; `load_from_disk` (available under the `disk`
 //! feature) is the disk-backed convenience wrapper that reads a manifest and dispatches
 //! into the user type's [`Load`] impl.
@@ -41,7 +46,7 @@ pub(crate) use context::LoadContext;
 pub use context::{Context, Object, Reader};
 
 #[cfg(feature = "disk")]
-use std::path::Path;
+use std::{marker::PhantomData, path::Path};
 
 use crate::{Version, save};
 
@@ -55,13 +60,20 @@ use crate::{Version, save};
 /// # Errors
 ///
 /// Returns [`Error`] if the context cannot produce a root value or if `T`'s loader fails.
-pub(crate) fn load<'a, T, C>(context: &'a C) -> Result<T>
+pub(crate) fn load<'a, T>(context: &'a dyn LoadContext) -> Result<T>
 where
     T: Loadable<'a>,
-    C: LoadContext,
+{
+    load_with(context, PhantomData::<T>)
+}
+
+/// Load the root value using caller-supplied settings or resources.
+pub(crate) fn load_with<'a, L>(context: &'a dyn LoadContext, loader: L) -> Result<L::Value>
+where
+    L: Loader<'a>,
 {
     let value = context.value()?;
-    T::load(Context::new(context, value))
+    loader.load(Context::new(context, value))
 }
 
 /// Reload a value previously written by [`save::save_to_disk`].
@@ -81,6 +93,59 @@ where
 {
     let context = crate::backend::disk::DiskLoadContext::new(metadata, dir)?;
     load(&context)
+}
+
+/// Reload a saved value using caller-supplied settings or resources.
+///
+/// The loader must work for any metadata lifetime, so the result cannot borrow from
+/// the disk context, which is dropped before returning. It may borrow resources
+/// supplied by the caller; those resources need not be `'static`.
+///
+/// A reference into the saved metadata cannot escape:
+///
+/// ```compile_fail
+/// use std::{marker::PhantomData, path::Path};
+/// use diskann_record::load::load_from_disk_with;
+///
+/// let name: &str = load_from_disk_with(
+///     Path::new("metadata.json"),
+///     Path::new("artifacts"),
+///     PhantomData::<&str>,
+/// ).unwrap();
+/// ```
+///
+/// # Errors
+///
+/// Returns the same manifest and artifact errors as [`load_from_disk`], or any error
+/// returned by the loader.
+#[cfg(feature = "disk")]
+pub fn load_from_disk_with<L, T>(metadata: &Path, dir: &Path, loader: L) -> Result<T>
+where
+    L: for<'a> Loader<'a, Value = T>,
+{
+    let context = crate::backend::disk::DiskLoadContext::new(metadata, dir)?;
+    load_with(&context, loader)
+}
+
+/// Reconstruct a value using caller-supplied settings or resources.
+pub trait Loader<'a>: Sized {
+    /// The value produced by this loader.
+    type Value;
+
+    /// Load from the supplied context, consuming this loader.
+    fn load(self, context: Context<'a>) -> Result<Self::Value>;
+}
+
+/// Trick to load a [`Loadable`] type through [`Loader`].
+impl<'a, T> Loader<'a> for PhantomData<T>
+where
+    T: Loadable<'a>,
+{
+    type Value = T;
+
+    fn load(self, context: Context<'a>) -> Result<Self::Value> {
+        T::load(context)
+    }
 }
 
 /// Implemented by user types that can be reloaded from a versioned [`Object`].
