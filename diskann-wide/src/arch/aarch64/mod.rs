@@ -113,7 +113,7 @@ pub(super) enum LevelInner {
 /////////////
 
 cfg_if::cfg_if! {
-    if #[cfg(all(target_feature = "neon", target_feature = "dotprod"))] {
+    if #[cfg(all(target_feature = "neon", target_feature = "dotprod", target_feature = "fhm"))] {
         pub type Current = Neon;
 
         pub const fn current() -> Current {
@@ -224,6 +224,7 @@ impl Neon {
     ///
     /// * `neon`
     /// * `dotprod`
+    /// * `fhm`
     pub const unsafe fn new() -> Self {
         Self(Hidden)
     }
@@ -232,7 +233,11 @@ impl Neon {
     pub fn new_checked() -> Option<Self> {
         // This check here ensures that if we ever switch to dynamically dispatching to
         // `Neon` that we do not forget to update `new_checked`.
-        if cfg!(all(target_feature = "neon", target_feature = "dotprod")) {
+        if cfg!(all(
+            target_feature = "neon",
+            target_feature = "dotprod",
+            target_feature = "fhm"
+        )) {
             // SAFETY: The compile-time feature check above ensures we do not accidentally
             // return an unsafe instance of `Self`.
             Some(unsafe { Self::new() })
