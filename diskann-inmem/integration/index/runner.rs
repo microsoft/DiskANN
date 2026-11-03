@@ -925,11 +925,11 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 
         let index = input.index(data.as_view())?;
         let rt = diskann_benchmark_core::tokio::runtime(1)?;
-        let build = super::tests::insert(&*index, data.as_view(), rt.handle())?;
+        let build = super::ops::insert(&*index, data.as_view(), rt.handle())?;
 
         let mut knn = Vec::new();
         for (k, param) in input.search.knn.iter() {
-            let stats = super::tests::knn(
+            let stats = super::ops::knn(
                 &*index,
                 *k,
                 *param,
@@ -972,7 +972,7 @@ impl Regression for FullPrecision {
 #[derive(Debug, Serialize, Deserialize)]
 struct BuildAndSearch {
     build: Counters,
-    knn: Vec<super::tests::KnnStats>,
+    knn: Vec<super::ops::KnnStats>,
 }
 
 impl std::fmt::Display for BuildAndSearch {
@@ -992,22 +992,21 @@ impl std::fmt::Display for BuildAndSearch {
 // Tolerance //
 ///////////////
 
-/// A tolerance [`Input`] for [`diskann_benchmark_runner::benchmark::Regression`]s that sets
-/// a limit on the delta for counters.
+/// A tolerance [`Input`] for [`diskann_benchmark_runner::benchmark::Regression`]s.
 ///
-/// This delta allows for minor cross-architecture (`aarch64` vs `x86`) due to different
-/// choices with floating point SIMD width/association.
+/// This allows for minor cross-architecture (`aarch64` vs `x86`) due to different choices
+/// with floating point SIMD width/association.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct CheckBuildAndSearch {
     build: CheckCounters,
-    knn: super::tests::KnnDiff,
+    knn: super::ops::CheckKnnStats,
 }
 
 impl CheckBuildAndSearch {
     fn example() -> Self {
         Self {
             build: CheckCounters::example(),
-            knn: super::tests::KnnDiff::example(),
+            knn: super::ops::CheckKnnStats::example(),
         }
     }
 
@@ -1069,8 +1068,32 @@ impl diskann_benchmark_runner::Input for CheckBuildAndSearch {
 mod tests {
     use super::*;
 
+    use diskann_benchmark_runner::report::Status;
+
     #[test]
     fn example_parses() {
         let _ = Test::from_raw(<Test as diskann_benchmark_runner::Input>::example(), None).unwrap();
+    }
+
+    #[test]
+    fn check_build_and_search_rejects_knn_length_mismatch() {
+        let tolerance = CheckBuildAndSearch::example();
+        let output = |len| BuildAndSearch {
+            build: Counters::test_fixture(),
+            knn: (0..len)
+                .map(|_| super::super::ops::KnnStats::test_fixture())
+                .collect(),
+        };
+        for (old_len, new_len, expected) in [
+            (1, 1, Status::Pass),
+            (1, 0, Status::Fail),
+            (0, 1, Status::Fail),
+        ] {
+            assert_eq!(
+                tolerance.check(&output(old_len), &output(new_len)).status(),
+                expected,
+                "old_len = {old_len}, new_len = {new_len}"
+            );
+        }
     }
 }

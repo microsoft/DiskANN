@@ -87,6 +87,19 @@ pub(crate) struct Counters {
 }
 
 impl Counters {
+    #[cfg(test)]
+    pub(super) fn test_fixture() -> Self {
+        Self {
+            query_distance: 10_000,
+            distance: 0,
+            get_vector: 0,
+            set_vector: 0,
+            get_neighbors: 0,
+            set_neighbors: 0,
+            append_neighbors: 0,
+        }
+    }
+
     pub(crate) fn delta(&self, after: &Counters) -> anyhow::Result<Self> {
         #[derive(Debug, Error)]
         #[error(
@@ -219,6 +232,38 @@ impl CheckCounters {
             Report::equal_with_tolerance(tol, *append_neighbors, new.append_neighbors, fmt),
         );
         builder.finish()
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use diskann_benchmark_runner::report::Status;
+
+    #[test]
+    fn check_counters_rejects_exceeded_tolerance() {
+        let tolerance = CheckCounters::example();
+        let old = Counters::test_fixture();
+        for (query_distance, expected) in [
+            (10_000, Status::Pass),
+            (10_001, Status::Pass),
+            (10_002, Status::Fail),
+        ] {
+            let new = Counters {
+                query_distance,
+                ..Counters::test_fixture()
+            };
+            assert_eq!(
+                tolerance.check(&old, &new).status(),
+                expected,
+                "query_distance = {query_distance}"
+            );
+        }
     }
 }
 

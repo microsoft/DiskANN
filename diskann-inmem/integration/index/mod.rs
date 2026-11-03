@@ -4,8 +4,8 @@
  */
 
 mod object;
+mod ops;
 mod runner;
-mod tests;
 
 use object::{CheckCounters, Counters, Index, KnnSearch};
 

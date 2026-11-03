@@ -243,7 +243,8 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn graph_index_full() {
-        // Full precision is relatively stable across architectures.
+        // Full precision is relatively stable across architectures and thus all data types
+        // can share a tight tolerance.
         run_regression_example(
             "graph/full/integration.json",
             "graph/full/checks.json",
@@ -255,14 +256,20 @@ mod tests {
     // Spherical Quantization //
     //------------------------//
 
+    // Note: Several low-bit cases exhibit some numerical difference between x86 and aarch64.
+    //
+    // The largest difference is in the number of expansions performed during search.
+    // This is still well below a 1% relative difference, but a looser tolerance is used for
+    // these runs.
+    //
+    // 2-bit Cosine is even worse than these outliers and gets its own check file.
+
     #[test]
     #[cfg(not(miri))]
     fn graph_spherical_one_bit_l2() {
-        // Looser checks: biggest observed change is in the number of neighbors retrieved
-        // during search.
         run_regression_example(
             "graph/spherical/one-bit-l2.json",
-            "graph/spherical/checks-loose.json",
+            "graph/spherical/checks-loose.json", // looser
             "graph/spherical/one-bit-l2-baseline.json",
         );
     }
@@ -280,11 +287,9 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_one_bit_cosine() {
-        // Looser checks: biggest observed change is in the number of neighbors retrieved
-        // during search.
         run_regression_example(
             "graph/spherical/one-bit-cosine.json",
-            "graph/spherical/checks-loose.json",
+            "graph/spherical/checks-loose.json", // looser
             "graph/spherical/one-bit-cosine-baseline.json",
         );
     }
@@ -292,11 +297,9 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_two_bit_l2() {
-        // Looser checks: biggest observed change is in the number of neighbors retrieved
-        // during search.
         run_regression_example(
             "graph/spherical/two-bit-l2.json",
-            "graph/spherical/checks-loose.json",
+            "graph/spherical/checks-loose.json", // looser
             "graph/spherical/two-bit-l2-baseline.json",
         );
     }
@@ -317,7 +320,7 @@ mod tests {
         // Looser checks: For some reason, 2-bit spherical cosine exhibits the most
         // difference between architectures.
         //
-        // This uses a special looser tolerance to accomdate just this case.
+        // This uses a special looser tolerance to accommodate just this case.
         run_regression_example(
             "graph/spherical/two-bit-cosine.json",
             "graph/spherical/checks-two-bit-cosine.json",
@@ -359,6 +362,11 @@ mod tests {
     // Product Quantization //
     //----------------------//
 
+    // PQ is stable across architecture and can use a tight tolerance for IP and L2.
+    //
+    // Cosine requires sufficiently loose tolerance that it gets its own file to keep the
+    // tolerance for the other distances tight.
+
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_product_l2() {
@@ -382,7 +390,6 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn graph_product_cosine() {
-        // Cosine uses separate, slightly looser bounds.
         run_regression_example(
             "graph/product/cosine.json",
             "graph/product/checks-cosine.json",
@@ -393,6 +400,9 @@ mod tests {
     //---------------------//
     // Scalar Quantization //
     //---------------------//
+
+    // Scalar quantization is fairly stable across architecture and can share a single
+    // check file.
 
     #[test]
     #[cfg(not(miri))]

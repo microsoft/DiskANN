@@ -149,6 +149,22 @@ pub(crate) struct KnnStats {
     misc: KnnSearch,
 }
 
+#[cfg(test)]
+impl KnnStats {
+    pub(super) fn test_fixture() -> Self {
+        Self {
+            recall: KnnRecall {
+                recall_k: 10,
+                recall_n: 10,
+                num_queries: 100,
+                average: 0.75,
+            },
+            counters: Counters::test_fixture(),
+            misc: KnnSearch::new(),
+        }
+    }
+}
+
 impl std::fmt::Display for KnnStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut kv = KeyValue::new();
@@ -160,12 +176,12 @@ impl std::fmt::Display for KnnStats {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct KnnDiff {
+pub(crate) struct CheckKnnStats {
     recall: CheckKnnRecall,
     counters: CheckCounters,
 }
 
-impl KnnDiff {
+impl CheckKnnStats {
     pub(crate) fn example() -> Self {
         Self {
             recall: CheckKnnRecall::example(),
@@ -189,5 +205,35 @@ impl KnnDiff {
         builder.push("counters", check_counters.check(counters, &new.counters));
         builder.push("misc", check_counters.check_hops_and_cmps(misc, &new.misc));
         builder.finish()
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diskann_benchmark_runner::report::Status;
+
+    #[test]
+    fn check_knn_stats_rejects_recall_changes() {
+        let tolerance = CheckKnnStats::example();
+        let old = KnnStats::test_fixture();
+        for (recall_k, average, expected) in [
+            (10, 0.75, Status::Pass),
+            (11, 0.75, Status::Fail),
+            (10, 0.74, Status::Fail),
+        ] {
+            let mut new = KnnStats::test_fixture();
+            new.recall.recall_k = recall_k;
+            new.recall.average = average;
+            assert_eq!(
+                tolerance.check(&old, &new).status(),
+                expected,
+                "recall_k = {recall_k}, average = {average}"
+            );
+        }
     }
 }

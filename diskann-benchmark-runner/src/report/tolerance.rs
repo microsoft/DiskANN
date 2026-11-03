@@ -375,19 +375,22 @@ lower_is_better!(MaxAbsoluteIncrease);
 /// Limits on the relative decrease and increase allowed.
 ///
 /// A check succeeds if `-max_decrease <= (new - old) / old <= max_increase`.
-/// Both bounds are inclusive and relative to `old`; swapping `old` and `new` need not
-/// produce the same result, even when the bounds are equal.
 ///
-/// Like [`MaxRelativeDecrease`] and [`MaxRelativeIncrease`], this supports primitive
-/// integers up to 64 bits, including `usize`/`isize`, and `f32`/`f64`, and requires
-/// positive, finite inputs and a finite relative change, or two zero inputs.
-/// Two zero inputs have zero relative change; a single zero input is rejected.
+/// This supports primitive integers up to 64 bits and `f32`/`f64` and requires positive,
+/// finite inputs and a finite relative change, or two zero inputs.
+/// Two zero inputs have zero relative change.
 ///
 /// # Precision
 ///
-/// Integer absolute differences are exact. Floating-point differences are computed in
-/// `f64`. The difference magnitude and `old` are converted to `f64` before division,
-/// which can lose integer precision; floating-point arithmetic is subject to rounding.
+/// Integer absolute differences are computed exactly. Floating-point differences are
+/// computed in `f64` and are subject to floating-point rounding.
+///
+/// The relative change magnitude (`absolute / old`) is computed by converting both
+/// values to `f64` before division.
+///
+/// If either `absolute` or `old` is an integer that cannot be represented exactly as
+/// an `f64`, the conversion can lose precision. The division itself is subject to
+/// floating-point rounding.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaxRelativeChange {
@@ -405,18 +408,19 @@ struct RelativeChangeLimits {
 impl MaxRelativeChange {
     /// Construct inclusive relative bounds.
     ///
-    /// Returns `None` unless `max_decrease` is in `[0, 1]` and `max_increase` is
-    /// non-negative and finite.
+    /// Requires `max_decrease` to be in `[0, 1]` and `max_increase` to be non-negative and
+    /// finite.
     pub const fn new(max_decrease: f64, max_increase: f64) -> Option<Self> {
-        match (
-            Fraction::new(max_decrease),
-            NonNegativeFinite::new(max_increase),
-        ) {
-            (Some(decrease), Ok(increase)) => Some(Self {
-                limits: RelativeChangeLimits { decrease, increase },
-            }),
-            _ => None,
-        }
+        let decrease = match Fraction::new(max_decrease) {
+            Some(v) => v,
+            None => return None,
+        };
+        let increase = match NonNegativeFinite::new(max_increase) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        let limits = RelativeChangeLimits { decrease, increase };
+        Some(Self { limits })
     }
 
     /// Return the maximum relative decrease.
@@ -435,13 +439,13 @@ equal_with_tolerance!(MaxRelativeChange);
 /// A limit on the absolute change allowed in either direction.
 ///
 /// A check succeeds if `|new - old| <= limit`. Supports primitive integers up to
-/// 64 bits, including `usize`/`isize`, and `f32`/`f64`. Zero and negative inputs are
-/// allowed; floating-point inputs and their difference must be finite.
+/// 64 bits and `f32`/`f64`. Floating-point inputs and their difference must be finite.
 ///
 /// # Precision
 ///
-/// Integer absolute differences and comparisons with integer limits are exact.
-/// Floating-point differences are computed in `f64` and are subject to rounding.
+/// Integer absolute differences are computed exactly. Floating-point differences are
+/// an `f64`, the conversion can lose precision. The division itself is subject to
+/// floating-point rounding.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaxAbsoluteChange {
@@ -1522,10 +1526,6 @@ mod tests {
             let check = Check::equal_with_tolerance(&TOLERANCE, old, new, spec);
             assert_eq!(check.status(), status, "old = {old}, new = {new}");
             assert_eq!(check.render(super::super::FmtContext::Tree), expected);
-
-            let report = super::super::Report::equal_with_tolerance(&TOLERANCE, old, new, spec);
-            assert_eq!(report.status(), status, "old = {old}, new = {new}");
-            assert_eq!(report.to_string(), expected);
         }
 
         let zero = MaxRelativeChange::new(-0.0, -0.0).unwrap();
@@ -1587,10 +1587,6 @@ mod tests {
             let check = Check::equal_with_tolerance(&TOLERANCE, old, new, spec);
             assert_eq!(check.status(), status, "old = {old}, new = {new}");
             assert_eq!(check.render(super::super::FmtContext::Tree), expected);
-
-            let report = super::super::Report::equal_with_tolerance(&TOLERANCE, old, new, spec);
-            assert_eq!(report.status(), status, "old = {old}, new = {new}");
-            assert_eq!(report.to_string(), expected);
         }
         let zero = MaxAbsoluteChange::try_from_f64(-0.0).unwrap();
         for (new, status) in [(0.0, Pass), (-0.0, Pass), (-1.0, Fail), (1.0, Fail)] {
@@ -1606,6 +1602,41 @@ mod tests {
                 f64::MAX
             )
         );
+    }
+
+    #[test]
+    fn test_report_equal_with_tolerance() {
+        use super::super::Report;
+        use Status::{Fail, Pass};
+
+        let relative = MaxRelativeChange::new(0.125, 0.25).unwrap();
+        let absolute = MaxAbsoluteChange::from_u64(1);
+        let spec = FmtSpec::new();
+        for (report, status, expected) in [
+            (
+                Report::equal_with_tolerance(&relative, 8u64, 9, spec),
+                Pass,
+                "8 => 9 (+12.500%)",
+            ),
+            (
+                Report::equal_with_tolerance(&relative, 8u64, 6, spec),
+                Fail,
+                "8 => 6 (-25.000%) [min -12.5%, max +25%] | FAIL",
+            ),
+            (
+                Report::equal_with_tolerance(&absolute, 8u64, 9, spec),
+                Pass,
+                "8 => 9 (+1)",
+            ),
+            (
+                Report::equal_with_tolerance(&absolute, 8u64, 10, spec),
+                Fail,
+                "8 => 10 (+2) [min -1, max +1] | FAIL",
+            ),
+        ] {
+            assert_eq!(report.status(), status);
+            assert_eq!(report.to_string(), expected);
+        }
     }
 
     #[test]
@@ -1864,13 +1895,13 @@ mod tests {
 
         for old in [0.0f64, -0.0] {
             for new in [0.0f64, -0.0] {
+                assert_eq!(new.change_from(&old).unwrap().relative().unwrap(), 0.0);
                 for check in [
                     decrease.higher_is_better(old, new, spec),
                     increase.lower_is_better(old, new, spec),
                     change.equal_with_tolerance(old, new, spec),
                 ] {
                     assert_eq!(check.status(), Status::Pass);
-                    assert_eq!(serde_json::to_value(check).unwrap()["relative"], 0.0);
                 }
             }
             for (old, new) in [
@@ -1900,7 +1931,6 @@ mod tests {
             change.equal_with_tolerance(0i64, 0, spec),
         ] {
             assert_eq!(check.status(), Status::Pass);
-            assert_eq!(serde_json::to_value(check).unwrap()["relative"], 0.0);
         }
     }
 
@@ -2078,12 +2108,32 @@ mod tests {
 
     #[test]
     fn test_change_tolerance_deserialization() {
-        for (decrease, increase) in [(0.0, 0.0), (0.125, 0.25), (1.0, 2.0)] {
-            let input = serde_json::json!({
-                "max-relative-change": { "decrease": decrease, "increase": increase }
-            });
-            let tolerance: MaxRelativeChange = serde_json::from_value(input.clone()).unwrap();
-            assert_eq!(serde_json::to_value(tolerance).unwrap(), input);
+        for (input, decrease, increase) in [
+            (
+                serde_json::json!({
+                    "max-relative-change": { "decrease": 0.0, "increase": 0.0 }
+                }),
+                0.0,
+                0.0,
+            ),
+            (
+                serde_json::json!({
+                    "max-relative-change": { "decrease": 0.125, "increase": 0.25 }
+                }),
+                0.125,
+                0.25,
+            ),
+            (
+                serde_json::json!({
+                    "max-relative-change": { "decrease": 1.0, "increase": 2.0 }
+                }),
+                1.0,
+                2.0,
+            ),
+        ] {
+            let tolerance: MaxRelativeChange = serde_json::from_value(input).unwrap();
+            assert_eq!(tolerance.max_decrease(), decrease);
+            assert_eq!(tolerance.max_increase(), increase);
         }
         for input in [
             serde_json::json!({}),
@@ -2112,12 +2162,21 @@ mod tests {
             );
         }
 
-        for input in [
-            serde_json::json!({ "max-absolute-change": u64::MAX }),
-            serde_json::json!({ "max-absolute-change": 0.5 }),
+        for (input, integer, float) in [
+            (
+                serde_json::json!({ "max-absolute-change": u64::MAX }),
+                Some(u64::MAX),
+                None,
+            ),
+            (
+                serde_json::json!({ "max-absolute-change": 0.5 }),
+                None,
+                Some(0.5),
+            ),
         ] {
-            let tolerance: MaxAbsoluteChange = serde_json::from_value(input.clone()).unwrap();
-            assert_eq!(serde_json::to_value(tolerance).unwrap(), input);
+            let tolerance: MaxAbsoluteChange = serde_json::from_value(input).unwrap();
+            assert_eq!(tolerance.as_u64(), integer);
+            assert_eq!(tolerance.as_f64(), float);
         }
         for input in [
             serde_json::json!({}),
