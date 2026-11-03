@@ -5,21 +5,23 @@
 | **Authors** | Suhas Jayaram Subramanya (suhasjs) |
 | **Contributors** | |
 | **Created** | 2026-09-08 |
-| **Updated** | 2026-09-09 |
+| **Updated** | 2026-11-02 |
 
 ## Summary
 
-Add stateful loading to `diskann-record`, inspired by Serde's [`DeserializeSeed`](https://docs.rs/serde/latest/serde/de/trait.DeserializeSeed.html). A caller supplies a loader that carries construction state and declares the type it produces. Existing stateless loading remains unchanged; target types do not need an associated runtime-parameter type.
+Let callers pass settings and resources when loading saved data with `diskann-record`. Keep loading without these extra inputs unchanged. Both paths use the same code to read the saved data. The design is inspired by Serde's [`DeserializeSeed`](https://docs.rs/serde/latest/serde/de/trait.DeserializeSeed.html).
 
 ## Motivation
 
-A saved in-memory index contains only its live nodes. Loading 100,000 saved nodes may construct an index with capacity for 200,000, one million, or ten million nodes. Capacity is not persisted because it describes the new runtime allocation rather than the logical index.
+**Want**: A saved in-memory index should contain its live nodes and frozen start points (fixed search entry points), not empty slots or state used to manage concurrent access. A caller loading 100,000 saved nodes might want room for one million. That capacity is a choice made when loading and should not be part of the saved index data.
 
-The existing `Load` API receives only persisted data. A loader supplies the missing construction state: capacity settings, shared resources, owned storage, or a mutable destination. Different loaders may construct the same target type; there is no requirement for one runtime contract per target.
+The existing `Load` API receives only saved data. A loader supplies the extra inputs: capacity, shared resources, storage, or an existing value to fill. Different loaders can produce the same type; that type does not have to declare which settings they accept.
+
+[`diskann-inmem::Provider`](../diskann-inmem/src/provider.rs) is the motivating use case. Its [full-precision configuration](../diskann-inmem/src/repr/full.rs) combines data that should be saved, such as the distance metric and start points, with load-time settings like capacity, concurrency, and prefetching. Since it has no save/load support today, this proposal intends to add that support with caller-supplied settings.
 
 ## Proposal
 
-Keep `Load` and `Loadable` unchanged and add the following trait. The examples sketch the proposed API, not the current implementation.
+Keep `Load` and `Loadable` unchanged and add a `Loader` trait. The code below sketches the proposed API.
 
 ```rust
 pub trait Loader<'a>: Sized {
@@ -29,23 +31,26 @@ pub trait Loader<'a>: Sized {
 }
 ```
 
-The loader, rather than the output type, implements the operation. `Value` need not implement `Load` or `Loadable`; a loader loading into an existing destination may return `()`. Consuming the loader allows owned resources to move into the result and mutable references to be used without requiring interior mutability.
+`load` takes ownership of the loader, so it can pass storage to the result or write into an existing value. `Value` need not implement `Load`; a loader that fills an existing value may return `()`. Implement `Loader` for `PhantomData<T>` where `T: Loadable<'a>` by calling `Loadable::load`, so ordinary loading works with the new API too.
 
-As in Serde, `PhantomData<T>` adapts ordinary loading to the new API:
+Caller-supplied settings and resources stay in the loader, not in `Context`, `Object`, or the storage backend, and are not expected to be saved. Resources used by the result must remain valid while it uses them; they are not tied to how long the saved metadata is available (`'a`).
 
-```rust
-impl<'a, T: Loadable<'a>> Loader<'a> for std::marker::PhantomData<T> {
-    type Value = T;
+### Shared Saved Data
 
-    fn load(self, context: Context<'a>) -> Result<T> {
-        <T as Loadable<'a>>::load(context)
-    }
-}
+Use a separate struct, aka data transfer object (DTO), to hold the saved fields. Its `Load` implementation reads those fields and converts from any supported older formats. It does not contain runtime settings or concurrency state. Both loading paths can use the same code to build the result from it:
+
+```text
+ordinary Load -> DTO decoding -> restore(dto, default options)
+    Loader -> DTO decoding -> restore(dto, supplied options)
 ```
 
-Runtime state is not stored in `Context`, `Object`, or the backend and is not serialized. A loader's resource lifetimes are independent of the manifest lifetime `'a`; any resources borrowed by the output must have their lifetimes represented in the loader and output types.
+The result type's ordinary `Load` uses the DTO's `VERSION`, `load`, and `load_legacy`, then builds the result with default settings. A loader calls `context.load::<Dto>()?` and builds it with caller-supplied settings. Neither path needs its own copy of the code that reads and checks saved data.
 
-### Composition
+For small records, the DTO can hold all the data. For large ones, it can hold metadata, file handles, and an `Object<'a>` used to open the saved files. Building the result then reads and checks those files directly, without keeping a second full copy in memory. Reading metadata alone does not check the file contents. Finish using the DTO before the disk context is dropped.
+
+Define the DTO in the crate that defines the saved format; `diskann-record` needs no new trait for DTOs. Saving writes the same format, either from the running index or through a wrapper that reads from it without copying it. The DTO itself need not implement `Save`.
+
+### Loading Nested Values
 
 Add helpers that accept a loader:
 
@@ -63,107 +68,90 @@ impl<'a> Object<'a> {
 }
 ```
 
-Existing `Context::load`, `Object::field`, `load_fields!`, and all primitive and collection implementations remain unchanged. A parent explicitly supplies loaders for stateful children, for example `object.field_with("graph", GraphLoader { max_slots })?`, and uses ordinary field loading for stateless children.
+When loading a field, pass a loader with the settings that field needs. Alternatively, read its DTO with an ordinary `field` call and pass settings when building the result. Existing `load`, `field`, `load_fields!`, and support for basic types and collections stay unchanged.
 
-There is no implicit propagation into `Option<T>` or `Vec<T>`. Stateful collections use explicit traversal, constructing a loader for each present value or element and reborrowing shared state as needed. Loaders need not be `Clone`; generic collection adapters and macro extensions are outside this proposal.
+Settings are not passed automatically through `Option<T>` or `Vec<T>`. Callers handle each present value or element with a loader, passing shared resources again as needed. Loaders do not have to support copying or cloning.
 
-### Schema Versions and Errors
+### Versions and Errors
 
-`Loader` receives a `Context`; it does not automatically invoke the `Loadable` version dispatcher. A simple approach is to load a persisted representation through `Context::load` and then construct the runtime value. This retains the existing object-shape check, `Load::load` / `load_legacy` dispatch, and error classification.
+`Loader` does not choose how to read a format version automatically. Calling `context.load::<Dto>()` uses the existing record checks, version handling, and error categories. A loader that reads data directly must handle these itself. Caller settings cannot change how saved fields are interpreted. The record format and storage backends stay unchanged.
 
-A loader may instead decode directly, including streaming sidecar artifacts, but is then responsible for the same shape and version checks and any legacy upgrades it supports. Persisted schema information, not runtime settings, determines field encodings and decoding paths. No persisted format changes are required.
+Invalid settings, corrupt data, and reported memory-allocation failures are critical errors, not reasons to try another format. This proposal does not add error handling to allocations that lack it today. Callers may retry recoverable errors, but each attempt needs a new loader and must start with unchanged or reset external data. Loading into an existing value may leave it partly changed on failure.
 
-Invalid runtime settings and allocation failures are critical errors, not reasons to try another schema. Probing remains caller-controlled and retries only recoverable errors. Since loaders are consumed and may mutate external state, each attempt needs a fresh loader or reborrow; retrying also requires unchanged or restored external state. Prefer checking schema compatibility before mutating a destination.
+## Example: In-Memory Provider
 
-## Example
+Start with `Provider<Full<f32>, u32>`: saved vectors use `f32` and external IDs use `u32`. These are fixed, not choices made when loading. The provider holds the ID map; `Full` holds vectors, neighbor lists, and start points. Separate the saved data from runtime settings and state:
 
-Use inline adjacency lists for this small example:
+| Saved data | Supplied or rebuilt when loading |
+|---|---|
+| Live and frozen counts, vector dimension | Capacity for writable slots |
+| Distance measure and maximum neighbors per node | Store concurrency and prefetch settings |
+| Live and frozen vectors, neighbor lists | Slot state, free-slot lists, reader tracking, and locks |
+| External IDs in the same row order as saved live vectors | Two-way ID map and counters |
 
-```rust
-struct Metadata {
-    name: String, // Saved.
-}
+### Loading
 
-struct Graph {
-    adjacency: Vec<Vec<u32>>, // Saved, one row per live node.
-    max_slots: usize,         // Runtime limit; not saved.
-}
-
-struct Index {
-    metadata: Metadata,
-    graph: Graph,
-    scratch: Vec<u32>, // Runtime scratch; not saved.
-}
-```
-
-Assume all three already implement `Save` and `Load`; the existing blanket implementation supplies `Loadable`. Their loaders handle schema version `0.0`, reject unsupported versions, and validate saved fields and graph edges. Ordinary loading sets `Graph::max_slots` to `adjacency.len()` and initializes `Index::scratch` with `Vec::new()`.
-
-`IndexLoader` loads metadata normally and supplies a `GraphLoader` for the graph field. The child receives only its slot limit; scratch allocation belongs to the parent.
+A provider DTO refers to the saved external IDs and contains another DTO for the vector and graph files. Its `restore` method reads these into a new provider:
 
 ```rust
-struct IndexLoader {
-    max_slots: usize,
-    scratch_capacity: usize,
+use diskann_record::load;
+use crate::{Provider, num::Capacity, repr::Full, store};
+
+type FullProvider = Provider<Full<f32>, u32>;
+
+#[derive(Default)]
+struct FullLoadOptions {
+    capacity: Option<Capacity>,
+    store: store::Config,
 }
 
-struct GraphLoader {
-    max_slots: usize,
+struct FullProviderLoader {
+    options: FullLoadOptions,
 }
 
-impl<'a> load::Loader<'a> for IndexLoader {
-    type Value = Index;
+impl<'a> load::Loader<'a> for FullProviderLoader {
+    type Value = FullProvider;
 
-    fn load(self, context: load::Context<'a>) -> load::Result<Index> {
-        let object = context.as_object().ok_or(load::error::Kind::TypeMismatch)?;
-        if object.version() != <Index as load::Load<'a>>::VERSION {
-            return Err(load::error::Kind::UnknownVersion.into());
-        }
-
-        let metadata: Metadata = object.field("metadata")?;
-        let graph = object.field_with("graph", GraphLoader { max_slots: self.max_slots })?;
-        let mut scratch = Vec::new();
-        scratch
-            .try_reserve_exact(self.scratch_capacity)
-            .map_err(load::Error::new)?;
-
-        Ok(Index { metadata, graph, scratch })
-    }
-}
-
-impl<'a> load::Loader<'a> for GraphLoader {
-    type Value = Graph;
-
-    fn load(self, context: load::Context<'a>) -> load::Result<Graph> {
-        let object = context.as_object().ok_or(load::error::Kind::TypeMismatch)?;
-        if object.version() != <Graph as load::Load<'a>>::VERSION {
-            return Err(load::error::Kind::UnknownVersion.into());
-        }
-
-        load_fields!(object, [adjacency: Vec<Vec<u32>>]);
-        let mut adjacency = adjacency;
-        let live = adjacency.len();
-        if self.max_slots < live {
-            return Err(load::Error::message("max_slots is smaller than the live node count"));
-        }
-        for &target in adjacency.iter().flatten() {
-            if usize::try_from(target).map_err(load::Error::new)? >= live {
-                return Err(load::Error::message("edge targets a nonexistent node"));
-            }
-        }
-        adjacency.try_reserve_exact(self.max_slots - live).map_err(load::Error::new)?;
-
-        Ok(Graph { adjacency, max_slots: self.max_slots })
+    fn load(self, context: load::Context<'a>) -> load::Result<FullProvider> {
+        let dto: FullProviderDto<'a> = context.load()?;
+        dto.restore(self.options)
     }
 }
 ```
 
-The keys `"metadata"`, `"graph"`, and `"adjacency"` match the fields written by the existing `Save` implementations. `field("metadata")` retains ordinary `Loadable` dispatch; `field_with("graph", ...)` invokes the supplied child loader. `load_fields!` derives the `"adjacency"` key from the binding name and calls `object.field("adjacency")`. Both direct loaders check their own object shape and version rather than calling `Index::load` or `Graph::load`; this example supports no legacy schemas.
+`capacity: None` uses the saved live-node count; a supplied capacity must be at least that count. Capacity counts writable slots, excluding frozen points. Other defaults use `store::Config::default()` and `Full`'s default prefetch settings. Ordinary `Load` uses the same DTO and build steps with default options. This requires new internal loading code in `diskann-inmem`.
 
-`GraphLoader` decodes adjacency through ordinary collection loading, then validates and reserves capacity; this may reallocate. Reservation guarantees at least the requested capacity without adding live nodes, and `max_slots` remains the logical limit. Invalid capacity, invalid edges, and reservation failures are critical errors. Saving again writes only metadata and live adjacency rows, never capacity or scratch state. Production implementations should share schema checks and validation with ordinary loading.
+### Saved ID Layout
 
-### Backend Entry Points
+Let `F` be the frozen-point count, `N` the live-node count, and `C` the requested writable capacity, with `C >= N`. As in the current `Full` layout, frozen points come first:
 
-Add a crate-private context-based `load_with` alongside the existing `load`, and a public disk convenience function:
+| Kind | Saved IDs | Restored IDs |
+|---|---|---|
+| Frozen points | `[0, F)` | `[0, F)` |
+| Live nodes | `[F, F + N)` | `[F, F + N)` |
+| Spare writable slots | Not saved | `[F + N, F + C)` |
+
+Increasing capacity only adds empty slots; no graph IDs move on load. Live-vector and external-ID rows use IDs `[F, F + N)`, frozen-vector rows use `[0, F)`, and graph rows use `[0, F + N)`. Edges may only point to saved nodes, never to empty slots in the new capacity. Other implementations of `Representation` need not use this layout.
+
+### Saving After Deletions
+
+Deletions leave gaps in the live IDs. Saving removes those gaps in two steps, with all writes paused:
+
+1. Check that live slots and the ID map agree. Keep frozen IDs and assign live nodes, in their current ID order, to `[F, F + N)`.
+2. Write IDs, vectors, and graph rows using that same mapping, including frozen neighbor lists. Update edge targets to the saved IDs, drop edges to known deleted nodes, and keep the remaining neighbors in order. Write the new neighbor count. Invalid targets or inconsistent mappings are errors.
+
+Build the complete mapping before writing edges. Share it across the save code without copying or changing the graph. Keep writes paused through both steps, including graph updates; locking one row at a time does not keep the whole snapshot consistent. Do not save runtime capacity.
+
+### Checks When Loading
+
+- Check `C >= N` and that `F + C` fits `IdLimit` before allocating memory.
+- Check dimensions, file lengths, row and neighbor counts, edges to saved nodes, and that external IDs are unique.
+- Load vectors and neighbor lists, including frozen rows, at their saved IDs without rebuilding the graph. Size the ID map for `F + C`, but add entries only for live nodes.
+- Set up slot state and concurrency tracking so only empty slots can be used for insertion. Return the provider only after all data has been read, checked, and initialized.
+
+## Loading From Disk
+
+Add an internal `load_with` function that takes a context alongside the existing `load`, plus a public function for loading from disk:
 
 ```rust
 pub fn load_from_disk_with<L, T>(
@@ -175,14 +163,31 @@ where
     L: for<'a> Loader<'a, Value = T>;
 ```
 
-The disk function creates a temporary context and invokes the loader. Fixing `Value = T` across context lifetimes prevents the result from borrowing that temporary context; it does not require the loader or result to be `'static`, so caller-owned resources may still be borrowed. The context-based entry point uses `L: Loader<'a>` for a caller-owned context borrowed for `'a`, allowing results to borrow from it.
+The disk function creates a context and drops it before returning. The `for<'a>` requirement ensures the result cannot keep references to that context. It may still use resources supplied by the caller; those do not have to be `'static`. With a caller-supplied context, `load_with` uses `L: Loader<'a>` and allows the result to reference that context.
 
 ```rust
-let index: Index = load_from_disk_with(
+let provider: FullProvider = load_from_disk_with(
     &metadata_path,
     &artifact_dir,
-    IndexLoader { max_slots: 200_000, scratch_capacity: 64 },
+    FullProviderLoader {
+        options: FullLoadOptions {
+            capacity: Some(Capacity::new(200_000)),
+            ..FullLoadOptions::default()
+        },
+    },
 )?;
 ```
 
-Existing `load_from_disk::<T>` remains available without an explicit loader; stateless loading can delegate through `PhantomData<T>`. Disk and memory backends remain responsible only for manifests and artifacts. Exposing public memory execution APIs is outside this proposal.
+Existing `load_from_disk::<T>` remains available and can call the new API using `PhantomData<T>`.
+
+## Testing and Scope
+
+The initial implementation should test:
+
+- Saving and loading at the live-node count and at larger capacities, preserving vectors, external IDs, and graph edges, including frozen rows. Later inserts must use only empty slots.
+- Saving after deletions, with matching ID, vector, and graph rows and no changes to the source graph. Include multiple frozen points, live IDs at or above writable capacity, and an empty index containing only frozen points.
+- The same results and errors with ordinary loading and a loader using default settings, including supported older formats.
+- Rejection of too-small capacity, ID overflow, duplicate external IDs, invalid edges (including into empty slots), and corrupt files. Never return an incomplete provider or give frozen points external IDs.
+- Reading large files through a DTO that references the disk context, and loaders using caller-supplied resources that are not `'static`.
+
+Later work can add save/load support for quantized data, snapshots without pausing writers, reusable DTO and collection helpers, macro changes, public APIs for loading from memory, and loading into existing values with rollback on failure.
