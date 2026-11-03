@@ -36,7 +36,7 @@ use super::{
         KMeansSplit, Linked, Links, Reassign, Split,
         policies::{
             Assign, FirstPoints, NearestCentroid, SplitError,
-            kmeans::{NotEnoughPoints, Seed},
+            kmeans::{FitError, Seed},
         },
     },
     traits::{
@@ -425,14 +425,13 @@ fn new_rejects_splits_that_cannot_shrink_or_seed_lists() {
         reassign_count: ReassignCount::None,
         split_iterations: ONE,
     };
-    let new = IVFIndex::<DefaultContext>::new;
+    let new = IVFIndex::new;
 
-    // `IVFIndex<DefaultContext>` is not `Debug`, so take the error with `err`.
-    let error = new(config(4, 1)).err().unwrap();
+    let error = new(config(4, 1)).unwrap_err();
     assert!(matches!(error, ConfigError::TooFewChildren(1)));
     assert_eq!(error.to_string(), "split_k must be at least 2, got 1");
 
-    let error = new(config(2, 4)).err().unwrap();
+    let error = new(config(2, 4)).unwrap_err();
     assert!(matches!(
         error,
         ConfigError::TooManyChildren {
@@ -454,7 +453,7 @@ fn new_rejects_splits_that_cannot_shrink_or_seed_lists() {
 #[tokio::test]
 async fn splitting_uses_the_configured_number_of_children() {
     let strategy = Strategy::new(seeded());
-    let mut index = IVFIndex::<DefaultContext>::new(Config {
+    let mut index = IVFIndex::new(Config {
         dim: TWO,
         split_threshold: TWO,
         split_k: NonZeroUsize::new(3).unwrap(),
@@ -1615,11 +1614,8 @@ fn k_means_needs_k_points_per_parent() {
         .unwrap_err();
 
     assert!(matches!(
-        error.downcast_ref::<NotEnoughPoints>(),
-        Some(NotEnoughPoints {
-            actual: 2,
-            required: 3
-        })
+        error.downcast_ref::<FitError>(),
+        Some(FitError::NotEnoughPoints(2, 3))
     ));
     assert!(created.is_empty());
     assert_eq!(memberships.into_changes().count(), 0);
@@ -2187,8 +2183,8 @@ fn k_means_reports_insufficient_points_before_writing() {
         .split(&region, &mut update, &[1], |_, _| {})
         .unwrap_err();
         assert!(matches!(
-            error.downcast_ref::<NotEnoughPoints>(),
-            Some(NotEnoughPoints { actual, required: 2 }) if *actual == expected
+            error.downcast_ref::<FitError>(),
+            Some(FitError::NotEnoughPoints(actual, 2)) if *actual == expected
         ));
         let message = error.to_string();
         assert!(message.contains("while seeding list 1"), "{message}");

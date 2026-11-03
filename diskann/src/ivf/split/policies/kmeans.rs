@@ -30,15 +30,16 @@ use crate::{
 
 /// A parent has fewer points than the children it must seed.
 #[derive(Debug, thiserror::Error)]
-#[error("Expected at least {required} points to seed, got {actual}")]
-pub(crate) struct NotEnoughPoints {
-    pub(crate) actual: usize,
-    pub(crate) required: usize,
+pub(crate) enum FitError {
+    #[error("Expected at least {0} points to seed, got {1}")]
+    NotEnoughPoints(usize, usize),
+    #[error("Expected dimension {0}, got {1}")]
+    DimensionMismatch(usize, usize),
 }
 
-impl From<NotEnoughPoints> for ANNError {
+impl From<FitError> for ANNError {
     #[track_caller]
-    fn from(error: NotEnoughPoints) -> Self {
+    fn from(error: FitError) -> Self {
         Self::new(error)
     }
 }
@@ -67,21 +68,20 @@ pub(crate) trait Seed {
 pub(crate) struct FirstPoints;
 
 impl Seed for FirstPoints {
-    type Error = NotEnoughPoints;
+    type Error = FitError;
 
     fn seed(
         &mut self,
         points: rowmajor::Ref<'_, f32>,
         mut centers: rowmajor::Mut<'_, f32>,
     ) -> Result<(), Self::Error> {
+        debug_assert!(points.ncols() == centers.ncols());
+
         let n = points.nrows();
         let k = centers.nrows();
 
         if n < k {
-            return Err(NotEnoughPoints {
-                actual: n,
-                required: k,
-            });
+            return Err(FitError::NotEnoughPoints(n, k));
         }
 
         let first = &points.as_slice()[..centers.as_slice().len()];
@@ -153,6 +153,10 @@ impl<A, S: Seed> KMeansSplit<A, S> {
                 .ok_or(SplitError::UnableToRetrieve(list))?;
 
             let points = vectors.reborrow().as_view();
+
+            if points.ncols() != dst.ncols() {
+                return Err(FitError::DimensionMismatch(points.ncols(), dst.ncols()).into());
+            }
 
             self.seed
                 .seed(points, dst.reborrow_mut())

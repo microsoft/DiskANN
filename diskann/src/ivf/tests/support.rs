@@ -610,7 +610,7 @@ impl<T> HasIds for Search<'_, '_, T> {
     type ListId = u32;
 }
 
-impl<'q, T: Copy + Into<f32> + Send + Sync> SearchAccessor<&'q [T]> for Search<'_, 'q, T> {
+impl<T: Copy + Into<f32> + Send + Sync> SearchAccessor for Search<'_, '_, T> {
     fn scan<A>(&self, nprobe: NonZeroUsize, results: &mut A) -> impl SendFuture<ANNResult<()>>
     where
         A: Accumulator<Self::Id>,
@@ -672,7 +672,7 @@ pub(super) fn matrix<const D: usize>(rows: &[[f32; D]]) -> rowmajor::Owned<f32> 
 
 /// Return an index over `store` that splits lists with more than `threshold` members into
 /// two children, without reassignment, and the strategy holding `store`.
-pub(super) fn index(store: Store, threshold: usize) -> (IVFIndex<DefaultContext>, Strategy) {
+pub(super) fn index(store: Store, threshold: usize) -> (IVFIndex, Strategy) {
     index_with_neighbors(store, threshold, 0)
 }
 
@@ -681,7 +681,7 @@ pub(super) fn index_with_neighbors(
     store: Store,
     threshold: usize,
     neighbors: usize,
-) -> (IVFIndex<DefaultContext>, Strategy) {
+) -> (IVFIndex, Strategy) {
     let index = IVFIndex::new(Config {
         dim: NonZeroUsize::new(store.dim).expect("test stores have a positive dimension"),
         split_threshold: NonZeroUsize::new(threshold).unwrap(),

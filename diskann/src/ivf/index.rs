@@ -7,7 +7,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    marker::PhantomData,
     num::NonZeroUsize,
 };
 
@@ -25,7 +24,6 @@ use crate::{
         traits::BuildStrategy,
     },
     neighbor::NeighborPriorityQueue,
-    provider::ExecutionContext,
 };
 
 /// Number of nearby lists each child of a split considers doing re-assignment.
@@ -83,12 +81,11 @@ pub struct InsertStats {
 /// Providers shared by several indexes must still keep build operations apart;
 /// see [`BuildStrategy::build_accessor`].
 #[derive(Debug)]
-pub struct IVFIndex<C: ExecutionContext> {
+pub struct IVFIndex {
     config: Config,
-    phantom: PhantomData<C>,
 }
 
-impl<C: ExecutionContext> IVFIndex<C> {
+impl IVFIndex {
     /// Construct an index with `config`.
     ///
     /// # Errors
@@ -108,10 +105,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
             });
         }
 
-        Ok(Self {
-            config,
-            phantom: PhantomData,
-        })
+        Ok(Self { config })
     }
 
     /// Insert a batch of points as one build operation, splitting every list that routing
@@ -122,13 +116,14 @@ impl<C: ExecutionContext> IVFIndex<C> {
     ///
     /// Fails if the batch is empty, or if a provider call or split fails. Any failure
     /// abandons the operation: the accessor is dropped without being finished.
-    pub fn insert_batch<'a, S, B>(
+    pub fn insert_batch<'a, S, B, C>(
         &'a mut self,
         strategy: &'a S,
         context: &'a C,
         points: B,
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
+        C: Sync,
         S: BuildStrategy<'a, B, C>,
         S::Accessor: for<'b> BuildAccessor<B, VectorsRef<'b>: AsMatRef<'b, f32>>,
         B: Send + Sync,
@@ -230,7 +225,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
     ///
     /// Fails if the accessor cannot be created or the scan fails, leaving `output`
     /// unchanged.
-    pub fn search<'a, S, T, OB>(
+    pub fn search<'a, S, T, C, OB>(
         &'a self,
         strategy: &'a S,
         context: &'a C,
@@ -240,6 +235,7 @@ impl<C: ExecutionContext> IVFIndex<C> {
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<usize>>
     where
+        C: Sync,
         S: SearchStrategy<'a, T, C>,
         T: Copy + Send + Sync,
         OB: SearchOutputBuffer<S::Id> + Send + ?Sized,

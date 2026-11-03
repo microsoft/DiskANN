@@ -15,7 +15,6 @@ use crate::{
     ANNResult,
     error::StandardError,
     neighbor::{Neighbor, NeighborPriorityQueue, NeighborPriorityQueueIdType},
-    provider::ExecutionContext,
     utils::VectorId,
 };
 
@@ -139,7 +138,7 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
 }
 
 /// Creates the accessor for each build operation on a batch `B`.
-pub trait BuildStrategy<'a, B, C: ExecutionContext>: Send + Sync + HasIds {
+pub trait BuildStrategy<'a, B, C>: Send + Sync + HasIds {
     /// The accessor for one build operation.
     type Accessor: BuildAccessor<B, Id = Self::Id, ListId = Self::ListId>;
 
@@ -173,9 +172,9 @@ pub trait Accumulator<I>: Send + Sized {
 }
 
 /// Creates the accessor for each search with a query of type `T`.
-pub trait SearchStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds {
+pub trait SearchStrategy<'a, T: Sync, C>: Send + Sync + HasIds {
     /// Query-bound accessor responsible for list selection and scanning.
-    type Accessor: SearchAccessor<T, ListId = Self::ListId, Id = Self::Id>;
+    type Accessor: SearchAccessor<ListId = Self::ListId, Id = Self::Id>;
 
     /// An error that can occur when creating an accessor.
     type Error: StandardError;
@@ -185,7 +184,7 @@ pub trait SearchStrategy<'a, T: Sync, C: ExecutionContext>: Send + Sync + HasIds
 }
 
 /// Selects and scans lists for one query.
-pub trait SearchAccessor<T: Sync>: Send + Sized + HasIds {
+pub trait SearchAccessor: Send + Sized + HasIds {
     /// Scan the `nprobe` lists nearest the accessor's query, pushing **every** member's
     /// `(id, distance)` pair into `results`.
     ///
