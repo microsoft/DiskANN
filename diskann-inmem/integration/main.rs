@@ -257,12 +257,11 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn graph_spherical_one_bit_l2() {
-        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "graph/spherical/one-bit-l2-baseline-macos.json"
-        } else {
-            "graph/spherical/one-bit-l2-baseline.json"
-        };
-        run_regression_example("graph/spherical/one-bit-l2.json", "checks.json", baseline);
+        run_regression_example(
+            "graph/spherical/one-bit-l2.json",
+            "checks.json",
+            "graph/spherical/one-bit-l2-baseline.json",
+        );
     }
 
     #[test]
@@ -278,15 +277,10 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_one_bit_cosine() {
-        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "graph/spherical/one-bit-cosine-baseline-macos.json"
-        } else {
-            "graph/spherical/one-bit-cosine-baseline.json"
-        };
         run_regression_example(
             "graph/spherical/one-bit-cosine.json",
             "checks.json",
-            baseline,
+            "graph/spherical/one-bit-cosine-baseline.json",
         );
     }
 
@@ -313,15 +307,10 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_two_bit_cosine() {
-        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "graph/spherical/two-bit-cosine-baseline-macos.json"
-        } else {
-            "graph/spherical/two-bit-cosine-baseline.json"
-        };
         run_regression_example(
             "graph/spherical/two-bit-cosine.json",
             "checks.json",
-            baseline,
+            "graph/spherical/two-bit-cosine-baseline.json",
         );
     }
 
@@ -348,15 +337,10 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_four_bit_cosine() {
-        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "graph/spherical/four-bit-cosine-baseline-macos.json"
-        } else {
-            "graph/spherical/four-bit-cosine-baseline.json"
-        };
         run_regression_example(
             "graph/spherical/four-bit-cosine.json",
             "checks.json",
-            baseline,
+            "graph/spherical/four-bit-cosine-baseline.json",
         );
     }
 
@@ -377,23 +361,21 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_product_ip() {
-        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "graph/product/ip-baseline-macos.json"
-        } else {
-            "graph/product/ip-baseline.json"
-        };
-        run_regression_example("graph/product/ip.json", "checks.json", baseline);
+        run_regression_example(
+            "graph/product/ip.json",
+            "checks.json",
+            "graph/product/ip-baseline.json",
+        );
     }
 
     #[test]
     #[cfg(not(miri))]
     fn graph_product_cosine() {
-        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "graph/product/cosine-baseline-macos.json"
-        } else {
-            "graph/product/cosine-baseline.json"
-        };
-        run_regression_example("graph/product/cosine.json", "checks.json", baseline);
+        run_regression_example(
+            "graph/product/cosine.json",
+            "checks.json",
+            "graph/product/cosine-baseline.json",
+        );
     }
 
     //---------------------//
@@ -423,12 +405,11 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_scalar_four() {
-        let baseline = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "graph/scalar/four-bit-ip-baseline-macos.json"
-        } else {
-            "graph/scalar/four-bit-ip-baseline.json"
-        };
-        run_regression_example("graph/scalar/four-bit-ip.json", "checks.json", baseline);
+        run_regression_example(
+            "graph/scalar/four-bit-ip.json",
+            "checks.json",
+            "graph/scalar/four-bit-ip-baseline.json",
+        );
     }
 
     #[test]
