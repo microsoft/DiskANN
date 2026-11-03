@@ -38,7 +38,9 @@ use super::{
 #[derive(Debug, Clone, Copy)]
 pub struct Emulated<T, const N: usize, A = Scalar>(pub(crate) [T; N], A);
 
+// Inline array adapters so emulated SIMD stays cheap across codegen units.
 impl<T, const N: usize, A> Emulated<T, N, A> {
+    #[inline(always)]
     pub fn from_arch_fn<F>(arch: A, f: F) -> Self
     where
         F: FnMut(usize) -> T,
@@ -66,35 +68,42 @@ where
     const EMULATED: bool = true;
 
     /// Return the Scalar architecture.
+    #[inline(always)]
     fn arch(self) -> A {
         self.1
     }
 
+    #[inline(always)]
     fn default(arch: A) -> Self {
         Self([T::default(); N], arch)
     }
 
     /// Return the underlying array.
+    #[inline(always)]
     fn to_underlying(self) -> Self::Underlying {
         self.0
     }
 
     /// Construct from the underlying array.
+    #[inline(always)]
     fn from_underlying(arch: A, repr: [T; N]) -> Self {
         Self(repr, arch)
     }
 
     /// Return the underlying array.
+    #[inline(always)]
     fn to_array(self) -> [T; N] {
         self.0
     }
 
     /// Construct from the underlying array.
+    #[inline(always)]
     fn from_array(arch: A, x: [T; N]) -> Self {
         Self(x, arch)
     }
 
     /// Broadcast the provided scalar across all lanes.
+    #[inline(always)]
     fn splat(arch: A, value: Self::Scalar) -> Self {
         Self([value; N], arch)
     }
@@ -393,6 +402,7 @@ macro_rules! impl_simd_dot_product_i16_to_i32 {
         where
             A: arch::Sealed,
         {
+            #[inline(always)]
             fn dot_simd(
                 self,
                 left: Emulated<i16, $TwoN, A>,
@@ -420,6 +430,7 @@ macro_rules! impl_simd_dot_product_iu8_to_i32 {
         where
             A: arch::Sealed,
         {
+            #[inline(always)]
             fn dot_simd(self, left: Emulated<u8, $TwoN, A>, right: Emulated<i8, $TwoN, A>) -> Self {
                 self + Self::from_arch_fn(self.1, |i| {
                     let l0: i32 = left.0[4 * i].into();
@@ -444,6 +455,7 @@ macro_rules! impl_simd_dot_product_iu8_to_i32 {
         where
             A: arch::Sealed,
         {
+            #[inline(always)]
             fn dot_simd(self, left: Emulated<i8, $TwoN, A>, right: Emulated<u8, $TwoN, A>) -> Self {
                 self.dot_simd(right, left)
             }
@@ -454,6 +466,7 @@ macro_rules! impl_simd_dot_product_iu8_to_i32 {
         where
             A: arch::Sealed,
         {
+            #[inline(always)]
             fn dot_simd(self, left: Emulated<u8, $TwoN, A>, right: Emulated<u8, $TwoN, A>) -> Self {
                 self + Self::from_arch_fn(self.1, |i| {
                     let l0: u32 = left.0[4 * i].into();
@@ -478,6 +491,7 @@ macro_rules! impl_simd_dot_product_iu8_to_i32 {
         where
             A: arch::Sealed,
         {
+            #[inline(always)]
             fn dot_simd(self, left: Emulated<i8, $TwoN, A>, right: Emulated<i8, $TwoN, A>) -> Self {
                 self + Self::from_arch_fn(self.1, |i| {
                     let l0: i32 = left.0[4 * i].into();

@@ -695,6 +695,7 @@ impl ExtraWide<16, 4> for Scalar {
         acc.dot_simd(a, b)
     }
 
+    #[inline(always)]
     fn convert_b(code: u8) -> i8 {
         code as i8
     }
@@ -745,6 +746,7 @@ impl ExtraWide<16, 2> for Scalar {
         acc.dot_simd(a, b)
     }
 
+    #[inline(always)]
     fn convert_b(code: u8) -> i16 {
         i16::from(code)
     }
@@ -792,6 +794,7 @@ impl ExtraWide<8, 2> for Scalar {
         acc.dot_simd(a, b)
     }
 
+    #[inline(always)]
     fn convert_b(code: u8) -> i16 {
         i16::from(code)
     }
@@ -879,6 +882,7 @@ mod x86_64 {
             compensated_max_into(self, acc, query, docs, k, scores);
         }
 
+        #[inline(always)]
         fn convert_b(code: u8) -> i8 {
             code as i8
         }
@@ -932,6 +936,7 @@ mod x86_64 {
             acc.dot_simd(a, b)
         }
 
+        #[inline(always)]
         fn convert_b(code: u8) -> i16 {
             i16::from(code)
         }
@@ -974,6 +979,7 @@ mod x86_64 {
             compensated_max_into_v3(self, acc, query, docs, k, scores);
         }
 
+        #[inline(always)]
         fn convert_b(code: u8) -> i8 {
             code as i8
         }
@@ -1038,6 +1044,7 @@ mod x86_64 {
             acc.dot_simd(a, b)
         }
 
+        #[inline(always)]
         fn convert_b(code: u8) -> i16 {
             i16::from(code)
         }
@@ -1088,6 +1095,7 @@ mod x86_64 {
             acc.dot_simd(a, b)
         }
 
+        #[inline(always)]
         fn convert_b(code: u8) -> i8 {
             code as i8
         }
@@ -1138,6 +1146,7 @@ mod x86_64 {
             acc.dot_simd(a, b)
         }
 
+        #[inline(always)]
         fn convert_b(code: u8) -> i16 {
             i16::from(code)
         }
@@ -1191,6 +1200,7 @@ mod aarch64 {
             acc.dot_simd(a, b)
         }
 
+        #[inline(always)]
         fn convert_b(code: u8) -> u8 {
             code
         }
@@ -1240,6 +1250,7 @@ mod aarch64 {
             acc.dot_simd(a, b)
         }
 
+        #[inline(always)]
         fn convert_b(code: u8) -> u8 {
             code
         }

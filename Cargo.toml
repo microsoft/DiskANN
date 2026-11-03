@@ -130,3 +130,7 @@ split-debuginfo = "packed"
 # See: https://doc.rust-lang.org/cargo/reference/profiles.html#test
 [profile.test]
 opt-level = 1
+
+# Generate the independent quantization kernels in parallel.
+[profile.release.package.diskann-quantization]
+codegen-units = 8
