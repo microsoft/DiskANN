@@ -9,7 +9,7 @@ use std::{fmt::Debug, num::NonZeroUsize};
 
 use diskann_quantization::algorithms::kmeans::lloyds::lloyds;
 use diskann_utils::{
-    Reborrow,
+    Parallelism, Reborrow,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
 
@@ -18,7 +18,6 @@ use crate::{
     ANNError, ANNResult,
     error::{ErrorContext, IntoANNResult},
     ivf::{
-        Parallelism,
         region::{AsMatRef, Update, View},
         split::Split,
     },

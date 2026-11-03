@@ -5,13 +5,12 @@
 
 //! Reassignment of points between linked lists.
 
-use diskann_utils::Reborrow;
+use diskann_utils::{Parallelism, Reborrow};
 
 use super::{Assign, Buckets, NearestCentroid, SplitError};
 use crate::{
     ANNError, ANNResult,
     ivf::{
-        Parallelism,
         region::{Update, View},
         split::{Links, Reassign},
     },

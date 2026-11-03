@@ -11,12 +11,11 @@
 
 use std::fmt::Debug;
 
+use diskann_utils::Parallelism;
+
 use crate::{
     ANNError,
-    ivf::{
-        Parallelism,
-        region::{Update, View},
-    },
+    ivf::region::{Update, View},
 };
 
 pub(crate) mod links;

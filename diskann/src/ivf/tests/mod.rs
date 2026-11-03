@@ -18,7 +18,7 @@ use std::{
 };
 
 use diskann_utils::{
-    Reborrow,
+    Parallelism, Reborrow,
     future::SendFuture,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
@@ -31,7 +31,7 @@ use self::{
     support::*,
 };
 use super::{
-    Config, ConfigError, IVFIndex, InsertStats, Parallelism, ReassignCount,
+    Config, ConfigError, IVFIndex, InsertStats, ReassignCount,
     region::{AsMatRef, List, Update, View},
     split::{
         KMeansSplit, Linked, Links, Reassign, Split,
@@ -1042,7 +1042,6 @@ async fn uninitialized_insertion_fails() {
 
 /// Inserting with a thread pool makes exactly the changes that inserting sequentially
 /// does, across several rounds of splitting and reassignment.
-#[cfg(feature = "rayon")]
 #[tokio::test]
 async fn parallel_insertion_matches_sequential() {
     use rand::{Rng, SeedableRng, rngs::StdRng};

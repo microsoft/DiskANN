@@ -10,7 +10,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use diskann_utils::future::SendFuture;
+use diskann_utils::{Parallelism, future::SendFuture};
 use thiserror::Error;
 
 use super::traits::{BuildAccessor, Nearest, SearchAccessor, SearchStrategy};
@@ -19,7 +19,6 @@ use crate::{
     error::IntoANNResult,
     graph::SearchOutputBuffer,
     ivf::{
-        Parallelism,
         region::{AsMatRef, Update},
         split::{KMeansSplit, Linked, Links, Reassign, Split, policies},
         traits::BuildStrategy,
