@@ -10,14 +10,16 @@ use diskann::{
     neighbor::Neighbor,
     utils::IntoUsize,
 };
-use diskann_benchmark_runner::{report::Report, utils::fmt::KeyValue};
+use diskann_benchmark_runner::{
+    report::{Report, tolerance::{MaxRelativeChange, FmtSpec}},
+    utils::fmt::KeyValue,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_inmem::{Context, Provider, Strategy, integration, repr};
 
 use crate::support::{
-    check::{CheckMatch, check_all_fields},
     datatype::{AsDataType, FromSlice, Slice},
 };
 
@@ -69,17 +71,6 @@ impl std::ops::AddAssign for KnnSearch {
 impl std::fmt::Display for KnnSearch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "hops = {}, cmps = {}", self.hops, self.cmps)
-    }
-}
-
-impl CheckMatch for KnnSearch {
-    fn check_match(&self, previous: &Self) -> Report {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            { hops, cmps },
-        );
-        builder.finish()
     }
 }
 
@@ -157,20 +148,69 @@ impl From<integration::counters::CounterSnapshot> for Counters {
     }
 }
 
-impl CheckMatch for Counters {
-    fn check_match(&self, previous: &Self) -> Report {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            {
-                query_distance,
-                distance,
-                get_vector,
-                set_vector,
-                get_neighbors,
-                set_neighbors,
-                append_neighbors
-            }
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct CheckCounters(MaxRelativeChange);
+
+impl CheckCounters {
+    pub(crate) fn example() -> Self {
+        const TOL: MaxRelativeChange = MaxRelativeChange::new(0.0001, 0.0001).unwrap();
+        Self(TOL)
+    }
+
+    pub(crate) fn check_hops_and_cmps(&self, old: &KnnSearch, new: &KnnSearch) -> Report {
+        let Self(tol) = self;
+        let KnnSearch { hops, cmps } = old;
+
+        let fmt = FmtSpec::new();
+        let mut builder = Report::builder();
+        builder.push("hops", Report::equal_with_tolerance(tol, *hops, new.hops, fmt));
+        builder.push("cmps", Report::equal_with_tolerance(tol, *cmps, new.cmps, fmt));
+        builder.finish()
+    }
+
+
+    pub(crate) fn check(&self, old: &Counters, new: &Counters) -> Report {
+        let Self(tol) = self;
+        let Counters {
+            query_distance,
+            distance,
+            get_vector,
+            set_vector,
+            get_neighbors,
+            set_neighbors,
+            append_neighbors,
+        } = old;
+
+        let mut builder = Report::builder();
+        let fmt = FmtSpec::new().with_precision(3);
+
+        builder.push(
+            "query_distance",
+            Report::equal_with_tolerance(tol, *query_distance, new.query_distance, fmt),
+        );
+        builder.push(
+            "distance",
+            Report::equal_with_tolerance(tol, *distance, new.distance, fmt),
+        );
+        builder.push(
+            "get_vector",
+            Report::equal_with_tolerance(tol, *get_vector, new.get_vector, fmt),
+        );
+        builder.push(
+            "set_vector",
+            Report::equal_with_tolerance(tol, *set_vector, new.set_vector, fmt),
+        );
+        builder.push(
+            "get_neighbors",
+            Report::equal_with_tolerance(tol, *get_neighbors, new.get_neighbors, fmt),
+        );
+        builder.push(
+            "set_neighbors",
+            Report::equal_with_tolerance(tol, *set_neighbors, new.set_neighbors, fmt),
+        );
+        builder.push(
+            "append_neighbors",
+            Report::equal_with_tolerance(tol, *append_neighbors, new.append_neighbors, fmt),
         );
         builder.finish()
     }

@@ -147,6 +147,30 @@ impl Report {
         Check::equal(old, new).into()
     }
 
+    /// Construct a new [`Report`] using [`tolerance::EqualWithTolerance`].
+    ///
+    /// ```
+    /// use diskann_benchmark_runner::report::{
+    ///     Report, Status,
+    ///     tolerance::{FmtSpec, MaxAbsoluteChange},
+    /// };
+    ///
+    /// let tolerance = MaxAbsoluteChange::from_u64(2);
+    /// let report = Report::equal_with_tolerance(&tolerance, 100u64, 102, FmtSpec::new());
+    /// assert_eq!(report.status(), Status::Pass);
+    /// ```
+    pub fn equal_with_tolerance<T, U>(
+        tolerance: &T,
+        old: U,
+        new: U,
+        spec: tolerance::FmtSpec,
+    ) -> Self
+    where
+        T: tolerance::EqualWithTolerance<U>,
+    {
+        tolerance.equal_with_tolerance(old, new, spec).into()
+    }
+
     /// Construct a new [`Report`] using [`tolerance::HigherIsBetter`].
     pub fn higher_is_better<T, U>(tolerance: &T, old: U, new: U, spec: tolerance::FmtSpec) -> Self
     where
@@ -745,6 +769,21 @@ impl Check {
         } else {
             Self::new(NotEqual { old, new })
         }
+    }
+
+    /// Construct a new [`Check`] using [`tolerance::EqualWithTolerance`].
+    ///
+    /// See also: [`Report::equal_with_tolerance`].
+    pub fn equal_with_tolerance<T, U>(
+        tolerance: &T,
+        old: U,
+        new: U,
+        spec: tolerance::FmtSpec,
+    ) -> Self
+    where
+        T: tolerance::EqualWithTolerance<U>,
+    {
+        tolerance.equal_with_tolerance(old, new, spec)
     }
 
     /// Construct a new [`Check`] using [`tolerance::HigherIsBetter`].

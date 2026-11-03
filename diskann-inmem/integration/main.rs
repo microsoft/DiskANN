@@ -214,7 +214,7 @@ mod tests {
 
         if let Err(err) = App::from_commands(command).run(&registry().unwrap(), &mut output) {
             panic!(
-                "Regression check failed:\n\n{}\n\n{}",
+                "Regression check failed:\n\n{:#}\n\n{}",
                 err,
                 String::from_utf8(output.into_inner()).unwrap()
             );

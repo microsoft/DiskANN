@@ -25,12 +25,10 @@ use diskann_inmem::{
 };
 
 use crate::{
-    index::{Counters, Index},
+    index::{Counters, CheckCounters, Index},
     support::{
-        check::{CheckMatch, check_all_fields},
         datatype::{self, DataType, Dataset, DatasetView},
         io::load_and_convert,
-        tolerance,
     },
 };
 
@@ -952,18 +950,18 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 }
 
 impl Regression for FullPrecision {
-    type Tolerances = tolerance::Empty;
+    type Tolerances = CheckBuildAndSearch;
     type Pass = Finished;
     type Fail = Finished;
 
     fn check(
         &self,
-        _tolerances: &Self::Tolerances,
+        tolerances: &Self::Tolerances,
         _input: &Self::Input,
         before: &Self::Output,
         after: &Self::Output,
     ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
-        Ok(after.check_match(before).pass_fail())
+        Ok(tolerances.check(before, after).pass_fail())
     }
 }
 
@@ -990,14 +988,79 @@ impl std::fmt::Display for BuildAndSearch {
     }
 }
 
-impl CheckMatch for BuildAndSearch {
-    fn check_match(&self, previous: &Self) -> Report {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            { build, knn },
+///////////////
+// Tolerance //
+///////////////
+
+/// A tolerance [`Input`] for [`diskann_benchmark_runner::benchmark::Regression`]s that sets
+/// a limit on the delta for counters.
+///
+/// This delta allows for minor cross-architecture (`aarch64` vs `x86`) due to different
+/// choices with floating point SIMD width/association.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct CheckBuildAndSearch {
+    build: CheckCounters,
+    knn: super::tests::KnnDiff,
+}
+
+impl CheckBuildAndSearch {
+    fn example() -> Self {
+        Self {
+            build: CheckCounters::example(),
+            knn: super::tests::KnnDiff::example(),
+        }
+    }
+
+    fn check(&self, old: &BuildAndSearch, new: &BuildAndSearch) -> Report {
+        let Self {
+            build: check_build,
+            knn: check_knn,
+        } = self;
+        let BuildAndSearch { build, knn } = old;
+        let mut builder = Report::builder();
+        builder.push(
+            "build",
+            check_build.check(build, &new.build)
         );
+
+        if knn.len() != new.knn.len() {
+            builder.push(
+                "knn",
+                Report::error(format_args!(
+                    "old KNN has {} entries while the new has {}",
+                    knn.len(),
+                    new.knn.len()
+                )),
+            );
+        } else {
+            let mut sub = Report::builder();
+            for (i, (old, new)) in std::iter::zip(knn.iter(), new.knn.iter()).enumerate() {
+                sub.push(i, check_knn.check(old, new));
+            }
+            builder.push("knn", sub.finish());
+        }
+
         builder.finish()
+    }
+}
+
+impl diskann_benchmark_runner::Input for CheckBuildAndSearch {
+    type Raw = Self;
+
+    fn tag() -> &'static str {
+        "tolerance-build-and-search"
+    }
+
+    fn from_raw(raw: Self::Raw, _: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        <Self>::example()
     }
 }
 

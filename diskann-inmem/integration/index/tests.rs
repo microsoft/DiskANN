@@ -5,14 +5,13 @@
 
 use diskann::graph::search::Knn;
 use diskann_benchmark_core::recall::{RecallMetrics, Rows};
-use diskann_benchmark_runner::{report::Report, utils::fmt::KeyValue};
+use diskann_benchmark_runner::{report::{Report, tolerance::{FmtSpec, MaxAbsoluteChange}}, utils::fmt::KeyValue};
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    index::{Counters, Index, KnnSearch},
+    index::{Counters, CheckCounters, Index, KnnSearch},
     support::{
-        check::{CheckMatch, check_all_fields},
         datatype::DatasetView,
     },
 };
@@ -94,17 +93,6 @@ impl From<RecallMetrics> for KnnRecall {
     }
 }
 
-impl CheckMatch for KnnRecall {
-    fn check_match(&self, previous: &Self) -> Report {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            { recall_k, recall_n, num_queries, average }
-        );
-        builder.finish()
-    }
-}
-
 impl std::fmt::Display for KnnRecall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -112,6 +100,33 @@ impl std::fmt::Display for KnnRecall {
             "recall = {:.4}, recall_k = {}, recall_n = {}, num_queries = {}",
             self.average, self.recall_k, self.recall_n, self.num_queries
         )
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CheckKnnRecall {
+    recall: MaxAbsoluteChange,
+}
+
+impl CheckKnnRecall {
+    fn example() -> Self {
+        const RECALL: MaxAbsoluteChange = MaxAbsoluteChange::try_from_f64(0.001).unwrap();
+        Self {
+            recall: RECALL,
+        }
+    }
+
+    fn check(&self, old: &KnnRecall, new: &KnnRecall) -> Report {
+        let Self { recall: check_recall } = self;
+        let KnnRecall { recall_k, recall_n, num_queries, average } = old;
+
+        let fmt = FmtSpec::new().with_precision(4);
+        let mut builder = Report::builder();
+        builder.push("recall_k", Report::equal(*recall_k, new.recall_k));
+        builder.push("recall_n", Report::equal(*recall_n, new.recall_n));
+        builder.push("num_queries", Report::equal(*num_queries, new.num_queries));
+        builder.push("average", Report::equal_with_tolerance(check_recall, *average, new.average, fmt));
+        builder.finish()
     }
 }
 
@@ -132,13 +147,28 @@ impl std::fmt::Display for KnnStats {
     }
 }
 
-impl CheckMatch for KnnStats {
-    fn check_match(&self, previous: &Self) -> Report {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            { recall, counters, misc }
-        );
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct KnnDiff {
+    recall: CheckKnnRecall,
+    counters: CheckCounters,
+}
+
+impl KnnDiff {
+    pub(crate) fn example() -> Self {
+        Self {
+            recall: CheckKnnRecall::example(),
+            counters: CheckCounters::example(),
+        }
+    }
+
+    pub(crate) fn check(&self, old: &KnnStats, new: &KnnStats) -> Report {
+        let Self { recall: check_recall, counters: check_counters } = self;
+        let KnnStats { recall, counters, misc } = old;
+
+        let mut builder = Report::builder();
+        builder.push("recall", check_recall.check(recall, &new.recall));
+        builder.push("counters", check_counters.check(counters, &new.counters));
+        builder.push("misc", check_counters.check_hops_and_cmps(misc, &new.misc));
         builder.finish()
     }
 }
