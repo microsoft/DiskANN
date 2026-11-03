@@ -255,7 +255,7 @@ fn create_index_impl<T: VectorRepr>(
     dim: usize,
     metric_type: Metric,
     max_degree: usize,
-    start_point_id: u32,
+    start_point_id: u64,
     callbacks: Callbacks,
     context: Context,
 ) -> Result<(Arc<Index>, bool), GarnetProviderError> {
@@ -326,7 +326,7 @@ pub unsafe extern "C" fn create_index(
     metric_type: i32,
     l_build: u32,
     max_degree: u32,
-    start_point_id: u32,
+    start_point_id: u64,
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
@@ -1192,11 +1192,11 @@ pub unsafe extern "C" fn check_internal_id_valid(
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
     let internal_id_bytes = unsafe { slice::from_raw_parts(internal_id_data, internal_id_len) };
-    if internal_id_bytes.len() != mem::size_of::<u32>() {
+    if internal_id_bytes.len() != mem::size_of::<u64>() {
         return false;
     }
 
-    let id = bytemuck::pod_read_unaligned::<u32>(internal_id_bytes);
+    let id = bytemuck::pod_read_unaligned::<u64>(internal_id_bytes);
 
     index.inner.internal_id_exists(&ctx, id)
 }

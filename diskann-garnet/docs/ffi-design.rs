@@ -58,8 +58,8 @@ enum InsertResult {
 ///
 /// For every key that is present, Garnet invokes `read_data` with the index of that key within
 /// the batch, the opaque `read_data_state`, and the value bytes. Missing keys are skipped, so
-/// a key's existence is determined by whether `read_data` fires for it. Values must be aligned
-/// to at least 8 bytes.
+/// a key's existence is determined by whether `read_data` fires for it. Do not assume values are
+/// aligned for `u64`; decode byte representations or copy into aligned destinations as needed.
 type ReadCallback = unsafe extern "C" fn(
     context: u64,
     key_count: u32,
@@ -146,7 +146,7 @@ extern "C" fn create_index(
     metric_type: i32,
     l_build: u32,
     max_degree: u32,
-    start_point_id: u32,
+    start_point_id: u64,
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,

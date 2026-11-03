@@ -80,7 +80,7 @@ pub(crate) trait DynIndex: Send + Sync {
 
     /// Check if a vector exists by its internal id.
     /// Returns true if the vector exists and false otherwise.
-    fn internal_id_exists(&self, context: &Context, id: u32) -> bool;
+    fn internal_id_exists(&self, context: &Context, id: u64) -> bool;
 
     /// Check if a vector exists by its external id.
     /// Returns true if the vector exists false otherwise.
@@ -285,7 +285,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
             .map_err(|e| e.into())
     }
 
-    fn internal_id_exists(&self, context: &Context, id: u32) -> bool {
+    fn internal_id_exists(&self, context: &Context, id: u64) -> bool {
         if !self.inner.provider().disable_import(context) {
             return false;
         }

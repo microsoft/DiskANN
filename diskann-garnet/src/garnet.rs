@@ -117,6 +117,60 @@ pub(crate) type RmwDataCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usi
 pub(crate) type FilterCallback = unsafe extern "C" fn(u64, *const u8, usize) -> bool;
 pub(crate) type LogCallback = unsafe extern "C" fn(u64, *const u8, usize);
 
+/// A four-byte length prefix followed immediately by a native-endian internal ID.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct LengthPrefixedId {
+    length: u32,
+    bytes: [u8; 8],
+}
+
+impl Default for LengthPrefixedId {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl LengthPrefixedId {
+    pub(crate) fn new(id: u64) -> Self {
+        Self {
+            length: 8,
+            bytes: id.to_ne_bytes(),
+        }
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        u64::from_ne_bytes(self.bytes)
+    }
+
+    fn key_bytes(&self) -> &[u8] {
+        &bytemuck::bytes_of(self)[4..]
+    }
+}
+
+/// FSM keys have a four-byte tag and an unpadded native-endian block number.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct MetadataBlockKey {
+    length: u32,
+    tag: u32,
+    block: [u8; 8],
+}
+
+impl MetadataBlockKey {
+    pub(crate) fn new(tag: u32, block: u64) -> Self {
+        Self {
+            length: 12,
+            tag,
+            block: block.to_ne_bytes(),
+        }
+    }
+
+    pub(crate) fn key_bytes(&self) -> &[u8] {
+        &bytemuck::bytes_of(self)[4..]
+    }
+}
+
 #[derive(Copy, Clone)]
 pub(crate) struct Callbacks {
     read_callback: ReadCallback,
@@ -176,18 +230,20 @@ impl Callbacks {
         self.log_callback
     }
 
-    pub(crate) fn exists_iid(&self, ctx: &Context, id: u32, length_hint: usize) -> bool {
-        let key = [4, id];
-        // SAFETY: Key bytes are preceded by 4 bytes of space.
+    pub(crate) fn exists_iid(&self, ctx: &Context, id: u64, length_hint: usize) -> bool {
+        let key = LengthPrefixedId::new(id);
+        // SAFETY: The record includes the four-byte key length prefix.
         unsafe { self.exists_raw(ctx, bytemuck::bytes_of(&key), length_hint) }
     }
 
-    pub(crate) fn exists_wid(&self, ctx: &Context, key: u64, length_hint: usize) -> bool {
-        // NOTE: the length is bit-shifted so that we have a u32 in the lower half of the u64.
-        let mut key = [8 << 32, key];
-        let key_bytes = bytemuck::bytes_of_mut(&mut key);
-        // SAFETY: Key bytes are preceded by 8 bytes of extra space.
-        unsafe { self.exists_raw(ctx, &key_bytes[4..], length_hint) }
+    pub(crate) fn exists_block(
+        &self,
+        ctx: &Context,
+        key: &MetadataBlockKey,
+        length_hint: usize,
+    ) -> bool {
+        // SAFETY: The record includes the four-byte key length prefix.
+        unsafe { self.exists_raw(ctx, bytemuck::bytes_of(key), length_hint) }
     }
 
     pub(crate) fn exists_eid(&self, ctx: &Context, id: &GarnetId, length_hint: usize) -> bool {
@@ -223,10 +279,10 @@ impl Callbacks {
     pub(crate) fn read_single_iid<D: bytemuck::Pod>(
         &self,
         ctx: &Context,
-        id: u32,
+        id: u64,
         value: &mut [D],
     ) -> bool {
-        let key = [4, id];
+        let key = LengthPrefixedId::new(id);
         // SAFETY: Key bytes are preceded by 4 bytes of extra space.
         unsafe {
             self.read_single_raw(
@@ -238,21 +294,36 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub(crate) fn read_single_wid<D: bytemuck::Pod>(
+    pub(crate) fn read_single_meta<D: bytemuck::Pod>(
         &self,
         ctx: &Context,
-        key: u64,
+        key: u32,
         value: &mut [D],
     ) -> bool {
-        let mut key = [0, key];
-        let key_bytes = bytemuck::bytes_of_mut(&mut key);
-        key_bytes[4..8].copy_from_slice(bytemuck::bytes_of(&8u32));
-        // SAFETY: Key bytes are preceded by 8 bytes of extra space.
+        let key = [4, key];
+        // SAFETY: The key includes its four-byte length prefix.
         unsafe {
             self.read_single_raw(
                 ctx,
-                &key_bytes[4..],
-                bytemuck::must_cast_slice_mut::<D, u8>(value),
+                bytemuck::bytes_of(&key),
+                bytemuck::must_cast_slice_mut(value),
+            )
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn read_single_block<D: bytemuck::Pod>(
+        &self,
+        ctx: &Context,
+        key: &MetadataBlockKey,
+        value: &mut [D],
+    ) -> bool {
+        // SAFETY: The record includes the four-byte key length prefix.
+        unsafe {
+            self.read_single_raw(
+                ctx,
+                bytemuck::bytes_of(key),
+                bytemuck::must_cast_slice_mut(value),
             )
         }
     }
@@ -303,11 +374,11 @@ impl Callbacks {
         found
     }
 
-    // ids must be passed as 4-byte length prefixed u32s. so [4, I1_u32, 4, I2_u32, ...]
+    /// Read one key per typed length-prefixed internal-ID entry.
     pub(crate) fn read_multi_lpiid<'a, F, T: bytemuck::Pod>(
         &self,
         ctx: &Context,
-        ids: &[u32],
+        ids: &[LengthPrefixedId],
         length_hint: usize,
         mut f: F,
     ) where
@@ -320,7 +391,7 @@ impl Callbacks {
         unsafe {
             (self.read_callback)(
                 ctx.inner,
-                ids.len() as u32 / 2,
+                ids.len() as u32,
                 length_hint as u32,
                 bytemuck::must_cast_slice::<_, u8>(ids).as_ptr(),
                 mem::size_of_val(ids),
@@ -338,17 +409,37 @@ impl Callbacks {
     pub(crate) fn read_varsize_iid<T: bytemuck::Pod>(
         &self,
         ctx: &Context,
-        id: u32,
+        id: u64,
     ) -> Option<Vec<T>> {
-        let key = [4, id];
+        let key = LengthPrefixedId::new(id);
+        // SAFETY: The record includes the four-byte key length prefix.
+        unsafe { self.read_varsize_raw(ctx, bytemuck::bytes_of(&key)) }
+    }
+
+    #[must_use]
+    pub(crate) fn read_varsize_meta<T: bytemuck::Pod>(
+        &self,
+        ctx: &Context,
+        key: u32,
+    ) -> Option<Vec<T>> {
+        let key = [4, key];
+        // SAFETY: The key includes its four-byte length prefix.
+        unsafe { self.read_varsize_raw(ctx, bytemuck::bytes_of(&key)) }
+    }
+
+    unsafe fn read_varsize_raw<T: bytemuck::Pod>(
+        &self,
+        ctx: &Context,
+        key: &[u8],
+    ) -> Option<Vec<T>> {
         let mut result = None;
         let mut cb = |_, data: &[u8]| {
-            // NOTE: Values in Garnet are stored aligned at least to 8 bytes. This cast will succeed as long as
-            // mem::align_of::<T>() <= 8.
+            // Typed readers must respect the stored value's alignment. Use bytes when
+            // it is unknown; extended namespaces do not guarantee u64 alignment.
             const {
                 assert!(
                     std::mem::align_of::<T>() <= 8,
-                    "garnet only guarantees 8-byte alignment",
+                    "callback read types cannot require more than eight-byte alignment",
                 )
             }
             result = Some(bytemuck::cast_slice::<u8, T>(data).to_owned());
@@ -363,8 +454,8 @@ impl Callbacks {
                 ctx.inner,
                 1,
                 8192,
-                bytemuck::bytes_of(&key).as_ptr(),
-                mem::size_of_val(&key),
+                key.as_ptr(),
+                key.len(),
                 make_read_call(&cb),
                 &mut cb as *mut _ as *mut c_void,
             );
@@ -374,29 +465,45 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub(crate) fn write_iid<D: bytemuck::Pod>(&self, ctx: &Context, id: u32, value: &[D]) -> bool {
-        let key = [0, id];
+    pub(crate) fn write_iid<D: bytemuck::Pod>(&self, ctx: &Context, id: u64, value: &[D]) -> bool {
+        let key = LengthPrefixedId::new(id);
         // SAFETY: Key bytes are preceded by 4 bytes of extra space.
         unsafe {
             self.write_raw(
                 ctx,
-                bytemuck::bytes_of(&key[1]),
+                key.key_bytes(),
                 bytemuck::must_cast_slice::<D, u8>(value),
             )
         }
     }
 
     #[must_use]
-    pub(crate) fn write_wid<D: bytemuck::Pod>(&self, ctx: &Context, key: u64, value: &[D]) -> bool {
+    pub(crate) fn write_meta<D: bytemuck::Pod>(
+        &self,
+        ctx: &Context,
+        key: u32,
+        value: &[D],
+    ) -> bool {
         let key = [0, key];
-        // SAFETY: Key bytes are preceded by 8 bytes of extra space.
+        // SAFETY: The key is preceded by four bytes of scratch space.
         unsafe {
             self.write_raw(
                 ctx,
                 bytemuck::bytes_of(&key[1]),
-                bytemuck::must_cast_slice::<D, u8>(value),
+                bytemuck::must_cast_slice(value),
             )
         }
+    }
+
+    #[must_use]
+    pub(crate) fn write_block<D: bytemuck::Pod>(
+        &self,
+        ctx: &Context,
+        key: &MetadataBlockKey,
+        value: &[D],
+    ) -> bool {
+        // SAFETY: The record provides four bytes of scratch space before the key.
+        unsafe { self.write_raw(ctx, key.key_bytes(), bytemuck::must_cast_slice(value)) }
     }
 
     #[must_use]
@@ -421,9 +528,9 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub(crate) fn delete_iid(&self, ctx: &Context, id: u32) -> bool {
-        let key = [0, id];
-        unsafe { (self.delete_callback)(ctx.inner, bytemuck::bytes_of(&key[1]).as_ptr(), 4) }
+    pub(crate) fn delete_iid(&self, ctx: &Context, id: u64) -> bool {
+        let key = LengthPrefixedId::new(id);
+        unsafe { (self.delete_callback)(ctx.inner, key.key_bytes().as_ptr(), 8) }
     }
 
     #[must_use]
@@ -439,67 +546,45 @@ impl Callbacks {
     ///
     /// `f` should not panic.
     #[must_use]
-    pub(crate) fn rmw_iid<'a, F, T>(
-        &self,
-        ctx: &Context,
-        id: u32,
-        write_len: usize,
-        mut f: F,
-    ) -> bool
+    pub(crate) fn rmw_iid<'a, F>(&self, ctx: &Context, id: u64, write_len: usize, f: F) -> bool
     where
-        F: FnMut(&'a mut [T]),
-        T: bytemuck::Pod,
+        F: FnMut(&'a mut [u8]),
     {
-        let key = [0, id];
-        // SAFETY: Key bytes are preceded by 4 bytes of extra space.
-        unsafe {
-            self.rmw_raw(ctx, bytemuck::bytes_of(&key[1]), write_len, |d| {
-                // NOTE: Values in Garnet are stored aligned at least to 8 bytes. This cast will succeed as long as
-                // mem::align_of::<T>() <= 8.
-                const {
-                    assert!(
-                        std::mem::align_of::<T>() <= 8,
-                        "garnet only guarantees 8-byte alignment",
-                    )
-                }
-                f(bytemuck::cast_slice_mut::<u8, T>(d))
-            })
-        }
+        let key = LengthPrefixedId::new(id);
+        // SAFETY: The record provides four bytes of scratch space before the key.
+        unsafe { self.rmw_raw(ctx, key.key_bytes(), write_len, f) }
     }
 
-    /// Modify a value in Garnet by wide ID.
+    /// Atomically modify a value stored under a four-byte metadata tag.
+    #[must_use]
+    pub(crate) fn rmw_meta<'a, F>(&self, ctx: &Context, key: u32, write_len: usize, f: F) -> bool
+    where
+        F: FnMut(&'a mut [u8]),
+    {
+        let key = [0, key];
+        // SAFETY: The key is preceded by four bytes of scratch space.
+        unsafe { self.rmw_raw(ctx, bytemuck::bytes_of(&key[1]), write_len, f) }
+    }
+
+    /// Modify an FSM block in Garnet.
     ///
     /// The provided function `f` will receive the current value, which it can then modify. If no
     /// value exists, zero-initialized value of length `write_len` will be passed in.
     ///
     /// `f` should not panic.
     #[must_use]
-    pub(crate) fn rmw_wid<'a, F, T>(
+    pub(crate) fn rmw_block<'a, F>(
         &self,
         ctx: &Context,
-        key: u64,
+        key: &MetadataBlockKey,
         write_len: usize,
-        mut f: F,
+        f: F,
     ) -> bool
     where
-        F: FnMut(&'a mut [T]),
-        T: bytemuck::Pod,
+        F: FnMut(&'a mut [u8]),
     {
-        let key = [0, key];
-        // SAFETY: Key bytes are preceded by 8 bytes of extra space.
-        unsafe {
-            self.rmw_raw(ctx, bytemuck::bytes_of(&key[1]), write_len, |d| {
-                // NOTE: Values in Garnet are stored aligned at least to 8 bytes. This cast will succeed as long as
-                // mem::align_of::<T>() <= 8.
-                const {
-                    assert!(
-                        std::mem::align_of::<T>() <= 8,
-                        "garnet only guarantees 8-byte alignment",
-                    )
-                }
-                f(bytemuck::cast_slice_mut::<u8, T>(d))
-            })
-        }
+        // SAFETY: The record provides four bytes of scratch space before the key.
+        unsafe { self.rmw_raw(ctx, key.key_bytes(), write_len, f) }
     }
 
     /// Modify a value in Garnet.
@@ -559,12 +644,12 @@ where
     T: bytemuck::Pod,
 {
     let data_slice = unsafe { slice::from_raw_parts(data, len) };
-    // NOTE: Values in Garnet are stored aligned at least to 8 bytes. This cast will succeed as long as
-    // mem::align_of::<T>() <= 8.
+    // Typed readers must respect the stored value's alignment. Use bytes when it
+    // is unknown; extended namespaces do not guarantee u64 alignment.
     const {
         assert!(
             std::mem::align_of::<T>() <= 8,
-            "garnet only guarantees 8-byte alignment",
+            "callback read types cannot require more than eight-byte alignment",
         )
     }
     let data_slice = bytemuck::cast_slice::<u8, T>(data_slice);
@@ -579,30 +664,19 @@ where
     read_call::<F, T>
 }
 
-unsafe extern "C" fn rmw_call<'a, F, T>(ptr: *mut c_void, data: *mut u8, len: usize)
+unsafe extern "C" fn rmw_call<'a, F>(ptr: *mut c_void, data: *mut u8, len: usize)
 where
-    F: FnMut(&'a mut [T]),
-    T: bytemuck::Pod,
+    F: FnMut(&'a mut [u8]),
 {
     let data_slice = unsafe { slice::from_raw_parts_mut(data, len) };
-    // NOTE: Values in Garnet are stored aligned at least to 8 bytes. This cast will succeed as long as
-    // mem::align_of::<T>() <= 8.
-    const {
-        assert!(
-            std::mem::align_of::<T>() <= 8,
-            "garnet only guarantees 8-byte alignment",
-        )
-    }
-    let data_slice = bytemuck::cast_slice_mut::<u8, T>(data_slice);
     unsafe { (&mut *ptr.cast::<F>())(data_slice) }
 }
 
-fn make_rmw_call<'a, F, T>(_: &F) -> RmwDataCallback
+fn make_rmw_call<'a, F>(_: &F) -> RmwDataCallback
 where
-    F: FnMut(&'a mut [T]),
-    T: bytemuck::Pod,
+    F: FnMut(&'a mut [u8]),
 {
-    rmw_call::<F, T>
+    rmw_call::<F>
 }
 
 #[derive(Debug, Error, PartialEq)]

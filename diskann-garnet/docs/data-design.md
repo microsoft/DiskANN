@@ -16,6 +16,11 @@ The read method can be used to access a single value or multiple values. It take
 
 This design means that it is quite efficient as it can read or copy both full and partial values and when multiple keys are read, Garnet does prefetching to reduce memory latency of access.
 
+Callback values are not guaranteed to have eight-byte alignment: extended Garnet
+namespaces can leave values aligned to only four bytes. Decode `u64` IDs and
+neighbor slots from bytes with unaligned reads or copy them into aligned buffers;
+do not cast callback values directly to `&[u64]`.
+
 #### Write
 
 The write method always writes to a single key and must write the entire value.
@@ -46,7 +51,7 @@ The term types in diskann-garnet are: full precision vectors, neighbor lists, qu
 
 ### Full Precision Vectors
 
-*Key*: Internal ID as bytes; this key is always 4 bytes.
+*Key*: Internal ID as bytes; this key is always 8 bytes.
 *Value*: Vector data bytes, will always be a fixed size of `dimension * mem::size_of::<T>()` where `T` is either f32, u8, or i8.
 
 The values are read or written whole or deleted. In a quantized index, these
@@ -55,18 +60,18 @@ precision only index, they are the most accessed term.
 
 ### Neighbor Lists
 
-*Key*: Internal ID as bytes; this key is always 4 bytes.
-*Value*: `[u32; M + 1]` stored as bytes, where `M` is the same `M` passed to VADD. Every value in the index will have this fixed size of `(M + 1) * 4` bytes.
+*Key*: Internal ID as bytes; this key is always 8 bytes.
+*Value*: `[u64; M + 1]` stored as bytes, where `M` is the same `M` passed to VADD. Every value in the index will have this fixed size of `(M + 1) * 8` bytes.
 
-Neighbor lists are stored as a fixed size of `(M + 1) * mem::size_of::<u32>()`. The final entry is the true length of the neighbor list and must not exceed `M`.
+Neighbor lists are stored as a fixed size of `(M + 1) * mem::size_of::<u64>()`. The final entry is the true length of the neighbor list and must not exceed `M`.
 
-For example, in a graph where the `M` value is given as 16, the size of a neighbor list would be `(16 + 1) * 4 = 68` bytes long. Using fixed size lists this way means that all neighbor list allocations are the same size.
+For example, in a graph where the `M` value is given as 16, the size of a neighbor list would be `(16 + 1) * 8 = 136` bytes long. Using fixed size lists this way means that all neighbor list allocations are the same size.
 
 In a typical index, these are accessed second most often after quantized vectors (in a quantized index) or full precision vectors (in a full precision only index).
 
 ### Quantized Vectors
 
-*Key*: Internal ID as bytes; this key is always 4 bytes.
+*Key*: Internal ID as bytes; this key is always 8 bytes.
 *Value*: Quantized bits for the vector. This varies by quantizer. For BIN-family quantizers, this is 1-bit per dimension plus a fixed overhead of up to 6 bytes. For the Q8 quantizer, this is 20 bytes + 1 byte per dimension.
 
 Quantized vectors are similar to full precision vectors in that they are fixed size and read/written as a whole, although they will often have a more complex representation than just an array of quantized elements.
@@ -75,7 +80,7 @@ In a quantized index, these vectors are the most often accessed piece of data an
 
 ### Attributes
 
-*Key*: Internal ID as bytes; this key is always 4 bytes.
+*Key*: Internal ID as bytes; this key is always 8 bytes.
 *Value*: Attributes given by the user. Variable length.
 
 When vectors are inserted by the Redis Vector Set API, an arbitrary JSON blob of attributes can be attached. These attributes are stored as a utf-8 string and read/written as a whole unit.
@@ -88,7 +93,7 @@ The are several terms in the index used for internal state management of the dis
 
 #### Start Points
 
-Only a single start point is supported. Its internal ID is fixed when the provider is created and defaults to `DEFAULT_START_POINT_ID` (`u32::MAX`). During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
+Only a single start point is supported. Its internal ID is fixed when the provider is created and defaults to `u64::MAX`. During normal insertion, its vector data is the same as the first vector that was inserted. It will not be returned by search, and its vector data will not be modified during the lifetime of the index.
 
 Imports must supply the full vector, neighbor list, and (for quantized indexes) quantized vector at the configured start-point ID. The neighbor count must fit the configured degree. Finalization populates the caches.
 
@@ -100,12 +105,16 @@ Metadata is currently used for the free space map which manages used and availab
 
 ##### Free Space Map
 
-*Key*: b'_fsm' concatenated with FSM 32-bit block number as bytes; this key is always 8 bytes in length.
+*Key*: The native-endian `u32::from_be_bytes(*b"_fsm")` tag followed by a native-endian `u64` block number; this key is always 12 bytes in length, excluding callback framing.
 *Value*: Each FSM block holds 8kB of data, one bit per internal ID represented in the block.
 
 The free space map is used to keep track of which internal IDs are allocated and in use. Please see the [ID Mapping](#id-mapping) section for more details on why mapped IDs are used.
 
 The free space map is a contiguous sequence of blocks starting at block zero. Each block contains 65,536 one-bit ID states and occupies 8 KiB: `0b0` for free and `0b1` for used. The bit for the configured start-point ID is ignored. Blocks grow on demand during insertion or import, including intermediate blocks.
+
+Bitmap space therefore grows with the highest ordinary ID, not just the number of
+imported vectors. Large gaps consume the intervening bitmap blocks; a high reserved
+start-point ID does not.
 
 During startup, the index scans FSM blocks in sequence to restore state. It updates the corresponding bit whenever a user vector's allocation changes. A failed expansion retains its successfully written prefix, allowing subsequent expansion to continue without erasing earlier claims.
 
@@ -113,7 +122,7 @@ Importing a term keyed by internal ID marks that ID as used unless it is the sta
 
 ##### Quantizer Tables
 
-*Key*: b'_qnt'; this key is always 4 bytes, but only exists if quantization is used.
+*Key*: The native-endian `u32::from_be_bytes(*b"_qnt")` tag; this key is always 4 bytes, but only exists if quantization is used.
 *Value*: For BIN-family: 117 + 6D bytes where D is the dimension. For Q8: 68 + 2D bytes.
 
 Note that for the BIN quantizer, a 1 byte flag precedes the quantizer table which indicates whether quantization backfill is complete. That byte is accounted for in the value sizing above.
@@ -122,7 +131,7 @@ Quantizer state can only be replaced while no ordinary IDs are occupied in the F
 
 ##### Import Status
 
-*Key*: b'_imp'; this key is always 4 bytes.
+*Key*: The native-endian `u32::from_be_bytes(*b"_imp")` tag; this key is always 4 bytes.
 *Value*: A single byte: 0 for `Disabled`, 1 for `Ready`, or 2 for `Importing`.
 
 When no saved status exists, an empty index starts `Ready` if it is unquantized or has supplied quantizer state, and `Disabled` otherwise. The initial status is persisted before writing Q8's generated default table, so that table cannot enable imports on reopen. Successfully supplying quantizer state during creation publishes `Ready` after setup completes. A saved status is restored rather than inferred from the absence of a start point.
@@ -133,11 +142,9 @@ Status transitions persist the new byte before publishing it with an atomic comp
 
 Concurrent `finish_import` calls serialize; once one succeeds, subsequent calls on that handle return success as well.
 
-The former Boolean format did not distinguish ready indexes from unfinished imports; finish those imports before upgrading.
-
 #### Internal ID Mapping
 
-*Key*: Internal ID as bytes; this key is always 4 bytes in length.
+*Key*: Internal ID as bytes; this key is always 8 bytes in length.
 *Value*: External ID; this is variable length byte string that the user assigned.
 
 Each internal ID corresponds to an external ID, which is a byte string of arbitrary length, including zero.
@@ -147,19 +154,35 @@ Lookup of an external ID will happen during post processing when we return resul
 #### External ID Mapping
 
 *Key*: External ID bytes; this key is a variable length byte string that the user assigned.
-*Value*: Interal ID as bytes; this key is always 4 bytes in length.
+*Value*: Internal ID as bytes; this value is always 8 bytes in length.
 
-Each external ID corresponds to an internal ID which is a u32. The internal IDs are stored as 4 bytes and read/written as a whole.
+Each external ID corresponds to a `u64` internal ID. The internal IDs are stored as 8 bytes and read/written as a whole.
 
 Lookup of an internal ID will happen for things such as delete.
 
 ## ID Mapping
 
-Garnet vector set IDs are arbitrary length byte strings natively. These are quite inefficient for indexing so we map each external ID to a `u32` internal ID. One internal ID is reserved for the start point and cannot be allocated to inserted vectors.
+Garnet vector set IDs are arbitrary length byte strings natively. These are quite inefficient for indexing so we map each external ID to a `u64` internal ID. The configured start-point ID is reserved and cannot be allocated to inserted vectors; `u64::MAX` cannot be an ordinary ID because the allocation frontier must represent the next ID.
 
 When the DiskANN algorithm performs searches and other operations it works with internal IDs only. The external IDs are only used when returning data to the user (which has no concept of the internal IDs) or when asked to perform operations like delete on specific vectors which will be identified by their external ID. In order to convert back and forth for these occasions, lookup tables must be kept for the mapping.
 
 In addition to lookup tables for mapping, diskann-garnet must also track the status of internal IDs so that IDs that are no longer in use may be reused by future vectors. The [free space map](#free-space-map) is used to track status for each internal ID, and the data structure that handles the FSM also maintains a short list of available IDs for re-use so that requests to Garnet are amortized.
+
+## Measuring Stored Size
+
+Graph-and-vector payload is the sum of live full-vector, neighbor-list, and
+quantized-vector value lengths. Include the reserved start point, unused neighbor
+capacity, and the trailing neighbor count. Quantized indexes retain their full
+precision vectors for reranking, so those bytes still count.
+
+Report key bytes, record headers, namespace extensions, allocation padding, ID
+maps, FSM blocks, and quantizer state separately from that payload. Hash-table
+capacity, obsolete records, page slack, and checkpoint copies are not live
+graph-and-vector payload; checkpoint file lengths do not measure it.
+
+Iterate distinct live keys rather than raw log records, which can include
+superseded versions. Cross-check the census against complete member enumeration,
+both ID mappings, and point reads of vector and neighbor terms.
 
 ## Concurrency Issues
 

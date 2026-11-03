@@ -56,14 +56,14 @@ use crate::{
     SearchResults, VectorQuantType,
     alloc::AlignToEight,
     fsm::{FreeSpaceMap, FsmError},
-    garnet::{Callbacks, Context, GarnetError, GarnetId, Term},
+    garnet::{Callbacks, Context, GarnetError, GarnetId, LengthPrefixedId, Term},
     quantization::{
         self, DynDistanceComputer, DynQueryComputer, GarnetQuantizer, GarnetQuantizerError,
     },
 };
 
 #[cfg(test)]
-pub(crate) const DEFAULT_START_POINT_ID: u32 = u32::MAX;
+pub(crate) const DEFAULT_START_POINT_ID: u64 = u64::MAX;
 
 /// Quantization state and table are stored under this key in Garnet under the metadata
 /// term.
@@ -131,10 +131,10 @@ const ATTRIBUTE_LENGTH_HINT: usize = 1024;
 const RESERVATION_RETRY_LIMIT: usize = 5;
 
 #[derive(Clone)]
-struct AdjList(AdjacencyList<u32>);
+struct AdjList(AdjacencyList<u64>);
 
 impl Deref for AdjList {
-    type Target = AdjacencyList<u32>;
+    type Target = AdjacencyList<u64>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -183,9 +183,9 @@ diskann::convert_error!(GarnetProviderError);
 diskann::always_escalate!(GarnetProviderError);
 
 struct BackfillGuard {
-    ranges: Arc<Mutex<HashSet<Range<u32>>>>,
+    ranges: Arc<Mutex<HashSet<Range<u64>>>>,
     notify: Arc<Condvar>,
-    range: Range<u32>,
+    range: Range<u64>,
 }
 
 impl Drop for BackfillGuard {
@@ -210,7 +210,7 @@ pub(crate) struct InsertGuard {
     callbacks: Callbacks,
     context: Context,
     external_id: GarnetId,
-    internal_id: u32,
+    internal_id: u64,
     fsm: Arc<FreeSpaceMap>,
     original: Option<[(Context, Option<Vec<u8>>); 4]>,
     completed: bool,
@@ -228,13 +228,13 @@ impl std::fmt::Debug for InsertGuard {
 }
 
 impl Guard for InsertGuard {
-    type Id = u32;
+    type Id = u64;
 
     async fn complete(mut self) {
         self.completed = true;
     }
 
-    fn id(&self) -> u32 {
+    fn id(&self) -> u64 {
         self.internal_id
     }
 }
@@ -275,7 +275,7 @@ impl Drop for InsertGuard {
             restored &= self.callbacks.delete_eid(&context, &self.external_id)
                 || !self
                     .callbacks
-                    .exists_eid(&context, &self.external_id, mem::size_of::<u32>());
+                    .exists_eid(&context, &self.external_id, mem::size_of::<u64>());
             if restored {
                 restored = self.fsm.mark_free(&self.context, self.internal_id).is_ok();
             }
@@ -304,7 +304,7 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// exceed this degree.
     max_degree: usize,
     /// The internal ID the start point will use
-    start_point_id: u32,
+    start_point_id: u64,
     /// Garnet storage engine callbacks
     callbacks: Callbacks,
     pending_external_ids: DashMap<u64, watch::Sender<()>, foldhash::fast::RandomState>,
@@ -315,7 +315,7 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// Per job tracker for quantization backfill completion
     backfills_completed: AtomicU64,
     /// Lock for active backfill and update ranges
-    backfill_lock: Arc<Mutex<HashSet<Range<u32>>>>,
+    backfill_lock: Arc<Mutex<HashSet<Range<u64>>>>,
     /// Signals released range reservations
     backfill_notify: Arc<Condvar>,
     /// Lock to ensure training only happens once.
@@ -329,20 +329,20 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// Pool of pre-allocated buffers to use for neighbor lists
     id_buffer_pool: ObjectPool<AdjList>,
     /// Pool of pre-allocated buffers to use for IDs
-    filtered_ids_pool: ObjectPool<Vec<u32>>,
+    filtered_ids_pool: ObjectPool<Vec<LengthPrefixedId>>,
     /// Pool of pre-allocated buffers to use for filter decisions during
     /// filtered search beam expansion
     filtered_decisions_pool: ObjectPool<Vec<bool>>,
     /// Pool of pre-allocated buffers to use for reranking
-    rerank_pool: ObjectPool<Vec<Neighbor<u32>>>,
+    rerank_pool: ObjectPool<Vec<Neighbor<u64>>>,
     /// Pool of pre-allocated buffers to use for quantizing vectors
     quant_buffer_pool: ObjectPool<Vec<u8>>,
     /// Small cache for the start points' neighbors
-    neighbor_cache: DashMap<u32, Vec<u32>, foldhash::fast::RandomState>,
+    neighbor_cache: DashMap<u64, Vec<u64>, foldhash::fast::RandomState>,
     /// Small cache for the start points' full precision vector data
-    start_point_cache: DashMap<u32, Poly<[u8], AlignToEight>, foldhash::fast::RandomState>,
+    start_point_cache: DashMap<u64, Poly<[u8], AlignToEight>, foldhash::fast::RandomState>,
     /// Small cache for the start points' quantized vector data
-    start_point_quant_cache: DashMap<u32, Poly<[u8], AlignToEight>, foldhash::fast::RandomState>,
+    start_point_quant_cache: DashMap<u64, Poly<[u8], AlignToEight>, foldhash::fast::RandomState>,
     /// Free space map to track internal IDs
     fsm: Arc<FreeSpaceMap>,
     _phantom: PhantomData<T>,
@@ -354,7 +354,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         quant_type: VectorQuantType,
         metric_type: Metric,
         max_degree: usize,
-        start_point_id: u32,
+        start_point_id: u64,
         callbacks: Callbacks,
         context: &Context,
     ) -> Result<Self, GarnetProviderError> {
@@ -362,7 +362,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         let id_buffer_pool =
             ObjectPool::new(Undef::new(max_degree + 1), parallelism, Some(parallelism));
         let filtered_ids_pool = ObjectPool::new(
-            Undef::new(MAX_OCCLUSION_SIZE.get() as usize * 2),
+            Undef::new(MAX_OCCLUSION_SIZE.get() as usize),
             parallelism,
             Some(parallelism),
         );
@@ -385,7 +385,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             DashMap::with_capacity_and_hasher(1, foldhash::fast::RandomState::default());
 
         let mut persisted_status = [0u8];
-        let saved_import_status = if callbacks.read_single_iid(
+        let saved_import_status = if callbacks.read_single_meta(
             &context.term(Term::Metadata),
             IMPORT_STATUS_KEY,
             &mut persisted_status,
@@ -400,7 +400,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         if matches!(saved_import_status, None | Some(ImportStatus::Disabled))
             && callbacks.read_single_iid(&context.term(Term::Vector), start_point_id, &mut v)
         {
-            let mut neighbors = vec![0u32; max_degree + 1];
+            let mut neighbors = vec![0u64; max_degree + 1];
             if !callbacks.read_single_iid(
                 &context.term(Term::Neighbors),
                 start_point_id,
@@ -411,8 +411,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
             start_point_cache.insert(start_point_id, v);
 
-            let len = neighbors[max_degree] as usize;
-            neighbors.truncate(len);
+            let len = neighbors[max_degree];
+            if len > max_degree as u64 {
+                return Err(GarnetProviderError::StartPoint);
+            }
+            neighbors.truncate(len as usize);
             neighbor_cache.insert(start_point_id, neighbors);
         }
 
@@ -428,8 +431,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     return Err(GarnetProviderError::InvalidQuantizer);
                 }
 
-                let quantizer = if let Some(quant_state) =
-                    callbacks.read_varsize_iid::<u8>(&context.term(Term::Metadata), QUANT_STATE_KEY)
+                let quantizer = if let Some(quant_state) = callbacks
+                    .read_varsize_meta::<u8>(&context.term(Term::Metadata), QUANT_STATE_KEY)
                 {
                     has_quant_state = true;
                     quantization::MinMax8Bit::new_from_bytes(metric_type, &quant_state)?
@@ -506,8 +509,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let canonical_bytes = quantizer.bytes();
                 let mut all_quantized = false;
 
-                if let Some(total_quant_state) =
-                    callbacks.read_varsize_iid::<u8>(&context.term(Term::Metadata), QUANT_STATE_KEY)
+                if let Some(total_quant_state) = callbacks
+                    .read_varsize_meta::<u8>(&context.term(Term::Metadata), QUANT_STATE_KEY)
                 {
                     if total_quant_state.len() <= 1 {
                         return Err(GarnetProviderError::InvalidQuantizer);
@@ -559,7 +562,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             } else {
                 ImportStatus::Disabled
             };
-            if !callbacks.write_iid(
+            if !callbacks.write_meta(
                 &context.term(Term::Metadata),
                 IMPORT_STATUS_KEY,
                 &[status as u8],
@@ -571,7 +574,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
         // Persist quantizer state
         if let Some(state) = default_quant_state
-            && !callbacks.write_iid(&context.term(Term::Metadata), QUANT_STATE_KEY, &state)
+            && !callbacks.write_meta(&context.term(Term::Metadata), QUANT_STATE_KEY, &state)
         {
             return Err(GarnetError::Write.into());
         }
@@ -635,7 +638,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         Err(GarnetProviderError::ReservationRetryLimit)
     }
 
-    fn reserve_backfill_range(&self, range: Range<u32>) -> Option<BackfillGuard> {
+    fn reserve_backfill_range(&self, range: Range<u64>) -> Option<BackfillGuard> {
         if range.is_empty() {
             return None;
         }
@@ -670,7 +673,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             .read_single_iid(&context.term(Term::Vector), self.start_point_id, &mut v)
         {
             // Garnet already has a start point, so use that instead of `point`
-            let mut neighbors = vec![0u32; self.max_degree + 1];
+            let mut neighbors = vec![0u64; self.max_degree + 1];
             if !self.callbacks.read_single_iid(
                 &context.term(Term::Neighbors),
                 self.start_point_id,
@@ -698,11 +701,14 @@ impl<T: VectorRepr> GarnetProvider<T> {
             }
 
             self.start_point_cache.insert(self.start_point_id, v);
-            let len = neighbors[self.max_degree] as usize;
-            neighbors.truncate(len);
+            let len = neighbors[self.max_degree];
+            if len > self.max_degree as u64 {
+                return Err(GarnetProviderError::StartPoint);
+            }
+            neighbors.truncate(len as usize);
             self.neighbor_cache.insert(self.start_point_id, neighbors);
         } else {
-            let neighbors = vec![0u32; self.max_degree + 1];
+            let neighbors = vec![0u64; self.max_degree + 1];
 
             if !self
                 .callbacks
@@ -768,7 +774,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         id: &GarnetId,
         data: &[u8],
     ) -> Result<(), GarnetProviderError> {
-        let mut iid = u32::MAX;
+        let mut iid = u64::MAX;
         if !self.callbacks.read_single_eid(
             &context.term(Term::IntMap),
             id,
@@ -792,7 +798,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         context: &Context,
         id: &GarnetId,
     ) -> Result<(), GarnetProviderError> {
-        let mut iid = u32::MAX;
+        let mut iid = u64::MAX;
         if !self.callbacks.read_single_eid(
             &context.term(Term::IntMap),
             id,
@@ -819,7 +825,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         !self.fsm.is_free(context, iid).unwrap_or(true)
     }
 
-    pub(crate) fn vector_iid_exists(&self, context: &Context, id: u32) -> bool {
+    pub(crate) fn vector_iid_exists(&self, context: &Context, id: u64) -> bool {
         if id == self.start_point_id {
             self.start_points_exist()
         } else {
@@ -827,7 +833,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         }
     }
 
-    pub(crate) fn max_internal_id(&self) -> u32 {
+    pub(crate) fn max_internal_id(&self) -> u64 {
         self.fsm.max_id()
     }
 
@@ -919,7 +925,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let mut total_quant_state = vec![0u8; quant_state.len() + 1];
                 total_quant_state[1..].copy_from_slice(&quant_state);
 
-                if !self.callbacks.write_iid(
+                if !self.callbacks.write_meta(
                     &context.term(Term::Metadata),
                     QUANT_STATE_KEY,
                     &total_quant_state,
@@ -935,17 +941,17 @@ impl<T: VectorRepr> GarnetProvider<T> {
     }
 
     /// Determine ID range for a parallel task.
-    fn task_range(&self, task_idx: usize, task_count: usize, max_id: u32) -> Option<(u32, u32)> {
-        if max_id == u32::MAX || task_count == 0 || task_idx >= task_count {
+    fn task_range(&self, task_idx: usize, task_count: usize, max_id: u64) -> Option<(u64, u64)> {
+        if max_id == u64::MAX || task_count == 0 || task_idx >= task_count {
             return None;
         }
 
-        let id_count = max_id as usize + 1;
-        let work_count = id_count.div_ceil(task_count);
-        let start_id = work_count.saturating_mul(task_idx).min(id_count);
+        let id_count = max_id + 1;
+        let work_count = id_count.div_ceil(task_count as u64);
+        let start_id = work_count.saturating_mul(task_idx as u64).min(id_count);
         let end_id = start_id.saturating_add(work_count).min(id_count);
 
-        Some((start_id as u32, end_id as u32))
+        Some((start_id, end_id))
     }
 
     /// Bulk quantize previously inserted vectors.
@@ -1046,14 +1052,12 @@ impl<T: VectorRepr> GarnetProvider<T> {
             // Now that all vectors have quant vectors associated, unlock ID reuse.
             self.fsm.enable_reuse();
 
-            if !self.callbacks.rmw_iid::<_, u8>(
-                &context.term(Term::Metadata),
-                QUANT_STATE_KEY,
-                1,
-                |data| {
+            if !self
+                .callbacks
+                .rmw_meta(&context.term(Term::Metadata), QUANT_STATE_KEY, 1, |data| {
                     data[0] = 1;
-                },
-            ) {
+                })
+            {
                 self.callbacks.log(
                     &context.term(Term::Quantized),
                     "Error saving quantizer state; failed to finish backfill. Index will operate full precision only mode.",
@@ -1076,21 +1080,26 @@ impl<T: VectorRepr> GarnetProvider<T> {
     ) -> bool {
         let mut rng = rand::rng();
 
-        let id_space = self.max_internal_id() as usize + 1;
+        let Some(id_space) = self
+            .max_internal_id()
+            .checked_add(1)
+            .and_then(|count| usize::try_from(count).ok())
+        else {
+            return false;
+        };
         let total_vectors = self.fsm.total_used();
         let mut remaining = (count as usize).min(total_vectors);
         let mut chosen = HashSet::new();
 
         // Deletions leave holes in the ID space, so scale the first batch by the density of
         // live IDs, then grow it until the request is satisfied or the whole space is covered.
-        let mut batch = remaining
-            .saturating_mul(id_space)
-            .div_ceil(total_vectors.max(1))
+        let mut batch = ((remaining as u128 * id_space as u128)
+            .div_ceil(total_vectors.max(1) as u128) as usize)
             .clamp(1, id_space);
 
         while remaining > 0 {
             for samp in rand::seq::index::sample(&mut rng, id_space, batch) {
-                let samp = samp as u32;
+                let samp = samp as u64;
                 if !chosen.insert(samp) {
                     // Already considered on an earlier round.
                     continue;
@@ -1169,7 +1178,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     (Term::Vector, self.dim * mem::size_of::<T>()),
                     (
                         Term::Neighbors,
-                        (self.max_degree + 1) * mem::size_of::<u32>(),
+                        (self.max_degree + 1) * mem::size_of::<u64>(),
                     ),
                     (Term::Quantized, quantizer.bytes()),
                 ]
@@ -1195,7 +1204,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 state
             };
 
-            if !self.callbacks.write_iid(
+            if !self.callbacks.write_meta(
                 &context.term(Term::Metadata),
                 QUANT_STATE_KEY,
                 total_quant_state,
@@ -1270,7 +1279,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         new: ImportStatus,
         _transition: &MutexGuard<'_, ()>,
     ) -> bool {
-        self.callbacks.write_iid(
+        self.callbacks.write_meta(
             &context.term(Term::Metadata),
             IMPORT_STATUS_KEY,
             &[new as u8],
@@ -1286,13 +1295,13 @@ impl<T: VectorRepr> GarnetProvider<T> {
     ) -> bool {
         match term {
             Term::Vector | Term::Neighbors | Term::Quantized | Term::Attributes | Term::ExtMap => {
-                if id.len() == 4 {
-                    let mut iid = 0u32;
+                if id.len() == mem::size_of::<u64>() {
+                    let mut iid = 0u64;
                     bytemuck::bytes_of_mut(&mut iid).copy_from_slice(id);
 
                     let is_start_point = iid == self.start_point_id;
                     if (is_start_point && matches!(term, Term::Attributes | Term::ExtMap))
-                        || (!is_start_point && iid == u32::MAX)
+                        || (!is_start_point && iid == u64::MAX)
                     {
                         return false;
                     }
@@ -1304,11 +1313,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
                             None => false,
                         },
                         Term::Neighbors => {
-                            let count_offset = self.max_degree * mem::size_of::<u32>();
-                            value.len() == count_offset + mem::size_of::<u32>()
-                                && bytemuck::pod_read_unaligned::<u32>(&value[count_offset..])
-                                    as usize
-                                    <= self.max_degree
+                            let count_offset = self.max_degree * mem::size_of::<u64>();
+                            value.len() == count_offset + mem::size_of::<u64>()
+                                && bytemuck::pod_read_unaligned::<u64>(&value[count_offset..])
+                                    <= self.max_degree as u64
                         }
                         Term::ExtMap => true,
                         Term::Attributes => !value.is_empty(),
@@ -1339,9 +1347,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
             }
             Term::Metadata => false,
             Term::IntMap => {
-                if value.len() != mem::size_of::<u32>()
-                    || bytemuck::pod_read_unaligned::<u32>(value) == self.start_point_id
-                {
+                if value.len() != mem::size_of::<u64>() {
+                    return false;
+                }
+                let iid = bytemuck::pod_read_unaligned::<u64>(value);
+                if iid == self.start_point_id || iid == u64::MAX {
                     return false;
                 }
 
@@ -1424,7 +1434,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             if !self.callbacks.exists_iid(
                 &context.term(Term::Neighbors),
                 id,
-                (self.max_degree + 1) * mem::size_of::<u32>(),
+                (self.max_degree + 1) * mem::size_of::<u64>(),
             ) {
                 log_failure(format_args!("missing neighbors: id={id}"));
                 return false;
@@ -1439,11 +1449,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     return false;
                 }
             };
-            if !self
-                .callbacks
-                .exists_eid(&context.term(Term::IntMap), &eid, mem::size_of::<u32>())
-            {
-                log_failure(format_args!("missing internal-ID mapping: id={id}"));
+            if self.to_internal_id(context, &eid).is_err() {
+                log_failure(format_args!(
+                    "missing or invalid internal-ID mapping: id={id}"
+                ));
                 return false;
             }
         }
@@ -1453,7 +1462,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 (Term::Vector, self.dim * mem::size_of::<T>()),
                 (
                     Term::Neighbors,
-                    (self.max_degree + 1) * mem::size_of::<u32>(),
+                    (self.max_degree + 1) * mem::size_of::<u64>(),
                 ),
                 (Term::Quantized, self.quantizer().map_or(0, |q| q.bytes())),
             ] {
@@ -1463,15 +1472,14 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let mut valid = false;
                 self.callbacks.read_multi_lpiid::<_, u8>(
                     &context.term(term),
-                    &[4, self.start_point_id],
+                    &[LengthPrefixedId::new(self.start_point_id)],
                     bytes,
                     |_, data| {
                         valid = data.len() == bytes
                             && (!matches!(term, Term::Neighbors)
-                                || bytemuck::pod_read_unaligned::<u32>(
-                                    &data[bytes - mem::size_of::<u32>()..],
-                                ) as usize
-                                    <= self.max_degree);
+                                || bytemuck::pod_read_unaligned::<u64>(
+                                    &data[bytes - mem::size_of::<u64>()..],
+                                ) <= self.max_degree as u64);
                     },
                 );
                 if !valid {
@@ -1556,7 +1564,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         } else {
             None
         };
-        let mut ns = vec![0u32; self.max_degree + 1];
+        let mut ns = vec![0u64; self.max_degree + 1];
         if !self.callbacks.read_single_iid(
             &context.term(Term::Neighbors),
             self.start_point_id,
@@ -1568,12 +1576,12 @@ impl<T: VectorRepr> GarnetProvider<T> {
             ));
             return false;
         }
-        let ns_len = ns[self.max_degree] as usize;
-        if ns_len > self.max_degree {
+        let ns_len = ns[self.max_degree];
+        if ns_len > self.max_degree as u64 {
             log_failure(format_args!("start point neighbor count exceeds degree"));
             return false;
         }
-        ns.truncate(ns_len);
+        ns.truncate(ns_len as usize);
 
         self.start_point_cache.insert(self.start_point_id, v);
         if let Some(qv) = qv {
@@ -1615,7 +1623,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
     pub(crate) fn get_full_vector(
         &self,
         context: &Context,
-        iid: u32,
+        iid: u64,
     ) -> Result<Vec<T>, GarnetProviderError> {
         let mut v = vec![T::default(); self.dim];
 
@@ -1642,8 +1650,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
     fn get_neighbors(
         &self,
         context: &Context,
-        iid: u32,
-        neighbors: &mut AdjacencyList<u32>,
+        iid: u64,
+        neighbors: &mut AdjacencyList<u64>,
     ) -> bool {
         let mut guard = neighbors.resize(self.max_degree + 1);
 
@@ -1664,6 +1672,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
         }
 
         let len = guard[self.max_degree];
+        if len > self.max_degree as u64 {
+            guard.finish(0);
+            return false;
+        }
         guard.finish(len as usize);
 
         true
@@ -1672,21 +1684,21 @@ impl<T: VectorRepr> GarnetProvider<T> {
     fn set_neighbors(
         &self,
         context: &Context,
-        iid: u32,
-        neighbors: &[u32],
-        scratch: &mut AdjacencyList<u32>,
+        iid: u64,
+        neighbors: &[u64],
+        scratch: &mut AdjacencyList<u64>,
     ) -> Result<(), GarnetProviderError> {
         let mut guard = scratch.resize(self.max_degree + 1);
         guard[0..neighbors.len()].copy_from_slice(neighbors);
-        guard[self.max_degree] = neighbors.len() as u32;
+        guard[self.max_degree] = neighbors.len() as u64;
 
         // NOTE: We use `rmw_iid` here instead of `write_iid` to guarantee cache coherence.
         if !self.callbacks.rmw_iid(
             &context.term(Term::Neighbors),
             iid,
-            (self.max_degree + 1) * mem::size_of::<u32>(),
-            |data: &mut [u32]| {
-                data.copy_from_slice(&guard);
+            (self.max_degree + 1) * mem::size_of::<u64>(),
+            |data| {
+                data.copy_from_slice(bytemuck::must_cast_slice(&guard));
                 if iid == self.start_point_id {
                     self.neighbor_cache.insert(iid, neighbors.to_vec());
                 }
@@ -1703,36 +1715,43 @@ impl<T: VectorRepr> GarnetProvider<T> {
     fn append_vector(
         &self,
         context: &Context,
-        iid: u32,
-        neighbors: &[u32],
+        iid: u64,
+        neighbors: &[u64],
     ) -> Result<(), GarnetProviderError> {
         let max_degree = self.max_degree;
         if !self.callbacks.rmw_iid(
             &context.term(Term::Neighbors),
             iid,
-            (max_degree + 1) * mem::size_of::<u32>(),
-            |data: &mut [u32]| {
-                let mut len = (data[max_degree] as usize).min(max_degree);
+            (max_degree + 1) * mem::size_of::<u64>(),
+            |data| {
+                // Extended Garnet namespaces can leave u64 slots only four-byte aligned.
+                let data: &mut [[u8; 8]] = bytemuck::cast_slice_mut(data);
+                let mut len = u64::from_ne_bytes(data[max_degree]).min(max_degree as u64) as usize;
 
                 for &nbr in neighbors {
                     if len == max_degree {
                         return;
                     }
 
-                    if u32::contains_simd(&data[0..len], nbr) {
+                    let bytes = nbr.to_ne_bytes();
+                    let present = match bytemuck::try_cast_slice::<_, u64>(&data[..len]) {
+                        Ok(ids) => u64::contains_simd(ids, nbr),
+                        Err(_) => data[..len].contains(&bytes),
+                    };
+                    if present {
                         continue;
                     }
 
-                    data[len] = nbr;
+                    data[len] = bytes;
                     len += 1;
-                    data[max_degree] = len as u32;
+                    data[max_degree] = (len as u64).to_ne_bytes();
                 }
 
                 if iid == self.start_point_id
                     && let Some(mut ns) = self.neighbor_cache.get_mut(&iid)
                 {
                     ns.clear();
-                    ns.extend(data.iter().copied().take(len));
+                    ns.extend(data.iter().take(len).map(|id| u64::from_ne_bytes(*id)));
                 }
             },
         ) {
@@ -1757,7 +1776,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
     }
 
     /// Convert the internal `id` into an external one.
-    fn to_external_id(&self, context: &Context, id: u32) -> Result<GarnetId, GarnetProviderError> {
+    fn to_external_id(&self, context: &Context, id: u64) -> Result<GarnetId, GarnetProviderError> {
         match self
             .callbacks
             .read_varsize_iid(&context.term(Term::ExtMap), id)
@@ -1766,18 +1785,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
             None => Err(GarnetProviderError::Garnet(GarnetError::Read)),
         }
     }
-
-    /// Provides an estimate of quantizer state size.
-    /// This is allowed to be wrong, but should ideally be an overestimate.
-    #[cfg(test)]
-    fn quant_state_size(&self) -> usize {
-        self.dim * 6 + 128
-    }
 }
 
 impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
     type Context = Context;
-    type InternalId = u32;
+    type InternalId = u64;
     type ExternalId = GarnetId;
     type Error = GarnetProviderError;
     type Guard = InsertGuard;
@@ -1787,7 +1799,7 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
         context: &Context,
         gid: &GarnetId,
     ) -> Result<Self::InternalId, Self::Error> {
-        let mut id = 0u32;
+        let mut id = 0u64;
         if !self.callbacks.read_single_eid(
             &context.term(Term::IntMap),
             gid,
@@ -2026,7 +2038,7 @@ pub(crate) struct DynamicAccessor<'a, T: VectorRepr> {
     quantized: bool,
     computer: GarnetQueryComputer,
     id_buffer: PooledRef<'a, AdjList>,
-    filtered_ids: PooledRef<'a, Vec<u32>>,
+    filtered_ids: PooledRef<'a, Vec<LengthPrefixedId>>,
     filtered_decisions: PooledRef<'a, Vec<bool>>,
 }
 
@@ -2042,7 +2054,7 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
             .get_ref(Undef::new(provider.max_degree + 1));
         let filtered_ids = provider
             .filtered_ids_pool
-            .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize * 2)); // x2 to allow for the length prefixes for garnet
+            .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize));
         let filtered_decisions = provider
             .filtered_decisions_pool
             .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize));
@@ -2112,7 +2124,7 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
         } = self;
 
         filtered_decisions.clear();
-        filtered_decisions.resize(filtered_ids.len() / 2, default_decision);
+        filtered_decisions.resize(filtered_ids.len(), default_decision);
 
         provider.callbacks.read_multi_lpiid::<_, u8>(
             &context.term(Term::Attributes),
@@ -2126,7 +2138,7 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
 }
 
 impl<T: VectorRepr> HasId for DynamicAccessor<'_, T> {
-    type Id = u32;
+    type Id = u64;
 }
 
 impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
@@ -2196,8 +2208,7 @@ impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
 
                     on_neighbors(id, dist);
                 } else {
-                    self.filtered_ids.push(4);
-                    self.filtered_ids.push(id);
+                    self.filtered_ids.push(LengthPrefixedId::new(id));
                 }
             }
 
@@ -2220,7 +2231,7 @@ impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
                     length_hint,
                     |i, v| {
                         let dist = self.computer.evaluate_similarity(v);
-                        on_neighbors(self.filtered_ids[i as usize * 2 + 1], dist);
+                        on_neighbors(self.filtered_ids[i as usize].id(), dist);
                     },
                 );
             }
@@ -2374,8 +2385,9 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
         // the rerank buffer.
         accessor.filtered_ids.clear();
         for nbor in candidates {
-            accessor.filtered_ids.push(4);
-            accessor.filtered_ids.push(*nbor.id());
+            accessor
+                .filtered_ids
+                .push(LengthPrefixedId::new(*nbor.id()));
         }
 
         if !accessor.filtered_ids.is_empty() {
@@ -2385,10 +2397,7 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
                 provider.full_vector_size(),
                 |i, v| {
                     let dist = f.evaluate_similarity(query, bytemuck::cast_slice::<u8, T>(v));
-                    reranked.push(Neighbor::new(
-                        accessor.filtered_ids[i as usize * 2 + 1],
-                        dist,
-                    ));
+                    reranked.push(Neighbor::new(accessor.filtered_ids[i as usize].id(), dist));
                 },
             );
         }
@@ -2453,8 +2462,7 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                     };
                     on_neighbors(Decision::reject(id), dist);
                 } else {
-                    self.filtered_ids.push(4);
-                    self.filtered_ids.push(id);
+                    self.filtered_ids.push(LengthPrefixedId::new(id));
                 }
             }
 
@@ -2484,9 +2492,9 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                 |i, v| {
                     let dist = self.computer.evaluate_similarity(v);
                     let decision = if self.filtered_decisions[i as usize] {
-                        Decision::accept(self.filtered_ids[i as usize * 2 + 1])
+                        Decision::accept(self.filtered_ids[i as usize].id())
                     } else {
-                        Decision::reject(self.filtered_ids[i as usize * 2 + 1])
+                        Decision::reject(self.filtered_ids[i as usize].id())
                     };
                     on_neighbors(decision, dist);
                 },
@@ -2521,8 +2529,7 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
 
             for id in id_buffer.iter().copied() {
                 if id != self.provider.start_point_id && pred.eval(&id) {
-                    self.filtered_ids.push(4);
-                    self.filtered_ids.push(id);
+                    self.filtered_ids.push(LengthPrefixedId::new(id));
                 }
             }
 
@@ -2539,15 +2546,14 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                     continue;
                 }
 
-                let id = self.filtered_ids[i * 2 + 1];
+                let id = self.filtered_ids[i].id();
 
                 if pred.eval_mut(&Accept::new(id)) {
-                    self.filtered_ids[index * 2] = 4;
-                    self.filtered_ids[index * 2 + 1] = id;
+                    self.filtered_ids[index] = LengthPrefixedId::new(id);
                     index += 1;
                 }
             }
-            self.filtered_ids.truncate(index * 2);
+            self.filtered_ids.truncate(index);
 
             if self.filtered_ids.is_empty() {
                 continue;
@@ -2571,7 +2577,7 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                 length_hint,
                 |i, v| {
                     let dist = self.computer.evaluate_similarity(v);
-                    on_neighbors(Accept::new(self.filtered_ids[i as usize * 2 + 1]), dist);
+                    on_neighbors(Accept::new(self.filtered_ids[i as usize].id()), dist);
                 },
             );
         }
@@ -2601,9 +2607,9 @@ where
     context: &'a Context,
     quantized: bool,
     id_buffer: PooledRef<'a, AdjList>,
-    filtered_ids: PooledRef<'a, Vec<u32>>,
+    filtered_ids: PooledRef<'a, Vec<LengthPrefixedId>>,
     distance: GarnetDistanceComputer,
-    set: workingset::Map<u32, Box<[u8]>>,
+    set: workingset::Map<u64, Box<[u8]>>,
 }
 
 impl<'a, T> PruneAccessor<'a, T>
@@ -2629,10 +2635,9 @@ where
             .id_buffer_pool
             .get_ref(Undef::new(provider.max_degree + 1));
 
-        // x2 to allow for the length prefixes for garnet
         let filtered_ids = provider
             .filtered_ids_pool
-            .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize * 2));
+            .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize));
 
         // Using `Capacity::Default` means that the constructed working set will act as a
         // cache and persist up to `capacity` items across uses of the working set.
@@ -2658,7 +2663,7 @@ impl<T> HasId for PruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
-    type Id = u32;
+    type Id = u64;
 }
 
 impl<T> glue::PruneAccessor for PruneAccessor<'_, T>
@@ -2667,7 +2672,7 @@ where
 {
     type ElementRef<'a> = &'a [u8];
     type View<'a>
-        = workingset::map::View<'a, u32, Box<[u8]>>
+        = workingset::map::View<'a, u64, Box<[u8]>>
     where
         Self: 'a;
     type Distance<'a>
@@ -2707,8 +2712,7 @@ where
                     continue;
                 };
             } else if !self.set.contains_key(&id) {
-                self.filtered_ids.push(4);
-                self.filtered_ids.push(id);
+                self.filtered_ids.push(LengthPrefixedId::new(id));
             }
         }
 
@@ -2731,7 +2735,7 @@ where
                 length_hint,
                 |id, v| {
                     self.set
-                        .insert(self.filtered_ids[id as usize * 2 + 1], v.into());
+                        .insert(self.filtered_ids[id as usize].id(), v.into());
                 },
             );
         }
@@ -2754,11 +2758,11 @@ where
 {
     provider: &'a GarnetProvider<T>,
     context: &'a Context,
-    scratch: &'a mut AdjacencyList<u32>,
+    scratch: &'a mut AdjacencyList<u64>,
 }
 
 impl<T: VectorRepr> HasId for DelegateNeighborAccessor<'_, T> {
-    type Id = u32;
+    type Id = u64;
 }
 
 impl<T: VectorRepr> NeighborAccessor for DelegateNeighborAccessor<'_, T> {
@@ -2985,9 +2989,175 @@ mod tests {
         LOGS.with(|logs| assert!(logs.lock().is_empty()));
     }
 
+    #[test]
+    fn task_ranges_preserve_full_width_boundaries() {
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let index = create_2d_f32_index(VectorQuantType::NoQuant, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+
+        assert_eq!(
+            provider.task_range(0, 2, (1u64 << 32) - 1),
+            Some((0, 1u64 << 31))
+        );
+        assert_eq!(
+            provider.task_range(1, 2, (1u64 << 32) - 1),
+            Some((1u64 << 31, 1u64 << 32))
+        );
+        assert_eq!(
+            provider.task_range(0, 2, u64::MAX - 1),
+            Some((0, 1u64 << 63))
+        );
+        assert_eq!(
+            provider.task_range(1, 2, u64::MAX - 1),
+            Some((1u64 << 63, u64::MAX))
+        );
+        assert_eq!(provider.task_range(2, 2, u64::MAX - 1), None);
+        assert_eq!(provider.task_range(0, 0, 0), None);
+        assert_eq!(provider.task_range(0, 1, u64::MAX), None);
+    }
+
+    #[tokio::test]
+    async fn adjacency_and_batches_preserve_colliding_low_words() {
+        use diskann::graph::{
+            AdjacencyList,
+            glue::{self, FilteredAccessor, SearchAccessor},
+        };
+
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let start = (1u64 << 56) | 7;
+        let provider = GarnetProvider::<f32>::new(
+            2,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            10,
+            start,
+            store.callbacks(),
+            &ctx,
+        )
+        .unwrap();
+        provider.maybe_set_start_point(&ctx, &[0.0, 0.0]).unwrap();
+        let low = 7u64;
+        let high = (1u64 << 40) | low;
+        let top = (1u64 << 63) | low;
+        let member = 42u32.to_ne_bytes();
+
+        // Seed sparse ordinary records directly: claiming these IDs would allocate a dense FSM.
+        for (id, external, vector) in [
+            (low, &b""[..], [1.0f32, 0.0]),
+            (high, member.as_slice(), [2.0f32, 0.0]),
+            (top, &b"top"[..], [3.0f32, 0.0]),
+        ] {
+            let key = id.to_ne_bytes();
+            store.set(
+                ctx.term(Term::Vector).get(),
+                &key,
+                bytemuck::cast_slice(&vector),
+            );
+            store.set(ctx.term(Term::ExtMap).get(), &key, external);
+            store.set(ctx.term(Term::IntMap).get(), external, &key);
+            let external = GarnetId::from(external);
+            assert_eq!(provider.to_internal_id(&ctx, &external).unwrap(), id);
+            assert_eq!(provider.to_external_id(&ctx, id).unwrap(), external);
+        }
+        let external = GarnetId::from(member.as_slice());
+        provider.set_attributes(&ctx, &external, b"high").unwrap();
+        assert_eq!(
+            store.get(ctx.term(Term::Attributes).get(), &high.to_ne_bytes()),
+            Some(b"high".to_vec())
+        );
+        assert!(
+            store
+                .get(ctx.term(Term::Attributes).get(), &low.to_ne_bytes())
+                .is_none()
+        );
+
+        let mut scratch = AdjacencyList::with_capacity(11);
+        provider
+            .set_neighbors(&ctx, start, &[high, low], &mut scratch)
+            .unwrap();
+        provider
+            .append_vector(&ctx, start, &[high, top, low])
+            .unwrap();
+        let mut neighbors = AdjacencyList::with_capacity(11);
+        assert!(provider.get_neighbors(&ctx, start, &mut neighbors));
+        assert_eq!(&*neighbors, &[high, low, top]);
+        let stored = store
+            .get(ctx.term(Term::Neighbors).get(), &start.to_ne_bytes())
+            .unwrap();
+        assert_eq!(stored.len(), 11 * mem::size_of::<u64>());
+        assert_eq!(bytemuck::pod_read_unaligned::<u64>(&stored[80..]), 3);
+
+        let query = [0.0f32, 0.0];
+        let mut accessor = super::DynamicAccessor::new(&provider, &ctx, &query, false).unwrap();
+        let mut visited = Default::default();
+        let mut expanded = Vec::new();
+        accessor
+            .expand_beam(
+                [start].into_iter(),
+                glue::NotInMut::new(&mut visited),
+                |id, _| expanded.push(id),
+            )
+            .await
+            .unwrap();
+        assert_eq!(expanded, [high, low, top]);
+
+        visited.clear();
+        expanded.clear();
+        accessor
+            .expand_beam_accept_only(
+                [start].into_iter(),
+                glue::NotInMut::new(&mut visited),
+                |id, _| expanded.push(*id.get()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(expanded, [high, low, top]);
+    }
+
+    #[test]
+    fn import_rejects_legacy_numeric_widths_without_restricting_external_ids() {
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let index = create_2d_f32_index(VectorQuantType::NoQuant, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+        let legacy = 7u32.to_ne_bytes();
+        let high = ((1u64 << 63) | 7).to_ne_bytes();
+        assert!(!provider.import_term(
+            &ctx,
+            Term::Vector,
+            &legacy,
+            bytemuck::cast_slice(&[0.0f32; 2])
+        ));
+        assert!(!provider.import_term(&ctx, Term::IntMap, b"member", &legacy));
+        for external in [&b""[..], legacy.as_slice()] {
+            assert!(provider.import_term(&ctx, Term::IntMap, external, &high));
+            assert_eq!(
+                provider
+                    .to_internal_id(&ctx, &GarnetId::from(external))
+                    .unwrap(),
+                u64::from_ne_bytes(high)
+            );
+        }
+        let start = DEFAULT_START_POINT_ID.to_ne_bytes();
+        assert!(!provider.import_term(
+            &ctx,
+            Term::Neighbors,
+            &start,
+            bytemuck::cast_slice(&[0u32; 11])
+        ));
+        assert!(provider.import_term(
+            &ctx,
+            Term::Neighbors,
+            &start,
+            bytemuck::cast_slice(&[0u64; 11])
+        ));
+    }
+
     fn assert_waits_for_range(
         provider: &GarnetProvider<f32>,
-        range: Range<u32>,
+        range: Range<u64>,
         should_wait: bool,
         operation: impl FnOnce() + Send,
     ) {
@@ -3031,7 +3201,7 @@ mod tests {
         assert!(
             provider
                 .callbacks
-                .write_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY, &state)
+                .write_meta(&ctx.term(Term::Metadata), QUANT_STATE_KEY, &state)
         );
         provider.fsm.enable_quantization();
     }
@@ -3108,7 +3278,7 @@ mod tests {
                 assert!(provider.all_quantized.load(Ordering::Acquire));
             }
             let internal_id = parallel_get(&store, ctx.term(Term::IntMap).get(), &id).unwrap();
-            let internal_id = bytemuck::pod_read_unaligned::<u32>(&internal_id);
+            let internal_id = bytemuck::pod_read_unaligned::<u64>(&internal_id);
             let update_ctx = state.context();
             assert_waits_for_range(provider, internal_id..internal_id + 1, should_wait, || {
                 let updated = [1.0f32, 0.0];
@@ -3352,7 +3522,7 @@ mod tests {
         .unwrap();
         for (term, value) in [
             (Term::Vector, bytemuck::cast_slice(&[0.0f32; 2])),
-            (Term::Neighbors, bytemuck::cast_slice(&[0u32; 11])),
+            (Term::Neighbors, bytemuck::cast_slice(&[0u64; 11])),
         ] {
             assert!(provider.import_term(&ctx, term, &DEFAULT_START_POINT_ID.to_ne_bytes(), value));
         }
@@ -3404,7 +3574,7 @@ mod tests {
                     provider.import_term(
                         context,
                         Term::Vector,
-                        &7u32.to_ne_bytes(),
+                        &7u64.to_ne_bytes(),
                         bytemuck::cast_slice(&imported_vector),
                     )
                 } else {
@@ -3469,7 +3639,7 @@ mod tests {
                 (!import_first).then(|| bytemuck::cast_slice(&ordinary_vector).to_vec())
             );
             assert_eq!(
-                parallel_get(&store, ctx.term(Term::Vector).get(), &7u32.to_ne_bytes()),
+                parallel_get(&store, ctx.term(Term::Vector).get(), &7u64.to_ne_bytes()),
                 import_first.then(|| bytemuck::cast_slice(&imported_vector).to_vec())
             );
         }
@@ -3493,16 +3663,16 @@ mod tests {
             assert!(provider.set_quant_state(&ctx, &quant_state));
             let (first_id, first_value, second_id, second_value) = match term {
                 Term::Vector => (
-                    7u32.to_ne_bytes().to_vec(),
+                    7u64.to_ne_bytes().to_vec(),
                     bytemuck::cast_slice(&[1.0f32, 2.0]).to_vec(),
-                    8u32.to_ne_bytes().to_vec(),
+                    8u64.to_ne_bytes().to_vec(),
                     bytemuck::cast_slice(&[3.0f32, 4.0]).to_vec(),
                 ),
                 Term::IntMap => (
                     b"first".to_vec(),
-                    7u32.to_ne_bytes().to_vec(),
+                    7u64.to_ne_bytes().to_vec(),
                     b"second".to_vec(),
-                    8u32.to_ne_bytes().to_vec(),
+                    8u64.to_ne_bytes().to_vec(),
                 ),
                 _ => unreachable!(),
             };
@@ -3601,7 +3771,7 @@ mod tests {
                         provider.import_term(
                             context,
                             Term::Quantized,
-                            &7u32.to_ne_bytes(),
+                            &7u64.to_ne_bytes(),
                             &quantized,
                         )
                     } else {
@@ -3675,7 +3845,7 @@ mod tests {
                     Some(expected_state.to_vec())
                 );
                 let id = if importing {
-                    7u32
+                    7u64
                 } else {
                     provider.start_point_id
                 };
@@ -3703,7 +3873,7 @@ mod tests {
             let state = provider.quantizer().unwrap().serialize().unwrap();
             let replacement = q8_state_with_identity_transform(2);
             assert!(provider.set_quant_state(&ctx, &state));
-            let id = 7u32.to_ne_bytes();
+            let id = 7u64.to_ne_bytes();
             let mut quantized = vec![0u8; provider.quantizer().unwrap().bytes()];
             provider
                 .quantizer()
@@ -3898,7 +4068,7 @@ mod tests {
                 );
                 let mapping = parallel_get(&store, ctx.term(Term::IntMap).get(), &id);
                 assert_eq!(mapping.is_some(), has_member);
-                let current_id = mapping.as_deref().map(bytemuck::pod_read_unaligned::<u32>);
+                let current_id = mapping.as_deref().map(bytemuck::pod_read_unaligned::<u64>);
                 for internal_id in 1..=provider.fsm.max_id() {
                     let key = bytemuck::bytes_of(&internal_id);
                     if Some(internal_id) == current_id {
@@ -4436,7 +4606,7 @@ mod tests {
                     &ctx,
                     Term::Neighbors,
                     &id_bytes,
-                    bytemuck::cast_slice(&[0u32; 11])
+                    bytemuck::cast_slice(&[0u64; 11])
                 ));
                 if let Some(quantizer) = provider.quantizer() {
                     let mut quantized = vec![0u8; quantizer.bytes()];
@@ -4497,7 +4667,7 @@ mod tests {
             let quantizer = provider.quantizer().unwrap();
             assert!(provider.set_quant_state(&ctx, &quantizer.serialize().unwrap()));
             let point = [1.0f32, 2.0];
-            let neighbors = [0u32; 11];
+            let neighbors = [0u64; 11];
             let mut quantized = vec![0u8; quantizer.bytes()];
             quantizer.compress(&point, &mut quantized).unwrap();
             for (term_index, (term, value)) in [
@@ -4534,7 +4704,7 @@ mod tests {
 
     #[test]
     fn finish_import_checks_start_point_neighbors() {
-        for (neighbor_count, expected_success) in [(11, false), (10, true)] {
+        for (neighbor_count, expected_success) in [(11, false), (10, true), (1u64 << 32, false)] {
             let store = Store::new();
             let ctx = Context::new(0);
             let provider = GarnetProvider::<f32>::new(
@@ -4547,7 +4717,7 @@ mod tests {
                 &ctx,
             )
             .unwrap();
-            let mut neighbors = [0u32; 11];
+            let mut neighbors = [0u64; 11];
             // No ordinary vectors are imported; dangling and self-references are allowed.
             neighbors[1] = DEFAULT_START_POINT_ID;
             neighbors[10] = neighbor_count;
@@ -4727,15 +4897,14 @@ mod tests {
 
         assert!(!provider.is_quantized());
         let max_id = provider.max_internal_id();
-        assert_eq!(max_id, last_inserted_id);
+        assert_eq!(max_id, u64::from(last_inserted_id));
 
         // There should be no saved quant state.
         assert!(
-            !provider.callbacks.exists_iid(
-                &ctx.term(Term::Metadata),
-                QUANT_STATE_KEY,
-                provider.quant_state_size()
-            ),
+            provider
+                .callbacks
+                .read_varsize_meta::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
+                .is_none(),
             "quant state should not be stored yet"
         );
 
@@ -4805,21 +4974,20 @@ mod tests {
         // is_quantized won't be true until backfill is complete
         assert!(!provider.is_quantized());
         let max_id = provider.max_internal_id();
-        assert_eq!(max_id, last_inserted_id);
+        assert_eq!(max_id, u64::from(last_inserted_id));
 
         // There should be saved quant state.
         assert!(
-            provider.callbacks.exists_iid(
-                &ctx.term(Term::Metadata),
-                QUANT_STATE_KEY,
-                provider.quant_state_size()
-            ),
+            provider
+                .callbacks
+                .read_varsize_meta::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
+                .is_some(),
             "quant state missing"
         );
 
         let tqs = provider
             .callbacks
-            .read_varsize_iid::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
+            .read_varsize_meta::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
             .unwrap();
         assert!(tqs.len() > 1, "quant state too small");
         assert_eq!(tqs[0], 0, "quant state should be pre-backfill");
@@ -4830,7 +4998,7 @@ mod tests {
 
         assert!(!provider.is_quantized());
         let max_id = provider.max_internal_id();
-        assert_eq!(max_id, last_inserted_id);
+        assert_eq!(max_id, u64::from(last_inserted_id));
 
         // Quant should be needed now, since backfill has never run
         assert!(provider.quantization_needed());
@@ -4939,18 +5107,17 @@ mod tests {
 
         // There should be saved quant state.
         assert!(
-            provider.callbacks.exists_iid(
-                &ctx.term(Term::Metadata),
-                QUANT_STATE_KEY,
-                provider.quant_state_size()
-            ),
+            provider
+                .callbacks
+                .read_varsize_meta::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
+                .is_some(),
             "quant state missing"
         );
 
         // all quantized state should match index
         let tqs = provider
             .callbacks
-            .read_varsize_iid::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
+            .read_varsize_meta::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
             .unwrap();
         assert!(tqs.len() > 1, "quant state too small");
         assert_eq!(tqs[0], 1, "quant state should be post-backfill");
@@ -4959,7 +5126,7 @@ mod tests {
         for id in 0..last_inserted_id {
             assert!(provider.callbacks.exists_iid(
                 &ctx.term(Term::Quantized),
-                id,
+                u64::from(id),
                 provider.quant_vector_size()
             ));
         }
@@ -5045,11 +5212,10 @@ mod tests {
 
         // There should be saved quant state.
         assert!(
-            provider.callbacks.exists_iid(
-                &ctx.term(Term::Metadata),
-                QUANT_STATE_KEY,
-                provider.quant_state_size()
-            ),
+            provider
+                .callbacks
+                .read_varsize_meta::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
+                .is_some(),
             "quant state missing"
         );
 
@@ -5061,7 +5227,7 @@ mod tests {
         let mut qv = vec![0u8; quantizer.bytes()];
 
         let gid = GarnetId::from(bytemuck::bytes_of::<u32>(&0));
-        let mut iid = 0u32;
+        let mut iid = 0u64;
         assert!(provider.callbacks.read_single_eid(
             &ctx.term(Term::IntMap),
             &gid,

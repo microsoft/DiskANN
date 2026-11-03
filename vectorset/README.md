@@ -42,6 +42,10 @@ running, copy config.toml.example to config.toml and modify as necessary.
 Since vectorset has its own workspace in the DiskANN repo, the following examples should be run from the `vectorset` directory in the repo. Running `cargo run --release -- --help` will enumerate
 all the various subcommands and arguments.
 
+Use the global `--response-timeout-ms 60000` option for slow commands or pipelines.
+It applies to all subcommands and limits each request, not the complete benchmark
+run. Omitting it preserves the Redis client default (currently 500 ms).
+
 ### Ingest
 
 The `ingest` subcommand will ingest vectors and build the index. The following example builds a full precision only index on the wikipedia-10M dataset from big-ann-benchmarks.

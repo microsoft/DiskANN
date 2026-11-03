@@ -77,7 +77,7 @@ mod tests {
         quant_type: VectorQuantType,
         metric_type: i32,
         write_callback: WriteCallback,
-        start_point_id: u32,
+        start_point_id: u64,
     ) -> (*const c_void, Context) {
         let callbacks = store.callbacks();
         let ctx = Context::new(0);
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn basic_create_index_with_start_point() {
-        for start_point_id in [0, 42, DEFAULT_START_POINT_ID] {
+        for start_point_id in [0, 42, 1 << 40, 1 << 63, DEFAULT_START_POINT_ID] {
             let store = Store::new();
             let create = || {
                 create_test_index_with_start_point(
@@ -309,7 +309,7 @@ mod tests {
     fn import_rejects_empty_non_external_id_fields() {
         let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
-        let id = 1u32.to_ne_bytes();
+        let id = 1u64.to_ne_bytes();
         for term in [
             Term::Vector,
             Term::Neighbors,
@@ -396,10 +396,12 @@ mod tests {
             let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Q8);
             assert!(unsafe { set_quant_state(ctx.get(), index_ptr, state.as_ptr(), state.len()) });
             import_single_vector(&ctx, index_ptr, Some(&quantizer));
-            let key = if matches!(term, Term::Metadata) {
-                bytemuck::bytes_of(&[u32::from_be_bytes(*b"_fsm"), 0]).to_vec()
-            } else {
-                1u32.to_ne_bytes().to_vec()
+            let key = match term {
+                Term::Metadata => {
+                    bytemuck::bytes_of(&[u32::from_be_bytes(*b"_fsm"), 0, 0]).to_vec()
+                }
+                Term::IntMap => 1u32.to_ne_bytes().to_vec(),
+                _ => 1u64.to_ne_bytes().to_vec(),
             };
             let context = ctx.term(term).get();
             let value = store.get(context, &key).unwrap();
@@ -452,12 +454,13 @@ mod tests {
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
             let id = 1u32.to_ne_bytes();
-            let zero = 0u32.to_ne_bytes();
+            let iid = 1u64.to_ne_bytes();
+            let zero = 0u64.to_ne_bytes();
             for (internal_id, accepted, expected) in [
                 (DEFAULT_START_POINT_ID, false, None),
                 (0, true, Some(zero.as_slice())),
-                (1, true, Some(id.as_slice())),
-                (DEFAULT_START_POINT_ID, false, Some(id.as_slice())),
+                (1, true, Some(iid.as_slice())),
+                (DEFAULT_START_POINT_ID, false, Some(iid.as_slice())),
             ] {
                 let value = internal_id.to_ne_bytes();
                 assert_eq!(
@@ -487,7 +490,7 @@ mod tests {
                 }
                 assert_eq!(
                     store.get(ctx.term(Term::IntMap).get(), &id),
-                    Some(id.to_vec())
+                    Some(iid.to_vec())
                 );
             }
             let attributes = b"attributes";
@@ -495,7 +498,7 @@ mod tests {
                 &ctx,
                 index_ptr,
                 Term::Attributes,
-                &id,
+                &iid,
                 attributes
             ));
             if quant_type == VectorQuantType::Q8 {
@@ -529,7 +532,7 @@ mod tests {
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
             assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
             assert!(unsafe {
-                check_internal_id_valid(ctx.get(), index_ptr, id.as_ptr(), id.len())
+                check_internal_id_valid(ctx.get(), index_ptr, iid.as_ptr(), iid.len())
             });
             assert!(unsafe {
                 check_external_id_valid(ctx.get(), index_ptr, id.as_ptr(), id.len())
@@ -739,8 +742,9 @@ mod tests {
         assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
         let id = 1u32.to_ne_bytes();
+        let iid = 1u64.to_ne_bytes();
         FAIL_WRITE.store(true, Ordering::Release);
-        assert!(!import_test_term(&ctx, index_ptr, Term::IntMap, &id, &id));
+        assert!(!import_test_term(&ctx, index_ptr, Term::IntMap, &id, &iid));
         assert!(!FAIL_WRITE.load(Ordering::Acquire));
         assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
@@ -768,7 +772,7 @@ mod tests {
             index_ptr,
             Term::Neighbors,
             &start_id,
-            bytemuck::cast_slice(&[0u32; 21]),
+            bytemuck::cast_slice(&[0u64; 21]),
         ));
         assert!(unsafe { finish_import(ctx.get(), index_ptr) });
         assert!(!unsafe { can_import(ctx.get(), index_ptr) });
@@ -842,13 +846,14 @@ mod tests {
         quantizer: Option<&dyn GarnetQuantizer>,
     ) {
         let id = 1u32.to_ne_bytes();
+        let iid = 1u64.to_ne_bytes();
         let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
         let vector = [1.0f32, 2.0];
         assert!(import_test_term(
             ctx,
             index_ptr,
             Term::Vector,
-            &id,
+            &iid,
             bytemuck::cast_slice(&vector),
         ));
         assert!(import_test_term(
@@ -865,7 +870,7 @@ mod tests {
                 ctx,
                 index_ptr,
                 Term::Quantized,
-                &id,
+                &iid,
                 &quantized
             ));
             assert!(import_test_term(
@@ -880,10 +885,10 @@ mod tests {
             ctx,
             index_ptr,
             Term::Neighbors,
-            &id,
-            bytemuck::cast_slice(&[0u32; 21]),
+            &iid,
+            bytemuck::cast_slice(&[0u64; 21]),
         ));
-        let mut start_neighbors = [0u32; 21];
+        let mut start_neighbors = [0u64; 21];
         start_neighbors[0] = 1;
         start_neighbors[20] = 1;
         assert!(import_test_term(
@@ -893,13 +898,13 @@ mod tests {
             &start_id,
             bytemuck::cast_slice(&start_neighbors),
         ));
-        assert!(import_test_term(ctx, index_ptr, Term::IntMap, &id, &id));
-        assert!(import_test_term(ctx, index_ptr, Term::ExtMap, &id, &id));
+        assert!(import_test_term(ctx, index_ptr, Term::IntMap, &id, &iid));
+        assert!(import_test_term(ctx, index_ptr, Term::ExtMap, &iid, &id));
         assert!(import_test_term(
             ctx,
             index_ptr,
             Term::Attributes,
-            &id,
+            &iid,
             b"original"
         ));
     }
@@ -942,9 +947,9 @@ mod tests {
     ) {
         const VECTOR_COUNT: usize = 100;
         const MAX_DEGREE: usize = 20;
-        const BLOCK_SIZE_IDS: u32 = 1 << 16;
+        const BLOCK_SIZE_IDS: u64 = 1 << 16;
 
-        let mut internal_ids: [u32; VECTOR_COUNT] = std::array::from_fn(|index| index as u32 + 1);
+        let mut internal_ids: [u64; VECTOR_COUNT] = std::array::from_fn(|index| index as u64 + 1);
         internal_ids[VECTOR_COUNT - 2] = BLOCK_SIZE_IDS;
         internal_ids[VECTOR_COUNT - 1] = 2 * BLOCK_SIZE_IDS + 7;
         let max_id = internal_ids[VECTOR_COUNT - 1];
@@ -963,13 +968,13 @@ mod tests {
                     quantizer.compress(&vector, &mut quantized).unwrap();
                     vector_terms.push((Term::Quantized, quantized));
                 }
-                let mut neighbors = [0u32; MAX_DEGREE + 1];
+                let mut neighbors = [0u64; MAX_DEGREE + 1];
                 let neighbor_count = if vector_index == 0 { MAX_DEGREE } else { 5 };
                 for (offset, neighbor) in neighbors[..neighbor_count].iter_mut().enumerate() {
                     *neighbor =
                         internal_ids[(vector_index + VECTOR_COUNT - 1 - offset) % VECTOR_COUNT];
                 }
-                neighbors[MAX_DEGREE] = neighbor_count as u32;
+                neighbors[MAX_DEGREE] = neighbor_count as u64;
                 let id_bytes = id.to_ne_bytes();
                 let external_id = (vector_index as u32 + 1).to_ne_bytes();
 
@@ -985,7 +990,7 @@ mod tests {
         let term_count = terms[0].len();
 
         let start_vector = [0.5f32; 2];
-        let mut start_neighbors = [0u32; MAX_DEGREE + 1];
+        let mut start_neighbors = [0u64; MAX_DEGREE + 1];
         start_neighbors[0] = internal_ids[VECTOR_COUNT - 1];
         start_neighbors[MAX_DEGREE] = 1;
         let mut start_terms = vec![
@@ -1008,16 +1013,22 @@ mod tests {
             assert_eq!(index.inner.max_degree(), MAX_DEGREE);
             if let Some(quant_state) = &quant_state {
                 let id = 1u32.to_ne_bytes();
+                let iid = 1u64.to_ne_bytes();
                 for (term, value) in &terms[0] {
+                    let key = if matches!(term, Term::IntMap) {
+                        id.as_slice()
+                    } else {
+                        iid.as_slice()
+                    };
                     assert!(
-                        !import_test_term(&ctx, index_ptr, *term, &id, value),
+                        !import_test_term(&ctx, index_ptr, *term, key, value),
                         "import accepted without preset quant state: quant_type={quant_type:?}, by_term={by_term}, term={term:?}"
                     );
-                    assert!(store.get(ctx.get() | *term as u64, &id).is_none());
+                    assert!(store.get(ctx.get() | *term as u64, key).is_none());
                 }
                 assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
                 assert!(!unsafe {
-                    check_internal_id_valid(ctx.get(), index_ptr, id.as_ptr(), id.len())
+                    check_internal_id_valid(ctx.get(), index_ptr, iid.as_ptr(), iid.len())
                 });
                 assert!(!unsafe {
                     check_external_id_valid(ctx.get(), index_ptr, id.as_ptr(), id.len())
@@ -1043,8 +1054,8 @@ mod tests {
             assert!(store.get(ctx.term(Term::Attributes).get(), &id).is_none());
 
             let rejected_id = (max_id + 1).to_ne_bytes();
-            let mut bad_neighbors = [0u32; MAX_DEGREE + 1];
-            bad_neighbors[MAX_DEGREE] = MAX_DEGREE as u32 + 1;
+            let mut bad_neighbors = [0u64; MAX_DEGREE + 1];
+            bad_neighbors[MAX_DEGREE] = MAX_DEGREE as u64 + 1;
             let value = bytemuck::cast_slice(&bad_neighbors);
             assert!(!import_test_term(
                 &ctx,
@@ -1071,14 +1082,15 @@ mod tests {
                     )
                 };
                 let (term, value) = &terms[vector_index][term_index];
+                let external_id = (vector_index as u32 + 1).to_ne_bytes();
+                let internal_id = internal_ids[vector_index].to_ne_bytes();
                 let id = if matches!(term, Term::IntMap) {
-                    vector_index as u32 + 1
+                    external_id.as_slice()
                 } else {
-                    internal_ids[vector_index]
-                }
-                .to_ne_bytes();
+                    internal_id.as_slice()
+                };
                 assert!(
-                    import_test_term(&ctx, index_ptr, *term, &id, value),
+                    import_test_term(&ctx, index_ptr, *term, id, value),
                     "import failed: by_term={by_term}, internal_id={}, term={term:?}",
                     internal_ids[vector_index]
                 );
@@ -1114,16 +1126,22 @@ mod tests {
                 );
             }
             for rejected_id in [1u32, 101] {
-                let id = rejected_id.to_ne_bytes();
+                let external_id = rejected_id.to_ne_bytes();
+                let internal_id = u64::from(rejected_id).to_ne_bytes();
                 for (term, value) in &terms[1] {
+                    let id = if matches!(term, Term::IntMap) {
+                        external_id.as_slice()
+                    } else {
+                        internal_id.as_slice()
+                    };
                     let term_context = ctx.get() | *term as u64;
-                    let before = store.get(term_context, &id);
+                    let before = store.get(term_context, id);
                     assert!(
-                        !import_test_term(&ctx, index_ptr, *term, &id, value),
+                        !import_test_term(&ctx, index_ptr, *term, id, value),
                         "import accepted after finish_import: by_term={by_term}, id={rejected_id}, term={term:?}"
                     );
                     assert_eq!(
-                        store.get(term_context, &id),
+                        store.get(term_context, id),
                         before,
                         "rejected import changed storage: by_term={by_term}, id={rejected_id}, term={term:?}"
                     );
@@ -1373,7 +1391,7 @@ mod tests {
         let vector_bytes = bytemuck::cast_slice(&vector);
         let vector_len = 2;
 
-        let iid = 0u32;
+        let iid = 0u64;
         let iid_bytes = bytemuck::bytes_of(&iid);
 
         // Check internal ID does not exist
@@ -2046,7 +2064,7 @@ mod tests {
                     store
                         .get(
                             ctx.term(Term::Quantized).get(),
-                            &(required as u32 - 1).to_ne_bytes()
+                            &(required as u64 - 1).to_ne_bytes()
                         )
                         .is_none()
                 );
@@ -2054,7 +2072,7 @@ mod tests {
                     store
                         .get(
                             ctx.term(Term::Quantized).get(),
-                            &(required as u32).to_ne_bytes()
+                            &(required as u64).to_ne_bytes()
                         )
                         .unwrap()
                         .len(),
@@ -2089,7 +2107,7 @@ mod tests {
         }
 
         for id in 0..required + 2 {
-            let internal_id = (id as u32).to_ne_bytes();
+            let internal_id = (id as u64).to_ne_bytes();
             assert_eq!(
                 store
                     .get(ctx.term(Term::Vector).get(), &internal_id)
@@ -2098,7 +2116,7 @@ mod tests {
                 "original vector changed for {quant_type:?}, id={id}"
             );
         }
-        for id in (0..required as u32 + 2).chain([DEFAULT_START_POINT_ID]) {
+        for id in (0..required as u64 + 2).chain([DEFAULT_START_POINT_ID]) {
             assert_eq!(
                 store
                     .get(ctx.term(Term::Quantized).get(), &id.to_ne_bytes())

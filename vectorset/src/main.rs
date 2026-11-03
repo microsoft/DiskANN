@@ -10,7 +10,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use loader::DatasetLoader;
 use redis::{
-    AsyncTypedCommands, IntoConnectionInfo, Pipeline, ToRedisArgs, aio::MultiplexedConnection,
+    AsyncConnectionConfig, AsyncTypedCommands, IntoConnectionInfo, Pipeline, ToRedisArgs,
+    aio::MultiplexedConnection,
 };
 use serde::Deserialize;
 use std::{
@@ -56,12 +57,26 @@ struct Options {
     #[arg(short, long)]
     threads: Option<usize>,
 
+    /// Response timeout in milliseconds (uses the Redis client default when omitted)
+    #[arg(long, global = true)]
+    response_timeout_ms: Option<u64>,
+
     /// Quantizer
     #[arg(long, default_value_t)]
     quantizer: Quantizer,
 
     #[command(subcommand)]
     command: Commands,
+}
+
+impl Options {
+    fn connection_config(&self) -> AsyncConnectionConfig {
+        let config = AsyncConnectionConfig::new();
+        match self.response_timeout_ms {
+            Some(timeout) => config.set_response_timeout(Some(Duration::from_millis(timeout))),
+            None => config,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -400,18 +415,20 @@ async fn dispatch<T: Element>(
     cred: Option<ExpiringCredential>,
 ) -> Result<()> {
     match command {
-        Commands::Ping => ping::<T>(infos[0].clone()).await?,
+        Commands::Ping => ping::<T>(opts, infos[0].clone()).await?,
         Commands::Ingest(args) => ingest::<T>(opts, args, infos[0].clone(), cred).await?,
-        Commands::Delete(args) => delete::<T>(args, infos[0].clone()).await?,
+        Commands::Delete(args) => delete::<T>(opts, args, infos[0].clone()).await?,
         Commands::Query(args) => query::<T>(opts, args, infos, cred).await?,
     }
 
     Ok(())
 }
 
-async fn ping<T: Element>(info: redis::ConnectionInfo) -> Result<()> {
+async fn ping<T: Element>(opts: &Options, info: redis::ConnectionInfo) -> Result<()> {
     let client = redis::Client::open(info).unwrap();
-    let mut con = client.get_multiplexed_async_connection().await?;
+    let mut con = client
+        .get_multiplexed_async_connection_with_config(&opts.connection_config())
+        .await?;
 
     println!("PING...");
     let result = con.ping().await?;
@@ -432,6 +449,7 @@ async fn ingest<T: Element>(
     let (tx, mut rx) = mpsc::channel(parallelism);
     let mut tasks = JoinSet::<Result<()>>::new();
     let total_vectors = ds.len();
+    let connection_config = opts.connection_config();
 
     tasks.spawn(async move {
         let progress = ProgressBar::with_draw_target(
@@ -454,7 +472,9 @@ async fn ingest<T: Element>(
     // Insert base vectors
     for _ in 0..parallelism {
         let client = redis::Client::open(info.clone())?;
-        let mut con = client.get_multiplexed_async_connection().await?;
+        let mut con = client
+            .get_multiplexed_async_connection_with_config(&connection_config)
+            .await?;
         let ds = ds.clone();
         let pipeline_size = args.pipeline_size;
         let vset = vset.clone();
@@ -556,9 +576,15 @@ async fn ingest<T: Element>(
     Ok(())
 }
 
-async fn delete<T: Element>(args: &DeleteArgs, info: redis::ConnectionInfo) -> Result<()> {
+async fn delete<T: Element>(
+    opts: &Options,
+    args: &DeleteArgs,
+    info: redis::ConnectionInfo,
+) -> Result<()> {
     let client = redis::Client::open(info).unwrap();
-    let mut con = client.get_multiplexed_async_connection().await?;
+    let mut con = client
+        .get_multiplexed_async_connection_with_config(&opts.connection_config())
+        .await?;
 
     con.del(&args.set).await?;
     con.flushdb().await?;
@@ -573,6 +599,7 @@ async fn query<T: Element>(
 ) -> Result<()> {
     let parallelism = args.tasks.unwrap_or(thread::available_parallelism()?.get());
     let vset = Arc::new(args.set.clone());
+    let connection_config = opts.connection_config();
     let (tx, mut rx) = mpsc::channel(parallelism);
 
     let queries = DatasetLoader::<T>::load(&args.query_path).await?;
@@ -600,7 +627,9 @@ async fn query<T: Element>(
     let time_start = Instant::now();
     for task_idx in 0..parallelism {
         let client = redis::Client::open(infos[task_idx % infos.len()].clone())?;
-        let mut con = client.get_multiplexed_async_connection().await?;
+        let mut con = client
+            .get_multiplexed_async_connection_with_config(&connection_config)
+            .await?;
         let pipeline_size = args.pipeline_size;
         let tx = tx.clone();
         let queries = queries.clone();

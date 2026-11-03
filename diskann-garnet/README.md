@@ -42,8 +42,19 @@ Redis always uses cosine distance, but many vector data sets use other metrics. 
 - `XSPHERICAL4_I8`: 4-bit spherical quantization of 8-bit signed integer
 - `XSPHERICAL4_U8`: 4-bit spherical quantization of 8-bit unsigned integer
 
-An ndex supports up to `2^32 - 1` user vectors. User IDs range from 0 through
-`u32::MAX - 1`; `u32::MAX` is reserved for the start point.
+Internal graph IDs are `u64`. `START_POINT` defaults to `u64::MAX`; the configured
+start-point ID is reserved for the index lifetime. Ordinary IDs stop at
+`u64::MAX - 1`. External member IDs remain arbitrary byte strings.
+
+Version 10.0.0 changes the native ABI and persisted internal-ID formats. Upgrade
+Garnet and its native package together, and rebuild or re-import legacy sets.
+Four-byte internal keys, mapping values, neighbor slots, and eight-byte FSM keys
+are incompatible with the new format; there is no dual-format reopen path.
+Neighbor IDs are still uncompressed; StreamVByte64 is not part of this cutover.
+
+The [uncompressed ID baseline](docs/id-compression-baseline.json) preserves component
+sizes, build/query samples, construction settings, and recall/target provenance for
+comparison after ID compression.
 
 ### Bulk Import
 
@@ -157,11 +168,11 @@ the one you want.
 ## Testing
 
 Run the Rust tests from the workspace root with `cargo test -p diskann-garnet`.
-Many end-to-end tests run from the Garnet side. These two invocations run them:
+End-to-end suites run from the Garnet repository:
 
 ```
-dotnet test test/standalone/Garnet.test.vectorset -f net10.0 -c Debug --filter RespVectorSetTests
-dotnet test test/standalone/Garnet.test.extensions -f net10.0 -c Debug --filter DiskANNServiceTests
+dotnet test test/standalone/Garnet.test.vectorset -f net10.0 -c Debug
+dotnet test test/cluster/Garnet.test.cluster.vectorsets -f net10.0 -c Debug --filter ClusterVectorSetTests
 ```
 
 ## Client Examples

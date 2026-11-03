@@ -1,6 +1,6 @@
 [package]
 name = "diskann-garnet"
-version = "9.0.0"
+version = "10.0.0"
 edition = "2024"
 authors.workspace = true
 license.workspace = true
@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 allow_attributes = "warn"
 
 [dependencies]
-bytemuck.workspace = true
+bytemuck = { workspace = true, features = ["derive"] }
 crossbeam = "0.8.4"
 dashmap = { workspace = true, features = ["inline"] }
 diskann.workspace = true

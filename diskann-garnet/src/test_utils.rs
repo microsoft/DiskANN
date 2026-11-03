@@ -178,6 +178,11 @@ unsafe extern "C" fn test_read(
             }
         }
     }
+    assert_eq!(
+        pos,
+        ids.len(),
+        "callback key batch must have no trailing bytes"
+    );
 }
 
 unsafe extern "C" fn test_write(
@@ -244,7 +249,7 @@ mod tests {
 
     use crate::{
         VectorQuantType,
-        garnet::{Context, Term},
+        garnet::{Context, GarnetId, LengthPrefixedId, Term},
         test_utils::Store,
     };
 
@@ -285,7 +290,7 @@ mod tests {
 
         // Multi-read should work.
         assert!(callbacks.write_iid(&ctx.term(Term::Vector), 1, b"2222"));
-        let ids = [4u32, 0, 4, 1, 4, 2];
+        let ids = [0, 1, 2].map(LengthPrefixedId::new);
         let mut results = HashMap::new();
         callbacks.read_multi_lpiid(&ctx.term(Term::Vector), &ids, 10, |i, v| {
             results.insert(i, v.to_owned());
@@ -300,6 +305,80 @@ mod tests {
         }));
         assert!(callbacks.read_single_iid(&ctx.term(Term::Vector), 0, &mut val));
         assert_eq!(val, b"0rmw");
+    }
+
+    #[test]
+    fn full_width_ids_keep_exact_key_bytes_and_batch_positions() {
+        let store = Store::new();
+        let callbacks = store.callbacks();
+        let ctx = Context::new(0).term(Term::Vector);
+        let ids = [7, (1 << 32) + 7, (1 << 63) + 7, u64::MAX];
+        for (index, id) in ids.into_iter().enumerate() {
+            assert!(callbacks.write_iid(&ctx, id, &[index as u8]));
+            assert_eq!(
+                store.get(ctx.get(), &id.to_ne_bytes()),
+                Some(vec![index as u8])
+            );
+        }
+        let entries = [
+            LengthPrefixedId::new(ids[2]),
+            LengthPrefixedId::new(123), // Missing keys retain their positional index.
+            LengthPrefixedId::new(ids[1]),
+            LengthPrefixedId::new(ids[3]),
+            LengthPrefixedId::new(ids[0]),
+        ];
+        let mut results = Vec::new();
+        callbacks.read_multi_lpiid::<_, u8>(&ctx, &entries, 1, |index, value| {
+            results.push((index, value[0]));
+        });
+        assert_eq!(results, [(0, 2), (2, 1), (3, 3), (4, 0)]);
+        assert!(callbacks.rmw_iid(&ctx, ids[2], 1, |value| value[0] = 9));
+        assert_eq!(
+            callbacks.read_varsize_iid::<u8>(&ctx, ids[2]),
+            Some(vec![9])
+        );
+        assert!(callbacks.delete_iid(&ctx, ids[2]));
+        assert!(!callbacks.exists_iid(&ctx, ids[2], 1));
+        assert!(callbacks.exists_iid(&ctx, ids[0], 1));
+    }
+
+    #[test]
+    fn metadata_tags_and_external_byte_ids_keep_their_widths() {
+        let store = Store::new();
+        let callbacks = store.callbacks();
+        let ctx = Context::new(0).term(Term::Metadata);
+        let tag = 7u32;
+        assert!(callbacks.write_meta(&ctx, tag, b"tag"));
+        assert!(callbacks.write_iid(&ctx, u64::from(tag), b"iid"));
+        assert!(callbacks.rmw_meta(&ctx, tag, 3, |value| value[0] = b'T'));
+        let mut value = [0; 3];
+        assert!(callbacks.read_single_meta(&ctx, tag, &mut value));
+        assert_eq!(&value, b"Tag");
+        assert_eq!(
+            callbacks.read_varsize_meta::<u8>(&ctx, tag),
+            Some(b"Tag".to_vec())
+        );
+        assert_eq!(
+            store.get(ctx.get(), &tag.to_ne_bytes()),
+            Some(b"Tag".to_vec())
+        );
+        assert_eq!(
+            callbacks.read_varsize_iid::<u8>(&ctx, u64::from(tag)),
+            Some(b"iid".to_vec())
+        );
+
+        let ctx = Context::new(0).term(Term::IntMap);
+        for bytes in [&[][..], &tag.to_ne_bytes()[..]] {
+            let external = GarnetId::from(bytes);
+            assert!(callbacks.write_eid(&ctx, &external, &u64::MAX.to_ne_bytes()));
+            let mut internal = [0u64; 1];
+            assert!(callbacks.read_single_eid(&ctx, &external, &mut internal));
+            assert_eq!(internal, [u64::MAX]);
+            assert_eq!(
+                store.get(ctx.get(), bytes),
+                Some(u64::MAX.to_ne_bytes().to_vec())
+            );
+        }
     }
 
     #[test]
