@@ -32,6 +32,7 @@ diskann-wide = { workspace = true }
 # Optional Dependencies
 dashmap = { workspace = true, optional = true }
 diskann-linalg = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 diskann-utils = { workspace = true, features = ["testing"] }
@@ -72,3 +73,6 @@ testing = ["dep:dashmap"]
 
 # Enable experimental diversity search
 experimental_diversity_search = []
+
+# Run independent IVF work, such as fitting split lists, on a Rayon thread pool.
+rayon = ["dep:rayon"]

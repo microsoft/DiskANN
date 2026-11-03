@@ -33,7 +33,9 @@ pub struct List<'a, I, L> {
 ///
 /// 1. Routed appends, resulting from a call to [`route`](crate::ivf::traits::BuildAccessor::route).
 /// 2. Every update `finish`ed by a previous call to [`fill`](crate::ivf::traits::BuildAccessor::fill).
-pub trait View<I, L>: Send {
+///
+/// The index may read one region from several threads at once.
+pub trait View<I, L>: Send + Sync {
     /// Borrowed vector representation for a list.
     type VectorsRef<'a>;
 

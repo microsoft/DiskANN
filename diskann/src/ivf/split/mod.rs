@@ -13,7 +13,10 @@ use std::fmt::Debug;
 
 use crate::{
     ANNError,
-    ivf::region::{Update, View},
+    ivf::{
+        Parallelism,
+        region::{Update, View},
+    },
 };
 
 pub(crate) mod links;
@@ -37,7 +40,8 @@ where
     /// Retire every parent and create lists holding all of its members, calling
     /// `emit(parent, child)` once per created list.
     ///
-    /// Every parent must be filled into `region`.
+    /// Every parent must be filled into `region`. Work that is independent across parents
+    /// may run with `parallelism`; the changes recorded must not depend on it.
     ///
     /// # Errors
     ///
@@ -48,6 +52,7 @@ where
         region: &R,
         update: &mut U,
         parents: &[L],
+        parallelism: Parallelism<'_>,
         emit: F,
     ) -> Result<(), Self::Error>
     where
@@ -70,7 +75,8 @@ where
     /// Keep each point of every list in `links` represneted by [`Links`] in place,
     /// or move it to a list linked to its own.
     ///
-    /// Every list in `links` must be filled into `region`.
+    /// Every list in `links` must be filled into `region`. Work that is independent across
+    /// lists may run with `parallelism`; the changes recorded must not depend on it.
     ///
     /// # Errors
     ///
@@ -81,6 +87,7 @@ where
         region: &R,
         update: &mut U,
         links: &Links<L>,
+        parallelism: Parallelism<'_>,
     ) -> Result<(), Self::Error>
     where
         U: Update<I, L>;
