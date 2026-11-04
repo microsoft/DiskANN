@@ -117,7 +117,7 @@ impl Simple {
     /// # Panics
     ///
     /// Panics if `guard` does not belong to `self`'s [`epoch::Registry`].
-    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+    pub(crate) fn reader<'a>(&'a self, guard: epoch::ReadGuard<'a>) -> Reader<'a> {
         self.handle.assert_guard_belongs(&guard);
         Reader {
             buffer: &self.buffer,
@@ -195,7 +195,7 @@ pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
     bytes: Bytes,
     tags: &'a tag::ReadOnly,
-    _guard: epoch::Guard<'a>,
+    _guard: epoch::ReadGuard<'a>,
 }
 
 impl<'a> Reader<'a> {
@@ -334,7 +334,9 @@ mod tests {
         let s = store(4, 8, 2).unwrap();
 
         assert_eq!(s.id_limit().value(), 6);
-        let reader = s.guard(|intrusive, guard| intrusive.reader(guard)).unwrap();
+        let reader = s
+            .read_guard(|intrusive, guard| intrusive.reader(guard))
+            .unwrap();
         for i in 0..4 {
             assert!(!s.can_read_approximate(i).unwrap());
             assert!(reader.read(i).is_none());
@@ -359,7 +361,7 @@ mod tests {
         let s = store(4, 8, 1).unwrap();
 
         let reader = s
-            .guard(|simple, guard| simple.reader(guard))
+            .read_guard(|simple, guard| simple.reader(guard))
             .expect("reader guard available");
 
         let idx = {
@@ -385,7 +387,7 @@ mod tests {
         let s = store(4, 8, 1).unwrap();
 
         let reader = s
-            .guard(|simple, guard| simple.reader(guard))
+            .read_guard(|simple, guard| simple.reader(guard))
             .expect("reader guard available");
 
         let idx = {
@@ -461,7 +463,7 @@ mod tests {
 
         // A reader opened after retirement must not observe the retired slot.
         let reader = s
-            .guard(|simple, guard| simple.reader(guard))
+            .read_guard(|simple, guard| simple.reader(guard))
             .expect("reader guard available");
 
         assert_eq!(reader.read(idx), None);

@@ -490,7 +490,7 @@ mod tests {
                 std::mem::drop(g3);
 
                 let expand = ExpandBeam::new(
-                    store.guard(|packed, guard| packed.reader(guard)).unwrap(),
+                    store.read_guard(|packed, guard| packed.reader(guard)).unwrap(),
                     TestQueryDistance::new(&query),
                     prefetch::Loop::new(),
                     *tag_lookahead,
@@ -600,7 +600,7 @@ mod tests {
         }
 
         let mut prune = Prune::new(
-            store.guard(|packed, guard| packed.reader(guard)).unwrap(),
+            store.read_guard(|packed, guard| packed.reader(guard)).unwrap(),
             TestDistance,
         );
 

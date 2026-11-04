@@ -424,7 +424,8 @@ where
     }
 
     fn reader(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
-        self.store.guard(|packed, guard| packed.reader(guard))
+        self.store
+            .read_guard(|packed, guard| packed.reader(guard))
     }
 }
 
