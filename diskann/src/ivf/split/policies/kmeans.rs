@@ -7,11 +7,12 @@
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
-use diskann_quantization::algorithms::kmeans::lloyds::lloyds;
+use diskann_quantization::{Parallelism, algorithms::kmeans::lloyds::lloyds};
 use diskann_utils::{
-    Parallelism, Reborrow,
+    Reborrow,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use super::{Assign, Buckets, Groups, NearestCentroid, SplitError};
 use crate::{
@@ -65,7 +66,7 @@ pub(crate) trait Seed: Sync {
 
 /// Seeds with the first rows of `points`.
 ///
-/// Fails with [`NotEnoughPoints`] if `points` has fewer rows than `centers`.
+/// Fails with [`FitError::NotEnoughPoints`] if `points` has fewer rows than `centers`.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct FirstPoints;
 
@@ -159,6 +160,7 @@ impl<A, S: Seed> KMeansSplit<A, S> {
         let view = region
             .get_list(parent)
             .ok_or(SplitError::UnableToRetrieve(parent))?;
+
         let vectors = region
             .get_vectors(parent)
             .ok_or(SplitError::UnableToRetrieve(parent))?;
@@ -215,7 +217,7 @@ where
         region: &R,
         update: &mut U,
         parents: &[L],
-        parallelism: Parallelism<'_>,
+        parallelism: Parallelism,
         mut emit: F,
     ) -> ANNResult<()>
     where
@@ -226,10 +228,18 @@ where
             return Err(SplitError::<L>::EmptyParents.into());
         }
 
-        let this = &*self;
-        let families = parallelism.try_map(parents.len(), |p| this.fit(region, parents[p]))?;
+        let fit = |&parent| self.fit(region, parent);
 
-        // Write in parent order, so list IDs do not depend on `parallelism`.
+        let families: Vec<_> = match parallelism {
+            // Report the first error in parent order.
+            Parallelism::Rayon => {
+                let results: Vec<_> = parents.par_iter().map(fit).collect();
+                results.into_iter().collect::<ANNResult<_>>()?
+            }
+            Parallelism::Sequential | _ => parents.iter().map(fit).collect::<ANNResult<_>>()?,
+        };
+
+        // Write in parent order.
         for (&parent, children) in parents.iter().zip(&families) {
             update.retire(parent)?;
 

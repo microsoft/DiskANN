@@ -14,7 +14,6 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc", "x86_64-pc-win
 [dependencies]
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["must_cast"]}
-diskann-quantization = { workspace = true }
 diskann-utils = { workspace = true, default-features = false }
 futures-util = { workspace = true, default-features = false }
 half = { workspace = true, features = ["bytemuck", "num-traits"] }
@@ -32,13 +31,14 @@ diskann-wide = { workspace = true }
 # Optional Dependencies
 dashmap = { workspace = true, optional = true }
 diskann-linalg = { workspace = true, optional = true }
+diskann-quantization = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
-diskann-utils = { workspace = true, features = ["testing", "rayon"] }
+diskann-utils = { workspace = true, features = ["testing"] }
 futures-util = { workspace = true, default-features = false  }
 pin-project.workspace = true
 rand.workspace = true
-rayon.workspace = true
 relative-path = "2.0.1"
 rstest.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -64,6 +64,9 @@ default = ["tracing"]
 
 # Enable PiPNN numerical kernels.
 pipnn = ["dep:diskann-linalg"]
+
+# Enable clustering for IVF
+ivf = ["dep:diskann-quantization", "diskann-quantization/rayon", "dep:rayon"]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]

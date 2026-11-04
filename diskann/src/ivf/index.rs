@@ -5,25 +5,27 @@
 
 //! [`IVFIndex`] and its configuration.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-};
+use std::num::NonZeroUsize;
 
-use diskann_utils::{Parallelism, future::SendFuture};
+#[cfg(feature = "ivf")]
+use std::collections::{BTreeMap, BTreeSet};
+
+#[cfg(feature = "ivf")]
+use diskann_quantization::Parallelism;
+use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::traits::{BuildAccessor, Nearest, SearchAccessor, SearchStrategy};
+use super::traits::{SearchAccessor, SearchStrategy};
 use crate::{
-    ANNResult,
-    error::IntoANNResult,
-    graph::SearchOutputBuffer,
-    ivf::{
-        region::{AsMatRef, Update},
-        split::{KMeansSplit, Linked, Links, Reassign, Split, policies},
-        traits::BuildStrategy,
-    },
-    neighbor::NeighborPriorityQueue,
+    ANNResult, error::IntoANNResult, graph::SearchOutputBuffer, neighbor::NeighborPriorityQueue,
+};
+
+// Insertion splits lists with k-means from `diskann-quantization`.
+#[cfg(feature = "ivf")]
+use super::{
+    region::{AsMatRef, Update},
+    split::{KMeansSplit, Linked, Links, Reassign, Split, policies},
+    traits::{BuildAccessor, BuildStrategy, Nearest},
 };
 
 /// Number of nearby lists each child of a split considers doing re-assignment.
@@ -75,10 +77,10 @@ pub struct InsertStats {
 
 /// An incremental IVF index.
 ///
-/// The index holds only its [`Config`].
+/// The index holds only its [`Config`]. Inserting needs the `kmeans` feature.
 ///
 /// Providers shared by several indexes must still keep build operations apart;
-/// see [`BuildStrategy::build_accessor`].
+/// see [`build_accessor`](super::traits::BuildStrategy::build_accessor).
 #[derive(Debug)]
 pub struct IVFIndex {
     config: Config,
@@ -107,6 +109,11 @@ impl IVFIndex {
         Ok(Self { config })
     }
 
+    /// Return the configuration of the index.
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     /// Insert a batch of points as one build operation, splitting every list that routing
     /// leaves with more than [`Config::split_threshold`] members and then re-assigning
     /// points if [`ReassignCount`] in `config` is not zero.
@@ -115,12 +122,13 @@ impl IVFIndex {
     ///
     /// Fails if the batch is empty, or if a provider call or split fails. Any failure
     /// abandons the operation: the accessor is dropped without being finished.
+    #[cfg(feature = "ivf")]
     pub fn insert_batch<'a, S, B, C>(
         &'a mut self,
         strategy: &'a S,
         context: &'a C,
         points: B,
-        parallelism: Parallelism<'_>,
+        parallelism: Parallelism,
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
         C: Sync,

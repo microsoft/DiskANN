@@ -5,7 +5,9 @@
 
 //! Reassignment of points between linked lists.
 
-use diskann_utils::{Parallelism, Reborrow};
+use diskann_quantization::Parallelism;
+use diskann_utils::Reborrow;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use super::{Assign, Buckets, NearestCentroid, SplitError};
 use crate::{
@@ -99,13 +101,25 @@ where
         region: &R,
         update: &mut U,
         links: &Links<L>,
-        parallelism: Parallelism<'_>,
+        parallelism: Parallelism,
     ) -> ANNResult<()>
     where
         U: Update<I, L>,
     {
-        let this = &*self;
-        let moves = parallelism.try_map(links.len(), |i| this.moves(region, links, i))?;
+        let plan = |i| self.moves(region, links, i);
+
+        let moves: Vec<_> = match parallelism {
+            // Report the first error in list order.
+            Parallelism::Rayon => {
+                let results = (0..links.len())
+                    .into_par_iter()
+                    .map(plan)
+                    .collect::<Vec<_>>();
+
+                results.into_iter().collect::<ANNResult<_>>()?
+            }
+            Parallelism::Sequential | _ => (0..links.len()).map(plan).collect::<ANNResult<_>>()?,
+        };
 
         let mut moved = Buckets::new(links.len());
 

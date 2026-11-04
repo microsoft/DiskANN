@@ -55,6 +55,10 @@ pub trait View<I, L>: Send + Sync {
     fn get_vectors(&self, i: L) -> Option<Self::Vectors<'_>>;
 }
 
+////////////
+// Update //
+////////////
+
 /// Records the changes of one stage of a build operation.
 ///
 /// A list is *live* from its creation until it is retired. Changes become

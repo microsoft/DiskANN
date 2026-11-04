@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 
-use diskann_utils::Parallelism;
+use diskann_quantization::Parallelism;
 
 use crate::{
     ANNError,
@@ -50,7 +50,7 @@ where
         region: &R,
         update: &mut U,
         parents: &[L],
-        parallelism: Parallelism<'_>,
+        parallelism: Parallelism,
         emit: F,
     ) -> Result<(), Self::Error>
     where
@@ -83,7 +83,7 @@ where
         region: &R,
         update: &mut U,
         links: &Links<L>,
-        parallelism: Parallelism<'_>,
+        parallelism: Parallelism,
     ) -> Result<(), Self::Error>
     where
         U: Update<I, L>;

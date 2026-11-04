@@ -17,8 +17,9 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use diskann_quantization::Parallelism;
 use diskann_utils::{
-    Parallelism, Reborrow,
+    Reborrow,
     future::SendFuture,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
@@ -290,7 +291,7 @@ async fn native_inputs_are_inserted_using_the_assigned_ids() {
         &strategy,
         &DefaultContext,
         &points[..],
-        Parallelism::sequential(),
+        Parallelism::Sequential,
     ))
     .await
     .unwrap();
@@ -376,7 +377,7 @@ async fn appends_publish_actual_memberships_without_filling() {
         &strategy,
         &DefaultContext,
         &points[..],
-        Parallelism::sequential(),
+        Parallelism::Sequential,
     ))
     .await
     .unwrap();
@@ -419,7 +420,7 @@ async fn empty_batches_are_rejected_without_staging_or_publication() {
         &strategy,
         &DefaultContext,
         points,
-        Parallelism::sequential(),
+        Parallelism::Sequential,
     ))
     .await
     .unwrap_err();
@@ -482,7 +483,7 @@ async fn splitting_uses_the_configured_number_of_children() {
         &strategy,
         &DefaultContext,
         &points[..],
-        Parallelism::sequential(),
+        Parallelism::Sequential,
     ))
     .await
     .unwrap();
@@ -520,7 +521,7 @@ async fn splitting_commits_children_and_ordinary_appends_once() {
         &strategy,
         &DefaultContext,
         &points[..],
-        Parallelism::sequential(),
+        Parallelism::Sequential,
     ))
     .await
     .unwrap();
@@ -587,7 +588,7 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
         &strategy,
         &DefaultContext,
         &points[..],
-        Parallelism::sequential(),
+        Parallelism::Sequential,
     ))
     .await
     .unwrap();
@@ -643,7 +644,7 @@ async fn reassignment_links_each_child_to_its_nearest_other_lists() {
             &strategy,
             &DefaultContext,
             &points[..],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
         ))
         .await
         .unwrap();
@@ -732,7 +733,7 @@ async fn children_of_different_parents_exchange_points() {
         &strategy,
         &DefaultContext,
         &points[..],
-        Parallelism::sequential(),
+        Parallelism::Sequential,
     ))
     .await
     .unwrap();
@@ -796,7 +797,7 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 &region,
                 &mut update,
                 &[1],
-                Parallelism::sequential(),
+                Parallelism::Sequential,
                 |_, _| {},
             )
             .unwrap();
@@ -988,7 +989,7 @@ async fn failed_planning_or_publication_is_not_reported_as_success() {
             &strategy,
             &DefaultContext,
             &points[..],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
         ))
         .await
         .unwrap_err();
@@ -1023,7 +1024,7 @@ async fn uninitialized_insertion_fails() {
             &strategy,
             &DefaultContext,
             &points[..],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
         )
         .await
         .unwrap_err();
@@ -1040,19 +1041,14 @@ async fn uninitialized_insertion_fails() {
 // Parallelism //
 /////////////////
 
-/// Inserting with a thread pool makes exactly the changes that inserting sequentially
-/// does, across several rounds of splitting and reassignment.
+/// Inserting on Rayon makes exactly the changes that inserting sequentially does, across
+/// several rounds of splitting and reassignment.
 #[tokio::test]
 async fn parallel_insertion_matches_sequential() {
     use rand::{Rng, SeedableRng, rngs::StdRng};
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(4)
-        .build()
-        .unwrap();
-
     let mut runs = Vec::new();
-    for parallelism in [Parallelism::sequential(), Parallelism::rayon(&pool)] {
+    for parallelism in [Parallelism::Sequential, Parallelism::Rayon] {
         let mut rng = StdRng::seed_from_u64(0x7f3a_91c2_5e04_b8d6);
         let mut store = Store {
             dim: 2,
@@ -1386,7 +1382,7 @@ async fn search_supports_native_queries_after_insertion_and_splitting() {
             &strategy,
             &DefaultContext,
             &points[..],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
         )
         .await
         .unwrap();
@@ -1469,7 +1465,7 @@ fn reassignment_moves_points_only_along_links_and_keeps_empty_lists() {
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let links = support::links(&[(10, 2), (10, 3), (10, 4), (11, 2), (11, 3), (11, 4)]);
     Linked::new(NearestCentroid)
-        .reassign(&region, &mut update, &links, Parallelism::sequential())
+        .reassign(&region, &mut update, &links, Parallelism::Sequential)
         .unwrap();
 
     // Point 2 is nearest list 3, which it is not linked to, so it moves to list 11. Point 1
@@ -1522,7 +1518,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 &region,
                 &mut update,
                 &[1, 99],
-                Parallelism::sequential(),
+                Parallelism::Sequential,
                 |_, _| {}
             )
             .is_err()
@@ -1533,7 +1529,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                     &region,
                     &mut update,
                     &support::links(&[(1, 99)]),
-                    Parallelism::sequential()
+                    Parallelism::Sequential
                 )
                 .is_err()
         );
@@ -1554,7 +1550,7 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             &region,
             &mut update,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap();
@@ -1617,7 +1613,7 @@ fn parent_points_stay_within_their_own_children() {
         &region,
         &mut update,
         &[1, 2],
-        Parallelism::sequential(),
+        Parallelism::Sequential,
         |parent, child| children.push((parent, child)),
     )
     .unwrap();
@@ -1690,7 +1686,7 @@ fn assignment_is_delegated_to_the_assigner() {
             &region,
             &mut update,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap();
@@ -1707,7 +1703,7 @@ fn assignment_is_delegated_to_the_assigner() {
             &region,
             &mut update,
             &support::links(&[(1, 2)]),
-            Parallelism::sequential(),
+            Parallelism::Sequential,
         )
         .unwrap();
     assert_eq!(take(), [vec![0, 1], vec![1, 0]]);
@@ -1736,7 +1732,7 @@ fn k_means_fits_and_assigns_k_children_per_parent() {
             &region,
             &mut update,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |parent, child| children.push((parent, child)),
         )
         .unwrap();
@@ -1771,7 +1767,7 @@ fn k_means_needs_k_points_per_parent() {
             &region,
             &mut update,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap_err();
@@ -1822,7 +1818,7 @@ fn k_means_fits_from_its_seeder() {
             &region,
             &mut update,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap();
@@ -1863,7 +1859,7 @@ fn k_means_reports_seeding_failures_before_writing() {
             &region,
             &mut update,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap_err()
@@ -1896,7 +1892,7 @@ fn k_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties() {
                 &region,
                 &mut update,
                 &[1],
-                Parallelism::sequential(),
+                Parallelism::Sequential,
                 |_, _| {},
             )
             .unwrap();
@@ -1946,7 +1942,7 @@ fn reassignment_breaks_ties_by_own_list_then_link_order() {
                 &region,
                 &mut update,
                 &support::links(&pairs),
-                Parallelism::sequential(),
+                Parallelism::Sequential,
             )
             .unwrap();
 
@@ -1996,7 +1992,7 @@ fn k_means_reuses_splitter_across_regions() {
             &region,
             &mut full,
             &[1, 2],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap();
@@ -2026,7 +2022,7 @@ fn k_means_reuses_splitter_across_regions() {
             &region,
             &mut repeated,
             &[1, 2],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap();
@@ -2043,7 +2039,7 @@ fn k_means_reuses_splitter_across_regions() {
             &region,
             &mut smaller,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap();
@@ -2069,7 +2065,7 @@ fn empty_split_records_no_updates() {
             &region,
             &mut update,
             &[],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap_err();
@@ -2195,7 +2191,7 @@ fn k_means_handles_borrowed_batches() {
             &region,
             &mut update,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap();
@@ -2219,7 +2215,7 @@ fn k_means_handles_borrowed_batches() {
             &region,
             &mut update,
             &support::links(&[(1, 2)]),
-            Parallelism::sequential(),
+            Parallelism::Sequential,
         )
         .unwrap();
     assert_eq!(region.reads.load(Ordering::Relaxed), 4);
@@ -2272,7 +2268,7 @@ fn split_accepts_native_batches_without_matrix_access() {
             region: &R,
             update: &mut U,
             parents: &[u32],
-            _: Parallelism<'_>,
+            _: Parallelism,
             mut emit: F,
         ) -> ANNResult<()>
         where
@@ -2316,7 +2312,7 @@ fn split_accepts_native_batches_without_matrix_access() {
                 &region,
                 &mut update,
                 &[1],
-                Parallelism::sequential(),
+                Parallelism::Sequential,
                 |parent, child| children.push((parent, child)),
             )
             .unwrap();
@@ -2369,7 +2365,7 @@ fn k_means_matches_quantization_lloyds() {
             &region,
             &mut update,
             &[1, 2],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap();
@@ -2416,7 +2412,7 @@ fn k_means_reports_insufficient_points_before_writing() {
             &region,
             &mut update,
             &[1],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap_err();
@@ -2450,7 +2446,7 @@ fn k_means_missing_vectors_preserves_typed_error_without_updates() {
             &region,
             &mut update,
             &[1, 99],
-            Parallelism::sequential(),
+            Parallelism::Sequential,
             |_, _| {},
         )
         .unwrap_err();
@@ -2492,7 +2488,7 @@ fn reassignment_reports_missing_lists() {
                 &region,
                 &mut update,
                 &support::links(&pairs),
-                Parallelism::sequential(),
+                Parallelism::Sequential,
             )
             .unwrap_err();
         assert!(matches!(
@@ -2534,7 +2530,7 @@ fn reassignment_keeps_points_home_when_all_distances_overflow() {
             &region,
             &mut update,
             &support::links(&[(1, 2)]),
-            Parallelism::sequential(),
+            Parallelism::Sequential,
         )
         .unwrap();
 
