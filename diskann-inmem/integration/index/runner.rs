@@ -25,12 +25,10 @@ use diskann_inmem::{
 };
 
 use crate::{
-    index::{Counters, Index},
+    index::{CheckCounters, Counters, Index},
     support::{
-        check::{CheckMatch, check_all_fields},
         datatype::{self, DataType, Dataset, DatasetView},
         io::load_and_convert,
-        tolerance,
     },
 };
 
@@ -927,11 +925,11 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 
         let index = input.index(data.as_view())?;
         let rt = diskann_benchmark_core::tokio::runtime(1)?;
-        let build = super::tests::insert(&*index, data.as_view(), rt.handle())?;
+        let build = super::ops::insert(&*index, data.as_view(), rt.handle())?;
 
         let mut knn = Vec::new();
         for (k, param) in input.search.knn.iter() {
-            let stats = super::tests::knn(
+            let stats = super::ops::knn(
                 &*index,
                 *k,
                 *param,
@@ -952,18 +950,18 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 }
 
 impl Regression for FullPrecision {
-    type Tolerances = tolerance::Empty;
+    type Tolerances = CheckBuildAndSearch;
     type Pass = Finished;
     type Fail = Finished;
 
     fn check(
         &self,
-        _tolerances: &Self::Tolerances,
+        tolerances: &Self::Tolerances,
         _input: &Self::Input,
         before: &Self::Output,
         after: &Self::Output,
     ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
-        Ok(after.check_match(before).pass_fail())
+        Ok(tolerances.check(before, after).pass_fail())
     }
 }
 
@@ -974,7 +972,7 @@ impl Regression for FullPrecision {
 #[derive(Debug, Serialize, Deserialize)]
 struct BuildAndSearch {
     build: Counters,
-    knn: Vec<super::tests::KnnStats>,
+    knn: Vec<super::ops::KnnStats>,
 }
 
 impl std::fmt::Display for BuildAndSearch {
@@ -990,14 +988,76 @@ impl std::fmt::Display for BuildAndSearch {
     }
 }
 
-impl CheckMatch for BuildAndSearch {
-    fn check_match(&self, previous: &Self) -> Report {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            { build, knn },
-        );
+///////////////
+// Tolerance //
+///////////////
+
+/// A tolerance [`diskann_benchmark_runner::Input`] for
+/// [`diskann_benchmark_runner::benchmark::Regression`]s.
+///
+/// This allows for minor cross-architecture (`aarch64` vs `x86`) due to different choices
+/// with floating point SIMD width/association.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct CheckBuildAndSearch {
+    build: CheckCounters,
+    knn: super::ops::CheckKnnStats,
+}
+
+impl CheckBuildAndSearch {
+    fn example() -> Self {
+        Self {
+            build: CheckCounters::example(),
+            knn: super::ops::CheckKnnStats::example(),
+        }
+    }
+
+    fn check(&self, old: &BuildAndSearch, new: &BuildAndSearch) -> Report {
+        let Self {
+            build: check_build,
+            knn: check_knn,
+        } = self;
+        let BuildAndSearch { build, knn } = old;
+        let mut builder = Report::builder();
+        builder.push("build", check_build.check(build, &new.build));
+
+        if knn.len() != new.knn.len() {
+            builder.push(
+                "knn",
+                Report::error(format_args!(
+                    "old KNN has {} entries while the new has {}",
+                    knn.len(),
+                    new.knn.len()
+                )),
+            );
+        } else {
+            let mut sub = Report::builder();
+            for (i, (old, new)) in std::iter::zip(knn.iter(), new.knn.iter()).enumerate() {
+                sub.push(i, check_knn.check(old, new));
+            }
+            builder.push("knn", sub.finish());
+        }
+
         builder.finish()
+    }
+}
+
+impl diskann_benchmark_runner::Input for CheckBuildAndSearch {
+    type Raw = Self;
+
+    fn tag() -> &'static str {
+        "tolerance-build-and-search"
+    }
+
+    fn from_raw(raw: Self::Raw, _: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        <Self>::example()
     }
 }
 
@@ -1009,8 +1069,32 @@ impl CheckMatch for BuildAndSearch {
 mod tests {
     use super::*;
 
+    use diskann_benchmark_runner::report::Status;
+
     #[test]
     fn example_parses() {
         let _ = Test::from_raw(<Test as diskann_benchmark_runner::Input>::example(), None).unwrap();
+    }
+
+    #[test]
+    fn check_build_and_search_rejects_knn_length_mismatch() {
+        let tolerance = CheckBuildAndSearch::example();
+        let output = |len| BuildAndSearch {
+            build: Counters::test_fixture(),
+            knn: (0..len)
+                .map(|_| super::super::ops::KnnStats::test_fixture())
+                .collect(),
+        };
+        for (old_len, new_len, expected) in [
+            (1, 1, Status::Pass),
+            (1, 0, Status::Fail),
+            (0, 1, Status::Fail),
+        ] {
+            assert_eq!(
+                tolerance.check(&output(old_len), &output(new_len)).status(),
+                expected,
+                "old_len = {old_len}, new_len = {new_len}"
+            );
+        }
     }
 }

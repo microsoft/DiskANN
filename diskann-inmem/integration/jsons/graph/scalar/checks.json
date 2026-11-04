@@ -1,0 +1,34 @@
+{
+  "checks": [
+    {
+      "input": {
+        "type": "integration-test",
+        "content": {}
+      },
+      "tolerance": {
+        "type": "tolerance-build-and-search",
+        "content": {
+          "build": {
+            "max-relative-change": {
+              "decrease": 0.0001,
+              "increase": 0.0001
+            }
+          },
+          "knn": {
+            "counters": {
+              "max-relative-change": {
+                "decrease": 0.0006,
+                "increase": 0.0006
+              }
+            },
+            "recall": {
+              "recall": {
+                "max-absolute-change": 0.001
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

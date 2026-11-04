@@ -214,7 +214,7 @@ mod tests {
 
         if let Err(err) = App::from_commands(command).run(&registry().unwrap(), &mut output) {
             panic!(
-                "Regression check failed:\n\n{}\n\n{}",
+                "Regression check failed:\n\n{:#}\n\n{}",
                 err,
                 String::from_utf8(output.into_inner()).unwrap()
             );
@@ -243,10 +243,12 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn graph_index_full() {
+        // Full precision is relatively stable across architectures and thus all data types
+        // can share a tight tolerance.
         run_regression_example(
-            "integration.json",
-            "checks.json",
-            "integration-baseline.json",
+            "graph/full/integration.json",
+            "graph/full/checks.json",
+            "graph/full/integration-baseline.json",
         );
     }
 
@@ -254,12 +256,20 @@ mod tests {
     // Spherical Quantization //
     //------------------------//
 
+    // Note: Several low-bit cases exhibit some numerical difference between x86 and aarch64.
+    //
+    // The largest difference is in the number of expansions performed during search.
+    // This is still well below a 1% relative difference, but a looser tolerance is used for
+    // these runs.
+    //
+    // 2-bit Cosine is even worse than these outliers and gets its own check file.
+
     #[test]
     #[cfg(not(miri))]
     fn graph_spherical_one_bit_l2() {
         run_regression_example(
             "graph/spherical/one-bit-l2.json",
-            "checks.json",
+            "graph/spherical/checks-loose.json", // looser
             "graph/spherical/one-bit-l2-baseline.json",
         );
     }
@@ -269,7 +279,7 @@ mod tests {
     fn graph_spherical_one_bit_ip() {
         run_regression_example(
             "graph/spherical/one-bit-ip.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/one-bit-ip-baseline.json",
         );
     }
@@ -279,7 +289,7 @@ mod tests {
     fn graph_spherical_one_bit_cosine() {
         run_regression_example(
             "graph/spherical/one-bit-cosine.json",
-            "checks.json",
+            "graph/spherical/checks-loose.json", // looser
             "graph/spherical/one-bit-cosine-baseline.json",
         );
     }
@@ -289,7 +299,7 @@ mod tests {
     fn graph_spherical_two_bit_l2() {
         run_regression_example(
             "graph/spherical/two-bit-l2.json",
-            "checks.json",
+            "graph/spherical/checks-loose.json", // looser
             "graph/spherical/two-bit-l2-baseline.json",
         );
     }
@@ -299,7 +309,7 @@ mod tests {
     fn graph_spherical_two_bit_ip() {
         run_regression_example(
             "graph/spherical/two-bit-ip.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/two-bit-ip-baseline.json",
         );
     }
@@ -307,9 +317,13 @@ mod tests {
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_spherical_two_bit_cosine() {
+        // Looser checks: For some reason, 2-bit spherical cosine exhibits the most
+        // difference between architectures.
+        //
+        // This uses a special looser tolerance to accommodate just this case.
         run_regression_example(
             "graph/spherical/two-bit-cosine.json",
-            "checks.json",
+            "graph/spherical/checks-two-bit-cosine.json",
             "graph/spherical/two-bit-cosine-baseline.json",
         );
     }
@@ -319,7 +333,7 @@ mod tests {
     fn graph_spherical_four_bit_l2() {
         run_regression_example(
             "graph/spherical/four-bit-l2.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/four-bit-l2-baseline.json",
         );
     }
@@ -329,7 +343,7 @@ mod tests {
     fn graph_spherical_four_bit_ip() {
         run_regression_example(
             "graph/spherical/four-bit-ip.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/four-bit-ip-baseline.json",
         );
     }
@@ -339,7 +353,7 @@ mod tests {
     fn graph_spherical_four_bit_cosine() {
         run_regression_example(
             "graph/spherical/four-bit-cosine.json",
-            "checks.json",
+            "graph/spherical/checks.json",
             "graph/spherical/four-bit-cosine-baseline.json",
         );
     }
@@ -348,12 +362,17 @@ mod tests {
     // Product Quantization //
     //----------------------//
 
+    // PQ is stable across architecture and can use a tight tolerance for IP and L2.
+    //
+    // Cosine requires sufficiently loose tolerance that it gets its own file to keep the
+    // tolerance for the other distances tight.
+
     #[test]
     #[cfg(not(any(miri, coverage)))]
     fn graph_product_l2() {
         run_regression_example(
             "graph/product/l2.json",
-            "checks.json",
+            "graph/product/checks.json",
             "graph/product/l2-baseline.json",
         );
     }
@@ -363,7 +382,7 @@ mod tests {
     fn graph_product_ip() {
         run_regression_example(
             "graph/product/ip.json",
-            "checks.json",
+            "graph/product/checks.json",
             "graph/product/ip-baseline.json",
         );
     }
@@ -373,7 +392,7 @@ mod tests {
     fn graph_product_cosine() {
         run_regression_example(
             "graph/product/cosine.json",
-            "checks.json",
+            "graph/product/checks-cosine.json",
             "graph/product/cosine-baseline.json",
         );
     }
@@ -382,12 +401,15 @@ mod tests {
     // Scalar Quantization //
     //---------------------//
 
+    // Scalar quantization is fairly stable across architecture and can share a single
+    // check file.
+
     #[test]
     #[cfg(not(miri))]
     fn graph_scalar_one() {
         run_regression_example(
             "graph/scalar/one-bit-l2.json",
-            "checks.json",
+            "graph/scalar/checks.json",
             "graph/scalar/one-bit-l2-baseline.json",
         );
     }
@@ -397,7 +419,7 @@ mod tests {
     fn graph_scalar_two() {
         run_regression_example(
             "graph/scalar/two-bit-cosine.json",
-            "checks.json",
+            "graph/scalar/checks.json",
             "graph/scalar/two-bit-cosine-baseline.json",
         );
     }
@@ -407,7 +429,7 @@ mod tests {
     fn graph_scalar_four() {
         run_regression_example(
             "graph/scalar/four-bit-ip.json",
-            "checks.json",
+            "graph/scalar/checks.json",
             "graph/scalar/four-bit-ip-baseline.json",
         );
     }
@@ -417,7 +439,7 @@ mod tests {
     fn graph_scalar_eight() {
         run_regression_example(
             "graph/scalar/eight-bit-l2.json",
-            "checks.json",
+            "graph/scalar/checks.json",
             "graph/scalar/eight-bit-l2-baseline.json",
         );
     }
