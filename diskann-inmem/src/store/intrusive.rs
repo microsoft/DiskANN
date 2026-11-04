@@ -139,17 +139,26 @@ impl Intrusive {
     }
 
     /// Return the number of bytes for each entry.
+    #[expect(
+        unused,
+        reason = "this is a reasonable method to have - it's just not used"
+    )]
     pub(crate) fn bytes(&self) -> Bytes {
         self.bytes_plus_tag().unchecked_sub(AtomicTag::SIZE)
     }
 
     /// Return the number of bytes plus the atomic tag.
+    #[expect(
+        unused,
+        reason = "this is a reasonable method to have - it's just not used"
+    )]
     pub(crate) fn bytes_plus_tag(&self) -> Bytes {
         self.unpadded
     }
 
     /// Return the number of bytes needed to prefetch the data portion of each entry without
     /// fetching the cacheline on which the entry's tag resides.
+    #[cfg(feature = "quantization")]
     pub(crate) const fn prefetch_bytes_for(bytes: Bytes) -> Bytes {
         const CACHELINE: usize = (Bytes::CACHELINE).value();
 
@@ -300,6 +309,7 @@ impl<'a> Reader<'a> {
 
     /// Return the [`IdLimit`] for this collection.
     #[inline]
+    #[cfg(feature = "quantization")]
     #[must_use = "this function has no side-effects"]
     pub(crate) fn id_limit(&self) -> IdLimit {
         // Like `Intrusive::id_limit`, the numeric cast is safe because by construction,
@@ -394,6 +404,7 @@ impl<'a> Reader<'a> {
     /// The returned [`RawSlice`] and tag pointer may only be used for prefetching. Callers
     /// must never materialize either as a proper slice or reference.
     #[inline]
+    #[cfg(feature = "quantization")]
     pub(crate) unsafe fn read_for_prefetch(&self, i: usize) -> (RawSlice<'_>, *const u8) {
         // SAFETY: Caller asserts `i` is in-bounds.
         let raw = unsafe { self.buffer.get_unchecked(i) };
@@ -418,11 +429,13 @@ impl<'a> Reader<'a> {
     /// ```
     /// This may be less than `bytes` if the size of each entry is such that the intrusive
     /// tag shares a cache line with the data.
+    #[cfg(feature = "quantization")]
     pub(crate) fn prefetch_bytes(&self) -> Bytes {
         Intrusive::prefetch_bytes_for(self.bytes())
     }
 
     /// Return the number of bytes for each entry.
+    #[cfg(feature = "quantization")]
     pub(crate) fn bytes(&self) -> Bytes {
         self.unpadded.unchecked_sub(AtomicTag::SIZE)
     }

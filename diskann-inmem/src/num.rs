@@ -30,6 +30,7 @@ impl Bytes {
 
     /// Add `self` and `other`, returning `None` if the sum would overflow `usize`.
     #[inline]
+    #[cfg(any(test, feature = "quantization", feature = "integration-test"))]
     pub(crate) const fn checked_add(self, other: Bytes) -> Option<Bytes> {
         match self.value().checked_add(other.value()) {
             Some(v) => Some(Bytes::new(v)),

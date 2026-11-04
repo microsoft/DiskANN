@@ -13,7 +13,7 @@ mod internal_docs {
     //! ## Reading
     //!
     //! A [`Store`] provides no direct way of reading data. Instead, the [`slots::Slots`] is
-    //! responsible for exposing an appropriate reader (e.g., [`intrusive::Intrusive::reader`])
+    //! responsible for exposing an appropriate reader (e.g., [`packed::Packed::reader`])
     //! in accordance with its lifecycle implementation. [`Store::guard`] can be used for
     //! this purpose by acquiring an [`epoch::Guard`] for a [`Store`].
     //!
@@ -79,11 +79,13 @@ use crate::{
 };
 
 // Unconditional
-pub(crate) mod intrusive;
 pub(crate) mod packed;
 pub(crate) mod slots;
 
 // Quantization
+#[cfg(any(feature = "quantization", feature = "integration-test"))]
+pub(super) mod intrusive;
+
 #[cfg(feature = "quantization")]
 pub(crate) mod cons;
 

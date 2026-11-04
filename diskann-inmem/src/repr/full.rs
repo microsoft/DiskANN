@@ -14,8 +14,8 @@ mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
     //!
-    //! * [`crate::repr::internal::intrusive::ExpandBeam`]: For index search.
-    //! * [`crate::repr::internal::intrusive::Prune`]: For index construction.
+    //! * [`crate::repr::internal::packed::ExpandBeam`]: For index search.
+    //! * [`crate::repr::internal::packed::Prune`]: For index construction.
     //!
     //! These two structs are modular with respect to their exact distance function and
     //! prefetcher. Since [`super::repr::ExpandBeam`] and [`super::repr::Prune`] are
@@ -62,7 +62,7 @@ use crate::{
     repr::{self, internal::Calf},
     store::{
         self, Store,
-        intrusive::{self, Intrusive},
+        packed::{self, Packed},
     },
 };
 
@@ -275,7 +275,7 @@ pub struct Full<T>
 where
     T: 'static,
 {
-    store: Store<Intrusive>,
+    store: Store<Packed>,
     start_point_ids: Range,
     capacity: Capacity,
     metric: Metric,
@@ -321,8 +321,8 @@ where
         } = config;
 
         let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
-        let intrusive = Intrusive::config(bytes);
-        let store = Store::new(layout, store, intrusive)?;
+        let packed = Packed::config(bytes);
+        let store = Store::new(layout, store, packed)?;
 
         // Initialize start points.
         for (i, row) in std::iter::zip(start_point_ids, start_points.rows()) {
@@ -360,11 +360,6 @@ where
         self.store.slots().bytes()
     }
 
-    #[cfg(test)]
-    fn bytes_plus_tag(&self) -> Bytes {
-        self.store.slots().bytes_plus_tag()
-    }
-
     /// Return the [`Metric`] for this representation.
     pub fn metric(&self) -> Metric {
         self.metric
@@ -381,8 +376,8 @@ where
         }
     }
 
-    fn reader(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
-        self.store.guard(|intrusive, guard| intrusive.reader(guard))
+    fn reader(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
+        self.store.guard(|packed, guard| packed.reader(guard))
     }
 }
 
@@ -392,7 +387,7 @@ where
 {
     pub(crate) fn get(&self, i: u32) -> ANNResult<Box<[T]>> {
         let reader = self.reader()?;
-        let data = match reader.read(i.into_usize()) {
+        let data = match reader.read(i) {
             Some(data) => data,
             None => {
                 return Err(ANNError::message("item could not be read"));
@@ -411,7 +406,7 @@ repr::internal::macros::representation!(
 
 repr::internal::macros::set_guard!(
     /// A [`repr::Guard`] for [`Full`].
-    for<'a> intrusive::Exclusive<'a>
+    for<'a> packed::Exclusive<'a>
 );
 
 impl<T> repr::Set<&[T]> for Full<T>
@@ -583,11 +578,11 @@ where
 // Expand Beam (Search) //
 //----------------------//
 
-/// A temporary precursor for [`repr::internal::intrusive::ExpandBeam`] to simplify macros.
+/// A temporary precursor for [`repr::internal::packed::ExpandBeam`] to simplify macros.
 #[derive(Debug)]
 struct IntoExpandBeam<'a, T, U> {
     query: Calf<'a, [T]>,
-    reader: store::intrusive::Reader<'a>,
+    reader: store::packed::Reader<'a>,
     lookahead: Option<NonZeroUsize>,
     _data: PhantomData<U>,
 }
@@ -611,15 +606,16 @@ impl<'a, T, U> IntoExpandBeam<'a, T, U> {
         self,
         distance: D,
         prefetch: P,
-    ) -> repr::internal::intrusive::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
+    ) -> repr::internal::packed::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
     where
         D: Distance<T, U>,
         P: Prefetch,
     {
-        repr::internal::intrusive::ExpandBeam::new(
+        repr::internal::packed::ExpandBeam::new(
             self.reader,
             QueryDistance::new(self.query, distance),
             prefetch,
+            self.lookahead,
             self.lookahead,
         )
     }
@@ -643,7 +639,7 @@ diskann::convert_error!(ExpandBeamError);
 /////////////////
 
 const fn compute_bytes<T>(dim: usize) -> usize {
-    Intrusive::prefetch_bytes_for(Bytes::new(dim * std::mem::size_of::<T>())).value()
+    dim * std::mem::size_of::<T>()
 }
 
 macro_rules! expand_beam {
@@ -663,13 +659,10 @@ macro_rules! expand_beam {
 }
 
 macro_rules! prune {
-    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::intrusive::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
+    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::packed::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
     ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
-        repr::internal::intrusive::Prune::new(
-            $reader,
-            Pure::<$self, $self, Specialize<$N, $f>>::new(),
-        )
-        .boxed()
+        repr::internal::packed::Prune::new($reader, Pure::<$self, $self, Specialize<$N, $f>>::new())
+            .boxed()
     }};
 }
 
@@ -809,7 +802,7 @@ impl FullPrecisionImpl for i8 {
         let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
         let output: Box<dyn repr::Prune> =
-            repr::internal::intrusive::Prune::new(reader, distance).boxed();
+            repr::internal::packed::Prune::new(reader, distance).boxed();
 
         Ok(output)
     }
@@ -930,7 +923,6 @@ mod tests {
         let bytes = std::mem::size_of_val(data.row(0));
         assert_eq!(full.dim(), data.ncols());
         assert_eq!(full.bytes().value(), bytes);
-        assert_eq!(full.bytes_plus_tag().value(), bytes + 1);
         assert_eq!(full.metric(), metric);
         assert_eq!(repr::Representation::id_limit(&full), TEST_LIMIT,);
         assert_eq!(
@@ -946,7 +938,7 @@ mod tests {
                 std::iter::zip(full.start_point_ids, start_points.rows()).enumerate()
             {
                 assert_eq!(
-                    reader.read(slot.into_usize()).unwrap(),
+                    reader.read(slot).unwrap(),
                     bytemuck::must_cast_slice::<f32, u8>(start),
                 );
                 assert_eq!(repr::Representation::is_readable(&full, slot), Some(true));
@@ -965,7 +957,7 @@ mod tests {
     }
 
     /// These tests focus on accessor and distance-computer wiring. Exhaustive backend
-    /// behavior is covered by [`repr::internal::intrusive`].
+    /// behavior is covered by [`repr::internal::packed`].
     ///
     /// We use:
     ///
@@ -1122,14 +1114,14 @@ mod tests {
         {
             let reader = full.reader().unwrap();
             assert_eq!(
-                reader.read(slot.value().into_usize()).unwrap(),
+                reader.read(slot.value()).unwrap(),
                 bytemuck::bytes_of(&[-1.0f32, 1.0])
             );
 
             repr::Representation::retire(&full, slot.value()).unwrap();
             reference.delete(id);
 
-            assert!(reader.read(slot.value().into_usize()).is_none());
+            assert!(reader.read(slot.value()).is_none());
             assert_eq!(
                 repr::Representation::is_readable(&full, slot.value()),
                 Some(false),
@@ -1153,7 +1145,7 @@ mod tests {
             );
 
             let reader = full.reader().unwrap();
-            assert!(reader.read(slot.value().into_usize()).is_none());
+            assert!(reader.read(slot.value()).is_none());
             assert_eq!(
                 repr::Representation::is_readable(&full, slot.value()),
                 Some(false),
@@ -1186,7 +1178,7 @@ mod tests {
             );
 
             assert_eq!(
-                reader.read(slot.value().into_usize()).unwrap(),
+                reader.read(slot.value()).unwrap(),
                 bytemuck::bytes_of(&[-10.0f32, -10.0]),
             );
         }
