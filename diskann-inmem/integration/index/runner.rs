@@ -992,7 +992,8 @@ impl std::fmt::Display for BuildAndSearch {
 // Tolerance //
 ///////////////
 
-/// A tolerance [`Input`] for [`diskann_benchmark_runner::benchmark::Regression`]s.
+/// A tolerance [`diskann_benchmark_runner::Input`] for
+/// [`diskann_benchmark_runner::benchmark::Regression`]s.
 ///
 /// This allows for minor cross-architecture (`aarch64` vs `x86`) due to different choices
 /// with floating point SIMD width/association.
