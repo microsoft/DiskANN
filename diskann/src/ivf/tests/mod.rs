@@ -2146,7 +2146,7 @@ fn k_means_handles_borrowed_batches() {
         where
             Self: 'a;
 
-        fn get_list(&self, list: u32) -> Option<List<'_, u32, u32>> {
+        fn get_list(&self, list: u32) -> Option<List<'_, u32>> {
             self.inner.get_list(list)
         }
 
@@ -2250,7 +2250,7 @@ fn split_accepts_native_batches_without_matrix_access() {
         where
             Self: 'a;
 
-        fn get_list(&self, list: u32) -> Option<List<'_, u32, u32>> {
+        fn get_list(&self, list: u32) -> Option<List<'_, u32>> {
             self.inner.get_list(list)
         }
 

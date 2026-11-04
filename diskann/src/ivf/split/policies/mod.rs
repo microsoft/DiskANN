@@ -44,9 +44,7 @@ impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
 // Assign //
 ////////////
 
-/// Chooses a destination for every point of one list, reading points as `V`.
-///
-/// Lists may be assigned in parallel, so one assigner can be shared between threads.
+/// Chooses a destination for every point in `V`.
 pub(crate) trait Assign<V>: Sync {
     /// Call `emit(member, key)` once per member, choosing `key` from the `(key, centroid)`
     /// pairs of `candidates`. With no candidates, nothing is emitted.
@@ -147,6 +145,20 @@ impl<I: Copy> Buckets<I> {
 
         self.items.push(item);
         self.keys.push(key);
+    }
+
+    /// Extend the current bucket with `(item, key)` pairs from an interator.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any `key` is not less than the key count.
+    fn extend<Itr>(&mut self, itr: Itr)
+    where
+        Itr: Iterator<Item = (I, usize)>,
+    {
+        for (item, key) in itr {
+            self.push(item, key);
+        }
     }
 
     /// Close the open source bucket and return its items.

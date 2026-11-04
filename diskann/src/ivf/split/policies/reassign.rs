@@ -25,15 +25,15 @@ use crate::{
 ///
 /// # Algorithm
 ///
-/// 1. For each list, independently and possibly in parallel: offer each member the list's
-///    own centroid first, then the centroids of its linked lists in link order, and let `A`
-///    choose among them. This step only reads the region, so its failures leave the update
-///    untouched.
+/// For each list, in the order of [`Links::lists`]:
 ///
-/// 2. In the order of [`Links::lists`], remove the members that move from each list. Then
-///    append each moved point to its destination.
+/// 1. Offer each member the the centroids of its linked lists in link order,
+/// and it's own centroid, and let `A` choose among them.
 ///
-/// Each point is considered once, from the list it was filled in, and no centroid changes.
+/// 2. Remove the members that move.
+///
+/// After every list is processed, append each moved point to its destination. Each point
+/// is considered once, from the list it was filled in, and no centroid changes.
 pub struct Linked<A = NearestCentroid> {
     assign: A,
 }
@@ -46,8 +46,6 @@ impl<A> Linked<A> {
 
     /// Return the members of list `i` in `links` that move, each with the index of its
     /// destination in [`Links::lists`].
-    ///
-    /// This reads only `region`, so lists can be planned in parallel.
     fn moves<I, L, R>(&self, region: &R, links: &Links<L>, i: usize) -> ANNResult<Vec<(I, usize)>>
     where
         I: Copy,
@@ -63,15 +61,17 @@ impl<A> Linked<A> {
 
         let list = links.lists()[i];
         let view = get(list)?;
+
         let vectors = region
             .get_vectors(list)
             .ok_or(SplitError::UnableToRetrieve(list))?;
 
-        // Offer the list's own centroid first, so points can stay in place.
-        let mut candidates = vec![(i, view.centroid)];
+        let mut candidates = Vec::new();
         for &j in links.links(i) {
             candidates.push((j, get(links.lists()[j])?.centroid));
         }
+
+        candidates.push((i, view.centroid));
 
         let mut moves = Vec::new();
         self.assign
@@ -107,14 +107,10 @@ where
         let this = &*self;
         let moves = parallelism.try_map(links.len(), |i| this.moves(region, links, i))?;
 
-        // Write in list order, so the changes do not depend on `parallelism`.
         let mut moved = Buckets::new(links.len());
 
         for (&list, moves) in links.lists().iter().zip(moves) {
-            for (id, dst) in moves {
-                moved.push(id, dst);
-            }
-
+            moved.extend(moves.into_iter());
             update.remove_members(list, moved.seal())?;
         }
 

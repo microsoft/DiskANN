@@ -39,8 +39,7 @@ where
     /// Retire every parent and create lists holding all of its members, calling
     /// `emit(parent, child)` once per created list.
     ///
-    /// Every parent must be filled into `region`. Work that is independent across parents
-    /// may run with `parallelism`; the changes recorded must not depend on it.
+    /// Every parent must be filled into `region`.
     ///
     /// # Errors
     ///
@@ -71,11 +70,9 @@ where
     /// The error returned by a failed reassignment.
     type Error: Debug + Send + Sync + Into<ANNError>;
 
-    /// Keep each point of every list in `links` represneted by [`Links`] in place,
-    /// or move it to a list linked to its own.
+    /// Potentially re-assign points using links
     ///
-    /// Every list in `links` must be filled into `region`. Work that is independent across
-    /// lists may run with `parallelism`; the changes recorded must not depend on it.
+    /// Every list in `links` must be filled into `region`.
     ///
     /// # Errors
     ///

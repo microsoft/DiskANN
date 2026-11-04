@@ -97,17 +97,24 @@ impl Seed for FirstPoints {
 // KMeans //
 ////////////
 
+/// The children fitted to one parent.
+struct Children<I> {
+    // Centroids of the children
+    centroids: rowmajor::Owned<f32>,
+    // Groups mapping members to centroid index; indexed by `centroid`
+    members: Groups<I>,
+}
+
 /// Splits each parent into `k` children, fitted by k-means over the parent's points.
 ///
 /// # Algorithm
 ///
-/// 1. For each parent, independently and possibly in parallel: seed `k` children with `S`,
-///    run Lloyd's iterations over the parent's points, and assign each point to one of the
-///    children with `A`. This step only reads the region, so its failures leave the update
-///    untouched.
+/// 1. Fit `k` children per parent: seed them with `S`, then run Lloyd's iterations over
+///    the parent's points.
 ///
-/// 2. In parent order, retire each parent and create its children, each holding the points
-///    assigned to it.
+/// 2. For each parent, assign its points among its own children with `A`, then retire it.
+///
+/// 3. Create the children in parent order, each holding the points assigned to it.
 pub struct KMeansSplit<A = NearestCentroid, S = FirstPoints> {
     /// Children per parent.
     k: NonZeroUsize,
@@ -157,6 +164,7 @@ impl<A, S: Seed> KMeansSplit<A, S> {
             .ok_or(SplitError::UnableToRetrieve(parent))?;
 
         let points = vectors.reborrow().as_view();
+
         let mut centroids = rowmajor::Owned::try_from_element(self.k.get(), self.dim.get(), 0.0)?;
 
         if points.ncols() != centroids.ncols() {
@@ -172,7 +180,9 @@ impl<A, S: Seed> KMeansSplit<A, S> {
 
         // Each point moves to one of the parent's own children, chosen by `A`.
         let candidates: Vec<_> = centroids.rows().enumerate().collect();
+
         let mut members = Buckets::new(self.k.get());
+
         self.assign
             .assign(view.members, vectors.reborrow(), &candidates, |id, c| {
                 members.push(id, c)
@@ -183,13 +193,6 @@ impl<A, S: Seed> KMeansSplit<A, S> {
             centroids,
         })
     }
-}
-
-/// The children fitted to one parent: their centroids, and the parent's members grouped by
-/// child.
-struct Children<I> {
-    centroids: rowmajor::Owned<f32>,
-    members: Groups<I>,
 }
 
 ///////////

@@ -283,9 +283,8 @@ impl View<u32, u32> for Region<'_> {
     where
         Self: 'a;
 
-    fn get_list(&self, list: u32) -> Option<List<'_, u32, u32>> {
+    fn get_list(&self, list: u32) -> Option<List<'_, u32>> {
         self.sources.get(&list).map(|source| List {
-            id: list,
             centroid: &source.centroid,
             members: &source.members,
         })

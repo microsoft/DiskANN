@@ -16,15 +16,18 @@ use diskann_utils::{
 
 use crate::ANNResult;
 
-/// The id, centroid and members of one filled list.
+/// The centroid and members of one filled list.
 #[derive(Debug)]
-pub struct List<'a, I, L> {
-    pub id: L,
+pub struct List<'a, I> {
     /// Floating point representation for the centroid of the list.
     pub centroid: &'a [f32],
     /// Internal IDs of the members, including appends made earlier in the operation.
     pub members: &'a [I],
 }
+
+//////////
+// View //
+//////////
 
 /// Read access to vectors and the [`List`] for a subset of list ids in the index.
 ///
@@ -46,7 +49,7 @@ pub trait View<I, L>: Send + Sync {
         Self: 'a;
 
     /// Return the centroid and members of list `i`, or `None` if `i` was not filled.
-    fn get_list(&self, i: L) -> Option<List<'_, I, L>>;
+    fn get_list(&self, i: L) -> Option<List<'_, I>>;
 
     /// Return the vectors of list `i` or `None` if `i` was not filled.
     fn get_vectors(&self, i: L) -> Option<Self::Vectors<'_>>;
