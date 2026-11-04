@@ -34,10 +34,11 @@ dashmap = { workspace = true, optional = true }
 diskann-linalg = { workspace = true, optional = true }
 
 [dev-dependencies]
-diskann-utils = { workspace = true, features = ["testing"] }
+diskann-utils = { workspace = true, features = ["testing", "rayon"] }
 futures-util = { workspace = true, default-features = false  }
 pin-project.workspace = true
 rand.workspace = true
+rayon.workspace = true
 relative-path = "2.0.1"
 rstest.workspace = true
 serde = { workspace = true, features = ["derive"] }

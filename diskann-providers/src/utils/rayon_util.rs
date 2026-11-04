@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 use diskann::{ANNError, ANNResult};
+use diskann_utils::Parallelism;
 use rayon::prelude::ParallelIterator;
 
 /// Creates a new thread pool with the specified number of threads.
@@ -73,6 +74,18 @@ impl<'a> RayonThreadPoolRef<'a> {
         R: Send,
     {
         self.0.install(op)
+    }
+}
+
+impl<'a> From<RayonThreadPoolRef<'a>> for Parallelism<'a> {
+    fn from(pool: RayonThreadPoolRef<'a>) -> Self {
+        Parallelism::rayon(pool.0)
+    }
+}
+
+impl<'a> From<&'a RayonThreadPool> for Parallelism<'a> {
+    fn from(pool: &'a RayonThreadPool) -> Self {
+        pool.as_ref().into()
     }
 }
 
@@ -258,6 +271,16 @@ mod tests {
         let mut res = res.lock().unwrap();
         res.sort();
         assert_eq!(&res[..], &[0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_parallelism_runs_in_pool() {
+        let pool = create_thread_pool(2).unwrap();
+
+        for parallelism in [Parallelism::from(&pool), Parallelism::from(pool.as_ref())] {
+            let in_pool = parallelism.map(5, |_| pool.0.current_thread_index().is_some());
+            assert_eq!(in_pool, [true; 5]);
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use diskann_utils::future::SendFuture;
+use diskann_utils::{Parallelism, future::SendFuture};
 use thiserror::Error;
 
 use super::traits::{BuildAccessor, Nearest, SearchAccessor, SearchStrategy};
@@ -112,6 +112,9 @@ impl IVFIndex {
     /// leaves with more than [`Config::split_threshold`] members and then re-assigning
     /// points if [`ReassignCount`] in `config` is not zero.
     ///
+    /// Fitting the children of each split list, and choosing where each list's points
+    /// move, run with `parallelism`. The changes the operation makes do not depend on it.
+    ///
     /// # Errors
     ///
     /// Fails if the batch is empty, or if a provider call or split fails. Any failure
@@ -121,6 +124,7 @@ impl IVFIndex {
         strategy: &'a S,
         context: &'a C,
         points: B,
+        parallelism: Parallelism<'_>,
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
         C: Sync,
@@ -162,6 +166,7 @@ impl IVFIndex {
                         &region,
                         &mut update,
                         &parents,
+                        parallelism,
                         |parent, child| children.push((parent, child)),
                     )?;
 
@@ -202,6 +207,7 @@ impl IVFIndex {
                         &region,
                         &mut update,
                         &links,
+                        parallelism,
                     )?;
 
                     update.finish().await?;

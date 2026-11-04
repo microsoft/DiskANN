@@ -9,11 +9,11 @@ use std::{fmt::Debug, num::NonZeroUsize};
 
 use diskann_quantization::algorithms::kmeans::lloyds::lloyds;
 use diskann_utils::{
-    Reborrow, ReborrowMut,
+    Parallelism, Reborrow,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
 
-use super::{Assign, Buckets, NearestCentroid, SplitError};
+use super::{Assign, Buckets, Groups, NearestCentroid, SplitError};
 use crate::{
     ANNError, ANNResult,
     error::{ErrorContext, IntoANNResult},
@@ -49,13 +49,15 @@ impl From<FitError> for ANNError {
 //////////
 
 /// Chooses initial centroids for one parent's points.
-pub(crate) trait Seed {
+///
+/// Parents may be seeded in parallel, so seeding must depend only on its arguments.
+pub(crate) trait Seed: Sync {
     /// The error returned by a failed seeding.
     type Error: Debug + Send + Sync + Into<ANNError>;
 
     /// Fill every row of `centers` with an initial centroid for `points`.
     fn seed(
-        &mut self,
+        &self,
         points: rowmajor::Ref<'_, f32>,
         centers: rowmajor::Mut<'_, f32>,
     ) -> Result<(), Self::Error>;
@@ -71,7 +73,7 @@ impl Seed for FirstPoints {
     type Error = FitError;
 
     fn seed(
-        &mut self,
+        &self,
         points: rowmajor::Ref<'_, f32>,
         mut centers: rowmajor::Mut<'_, f32>,
     ) -> Result<(), Self::Error> {
@@ -99,13 +101,13 @@ impl Seed for FirstPoints {
 ///
 /// # Algorithm
 ///
-/// 1. Fit `k` children per parent: seed them with `S`, then run Lloyd's iterations over
-///    the parent's points. Fitting finishes for every parent before anything is written,
-///    so its failures leave the update untouched.
+/// 1. For each parent, independently and possibly in parallel: seed `k` children with `S`,
+///    run Lloyd's iterations over the parent's points, and assign each point to one of the
+///    children with `A`. This step only reads the region, so its failures leave the update
+///    untouched.
 ///
-/// 2. For each parent, assign its points among its own children with `A`, then retire it.
-///
-/// 3. Create the children in parent order, each holding the points assigned to it.
+/// 2. In parent order, retire each parent and create its children, each holding the points
+///    assigned to it.
 pub struct KMeansSplit<A = NearestCentroid, S = FirstPoints> {
     /// Children per parent.
     k: NonZeroUsize,
@@ -136,38 +138,58 @@ impl<A, S: Seed> KMeansSplit<A, S> {
         }
     }
 
-    /// Fit `k` children per parent. The children of the parent at index `p` are rows
-    /// `k * p..k * (p + 1)` of the returned matrix.
-    fn fit<I, L, R>(&mut self, region: &R, parents: &[L]) -> ANNResult<rowmajor::Owned<f32>>
+    /// Fit `k` children to the points of `parent`, and assign each point to one of them.
+    ///
+    /// This reads only `region`, so parents can be fitted in parallel.
+    fn fit<I, L, R>(&self, region: &R, parent: L) -> ANNResult<Children<I>>
     where
+        I: Copy,
         L: VectorId,
         R: View<I, L>,
+        A: for<'a> Assign<R::VectorsRef<'a>>,
         for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
     {
-        let mut children =
-            rowmajor::Owned::try_from_element(parents.len() * self.k.get(), self.dim.get(), 0.0)?;
+        let view = region
+            .get_list(parent)
+            .ok_or(SplitError::UnableToRetrieve(parent))?;
+        let vectors = region
+            .get_vectors(parent)
+            .ok_or(SplitError::UnableToRetrieve(parent))?;
 
-        for (&list, mut dst) in parents.iter().zip(children.window_iter_mut(self.k)) {
-            let vectors = region
-                .get_vectors(list)
-                .ok_or(SplitError::UnableToRetrieve(list))?;
+        let points = vectors.reborrow().as_view();
+        let mut centroids = rowmajor::Owned::try_from_element(self.k.get(), self.dim.get(), 0.0)?;
 
-            let points = vectors.reborrow().as_view();
-
-            if points.ncols() != dst.ncols() {
-                return Err(FitError::DimensionMismatch(points.ncols(), dst.ncols()).into());
-            }
-
-            self.seed
-                .seed(points, dst.reborrow_mut())
-                .into_ann_result()
-                .with_context(|| format!("while seeding list {list:?}"))?;
-
-            let _ = lloyds(points, dst, self.iterations.get());
+        if points.ncols() != centroids.ncols() {
+            return Err(FitError::DimensionMismatch(points.ncols(), centroids.ncols()).into());
         }
 
-        Ok(children)
+        self.seed
+            .seed(points, centroids.as_view_mut())
+            .into_ann_result()
+            .with_context(|| format!("while seeding list {parent:?}"))?;
+
+        let _ = lloyds(points, centroids.as_view_mut(), self.iterations.get());
+
+        // Each point moves to one of the parent's own children, chosen by `A`.
+        let candidates: Vec<_> = centroids.rows().enumerate().collect();
+        let mut members = Buckets::new(self.k.get());
+        self.assign
+            .assign(view.members, vectors.reborrow(), &candidates, |id, c| {
+                members.push(id, c)
+            });
+
+        Ok(Children {
+            members: members.group(),
+            centroids,
+        })
     }
+}
+
+/// The children fitted to one parent: their centroids, and the parent's members grouped by
+/// child.
+struct Children<I> {
+    centroids: rowmajor::Owned<f32>,
+    members: Groups<I>,
 }
 
 ///////////
@@ -176,7 +198,7 @@ impl<A, S: Seed> KMeansSplit<A, S> {
 
 impl<I, L, R, A, S> Split<I, L, R> for KMeansSplit<A, S>
 where
-    I: Copy,
+    I: Copy + Send,
     L: VectorId,
     R: View<I, L>,
     A: for<'a> Assign<R::VectorsRef<'a>>,
@@ -190,6 +212,7 @@ where
         region: &R,
         update: &mut U,
         parents: &[L],
+        parallelism: Parallelism<'_>,
         mut emit: F,
     ) -> ANNResult<()>
     where
@@ -200,38 +223,16 @@ where
             return Err(SplitError::<L>::EmptyParents.into());
         }
 
-        let children = self.fit(region, parents)?;
-        let k = self.k.get();
+        let this = &*self;
+        let families = parallelism.try_map(parents.len(), |p| this.fit(region, parents[p]))?;
 
-        let mut moved = Buckets::new(children.nrows());
-        let mut candidates = Vec::new();
-
-        // Each parent's points move to one of its own children, chosen by `A`.
-        for (p, &parent) in parents.iter().enumerate() {
-            candidates.clear();
-            candidates.extend((k * p..k * (p + 1)).map(|c| (c, children.row(c))));
-
-            let view = region
-                .get_list(parent)
-                .ok_or(SplitError::UnableToRetrieve(parent))?;
-            let vectors = region
-                .get_vectors(parent)
-                .ok_or(SplitError::UnableToRetrieve(parent))?;
-
-            self.assign
-                .assign(view.members, vectors.reborrow(), &candidates, |id, c| {
-                    moved.push(id, c)
-                });
-
+        // Write in parent order, so list IDs do not depend on `parallelism`.
+        for (&parent, children) in parents.iter().zip(&families) {
             update.retire(parent)?;
-        }
 
-        let incoming = moved.group();
-
-        for (c, child) in children.rows().enumerate() {
-            // Every parent has exactly `k` children, so child `c` belongs to parent `c / k`.
-            let p = c / k;
-            emit(parents[p], update.create(child, incoming.get(c))?);
+            for (c, centroid) in children.centroids.rows().enumerate() {
+                emit(parent, update.create(centroid, children.members.get(c))?);
+            }
         }
 
         Ok(())

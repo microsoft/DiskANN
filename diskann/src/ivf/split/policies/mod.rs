@@ -45,7 +45,9 @@ impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
 ////////////
 
 /// Chooses a destination for every point of one list, reading points as `V`.
-pub(crate) trait Assign<V> {
+///
+/// Lists may be assigned in parallel, so one assigner can be shared between threads.
+pub(crate) trait Assign<V>: Sync {
     /// Call `emit(member, key)` once per member, choosing `key` from the `(key, centroid)`
     /// pairs of `candidates`. With no candidates, nothing is emitted.
     fn assign<I>(

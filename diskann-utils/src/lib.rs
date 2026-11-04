@@ -17,6 +17,9 @@ pub mod io;
 pub mod object_pool;
 pub mod sampling;
 
+mod parallel;
+pub use parallel::Parallelism;
+
 // Views
 pub mod strided;
 pub mod views;

@@ -10,14 +10,15 @@
 //! reassignment policies directly on hand-built regions.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     future::Future,
     num::NonZeroUsize,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use diskann_utils::{
-    Reborrow,
+    Parallelism, Reborrow,
     future::SendFuture,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
@@ -285,9 +286,14 @@ async fn failed_routing_leaves_no_staged_points_or_appends() {
 async fn native_inputs_are_inserted_using_the_assigned_ids() {
     let (mut index, strategy) = index(seeded(), 4);
     let points: [(u32, &[u8]); 3] = [(9, &[11, 0]), (7, &[1, 0]), (8, &[0, 0])];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-        .await
-        .unwrap();
+    let stats = require_send(index.insert_batch(
+        &strategy,
+        &DefaultContext,
+        &points[..],
+        Parallelism::sequential(),
+    ))
+    .await
+    .unwrap();
     assert_eq!(
         stats,
         InsertStats {
@@ -366,9 +372,14 @@ async fn appends_publish_actual_memberships_without_filling() {
         (8, &[1.0, 0.0][..]),
         (9, &[10.0, 1.0][..]),
     ];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-        .await
-        .unwrap();
+    let stats = require_send(index.insert_batch(
+        &strategy,
+        &DefaultContext,
+        &points[..],
+        Parallelism::sequential(),
+    ))
+    .await
+    .unwrap();
 
     assert_eq!(
         stats,
@@ -404,9 +415,14 @@ async fn empty_batches_are_rejected_without_staging_or_publication() {
         assert!(build.staged.is_empty());
         assert!(build.pending.clone().into_changes().next().is_none());
     }
-    let error = require_send(index.insert_batch(&strategy, &DefaultContext, points))
-        .await
-        .unwrap_err();
+    let error = require_send(index.insert_batch(
+        &strategy,
+        &DefaultContext,
+        points,
+        Parallelism::sequential(),
+    ))
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("cannot insert an empty batch"));
     let store = strategy.store();
     assert_eq!(store.points.len(), 5);
@@ -462,9 +478,14 @@ async fn splitting_uses_the_configured_number_of_children() {
     })
     .unwrap();
     let points: [(u32, &[f32]); 1] = [(5, &[1.0, 1.0][..])];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-        .await
-        .unwrap();
+    let stats = require_send(index.insert_batch(
+        &strategy,
+        &DefaultContext,
+        &points[..],
+        Parallelism::sequential(),
+    ))
+    .await
+    .unwrap();
     assert_eq!(
         stats,
         InsertStats {
@@ -495,9 +516,14 @@ async fn splitting_commits_children_and_ordinary_appends_once() {
         (6, &[11.0, 1.0][..]),
         (7, &[101.0, 0.0][..]),
     ];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-        .await
-        .unwrap();
+    let stats = require_send(index.insert_batch(
+        &strategy,
+        &DefaultContext,
+        &points[..],
+        Parallelism::sequential(),
+    ))
+    .await
+    .unwrap();
     let store = strategy.store();
 
     assert_eq!(
@@ -557,9 +583,14 @@ async fn neighboring_lists_exchange_points_and_pending_appends_once() {
     store.lists.get_mut(&2).unwrap().centroid = vec![5.0, 0.0];
     let (mut index, strategy) = index_with_neighbors(store, 3, 2);
     let points: [(u32, &[f32]); 2] = [(7, &[1.0, 0.0][..]), (8, &[5.2, 0.0][..])];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-        .await
-        .unwrap();
+    let stats = require_send(index.insert_batch(
+        &strategy,
+        &DefaultContext,
+        &points[..],
+        Parallelism::sequential(),
+    ))
+    .await
+    .unwrap();
     let store = strategy.store();
 
     assert_eq!(
@@ -608,9 +639,14 @@ async fn reassignment_links_each_child_to_its_nearest_other_lists() {
         store.fail_nearest = count == 0;
         let (mut index, strategy) = index_with_neighbors(store, 2, count);
         let points: [(u32, &[f32]); 2] = [(5, &[0.5, 0.0][..]), (6, &[10.5, 0.0][..])];
-        let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-            .await
-            .unwrap();
+        let stats = require_send(index.insert_batch(
+            &strategy,
+            &DefaultContext,
+            &points[..],
+            Parallelism::sequential(),
+        ))
+        .await
+        .unwrap();
         let store = strategy.store();
         assert_eq!(
             stats,
@@ -692,9 +728,14 @@ async fn children_of_different_parents_exchange_points() {
     };
     let (mut index, strategy) = index_with_neighbors(store, 2, 1);
     let points: [(u32, &[f32]); 2] = [(4, &[60.0][..]), (5, &[64.0][..])];
-    let stats = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-        .await
-        .unwrap();
+    let stats = require_send(index.insert_batch(
+        &strategy,
+        &DefaultContext,
+        &points[..],
+        Parallelism::sequential(),
+    ))
+    .await
+    .unwrap();
     assert_eq!(
         stats,
         InsertStats {
@@ -751,7 +792,13 @@ async fn region_view_borrows_inputs_while_updates_are_recorded() {
                 NearestCentroid,
                 FirstPoints,
             )
-            .split(&region, &mut update, &[1], |_, _| {})
+            .split(
+                &region,
+                &mut update,
+                &[1],
+                Parallelism::sequential(),
+                |_, _| {},
+            )
             .unwrap();
             assert_eq!(view.members, [10_000, 10_001, 10_006, 10_005]);
             assert_eq!(vectors.row(2), points[1].1);
@@ -937,9 +984,14 @@ async fn failed_planning_or_publication_is_not_reported_as_success() {
         store.fail_finish = failure == "finish";
         let (mut index, strategy) = index_with_neighbors(store, 2, 2);
         let points: [(u32, &[f32]); 1] = [(5, &[1.0, 1.0][..])];
-        let error = require_send(index.insert_batch(&strategy, &DefaultContext, &points[..]))
-            .await
-            .unwrap_err();
+        let error = require_send(index.insert_batch(
+            &strategy,
+            &DefaultContext,
+            &points[..],
+            Parallelism::sequential(),
+        ))
+        .await
+        .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -967,7 +1019,12 @@ async fn uninitialized_insertion_fails() {
     );
     let points: [(u32, &[f32]); 1] = [(7, &[0.0, 1.0][..])];
     let error = index
-        .insert_batch(&strategy, &DefaultContext, &points[..])
+        .insert_batch(
+            &strategy,
+            &DefaultContext,
+            &points[..],
+            Parallelism::sequential(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -977,6 +1034,64 @@ async fn uninitialized_insertion_fails() {
         "{error}"
     );
     assert_eq!(strategy.store().finishes, 0);
+}
+
+/////////////////
+// Parallelism //
+/////////////////
+
+/// Inserting with a thread pool makes exactly the changes that inserting sequentially
+/// does, across several rounds of splitting and reassignment.
+#[tokio::test]
+async fn parallel_insertion_matches_sequential() {
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+
+    let mut runs = Vec::new();
+    for parallelism in [Parallelism::sequential(), Parallelism::rayon(&pool)] {
+        let mut rng = StdRng::seed_from_u64(0x7f3a_91c2_5e04_b8d6);
+        let mut store = Store {
+            dim: 2,
+            next_list: 8,
+            ..Store::default()
+        };
+        for id in 0..8 {
+            let centroid = vec![rng.random_range(-50.0..50.0), rng.random_range(-50.0..50.0)];
+            let members = Vec::new();
+            store.lists.insert(id, StoredList { centroid, members });
+        }
+        let (mut index, strategy) = index_with_neighbors(store, 4, 2);
+
+        let mut stats = Vec::new();
+        for batch in 0..5 {
+            let vectors: Vec<[f32; 2]> = (0..40)
+                .map(|_| [rng.random_range(-50.0..50.0), rng.random_range(-50.0..50.0)])
+                .collect();
+            let points: Vec<(u32, &[f32])> =
+                (40 * batch..).zip(vectors.iter().map(|v| &v[..])).collect();
+            let inserted = index
+                .insert_batch(&strategy, &DefaultContext, &points[..], parallelism)
+                .await
+                .unwrap();
+            stats.push(inserted);
+        }
+
+        let store = strategy.store();
+        let lists: Vec<_> = store
+            .lists
+            .iter()
+            .map(|(&id, list)| (id, list.centroid.clone(), list.members.clone()))
+            .collect();
+        runs.push((stats, lists));
+    }
+
+    let splits: usize = runs[0].0.iter().map(|stats| stats.splits).sum();
+    assert!(splits > 8, "the batches split only {splits} lists");
+    assert_eq!(runs[0], runs[1]);
 }
 
 ////////////
@@ -1267,7 +1382,12 @@ async fn search_supports_native_queries_after_insertion_and_splitting() {
     let (mut index, strategy) = index(seeded(), 2);
     let points = [(5, &[8u8, 0][..])];
     let stats = index
-        .insert_batch(&strategy, &DefaultContext, &points[..])
+        .insert_batch(
+            &strategy,
+            &DefaultContext,
+            &points[..],
+            Parallelism::sequential(),
+        )
         .await
         .unwrap();
     assert_eq!(stats.splits, 1);
@@ -1349,7 +1469,7 @@ fn reassignment_moves_points_only_along_links_and_keeps_empty_lists() {
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let links = support::links(&[(10, 2), (10, 3), (10, 4), (11, 2), (11, 3), (11, 4)]);
     Linked::new(NearestCentroid)
-        .reassign(&region, &mut update, &links)
+        .reassign(&region, &mut update, &links, Parallelism::sequential())
         .unwrap();
 
     // Point 2 is nearest list 3, which it is not linked to, so it moves to list 11. Point 1
@@ -1398,12 +1518,23 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
                 NearestCentroid,
                 FirstPoints
             )
-            .split(&region, &mut update, &[1, 99], |_, _| {})
+            .split(
+                &region,
+                &mut update,
+                &[1, 99],
+                Parallelism::sequential(),
+                |_, _| {}
+            )
             .is_err()
         );
         assert!(
             Linked::new(NearestCentroid)
-                .reassign(&region, &mut update, &support::links(&[(1, 99)]))
+                .reassign(
+                    &region,
+                    &mut update,
+                    &support::links(&[(1, 99)]),
+                    Parallelism::sequential()
+                )
                 .is_err()
         );
         assert!(update.created.is_empty());
@@ -1419,7 +1550,13 @@ async fn split_only_edits_explicit_parents_and_missing_sources_leave_no_edits() 
             NearestCentroid,
             FirstPoints,
         )
-        .split(&region, &mut update, &[1], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap();
         assert_eq!(update.created.len(), 2);
     }
@@ -1476,9 +1613,13 @@ fn parent_points_stay_within_their_own_children() {
         NearestCentroid,
         FirstPoints,
     )
-    .split(&region, &mut update, &[1, 2], |parent, child| {
-        children.push((parent, child))
-    })
+    .split(
+        &region,
+        &mut update,
+        &[1, 2],
+        Parallelism::sequential(),
+        |parent, child| children.push((parent, child)),
+    )
     .unwrap();
     assert_eq!(children, [(1, 3), (1, 4), (2, 5), (2, 6)]);
     let members = |children: &[StoredList]| {
@@ -1499,7 +1640,7 @@ fn parent_points_stay_within_their_own_children() {
 #[test]
 fn assignment_is_delegated_to_the_assigner() {
     /// Records the candidates of every list and sends each point to the first one.
-    struct First<'a>(&'a RefCell<Vec<Vec<usize>>>);
+    struct First<'a>(&'a std::sync::Mutex<Vec<Vec<usize>>>);
 
     impl<'v, V: AsMatRef<'v, f32>> Assign<V> for First<'_> {
         fn assign<I: Copy>(
@@ -1511,7 +1652,7 @@ fn assignment_is_delegated_to_the_assigner() {
         ) {
             assert_eq!(members.len(), points.as_view().nrows());
             let dsts = candidates.iter().map(|&(dst, _)| dst).collect();
-            self.0.borrow_mut().push(dsts);
+            self.0.lock().unwrap().push(dsts);
             for &id in members {
                 emit(id, candidates[0].0);
             }
@@ -1537,16 +1678,23 @@ fn assignment_is_delegated_to_the_assigner() {
         ),
     ]);
     let region = Region::new(&sources);
-    let seen = RefCell::new(Vec::new());
+    let seen = std::sync::Mutex::new(Vec::new());
+    let take = || std::mem::take(&mut *seen.lock().unwrap());
 
     // Splitting offers a parent's own children.
     let mut memberships = PendingLists::default();
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     KMeansSplit::new(TWO, ONE, ONE, First(&seen), FirstPoints)
-        .split(&region, &mut update, &[1], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap();
-    assert_eq!(seen.take(), [vec![0, 1]]);
+    assert_eq!(take(), [vec![0, 1]]);
     assert_eq!(created[0].members, [0, 1]);
     assert!(created[1].members.is_empty());
 
@@ -1555,9 +1703,14 @@ fn assignment_is_delegated_to_the_assigner() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     Linked::new(First(&seen))
-        .reassign(&region, &mut update, &support::links(&[(1, 2)]))
+        .reassign(
+            &region,
+            &mut update,
+            &support::links(&[(1, 2)]),
+            Parallelism::sequential(),
+        )
         .unwrap();
-    assert_eq!(seen.take(), [vec![0, 1], vec![1, 0]]);
+    assert_eq!(take(), [vec![0, 1], vec![1, 0]]);
     // Every point is sent to its own list, so nothing changes.
     assert_eq!(memberships.into_changes().count(), 0);
 }
@@ -1579,9 +1732,13 @@ fn k_means_fits_and_assigns_k_children_per_parent() {
     let mut children = Vec::new();
     let k = NonZeroUsize::new(3).unwrap();
     KMeansSplit::new(k, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &[1], |parent, child| {
-            children.push((parent, child))
-        })
+        .split(
+            &region,
+            &mut update,
+            &[1],
+            Parallelism::sequential(),
+            |parent, child| children.push((parent, child)),
+        )
         .unwrap();
 
     assert_eq!(children, [(1, 2), (1, 3), (1, 4)]);
@@ -1610,7 +1767,13 @@ fn k_means_needs_k_points_per_parent() {
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let k = NonZeroUsize::new(3).unwrap();
     let error = KMeansSplit::new(k, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &[1], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap_err();
 
     assert!(matches!(
@@ -1630,7 +1793,7 @@ fn k_means_fits_from_its_seeder() {
         type Error = ANNError;
 
         fn seed(
-            &mut self,
+            &self,
             points: rowmajor::Ref<'_, f32>,
             mut centers: rowmajor::Mut<'_, f32>,
         ) -> ANNResult<()> {
@@ -1655,7 +1818,13 @@ fn k_means_fits_from_its_seeder() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, Reversed)
-        .split(&region, &mut update, &[1], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap();
 
     // `FirstPoints` would put -1 first; reversed seeds keep that order through Lloyd's.
@@ -1672,7 +1841,7 @@ fn k_means_reports_seeding_failures_before_writing() {
     impl Seed for Fails {
         type Error = ANNError;
 
-        fn seed(&mut self, _: rowmajor::Ref<'_, f32>, _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
+        fn seed(&self, _: rowmajor::Ref<'_, f32>, _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
             Err(ANNError::message("injected seeding failure"))
         }
     }
@@ -1690,7 +1859,13 @@ fn k_means_reports_seeding_failures_before_writing() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let error = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, Fails)
-        .split(&region, &mut update, &[1], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap_err()
         .to_string();
 
@@ -1717,7 +1892,13 @@ fn k_means_resets_empty_children_to_zero_and_prefers_the_first_child_on_ties() {
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-            .split(&region, &mut update, &[1], |_, _| {})
+            .split(
+                &region,
+                &mut update,
+                &[1],
+                Parallelism::sequential(),
+                |_, _| {},
+            )
             .unwrap();
         assert_eq!(update.created.len(), 2);
         assert_eq!(update.created[0].centroid, [value]);
@@ -1761,7 +1942,12 @@ fn reassignment_breaks_ties_by_own_list_then_link_order() {
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         Linked::new(NearestCentroid)
-            .reassign(&region, &mut update, &support::links(&pairs))
+            .reassign(
+                &region,
+                &mut update,
+                &support::links(&pairs),
+                Parallelism::sequential(),
+            )
             .unwrap();
 
         // Point 0 ties lists 2 and 3 and joins the one linked first. Points 2 and 3 tie
@@ -1806,7 +1992,13 @@ fn k_means_reuses_splitter_across_regions() {
     let mut full = support::Update::new(&sources, 1, &mut full_memberships, &mut full_created);
     let mut splitter = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints);
     splitter
-        .split(&region, &mut full, &[1, 2], |_, _| {})
+        .split(
+            &region,
+            &mut full,
+            &[1, 2],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap();
     assert_eq!(
         full.created
@@ -1830,7 +2022,13 @@ fn k_means_reuses_splitter_across_regions() {
         &mut repeated_created,
     );
     splitter
-        .split(&region, &mut repeated, &[1, 2], |_, _| {})
+        .split(
+            &region,
+            &mut repeated,
+            &[1, 2],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap();
     for (first, repeated) in full.created.iter().zip(repeated.created.iter()) {
         assert_eq!(first.centroid, repeated.centroid);
@@ -1841,7 +2039,13 @@ fn k_means_reuses_splitter_across_regions() {
     let mut smaller =
         support::Update::new(&sources, 1, &mut smaller_memberships, &mut smaller_created);
     splitter
-        .split(&region, &mut smaller, &[1], |_, _| {})
+        .split(
+            &region,
+            &mut smaller,
+            &[1],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap();
     assert_eq!(smaller.created.len(), 2);
     assert_eq!(smaller.created[0].members, [0]);
@@ -1861,7 +2065,13 @@ fn empty_split_records_no_updates() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let error = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &[], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<SplitError<u32>>(),
@@ -1898,12 +2108,12 @@ fn region_vector_reborrows_share_source_storage() {
 fn k_means_handles_borrowed_batches() {
     struct Batch<'a> {
         vectors: rowmajor::Ref<'a, f32>,
-        reads: &'a Cell<usize>,
+        reads: &'a AtomicUsize,
     }
 
     struct BatchRef<'a> {
         vectors: rowmajor::Ref<'a, f32>,
-        reads: &'a Cell<usize>,
+        reads: &'a AtomicUsize,
     }
 
     impl<'r> Reborrow<'r> for Batch<'_> {
@@ -1919,14 +2129,14 @@ fn k_means_handles_borrowed_batches() {
 
     impl<'a> AsMatRef<'a, f32> for BatchRef<'a> {
         fn as_view(self) -> rowmajor::Ref<'a, f32> {
-            self.reads.set(self.reads.get() + 1);
+            self.reads.fetch_add(1, Ordering::Relaxed);
             self.vectors
         }
     }
 
     struct BatchRegion<'a> {
         inner: Region<'a>,
-        reads: Cell<usize>,
+        reads: AtomicUsize,
     }
 
     impl View<u32, u32> for BatchRegion<'_> {
@@ -1968,7 +2178,7 @@ fn k_means_handles_borrowed_batches() {
     ]);
     let region = BatchRegion {
         inner: Region::new(&sources),
-        reads: Cell::new(0),
+        reads: AtomicUsize::new(0),
     };
     let batch = region.get_vectors(1).unwrap();
     let borrowed = batch.reborrow();
@@ -1981,10 +2191,16 @@ fn k_means_handles_borrowed_batches() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &[1], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap();
     // Fitting and assigning the parent each read its vectors once.
-    assert_eq!(region.reads.get(), 2);
+    assert_eq!(region.reads.load(Ordering::Relaxed), 2);
     assert_eq!(created.len(), 2);
     assert_eq!(created[0].centroid, [-1.0]);
     assert_eq!(created[0].members, [0]);
@@ -1999,9 +2215,14 @@ fn k_means_handles_borrowed_batches() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     Linked::new(NearestCentroid)
-        .reassign(&region, &mut update, &support::links(&[(1, 2)]))
+        .reassign(
+            &region,
+            &mut update,
+            &support::links(&[(1, 2)]),
+            Parallelism::sequential(),
+        )
         .unwrap();
-    assert_eq!(region.reads.get(), 4);
+    assert_eq!(region.reads.load(Ordering::Relaxed), 4);
     assert_eq!(memberships.into_changes().count(), 0);
 }
 
@@ -2051,6 +2272,7 @@ fn split_accepts_native_batches_without_matrix_access() {
             region: &R,
             update: &mut U,
             parents: &[u32],
+            _: Parallelism<'_>,
             mut emit: F,
         ) -> ANNResult<()>
         where
@@ -2090,9 +2312,13 @@ fn split_accepts_native_batches_without_matrix_access() {
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         let mut children = Vec::new();
         splitter
-            .split(&region, &mut update, &[1], |parent, child| {
-                children.push((parent, child))
-            })
+            .split(
+                &region,
+                &mut update,
+                &[1],
+                Parallelism::sequential(),
+                |parent, child| children.push((parent, child)),
+            )
             .unwrap();
         assert_eq!(children, [(1, 2), (1, 3)]);
         assert_eq!(created.len(), 2);
@@ -2139,7 +2365,13 @@ fn k_means_matches_quantization_lloyds() {
             NearestCentroid,
             FirstPoints,
         )
-        .split(&region, &mut update, &[1, 2], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1, 2],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap();
         assert_eq!(created.len(), 4);
         for (source, actual) in sources.values().zip(created.chunks_exact(2)) {
@@ -2180,7 +2412,13 @@ fn k_means_reports_insufficient_points_before_writing() {
             NearestCentroid,
             FirstPoints,
         )
-        .split(&region, &mut update, &[1], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap_err();
         assert!(matches!(
             error.downcast_ref::<FitError>(),
@@ -2208,7 +2446,13 @@ fn k_means_missing_vectors_preserves_typed_error_without_updates() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     let error = KMeansSplit::new(TWO, ONE, ONE, NearestCentroid, FirstPoints)
-        .split(&region, &mut update, &[1, 99], |_, _| {})
+        .split(
+            &region,
+            &mut update,
+            &[1, 99],
+            Parallelism::sequential(),
+            |_, _| {},
+        )
         .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<SplitError<u32>>(),
@@ -2244,7 +2488,12 @@ fn reassignment_reports_missing_lists() {
         let mut created = Vec::new();
         let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
         let error = Linked::new(NearestCentroid)
-            .reassign(&region, &mut update, &support::links(&pairs))
+            .reassign(
+                &region,
+                &mut update,
+                &support::links(&pairs),
+                Parallelism::sequential(),
+            )
             .unwrap_err();
         assert!(matches!(
             error.downcast_ref::<SplitError<u32>>(),
@@ -2281,7 +2530,12 @@ fn reassignment_keeps_points_home_when_all_distances_overflow() {
     let mut created = Vec::new();
     let mut update = support::Update::new(&sources, 1, &mut memberships, &mut created);
     Linked::new(NearestCentroid)
-        .reassign(&region, &mut update, &support::links(&[(1, 2)]))
+        .reassign(
+            &region,
+            &mut update,
+            &support::links(&[(1, 2)]),
+            Parallelism::sequential(),
+        )
         .unwrap();
 
     // Point 2 is infinitely far from both centroids and stays in its own list.
