@@ -75,8 +75,7 @@ pub struct InsertStats {
 
 /// An incremental IVF index.
 ///
-/// The index holds only its [`Config`]. Points and lists live in a provider, reached
-/// through the strategy passed to each call; see the [module documentation](crate::ivf).
+/// The index holds only its [`Config`].
 ///
 /// Providers shared by several indexes must still keep build operations apart;
 /// see [`BuildStrategy::build_accessor`].
@@ -111,9 +110,6 @@ impl IVFIndex {
     /// Insert a batch of points as one build operation, splitting every list that routing
     /// leaves with more than [`Config::split_threshold`] members and then re-assigning
     /// points if [`ReassignCount`] in `config` is not zero.
-    ///
-    /// Fitting the children of each split list, and choosing where each list's points
-    /// move, run with `parallelism`. The changes the operation makes do not depend on it.
     ///
     /// # Errors
     ///

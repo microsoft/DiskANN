@@ -9,23 +9,28 @@ use std::marker::PhantomData;
 #[cfg(feature = "rayon")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-/// Where to run independent tasks: on the calling thread, or on a Rayon thread pool.
+/// A struct to run independent tasks, either on the calling thread or on a Rayon thread
+/// pool.
 ///
 /// Results do not depend on this choice: outputs are in task order, and a failed operation
-/// returns the error of its first failed task. Tasks must be thread-safe even when they run
-/// on the calling thread, so code that works with one choice works with all of them. The
-/// default runs every task on the calling thread.
-///
-/// # Example
+/// returns the error of its first failed task.
 ///
 /// ```
 /// use diskann_utils::Parallelism;
 ///
-/// fn norms(rows: &[Vec<f32>], parallelism: Parallelism<'_>) -> Vec<f32> {
-///     parallelism.map(rows.len(), |i| rows[i].iter().map(|x| x * x).sum::<f32>().sqrt())
+/// fn norms_sq(rows: &[Vec<f32>], parallelism: Parallelism<'_>) -> Vec<f32> {
+///     parallelism.map(rows.len(), |i| rows[i].iter().map(|x| x * x).sum::<f32>())
 /// }
 ///
-/// assert_eq!(norms(&[vec![3.0, 4.0]], Parallelism::sequential()), [5.0]);
+/// let a = vec![vec![3.0, 4.0], vec![5.0, 12.0]];
+///
+/// assert_eq!(norms_sq(&a, Parallelism::sequential()), [25.0, 169.0]);
+///
+/// # #[cfg(feature = "rayon")]
+/// # {
+/// let pool = rayon::ThreadPoolBuilder::new().build().unwrap();
+/// assert_eq!(norms_sq(&a, Parallelism::rayon(&pool)), [25.0, 169.0]);
+/// # }
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Parallelism<'a> {
@@ -36,7 +41,8 @@ pub struct Parallelism<'a> {
 }
 
 impl<'a> Parallelism<'a> {
-    /// Run every task on the calling thread.
+    /// Construct a new `Parallelism` that runs every task on the calling thread. This is
+    /// the default.
     pub const fn sequential() -> Self {
         Self {
             #[cfg(feature = "rayon")]
@@ -46,10 +52,13 @@ impl<'a> Parallelism<'a> {
         }
     }
 
-    /// Run tasks on `pool`. The calling thread blocks until they finish.
+    /// Construct a new `Parallelism` that runs tasks on `pool`. Each operation blocks the
+    /// calling thread until its tasks finish.
     ///
-    /// Do not start an operation from a worker of `pool` while holding a lock: while it
-    /// waits, the worker may run other tasks from `pool`, and one that needs the same lock
+    /// # Note
+    ///
+    /// Do not start an operation from a worker of `pool` while holding a lock. While the
+    /// worker waits, it may run other tasks from `pool`, and one that needs the same lock
     /// deadlocks.
     #[cfg(feature = "rayon")]
     pub const fn rayon(pool: &'a rayon::ThreadPool) -> Self {
@@ -70,7 +79,8 @@ impl<'a> Parallelism<'a> {
         (0..tasks).map(f).collect()
     }
 
-    /// Return `f(0)`, ..., `f(tasks - 1)` in task order.
+    /// Return the outputs of `f(0)`, ..., `f(tasks - 1)` in task order if every task
+    /// succeeds.
     ///
     /// # Errors
     ///
@@ -101,8 +111,8 @@ impl<'a> Parallelism<'a> {
 mod tests {
     use super::*;
 
-    /// Check that `parallelism` returns results, and the first error, in task order.
-    fn check_task_order(parallelism: Parallelism<'_>) {
+    /// Assert that `parallelism` returns outputs, and the first error, in task order.
+    fn assert_task_order(parallelism: Parallelism<'_>) {
         let squares: Vec<usize> = (0..100).map(|i| i * i).collect();
         assert_eq!(parallelism.map(100, |i| i * i), squares);
         assert_eq!(
@@ -110,46 +120,47 @@ mod tests {
             Ok(squares)
         );
 
+        // With no tasks, `f` is never called.
         assert!(parallelism.map(0, |i| i).is_empty());
         assert_eq!(parallelism.try_map(0, Err::<usize, usize>), Ok(Vec::new()));
 
         // Tasks 37 and 74 fail; the earlier one is reported.
-        let failed =
-            parallelism.try_map(100, |i| if i % 37 == 0 && i > 0 { Err(i) } else { Ok(i) });
+        let failed = parallelism.try_map(100, |i| if i == 37 || i == 74 { Err(i) } else { Ok(i) });
         assert_eq!(failed, Err(37));
     }
 
-    /// Check that both operations of `parallelism` run every task where `placed` returns
+    /// Assert that both operations run every task on a thread where `expected` returns
     /// `true`.
-    fn check_placement<P>(parallelism: Parallelism<'_>, placed: P)
+    fn assert_tasks_run_where<P>(parallelism: Parallelism<'_>, expected: P)
     where
         P: Fn() -> bool + Sync + Send,
     {
-        assert!(parallelism.map(8, |_| placed()).into_iter().all(|p| p));
-
-        let placed = parallelism.try_map(8, |_| if placed() { Ok(()) } else { Err(()) });
-        assert!(placed.is_ok());
+        assert_eq!(parallelism.map(8, |_| expected()), [true; 8]);
+        assert_eq!(
+            parallelism.try_map(8, |_| Ok::<_, ()>(expected())),
+            Ok(vec![true; 8])
+        );
     }
 
     #[test]
-    fn sequential_runs_in_order_on_the_calling_thread() {
+    fn test_sequential() {
+        let parallelism = Parallelism::sequential();
         let caller = std::thread::current().id();
-        for parallelism in [Parallelism::sequential(), Parallelism::default()] {
-            check_task_order(parallelism);
-            check_placement(parallelism, || std::thread::current().id() == caller);
-        }
+
+        assert_task_order(parallelism);
+        assert_tasks_run_where(parallelism, || std::thread::current().id() == caller);
     }
 
-    #[cfg(feature = "rayon")]
     #[test]
-    fn rayon_runs_in_order_on_the_pool() {
+    #[cfg(all(not(miri), feature = "rayon"))]
+    fn test_rayon() {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
             .build()
             .unwrap();
         let parallelism = Parallelism::rayon(&pool);
 
-        check_task_order(parallelism);
-        check_placement(parallelism, || pool.current_thread_index().is_some());
+        assert_task_order(parallelism);
+        assert_tasks_run_where(parallelism, || pool.current_thread_index().is_some());
     }
 }
