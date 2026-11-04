@@ -167,6 +167,40 @@ fn configuration_rejects_unknown_or_invalid_build_options() -> Result<()> {
 }
 
 #[test]
+fn scan_target_configuration_accepts_lists_and_legacy_scalars() -> Result<()> {
+    for (input, expected) in [
+        (
+            r#"{"nprobe":[],"target_scan_ratios":[0.02,0.04,0.06,0.08]}"#,
+            vec![0.02, 0.04, 0.06, 0.08],
+        ),
+        (r#"{"nprobe":[],"target_scan_ratio":0.08}"#, vec![0.08]),
+        (r#"{"nprobe":[1],"target_scan_ratio":null}"#, Vec::new()),
+    ] {
+        let search: SearchPhase = serde_json::from_str(input)?;
+        assert_eq!(search.target_scan_ratios, expected);
+        let serialized = serde_json::to_value(&search)?;
+        assert_eq!(
+            serialized["target_scan_ratios"],
+            serde_json::json!(expected)
+        );
+        assert!(serialized.get("target_scan_ratio").is_none());
+        search.validate()?;
+    }
+    for input in [
+        r#"{"nprobe":[],"target_scan_ratios":[]}"#,
+        r#"{"target_scan_ratios":[0.02,0.0]}"#,
+        r#"{"target_scan_ratios":[0.02,1.01]}"#,
+        r#"{"target_scan_ratios":[-0.1]}"#,
+        r#"{"target_scan_ratios":[null]}"#,
+        r#"{"target_scan_ratio":0.08,"target_scan_ratios":[0.04]}"#,
+    ] {
+        let parsed = serde_json::from_str::<SearchPhase>(input);
+        assert!(parsed.is_err() || parsed?.validate().is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn scan_calibration_matches_measured_candidate_work() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread().build()?;
     runtime.block_on(async {
@@ -199,7 +233,10 @@ fn scan_calibration_matches_measured_candidate_work() -> Result<()> {
                 }
                 counts.push(count);
             }
-            for ratio in [0.08, 0.5, 1.0] {
+            let ratios = [0.08, 0.02, 0.04, 0.06, 0.08, 0.5, 1.0];
+            let probes = provider.calibrate(&queries, &ratios)?;
+            assert_eq!(probes.len(), ratios.len());
+            for (ratio, actual) in ratios.into_iter().zip(probes) {
                 let target = ratio * base.len() as f64 * queries.len() as f64;
                 let expected = counts
                     .iter()
@@ -210,7 +247,7 @@ fn scan_calibration_matches_measured_candidate_work() -> Result<()> {
                     .unwrap()
                     .0
                     + 1;
-                assert_eq!(provider.calibrate(&queries, ratio)?, expected);
+                assert_eq!(actual, expected);
             }
         }
         Ok(())
