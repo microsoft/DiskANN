@@ -145,7 +145,7 @@ impl Readable {
         word.load(Ordering::Acquire) & Self::mask(i) != 0
     }
 
-    /// Return `true` if slot `i` can be safely read under an [`epoch::Guard`].
+    /// Return `true` if slot `i` can be safely read under an [`epoch::ReadGuard`].
     ///
     /// This has [`Ordering::Acquire`] ordering.
     #[inline]
@@ -315,7 +315,7 @@ impl Packed {
     /// # Panics
     ///
     /// Panics if `guard` does not belong to `self`'s [`epoch::Registry`].
-    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+    pub(crate) fn reader<'a>(&'a self, guard: epoch::ReadGuard<'a>) -> Reader<'a> {
         self.handle.assert_guard_belongs(&guard);
         Reader {
             store: self,
@@ -369,7 +369,7 @@ impl slots::Slots for Packed {
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {
     store: &'a Packed,
-    _guard: epoch::Guard<'a>,
+    _guard: epoch::ReadGuard<'a>,
 }
 
 impl Reader<'_> {
@@ -416,8 +416,8 @@ impl Reader<'_> {
 
         // SAFETY: Caller asserts that `i` is in-bounds.
         if unsafe { self.store.readable.can_read_unchecked(i) } {
-            // SAFETY: Publication was observed. The `epoch::Guard` prevents recycling while
-            // the returned reference is borrowed from this reader.
+            // SAFETY: Publication was observed. The `epoch::ReadGuard` prevents recycling
+            // while the returned reference is borrowed from this reader.
             Some(unsafe { self.read_raw_unchecked(i).as_slice() })
         } else {
             None
@@ -541,7 +541,7 @@ mod tests {
     }
 
     fn reader(s: &Store<Packed>) -> Reader<'_> {
-        s.guard(|packed, guard| packed.reader(guard)).unwrap()
+        s.read_guard(|packed, guard| packed.reader(guard)).unwrap()
     }
 
     fn payload(i: u32, tag: u32) -> [u8; 8] {

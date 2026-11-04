@@ -34,14 +34,14 @@
 //!
 //! ## Primitives
 //!
-//! Actors call [`Registry::guard`] to receive a [`Guard`]. This guard protects items
-//! at its creation epoch. Any items "retired" while the guard is held will be buffered
+//! Actors call [`Registry::read_guard`] to receive a [`ReadGuard`]. This guard protects
+//! items at its creation epoch. Any items "retired" while the guard is held will be buffered
 //! until the guard is destroyed.
 //!
 //! To retire an item, [`Registry::retire`] is used to receive a [`Retire`]. This behaves
-//! exactly like a [`Guard`] with the extra capability of retiring items. All items retired
-//! through [`Retire::retire`] will be buffered until the [`Registry`] can prove that all
-//! guards (correctly using the data structure) that could have observed the retired item
+//! exactly like a [`ReadGuard`] with the extra capability of retiring items. All items
+//! retired through [`Retire::retire`] will be buffered until the [`Registry`] can prove that
+//! all guards (correctly using the data structure) that could have observed the retired item
 //! have been destroyed.
 //!
 //! Items can be reclaimed via [`Registry::try_advance`]. If successful, a [`Drain`] of
@@ -51,13 +51,14 @@
 //! as indices into some external storage); this is not a general-purpose deferred-drop EBR
 //! system.
 //!
-//! Additionally, [`Guard`]s are cheaply cloneable using [`Guard::share`]. These behave like
-//! [`std::sync::Arc`] with atomic reference counting, but do not require an initial allocation
-//! as the reference count lives inside the [`Registry`]. This enables uses where an initial
-//! [`Guard`] is acquired, then shared among multiple dataset readers.
+//! Additionally, [`ReadGuard`]s are cheaply cloneable using [`ReadGuard::share`]. These
+//! behave like [`std::sync::Arc`] with atomic reference counting, but do not require an
+//! initial allocation as the reference count lives inside the [`Registry`]. This enables
+//! uses where an initial [`ReadGuard`] is acquired, then shared among multiple dataset
+//! readers.
 //!
 //! Finally, [`RegistryHandle`]s can be created with [`Registry::handle`]. Such a handle may
-//! check that a [`Guard`] actually belongs to registry with
+//! check that a [`ReadGuard`] actually belongs to registry with
 //! [`RegistryHandle::assert_guard_belongs`].
 
 use std::{
@@ -75,7 +76,7 @@ use parking_lot::{Mutex, MutexGuard};
 
 const DEFAULT_GUARD_SLOTS: NonZeroUsize = NonZeroUsize::new(256).unwrap();
 
-/// Like [`std::sync::Arc`], we limit the number of [`Guard`] clones to `isize::MAX`.
+/// Like [`std::sync::Arc`], we limit the number of [`ReadGuard`] clones to `isize::MAX`.
 ///
 /// This is to give a `fetch_add` to increase reference counts some head room to detect
 /// overflow.
@@ -97,7 +98,7 @@ struct GuardSlot {
     epoch: AtomicU64,
 
     /// The number of guards sharing this slot. This is used to implement intrusive
-    /// reference counting for [`Guard`].
+    /// reference counting for [`ReadGuard`].
     references: AtomicUsize,
 }
 
@@ -110,7 +111,7 @@ impl Default for GuardSlot {
     }
 }
 
-/// A registry of epoch-based [`Guard`]s. See the [module-level docs](self).
+/// A registry of epoch-based [`ReadGuard`]s. See the [module-level docs](self).
 #[derive(Debug)]
 pub(crate) struct Registry {
     inner: Arc<Inner>,
@@ -167,7 +168,7 @@ struct Inner {
 
 impl Inner {
     #[must_use = "this function has no side-effects and is used to justify unsafe code"]
-    fn guard_belongs(&self, guard: &Guard<'_>) -> bool {
+    fn guard_belongs(&self, guard: &ReadGuard<'_>) -> bool {
         std::ptr::eq(self, guard.registry)
     }
 }
@@ -195,7 +196,7 @@ impl Registry {
 
     /// Construct a new [`Registry`] with `capacity` guard slots.
     ///
-    /// This is the number of [`Guard`]s that can be registered concurrently.
+    /// This is the number of [`ReadGuard`]s that can be registered concurrently.
     pub(crate) fn with_capacity(capacity: NonZeroUsize) -> Self {
         let inner = Inner {
             guards: std::iter::repeat_with(Default::default)
@@ -214,7 +215,7 @@ impl Registry {
 
     /// Create a read-only handle to the registry.
     ///
-    /// The [`RegistryHandle`] can be used to validate whether or not [`Guard`]s
+    /// The [`RegistryHandle`] can be used to validate whether or not [`ReadGuard`]s
     /// belong to this [`Registry`] or not.
     ///
     /// Unsafe code may rely on these checks.
@@ -233,13 +234,13 @@ impl Registry {
 
     /// Register the caller with `self`.
     ///
-    /// Any items retired while [`Guard`] is held will be protected.
+    /// Any items retired while [`ReadGuard`] is held will be protected.
     ///
     /// # Errors
     ///
     /// Returns an error if the number of currently active guards exceeds the number of
     /// internal guard slots and thus a new guard cannot be made.
-    pub(crate) fn guard(&self) -> Result<Guard<'_>, Unavailable> {
+    pub(crate) fn read_guard(&self) -> Result<ReadGuard<'_>, Unavailable> {
         self.guard_inner(NoDelay)
     }
 
@@ -248,12 +249,12 @@ impl Registry {
     /// Items passed to the returned [`Retire`] will be queued and held until any registry
     /// guard that would have observed the retirement has been dropped.
     pub(crate) fn retire(&self) -> Result<Retire<'_>, Unavailable> {
-        let guard = self.guard()?;
+        let guard = self.read_guard()?;
         Ok(Retire { guard })
     }
 
     #[inline]
-    fn guard_inner<T>(&self, mut delay: T) -> Result<Guard<'_>, Unavailable>
+    fn guard_inner<T>(&self, mut delay: T) -> Result<ReadGuard<'_>, Unavailable>
     where
         T: GuardDelay,
     {
@@ -309,7 +310,7 @@ impl Registry {
                 // to make sure we hit it.
                 guard_slot.references.store(1, Ordering::Relaxed);
 
-                return Ok(Guard {
+                return Ok(ReadGuard {
                     slot: guard_slot,
                     registry: &self.inner,
                     #[cfg(test)]
@@ -380,8 +381,8 @@ impl Registry {
     ///
     /// If successful, returns a [`Drain`]. All items in the drain can be reclaimed.
     ///
-    /// Returns `None` if the epoch cannot yet be advanced (some [`Guard`] still belongs to
-    /// a prior epoch) or if another [`Drain`] is currently active.
+    /// Returns `None` if the epoch cannot yet be advanced (some [`ReadGuard`] still belongs
+    /// to a prior epoch) or if another [`Drain`] is currently active.
     ///
     /// # Panics
     ///
@@ -451,7 +452,7 @@ impl Registry {
     }
 }
 
-/// A read-only handle to a [`Registry`] used to validate that [`Guard`]s belong to
+/// A read-only handle to a [`Registry`] used to validate that [`ReadGuard`]s belong to
 /// the said registry.
 #[derive(Debug, Clone)]
 pub(crate) struct RegistryHandle {
@@ -459,13 +460,13 @@ pub(crate) struct RegistryHandle {
 }
 
 impl RegistryHandle {
-    /// Assert that [`Guard`] belongs to the handle's [`Registry`].
+    /// Assert that [`ReadGuard`] belongs to the handle's [`Registry`].
     ///
     /// # Panics
     ///
-    /// Panics if [`Guard`] belongs to a different registry.
+    /// Panics if [`ReadGuard`] belongs to a different registry.
     #[inline]
-    pub(crate) fn assert_guard_belongs(&self, guard: &Guard<'_>) {
+    pub(crate) fn assert_guard_belongs(&self, guard: &ReadGuard<'_>) {
         if !self.inner.guard_belongs(guard) {
             guard_does_not_belong(self, guard)
         }
@@ -474,7 +475,7 @@ impl RegistryHandle {
 
 #[cold]
 #[expect(clippy::panic, reason = "internals should not provide invalid guards")]
-fn guard_does_not_belong(_handle: &RegistryHandle, _guard: &Guard<'_>) -> ! {
+fn guard_does_not_belong(_handle: &RegistryHandle, _guard: &ReadGuard<'_>) -> ! {
     panic!("invalid epoch guard");
 }
 
@@ -483,11 +484,11 @@ fn guard_does_not_belong(_handle: &RegistryHandle, _guard: &Guard<'_>) -> ! {
 /// While this guard is held, the [`Registry`] will not advance past the guard's epoch, and
 /// any items retired through *any* [`Retire`] at that epoch (or earlier) will not be reclaimed.
 ///
-/// Obtained via [`Registry::guard`].
+/// Obtained via [`Registry::read_guard`].
 ///
 /// See also: [`Retire`]
 #[derive(Debug)]
-pub(crate) struct Guard<'a> {
+pub(crate) struct ReadGuard<'a> {
     slot: &'a GuardSlot,
     registry: &'a Inner,
 
@@ -498,14 +499,14 @@ pub(crate) struct Guard<'a> {
     test_slot_index: usize,
 }
 
-impl<'a> Guard<'a> {
-    /// Cheaply clone `self` into another [`Guard`] with the same lifetime.
+impl<'a> ReadGuard<'a> {
+    /// Cheaply clone `self` into another [`ReadGuard`] with the same lifetime.
     ///
-    /// The epoch associated with the original [`Guard`] will be released only when all
+    /// The epoch associated with the original [`ReadGuard`] will be released only when all
     /// transitively shared guards are dropped.
     #[cfg(any(test, feature = "quantization"))]
     #[inline]
-    pub(crate) fn share(&self) -> Guard<'a> {
+    pub(crate) fn share(&self) -> ReadGuard<'a> {
         let ref_count = self.slot.references.fetch_add(1, Ordering::Relaxed);
 
         // See the note on `MAX_REFCOUNT`.
@@ -513,7 +514,7 @@ impl<'a> Guard<'a> {
             std::process::abort();
         }
 
-        Guard {
+        ReadGuard {
             slot: self.slot,
             registry: self.registry,
             #[cfg(test)]
@@ -533,7 +534,7 @@ impl<'a> Guard<'a> {
     }
 }
 
-impl Drop for Guard<'_> {
+impl Drop for ReadGuard<'_> {
     fn drop(&mut self) {
         // Decrement the reference count. If this is the last clone, then we can release our
         // registration on the guard slot.
@@ -564,7 +565,7 @@ impl Drop for Guard<'_> {
 /// See also: [`Retire`]
 #[derive(Debug)]
 pub(crate) struct Retire<'a> {
-    guard: Guard<'a>,
+    guard: ReadGuard<'a>,
 }
 
 impl<'a> Retire<'a> {
@@ -640,7 +641,7 @@ impl ExactSizeIterator for Drain<'_> {}
 // Error //
 //-------//
 
-/// Returned by [`Registry::guard`] when all guard slots are occupied.
+/// Returned by [`Registry::read_guard`] when all guard slots are occupied.
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) struct Unavailable;
@@ -704,7 +705,7 @@ mod tests {
         for capacity in 1..10 {
             let registry = Registry::with_capacity(NonZeroUsize::new(capacity).unwrap());
             let mut guards = Vec::new();
-            while let Ok(guard) = registry.guard() {
+            while let Ok(guard) = registry.read_guard() {
                 guards.push(guard);
             }
 
@@ -727,7 +728,7 @@ mod tests {
         let a = Registry::with_capacity(NonZeroUsize::new(5).unwrap());
         let b = Registry::with_capacity(NonZeroUsize::new(5).unwrap());
 
-        let guard = b.guard().unwrap();
+        let guard = b.read_guard().unwrap();
 
         // This function should panic since the guard does not belong.
         a.handle().assert_guard_belongs(&guard);
@@ -737,7 +738,7 @@ mod tests {
     fn shared_guards_prevent_advancement() {
         let registry = Registry::with_capacity(NonZeroUsize::new(5).unwrap());
 
-        let guard = registry.guard().unwrap();
+        let guard = registry.read_guard().unwrap();
 
         // Push an item into the retire queue.
         //
@@ -946,25 +947,25 @@ mod tests {
     fn test_slot_exhaustion() {
         let registry = Registry::with_capacity(NonZeroUsize::new(2).unwrap());
 
-        let g0 = registry.guard().unwrap();
-        let g1 = registry.guard().unwrap();
+        let g0 = registry.read_guard().unwrap();
+        let g1 = registry.read_guard().unwrap();
 
         // All guard slots are now occupied. The next registration must fail.
-        assert!(matches!(registry.guard(), Err(Unavailable)));
-        assert!(matches!(registry.guard(), Err(Unavailable)));
+        assert!(matches!(registry.read_guard(), Err(Unavailable)));
+        assert!(matches!(registry.read_guard(), Err(Unavailable)));
 
         // Dropping a guard releases its slot.
         let freed_slot = g0.test_slot_index;
         drop(g0);
 
-        let g2 = registry.guard().unwrap();
+        let g2 = registry.read_guard().unwrap();
         assert_eq!(
             g2.test_slot_index, freed_slot,
             "newly freed slot should be reclaimed"
         );
 
         // Registry is full again.
-        assert!(matches!(registry.guard(), Err(Unavailable)));
+        assert!(matches!(registry.read_guard(), Err(Unavailable)));
 
         drop(g1);
         drop(g2);
@@ -977,11 +978,11 @@ mod tests {
         let registry = Registry::with_capacity(NonZeroUsize::new(4).unwrap());
 
         let (g2, g3) = {
-            let _g0 = registry.guard().unwrap();
-            let _g1 = registry.guard().unwrap();
+            let _g0 = registry.read_guard().unwrap();
+            let _g1 = registry.read_guard().unwrap();
 
-            let g2 = registry.guard().unwrap();
-            let g3 = registry.guard().unwrap();
+            let g2 = registry.read_guard().unwrap();
+            let g3 = registry.read_guard().unwrap();
             (g2, g3)
         };
 
@@ -991,8 +992,8 @@ mod tests {
         let f = || {
             // Keep wrapping and hitting the first two guard slots.
             for _ in 0..10 {
-                let g0 = registry.guard().unwrap();
-                let g1 = registry.guard().unwrap();
+                let g0 = registry.read_guard().unwrap();
+                let g1 = registry.read_guard().unwrap();
 
                 let s0 = g0.test_slot_index;
                 let s1 = g1.test_slot_index;
@@ -1004,7 +1005,7 @@ mod tests {
                     assert_eq!((s0, s1), (1, 0));
                 };
 
-                assert!(matches!(registry.guard(), Err(Unavailable)));
+                assert!(matches!(registry.read_guard(), Err(Unavailable)));
             }
         };
 

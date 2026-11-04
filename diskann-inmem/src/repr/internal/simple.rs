@@ -124,7 +124,7 @@ mod tests {
         // If we rerank - IDs should come out in reverse order.
         let counters = Counters::new();
         let mut reranker = Reranker::new(
-            store.guard(|simple, guard| simple.reader(guard)).unwrap(),
+            store.read_guard(|simple, guard| simple.reader(guard)).unwrap(),
             repr::test::TestQueryDistance::new(&[-1.0]),
             counters.local(),
         );
