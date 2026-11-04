@@ -11,7 +11,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use crate::{
-    num::{Bytes, Capacity, MaxDegree},
+    num::{Bytes, IdLimit, MaxDegree},
     store,
 };
 
@@ -37,11 +37,19 @@ impl Store {
     ///
     /// # Panics
     ///
-    /// Panics if the underlying store could not be constructed (e.g. `config.capacity` plus
-    /// the frozen point exceeds `u32::MAX`) or if other configuration parameters such as
-    /// the number of epoch guard slots are invalid (e.g. zero).
+    /// Panics if the underlying store could not be constructed (e.g. `config.capacity`
+    /// exceeds `u32::MAX`) or if other configuration parameters such as the number of epoch
+    /// guard slots are invalid (e.g. zero).
     pub fn new(config: Config) -> Self {
-        let store_layout = store::Layout::new(Capacity::new(config.capacity), MaxDegree::new(0), 0);
+        let store_layout = store::Layout::new(
+            IdLimit::new(
+                config
+                    .capacity
+                    .try_into()
+                    .expect("capacity must fit in u32"),
+            ),
+            MaxDegree::new(0),
+        );
 
         let store_config = store::Config::__exhaustive(
             NonZeroUsize::new(config.epoch_guard_slots)

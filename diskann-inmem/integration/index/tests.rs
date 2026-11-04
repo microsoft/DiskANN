@@ -5,14 +5,14 @@
 
 use diskann::graph::search::Knn;
 use diskann_benchmark_core::recall::{RecallMetrics, Rows};
-use diskann_benchmark_runner::utils::fmt::KeyValue;
-use diskann_utils::views::Matrix;
+use diskann_benchmark_runner::{report::Report, utils::fmt::KeyValue};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     index::{Counters, Index, KnnSearch},
     support::{
-        check::{CheckMatch, Match, check_all_fields},
+        check::{CheckMatch, check_all_fields},
         datatype::DatasetView,
     },
 };
@@ -44,12 +44,12 @@ pub(super) fn knn(
         groundtruth.nrows(),
     );
 
-    let mut ids = Matrix::new(u64::MAX, queries.nrows(), k);
+    let mut ids = rowmajor::Owned::from_element(queries.nrows(), k, u64::MAX);
 
     let before = index.counters();
     let mut misc = KnnSearch::new();
     let mut neighbors = Vec::new();
-    for (out, query) in std::iter::zip(ids.row_iter_mut(), queries.iter()) {
+    for (out, query) in std::iter::zip(ids.rows_mut(), queries.iter()) {
         neighbors.clear();
 
         let stats = rt.block_on(index.search(query, knn, &mut neighbors))?;
@@ -95,7 +95,7 @@ impl From<RecallMetrics> for KnnRecall {
 }
 
 impl CheckMatch for KnnRecall {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,
@@ -133,7 +133,7 @@ impl std::fmt::Display for KnnStats {
 }
 
 impl CheckMatch for KnnStats {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,

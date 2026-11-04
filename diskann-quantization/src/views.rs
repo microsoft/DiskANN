@@ -181,14 +181,27 @@ where
     /// # Panics
     ///
     /// Panics if `i >= self.len()`.
+    #[expect(
+        clippy::panic,
+        reason = "this is documented to panic for out-of-bounds `i`"
+    )]
     pub fn at(&self, i: usize) -> core::ops::Range<usize> {
-        assert!(
-            i < self.len(),
-            "index {i} must be less than len {}",
-            self.len()
-        );
-        let slice = self.offsets.as_slice();
-        slice[i]..slice[i + 1]
+        match self.get(i) {
+            Some(range) => range,
+            None => panic!("index {i} must be less than len {}", self.len()),
+        }
+    }
+
+    /// Return a range containing the start and one-past-the-end indices for chunk `i`.
+    ///
+    /// Returns `None` is `i >= self.len()`.
+    pub fn get(&self, i: usize) -> Option<core::ops::Range<usize>> {
+        if i < self.len() {
+            let slice = self.offsets.as_slice();
+            Some(slice[i]..slice[i + 1])
+        } else {
+            None
+        }
     }
 
     /// Return `self` as a view.
@@ -210,6 +223,29 @@ where
     /// Return the underlying data as a slice.
     pub fn as_slice(&self) -> &[usize] {
         self.offsets.as_slice()
+    }
+
+    /// Return the maximum chunk dimension.
+    pub fn max_chunk_dim(&self) -> NonZeroUsize {
+        let mut max = NonZeroUsize::MIN;
+        let mut itr = self.offsets.as_slice().iter();
+
+        let Some(mut previous) = itr.next() else {
+            // NOTE: this is unreachable since we maintain the invariant that the number
+            // of chunks is at least 1.
+            return max;
+        };
+
+        for next in itr {
+            // This cannot underflow because offsets are verified to be strictly monotonic.
+            if let Some(dim) = NonZeroUsize::new(next - previous) {
+                max = max.max(dim);
+            }
+
+            previous = next;
+        }
+
+        max
     }
 }
 
@@ -423,12 +459,22 @@ mod tests {
         assert!(!offsets.is_empty());
 
         assert_eq!(offsets.at(0), 0..1);
+        assert_eq!(offsets.get(0).unwrap(), 0..1);
         assert_eq!(offsets.at(1), 1..3);
+        assert_eq!(offsets.get(1).unwrap(), 1..3);
         assert_eq!(offsets.at(2), 3..6);
+        assert_eq!(offsets.get(2).unwrap(), 3..6);
         assert_eq!(offsets.at(3), 6..10);
+        assert_eq!(offsets.get(3).unwrap(), 6..10);
         assert_eq!(offsets.at(4), 10..12);
+        assert_eq!(offsets.get(4).unwrap(), 10..12);
         assert_eq!(offsets.at(5), 12..13);
+        assert_eq!(offsets.get(5).unwrap(), 12..13);
         assert_eq!(offsets.at(6), 13..14);
+        assert_eq!(offsets.get(6).unwrap(), 13..14);
+
+        assert!(offsets.get(7).is_none());
+        assert!(offsets.get(8).is_none());
 
         // Finally, make sure the type is copyable.
         assert!(is_copyable(offsets));
@@ -452,12 +498,28 @@ mod tests {
             offsets_view.as_slice().as_ptr(),
             offsets_owned.as_slice().as_ptr()
         );
+
+        // `max_chunk_dim`
+        assert_eq!(offsets.max_chunk_dim().get(), 4);
+    }
+
+    #[test]
+    fn chunk_offset_max_dim() {
+        let offsets = ChunkOffsetsView::new(&[0, 10, 11, 14]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 10);
+
+        let offsets = ChunkOffsetsView::new(&[0, 1, 2, 3]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 1);
+
+        let offsets = ChunkOffsetsView::new(&[0, 1, 2, 5, 20, 21]).unwrap();
+        assert_eq!(offsets.max_chunk_dim().get(), 15);
     }
 
     #[test]
     #[should_panic(expected = "index 5 must be less than len 3")]
     fn chunk_offset_indexing_panic() {
         let offsets = ChunkOffsets::new(Box::new([0, 1, 2, 3])).unwrap();
+        assert!(offsets.get(5).is_none());
 
         // panics
         let _ = offsets.at(5);

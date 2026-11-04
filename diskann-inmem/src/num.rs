@@ -160,13 +160,14 @@ impl std::fmt::Display for Align {
 //-------------------------//
 
 macro_rules! typed_int {
-    ($(#[$doc:meta])* $vis:vis $name:ident, $T:ty $(,)?) => {
+    ($(#[$doc:meta])* $vis:vis $name:ident ($vis_inner:vis $T:ty)) => {
         $(#[$doc])*
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
         #[repr(transparent)]
-        $vis struct $name($T);
+        $vis struct $name($vis_inner $T);
 
         impl $name {
+            #[allow(unused)]
             $vis const fn new(value: $T) -> Self {
                 Self(value)
             }
@@ -188,14 +189,12 @@ typed_int!(
     /// The number of distinct slots a [`crate::Provider`] or [`crate::repr::Representation`]
     /// has capacity for. This is logically distinct from [`IdLimit`], which may be greater
     /// due to immutable points within a storage container.
-    pub Capacity,
-    usize,
+    pub Capacity(usize)
 );
 
 typed_int!(
     /// The maximum degree of an adjacency list.
-    pub MaxDegree,
-    usize
+    pub MaxDegree(usize)
 );
 
 typed_int!(
@@ -206,8 +205,7 @@ typed_int!(
     ///
     /// [`Capacity`] is related, but the [`IdLimit`] for a collection may be larger due to
     /// immutable points.
-    pub IdLimit,
-    u32
+    pub IdLimit(u32)
 );
 
 impl IdLimit {
@@ -226,6 +224,123 @@ impl IdLimit {
         }
 
         self.value() as usize
+    }
+}
+
+//-----------//
+// Test Only //
+//-----------//
+
+#[cfg(test)]
+typed_int!(
+    /// Used in test data structures to track the logical ID of an entry.
+    #[derive(Hash)]
+    pub(crate) LogicalId(pub(crate) usize)
+);
+
+#[cfg(test)]
+typed_int!(
+    /// Used in test data structures to track the logical ID of an entry.
+    #[derive(Hash)]
+    pub(crate) SlotId(pub(crate) u32)
+);
+
+///////////
+// Range //
+///////////
+
+/// A specialization of `std::ops::Range` containing points in `[start, end)` with the
+/// following properties:
+///
+/// 1. Start and end are guaranteed to be non-decreasing.
+/// 2. It is `Copy`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Range {
+    start: u32,
+    end: u32,
+}
+
+impl Range {
+    /// Construct a new [`Range`] if `end >= start`.
+    #[cfg_attr(not(test), expect(unused, reason = "this completes the API"))]
+    pub(crate) const fn new(start: u32, end: u32) -> Option<Self> {
+        if end < start {
+            None
+        } else {
+            Some(Self { start, end })
+        }
+    }
+
+    /// Construct a new range over `[start, start + offset)`.
+    ///
+    /// Returns `None` if `start + offset` overflows `u32::MAX`.
+    pub(crate) const fn start_plus(start: u32, offset: u32) -> Option<Self> {
+        match start.checked_add(offset) {
+            Some(end) => Some(Self { start, end }),
+            None => None,
+        }
+    }
+
+    /// Construct a new range over `[start, start + offset)`.
+    ///
+    /// Returns `None` if `start`, `offset`, or `start + offset` exceed `u32::MAX`.
+    pub(crate) const fn start_plus_usize(start: usize, offset: usize) -> Option<Self> {
+        let start = match const_convert(start) {
+            Some(start) => start,
+            None => return None,
+        };
+
+        let offset = match const_convert(offset) {
+            Some(offset) => offset,
+            None => return None,
+        };
+
+        Self::start_plus(start, offset)
+    }
+
+    /// Return the length of the [`Range`].
+    #[cfg_attr(not(test), expect(unused, reason = "this completes the API"))]
+    pub(crate) const fn len(&self) -> usize {
+        const { assert!(std::mem::size_of::<usize>() >= std::mem::size_of::<u32>()) };
+        (self.end - self.start) as usize
+    }
+
+    /// Return `true` only if `self.len() == 0`.
+    #[cfg_attr(not(test), expect(unused, reason = "this completes the API"))]
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Return the start of the range.
+    pub(crate) const fn start(&self) -> u32 {
+        self.start
+    }
+
+    /// Return the end of the range.
+    pub(crate) const fn end(&self) -> u32 {
+        self.end
+    }
+
+    /// Return an iterator over all items in the range.
+    pub(crate) const fn iter(&self) -> std::ops::Range<u32> {
+        self.start()..self.end()
+    }
+}
+
+const fn const_convert(x: usize) -> Option<u32> {
+    if x > (u32::MAX as usize) {
+        None
+    } else {
+        Some(x as u32)
+    }
+}
+
+impl IntoIterator for Range {
+    type Item = u32;
+    type IntoIter = std::ops::Range<u32>;
+
+    fn into_iter(self) -> std::ops::Range<u32> {
+        self.iter()
     }
 }
 
@@ -391,5 +506,68 @@ mod tests {
     #[test]
     fn align_display() {
         assert_eq!(format!("{}", Align::_64), "64");
+    }
+
+    //-------//
+    // Range //
+    //-------//
+
+    #[test]
+    fn test_range() {
+        // Constructors.
+        for (start, end) in [
+            (0, 0),
+            (0, 1),
+            (3, 7),
+            (7, 7),
+            (0, u32::MAX),
+            (u32::MAX - 1, u32::MAX),
+            (u32::MAX, u32::MAX),
+        ] {
+            let offset = end - start;
+            for range in [
+                Range::new(start, end).unwrap(),
+                Range::start_plus(start, offset).unwrap(),
+                Range::start_plus_usize(start as usize, offset as usize).unwrap(),
+            ] {
+                assert_eq!(range.start(), start);
+                assert_eq!(range.end(), end);
+                assert_eq!(range.len(), offset as usize);
+                assert_eq!(range.is_empty(), start == end);
+                assert_eq!(range.iter(), start..end);
+                assert_eq!(range.into_iter(), start..end);
+            }
+        }
+
+        for (start, end) in [(1, 0), (7, 3), (u32::MAX, 0)] {
+            assert!(Range::new(start, end).is_none());
+        }
+
+        for (start, offset) in [(u32::MAX, 1), (1, u32::MAX), (u32::MAX, u32::MAX)] {
+            assert!(Range::start_plus(start, offset).is_none());
+            assert!(Range::start_plus_usize(start as usize, offset as usize).is_none());
+        }
+
+        // Values outside u32 are only representable on wider targets.
+        if let Some(too_large) = (u32::MAX as usize).checked_add(1) {
+            assert!(Range::start_plus_usize(too_large, 0).is_none());
+            assert!(Range::start_plus_usize(0, too_large).is_none());
+            assert!(Range::start_plus_usize(usize::MAX, usize::MAX).is_none());
+        }
+
+        let cases: [(u32, u32, &[u32]); _] = [
+            (0, 0, &[]),
+            (7, 7, &[]),
+            (3, 7, &[3, 4, 5, 6]),
+            (u32::MAX - 1, u32::MAX, &[u32::MAX - 1]),
+            (u32::MAX, u32::MAX, &[]),
+        ];
+
+        // Iteration includes the start but excludes the end.
+        for (start, end, expected) in cases {
+            let range = Range::new(start, end).unwrap();
+            assert_eq!(range.iter().collect::<Vec<_>>(), expected);
+            assert_eq!(range.into_iter().collect::<Vec<_>>(), expected);
+        }
     }
 }

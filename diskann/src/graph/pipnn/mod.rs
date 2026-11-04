@@ -41,7 +41,7 @@ use crate::{
     graph::{AdjacencyList, Config},
     utils::VectorRepr,
 };
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::rowmajor;
 use diskann_vector::distance::Metric;
 use diskann_wide::arch::{self, Target2};
 use rayon::ThreadPool;
@@ -94,7 +94,7 @@ fn distance_scratch(
     storage: &mut Vec<f32>,
     rows: usize,
     columns: usize,
-) -> ANNResult<MutMatrixView<'_, f32>> {
+) -> ANNResult<rowmajor::Mut<'_, f32>> {
     let len = rows.checked_mul(columns).ok_or_else(|| {
         ANNError::message(format!(
             "distance matrix size overflows for {rows} x {columns}"
@@ -103,7 +103,11 @@ fn distance_scratch(
     if storage.len() < len {
         storage.resize(len, 0.0);
     }
-    Ok(MutMatrixView::try_from(&mut storage[..len], rows, columns)?)
+    Ok(rowmajor::Mut::try_from_data(
+        &mut storage[..len],
+        rows,
+        columns,
+    )?)
 }
 
 #[cfg(test)]

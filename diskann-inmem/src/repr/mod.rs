@@ -7,18 +7,53 @@
 //!
 //! A simplified interface for [`crate::Provider`] to use for building a graph index.
 
-use std::num::NonZeroU16;
+mod internal_docs {
+    //! # Start Point Handling
+    //!
+    //! By default, start points get located at the beginning of the physical slot space.
+    //! So if a [`super::Representation`] has 10 start points, they will be located at
+    //! physical slots `0..10`.
+    //!
+    //! While we do not **guarantee** this for external users, this has some nice properties
+    //! with respect to serialization. Serialization can compact an index to remove deleted
+    //! holes - and the serialized graph can be re-loaded in either the compact form or in
+    //! a form that adds extra room to enable insertions.
+    //!
+    //! With the start points located at the beginning, a serialized graph can be reloaded
+    //! at any size and the internal edges to not need any processing to handle start point
+    //! relocation.
+}
 
-use diskann::ANNResult;
-use thiserror::Error;
+use diskann::{ANNResult, neighbor::Neighbor};
 
 use crate::{
     counters::LocalCounters,
     num::{Capacity, IdLimit, MaxDegree},
 };
 
+//---------//
+// Modules //
+//---------//
+
+mod internal;
+
 pub mod full;
 pub use full::{Full, FullPrecision};
+
+#[cfg(feature = "quantization")]
+#[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
+pub mod quantized;
+
+#[cfg(feature = "quantization")]
+#[cfg_attr(docsrs, doc(cfg(feature = "quantization")))]
+pub use quantized::Quantized;
+
+#[cfg(test)]
+mod test;
+
+//----------------//
+// Representation //
+//----------------//
 
 /// Deferred creation of [`Representation`]s.
 ///
@@ -36,7 +71,7 @@ pub trait RepresentationConfig {
 ///
 /// A representation owns the adjacency lists and vector data for a concurrent in-memory graph
 /// index. Representations are expected to be indexed using `u32` IDs from
-/// `0..self.id_limit()`, with internal IDs in `0..self.capacity()` available for writing.
+/// `0..self.id_limit()` with `self.capacity()` slots available for writing.
 ///
 /// See also:
 ///
@@ -172,72 +207,71 @@ pub(crate) unsafe trait ExpandBeam: Send + Sync + std::fmt::Debug {
     ///
     /// * All items in `list` must be in bounds with respect to [`Self::id_limit`].
     /// * `buffer.len() >= list.len()`.
-    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize>;
+    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [Neighbor<u32>]) -> ANNResult<usize>;
+}
+
+/// A safe entry-point for resting [`ExpandBeam::expand_beam`].
+#[cfg(test)]
+fn safe_expand_beam(
+    expand_beam: &dyn ExpandBeam,
+    list: &[u32],
+    buffer: &mut [Neighbor<u32>],
+) -> ANNResult<usize> {
+    assert!(list.len() <= buffer.len());
+
+    let limit = expand_beam.id_limit();
+    for id in list.iter() {
+        if !limit.is_in_bounds(*id) {
+            panic!("id {} is not within {} -- {:?}", id, limit, expand_beam);
+        }
+    }
+
+    // SAFETY: We have verified that:
+    //
+    // 1. All entries in `list` are less than `expand_beam.id_limit()`.
+    // 2 `buffer.len() >= list.len()`.
+    unsafe { expand_beam.expand_beam(list, buffer) }
+}
+
+pub(crate) trait PostProcess: Send + Sync + std::fmt::Debug {
+    fn post_process(&mut self, buffer: &mut Vec<Neighbor<u32>>) -> ANNResult<()>;
 }
 
 /// Trait-object-based implementation for [`diskann::graph::glue::PruneAccessor`].
 ///
-/// [`Self::prepare`] assigns a [`PruneKey`] to each retrieved entry, allowing implementations
-/// to buffer data in a representation suitable for pruning. A prune session consists of one
-/// call to [`Self::prepare`] followed by calls to [`Self::evaluate`] using the keys it
-/// produced.
+/// Currently, we return raw slices to the underlying data. Limitations in the prune contract
+/// prevent us from doing any thing fancier.
 ///
-/// [`Self::prepare`] can be called multiple times for a single [`Prune`] object.
-/// Implementations may assume that each call starts a new prune session and do not need to
-/// buffer entries from all calls.
+/// ## Musings
+///
+/// Returning raw slices prevents us from doing something like hybrid pruning for PQ. At
+/// least not without some unpleasantness in `evaluate`. We accept this limitation for now
+/// since the performance of returning a raw slice is too tempting to give up.
+///
+/// A slightly better interface may be to use something like:
+/// ```text
+/// struct ElementRef<'a> {
+///     ptr: NonNull<()>,
+///     _lifetime: PhantomData<&'a ()>,
+/// }
+/// ```
+/// allowing us to store something slightly slimmer. However, because
+/// [`diskann::graph::glue::PruneAccessor::fill`] is a public method and
+/// [`diskann_vector::DistanceFunction`] is a safe trait with a safe method, we cannot
+/// expose these raw pointers soundly as someone in safe code could mix and match pointers.
+///
+/// At least slices have their length tagged. Our internal code does not yet do unsafe things
+/// assuming the lengths of two slices are the same. It would be nice to get there though.
 pub(crate) trait Prune: Send + Sync + std::fmt::Debug {
-    /// Prepare items for pruning.
+    /// The the data associated with `id`.
     ///
-    /// The `items` iterator contains all the internal IDs that need to be pruned as keys.
-    /// Each value in `items` is an output slot that should be populated with a [`PruneKey`]
-    /// if retrieval succeeds. Implementations are responsible for providing unique
-    /// [`PruneKey`]s and may assume these slots are initialized to `None`.
-    ///
-    /// Returns the total number of internal IDs that were successfully buffered.
-    fn prepare(
-        &mut self,
-        items: hashbrown::hash_map::IterMut<'_, u32, Option<PruneKey>>,
-    ) -> ANNResult<usize>;
+    /// Return `None` if `id` is unreadable (including out-of-bounds).
+    fn get(&self, id: u32) -> Option<&[u8]>;
 
-    /// Compute the distance between the elements referenced by the two [`PruneKey`]s.
+    /// Compute the distance between the two raw elements.
     ///
-    /// Implementations may assume that `a` and `b` were produced by the most recent call to
-    /// [`Self::prepare`] and are allowed to panic if this is violated. This property may
+    /// Implementations may assume that `a` and `b` were produced by a call to
+    /// [`Self::get`] and are allowed to panic if this is violated. This property may
     /// **not** be relied on for `unsafe` code.
-    fn evaluate(&self, a: PruneKey, b: PruneKey) -> f32;
+    fn evaluate(&self, a: &[u8], b: &[u8]) -> f32;
 }
-
-/// A [`Prune`]-local miniature internal ID.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PruneKey(NonZeroU16);
-
-impl PruneKey {
-    const ONE: Self = Self(NonZeroU16::new(1).unwrap());
-
-    /// Return the initial [`PruneKey`] in a sequence.
-    pub(crate) fn counter() -> Self {
-        Self::ONE
-    }
-
-    /// Increment `self` by 1.
-    ///
-    /// Overflows if called approximately 2^16 times.
-    pub(crate) fn increment(self) -> Result<Self, Overflow> {
-        match self.0.checked_add(1) {
-            Some(v) => Ok(Self(v)),
-            None => Err(Overflow),
-        }
-    }
-
-    /// Return the zero-based index represented by this key.
-    pub(crate) fn index(self) -> usize {
-        usize::from(self.0.get()) - 1
-    }
-}
-
-/// Incrementing a [`PruneKey`] overflowed.
-#[derive(Debug, Error)]
-#[error("prune list exceeded u16::MAX")]
-pub(crate) struct Overflow;
-
-diskann::convert_error!(Overflow);

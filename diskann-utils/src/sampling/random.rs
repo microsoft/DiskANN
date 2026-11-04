@@ -84,6 +84,7 @@ where
     vec.into_iter().map(f).collect()
 }
 
+#[cfg(not(miri))]
 #[cfg(test)]
 mod tests {
     use super::*;

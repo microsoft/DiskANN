@@ -15,10 +15,10 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 use diskann::ANNResult;
 use diskann_linalg::{self, Transpose};
 use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPoolRef};
-use diskann_vector::{norm::FastL2NormSquared, Norm};
+use diskann_vector::{Norm, norm::FastL2NormSquared};
 use rayon::prelude::*;
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 // This is the chunk size applied when computing the closest centers in a block.
 // The chunk size is the number of points to process in a single iteration to reduce memory usage of
@@ -683,10 +683,12 @@ mod math_util_test {
             pool.as_ref(),
         );
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("pts_norms_squared.len() (5) should equal num_points (4)"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("pts_norms_squared.len() (5) should equal num_points (4)")
+        );
     }
 
     #[test]
@@ -699,10 +701,12 @@ mod math_util_test {
 
         let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, pool.as_ref());
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("data.len() (12) should be vecs_l2sq.len() (5) * dim (3)"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("data.len() (12) should be vecs_l2sq.len() (5) * dim (3)")
+        );
     }
 
     #[test]
@@ -713,10 +717,12 @@ mod math_util_test {
 
         let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, 0, pool.as_ref());
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("dim must be non-zero"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("dim must be non-zero")
+        );
     }
 
     #[test]
@@ -743,10 +749,12 @@ mod math_util_test {
             pool.as_ref(),
         );
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("k (3) should be equal or less than num_centers (2)"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("k (3) should be equal or less than num_centers (2)")
+        );
     }
 
     #[test]
@@ -773,10 +781,12 @@ mod math_util_test {
             pool.as_ref(),
         );
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("closest_centers_ivf.len() (4) should equal num_points (4) * k (2)"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("closest_centers_ivf.len() (4) should equal num_points (4) * k (2)")
+        );
     }
 
     #[test]
@@ -807,10 +817,12 @@ mod math_util_test {
             pool.as_ref(),
         );
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("k (3) should be equal or less than num_centers (2)"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("k (3) should be equal or less than num_centers (2)")
+        );
     }
 
     #[test]
@@ -824,10 +836,12 @@ mod math_util_test {
         // 2 * usize::MAX overflows
         let result = compute_vecs_l2sq(&mut vecs_l2sq_buffer, data, dim, pool.as_ref());
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("vecs_l2sq.len() * dim overflowed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("vecs_l2sq.len() * dim overflowed")
+        );
     }
 
     #[test]
@@ -858,10 +872,12 @@ mod math_util_test {
         );
 
         // Will hit num_points * dim overflow in data validation
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("num_points * dim overflowed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("num_points * dim overflowed")
+        );
     }
 
     #[test]
@@ -888,10 +904,12 @@ mod math_util_test {
             pool.as_ref(),
         );
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("data.len() (11) should equal num_points (4) * dim (3)"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("data.len() (11) should equal num_points (4) * dim (3)")
+        );
     }
 
     #[test]
@@ -918,10 +936,12 @@ mod math_util_test {
             pool.as_ref(),
         );
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("pivot_data.len() (8) should equal num_centers (2) * dim (3)"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("pivot_data.len() (8) should equal num_centers (2) * dim (3)")
+        );
     }
 
     #[test]
@@ -948,10 +968,12 @@ mod math_util_test {
             pool.as_ref(),
         );
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("num_points * dim overflowed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("num_points * dim overflowed")
+        );
     }
 
     #[test]
@@ -978,9 +1000,11 @@ mod math_util_test {
             pool.as_ref(),
         );
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("num_centers * dim overflowed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("num_centers * dim overflowed")
+        );
     }
 }

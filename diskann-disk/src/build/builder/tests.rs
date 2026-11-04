@@ -10,17 +10,17 @@ mod disk_index_build_tests {
 
     use crate::test_utils::{GraphDataF32VectorUnitData, GraphDataMinMaxVectorUnitData};
     use diskann_providers::storage::{
-        get_compressed_pq_file, get_pq_pivot_file, StorageReadProvider, StorageWriteProvider,
+        StorageReadProvider, StorageWriteProvider, get_compressed_pq_file, get_pq_pivot_file,
     };
     use diskann_utils::io::Metadata;
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 
     use crate::{
-        build::builder::core::disk_index_builder_tests::{
-            new_vfs, verify_search_result_with_ground_truth, IndexBuildFixture, TestParams,
-        },
         QuantizationType, SphericalBits,
+        build::builder::core::disk_index_builder_tests::{
+            IndexBuildFixture, TestParams, new_vfs, verify_search_result_with_ground_truth,
+        },
     };
 
     #[derive(PartialEq)]

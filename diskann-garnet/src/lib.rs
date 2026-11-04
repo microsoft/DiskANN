@@ -31,7 +31,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     alloc::AlignToEight,
-    garnet::{FilterCallback, LogCallback},
+    garnet::{FilterCallback, LogCallback, Term},
     provider::{GarnetProvider, GarnetProviderError},
 };
 use crate::{
@@ -113,6 +113,12 @@ pub enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2,
+    XSpherical2I8,
+    XSpherical2U8,
+    XSpherical4,
+    XSpherical4I8,
+    XSpherical4U8,
 }
 
 /// Helper struct to manage the FFI buffers for handling search results
@@ -239,12 +245,17 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
 
 /// Helper generic function to create the correct type-erased `Arc<Index>`.
 /// This also returns a bool indicating whether quantization is needed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors native index creation parameters"
+)]
 fn create_index_impl<T: VectorRepr>(
     quant_type: VectorQuantType,
     config: config::Config,
     dim: usize,
     metric_type: Metric,
     max_degree: usize,
+    start_point_id: u32,
     callbacks: Callbacks,
     context: Context,
 ) -> Result<(Arc<Index>, bool), GarnetProviderError> {
@@ -253,6 +264,7 @@ fn create_index_impl<T: VectorRepr>(
         quant_type,
         metric_type,
         max_degree,
+        start_point_id,
         callbacks,
         &context,
     )?;
@@ -263,9 +275,15 @@ fn create_index_impl<T: VectorRepr>(
     };
 
     let quant_needed = match quant_type {
-        VectorQuantType::Bin | VectorQuantType::XBinI8 | VectorQuantType::XBinU8 => {
-            provider.quantization_needed()
-        }
+        VectorQuantType::Bin
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => provider.quantization_needed(),
         _ => false,
     };
 
@@ -293,9 +311,12 @@ fn create_index_impl<T: VectorRepr>(
 /// flag controls whether supplemental control is needed from Garnet to manage quantizers
 /// which require training and backfill.
 ///
+/// The same immutable `start_point_id` must be supplied when reopening the index.
+///
 /// # Safety
 ///
-/// FFI
+/// Callbacks must remain valid for the index lifetime, and `quantization_needed`
+/// must point to writable memory for a bool.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn create_index(
     ctx: u64,
@@ -305,6 +326,7 @@ pub unsafe extern "C" fn create_index(
     metric_type: i32,
     l_build: u32,
     max_degree: u32,
+    start_point_id: u32,
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
@@ -347,13 +369,17 @@ pub unsafe extern "C" fn create_index(
 
     match quant_type {
         VectorQuantType::Invalid => ptr::null(),
-        VectorQuantType::XNoQuantU8 | VectorQuantType::XBinU8 => {
+        VectorQuantType::XNoQuantU8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4U8 => {
             if let Ok((index, quant_needed)) = create_index_impl::<u8>(
                 quant_type,
                 config,
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -363,13 +389,17 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::XNoQuantI8 | VectorQuantType::XBinI8 => {
+        VectorQuantType::XNoQuantI8
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical4I8 => {
             if let Ok((index, quant_needed)) = create_index_impl::<i8>(
                 quant_type,
                 config,
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -379,13 +409,18 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => {
             if let Ok((index, quant_needed)) = create_index_impl::<f32>(
                 quant_type,
                 config,
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -453,11 +488,19 @@ fn interpret_vector<'a>(
     let vector_len_bytes = match quant_type {
         VectorQuantType::Invalid => return None,
 
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => vector_len * 4,
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => vector_len * 4,
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
         | VectorQuantType::XBinU8
-        | VectorQuantType::XBinI8 => vector_len,
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => vector_len,
     };
 
     let v = unsafe { slice::from_raw_parts(*vector_data, vector_len_bytes) };
@@ -465,7 +508,11 @@ fn interpret_vector<'a>(
     let v = match quant_type {
         VectorQuantType::Invalid => return None,
 
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => {
             if v.as_ptr().align_offset(mem::align_of::<f32>()) == 0 {
                 // pointer is correctly aligned to interpret as f32
                 PolyCow::from(v)
@@ -483,7 +530,11 @@ fn interpret_vector<'a>(
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
         | VectorQuantType::XBinU8
-        | VectorQuantType::XBinI8 => PolyCow::from(v),
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => PolyCow::from(v),
     };
 
     Some(v)
@@ -491,14 +542,15 @@ fn interpret_vector<'a>(
 
 /// Return type for `insert()`.
 ///
-/// `Fail` and `Success` are obvious. `SuccessStartTraining` is used when enough vectors have
-/// been inserted to start training the quantizer. That return value signals to Garnet that
-/// `build_quant_table` should be called.
+/// `Success` indicates a new vector and `SuccessUpdate` indicates an existing vector.
+/// `SuccessStartTraining` is returned when enough vectors have been inserted to start
+/// training the quantizer, signaling to Garnet that `build_quant_table` should be called.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum InsertResult {
     Fail,
     Success,
     SuccessStartTraining,
+    SuccessUpdate,
 }
 
 impl From<InsertResult> for u8 {
@@ -507,6 +559,7 @@ impl From<InsertResult> for u8 {
             InsertResult::Fail => 0,
             InsertResult::Success => 1,
             InsertResult::SuccessStartTraining => 2,
+            InsertResult::SuccessUpdate => 3,
         }
     }
 }
@@ -517,16 +570,33 @@ impl From<u8> for InsertResult {
         match value {
             1 => InsertResult::Success,
             2 => InsertResult::SuccessStartTraining,
+            3 => InsertResult::SuccessUpdate,
             _ => InsertResult::Fail,
         }
     }
 }
 
+/// Borrows FFI bytes, accepting a null pointer only for an empty slice.
+///
+/// # Safety
+///
+/// For a nonzero length, a non-null pointer must satisfy `slice::from_raw_parts`
+/// for the returned lifetime.
+#[inline]
+unsafe fn interpret_bytes_allow_empty<'a>(data: *const u8, len: usize) -> Option<&'a [u8]> {
+    if len == 0 {
+        Some(&[])
+    } else if data.is_null() {
+        None
+    } else {
+        Some(unsafe { slice::from_raw_parts(data, len) })
+    }
+}
+
 /// Insert a vector into the index.
 ///
-/// Returns a status corresponding to the `InsertResult` enum. Aside from failure and success,
-/// there is a third value that signals that the completed insert has reached the threshold to
-/// begin quantization.
+/// Returns a status corresponding to the `InsertResult` enum, distinguishing new inserts from
+/// updates and when an insert allows quantization training to begin.
 ///
 /// # Safety
 ///
@@ -545,7 +615,9 @@ pub unsafe extern "C" fn insert(
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
 
-    let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
+    let Some(id_bytes) = (unsafe { interpret_bytes_allow_empty(id_data, id_len) }) else {
+        return InsertResult::Fail.into();
+    };
     let id = GarnetId::from(id_bytes);
 
     let v = if let Some(v) = interpret_vector(index.quant_type, &vector_data, vector_len) {
@@ -573,6 +645,8 @@ pub unsafe extern "C" fn insert(
         let ready = ctx.quantizer_ready();
         if !old_ready && ready {
             InsertResult::SuccessStartTraining.into()
+        } else if ctx.insert_is_update() {
+            InsertResult::SuccessUpdate.into()
         } else {
             InsertResult::Success.into()
         }
@@ -652,14 +726,14 @@ pub unsafe extern "C" fn build_quant_table(context: u64, index_ptr: *const c_voi
 pub unsafe extern "C" fn backfill_quant_vectors(
     context: u64,
     index_ptr: *const c_void,
-    task_index: usize,
+    task_idx: usize,
     task_count: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(context);
     index
         .inner
-        .backfill_quant_vectors(&ctx, task_index, task_count)
+        .backfill_quant_vectors(&ctx, task_idx, task_count)
 }
 
 /// Set the attributes for a vector.
@@ -682,7 +756,10 @@ pub unsafe extern "C" fn set_attribute(
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(context);
-    let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
+
+    let Some(id_bytes) = (unsafe { interpret_bytes_allow_empty(id_data, id_len) }) else {
+        return false;
+    };
     let id = GarnetId::from(id_bytes);
 
     // Check if the vector exists
@@ -770,9 +847,9 @@ impl Overflow {
             if id_index + prefix_len > ids.len() {
                 break;
             }
-            let mut len = 0u32;
-            bytemuck::bytes_of_mut(&mut len)
-                .copy_from_slice(&self.id_buffer[self.id_index..self.id_index + prefix_len]);
+            let len = bytemuck::pod_read_unaligned::<u32>(
+                &self.id_buffer[self.id_index..self.id_index + prefix_len],
+            );
 
             // We check there is room before advancing the indices
             if id_index + prefix_len + len as usize > ids.len() {
@@ -935,7 +1012,10 @@ pub unsafe extern "C" fn search_element(
     overflow: *mut *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
+
+    let Some(id_bytes) = (unsafe { interpret_bytes_allow_empty(id_data, id_len) }) else {
+        return -1;
+    };
     let id = GarnetId::from(id_bytes);
     let ctx = Context::new(ctx);
 
@@ -1067,7 +1147,10 @@ pub unsafe extern "C" fn remove(
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
-    let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
+
+    let Some(id_bytes) = (unsafe { interpret_bytes_allow_empty(id_data, id_len) }) else {
+        return false;
+    };
     let id = GarnetId::from(id_bytes);
 
     if !index.inner.external_id_exists(&ctx, &id) {
@@ -1079,14 +1162,17 @@ pub unsafe extern "C" fn remove(
 
 /// Return the approximate count of vectors in the index.
 ///
+/// Returns `u64::MAX` if disabling imports fails.
+///
 /// # Safety
 ///
 /// FFI
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn card(_ctx: u64, index_ptr: *const c_void) -> u64 {
+pub unsafe extern "C" fn card(ctx: u64, index_ptr: *const c_void) -> u64 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
 
-    index.inner.approximate_count()
+    index.inner.approximate_count(&ctx).unwrap_or(u64::MAX)
 }
 
 /// Check if a given internal ID is a valid vector.
@@ -1110,8 +1196,7 @@ pub unsafe extern "C" fn check_internal_id_valid(
         return false;
     }
 
-    let mut id: u32 = 0;
-    bytemuck::bytes_of_mut(&mut id).copy_from_slice(internal_id_bytes);
+    let id = bytemuck::pod_read_unaligned::<u32>(internal_id_bytes);
 
     index.inner.internal_id_exists(&ctx, id)
 }
@@ -1132,7 +1217,10 @@ pub unsafe extern "C" fn check_external_id_valid(
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
-    let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
+
+    let Some(id_bytes) = (unsafe { interpret_bytes_allow_empty(id_data, id_len) }) else {
+        return false;
+    };
     let id = GarnetId::from(id_bytes);
 
     index.inner.external_id_exists(&ctx, &id)
@@ -1195,7 +1283,10 @@ pub unsafe extern "C" fn search_neighbors(
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
-    let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
+
+    let Some(id_bytes) = (unsafe { interpret_bytes_allow_empty(id_data, id_len) }) else {
+        return -1;
+    };
     let id = GarnetId::from(id_bytes);
 
     let mut output = SearchResults::new(
@@ -1229,6 +1320,156 @@ pub unsafe extern "C" fn search_neighbors(
     count as i32
 }
 
+/// Sets the quantizer internal state.
+///
+/// This is intended to be used on an empty, quantized index to set the quantizer state to a
+/// known value. This is called from the `XVCREATE` command.
+///
+/// This ensures quantized vectors will be externally intelligible to another system with
+/// the same quantizer state.
+///
+/// Returns false if importing has begun, the index is non-empty, or setup fails. On failure,
+/// discard the vector set: the quantizer and persisted metadata may already have changed.
+///
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn set_quant_state(
+    ctx: u64,
+    index_ptr: *const c_void,
+    state: *const u8,
+    state_len: usize,
+) -> bool {
+    if index_ptr.is_null() {
+        return false;
+    }
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+    if state.is_null() || state_len == 0 {
+        return false;
+    }
+    let state = unsafe { slice::from_raw_parts(state, state_len) };
+
+    index.inner.set_quant_state(&ctx, state)
+}
+
+/// Returns whether the index accepts imported terms.
+///
+/// # Safety
+///
+/// `index_ptr` must be a live index returned by `create_index`, and `ctx` must identify its storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn can_import(ctx: u64, index_ptr: *const c_void) -> bool {
+    if index_ptr.is_null() {
+        return false;
+    }
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+
+    index.inner.can_import(&ctx)
+}
+
+/// Imports a term directly in storage.
+///
+/// This is intended for bulk loading of existing DiskANN graphs that are stored outside of Garnet,
+/// allowing for creation of a vector set to happen without calling `VADD` on every vector.
+/// Ordinary index operations will fail once importing begins until finalization succeeds.
+///
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn import_term(
+    ctx: u64,
+    index_ptr: *const c_void,
+    term_type: u32,
+    id: *const u8,
+    id_len: usize,
+    value: *const u8,
+    value_len: usize,
+) -> bool {
+    if index_ptr.is_null() {
+        return false;
+    }
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+
+    let term = if let Ok(term) = Term::try_from(term_type) {
+        term
+    } else {
+        return false;
+    };
+
+    if (id_len == 0 && !matches!(term, Term::IntMap))
+        || (value_len == 0 && !matches!(term, Term::ExtMap))
+    {
+        return false;
+    }
+    let Some(id) = (unsafe { interpret_bytes_allow_empty(id, id_len) }) else {
+        return false;
+    };
+    let Some(value) = (unsafe { interpret_bytes_allow_empty(value, value_len) }) else {
+        return false;
+    };
+
+    index.inner.import_term(&ctx, term, id, value)
+}
+
+/// Verify a partition of the imported terms.
+///
+/// All term writes must finish before verification starts. Each call checks its
+/// partition anew; task zero also verifies the configured start point.
+///
+/// Returns true if this partition verifies successfully, false otherwise.
+///
+/// # Safety
+///
+/// A non-null `index_ptr` must be a live index returned by `create_index`. The
+/// index and callbacks must outlive this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn verify_import(
+    ctx: u64,
+    index_ptr: *const c_void,
+    task_idx: usize,
+    task_count: usize,
+) -> bool {
+    if index_ptr.is_null() {
+        return false;
+    }
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+    index.inner.verify_import(&ctx, task_idx, task_count)
+}
+
+/// Finalize an imported index.
+///
+/// All term writes must finish first. Verification is optional. Required
+/// start-point terms must be readable even if no user vectors were imported.
+/// Concurrent calls on the same handle serialize. Once one succeeds, subsequent
+/// calls on that handle return true.
+///
+/// Returns true on success. Failure does not enable an unfinished import.
+///
+/// # Safety
+///
+/// A non-null `index_ptr` must be a live index returned by `create_index`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn finish_import(ctx: u64, index_ptr: *const c_void) -> bool {
+    if index_ptr.is_null() {
+        return false;
+    }
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+    let result = index.inner.finish_import(&ctx);
+    if result {
+        index
+            .state
+            .store(IndexState::Ready as usize, Ordering::Release);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use std::{mem, ptr};
@@ -1243,6 +1484,7 @@ mod tests {
     use crate::{
         Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index,
         garnet::{Context, GarnetId, Term},
+        provider::DEFAULT_START_POINT_ID,
         test_utils::Store,
     };
 
@@ -1282,14 +1524,12 @@ mod tests {
 
         let mut pos = 0usize;
         for (i, d) in dists.iter().enumerate() {
-            let mut size = 0u32;
-            bytemuck::bytes_of_mut(&mut size).copy_from_slice(&ids[pos..pos + 4]);
+            let size = bytemuck::pod_read_unaligned::<u32>(&ids[pos..pos + 4]);
             pos += 4;
 
             assert_eq!(size, 4);
 
-            let mut id = 0u32;
-            bytemuck::bytes_of_mut(&mut id).copy_from_slice(&ids[pos..pos + 4]);
+            let id = bytemuck::pod_read_unaligned::<u32>(&ids[pos..pos + 4]);
             pos += 4;
 
             assert_eq!(id, i as u32 + 1);
@@ -1319,6 +1559,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1405,6 +1646,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1417,7 +1659,7 @@ mod tests {
         assert!(!index_ptr.is_null());
         let index = unsafe { &*index_ptr.cast::<Index>() };
         assert_eq!(index.quant_type, quant_type);
-        assert_eq!(index.inner.approximate_count(), 0);
+        assert_eq!(index.inner.approximate_count(&Context::new(0)).unwrap(), 0);
 
         unsafe {
             drop_index(0, index_ptr);
@@ -1438,6 +1680,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1456,6 +1699,28 @@ mod tests {
         check_create_index(VectorQuantType::XBinU8);
         check_create_index(VectorQuantType::XNoQuantI8);
         check_create_index(VectorQuantType::XBinI8);
+    }
+
+    #[test]
+    fn spherical_quantizer_abi_and_creation() {
+        for (quantizer, value) in [
+            (VectorQuantType::NoQuant, 1),
+            (VectorQuantType::Bin, 2),
+            (VectorQuantType::Q8, 3),
+            (VectorQuantType::XNoQuantU8, 4),
+            (VectorQuantType::XNoQuantI8, 5),
+            (VectorQuantType::XBinI8, 6),
+            (VectorQuantType::XBinU8, 7),
+            (VectorQuantType::XSpherical2, 8),
+            (VectorQuantType::XSpherical2I8, 9),
+            (VectorQuantType::XSpherical2U8, 10),
+            (VectorQuantType::XSpherical4, 11),
+            (VectorQuantType::XSpherical4I8, 12),
+            (VectorQuantType::XSpherical4U8, 13),
+        ] {
+            assert_eq!(quantizer as i32, value);
+            check_create_index(quantizer);
+        }
     }
 
     #[test]
@@ -1498,6 +1763,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1568,6 +1834,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1760,6 +2027,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),

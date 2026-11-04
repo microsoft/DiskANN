@@ -2,6 +2,16 @@
 
 Refer to the crate level documentation for usage of the `quantization` crate.
 
+## Inspecting CPU caches
+
+```shell
+cargo run -p diskann-quantization --features cache-diagnostics --bin detect-cache
+```
+
+Reports the probe source and hardware L1d/L2 capacities before budget scaling.
+`logical_sharers` is an OS-reported count, not a count of active workers or a
+cache reservation. CPUID and other unavailable counts are reported as `unknown`.
+
 ## Generating FlatBuffers bindings
 
 The Rust bindings generated from the files in `schemas` are checked into

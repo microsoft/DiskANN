@@ -9,8 +9,6 @@ mod internal_docs {
     //! A concurrent in-memory data store for driving [`slots::Slots`].
     //!
     //! This supports concurrent data access, deletes, and inserts through a safe interface.
-    //! Data is stored internally in slots indexed from `[0..N)` with `K` points reserved at the
-    //! end at positions `[N..N+K)`.
     //!
     //! ## Reading
     //!
@@ -63,7 +61,6 @@ mod internal_docs {
 }
 
 use std::{
-    iter::repeat_n,
     mem::ManuallyDrop,
     num::{NonZeroU32, NonZeroUsize},
     sync::atomic::Ordering,
@@ -77,13 +74,25 @@ use crate::{
     epoch::{self, Registry},
     freelist::{self, Freelist},
     neighbors::{Neighbors, NeighborsError},
-    num::{Capacity, IdLimit, MaxDegree},
-    tag::{AtomicTag, Tag},
+    num::{IdLimit, MaxDegree},
+    tag::{self, AtomicTag, Tag},
 };
 
+// Unconditional
 pub(crate) mod intrusive;
 pub(crate) mod slots;
 
+// Quantization
+#[cfg(feature = "quantization")]
+pub(crate) mod cons;
+
+#[cfg(feature = "quantization")]
+pub(crate) mod optional;
+
+#[cfg(any(test, feature = "quantization", feature = "integration-test"))]
+pub(crate) mod simple;
+
+// Integration Test
 #[cfg(any(test, feature = "integration-test"))]
 pub(crate) mod checked;
 
@@ -174,31 +183,21 @@ impl Default for Config {
 /// Layout parameters for [`Store`] and the corresponding [`slots::Slots`].
 #[derive(Debug, Clone)]
 pub(crate) struct Layout {
-    /// The number of non-frozen slots to create space for.
-    capacity: Capacity,
+    /// The number of slots to create space for.
+    id_limit: IdLimit,
 
     /// The maximum number of neighbors in each adjacency list.
     max_degree: MaxDegree,
-
-    /// The number of immutable points to reserve at the end of the [`Store`].
-    frozen: u32,
 }
 
 impl Layout {
-    /// Create a new [`Layout`] capable of holding `capacity` non-frozen points and `frozen`
-    /// reserved points at the end.
-    ///
-    /// After construction, the only distinction between non-frozen and frozen points is that
-    /// IDs for frozen points will not be selected through [`Store::acquire`]. Frozen slots
-    /// IDs can be obtained via [`Store::frozen`], and direct acquisition can be done with
-    /// [`Store::slot`].
+    /// Create a new [`Layout`] capable of holding `id_limit` points.
     ///
     /// All adjacency lists will have a maximum capacity of `max_degree`.
-    pub(crate) fn new(capacity: Capacity, max_degree: MaxDegree, frozen: u32) -> Self {
+    pub(crate) fn new(id_limit: IdLimit, max_degree: MaxDegree) -> Self {
         Self {
-            capacity,
+            id_limit,
             max_degree,
-            frozen,
         }
     }
 }
@@ -209,11 +208,8 @@ pub(crate) struct Store<T> {
     // The [`slots::Slots`] managed by this [`Store`].
     slots: T,
 
-    // The number of unfrozen points.
-    unfrozen: Capacity,
-
     // The authoritative source of truth for the state of each slot.
-    tags: Vec<AtomicTag>,
+    tags: tag::Authoritative,
 
     // Acceleration of finding free slot IDs.
     freelist: Freelist,
@@ -255,9 +251,8 @@ where
         C: slots::SlotsConfig<Slots = T>,
     {
         let Layout {
-            capacity,
+            id_limit,
             max_degree,
-            frozen,
         } = layout;
 
         let Config {
@@ -265,24 +260,17 @@ where
             freelist_recycle_capacity,
         } = config;
 
-        let too_many_entries = || StoreError::too_many_entries(capacity, frozen);
-
-        // We have a hard upper-bound of `u32::MAX` total slots.
-        //
-        // This enforces that bound.
-        let entries: u32 = capacity
-            .value()
-            .try_into()
-            .map_err(|_| too_many_entries())?;
-
-        let id_limit = IdLimit::new(entries.checked_add(frozen).ok_or_else(too_many_entries)?);
-
         let max_degree: u32 = max_degree
             .value()
             .try_into()
             .map_err(|_| StoreError::too_many_neighbors(max_degree))?;
 
-        let slots = slots::SlotsConfig::build(slots, id_limit).map_err(StoreError::slots)?;
+        let registry = Registry::with_capacity(epoch_guard_slots);
+        let tags = tag::Authoritative::new(id_limit);
+
+        // SAFETY: `registry.handle()` and `tags` belong to store containing the returned `slots`.
+        let slots = unsafe { slots::SlotsConfig::build(slots, registry.handle(), &tags) }
+            .map_err(StoreError::slots)?;
 
         let slots_id_limit = slots.id_limit();
         if slots_id_limit != id_limit {
@@ -291,15 +279,9 @@ where
 
         let me = Self {
             slots,
-            unfrozen: capacity,
-            tags: repeat_n(Tag::AVAILABLE, id_limit.as_usize())
-                .map(AtomicTag::new)
-                .collect(),
-
-            // NOTE: The `Freelist` is initialized to `entries` and not `total` because
-            // we do not want it to release frozen IDs.
-            freelist: Freelist::new(entries, freelist_recycle_capacity),
-            registry: Registry::with_capacity(epoch_guard_slots),
+            tags,
+            freelist: Freelist::new(id_limit, freelist_recycle_capacity),
+            registry,
             neighbors: Neighbors::new(id_limit, max_degree)?,
         };
 
@@ -311,21 +293,11 @@ where
         &self.slots
     }
 
-    /// Return the range of slots containing frozen items in `self`.
-    pub(crate) fn frozen(&self) -> std::ops::Range<u32> {
-        (self.unfrozen.value() as u32)..self.neighbors.entries()
-    }
-
     /// Return the [`IdLimit`] for this store.
     pub(crate) fn id_limit(&self) -> IdLimit {
         // The numeric cast is safe: We verify during construction that `self.tags.len()` fits
         // in a `u32`.
         IdLimit::new(self.tags.len() as u32)
-    }
-
-    /// Return the [`Capacity`] for this store.
-    pub(crate) fn capacity(&self) -> Capacity {
-        self.unfrozen
     }
 
     /// Return the [`Neighbors`] for this store.
@@ -443,7 +415,7 @@ where
 
         let guard = self
             .registry
-            .guard()
+            .retire()
             .map_err(RetireError::GuardUnavailable)?;
 
         let retiring = Tag::RETIRING;
@@ -479,7 +451,11 @@ where
     fn scan_acquire(&self) -> Option<Exclusive<'_, <T as slots::Slots>::Exclusive<'_>>> {
         // This is potentially quite slow, so scan approximately `1 / SCAN_ADVANCE_RETRY_LIMIT`
         // of the writable range. The outer retry loop provides broader coverage.
-        let mut remaining = self.unfrozen.value().div_ceil(SCAN_ADVANCE_RETRY_LIMIT);
+        let mut remaining = self
+            .id_limit()
+            .value()
+            .into_usize()
+            .div_ceil(SCAN_ADVANCE_RETRY_LIMIT);
         let mut chunks_since_freelist_check = 0;
         let mut acquired: Option<Exclusive<'_, <T as slots::Slots>::Exclusive<'_>>> = None;
 
@@ -591,11 +567,6 @@ where
             .get(i)
             .map(|tag| tag.load(Ordering::Relaxed).can_read())
     }
-
-    #[cfg(test)]
-    fn writable(&self) -> std::ops::Range<u32> {
-        0..self.unfrozen.value() as u32
-    }
 }
 
 /// Errors occurring during [`Store::new`].
@@ -604,13 +575,6 @@ where
 pub(crate) struct StoreError(StoreErrorInner);
 
 impl StoreError {
-    fn too_many_entries(capacity: Capacity, frozen: u32) -> Self {
-        Self(StoreErrorInner::TooManyEntries {
-            entries: capacity.value(),
-            frozen,
-        })
-    }
-
     fn too_many_neighbors(neighbors: MaxDegree) -> Self {
         Self(StoreErrorInner::TooManyNeighbors {
             neighbors: neighbors.value(),
@@ -646,12 +610,6 @@ diskann::convert_error!(StoreError);
 
 #[derive(Debug, Error)]
 enum StoreErrorInner {
-    #[error(
-        "total points ({} + {} frozen) must not exceed `u32::MAX`",
-        entries,
-        frozen
-    )]
-    TooManyEntries { entries: usize, frozen: u32 },
     #[error("number of neighbors ({}) may not exceed `u32::MAX`", neighbors)]
     TooManyNeighbors { neighbors: usize },
     #[error(transparent)]
@@ -785,9 +743,13 @@ mod tests {
         type Slots = Checked;
         type Error = diskann::error::Infallible;
 
-        fn build(self, id_limit: IdLimit) -> Result<Checked, diskann::error::Infallible> {
-            let faulty = id_limit.value().checked_sub(1).unwrap_or(1);
-            Ok(Checked::new(IdLimit::new(faulty)))
+        unsafe fn build(
+            self,
+            handle: epoch::RegistryHandle,
+            tags: &tag::Authoritative,
+        ) -> Result<Checked, diskann::error::Infallible> {
+            let faulty = tags.id_limit().value().checked_sub(1).unwrap_or(1);
+            Ok(Checked::new(handle, IdLimit::new(faulty)))
         }
     }
 
@@ -797,12 +759,12 @@ mod tests {
         let config =
             Config::__exhaustive(NonZeroUsize::new(10).unwrap(), NonZeroU32::new(16).unwrap());
 
-        let layout = Layout::new(Capacity::new(entries), MaxDegree::new(0), frozen);
+        let id_limit: u32 = (entries + frozen as usize).try_into().unwrap();
+        let layout = Layout::new(IdLimit::new(id_limit), MaxDegree::new(0));
         let store = Store::new(layout, config, Checked::config())?;
-        assert_eq!(store.frozen().len(), frozen.into_usize());
 
-        for (i, id) in store.frozen().enumerate() {
-            let mut slot = store.slot(id).unwrap();
+        for (i, id) in (entries..(entries + frozen as usize)).enumerate() {
+            let mut slot = store.slot(id.try_into().unwrap()).unwrap();
             slot.data().set(i as u64);
             slot.freeze();
         }
@@ -811,7 +773,7 @@ mod tests {
     }
 
     fn reader(store: &Store<Checked>) -> checked::Reader<'_> {
-        Checked::reader(store).unwrap()
+        store.guard(|checked, guard| checked.reader(guard)).unwrap()
     }
 
     //------------------------//
@@ -819,25 +781,9 @@ mod tests {
     //------------------------//
 
     #[test]
-    fn new_rejects_total_slot_overflow() {
-        // `entries` alone fits in u32, but `entries + frozen` overflows it.
-        let err = Store::new(
-            Layout::new(Capacity::new(u32::MAX as usize), MaxDegree::new(0), 1),
-            Config::default(),
-            Checked::config(),
-        )
-        .unwrap_err();
-        assert_matches!(err.0, StoreErrorInner::TooManyEntries { .. });
-    }
-
-    #[test]
     fn new_rejects_too_many_neighbors() {
         let err = Store::new(
-            Layout::new(
-                Capacity::new(4),
-                MaxDegree::new(u32::MAX.into_usize() + 1),
-                0,
-            ),
+            Layout::new(IdLimit::new(4), MaxDegree::new(u32::MAX.into_usize() + 1)),
             Config::default(),
             Checked::config(),
         )
@@ -848,7 +794,7 @@ mod tests {
     #[test]
     fn new_rejects_faulty_slots() {
         let err = Store::new(
-            Layout::new(Capacity::new(4), MaxDegree::new(10), 0),
+            Layout::new(IdLimit::new(4), MaxDegree::new(10)),
             Config::default(),
             FaultyConfig,
         )
@@ -864,8 +810,7 @@ mod tests {
     fn frozen_range_follows_writable_slots() {
         let s = store(4, 2).unwrap();
 
-        // Writable slots are [0, 4); frozen points occupy [4, 6).
-        assert_eq!(s.frozen(), 4..6);
+        assert_eq!(s.id_limit().value(), 6);
 
         let reader = reader(&s);
         for i in 0u32..4 {
@@ -963,7 +908,7 @@ mod tests {
             Err(RetireError::SlotIsReserved { .. })
         ));
         // A frozen slot is likewise reserved.
-        let frozen = s.frozen().start as usize;
+        let frozen = 4;
         assert!(matches!(
             s.retire(frozen),
             Err(RetireError::SlotIsReserved { .. })
@@ -1009,7 +954,7 @@ mod tests {
 
         let s = store(entries, 2).unwrap();
 
-        assert_eq!(s.writable().len(), entries);
+        assert_eq!(s.id_limit().value() as usize, entries + 2);
 
         // Claim all slots.
         let mut count = 0;
@@ -1029,7 +974,7 @@ mod tests {
         }
 
         // Now that all slots are claimed - retire all slots.
-        for i in s.writable() {
+        for i in 0..entries {
             s.retire(i.into_usize()).unwrap();
         }
 

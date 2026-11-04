@@ -13,7 +13,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -681,15 +681,6 @@ impl provider::DataProvider for Provider {
             Err(InvalidId::External(*gid))
         }
     }
-
-    fn to_external_id(&self, _context: &Context, id: u32) -> Result<u32, InvalidId> {
-        let valid = self.terms.contains_key(&id);
-        if valid {
-            Ok(id)
-        } else {
-            Err(InvalidId::Internal(id))
-        }
-    }
 }
 
 impl provider::Delete for Provider {
@@ -1338,7 +1329,7 @@ impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
     }
 }
 
-impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
+impl glue::MultiInsertStrategy<Provider, rowmajor::Owned<f32>> for Strategy {
     type Seed = workingset::map::Builder<u32, workingset::map::Ref<[f32]>>;
     type FinishError = Infallible;
     type PruneStrategy = Self;
@@ -1352,7 +1343,7 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
         &self,
         _provider: &Provider,
         _ctx: &Context,
-        batch: &Arc<Matrix<f32>>,
+        batch: &Arc<rowmajor::Owned<f32>>,
         ids: Itr,
     ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
     where
@@ -1463,7 +1454,8 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
 mod tests {
     use super::*;
 
-    use crate::test::{assert_message_contains, tokio::current_thread_runtime};
+    use crate::test::tokio::current_thread_runtime;
+    use diskann_utils::assert_contains;
 
     #[test]
     fn test_start_point() {
@@ -1646,7 +1638,7 @@ mod tests {
             // Exceeds max degree of 2
             let start_points = [(0, AdjacencyList::from_iter_untrusted([1, 2, 3]))];
             let err = Provider::new_from(config, start_points, []).unwrap_err();
-            assert_message_contains!(err.to_string(), "max degree");
+            assert_contains!(err.to_string(), "max degree");
         }
 
         // Error: invalid start point ID
@@ -1654,7 +1646,7 @@ mod tests {
             let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
             let start_points = [(999, AdjacencyList::new())]; // 999 is not a valid start point
             let err = Provider::new_from(config, start_points, []).unwrap_err();
-            assert_message_contains!(err.to_string(), "not a valid start point");
+            assert_contains!(err.to_string(), "not a valid start point");
         }
 
         // Error: regular point neighbors exceed max degree
@@ -1664,7 +1656,7 @@ mod tests {
             // Exceeds max degree
             let points = [(1, vec![2.0], AdjacencyList::from_iter_untrusted([0, 2, 3]))];
             let err = Provider::new_from(config, [], points).unwrap_err();
-            assert_message_contains!(err.to_string(), "max degree");
+            assert_contains!(err.to_string(), "max degree");
         }
 
         // Error: trying to assign start point through regular points
@@ -1672,7 +1664,7 @@ mod tests {
             let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
             let points = [(0, vec![2.0], AdjacencyList::new())]; // 0 is already a start point
             let err = Provider::new_from(config, [], points).unwrap_err();
-            assert_message_contains!(err.to_string(), "cannot assign start point");
+            assert_contains!(err.to_string(), "cannot assign start point");
         }
 
         // Error: dimension mismatch in regular points
@@ -1680,7 +1672,7 @@ mod tests {
             let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0, 2.0])]).unwrap();
             let points = [(1, vec![3.0], AdjacencyList::new())]; // Wrong dimension (1 instead of 2)
             let err = Provider::new_from(config, [], points).unwrap_err();
-            assert_message_contains!(err.to_string(), "expecting dim");
+            assert_contains!(err.to_string(), "expecting dim");
         }
 
         // Error: inconsistent graph (neighbor points to non-existent ID)
@@ -1692,7 +1684,7 @@ mod tests {
                 AdjacencyList::from_iter_unique(std::iter::once(999)),
             )]; // 999 doesn't exist
             let err = Provider::new_from(config, [], points).unwrap_err();
-            assert_message_contains!(err.to_string(), "not in the provider");
+            assert_contains!(err.to_string(), "not in the provider");
         }
     }
 
@@ -1743,23 +1735,12 @@ mod tests {
         for i in 0u32..3u32 {
             let internal = provider.to_internal_id(&context, &i).unwrap();
             assert_eq!(internal, i);
-
-            let external = provider.to_external_id(&context, i).unwrap();
-            assert_eq!(external, i);
         }
 
         let err = provider.to_internal_id(&context, &5).unwrap_err();
         let message = err.to_string();
         assert_eq!(
             message, "external id 5 is not initialized",
-            "got {}",
-            message
-        );
-
-        let err = provider.to_external_id(&context, 5).unwrap_err();
-        let message = err.to_string();
-        assert_eq!(
-            message, "internal id 5 is not initialized",
             "got {}",
             message
         );
@@ -1786,7 +1767,7 @@ mod tests {
                 .block_on(provider.set_element(&context, &id, &v))
                 .unwrap_err();
             let msg = err.to_string();
-            assert_message_contains!(msg, "wrong dim");
+            assert_contains!(msg, "wrong dim");
             assert!(accessor.get_distance(id).is_err());
         }
 
@@ -1809,7 +1790,7 @@ mod tests {
                 .block_on(provider.set_element(&context, &id, &v))
                 .unwrap_err();
             let msg = err.to_string();
-            assert_message_contains!(msg, "vector id 5 is already assigned");
+            assert_contains!(msg, "vector id 5 is already assigned");
         }
     }
 
@@ -1839,7 +1820,7 @@ mod tests {
 
         // Accessing an uninitialized vector is an error.
         let err = rt.block_on(accessor.get_neighbors(4, &mut v)).unwrap_err();
-        assert_message_contains!(err.to_string(), "Attempt to access an invalid id");
+        assert_contains!(err.to_string(), "Attempt to access an invalid id");
     }
 
     #[test]
@@ -1878,7 +1859,7 @@ mod tests {
             assert_eq!(&*v, &[1, 3], "original neighbors should be unchanged");
 
             let msg = err.to_string();
-            assert_message_contains!(msg, "trying to assign neighbors with length 5");
+            assert_contains!(msg, "trying to assign neighbors with length 5");
 
             assert_eq!(
                 provider.set_neighbors.value(),
@@ -1900,7 +1881,7 @@ mod tests {
                 "final neighbors should still be deduplicated"
             );
             let msg = err.to_string();
-            assert_message_contains!(msg, "duplicate neighbors detected");
+            assert_contains!(msg, "duplicate neighbors detected");
 
             assert_eq!(
                 provider.set_neighbors.value(),
@@ -1916,7 +1897,7 @@ mod tests {
                 .unwrap_err();
 
             let msg = err.to_string();
-            assert_message_contains!(msg, "access an invalid id");
+            assert_contains!(msg, "access an invalid id");
         }
     }
 
@@ -1955,7 +1936,7 @@ mod tests {
             assert_eq!(&*v, &[1, 3, 4]);
 
             let msg = err.to_string();
-            assert_message_contains!(msg, "duplicate ids in append-vector");
+            assert_contains!(msg, "duplicate ids in append-vector");
             assert_eq!(
                 provider.append_neighbors.value(),
                 3,
@@ -1973,7 +1954,7 @@ mod tests {
             assert_eq!(&*v, &[1]);
 
             let msg = err.to_string();
-            assert_message_contains!(msg, "duplicate ids in append-vector");
+            assert_contains!(msg, "duplicate ids in append-vector");
             assert_eq!(
                 provider.append_neighbors.value(),
                 4,
@@ -1990,7 +1971,7 @@ mod tests {
             assert_eq!(&*v, &[1]);
 
             let msg = err.to_string();
-            assert_message_contains!(msg, "will exceed the max degree");
+            assert_contains!(msg, "will exceed the max degree");
             assert_eq!(provider.append_neighbors.value(), 4);
         }
 
@@ -2001,7 +1982,7 @@ mod tests {
                 .unwrap_err();
 
             let msg = err.to_string();
-            assert_message_contains!(msg, "access an invalid id");
+            assert_contains!(msg, "access an invalid id");
         }
     }
 
@@ -2046,17 +2027,17 @@ mod tests {
         // Accessing an invalid ID in all APIs returns an error.
         {
             let err = provider.is_deleted(invalid_id).unwrap_err();
-            assert_message_contains!(err.to_string(), "not initialized");
+            assert_contains!(err.to_string(), "not initialized");
 
             let err = rt
                 .block_on(provider.status_by_internal_id(&context, invalid_id))
                 .unwrap_err();
-            assert_message_contains!(err.to_string(), "not initialized");
+            assert_contains!(err.to_string(), "not initialized");
 
             let err = rt
                 .block_on(provider.status_by_external_id(&context, &invalid_id))
                 .unwrap_err();
-            assert_message_contains!(err.to_string(), "not initialized");
+            assert_contains!(err.to_string(), "not initialized");
         }
 
         // Deleting works.
@@ -2082,17 +2063,17 @@ mod tests {
             let id = 3;
             rt.block_on(provider.release(&context, id)).unwrap();
             let err = provider.is_deleted(id).unwrap_err();
-            assert_message_contains!(err.to_string(), "not initialized");
+            assert_contains!(err.to_string(), "not initialized");
 
             let err = rt
                 .block_on(provider.status_by_internal_id(&context, id))
                 .unwrap_err();
-            assert_message_contains!(err.to_string(), "not initialized");
+            assert_contains!(err.to_string(), "not initialized");
 
             let err = rt
                 .block_on(provider.status_by_external_id(&context, &id))
                 .unwrap_err();
-            assert_message_contains!(err.to_string(), "not initialized");
+            assert_contains!(err.to_string(), "not initialized");
         }
     }
 
@@ -2109,12 +2090,12 @@ mod tests {
         let context = Context::new();
         let err = rt.block_on(provider.delete(&context, &0)).unwrap_err();
         let msg = err.to_string();
-        assert_message_contains!(msg, "cannot delete start point");
+        assert_contains!(msg, "cannot delete start point");
         assert!(!provider.is_deleted(0).unwrap());
 
         let err = rt.block_on(provider.release(&context, 0)).unwrap_err();
         let msg = err.to_string();
-        assert_message_contains!(msg, "cannot delete start point");
+        assert_contains!(msg, "cannot delete start point");
         assert!(!provider.is_deleted(0).unwrap());
     }
 }
