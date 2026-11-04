@@ -22,7 +22,12 @@
           "groundtruth": "fbv8_gt_recall_2000.bin",
           "k": 1000,
           "nprobe": [],
-          "target_scan_ratio": 0.08,
+          "target_scan_ratios": [
+            0.02,
+            0.04,
+            0.06,
+            0.08
+          ],
           "reps": 1,
           "query_limit": null,
           "full_probe_queries": 8

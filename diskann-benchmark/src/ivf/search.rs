@@ -321,9 +321,7 @@ pub(super) fn run(
         .iter()
         .map(|n| n.get().min(list_count))
         .collect();
-    if let Some(ratio) = config.target_scan_ratio {
-        probes.push(provider.calibrate(&queries, ratio)?);
-    }
+    probes.extend(provider.calibrate(&queries, &config.target_scan_ratios)?);
     probes.push(list_count);
     probes.sort_unstable();
     probes.dedup();

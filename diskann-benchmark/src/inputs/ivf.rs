@@ -51,20 +51,7 @@ impl IvfBuildSearch {
                 self.data.is_some() == search.queries.is_some(),
                 "provide both dataset and query files, or neither for synthetic data"
             );
-            ensure!(
-                search.groundtruth.is_none() || search.queries.is_some(),
-                "groundtruth requires a query file"
-            );
-            ensure!(
-                !search.nprobe.is_empty() || search.target_scan_ratio.is_some(),
-                "nprobe must not be empty without a scan target"
-            );
-            if let Some(ratio) = search.target_scan_ratio {
-                ensure!(
-                    ratio.is_finite() && ratio > 0.0 && ratio <= 1.0,
-                    "scan target must be in (0, 1]"
-                );
-            }
+            search.validate()?;
             if let Some(queries) = &mut search.queries {
                 queries.resolve(checker).context("resolving queries file")?;
             }
@@ -113,6 +100,18 @@ impl std::fmt::Display for IvfBuildSearch {
                     .collect::<Vec<_>>()
                     .join(", ")
             )?;
+            if !search.target_scan_ratios.is_empty() {
+                write_field!(
+                    f,
+                    "Scan Targets",
+                    search
+                        .target_scan_ratios
+                        .iter()
+                        .map(|ratio| format!("{:.1}%", ratio * 100.0))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
+            }
             write_field!(f, "Reps", search.reps)?;
         } else {
             write_field!(f, "Search", "disabled")?;
@@ -199,8 +198,32 @@ pub(crate) struct SearchPhase {
     pub(crate) query_limit: Option<NonZeroUsize>,
     /// Restricts only the full-list correctness check; None checks all queries.
     pub(crate) full_probe_queries: Option<NonZeroUsize>,
-    /// Add a fixed nprobe calibrated to this mean vector scan ratio over all selected queries.
-    pub(crate) target_scan_ratio: Option<f64>,
+    /// Add one fixed nprobe per mean vector scan target over all selected queries.
+    #[serde(
+        alias = "target_scan_ratio",
+        deserialize_with = "deserialize_scan_targets"
+    )]
+    pub(crate) target_scan_ratios: Vec<f64>,
+}
+
+impl SearchPhase {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        ensure!(
+            self.groundtruth.is_none() || self.queries.is_some(),
+            "groundtruth requires a query file"
+        );
+        ensure!(
+            !self.nprobe.is_empty() || !self.target_scan_ratios.is_empty(),
+            "nprobe must not be empty without a scan target"
+        );
+        for &ratio in &self.target_scan_ratios {
+            ensure!(
+                ratio.is_finite() && ratio > 0.0 && ratio <= 1.0,
+                "scan target must be in (0, 1]"
+            );
+        }
+        Ok(())
+    }
 }
 
 impl Default for SearchPhase {
@@ -216,7 +239,7 @@ impl Default for SearchPhase {
             reps: NonZeroUsize::new(3).unwrap(),
             query_limit: None,
             full_probe_queries: None,
-            target_scan_ratio: None,
+            target_scan_ratios: Vec::new(),
         }
     }
 }
@@ -233,4 +256,23 @@ impl Example for SearchPhase {
 
 fn default_data_type() -> DataType {
     DataType::Float32
+}
+
+// Continue accepting the original scalar/null input while serializing a list of targets.
+fn deserialize_scan_targets<'de, D>(deserializer: D) -> Result<Vec<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Targets {
+        One(f64),
+        Many(Vec<f64>),
+    }
+
+    Ok(match Option::<Targets>::deserialize(deserializer)? {
+        Some(Targets::One(ratio)) => vec![ratio],
+        Some(Targets::Many(ratios)) => ratios,
+        None => Vec::new(),
+    })
 }

@@ -67,8 +67,11 @@ impl SearchProvider {
         )
     }
 
-    /// Choose the closest achievable mean scan ratio using the same metric as search.
-    pub(super) fn calibrate(&self, queries: &[Vec<f32>], ratio: f64) -> ANNResult<usize> {
+    /// Choose the closest achievable scan budgets, sharing centroid rankings across targets.
+    pub(super) fn calibrate(&self, queries: &[Vec<f32>], ratios: &[f64]) -> ANNResult<Vec<usize>> {
+        if ratios.is_empty() {
+            return Ok(Vec::new());
+        }
         if queries.is_empty() || self.inserted == 0 {
             return Err(ANNError::message(
                 "scan calibration needs an index and queries",
@@ -81,17 +84,22 @@ impl SearchProvider {
                 *count += self.lists[&id].members.len();
             }
         }
-        let target = ratio * self.inserted as f64 * queries.len() as f64;
+        let targets: Vec<_> = ratios
+            .iter()
+            .map(|ratio| ratio * self.inserted as f64 * queries.len() as f64)
+            .collect();
         let mut cumulative = 0usize;
-        let mut best = (1, f64::INFINITY);
+        let mut choices = vec![(1, f64::INFINITY); targets.len()];
         for (rank, count) in counts.into_iter().enumerate() {
             cumulative += count;
-            let error = (cumulative as f64 - target).abs();
-            if error < best.1 {
-                best = (rank + 1, error);
+            for (target, best) in targets.iter().zip(&mut choices) {
+                let error = (cumulative as f64 - target).abs();
+                if error < best.1 {
+                    *best = (rank + 1, error);
+                }
             }
         }
-        Ok(best.0)
+        Ok(choices.into_iter().map(|(nprobe, _)| nprobe).collect())
     }
 }
 
