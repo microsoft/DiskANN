@@ -156,7 +156,7 @@ where
             get_disk_index_file(ctx.quant_load_context.metadata.prefix())
         );
 
-        // This temporary factory only reads metadata and validates a Q3 vector.
+        // This temporary factory only reads metadata and validates a SphericalQ vector.
         let vertex_provider_factory =
             DiskVertexProviderFactory::<Data, AlignedFileReaderFactory>::from_disk_index_path(
                 get_disk_index_file(ctx.quant_load_context.metadata.prefix()),
@@ -202,7 +202,10 @@ where
             ));
         }
         search_data.validate(graph_header.metadata().dims, num_points, metric)?;
-        if search_data.quantization() == SearchQuantization::SphericalQ3 {
+        if matches!(
+            search_data.quantization(),
+            SearchQuantization::Spherical { .. }
+        ) {
             // Encoded representations can have a decoded dimension different from the
             // stored row length. Read an actual graph vector rather than trusting sidecars.
             let mut vertex_provider =
@@ -1630,7 +1633,8 @@ mod disk_provider_tests {
         ] {
             std::fs::copy(root.join(source.trim_start_matches('/')), destination).unwrap();
         }
-        crate::storage::quant::generate_spherical_q3::<f32, _>(
+        crate::storage::quant::generate_spherical::<f32, _>(
+            3,
             &prefix,
             &root
                 .join(TEST_DATA_FILE.trim_start_matches('/'))
@@ -1665,7 +1669,10 @@ mod disk_provider_tests {
             ))
             .unwrap();
         assert_eq!(legacy.search_data.quantization(), SearchQuantization::PQ);
-        for quantization in [SearchQuantization::PQ, SearchQuantization::SphericalQ3] {
+        for quantization in [
+            SearchQuantization::PQ,
+            SearchQuantization::Spherical { num_bits: 3 },
+        ] {
             context.num_nodes_to_cache = 32;
             let explicit = runtime
                 .block_on(
@@ -1931,7 +1938,7 @@ mod disk_provider_tests {
                 )
                 .unwrap(),
             ),
-            SearchQuantization::SphericalQ3 => None,
+            SearchQuantization::Spherical { .. } => None,
         };
 
         let aligned_reader_factory = VirtualAlignedReaderFactory::new(
@@ -3019,11 +3026,12 @@ mod disk_provider_tests {
 
     #[rstest]
     #[case(SearchQuantization::PQ)]
-    #[case(SearchQuantization::SphericalQ3)]
+    #[case(SearchQuantization::Spherical { num_bits: 3 })]
     fn graph_and_flat_queries_isolate_pooled_query_state(#[case] quantization: SearchQuantization) {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
-        if quantization == SearchQuantization::SphericalQ3 {
-            crate::storage::quant::generate_spherical_q3::<f32, _>(
+        if let SearchQuantization::Spherical { num_bits } = quantization {
+            crate::storage::quant::generate_spherical::<f32, _>(
+                num_bits,
                 TEST_INDEX_PREFIX_128DIM,
                 TEST_DATA_FILE,
                 Metric::L2,
@@ -3073,9 +3081,11 @@ mod disk_provider_tests {
     }
 
     #[rstest]
-    #[case(SearchQuantization::PQ, SearchQuantization::SphericalQ3)]
-    #[case(SearchQuantization::SphericalQ3, SearchQuantization::PQ)]
-    fn rebuild_invalidates_other_search_backend(
+    #[case(SearchQuantization::PQ, SearchQuantization::Spherical { num_bits: 3 })]
+    #[case(SearchQuantization::Spherical { num_bits: 3 }, SearchQuantization::PQ)]
+    #[case(SearchQuantization::Spherical { num_bits: 2 }, SearchQuantization::Spherical { num_bits: 4 })]
+    #[case(SearchQuantization::Spherical { num_bits: 4 }, SearchQuantization::Spherical { num_bits: 3 })]
+    fn rebuild_rejects_stale_search_data(
         #[case] initial: SearchQuantization,
         #[case] replacement: SearchQuantization,
     ) {
@@ -3110,8 +3120,10 @@ mod disk_provider_tests {
         fixture.params.data_path = "/disk_index_build/replacement.bin".into();
         fixture.params.search_quantization = replacement;
         fixture.build::<GraphDataF32VectorUnitData>().unwrap();
-        for path in initial.paths(&prefix) {
-            assert!(!fixture.storage_provider.exists(&path));
+        if initial.paths(&prefix) != replacement.paths(&prefix) {
+            for path in initial.paths(&prefix) {
+                assert!(!fixture.storage_provider.exists(&path));
+            }
         }
         assert!(SearchData::load(&prefix, initial, fixture.storage_provider.as_ref()).is_err());
         let data = Arc::new(
@@ -3138,7 +3150,7 @@ mod disk_provider_tests {
     #[rstest]
     #[case(false)]
     #[case(true)]
-    fn spherical_q3_cosine_normalized_build_load_and_rerank(#[case] cache_nodes: bool) {
+    fn spherical_cosine_normalized_build_load_and_rerank(#[case] cache_nodes: bool) {
         use diskann_utils::{io::write_bin, views::rowmajor::MatrixMut};
         use std::io::Write;
 
@@ -3160,7 +3172,7 @@ mod disk_provider_tests {
         let fixture = IndexBuildFixture::new(
             storage,
             TestParams {
-                search_quantization: SearchQuantization::SphericalQ3,
+                search_quantization: SearchQuantization::Spherical { num_bits: 3 },
                 metric: Metric::CosineNormalized,
                 data_path: "/disk_index_build/normalized.bin".into(),
                 ..Default::default()
@@ -3172,7 +3184,7 @@ mod disk_provider_tests {
         let data = Arc::new(
             SearchData::load(
                 prefix,
-                SearchQuantization::SphericalQ3,
+                SearchQuantization::Spherical { num_bits: 3 },
                 fixture.storage_provider.as_ref(),
             )
             .unwrap(),
@@ -3216,11 +3228,14 @@ mod disk_provider_tests {
     #[rstest]
     #[case(false)]
     #[case(true)]
-    fn spherical_q3_build_search_and_rerank(#[case] cache_nodes: bool) {
+    fn spherical_build_search_and_rerank(
+        #[case] cache_nodes: bool,
+        #[values(1, 2, 3, 4, 8)] num_bits: usize,
+    ) {
         let fixture = IndexBuildFixture::new(
             VirtualStorageProvider::new_overlay(test_data_root()),
             TestParams {
-                search_quantization: SearchQuantization::SphericalQ3,
+                search_quantization: SearchQuantization::Spherical { num_bits },
                 data_compression_chunk_vector_count: Some(31),
                 ..Default::default()
             },
@@ -3235,7 +3250,7 @@ mod disk_provider_tests {
         let engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
                 index_path_prefix: prefix,
-                quantization: SearchQuantization::SphericalQ3,
+                quantization: SearchQuantization::Spherical { num_bits },
                 max_thread_num: 2,
                 caching_strategy: if cache_nodes {
                     CachingStrategy::StaticCacheWithBfsNodes(32)
@@ -3326,7 +3341,7 @@ mod disk_provider_tests {
     #[rstest]
     #[case(false)]
     #[case(true)]
-    fn spherical_q3_rejects_mismatched_input_dimension_on_load(#[case] minmax: bool) {
+    fn spherical_rejects_mismatched_input_dimension_on_load(#[case] minmax: bool) {
         use std::io::{Read, Write};
 
         use crate::test_utils::GraphDataMinMaxVectorUnitData;
@@ -3354,7 +3369,8 @@ mod disk_provider_tests {
                 write_bin(vectors.as_view(), &mut writer).unwrap();
                 writer.flush().unwrap();
             }
-            crate::storage::quant::generate_spherical_q3::<f32, _>(
+            crate::storage::quant::generate_spherical::<f32, _>(
+                3,
                 "/wrong",
                 "/wrong-dimension.bin",
                 Metric::L2,
@@ -3364,7 +3380,7 @@ mod disk_provider_tests {
                 128,
             )
             .unwrap();
-            let [quantizer_path, _] = SearchQuantization::SphericalQ3.paths("/wrong");
+            let [quantizer_path, _] = SearchQuantization::Spherical { num_bits: 3 }.paths("/wrong");
             let mut serialized = Vec::new();
             storage
                 .open_reader(&quantizer_path)
@@ -3379,7 +3395,12 @@ mod disk_provider_tests {
                 writer.flush().unwrap();
             }
             let search_data = Arc::new(
-                SearchData::load("/wrong", SearchQuantization::SphericalQ3, storage).unwrap(),
+                SearchData::load(
+                    "/wrong",
+                    SearchQuantization::Spherical { num_bits: 3 },
+                    storage,
+                )
+                .unwrap(),
             );
             let factory = DiskVertexProviderFactory::<Data, _>::new(
                 VirtualAlignedReaderFactory::new(
@@ -3405,7 +3426,7 @@ mod disk_provider_tests {
         }
 
         let params = TestParams {
-            search_quantization: SearchQuantization::SphericalQ3,
+            search_quantization: SearchQuantization::Spherical { num_bits: 3 },
             ..Default::default()
         };
         if minmax {
@@ -3420,7 +3441,7 @@ mod disk_provider_tests {
     }
 
     #[test]
-    fn spherical_q3_search_decodes_minmax_vectors() {
+    fn spherical_search_decodes_minmax_vectors() {
         use crate::test_utils::GraphDataMinMaxVectorUnitData;
         use diskann_providers::common::MinMax8;
 
@@ -3431,7 +3452,7 @@ mod disk_provider_tests {
                 dim: 148,
                 full_dim: 128,
                 data_path: data_path.into(),
-                search_quantization: SearchQuantization::SphericalQ3,
+                search_quantization: SearchQuantization::Spherical { num_bits: 3 },
                 ..Default::default()
             },
         )
@@ -3440,7 +3461,7 @@ mod disk_provider_tests {
         let engine = create_disk_index_searcher::<GraphDataMinMaxVectorUnitData>(
             CreateDiskIndexSearcherParams {
                 index_path_prefix: &fixture.params.index_path_prefix,
-                quantization: SearchQuantization::SphericalQ3,
+                quantization: SearchQuantization::Spherical { num_bits: 3 },
                 ..Default::default()
             },
             &fixture.storage_provider,

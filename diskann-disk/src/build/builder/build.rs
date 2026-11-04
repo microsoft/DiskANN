@@ -40,8 +40,8 @@ use crate::{
     error::{diskann_error, ErrorKind},
     storage::{
         quant::{
-            generate_spherical_q3, validate_data_generation_input, PQGeneration,
-            PQGenerationContext, QuantDataGenerator,
+            generate_spherical, validate_data_generation_input, PQGeneration, PQGenerationContext,
+            QuantDataGenerator,
         },
         DiskIndexWriter,
     },
@@ -76,6 +76,7 @@ where
         index_configuration: IndexConfiguration,
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
+        disk_build_param.search_quantization().validate()?;
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
             &(index_writer.get_index_path_prefix() + "_pq_compressed.bin"),
@@ -141,8 +142,11 @@ where
         let max_block_size = self.disk_build_param.data_compression_chunk_vector_count();
         validate_data_generation_input(self.storage_provider, &data_path, max_block_size)?;
 
-        if self.disk_build_param.search_quantization() == SearchQuantization::SphericalQ3 {
-            return generate_spherical_q3::<Data::VectorDataType, _>(
+        if let SearchQuantization::Spherical { num_bits } =
+            self.disk_build_param.search_quantization()
+        {
+            return generate_spherical::<Data::VectorDataType, _>(
+                num_bits,
                 &self.index_writer.get_index_path_prefix(),
                 &data_path,
                 self.index_configuration.dist_metric,
@@ -221,8 +225,8 @@ where
         // The other backend still describes the previous dataset, even if its shape
         // matches. Invalidate it before replacing the graph and propagate deletion errors.
         let unused_quantization = match self.disk_build_param.search_quantization() {
-            SearchQuantization::PQ => SearchQuantization::SphericalQ3,
-            SearchQuantization::SphericalQ3 => SearchQuantization::PQ,
+            SearchQuantization::PQ => SearchQuantization::Spherical { num_bits: 1 },
+            SearchQuantization::Spherical { .. } => SearchQuantization::PQ,
         };
         for path in unused_quantization.paths(&self.index_writer.get_index_path_prefix()) {
             if self.storage_provider.exists(&path) {

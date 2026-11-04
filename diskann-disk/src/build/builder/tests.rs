@@ -132,7 +132,7 @@ mod disk_index_build_tests {
             .write_all(b"existing graph")
             .unwrap();
         let [quantizer_path, _] =
-            crate::SearchQuantization::SphericalQ3.paths(&params.index_path_prefix);
+            crate::SearchQuantization::Spherical { num_bits: 3 }.paths(&params.index_path_prefix);
         // A directory cannot be deleted as a sidecar file. The builder must
         // return that storage error before opening the graph for replacement.
         std::fs::create_dir(&quantizer_path).unwrap();

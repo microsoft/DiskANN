@@ -98,7 +98,7 @@ where
 
     let num_pq_chunks = match params.search_quantization {
         SearchQuantization::PQ => params.num_pq_chunks.get(),
-        SearchQuantization::SphericalQ3 => 1,
+        SearchQuantization::Spherical { .. } => 1,
     };
     let build_parameters = DiskIndexBuildParameters::new(
         MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
@@ -202,7 +202,7 @@ mod tests {
             .contains("Number of PQ chunks must be within [1, 13]"));
         assert!(!storage.exists(&get_disk_index_file(&params.save_path)));
 
-        params.search_quantization = SearchQuantization::SphericalQ3;
+        params.search_quantization = SearchQuantization::Spherical { num_bits: 3 };
         build_disk_index::<f32, _>(&storage, &params).unwrap();
         let search_data = SearchData::load(
             &params.save_path,

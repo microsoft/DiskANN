@@ -16,7 +16,7 @@ cfg_if::cfg_if! {
             fn from(quantization: crate::inputs::disk::SearchQuantization) -> Self {
                 match quantization {
                     crate::inputs::disk::SearchQuantization::PQ => Self::PQ,
-                    crate::inputs::disk::SearchQuantization::SphericalQ3 => Self::SphericalQ3,
+                    crate::inputs::disk::SearchQuantization::Spherical { num_bits } => Self::Spherical { num_bits },
                 }
             }
         }

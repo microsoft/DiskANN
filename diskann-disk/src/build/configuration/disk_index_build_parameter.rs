@@ -172,7 +172,7 @@ impl DiskIndexBuildParameters {
         &self.build_quantization
     }
 
-    /// Get the PQ chunk count; ignored when search uses SphericalQ3.
+    /// Get the PQ chunk count; ignored when search uses Spherical.
     pub fn search_pq_chunks(&self) -> NumPQChunks {
         self.search_pq_chunks
     }
@@ -213,9 +213,9 @@ mod dataset_test {
         assert_eq!(result.search_quantization(), SearchQuantization::PQ);
         assert_eq!(
             result
-                .with_search_quantization(SearchQuantization::SphericalQ3)
+                .with_search_quantization(SearchQuantization::Spherical { num_bits: 3 })
                 .search_quantization(),
-            SearchQuantization::SphericalQ3
+            SearchQuantization::Spherical { num_bits: 3 }
         );
         assert_eq!(
             result.data_compression_chunk_vector_count(),

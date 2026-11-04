@@ -8,7 +8,7 @@ use std::{io::Read, sync::Arc};
 use diskann::{ANNError, ANNResult};
 use diskann_providers::storage::{get_compressed_pq_file, get_pq_pivot_file, StorageReadProvider};
 use diskann_quantization::{
-    alloc::GlobalAllocator,
+    alloc::{GlobalAllocator, Poly},
     spherical::iface::{self, Quantizer},
 };
 use diskann_utils::{
@@ -30,18 +30,33 @@ pub enum SearchQuantization {
     /// Product quantization using the existing PQ sidecar format.
     #[default]
     PQ,
-    /// Three-bit spherical data with compensation metadata and full-precision queries.
-    SphericalQ3,
+    /// Spherical data with compensation metadata and full-precision queries.
+    Spherical { num_bits: usize },
 }
 
 impl SearchQuantization {
+    /// Reject spherical bit widths without a full-precision query implementation.
+    ///
+    /// # Errors
+    /// Returns an error unless `num_bits` is one of 1, 2, 3, 4, or 8.
+    pub fn validate(self) -> ANNResult<()> {
+        if let Self::Spherical { num_bits } = self {
+            if !matches!(num_bits, 1 | 2 | 3 | 4 | 8) {
+                return Err(ANNError::message(
+                    "Spherical search num_bits must be one of 1, 2, 3, 4, or 8",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Sidecar files required by this backend. The disk graph is shared by both backends.
     pub fn paths(self, prefix: &str) -> [String; 2] {
         match self {
             Self::PQ => [get_pq_pivot_file(prefix), get_compressed_pq_file(prefix)],
-            Self::SphericalQ3 => [
-                format!("{prefix}_spherical_q3_quantizer.bin"),
-                format!("{prefix}_spherical_q3_compressed.bin"),
+            Self::Spherical { .. } => [
+                format!("{prefix}_spherical_quantizer.bin"),
+                format!("{prefix}_spherical_compressed.bin"),
             ],
         }
     }
@@ -49,8 +64,8 @@ impl SearchQuantization {
 
 pub(crate) enum SearchDataInner {
     PQ(Arc<PQData>),
-    SphericalQ3 {
-        plan: Box<dyn Quantizer>,
+    Spherical {
+        plan: Poly<dyn Quantizer>,
         codes: rowmajor::Owned<u8>,
         source_dim: usize,
     },
@@ -74,17 +89,18 @@ impl SearchData {
         quantization: SearchQuantization,
         storage: &S,
     ) -> ANNResult<Self> {
+        quantization.validate()?;
         let [quantizer_path, codes_path] = quantization.paths(prefix);
         match quantization {
             SearchQuantization::PQ => Ok(Self::from_pq(
                 DiskIndexReader::new(quantizer_path, codes_path, storage)?.get_pq_data(),
             )),
-            SearchQuantization::SphericalQ3 => {
+            SearchQuantization::Spherical { num_bits } => {
                 let mut serialized = Vec::new();
                 storage
                     .open_reader(&quantizer_path)?
                     .read_to_end(&mut serialized)?;
-                if serialized.len() < 16 || &serialized[..4] != b"DSQ3" {
+                if serialized.len() < 16 || &serialized[..4] != b"DSQ1" {
                     return Err(ANNError::message(
                         "Invalid spherical search quantizer header",
                     ));
@@ -100,10 +116,14 @@ impl SearchData {
                         "Spherical source dimension must be positive",
                     ));
                 }
-                let plan: Box<dyn Quantizer> = Box::new(
-                    iface::Impl::<3>::try_deserialize(&serialized[8..], GlobalAllocator)
-                        .map_err(ANNError::new)?,
-                );
+                let plan =
+                    iface::try_deserialize::<GlobalAllocator, _>(&serialized[8..], GlobalAllocator)
+                        .map_err(ANNError::new)?;
+                if plan.nbits() != num_bits {
+                    return Err(ANNError::message(
+                        "Spherical quantizer bit width does not match requested num_bits",
+                    ));
+                }
                 let mut reader = storage.open_reader(&codes_path)?;
                 let metadata = Metadata::read(&mut reader)?;
                 let expected = (metadata.npoints() as u64)
@@ -119,7 +139,7 @@ impl SearchData {
                 }
                 let codes =
                     read_bin(&mut storage.open_reader(&codes_path)?).map_err(ANNError::new)?;
-                Ok(Self(SearchDataInner::SphericalQ3 {
+                Ok(Self(SearchDataInner::Spherical {
                     plan,
                     codes,
                     source_dim,
@@ -132,7 +152,9 @@ impl SearchData {
     pub fn quantization(&self) -> SearchQuantization {
         match &self.0 {
             SearchDataInner::PQ(_) => SearchQuantization::PQ,
-            SearchDataInner::SphericalQ3 { .. } => SearchQuantization::SphericalQ3,
+            SearchDataInner::Spherical { plan, .. } => SearchQuantization::Spherical {
+                num_bits: plan.nbits(),
+            },
         }
     }
 
@@ -140,7 +162,7 @@ impl SearchData {
     pub fn num_points(&self) -> usize {
         match &self.0 {
             SearchDataInner::PQ(data) => data.pq_compressed_data().nrows(),
-            SearchDataInner::SphericalQ3 { codes, .. } => codes.nrows(),
+            SearchDataInner::Spherical { codes, .. } => codes.nrows(),
         }
     }
 
@@ -152,7 +174,7 @@ impl SearchData {
                 self.num_points()
             ));
         }
-        if let SearchDataInner::SphericalQ3 {
+        if let SearchDataInner::Spherical {
             plan, source_dim, ..
         } = &self.0
         {
@@ -166,7 +188,7 @@ impl SearchData {
     }
 
     pub(crate) fn validate_full_dimension(&self, full_dim: usize) -> ANNResult<()> {
-        if let SearchDataInner::SphericalQ3 { plan, .. } = &self.0 {
+        if let SearchDataInner::Spherical { plan, .. } = &self.0 {
             if plan.full_dim() != full_dim {
                 return Err(diskann_error!(
                     ErrorKind::DimensionMismatchError,

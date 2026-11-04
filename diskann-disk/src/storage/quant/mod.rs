@@ -19,4 +19,4 @@ pub(crate) use search_data::SearchDataInner;
 pub use search_data::{SearchData, SearchQuantization};
 
 mod spherical;
-pub use spherical::generate_spherical_q3;
+pub use spherical::generate_spherical;

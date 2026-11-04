@@ -17,7 +17,7 @@ use crate::storage::quant::{SearchData, SearchDataInner};
 
 pub(crate) enum QuantizedScratch {
     PQ(PQScratch),
-    SphericalQ3 {
+    Spherical {
         computer: Option<iface::QueryComputer>,
         batch_size: usize,
     },
@@ -32,7 +32,7 @@ impl QuantizedScratch {
                 data.get_num_chunks(),
                 data.get_num_centers(),
             )?)),
-            SearchDataInner::SphericalQ3 { .. } => Ok(Self::SphericalQ3 {
+            SearchDataInner::Spherical { .. } => Ok(Self::Spherical {
                 computer: None,
                 batch_size: graph_degree.max(1),
             }),
@@ -42,7 +42,7 @@ impl QuantizedScratch {
     pub(crate) fn max_vectors(&self) -> usize {
         match self {
             Self::PQ(scratch) => scratch.max_vectors(),
-            Self::SphericalQ3 { batch_size, .. } => *batch_size,
+            Self::Spherical { batch_size, .. } => *batch_size,
         }
     }
 
@@ -56,7 +56,7 @@ impl QuantizedScratch {
             (Self::PQ(scratch), SearchDataInner::PQ(data)) => {
                 scratch.prepare_query(data, metric, query)
             }
-            (Self::SphericalQ3 { computer, .. }, SearchDataInner::SphericalQ3 { plan, .. }) => {
+            (Self::Spherical { computer, .. }, SearchDataInner::Spherical { plan, .. }) => {
                 *computer = None;
                 *computer = Some(
                     plan.fused_query_computer(
@@ -97,7 +97,7 @@ impl QuantizedScratch {
                     callback(scratch.aligned_dist_scratch[index], *id);
                 }
             }
-            (Self::SphericalQ3 { computer, .. }, SearchDataInner::SphericalQ3 { codes, .. }) => {
+            (Self::Spherical { computer, .. }, SearchDataInner::Spherical { codes, .. }) => {
                 let computer = computer
                     .as_ref()
                     .ok_or_else(|| ANNError::message("Spherical query is not prepared"))?;

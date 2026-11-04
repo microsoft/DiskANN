@@ -16,8 +16,8 @@
           "build_ram_limit_gb": 2.0,
           "num_pq_chunks": 128,
           "quantization_type": "FP",
-          "search_quantization": "SphericalQ3",
-          "save_path": "siftsmall_index_spherical_q3"
+          "search_quantization": { "Spherical": { "num_bits": 3 } },
+          "save_path": "siftsmall_index_spherical"
         },
         "search_phase": {
           "queries": "disk_index_sample_query_10pts.fbin",

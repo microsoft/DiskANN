@@ -2100,6 +2100,7 @@ where
     match nbits {
         1 => unpack_bits::<1, _, _>(proto, alloc),
         2 => unpack_bits::<2, _, _>(proto, alloc),
+        3 => unpack_bits::<3, _, _>(proto, alloc),
         4 => unpack_bits::<4, _, _>(proto, alloc),
         8 => unpack_bits::<8, _, _>(proto, alloc),
         n => Err(DeserializationError::UnsupportedBitWidth(n)),
@@ -2826,6 +2827,18 @@ mod tests {
                         Err(DeserializationError::UnsupportedBitWidth(2)),
                     ));
                 }
+                3 => {
+                    test_deserialization_inner(
+                        quantizer,
+                        &Impl::<3, _>::try_deserialize(&serialized, global).unwrap(),
+                        nbits,
+                        dataset,
+                    );
+                    assert!(matches!(
+                        Impl::<2, _>::try_deserialize(&serialized, global),
+                        Err(DeserializationError::UnsupportedBitWidth(3)),
+                    ));
+                }
                 4 => {
                     test_deserialization_inner(
                         quantizer,
@@ -2930,6 +2943,19 @@ mod tests {
         }
 
         #[test]
+        fn test_plan_3bit_roundtrip() {
+            for metric in [
+                SupportedMetric::SquaredL2,
+                SupportedMetric::InnerProduct,
+                SupportedMetric::Cosine,
+            ] {
+                let (plan, data) = make_impl::<3>(metric);
+                test_plan_panic_boundary(&plan);
+                test_plan_serialization(&plan, 3, data.as_view());
+            }
+        }
+
+        #[test]
         fn test_plan_4bit_l2() {
             let (plan, data) = make_impl::<4>(SupportedMetric::SquaredL2);
             test_plan_panic_boundary(&plan);
@@ -2988,10 +3014,20 @@ mod tests {
         #[test]
         fn test_unsupported_bit_width() {
             let (plan, _) = make_impl::<3>(SupportedMetric::SquaredL2);
-            let serialized = plan.serialize(GlobalAllocator).unwrap();
+            let mut builder = FlatBufferBuilder::new();
+            let quantizer = plan.quantizer().pack(&mut builder);
+            let root = fb::spherical::Quantizer::create(
+                &mut builder,
+                &fb::spherical::QuantizerArgs {
+                    quantizer: Some(quantizer),
+                    nbits: 5,
+                },
+            );
+            fb::spherical::finish_quantizer_buffer(&mut builder, root);
+            let serialized = builder.finished_data();
             assert!(matches!(
-                try_deserialize::<GlobalAllocator, _>(&serialized, crate::test_util::AlwaysFails),
-                Err(DeserializationError::UnsupportedBitWidth(3)),
+                try_deserialize::<GlobalAllocator, _>(serialized, crate::test_util::AlwaysFails),
+                Err(DeserializationError::UnsupportedBitWidth(5)),
             ));
         }
 

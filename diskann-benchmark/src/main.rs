@@ -782,23 +782,32 @@ mod tests {
 
     #[test]
     #[cfg(feature = "disk-index")]
-    fn disk_index_spherical_q3_integration() {
+    fn disk_index_spherical_integration() {
+        for num_bits in [1, 2, 3, 4, 8] {
+            run_disk_index_spherical_integration(num_bits);
+        }
+    }
+
+    #[cfg(feature = "disk-index")]
+    fn run_disk_index_spherical_integration(num_bits: usize) {
         let tempdir = tempfile::tempdir().unwrap();
         let prefix = tempdir
             .path()
             .join("spherical")
             .to_string_lossy()
             .into_owned();
-        let mut raw = value_from_file(&example_directory().join("disk-index-spherical-q3.json"));
+        let mut raw = value_from_file(&example_directory().join("disk-index-spherical.json"));
         prefix_search_directories(&mut raw, &root_directory());
         raw["jobs"][0]["content"]["source"]["save_path"] = serde_json::json!(prefix);
+        raw["jobs"][0]["content"]["source"]["search_quantization"] =
+            serde_json::json!({"Spherical": {"num_bits": num_bits}});
         for phase in ["build", "load"] {
             if phase == "load" {
                 raw["jobs"][0]["content"]["source"] = serde_json::json!({
                     "disk-index-source": "Load",
                     "data_type": "float32",
                     "load_path": prefix,
-                    "search_quantization": "SphericalQ3"
+                    "search_quantization": { "Spherical": { "num_bits": num_bits } }
                 });
                 raw["jobs"][0]["content"]["search_phase"]["is_flat_search"] =
                     serde_json::json!(true);
@@ -819,7 +828,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             assert_eq!(
                 results[0]["results"]["search"]["search_quantization"],
-                "SphericalQ3"
+                serde_json::json!({"Spherical": {"num_bits": num_bits}})
             );
         }
         for path in diskann_disk::SearchQuantization::PQ.paths(&prefix) {
@@ -831,11 +840,15 @@ mod tests {
     fn disk_index_load_validates_selected_quantization() {
         for (quantization, quantizer_suffix, codes_suffix) in [
             (None, "_pq_pivots.bin", "_pq_compressed.bin"),
-            (Some("PQ"), "_pq_pivots.bin", "_pq_compressed.bin"),
             (
-                Some("SphericalQ3"),
-                "_spherical_q3_quantizer.bin",
-                "_spherical_q3_compressed.bin",
+                Some(serde_json::json!("PQ")),
+                "_pq_pivots.bin",
+                "_pq_compressed.bin",
+            ),
+            (
+                Some(serde_json::json!({"Spherical": {"num_bits": 3}})),
+                "_spherical_quantizer.bin",
+                "_spherical_compressed.bin",
             ),
         ] {
             let tempdir = tempfile::tempdir().unwrap();
@@ -852,14 +865,12 @@ mod tests {
             ] {
                 std::fs::write(path, []).unwrap();
             }
-            let mut raw =
-                value_from_file(&example_directory().join("disk-index-spherical-q3.json"));
+            let mut raw = value_from_file(&example_directory().join("disk-index-spherical.json"));
             raw["jobs"][0]["content"]["source"] = serde_json::json!({
                 "disk-index-source": "Load", "data_type": "float32", "load_path": prefix
             });
             if let Some(quantization) = quantization {
-                raw["jobs"][0]["content"]["source"]["search_quantization"] =
-                    serde_json::json!(quantization);
+                raw["jobs"][0]["content"]["source"]["search_quantization"] = quantization;
             }
             raw["jobs"][0]["content"]["search_phase"]["queries"] = serde_json::json!(queries);
             raw["jobs"][0]["content"]["search_phase"]["groundtruth"] =
