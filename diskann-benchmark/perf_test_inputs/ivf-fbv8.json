@@ -10,9 +10,9 @@
         "data_type": "float16",
         "format": "bin",
         "build": {
-          "batch_size": 1024,
-          "split_threshold": 2048,
-          "iterations": 20,
+          "batch_size": 8192,
+          "split_threshold": 120,
+          "iterations": 5,
           "split_k": 2,
           "reassign_count": 8
         },
@@ -21,14 +21,8 @@
           "queries": "fbv_8_normalized_query_6380.bin",
           "groundtruth": "fbv8_gt_recall_2000.bin",
           "k": 1000,
-          "nprobe": [
-            1,
-            2,
-            4,
-            8,
-            16,
-            32
-          ],
+          "nprobe": [],
+          "target_scan_ratio": 0.08,
           "reps": 1,
           "query_limit": null,
           "full_probe_queries": 8

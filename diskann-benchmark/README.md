@@ -272,8 +272,9 @@ cargo run --release -p diskann-benchmark -- run --input-file diskann-benchmark/e
 The [FBV8 configuration](perf_test_inputs/ivf-fbv8.json) accepts FP16 bin data;
 update its search directory to the dataset location. FP16 values are promoted to FP32
 without renormalization. FP32 bin and fvecs inputs are also supported.
-The FBV8 workload selects `search.distance: "cosine_normalized"`, matching its
-normalized embeddings.
+The FBV8 workload uses batches of 8,192 vectors, split threshold 120, and at most
+5 Lloyd iterations. It selects `search.distance: "cosine_normalized"`, matching its
+normalized embeddings, and calibrates nprobe to an 8% mean scanned-vector ratio.
 
 The provider starts with the first row as an empty list's centroid. Splits use the upstream
 FirstPoints seeder; no random seed is consumed. `build.split_k` defaults to 2 and
@@ -300,6 +301,8 @@ flat oracle checks full probing. `query_limit: null` uses all queries;
 search repetitions. Results include actual scanned-vector ratios and QPS per repetition.
 Set `search.target_scan_ratio` to add a fixed nprobe calibrated from centroid rankings
 and list sizes over the selected queries, without consulting ground truth.
+`search.nprobe` lists search budgets to evaluate on the same built index. Use an empty
+list with `target_scan_ratio` to run only the calibrated budget and the full-probe check.
 The full-probe oracle requires valid unique IDs and exact equality of the ordered
 distance sequence. Only exact distance ties may change IDs or their order;
 `full_probe_tie_queries` counts queries with such differences.
