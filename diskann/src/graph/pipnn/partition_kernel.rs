@@ -15,8 +15,8 @@ use crate::ANNResult;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use super::{
-    check_output_rows, distance_scratch,
-    partition_metric::PartitionMetric,
+    check_output_rows,
+    partition_metric::{PartitionLeaders, PartitionMetric},
     simd::Simd,
     topk::{Candidate, select_top_k_ids},
 };
@@ -25,7 +25,7 @@ use super::{
 /// avoid an allocation for each stripe.
 #[derive(Debug, Default)]
 pub(super) struct PartitionKernelWorkspace {
-    distance_scratch: Vec<f32>,
+    distances: rowmajor::Buffer<f32>,
     nearest_leaders: Vec<Candidate>,
 }
 
@@ -42,12 +42,12 @@ pub(super) struct PartitionKernelWorkspace {
 /// # Errors
 ///
 /// Returns an error if `output` does not have one row per point, if the
-/// distance matrix size overflows `usize`, or if points and leaders have
+/// distance matrix shape is not a valid layout, or if points and leaders have
 /// different dimensions.
 pub(super) fn assign_leaders<A, M>(
     arch: A,
     points: rowmajor::Ref<'_, f32>,
-    leaders: &M::Leaders<'_>,
+    leaders: &PartitionLeaders<'_>,
     output: rowmajor::Mut<'_, u32>,
     workspace: &mut PartitionKernelWorkspace,
 ) -> ANNResult<()>
@@ -57,15 +57,13 @@ where
 {
     let point_count = points.nrows();
     check_output_rows(point_count, output.nrows())?;
-    let mut distances = distance_scratch(
-        &mut workspace.distance_scratch,
-        point_count,
-        M::leader_count(leaders),
-    )?;
-    M::compute_distances(points, leaders, distances.as_view_mut())?;
+    workspace
+        .distances
+        .resize(point_count, leaders.leader_count())?;
+    M::compute_distances(points, leaders, workspace.distances.as_view_mut())?;
     select_top_k_ids(
         arch,
-        distances.as_view(),
+        workspace.distances.as_view(),
         output,
         &mut workspace.nearest_leaders,
     );

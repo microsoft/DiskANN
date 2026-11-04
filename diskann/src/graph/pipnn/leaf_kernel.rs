@@ -13,7 +13,7 @@ use crate::ANNResult;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use super::{
-    check_output_rows, distance_scratch,
+    check_output_rows,
     leaf_metric::LeafMetric,
     simd::Simd,
     topk::{Candidate, select_top_k_symmetric},
@@ -23,7 +23,7 @@ use super::{
 /// leaves to avoid an allocation for each leaf.
 #[derive(Debug, Default)]
 pub(super) struct LeafKernelWorkspace {
-    distance_scratch: Vec<f32>,
+    distances: rowmajor::Buffer<f32>,
     kth_distances: Vec<f32>,
 }
 
@@ -39,7 +39,7 @@ pub(super) struct LeafKernelWorkspace {
 /// # Errors
 ///
 /// Returns an error if `output` does not have one row per point, or if the
-/// distance matrix size overflows `usize`.
+/// distance matrix shape is not a valid layout.
 pub(super) fn select_leaf_neighbors<A, M>(
     arch: A,
     points: rowmajor::Ref<'_, f32>,
@@ -52,12 +52,11 @@ where
 {
     let point_count = points.nrows();
     check_output_rows(point_count, output.nrows())?;
-    let mut distances =
-        distance_scratch(&mut workspace.distance_scratch, point_count, point_count)?;
-    M::compute_distances(points, distances.as_view_mut())?;
+    workspace.distances.resize(point_count, point_count)?;
+    M::compute_distances(points, workspace.distances.as_view_mut())?;
     select_top_k_symmetric(
         arch,
-        distances.as_view(),
+        workspace.distances.as_view(),
         output,
         &mut workspace.kth_distances,
     );

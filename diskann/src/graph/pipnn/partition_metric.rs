@@ -25,28 +25,29 @@ use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 ///
 /// L2 stores squared norms, and Cosine stores norms. The norms are computed once,
 /// when the leader set is created, and all point stripes share them. Inner product
-/// and normalized cosine store no norms.
-pub(super) struct PartitionLeaders<'a, Norms> {
+/// and normalized cosine store no norms, so `norms` is empty.
+pub(super) struct PartitionLeaders<'a> {
     values: rowmajor::Ref<'a, f32>,
-    norms: Norms,
+    norms: Vec<f32>,
+}
+
+impl PartitionLeaders<'_> {
+    /// Return the number of leaders.
+    pub(super) fn leader_count(&self) -> usize {
+        self.values.nrows()
+    }
 }
 
 /// Compute ranking distances from points to partition leaders.
 ///
-/// `Leaders` hides the norms of each metric from the caller. The caller creates
-/// one leader set for a partition split and shares it across all point stripes.
+/// The caller creates one leader set for a partition split and shares it across
+/// all point stripes.
 pub(super) trait PartitionMetric: Send + Sync + 'static {
-    /// Leader vectors and precomputed norms for one partition split.
-    type Leaders<'a>: Sync;
-
     /// Create a leader set from a matrix with one leader in each row.
     ///
     /// Partitioning always samples at least one leader. The kernels do not support
     /// an empty leader set.
-    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a>;
-
-    /// Return the number of leaders.
-    fn leader_count(leaders: &Self::Leaders<'_>) -> usize;
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> PartitionLeaders<'a>;
 
     /// Write the ranking distance from each point to each leader.
     ///
@@ -57,7 +58,7 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
     /// this shape. A zero distance can have either sign.
     fn compute_distances(
         points: rowmajor::Ref<'_, f32>,
-        leaders: &Self::Leaders<'_>,
+        leaders: &PartitionLeaders<'_>,
         storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()>;
 }
@@ -72,9 +73,7 @@ fn cosine_norms(vectors: rowmajor::Ref<'_, f32>) -> Vec<f32> {
 }
 
 impl PartitionMetric for L2 {
-    type Leaders<'a> = PartitionLeaders<'a, Vec<f32>>;
-
-    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a> {
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> PartitionLeaders<'a> {
         PartitionLeaders {
             values,
             norms: values
@@ -84,13 +83,9 @@ impl PartitionMetric for L2 {
         }
     }
 
-    fn leader_count(leaders: &Self::Leaders<'_>) -> usize {
-        leaders.values.nrows()
-    }
-
     fn compute_distances(
         points: rowmajor::Ref<'_, f32>,
-        leaders: &Self::Leaders<'_>,
+        leaders: &PartitionLeaders<'_>,
         mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         // The ranking distance is `||l||² - 2(p·l)`: the squared L2 distance without
@@ -117,22 +112,16 @@ impl PartitionMetric for L2 {
 }
 
 impl PartitionMetric for Cosine {
-    type Leaders<'a> = PartitionLeaders<'a, Vec<f32>>;
-
-    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a> {
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> PartitionLeaders<'a> {
         PartitionLeaders {
             values,
             norms: cosine_norms(values),
         }
     }
 
-    fn leader_count(leaders: &Self::Leaders<'_>) -> usize {
-        leaders.values.nrows()
-    }
-
     fn compute_distances(
         points: rowmajor::Ref<'_, f32>,
-        leaders: &Self::Leaders<'_>,
+        leaders: &PartitionLeaders<'_>,
         mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         diskann_linalg::sgemm(
@@ -162,19 +151,16 @@ impl PartitionMetric for Cosine {
 }
 
 impl PartitionMetric for InnerProduct {
-    type Leaders<'a> = PartitionLeaders<'a, ()>;
-
-    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a> {
-        PartitionLeaders { values, norms: () }
-    }
-
-    fn leader_count(leaders: &Self::Leaders<'_>) -> usize {
-        leaders.values.nrows()
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> PartitionLeaders<'a> {
+        PartitionLeaders {
+            values,
+            norms: Vec::new(),
+        }
     }
 
     fn compute_distances(
         points: rowmajor::Ref<'_, f32>,
-        leaders: &Self::Leaders<'_>,
+        leaders: &PartitionLeaders<'_>,
         mut storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         diskann_linalg::sgemm(
@@ -195,19 +181,13 @@ impl PartitionMetric for InnerProduct {
 }
 
 impl PartitionMetric for CosineNormalized {
-    type Leaders<'a> = <InnerProduct as PartitionMetric>::Leaders<'a>;
-
-    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> Self::Leaders<'a> {
+    fn create_leaders<'a>(values: rowmajor::Ref<'a, f32>) -> PartitionLeaders<'a> {
         InnerProduct::create_leaders(values)
-    }
-
-    fn leader_count(leaders: &Self::Leaders<'_>) -> usize {
-        InnerProduct::leader_count(leaders)
     }
 
     fn compute_distances(
         points: rowmajor::Ref<'_, f32>,
-        leaders: &Self::Leaders<'_>,
+        leaders: &PartitionLeaders<'_>,
         storage: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         // The constant in `1 - dot` does not change nearest-first order.
@@ -311,7 +291,7 @@ mod tests {
                     });
 
                     assert_eq!(
-                        M::leader_count(&leaders),
+                        leaders.leader_count(),
                         leader_count,
                         "point_count={point_count}, leader_count={leader_count}, dimensions={dimensions}"
                     );
