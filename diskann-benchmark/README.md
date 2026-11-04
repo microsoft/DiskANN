@@ -260,6 +260,60 @@ is running. This incremental saving allows benchmarks to be interrupted without 
 In addition to the machine-readable JSON output files, a (hopefully) helpful summary of the
 results will be printed to `stdout`.
 
+### IVF Build and Search
+
+The `ivf-index` benchmark accepts `ivf-build-search` jobs. Run the
+[synthetic example](example/ivf-index.json) from the repository root:
+
+```sh
+cargo run --release -p diskann-benchmark -- run --input-file diskann-benchmark/example/ivf-index.json --output-file ivf-output.json
+```
+
+The [FBV8 configuration](perf_test_inputs/ivf-fbv8.json) accepts FP16 bin data;
+update its search directory to the dataset location. FP16 values are promoted to FP32
+without renormalization. FP32 bin and fvecs inputs are also supported.
+The FBV8 workload selects `search.distance: "cosine_normalized"`, matching its
+normalized embeddings.
+
+The provider starts with the first row as an empty list's centroid. Splits use the upstream
+FirstPoints seeder; no random seed is consumed. `build.split_k` defaults to 2 and
+`build.reassign_count` defaults to 8 (0 disables reassignment). Each point may move only
+to its source list's linked candidates; ties prefer its source, then link order.
+
+Search uses the upstream SearchStrategy/Accessor API and the shared benchmark runner.
+Set `search.distance` to the dataset's metric: `squared_l2` (the default), `inner_product`,
+`cosine`, or `cosine_normalized`. The normalized cosine path uses the inner-product
+kernel and returns `1 - dot` for the smaller-is-nearer accumulator. It requires unit
+base vectors and queries; loading validates their norms within `1e-3` to allow FP16
+rounding, without modifying the coordinates. Use `cosine` for unnormalized inputs.
+
+Before searching, the provider copies the final list metadata and normalizes each
+nonzero centroid for either cosine mode. Zero centroids remain zero. This preparation
+is done once per search phase, outside search timing, and reported as
+`search_preparation_ms`. The stored means, build routing, splitting and reassignment
+retain their upstream squared-L2 behavior. Calibration, posting scans, computed ground
+truth and the full-probe oracle all use the selected search metric.
+
+`search.k` defaults to 1000. Supplied ground truth defines recall; an independent FP32
+flat oracle checks full probing. `query_limit: null` uses all queries;
+`full_probe_queries` can limit only the full-probe check. One warmup precedes measured
+search repetitions. Results include actual scanned-vector ratios and QPS per repetition.
+Set `search.target_scan_ratio` to add a fixed nprobe calibrated from centroid rankings
+and list sizes over the selected queries, without consulting ground truth.
+The full-probe oracle requires valid unique IDs and exact equality of the ordered
+distance sequence. Only exact distance ties may change IDs or their order;
+`full_probe_tie_queries` counts queries with such differences.
+
+Build timing covers provider/index initialization and insertion calls. Data loading,
+checkpoints and validation are excluded. Results report total insertion time, the number
+of batches that split lists, and the total split parents from upstream `InsertStats`.
+Internal fitting and reassignment timings are not exposed by the upstream API.
+
+Each build validates complete unique membership and reports hashes of centroid bits and
+ordered list memberships. Set `build.record_layout: true` to record these after every batch
+outside insertion timing; leave it false for performance runs. These are local in-memory
+IVF-Flat measurements, with exhaustive centroid routing.
+
 ### Streaming Runs
 Running the benchmark on a streaming workload is similar to other registered benchmarks,
 relying on the file formats and streaming runbooks of `big-ann-benchmarks`

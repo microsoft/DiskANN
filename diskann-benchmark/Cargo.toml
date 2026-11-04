@@ -25,7 +25,7 @@ rayon.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 diskann-vector.workspace = true
 diskann-wide.workspace = true
 diskann-label-filter.workspace = true
