@@ -195,7 +195,7 @@ pub enum DatasetError {
 
 crate::convert_error!(DatasetError);
 
-/// PiPNN build parameters: the partition and leaf parameters, and the
+/// PiPNN build parameters: the partition parameters, the leaf `k`, and the
 /// RobustPrune policy of final pruning. The metric belongs to the
 /// [`Dataset`], and the occlusion rule of pruning follows the metric.
 ///
@@ -207,13 +207,25 @@ crate::convert_error!(DatasetError);
 /// nearer candidates, which raises recall and makes the build slower.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
+    partition: PartitionConfig,
+    leaf_k: NonZeroUsize,
+    prune: PruneConfig,
+}
+
+/// The parameters that the partition step reads.
+#[derive(Clone, Debug, PartialEq)]
+struct PartitionConfig {
     c_max: NonZeroUsize,
     p_samp: f64,
     max_leaders: NonZeroUsize,
     fanout: Vec<NonZeroUsize>,
     max_depth: NonZeroUsize,
-    leaf_k: NonZeroUsize,
-    seed: Option<u64>,
+    seed: u64,
+}
+
+/// The parameters that final pruning reads.
+#[derive(Clone, Debug, PartialEq)]
+struct PruneConfig {
     degree: NonZeroUsize,
     alpha: f32,
     max_occlusion_size: NonZeroU16,
@@ -227,27 +239,32 @@ impl Config {
 
     /// Maximum number of points in a leaf.
     pub fn c_max(&self) -> NonZeroUsize {
-        self.c_max
+        self.partition.c_max
     }
 
     /// Fraction of the points of a cluster that a split samples as leaders.
     pub fn p_samp(&self) -> f64 {
-        self.p_samp
+        self.partition.p_samp
     }
 
     /// Maximum number of leaders in one split.
     pub fn max_leaders(&self) -> NonZeroUsize {
-        self.max_leaders
+        self.partition.max_leaders
     }
 
     /// Number of nearest leaders that each point joins, for each split level.
     pub fn fanout(&self) -> &[NonZeroUsize] {
-        &self.fanout
+        &self.partition.fanout
     }
 
     /// Maximum number of split levels.
     pub fn max_depth(&self) -> NonZeroUsize {
-        self.max_depth
+        self.partition.max_depth
+    }
+
+    /// Seed of leader sampling.
+    pub fn seed(&self) -> u64 {
+        self.partition.seed
     }
 
     /// Number of nearest neighbors that each point selects inside a leaf.
@@ -255,24 +272,19 @@ impl Config {
         self.leaf_k
     }
 
-    /// Seed of leader sampling, or `None` for a seed from the operating system.
-    pub fn seed(&self) -> Option<u64> {
-        self.seed
-    }
-
     /// Number of neighbors that final pruning keeps for each point.
     pub fn degree(&self) -> NonZeroUsize {
-        self.degree
+        self.prune.degree
     }
 
     /// RobustPrune alpha of final pruning.
     pub fn alpha(&self) -> f32 {
-        self.alpha
+        self.prune.alpha
     }
 
     /// Number of nearest candidates that final pruning considers for one point.
     pub fn max_occlusion_size(&self) -> NonZeroU16 {
-        self.max_occlusion_size
+        self.prune.max_occlusion_size
     }
 }
 
@@ -289,6 +301,7 @@ mod defaults {
     ];
     pub(super) const MAX_DEPTH: NonZeroUsize = NonZeroUsize::new(30).unwrap();
     pub(super) const LEAF_K: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+    pub(super) const SEED: u64 = 0;
 }
 
 /// Builder for [`Config`].
@@ -304,7 +317,7 @@ pub struct Builder {
     fanout: Vec<NonZeroUsize>,
     max_depth: NonZeroUsize,
     leaf_k: NonZeroUsize,
-    seed: Option<u64>,
+    seed: u64,
     alpha: f32,
     max_occlusion_size: NonZeroU16,
 }
@@ -320,7 +333,7 @@ impl Builder {
             fanout: defaults::FANOUT.to_vec(),
             max_depth: defaults::MAX_DEPTH,
             leaf_k: defaults::LEAF_K,
-            seed: None,
+            seed: defaults::SEED,
             alpha: config::defaults::ALPHA,
             max_occlusion_size: config::defaults::MAX_OCCLUSION_SIZE,
         }
@@ -391,9 +404,9 @@ impl Builder {
         self
     }
 
-    /// Seed of leader sampling. The same seed gives the same leaves. `None`
-    /// draws a seed from the operating system, so each build samples new leaves.
-    pub fn seed(mut self, seed: Option<u64>) -> Self {
+    /// Seed of leader sampling. The same seed gives the same leaves. Pass a
+    /// random value to sample new leaves on each build.
+    pub fn seed(mut self, seed: u64) -> Self {
         self.seed = seed;
         self
     }
@@ -431,16 +444,20 @@ impl Builder {
             return Err(ConfigError::MaxLeaders(self.max_leaders.get()));
         }
         Ok(Config {
-            c_max: self.c_max,
-            p_samp: self.p_samp,
-            max_leaders: self.max_leaders,
-            fanout: self.fanout,
-            max_depth: self.max_depth,
+            partition: PartitionConfig {
+                c_max: self.c_max,
+                p_samp: self.p_samp,
+                max_leaders: self.max_leaders,
+                fanout: self.fanout,
+                max_depth: self.max_depth,
+                seed: self.seed,
+            },
             leaf_k: self.leaf_k,
-            seed: self.seed,
-            degree: self.degree,
-            alpha: self.alpha,
-            max_occlusion_size: self.max_occlusion_size,
+            prune: PruneConfig {
+                degree: self.degree,
+                alpha: self.alpha,
+                max_occlusion_size: self.max_occlusion_size,
+            },
         })
     }
 }
@@ -468,7 +485,7 @@ pub fn build_graph(data: &dyn Dataset, config: &Config) -> ANNResult<Vec<Adjacen
     }
     let kernels = kernels::select(data.metric());
     let start = Instant::now();
-    let leaves = partitioning::partition(data, &*kernels, config)?;
+    let leaves = partitioning::partition(data, &*kernels, &config.partition)?;
     tracked_debug!(
         "PiPNN partition: {} leaves in {:.2?}",
         leaves.len(),
@@ -478,11 +495,11 @@ pub fn build_graph(data: &dyn Dataset, config: &Config) -> ANNResult<Vec<Adjacen
     // final pruning starts.
     let start = Instant::now();
     let candidates =
-        leaf_build::build_leaf_candidates(data, &*kernels, leaves, config.leaf_k().get())?;
+        leaf_build::build_leaf_candidates(data, &*kernels, leaves, config.leaf_k.get())?;
     tracked_debug!("PiPNN leaf build in {:.2?}", start.elapsed());
     // Final pruning cuts each candidate list in place.
     let start = Instant::now();
-    let graph = finalization::prune_overfull(candidates, data, config);
+    let graph = finalization::prune_overfull(candidates, data, &config.prune);
     tracked_debug!("PiPNN final pruning in {:.2?}", start.elapsed());
     Ok(graph)
 }
@@ -691,6 +708,7 @@ mod construction_tests {
     };
     use diskann_utils::{
         io::read_bin,
+        sampling::medoid::ComputeMedoid,
         test_data_root,
         views::rowmajor::{self, Matrix},
     };
@@ -713,7 +731,7 @@ mod construction_tests {
             .fanout(vec![nz(2)])
             .max_depth(nz(10))
             .leaf_k(nz(1))
-            .seed(Some(1290))
+            .seed(1290)
             .alpha(1.0)
     }
 
@@ -746,41 +764,9 @@ mod construction_tests {
             .fanout(vec![nz(10), nz(3)])
             .max_depth(nz(10))
             .leaf_k(nz(2))
-            .seed(Some(1290))
+            .seed(1290)
             .build()
             .unwrap()
-    }
-
-    /// Return the point nearest to the mean of `data`, under squared L2.
-    fn medoid(data: rowmajor::Ref<'_, f32>) -> usize {
-        let point_count = data.nrows();
-        let dimensions = data.ncols();
-        let mut mean = vec![0.0_f64; dimensions];
-        for row in data.rows() {
-            for (sum, &value) in mean.iter_mut().zip(row) {
-                *sum += f64::from(value);
-            }
-        }
-        let mean: Vec<f32> = mean
-            .into_iter()
-            .map(|sum| (sum / point_count as f64) as f32)
-            .collect();
-        let l2 = f32::distance(Metric::L2, Some(dimensions));
-        data.rows()
-            .enumerate()
-            .map(|(id, row)| (id, l2.evaluate_similarity(row, mean.as_slice())))
-            .min_by(|left, right| left.1.total_cmp(&right.1))
-            .unwrap()
-            .0
-    }
-
-    /// Build the PiPNN graph of `build_data` under `metric`.
-    fn build_sift_graph<T: Element>(
-        build_data: rowmajor::Ref<'_, T>,
-        metric: Metric,
-        config: &Config,
-    ) -> Vec<AdjacencyList<u32>> {
-        build_graph(&Rows::new(build_data, metric).unwrap(), config).unwrap()
     }
 
     /// Load `data` and its PiPNN graph into the test provider. One start node
@@ -792,7 +778,8 @@ mod construction_tests {
         metric: Metric,
         adjacency: Vec<AdjacencyList<u32>>,
     ) -> DiskANNIndex<test_provider::Provider> {
-        let medoid_id = medoid(data);
+        let medoid = f32::compute_medoid(data);
+        let medoid_id = data.rows().position(|row| row == medoid).unwrap();
         let start_id = data.nrows() as u32;
         let degree = graph.pruned_degree().get();
         let provider_config = test_provider::Config::new(
@@ -869,6 +856,22 @@ mod construction_tests {
             mismatches, 0,
             "{case}: {mismatches}/{point_count} queries differ; first: {example}"
         );
+    }
+
+    /// Build the graph of `build_data` under `metric`, index the `f32` rows of
+    /// `reference` with it, and assert the exact top 10 of every reference row.
+    fn assert_build_finds_exact_top_10<T: Element>(
+        build_data: rowmajor::Ref<'_, T>,
+        reference: rowmajor::Ref<'_, f32>,
+        metric: Metric,
+        case: &str,
+    ) {
+        let config = sift_pipnn_config();
+
+        let adjacency = build_graph(&Rows::new(build_data, metric).unwrap(), &config).unwrap();
+
+        let index = searchable_index(reference, sift_graph(metric), metric, adjacency);
+        assert_exact_top_10(&index, reference, metric, case);
     }
 
     #[test]
@@ -997,20 +1000,22 @@ mod construction_tests {
             (Metric::InnerProduct, SIFT_NORMALIZED),
         ] {
             let data = load_sift(file);
-            let config = sift_pipnn_config();
 
-            let adjacency = build_sift_graph(data.as_view(), metric, &config);
-            let index = searchable_index(data.as_view(), sift_graph(metric), metric, adjacency);
-
-            assert_exact_top_10(&index, data.as_view(), metric, &format!("{metric:?}"));
+            assert_build_finds_exact_top_10(
+                data.as_view(),
+                data.as_view(),
+                metric,
+                &format!("{metric:?}"),
+            );
         }
     }
 
     #[test]
     fn every_point_finds_its_exact_top_10_for_each_vector_type() {
+        // The f32 rows run in the metric test. These bounds make f16 and u8
+        // conversion exact, so every build must find the same distances against
+        // the original f32 rows.
         let data = load_sift(SIFT);
-        // These bounds make f16 and u8 conversion exact, so every build must
-        // find the same distances against the original f32 rows.
         assert!(
             data.as_slice()
                 .iter()
@@ -1024,22 +1029,9 @@ mod construction_tests {
         let shifted = data.map(|&value| value - shift);
         let signed = shifted.map(|&value| value as i8);
         let metric = Metric::L2;
-        let config = sift_pipnn_config();
 
-        let adjacency = build_sift_graph(data.as_view(), metric, &config);
-        let index = searchable_index(data.as_view(), sift_graph(metric), metric, adjacency);
-        assert_exact_top_10(&index, data.as_view(), metric, "f32");
-
-        let adjacency = build_sift_graph(half.as_view(), metric, &config);
-        let index = searchable_index(data.as_view(), sift_graph(metric), metric, adjacency);
-        assert_exact_top_10(&index, data.as_view(), metric, "f16");
-
-        let adjacency = build_sift_graph(unsigned.as_view(), metric, &config);
-        let index = searchable_index(data.as_view(), sift_graph(metric), metric, adjacency);
-        assert_exact_top_10(&index, data.as_view(), metric, "u8");
-
-        let adjacency = build_sift_graph(signed.as_view(), metric, &config);
-        let index = searchable_index(shifted.as_view(), sift_graph(metric), metric, adjacency);
-        assert_exact_top_10(&index, shifted.as_view(), metric, "i8");
+        assert_build_finds_exact_top_10(half.as_view(), data.as_view(), metric, "f16");
+        assert_build_finds_exact_top_10(unsigned.as_view(), data.as_view(), metric, "u8");
+        assert_build_finds_exact_top_10(signed.as_view(), shifted.as_view(), metric, "i8");
     }
 }

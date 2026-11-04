@@ -23,7 +23,7 @@ use crate::{
 };
 use rayon::prelude::*;
 
-use super::{Config, dataset::Dataset};
+use super::{PruneConfig, dataset::Dataset};
 
 /// RobustPrune scratch for one prune job.
 #[derive(Default)]
@@ -39,10 +39,10 @@ impl PruneWorkspace {
         &mut self,
         source: u32,
         mut source_candidates: AdjacencyList<u32>,
-        config: &Config,
+        config: &PruneConfig,
         data: &dyn Dataset,
     ) -> AdjacencyList<u32> {
-        let degree = config.degree().get();
+        let degree = config.degree.get();
         if source_candidates.len() <= degree {
             return source_candidates;
         }
@@ -60,7 +60,7 @@ impl PruneWorkspace {
         // sort's order for equal distances, and therefore RobustPrune's choices.
         let sorted = SortedNeighbors::new(
             &mut self.candidates,
-            usize::from(config.max_occlusion_size().get()),
+            usize::from(config.max_occlusion_size.get()),
         );
         // RobustPrune skips `None` candidates. PiPNN has none to skip: leaf build
         // never pairs a point with itself, and every vector is in memory.
@@ -71,7 +71,7 @@ impl PruneWorkspace {
             mapped,
             &mut self.states,
             degree,
-            config.alpha(),
+            config.alpha,
             PruneKind::from_metric(data.metric()),
             |&left, &right| data.distance(left, right),
         );
@@ -91,7 +91,7 @@ impl PruneWorkspace {
 pub(super) fn prune_overfull(
     candidates: Vec<AdjacencyList<u32>>,
     data: &dyn Dataset,
-    config: &Config,
+    config: &PruneConfig,
 ) -> Vec<AdjacencyList<u32>> {
     candidates
         .into_par_iter()
@@ -108,7 +108,10 @@ pub(super) fn prune_overfull(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ANNResult, graph::pipnn::test_support::nz};
+    use crate::{
+        ANNResult,
+        graph::pipnn::{Config, test_support::nz},
+    };
     use diskann_utils::views::rowmajor;
     use diskann_vector::distance::Metric;
     use std::collections::BTreeSet;
@@ -145,9 +148,13 @@ mod tests {
     /// L2 configuration that prunes to `degree`. Alpha 1 means that a selected
     /// neighbor occludes a candidate when the neighbor is nearer to the
     /// candidate than the source is.
-    fn pruning_config(degree: usize) -> Config {
+    fn pruning_config(degree: usize) -> PruneConfig {
         let alpha = 1.0;
-        Config::builder(nz(degree)).alpha(alpha).build().unwrap()
+        Config::builder(nz(degree))
+            .alpha(alpha)
+            .build()
+            .unwrap()
+            .prune
     }
 
     fn candidates_in_order(ids: &[u32]) -> AdjacencyList<u32> {
@@ -157,7 +164,7 @@ mod tests {
     }
 
     /// Prune the candidates of `source` in one-dimensional L2 points `x`.
-    fn prune_1d(x: &[f32], source: u32, candidates: &[u32], config: &Config) -> Vec<u32> {
+    fn prune_1d(x: &[f32], source: u32, candidates: &[u32], config: &PruneConfig) -> Vec<u32> {
         let pruned = PruneWorkspace::default().prune(
             source,
             candidates_in_order(candidates),
