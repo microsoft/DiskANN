@@ -60,9 +60,9 @@ impl Default for PiPNNParameters {
 #[cfg(feature = "pipnn")]
 impl PiPNNParameters {
     /// Start a PiPNN configuration from these parameters and the prune policy
-    /// of `graph`. The disk builder adds the seed from
-    /// `IndexConfiguration::random_seed` and builds it.
-    pub(crate) fn builder(&self, graph: &diskann::graph::Config) -> diskann::graph::pipnn::Builder {
+    /// of `graph`. The caller adds the seed and builds it; the disk builder
+    /// takes the seed from `IndexConfiguration::random_seed`.
+    pub fn builder(&self, graph: &diskann::graph::Config) -> diskann::graph::pipnn::Builder {
         diskann::graph::pipnn::Builder::from_graph(graph)
             .c_max(self.c_max)
             .p_samp(self.p_samp)
