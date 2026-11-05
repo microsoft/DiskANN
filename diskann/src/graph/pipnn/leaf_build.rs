@@ -148,13 +148,13 @@ where
     T: VectorRepr,
 {
     leaves
-        .par_iter()
+        .into_par_iter()
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
             let leaf_k = gather_leaf_neighbors::<A, M, T>(
                 arch,
                 data,
                 dimensions,
-                point_ids,
+                &point_ids,
                 requested_k,
                 buffers,
             )?;
@@ -174,7 +174,7 @@ where
                 },
             )?;
             reservoirs.add_leaf_edges(
-                point_ids,
+                &point_ids,
                 &buffers.edge_offsets[..point_count + 1],
                 &buffers.edges[..edge_count],
                 &mut buffers.sketch_scratch,
