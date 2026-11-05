@@ -262,7 +262,8 @@ impl Config {
         self.partition.max_depth
     }
 
-    /// Seed of leader sampling.
+    /// Seed of leader sampling. A build with the same seed and data samples
+    /// the same leaves, so a caller can log it to repeat a build.
     pub fn seed(&self) -> u64 {
         self.partition.seed
     }
@@ -301,7 +302,6 @@ mod defaults {
     ];
     pub(super) const MAX_DEPTH: NonZeroUsize = NonZeroUsize::new(30).unwrap();
     pub(super) const LEAF_K: NonZeroUsize = NonZeroUsize::new(2).unwrap();
-    pub(super) const SEED: u64 = 0;
 }
 
 /// Builder for [`Config`].
@@ -317,7 +317,7 @@ pub struct Builder {
     fanout: Vec<NonZeroUsize>,
     max_depth: NonZeroUsize,
     leaf_k: NonZeroUsize,
-    seed: u64,
+    seed: Option<u64>,
     alpha: f32,
     max_occlusion_size: NonZeroU16,
 }
@@ -333,7 +333,7 @@ impl Builder {
             fanout: defaults::FANOUT.to_vec(),
             max_depth: defaults::MAX_DEPTH,
             leaf_k: defaults::LEAF_K,
-            seed: defaults::SEED,
+            seed: None,
             alpha: config::defaults::ALPHA,
             max_occlusion_size: config::defaults::MAX_OCCLUSION_SIZE,
         }
@@ -404,10 +404,11 @@ impl Builder {
         self
     }
 
-    /// Seed of leader sampling. The same seed gives the same leaves. Pass a
-    /// random value to sample new leaves on each build.
+    /// Seed of leader sampling. The same seed gives the same leaves. Without
+    /// a seed, [`Builder::build`] draws one at random, so each configuration
+    /// samples new leaves.
     pub fn seed(mut self, seed: u64) -> Self {
-        self.seed = seed;
+        self.seed = Some(seed);
         self
     }
 
@@ -450,7 +451,7 @@ impl Builder {
                 max_leaders: self.max_leaders,
                 fanout: self.fanout,
                 max_depth: self.max_depth,
-                seed: self.seed,
+                seed: self.seed.unwrap_or_else(rand::random),
             },
             leaf_k: self.leaf_k,
             prune: PruneConfig {
@@ -903,6 +904,19 @@ mod construction_tests {
 
             assert!(config.is_ok(), "p_samp {p_samp}: {config:?}");
         }
+    }
+
+    #[test]
+    fn a_given_seed_is_kept_and_a_missing_seed_is_drawn() {
+        let degree = nz(2);
+        let seed = 1290;
+
+        let given = Config::builder(degree).seed(seed).build().unwrap();
+        let drawn = Config::builder(degree).build().unwrap();
+        let drawn_again = Config::builder(degree).build().unwrap();
+
+        assert_eq!(given.seed(), seed);
+        assert_ne!(drawn.seed(), drawn_again.seed());
     }
 
     #[test]
