@@ -368,6 +368,33 @@ where
         Ok(f(self.slots(), guard))
     }
 
+    /// Create an [`epoch::WriteGuard`] for the [`epoch::Registry`] within `self` and invoke
+    /// `f` with that guard, returning the result.
+    ///
+    /// This can be used by [`slots::Slots`] readers to establish a verifiable chain of
+    /// custody for an [`epoch::WriteGuard`] over the slots.
+    pub(crate) fn write_guard<'a, F, R>(&'a self, f: F) -> Result<R, epoch::Unavailable>
+    where
+        F: FnOnce(&'a T, epoch::WriteGuard<'a>) -> R,
+    {
+        let guard = self.registry.write_guard()?;
+        Ok(f(self.slots(), guard))
+    }
+
+    /// Attempt to exclude all workers from the [`Store`], potentially blocking as it waits
+    /// for current workers to finish.
+    #[expect(unused, reason = "this will be used for serialization")]
+    pub(crate) fn try_exclude_workers(&self) -> Option<epoch::WorkerExclusionGuard<'_>> {
+        self.registry.try_exclude_workers()
+    }
+
+    /// Attempt to exclude all workers from the [`Store`], potentially blocking as it waits
+    /// for current workers to finish.
+    #[expect(unused, reason = "this will be used for serialization")]
+    pub(crate) fn try_exclude_writers(&self) -> Option<epoch::WriterExclusionGuard<'_>> {
+        self.registry.try_exclude_writers()
+    }
+
     /// Attempt to acquire a new [`Exclusive`] for writing.
     ///
     /// This method first consults the freelist and falls back to scanning the tags list

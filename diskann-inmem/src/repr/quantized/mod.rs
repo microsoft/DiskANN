@@ -672,7 +672,7 @@ impl repr::Insert for Quantized {
     ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
         let reader = self
             .store
-            .read_guard(|slots, guard| slots.first().reader(guard))?;
+            .write_guard(|slots, guard| slots.first().reader(guard.into_read_guard()))?;
 
         let prune = self.quantizer.prune(reader);
 
