@@ -153,8 +153,8 @@ use diskann_wide::arch::aarch64::Neon;
 
 use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, Data, DataMut, DataRef, FullQuery,
-    FullQueryMut, FullQueryRef, Query, QueryMut, QueryRef, SphericalQuantizer, SupportedMetric,
-    quantizer,
+    FullQueryMut, FullQueryRef, InputHints, Query, QueryMut, QueryRef, SphericalQuantizer,
+    SupportedMetric, quantizer,
 };
 use crate::{
     AsFunctor, CompressIntoWith,
@@ -291,19 +291,52 @@ where
         allow_rescale: bool,
         buffer: OpaqueMut<'_>,
         scratch: ScopedAllocator<'_>,
+    ) -> Result<(), QueryCompressionError> {
+        self.compress_query_with_hints(
+            x,
+            layout,
+            InputHints::new().with_maybe_out_of_distribution(allow_rescale),
+            buffer,
+            scratch,
+        )
+    }
+
+    /// Compress a query with properties of this input. Buffer and layout requirements are
+    /// the same as for [Self::compress_query].
+    fn compress_query_with_hints(
+        &self,
+        x: &[f32],
+        layout: QueryLayout,
+        hints: InputHints,
+        buffer: OpaqueMut<'_>,
+        scratch: ScopedAllocator<'_>,
     ) -> Result<(), QueryCompressionError>;
 
-    /// Return a query for the argument `x` capable on operating on validly initialized
-    /// [`Opaque`] slices of length [`Self::bytes`].
-    ///
-    /// These slices should be initialized by [`Self::compress`].
-    ///
-    /// Note: Only layouts for which [`Self::is_supported`] returns `true` are supported.
+    /// Create a query computer. Only layouts accepted by [Self::is_supported] are supported.
     fn fused_query_computer(
         &self,
         x: &[f32],
         layout: QueryLayout,
         allow_rescale: bool,
+        allocator: A,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<QueryComputer<A>, QueryComputerError> {
+        self.fused_query_computer_with_hints(
+            x,
+            layout,
+            InputHints::new().with_maybe_out_of_distribution(allow_rescale),
+            allocator,
+            scratch,
+        )
+    }
+
+    /// Create a query computer using properties of this query, independently of the hints
+    /// used to train the quantizer or compress database vectors.
+    fn fused_query_computer_with_hints(
+        &self,
+        x: &[f32],
+        layout: QueryLayout,
+        hints: InputHints,
         allocator: A,
         scratch: ScopedAllocator<'_>,
     ) -> Result<QueryComputer<A>, QueryComputerError>;
@@ -320,6 +353,18 @@ where
     fn compress(
         &self,
         x: &[f32],
+        into: OpaqueMut<'_>,
+        scratch: ScopedAllocator<'_>,
+    ) -> Result<(), CompressionError> {
+        self.compress_with_hints(x, InputHints::new(), into, scratch)
+    }
+
+    /// Compress stored data with input properties. The distribution hint is ignored:
+    /// independently rescaling stored vectors would change inner-product rankings.
+    fn compress_with_hints(
+        &self,
+        x: &[f32],
+        hints: InputHints,
         into: OpaqueMut<'_>,
         scratch: ScopedAllocator<'_>,
     ) -> Result<(), CompressionError>;
@@ -1081,14 +1126,20 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
     fn compress_query<'a, T>(
         &self,
         query: &'a [f32],
+        hints: InputHints,
         storage: T,
         scratch: ScopedAllocator<'a>,
     ) -> Result<(), QueryCompressionError>
     where
-        SphericalQuantizer<A>: CompressIntoWith<&'a [f32], T, ScopedAllocator<'a>, Error = quantizer::CompressionError>,
+        SphericalQuantizer<A>: CompressIntoWith<
+                &'a [f32],
+                T,
+                (ScopedAllocator<'a>, InputHints),
+                Error = quantizer::CompressionError,
+            >,
     {
         self.quantizer
-            .compress_into_with(query, storage, scratch)
+            .compress_into_with_hints(query, storage, hints, scratch)
             .map_err(|err| CompressionError::CompressionError(err).into())
     }
 
@@ -1097,6 +1148,7 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
     fn fused_query_computer<Q, T, B>(
         &self,
         query: &[f32],
+        hints: InputHints,
         mut storage: T,
         allocator: B,
         scratch: ScopedAllocator<'_>,
@@ -1114,14 +1166,14 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         SphericalQuantizer<A>: for<'a> CompressIntoWith<
                 &'a [f32],
                 <T as ReborrowMut<'a>>::Target,
-                ScopedAllocator<'a>,
+                (ScopedAllocator<'a>, InputHints),
                 Error = quantizer::CompressionError,
             >,
         SphericalQuantizer<A>: Dispatchable<Q, NBITS>,
     {
-        if let Err(err) = self
-            .quantizer
-            .compress_into_with(query, storage.reborrow_mut(), scratch)
+        if let Err(err) =
+            self.quantizer
+                .compress_into_with_hints(query, storage.reborrow_mut(), hints, scratch)
         {
             return Err(CompressionError::CompressionError(err).into());
         }
@@ -1649,11 +1701,11 @@ where
         }
     }
 
-    fn compress_query(
+    fn compress_query_with_hints(
         &self,
         x: &[f32],
         layout: QueryLayout,
-        allow_rescale: bool,
+        hints: InputHints,
         mut buffer: OpaqueMut<'_>,
         scratch: ScopedAllocator<'_>,
     ) -> Result<(), QueryCompressionError> {
@@ -1662,12 +1714,14 @@ where
             match layout {
                 QueryLayout::SameAsData => self.compress_query(
                     v,
+                    hints,
                     DataMut::<1>::from_canonical_back_mut(&mut buffer, dim)
                         .map_err(NotCanonical::new)?,
                     scratch,
                 ),
                 QueryLayout::FourBitTransposed => self.compress_query(
                     v,
+                    hints,
                     QueryMut::<4, bits::BitTranspose>::from_canonical_back_mut(&mut buffer, dim)
                         .map_err(NotCanonical::new)?,
                     scratch,
@@ -1677,6 +1731,7 @@ where
                 }
                 QueryLayout::FullPrecision => self.compress_query(
                     v,
+                    hints,
                     FullQueryMut::from_canonical_mut(&mut buffer, dim)
                         .map_err(NotCanonical::new)?,
                     scratch,
@@ -1684,20 +1739,14 @@ where
             }
         };
 
-        if allow_rescale && self.quantizer.metric() == SupportedMetric::InnerProduct {
-            let mut copy = x.to_owned();
-            self.quantizer.rescale(&mut copy);
-            finish(&copy)
-        } else {
-            finish(x)
-        }
+        finish(x)
     }
 
-    fn fused_query_computer(
+    fn fused_query_computer_with_hints(
         &self,
         x: &[f32],
         layout: QueryLayout,
-        allow_rescale: bool,
+        hints: InputHints,
         allocator: B,
         scratch: ScopedAllocator<'_>,
     ) -> Result<QueryComputer<B>, QueryComputerError> {
@@ -1705,14 +1754,14 @@ where
         let finish = |v: &[f32], allocator: B| -> Result<QueryComputer<B>, QueryComputerError> {
             match layout {
                     QueryLayout::SameAsData => self.fused_query_computer::<AsData<1>, Data<1, _>, _>(
-                        v,
+                        v, hints,
                         Data::new_in(dim, allocator.clone())?,
                         allocator,
                         scratch,
                     ),
                     QueryLayout::FourBitTransposed => self
                         .fused_query_computer::<AsQuery<4, bits::BitTranspose>, Query<4, bits::BitTranspose, _>, _>(
-                            v,
+                            v, hints,
                             Query::new_in(dim, allocator.clone())?,
                             allocator,
                             scratch,
@@ -1721,7 +1770,7 @@ where
                         Err(UnsupportedQueryLayout::new(layout, "1-bit compression").into())
                     }
                     QueryLayout::FullPrecision => self.fused_query_computer::<AsFull, FullQuery<_>, _>(
-                        v,
+                        v, hints,
                         FullQuery::empty(dim, allocator.clone())?,
                         allocator,
                         scratch,
@@ -1729,22 +1778,17 @@ where
                 }
         };
 
-        if allow_rescale && self.quantizer.metric() == SupportedMetric::InnerProduct {
-            let mut copy = x.to_owned();
-            self.quantizer.rescale(&mut copy);
-            finish(&copy, allocator)
-        } else {
-            finish(x, allocator)
-        }
+        finish(x, allocator)
     }
 
     fn is_supported(&self, layout: QueryLayout) -> bool {
         Self::supports(layout)
     }
 
-    fn compress(
+    fn compress_with_hints(
         &self,
         x: &[f32],
+        hints: InputHints,
         mut into: OpaqueMut<'_>,
         scratch: ScopedAllocator<'_>,
     ) -> Result<(), CompressionError> {
@@ -1752,7 +1796,12 @@ where
         let into = DataMut::<1>::from_canonical_back_mut(into.inspect(), dim)
             .map_err(CompressionError::not_canonical)?;
         self.quantizer
-            .compress_into_with(x, into, scratch)
+            .compress_into_with_hints(
+                x,
+                into,
+                hints.with_maybe_out_of_distribution(false),
+                scratch,
+            )
             .map_err(CompressionError::CompressionError)
     }
 
@@ -1858,11 +1907,11 @@ macro_rules! plan {
                 }
             }
 
-            fn compress_query(
+            fn compress_query_with_hints(
                 &self,
                 x: &[f32],
                 layout: QueryLayout,
-                allow_rescale: bool,
+                hints: InputHints,
                 mut buffer: OpaqueMut<'_>,
                 scratch: ScopedAllocator<'_>,
             ) -> Result<(), QueryCompressionError> {
@@ -1870,7 +1919,7 @@ macro_rules! plan {
                 let mut finish = |v: &[f32]| -> Result<(), QueryCompressionError> {
                     match layout {
                         QueryLayout::SameAsData => self.compress_query(
-                            v,
+                            v, hints,
                             DataMut::<$N>::from_canonical_back_mut(
                                 &mut buffer,
                                 dim,
@@ -1884,7 +1933,7 @@ macro_rules! plan {
                             ).into())
                         },
                         QueryLayout::ScalarQuantized => self.compress_query(
-                            v,
+                            v, hints,
                             QueryMut::<$N, bits::Dense>::from_canonical_back_mut(
                                 &mut buffer,
                                 dim,
@@ -1892,7 +1941,7 @@ macro_rules! plan {
                             scratch,
                         ),
                         QueryLayout::FullPrecision => self.compress_query(
-                            v,
+                            v, hints,
                             FullQueryMut::from_canonical_mut(
                                 &mut buffer,
                                 dim,
@@ -1902,20 +1951,14 @@ macro_rules! plan {
                     }
                 };
 
-                if allow_rescale && self.quantizer.metric() == SupportedMetric::InnerProduct {
-                    let mut copy = x.to_owned();
-                    self.quantizer.rescale(&mut copy);
-                    finish(&copy)
-                } else {
-                    finish(x)
-                }
+                finish(x)
             }
 
-            fn fused_query_computer(
+            fn fused_query_computer_with_hints(
                 &self,
                 x: &[f32],
                 layout: QueryLayout,
-                allow_rescale: bool,
+                hints: InputHints,
                 allocator: B,
                 scratch: ScopedAllocator<'_>,
             ) -> Result<QueryComputer<B>, QueryComputerError>
@@ -1925,7 +1968,7 @@ macro_rules! plan {
                     match layout {
                         QueryLayout::SameAsData => {
                             self.fused_query_computer::<AsData<$N>, Data<$N, _>, B>(
-                                v,
+                                v, hints,
                                 Data::new_in(dim, allocator.clone())?,
                                 allocator,
                                 scratch,
@@ -1939,7 +1982,7 @@ macro_rules! plan {
                         },
                         QueryLayout::ScalarQuantized => {
                             self.fused_query_computer::<AsQuery<$N, bits::Dense>, Query<$N, bits::Dense, _>, B>(
-                                v,
+                                v, hints,
                                 Query::new_in(dim, allocator.clone())?,
                                 allocator,
                                 scratch,
@@ -1947,7 +1990,7 @@ macro_rules! plan {
                         },
                         QueryLayout::FullPrecision => {
                             self.fused_query_computer::<AsFull, FullQuery<_>, B>(
-                                v,
+                                v, hints,
                                 FullQuery::empty(dim, allocator.clone())?,
                                 allocator,
                                 scratch,
@@ -1956,23 +1999,17 @@ macro_rules! plan {
                     }
                 };
 
-                let metric = <Self as Quantizer<B>>::metric(self);
-                if allow_rescale && metric == SupportedMetric::InnerProduct {
-                    let mut copy = x.to_owned();
-                    self.quantizer.rescale(&mut copy);
-                    finish(&copy)
-                } else {
-                    finish(x)
-                }
+                finish(x)
             }
 
             fn is_supported(&self, layout: QueryLayout) -> bool {
                 Self::supports(layout)
             }
 
-            fn compress(
+            fn compress_with_hints(
                 &self,
                 x: &[f32],
+                hints: InputHints,
                 mut into: OpaqueMut<'_>,
                 scratch: ScopedAllocator<'_>,
             ) -> Result<(), CompressionError> {
@@ -1980,7 +2017,7 @@ macro_rules! plan {
                 let into = DataMut::<$N>::from_canonical_back_mut(into.inspect(), dim)
                     .map_err(CompressionError::not_canonical)?;
 
-                self.quantizer.compress_into_with(x, into, scratch)
+                self.quantizer.compress_into_with_hints(x, into, hints.with_maybe_out_of_distribution(false), scratch)
                     .map_err(CompressionError::CompressionError)
             }
 

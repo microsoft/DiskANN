@@ -1865,7 +1865,7 @@ pub(crate) mod tests {
                 diskann_quantization::algorithms::transforms::TransformKind::PaddingHadamard {
                     target_dim: diskann_quantization::algorithms::transforms::TargetDim::Natural,
                 },
-                Metric::L2.try_into().unwrap(),
+                Metric::L2.into(),
                 diskann_quantization::spherical::PreScale::ReciprocalMeanNorm,
                 rng,
                 diskann_quantization::alloc::GlobalAllocator,
@@ -1978,7 +1978,7 @@ pub(crate) mod tests {
                 diskann_quantization::algorithms::transforms::TransformKind::PaddingHadamard {
                     target_dim: diskann_quantization::algorithms::transforms::TargetDim::Natural,
                 },
-                Metric::L2.try_into().unwrap(),
+                Metric::L2.into(),
                 diskann_quantization::spherical::PreScale::ReciprocalMeanNorm,
                 rng,
                 diskann_quantization::alloc::GlobalAllocator,

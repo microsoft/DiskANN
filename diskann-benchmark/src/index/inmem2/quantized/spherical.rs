@@ -74,6 +74,7 @@ pub(super) struct Spherical {
     bits: Bits,
     seed: u64,
     metric: dq::spherical::SupportedMetric,
+    input_hints: dq::spherical::InputHints,
 }
 
 impl inmem2::quantized::Quantizer for Spherical {
@@ -88,7 +89,9 @@ impl inmem2::quantized::Quantizer for Spherical {
         Ok(Self {
             bits: Bits::from_raw(bits),
             seed: *seed,
-            metric: metric.try_into()?,
+            metric: metric.into(),
+            input_hints: dq::spherical::InputHints::new()
+                .with_normalized(metric == dv::distance::Metric::CosineNormalized),
         })
     }
 
@@ -99,24 +102,41 @@ impl inmem2::quantized::Quantizer for Spherical {
     fn train(&self, data: rowmajor::Ref<'_, f32>) -> anyhow::Result<di::repr::quantized::Backend> {
         use di::repr::quantized::{spherical::Spherical, Backend};
 
-        let Self { bits, seed, metric } = self;
+        let Self {
+            bits,
+            seed,
+            metric,
+            input_hints,
+        } = self;
+        let hints = *input_hints;
+        let query_hints = hints.with_maybe_out_of_distribution(true);
 
         let mut rng = StdRng::seed_from_u64(*seed);
-        let quantizer = dq::spherical::SphericalQuantizer::train(
+        let quantizer = dq::spherical::SphericalQuantizer::train_with_hints(
             data,
             dq::algorithms::transforms::TransformKind::DoubleHadamard {
                 target_dim: dq::algorithms::transforms::TargetDim::Same,
             },
             *metric,
             dq::spherical::PreScale::ReciprocalMeanNorm,
+            hints,
             &mut rng,
             dq::alloc::GlobalAllocator,
         )?;
 
         let quantizer = match bits {
-            Bits::One => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<1>()?)),
-            Bits::Two => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<2>()?)),
-            Bits::Four => Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?)),
+            Bits::One => Backend::new(
+                Spherical::new(quantizer.as_quantizer_impl::<1>()?)
+                    .with_input_hints(hints, query_hints),
+            ),
+            Bits::Two => Backend::new(
+                Spherical::new(quantizer.as_quantizer_impl::<2>()?)
+                    .with_input_hints(hints, query_hints),
+            ),
+            Bits::Four => Backend::new(
+                Spherical::new(quantizer.as_quantizer_impl::<4>()?)
+                    .with_input_hints(hints, query_hints),
+            ),
         };
 
         Ok(quantizer)
@@ -125,7 +145,9 @@ impl inmem2::quantized::Quantizer for Spherical {
 
 impl std::fmt::Display for Spherical {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { bits, seed, metric } = self;
+        let Self {
+            bits, seed, metric, ..
+        } = self;
 
         let mut kv = dbr::utils::fmt::KeyValue::new();
         kv.push("bits", bits);
@@ -150,5 +172,32 @@ mod tests {
             dv::distance::Metric::L2
         )
         .is_ok());
+    }
+
+    #[test]
+    fn spherical_build_matches_cosine_normalized() {
+        use dbr::benchmark::{MatchContext, TestScore};
+        use diskann_utils::views::rowmajor::Matrix;
+        use inmem2::{
+            common::FromRawWith,
+            quantized::{BuildAndSearch, Quantizer, RunBuildAndSearch},
+        };
+
+        for bits in [dto::Bits::One, dto::Bits::Two, dto::Bits::Four] {
+            let raw = inmem2::quantized::dto::BuildAndSearch::example(dto::Spherical {
+                bits,
+                ..dto::Spherical::example()
+            });
+            let mut raw = serde_json::to_value(raw).unwrap();
+            raw["data"]["distance"] =
+                serde_json::to_value(crate::utils::SimilarityMeasure::CosineNormalized).unwrap();
+            let raw = serde_json::from_value(raw).unwrap();
+            let input = BuildAndSearch::<Spherical>::from_raw_with(&raw, None).unwrap();
+            let score = MatchContext::test(&RunBuildAndSearch::<Spherical>::new(), &input);
+            assert!(matches!(score, TestScore::Success(0)), "{score:?}");
+            let data =
+                rowmajor::Owned::from_fn(4, 4, |rc| if rc.row == rc.col { 1.0f32 } else { 0.0 });
+            let _backend = input.quantizer.train(data.as_view()).unwrap();
+        }
     }
 }
