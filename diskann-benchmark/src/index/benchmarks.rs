@@ -176,7 +176,7 @@ where
 
 impl<T> Benchmark for FullPrecision<T>
 where
-    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
+    T: crate::utils::BuildElement + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = IndexOperation;
     type Output = BuildResult;
@@ -297,7 +297,7 @@ impl<T> DynamicFullPrecision<T> {
 
 impl<T> Benchmark for DynamicFullPrecision<T>
 where
-    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
+    T: crate::utils::BuildElement + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = DynamicIndexRun;
     type Output = Vec<managed::Stats<StreamStats>>;
