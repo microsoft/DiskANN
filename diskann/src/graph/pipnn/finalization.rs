@@ -9,20 +9,23 @@
 //! distance to its source point and pruned with the shared Vamana RobustPrune,
 //! which owns occlusion and the alpha rounds. The selected IDs overwrite the list
 //! in place.
+//!
+//! Distances come from the [`Dataset`] object, so this step compiles once for
+//! every element type.
 
 use crate::{
     graph::{
-        AdjacencyList, Config,
+        AdjacencyList,
+        config::PruneKind,
         internal::{SortedNeighbors, prune},
     },
     neighbor::Neighbor,
-    utils::VectorRepr,
 };
-use diskann_utils::views::MatrixView;
-use diskann_vector::{DistanceFunction, distance::Metric};
 use rayon::prelude::*;
 
-/// RobustPrune scratch for one Rayon job.
+use super::{PruneConfig, dataset::Dataset};
+
+/// RobustPrune scratch for one prune job.
 #[derive(Default)]
 struct PruneWorkspace {
     candidates: Vec<Neighbor<u32>>,
@@ -32,35 +35,33 @@ struct PruneWorkspace {
 
 impl PruneWorkspace {
     /// Prune the candidates of point `source` to the graph degree.
-    fn prune<T: VectorRepr>(
+    fn prune(
         &mut self,
-        data: MatrixView<'_, T>,
-        source: usize,
+        source: u32,
         mut source_candidates: AdjacencyList<u32>,
-        graph: &Config,
-        distance: &T::Distance,
+        config: &PruneConfig,
+        data: &dyn Dataset,
     ) -> AdjacencyList<u32> {
-        let degree = graph.pruned_degree().get();
+        let degree = config.degree.get();
         if source_candidates.len() <= degree {
             return source_candidates;
         }
 
-        let source_vector = data.row(source);
         self.candidates.clear();
-        self.candidates
-            .extend(source_candidates.iter().copied().map(|candidate| {
-                Neighbor::new(
-                    candidate,
-                    distance.evaluate_similarity(source_vector, data.row(candidate as usize)),
-                )
-            }));
+        self.candidates.extend(
+            source_candidates
+                .iter()
+                .map(|&candidate| Neighbor::new(candidate, data.distance(source, candidate))),
+        );
         // Like Vamana, prune only the `max_occlusion_size` nearest candidates. The
-        // graph configuration keeps this size within the `u16` positions of
-        // RobustPrune.
+        // configuration keeps this size within the `u16` positions of RobustPrune.
         //
         // Sort before mapping: changing the element type can change the unstable
         // sort's order for equal distances, and therefore RobustPrune's choices.
-        let sorted = SortedNeighbors::new(&mut self.candidates, graph.max_occlusion_size().get());
+        let sorted = SortedNeighbors::new(
+            &mut self.candidates,
+            usize::from(config.max_occlusion_size.get()),
+        );
         // RobustPrune skips `None` candidates. PiPNN has none to skip: leaf build
         // never pairs a point with itself, and every vector is in memory.
         let mapped = sorted.map_in(&mut self.mapped_candidates, |&candidate| Some(candidate));
@@ -70,11 +71,9 @@ impl PruneWorkspace {
             mapped,
             &mut self.states,
             degree,
-            graph.alpha(),
-            graph.prune_kind(),
-            |left, right| {
-                distance.evaluate_similarity(data.row(*left as usize), data.row(*right as usize))
-            },
+            config.alpha,
+            PruneKind::from_metric(data.metric()),
+            |&left, &right| data.distance(left, right),
         );
 
         let mut output = source_candidates.resize(selected);
@@ -88,23 +87,19 @@ impl PruneWorkspace {
 
 /// Prune each candidate list that is longer than the graph degree.
 ///
-/// `candidates` holds one list of dataset IDs for each data row.
-pub(crate) fn prune_overfull<T: VectorRepr>(
-    data: MatrixView<'_, T>,
+/// `candidates` holds one list of dataset IDs for each row of `data`.
+pub(super) fn prune_overfull(
     candidates: Vec<AdjacencyList<u32>>,
-    graph: &Config,
-    metric: Metric,
+    data: &dyn Dataset,
+    config: &PruneConfig,
 ) -> Vec<AdjacencyList<u32>> {
-    let distance = T::distance(metric, Some(data.ncols()));
-
-    // This runs in the pool of the build context (see `build_graph`).
     candidates
         .into_par_iter()
         .enumerate()
         .map_init(
             PruneWorkspace::default,
             |workspace, (source, candidates)| {
-                workspace.prune(data, source, candidates, graph, &distance)
+                workspace.prune(source as u32, candidates, config, data)
             },
         )
         .collect()
@@ -113,31 +108,53 @@ pub(crate) fn prune_overfull<T: VectorRepr>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{config, pipnn::test_support::thread_pool};
+    use crate::{
+        ANNResult,
+        graph::pipnn::{Config, test_support::nz},
+    };
+    use diskann_utils::views::rowmajor;
+    use diskann_vector::distance::Metric;
     use std::collections::BTreeSet;
+
+    /// One-dimensional L2 points `x[i]`. Pruning reads only the distances.
+    struct Line<'a>(&'a [f32]);
+
+    impl Dataset for Line<'_> {
+        fn nrows(&self) -> usize {
+            self.0.len()
+        }
+
+        fn dimensions(&self) -> usize {
+            1
+        }
+
+        fn metric(&self) -> Metric {
+            Metric::L2
+        }
+
+        fn gather(&self, _: &[u32], _: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
+            unreachable!("pruning does not gather rows")
+        }
+
+        fn distance(&self, source: u32, target: u32) -> f32 {
+            (self.0[source as usize] - self.0[target as usize]).powi(2)
+        }
+    }
 
     fn as_set(ids: &[u32]) -> BTreeSet<u32> {
         ids.iter().copied().collect()
     }
 
-    /// L2 graph configuration that prunes to `degree`. Alpha 1 means that a
-    /// selected neighbor occludes a candidate when the neighbor is nearer to
-    /// the candidate than the source is.
-    fn pruning_config(degree: usize) -> Config {
-        // This is the build search list size, which pruning does not read.
-        let search_list_size = 16;
+    /// L2 configuration that prunes to `degree`. Alpha 1 means that a selected
+    /// neighbor occludes a candidate when the neighbor is nearer to the
+    /// candidate than the source is.
+    fn pruning_config(degree: usize) -> PruneConfig {
         let alpha = 1.0;
-        config::Builder::new_with(
-            degree,
-            config::MaxDegree::same(),
-            search_list_size,
-            Metric::L2.into(),
-            |b| {
-                b.alpha(alpha);
-            },
-        )
-        .build()
-        .unwrap()
+        Config::builder(nz(degree))
+            .alpha(alpha)
+            .build()
+            .unwrap()
+            .prune
     }
 
     fn candidates_in_order(ids: &[u32]) -> AdjacencyList<u32> {
@@ -147,16 +164,12 @@ mod tests {
     }
 
     /// Prune the candidates of `source` in one-dimensional L2 points `x`.
-    fn prune_1d(x: &[f32], source: usize, candidates: &[u32], graph: &Config) -> Vec<u32> {
-        let dimensions = 1;
-        let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
-        let distance = f32::distance(Metric::L2, Some(dimensions));
+    fn prune_1d(x: &[f32], source: u32, candidates: &[u32], config: &PruneConfig) -> Vec<u32> {
         let pruned = PruneWorkspace::default().prune(
-            data,
             source,
             candidates_in_order(candidates),
-            graph,
-            &distance,
+            config,
+            &Line(x),
         );
         pruned.to_vec()
     }
@@ -196,11 +209,8 @@ mod tests {
     fn a_reused_workspace_does_not_carry_state_between_sources() {
         // x[i] is the one-dimensional vector of point i.
         let x = [0.0, 1.0, 3.0, -2.0, 9.0];
-        let dimensions = 1;
         let degree = 2;
-        let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
-        let graph = pruning_config(degree);
-        let distance = f32::distance(Metric::L2, Some(dimensions));
+        let config = pruning_config(degree);
         let mut workspace = PruneWorkspace::default();
 
         // One workspace prunes a long list, a shorter list, then a long list again.
@@ -212,13 +222,8 @@ mod tests {
             // Points 0 and 2 are nearest, and point 0 does not occlude point 2.
             (1, vec![4, 3, 2, 0], vec![0, 2]),
         ] {
-            let actual = workspace.prune(
-                data,
-                source,
-                candidates_in_order(&candidates),
-                &graph,
-                &distance,
-            );
+            let actual =
+                workspace.prune(source, candidates_in_order(&candidates), &config, &Line(&x));
 
             assert_eq!(as_set(&actual), as_set(&expected), "source {source}");
         }
@@ -229,11 +234,8 @@ mod tests {
         // x[i] is the one-dimensional vector of point i.
         // Overfull, within-degree and empty lists must retain their source rows.
         let x = [0.0, 1.0, 2.0, -3.0];
-        let dimensions = 1;
         let degree = 2;
-        let n_threads = 1;
-        let data = MatrixView::try_from(x.as_slice(), x.len(), dimensions).unwrap();
-        let graph = pruning_config(degree);
+        let config = pruning_config(degree);
         let candidates = [vec![3, 2, 1], vec![0, 2], vec![1, 0, 3], vec![]]
             .map(|ids| candidates_in_order(&ids))
             .to_vec();
@@ -248,8 +250,7 @@ mod tests {
             BTreeSet::new(),
         ];
 
-        let actual =
-            thread_pool(n_threads).install(|| prune_overfull(data, candidates, &graph, Metric::L2));
+        let actual = prune_overfull(candidates, &Line(&x), &config);
 
         let actual: Vec<BTreeSet<u32>> = actual.into_iter().map(|row| as_set(&row)).collect();
         assert_eq!(actual, expected);

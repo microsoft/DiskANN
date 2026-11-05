@@ -332,6 +332,42 @@ pub fn twobit_v3_cosine_full_data(
 }
 
 ///////////
+// 3-bit //
+///////////
+
+#[inline(never)]
+pub fn threebit_v3_l2_full_data(arch: V3, dim: usize) -> Result<DistanceComputer, AllocatorError> {
+    let reify =
+        Reify::<_, _, AsFull, AsData<3>>::new(vectors::CompensatedSquaredL2::new(dim), dim, arch);
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+#[inline(never)]
+pub fn threebit_v3_ip_full_data(
+    arch: V3,
+    shift: &[f32],
+    dim: usize,
+) -> Result<DistanceComputer, AllocatorError> {
+    let reify =
+        Reify::<_, _, AsFull, AsData<3>>::new(vectors::CompensatedIP::new(shift, dim), dim, arch);
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+#[inline(never)]
+pub fn threebit_v3_cosine_full_data(
+    arch: V3,
+    shift: &[f32],
+    dim: usize,
+) -> Result<DistanceComputer, AllocatorError> {
+    let reify = Reify::<_, _, AsFull, AsData<3>>::new(
+        vectors::CompensatedCosine::new(vectors::CompensatedIP::new(shift, dim)),
+        dim,
+        arch,
+    );
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+///////////
 // 4-bit //
 ///////////
 

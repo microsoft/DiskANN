@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use rand::{
     distr::{Distribution, Uniform},
     rngs::StdRng,
@@ -52,6 +52,10 @@ impl LimitedAllocator {
         Self {
             remaining: Arc::new(AtomicUsize::new(allocations)),
         }
+    }
+
+    pub(crate) fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::Relaxed)
     }
 }
 
@@ -105,7 +109,7 @@ pub(crate) fn compute_absolute_error(got: f32, expected: f32) -> f32 {
 }
 
 pub(crate) struct TestProblem {
-    pub(crate) data: Matrix<f32>,
+    pub(crate) data: rowmajor::Owned<f32>,
     pub(crate) means: Vec<f64>,
     pub(crate) variances: Vec<f64>,
     pub(crate) mean_norm: f64,
@@ -169,17 +173,17 @@ pub(crate) fn create_test_problem(nrows: usize, ncols: usize, rng: &mut StdRng) 
         })
         .collect();
 
-    let mut data = Matrix::<f32>::new(0.0, nrows, ncols);
+    let mut data = rowmajor::Owned::<f32>::from_element(nrows, ncols, 0.0);
     for col in 0..ncols {
         offsets.shuffle(rng);
-        for row in 0..nrows {
-            data[(row, col)] = means[col] + scales[col] * offsets[row];
+        for (row, offset) in std::iter::zip(data.rows_mut(), offsets.iter()) {
+            row[col] = means[col] + scales[col] * offset;
         }
     }
 
     // Compute the mean norm directly.
     let mean_norm = data
-        .row_iter()
+        .rows()
         .map(|row| {
             row.iter()
                 .map(|&i| {
@@ -204,6 +208,7 @@ pub(crate) fn create_test_problem(nrows: usize, ncols: usize, rng: &mut StdRng) 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Check {
     /// Assert two floating point numbers are within a set number of ULPs oeachother.
+    #[cfg(not(miri))]
     Ulp(usize),
 
     /// Assert two floating point numbers `x` and `y` satisfy:
@@ -212,18 +217,26 @@ pub(crate) enum Check {
     /// ```
     AbsRel { abs: f32, rel: f32 },
 
+    /// Two values must be exact.
+    Exact,
+
     /// Skip the check entirely.
     #[cfg(not(miri))]
     Skip,
 }
 
 impl Check {
+    #[cfg(not(miri))]
     pub(crate) const fn ulp(ulp: usize) -> Self {
         Self::Ulp(ulp)
     }
 
     pub(crate) const fn absrel(abs: f32, rel: f32) -> Self {
         Self::AbsRel { abs, rel }
+    }
+
+    pub(crate) const fn exact() -> Self {
+        Self::Exact
     }
 
     #[cfg(not(miri))]
@@ -237,6 +250,7 @@ impl Check {
     /// a useful diagnostic.
     pub(crate) fn check(&self, got: f32, expected: f32) -> Result<(), CheckFailed> {
         match self {
+            #[cfg(not(miri))]
             Self::Ulp(ulp) => {
                 if within_ulp(got, expected, *ulp) {
                     Ok(())
@@ -274,6 +288,13 @@ impl Check {
                     })
                 }
             }
+            Self::Exact => {
+                if got == expected {
+                    Ok(())
+                } else {
+                    Err(CheckFailed::Exact { got, expected })
+                }
+            }
             #[cfg(not(miri))]
             Self::Skip => Ok(()),
         }
@@ -282,8 +303,11 @@ impl Check {
 
 #[derive(Debug, Clone, Copy, Error)]
 pub(crate) enum CheckFailed {
+    #[cfg(not(miri))]
     #[error("not within {ulp} ulp - got {got}, expected {expected}")]
     Ulp { ulp: usize, got: f32, expected: f32 },
+    #[error("not exact got {got}, expected {expected}")]
+    Exact { got: f32, expected: f32 },
     #[error(
         "not within {abs_limit}/{rel_limit} - errors {abs_got}/{rel_got} - \
             got {got}, expected {expected}"
@@ -298,6 +322,7 @@ pub(crate) enum CheckFailed {
     },
 }
 
+#[cfg(not(miri))]
 fn within_ulp(mut got: f32, expected: f32, ulp: usize) -> bool {
     if got == expected {
         true

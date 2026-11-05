@@ -32,6 +32,7 @@ on:
       - 'diskann-benchmark/**'
       - 'diskann-benchmark-runner/**'
       - '.github/actions/setup-disk-benchmark/**'
+      - '.github/actions/prepare-nvme/**'
       - '.github/workflows/disk-benchmarks.yml'
 
 # Cancel in-progress runs when a new run is triggered
@@ -40,6 +41,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  RUST_CONFIG: 'target."cfg(all())".rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   PERF_INPUTS: diskann-benchmark/perf_test_inputs
 
@@ -76,19 +78,16 @@ jobs:
             data_dir: OpenAIArXiv
 
     steps:
-      # Kept inline because this must run before checkout, but local action.yml
-      # files are only available after checkout.
-      - name: Mount high-speed NVMe SSD
-        shell: bash
-        run: |
-          sudo mkdir -p /mnt/nvme
-          sudo lsblk
-          sudo mkfs.ext4 /dev/nvme0n1
-          sudo mount /dev/nvme0n1 /mnt/nvme
-          sudo chmod 777 /mnt/nvme
-          mkdir -p /mnt/nvme/diskann_rust /mnt/nvme/baseline
-          ln -s /mnt/nvme/diskann_rust diskann_rust
-          ln -s /mnt/nvme/baseline baseline
+      # Local composite actions resolve from the workspace, so fetch only this
+      # action before the NVMe-backed checkouts below.
+      - name: Checkout mount action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions/prepare-nvme
+          path: .ci-bootstrap
+
+      - name: Prepare NVMe workspace
+        uses: ./.ci-bootstrap/.github/actions/prepare-nvme
 
       - name: Checkout current branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -119,21 +118,21 @@ jobs:
       - name: Run baseline benchmark
         working-directory: baseline
         run: |
-          cargo run -p diskann-benchmark --features disk-index --release -- \
+          cargo run -p diskann-benchmark --features disk-index --release --config "$RUST_CONFIG" -- \
             run --input-file ../diskann_rust/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark
         working-directory: diskann_rust
         run: |
-          cargo run -p diskann-benchmark --features disk-index --release -- \
+          cargo run -p diskann-benchmark --features disk-index --release --config "$RUST_CONFIG" -- \
             run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Validate benchmark results
         working-directory: diskann_rust
         run: |
-          cargo run -p diskann-benchmark --features disk-index --release -- \
+          cargo run -p diskann-benchmark --features disk-index --release --config "$RUST_CONFIG" -- \
             check run \
             --tolerances ${{ env.PERF_INPUTS }}/disk-index-tolerances.json \
             --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
@@ -141,7 +140,7 @@ jobs:
             --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()  # Upload even if validation fails
         with:
           name: benchmark-results-${{ matrix.dataset }}

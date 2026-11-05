@@ -8,40 +8,33 @@
 //!
 //! A leaf job gathers the vectors of its points as `f32`. The leaf kernel then
 //! selects the `k` nearest leaf points of each point, and the job adds each
-//! selected pair in both directions. Leaves overlap and run in parallel, so each
-//! data point has a locked candidate list. A job groups its edges by point first
-//! and then locks each list once.
-//!
-//! The HashPrune merge groups the edges of a leaf the same way. Each edge also
-//! keeps its distance. The job adds the edges of each source point to the locked
-//! reservoir of that point.
+//! selected pair in both directions. Leaves overlap and their jobs can run in
+//! parallel, so each data point has a locked candidate list. A job groups its
+//! edges by point first and then locks each list once.
 
 use std::sync::{Mutex, PoisonError};
 
-use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use crate::{ANNError, ANNResult, graph::AdjacencyList};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use rayon::prelude::*;
 
 use super::{
-    conversion::gather_as_f32,
-    hash_prune::HashPrune,
-    leaf_kernel::{LeafKernelWorkspace, select_leaf_neighbors},
-    leaf_metric::LeafMetric,
-    simd::Simd,
+    dataset::Dataset, hash_prune::HashPrune, kernels::Kernels, leaf_kernel::LeafKernelWorkspace,
     topk::Candidate,
 };
 
-/// Scratch for one Rayon leaf job.
+/// Scratch for one leaf job.
 ///
-/// Each buffer keeps the largest size that the job needed. A leaf uses a prefix.
-/// The direct merge uses `local_adjacency`. The HashPrune merge uses the edge
-/// buffers and `sketch_scratch`.
+/// Each buffer keeps the largest allocation that the job needed, and takes
+/// the shape of the current leaf.
 #[derive(Default)]
 struct LeafBuffers {
-    point_values: Vec<f32>,
-    neighbors: Vec<Candidate>,
+    points: rowmajor::Buffer<f32>,
+    neighbors: rowmajor::Buffer<Candidate>,
     local_adjacency: Vec<Vec<u32>>,
     kernel_workspace: LeafKernelWorkspace,
+    /// HashPrune scratch: one flag for each ordered pair of leaf points, the
+    /// CSR edge lists of the leaf, and the gathered sketches of its points.
     seen_pairs: Vec<bool>,
     edge_offsets: Vec<u32>,
     edges: Vec<(u32, f32)>,
@@ -50,40 +43,27 @@ struct LeafBuffers {
 }
 
 impl LeafBuffers {
-    /// Grow the buffers for a leaf of `point_count` points and return the
-    /// effective `k` of the leaf.
-    ///
-    /// The buffers never shrink. A smaller leaf uses a prefix, so a later large
-    /// leaf does not fill the same slots again.
-    fn prepare(&mut self, point_count: usize, dimension_count: usize, requested_k: usize) -> usize {
-        // A point has at most `point_count - 1` other points in its leaf. Wider rows
-        // would hold only empty slots.
-        let leaf_k = requested_k.min(point_count.saturating_sub(1));
-        let value_count = point_count * dimension_count;
-        if self.point_values.len() < value_count {
-            self.point_values.resize(value_count, 0.0);
-        }
-        let neighbor_count = point_count * leaf_k;
-        if self.neighbors.len() < neighbor_count {
-            self.neighbors.resize(neighbor_count, Candidate::default());
-        }
-        leaf_k
-    }
-
-    /// Clear the edge lists of the first `point_count` leaf points.
-    fn prepare_local_adjacency(&mut self, point_count: usize) {
+    /// Shape the buffers for a leaf of `point_count` points that selects
+    /// `leaf_k` neighbors each, and clear the edge lists of those points.
+    fn prepare(
+        &mut self,
+        point_count: usize,
+        dimension_count: usize,
+        leaf_k: usize,
+    ) -> ANNResult<()> {
+        self.points.resize(point_count, dimension_count)?;
+        self.neighbors.resize(point_count, leaf_k)?;
         if self.local_adjacency.len() < point_count {
             self.local_adjacency.resize_with(point_count, Vec::new);
         }
         self.local_adjacency[..point_count]
             .iter_mut()
             .for_each(Vec::clear);
+        Ok(())
     }
 
-    /// Grow the `source x target` flags of a leaf of `point_count` points.
-    ///
-    /// A leaf has at most `u32::MAX` distinct points, so the product fits in a
-    /// 64-bit `usize`.
+    /// Hold one flag for each ordered pair of `point_count` leaf points. The
+    /// CSR build leaves every flag `false`.
     fn prepare_seen_pairs(&mut self, point_count: usize) {
         grow(&mut self.seen_pairs, point_count * point_count, false);
     }
@@ -93,36 +73,22 @@ impl LeafBuffers {
 /// leaves.
 ///
 /// Each selected pair adds both directions. A list holds global IDs without
-/// duplicates, in the order in which the parallel jobs add them. The lists stay
+/// duplicates, in the order in which the leaf jobs add them. The lists stay
 /// unsorted: final pruning ranks candidates by distance, and a graph search reads
 /// all neighbors of a point, so the order only breaks distance ties.
-pub(super) fn build_leaf_candidates<A, M, T>(
-    arch: A,
-    data: MatrixView<'_, T>,
-    dimensions: usize,
+pub(super) fn build_leaf_candidates(
+    data: &dyn Dataset,
+    kernels: &dyn Kernels,
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
-) -> ANNResult<Vec<AdjacencyList<u32>>>
-where
-    A: Simd,
-    M: LeafMetric,
-    T: VectorRepr,
-{
+) -> ANNResult<Vec<AdjacencyList<u32>>> {
     let candidates: Vec<_> = (0..data.nrows())
         .map(|_| Mutex::new(AdjacencyList::new()))
         .collect();
     leaves
-        .par_iter()
+        .into_par_iter()
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
-            add_leaf_candidates::<A, M, T>(
-                arch,
-                data,
-                dimensions,
-                point_ids,
-                requested_k,
-                buffers,
-                &candidates,
-            )
+            add_leaf_candidates(data, kernels, &point_ids, requested_k, buffers, &candidates)
         })?;
     Ok(candidates
         .into_iter()
@@ -130,42 +96,68 @@ where
         .collect())
 }
 
-/// Add the selected pairs of all leaves, with their distances, to the HashPrune
-/// reservoirs.
+/// Add the selected pairs of one leaf to the candidate lists.
 ///
-/// Each selected pair adds both directions.
-pub(super) fn add_hash_prune_candidates<A, M, T>(
-    arch: A,
-    data: MatrixView<'_, T>,
-    dimensions: usize,
+/// The IDs of a leaf are distinct dataset rows, so `points x dimensions` is not
+/// larger than the dataset.
+fn add_leaf_candidates(
+    data: &dyn Dataset,
+    kernels: &dyn Kernels,
+    point_ids: &[u32],
+    requested_k: usize,
+    buffers: &mut LeafBuffers,
+    candidates: &[Mutex<AdjacencyList<u32>>],
+) -> ANNResult<()> {
+    let point_count = point_ids.len();
+    // A point has at most `point_count - 1` other points in its leaf. Wider rows
+    // would hold only empty slots.
+    let leaf_k = requested_k.min(point_count.saturating_sub(1));
+    if leaf_k == 0 {
+        return Ok(());
+    }
+
+    select_nearest_in_leaf(data, kernels, point_ids, leaf_k, buffers)?;
+
+    add_symmetric_neighbors(
+        point_ids,
+        buffers.neighbors.as_view(),
+        &mut buffers.local_adjacency[..point_count],
+    );
+    for (&point_id, additions) in point_ids.iter().zip(&buffers.local_adjacency) {
+        candidates[point_id as usize]
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(additions);
+    }
+    Ok(())
+}
+
+/// Add the selected pairs of every leaf to the HashPrune reservoirs.
+///
+/// Each leaf lists its pairs once in each direction, as CSR edge lists, and
+/// the reservoirs of the leaf points take them with their distances.
+pub(super) fn add_hash_prune_candidates(
+    data: &dyn Dataset,
+    kernels: &dyn Kernels,
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
     reservoirs: &HashPrune,
-) -> ANNResult<()>
-where
-    A: Simd,
-    M: LeafMetric,
-    T: VectorRepr,
-{
+) -> ANNResult<()> {
     leaves
         .into_par_iter()
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
-            let leaf_k = gather_leaf_neighbors::<A, M, T>(
-                arch,
-                data,
-                dimensions,
-                &point_ids,
-                requested_k,
-                buffers,
-            )?;
+            let point_count = point_ids.len();
+            // A point has at most `point_count - 1` other points in its leaf.
+            let leaf_k = requested_k.min(point_count.saturating_sub(1));
             if leaf_k == 0 {
                 return Ok(());
             }
-            let point_count = point_ids.len();
+
+            select_nearest_in_leaf(data, kernels, &point_ids, leaf_k, buffers)?;
             buffers.prepare_seen_pairs(point_count);
             let edge_count = build_symmetric_edge_csr(
                 leaf_k,
-                &buffers.neighbors[..point_count * leaf_k],
+                buffers.neighbors.as_slice(),
                 EdgeBuffers {
                     seen: &mut buffers.seen_pairs[..point_count * point_count],
                     offsets: &mut buffers.edge_offsets,
@@ -183,100 +175,32 @@ where
         })
 }
 
-/// Add the selected pairs of one leaf to the candidate lists.
-fn add_leaf_candidates<A, M, T>(
-    arch: A,
-    data: MatrixView<'_, T>,
-    dimensions: usize,
+/// Gather the leaf as `f32` and select the `leaf_k` nearest leaf points of
+/// each point into `buffers.neighbors`.
+fn select_nearest_in_leaf(
+    data: &dyn Dataset,
+    kernels: &dyn Kernels,
     point_ids: &[u32],
-    requested_k: usize,
+    leaf_k: usize,
     buffers: &mut LeafBuffers,
-    candidates: &[Mutex<AdjacencyList<u32>>],
-) -> ANNResult<()>
-where
-    A: Simd,
-    M: LeafMetric,
-    T: VectorRepr,
-{
-    let leaf_k =
-        gather_leaf_neighbors::<A, M, T>(arch, data, dimensions, point_ids, requested_k, buffers)?;
-    if leaf_k == 0 {
-        return Ok(());
-    }
-
-    let point_count = point_ids.len();
-    buffers.prepare_local_adjacency(point_count);
-    let neighbors = MatrixView::try_from(
-        &buffers.neighbors[..point_count * leaf_k],
-        point_count,
-        leaf_k,
-    )?;
-    add_symmetric_neighbors(
-        point_ids,
-        neighbors,
-        &mut buffers.local_adjacency[..point_count],
-    );
-    for (&point_id, additions) in point_ids.iter().zip(&buffers.local_adjacency) {
-        candidates[point_id as usize]
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(additions);
-    }
-    Ok(())
-}
-
-/// Select the `k` nearest leaf points of each point of one leaf into
-/// `buffers.neighbors`, and return the effective `k` of the leaf.
-///
-/// The IDs of a leaf are distinct dataset rows, so `points x dimensions` is not
-/// larger than the dataset.
-fn gather_leaf_neighbors<A, M, T>(
-    arch: A,
-    data: MatrixView<'_, T>,
-    dimensions: usize,
-    point_ids: &[u32],
-    requested_k: usize,
-    buffers: &mut LeafBuffers,
-) -> ANNResult<usize>
-where
-    A: Simd,
-    M: LeafMetric,
-    T: VectorRepr,
-{
-    let point_count = point_ids.len();
-    let leaf_k = buffers.prepare(point_count, dimensions, requested_k);
-    if leaf_k == 0 {
-        return Ok(0);
-    }
-
-    let mut points = MutMatrixView::try_from(
-        &mut buffers.point_values[..point_count * dimensions],
-        point_count,
-        dimensions,
-    )?;
-    gather_as_f32(data, point_ids, points.as_mut_view())?;
-    let output = MutMatrixView::try_from(
-        &mut buffers.neighbors[..point_count * leaf_k],
-        point_count,
-        leaf_k,
-    )?;
-    select_leaf_neighbors::<A, M>(
-        arch,
-        points.as_view(),
-        output,
+) -> ANNResult<()> {
+    buffers.prepare(point_ids.len(), data.dimensions(), leaf_k)?;
+    data.gather(point_ids, buffers.points.as_view_mut())?;
+    kernels.select_leaf_neighbors(
+        buffers.points.as_view(),
+        buffers.neighbors.as_view_mut(),
         &mut buffers.kernel_workspace,
-    )?;
-    Ok(leaf_k)
+    )
 }
 
 /// Convert each selected pair from leaf positions to global IDs and add it to
 /// the edge lists of both points.
 fn add_symmetric_neighbors(
     point_ids: &[u32],
-    neighbors: MatrixView<'_, Candidate>,
+    neighbors: rowmajor::Ref<'_, Candidate>,
     local_adjacency: &mut [Vec<u32>],
 ) {
-    for (source, source_neighbors) in neighbors.row_iter().enumerate() {
+    for (source, source_neighbors) in neighbors.rows().enumerate() {
         for neighbor in source_neighbors {
             // Skip the empty slots that the kernel leaves for NaN and infinite
             // distances.
@@ -292,20 +216,22 @@ fn add_symmetric_neighbors(
     }
 }
 
-/// Reusable storage of [`build_symmetric_edge_csr`].
+/// Scratch of one CSR build.
 struct EdgeBuffers<'a> {
-    /// `source x target` flags of the leaf. All flags are clear between calls.
     seen: &'a mut [bool],
     offsets: &'a mut Vec<u32>,
     edges: &'a mut Vec<(u32, f32)>,
     cursor: &'a mut Vec<u32>,
 }
 
-/// Write the directed edges of one leaf as a CSR matrix and return the edge count.
+/// List the selected pairs of a leaf once in each direction, as CSR edge lists
+/// in leaf positions, and return the number of directed edges.
 ///
-/// Each selected pair adds both directions, and each direction appears once.
-/// Row `source` lists `(target, distance)` in leaf positions, in the order of
-/// the first selection. `offsets[..=point_count]` holds the row bounds.
+/// `neighbors` is the kernel output: `leaf_k` candidates for each point.
+/// A pair that both points select appears once per direction, with the
+/// distance of its first selection. `seen` must be all `false` on entry and
+/// is all `false` on return: the counting pass sets a flag per directed edge
+/// and the writing pass clears it.
 fn build_symmetric_edge_csr(
     leaf_k: usize,
     neighbors: &[Candidate],
@@ -320,10 +246,6 @@ fn build_symmetric_edge_csr(
     let point_count = neighbors.len() / leaf_k;
     grow(offsets, point_count + 1, 0);
     offsets[..point_count + 1].fill(0);
-
-    // The count pass sets the flag of each new direction and counts it in
-    // `offsets[source + 1]`. A source has at most `point_count - 1` targets, and
-    // a leaf has at most `u32::MAX` points, so a count fits in `u32`.
     for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in neighbors.iter().filter(|neighbor| neighbor.is_assigned()) {
             let target = neighbor.local_idx as usize;
@@ -336,16 +258,12 @@ fn build_symmetric_edge_csr(
             .checked_add(offsets[point - 1])
             .ok_or_else(|| ANNError::message("a leaf has more than u32::MAX directed edges"))?;
     }
-
     let edge_count = offsets[point_count] as usize;
     grow(edges, edge_count, (0, 0.0));
     grow(cursor, point_count, 0);
     cursor[..point_count].copy_from_slice(&offsets[..point_count]);
     let edges = &mut edges[..edge_count];
     let cursor = &mut cursor[..point_count];
-
-    // The write pass visits the directions in the same order. The first visit
-    // of a direction writes its edge and clears its flag for the next leaf.
     for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in neighbors.iter().filter(|neighbor| neighbor.is_assigned()) {
             let target = neighbor.local_idx as usize;
@@ -357,6 +275,7 @@ fn build_symmetric_edge_csr(
     Ok(edge_count)
 }
 
+/// Count the directed edge `source -> target` once.
 fn count_directed_edge(
     point_count: usize,
     source: usize,
@@ -371,6 +290,8 @@ fn count_directed_edge(
     }
 }
 
+/// Write the directed edge `source -> target` at the cursor of `source` if the
+/// counting pass counted it, and clear its flag.
 fn write_counted_directed_edge(
     point_count: usize,
     source: usize,
@@ -388,8 +309,7 @@ fn write_counted_directed_edge(
     }
 }
 
-/// Grow `values` to at least `len` elements. The buffers never shrink, so a
-/// smaller leaf uses a prefix.
+/// Grow `values` to at least `len` elements. Existing elements stay.
 fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
     if values.len() < len {
         values.resize(len, value);
@@ -400,20 +320,25 @@ fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
 mod tests {
     use super::*;
     use crate::graph::pipnn::{
-        L2,
-        test_support::{both_directions, edges, thread_pool},
+        dataset::Rows,
+        kernels,
+        test_support::{both_directions, edges},
     };
-    use diskann_wide::ARCH;
+    use diskann_vector::distance::Metric;
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::collections::BTreeSet;
 
-    /// Build L2 candidates from one-dimensional points on `n_threads` threads.
-    fn build_1d(x: &[f32], leaves: Vec<Vec<u32>>, k: usize, n_threads: usize) -> Vec<Vec<u32>> {
+    /// Build L2 candidates from one-dimensional points.
+    fn build_1d(x: &[f32], leaves: Vec<Vec<u32>>, k: usize) -> Vec<Vec<u32>> {
         let dimensions = 1;
-        let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
-        let candidates = thread_pool(n_threads)
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, dimensions, leaves, k))
-            .unwrap();
+        let data = rowmajor::Ref::try_from_data(x, x.len(), dimensions).unwrap();
+        let candidates = build_leaf_candidates(
+            &Rows::new(data, Metric::L2).unwrap(),
+            &*kernels::select(Metric::L2),
+            leaves,
+            k,
+        )
+        .unwrap();
         candidates.into_iter().map(Vec::from).collect()
     }
 
@@ -431,9 +356,7 @@ mod tests {
             x[id as usize] = value;
         }
         let ids = leaf.iter().map(|&(id, _)| id).collect();
-        // One leaf is one task, so more threads change nothing.
-        let n_threads = 1;
-        build_1d(&x, vec![ids], k, n_threads)
+        build_1d(&x, vec![ids], k)
     }
 
     #[test]
@@ -461,12 +384,12 @@ mod tests {
         let leaf_count = 40;
         let max_leaf_size = 64;
         let k = 2;
-        let n_threads = 1;
         let mut rng = StdRng::seed_from_u64(seed);
         let values: Vec<f32> = (0..point_count * dimensions)
             .map(|_| rng.random())
             .collect();
-        let data = MatrixView::try_from(values.as_slice(), point_count, dimensions).unwrap();
+        let data =
+            rowmajor::Ref::try_from_data(values.as_slice(), point_count, dimensions).unwrap();
         // The stride 11 is coprime to 300, so no leaf repeats a point.
         let leaves: Vec<Vec<u32>> = (0..leaf_count)
             .map(|j| {
@@ -523,9 +446,13 @@ mod tests {
             "the oracle must select a pair in two different leaves"
         );
 
-        let actual = thread_pool(n_threads)
-            .install(|| build_leaf_candidates::<_, L2, _>(ARCH, data, dimensions, leaves, k))
-            .unwrap();
+        let actual = build_leaf_candidates(
+            &Rows::new(data, Metric::L2).unwrap(),
+            &*kernels::select(Metric::L2),
+            leaves,
+            k,
+        )
+        .unwrap();
 
         let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
         assert_eq!(edges(&actual), expected, "seed {seed}");
@@ -539,11 +466,10 @@ mod tests {
         // The leaves overlap, and the last one repeats the first.
         let leaves = vec![vec![0, 1, 2], vec![1, 2, 3], vec![2, 3, 4], vec![0, 1, 2]];
         let k = 1;
-        let n_threads = 1;
         // Three leaves find pair 1-2, and two leaves each find 0-1 and 2-3.
         let expected = both_directions([(0, 1), (1, 2), (2, 3), (3, 4)]);
 
-        let actual = build_1d(&x, leaves, k, n_threads);
+        let actual = build_1d(&x, leaves, k);
 
         // `edges` panics on a repeated edge.
         assert_eq!(edges(&actual), expected);
@@ -579,11 +505,10 @@ mod tests {
         let x = [0.0, 3.0, f32::NAN];
         let leaf = vec![0, 1, 2];
         let k = leaf.len() - 1;
-        let n_threads = 1;
         // Point 2 is NaN, so its pairs are not rankable.
         let expected = both_directions([(0, 1)]);
 
-        let actual = build_1d(&x, vec![leaf], k, n_threads);
+        let actual = build_1d(&x, vec![leaf], k);
 
         assert_eq!(edges(&actual), expected);
     }
@@ -592,13 +517,20 @@ mod tests {
     /// the given buffers, and return the candidate list of each point.
     fn add_one_leaf(x: &[f32], leaf: &[u32], k: usize, buffers: &mut LeafBuffers) -> Vec<Vec<u32>> {
         let dimensions = 1;
-        let data = MatrixView::try_from(x, x.len(), dimensions).unwrap();
+        let data = rowmajor::Ref::try_from_data(x, x.len(), dimensions).unwrap();
         let candidates: Vec<_> = (0..x.len())
             .map(|_| Mutex::new(AdjacencyList::new()))
             .collect();
 
-        add_leaf_candidates::<_, L2, _>(ARCH, data, dimensions, leaf, k, buffers, &candidates)
-            .unwrap();
+        add_leaf_candidates(
+            &Rows::new(data, Metric::L2).unwrap(),
+            &*kernels::select(Metric::L2),
+            leaf,
+            k,
+            buffers,
+            &candidates,
+        )
+        .unwrap();
 
         candidates
             .into_iter()
@@ -630,79 +562,6 @@ mod tests {
             let actual = add_one_leaf(&x, &leaf, k, &mut buffers);
 
             assert_eq!(edges(&actual), expected, "leaf {leaf:?}, k={k}");
-        }
-    }
-
-    #[test]
-    fn edge_csr_lists_each_direction_once_in_first_selection_order() {
-        // Each case gives the kernel output of a leaf with `k` columns.
-        // `Candidate::default()` is an empty slot.
-        for (case, k, neighbors, expected_offsets, expected_edges) in [
-            (
-                // The pair 1-2 is selected by both points. Its first selection,
-                // from point 1, sets the distance of both directions.
-                "three points",
-                1,
-                vec![
-                    Candidate::new(1, 1.0),
-                    Candidate::new(2, 2.0),
-                    Candidate::new(1, 1.5),
-                ],
-                vec![0, 1, 3, 4],
-                vec![(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)],
-            ),
-            (
-                "empty slot",
-                1,
-                vec![Candidate::new(1, 1.0), Candidate::default()],
-                vec![0, 1, 2],
-                vec![(1, 1.0), (0, 1.0)],
-            ),
-            (
-                "pair selected from both ends",
-                1,
-                vec![Candidate::new(1, 1.0), Candidate::new(0, 1.0)],
-                vec![0, 1, 2],
-                vec![(1, 1.0), (0, 1.0)],
-            ),
-            (
-                "two neighbors per point",
-                2,
-                vec![
-                    Candidate::new(1, 1.0),
-                    Candidate::new(2, 4.0),
-                    Candidate::new(0, 1.0),
-                    Candidate::new(2, 1.0),
-                    Candidate::new(1, 1.0),
-                    Candidate::new(0, 4.0),
-                ],
-                vec![0, 2, 4, 6],
-                vec![(1, 1.0), (2, 4.0), (0, 1.0), (2, 1.0), (0, 4.0), (1, 1.0)],
-            ),
-        ] {
-            let point_count = neighbors.len() / k;
-            let mut seen = vec![false; point_count * point_count];
-            // Stale values from a larger earlier leaf must not leak into this one.
-            let mut offsets = vec![9; point_count + 3];
-            let mut edges = vec![(99, 99.0); 8];
-            let mut cursor = vec![9; point_count + 3];
-
-            let edge_count = build_symmetric_edge_csr(
-                k,
-                &neighbors,
-                EdgeBuffers {
-                    seen: &mut seen,
-                    offsets: &mut offsets,
-                    edges: &mut edges,
-                    cursor: &mut cursor,
-                },
-            )
-            .unwrap();
-
-            assert_eq!(edge_count, expected_edges.len(), "{case}");
-            assert_eq!(offsets[..=point_count], expected_offsets, "{case}");
-            assert_eq!(edges[..edge_count], expected_edges, "{case}");
-            assert!(seen.iter().all(|&flag| !flag), "{case}: flags stay set");
         }
     }
 }

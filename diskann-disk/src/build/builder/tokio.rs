@@ -5,7 +5,7 @@
 
 use diskann::ANNResult;
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 /// Creates a new multi-threaded tokio runtime with the specified number of worker threads.
 /// If `num_threads` is 0, it defaults to the number of logical CPUs.

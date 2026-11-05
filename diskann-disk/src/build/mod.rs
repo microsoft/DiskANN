@@ -13,8 +13,8 @@ pub mod configuration;
 
 // Re-export key types for convenience
 pub use configuration::{
-    disk_index_build_parameter, filter_parameter, BuildAlgorithm, DiskIndexBuildParameters,
-    QuantizationType, SphericalBits,
+    BuildAlgorithm, DiskIndexBuildParameters, QuantizationType, SphericalBits,
+    disk_index_build_parameter, filter_parameter,
 };
 #[cfg(feature = "pipnn")]
 pub use configuration::{HashPruneParameters, PiPNNParameters};

@@ -99,6 +99,37 @@ impl FallbackKernel {
         }
     }
 
+    /// Exact `i32` counterpart of [`FallbackKernel::max_sim_kernel`] for `i8`.
+    ///
+    /// The `i8` inner product fits an `i32` accumulator exactly for vector dimensions up
+    /// to `131_071`, so scores are exact rather than rounded through `f32`. If there are
+    /// no vectors in the `doc`, the score is `i32::MAX`.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query multi-vector (wrapped as [`QueryMatRef`])
+    /// * `doc` - The document multi-vector
+    /// * `f` - Callback invoked with `(query_index, similarity)` for each query vector
+    #[inline]
+    pub(crate) fn max_sim_kernel_i8<F>(
+        query: QueryMatRef<'_, Standard<i8>>,
+        doc: MatRef<'_, Standard<i8>>,
+        mut f: F,
+    ) where
+        F: FnMut(usize, i32),
+    {
+        for (i, q_vec) in query.rows().enumerate() {
+            // Negate to match the similarity convention of `InnerProduct::evaluate`.
+            let mut min_dist = i32::MAX;
+
+            for d_vec in doc.rows() {
+                min_dist = min_dist.min(-dot_i32(q_vec, d_vec));
+            }
+
+            f(i, min_dist);
+        }
+    }
+
     /// Core kernel for computing per-query-vector projected-eigen scores.
     ///
     /// For each `query` vector, sums the negated squared inner product
@@ -142,6 +173,15 @@ impl FallbackKernel {
             f(i, sum);
         }
     }
+}
+
+/// Exact `i8` inner product, matching the `i32` accumulator width of the SIMD
+/// kernels.
+fn dot_i32(a: &[i8], b: &[i8]) -> i32 {
+    a.iter()
+        .zip(b)
+        .map(|(&x, &y)| i32::from(x) * i32::from(y))
+        .sum()
 }
 
 ////////////

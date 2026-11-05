@@ -10,7 +10,10 @@ use diskann::{
     graph::{self, glue},
     provider,
 };
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::build::{Build, ids::ToId};
 
@@ -27,7 +30,7 @@ where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     strategy: S,
     to_id: Box<dyn ToId<DP::ExternalId>>,
 }
@@ -45,7 +48,7 @@ where
     /// to external IDs.
     pub fn new<I>(
         index: Arc<graph::DiskANNIndex<DP>>,
-        data: Arc<Matrix<T>>,
+        data: Arc<rowmajor::Owned<T>>,
         strategy: S,
         to_id: I,
     ) -> Arc<Self>
@@ -64,7 +67,7 @@ where
 impl<DP, T, S> Build for MultiInsert<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default> + for<'a> provider::SetElement<&'a [T]>,
-    S: glue::MultiInsertStrategy<DP, Matrix<T>> + Clone + 'static,
+    S: glue::MultiInsertStrategy<DP, rowmajor::Owned<T>> + Clone + 'static,
     T: AsyncFriendly + Clone,
 {
     type Output = ();
@@ -101,7 +104,7 @@ where
                     end: range.end,
                 })
             })?
-            .to_owned();
+            .to_rowmajor_owned();
 
         let ids: ANNResult<Arc<[_]>> = range.into_iter().map(|i| self.to_id.to_id(i)).collect();
         let context = DP::Context::default();

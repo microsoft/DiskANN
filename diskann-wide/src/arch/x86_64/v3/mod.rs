@@ -475,9 +475,59 @@ impl Architecture for V3 {
     }
 }
 
+///////////////////////
+// Custom Intrinsics //
+///////////////////////
+
+impl V3 {
+    /// Multiply unsigned bytes from `x` by signed bytes from `y`, then add adjacent
+    /// products with saturation to `i16::MIN..=i16::MAX`.
+    ///
+    /// Each output lane corresponds to one adjacent input pair, in order.
+    /// There is no accumulator.
+    ///
+    /// See: [`std::arch::x86_64::_mm256_maddubs_epi16`].
+    #[inline(always)]
+    pub fn mm256_maddubs_epi16(self, x: u8x32, y: i8x32) -> i16x16 {
+        // SAFETY: V3 provides AVX2.
+        i16x16::from_underlying(self, unsafe {
+            std::arch::x86_64::_mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
+        })
+    }
+}
+
 // Conversions
 impl From<V3> for Scalar {
     fn from(_: V3) -> Scalar {
         Scalar
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils;
+
+    #[test]
+    fn test_mm256_maddubs_epi16() {
+        if let Some(arch) = V3::new_checked_uncached() {
+            let check = move |x: &[u8], y: &[i8]| {
+                let got = arch
+                    .mm256_maddubs_epi16(
+                        u8x32::from_array(arch, x.try_into().unwrap()),
+                        i8x32::from_array(arch, y.try_into().unwrap()),
+                    )
+                    .to_array();
+                let expected: [i16; 16] = core::array::from_fn(|i| {
+                    let even = i16::from(x[2 * i]) * i16::from(y[2 * i]);
+                    let odd = i16::from(x[2 * i + 1]) * i16::from(y[2 * i + 1]);
+                    even.saturating_add(odd)
+                });
+                assert_eq!(got, expected, "x = {x:?}, y = {y:?}");
+            };
+            check(&[u8::MAX; 32], &[i8::MAX; 32]);
+            check(&[u8::MAX; 32], &[i8::MIN; 32]);
+            test_utils::driver::drive_binary(&check, (32, 32), 0x7fc14e39a2d06b85);
+        }
     }
 }

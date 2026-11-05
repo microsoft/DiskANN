@@ -12,7 +12,7 @@ pub fn get_process_cycle_time() -> Option<u64> {
 /// Gets the process time in kernel and user modes.
 /// On macOS, we use rusage to get process times.
 pub fn get_process_time() -> Option<u64> {
-    use libc::{getrusage, rusage, RUSAGE_SELF};
+    use libc::{RUSAGE_SELF, getrusage, rusage};
 
     let mut usage: rusage = unsafe { std::mem::zeroed() };
     let result = unsafe { getrusage(RUSAGE_SELF, &mut usage) };
@@ -39,7 +39,7 @@ pub fn get_system_time() -> Option<u64> {
 
 /// Gets the number of processors.
 pub fn get_number_of_processors() -> Option<u64> {
-    use libc::{sysconf, _SC_NPROCESSORS_ONLN};
+    use libc::{_SC_NPROCESSORS_ONLN, sysconf};
 
     let result = unsafe { sysconf(_SC_NPROCESSORS_ONLN) };
     if result > 0 {
@@ -58,7 +58,7 @@ pub fn get_number_of_processors() -> Option<u64> {
 ///
 /// An `Option<u64>` representing the peak working set size in bytes, or `None` if the operation fails.
 pub fn get_peak_workingset_size() -> Option<u64> {
-    use libc::{getrusage, rusage, RUSAGE_SELF};
+    use libc::{RUSAGE_SELF, getrusage, rusage};
 
     let mut usage: rusage = unsafe { std::mem::zeroed() };
     let result = unsafe { getrusage(RUSAGE_SELF, &mut usage) };

@@ -101,11 +101,11 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use diskann_utils::views::Matrix;
+//! use diskann_utils::views::rowmajor;
 //!
 //! use diskann::graph::workingset::{Map, View, map::{Overlay, Ref, Builder, Capacity}};
 //!
-//! let batch = Matrix::<u32>::row_vector(Box::new([1, 2, 3]));
+//! let batch = rowmajor::Owned::<u32>::row_vector(Box::new([1, 2, 3]));
 //!
 //! // Construct an "overlay" with just one id.
 //! //
@@ -646,14 +646,14 @@ where
 ///
 /// ```
 /// use std::sync::Arc;
-/// use diskann_utils::views::Matrix;
+/// use diskann_utils::views::rowmajor;
 ///
 /// use diskann::graph::workingset::map::{Overlay, Ref};
 ///
-/// let data = Matrix::<u32>::column_vector(Box::new([10, 20, 30]));
+/// let data = rowmajor::Owned::<u32>::column_vector(Box::new([10, 20, 30]));
 /// let ids = [5, 3, 2];
 ///
-/// // The `Ref<[u32]>` projection yields slices, which is compatible with a `Matrix`.
+/// // The `Ref<[u32]>` projection yields slices, which is compatible with a `rowmajor::Owned`.
 /// let overlay = Overlay::<u32, Ref<[u32]>>::from_batch(Arc::new(data), ids);
 ///
 /// assert_eq!(overlay.get(&5).unwrap(), &[10]);
@@ -923,7 +923,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix};
 
     use crate::graph::workingset::View as WorkingSetView;
 
@@ -1015,20 +1015,21 @@ mod tests {
     /// 3.0  4.0
     /// 5.0  6.0
     /// ```
-    fn test_matrix() -> Matrix<f32> {
-        Matrix::try_from(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0].into_boxed_slice(), 3, 2).unwrap()
+    fn test_matrix() -> rowmajor::Owned<f32> {
+        rowmajor::Owned::try_from_data(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0].into_boxed_slice(), 3, 2)
+            .unwrap()
     }
 
     type TestOverlay = Overlay<u32, Ref<[f32]>>;
 
-    fn test_overlay() -> (Arc<Matrix<f32>>, TestOverlay) {
+    fn test_overlay() -> (Arc<rowmajor::Owned<f32>>, TestOverlay) {
         let batch = Arc::new(test_matrix());
         let ids = [10u32, 20, 30];
         let overlay = Overlay::from_batch(batch.clone(), ids);
         (batch, overlay)
     }
 
-    fn test_overlay_projected() -> (Arc<Matrix<f32>>, Overlay<u32, TestProjection>) {
+    fn test_overlay_projected() -> (Arc<rowmajor::Owned<f32>>, Overlay<u32, TestProjection>) {
         let batch = Arc::new(test_matrix());
         let ids = [10u32, 20, 30];
         let overlay = Overlay::from_batch(batch.clone(), ids);
@@ -1816,7 +1817,7 @@ mod tests {
 
     #[test]
     fn overlay_from_batch_empty() {
-        let batch = Arc::new(Matrix::try_from(Box::new([]), 0, 2).unwrap());
+        let batch = Arc::new(rowmajor::Owned::try_from_data(Box::new([]), 0, 2).unwrap());
         let overlay = Overlay::<u32, Ref<[f32]>>::from_batch(batch, std::iter::empty());
         assert!(overlay.get(&0).is_none());
         assert!(!overlay.contains_key(&0));
@@ -1824,7 +1825,7 @@ mod tests {
 
     #[test]
     fn overlay_from_batch_single_element() {
-        let batch = Arc::new(Matrix::try_from(Box::new([1.0, 2.0]), 1, 2).unwrap());
+        let batch = Arc::new(rowmajor::Owned::try_from_data(Box::new([1.0, 2.0]), 1, 2).unwrap());
         let overlay = Overlay::<u32, Ref<[f32]>>::from_batch(batch, [42u32]);
         assert_eq!(overlay.get(&42).unwrap(), &[1.0, 2.0]);
     }
@@ -1983,7 +1984,7 @@ mod tests {
     #[test]
     fn fill_skips_seeded_entries() {
         // Seed with a batch containing a different value for ID 0.
-        let batch = Arc::new(Matrix::try_from(Box::new([99.0, 88.0]), 2, 1).unwrap());
+        let batch = Arc::new(rowmajor::Owned::try_from_data(Box::new([99.0, 88.0]), 2, 1).unwrap());
         let overlay = Overlay::<u32, Ref<[f32]>>::from_batch(batch, [0u32, 1]);
         let mut map = seeded_map(overlay, Capacity::Unbounded);
 

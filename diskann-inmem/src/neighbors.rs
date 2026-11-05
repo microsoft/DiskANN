@@ -498,7 +498,7 @@ mod tests {
         let n = Neighbors::new(IdLimit::new(4), 4).unwrap();
 
         let lock = n.lock(0).unwrap();
-        assert_eq!(lock.as_slice(), &[]);
+        assert!(lock.as_slice().is_empty());
         lock.append(&[1, 2, 3]).unwrap();
 
         let mut out = AdjacencyList::with_capacity(4);
@@ -582,7 +582,6 @@ mod tests {
             assert_eq!(lock.capacity(), neighbors.max_degree().value());
             assert_eq!(lock.len(), 0);
             assert!(lock.is_empty());
-            assert_eq!(lock.as_slice(), &[]);
         }
 
         // Verify out-of-bounds accesses error.

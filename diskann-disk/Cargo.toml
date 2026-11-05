@@ -5,7 +5,7 @@ description.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
-edition.workspace = true
+edition = "2024"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
@@ -75,7 +75,7 @@ diskann-providers = { workspace = true, default-features = false, features = [
 ] }
 diskann-utils = { workspace = true, features = ["testing"] }
 criterion.workspace = true
-iai-callgrind.workspace = true
+gungraun.workspace = true
 diskann = { workspace = true }
 approx.workspace = true
 proptest.workspace = true
@@ -83,7 +83,7 @@ proptest.workspace = true
 [features]
 default = []
 perf_test = ["dep:opentelemetry"]
-pipnn = ["diskann/pipnn"]
+pipnn = ["diskann/pipnn", "diskann-providers/pipnn"]
 virtual_storage = ["diskann-providers/virtual_storage"]
 experimental_diversity_search = [
     "diskann/experimental_diversity_search",
@@ -95,7 +95,7 @@ name = "bench_main"
 harness = false
 
 [[bench]]
-name = "bench_main_iai"
+name = "bench_main_gungraun"
 harness = false
 
 # Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`

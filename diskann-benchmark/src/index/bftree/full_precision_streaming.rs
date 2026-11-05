@@ -24,7 +24,7 @@ use diskann_providers::{
     model::graph::provider::async_::common::FullPrecision,
     storage::{FileStorageProvider, SaveWith},
 };
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::{
     index::{
@@ -68,10 +68,10 @@ impl<T> BfTreeStream<T>
 where
     T: VectorRepr,
 {
-    fn insert_(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<BuildStats> {
+    fn insert_(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<BuildStats> {
         let runner = benchmark_core::build::graph::SingleInsert::new(
             self.index.clone(),
-            Arc::new(data.to_owned()),
+            Arc::new(data.to_rowmajor_owned()),
             FullPrecision,
             benchmark_core::build::ids::Slice::new(slots.into()),
         );
@@ -94,7 +94,7 @@ where
 
     fn search(
         &self,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         groundtruth: &dyn Rows<u32>,
     ) -> anyhow::Result<Self::Output> {
         let knn = benchmark_core::search::graph::KNN::new(
@@ -113,11 +113,11 @@ where
         Ok(StreamStats::Search(results))
     }
 
-    fn insert(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn insert(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Insert(self.insert_(data, slots)?))
     }
 
-    fn replace(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn replace(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Replace(self.insert_(data, slots)?))
     }
 
@@ -247,7 +247,7 @@ where
     ))?);
 
     let config = input.try_as_config()?.build()?;
-    let params = input.bftree_parameters(max_points, data.ncols())?;
+    let params = input.bftree_parameters(max_points, Matrix::ncols(&data))?;
     let start_points = input
         .build()
         .start_point_strategy()

@@ -11,26 +11,25 @@
 //!
 //! 1. `partitioning` splits the dataset into overlapping leaves.
 //! 2. `leaf_build` selects the `leaf_k` nearest neighbors of each point inside
-//!    each leaf. The direct merge adds them to one candidate list per point.
-//!    With [`HashPruneConfig`], `hash_prune` adds them to one bounded reservoir
-//!    per point instead. A reservoir keeps at most `l_max` candidates, at most
-//!    one for each direction hash.
+//!    each leaf and merges them into one candidate list per point.
 //! 3. `finalization` prunes each list that is longer than the graph degree with
-//!    Vamana RobustPrune. Without `final_prune`, a HashPrune build keeps the
-//!    nearest reservoir entries instead.
+//!    Vamana RobustPrune.
 //!
-//! [`build_graph`] selects the SIMD architecture and the metric once, so the
-//! steps compile for one architecture and one metric. It borrows one contiguous
-//! [`MatrixView`] and returns one adjacency list for each point. Each step takes
-//! ownership of the previous output and frees it when it returns.
+//! [`build_graph`] selects the SIMD architecture and the metric once and puts
+//! them, with the element type, behind trait objects, so the steps compile
+//! once. It reads rows through [`Dataset`] and returns one adjacency list for
+//! each point. Each step takes ownership of the previous output and
+//! frees it when it returns. The steps run as Rayon jobs in the thread pool
+//! of the caller.
 //!
 //! The build does not load providers or select start points. It also does not
 //! quantize, serialize, or search the graph.
 
 mod bf16;
-mod conversion;
+mod dataset;
 mod finalization;
 mod hash_prune;
+mod kernels;
 mod leaf_build;
 mod leaf_kernel;
 mod leaf_metric;
@@ -41,19 +40,18 @@ mod partitioning;
 mod simd;
 mod topk;
 
-use std::num::NonZeroUsize;
+use std::{
+    num::{NonZeroU16, NonZeroUsize},
+    time::Instant,
+};
 
 use crate::{
     ANNError, ANNResult,
-    graph::{AdjacencyList, Config},
-    utils::VectorRepr,
+    graph::{AdjacencyList, config},
+    tracked_debug,
 };
-use diskann_utils::views::{MatrixView, MutMatrixView};
-use diskann_vector::distance::Metric;
-use diskann_wide::arch::{self, Target2};
-use rayon::ThreadPool;
 
-use self::{leaf_metric::LeafMetric, partition_metric::PartitionMetric, simd::Simd};
+pub use self::dataset::{Dataset, Element, Rows};
 
 /// Squared Euclidean distance.
 pub(super) struct L2;
@@ -91,26 +89,6 @@ fn check_output_rows(points: usize, rows: usize) -> ANNResult<()> {
             "invalid kernel output row count {rows} for {points} points"
         )))
     }
-}
-
-/// Borrow a `rows x columns` prefix of reusable distance storage.
-///
-/// The storage grows to the largest shape that it serves and never shrinks.
-/// A shape whose element count overflows `usize` is an error, not a wrapped size.
-fn distance_scratch(
-    storage: &mut Vec<f32>,
-    rows: usize,
-    columns: usize,
-) -> ANNResult<MutMatrixView<'_, f32>> {
-    let len = rows.checked_mul(columns).ok_or_else(|| {
-        ANNError::message(format!(
-            "distance matrix size overflows for {rows} x {columns}"
-        ))
-    })?;
-    if storage.len() < len {
-        storage.resize(len, 0.0);
-    }
-    Ok(MutMatrixView::try_from(&mut storage[..len], rows, columns)?)
 }
 
 #[cfg(test)]
@@ -188,7 +166,7 @@ mod cosine_distance_tests {
 
 /// Error for invalid PiPNN parameters.
 #[derive(Debug, PartialEq, thiserror::Error)]
-pub enum PiPNNConfigError {
+pub enum ConfigError {
     #[error("p_samp ({0}) must be in (0, 1]")]
     SamplingFraction(f64),
     #[error("fanout must not be empty")]
@@ -217,111 +195,41 @@ pub enum PiPNNConfigError {
     },
 }
 
-crate::convert_error!(PiPNNConfigError);
+crate::convert_error!(ConfigError);
 
-/// PiPNN partition and leaf parameters.
+/// HashPrune: a bounded reservoir of candidates for each point instead of the
+/// unbounded direct merge of the leaf pairs.
 ///
-/// The DiskANN graph [`Config`] supplies the degree, alpha, and prune kind.
-///
-/// The default configuration is `c_max = 512`, `p_samp = 0.005`,
-/// `max_leaders = 1000`, `fanout = [10, 3]`, `max_depth = 30` and `leaf_k = 2`.
-/// Each point then joins about 30 leaves, the product of the fanout values.
-/// Larger `c_max`, fanout values and `leaf_k` all give each point more or
-/// nearer candidates, which raises recall and makes the build slower.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PiPNNConfig {
-    /// Maximum number of points in a leaf. A larger leaf holds more of the true
-    /// neighbors of its points, so the selected neighbors are nearer. The leaf
-    /// distance work grows with the square of the leaf size.
-    pub c_max: NonZeroUsize,
-    /// Fraction of the points of a cluster that a split samples as leaders, in
-    /// `(0, 1]`. More leaders give smaller children and fewer split levels, but
-    /// each split costs `points x leaders x dimensions` multiply-adds. A split
-    /// samples at least 2 and at most `max_leaders` leaders.
-    pub p_samp: f64,
-    /// Maximum number of leaders in one split, at least 2. A split costs
-    /// `points x leaders x dimensions` multiply-adds, so the cap bounds the
-    /// first splits of a large dataset, where `p_samp` alone samples many
-    /// leaders: 10M points at `p_samp = 0.005` would give 50,000. The PiPNN
-    /// paper uses about 1,000.
-    pub max_leaders: NonZeroUsize,
-    /// Number of nearest leaders that each point joins, for each split level.
-    /// Levels after this schedule use one leader. The schedule must not be empty.
-    /// Larger values make leaves overlap more, so each point gets candidates
-    /// from more leaves. The number of leaves and the leaf build time grow with
-    /// the product of the values.
-    /// Put larger values first: a large first fanout sends each point to more
-    /// distinct regions of the dataset and gives more distinct candidates.
-    pub fanout: Vec<NonZeroUsize>,
-    /// Maximum number of split levels. A cluster that is still larger than
-    /// `c_max` after `max_depth` splits is cut into equal leaves in point
-    /// order, and the build logs a warning with the number of points it cut.
-    /// Such leaves group points arbitrarily, which can lower recall. The value
-    /// must be at least the number of `fanout` levels.
-    pub max_depth: NonZeroUsize,
-    /// Number of nearest neighbors that each point selects inside a leaf. Each
-    /// selected pair adds a candidate in both directions. A larger value gives
-    /// more candidates and makes final pruning slower.
-    pub leaf_k: NonZeroUsize,
-    /// Seed of leader sampling. The same seed gives the same leaves. `None`
-    /// draws a seed from the operating system, so each build samples new leaves.
-    pub seed: Option<u64>,
-}
-
-impl PiPNNConfig {
-    /// Check the parameters that the field types do not constrain.
-    pub fn validate(&self) -> Result<(), PiPNNConfigError> {
-        if !(0.0 < self.p_samp && self.p_samp <= 1.0) {
-            return Err(PiPNNConfigError::SamplingFraction(self.p_samp));
-        }
-        if self.fanout.is_empty() {
-            return Err(PiPNNConfigError::EmptyFanout);
-        }
-        if self.max_depth.get() < self.fanout.len() {
-            return Err(PiPNNConfigError::MaxDepth {
-                max_depth: self.max_depth.get(),
-                fanout_levels: self.fanout.len(),
-            });
-        }
-        if self.max_leaders.get() < 2 {
-            return Err(PiPNNConfigError::MaxLeaders(self.max_leaders.get()));
-        }
-        Ok(())
-    }
-}
-
-/// HashPrune parameters.
-///
-/// Each edge `source -> target` gets a direction hash with one bit per random
-/// hyperplane. The reservoir of `source` keeps the nearest target for each hash,
-/// up to `l_max` targets.
+/// A reservoir keeps at most `l_max` candidates, at most one for each
+/// direction hash of `num_hash_planes` random hyperplanes, and keeps the
+/// nearer candidate of a hash collision. With `final_prune`, RobustPrune cuts
+/// the reservoirs to the degree; without it, each point keeps its nearest
+/// reservoir entries.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HashPruneConfig {
-    /// Number of random hyperplanes, one hash bit each.
+    /// Number of random hyperplanes of the direction hash, in
+    /// `[1, 16]`.
     pub num_hash_planes: usize,
-    /// Maximum number of candidates in the reservoir of a point.
+    /// Maximum number of candidates in a reservoir, in `[1, 255]`.
     pub l_max: usize,
-    /// Prune the reservoir candidates with Vamana RobustPrune. Without this
-    /// step, each point keeps its nearest candidates up to the graph degree.
+    /// Run RobustPrune on the reservoirs. Without it, each point keeps its
+    /// nearest reservoir entries up to the degree.
     pub final_prune: bool,
 }
 
 impl HashPruneConfig {
-    /// Check the parameter ranges, and check that a reservoir can hold `degree`
-    /// candidates.
-    ///
-    /// A reservoir holds at most one candidate per hash, so it holds at most
-    /// `2^num_hash_planes` candidates.
-    pub fn validate(&self, degree: usize) -> Result<(), PiPNNConfigError> {
+    /// Check the parameters against the graph `degree`: a reservoir must be
+    /// able to hold `degree` candidates.
+    fn validate(&self, degree: usize) -> Result<(), ConfigError> {
         if !(1..=lsh::MAX_PLANES).contains(&self.num_hash_planes) {
-            return Err(PiPNNConfigError::HashPlanes(self.num_hash_planes));
+            return Err(ConfigError::HashPlanes(self.num_hash_planes));
         }
         if !(1..=hash_prune::MAX_RESERVOIR_LEN).contains(&self.l_max) {
-            return Err(PiPNNConfigError::ReservoirLength(self.l_max));
+            return Err(ConfigError::ReservoirLength(self.l_max));
         }
         let hash_buckets = 1 << self.num_hash_planes;
         if self.l_max.min(hash_buckets) < degree {
-            return Err(PiPNNConfigError::HashPruneCapacity {
+            return Err(ConfigError::HashPruneCapacity {
                 l_max: self.l_max,
                 hash_buckets,
                 degree,
@@ -331,175 +239,370 @@ impl HashPruneConfig {
     }
 }
 
-/// PiPNN parameters, graph policy, and the Rayon pool for one graph build.
-#[derive(Debug)]
-pub struct PiPNNBuildContext<'a> {
-    config: PiPNNConfig,
-    hash_prune: Option<HashPruneConfig>,
-    graph: &'a Config,
-    metric: Metric,
-    dimensions: NonZeroUsize,
-    pool: &'a ThreadPool,
+/// Seed of the HashPrune hyperplanes.
+const HASH_PRUNE_SEED: u64 = 42;
+
+/// Error for a dataset that a build cannot start from.
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum DatasetError {
+    #[error("PiPNN requires at least one data point")]
+    NoPoints,
+    #[error("PiPNN requires at least one data dimension")]
+    NoDimensions,
+    #[error("PiPNN dataset point count ({0}) exceeds the u32 graph ID limit")]
+    TooManyPoints(usize),
 }
 
-impl<'a> PiPNNBuildContext<'a> {
-    /// Check `config` and combine it with the graph policy.
-    ///
-    /// Final pruning uses the prune kind of `graph`, as Vamana does. Build
-    /// `graph` with the prune kind of `metric` (`metric.into()`).
-    ///
-    /// `dimensions` is the length of each row after conversion to `f32`.
-    /// Compressed element types such as MinMax store more elements per row,
-    /// so it can differ from `data.ncols()`.
-    pub fn new(
-        config: PiPNNConfig,
-        graph: &'a Config,
-        metric: Metric,
-        dimensions: NonZeroUsize,
-        pool: &'a ThreadPool,
-    ) -> Result<Self, PiPNNConfigError> {
-        config.validate()?;
-        Ok(Self {
-            config,
+crate::convert_error!(DatasetError);
+
+/// PiPNN build parameters: the partition parameters, the leaf `k`, and the
+/// RobustPrune policy of final pruning. The metric belongs to the
+/// [`Dataset`], and the occlusion rule of pruning follows the metric.
+///
+/// [`Config::builder`] checks the parameters once, so every build step can
+/// rely on them. The default configuration is `c_max = 512`, `p_samp = 0.005`,
+/// `max_leaders = 1000`, `fanout = [10, 3]`, `max_depth = 30` and `leaf_k = 2`.
+/// Each point then joins about 30 leaves, the product of the fanout values.
+/// Larger `c_max`, fanout values and `leaf_k` all give each point more or
+/// nearer candidates, which raises recall and makes the build slower.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Config {
+    partition: PartitionConfig,
+    leaf_k: NonZeroUsize,
+    hash_prune: Option<HashPruneConfig>,
+    prune: PruneConfig,
+}
+
+/// The parameters that the partition step reads.
+#[derive(Clone, Debug, PartialEq)]
+struct PartitionConfig {
+    c_max: NonZeroUsize,
+    p_samp: f64,
+    max_leaders: NonZeroUsize,
+    fanout: Vec<NonZeroUsize>,
+    max_depth: NonZeroUsize,
+    seed: u64,
+}
+
+/// The parameters that final pruning reads.
+#[derive(Clone, Debug, PartialEq)]
+struct PruneConfig {
+    degree: NonZeroUsize,
+    alpha: f32,
+    max_occlusion_size: NonZeroU16,
+}
+
+impl Config {
+    /// Start a configuration that prunes each point to `degree` neighbors.
+    pub fn builder(degree: NonZeroUsize) -> Builder {
+        Builder::new(degree)
+    }
+
+    /// Maximum number of points in a leaf.
+    pub fn c_max(&self) -> NonZeroUsize {
+        self.partition.c_max
+    }
+
+    /// Fraction of the points of a cluster that a split samples as leaders.
+    pub fn p_samp(&self) -> f64 {
+        self.partition.p_samp
+    }
+
+    /// Maximum number of leaders in one split.
+    pub fn max_leaders(&self) -> NonZeroUsize {
+        self.partition.max_leaders
+    }
+
+    /// Number of nearest leaders that each point joins, for each split level.
+    pub fn fanout(&self) -> &[NonZeroUsize] {
+        &self.partition.fanout
+    }
+
+    /// Maximum number of split levels.
+    pub fn max_depth(&self) -> NonZeroUsize {
+        self.partition.max_depth
+    }
+
+    /// Seed of leader sampling. A build with the same seed and data samples
+    /// the same leaves, so a caller can log it to repeat a build.
+    pub fn seed(&self) -> u64 {
+        self.partition.seed
+    }
+
+    /// Number of nearest neighbors that each point selects inside a leaf.
+    pub fn leaf_k(&self) -> NonZeroUsize {
+        self.leaf_k
+    }
+
+    /// HashPrune policy, or `None` for the direct merge of the leaf pairs.
+    pub fn hash_prune(&self) -> Option<&HashPruneConfig> {
+        self.hash_prune.as_ref()
+    }
+
+    /// Number of neighbors that final pruning keeps for each point.
+    pub fn degree(&self) -> NonZeroUsize {
+        self.prune.degree
+    }
+
+    /// RobustPrune alpha of final pruning.
+    pub fn alpha(&self) -> f32 {
+        self.prune.alpha
+    }
+
+    /// Number of nearest candidates that final pruning considers for one point.
+    pub fn max_occlusion_size(&self) -> NonZeroU16 {
+        self.prune.max_occlusion_size
+    }
+}
+
+/// Default parameters of [`Builder::new`].
+mod defaults {
+    use std::num::NonZeroUsize;
+
+    pub(super) const C_MAX: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+    pub(super) const P_SAMP: f64 = 0.005;
+    pub(super) const MAX_LEADERS: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+    pub(super) const FANOUT: [NonZeroUsize; 2] = [
+        NonZeroUsize::new(10).unwrap(),
+        NonZeroUsize::new(3).unwrap(),
+    ];
+    pub(super) const MAX_DEPTH: NonZeroUsize = NonZeroUsize::new(30).unwrap();
+    pub(super) const LEAF_K: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+}
+
+/// Builder for [`Config`].
+///
+/// Each parameter has a default except the degree. [`Builder::build`] rejects
+/// parameters that the field types do not constrain.
+#[derive(Clone, Debug)]
+pub struct Builder {
+    degree: NonZeroUsize,
+    c_max: NonZeroUsize,
+    p_samp: f64,
+    max_leaders: NonZeroUsize,
+    fanout: Vec<NonZeroUsize>,
+    max_depth: NonZeroUsize,
+    leaf_k: NonZeroUsize,
+    seed: Option<u64>,
+    hash_prune: Option<HashPruneConfig>,
+    alpha: f32,
+    max_occlusion_size: NonZeroU16,
+}
+
+impl Builder {
+    /// Start from the defaults for `degree`.
+    pub fn new(degree: NonZeroUsize) -> Self {
+        Self {
+            degree,
+            c_max: defaults::C_MAX,
+            p_samp: defaults::P_SAMP,
+            max_leaders: defaults::MAX_LEADERS,
+            fanout: defaults::FANOUT.to_vec(),
+            max_depth: defaults::MAX_DEPTH,
+            leaf_k: defaults::LEAF_K,
+            seed: None,
             hash_prune: None,
-            graph,
-            metric,
-            dimensions,
-            pool,
+            alpha: config::defaults::ALPHA,
+            max_occlusion_size: config::defaults::MAX_OCCLUSION_SIZE,
+        }
+    }
+
+    /// Start from the prune policy of `graph`: its pruned degree, alpha and
+    /// occlusion size. PiPNN reads no other part of the graph configuration.
+    pub fn from_graph(graph: &config::Config) -> Self {
+        Self::new(graph.pruned_degree())
+            .alpha(graph.alpha())
+            .max_occlusion_size(graph.max_occlusion_size_u16())
+    }
+
+    /// Maximum number of points in a leaf. A larger leaf holds more of the true
+    /// neighbors of its points, so the selected neighbors are nearer. The leaf
+    /// distance work grows with the square of the leaf size.
+    pub fn c_max(mut self, c_max: NonZeroUsize) -> Self {
+        self.c_max = c_max;
+        self
+    }
+
+    /// Fraction of the points of a cluster that a split samples as leaders, in
+    /// `(0, 1]`. More leaders give smaller children and fewer split levels, but
+    /// each split costs `points x leaders x dimensions` multiply-adds. A split
+    /// samples at least 2 and at most `max_leaders` leaders.
+    pub fn p_samp(mut self, p_samp: f64) -> Self {
+        self.p_samp = p_samp;
+        self
+    }
+
+    /// Maximum number of leaders in one split, at least 2. A split costs
+    /// `points x leaders x dimensions` multiply-adds, so the cap bounds the
+    /// first splits of a large dataset, where `p_samp` alone samples many
+    /// leaders: 10M points at `p_samp = 0.005` would give 50,000. The PiPNN
+    /// paper uses about 1,000.
+    pub fn max_leaders(mut self, max_leaders: NonZeroUsize) -> Self {
+        self.max_leaders = max_leaders;
+        self
+    }
+
+    /// Number of nearest leaders that each point joins, for each split level.
+    /// Levels after this schedule use one leader. The schedule must not be empty.
+    /// Larger values make leaves overlap more, so each point gets candidates
+    /// from more leaves. The number of leaves and the leaf build time grow with
+    /// the product of the values.
+    /// Put larger values first: a large first fanout sends each point to more
+    /// distinct regions of the dataset and gives more distinct candidates.
+    pub fn fanout(mut self, fanout: Vec<NonZeroUsize>) -> Self {
+        self.fanout = fanout;
+        self
+    }
+
+    /// Maximum number of split levels. A cluster that is still larger than
+    /// `c_max` after `max_depth` splits is cut into equal leaves in point
+    /// order, and the build logs a warning with the number of points it cut.
+    /// Such leaves group points arbitrarily, which can lower recall. The value
+    /// must be at least the number of `fanout` levels.
+    pub fn max_depth(mut self, max_depth: NonZeroUsize) -> Self {
+        self.max_depth = max_depth;
+        self
+    }
+
+    /// Number of nearest neighbors that each point selects inside a leaf. Each
+    /// selected pair adds a candidate in both directions. A larger value gives
+    /// more candidates and makes final pruning slower.
+    pub fn leaf_k(mut self, leaf_k: NonZeroUsize) -> Self {
+        self.leaf_k = leaf_k;
+        self
+    }
+
+    /// Seed of leader sampling. The same seed gives the same leaves. Without
+    /// a seed, [`Builder::build`] draws one at random, so each configuration
+    /// samples new leaves.
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
+    /// Merge the leaf pairs into bounded HashPrune reservoirs instead of
+    /// unbounded candidate lists. See [`HashPruneConfig`].
+    pub fn hash_prune(mut self, config: HashPruneConfig) -> Self {
+        self.hash_prune = Some(config);
+        self
+    }
+
+    /// RobustPrune alpha of final pruning. A larger alpha occludes fewer
+    /// candidates and keeps longer edges.
+    pub fn alpha(mut self, alpha: f32) -> Self {
+        self.alpha = alpha;
+        self
+    }
+
+    /// Number of nearest candidates that final pruning considers for one point,
+    /// as Vamana does. RobustPrune addresses candidates with `u16` positions.
+    pub fn max_occlusion_size(mut self, max_occlusion_size: NonZeroU16) -> Self {
+        self.max_occlusion_size = max_occlusion_size;
+        self
+    }
+
+    /// Check the parameters that the field types do not constrain and return
+    /// the configuration.
+    pub fn build(self) -> Result<Config, ConfigError> {
+        if !(0.0 < self.p_samp && self.p_samp <= 1.0) {
+            return Err(ConfigError::SamplingFraction(self.p_samp));
+        }
+        if self.fanout.is_empty() {
+            return Err(ConfigError::EmptyFanout);
+        }
+        if self.max_depth.get() < self.fanout.len() {
+            return Err(ConfigError::MaxDepth {
+                max_depth: self.max_depth.get(),
+                fanout_levels: self.fanout.len(),
+            });
+        }
+        if self.max_leaders.get() < 2 {
+            return Err(ConfigError::MaxLeaders(self.max_leaders.get()));
+        }
+        if let Some(hash_prune) = &self.hash_prune {
+            hash_prune.validate(self.degree.get())?;
+        }
+        Ok(Config {
+            partition: PartitionConfig {
+                c_max: self.c_max,
+                p_samp: self.p_samp,
+                max_leaders: self.max_leaders,
+                fanout: self.fanout,
+                max_depth: self.max_depth,
+                seed: self.seed.unwrap_or_else(rand::random),
+            },
+            leaf_k: self.leaf_k,
+            hash_prune: self.hash_prune,
+            prune: PruneConfig {
+                degree: self.degree,
+                alpha: self.alpha,
+                max_occlusion_size: self.max_occlusion_size,
+            },
         })
     }
-
-    /// Merge the leaf candidates with HashPrune reservoirs.
-    pub fn with_hash_prune(mut self, config: HashPruneConfig) -> Result<Self, PiPNNConfigError> {
-        config.validate(self.graph.pruned_degree().get())?;
-        self.hash_prune = Some(config);
-        Ok(self)
-    }
 }
 
-/// Build one adjacency list for each point of `data`.
+/// Build one adjacency list for each row of `data`.
 ///
-/// Each step converts the rows it reads to `f32` with
-/// [`VectorRepr::as_f32_into`], so any element type that converts to `f32`
-/// works, including compressed ones.
+/// [`Rows`] is the dataset of a matrix of one [`Element`] type. The element
+/// type lives behind `data`, and the architecture and metric behind the
+/// kernels, so this function and the three steps compile once.
+///
+/// The build runs as Rayon jobs in the thread pool of the caller: the pool of
+/// an enclosing `ThreadPool::install`, or else the global pool.
 ///
 /// The graph links dataset points only; the caller selects start points and
 /// serializes the index.
-pub fn build_graph<T>(
-    data: MatrixView<'_, T>,
-    context: &PiPNNBuildContext<'_>,
-) -> ANNResult<Vec<AdjacencyList<u32>>>
-where
-    T: VectorRepr,
-{
-    context
-        .pool
-        .install(|| validate_and_dispatch_build(data, context))
-}
-
-/// Check dataset bounds and select the architecture and metric implementation.
-fn validate_and_dispatch_build<T>(
-    data: MatrixView<'_, T>,
-    context: &PiPNNBuildContext<'_>,
-) -> ANNResult<Vec<AdjacencyList<u32>>>
-where
-    T: VectorRepr,
-{
+pub fn build_graph(data: &dyn Dataset, config: &Config) -> ANNResult<Vec<AdjacencyList<u32>>> {
     if data.nrows() == 0 {
-        return Err(ANNError::message("PiPNN requires at least one data point"));
+        return Err(DatasetError::NoPoints.into());
     }
-    if data.ncols() == 0 {
-        return Err(ANNError::message(
-            "PiPNN requires at least one data dimension",
-        ));
+    if data.dimensions() == 0 {
+        return Err(DatasetError::NoDimensions.into());
     }
     if data.nrows() > u32::MAX as usize {
-        return Err(ANNError::message(format!(
-            "PiPNN dataset point count ({}) exceeds the u32 graph ID limit",
-            data.nrows()
-        )));
+        return Err(DatasetError::TooManyPoints(data.nrows()).into());
     }
-    arch::dispatch2_no_features(BuildGraph, data, context)
-}
-
-/// Runs the build for the architecture that `diskann-wide` selects at run time.
-struct BuildGraph;
-
-impl<A, T> Target2<A, ANNResult<Vec<AdjacencyList<u32>>>, MatrixView<'_, T>, &PiPNNBuildContext<'_>>
-    for BuildGraph
-where
-    A: Simd,
-    T: VectorRepr,
-{
-    fn run(
-        self,
-        arch: A,
-        data: MatrixView<'_, T>,
-        context: &PiPNNBuildContext<'_>,
-    ) -> ANNResult<Vec<AdjacencyList<u32>>> {
-        let metric = context.metric;
-        match metric {
-            Metric::L2 => build_graph_for::<A, L2, T>(arch, data, context, metric),
-            Metric::Cosine => build_graph_for::<A, Cosine, T>(arch, data, context, metric),
-            Metric::CosineNormalized => {
-                build_graph_for::<A, CosineNormalized, T>(arch, data, context, metric)
-            }
-            Metric::InnerProduct => {
-                build_graph_for::<A, InnerProduct, T>(arch, data, context, metric)
-            }
-        }
-    }
-}
-
-/// Run the three build steps for architecture `A` and metric `M`.
-fn build_graph_for<A, M, T>(
-    arch: A,
-    data: MatrixView<'_, T>,
-    context: &PiPNNBuildContext<'_>,
-    metric: Metric,
-) -> ANNResult<Vec<AdjacencyList<u32>>>
-where
-    A: Simd,
-    M: LeafMetric + PartitionMetric,
-    T: VectorRepr,
-{
-    let dimensions = context.dimensions.get();
-    let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, dimensions, &context.config))?;
+    let kernels = kernels::select(data.metric());
+    let start = Instant::now();
+    let leaves = partitioning::partition(data, &*kernels, &config.partition)?;
+    tracked_debug!(
+        "PiPNN partition: {} leaves in {:.2?}",
+        leaves.len(),
+        start.elapsed()
+    );
     // The leaf step takes the leaves by value, so their memory is free before
     // final pruning starts.
-    let leaf_k = context.config.leaf_k.get();
-    let candidates = match &context.hash_prune {
-        None => tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-            leaf_build::build_leaf_candidates::<A, M, T>(arch, data, dimensions, leaves, leaf_k)
-        })?,
-        Some(config) => {
+    let start = Instant::now();
+    let candidates = match &config.hash_prune {
+        None => leaf_build::build_leaf_candidates(data, &*kernels, leaves, config.leaf_k.get())?,
+        Some(hash_prune) => {
             let reservoirs = hash_prune::HashPrune::new(
                 data,
-                dimensions,
-                config.num_hash_planes,
-                config.l_max,
-                42,
+                hash_prune.num_hash_planes,
+                hash_prune.l_max,
+                HASH_PRUNE_SEED,
             )?;
-            tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-                leaf_build::add_hash_prune_candidates::<A, M, T>(
-                    arch,
-                    data,
-                    dimensions,
-                    leaves,
-                    leaf_k,
-                    &reservoirs,
-                )
-            })?;
-            if !config.final_prune {
-                return Ok(reservoirs.into_nearest_lists(context.graph.pruned_degree().get()));
+            leaf_build::add_hash_prune_candidates(
+                data,
+                &*kernels,
+                leaves,
+                config.leaf_k.get(),
+                &reservoirs,
+            )?;
+            tracked_debug!("PiPNN leaf build in {:.2?}", start.elapsed());
+            if !hash_prune.final_prune {
+                return Ok(reservoirs.into_nearest_lists(config.prune.degree.get()));
             }
             reservoirs.into_candidate_lists()
         }
     };
+    tracked_debug!("PiPNN leaf build in {:.2?}", start.elapsed());
     // Final pruning cuts each candidate list in place.
-    Ok(tracing::info_span!("pipnn.finalization")
-        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric)))
+    let start = Instant::now();
+    let graph = finalization::prune_overfull(candidates, data, &config.prune);
+    tracked_debug!("PiPNN final pruning in {:.2?}", start.elapsed());
+    Ok(graph)
 }
 
 #[cfg(test)]
@@ -535,14 +638,6 @@ mod test_support {
 
     pub(super) fn nz(value: usize) -> std::num::NonZeroUsize {
         std::num::NonZeroUsize::new(value).unwrap()
-    }
-
-    /// Build a Rayon pool with `n_threads` threads.
-    pub(super) fn thread_pool(n_threads: usize) -> rayon::ThreadPool {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(n_threads)
-            .build()
-            .unwrap()
     }
 
     #[test]
@@ -711,68 +806,44 @@ mod construction_tests {
         graph::{DiskANNIndex, config, search::Knn, test::provider as test_provider},
         neighbor::{BackInserter, Neighbor},
         test::tokio::current_thread_runtime,
+        utils::VectorRepr,
     };
-    use diskann_utils::{io::read_bin, test_data_root, views::Matrix};
+    use diskann_utils::{
+        io::read_bin,
+        sampling::medoid::ComputeMedoid,
+        test_data_root,
+        views::rowmajor::{self, Matrix},
+    };
     use diskann_vector::DistanceFunction;
+    use diskann_vector::distance::Metric;
     use half::f16;
     use std::fs::File;
-    use test_support::{both_directions, edges, nz, thread_pool};
+    use test_support::{both_directions, edges, nz};
 
     const SIFT: &str = "sift/siftsmall_learn_256pts.fbin";
     const SIFT_NORMALIZED: &str = "sift/siftsmall_learn_256pts_normalized.fbin";
 
     /// Every point is a leader (`p_samp = 1.0`), so leader sampling picks the
-    /// same set for any seed.
-    fn partition_policy() -> PiPNNConfig {
-        PiPNNConfig {
-            c_max: nz(4),
-            p_samp: 1.0,
-            max_leaders: nz(1000),
-            fanout: vec![nz(2)],
-            max_depth: nz(10),
-            leaf_k: nz(1),
-            seed: Some(1290),
-        }
+    /// same set for any seed. Alpha one prunes to degree 2 under L2.
+    fn partition_policy() -> Builder {
+        Config::builder(nz(2))
+            .c_max(nz(4))
+            .p_samp(1.0)
+            .max_leaders(nz(1000))
+            .fanout(vec![nz(2)])
+            .max_depth(nz(10))
+            .leaf_k(nz(1))
+            .seed(1290)
+            .alpha(1.0)
     }
 
-    /// Use alpha one and no degree slack. PiPNN does not use the build search list.
-    fn graph_policy(degree: usize, metric: Metric) -> Config {
-        let search_list_size = 16;
-        let alpha = 1.0;
-        config::Builder::new_with(
-            degree,
-            config::MaxDegree::same(),
-            search_list_size,
-            metric.into(),
-            |b| {
-                b.alpha(alpha);
-            },
-        )
-        .build()
-        .unwrap()
-    }
-
-    fn load_sift(file: &str) -> Matrix<f32> {
+    fn load_sift(file: &str) -> rowmajor::Owned<f32> {
         read_bin::<f32>(&mut File::open(test_data_root().join(file)).unwrap()).unwrap()
-    }
-
-    /// 256 x 0.05 = 12.8 rounds up to 13 leaders, so the fanout-10 level runs
-    /// and the leaves overlap.
-    fn sift_pipnn_config() -> PiPNNConfig {
-        PiPNNConfig {
-            c_max: nz(64),
-            p_samp: 0.05,
-            max_leaders: nz(1000),
-            fanout: vec![nz(10), nz(3)],
-            max_depth: nz(10),
-            leaf_k: nz(2),
-            seed: Some(1290),
-        }
     }
 
     /// Degree 16 with the default alpha. PiPNN does not read the build search
     /// list size.
-    fn sift_graph(metric: Metric) -> Config {
+    fn sift_graph(metric: Metric) -> config::Config {
         let degree = 16;
         let l_build = 64;
         config::Builder::new(
@@ -785,53 +856,32 @@ mod construction_tests {
         .unwrap()
     }
 
-    /// Return the point nearest to the mean of `data`, under squared L2.
-    fn medoid(data: MatrixView<'_, f32>) -> usize {
-        let point_count = data.nrows();
-        let dimensions = data.ncols();
-        let mut mean = vec![0.0_f64; dimensions];
-        for row in data.row_iter() {
-            for (sum, &value) in mean.iter_mut().zip(row) {
-                *sum += f64::from(value);
-            }
-        }
-        let mean: Vec<f32> = mean
-            .into_iter()
-            .map(|sum| (sum / point_count as f64) as f32)
-            .collect();
-        let l2 = f32::distance(Metric::L2, Some(dimensions));
-        data.row_iter()
-            .enumerate()
-            .map(|(id, row)| (id, l2.evaluate_similarity(row, mean.as_slice())))
-            .min_by(|left, right| left.1.total_cmp(&right.1))
+    /// Degree 16 with the default alpha, like [`sift_graph`]. 256 x 0.05 = 12.8
+    /// rounds up to 13 leaders, so the fanout-10 level runs and the leaves overlap.
+    fn sift_pipnn_config() -> Config {
+        Config::builder(nz(16))
+            .c_max(nz(64))
+            .p_samp(0.05)
+            .max_leaders(nz(1000))
+            .fanout(vec![nz(10), nz(3)])
+            .max_depth(nz(10))
+            .leaf_k(nz(2))
+            .seed(1290)
+            .build()
             .unwrap()
-            .0
-    }
-
-    /// Build the PiPNN graph of `build_data` on one thread.
-    fn build_sift_graph<T: VectorRepr>(
-        build_data: MatrixView<'_, T>,
-        graph: &Config,
-        metric: Metric,
-    ) -> Vec<AdjacencyList<u32>> {
-        let config = sift_pipnn_config();
-        let dimensions = NonZeroUsize::new(build_data.ncols()).unwrap();
-        let n_threads = 1;
-        let pool = thread_pool(n_threads);
-        let context = PiPNNBuildContext::new(config, graph, metric, dimensions, &pool).unwrap();
-        build_graph(build_data, &context).unwrap()
     }
 
     /// Load `data` and its PiPNN graph into the test provider. One start node
     /// points to the medoid, as the disk path starts at the medoid; the provider
     /// leaves start nodes out of search results.
     fn searchable_index(
-        data: MatrixView<'_, f32>,
-        graph: Config,
+        data: rowmajor::Ref<'_, f32>,
+        graph: config::Config,
         metric: Metric,
         adjacency: Vec<AdjacencyList<u32>>,
     ) -> DiskANNIndex<test_provider::Provider> {
-        let medoid_id = medoid(data);
+        let medoid = f32::compute_medoid(data);
+        let medoid_id = data.rows().position(|row| row == medoid).unwrap();
         let start_id = data.nrows() as u32;
         let degree = graph.pruned_degree().get();
         let provider_config = test_provider::Config::new(
@@ -842,7 +892,7 @@ mod construction_tests {
         .unwrap();
         let start_neighbors = AdjacencyList::from_iter_untrusted([medoid_id as u32]);
         let points = data
-            .row_iter()
+            .rows()
             .zip(adjacency)
             .enumerate()
             .map(|(id, (row, neighbors))| (id as u32, row.to_vec(), neighbors));
@@ -860,7 +910,7 @@ mod construction_tests {
     /// every point is reachable from the start node.
     fn assert_exact_top_10(
         index: &DiskANNIndex<test_provider::Provider>,
-        data: MatrixView<'_, f32>,
+        data: rowmajor::Ref<'_, f32>,
         metric: Metric,
         case: &str,
     ) {
@@ -873,9 +923,9 @@ mod construction_tests {
         let mut mismatches = 0;
         let mut example = String::new();
 
-        for (query_id, query) in data.row_iter().enumerate() {
+        for (query_id, query) in data.rows().enumerate() {
             let mut expected: Vec<f32> = data
-                .row_iter()
+                .rows()
                 .map(|point| distance.evaluate_similarity(query, point))
                 .collect();
             expected.sort_unstable_by(f32::total_cmp);
@@ -910,6 +960,22 @@ mod construction_tests {
         );
     }
 
+    /// Build the graph of `build_data` under `metric`, index the `f32` rows of
+    /// `reference` with it, and assert the exact top 10 of every reference row.
+    fn assert_build_finds_exact_top_10<T: Element>(
+        build_data: rowmajor::Ref<'_, T>,
+        reference: rowmajor::Ref<'_, f32>,
+        metric: Metric,
+        case: &str,
+    ) {
+        let config = sift_pipnn_config();
+
+        let adjacency = build_graph(&Rows::new(build_data, metric).unwrap(), &config).unwrap();
+
+        let index = searchable_index(reference, sift_graph(metric), metric, adjacency);
+        assert_exact_top_10(&index, reference, metric, case);
+    }
+
     #[test]
     fn invalid_sampling_fractions_are_rejected() {
         // Fractions outside (0, 1] cannot select a valid sample of leaders.
@@ -921,28 +987,13 @@ mod construction_tests {
             f64::INFINITY,
             f64::NEG_INFINITY,
         ] {
-            let config = PiPNNConfig {
-                p_samp,
-                ..partition_policy()
-            };
-
-            let error = config.validate().unwrap_err();
+            let error = partition_policy().p_samp(p_samp).build().unwrap_err();
 
             assert!(
-                matches!(error, PiPNNConfigError::SamplingFraction(value) if value.to_bits() == p_samp.to_bits()),
+                matches!(error, ConfigError::SamplingFraction(value) if value.to_bits() == p_samp.to_bits()),
                 "p_samp {p_samp}: {error}"
             );
         }
-    }
-
-    #[test]
-    fn an_empty_fanout_is_rejected() {
-        // An empty fanout list has no first level.
-        let config = PiPNNConfig {
-            fanout: vec![],
-            ..partition_policy()
-        };
-        assert_eq!(config.validate(), Err(PiPNNConfigError::EmptyFanout));
     }
 
     #[test]
@@ -950,197 +1001,66 @@ mod construction_tests {
         // The smallest positive fraction and the inclusive upper bound are valid.
         let smallest_positive = f64::from_bits(1);
         for p_samp in [smallest_positive, 1.0] {
-            let config = PiPNNConfig {
-                p_samp,
-                ..partition_policy()
-            };
+            let config = partition_policy().p_samp(p_samp).build();
 
-            assert_eq!(config.validate(), Ok(()), "p_samp {p_samp}");
+            assert!(config.is_ok(), "p_samp {p_samp}: {config:?}");
         }
     }
 
     #[test]
-    fn a_leader_cap_below_two_is_rejected() {
-        // A split needs two leaders.
-        let config = PiPNNConfig {
-            max_leaders: nz(1),
-            ..partition_policy()
-        };
+    fn a_given_seed_is_kept_and_a_missing_seed_is_drawn() {
+        let degree = nz(2);
+        let seed = 1290;
 
-        assert_eq!(config.validate(), Err(PiPNNConfigError::MaxLeaders(1)));
-    }
+        let given = Config::builder(degree).seed(seed).build().unwrap();
+        let drawn = Config::builder(degree).build().unwrap();
+        let drawn_again = Config::builder(degree).build().unwrap();
 
-    #[test]
-    fn a_max_depth_below_the_fanout_levels_is_rejected() {
-        // Two fanout levels cannot fit within one split level.
-        let config = PiPNNConfig {
-            fanout: vec![nz(10), nz(3)],
-            max_depth: nz(1),
-            ..partition_policy()
-        };
-
-        let actual = config.validate();
-
-        assert_eq!(
-            actual,
-            Err(PiPNNConfigError::MaxDepth {
-                max_depth: 1,
-                fanout_levels: 2
-            })
-        );
-    }
-
-    #[test]
-    fn a_build_context_checks_the_configuration() {
-        // An empty fanout must fail when the context is created, before a build.
-        let degree = 2;
-        let n_threads = 1;
-        let config = PiPNNConfig {
-            fanout: vec![],
-            ..partition_policy()
-        };
-        let dimensions = nz(1);
-        let graph = graph_policy(degree, Metric::L2);
-        let pool = thread_pool(n_threads);
-
-        let error =
-            PiPNNBuildContext::new(config, &graph, Metric::L2, dimensions, &pool).unwrap_err();
-
-        assert_eq!(error, PiPNNConfigError::EmptyFanout);
-    }
-
-    #[test]
-    fn an_empty_dataset_axis_is_rejected_before_building() {
-        // Each shape has one empty axis; validation must reject it before a kernel runs.
-        let degree = 2;
-        let n_threads = 1;
-        let dimensions = nz(2);
-        let graph = graph_policy(degree, Metric::L2);
-        let pool = thread_pool(n_threads);
-        let context =
-            PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, dimensions, &pool)
-                .unwrap();
-
-        for (rows, columns, expected_message) in [
-            (0, 2, "at least one data point"),
-            (2, 0, "at least one data dimension"),
-        ] {
-            let data = MatrixView::try_from(&[] as &[f32], rows, columns).unwrap();
-
-            let error = build_graph(data, &context).unwrap_err();
-
-            assert!(error.to_string().contains(expected_message), "{error}");
-        }
-    }
-
-    #[test]
-    fn every_point_finds_its_exact_top_10_for_each_metric() {
-        // Raw SIFT rows serve L2 and cosine. Normalized cosine and inner product
-        // need unit vectors, so they use the normalized file.
-        for (metric, file) in [
-            (Metric::L2, SIFT),
-            (Metric::Cosine, SIFT),
-            (Metric::CosineNormalized, SIFT_NORMALIZED),
-            (Metric::InnerProduct, SIFT_NORMALIZED),
-        ] {
-            let data = load_sift(file);
-            let graph = sift_graph(metric);
-
-            let adjacency = build_sift_graph(data.as_view(), &graph, metric);
-            let index = searchable_index(data.as_view(), graph, metric, adjacency);
-
-            assert_exact_top_10(&index, data.as_view(), metric, &format!("{metric:?}"));
-        }
-    }
-
-    #[test]
-    fn every_point_finds_its_exact_top_10_for_each_vector_type() {
-        let data = load_sift(SIFT);
-        // These bounds make f16 and u8 conversion exact, so every build must
-        // find the same distances against the original f32 rows.
-        assert!(
-            data.as_slice()
-                .iter()
-                .all(|&value| value.fract() == 0.0 && (0.0..=255.0).contains(&value)),
-            "raw SIFT values must be integers in 0..=255 for exact f16 and u8 conversion"
-        );
-        let half = data.map(|&value| f16::from_f32(value));
-        let unsigned = data.map(|&value| value as u8);
-        // i8 uses every value minus 128; a shift keeps every L2 distance.
-        let shift = 128.0;
-        let shifted = data.map(|&value| value - shift);
-        let signed = shifted.map(|&value| value as i8);
-        let metric = Metric::L2;
-        let graph = sift_graph(metric);
-
-        let adjacency = build_sift_graph(data.as_view(), &graph, metric);
-        let index = searchable_index(data.as_view(), graph.clone(), metric, adjacency);
-        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<f32>());
-
-        let adjacency = build_sift_graph(half.as_view(), &graph, metric);
-        let index = searchable_index(data.as_view(), graph.clone(), metric, adjacency);
-        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<f16>());
-
-        let adjacency = build_sift_graph(unsigned.as_view(), &graph, metric);
-        let index = searchable_index(data.as_view(), graph.clone(), metric, adjacency);
-        assert_exact_top_10(&index, data.as_view(), metric, std::any::type_name::<u8>());
-
-        let adjacency = build_sift_graph(signed.as_view(), &graph, metric);
-        let index = searchable_index(shifted.as_view(), graph, metric, adjacency);
-        assert_exact_top_10(
-            &index,
-            shifted.as_view(),
-            metric,
-            std::any::type_name::<i8>(),
-        );
+        assert_eq!(given.seed(), seed);
+        assert_ne!(drawn.seed(), drawn_again.seed());
     }
 
     #[test]
     fn hash_prune_parameters_must_hold_the_graph_degree() {
-        let n_threads = 1;
-        let dimensions = nz(1);
-        let pool = thread_pool(n_threads);
         for (num_hash_planes, l_max, degree, expected) in [
-            (0, 64, 2, Err(PiPNNConfigError::HashPlanes(0))),
-            (17, 64, 2, Err(PiPNNConfigError::HashPlanes(17))),
-            (8, 0, 2, Err(PiPNNConfigError::ReservoirLength(0))),
-            (8, 256, 2, Err(PiPNNConfigError::ReservoirLength(256))),
+            (0, 64, 2, Err(ConfigError::HashPlanes(0))),
+            (17, 64, 2, Err(ConfigError::HashPlanes(17))),
+            (8, 0, 2, Err(ConfigError::ReservoirLength(0))),
+            (8, 256, 2, Err(ConfigError::ReservoirLength(256))),
             (16, 255, 2, Ok(())),
             (8, 64, 64, Ok(())),
             (
                 8,
                 63,
                 64,
-                Err(PiPNNConfigError::HashPruneCapacity {
+                Err(ConfigError::HashPruneCapacity {
                     l_max: 63,
                     hash_buckets: 256,
                     degree: 64,
                 }),
             ),
-            // One plane gives two hashes, so a reservoir holds two candidates.
             (1, 64, 2, Ok(())),
             (
                 1,
                 64,
                 3,
-                Err(PiPNNConfigError::HashPruneCapacity {
+                Err(ConfigError::HashPruneCapacity {
                     l_max: 64,
                     hash_buckets: 2,
                     degree: 3,
                 }),
             ),
         ] {
-            let graph = graph_policy(degree, Metric::L2);
-            let context =
-                PiPNNBuildContext::new(partition_policy(), &graph, Metric::L2, dimensions, &pool)
-                    .unwrap();
             let config = HashPruneConfig {
                 num_hash_planes,
                 l_max,
                 final_prune: true,
             };
 
-            let actual = context.with_hash_prune(config).map(|_| ());
+            let actual = Config::builder(nz(degree))
+                .hash_prune(config)
+                .build()
+                .map(|_| ());
 
             assert_eq!(
                 actual, expected,
@@ -1155,29 +1075,33 @@ mod construction_tests {
         // so each reservoir keeps the nearest point on each side. Degree two
         // keeps both.
         let values = [-3.0_f32, 0.0, 1.0];
-        let data = MatrixView::column_vector(&values[..]);
-        let dimensions = NonZeroUsize::new(data.ncols()).unwrap();
+        let dimensions = 1;
+        let data = rowmajor::Ref::try_from_data(&values[..], values.len(), dimensions).unwrap();
         let degree = 2;
-        let graph = graph_policy(degree, Metric::L2);
-        let config = PiPNNConfig {
-            c_max: nz(3),
-            fanout: vec![nz(1)],
-            leaf_k: nz(2),
-            ..partition_policy()
-        };
         for (n_threads, final_prune) in [(1, true), (4, true), (4, false)] {
-            let pool = thread_pool(n_threads);
-            let context =
-                PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, dimensions, &pool)
-                    .unwrap()
-                    .with_hash_prune(HashPruneConfig {
-                        num_hash_planes: 8,
-                        l_max: 16,
-                        final_prune,
-                    })
-                    .unwrap();
+            let config = Config::builder(nz(degree))
+                .c_max(nz(3))
+                .p_samp(1.0)
+                .fanout(vec![nz(1)])
+                .max_depth(nz(10))
+                .leaf_k(nz(2))
+                .seed(1290)
+                .alpha(1.0)
+                .hash_prune(HashPruneConfig {
+                    num_hash_planes: 8,
+                    l_max: 16,
+                    final_prune,
+                })
+                .build()
+                .unwrap();
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(n_threads)
+                .build()
+                .unwrap();
 
-            let actual = build_graph(data, &context).unwrap();
+            let actual = pool
+                .install(|| build_graph(&Rows::new(data, Metric::L2).unwrap(), &config))
+                .unwrap();
 
             let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
             assert_eq!(
@@ -1186,5 +1110,135 @@ mod construction_tests {
                 "{n_threads} threads, final_prune={final_prune}"
             );
         }
+    }
+
+    #[test]
+    fn an_empty_fanout_is_rejected() {
+        // An empty fanout list has no first level.
+        let actual = partition_policy().fanout(vec![]).build();
+
+        assert_eq!(actual, Err(ConfigError::EmptyFanout));
+    }
+
+    #[test]
+    fn a_leader_cap_below_two_is_rejected() {
+        // A split needs two leaders.
+        let actual = partition_policy().max_leaders(nz(1)).build();
+
+        assert_eq!(actual, Err(ConfigError::MaxLeaders(1)));
+    }
+
+    #[test]
+    fn a_max_depth_below_the_fanout_levels_is_rejected() {
+        // Two fanout levels cannot fit within one split level.
+        let actual = partition_policy()
+            .fanout(vec![nz(10), nz(3)])
+            .max_depth(nz(1))
+            .build();
+
+        assert_eq!(
+            actual,
+            Err(ConfigError::MaxDepth {
+                max_depth: 1,
+                fanout_levels: 2
+            })
+        );
+    }
+
+    #[test]
+    fn a_builder_from_a_graph_copies_its_prune_policy() {
+        // Values that differ from the PiPNN defaults, so a default would fail.
+        let degree = 7;
+        let alpha = 1.5;
+        let max_occlusion_size = 300;
+        let l_build = 64;
+        let graph = config::Builder::new_with(
+            degree,
+            config::MaxDegree::same(),
+            l_build,
+            Metric::L2.into(),
+            |b| {
+                b.alpha(alpha).max_occlusion_size(max_occlusion_size);
+            },
+        )
+        .build()
+        .unwrap();
+
+        let config = Builder::from_graph(&graph).build().unwrap();
+
+        assert_eq!(config.degree(), nz(degree));
+        assert_eq!(config.alpha(), alpha);
+        assert_eq!(
+            config.max_occlusion_size(),
+            NonZeroU16::new(max_occlusion_size as u16).unwrap()
+        );
+    }
+
+    #[test]
+    fn an_empty_dataset_axis_is_rejected_before_building() {
+        // Each shape has one empty axis; validation must reject it before a kernel runs.
+        let config = partition_policy().build().unwrap();
+
+        for (rows, columns, expected) in [
+            (0, 2, DatasetError::NoPoints),
+            (2, 0, DatasetError::NoDimensions),
+        ] {
+            let data = rowmajor::Ref::try_from_data(&[] as &[f32], rows, columns).unwrap();
+            let rows = Rows::new(data, Metric::L2).unwrap();
+
+            let error = build_graph(&rows, &config).unwrap_err();
+
+            assert_eq!(
+                error.downcast_ref::<DatasetError>(),
+                Some(&expected),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_point_finds_its_exact_top_10_for_each_metric() {
+        // Raw SIFT rows serve L2 and cosine. Normalized cosine and inner product
+        // need unit vectors, so they use the normalized file.
+        for (metric, file) in [
+            (Metric::L2, SIFT),
+            (Metric::Cosine, SIFT),
+            (Metric::CosineNormalized, SIFT_NORMALIZED),
+            (Metric::InnerProduct, SIFT_NORMALIZED),
+        ] {
+            let data = load_sift(file);
+
+            assert_build_finds_exact_top_10(
+                data.as_view(),
+                data.as_view(),
+                metric,
+                &format!("{metric:?}"),
+            );
+        }
+    }
+
+    #[test]
+    fn every_point_finds_its_exact_top_10_for_each_vector_type() {
+        // The f32 rows run in the metric test. These bounds make f16 and u8
+        // conversion exact, so every build must find the same distances against
+        // the original f32 rows.
+        let data = load_sift(SIFT);
+        assert!(
+            data.as_slice()
+                .iter()
+                .all(|&value| value.fract() == 0.0 && (0.0..=255.0).contains(&value)),
+            "raw SIFT values must be integers in 0..=255 for exact f16 and u8 conversion"
+        );
+        let half = data.map(|&value| f16::from_f32(value));
+        let unsigned = data.map(|&value| value as u8);
+        // i8 uses every value minus 128; a shift keeps every L2 distance.
+        let shift = 128.0;
+        let shifted = data.map(|&value| value - shift);
+        let signed = shifted.map(|&value| value as i8);
+        let metric = Metric::L2;
+
+        assert_build_finds_exact_top_10(half.as_view(), data.as_view(), metric, "f16");
+        assert_build_finds_exact_top_10(unsigned.as_view(), data.as_view(), metric, "u8");
+        assert_build_finds_exact_top_10(signed.as_view(), shifted.as_view(), metric, "i8");
     }
 }

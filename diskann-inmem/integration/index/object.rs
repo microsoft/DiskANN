@@ -10,14 +10,14 @@ use diskann::{
     neighbor::Neighbor,
     utils::IntoUsize,
 };
-use diskann_benchmark_runner::utils::fmt::KeyValue;
+use diskann_benchmark_runner::{report::Report, utils::fmt::KeyValue};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_inmem::{Context, Provider, Strategy, integration, repr};
 
 use crate::support::{
-    check::{CheckMatch, Match, check_all_fields},
+    check::{CheckMatch, check_all_fields},
     datatype::{AsDataType, FromSlice, Slice},
 };
 
@@ -73,16 +73,13 @@ impl std::fmt::Display for KnnSearch {
 }
 
 impl CheckMatch for KnnSearch {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,
             { hops, cmps },
         );
-
-        builder.finish_with_remark(Some(
-            "check assumes deterministic (usually single-threaded) execution".into(),
-        ))
+        builder.finish()
     }
 }
 
@@ -161,7 +158,7 @@ impl From<integration::counters::CounterSnapshot> for Counters {
 }
 
 impl CheckMatch for Counters {
-    fn check_match(&self, previous: &Self) -> Match {
+    fn check_match(&self, previous: &Self) -> Report {
         let builder = check_all_fields!(
             self,
             previous,
@@ -175,10 +172,7 @@ impl CheckMatch for Counters {
                 append_neighbors
             }
         );
-
-        builder.finish_with_remark(Some(
-            "check assumes deterministic (usually single-threaded) execution".into(),
-        ))
+        builder.finish()
     }
 }
 
@@ -186,44 +180,54 @@ impl CheckMatch for Counters {
 // Impls //
 ///////////
 
-impl<T> Index for DiskANNIndex<Provider<repr::Full<T>, u64>>
-where
-    T: repr::FullPrecision + FromSlice + AsDataType,
-{
-    fn search<'a>(
-        &'a self,
-        query: Slice<'a>,
-        knn: Knn,
-        neighbors: &'a mut Vec<Neighbor<u64>>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>> {
-        let fut = async move {
-            let query = query.try_cast()?;
-            let stats = self
-                .search(knn, &Strategy, &Context, query, neighbors)
-                .await?;
+macro_rules! index {
+    ($T:ty) => {
+        index!({} $T where);
+    };
+    ({ $($generics:ident),* $(,)? } $T:ty where $($where:tt)*) => {
+        impl<$($generics),*> Index for DiskANNIndex<Provider<$T, u64>>
+        where
+            $($where)*
+        {
+            fn search<'a>(
+                &'a self,
+                query: Slice<'a>,
+                knn: Knn,
+                neighbors: &'a mut Vec<Neighbor<u64>>,
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>> {
+                let fut = async move {
+                    let query = query.try_cast()?;
+                    let stats = self
+                        .search(knn, &Strategy, &Context, query, neighbors)
+                        .await?;
 
-            Ok(stats.into())
-        };
+                    Ok(stats.into())
+                };
 
-        Box::pin(fut)
-    }
+                Box::pin(fut)
+            }
 
-    fn insert<'a>(
-        &'a self,
-        vector: Slice<'a>,
-        id: u64,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
-        let fut = async move {
-            let vector = vector.try_cast()?;
-            self.insert(&Strategy, &Context, &id, vector).await?;
+            fn insert<'a>(
+                &'a self,
+                vector: Slice<'a>,
+                id: u64,
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
+                let fut = async move {
+                    let vector = vector.try_cast()?;
+                    self.insert(&Strategy, &Context, &id, vector).await?;
 
-            Ok(())
-        };
+                    Ok(())
+                };
 
-        Box::pin(fut)
-    }
+                Box::pin(fut)
+            }
 
-    fn counters(&self) -> Counters {
-        self.provider().counters().into()
+            fn counters(&self) -> Counters {
+                self.provider().counters().into()
+            }
+        }
     }
 }
+
+index!({ T } repr::Full<T> where T: repr::FullPrecision + FromSlice + AsDataType);
+index!(repr::Quantized);

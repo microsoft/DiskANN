@@ -3,28 +3,33 @@
  * Licensed under the MIT license.
  */
 
-//! Write a PiPNN graph in the DiskANN disk-index format.
+//! PiPNN graph build for the disk index.
 //!
-//! This adapter checks dataset metadata and loads one contiguous matrix. It runs
-//! PiPNN in the supplied Rayon pool. It computes the start point with the sampled
-//! medoid policy. It then writes the common graph header and adjacency layout.
-//!
-//! PiPNN and Vamana use the same disk graph format.
+//! The adapter checks the dataset shape, finds the start point from a storage
+//! sample, builds the graph from the dataset in memory, and writes the
+//! adjacency lists as the in-memory index file that the disk layout step reads.
+//! The dataset lives only inside [`build_adjacency`], so it is gone before the
+//! graph is written.
 
-use std::num::NonZeroUsize;
-
-use diskann::graph::pipnn::PiPNNBuildContext;
-use diskann::{utils::VectorRepr, ANNError, ANNResult};
-use diskann_providers::{
-    storage::{save_adjacency_graph, StorageReadProvider, StorageWriteProvider},
-    utils::{find_medoid_with_sampling, RayonThreadPoolRef, MAX_MEDOID_SAMPLE_SIZE},
+use diskann::{
+    ANNError, ANNResult,
+    graph::{AdjacencyList, pipnn},
 };
-use diskann_utils::io::{read_bin, Metadata};
+use diskann_providers::{
+    storage::{StorageReadProvider, StorageWriteProvider, save_adjacency_graph},
+    utils::{MAX_MEDOID_SAMPLE_SIZE, RayonThreadPoolRef, find_medoid_with_sampling},
+};
+use diskann_utils::{
+    io::{Metadata, read_bin},
+    views::rowmajor::Matrix,
+};
+use diskann_vector::distance::Metric;
 
-use super::{u32_try_from, DiskIndexBuilder};
-use crate::{data_model::GraphDataType, PiPNNParameters};
+use super::{DiskIndexBuilder, u32_try_from};
+use crate::{PiPNNParameters, data_model::GraphDataType};
 
-/// Build PiPNN adjacency and persist it through the canonical disk graph writer.
+/// Build the PiPNN graph of the dataset of `builder` and write it as the
+/// in-memory index file.
 pub(super) fn build_graph<Data, StorageProvider>(
     builder: &DiskIndexBuilder<'_, Data, StorageProvider>,
     pool: RayonThreadPoolRef<'_>,
@@ -32,12 +37,10 @@ pub(super) fn build_graph<Data, StorageProvider>(
 ) -> ANNResult<()>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr,
+    Data::VectorDataType: pipnn::Element,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
     let data_path = builder.index_writer.get_dataset_file();
-    // Check metadata before the code loads the full matrix. Report a configuration
-    // error instead of a matrix-shape error.
     let (points, dimensions) =
         Metadata::read(&mut builder.storage_provider.open_reader(&data_path)?)?.into_dims();
     if dimensions != builder.index_configuration.dim {
@@ -53,40 +56,14 @@ where
         )));
     }
 
-    // PiPNN requires one contiguous matrix. Partition and leaf work use the
-    // supplied Rayon pool.
-    let data =
-        read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
-    // PiPNN needs the row length after conversion to `f32`. A compressed type
-    // such as MinMax stores more elements per row and encodes the dimension in
-    // each row, so read it from the first row, as the PQ generator does.
-    let dimensions = data
-        .as_view()
-        .get_row(0)
-        .map(Data::VectorDataType::full_dimension)
-        .transpose()
-        .map_err(Into::<ANNError>::into)?
-        .and_then(NonZeroUsize::new)
-        .ok_or_else(|| ANNError::message("PiPNN requires at least one data point"))?;
-    // The same seed controls leader sampling and the medoid sample below.
-    let config = diskann::graph::pipnn::PiPNNConfig {
-        seed: builder.index_configuration.random_seed,
-        ..parameters.into()
-    };
-    let mut context = PiPNNBuildContext::new(
-        config,
-        &builder.index_configuration.config,
-        builder.index_configuration.dist_metric,
-        dimensions,
-        pool.as_rayon(),
-    )?;
-    if let Some(hash_prune) = &parameters.hash_prune {
-        context = context.with_hash_prune(hash_prune.into())?;
+    let mut config = parameters.builder(&builder.index_configuration.config);
+    if let Some(seed) = builder.index_configuration.random_seed {
+        config = config.seed(seed);
     }
-    let adjacency = diskann::graph::pipnn::build_graph(data.as_view(), &context)?;
+    let config = config.build()?;
 
-    // The disk header requires a start point. Use the same sampled medoid policy
-    // as the Vamana disk builder.
+    // The start point comes from a storage sample, as in the Vamana build, and
+    // is found before the dataset is in memory.
     let mut rng = diskann_providers::utils::create_rnd_from_optional_seed(
         builder.index_configuration.random_seed,
     );
@@ -95,6 +72,14 @@ where
         builder.storage_provider,
         MAX_MEDOID_SAMPLE_SIZE,
         &mut rng,
+    )?;
+
+    let adjacency = build_adjacency::<Data::VectorDataType, _>(
+        &data_path,
+        builder.storage_provider,
+        builder.index_configuration.dist_metric,
+        &config,
+        pool,
     )?;
     save_adjacency_graph(
         &adjacency,
@@ -106,6 +91,26 @@ where
     Ok(())
 }
 
+/// Read the dataset at `data_path` and build its PiPNN graph on `pool`.
+///
+/// The dataset is dropped on return, so only the adjacency lists stay in
+/// memory while the graph is written.
+fn build_adjacency<T, StorageProvider>(
+    data_path: &str,
+    storage: &StorageProvider,
+    metric: Metric,
+    config: &pipnn::Config,
+    pool: RayonThreadPoolRef<'_>,
+) -> ANNResult<Vec<AdjacencyList<u32>>>
+where
+    T: pipnn::Element,
+    StorageProvider: StorageReadProvider,
+{
+    let data = read_bin::<T>(&mut storage.open_reader(data_path)?)?;
+    let rows = pipnn::Rows::new(data.as_view(), metric)?;
+    pool.install(|| pipnn::build_graph(&rows, config))
+}
+
 #[cfg(test)]
 mod tests {
     use diskann::{graph::config, utils::ONE};
@@ -113,21 +118,21 @@ mod tests {
     use diskann_providers::{
         model::IndexConfiguration,
         storage::{
-            get_disk_index_file, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
+            StorageReadProvider, StorageWriteProvider, VirtualStorageProvider, get_disk_index_file,
         },
     };
-    use diskann_utils::{io::write_bin, views::MatrixView};
+    use diskann_utils::{io::write_bin, views::rowmajor};
     use diskann_vector::distance::Metric;
     use vfs::MemoryFS;
 
     use crate::{
+        DiskIndexBuildParameters,
         build::{
             builder::build::DiskIndexBuilder,
             configuration::{MemoryBudget, NumPQChunks, PiPNNParameters},
         },
         data_model::AdHoc,
         storage::DiskIndexWriter,
-        DiskIndexBuildParameters,
     };
 
     fn pipnn() -> PiPNNParameters {
@@ -148,7 +153,7 @@ mod tests {
             .map(|index| ((index * 17) % 251) as f32)
             .collect();
         write_bin(
-            MatrixView::try_from(data.as_slice(), points, dimensions).unwrap(),
+            rowmajor::Ref::try_from_data(data.as_slice(), points, dimensions).unwrap(),
             &mut storage.create_for_write("/data.fbin").unwrap(),
         )
         .unwrap();

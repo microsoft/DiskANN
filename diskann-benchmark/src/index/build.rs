@@ -27,14 +27,13 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix},
 };
 #[cfg(feature = "pipnn")]
 use diskann_vector::DistanceFunction;
-use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
-use crate::inputs::graph_index::IndexBuild;
+use crate::{inputs::graph_index::IndexBuild, utils::progress::Progress};
 
 ///////////////////////////////
 // Start Point Configuration //
@@ -42,7 +41,7 @@ use crate::inputs::graph_index::IndexBuild;
 
 pub(crate) fn set_start_points<DP, T>(
     provider: &DP,
-    data: MatrixView<'_, T>,
+    data: rowmajor::Ref<'_, T>,
     start_strategy: StartPointStrategy,
 ) -> ANNResult<()>
 where
@@ -50,7 +49,7 @@ where
     T: diskann::graph::SampleableForStart + AsyncFriendly,
 {
     let start_points = start_strategy.compute(data).map_err(ANNError::new)?;
-    provider.set_start_points(start_points.row_iter())
+    provider.set_start_points(start_points.rows())
 }
 
 ///////////
@@ -60,7 +59,7 @@ where
 pub(crate) fn single_or_multi_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     output: &mut dyn Output,
 ) -> anyhow::Result<BuildStats>
@@ -87,7 +86,7 @@ where
                     NonZeroUsize::new(input.num_threads()).unwrap(),
                 ),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::SingleInsert, results)?)
@@ -104,7 +103,7 @@ where
                 runner,
                 build_core::Parallelism::sequential(multi_insert.batch_size),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::MultiInsert, results)?)
@@ -122,12 +121,12 @@ where
 /// `BuildStats` includes graph construction and provider installation. It does
 /// not include provider allocation.
 pub(crate) fn pipnn_build<T>(
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     parameters: &diskann_disk::PiPNNParameters,
 ) -> anyhow::Result<(diskann_async::MemoryIndex<T>, BuildStats)>
 where
-    T: diskann::graph::SampleableForStart + diskann::utils::VectorRepr,
+    T: diskann::graph::SampleableForStart + diskann::graph::pipnn::Element,
 {
     use anyhow::Context;
     use rayon::prelude::*;
@@ -142,20 +141,11 @@ where
         .context("failed to create PiPNN build thread pool")?;
 
     let started = std::time::Instant::now();
-    let adjacency = {
-        let mut context = diskann::graph::pipnn::PiPNNBuildContext::new(
-            parameters.into(),
-            &graph,
-            metric,
-            std::num::NonZeroUsize::new(dimensions)
-                .context("PiPNN needs at least one dimension")?,
-            &pool,
-        )?;
-        if let Some(hash_prune) = &parameters.hash_prune {
-            context = context.with_hash_prune(hash_prune.into())?;
-        }
-        diskann::graph::pipnn::build_graph(data.as_view(), &context)?
-    };
+    let config = parameters.builder(&graph).build()?;
+    let adjacency = pool.install(|| {
+        let rows = diskann::graph::pipnn::Rows::new(data.as_view(), metric)?;
+        diskann::graph::pipnn::build_graph(&rows, &config)
+    })?;
     let start_points = input
         .start_point_strategy()
         .compute(data.as_view())
@@ -165,13 +155,13 @@ where
     // frozen ID to its source row. For a synthetic start vector, connect it to
     // the nearest real row. `total_cmp` gives a deterministic total order.
     let start_sources = start_points
-        .row_iter()
+        .rows()
         .map(|start| {
             let bytes: &[u8] = bytemuck::cast_slice(start);
-            data.row_iter()
+            data.rows()
                 .position(|row| bytemuck::cast_slice::<T, u8>(row) == bytes)
                 .or_else(|| {
-                    data.row_iter()
+                    data.rows()
                         .enumerate()
                         .map(|(index, row)| (index, distance.evaluate_similarity(start, row)))
                         .min_by(|(_, left), (_, right)| left.total_cmp(right))
@@ -224,7 +214,7 @@ where
             })?;
         Ok(())
     })?;
-    index.provider().set_start_points(start_points.row_iter())?;
+    index.provider().set_start_points(start_points.rows())?;
     let start_ids = index.provider().starting_points()?;
     anyhow::ensure!(
         start_ids.len() == start_neighbors.len(),
@@ -253,7 +243,7 @@ where
 pub(crate) fn only_single_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     output: &mut dyn Output,
 ) -> anyhow::Result<BuildStats>
@@ -279,7 +269,7 @@ where
                     NonZeroUsize::new(input.num_threads()).unwrap(),
                 ),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::SingleInsert, results)?)
@@ -358,42 +348,6 @@ impl std::fmt::Display for BuildStats {
         } else {
             writeln!(f, "Insert Latencies: not measured for batch construction\n")
         }
-    }
-}
-
-pub struct ProgressMeter<'a> {
-    output: &'a mut dyn Output,
-}
-
-impl<'a> ProgressMeter<'a> {
-    pub fn new(output: &'a mut dyn Output) -> Self {
-        Self { output }
-    }
-}
-
-impl build_core::AsProgress for ProgressMeter<'_> {
-    fn as_progress(&self, max: usize) -> Arc<dyn build_core::Progress> {
-        let target = self.output.draw_target();
-        let meter = ProgressBar::with_draw_target(Some(max as u64), target);
-        meter.set_style(
-            ProgressStyle::with_template("Building [{elapsed_precise}] {wide_bar} {percent}")
-                .expect("This format should be valid"),
-        );
-        Arc::new(Meter { meter })
-    }
-}
-
-#[derive(Debug)]
-struct Meter {
-    meter: ProgressBar,
-}
-
-impl build_core::Progress for Meter {
-    fn progress(&self, handled: usize) {
-        self.meter.inc(handled as u64)
-    }
-    fn finish(&self) {
-        self.meter.finish()
     }
 }
 
@@ -479,8 +433,8 @@ mod pipnn_tests {
         let diskann_disk::BuildAlgorithm::PiPNN(parameters) = input.build_algorithm() else {
             panic!("expected PiPNN parameters");
         };
-        let mut data = Matrix::new(0.0_f32, coordinates.len(), 1);
-        data.as_mut_slice().copy_from_slice(&coordinates);
+        let data =
+            rowmajor::Owned::try_from_data(Box::from(coordinates), coordinates.len(), 1).unwrap();
 
         // When
         let (index, stats) = pipnn_build(Arc::new(data), &input, parameters).unwrap();

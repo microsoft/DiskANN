@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) mod datafiles;
 pub(crate) mod filters;
+pub(crate) mod progress;
 pub(crate) mod recall;
 pub(crate) mod streaming;
 pub(crate) mod tokio;
@@ -25,6 +26,17 @@ where
         score.fail(DATA_TYPE_MISMATCH, &T::describe(data_type))
     }
 }
+
+/// Construct a constant `NonZeroUsize` - failing to compile if `$value` is zero.
+#[cfg(feature = "inmem2")]
+macro_rules! nz {
+    ($ident:ident = $value:literal) => {
+        const $ident: ::std::num::NonZeroUsize = ::std::num::NonZeroUsize::new($value).unwrap();
+    };
+}
+
+#[cfg(feature = "inmem2")]
+pub(crate) use nz;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,6 +134,24 @@ impl std::fmt::Display for SmallBanner<'_> {
 ///////////
 // Tests //
 ///////////
+
+/// Vector element types that the index builds accept. With the `pipnn`
+/// feature, PiPNN also needs the [`Element`] gather of the type.
+///
+/// [`Element`]: diskann::graph::pipnn::Element
+#[cfg(feature = "pipnn")]
+pub(crate) trait BuildElement:
+    diskann::utils::VectorRepr + diskann::graph::pipnn::Element
+{
+}
+#[cfg(feature = "pipnn")]
+impl<T: diskann::utils::VectorRepr + diskann::graph::pipnn::Element> BuildElement for T {}
+
+/// Vector element types that the index builds accept.
+#[cfg(not(feature = "pipnn"))]
+pub(crate) trait BuildElement: diskann::utils::VectorRepr {}
+#[cfg(not(feature = "pipnn"))]
+impl<T: diskann::utils::VectorRepr> BuildElement for T {}
 
 #[cfg(test)]
 mod tests {

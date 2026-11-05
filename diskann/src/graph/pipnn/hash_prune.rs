@@ -23,13 +23,13 @@ use std::cell::UnsafeCell;
 
 use super::{
     bf16::f32_to_bf16,
+    dataset::Dataset,
     lsh::{LshSketches, MAX_PLANES},
     simd::Simd,
 };
-use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
+use crate::{ANNError, ANNResult, graph::AdjacencyList, tracked_debug};
 use bytemuck::Pod;
-use diskann_utils::views::MatrixView;
-use diskann_vector::{prefetch_hint_all, prefetch_hint_all_raw};
+use diskann_vector::{prefetch_cache_line, prefetch_hint_all};
 use diskann_wide::{
     Architecture, SIMDMask, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
     arch::{self, Dispatched1, FTarget1, Target},
@@ -221,6 +221,22 @@ impl<T: Pod + Default> MmapSlab<T> {
 ///
 /// `ReservoirState.len` and `ReservoirState.farthest_idx` are `u8`. Runtime `l_max` selects the
 /// actual length. Values above this bound are invalid.
+/// Prefetch every cache line of the `bytes` bytes at `ptr`.
+///
+/// # Safety
+///
+/// `ptr` must point into a live allocation of at least `bytes` bytes. The
+/// function creates no Rust reference, so writes to the range by another
+/// thread are the caller's concern.
+#[inline(always)]
+unsafe fn prefetch_bytes(ptr: *const u8, bytes: usize) {
+    const CACHE_LINE_BYTES: usize = 64;
+    for offset in (0..bytes).step_by(CACHE_LINE_BYTES) {
+        // SAFETY: `offset < bytes`, so the address is inside the allocation.
+        unsafe { prefetch_cache_line(ptr.add(offset).cast()) };
+    }
+}
+
 pub(crate) const MAX_RESERVOIR_LEN: usize = u8::MAX as usize;
 
 #[repr(C)]
@@ -615,20 +631,16 @@ unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
     /// Create one empty direction reservoir and LSH sketch for each dataset point.
-    pub(crate) fn new<T: VectorRepr + Send + Sync>(
-        data: MatrixView<'_, T>,
-        dimensions: usize,
+    pub(crate) fn new(
+        data: &dyn Dataset,
         num_planes: usize,
         l_max: usize,
         seed: u64,
     ) -> ANNResult<Self> {
         let npoints = data.nrows();
         let t0 = std::time::Instant::now();
-        let sketches = LshSketches::try_new(data, dimensions, num_planes, seed)?;
-        tracing::debug!(
-            elapsed_secs = t0.elapsed().as_secs_f64(),
-            "sketch computation"
-        );
+        let sketches = LshSketches::try_new(data, num_planes, seed)?;
+        tracked_debug!("PiPNN HashPrune sketches in {:.2?}", t0.elapsed());
         let t1 = std::time::Instant::now();
         let row_stride = l_max.next_multiple_of(32).max(32);
 
@@ -669,10 +681,9 @@ impl HashPrune {
             }
         }
 
-        tracing::debug!(
-            elapsed_secs = t1.elapsed().as_secs_f64(),
-            row_stride,
-            "reservoir allocation"
+        tracked_debug!(
+            "PiPNN HashPrune reservoirs (row stride {row_stride}) in {:.2?}",
+            t1.elapsed()
         );
 
         Ok(Self {
@@ -761,10 +772,7 @@ impl HashPrune {
                 // a shared slice while another worker mutates the row.
                 unsafe {
                     let hashes = (*self.hash_rows.get()).as_ptr().add(off);
-                    prefetch_hint_all_raw(
-                        hashes.cast(),
-                        self.row_stride * std::mem::size_of::<u16>(),
-                    );
+                    prefetch_bytes(hashes.cast(), self.row_stride * std::mem::size_of::<u16>());
                 }
             }
 
@@ -907,22 +915,24 @@ impl HashPrune {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::pipnn::dataset::{Element, Rows};
+    use diskann_utils::views::rowmajor;
+    use diskann_vector::distance::Metric;
     use rstest::rstest;
 
-    fn build_hash_prune<T: VectorRepr>(
+    fn rows<T: Element>(data: &[T], points: usize, dimensions: usize) -> Rows<'_, T> {
+        let view = rowmajor::Ref::try_from_data(data, points, dimensions).unwrap();
+        Rows::new(view, Metric::L2).unwrap()
+    }
+
+    fn build_hash_prune<T: Element>(
         data: &[T],
         points: usize,
         dimensions: usize,
         planes: usize,
         l_max: usize,
     ) -> ANNResult<HashPrune> {
-        HashPrune::new(
-            MatrixView::try_from(data, points, dimensions).unwrap(),
-            dimensions,
-            planes,
-            l_max,
-            42,
-        )
+        HashPrune::new(&rows(data, points, dimensions), planes, l_max, 42)
     }
 
     struct TestReservoir {
@@ -1048,7 +1058,7 @@ mod tests {
         convert: impl Fn(u8) -> T,
         reference: impl Fn(u8) -> f32,
     ) where
-        T: VectorRepr + Send + Sync,
+        T: Element,
     {
         #[cfg(not(miri))]
         let pool = rayon::ThreadPoolBuilder::new()
@@ -1076,20 +1086,10 @@ mod tests {
             for &planes in plane_counts {
                 let build = || {
                     (
-                        LshSketches::try_new(
-                            MatrixView::try_from(converted.as_slice(), points, dimensions).unwrap(),
-                            dimensions,
-                            planes,
-                            42,
-                        )
-                        .unwrap(),
-                        LshSketches::try_new(
-                            MatrixView::try_from(f32_data.as_slice(), points, dimensions).unwrap(),
-                            dimensions,
-                            planes,
-                            42,
-                        )
-                        .unwrap(),
+                        LshSketches::try_new(&rows(&converted, points, dimensions), planes, 42)
+                            .unwrap(),
+                        LshSketches::try_new(&rows(&f32_data, points, dimensions), planes, 42)
+                            .unwrap(),
                     )
                 };
                 #[cfg(miri)]
