@@ -493,6 +493,47 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_loading_uses_default_loader() {
+        struct Text(String);
+
+        #[derive(Default)]
+        struct TextLoader {
+            prefix: String,
+        }
+
+        impl Loader<'_> for TextLoader {
+            type Value = Text;
+
+            fn load(mut self, context: Context<'_>) -> Result<Self::Value> {
+                self.prefix.push_str(context.load::<&str>()?);
+                Ok(Text(self.prefix))
+            }
+        }
+
+        impl Loadable<'_> for Text {
+            fn load(context: Context<'_>) -> Result<Self> {
+                Loader::load(TextLoader::default(), context)
+            }
+        }
+
+        let value = save::Value::String("example".into());
+        let inner = TestContext;
+        let context = Context::new(&inner, &value);
+
+        let ordinary: Text = context.load().unwrap();
+        let adapted = context.load_with(PhantomData::<Text>).unwrap();
+        let custom = context
+            .load_with(TextLoader {
+                prefix: "custom ".to_owned(),
+            })
+            .unwrap();
+
+        assert_eq!(ordinary.0, "example");
+        assert_eq!(adapted.0, ordinary.0);
+        assert_eq!(custom.0, "custom example");
+    }
+
+    #[test]
     fn object_reports_populated_keys() {
         let mut record = save::Record::empty();
         record.insert("alpha", save::Value::Null).unwrap();

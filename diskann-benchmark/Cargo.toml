@@ -40,6 +40,7 @@ scopeguard = { version = "1.2", optional = true }
 diskann-benchmark-core = { workspace = true, features = ["bigann"] }
 itertools.workspace = true
 diskann-inmem = { workspace = true, optional = true, features = ["quantization"] }
+diskann-record = { workspace = true, optional = true, features = ["disk"] }
 
 [lints]
 clippy.allow_attributes = "warn"
@@ -70,7 +71,7 @@ minmax-quantization = []
 multi-vector = []
 
 # Enable inmem 2.0
-inmem2 = ["dep:diskann-inmem"]
+inmem2 = ["dep:diskann-inmem", "dep:diskann-record"]
 
 # Enable bftree backend
 bftree = ["dep:diskann-bftree"]

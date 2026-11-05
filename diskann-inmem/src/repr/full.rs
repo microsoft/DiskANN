@@ -10,6 +10,9 @@
 //!
 //! The [`FullPrecision`] generic bound can be used to constrain these data types.
 
+pub(crate) mod load;
+mod save;
+
 mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:

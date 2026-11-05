@@ -10,9 +10,9 @@
 //! they extract individual fields and side-car artifacts.
 //!
 //! Implement [`Loader`] to supply runtime settings or resources without changing the
-//! saved format. Decode a shared saved-data type with [`Context::load`], then build the
-//! result using those settings. Ordinary [`Load`] implementations can use the same
-//! saved-data type with defaults.
+//! saved format. 
+//! NOTE:: Do not also implement [`Load`], which already provides a blanket 
+//! [`Loadable`] implementation.
 //!
 //! The generic entry point is `load`; `load_from_disk` (available under the `disk`
 //! feature) is the disk-backed convenience wrapper that reads a manifest and dispatches
@@ -45,8 +45,10 @@ mod context;
 pub(crate) use context::LoadContext;
 pub use context::{Context, Object, Reader};
 
+use std::marker::PhantomData;
+
 #[cfg(feature = "disk")]
-use std::{marker::PhantomData, path::Path};
+use std::path::Path;
 
 use crate::{Version, save};
 
@@ -181,7 +183,8 @@ pub trait Load<'a>: Sized {
 /// This is the bottom of the trait hierarchy and is implemented for the same set of
 /// primitive-like types as [`super::save::Saveable`]. Most user types should implement
 /// [`Load`] (which gets a [`Loadable`] impl for free via the blanket below) rather than
-/// [`Loadable`] directly.
+/// [`Loadable`] directly. A type whose shared load path lives in a [`Loader`] can
+/// instead implement this trait directly by delegating to that loader with defaults.
 pub trait Loadable<'a>: Sized {
     /// Deserialize `Self` from a [`Context`].
     fn load(context: Context<'a>) -> Result<Self>;

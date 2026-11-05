@@ -33,18 +33,20 @@ pub trait Loader<'a>: Sized {
 
 `load` takes ownership of the loader, so it can pass storage to the result or write into an existing value. `Value` need not implement `Load`; a loader that fills an existing value may return `()`. Implement `Loader` for `PhantomData<T>` where `T: Loadable<'a>` by calling `Loadable::load`, so ordinary loading works with the new API too.
 
-### Dedup `Load` + `Loader` with DTOs
+### Sharing the Load Path
 
-Use a separate struct -- a data transfer object (DTO) -- to hold the saved fields. Its `Load` impl reads those fields and converts from any supported older formats. It does not contain runtime settings or concurrency state. Both loading paths can use the same code to build the result from it:
+Put decoding, version handling, validation, and construction in the loader. When all required runtime inputs have meaningful defaults, implement `Loadable` for the result by delegating to a default loader:
 
 ```text
-(ordinary) Load   -> DTO decoding  -> restore(dto, default options)
-(custom)   Loader -> DTO decoding  -> restore(dto, supplied options)
+(ordinary) Loadable -> default loader ---------+
+(custom)   Loader with supplied inputs -------+-> decode, validate, allocate, restore
 ```
 
-The result type's ordinary `Load` uses the DTO's `VERSION`, `load`, and `load_legacy`, then builds the result with default settings. A loader calls `context.load::<Dto>()?` and builds it with caller-supplied settings. This way, both paths can share the same codepath to read and check saved data.
+This shares the entire load path without a separate saved-data type. Implement `Loadable` directly for this adapter, not `Load`: `Loadable::load` receives a `Context`, while `Load::load` receives an `Object`. Do not implement both, since `Load` already provides a blanket `Loadable` implementation.
 
-**Where the DTO lives**: We don't need a new trait in `diskann-record` for DTOs, so define the DTO in the crate that defines the saved format. The DTO itself need not implement `Save` -- we just need it to understand the saved format.
+`Loader` does not require `Default`, and its result need not implement either `Load` or `Loadable`. If loading requires caller-owned storage, a query scratch pool, or other resources without meaningful defaults, require an explicit loader instead of offering ordinary loading.
+
+A loader can read small metadata first, resolve runtime settings, and stream large artifacts directly into final storage. It need not keep a second full copy in memory. Resources supplied by the caller are independent of the metadata lifetime `'a`; any metadata references must remain within that lifetime.
 
 ### Loading Nested Values
 
@@ -64,13 +66,15 @@ impl<'a> Object<'a> {
 }
 ```
 
-When loading a field, pass a loader with the settings that field needs. Alternatively, read its DTO with an ordinary `field` call and pass settings when building the result. Existing `load`, `field`, `load_fields!`, and support for basic types and collections can stay unchanged.
+When loading a field, pass a loader with the settings or resources that field needs. Fields that need no extra inputs can use ordinary `field` calls. Existing `load`, `field`, `load_fields!`, and support for basic types and collections can stay unchanged.
 
 Settings are not passed automatically through `Option<T>` or `Vec<T>`. Callers handle each present value or element with a loader, passing shared resources again as needed. Loaders do not have to support copying or cloning.
 
 ### Versions and Errors
 
-`Loader` will not do any version checks or sanity checks for persisted data (the DTO should keep that responsibility). Instead, it will only do _runtime_-related sanity checks (e.g., ensuring scratch space is large enough, or that capacity is sufficient). Invalid settings, corrupt data, and memory-allocation failures can throw errors from `Loader` itself (needs new `Error` types). 
+`Loader` does not receive automatic version dispatch. A loader reading a versioned object directly must check its shape and `Object::version()`, handle supported older formats, and validate saved data as well as runtime settings. Nested values loaded through `context.load::<T>()` or ordinary `field` calls retain their existing checks and version handling. Caller settings must not change how saved fields are interpreted.
+
+Use the existing load error types and categories. Invalid settings, corrupt data, and reported memory-allocation failures are critical errors, not reasons to try another format. This proposal does not add error handling to allocations that lack it today. Retrying a recoverable error requires a new loader and unchanged or reset external state; loading into an existing value may leave it partly changed on failure.
 
 ## Sketch for In-Mem 2.0
 
@@ -85,7 +89,7 @@ Let's start with `Provider<Full<f32>, u32>` whose saved vectors are in `f32` and
 
 ### Loading
 
-A provider DTO refers to the saved external IDs and contains another DTO for the vector and graph files. Its `restore` method reads these into a new provider:
+A defaultable loader holds the runtime inputs and owns the shared load path:
 
 ```rust
 use diskann_record::load;
@@ -94,26 +98,30 @@ use crate::{Provider, num::Capacity, repr::Full, store};
 type FullProvider = Provider<Full<f32>, u32>;
 
 #[derive(Default)]
-struct FullLoadOptions {
+struct FullProviderLoader {
     capacity: Option<Capacity>,
     store: store::Config,
-}
-
-struct FullProviderLoader {
-    options: FullLoadOptions,
 }
 
 impl<'a> load::Loader<'a> for FullProviderLoader {
     type Value = FullProvider;
 
     fn load(self, context: load::Context<'a>) -> load::Result<FullProvider> {
-        let dto: FullProviderDto<'a> = context.load()?;
-        dto.restore(self.options)
+        let object = context.as_object().ok_or(load::error::Kind::TypeMismatch)?;
+        self.load_object(object)
+    }
+}
+
+impl<'a> load::Loadable<'a> for FullProvider {
+    fn load(context: load::Context<'a>) -> load::Result<Self> {
+        load::Loader::load(FullProviderLoader::default(), context)
     }
 }
 ```
 
-`capacity: None` uses the saved live-node count, and if supplied, it must be at least that count. Other defaults use `store::Config::default()` and `Full`'s default prefetch settings. Ordinary `Load` will use the same DTO and build steps, but with default options. This code wil live in the `diskann-inmem` crate.
+In this sketch, `load_object` is an internal loader method that dispatches on the saved version, reads and checks metadata and artifact handles, allocates the provider, and streams external IDs, vectors, and graph rows into their final storage. It validates file lengths, row and neighbor counts, edge targets, and external-ID uniqueness before returning a complete provider. It does not rebuild the graph or give frozen points external IDs. This code lives in `diskann-inmem`; no new saved-data trait or type is required in `diskann-record`.
+
+`capacity: None` is a policy, not a capacity chosen before loading. After reading the saved live-node count `N` and frozen-point count `F`, resolve writable capacity `C` to the supplied value or `N`. Check `C >= N`, that `F + C` fits `IdLimit`, and allocation sizes before allocating the provider. Other defaults use `store::Config::default()` and `Full`'s default prefetch settings. Ordinary `Loadable` delegates to this same loader with defaults.
 
 ### Saved ID Layout
 

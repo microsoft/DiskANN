@@ -1,0 +1,27 @@
+{
+  "search_directories": [
+    "target/tmp/inmem2",
+    "test_data/disk_index_search"
+  ],
+  "jobs": [
+    {
+      "type": "inmem2-fp-search",
+      "content": {
+        "load_path": "metadata.json",
+        "search": {
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
+          "reps": 3,
+          "num_threads": [4],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [10, 20, 30, 40, 50],
+              "recall_k": 10
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
