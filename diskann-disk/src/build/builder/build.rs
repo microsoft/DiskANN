@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::data_model::GraphDataType;
+use crate::data_model::{GraphDataType, graph_data_types::BuildVector};
 use diskann::{
     ANNResult,
     utils::{ONE, VectorRepr, async_tools},
@@ -70,7 +70,7 @@ where
 impl<'a, Data, StorageProvider> DiskIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr,
+    Data::VectorDataType: BuildVector,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
 {
@@ -81,8 +81,9 @@ where
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
         #[cfg(feature = "pipnn")]
-        if let Some(config) = disk_build_param.pipnn_config() {
-            config.validate()?;
+        if let Some(parameters) = disk_build_param.pipnn_parameters() {
+            // Reject bad parameters before the quantizer is trained.
+            parameters.builder(&index_configuration.config).build()?;
         }
 
         let pq_storage = PQStorage::new(
@@ -186,8 +187,8 @@ where
 
     async fn build_graph(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         #[cfg(feature = "pipnn")]
-        if let Some(config) = self.disk_build_param.pipnn_config() {
-            return pipnn::build_graph(self, pool, config);
+        if let Some(parameters) = self.disk_build_param.pipnn_parameters() {
+            return pipnn::build_graph(self, pool, parameters);
         }
 
         match determine_build_strategy::<Data>(

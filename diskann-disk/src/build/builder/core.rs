@@ -566,7 +566,7 @@ pub(crate) mod disk_index_builder_tests {
     use super::*;
     use crate::{
         build::builder::build::DiskIndexBuilder,
-        data_model::{CachingStrategy, GraphHeader},
+        data_model::{CachingStrategy, GraphHeader, graph_data_types::BuildVector},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
         search::provider::{
             aligned_file_reader::VirtualAlignedReaderFactory, disk_provider::DiskIndexSearcher,
@@ -673,6 +673,7 @@ pub(crate) mod disk_index_builder_tests {
         pub fn build<T>(&self) -> ANNResult<()>
         where
             T: GraphDataType<VectorIdType = u32>,
+            T::VectorDataType: BuildVector,
             StorageProvider::Reader: std::marker::Send + Read,
         {
             // Create disk index build parameters

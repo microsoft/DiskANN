@@ -161,6 +161,20 @@ where
     T::evaluate(xref, yref).unwrap()
 }
 
+/// MinMax rows reach PiPNN through the default gather, which converts each row
+/// with [`VectorRepr::as_f32_into`].
+#[cfg(feature = "pipnn")]
+impl<const NBITS: usize> diskann::graph::pipnn::Element for MinMaxElement<NBITS>
+where
+    InnerProduct: for<'a, 'b> PureDistanceFunction<
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            diskann_quantization::distances::MathematicalResult<u32>,
+        >,
+    Unsigned: Representation<NBITS>,
+{
+}
+
 //////////////////
 /// VectorRepr ///
 /////////////////
