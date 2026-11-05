@@ -14,8 +14,8 @@ mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
     //!
-    //! * [`super::ExpandBeam`]: For index search.
-    //! * [`super::Prune`]: For index construction.
+    //! * [`crate::repr::internal::intrusive::ExpandBeam`]: For index search.
+    //! * [`crate::repr::internal::intrusive::Prune`]: For index construction.
     //!
     //! These two structs are modular with respect to their exact distance function and
     //! prefetcher. Since [`super::repr::ExpandBeam`] and [`super::repr::Prune`] are
@@ -38,12 +38,13 @@ mod internal_docs {
 use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize};
 
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
     distance::{
-        Cosine, CosineNormalized, DistanceProvider, InnerProduct, Metric, Specialize, SquaredL2,
+        Cosine, CosineNormalized, Distance as VDistance, InnerProduct, Metric, Specialize,
+        SquaredL2,
     },
 };
 use diskann_wide::{
@@ -56,15 +57,38 @@ use thiserror::Error;
 use crate::{
     counters::LocalCounters,
     epoch,
-    num::{Bytes, Capacity, IdLimit, MaxDegree},
+    num::{Bytes, Capacity, IdLimit, MaxDegree, Range},
     prefetch::{self, Prefetch},
-    repr,
+    repr::{self, internal::Calf},
     store::{
         self, Store,
         intrusive::{self, Intrusive},
     },
     tag::AtomicTag,
 };
+
+/// Construct an [`UnalignedSlice`] over `bytes`.
+///
+/// In release builds, this method truncates `bytes.len()` to a multiple of `size_of::<T>()`.
+///
+/// Debug builds assert that the length is in fact a multiple.
+fn unaligned_from_bytes<T>(bytes: &[u8]) -> UnalignedSlice<'_, T>
+where
+    T: bytemuck::Pod,
+{
+    debug_assert!(bytes.len().is_multiple_of(std::mem::size_of::<T>()));
+
+    // SAFETY: The slice `bytes` attests that the memory spanned by
+    // `[ptr, ptr.add(size_of::<T>() * (len / size_of::<T>())))` is valid.
+    //
+    // Since `T: Pod`, all bit patterns are valid, so unaligned loads yield well-defined values.
+    unsafe {
+        UnalignedSlice::new(
+            bytes.as_ptr().cast::<T>(),
+            bytes.len() / std::mem::size_of::<T>(),
+        )
+    }
+}
 
 /// A useful trait bound for types compatible with [`Full`].
 ///
@@ -90,8 +114,10 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
 #[derive(Debug, Clone)]
 pub struct Config<T> {
     layout: store::Layout,
+    capacity: Capacity,
     metric: Metric,
-    start_points: Matrix<T>,
+    start_points: rowmajor::Owned<T>,
+    start_point_ids: Range,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
 }
@@ -102,8 +128,7 @@ impl<T> Config<T> {
     /// Create a new [`Config`] for a [`Full`].
     ///
     /// The resulting store will hold `capacity` writable items and `start_points.nrows()`
-    /// frozen points at internal IDs `[capacity, capacity + start_points.nrows())`. The
-    /// dimensionality of the full-precision data will be inferred from
+    /// frozen points. The dimensionality of the full-precision data will be inferred from
     /// `start_points.ncols()`.
     ///
     /// The associated graph will be bounded with `max_degree` and `metric` will be used to
@@ -117,13 +142,8 @@ impl<T> Config<T> {
         capacity: Capacity,
         max_degree: MaxDegree,
         metric: Metric,
-        start_points: Matrix<T>,
+        start_points: rowmajor::Owned<T>,
     ) -> Result<Self, ConfigError> {
-        let num_start_points: u32 = match start_points.nrows().try_into() {
-            Ok(points) => points,
-            Err(_) => return Err(ConfigError::TooManyStartPoints(start_points.nrows())),
-        };
-
         // Check that we won't overflow when computing the number of bytes required for each
         // data point. This can happen if `start_points` has 0 rows but a large number of
         // columns.
@@ -132,13 +152,26 @@ impl<T> Config<T> {
             .checked_mul(std::mem::size_of::<T>())
             .is_none()
         {
-            return Err(ConfigError::DimTooLarge(start_points.ncols()));
+            return Err(ConfigError::dim_too_large(start_points.ncols()));
         }
 
+        let num_start_points = start_points.nrows();
+        let too_many_points = || ConfigError::too_many_points(capacity, num_start_points);
+        let start_point_ids =
+            Range::start_plus_usize(0, num_start_points).ok_or_else(too_many_points)?;
+
+        let id_limit = capacity
+            .value()
+            .checked_add(num_start_points)
+            .and_then(|id_limit| u32::try_from(id_limit).map(IdLimit::new).ok())
+            .ok_or_else(too_many_points)?;
+
         Ok(Self {
-            layout: store::Layout::new(capacity, max_degree, num_start_points),
+            layout: store::Layout::new(id_limit, max_degree),
+            capacity,
             metric,
             start_points,
+            start_point_ids,
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
         })
@@ -176,18 +209,47 @@ impl<T> Config<T> {
 
 /// Errors that can arise when constructing [`Config`].
 #[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum ConfigError {
-    #[error("{} start points exceed `u32::MAX`", 0)]
-    TooManyStartPoints(usize),
+#[error(transparent)]
+pub struct ConfigError {
+    inner: ConfigErrorInner,
+}
+
+impl ConfigError {
+    fn dim_too_large(dim: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::DimTooLarge(dim),
+        }
+    }
+
+    fn too_many_points(capacity: Capacity, num_start_points: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::TooManyPoints {
+                capacity,
+                num_start_points,
+            },
+        }
+    }
+}
+
+diskann::convert_error!(ConfigError);
+
+#[derive(Debug, Error)]
+enum ConfigErrorInner {
     #[error(
         "the number of bytes to hold {}-dimensional data exceeds `usize::MAX`",
         0
     )]
     DimTooLarge(usize),
+    #[error(
+        "requested number of points ({} + {} start points) exceeds u32::MAX",
+        capacity,
+        num_start_points
+    )]
+    TooManyPoints {
+        capacity: Capacity,
+        num_start_points: usize,
+    },
 }
-
-diskann::convert_error!(ConfigError);
 
 impl<T> repr::RepresentationConfig for Config<T>
 where
@@ -218,6 +280,8 @@ where
     T: 'static,
 {
     store: Store<Intrusive>,
+    start_point_ids: Range,
+    capacity: Capacity,
     metric: Metric,
     lookahead: Option<NonZeroUsize>,
     _type: PhantomData<T>,
@@ -238,7 +302,7 @@ where
         capacity: Capacity,
         max_degree: MaxDegree,
         metric: Metric,
-        start_points: Matrix<T>,
+        start_points: rowmajor::Owned<T>,
     ) -> Result<Config<T>, ConfigError> {
         Config::new(capacity, max_degree, metric, start_points)
     }
@@ -252,8 +316,10 @@ where
     {
         let Config {
             layout,
+            capacity,
             metric,
             start_points,
+            start_point_ids,
             store,
             lookahead,
         } = config;
@@ -263,7 +329,7 @@ where
         let store = Store::new(layout, store, intrusive)?;
 
         // Initialize start points.
-        for (i, row) in std::iter::zip(store.frozen(), start_points.row_iter()) {
+        for (i, row) in std::iter::zip(start_point_ids, start_points.rows()) {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -280,6 +346,8 @@ where
 
         Ok(Self {
             store,
+            start_point_ids,
+            capacity,
             metric,
             lookahead,
             _type: PhantomData,
@@ -318,7 +386,7 @@ where
     }
 
     fn reader(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
-        Intrusive::reader(&self.store)
+        self.store.guard(|intrusive, guard| intrusive.reader(guard))
     }
 }
 
@@ -341,30 +409,14 @@ where
     }
 }
 
-impl<T> repr::Representation for Full<T>
-where
-    T: FullPrecision,
-{
-    fn max_degree(&self) -> MaxDegree {
-        self.store.neighbors().max_degree()
-    }
+repr::internal::macros::representation!(
+    { T } Full<T> where T: FullPrecision
+);
 
-    fn retire(&self, i: u32) -> ANNResult<()> {
-        Ok(self.store.retire(i.into_usize())?)
-    }
-
-    fn is_readable(&self, i: u32) -> Option<bool> {
-        self.store.can_read_approximate(i.into_usize())
-    }
-
-    fn id_limit(&self) -> IdLimit {
-        self.store.id_limit()
-    }
-
-    fn capacity(&self) -> Capacity {
-        self.store.capacity()
-    }
-}
+repr::internal::macros::set_guard!(
+    /// A [`repr::Guard`] for [`Full`].
+    for<'a> intrusive::Exclusive<'a>
+);
 
 impl<T> repr::Set<&[T]> for Full<T>
 where
@@ -385,27 +437,6 @@ where
             .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
 
         Ok(Guard::new(slot))
-    }
-}
-
-/// A [`repr::Guard`] for [`Full`].
-#[derive(Debug)]
-pub struct Guard<'a> {
-    slot: store::Exclusive<'a, intrusive::Exclusive<'a>>,
-}
-
-impl<'a> Guard<'a> {
-    fn new(slot: store::Exclusive<'a, intrusive::Exclusive<'a>>) -> Self {
-        Self { slot }
-    }
-}
-
-impl repr::Guard for Guard<'_> {
-    fn publish(self) {
-        self.slot.publish();
-    }
-    fn id(&self) -> u32 {
-        self.slot.slot()
     }
 }
 
@@ -437,76 +468,55 @@ where
     }
 }
 
-//----------------------//
-// Expand Beam (Search) //
-//----------------------//
-
-// A baby [`std::borrow::Cow`].
-#[derive(Debug)]
-enum Calf<'a, T> {
-    Borrowed(&'a [T]),
-    Owned(Box<[T]>),
-}
-
-impl<T> std::ops::Deref for Calf<'_, T> {
-    type Target = [T];
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Borrowed(slice) => slice,
-            Self::Owned(boxed) => boxed,
-        }
-    }
-}
-
-/// A temporary precursor for [`ExpandBeam`] to simplify macros.
-#[derive(Debug)]
-struct IntoExpandBeam<'a, T, U> {
-    query: Calf<'a, T>,
-    reader: store::intrusive::Reader<'a>,
-    lookahead: Option<NonZeroUsize>,
-    _data: PhantomData<U>,
-}
-
-impl<'a, T, U> IntoExpandBeam<'a, T, U> {
-    /// Construct a new [`IntoExpandBeam`], validating the query dimension and acquiring a
-    /// reader for `full`.
-    fn new(full: &'a Full<U>, query: Calf<'a, T>) -> ANNResult<Self> {
-        full.check_dim(query.len())?;
-        let reader = full.reader()?;
-        let lookahead = full.lookahead;
-        Ok(Self {
-            query,
-            reader,
-            lookahead,
-            _data: PhantomData,
-        })
-    }
-}
+//----------//
+// Distance //
+//----------//
 
 trait Distance<T, U>: std::fmt::Debug + Send + Sync + 'static {
     fn eval(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32;
 }
 
 #[derive(Debug)]
-struct Pure<D>(PhantomData<D>);
+struct Pure<T, U, D>(PhantomData<(T, U, D)>);
 
-impl<D> Pure<D> {
+impl<T, U, D> Pure<T, U, D> {
     const fn new() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<T, U, D> Distance<T, U> for Pure<D>
+impl<T, U, D> Distance<T, U> for Pure<T, U, D>
 where
     D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>
         + std::fmt::Debug
         + Send
         + Sync
         + 'static,
+    T: std::fmt::Debug + Send + Sync + 'static,
+    U: std::fmt::Debug + Send + Sync + 'static,
 {
     #[inline(always)]
     fn eval(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
         D::run(ARCH, x, y)
+    }
+}
+
+impl<T, U, D> repr::internal::RawDistance for Pure<T, U, D>
+where
+    Self: Distance<T, U>,
+    T: bytemuck::Pod + std::fmt::Debug + Send + Sync,
+    U: bytemuck::Pod + std::fmt::Debug + Send + Sync,
+{
+    /// Not techncially true since we panic on length miematches.
+    type Error = diskann::error::Infallible;
+
+    #[inline(always)]
+    fn eval(&self, x: &[u8], y: &[u8]) -> Result<f32, Self::Error> {
+        Ok(Distance::eval(
+            self,
+            unaligned_from_bytes(x),
+            unaligned_from_bytes(y),
+        ))
     }
 }
 
@@ -521,177 +531,103 @@ where
     }
 }
 
-/// A fused query distance based on [`diskann_vector::PureDistanceFunction`] to enable
-/// inlining of the final distance function (`D`).
-///
-/// The type of the embedded query (`T`) is distinct from the expected data-set (`U`) to
-/// allow `f16` queries to be pre-converted to `f32`, saving on-the-fly conversion that
-/// would otherwise be needed.
+impl<T, U> repr::internal::RawDistance for diskann_vector::distance::Distance<T, U>
+where
+    T: bytemuck::Pod + std::fmt::Debug + 'static,
+    U: bytemuck::Pod + std::fmt::Debug + 'static,
+{
+    /// Not techncially true since we panic on length miematches.
+    type Error = diskann::error::Infallible;
+
+    #[inline(always)]
+    fn eval(&self, x: &[u8], y: &[u8]) -> Result<f32, Self::Error> {
+        Ok(Distance::eval(
+            self,
+            unaligned_from_bytes(x),
+            unaligned_from_bytes(y),
+        ))
+    }
+}
+
 #[derive(Debug)]
-struct ExpandBeam<'a, P, T, U, D> {
-    // The original query.
-    query: Calf<'a, T>,
-    // A reader into a representation's store.
-    reader: store::intrusive::Reader<'a>,
-    // The prefetch lookahead.
-    lookahead: Option<NonZeroUsize>,
-    // The type of the data prefetcher.
-    prefetch: prefetch::Checked<P>,
-    // The type of the distance used for the arguments
+pub(super) struct QueryDistance<'a, T, U, D> {
+    query: Calf<'a, [T]>,
     distance: D,
-    // The type of the data in the original dataset.
+    _cast: PhantomData<U>,
+}
+
+impl<'a, T, U, D> QueryDistance<'a, T, U, D> {
+    pub(super) fn new(query: Calf<'a, [T]>, distance: D) -> Self {
+        Self {
+            query,
+            distance,
+            _cast: PhantomData,
+        }
+    }
+}
+
+impl<T, U, D> repr::internal::RawQueryDistance for QueryDistance<'_, T, U, D>
+where
+    D: Distance<T, U>,
+    T: std::fmt::Debug + Send + Sync + 'static,
+    U: bytemuck::Pod + std::fmt::Debug + Send + Sync,
+{
+    /// Not techncially true since we panic on length miematches.
+    type Error = diskann::error::Infallible;
+
+    #[inline(always)]
+    fn eval(&self, x: &[u8]) -> Result<f32, Self::Error> {
+        Ok(self
+            .distance
+            .eval(UnalignedSlice::from(&*self.query), unaligned_from_bytes(x)))
+    }
+}
+
+//----------------------//
+// Expand Beam (Search) //
+//----------------------//
+
+/// A temporary precursor for [`repr::internal::intrusive::ExpandBeam`] to simplify macros.
+#[derive(Debug)]
+struct IntoExpandBeam<'a, T, U> {
+    query: Calf<'a, [T]>,
+    reader: store::intrusive::Reader<'a>,
+    lookahead: Option<NonZeroUsize>,
     _data: PhantomData<U>,
 }
 
-impl<'a, P, T, U, D> ExpandBeam<'a, P, T, U, D> {
-    fn new(into: IntoExpandBeam<'a, T, U>, prefetch: P, distance: D) -> Self
-    where
-        P: Prefetch,
-    {
-        let IntoExpandBeam {
+impl<'a, T, U> IntoExpandBeam<'a, T, U> {
+    /// Construct a new [`IntoExpandBeam`], validating the query dimension and acquiring a
+    /// reader for `full`.
+    fn new(full: &'a Full<U>, query: Calf<'a, [T]>) -> ANNResult<Self> {
+        full.check_dim(query.len())?;
+        let reader = full.reader()?;
+        let lookahead = full.lookahead;
+        Ok(Self {
             query,
             reader,
             lookahead,
-            _data,
-        } = into;
-
-        // TAG: PREFETCH-CHECK
-        #[expect(
-            clippy::expect_used,
-            reason = "internal APIs should only provide valid prefetchers"
-        )]
-        let prefetch = prefetch::Checked::new(prefetch, reader.bytes_plus_tag())
-            .expect("internal APIs should only provide valid prefetchers");
-
-        Self {
-            query,
-            reader,
-            lookahead,
-            prefetch,
-            distance,
-            _data,
-        }
+            _data: PhantomData,
+        })
     }
 
-    fn bytes(&self) -> usize {
-        std::mem::size_of::<U>() * self.query.len()
-    }
-
-    fn boxed(self) -> Box<Self> {
-        Box::new(self)
-    }
-
-    /// Compute the distance between the embedded query and `x`.
-    ///
-    /// # Safety
-    ///
-    /// `x.len()` must be exactly `self.bytes()` bytes long and contain
-    /// `self.query.len()` valid values of `U`.
-    #[inline(always)]
-    unsafe fn run_unchecked(&self, x: &[u8]) -> f32
+    fn into_expand_beam<D, P>(
+        self,
+        distance: D,
+        prefetch: P,
+    ) -> repr::internal::intrusive::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
     where
         D: Distance<T, U>,
+        P: Prefetch,
     {
-        debug_assert_eq!(x.len(), self.bytes());
-
-        // SAFETY: We've validated that `x` has the correct length.
-        let x = unsafe { UnalignedSlice::new(x.as_ptr().cast::<U>(), self.query.len()) };
-        self.distance.eval((*self.query).into(), x)
+        repr::internal::intrusive::ExpandBeam::new(
+            self.reader,
+            QueryDistance::new(self.query, distance),
+            prefetch,
+            self.lookahead,
+        )
     }
 }
-
-// SAFETY: Our implementation of `repr::ExpandBeam::id_limit` is consistent with our
-// `repr::ExpandBeam::expand_beam` implementation. They are both dependent on
-// `intrusive::Reader`'s internal bounds.
-unsafe impl<P, T, U, D> repr::ExpandBeam for ExpandBeam<'_, P, T, U, D>
-where
-    P: Prefetch,
-    T: Send + Sync + 'static + Debug,
-    U: Send + Sync + 'static + Debug,
-    D: Distance<T, U>,
-{
-    fn evaluate(&self, i: u32) -> ANNResult<Option<f32>> {
-        if !self.reader.is_in_bounds(i.into_usize()) {
-            Err(ANNError::new(OutOfBounds(i)))
-        } else {
-            // SAFETY: We have checked that `i` is in-bounds.
-            match unsafe { self.reader.read_in_bounds(i.into_usize()) } {
-                Some(data) => {
-                    // SAFETY: Since we just read `data` from `self.reader`, we know it's
-                    // exactly `self.bytes()` long.
-                    let distance = unsafe { self.run_unchecked(data) };
-                    Ok(Some(distance))
-                }
-                None => Ok(None),
-            }
-        }
-    }
-
-    fn id_limit(&self) -> IdLimit {
-        self.reader.id_limit()
-    }
-
-    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize> {
-        debug_assert!(buffer.len() >= list.len());
-
-        let len = list.len();
-        let lookahead = self.lookahead.map(|l| l.get()).unwrap_or(0).min(len);
-
-        for j in list.iter().take(lookahead) {
-            // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
-            // as the validity of the prefetch bounds.
-            //
-            // We validated `self.prefetch` with `self.reader.bytes_with_tag()` upon construction.
-            //
-            // We do not materialize the `RawSlice` as a reference.
-            unsafe {
-                let raw = self.reader.read_raw_unchecked(j.into_usize());
-                self.prefetch.prefetch(raw.as_ptr(), raw.len());
-            }
-        }
-
-        // Disable prefetching if the lookahead is 0.
-        let mut j = if lookahead == 0 { len } else { lookahead };
-        let mut processed = 0;
-        for &i in list.iter() {
-            if j != len {
-                // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
-                // well as the validity of the prefetch bounds.
-                //
-                // We validated `self.prefetch` with `self.reader.bytes_with_tag()` upon
-                // construction.
-                //
-                // We do not materialize the `RawSlice` as a reference.
-                unsafe {
-                    let raw = self
-                        .reader
-                        .read_raw_unchecked(list.get_unchecked(j).into_usize());
-                    self.prefetch.prefetch(raw.as_ptr(), raw.len());
-                }
-                j += 1;
-            }
-
-            // SAFETY: Caller asserts that `i` is in-bounds.
-            if let Some(data) = unsafe { self.reader.read_in_bounds(i.into_usize()) } {
-                // SAFETY: We just read `data` from `self.reader`, so it has a length of
-                // exactly `self.bytes()`.
-                let distance = unsafe { self.run_unchecked(data) };
-
-                // SAFETY: Inherited from caller.
-                *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance);
-                processed += 1;
-            }
-        }
-
-        Ok(processed)
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("index {} is out-of-bounds", self.0)]
-struct OutOfBounds(u32);
-
-diskann::convert_error!(OutOfBounds);
 
 #[derive(Debug, Error)]
 #[error(
@@ -706,91 +642,6 @@ struct ExpandBeamError {
 
 diskann::convert_error!(ExpandBeamError);
 
-//-------//
-// Prune //
-//-------//
-
-#[derive(Debug)]
-struct Prune<'a, T, D> {
-    // Buffered data to prune over.
-    buffer: Vec<UnalignedSlice<'a, T>>,
-    // A reader into a representation's store.
-    reader: store::intrusive::Reader<'a>,
-    // The distance implementation used for pruning.
-    distance: D,
-}
-
-impl<'a, T, D> Prune<'a, T, D> {
-    fn new(reader: store::intrusive::Reader<'a>, distance: D) -> Self {
-        // This should be ensured at construction time
-        debug_assert!(
-            reader
-                .bytes()
-                .value()
-                .is_multiple_of(std::mem::size_of::<T>()),
-            "internal invariant violated",
-        );
-
-        Self {
-            buffer: Vec::new(),
-            reader,
-            distance,
-        }
-    }
-
-    fn boxed(self) -> Box<Self> {
-        Box::new(self)
-    }
-}
-
-impl<T, D> repr::Prune for Prune<'_, T, D>
-where
-    T: Debug + Send + Sync + 'static,
-    D: Distance<T, T>,
-{
-    fn prepare(
-        &mut self,
-        items: hashbrown::hash_map::IterMut<'_, u32, Option<repr::PruneKey>>,
-    ) -> ANNResult<usize> {
-        let mut counter = repr::PruneKey::counter();
-        self.buffer.clear();
-        self.buffer.reserve(items.len());
-
-        for (id, key) in items {
-            if let Some(v) = self.reader.read(id.into_usize()) {
-                // SAFETY: We have checked that it is safe to read this data vector and
-                // `self.reader` is preventing any mutation for `self`'s lifetime.
-                //
-                // Further, we know the raw slice has a length exactly `self.reader.bytes()`,
-                // so the formed `UnalignedSlice` is within a single allocated object.
-                let unaligned = unsafe {
-                    UnalignedSlice::new(
-                        v.as_ptr().cast::<T>(),
-                        self.reader.bytes().value() / std::mem::size_of::<T>(),
-                    )
-                };
-
-                self.buffer.push(unaligned);
-
-                *key = Some(counter);
-
-                // Potential overflow issue - but it's exceedingly unlikely that
-                // someone will provide a prune list exceeding `u16::MAX`.
-                //
-                // In addition, `diskann` limits this bound as well.
-                counter = counter.increment()?;
-            }
-        }
-
-        Ok(counter.index())
-    }
-
-    fn evaluate(&self, a: repr::PruneKey, b: repr::PruneKey) -> f32 {
-        self.distance
-            .eval(self.buffer[a.index()], self.buffer[b.index()])
-    }
-}
-
 /////////////////
 // Dispatching //
 /////////////////
@@ -801,24 +652,29 @@ const fn compute_bytes<T>(dim: usize) -> usize {
 
 macro_rules! expand_beam {
     ($into:ident, { $T:ty, $N:literal, $f:ident }) => {{
-        Box::new(ExpandBeam::<_, _, $T, _>::new(
-            $into,
-            prefetch::Unrolled::<{ compute_bytes::<$T>($N) }>::new(),
-            Pure::<Specialize<$N, $f>>::new(),
-        ))
+        $into
+            .into_expand_beam(
+                Pure::<_, _, Specialize<$N, $f>>::new(),
+                prefetch::Unrolled::<{ compute_bytes::<$T>($N) }>::new(),
+            )
+            .boxed()
     }};
     ($into:ident, $f:ident) => {{
-        Box::new(ExpandBeam::new(
-            $into,
-            prefetch::Loop::new(),
-            Pure::<$f>::new(),
-        ))
+        $into
+            .into_expand_beam(Pure::<_, _, $f>::new(), prefetch::Loop::new())
+            .boxed()
     }};
 }
 
 macro_rules! prune {
-    ($self:ty, $reader:ident, $f:ident) => {{ Prune::<$self, _>::new($reader, Pure::<$f>::new()).boxed() }};
-    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{ Prune::<$self, _>::new($reader, Pure::<Specialize<$N, $f>>::new()).boxed() }};
+    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::intrusive::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
+    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
+        repr::internal::intrusive::Prune::new(
+            $reader,
+            Pure::<$self, $self, Specialize<$N, $f>>::new(),
+        )
+        .boxed()
+    }};
 }
 
 impl FullPrecisionImpl for f32 {
@@ -942,11 +798,11 @@ impl FullPrecisionImpl for i8 {
     ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
-        let distance =
-            <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
+        let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
-        let output: Box<dyn repr::ExpandBeam + 'a> =
-            ExpandBeam::new(into, prefetch::Loop::new(), distance).boxed();
+        let output: Box<dyn repr::ExpandBeam + 'a> = into
+            .into_expand_beam(distance, prefetch::Loop::new())
+            .boxed();
 
         Ok(output)
     }
@@ -954,10 +810,11 @@ impl FullPrecisionImpl for i8 {
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
         let reader = full.reader()?;
 
-        let distance =
-            <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
+        let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
-        let output: Box<dyn repr::Prune> = Prune::<Self, _>::new(reader, distance).boxed();
+        let output: Box<dyn repr::Prune> =
+            repr::internal::intrusive::Prune::new(reader, distance).boxed();
+
         Ok(output)
     }
 }
@@ -978,8 +835,9 @@ macro_rules! impl_full_precision {
                 Ok(crate::provider::SearchAccessor::new(
                     representation.store.neighbors(),
                     expand_beam,
+                    None,
                     provider,
-                    representation.store.frozen(),
+                    representation.start_point_ids,
                     counters,
                 ))
             }
@@ -1014,7 +872,9 @@ mod tests {
 
     use std::fmt::Display;
 
+    use diskann::neighbor::Neighbor;
     use diskann_utils::lazy_format;
+    use diskann_vector::distance::DistanceProvider;
     use hashbrown::{HashMap, HashSet};
     use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -1071,7 +931,7 @@ mod tests {
                 capacity,
                 MaxDegree::new(0),
                 Metric::L2,
-                Matrix::column_vector(Box::new(start_points)),
+                rowmajor::Owned::column_vector(Box::new(start_points)),
             )
             .unwrap(),
         )
@@ -1095,29 +955,23 @@ mod tests {
         let points: HashMap<u32, f32> = {
             let reader = full.reader().unwrap();
             assert_eq!(
-                reader.read(capacity.value()).unwrap(),
+                reader.read(0).unwrap(),
                 bytemuck::bytes_of(&start_points[0])
             );
             assert_eq!(
-                reader.read(capacity.value() + 1).unwrap(),
+                reader.read(1).unwrap(),
                 bytemuck::bytes_of(&start_points[1])
             );
 
-            [
-                (capacity.value() as u32, start_points[0]),
-                ((capacity.value() + 1) as u32, start_points[1]),
-            ]
-            .into_iter()
-            .collect()
+            [(0, start_points[0]), (1, start_points[1])]
+                .into_iter()
+                .collect()
         };
 
         (full, points)
     }
 
-    #[derive(Debug)]
-    struct TestDistance;
-
-    impl Distance<f32, f32> for TestDistance {
+    impl Distance<f32, f32> for repr::test::TestDistance {
         fn eval(&self, x: UnalignedSlice<'_, f32>, y: UnalignedSlice<'_, f32>) -> f32 {
             assert_eq!(x.len(), 1);
             assert_eq!(y.len(), 1);
@@ -1213,11 +1067,11 @@ mod tests {
             let into =
                 IntoExpandBeam::new(&full, Calf::Borrowed(std::slice::from_ref(&query))).unwrap();
 
-            let expand = ExpandBeam::new(into, prefetch::Loop::new(), TestDistance);
+            let expand = into.into_expand_beam(repr::test::TestDistance, prefetch::Loop::new());
 
             assert_eq!(<_ as repr::ExpandBeam>::id_limit(&expand), id_limit);
 
-            let mut buf = Vec::<(u32, f32)>::new();
+            let mut buf = Vec::<Neighbor<u32>>::new();
             let mut list = Vec::<u32>::new();
 
             // Use triangular indexing from `0..id_limit` with `points` serving as the
@@ -1232,13 +1086,7 @@ mod tests {
 
                 buf.resize(list.len(), Default::default());
 
-                // SAFETY: By construction, all entries in `list` are within `id_limit`
-                // (verified against this `ExpandBeam` instance.
-                //
-                // Also by construction `buf` is at least as long as `list`.
-                let read =
-                    unsafe { <_ as repr::ExpandBeam>::expand_beam(&expand, &list, &mut buf) }
-                        .unwrap();
+                let read = repr::safe_expand_beam(&expand, &list, &mut buf).unwrap();
 
                 let expected: Vec<(u32, f32)> = list
                     .iter()
@@ -1278,7 +1126,10 @@ mod tests {
                     })
                     .collect();
 
-                assert_eq!(&buf[..read], &*expected);
+                for i in 0..read {
+                    assert_eq!(*buf[i].id(), expected[i].0, "i = {i}");
+                    assert_eq!(*buf[i].distance(), expected[i].1, "i = {i}");
+                }
             }
 
             assert!(
@@ -1294,30 +1145,27 @@ mod tests {
 
     fn test_prune_inner(
         points: &HashMap<u32, f32>,
-        prune: &mut Prune<f32, TestDistance>,
+        prune: &mut repr::internal::intrusive::Prune<'_, repr::test::TestDistance>,
         ids: &[u32],
     ) {
-        let mut items: HashMap<u32, Option<repr::PruneKey>> =
-            ids.iter().map(|id| (*id, None)).collect();
-
-        let processed = <_ as repr::Prune>::prepare(prune, items.iter_mut()).unwrap();
-        assert_eq!(processed, items.values().filter(|i| i.is_some()).count());
-
-        // Ensure that `prepare` agrees with `points`.
-        for (k, v) in items.iter() {
-            match v {
-                Some(_) => assert!(points.contains_key(k)),
-                None => assert!(!points.contains_key(k)),
-            }
-        }
-
-        fn filter((k, v): (&u32, &Option<repr::PruneKey>)) -> Option<(u32, repr::PruneKey)> {
-            v.map(|v| (*k, v))
-        }
-
         // Ensure that distances agree.
-        for (k0, v0) in items.iter().filter_map(filter) {
-            for (k1, v1) in items.iter().filter_map(filter) {
+        for &k0 in ids.iter() {
+            let v0 = <_ as repr::Prune>::get(prune, k0);
+            if !points.contains_key(&k0) {
+                assert!(v0.is_none(), "Failed for key {}", k0);
+                continue;
+            }
+
+            let v0 = v0.unwrap();
+            for &k1 in ids.iter() {
+                let v1 = <_ as repr::Prune>::get(prune, k1);
+                if !points.contains_key(&k1) {
+                    assert!(v1.is_none(), "Failed for key {}", k1);
+                    continue;
+                }
+
+                let v1 = v1.unwrap();
+
                 // Manually implement `TestDistance`.
                 let expected = points[&k0] + points[&k1];
                 let got = <_ as repr::Prune>::evaluate(prune, v0, v1);
@@ -1382,7 +1230,8 @@ mod tests {
             <_ as repr::Representation>::retire(&full, g1_id).unwrap();
         }
 
-        let mut prune = Prune::new(full.reader().unwrap(), TestDistance);
+        let mut prune =
+            repr::internal::intrusive::Prune::new(full.reader().unwrap(), repr::test::TestDistance);
 
         // Note that we emit reads above the `IdLimit`, which we expect to be silently
         // rejected.
@@ -1420,14 +1269,14 @@ mod tests {
                 Capacity::new(1),
                 MaxDegree::new(0),
                 metric,
-                Matrix::<T>::row_vector(start_point.clone().into()),
+                rowmajor::Owned::<T>::row_vector(start_point.clone().into()),
             )
             .unwrap(),
         )
         .unwrap();
 
-        let start_id: u32 = 1;
-
+        // We know the internal start IDs begin at 0. This is not a stability guarantee.
+        let start_id: u32 = 0;
         let internal_query = {
             let guard = <_ as repr::Set<&[T]>>::set(&full, &query).unwrap();
             let id = <_ as repr::Guard>::id(&guard);
@@ -1435,7 +1284,7 @@ mod tests {
             id
         };
 
-        let distance = <T as DistanceProvider<T>>::distance_comparer(metric, None);
+        let distance = VDistance::<T, T>::new(metric, None);
         let expected = distance.call(&start_point, &query);
 
         // Expand Beam - both `evaluate` and `expand_beam` share the same distance computer,
@@ -1451,13 +1300,10 @@ mod tests {
 
         // Prune
         {
-            let mut prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
-            let mut points: HashMap<u32, Option<repr::PruneKey>> =
-                [(internal_query, None), (start_id, None)]
-                    .into_iter()
-                    .collect();
-            prune.prepare(points.iter_mut()).unwrap();
-            let got = prune.evaluate(points[&internal_query].unwrap(), points[&start_id].unwrap());
+            let prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
+            let query = prune.get(internal_query).unwrap();
+            let start = prune.get(start_id).unwrap();
+            let got = prune.evaluate(query, start);
             assert!(
                 approx_eq(expected, got),
                 "{ctx} - expected {expected}, got {got}"

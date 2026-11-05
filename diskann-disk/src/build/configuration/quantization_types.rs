@@ -7,13 +7,12 @@ use std::{fmt, fmt::Display, str::FromStr};
 
 use diskann_quantization::num::Positive;
 use serde::{
-    de::{self, Visitor},
     Deserializer, Serializer,
+    de::{self, Visitor},
 };
 use thiserror::Error;
 
-const EXPECTED_QUANTIZATION_TEMPLATE: &str =
-    "Expected 'FP', 'PQ_N', 'SQ_NBITS'(STDDEV=2.0 by default), 'SQ_NBITS_STDDEV', or 'SPHERICAL_NBITS', got: ";
+const EXPECTED_QUANTIZATION_TEMPLATE: &str = "Expected 'FP', 'PQ_N', 'SQ_NBITS'(STDDEV=2.0 by default), 'SQ_NBITS_STDDEV', or 'SPHERICAL_NBITS', got: ";
 
 /// - `PQ`: Product Quantization with a specified number of chunks.
 /// - `SQ`: Scalar Quantization with a specified number of bits per dimension and a standard deviation.
@@ -211,13 +210,10 @@ impl Display for QuantizationType {
             QuantizationType::SQ {
                 nbits,
                 standard_deviation,
-            } => {
-                let standard_deviation = match standard_deviation {
-                    Some(sd) => sd.into_inner().to_string(),
-                    None => "None".to_string(),
-                };
-                write!(f, "SQ_{}_{}", nbits, standard_deviation)
-            }
+            } => match standard_deviation {
+                Some(sd) => write!(f, "SQ_{}_{}", nbits, sd.into_inner()),
+                None => write!(f, "SQ_{}", nbits),
+            },
         }
     }
 }
@@ -281,7 +277,7 @@ mod tests {
     #[case(QuantizationType::Spherical(SphericalBits::One), "SPHERICAL_1")]
     #[case(
         QuantizationType::SQ { nbits: 8, standard_deviation: None },
-        "SQ_8_None"
+        "SQ_8"
     )]
     #[case(
         QuantizationType::SQ {
@@ -331,11 +327,13 @@ mod tests {
 
     #[test]
     fn test_roundtrip_serialization() {
-        // Note: SQ with None standard_deviation is not included as it formats to "SQ_N_None"
-        // which the parser doesn't accept - this is a known limitation of the current implementation
         let types = vec![
             QuantizationType::FP,
             QuantizationType::PQ { num_chunks: 256 },
+            QuantizationType::SQ {
+                nbits: 8,
+                standard_deviation: None,
+            },
             QuantizationType::SQ {
                 nbits: 8,
                 standard_deviation: Some(Positive::new(1.5).unwrap()),

@@ -8,18 +8,21 @@
 
 use std::num::NonZeroUsize;
 
+use diskann_utils::views::rowmajor::Matrix;
+use diskann_vector::PureDistanceFunction;
 use diskann_vector::distance::InnerProduct;
-use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 use diskann_wide::Architecture;
 use diskann_wide::arch::Scalar;
 #[cfg(target_arch = "aarch64")]
 use diskann_wide::arch::aarch64::Neon;
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
+use thiserror::Error;
 
+use super::fallback::FallbackKernel;
 use super::isa::{MaxSimIsa, NotSupported};
 use super::kernel::{Erase, MaxSimKernel};
-use super::max_sim::{MaxSim, MaxSimError};
+use super::max_sim::MaxSimError;
 use crate::matrix_kernels as mk;
 use crate::multi_vector::distance::QueryMatRef;
 use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
@@ -175,15 +178,88 @@ where
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-//  ReferenceKernel<T> — non-SIMD fallback that wraps MaxSim::evaluate.
-// ─────────────────────────────────────────────────────────────────────────
+impl<A, Q, const GROUP: usize, const NR: usize, const PACK: usize> MaxSimKernel<i8>
+    for Prepared<A, BlockTransposed<Q, GROUP, PACK>, NR>
+where
+    Q: Copy + Send + Sync + std::fmt::Debug,
+    A: mk::maxsim::packed_i8_x_unpacked_i8::PrepareB<AElem = Q> + Architecture,
+    for<'a> mk::maxsim::packed_i8_x_unpacked_i8::Driver<'a, A, GROUP, NR, PACK>: mk::Drive,
+{
+    fn nrows(&self) -> usize {
+        self.prepared.nrows()
+    }
 
-struct ReferenceKernel<T: Copy> {
-    query: Mat<Standard<T>>,
+    fn compute_max_sim(
+        &self,
+        doc: MatRef<'_, Standard<i8>>,
+        scores: &mut [i32],
+    ) -> Result<(), MaxSimError> {
+        if scores.len() != self.nrows() {
+            return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
+        }
+
+        if doc.vector_dim() != self.prepared.ncols() {
+            return Err(MaxSimError::UnequalDim(
+                doc.vector_dim(),
+                self.prepared.ncols(),
+            ));
+        }
+
+        let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
+            scores.fill(if doc.num_vectors() == 0 { i32::MAX } else { 0 });
+            return Ok(());
+        };
+
+        let Some(a) = mk::blocks::packed::View::from_block_transposed(self.prepared.as_view())
+        else {
+            return Ok(());
+        };
+
+        let Some(b) = mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()) else {
+            scores.fill(i32::MAX);
+            return Ok(());
+        };
+
+        // SAFETY: The dimension check establishes that `a.k() == b.k() == k`.
+        // The length check establishes that `scores` occupies exactly the
+        // packed blocks in `a`.
+        let mut driver = unsafe {
+            mk::maxsim::packed_i8_x_unpacked_i8::Driver::new(
+                self.arch,
+                a,
+                b,
+                scores,
+                k,
+                mk::Cache::detect(),
+            )
+        };
+
+        mk::Drive::drive(&mut driver);
+
+        scores.iter_mut().for_each(|s| *s = -*s);
+
+        Ok(())
+    }
 }
 
-impl<T: Copy + std::fmt::Debug> std::fmt::Debug for ReferenceKernel<T> {
+// ─────────────────────────────────────────────────────────────────────────
+//  ReferenceKernel<T> — double loop over the single-vector inner product.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Reference MaxSim implementation, selected by [`MaxSimElement::build`].
+///
+/// May assume `scores` and `doc` were validated by
+/// [`MaxSimKernel::compute_max_sim`].
+type ReferenceFn<T> =
+    fn(QueryMatRef<'_, Standard<T>>, MatRef<'_, Standard<T>>, &mut [<T as MaxSimElement>::Score]);
+
+/// Unoptimized kernel backing [`MaxSimIsa::Reference`].
+struct ReferenceKernel<T: MaxSimElement> {
+    query: Mat<Standard<T>>,
+    run: ReferenceFn<T>,
+}
+
+impl<T: MaxSimElement> std::fmt::Debug for ReferenceKernel<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReferenceKernel")
             .field("nrows", &self.query.num_vectors())
@@ -191,19 +267,16 @@ impl<T: Copy + std::fmt::Debug> std::fmt::Debug for ReferenceKernel<T> {
     }
 }
 
-impl<T: Copy> ReferenceKernel<T> {
-    fn new(query: MatRef<'_, Standard<T>>) -> Self {
+impl<T: MaxSimElement> ReferenceKernel<T> {
+    fn new(query: MatRef<'_, Standard<T>>, run: ReferenceFn<T>) -> Self {
         Self {
             query: query.to_owned(),
+            run,
         }
     }
 }
 
-impl<T> MaxSimKernel<T> for ReferenceKernel<T>
-where
-    T: Copy + Send + Sync + std::fmt::Debug + 'static,
-    InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
-{
+impl<T: MaxSimElement> MaxSimKernel<T> for ReferenceKernel<T> {
     fn nrows(&self) -> usize {
         self.query.num_vectors()
     }
@@ -211,7 +284,7 @@ where
     fn compute_max_sim(
         &self,
         doc: MatRef<'_, Standard<T>>,
-        scores: &mut [f32],
+        scores: &mut [T::Score],
     ) -> Result<(), MaxSimError> {
         if scores.len() != self.nrows() {
             return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
@@ -222,14 +295,29 @@ where
                 self.query.vector_dim(),
             ));
         }
-        if doc.num_vectors() == 0 {
-            scores.fill(f32::MAX);
-            return Ok(());
-        }
-        let query: QueryMatRef<'_, Standard<T>> = self.query.as_view().into();
-        let mut max_sim = MaxSim::new(scores);
-        max_sim.evaluate(query, doc)
+        (self.run)(self.query.as_view().into(), doc, scores);
+        Ok(())
     }
+}
+
+/// [`ReferenceKernel`] implementation for element types scored in `f32`.
+fn reference_scores<T: Copy>(
+    query: QueryMatRef<'_, Standard<T>>,
+    doc: MatRef<'_, Standard<T>>,
+    scores: &mut [f32],
+) where
+    InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
+{
+    FallbackKernel::max_sim_kernel(query, doc, |i, score| scores[i] = score);
+}
+
+/// [`ReferenceKernel`] implementation for `i8`, which scores in exact `i32`.
+fn reference_scores_i8(
+    query: QueryMatRef<'_, Standard<i8>>,
+    doc: MatRef<'_, Standard<i8>>,
+    scores: &mut [i32],
+) {
+    FallbackKernel::max_sim_kernel_i8(query, doc, |i, score| scores[i] = score);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -377,6 +465,69 @@ impl<E: Erase<half::f16>>
     }
 }
 
+// ───── i8 Target1 impls ─────
+
+impl<E: Erase<i8>> diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, Standard<i8>>>
+    for BuildAndErase<E>
+{
+    fn run(self, arch: Scalar, query: MatRef<'_, Standard<i8>>) -> E::Output {
+        let prepared = BlockTransposed::<i8, 8, 2>::from_matrix_view(query.as_matrix_view());
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<2>,
+        })
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl<E: Erase<i8>> diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standard<i8>>>
+    for BuildAndErase<E>
+{
+    fn run(self, arch: V3, query: MatRef<'_, Standard<i8>>) -> E::Output {
+        // `PrepareB for V3` expects the query widened to `i16`.
+        let prepared = BlockTransposed::<i16, 16, 2>::from_matrix_view(
+            query.as_matrix_view().map(|v| i16::from(*v)).as_view(),
+        );
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl<E: Erase<i8>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standard<i8>>>
+    for BuildAndErase<E>
+{
+    fn run(self, arch: V4, query: MatRef<'_, Standard<i8>>) -> E::Output {
+        // `PrepareB for V4` expects the query packed as `x + 128` in `u8`.
+        let prepared = BlockTransposed::<u8, 32, 4>::from_matrix_view(
+            query.as_matrix_view().map(|v| (*v as u8) ^ 0x80).as_view(),
+        );
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl<E: Erase<i8>> diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Standard<i8>>>
+    for BuildAndErase<E>
+{
+    fn run(self, arch: Neon, query: MatRef<'_, Standard<i8>>) -> E::Output {
+        let prepared = BlockTransposed::<i8, 8, 4>::from_matrix_view(query.as_matrix_view());
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 //  MaxSimElement — sealed trait gating accepted element types.
 // ─────────────────────────────────────────────────────────────────────────
@@ -391,29 +542,42 @@ mod sealed {
 /// (PQ, SQ, packed sub-byte) are intentionally excluded — they need
 /// codebook/scale state that [`MatRef<'_, Standard<Self>>`] can't carry.
 pub trait MaxSimElement: sealed::Sealed + Sized + Copy + Send + Sync + 'static {
+    /// Score produced per query row: `f32` for floating-point elements, `i32`
+    /// for `i8` where the inner product is exact.
+    type Score: Copy + Default + PartialEq + std::fmt::Debug;
+
+    /// Score written for every query row when the document set is empty.
+    const NO_MATCH: Self::Score;
+
     /// Build the concrete kernel for this element type and hand it to
     /// `erase.erase(...)`.
     ///
     /// # Errors
     ///
-    /// Returns [`NotSupported`] when the requested ISA cannot run on this
-    /// build (e.g. AVX-512 unavailable; aarch64 on x86_64).
+    /// Returns [`BuildMaxSimError::NotSupported`] when the requested ISA cannot
+    /// run on this build (e.g. AVX-512 unavailable; aarch64 on x86_64), and
+    /// [`BuildMaxSimError::DimTooLarge`] when an `i8` query has more than
+    /// `131_071` dimensions, beyond which `i32` scores could overflow.
     fn build<E: Erase<Self>>(
         isa: MaxSimIsa,
         query: MatRef<'_, Standard<Self>>,
         erase: E,
-    ) -> Result<E::Output, NotSupported>;
+    ) -> Result<E::Output, BuildMaxSimError>;
 }
 
 impl sealed::Sealed for f32 {}
 impl sealed::Sealed for half::f16 {}
+impl sealed::Sealed for i8 {}
 
 impl MaxSimElement for f32 {
+    type Score = f32;
+    const NO_MATCH: f32 = f32::MAX;
+
     fn build<E: Erase<f32>>(
         isa: MaxSimIsa,
         query: MatRef<'_, Standard<f32>>,
         erase: E,
-    ) -> Result<E::Output, NotSupported> {
+    ) -> Result<E::Output, BuildMaxSimError> {
         match isa {
             MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
                 BuildAndErase(erase),
@@ -440,7 +604,8 @@ impl MaxSimElement for f32 {
             MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
                 isa,
                 reason: "x86_64 target only",
-            }),
+            }
+            .into()),
             #[cfg(target_arch = "aarch64")]
             MaxSimIsa::Neon => {
                 let arch = Neon::new_checked().ok_or(NotSupported {
@@ -453,18 +618,24 @@ impl MaxSimElement for f32 {
             MaxSimIsa::Neon => Err(NotSupported {
                 isa,
                 reason: "aarch64 target only",
-            }),
-            MaxSimIsa::Reference => Ok(erase.erase(ReferenceKernel::<f32>::new(query))),
+            }
+            .into()),
+            MaxSimIsa::Reference => {
+                Ok(erase.erase(ReferenceKernel::new(query, reference_scores::<f32>)))
+            }
         }
     }
 }
 
 impl MaxSimElement for half::f16 {
+    type Score = f32;
+    const NO_MATCH: f32 = f32::MAX;
+
     fn build<E: Erase<half::f16>>(
         isa: MaxSimIsa,
         query: MatRef<'_, Standard<half::f16>>,
         erase: E,
-    ) -> Result<E::Output, NotSupported> {
+    ) -> Result<E::Output, BuildMaxSimError> {
         match isa {
             MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
                 BuildAndErase(erase),
@@ -491,7 +662,8 @@ impl MaxSimElement for half::f16 {
             MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
                 isa,
                 reason: "x86_64 target only",
-            }),
+            }
+            .into()),
             #[cfg(target_arch = "aarch64")]
             MaxSimIsa::Neon => {
                 let arch = Neon::new_checked().ok_or(NotSupported {
@@ -504,8 +676,79 @@ impl MaxSimElement for half::f16 {
             MaxSimIsa::Neon => Err(NotSupported {
                 isa,
                 reason: "aarch64 target only",
-            }),
-            MaxSimIsa::Reference => Ok(erase.erase(ReferenceKernel::<half::f16>::new(query))),
+            }
+            .into()),
+            MaxSimIsa::Reference => {
+                Ok(erase.erase(ReferenceKernel::new(query, reference_scores::<half::f16>)))
+            }
+        }
+    }
+}
+
+/// Largest `i8` dimension for which every inner product fits in `i32`.
+const MAX_I8_DIM: usize = (i32::MAX / (128 * 128)) as usize;
+
+impl MaxSimElement for i8 {
+    type Score = i32;
+    const NO_MATCH: i32 = i32::MAX;
+
+    fn build<E: Erase<i8>>(
+        isa: MaxSimIsa,
+        query: MatRef<'_, Standard<i8>>,
+        erase: E,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        if query.vector_dim() > MAX_I8_DIM {
+            return Err(BuildMaxSimError::DimTooLarge(
+                query.vector_dim(),
+                MAX_I8_DIM,
+            ));
+        }
+
+        match isa {
+            MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
+                BuildAndErase(erase),
+                query,
+            )),
+            MaxSimIsa::Scalar => Ok(Scalar::new().run1(BuildAndErase(erase), query)),
+            #[cfg(target_arch = "x86_64")]
+            MaxSimIsa::X86_64_V3 => {
+                let arch = V3::new_checked().ok_or(NotSupported {
+                    isa,
+                    reason: "AVX2/FMA unavailable on this CPU",
+                })?;
+                Ok(arch.run1(BuildAndErase(erase), query))
+            }
+            #[cfg(target_arch = "x86_64")]
+            MaxSimIsa::X86_64_V4 => {
+                let arch = V4::new_checked().ok_or(NotSupported {
+                    isa,
+                    reason: "AVX-512 unavailable on this CPU",
+                })?;
+                Ok(arch.run1(BuildAndErase(erase), query))
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
+                isa,
+                reason: "x86_64 target only",
+            }
+            .into()),
+            #[cfg(target_arch = "aarch64")]
+            MaxSimIsa::Neon => {
+                let arch = Neon::new_checked().ok_or(NotSupported {
+                    isa,
+                    reason: "Neon unavailable on this CPU",
+                })?;
+                Ok(arch.run1(BuildAndErase(erase), query))
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            MaxSimIsa::Neon => Err(NotSupported {
+                isa,
+                reason: "aarch64 target only",
+            }
+            .into()),
+            MaxSimIsa::Reference => {
+                Ok(erase.erase(ReferenceKernel::new(query, reference_scores_i8)))
+            }
         }
     }
 }
@@ -514,6 +757,16 @@ impl MaxSimElement for half::f16 {
 //  Factory entry point.
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Error returned by [`build_max_sim`].
+#[derive(Debug, Clone, Copy, Error)]
+#[non_exhaustive]
+pub enum BuildMaxSimError {
+    #[error(transparent)]
+    NotSupported(#[from] NotSupported),
+    #[error("query-vector dim {0} exceeds the maximum of {1}")]
+    DimTooLarge(usize, usize),
+}
+
 /// Build a multi-vector MaxSim kernel for any [`MaxSimElement`] type.
 ///
 /// Thin wrapper over [`MaxSimElement::build`] so callers don't have to name
@@ -521,12 +774,14 @@ impl MaxSimElement for half::f16 {
 ///
 /// # Errors
 ///
-/// Returns [`NotSupported`] when the requested ISA cannot run on this build.
+/// Returns [`BuildMaxSimError::NotSupported`] when the requested ISA cannot run
+/// on this build, and [`BuildMaxSimError::DimTooLarge`] when an `i8` query has
+/// more than `131_071` dimensions.
 pub fn build_max_sim<T: MaxSimElement, E: Erase<T>>(
     isa: MaxSimIsa,
     query: MatRef<'_, Standard<T>>,
     erase: E,
-) -> Result<E::Output, NotSupported> {
+) -> Result<E::Output, BuildMaxSimError> {
     T::build(isa, query, erase)
 }
 
@@ -534,10 +789,10 @@ pub fn build_max_sim<T: MaxSimElement, E: Erase<T>>(
 mod tests {
     use super::*;
     use crate::multi_vector::{BoxErase, Chamfer, MaxSim, QueryMatRef};
+    use diskann_vector::DistanceFunctionMut;
 
     /// Local helper trait — picks a sane test value of `T` from an `f32`
-    /// so both `f32` and `half::f16` parameterizations share the same data
-    /// generator.
+    /// so every element type shares the same data generator.
     trait FromF32 {
         fn from_f32(v: f32) -> Self;
     }
@@ -552,6 +807,44 @@ mod tests {
         fn from_f32(v: f32) -> Self {
             diskann_wide::cast_f32_to_f16(v)
         }
+    }
+
+    impl FromF32 for i8 {
+        fn from_f32(v: f32) -> Self {
+            v as i8
+        }
+    }
+
+    /// Projects a kernel score onto the `f32` distance the fallback path
+    /// produces, so every element type shares the same assertions.
+    trait ScoreAsF32: MaxSimElement {
+        fn score_as_f32(score: Self::Score) -> f32;
+    }
+
+    impl ScoreAsF32 for f32 {
+        fn score_as_f32(score: f32) -> f32 {
+            score
+        }
+    }
+
+    impl ScoreAsF32 for half::f16 {
+        fn score_as_f32(score: f32) -> f32 {
+            score
+        }
+    }
+
+    impl ScoreAsF32 for i8 {
+        fn score_as_f32(score: i32) -> f32 {
+            if score == Self::NO_MATCH {
+                f32::MAX
+            } else {
+                score as f32
+            }
+        }
+    }
+
+    fn scores_buffer<T: MaxSimElement>(len: usize) -> Vec<T::Score> {
+        vec![T::Score::default(); len]
     }
 
     fn make_mat<T: Copy>(data: &[T], nrows: usize, ncols: usize) -> MatRef<'_, Standard<T>> {
@@ -583,7 +876,7 @@ mod tests {
 
     fn check_chamfer_matches<T>(tol: f32, label: &str)
     where
-        T: MaxSimElement + FromF32,
+        T: ScoreAsF32 + FromF32,
         InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
         for &(nq, nd, dim) in TEST_CASES {
@@ -596,9 +889,9 @@ mod tests {
             let expected = Chamfer::evaluate(QueryMatRef::from(query), doc);
 
             let kernel = build_max_sim::<T, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
-            let mut scores = vec![0.0f32; nq];
+            let mut scores = scores_buffer::<T>(nq);
             kernel.compute_max_sim(doc, &mut scores).unwrap();
-            let actual: f32 = scores.iter().sum();
+            let actual: f32 = scores.iter().map(|&s| T::score_as_f32(s)).sum();
 
             assert!(
                 (actual - expected).abs() < tol,
@@ -609,7 +902,7 @@ mod tests {
 
     fn check_max_sim_matches<T>(tol: f32, label: &str)
     where
-        T: MaxSimElement + FromF32,
+        T: ScoreAsF32 + FromF32,
         InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
         for &(nq, nd, dim) in TEST_CASES {
@@ -623,17 +916,61 @@ mod tests {
             let _ = MaxSim::new(&mut expected_scores).evaluate(QueryMatRef::from(query), doc);
 
             let kernel = build_max_sim::<T, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
-            let mut actual_scores = vec![0.0f32; nq];
+            let mut actual_scores = scores_buffer::<T>(nq);
             kernel.compute_max_sim(doc, &mut actual_scores).unwrap();
 
             for i in 0..nq {
+                let actual = T::score_as_f32(actual_scores[i]);
                 assert!(
-                    (actual_scores[i] - expected_scores[i]).abs() < tol,
-                    "{label}MaxSim[{i}] mismatch for ({nq},{nd},{dim}): actual={}, expected={}",
-                    actual_scores[i],
+                    (actual - expected_scores[i]).abs() < tol,
+                    "{label}MaxSim[{i}] mismatch for ({nq},{nd},{dim}): actual={actual}, expected={}",
                     expected_scores[i],
                 );
             }
+        }
+    }
+
+    fn check_i8_isas(nq: usize, nd: usize, dim: usize, query_data: &[i8], doc_data: &[i8]) {
+        let query = make_mat(query_data, nq, dim);
+        let doc = make_mat(doc_data, nd, dim);
+
+        let mut expected = vec![0.0f32; nq];
+        let _ = MaxSim::new(&mut expected).evaluate(QueryMatRef::from(query), doc);
+
+        for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
+            let kernel = build_max_sim::<i8, _>(isa, query, BoxErase).unwrap();
+            let mut scores = scores_buffer::<i8>(nq);
+            kernel.compute_max_sim(doc, &mut scores).unwrap();
+
+            for i in 0..nq {
+                let actual = <i8 as ScoreAsF32>::score_as_f32(scores[i]);
+                assert!(
+                    (actual - expected[i]).abs() < 1e-10,
+                    "i8 {isa} MaxSim[{i}] mismatch for ({nq},{nd},{dim}): \
+                     actual={actual}, expected={}",
+                    expected[i],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn i8_isas_match_oracle() {
+        for &(nq, nd, dim) in TEST_CASES {
+            let query_data = make_test_data::<i8>(nq * dim, dim, dim / 2);
+            let doc_data = make_test_data::<i8>(nd * dim, dim, dim);
+            check_i8_isas(nq, nd, dim, &query_data, &doc_data);
+        }
+
+        let full_range: &[(usize, usize, usize)] = if cfg!(miri) {
+            &[(5, 4, 64)]
+        } else {
+            &[(33, 13, 64), (70, 1000, 131)]
+        };
+        for &(nq, nd, dim) in full_range {
+            let query_data: Vec<i8> = (0..nq * dim).map(|v| (37 * v) as i8).collect();
+            let doc_data: Vec<i8> = (0..nd * dim).map(|v| (91 * v + 5) as i8).collect();
+            check_i8_isas(nq, nd, dim, &query_data, &doc_data);
         }
     }
 
@@ -653,10 +990,45 @@ mod tests {
         assert_eq!(kernel.nrows(), 5);
     }
 
+    #[test]
+    fn dimensions_i8() {
+        let data = vec![1i8; 5 * 8];
+        let query = make_mat(&data, 5, 8);
+        let kernel = build_max_sim::<i8, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
+        assert_eq!(kernel.nrows(), 5);
+    }
+
+    #[test]
+    fn i8_rejects_dim_too_large() {
+        let data = vec![0i8; 131_072];
+        let query = make_mat(&data, 1, 131_072);
+
+        for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
+            let err = build_max_sim::<i8, _>(isa, query, BoxErase).err();
+            assert!(
+                matches!(err, Some(BuildMaxSimError::DimTooLarge(131_072, 131_071))),
+                "{isa:?}: expected DimTooLarge(131_072, 131_071), got {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn i8_max_dim_is_exact() {
+        let data = vec![i8::MIN; 131_071];
+        let query = make_mat(&data, 1, 131_071);
+
+        for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
+            let kernel = build_max_sim::<i8, _>(isa, query, BoxErase).unwrap();
+            let mut scores = scores_buffer::<i8>(1);
+            kernel.compute_max_sim(query, &mut scores).unwrap();
+            assert_eq!(scores[0], -131_071 * 16_384, "{isa:?}");
+        }
+    }
+
     fn check_size_mismatch<T>(label: &str)
     where
         T: MaxSimElement + FromF32,
-        InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
         let query_data = make_test_data::<T>(3 * 4, 4, 0);
         let doc_data = make_test_data::<T>(2 * 4, 4, 1);
@@ -666,7 +1038,7 @@ mod tests {
         for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
             let kernel = build_max_sim::<T, _>(isa, query, BoxErase).unwrap();
 
-            let mut too_short = vec![0.0f32; 2];
+            let mut too_short = scores_buffer::<T>(2);
             match kernel.compute_max_sim(doc, &mut too_short) {
                 Err(MaxSimError::InvalidBufferLength(2, 3)) => {}
                 other => {
@@ -674,7 +1046,7 @@ mod tests {
                 }
             }
 
-            let mut too_long = vec![0.0f32; 4];
+            let mut too_long = scores_buffer::<T>(4);
             match kernel.compute_max_sim(doc, &mut too_long) {
                 Err(MaxSimError::InvalidBufferLength(4, 3)) => {}
                 other => {
@@ -687,7 +1059,6 @@ mod tests {
     fn check_zero_docs_fills_sentinel<T>(label: &str)
     where
         T: MaxSimElement + FromF32,
-        InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
         let query_data = make_test_data::<T>(3 * 4, 4, 0);
         let doc_data: Vec<T> = Vec::new();
@@ -696,13 +1067,13 @@ mod tests {
 
         for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
             let kernel = build_max_sim::<T, _>(isa, query, BoxErase).unwrap();
-            let mut scores = vec![0.0f32; 3];
+            let mut scores = scores_buffer::<T>(3);
             kernel.compute_max_sim(doc, &mut scores).unwrap();
             for (i, &s) in scores.iter().enumerate() {
                 assert_eq!(
                     s,
-                    f32::MAX,
-                    "{label}({isa:?}) zero-doc slot {i} should be f32::MAX sentinel",
+                    T::NO_MATCH,
+                    "{label}({isa:?}) zero-doc slot {i} should be the NO_MATCH sentinel",
                 );
             }
         }
@@ -711,7 +1082,6 @@ mod tests {
     fn check_zero_query<T>(label: &str)
     where
         T: MaxSimElement + FromF32,
-        InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
     {
         let query_data: Vec<T> = Vec::new();
         let doc_data = make_test_data::<T>(2 * 4, 4, 0);
@@ -725,7 +1095,7 @@ mod tests {
                 0,
                 "{label}({isa:?}) empty query should yield nrows=0",
             );
-            let mut scores: Vec<f32> = Vec::new();
+            let mut scores = scores_buffer::<T>(0);
             kernel
                 .compute_max_sim(doc, &mut scores)
                 .unwrap_or_else(|e| panic!("{label}({isa:?}) expected Ok, got {e:?}"));
@@ -767,4 +1137,5 @@ mod tests {
 
     test_matches_fallback!(f32, f32, 1e-10, "f32 ");
     test_matches_fallback!(f16, half::f16, 1e-10, "f16 ");
+    test_matches_fallback!(i8, i8, 1e-10, "i8 ");
 }

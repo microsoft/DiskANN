@@ -5,7 +5,10 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{ReborrowMut, views::MatrixView};
+use diskann_utils::{
+    ReborrowMut,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::{
     MathematicalValue, Norm, PureDistanceFunction, distance::InnerProduct, norm::FastL2Norm,
 };
@@ -105,6 +108,15 @@ pub enum TrainError {
     AllocatorError(#[from] AllocatorError),
 }
 
+#[derive(Debug, Clone, Copy, Error, PartialEq)]
+#[non_exhaustive]
+pub enum CentroidDistanceError {
+    #[error("centroid distance is not finite")]
+    NonFiniteDistance,
+    #[error("expected centroid to have length {expected}")]
+    DimensionMismatch { expected: usize },
+}
+
 impl<A> SphericalQuantizer<A>
 where
     A: Allocator,
@@ -137,12 +149,57 @@ where
         self.mean_norm
     }
 
-    /// Return the pre-scaling parameter for data. This value is multiplied to every
-    /// compressed vector to adjust its dynamic range.
+    /// Return the pre-scaling parameter for data. Non-cosine metrics multiply every
+    /// compressed vector by this value to adjust its dynamic range. Cosine ignores it.
     ///
     /// A value of 1.0 means that no scaling is occurring.
     pub fn pre_scale(&self) -> Positive<f32> {
         self.pre_scale
+    }
+
+    /// Compute the effective squared L2 distance of `centroid` relative to the
+    /// quantizer's internal shift.
+    ///
+    /// For squared L2 and inner product, the training centroid is recovered from the
+    /// pre-scaled shift before comparison. Cosine compares the supplied centroid
+    /// directly with the stored centroid without normalization or pre-scaling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `centroid.len()` is not equal to [`Self::input_dim`] or
+    /// the computed distance is non-finite.
+    pub fn centroid_squared_distance(
+        &self,
+        centroid: &[f32],
+    ) -> Result<f32, CentroidDistanceError> {
+        if centroid.len() != self.input_dim() {
+            return Err(CentroidDistanceError::DimensionMismatch {
+                expected: self.input_dim(),
+            });
+        }
+
+        let stored_scale = match self.metric {
+            SupportedMetric::Cosine => 1.0,
+            SupportedMetric::SquaredL2 | SupportedMetric::InnerProduct => {
+                self.pre_scale.into_inner()
+            }
+        };
+
+        let distance = centroid
+            .iter()
+            .zip(self.shift.iter())
+            .map(|(&candidate, &shift)| {
+                let training = shift / stored_scale;
+                let delta = candidate - training;
+                delta * delta
+            })
+            .sum::<f32>();
+
+        if !distance.is_finite() {
+            return Err(CentroidDistanceError::NonFiniteDistance);
+        }
+
+        Ok(distance)
     }
 
     /// Return a reference to the allocator used by this data structure.
@@ -194,10 +251,13 @@ where
             }
         };
 
-        // Transform the centroid by the pre-scale.
-        centroid
-            .iter_mut()
-            .for_each(|v| *v *= pre_scale.into_inner());
+        // Cosine preprocessing normalizes each vector, so pre-scaling does not affect
+        // cosine vectors or their centroid.
+        if metric != SupportedMetric::Cosine {
+            centroid
+                .iter_mut()
+                .for_each(|v| *v *= pre_scale.into_inner());
+        }
 
         Ok(SphericalQuantizer {
             shift: centroid,
@@ -225,10 +285,11 @@ where
     /// Additionally, vectors compressed when using the [`SupportedMetric::Cosine`] distance
     /// will be implicitly normalized before being compressed to enable better compression.
     ///
-    /// If argument `pre_scale` is given, then all vectors compressed by this quantizer will
-    /// first be scaled by this value. Note that if given, `pre_scale` **must** be positive.
+    /// If argument `pre_scale` is given, non-cosine vectors compressed by this quantizer
+    /// will first be scaled by this value. Cosine ignores `pre_scale`. Note that if given,
+    /// `pre_scale` **must** be positive.
     pub fn train<T, R>(
-        data: MatrixView<T>,
+        data: rowmajor::Ref<T>,
         transform: TransformKind,
         metric: SupportedMetric,
         pre_scale: PreScale,
@@ -243,7 +304,7 @@ where
         // cut down on excess monomorphization.
         #[inline(never)]
         fn train<T, A>(
-            data: MatrixView<T>,
+            data: rowmajor::Ref<T>,
             transform: TransformKind,
             metric: SupportedMetric,
             pre_scale: PreScale,
@@ -326,8 +387,10 @@ where
     /// Rescale the argument `v` to be in the rough dynamic range of the training dataset.
     pub fn rescale(&self, v: &mut [f32]) {
         let norm = FastL2Norm.evaluate(&*v);
-        let m = self.mean_norm.into_inner() / norm;
-        v.iter_mut().for_each(|i| *i *= m);
+        if norm != 0.0 {
+            let m = self.mean_norm.into_inner() / norm;
+            v.iter_mut().for_each(|i| *i *= m);
+        }
     }
 
     /// Private helper function to do common data pre-processing.
@@ -380,6 +443,17 @@ where
         })
     }
 
+    /// Construct an [`iface::Impl`] `self`.
+    pub fn as_quantizer_impl<const NBITS: usize>(
+        self,
+    ) -> Result<iface::Impl<NBITS, A>, AllocatorError>
+    where
+        A: 'static,
+        iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
+    {
+        iface::Impl::<NBITS, A>::new(self)
+    }
+
     /// Construct an [`iface::Quantizer`] trait object from `self`.
     pub fn as_quantizer<const NBITS: usize>(
         self,
@@ -388,7 +462,7 @@ where
         A: 'static,
         iface::Impl<NBITS, A>: iface::Constructible<A> + iface::Quantizer,
     {
-        let iface = iface::Impl::<NBITS, A>::new(self)?;
+        let iface = self.as_quantizer_impl()?;
         crate::poly!({ iface::Quantizer }, iface, GlobalAllocator)
     }
 }
@@ -676,6 +750,24 @@ impl FinishCompressing for DataMut<'_, 2> {
     }
 }
 
+impl FinishCompressing for DataMut<'_, 3> {
+    fn finish_compressing(
+        &mut self,
+        preprocessed: &Preprocessed<'_>,
+        transformed: &[f32],
+        transformed_norm: f32,
+        allocator: ScopedAllocator<'_>,
+    ) -> Result<(), CompressionError> {
+        compress_via_maximum_cosine(
+            self.reborrow_mut(),
+            preprocessed,
+            transformed,
+            transformed_norm,
+            allocator,
+        )
+    }
+}
+
 impl FinishCompressing for DataMut<'_, 4> {
     fn finish_compressing(
         &mut self,
@@ -937,9 +1029,9 @@ where
 //   Informally, "what's the smallest scaling factor so `v[position]` gets rounded to
 //   the next value.
 //
-// 2. Imposes a total ordering on `f32` values so it can be used in a `BinaryHeap`.
-//   Additionally, ordering is reverse so that `BinaryHeap` models a min-heap instead
-//   of a max-heap.
+// 2. Imposes a total ordering on nonnegative, non-NaN critical values using unsigned
+//   bit order, which matches numeric order for these values. Additionally, ordering
+//   is reversed so that `BinaryHeap` models a min-heap instead of a max-heap.
 #[derive(Debug, Clone, Copy)]
 struct Pair {
     value: f32,
@@ -948,7 +1040,7 @@ struct Pair {
 
 impl PartialEq for Pair {
     fn eq(&self, other: &Self) -> bool {
-        self.value.eq(&other.value)
+        self.value.to_bits().eq(&other.value.to_bits())
     }
 }
 
@@ -960,10 +1052,7 @@ impl PartialOrd for Pair {
 }
 impl Ord for Pair {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .value
-            .partial_cmp(&self.value)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        other.value.to_bits().cmp(&self.value.to_bits())
     }
 }
 
@@ -989,6 +1078,10 @@ impl Ord for Pair {
 ///
 /// Refer to algorithm 1 in <https://arxiv.org/pdf/2409.09913>.
 ///
+/// # Errors
+///
+/// Returns an error if `v` contains NaN or scratch allocation fails.
+///
 /// # Panics
 ///
 /// Panics is `v.is_empty()`.
@@ -1002,12 +1095,15 @@ fn maximize_cosine_similarity(
     v: &[f32],
     num_bits: NonZeroUsize,
     allocator: ScopedAllocator<'_>,
-) -> Result<f32, AllocatorError> {
+) -> Result<f32, CompressionError> {
     // Initially, the lattice element has the value `0.5` for all dimensions.
     // This means the initial inner product between `v` and the rounded term is simply
     // `0.5 * sum(abs.(v))`. The absolute value is used because the latice element is
     // always in the direction of the components in `v`.
     let mut current_ip = 0.5 * v.iter().map(|i| i.abs() as f64).sum::<f64>();
+    if current_ip.is_nan() {
+        return Err(CompressionError::InputContainsNaN);
+    }
     let mut current_square_norm = 0.25 * (v.len() as f64);
 
     // Book keeping for the current value of the rounded vector.
@@ -1233,10 +1329,7 @@ mod tests {
 
     use std::fmt::Display;
 
-    use diskann_utils::{
-        ReborrowMut, lazy_format,
-        views::{self, Matrix},
-    };
+    use diskann_utils::{ReborrowMut, lazy_format, views::rowmajor::MatrixMut};
     use diskann_vector::{PureDistanceFunction, norm::FastL2NormSquared};
     use diskann_wide::ARCH;
     use rand::{
@@ -1254,7 +1347,40 @@ mod tests {
         test_util,
     };
 
-    // Test cosine-similarity maximizer
+    #[test]
+    fn cosine_similarity_maximizer_errors() {
+        let num_bits = NonZeroUsize::new(4).unwrap();
+        for nan in [f32::NAN, f32::from_bits(0xffc0_0001)] {
+            for position in 0..4 {
+                let mut target = [1.0; 4];
+                target[position] = nan;
+                assert_eq!(
+                    maximize_cosine_similarity(
+                        &target,
+                        num_bits,
+                        ScopedAllocator::new(&test_util::AlwaysFails),
+                    ),
+                    Err(CompressionError::InputContainsNaN),
+                );
+            }
+        }
+        for budget in 0..=2 {
+            let result = maximize_cosine_similarity(
+                &[1.0, 0.5],
+                num_bits,
+                ScopedAllocator::new(&test_util::LimitedAllocator::new(budget)),
+            );
+            if budget < 2 {
+                assert_eq!(
+                    result,
+                    Err(CompressionError::AllocatorError(AllocatorError))
+                );
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
     #[test]
     fn test_cosine_similarity_maximizer() {
         let mut rng = StdRng::seed_from_u64(0x070d9ff8cf5e0f8c);
@@ -1305,7 +1431,11 @@ mod tests {
 
             // We expect to either get the best value found via exhaustive search, or some
             // scalar multiple of it (since that will have the same cosine similarity).
-            let passed = if best == clamped {
+            let passed = if best == clamped
+                || (best_similarity == clamped_cosine.into_inner()
+                    && std::iter::zip(target, std::iter::zip(best, clamped))
+                        .all(|(input, (expected, actual))| input == 0.0 || expected == actual))
+            {
                 true
             } else {
                 let ratio: Vec<f32> = std::iter::zip(best, clamped)
@@ -1336,6 +1466,20 @@ mod tests {
                 );
             }
         };
+
+        for target in [
+            [1.0, 0.0, -0.0, -1.0],
+            [0.0, 0.5, -0.5, 0.0],
+            [1.0, 1.0, -1.0, -1.0],
+            [
+                f32::from_bits(1.0f32.to_bits() - 1),
+                1.0,
+                f32::from_bits(1.0f32.to_bits() + 1),
+                -1.0,
+            ],
+        ] {
+            run_test(target);
+        }
 
         // Run targeted tests.
         let min = -3.5;
@@ -2264,6 +2408,7 @@ mod tests {
 
             test_quantizer::<4, 1, BitTranspose>(&setup, &mut rng);
             test_quantizer::<2, 2, Dense>(&setup, &mut rng);
+            test_quantizer::<3, 3, Dense>(&setup, &mut rng);
             test_quantizer::<4, 4, Dense>(&setup, &mut rng);
             test_quantizer::<8, 8, Dense>(&setup, &mut rng);
 
@@ -2277,6 +2422,7 @@ mod tests {
             };
             test_quantizer::<4, 1, BitTranspose>(&setup, &mut rng);
             test_quantizer::<2, 2, Dense>(&setup, &mut rng);
+            test_quantizer::<3, 3, Dense>(&setup, &mut rng);
             test_quantizer::<4, 4, Dense>(&setup, &mut rng);
             test_quantizer::<8, 8, Dense>(&setup, &mut rng);
         }
@@ -2288,7 +2434,7 @@ mod tests {
 
     #[test]
     fn err_dim_cannot_be_zero() {
-        let data = Matrix::new(0.0f32, 10, 0);
+        let data = rowmajor::Owned::from_element(10, 0, 0.0f32);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2306,7 +2452,7 @@ mod tests {
 
     #[test]
     fn err_norm_must_be_positive() {
-        let data = Matrix::new(0.0f32, 10, 10);
+        let data = rowmajor::Owned::from_element(10, 10, 0.0f32);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2324,8 +2470,8 @@ mod tests {
 
     #[test]
     fn err_norm_cannot_be_infinity() {
-        let mut data = Matrix::new(0.0f32, 10, 10);
-        data[(2, 5)] = f32::INFINITY;
+        let mut data = rowmajor::Owned::from_element(10, 10, 0.0f32);
+        *data.element_mut(2, 5) = f32::INFINITY;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
@@ -2344,8 +2490,8 @@ mod tests {
 
     #[test]
     fn err_reciprocal_norm_cannot_be_infinity() {
-        let mut data = Matrix::new(0.0f32, 10, 10);
-        data[(2, 5)] = 2.93863e-39;
+        let mut data = rowmajor::Owned::from_element(10, 10, 0.0f32);
+        *data.element_mut(2, 5) = 2.93863e-39;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
@@ -2403,7 +2549,7 @@ mod tests {
     #[test]
     fn compression_errors_data() {
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
-        let data = Matrix::<f32>::new(views::Init(|| StandardNormal {}.sample(&mut rng)), 16, 12);
+        let data = rowmajor::Owned::<f32>::from_fn(16, 12, |_| StandardNormal {}.sample(&mut rng));
 
         let quantizer = SphericalQuantizer::train(
             data.as_view(),
@@ -2423,6 +2569,7 @@ mod tests {
         {
             let mut query: Vec<f32> = quantizer.shift().to_vec();
             let mut d = Data::<1, _>::new_boxed(quantizer.output_dim());
+            let mut multibit_data = Data::<4, _>::new_boxed(quantizer.output_dim());
             let mut q = Query::<4, BitTranspose, _>::new_boxed(quantizer.output_dim());
 
             for i in 0..query.len() {
@@ -2435,6 +2582,12 @@ mod tests {
                         .unwrap_err();
 
                     assert_eq!(err.to_string(), "input contains NaN", "failed for {}", v);
+
+                    let err = quantizer
+                        .compress_into_with(&*query, multibit_data.reborrow_mut(), scoped_global)
+                        .unwrap_err();
+
+                    assert_eq!(err, CompressionError::InputContainsNaN);
 
                     let err = quantizer
                         .compress_into_with(&*query, q.reborrow_mut(), scoped_global)
@@ -2543,6 +2696,75 @@ mod tests {
                 .is_ok(),
             "if this failed, the likely culprit is exceeding the value of the 16-bit correction terms"
         );
+    }
+
+    #[test]
+    fn centroid_squared_distance_validates_input() {
+        let quantizer = SphericalQuantizer::generate(
+            Poly::from_iter([2.0f32, 4.0].into_iter(), GlobalAllocator).unwrap(),
+            1.0,
+            TransformKind::Null,
+            SupportedMetric::SquaredL2,
+            Some(1.0),
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[2.0]),
+            Err(CentroidDistanceError::DimensionMismatch { expected: 2 })
+        );
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[f32::NAN, 4.0]),
+            Err(CentroidDistanceError::NonFiniteDistance)
+        );
+        assert_eq!(
+            quantizer.centroid_squared_distance(&[f32::MAX, f32::MAX]),
+            Err(CentroidDistanceError::NonFiniteDistance)
+        );
+    }
+
+    #[test]
+    fn cosine_centroid_squared_distance_ignores_pre_scale() {
+        let quantizer = SphericalQuantizer::generate(
+            Poly::from_iter([0.5f32, 0.5].into_iter(), GlobalAllocator).unwrap(),
+            1.0,
+            TransformKind::Null,
+            SupportedMetric::Cosine,
+            Some(2.0),
+            &mut StdRng::seed_from_u64(10),
+            GlobalAllocator,
+        )
+        .unwrap();
+
+        assert_eq!(quantizer.shift(), &[0.5, 0.5]);
+
+        let actual = quantizer.centroid_squared_distance(&[0.6, 0.4]).unwrap();
+        let expected = 0.02;
+        assert!((actual - expected).abs() <= 1.0e-6);
+    }
+
+    #[test]
+    fn non_cosine_centroid_squared_distance_removes_pre_scale() {
+        for metric in [SupportedMetric::SquaredL2, SupportedMetric::InnerProduct] {
+            let quantizer = SphericalQuantizer::generate(
+                Poly::from_iter([0.5f32, 0.5].into_iter(), GlobalAllocator).unwrap(),
+                1.0,
+                TransformKind::Null,
+                metric,
+                Some(2.0),
+                &mut StdRng::seed_from_u64(10),
+                GlobalAllocator,
+            )
+            .unwrap();
+
+            assert_eq!(quantizer.shift(), &[1.0, 1.0]);
+
+            let actual = quantizer.centroid_squared_distance(&[0.6, 0.4]).unwrap();
+            let expected = 0.02;
+            assert!((actual - expected).abs() <= 1.0e-6);
+        }
     }
 }
 

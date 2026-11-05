@@ -12,6 +12,7 @@ const NAME: &str = "spherical-exhaustive-search";
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register(NAME, imp::SphericalQ::<1>)?;
     registry.register(NAME, imp::SphericalQ::<2>)?;
+    registry.register(NAME, imp::SphericalQ::<3>)?;
     registry.register(NAME, imp::SphericalQ::<4>)?;
     registry.register(NAME, imp::SphericalQ::<8>)?;
 
@@ -50,6 +51,7 @@ mod imp {
         spherical::{DataMut, SphericalQuantizer},
         CompressIntoWith,
     };
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use indicatif::{ProgressBar, ProgressStyle};
     use rand::SeedableRng;
     use rayon::iter::{IndexedParallelIterator, ParallelIterator};
@@ -394,7 +396,7 @@ mod imp {
     pub(super) struct Store<const NBITS: usize> {
         // The number of bytes to take from each row.
         bytes: usize,
-        data: diskann_utils::views::Matrix<u8>,
+        data: rowmajor::Owned<u8>,
         plan: diskann_quantization::spherical::iface::Impl<NBITS>,
     }
 
@@ -405,7 +407,7 @@ mod imp {
             for<'a> CompressIntoWith<&'a [f32], DataMut<'a, NBITS>, ScopedAllocator<'a>>,
     {
         fn new(
-            input: diskann_utils::views::MatrixView<f32>,
+            input: rowmajor::Ref<f32>,
             plan: diskann_quantization::spherical::iface::Impl<NBITS>,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
@@ -416,13 +418,12 @@ mod imp {
             let output_dim = plan.quantizer().output_dim();
             let bytes =
                 diskann_quantization::spherical::DataRef::<NBITS>::canonical_bytes(output_dim);
-            let mut data = diskann_utils::views::Matrix::new(0, input.nrows(), bytes);
+            let mut data = rowmajor::Owned::try_from_element(input.nrows(), bytes, 0)?;
 
             // Compress the data.
             #[expect(clippy::disallowed_methods)]
-            data.par_row_iter_mut()
-                .zip(input.par_row_iter())
-                .try_for_each(|(d, i)| -> anyhow::Result<()> {
+            data.par_rows_mut().zip(input.par_rows()).try_for_each(
+                |(d, i)| -> anyhow::Result<()> {
                     let c =
                         diskann_quantization::spherical::DataMut::<NBITS>::from_canonical_back_mut(
                             &mut d[..bytes],
@@ -432,7 +433,8 @@ mod imp {
                         .compress_into_with(i, c, ScopedAllocator::global())?;
                     progress.inc(1);
                     Ok(())
-                })?;
+                },
+            )?;
 
             Ok(Self { bytes, data, plan })
         }
@@ -459,7 +461,7 @@ mod imp {
 
         fn iter(&self) -> impl Iterator<Item = Self::Item<'_>> {
             self.data
-                .row_iter()
+                .rows()
                 .map(move |r| diskann_quantization::spherical::iface::Opaque::new(&r[..self.bytes]))
         }
     }

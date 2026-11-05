@@ -40,10 +40,10 @@
 //!     spherical::{iface, SupportedMetric, SphericalQuantizer, PreScale},
 //!     num::PowerOfTwo,
 //! };
-//! use diskann_utils::views::Matrix;
+//! use diskann_utils::views::rowmajor::{self, Matrix};
 //!
 //! // For illustration purposes, the dataset consists of just a single vector.
-//! let mut data = Matrix::new(1.0, 1, 4);
+//! let mut data = rowmajor::Owned::from_element(1, 4, 1.0);
 //! let quantizer = SphericalQuantizer::train(
 //!     data.as_view(),
 //!     TransformKind::Null,
@@ -326,6 +326,12 @@ where
 
     /// Return the metric this plan was created with.
     fn metric(&self) -> SupportedMetric;
+
+    /// Compute the squared L2 distance from `centroid` to the training centroid.
+    fn centroid_squared_distance(
+        &self,
+        centroid: &[f32],
+    ) -> Result<f32, quantizer::CentroidDistanceError>;
 
     /// Clone the backing object.
     fn try_clone_into(&self, allocator: A) -> Result<Poly<dyn Quantizer<A>, A>, AllocatorError>;
@@ -1358,17 +1364,20 @@ macro_rules! dispatch_map {
 
 dispatch_map!(1, AsFull, Scalar);
 dispatch_map!(2, AsFull, Scalar);
+dispatch_map!(3, AsFull, Scalar);
 dispatch_map!(4, AsFull, Scalar);
 dispatch_map!(8, AsFull, Scalar);
 
 dispatch_map!(1, AsData<1>, Scalar);
 dispatch_map!(2, AsData<2>, Scalar);
+dispatch_map!(3, AsData<3>, Scalar);
 dispatch_map!(4, AsData<4>, Scalar);
 dispatch_map!(8, AsData<8>, Scalar);
 
 // Special Cases
 dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Scalar);
 dispatch_map!(2, AsQuery<2>, Scalar);
+dispatch_map!(3, AsQuery<3>, Scalar);
 dispatch_map!(4, AsQuery<4>, Scalar);
 dispatch_map!(8, AsQuery<8>, Scalar);
 
@@ -1381,32 +1390,38 @@ cfg_if::cfg_if! {
         // V3
         dispatch_map!(1, AsFull, V3);
         dispatch_map!(2, AsFull, V3);
+        dispatch_map!(3, AsFull, V3);
         dispatch_map!(4, AsFull, V3);
         dispatch_map!(8, AsFull, V3);
 
         dispatch_map!(1, AsData<1>, V3);
         dispatch_map!(2, AsData<2>, V3);
+        dispatch_map!(3, AsData<3>, V3);
         dispatch_map!(4, AsData<4>, V3);
         dispatch_map!(8, AsData<8>, V3);
 
         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V3);
         dispatch_map!(2, AsQuery<2>, V3);
+        dispatch_map!(3, AsQuery<3>, V3);
         dispatch_map!(4, AsQuery<4>, V3);
         dispatch_map!(8, AsQuery<8>, V3);
 
         // V4
         dispatch_map!(1, AsFull, V4, downcast_to_v3);
         dispatch_map!(2, AsFull, V4, downcast_to_v3);
+        dispatch_map!(3, AsFull, V4, downcast_to_v3);
         dispatch_map!(4, AsFull, V4, downcast_to_v3);
         dispatch_map!(8, AsFull, V4, downcast_to_v3);
 
         dispatch_map!(1, AsData<1>, V4, downcast_to_v3);
         dispatch_map!(2, AsData<2>, V4); // specialized
+        dispatch_map!(3, AsData<3>, V4, downcast_to_v3);
         dispatch_map!(4, AsData<4>, V4); // specialized
         dispatch_map!(8, AsData<8>, V4, downcast_to_v3);
 
         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V4, downcast_to_v3);
         dispatch_map!(2, AsQuery<2>, V4); // specialized
+        dispatch_map!(3, AsQuery<3>, V4, downcast_to_v3);
         dispatch_map!(4, AsQuery<4>, V4); // specialized
         dispatch_map!(8, AsQuery<8>, V4, downcast_to_v3);
     } else if #[cfg(target_arch = "aarch64")] {
@@ -1414,18 +1429,21 @@ cfg_if::cfg_if! {
             arch.retarget()
         }
 
-        dispatch_map!(1, AsFull, Neon, downcast);
-        dispatch_map!(2, AsFull, Neon, downcast);
-        dispatch_map!(4, AsFull, Neon, downcast);
+        dispatch_map!(1, AsFull, Neon);
+        dispatch_map!(2, AsFull, Neon);
+        dispatch_map!(3, AsFull, Neon, downcast);
+        dispatch_map!(4, AsFull, Neon);
         dispatch_map!(8, AsFull, Neon, downcast);
 
         dispatch_map!(1, AsData<1>, Neon, downcast);
         dispatch_map!(2, AsData<2>, Neon);
+        dispatch_map!(3, AsData<3>, Neon);
         dispatch_map!(4, AsData<4>, Neon);
         dispatch_map!(8, AsData<8>, Neon, downcast);
 
         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Neon, downcast);
         dispatch_map!(2, AsQuery<2>, Neon);
+        dispatch_map!(3, AsQuery<3>, Neon);
         dispatch_map!(4, AsQuery<4>, Neon);
         dispatch_map!(8, AsQuery<8>, Neon, downcast);
     }
@@ -1742,6 +1760,13 @@ where
         self.quantizer.metric()
     }
 
+    fn centroid_squared_distance(
+        &self,
+        centroid: &[f32],
+    ) -> Result<f32, quantizer::CentroidDistanceError> {
+        self.quantizer.centroid_squared_distance(centroid)
+    }
+
     fn try_clone_into(&self, allocator: B) -> Result<Poly<dyn Quantizer<B>, B>, AllocatorError> {
         let clone = (*self).try_clone()?;
         poly!({ Quantizer<B> }, clone, allocator)
@@ -1963,6 +1988,13 @@ macro_rules! plan {
                 self.quantizer.metric()
             }
 
+            fn centroid_squared_distance(
+                &self,
+                centroid: &[f32],
+            ) -> Result<f32, quantizer::CentroidDistanceError> {
+                self.quantizer.centroid_squared_distance(centroid)
+            }
+
             fn try_clone_into(&self, allocator: B) -> Result<Poly<dyn Quantizer<B>, B>, AllocatorError> {
                 let clone = (&*self).try_clone()?;
                 poly!({ Quantizer<B> }, clone, allocator)
@@ -1980,7 +2012,7 @@ macro_rules! plan {
     }
 }
 
-plan!(2, 4, 8);
+plan!(2, 3, 4, 8);
 
 ////////////////
 // Flatbuffer //
@@ -2009,6 +2041,9 @@ pub enum DeserializationError {
 
 /// Attempt to deserialize a `spherical::Quantizer` flatbuffer into one of the concrete
 /// implementations of `Quantizer`.
+///
+/// Bit widths not supported by this dispatcher can be loaded with
+/// [`Impl::try_deserialize`] when the bit width is known at compile time.
 ///
 /// This function guarantees that the returned `Poly` is the first object allocated through
 /// `alloc`.
@@ -2077,7 +2112,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
@@ -2146,7 +2181,7 @@ mod tests {
     }
 
     #[inline(never)]
-    fn test_plan(plan: &dyn Quantizer, nbits: usize, dataset: MatrixView<f32>) {
+    fn test_plan(plan: &dyn Quantizer, nbits: usize, dataset: rowmajor::Ref<f32>) {
         // Perform the bit-specific test.
         if nbits == 1 {
             test_plan_1_bit(plan);
@@ -2366,7 +2401,7 @@ mod tests {
         }
     }
 
-    fn make_impl<const NBITS: usize>(metric: SupportedMetric) -> (Impl<NBITS>, Matrix<f32>)
+    fn make_impl<const NBITS: usize>(metric: SupportedMetric) -> (Impl<NBITS>, rowmajor::Owned<f32>)
     where
         Impl<NBITS>: Constructible,
     {
@@ -2425,6 +2460,24 @@ mod tests {
     }
 
     #[test]
+    fn test_plan_3bit_l2() {
+        let (plan, data) = make_impl::<3>(SupportedMetric::SquaredL2);
+        test_plan(&plan, 3, data.as_view());
+    }
+
+    #[test]
+    fn test_plan_3bit_ip() {
+        let (plan, data) = make_impl::<3>(SupportedMetric::InnerProduct);
+        test_plan(&plan, 3, data.as_view());
+    }
+
+    #[test]
+    fn test_plan_3bit_cosine() {
+        let (plan, data) = make_impl::<3>(SupportedMetric::Cosine);
+        test_plan(&plan, 3, data.as_view());
+    }
+
+    #[test]
     fn test_plan_4bit_l2() {
         let (plan, data) = make_impl::<4>(SupportedMetric::SquaredL2);
         test_plan(&plan, 4, data.as_view());
@@ -2460,7 +2513,7 @@ mod tests {
         test_plan(&plan, 8, data.as_view());
     }
 
-    fn test_dataset() -> Matrix<f32> {
+    fn test_dataset() -> rowmajor::Owned<f32> {
         let data = vec![
             0.28657,
             -0.0318168,
@@ -2592,7 +2645,7 @@ mod tests {
             -0.324718, // row 15
         ];
 
-        Matrix::try_from(data.into(), 16, 8).unwrap()
+        rowmajor::Owned::try_from_data(data.into(), 16, 8).unwrap()
     }
 
     #[cfg(feature = "flatbuffers")]
@@ -2609,7 +2662,7 @@ mod tests {
             quantizer: &dyn Quantizer,
             deserialized: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<'_, f32>,
+            dataset: rowmajor::Ref<'_, f32>,
         ) {
             let scoped_global = ScopedAllocator::global();
 
@@ -2633,7 +2686,7 @@ mod tests {
                 let mut a = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
                 let mut b = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
 
-                for row in dataset.row_iter() {
+                for row in dataset.rows() {
                     quantizer
                         .compress(row, OpaqueMut::new(&mut a), scoped_global)
                         .unwrap();
@@ -2658,14 +2711,14 @@ mod tests {
                 let d_computer = deserialized.distance_computer(GlobalAllocator).unwrap();
                 let d_computer_ref = deserialized.distance_computer_ref();
 
-                for r0 in dataset.row_iter() {
+                for r0 in dataset.rows() {
                     quantizer
                         .compress(r0, OpaqueMut::new(&mut a0), scoped_global)
                         .unwrap();
                     deserialized
                         .compress(r0, OpaqueMut::new(&mut b0), scoped_global)
                         .unwrap();
-                    for r1 in dataset.row_iter() {
+                    for r1 in dataset.rows() {
                         quantizer
                             .compress(r1, OpaqueMut::new(&mut a1), scoped_global)
                             .unwrap();
@@ -2701,7 +2754,7 @@ mod tests {
                         continue;
                     }
 
-                    for r in dataset.row_iter() {
+                    for r in dataset.rows() {
                         let q_computer = quantizer
                             .fused_query_computer(r, layout, false, GlobalAllocator, scoped_global)
                             .unwrap();
@@ -2709,7 +2762,7 @@ mod tests {
                             .fused_query_computer(r, layout, false, GlobalAllocator, scoped_global)
                             .unwrap();
 
-                        for u in dataset.row_iter() {
+                        for u in dataset.rows() {
                             quantizer
                                 .compress(u, OpaqueMut::new(&mut a), scoped_global)
                                 .unwrap();
@@ -2731,7 +2784,7 @@ mod tests {
         fn test_plan_serialization(
             quantizer: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
         ) {
             let global = GlobalAllocator;
 
@@ -2930,6 +2983,16 @@ mod tests {
             let (plan, data) = make_impl::<8>(SupportedMetric::Cosine);
             test_plan_panic_boundary(&plan);
             test_plan_serialization(&plan, 8, data.as_view());
+        }
+
+        #[test]
+        fn test_unsupported_bit_width() {
+            let (plan, _) = make_impl::<3>(SupportedMetric::SquaredL2);
+            let serialized = plan.serialize(GlobalAllocator).unwrap();
+            assert!(matches!(
+                try_deserialize::<GlobalAllocator, _>(&serialized, crate::test_util::AlwaysFails),
+                Err(DeserializationError::UnsupportedBitWidth(3)),
+            ));
         }
 
         #[test]
@@ -3151,11 +3214,14 @@ mod tests {
         // Helpers //
         /////////////
 
-        fn compress_dataset(quantizer: &dyn Quantizer, dataset: MatrixView<f32>) -> Vec<Vec<u8>> {
+        fn compress_dataset(
+            quantizer: &dyn Quantizer,
+            dataset: rowmajor::Ref<f32>,
+        ) -> Vec<Vec<u8>> {
             let scoped_global = ScopedAllocator::global();
             let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
             dataset
-                .row_iter()
+                .rows()
                 .map(|row| {
                     let mut buf = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
                     quantizer
@@ -3168,7 +3234,7 @@ mod tests {
 
         fn compute_layout_distances(
             quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             compressed: &[Vec<u8>],
             allow_rescale: bool,
         ) -> Vec<LayoutDistances> {
@@ -3178,7 +3244,7 @@ mod tests {
                 .filter(|&layout| quantizer.is_supported(layout))
                 .map(|layout| {
                     let distances = dataset
-                        .row_iter()
+                        .rows()
                         .map(|query_row| {
                             let computer = quantizer
                                 .fused_query_computer(
@@ -3209,7 +3275,7 @@ mod tests {
         /// per-layout query distances.
         fn assert_layout_distances(
             quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             compressed: &[Vec<u8>],
             expected: &[LayoutDistances],
             allow_rescale: bool,
@@ -3224,8 +3290,7 @@ mod tests {
                 );
 
                 for (qi, (query_row, expected_distances)) in
-                    std::iter::zip(dataset.row_iter(), layout_distances.distances.iter())
-                        .enumerate()
+                    std::iter::zip(dataset.rows(), layout_distances.distances.iter()).enumerate()
                 {
                     let computer = quantizer
                         .fused_query_computer(
@@ -3260,7 +3325,7 @@ mod tests {
             quantizer: &dyn Quantizer,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
         ) -> Baseline {
             let compressed_vectors = compress_dataset(quantizer, dataset);
 
@@ -3379,7 +3444,7 @@ mod tests {
 
         fn check_baseline(
             baseline: &Baseline,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<f32>,
             expected_transform: DataTransform,
             expected_pre_scale: ScaleConfig,
         ) {
@@ -3497,7 +3562,7 @@ mod tests {
             metric: SupportedMetric,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-        ) -> (Poly<dyn Quantizer>, Matrix<f32>)
+        ) -> (Poly<dyn Quantizer>, rowmajor::Owned<f32>)
         where
             Impl<NBITS>: Constructible + Quantizer,
         {

@@ -37,7 +37,9 @@ type DefaultVector<A> = <Const<LANES> as F32Vector<A>>::Vector;
 /// An architecture with an `f32` vector of [`LANES`] lanes.
 ///
 /// The blanket implementation below covers `Scalar`, `V3`, `V4`, and `Neon`.
-pub(super) trait Simd: Architecture {
+/// The architecture is a zero-sized token, so a kernel object can store and
+/// share it.
+pub(super) trait Simd: Architecture + Copy + Send + Sync + 'static {
     /// The vector that holds one group of [`LANES`] distances.
     type Vector: SIMDVector<Arch = Self, Scalar = f32, ConstLanes = Const<LANES>> + SIMDFloat;
 
@@ -49,7 +51,7 @@ pub(super) trait Simd: Architecture {
 // integer bit operations.
 impl<A> Simd for A
 where
-    A: Architecture,
+    A: Architecture + Copy + Send + Sync + 'static,
     DefaultVector<A>: SIMDVector<Arch = A, Scalar = f32, ConstLanes = Const<LANES>> + SIMDFloat,
     u64: From<
         <<<DefaultVector<A> as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying,

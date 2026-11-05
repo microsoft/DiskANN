@@ -22,7 +22,7 @@
           "preprocess": []
         },
         "representation": {
-          "FullPrecision": {
+          "full-precision": {
             "data_type": "f32"
           }
         },
@@ -65,7 +65,7 @@
           "preprocess": []
         },
         "representation": {
-          "FullPrecision": {
+          "full-precision": {
             "data_type": "f16"
           }
         },
@@ -108,7 +108,7 @@
           "preprocess": []
         },
         "representation": {
-          "FullPrecision": {
+          "full-precision": {
             "data_type": "u8"
           }
         },
@@ -154,7 +154,7 @@
           ]
         },
         "representation": {
-          "FullPrecision": {
+          "full-precision": {
             "data_type": "i8"
           }
         },

@@ -12,9 +12,9 @@ use io_uring::IoUring;
 use libc;
 
 use crate::{
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     search::provider::aligned_file_reader::{
-        platform::IOContext, traits::AlignedFileReader, AlignedRead, A512,
+        A512, AlignedRead, platform::IOContext, traits::AlignedFileReader,
     },
 };
 
@@ -135,8 +135,7 @@ mod tests {
 
     use super::*;
     use diskann_quantization::alloc::{AlignedAllocator, Poly};
-    pub const TEST_INDEX_PATH: &str =
-        "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
+    pub const TEST_INDEX_PATH: &str = "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
     pub const TRUTH_NODE_DATA_PATH: &str =
         "../test_data/disk_index_misc/disk_index_node_data_aligned_reader_truth.bin";
     const DEFAULT_DISK_SECTOR_LEN: usize = 4096;

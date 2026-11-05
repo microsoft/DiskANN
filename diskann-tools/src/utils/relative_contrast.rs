@@ -6,6 +6,7 @@
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::StorageReadProvider;
 use diskann_utils::io::read_bin;
+use diskann_utils::views::rowmajor::Matrix;
 use rand::Rng;
 
 use crate::utils::{CMDResult, CMDToolError};
@@ -66,9 +67,9 @@ pub fn compute_relative_contrast<T: VectorRepr, StorageProvider: StorageReadProv
     );
 
     // Reshape flat vectors into 2D vectors
-    let base: Vec<Vec<T>> = base_data.row_iter().map(|x| x.to_vec()).collect();
-    let query: Vec<Vec<T>> = query_data.row_iter().map(|x| x.to_vec()).collect();
-    let gt: Vec<Vec<u32>> = gt_data.row_iter().map(|x| x.to_vec()).collect();
+    let base: Vec<Vec<T>> = base_data.rows().map(|x| x.to_vec()).collect();
+    let query: Vec<Vec<T>> = query_data.rows().map(|x| x.to_vec()).collect();
+    let gt: Vec<Vec<u32>> = gt_data.rows().map(|x| x.to_vec()).collect();
 
     let mut mean_rc = 0.0;
 

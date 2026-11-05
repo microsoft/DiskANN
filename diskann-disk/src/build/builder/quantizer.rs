@@ -9,11 +9,11 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
     model::{
-        graph::provider::async_::{common::NoStore, inmem::WithBits},
         FixedChunkPQTable, IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE,
+        graph::provider::async_::{common::NoStore, inmem::WithBits},
     },
     storage::{PQStorage, SQStorage},
-    utils::{create_thread_pool, gen_random_slice, BridgeErr, PQPathNames},
+    utils::{BridgeErr, PQPathNames, create_thread_pool, gen_random_slice},
 };
 use diskann_quantization::{
     algorithms::transforms::{TargetDim, TransformKind},
@@ -21,12 +21,12 @@ use diskann_quantization::{
     scalar::train::ScalarQuantizationParameters,
     spherical::{PreScale, SphericalQuantizer, SupportedMetric},
 };
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor;
 use tracing::info;
 
 use crate::{
-    error::{diskann_error, ErrorKind},
     QuantizationType, SphericalBits,
+    error::{ErrorKind, diskann_error},
 };
 
 /// Quantizer types used specifically for async disk index building.
@@ -69,7 +69,8 @@ impl BuildQuantizer {
                             &mut rnd,
                         )?;
                     train_pq(
-                        MatrixView::try_from(&train_data, train_size, train_dim).bridge_err()?,
+                        rowmajor::Ref::try_from_data(&train_data, train_size, train_dim)
+                            .bridge_err()?,
                         num_chunks,
                         &mut rnd,
                         create_thread_pool(index_configuration.num_threads)?.as_ref(),
@@ -118,7 +119,8 @@ impl BuildQuantizer {
                 };
 
                 let quantizer = quantizer_params.train(
-                    MatrixView::try_from(&train_data_vector, train_size, train_dim).bridge_err()?,
+                    rowmajor::Ref::try_from_data(&train_data_vector, train_size, train_dim)
+                        .bridge_err()?,
                 );
 
                 info!("Now quantizer is trained and saving to file");
@@ -141,8 +143,8 @@ impl BuildQuantizer {
                         storage_provider,
                         &mut rnd,
                     )?;
-                let train_data =
-                    MatrixView::try_from(&train_data, train_size, train_dim).bridge_err()?;
+                let train_data = rowmajor::Ref::try_from_data(&train_data, train_size, train_dim)
+                    .bridge_err()?;
                 let quantizer = SphericalQuantizer::train(
                     train_data,
                     TransformKind::DoubleHadamard {

@@ -147,5 +147,6 @@ where
 pub(super) fn register(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register_regression("multi-vector-op-f32", Kernel::<f32>::new())?;
     registry.register_regression("multi-vector-op-f16", Kernel::<half::f16>::new())?;
+    registry.register_regression("multi-vector-op-i8", Kernel::<i8>::new())?;
     Ok(())
 }

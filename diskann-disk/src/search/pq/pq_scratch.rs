@@ -8,7 +8,7 @@ use diskann::ANNResult;
 
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 #[derive(Debug)]
 /// PQ scratch
@@ -94,7 +94,7 @@ mod tests {
 
     use super::PQScratch;
 
-    use crate::error::{error_kind, ErrorKind};
+    use crate::error::{ErrorKind, error_kind};
 
     #[rstest]
     #[case(512, 8, 128, 256)] // default test case

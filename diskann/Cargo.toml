@@ -62,7 +62,7 @@ panic = "warn"
 default = ["tracing"]
 
 # Enable PiPNN batch graph construction.
-pipnn = ["dep:diskann-linalg", "dep:rayon", "diskann-utils/rayon", "tracing"]
+pipnn = ["dep:diskann-linalg", "dep:rayon", "diskann-utils/rayon"]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]

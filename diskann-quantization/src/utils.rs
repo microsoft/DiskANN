@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 
 use thiserror::Error;
 
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 /// Specify featres and config flags that will be propagated to `docsrs` config.
 macro_rules! features {
@@ -106,14 +106,14 @@ where
 pub(crate) struct CannotBeEmpty;
 
 /// Compute the mean of each column in `data` as well as the average norm.
-pub(crate) fn compute_means_and_average_norm<T>(data: MatrixView<T>) -> (Vec<f64>, f64)
+pub(crate) fn compute_means_and_average_norm<T>(data: rowmajor::Ref<T>) -> (Vec<f64>, f64)
 where
     T: Into<f64> + Copy,
 {
     // Compute the centroid of the dataset as well as the sums of the norms of every
     // element in the dataset.
     let mut means: Vec<f64> = vec![0.0; data.ncols()];
-    let norm_sum = data.row_iter().fold(0.0f64, |accum: f64, row| {
+    let norm_sum = data.rows().fold(0.0f64, |accum: f64, row| {
         // Accumulate this row into the means.
         std::iter::zip(means.iter_mut(), row.iter()).for_each(|(m, r)| {
             let r: f64 = (*r).into();
@@ -141,7 +141,7 @@ where
 }
 
 /// Compute the mean of each column in `data` as well as the average norm.
-pub(crate) fn compute_normalized_means<T>(data: MatrixView<T>) -> Result<Vec<f64>, CannotBeEmpty>
+pub(crate) fn compute_normalized_means<T>(data: rowmajor::Ref<T>) -> Result<Vec<f64>, CannotBeEmpty>
 where
     T: Into<f64> + Copy,
 {
@@ -161,7 +161,7 @@ where
         x * x
     };
 
-    data.row_iter().for_each(|row| {
+    data.rows().for_each(|row| {
         let norm = row.iter().map(square).sum::<f64>().sqrt();
         let inv_norm = if norm == 0.0 { 1.0 } else { 1.0 / norm };
 
@@ -177,14 +177,14 @@ where
     Ok(means)
 }
 
-pub(crate) fn compute_variances<T>(data: MatrixView<T>, means: &[f64]) -> Vec<f64>
+pub(crate) fn compute_variances<T>(data: rowmajor::Ref<T>, means: &[f64]) -> Vec<f64>
 where
     T: Into<f64> + Copy,
 {
     assert_eq!(data.ncols(), means.len());
 
     let mut variances: Vec<f64> = vec![0.0; data.ncols()];
-    data.row_iter().for_each(|row| {
+    data.rows().for_each(|row| {
         variances
             .iter_mut()
             .zip(std::iter::zip(row.iter(), means.iter()))
@@ -205,7 +205,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::MatrixMut;
     use diskann_vector::{Norm, norm::FastL2Norm};
     use rand::{SeedableRng, rngs::StdRng};
 
@@ -271,7 +271,7 @@ mod tests {
         let test_problem = create_test_problem(nrows, ncols, &mut rng);
 
         let mut normalized_data = test_problem.data.clone();
-        normalized_data.row_iter_mut().for_each(normalize);
+        normalized_data.rows_mut().for_each(normalize);
 
         // Compute the means and mean norm of the normalized data.
         //
@@ -317,12 +317,12 @@ mod tests {
     #[test]
     fn test_normalized_means_corner_cases() {
         // If the input data has no columns, the returned vector should be empty.
-        let data = Matrix::new(1.0f32, 10, 0);
+        let data = rowmajor::Owned::from_element(10, 0, 1.0f32);
         let means = compute_normalized_means(data.as_view()).unwrap();
         assert!(means.is_empty());
 
         // If the data has no rows, an error should be returned.
-        let data = Matrix::new(1.0f32, 0, 10);
+        let data = rowmajor::Owned::from_element(0, 10, 1.0f32);
         let _: CannotBeEmpty = compute_normalized_means(data.as_view()).unwrap_err();
     }
 

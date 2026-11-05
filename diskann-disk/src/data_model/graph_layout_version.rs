@@ -8,7 +8,7 @@ use std::{cmp::Ordering, fmt, io::Cursor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{ANNError, ANNResult};
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 /// Graph layout version. In the format of `major.minor`.
 #[derive(Debug, PartialEq, Eq, Clone)]

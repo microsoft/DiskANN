@@ -1368,7 +1368,7 @@ mod tests {
         }
 
         #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = x86_64::V4::new_checked_miri() {
+        if let Some(arch) = x86_64::V4::new_checked_miri_uncached() {
             assert_eq!(arch.run(TestOp), expected);
             assert_eq!(arch.run_inline(TestOp), expected);
         }
@@ -1395,7 +1395,7 @@ mod tests {
         }
 
         #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = x86_64::V4::new_checked_miri() {
+        if let Some(arch) = x86_64::V4::new_checked_miri_uncached() {
             assert_eq!(arch.run1(TestOp, &src), sum);
             assert_eq!(arch.run1_inline(TestOp, &src), sum);
         }
@@ -1434,7 +1434,7 @@ mod tests {
         }
 
         #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = x86_64::V4::new_checked_miri() {
+        if let Some(arch) = x86_64::V4::new_checked_miri_uncached() {
             gen_test!(arch);
         }
 
@@ -1473,7 +1473,7 @@ mod tests {
         }
 
         #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = x86_64::V4::new_checked_miri() {
+        if let Some(arch) = x86_64::V4::new_checked_miri_uncached() {
             gen_test!(arch);
         }
 
@@ -1512,7 +1512,7 @@ mod tests {
         }
 
         #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = x86_64::V4::new_checked_miri() {
+        if let Some(arch) = x86_64::V4::new_checked_miri_uncached() {
             let f: FnPtr = arch.dispatch1::<TestOp, f32, Ref<[f32]>>();
             assert_eq!(f.call(&src), sum);
         }
@@ -1553,7 +1553,7 @@ mod tests {
         }
 
         #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = x86_64::V4::new_checked_miri() {
+        if let Some(arch) = x86_64::V4::new_checked_miri_uncached() {
             let mut dst = [0.0f32; 3];
             let f: FnPtr = arch.dispatch2::<TestOp, f32, Mut<[f32]>, Ref<[f32]>>();
             assert_eq!(f.call(&mut dst, &src), sum);
@@ -1600,7 +1600,7 @@ mod tests {
         }
 
         #[cfg(target_arch = "x86_64")]
-        if let Some(arch) = x86_64::V4::new_checked_miri() {
+        if let Some(arch) = x86_64::V4::new_checked_miri_uncached() {
             let mut dst = [0.0f32; 3];
             let f: FnPtr = arch.dispatch3::<TestOp, f32, Mut<[f32]>, Ref<[f32]>, f32>();
             assert_eq!(f.call(&mut dst, &src, offset), sum);
