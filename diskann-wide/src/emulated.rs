@@ -631,6 +631,11 @@ impl_little_endian_transmute_cast!(<u8, 16> => <i16, 8>);
 impl_little_endian_transmute_cast!(<u32, 16> => <u8, 64>);
 impl_little_endian_transmute_cast!(<u32, 16> => <i8, 64>);
 
+impl_little_endian_transmute_cast!(<u64, 8> => <u8, 64>);
+impl_little_endian_transmute_cast!(<u64, 8> => <i8, 64>);
+impl_little_endian_transmute_cast!(<u32, 8> => <u8, 32>);
+impl_little_endian_transmute_cast!(<u32, 8> => <i8, 32>);
+
 impl_little_endian_transmute_cast!(<u8, 64> => <u32, 16>);
 impl_little_endian_transmute_cast!(<i8, 64> => <u32, 16>);
 
@@ -660,6 +665,7 @@ impl_cast!(f32 => f16, 8);
 impl_cast!(f32 => f16, 16);
 
 impl_cast!(i32 => f32, 8);
+impl_cast!(i32 => f32, 16);
 
 ///////////////
 // SplitJoin //
@@ -1110,6 +1116,55 @@ mod test_emulated {
         Emulated<u8, 4> => Emulated<i32, 4>, 0x75929494c5d333d0, SC
     );
 
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u32, 8> => Emulated<i16, 16>, 0x763582a914ec0bfd, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u32, 16> => Emulated<i16, 32>, 0xe96b52d0743af18c, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<i16, 8> => Emulated<u8, 16>, 0x4b96d02e85f713ca, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u8, 16> => Emulated<i16, 8>, 0xd5302e6b194a87fc, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u32, 16> => Emulated<u8, 64>, 0x372ab891f06e5cd4, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u32, 16> => Emulated<i8, 64>, 0x951d80aefc476b23, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u32, 8> => Emulated<u8, 32>, 0x69b42dafe0917358, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u32, 8> => Emulated<i8, 32>, 0x69b42dafe0917358, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u64, 8> => Emulated<u8, 64>, 0x891d3c75ef2064ba, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u64, 8> => Emulated<i8, 64>, 0x891d3c75ef2064ba, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<u8, 64> => Emulated<u32, 16>, 0x28fc7d6140a953be, SC
+    );
+    #[cfg(target_endian = "little")]
+    test_utils::ops::test_reinterpret!(
+        Emulated<i8, 64> => Emulated<u32, 16>, 0xbf6308d2e471a59c, SC
+    );
+
     ///////////
     // Casts //
     ///////////
@@ -1121,6 +1176,7 @@ mod test_emulated {
     test_utils::ops::test_cast!(Emulated<f32, 16> => Emulated<f16, 16>, 0x2b637e21afd9ef6c, SC);
 
     test_utils::ops::test_cast!(Emulated<i32, 8> => Emulated<f32, 8>, 0x2b08e8ec7e49323b, SC);
+    test_utils::ops::test_cast!(Emulated<i32, 16> => Emulated<f32, 16>, 0x83e571a946db20cf, SC);
 
     //////////////
     // ZipUnzip //

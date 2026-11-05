@@ -20,7 +20,7 @@ enum VectorValueType {
 /// Quantizer selection for an index. Must match the definition on the C# side.
 ///
 /// `NoQuant`, `Bin`, and `Q8` map to the quantizations Redis exposes and take `f32` vector
-/// data. The `X`-prefixed variants are DiskANN extensions taking `u8`/`i8` vector data.
+/// data. The spherical extensions without a type suffix also take `f32`.
 #[repr(C)]
 enum VectorQuantType {
     Invalid = 0,
@@ -31,16 +31,24 @@ enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2,
+    XSpherical2I8,
+    XSpherical2U8,
+    XSpherical4,
+    XSpherical4I8,
+    XSpherical4U8,
 }
 
 /// Status returned by `insert`, encoded as a `u8`.
 ///
 /// `SuccessStartTraining` signals that the insert crossed the threshold at which the quantizer
-/// can be trained, and that Garnet should call `build_quant_table`.
+/// can be trained, and that Garnet should call `build_quant_table`. Otherwise, `Success` is returned for a newly
+/// inserted vector, and `SuccessUpdate` for an updated one.
 enum InsertResult {
     Fail = 0,
     Success = 1,
     SuccessStartTraining = 2,
+    SuccessUpdate = 3,
 }
 
 /// Read one or more keys from Garnet.
@@ -115,6 +123,8 @@ type LogCallback = unsafe extern "C" fn(context: u64, message: *const u8, messag
 /// reduce_dim == 0 to indicate no reduction requested. Dimensionality reduction is not
 /// implemented, so this parameter is currently ignored.
 ///
+/// start_point_id is fixed for the index lifetime and must be supplied again on reopen.
+///
 /// metric_type is passed as a raw i32. Valid values are:
 /// - 0: Cosine
 /// - 1: InnerProduct
@@ -136,6 +146,7 @@ extern "C" fn create_index(
     metric_type: i32,
     l_build: u32,
     max_degree: u32,
+    start_point_id: u32,
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
@@ -155,8 +166,8 @@ extern "C" fn drop_index(context: u64, index_ptr: *const c_void);
 
 /// Insert a vector into an index.
 ///
-/// Returns an `InsertResult` discriminant. `Fail` may result from the vector already being in
-/// the index, or from writes failing.
+/// Returns an `InsertResult` discriminant, distinguishing inserts from updates unless quantizer
+/// training becomes ready. `Fail` may result from invalid input or writes failing.
 ///
 /// vector_len is a count of elements, not bytes; the element type follows from the index's
 /// `quant_type`. The pointer need not be aligned for that element type.
@@ -312,9 +323,11 @@ extern "C" fn remove(
     id_len: usize,
 ) -> bool;
 
-/// Return number of vectors stored in index.
+/// Return number of live vectors in index, excluding the reserved start point.
 ///
 /// Equivalent to VCARD (https://redis.io/docs/latest/commands/vcard/) can be approximate, must be fast.
+///
+/// Returns `u64::MAX` on error.
 #[unsafe(no_mangle)]
 extern "C" fn card(context: u64, index_ptr: *const c_void) -> u64;
 
@@ -379,3 +392,77 @@ extern "C" fn search_neighbors(
     output_distances_len: usize,
     overflow: *mut *mut c_void,
 ) -> i32;
+
+/// Set serialized quantizer state on an empty, quantized index, for XVCREATE.
+///
+/// Pass serialized quantizer bytes. The metric and dimension must match. Importing must not have
+/// begun and the index must contain no data. Initial setup on an import-disabled index requires
+/// exclusive access before publishing it to concurrent commands. Success enables importing;
+/// Q8's automatically generated default state does not.
+///
+/// Returns true on success and false otherwise. On failure, discard the vector set: in-memory
+/// state and persisted metadata may already have changed.
+#[unsafe(no_mangle)]
+extern "C" fn set_quant_state(
+    context: u64,
+    index_ptr: *const c_void,
+    state: *const u8,
+    state_len: usize,
+) -> bool;
+
+/// Return whether the index accepts imported terms, both before and during import.
+/// This query does not begin or disable importing.
+#[unsafe(no_mangle)]
+extern "C" fn can_import(context: u64, index_ptr: *const c_void) -> bool;
+
+/// Import a term directly into storage, for XVIMPORT.
+///
+/// term_type is 0 for vectors, 1 for neighbors, 2 for quantized vectors, 3 for
+/// attributes, 5 for external-to-internal ID mappings, or 6 for
+/// internal-to-external ID mappings. Metadata (4) cannot be imported. External IDs
+/// are arbitrary byte strings and may be empty; other IDs and values must be
+/// non-null and non-empty. Terms may arrive in any order. Ordinary internal IDs
+/// range from 0 through u32::MAX - 1, excluding the configured start-point ID.
+/// Start-point vector, neighbor, and required quantized terms use that configured
+/// ID, which defaults to u32::MAX. Neighbor terms must have `(max_degree + 1) * 4` bytes
+/// and a trailing native-endian u32 count no greater than max_degree.
+///
+/// The first accepted term begins importing. Ordinary operations fail until FINISH succeeds.
+/// A failed term write keeps the import in progress; callers may repair or retry that term.
+///
+/// Returns true on success and false otherwise.
+#[unsafe(no_mangle)]
+extern "C" fn import_term(
+    context: u64,
+    index_ptr: *const c_void,
+    term_type: u32,
+    id: *const u8,
+    id_len: usize,
+    value: *const u8,
+    value_len: usize,
+) -> bool;
+
+/// Verify imported terms; for XVIMPORT ... VERIFY.
+///
+/// All term writes should be finished before calling. Each call checks its partition anew; task zero
+/// also checks the configured start point, independent of its numeric ID.
+/// Verification does not change import status.
+///
+/// Returns true if this partition passes, false for failure.
+#[unsafe(no_mangle)]
+extern "C" fn verify_import(
+    context: u64,
+    index_ptr: *const c_void,
+    task_idx: usize,
+    task_count: usize,
+) -> bool;
+
+/// Finalize the index.
+///
+/// All term writes should be finished before calling. This completes an import, and
+/// does not require that verification be done beforehand. Concurrent calls on the
+/// same handle serialize; once one succeeds, later calls return true.
+///
+/// Returns true on successful finalization, false on failure.
+#[unsafe(no_mangle)]
+extern "C" fn finish_import(context: u64, index_ptr: *const c_void) -> bool;

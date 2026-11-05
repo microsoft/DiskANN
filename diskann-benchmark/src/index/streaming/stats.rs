@@ -105,6 +105,16 @@ impl GenericStats {
             latencies: percentiles::compute_percentiles(&mut latencies)?,
         })
     }
+
+    #[cfg(feature = "inmem2")]
+    pub(crate) fn latencies(&self) -> &percentiles::Percentiles<MicroSeconds> {
+        &self.latencies
+    }
+
+    #[cfg(feature = "inmem2")]
+    pub(crate) fn total_time(&self) -> MicroSeconds {
+        self.total_time
+    }
 }
 
 impl std::fmt::Display for GenericStats {

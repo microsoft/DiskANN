@@ -17,8 +17,8 @@ pub mod build;
 #[cfg(feature = "pipnn")]
 pub use build::PiPNNParameters;
 pub use build::{
-    disk_index_build_parameter, filter_parameter, BuildAlgorithm, DiskIndexBuildParameters,
-    QuantizationType, SphericalBits,
+    BuildAlgorithm, DiskIndexBuildParameters, QuantizationType, SphericalBits,
+    disk_index_build_parameter, filter_parameter,
 };
 
 pub mod data_model;

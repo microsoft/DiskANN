@@ -12,11 +12,11 @@
 //! send each point.
 
 use crate::ANNResult;
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use super::{
-    check_output_rows, distance_scratch,
-    partition_metric::PartitionMetric,
+    check_output_rows,
+    partition_metric::{PartitionLeaders, PartitionMetric},
     simd::Simd,
     topk::{Candidate, select_top_k_ids},
 };
@@ -25,7 +25,7 @@ use super::{
 /// avoid an allocation for each stripe.
 #[derive(Debug, Default)]
 pub(super) struct PartitionKernelWorkspace {
-    distance_scratch: Vec<f32>,
+    distances: rowmajor::Buffer<f32>,
     nearest_leaders: Vec<Candidate>,
 }
 
@@ -42,13 +42,13 @@ pub(super) struct PartitionKernelWorkspace {
 /// # Errors
 ///
 /// Returns an error if `output` does not have one row per point, if the
-/// distance matrix size overflows `usize`, or if points and leaders have
+/// distance matrix shape is not a valid layout, or if points and leaders have
 /// different dimensions.
 pub(super) fn assign_leaders<A, M>(
     arch: A,
-    points: MatrixView<'_, f32>,
-    leaders: &M::Leaders<'_>,
-    output: MutMatrixView<'_, u32>,
+    points: rowmajor::Ref<'_, f32>,
+    leaders: &PartitionLeaders<'_>,
+    output: rowmajor::Mut<'_, u32>,
     workspace: &mut PartitionKernelWorkspace,
 ) -> ANNResult<()>
 where
@@ -57,15 +57,13 @@ where
 {
     let point_count = points.nrows();
     check_output_rows(point_count, output.nrows())?;
-    let mut distances = distance_scratch(
-        &mut workspace.distance_scratch,
-        point_count,
-        M::leader_count(leaders),
-    )?;
-    M::compute_distances(points, leaders, distances.as_mut_view())?;
+    workspace
+        .distances
+        .resize(point_count, leaders.leader_count())?;
+    M::compute_distances(points, leaders, workspace.distances.as_view_mut())?;
     select_top_k_ids(
         arch,
-        distances.as_view(),
+        workspace.distances.as_view(),
         output,
         &mut workspace.nearest_leaders,
     );
@@ -102,17 +100,18 @@ mod tests {
             2,
             unit_norm,
         );
-        let leaders =
-            M::create_leaders(MatrixView::try_from(leader_values.as_slice(), 4, 2).unwrap());
+        let leaders = M::create_leaders(
+            rowmajor::Ref::try_from_data(leader_values.as_slice(), 4, 2).unwrap(),
+        );
         // A width of six exceeds the four leaders.
         for assignments in [1, 2, 3, 4, 6] {
             let mut output = vec![0; 3 * assignments];
 
             assign_leaders::<_, M>(
                 ARCH,
-                MatrixView::try_from(point_values.as_slice(), 3, 2).unwrap(),
+                rowmajor::Ref::try_from_data(point_values.as_slice(), 3, 2).unwrap(),
                 &leaders,
-                MutMatrixView::try_from(output.as_mut_slice(), 3, assignments).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), 3, assignments).unwrap(),
                 &mut PartitionKernelWorkspace::default(),
             )
             .unwrap_or_else(|error| panic!("assignments={assignments}: {error}"));
@@ -162,12 +161,18 @@ mod tests {
                         test_support::normalize(&mut point_values, dimensions);
                         test_support::normalize(&mut leader_values, dimensions);
                     }
-                    let points =
-                        MatrixView::try_from(point_values.as_slice(), point_count, dimensions)
-                            .unwrap();
-                    let leader_matrix =
-                        MatrixView::try_from(leader_values.as_slice(), leader_count, dimensions)
-                            .unwrap();
+                    let points = rowmajor::Ref::try_from_data(
+                        point_values.as_slice(),
+                        point_count,
+                        dimensions,
+                    )
+                    .unwrap();
+                    let leader_matrix = rowmajor::Ref::try_from_data(
+                        leader_values.as_slice(),
+                        leader_count,
+                        dimensions,
+                    )
+                    .unwrap();
                     let leaders = M::create_leaders(leader_matrix);
                     let tolerance = test_support::dense_tolerance(metric, dimensions);
                     // The oracle sorts every leader by its scalar distance to the point.
@@ -199,7 +204,7 @@ mod tests {
                             arch,
                             points,
                             &leaders,
-                            MutMatrixView::try_from(
+                            rowmajor::Mut::try_from_data(
                                 output.as_mut_slice(),
                                 point_count,
                                 assignments,
@@ -246,7 +251,8 @@ mod tests {
     #[test]
     fn workspace_reuse_does_not_mix_results_from_different_stripes() {
         let leader_values = [0.0, 5.0, 12.0];
-        let leaders = L2::create_leaders(MatrixView::try_from(&leader_values[..], 3, 1).unwrap());
+        let leaders =
+            L2::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 3, 1).unwrap());
         let point_values = [1.0, 7.0, 11.0];
         let expected_ids = [[0, 1, 2], [1, 2, 0], [2, 1, 0]];
         let mut output = Vec::new();
@@ -256,9 +262,10 @@ mod tests {
             output.resize(point_count * assignments, 0);
             assign_leaders::<_, L2>(
                 ARCH,
-                MatrixView::try_from(&point_values[..point_count], point_count, 1).unwrap(),
+                rowmajor::Ref::try_from_data(&point_values[..point_count], point_count, 1).unwrap(),
                 &leaders,
-                MutMatrixView::try_from(output.as_mut_slice(), point_count, assignments).unwrap(),
+                rowmajor::Mut::try_from_data(output.as_mut_slice(), point_count, assignments)
+                    .unwrap(),
                 &mut workspace,
             )
             .unwrap();
@@ -293,8 +300,8 @@ mod tests {
 
         select_top_k_ids(
             ARCH,
-            MatrixView::try_from(&distances[..], 3, 4).unwrap(),
-            MutMatrixView::try_from(&mut output[..], 3, 3).unwrap(),
+            rowmajor::Ref::try_from_data(&distances[..], 3, 4).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 3, 3).unwrap(),
             &mut candidates,
         );
 
@@ -310,14 +317,15 @@ mod tests {
     fn output_without_one_row_per_point_is_rejected() {
         let point_values = [1.0, 6.0];
         let leader_values = [0.0, 5.0, 12.0];
-        let leaders = L2::create_leaders(MatrixView::try_from(&leader_values[..], 3, 1).unwrap());
+        let leaders =
+            L2::create_leaders(rowmajor::Ref::try_from_data(&leader_values[..], 3, 1).unwrap());
         let mut output = [2];
 
         let error = assign_leaders::<_, L2>(
             ARCH,
-            MatrixView::try_from(&point_values[..], 2, 1).unwrap(),
+            rowmajor::Ref::try_from_data(&point_values[..], 2, 1).unwrap(),
             &leaders,
-            MutMatrixView::try_from(&mut output[..], 1, 1).unwrap(),
+            rowmajor::Mut::try_from_data(&mut output[..], 1, 1).unwrap(),
             &mut PartitionKernelWorkspace::default(),
         )
         .unwrap_err();

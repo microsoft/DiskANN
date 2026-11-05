@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 /// PiPNN parameters in the JSON build configuration.
 ///
 /// The common index configuration supplies graph degree, alpha, metric, thread
-/// count, and memory limit. [`diskann::graph::pipnn::PiPNNConfig`] describes
-/// the effect of each parameter.
+/// count, and memory limit. [`diskann::graph::pipnn::Builder`] describes the
+/// effect of each parameter.
 #[cfg(feature = "pipnn")]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -58,18 +58,18 @@ impl Default for PiPNNParameters {
 }
 
 #[cfg(feature = "pipnn")]
-impl From<&PiPNNParameters> for diskann::graph::pipnn::PiPNNConfig {
-    fn from(config: &PiPNNParameters) -> Self {
-        Self {
-            c_max: config.c_max,
-            p_samp: config.p_samp,
-            max_leaders: config.max_leaders,
-            fanout: config.fanout.clone(),
-            max_depth: config.max_depth,
-            leaf_k: config.k,
-            // The disk builder sets the seed from `IndexConfiguration::random_seed`.
-            seed: None,
-        }
+impl PiPNNParameters {
+    /// Start a PiPNN configuration from these parameters and the prune policy
+    /// of `graph`. The disk builder adds the seed from
+    /// `IndexConfiguration::random_seed` and builds it.
+    pub(crate) fn builder(&self, graph: &diskann::graph::Config) -> diskann::graph::pipnn::Builder {
+        diskann::graph::pipnn::Builder::from_graph(graph)
+            .c_max(self.c_max)
+            .p_samp(self.p_samp)
+            .max_leaders(self.max_leaders)
+            .fanout(self.fanout.clone())
+            .max_depth(self.max_depth)
+            .leaf_k(self.k)
     }
 }
 

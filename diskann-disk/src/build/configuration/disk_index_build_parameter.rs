@@ -14,7 +14,7 @@ use thiserror::Error;
 use super::PiPNNParameters;
 use super::{BuildAlgorithm, QuantizationType};
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 /// GB to bytes ratio.
 pub const BYTES_IN_GB: f64 = 1024_f64 * 1024_f64 * 1024_f64;
@@ -198,9 +198,9 @@ impl DiskIndexBuildParameters {
     }
 
     #[cfg(feature = "pipnn")]
-    pub(crate) fn pipnn_config(&self) -> Option<diskann::graph::pipnn::PiPNNConfig> {
+    pub(crate) fn pipnn_parameters(&self) -> Option<&PiPNNParameters> {
         match &self.build_algorithm {
-            BuildAlgorithm::PiPNN(config) => Some(config.into()),
+            BuildAlgorithm::PiPNN(parameters) => Some(parameters),
             BuildAlgorithm::Vamana => None,
         }
     }
@@ -210,7 +210,7 @@ impl DiskIndexBuildParameters {
 mod dataset_test {
     use diskann::ANNError;
 
-    use crate::error::{error_kind, ErrorKind};
+    use crate::error::{ErrorKind, error_kind};
 
     use super::*;
 

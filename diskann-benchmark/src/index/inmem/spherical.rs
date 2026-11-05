@@ -39,6 +39,17 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 
         registry.register(
             NAME,
+            imp::SphericalQ::<3>::new()
+                .search(plugins::Topk)
+                .search(plugins::Range)
+                .search(plugins::FilteredRange)
+                .search(plugins::TopkBetaFilter)
+                .search(plugins::TopkMultihopFilter)
+                .search(plugins::TopkInlineFilter),
+        )?;
+
+        registry.register(
+            NAME,
             imp::SphericalQ::<4>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
@@ -78,7 +89,7 @@ mod imp {
         model::graph::provider::async_::{common, inmem},
     };
     use diskann_quantization::alloc::GlobalAllocator;
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use rand::SeedableRng;
     use serde::Serialize;
     use std::{io::Write, sync::Arc};
@@ -259,7 +270,7 @@ mod imp {
 
                     let build = &input.build;
 
-                    let data: Arc<Matrix<f32>> =
+                    let data: Arc<rowmajor::Owned<f32>> =
                         Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                     let start = std::time::Instant::now();
@@ -336,6 +347,7 @@ mod imp {
 
     build_and_search!(1);
     build_and_search!(2);
+    build_and_search!(3);
     build_and_search!(4);
 
     impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
@@ -360,7 +372,7 @@ mod imp {
             // compute the maximum value of k used in any search
             let max_k = topk.max_k();
 
-            let queries: Arc<Matrix<f32>> =
+            let queries: Arc<rowmajor::Owned<f32>> =
                 Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
             let groundtruth =
@@ -405,7 +417,7 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let range = phase.as_range()?;
 
-            let queries: Arc<Matrix<f32>> =
+            let queries: Arc<rowmajor::Owned<f32>> =
                 Arc::new(datafiles::load_dataset(datafiles::BinFile(&range.queries))?);
 
             let groundtruth =
@@ -447,9 +459,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let filtered_range = phase.as_filtered_range()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &filtered_range.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&filtered_range.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&filtered_range.groundtruth))?;
@@ -504,9 +516,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let betafilter = phase.as_topk_beta_filter()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &betafilter.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&betafilter.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&betafilter.groundtruth))?;
@@ -559,9 +571,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let multihop = phase.as_topk_multihop_filter()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &multihop.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&multihop.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
@@ -613,9 +625,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let inline = phase.as_topk_inline_filter()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &inline.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&inline.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;

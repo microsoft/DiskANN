@@ -16,12 +16,12 @@ use std::io::{Read, Seek, Write};
 use diskann_wide::{LoHi, SplitJoin};
 use thiserror::Error;
 
-use crate::views::{Matrix, MatrixView};
+use crate::views::rowmajor::{self, Layout, Matrix, MatrixMut};
 
 /// Read a matrix of `T` from the DiskANN binary format (see [module docs](self)).
 ///
 /// Validates that the reader contains enough data before allocating.
-pub fn read_bin<T>(reader: &mut (impl Read + Seek)) -> Result<Matrix<T>, ReadBinError>
+pub fn read_bin<T>(reader: &mut (impl Read + Seek)) -> Result<rowmajor::Owned<T>, ReadBinError>
 where
     T: bytemuck::Pod,
 {
@@ -29,14 +29,18 @@ where
     let (npoints, ndims) = (metadata.npoints(), metadata.ndims());
     let type_size = std::mem::size_of::<T>();
 
-    let expected_bytes = npoints
-        .checked_mul(ndims)
-        .and_then(|n| n.checked_mul(type_size))
-        .ok_or(ReadBinError::Overflow {
-            npoints: metadata.npoints_u32(),
-            ndims: metadata.ndims_u32(),
-            type_size,
-        })?;
+    let layout = match Layout::<T>::new(npoints, ndims) {
+        Ok(layout) => layout,
+        Err(_) => {
+            return Err(ReadBinError::Overflow {
+                npoints: metadata.npoints_u32(),
+                ndims: metadata.ndims_u32(),
+                type_size,
+            })
+        }
+    };
+
+    let expected_bytes = layout.num_elements() * std::mem::size_of::<T>();
 
     let data_start = reader.stream_position()?;
     let end = reader.seek(std::io::SeekFrom::End(0))?;
@@ -53,8 +57,8 @@ where
         });
     }
 
-    let mut data = Matrix::new(<T as bytemuck::Zeroable>::zeroed(), npoints, ndims);
-
+    let mut data =
+        rowmajor::Owned::from_element_with_layout(layout, <T as bytemuck::Zeroable>::zeroed());
     reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(data.as_mut_slice()))?;
     Ok(data)
 }
@@ -62,7 +66,10 @@ where
 /// Write a matrix of `T` in the DiskANN binary format (see [module docs](self)).
 ///
 /// Returns the total number of bytes written.
-pub fn write_bin<T>(data: MatrixView<'_, T>, writer: &mut impl Write) -> Result<usize, SaveBinError>
+pub fn write_bin<T>(
+    data: rowmajor::Ref<'_, T>,
+    writer: &mut impl Write,
+) -> Result<usize, SaveBinError>
 where
     T: bytemuck::Pod,
 {
@@ -174,7 +181,7 @@ pub enum ReadBinError {
         type_size: usize,
     },
 
-    /// `npoints * ndims` overflows `usize` (corrupt or malicious header).
+    /// The dimensions do not describe a valid allocation (corrupt or malicious header).
     #[error(
         "header dimensions overflow: {npoints} points × {ndims} dims × {type_size} bytes overflows"
     )]
@@ -209,22 +216,18 @@ pub enum SaveBinError {
 mod tests {
     use std::io::Cursor;
 
-    use crate::views::Init;
+    use crate::assert_contains;
 
     use super::*;
 
     #[test]
     fn round_trip_f32() {
         let mut counter = 1.0f32;
-        let matrix = Matrix::<f32>::new(
-            Init(|| {
-                let v = counter;
-                counter += 1.0;
-                v
-            }),
-            3,
-            4,
-        );
+        let matrix = rowmajor::Owned::<f32>::from_fn(3, 4, |_| {
+            let v = counter;
+            counter += 1.0;
+            v
+        });
 
         assert_eq!(
             matrix.as_slice(),
@@ -306,13 +309,10 @@ mod tests {
         let err = read_bin::<f32>(&mut cursor).unwrap_err();
         let msg = err.to_string();
 
-        assert!(msg.contains("100 points"), "missing npoints: {msg}");
-        assert!(msg.contains("32 dims"), "missing ndims: {msg}");
-        assert!(msg.contains("12800 bytes"), "missing expected: {msg}");
-        assert!(
-            msg.contains("0 bytes available"),
-            "missing available: {msg}"
-        );
+        assert_contains!(msg, "100 points", "missing npoints");
+        assert_contains!(msg, "32 dims", "missing ndims");
+        assert_contains!(msg, "12800 bytes", "missing expected");
+        assert_contains!(msg, "0 bytes available", "missing available");
     }
 
     #[test]

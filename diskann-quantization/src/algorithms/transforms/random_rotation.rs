@@ -5,16 +5,17 @@
 
 use std::num::NonZeroUsize;
 
+use diskann_linalg::{self, Transpose};
+use diskann_utils::views::rowmajor::{Matrix, MatrixMut};
 #[cfg(feature = "flatbuffers")]
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
-use diskann_linalg::{self, Transpose};
 use rand::Rng;
 #[cfg(feature = "flatbuffers")]
 use thiserror::Error;
 
 use super::{
-    utils::{check_dims, TransformFailed},
     TargetDim,
+    utils::{TransformFailed, check_dims},
 };
 #[cfg(feature = "flatbuffers")]
 use crate::flatbuffers as fb;
@@ -31,7 +32,7 @@ use crate::flatbuffers as fb;
 #[cfg_attr(test, derive(PartialEq))]
 pub struct RandomRotation {
     /// This data structure maintains the invariant that this **must** be a square matrix.
-    transform: diskann_utils::views::Matrix<f32>,
+    transform: diskann_utils::views::rowmajor::Owned<f32>,
 }
 
 impl RandomRotation {
@@ -88,7 +89,7 @@ impl RandomRotation {
         // Lint: By construction, the matrix returned from
         // `diskann_linalg::random_distance_preserving_matrix` will by `matrix_dim x matrix_dim`.
         #[expect(clippy::unwrap_used)]
-        let initial = diskann_utils::views::Matrix::try_from(
+        let initial = diskann_utils::views::rowmajor::Owned::try_from_data(
             diskann_linalg::random_distance_preserving_matrix(matrix_dim, rng).into(),
             matrix_dim,
             matrix_dim,
@@ -102,8 +103,9 @@ impl RandomRotation {
                 let indices = rand::seq::index::sample(rng, dim, target_dim);
                 let scaling = (dim as f32 / target_dim as f32).sqrt();
 
-                let mut transform = diskann_utils::views::Matrix::new(0.0f32, target_dim, dim);
-                std::iter::zip(transform.row_iter_mut(), indices.iter()).for_each(|(ro, ri)| {
+                let mut transform =
+                    diskann_utils::views::rowmajor::Owned::from_element(target_dim, dim, 0.0f32);
+                std::iter::zip(transform.rows_mut(), indices.iter()).for_each(|(ro, ri)| {
                     std::iter::zip(ro.iter_mut(), initial.row(ri).iter()).for_each(|(o, i)| {
                         *o = scaling * (*i);
                     })
@@ -111,8 +113,9 @@ impl RandomRotation {
                 transform
             }
             std::cmp::Ordering::Greater => {
-                let mut transform = diskann_utils::views::Matrix::new(0.0f32, target_dim, dim);
-                std::iter::zip(transform.row_iter_mut(), initial.row_iter())
+                let mut transform =
+                    diskann_utils::views::rowmajor::Owned::from_element(target_dim, dim, 0.0f32);
+                std::iter::zip(transform.rows_mut(), initial.rows())
                     .for_each(|(o, i)| o.copy_from_slice(&i[..dim]));
                 transform
             }
@@ -219,9 +222,12 @@ impl RandomRotation {
         }
 
         let data = proto.data().into_iter().collect();
-        let transform =
-            diskann_utils::views::Matrix::try_from(data, nrows as usize, ncols as usize)
-                .map_err(|_| RandomRotationError::IncorrectDim)?;
+        let transform = diskann_utils::views::rowmajor::Owned::try_from_data(
+            data,
+            nrows as usize,
+            ncols as usize,
+        )
+        .map_err(|_| RandomRotationError::IncorrectDim)?;
 
         Ok(Self { transform })
     }
@@ -234,11 +240,11 @@ impl RandomRotation {
 #[cfg(test)]
 mod tests {
     use diskann_utils::lazy_format;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::{
-        algorithms::transforms::{test_utils, Transform, TransformFailed, TransformKind},
+        algorithms::transforms::{Transform, TransformFailed, TransformKind, test_utils},
         alloc::GlobalAllocator,
         test_util::Check,
     };

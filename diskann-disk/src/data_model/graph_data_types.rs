@@ -8,6 +8,21 @@ use std::hash::Hash;
 use diskann::utils::{VectorId, VectorRepr};
 use serde::{Deserialize, Serialize};
 
+/// Vector element types that the disk index build accepts. With the `pipnn`
+/// feature, the build also needs the PiPNN [`Element`] gather of the type.
+///
+/// [`Element`]: diskann::graph::pipnn::Element
+#[cfg(feature = "pipnn")]
+pub trait BuildVector: diskann::graph::pipnn::Element {}
+#[cfg(feature = "pipnn")]
+impl<T: diskann::graph::pipnn::Element> BuildVector for T {}
+
+/// Vector element types that the disk index build accepts.
+#[cfg(not(feature = "pipnn"))]
+pub trait BuildVector: VectorRepr {}
+#[cfg(not(feature = "pipnn"))]
+impl<T: VectorRepr> BuildVector for T {}
+
 /// `GraphDataType` is a trait used for specifying the properties of a graph.
 /// For each of the associated type, it describes the traits bound required for ANN algorithm to use that type.
 /// Noted that the trait bounds are define on the associated type of the this trait. because these are the requirements for a type to be used in the graph.

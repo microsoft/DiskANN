@@ -13,18 +13,18 @@ use std::cmp::min;
 
 use diskann::ANNResult;
 use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPoolRef};
-use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
+use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use hashbrown::HashSet;
 use rand::{
+    Rng,
     distr::{StandardUniform, Uniform},
     prelude::Distribution,
-    Rng,
 };
 use rayon::prelude::*;
 
 use super::math_util::{compute_closest_centers, compute_vecs_l2sq};
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 /// Run Lloyds one iteration
 /// Given data in row-major num_points * dim, and centers in row-major
@@ -309,13 +309,7 @@ pub fn k_meanspp_selecting_pivots(
         // Calculate the sum of distances of all the nodes to their nearest selected pivot.
         let sum: f64 = dist
             .iter()
-            .map(|&x| {
-                if x == f32::INFINITY {
-                    f32::MAX
-                } else {
-                    x
-                }
-            } as f64)
+            .map(|&x| { if x == f32::INFINITY { f32::MAX } else { x } } as f64)
             .sum();
 
         // All unique points are picked as pivots.
@@ -339,7 +333,8 @@ pub fn k_meanspp_selecting_pivots(
                     || (dart_val <= prefix_sum && *pivot_dist != 0.0f32))
             {
                 if picked.contains(&i) {
-                    return Err(diskann_error!(ErrorKind::KMeansError,
+                    return Err(diskann_error!(
+                        ErrorKind::KMeansError,
                         "A pivot was sampled again, the condition on dart_val range should not have happened",
                     ));
                 }
@@ -448,7 +443,7 @@ mod kmeans_test {
     use diskann_utils::test_data_root;
     use rstest::rstest;
 
-    use crate::error::{error_kind, ErrorKind};
+    use crate::error::{ErrorKind, error_kind};
 
     use super::*;
 
@@ -568,9 +563,10 @@ mod kmeans_test {
         .unwrap_err();
 
         assert_eq!(error_kind(&err), ErrorKind::PQError);
-        assert!(err
-            .to_string()
-            .contains("Error: Cancellation requested by caller."));
+        assert!(
+            err.to_string()
+                .contains("Error: Cancellation requested by caller.")
+        );
     }
 
     #[test]

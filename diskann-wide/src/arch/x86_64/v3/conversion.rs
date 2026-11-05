@@ -6,7 +6,9 @@
 // x86 intrinsics
 use std::arch::x86_64::*;
 
-use super::{f16x8, f16x16, f32x8, f32x16, i8x16, i16x8, i16x16, i32x8, u8x16, u32x8};
+use super::{
+    f16x8, f16x16, f32x8, f32x16, i8x16, i8x32, i16x8, i16x16, i32x8, i32x16, u8x16, u8x32, u32x8,
+};
 use crate::{LoHi, SIMDCast, SIMDReinterpret, SplitJoin, helpers};
 
 /////////////////
@@ -81,6 +83,14 @@ impl SIMDCast<half::f16> for f32x16 {
     }
 }
 
+impl SIMDCast<f32> for i32x16 {
+    type Cast = f32x16;
+    #[inline(always)]
+    fn simd_cast(self) -> f32x16 {
+        self.split().map(|x| -> f32x8 { x.simd_cast() }).join()
+    }
+}
+
 // i8 to i16
 helpers::unsafe_map_conversion!(i8x16, i16x16, _mm256_cvtepi8_epi16, "avx2");
 
@@ -97,6 +107,18 @@ helpers::unsafe_map_cast!(i32x8 => (f32, f32x8), _mm256_cvtepi32_ps, "avx");
 impl SIMDReinterpret<i16x16> for u32x8 {
     fn reinterpret_simd(self) -> i16x16 {
         i16x16(self.0)
+    }
+}
+
+impl SIMDReinterpret<u8x32> for u32x8 {
+    fn reinterpret_simd(self) -> u8x32 {
+        u8x32(self.0)
+    }
+}
+
+impl SIMDReinterpret<i8x32> for u32x8 {
+    fn reinterpret_simd(self) -> i8x32 {
+        i8x32(self.0)
     }
 }
 
@@ -120,6 +142,22 @@ impl SIMDReinterpret<i16x8> for u8x16 {
 mod test_x86_conversions {
     use super::*;
     use crate::{arch::x86_64::V3, test_utils};
+
+    test_utils::ops::test_reinterpret!(
+        u32x8 => i16x16, 0x763582a914ec0bfd, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x8 => u8x32, 0x69b42dafe0917358, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u32x8 => i8x32, 0x69b42dafe0917358, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        i16x8 => u8x16, 0x4b96d02e85f713ca, V3::new_checked_uncached()
+    );
+    test_utils::ops::test_reinterpret!(
+        u8x16 => i16x8, 0xd5302e6b194a87fc, V3::new_checked_uncached()
+    );
 
     // Lossless Conversions
     #[cfg(not(miri))]
@@ -147,4 +185,5 @@ mod test_x86_conversions {
     test_utils::ops::test_cast!(f32x16 => f16x16, 0x7b9c9afee7e6ac63, V3::new_checked_uncached());
 
     test_utils::ops::test_cast!(i32x8 => f32x8, 0xde4fbf25c554b29e, V3::new_checked_uncached());
+    test_utils::ops::test_cast!(i32x16 => f32x16, 0x83e571a946db20cf, V3::new_checked_uncached());
 }

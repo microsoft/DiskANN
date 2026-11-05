@@ -31,7 +31,7 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix},
 };
 use half::f16;
 
@@ -380,7 +380,7 @@ type Index<DP> = Arc<DiskANNIndex<DP>>;
 pub(crate) fn run_build<T, BF, CF, B, DP>(
     input: &IndexBuild,
     build_strategy: B,
-    data: Option<Arc<Matrix<T>>>,
+    data: Option<Arc<rowmajor::Owned<T>>>,
     output: &mut dyn Output,
     create: CF,
     build: BF,
@@ -388,13 +388,13 @@ pub(crate) fn run_build<T, BF, CF, B, DP>(
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
         + for<'a> provider::SetElement<&'a [T]>,
-    CF: FnOnce(MatrixView<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
+    CF: FnOnce(rowmajor::Ref<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
     T: diskann::graph::SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
     B: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + Send + Sync,
     BF: FnOnce(
         Index<DP>,
         B,
-        Arc<Matrix<T>>,
+        Arc<rowmajor::Owned<T>>,
         &IndexBuild,
         &mut dyn Output,
     ) -> anyhow::Result<BuildStats>,
@@ -507,7 +507,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let topk = phase.as_topk()?;
 
-        let queries: Arc<Matrix<DP::Element>> =
+        let queries: Arc<rowmajor::Owned<DP::Element>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
         // compute the maximum value of k used in any search
@@ -564,7 +564,7 @@ where
         strategy: &Strategy<S>,
     ) -> anyhow::Result<AggregatedSearchResults> {
         let range = phase.as_range()?;
-        let queries: Arc<Matrix<DP::Element>> =
+        let queries: Arc<rowmajor::Owned<DP::Element>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&range.queries))?);
 
         let groundtruth =
@@ -615,7 +615,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let filtered_range = phase.as_filtered_range()?;
 
-        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
             datafiles::BinFile(&filtered_range.queries),
         )?);
 
@@ -681,7 +681,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let beta_filter = phase.as_topk_beta_filter()?;
 
-        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
             datafiles::BinFile(&beta_filter.queries),
         )?);
 
@@ -747,7 +747,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let multihop = phase.as_topk_multihop_filter()?;
 
-        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
             datafiles::BinFile(&multihop.queries),
         )?);
 
@@ -809,7 +809,7 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let inline = phase.as_topk_inline_filter()?;
 
-        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
             datafiles::BinFile(&inline.queries),
         )?);
 

@@ -15,6 +15,6 @@ pub mod configuration;
 #[cfg(feature = "pipnn")]
 pub use configuration::PiPNNParameters;
 pub use configuration::{
-    disk_index_build_parameter, filter_parameter, BuildAlgorithm, DiskIndexBuildParameters,
-    QuantizationType, SphericalBits,
+    BuildAlgorithm, DiskIndexBuildParameters, QuantizationType, SphericalBits,
+    disk_index_build_parameter, filter_parameter,
 };

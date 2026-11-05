@@ -27,14 +27,14 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix},
 };
 #[cfg(feature = "pipnn")]
 use diskann_vector::DistanceFunction;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
-use crate::inputs::graph_index::IndexBuild;
+use crate::{inputs::graph_index::IndexBuild, utils::progress::Progress};
 
 ///////////////////////////////
 // Start Point Configuration //
@@ -42,7 +42,7 @@ use crate::inputs::graph_index::IndexBuild;
 
 pub(crate) fn set_start_points<DP, T>(
     provider: &DP,
-    data: MatrixView<'_, T>,
+    data: rowmajor::Ref<'_, T>,
     start_strategy: StartPointStrategy,
 ) -> ANNResult<()>
 where
@@ -50,7 +50,7 @@ where
     T: diskann::graph::SampleableForStart + AsyncFriendly,
 {
     let start_points = start_strategy.compute(data).map_err(ANNError::new)?;
-    provider.set_start_points(start_points.row_iter())
+    provider.set_start_points(start_points.rows())
 }
 
 ///////////
@@ -60,7 +60,7 @@ where
 pub(crate) fn single_or_multi_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     output: &mut dyn Output,
 ) -> anyhow::Result<BuildStats>
@@ -87,7 +87,7 @@ where
                     NonZeroUsize::new(input.num_threads()).unwrap(),
                 ),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::SingleInsert, results)?)
@@ -104,7 +104,7 @@ where
                 runner,
                 build_core::Parallelism::sequential(multi_insert.batch_size),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::MultiInsert, results)?)
@@ -250,7 +250,7 @@ where
 pub(crate) fn only_single_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     output: &mut dyn Output,
 ) -> anyhow::Result<BuildStats>
@@ -276,7 +276,7 @@ where
                     NonZeroUsize::new(input.num_threads()).unwrap(),
                 ),
                 &rt,
-                Some(&ProgressMeter::new(output)),
+                Some(&Progress::new(output)),
             )?;
 
             Ok(BuildStats::new(BuildKind::SingleInsert, results)?)
@@ -355,42 +355,6 @@ impl std::fmt::Display for BuildStats {
         } else {
             writeln!(f, "Insert Latencies: not measured for batch construction\n")
         }
-    }
-}
-
-pub struct ProgressMeter<'a> {
-    output: &'a mut dyn Output,
-}
-
-impl<'a> ProgressMeter<'a> {
-    pub fn new(output: &'a mut dyn Output) -> Self {
-        Self { output }
-    }
-}
-
-impl build_core::AsProgress for ProgressMeter<'_> {
-    fn as_progress(&self, max: usize) -> Arc<dyn build_core::Progress> {
-        let target = self.output.draw_target();
-        let meter = ProgressBar::with_draw_target(Some(max as u64), target);
-        meter.set_style(
-            ProgressStyle::with_template("Building [{elapsed_precise}] {wide_bar} {percent}")
-                .expect("This format should be valid"),
-        );
-        Arc::new(Meter { meter })
-    }
-}
-
-#[derive(Debug)]
-struct Meter {
-    meter: ProgressBar,
-}
-
-impl build_core::Progress for Meter {
-    fn progress(&self, handled: usize) {
-        self.meter.inc(handled as u64)
-    }
-    fn finish(&self) {
-        self.meter.finish()
     }
 }
 

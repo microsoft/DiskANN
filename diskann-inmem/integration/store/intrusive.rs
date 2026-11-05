@@ -107,6 +107,7 @@ impl dbr::Benchmark for Stress {
             freelist_recycle_capacity: input.setup.freelist_recycle_capacity,
         };
 
+        writeln!(output, "Intrusive Store Stress Test\n")?;
         writeln!(output, "{}", input)?;
         let stats = super::run_benchmark(intrusive::Store::new(config), &input.setup)?;
         writeln!(output, "{}", stats)?;
@@ -116,7 +117,7 @@ impl dbr::Benchmark for Stress {
 
 /// Per-guard observation of a single slot.
 #[derive(Debug, Clone, Copy)]
-enum SlotObservations {
+pub(super) enum SlotObservations {
     /// The slot was observed readable with the given stamp.
     Readable(u64),
     /// The slot was observed readable and then became unreadable (retired).
@@ -124,7 +125,7 @@ enum SlotObservations {
 }
 
 /// Fill `buf` with `stamp` replicated across every 8-byte lane.
-fn write_stamp(buf: &mut [u8], stamp: u64) {
+pub(super) fn write_stamp(buf: &mut [u8], stamp: u64) {
     let bytes = stamp.to_ne_bytes();
     for lane in buf.chunks_exact_mut(8) {
         lane.copy_from_slice(&bytes);
@@ -132,7 +133,7 @@ fn write_stamp(buf: &mut [u8], stamp: u64) {
 }
 
 /// Read the stamp from `buf`, returning `Err` if any 8-byte lane disagrees (a torn read).
-fn read_stamp(buf: &[u8]) -> Result<u64, ()> {
+pub(super) fn read_stamp(buf: &[u8]) -> Result<u64, ()> {
     let (lanes, _) = buf.as_chunks::<8>();
     let mut lanes = lanes.iter();
     let first = u64::from_ne_bytes(*lanes.next().ok_or(())?);
@@ -142,6 +143,45 @@ fn read_stamp(buf: &[u8]) -> Result<u64, ()> {
         }
     }
     Ok(first)
+}
+
+pub(super) fn observe<T>(
+    observations: &mut HashMap<usize, SlotObservations>,
+    i: usize,
+    read: Option<&[u8]>,
+    shared: &super::Shared<T>,
+) {
+    let observed = observations.get(&i).copied();
+
+    match (observed, read) {
+        // Not yet observed readable; an unreadable slot tells us nothing actionable.
+        (None, None) => {}
+        // First readable observation: record the stamp (after a tearing check).
+        (None, Some(bytes)) => match read_stamp(bytes) {
+            Ok(stamp) => {
+                observations.insert(i, SlotObservations::Readable(stamp));
+            }
+            Err(()) => shared.record_violation(format!("torn read at slot {i}")),
+        },
+        // Still readable: the value must be identical and untorn.
+        (Some(SlotObservations::Readable(prev)), Some(bytes)) => match read_stamp(bytes) {
+            Ok(stamp) if stamp != prev => shared.record_violation(format!(
+                "slot {i} value changed within guard: {prev} -> {stamp}"
+            )),
+            Ok(_) => {}
+            Err(()) => shared.record_violation(format!("torn read at slot {i}")),
+        },
+        // Readable -> unreadable: an allowed, terminal transition.
+        (Some(SlotObservations::Readable(_)), None) => {
+            observations.insert(i, SlotObservations::Retired);
+            shared.transitions.fetch_add(1, Relaxed);
+        }
+        // Resurrection: a slot that retired came back to life within the same guard.
+        (Some(SlotObservations::Retired), Some(_)) => shared.record_violation(format!(
+            "resurrection at slot {i}: unreadable -> readable within one guard"
+        )),
+        (Some(SlotObservations::Retired), None) => {}
+    }
 }
 
 impl super::Testable for intrusive::Store {
@@ -229,42 +269,7 @@ impl super::Reader for Reader<'_> {
     /// Feed a single observation of slot `i` into the per-guard checker, recording a
     /// violation on the shared state if a safety invariant is broken.
     fn observe(&mut self, i: usize) {
-        let read = self.reader.read(i);
-        let observed = self.observed.get(&i).copied();
-
-        match (observed, read) {
-            // Not yet observed readable; an unreadable slot tells us nothing actionable.
-            (None, None) => {}
-            // First readable observation: record the stamp (after a tearing check).
-            (None, Some(bytes)) => match read_stamp(bytes) {
-                Ok(stamp) => {
-                    self.observed.insert(i, SlotObservations::Readable(stamp));
-                }
-                Err(()) => self
-                    .shared
-                    .record_violation(format!("torn read at slot {i}")),
-            },
-            // Still readable: the value must be identical and untorn.
-            (Some(SlotObservations::Readable(prev)), Some(bytes)) => match read_stamp(bytes) {
-                Ok(stamp) if stamp != prev => self.shared.record_violation(format!(
-                    "slot {i} value changed within guard: {prev} -> {stamp}"
-                )),
-                Ok(_) => {}
-                Err(()) => self
-                    .shared
-                    .record_violation(format!("torn read at slot {i}")),
-            },
-            // Readable -> unreadable: an allowed, terminal transition.
-            (Some(SlotObservations::Readable(_)), None) => {
-                self.observed.insert(i, SlotObservations::Retired);
-                self.shared.transitions.fetch_add(1, Relaxed);
-            }
-            // Resurrection: a slot that retired came back to life within the same guard.
-            (Some(SlotObservations::Retired), Some(_)) => self.shared.record_violation(format!(
-                "resurrection at slot {i}: unreadable -> readable within one guard"
-            )),
-            (Some(SlotObservations::Retired), None) => {}
-        }
+        observe(self.observed, i, self.reader.read(i), self.shared)
     }
 }
 

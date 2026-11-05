@@ -6,12 +6,10 @@
 use crate::garnet::{Callbacks, ReadDataCallback, RmwDataCallback, TERM_BITMASK, Term};
 use core::slice;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use std::{
     ffi::c_void,
-    sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 thread_local! {
@@ -19,6 +17,7 @@ thread_local! {
     pub static LOGS: Mutex<Vec<(u64, String)>> = const { Mutex::new(Vec::new()) };
     pub static FULL_READS: AtomicUsize = const { AtomicUsize::new(0) };
     pub static QUANT_READS: AtomicUsize = const { AtomicUsize::new(0) };
+    pub static INT_MAP_READS: AtomicUsize = const { AtomicUsize::new(0) };
 }
 
 /// Mock storage for testing.
@@ -53,11 +52,12 @@ impl Store {
     pub fn clear(&self) {
         STORE.with(|s| s.clear());
         LOGS.with(|l| {
-            let mut guard = l.lock().unwrap();
+            let mut guard = l.lock();
             guard.clear();
         });
         FULL_READS.with(|fr| fr.store(0, Ordering::Release));
         QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
+        INT_MAP_READS.with(|reads| reads.store(0, Ordering::Release));
     }
 
     pub fn set(&self, context: u64, key: &[u8], value: &[u8]) {
@@ -102,6 +102,7 @@ impl Store {
     pub fn clear_read_counts(&self) {
         FULL_READS.with(|fr| fr.store(0, Ordering::Release));
         QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
+        INT_MAP_READS.with(|reads| reads.store(0, Ordering::Release));
     }
 
     pub fn full_reads(&self) -> usize {
@@ -112,12 +113,39 @@ impl Store {
         QUANT_READS.with(|qr| qr.load(Ordering::Acquire))
     }
 
+    pub fn int_map_reads(&self) -> usize {
+        INT_MAP_READS.with(|reads| reads.load(Ordering::Acquire))
+    }
+
     pub fn log(&self, context: u64, msg: &str) {
         LOGS.with(|l| {
-            let mut guard = l.lock().unwrap();
+            let mut guard = l.lock();
             guard.push((context, msg.to_owned()));
         });
     }
+}
+
+/// A deterministic Q8 state distinct from the default DoubleHadamard transform.
+pub fn q8_state_with_identity_transform(
+    dim: usize,
+) -> diskann_quantization::alloc::Poly<[u8], diskann_quantization::alloc::GlobalAllocator> {
+    use diskann_quantization::{
+        algorithms::{Transform, TransformKind},
+        alloc::GlobalAllocator,
+        minmax::MinMaxQuantizer,
+        num::POSITIVE_ONE_F32,
+    };
+
+    let transform = Transform::new(
+        TransformKind::Null,
+        std::num::NonZero::new(dim).unwrap(),
+        None,
+        GlobalAllocator,
+    )
+    .unwrap();
+    MinMaxQuantizer::new(transform, POSITIVE_ONE_F32)
+        .serialize(GlobalAllocator)
+        .unwrap()
 }
 
 unsafe extern "C" fn test_read(
@@ -129,13 +157,14 @@ unsafe extern "C" fn test_read(
     cb: ReadDataCallback,
     cb_ctx: *mut c_void,
 ) {
+    if ctx & TERM_BITMASK == Term::IntMap as u64 {
+        INT_MAP_READS.with(|reads| reads.fetch_add(1, Ordering::AcqRel));
+    }
     let ids = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
     let mut pos = 0usize;
     for idx in 0..count {
-        let mut len = 0u32;
-        let len_bytes = bytemuck::bytes_of_mut(&mut len);
-        len_bytes.copy_from_slice(&ids[pos..pos + 4]);
+        let len = bytemuck::pod_read_unaligned::<u32>(&ids[pos..pos + 4]);
 
         pos += 4;
 
@@ -275,7 +304,7 @@ mod tests {
 
     #[test]
     fn garnet_provider_with_store_callbacks() {
-        use crate::provider::GarnetProvider;
+        use crate::provider::{DEFAULT_START_POINT_ID, GarnetProvider};
         use diskann_vector::distance::Metric;
 
         let store: Store = Store::new();
@@ -290,6 +319,7 @@ mod tests {
             VectorQuantType::NoQuant,
             Metric::L2,
             max_degree,
+            DEFAULT_START_POINT_ID,
             callbacks,
             &ctx,
         );
@@ -309,6 +339,7 @@ mod tests {
             VectorQuantType::NoQuant,
             Metric::L2,
             max_degree,
+            DEFAULT_START_POINT_ID,
             callbacks,
             &ctx,
         );

@@ -13,13 +13,13 @@ use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     storage::{get_mem_index_file, path_utility::*},
-    utils::{save_bytes, READ_WRITE_BLOCK_SIZE},
+    utils::{READ_WRITE_BLOCK_SIZE, save_bytes},
 };
 use tracing::info;
 
 use crate::{
     data_model::{GraphHeader, GraphMetadata},
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
 };
 
 // Struct DiskIndexWriterState maintains the state of the process of creating a disk
@@ -230,7 +230,8 @@ impl DiskIndexWriter {
                     return Err(diskann_error!(
                         ErrorKind::IndexError,
                         "Number of points in dataset file ({}) does not match number of points in associated data file ({}).",
-                        state.num_pts, associated_data_num_pts
+                        state.num_pts,
+                        associated_data_num_pts
                     ));
                 }
 
@@ -284,7 +285,7 @@ impl DiskIndexWriter {
         let num_nbrs: u32 = Self::get_neighbors_number(state)?;
 
         // sanity checks on num_nbrs
-        debug_assert!(num_nbrs > 0);
+        debug_assert!(num_nbrs > 0 || state.num_pts == 1);
         debug_assert!(num_nbrs <= state.max_degree);
 
         let num_nbrs_start = state.dims as usize * mem::size_of::<Data::VectorDataType>();
@@ -559,8 +560,9 @@ impl DiskIndexWriter {
 #[cfg(test)]
 mod disk_index_storage_test {
     use crate::test_utils::GraphDataF32VectorU32Data;
+    use diskann_providers::model::graph::provider::async_::SimpleNeighborProviderAsync;
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_utils::test_data_root;
+    use diskann_utils::{io::write_bin, test_data_root, views::rowmajor};
     use vfs::OverlayFS;
 
     use super::*;
@@ -686,8 +688,7 @@ mod disk_index_storage_test {
         const TEST_DATA_FILE_HIGH_DIM: &str = "/disk_index_misc/rand_float_1024D_1K_norm1.0.bin";
         const DISK_INDEX_PATH_PREFIX_HIGH_DIM: &str =
             "/disk_index_misc/disk_index_rand_float_1024D_1Kpts_R4_L50_A1.2_index_writer";
-        const TRUTH_DISK_LAYOUT_HIGH_DIM: &str =
-            "/disk_index_misc/truth_disk_index_rand_float_1024D_1Kpts_R4_L50_A1.2_index_writer.index";
+        const TRUTH_DISK_LAYOUT_HIGH_DIM: &str = "/disk_index_misc/truth_disk_index_rand_float_1024D_1Kpts_R4_L50_A1.2_index_writer.index";
 
         let disk_layout_file = {
             let storage = DiskIndexWriter::new(
@@ -733,6 +734,50 @@ mod disk_index_storage_test {
         storage_provider
             .delete(disk_layout_file.as_str())
             .expect("Failed to delete file");
+    }
+
+    // A 1-point graph has no neighbors; creating its disk layout must succeed.
+    #[test]
+    fn create_disk_layout_one_point_graph() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+
+        const DATA_FILE: &str = "/one_point.fbin";
+        const INDEX_PREFIX: &str = "/one_point_index";
+        const DIMS: usize = 4;
+        const MAX_DEGREE: u32 = 4;
+
+        write_bin(
+            rowmajor::Ref::try_from_data([1.0f32; DIMS].as_slice(), 1, DIMS).unwrap(),
+            &mut storage_provider.create_for_write(DATA_FILE).unwrap(),
+        )
+        .unwrap();
+
+        let index_writer = DiskIndexWriter::new(
+            DATA_FILE.to_string(),
+            INDEX_PREFIX.to_string(),
+            Option::None,
+            DEFAULT_DISK_SECTOR_LEN,
+        )
+        .unwrap();
+
+        // A single node with no neighbors, which is also the start point.
+        SimpleNeighborProviderAsync::new(1, 0, MAX_DEGREE, 1.0)
+            .save_direct(&storage_provider, 0, &index_writer.get_mem_index_file())
+            .unwrap();
+
+        index_writer
+            .create_disk_layout::<GraphDataF32VectorU32Data, _>(&storage_provider)
+            .unwrap();
+
+        let mut disk_layout: Vec<u8> = Vec::new();
+        storage_provider
+            .open_reader(index_writer.disk_index_file().as_str())
+            .unwrap()
+            .read_to_end(&mut disk_layout)
+            .unwrap();
+
+        let header = GraphHeader::try_from(&disk_layout[8..]).unwrap();
+        assert_eq!(header.metadata().num_pts, 1);
     }
 
     #[test]

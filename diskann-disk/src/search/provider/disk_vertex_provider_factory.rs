@@ -5,7 +5,7 @@
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
 use crate::data_model::GraphDataType;
-use diskann::{graph::AdjacencyList, ANNResult};
+use diskann::{ANNResult, graph::AdjacencyList};
 use diskann_quantization::{
     alloc::{AlignedAllocator, Poly},
     num::PowerOfTwo,
@@ -15,10 +15,10 @@ use tracing::info;
 
 use crate::{
     data_model::{Cache, CachingStrategy, GraphHeader},
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     search::provider::aligned_file_reader::{
-        traits::{AlignedFileReader, AlignedReaderFactory},
         AlignedFileReaderFactory, AlignedRead,
+        traits::{AlignedFileReader, AlignedReaderFactory},
     },
     search::{
         provider::{

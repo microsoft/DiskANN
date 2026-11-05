@@ -8,17 +8,17 @@ use std::{marker::PhantomData, time::Instant};
 use diskann::utils::VectorRepr;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{pq::generate_pq_pivots, GeneratePivotArguments},
+    model::{GeneratePivotArguments, pq::generate_pq_pivots},
     storage::PQStorage,
     utils::RayonThreadPoolRef,
 };
-use diskann_quantization::{error::Format, product::TransposedTable, CompressInto};
-use diskann_utils::views::MatrixBase;
+use diskann_quantization::{CompressInto, error::Format, product::TransposedTable};
+use diskann_utils::views::rowmajor;
 use diskann_vector::distance::Metric;
 use tracing::info;
 
 use crate::{
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     storage::quant::compressor::QuantCompressor,
 };
 
@@ -140,8 +140,8 @@ where
 
     fn compress(
         &self,
-        vector: MatrixBase<&[f32]>,
-        output: MatrixBase<&mut [u8]>,
+        vector: rowmajor::Ref<'_, f32>,
+        output: rowmajor::Mut<'_, u8>,
     ) -> Result<(), diskann::ANNError> {
         self.table
             .compress_into(vector, output)
@@ -162,16 +162,16 @@ mod pq_generation_tests {
     use std::io::{Read, Write};
 
     use diskann::ANNError;
-    use diskann_providers::model::pq::generate_pq_pivots;
     use diskann_providers::model::GeneratePivotArguments;
+    use diskann_providers::model::pq::generate_pq_pivots;
     use diskann_providers::storage::{
         PQStorage, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
-    use diskann_providers::utils::{create_thread_pool_for_test, RayonThreadPoolRef};
+    use diskann_providers::utils::{RayonThreadPoolRef, create_thread_pool_for_test};
     use diskann_utils::{
         io::{read_bin, write_bin},
         test_data_root,
-        views::{MatrixView, MutMatrixView},
+        views::rowmajor::{self, Matrix},
     };
     use diskann_vector::distance::Metric;
     use rstest::rstest;
@@ -261,7 +261,7 @@ mod pq_generation_tests {
         let (ndata, dim, num_centers, num_chunks, max_k_means_reps) = (5, 8, 2, 2, 5);
 
         write_bin(
-            MatrixView::try_from(VALIDATION_DATA.as_slice(), ndata, dim).unwrap(),
+            rowmajor::Ref::try_from_data(VALIDATION_DATA.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
         )
         .unwrap();
@@ -299,7 +299,7 @@ mod pq_generation_tests {
 
         let updated_data: Vec<f32> = VALIDATION_DATA.iter().map(|x| x + 10.0).collect();
         write_bin(
-            MatrixView::try_from(updated_data.as_slice(), ndata, dim).unwrap(),
+            rowmajor::Ref::try_from_data(updated_data.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
         )
         .unwrap();
@@ -336,8 +336,8 @@ mod pq_generation_tests {
         let mut expected_codes = vec![0; ndata * num_chunks];
         compressor
             .compress(
-                MatrixView::try_from(updated_data.as_slice(), ndata, dim).unwrap(),
-                MutMatrixView::try_from(&mut expected_codes, ndata, num_chunks).unwrap(),
+                rowmajor::Ref::try_from_data(updated_data.as_slice(), ndata, dim).unwrap(),
+                rowmajor::Mut::try_from_data(&mut expected_codes, ndata, num_chunks).unwrap(),
             )
             .unwrap();
         let codes =
@@ -371,7 +371,7 @@ mod pq_generation_tests {
         let pivots_path = "/pivots.bin";
         let codes_path = "/codes.bin";
         write_bin(
-            MatrixView::try_from(VALIDATION_DATA.as_slice(), 5, 8).unwrap(),
+            rowmajor::Ref::try_from_data(VALIDATION_DATA.as_slice(), 5, 8).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
         )
         .unwrap();
@@ -431,7 +431,7 @@ mod pq_generation_tests {
         let mut train_data: Vec<f32> = VALIDATION_DATA.to_vec();
 
         write_bin(
-            MatrixView::try_from(train_data.as_slice(), ndata, dim).unwrap(),
+            rowmajor::Ref::try_from_data(train_data.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
         )
         .unwrap();
@@ -502,7 +502,7 @@ mod pq_generation_tests {
         use diskann_quantization::CompressInto;
         let result = table.compress_into(
             data_matrix.as_view(),
-            MutMatrixView::try_from(&mut compressed_mat, npts, num_chunks).unwrap(),
+            rowmajor::Mut::try_from_data(&mut compressed_mat, npts, num_chunks).unwrap(),
         );
         assert!(result.is_ok());
 
