@@ -46,7 +46,6 @@ use crate::{
     ANNError, ANNResult,
     graph::{AdjacencyList, config},
     tracked_debug,
-    utils::VectorRepr,
 };
 
 pub use self::dataset::{Dataset, Element, Rows};
@@ -706,6 +705,7 @@ mod construction_tests {
         graph::{DiskANNIndex, config, search::Knn, test::provider as test_provider},
         neighbor::{BackInserter, Neighbor},
         test::tokio::current_thread_runtime,
+        utils::VectorRepr,
     };
     use diskann_utils::{
         io::read_bin,
