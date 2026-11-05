@@ -174,7 +174,7 @@ pub(crate) struct Driver<
     arch: W,
     a: AView<'a, W::AElem, MR, PACK>,
     b: rowmajor::Ref<'a, u8>,
-    decode_tile: DecodeTileFn<W, W::BElem>,
+    decode_tile: DecodeTileFn<W::BElem>,
     c: &'a mut [f32],
     b_rows_per_tile: NonZeroUsize,
 }
@@ -210,21 +210,43 @@ impl<'a, W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: u
                 "B bit width exceeds the backend's supported range"
             )
         };
+        let dim = a.codes.ncols();
+        bounds::check_eq!(bounds::Bound::new(b.repr().intrinsic_dim()), dim);
+        Self::from_canonical(
+            arch,
+            a,
+            b.as_canonical_view()
+                .expect("canonical document storage size must not overflow"),
+            c,
+            cache,
+            B_BITS,
+            decode_tile::<B_BITS, W::BElem>,
+        )
+    }
+
+    // Keep common initialization out of the bit-width-specific constructors.
+    #[inline(never)]
+    #[expect(clippy::expect_used)]
+    fn from_canonical(
+        arch: W,
+        a: &'a PackedA<W::AElem, MR, PACK>,
+        b: rowmajor::Ref<'a, u8>,
+        c: &'a mut [f32],
+        cache: Cache,
+        b_bits: usize,
+        decode_tile: DecodeTileFn<W::BElem>,
+    ) -> Self {
         let rows = a.codes.nrows();
         let a_bytes = a.panel_bytes();
         let a_bits = a.a_bits;
         let a = a.as_view().expect("A and K must be nonempty");
         let dim = a.k.value().get();
-        bounds::check_eq!(bounds::Bound::new(b.repr().intrinsic_dim()), a.k);
         bounds::check_eq!(bounds::Bound::new(c.len()), rows);
-        let max = max_k(a_bits, B_BITS);
+        let max = max_k(a_bits, b_bits);
         assert!(
             dim <= max,
-            "contraction dimension {dim} exceeds the MinMax{a_bits} x MinMax{B_BITS} limit of {max}",
+            "contraction dimension {dim} exceeds the MinMax{a_bits} x MinMax{b_bits} limit of {max}",
         );
-        let b = b
-            .as_canonical_view()
-            .expect("canonical document storage size must not overflow");
         let b_rows_per_tile = Params::new(
             cache,
             a_bytes,
@@ -236,12 +258,7 @@ impl<'a, W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: u
             arch,
             a,
             b,
-            decode_tile: |arch: W, source, k, codes, coefficients| {
-                arch.run(
-                    #[inline(always)]
-                    || decode_tile::<B_BITS, _>(source, k, codes, coefficients, W::convert_b),
-                )
-            },
+            decode_tile,
             c,
             b_rows_per_tile,
         }
@@ -256,7 +273,7 @@ where
 {
     fn drive(&mut self) {
         self.arch.run(
-            #[inline]
+            #[inline(always)]
             || {
                 self.c.fill(f32::NEG_INFINITY);
                 let mut scratch = BScratch::<W::BElem>::default();
@@ -271,23 +288,21 @@ where
                         .b
                         .subview(start..start + count.get())
                         .expect("B tile in bounds");
-                    let b = scratch.prepare::<PACK>(
-                        source,
-                        self.a.k,
-                        |source, k, codes, coefficients| {
-                            (self.decode_tile)(self.arch, source, k, codes, coefficients)
+                    let b = scratch.prepare::<PACK>(source, self.a.k, self.decode_tile);
+                    self.a.visit_panels(
+                        #[inline(always)]
+                        |a, panel| {
+                            let row = panel * MR;
+                            let end = (row + MR).min(self.c.len());
+                            let c = self.arch.load(&self.c[row..end]);
+                            // SAFETY: A and B share K by the driver contract.
+                            let kernel =
+                                unsafe { PanelKernel::<W, MR, NR, PACK>::new(self.arch, a, b, c) };
+                            // Already inside the driver's target-feature entry.
+                            let c = kernel.run(self.arch);
+                            self.arch.store(c, &mut self.c[row..end]);
                         },
                     );
-                    self.a.visit_panels(|a, panel| {
-                        let row = panel * MR;
-                        let end = (row + MR).min(self.c.len());
-                        let c = self.arch.load(&self.c[row..end]);
-                        // SAFETY: A and B share K by the driver contract.
-                        let kernel =
-                            unsafe { PanelKernel::<W, MR, NR, PACK>::new(self.arch, a, b, c) };
-                        let c = self.arch.run(kernel);
-                        self.arch.store(c, &mut self.c[row..end]);
-                    });
                     start += count.get();
                 }
             },
@@ -302,8 +317,7 @@ struct BScratch<T> {
 }
 
 // Only decoding is specialized by bit width; allocation, padding, and tile views are shared.
-type DecodeTileFn<W, T> = fn(
-    arch: W,
+type DecodeTileFn<T> = fn(
     source: rowmajor::Ref<'_, u8>,
     k: DimK,
     codes: rowmajor::Mut<'_, T>,
@@ -311,18 +325,17 @@ type DecodeTileFn<W, T> = fn(
 );
 
 /// Decode canonical rows into the logical columns of an already allocated tile.
-/// Inlined into the selected architecture's target-feature entry.
-#[inline(always)]
+/// Shared across architectures with the same decoded element type.
+#[inline(never)]
 #[expect(
     clippy::expect_used,
     reason = "the driver supplies canonical rows and output dimensions are checked"
 )]
-fn decode_tile<const B_BITS: usize, T>(
+fn decode_tile<const B_BITS: usize, T: UnpackedCode>(
     source: rowmajor::Ref<'_, u8>,
     k: DimK,
     mut codes: rowmajor::Mut<'_, T>,
     coefficients: &mut [Coefficients<f32>],
-    mut convert: impl FnMut(u8) -> T,
 ) where
     Unsigned: Representation<B_BITS>,
 {
@@ -343,7 +356,7 @@ fn decode_tile<const B_BITS: usize, T>(
             DataRef::<B_BITS>::from_canonical_front(bytes, dim).expect("canonical document row");
         *meta = row.meta().into();
         row.vector()
-            .decode_into(&mut dst[..dim], &mut convert)
+            .decode_into(&mut dst[..dim], T::from_code)
             .expect("B output must match the logical code count");
     }
 }
@@ -606,19 +619,39 @@ impl<W: ExtraWide<MR, PACK>, const MR: usize, const NR: usize, const PACK: usize
 // Backends //
 //----------//
 
+/// Convert an unsigned code to the backend's decoded storage type.
+pub(crate) trait UnpackedCode: Copy + Default {
+    fn from_code(code: u8) -> Self;
+}
+
+impl UnpackedCode for i8 {
+    fn from_code(code: u8) -> Self {
+        code as i8
+    }
+}
+
+impl UnpackedCode for i16 {
+    fn from_code(code: u8) -> Self {
+        i16::from(code)
+    }
+}
+
+impl UnpackedCode for u8 {
+    fn from_code(code: u8) -> Self {
+        code
+    }
+}
+
 /// Backends accept A codes in 0..=255; B is limited by `MAX_B_BITS`.
 pub(crate) trait ExtraWide<const MR: usize, const PACK: usize>: Architecture {
     /// Largest unsigned B width valid for every A code.
     const MAX_B_BITS: usize;
 
     type AElem: Copy + Default + From<u8>;
-    type BElem: Copy + Default;
+    type BElem: UnpackedCode;
     type Wide: Copy;
     type Splat: Copy;
     type Acc: Copy;
-
-    /// `code` fits in MAX_B_BITS unsigned bits.
-    fn convert_b(code: u8) -> Self::BElem;
 
     /// # Safety
     ///
@@ -739,10 +772,6 @@ impl ExtraWide<16, 4> for Scalar {
         acc.dot_simd(a, b)
     }
 
-    fn convert_b(code: u8) -> i8 {
-        code as i8
-    }
-
     #[inline(always)]
     unsafe fn splat(self, b: Slice<'_, i8>) -> Self::Splat {
         // SAFETY: The caller provides four readable elements.
@@ -789,10 +818,6 @@ impl ExtraWide<16, 2> for Scalar {
         acc.dot_simd(a, b)
     }
 
-    fn convert_b(code: u8) -> i16 {
-        i16::from(code)
-    }
-
     #[inline(always)]
     unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
         // SAFETY: Inherited from the caller.
@@ -836,9 +861,6 @@ impl ExtraWide<8, 2> for Scalar {
         acc.dot_simd(a, b)
     }
 
-    fn convert_b(code: u8) -> i16 {
-        i16::from(code)
-    }
     #[inline(always)]
     unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
         // SAFETY: The caller provides two readable elements.
@@ -923,9 +945,6 @@ mod x86_64 {
             compensated_max_into(self, acc, query, docs, k, scores);
         }
 
-        fn convert_b(code: u8) -> i8 {
-            code as i8
-        }
         #[inline(always)]
         fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
             // The largest pair is 2 * 255 * 63 = 32130, below i16 saturation.
@@ -976,9 +995,6 @@ mod x86_64 {
             acc.dot_simd(a, b)
         }
 
-        fn convert_b(code: u8) -> i16 {
-            i16::from(code)
-        }
         #[inline(always)]
         unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
             // SAFETY: The caller provides two readable elements.
@@ -1016,10 +1032,6 @@ mod x86_64 {
             scores: &mut [f32; 16],
         ) {
             compensated_max_into_v3(self, acc, query, docs, k, scores);
-        }
-
-        fn convert_b(code: u8) -> i8 {
-            code as i8
         }
 
         #[inline(always)]
@@ -1082,10 +1094,6 @@ mod x86_64 {
             acc.dot_simd(a, b)
         }
 
-        fn convert_b(code: u8) -> i16 {
-            i16::from(code)
-        }
-
         #[inline(always)]
         unsafe fn splat(self, b: Slice<'_, i16>) -> Self::Splat {
             // SAFETY: Inherited from the caller.
@@ -1132,10 +1140,6 @@ mod x86_64 {
             acc.dot_simd(a, b)
         }
 
-        fn convert_b(code: u8) -> i8 {
-            code as i8
-        }
-
         #[inline(always)]
         unsafe fn splat(self, b: Slice<'_, i8>) -> Self::Splat {
             // SAFETY: The caller provides four readable elements.
@@ -1180,10 +1184,6 @@ mod x86_64 {
         #[inline(always)]
         fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
             acc.dot_simd(a, b)
-        }
-
-        fn convert_b(code: u8) -> i16 {
-            i16::from(code)
         }
 
         #[inline(always)]
@@ -1235,9 +1235,6 @@ mod aarch64 {
             acc.dot_simd(a, b)
         }
 
-        fn convert_b(code: u8) -> u8 {
-            code
-        }
         #[inline(always)]
         unsafe fn splat(self, b: Slice<'_, u8>) -> Self::Splat {
             // SAFETY: The caller provides four readable elements.
@@ -1282,10 +1279,6 @@ mod aarch64 {
         #[inline(always)]
         fn dot(self, acc: Self::Acc, a: Self::Wide, b: Self::Splat) -> Self::Acc {
             acc.dot_simd(a, b)
-        }
-
-        fn convert_b(code: u8) -> u8 {
-            code
         }
 
         #[inline(always)]
@@ -1517,7 +1510,6 @@ mod tests {
         static CALLS: AtomicUsize = AtomicUsize::new(0);
 
         fn counting_decode<const B_BITS: usize>(
-            _: Scalar,
             source: rowmajor::Ref<'_, u8>,
             k: DimK,
             codes: rowmajor::Mut<'_, i16>,
@@ -1526,7 +1518,7 @@ mod tests {
             Unsigned: Representation<B_BITS>,
         {
             CALLS.fetch_add(1, Ordering::Relaxed);
-            decode_tile::<B_BITS, _>(source, k, codes, coefficients, i16::from);
+            decode_tile::<B_BITS, _>(source, k, codes, coefficients);
         }
 
         fn check<const B_BITS: usize>()
@@ -1840,7 +1832,6 @@ mod tests {
         check!(1, 2, 3, 4, 5, 6, 7);
         assert_b_preparation::<i16, 8, 2>(-1, i16::from);
         assert_b_preparation::<u8, 8, 4>(u8::MAX, |code| code);
-        assert_b_preparation::<u16, 3, 4>(u16::MAX, |code| u16::from(code) + 1);
     }
 
     #[test]
@@ -1852,9 +1843,7 @@ mod tests {
         let tile = scratch.prepare::<4>(
             source.as_view().as_canonical_view().unwrap(),
             k,
-            |source, k, codes, coefficients| {
-                decode_tile::<4, _>(source, k, codes, coefficients, |code| code);
-            },
+            decode_tile::<4, u8>,
         );
         let mut actual = Vec::new();
         let visit = |codes: unpacked::Panel<'_, u8, 2>, start| {
@@ -1881,7 +1870,7 @@ mod tests {
         sentinel: T,
         convert: impl Fn(u8) -> T,
     ) where
-        T: Copy + Default + PartialEq + std::fmt::Debug,
+        T: UnpackedCode + PartialEq + std::fmt::Debug,
         Unsigned: Representation<B_BITS>,
     {
         let mut scratch = BScratch::<T>::default();
@@ -1916,18 +1905,11 @@ mod tests {
             for (start, count) in [(0, 3), (2, 1), (1, 2)] {
                 scratch.codes.fill(sentinel);
                 scratch.meta.fill(Coefficients::default());
-                let mut conversions = 0;
                 let tile = scratch.prepare::<PACK>(
                     source.subview(start..start + count).unwrap(),
                     k,
-                    |source, k, codes, coefficients| {
-                        decode_tile::<B_BITS, _>(source, k, codes, coefficients, |code| {
-                            conversions += 1;
-                            convert(code)
-                        });
-                    },
+                    decode_tile::<B_BITS, T>,
                 );
-                assert_eq!(conversions, count * dim);
                 let padded = padded_k::<PACK>(k);
                 let row_len = padded.value().get();
                 // SAFETY: Preparation constructs the view with the recorded padded dimension.
@@ -2180,7 +2162,7 @@ mod tests {
                         })
                     })
                     .collect();
-                let b_codes = [W::convert_b(max_b); PACK];
+                let b_codes = [W::BElem::from_code(max_b); PACK];
                 // SAFETY: The buffers contain one complete A pack and B pack.
                 let (a, b) = unsafe {
                     (
