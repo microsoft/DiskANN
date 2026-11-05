@@ -35,30 +35,23 @@ struct LeafBuffers {
 }
 
 impl LeafBuffers {
-    /// Shape the buffers for a leaf of `point_count` points and return the
-    /// effective `k` of the leaf.
+    /// Shape the buffers for a leaf of `point_count` points that selects
+    /// `leaf_k` neighbors each, and clear the edge lists of those points.
     fn prepare(
         &mut self,
         point_count: usize,
         dimension_count: usize,
-        requested_k: usize,
-    ) -> ANNResult<usize> {
-        // A point has at most `point_count - 1` other points in its leaf. Wider rows
-        // would hold only empty slots.
-        let leaf_k = requested_k.min(point_count.saturating_sub(1));
+        leaf_k: usize,
+    ) -> ANNResult<()> {
         self.points.resize(point_count, dimension_count)?;
         self.neighbors.resize(point_count, leaf_k)?;
-        Ok(leaf_k)
-    }
-
-    /// Clear the edge lists of the first `point_count` leaf points.
-    fn prepare_local_adjacency(&mut self, point_count: usize) {
         if self.local_adjacency.len() < point_count {
             self.local_adjacency.resize_with(point_count, Vec::new);
         }
         self.local_adjacency[..point_count]
             .iter_mut()
             .for_each(Vec::clear);
+        Ok(())
     }
 }
 
@@ -79,9 +72,9 @@ pub(super) fn build_leaf_candidates(
         .map(|_| Mutex::new(AdjacencyList::new()))
         .collect();
     leaves
-        .par_iter()
+        .into_par_iter()
         .try_for_each_init(LeafBuffers::default, |buffers, point_ids| {
-            add_leaf_candidates(data, kernels, point_ids, requested_k, buffers, &candidates)
+            add_leaf_candidates(data, kernels, &point_ids, requested_k, buffers, &candidates)
         })?;
     Ok(candidates
         .into_iter()
@@ -102,12 +95,14 @@ fn add_leaf_candidates(
     candidates: &[Mutex<AdjacencyList<u32>>],
 ) -> ANNResult<()> {
     let point_count = point_ids.len();
-    let leaf_k = buffers.prepare(point_count, data.dimensions(), requested_k)?;
+    // A point has at most `point_count - 1` other points in its leaf. Wider rows
+    // would hold only empty slots.
+    let leaf_k = requested_k.min(point_count.saturating_sub(1));
     if leaf_k == 0 {
         return Ok(());
     }
 
-    buffers.prepare_local_adjacency(point_count);
+    buffers.prepare(point_count, data.dimensions(), leaf_k)?;
     data.gather(point_ids, buffers.points.as_view_mut())?;
     kernels.select_leaf_neighbors(
         buffers.points.as_view(),
