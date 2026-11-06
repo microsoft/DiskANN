@@ -23,13 +23,14 @@
 //! Adjacency lists written through the APIs exposed in this module are not validated for
 //! uniqueness nor for being in-bounds. These are the caller's responsibility.
 
-use std::ptr::NonNull;
+use std::{ptr::NonNull, sync::Arc};
 
 use diskann::{graph::AdjacencyList, utils::IntoUsize};
 use parking_lot::{RwLock, RwLockWriteGuard};
 use thiserror::Error;
 
 use crate::{
+    allocator::BufferAllocator,
     buffer::{Buffer, BufferError},
     num::{Align, Bytes, IdLimit, MaxDegree},
 };
@@ -66,12 +67,31 @@ impl Neighbors {
     /// Construct a new [`Neighbors`] capable of holding `id_limit` adjacency lists with a
     /// maximum length of `max_degree`.
     ///
+    /// Uses [`crate::allocator::DefaultAllocator`].
+    ///
     /// # Errors
     ///
     /// Returns an error if `(max_degree + 1) * size_of::<u32>()` overflows `usize`
     /// (unreachable on 64-bit targets) or the resulting allocation would exceed
     /// `isize::MAX` bytes.
     pub(crate) fn new(id_limit: IdLimit, max_degree: u32) -> Result<Self, NeighborsError> {
+        Self::new_with_allocator(
+            id_limit,
+            max_degree,
+            Arc::new(crate::allocator::DefaultAllocator),
+        )
+    }
+
+    /// Construct adjacency lists using `allocator`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same layout errors as [`Self::new`].
+    pub(crate) fn new_with_allocator(
+        id_limit: IdLimit,
+        max_degree: u32,
+        allocator: Arc<dyn BufferAllocator>,
+    ) -> Result<Self, NeighborsError> {
         let bytes = max_degree
             .into_usize()
             .checked_add(1)
@@ -91,7 +111,7 @@ impl Neighbors {
             );
         }
 
-        let neighbors = Buffer::new(id_limit.as_usize(), bytes, ALIGN)?;
+        let neighbors = Buffer::new_with_allocator(id_limit.as_usize(), bytes, ALIGN, allocator)?;
 
         let locks = std::iter::repeat_with(|| RwLock::new(()))
             .take(id_limit.as_usize().div_ceil(LOCK_GRANULARITY))
