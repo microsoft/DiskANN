@@ -566,7 +566,7 @@ pub(crate) mod disk_index_builder_tests {
     use super::*;
     use crate::{
         build::builder::build::DiskIndexBuilder,
-        data_model::{CachingStrategy, GraphHeader},
+        data_model::{CachingStrategy, GraphHeader, graph_data_types::BuildVector},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
         search::provider::{
             aligned_file_reader::VirtualAlignedReaderFactory, disk_provider::DiskIndexSearcher,
@@ -596,6 +596,9 @@ pub(crate) mod disk_index_builder_tests {
         pub num_threads: usize,
         pub metric: Metric,
         pub block_size: usize,
+        /// Build with PiPNN instead of Vamana.
+        #[cfg(feature = "pipnn")]
+        pub pipnn: Option<crate::PiPNNParameters>,
     }
 
     impl Default for TestParams {
@@ -615,6 +618,8 @@ pub(crate) mod disk_index_builder_tests {
                 num_threads: 1,
                 metric: L2,
                 block_size: DEFAULT_DISK_SECTOR_LEN,
+                #[cfg(feature = "pipnn")]
+                pipnn: None,
             }
         }
     }
@@ -668,14 +673,23 @@ pub(crate) mod disk_index_builder_tests {
         pub fn build<T>(&self) -> ANNResult<()>
         where
             T: GraphDataType<VectorIdType = u32>,
+            T::VectorDataType: BuildVector,
             StorageProvider::Reader: std::marker::Send + Read,
         {
             // Create disk index build parameters
+            let budget = MemoryBudget::try_from_gb(self.params.index_build_ram_gb)?;
+            let num_pq_chunks =
+                NumPQChunks::new_with(self.params.num_pq_chunks, self.params.full_dim)?;
             let mut disk_index_build_parameters = DiskIndexBuildParameters::new(
-                MemoryBudget::try_from_gb(self.params.index_build_ram_gb)?,
+                budget,
                 self.params.build_quantization_type,
-                NumPQChunks::new_with(self.params.num_pq_chunks, self.params.full_dim)?,
+                num_pq_chunks,
             );
+            #[cfg(feature = "pipnn")]
+            if let Some(pipnn) = &self.params.pipnn {
+                disk_index_build_parameters =
+                    DiskIndexBuildParameters::new_pipnn(budget, num_pq_chunks, pipnn.clone());
+            }
             if let Some(chunk_vector_count) = self.params.data_compression_chunk_vector_count {
                 disk_index_build_parameters = disk_index_build_parameters
                     .with_data_compression_chunk_vector_count(chunk_vector_count);

@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::data_model::GraphDataType;
+use crate::data_model::{GraphDataType, graph_data_types::BuildVector};
 use diskann::{
     ANNResult,
     utils::{ONE, VectorRepr, async_tools},
@@ -31,6 +31,9 @@ use tokio::task::JoinSet;
 #[cfg(debug_assertions)]
 use tracing::debug;
 use tracing::info;
+
+#[cfg(feature = "pipnn")]
+mod pipnn;
 
 use crate::{
     DiskIndexBuildParameters,
@@ -67,7 +70,7 @@ where
 impl<'a, Data, StorageProvider> DiskIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr,
+    Data::VectorDataType: BuildVector,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
 {
@@ -77,6 +80,12 @@ where
         index_configuration: IndexConfiguration,
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
+        #[cfg(feature = "pipnn")]
+        if let Some(parameters) = disk_build_param.pipnn_parameters() {
+            // Reject bad parameters before the quantizer is trained.
+            parameters.builder(&index_configuration.config).build()?;
+        }
+
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
             &(index_writer.get_index_path_prefix() + "_pq_compressed.bin"),
@@ -127,7 +136,7 @@ where
         self.generate_compressed_data(pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        self.build_inmem_index(pool.as_ref()).await?;
+        self.build_graph(pool.as_ref()).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
         // Use physical file to pass the memory index to the disk writer
@@ -176,7 +185,12 @@ where
         generator.generate_data(storage_provider, pool, max_block_size)
     }
 
-    async fn build_inmem_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+    async fn build_graph(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+        #[cfg(feature = "pipnn")]
+        if let Some(parameters) = self.disk_build_param.pipnn_parameters() {
+            return pipnn::build_graph(self, pool, parameters);
+        }
+
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
