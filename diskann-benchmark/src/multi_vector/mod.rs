@@ -5,8 +5,7 @@
 
 //! Multi-vector MaxSim distance benchmarks with regression detection.
 //!
-//! One `Benchmark` is registered per element type supported by
-//! [`MaxSimElement`]; the JSON `isa` field picks the kernel at run time.
+//! The JSON `element_type` and `isa` fields select the representation and backend.
 //!
 //! # Why two ISA enums?
 //!
@@ -16,7 +15,6 @@
 //! library stays serde-agnostic.
 //!
 //! [`MaxSimIsa`]: diskann_quantization::multi_vector::MaxSimIsa
-//! [`MaxSimElement`]: diskann_quantization::multi_vector::MaxSimElement
 //! [`BenchIsa`]: crate::inputs::multi_vector::BenchIsa
 
 use diskann_benchmark_runner::Registry;
@@ -25,6 +23,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "multi-vector")] {
         mod driver;
         mod kernels;
+        mod minmax;
 
         pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
             kernels::register(registry)
@@ -48,15 +47,12 @@ mod tests {
 
     use diskann_benchmark_runner::{
         benchmark::{PassFail, Regression},
-        utils::{
-            datatype::DataType, num::NonNegativeFinite, percentiles::compute_percentiles,
-            MicroSeconds,
-        },
+        utils::{num::NonNegativeFinite, percentiles::compute_percentiles, MicroSeconds},
     };
 
     use super::driver::{CheckResult, Comparison, MultiVectorTolerance, RunResult};
     use super::kernels::Kernel;
-    use crate::inputs::multi_vector::{BenchIsa, MultiVectorOp, Run};
+    use crate::inputs::multi_vector::{BenchIsa, ElementType, MultiVectorOp, Run};
 
     fn tiny_run() -> Run {
         Run {
@@ -70,7 +66,7 @@ mod tests {
 
     fn tiny_op() -> MultiVectorOp {
         MultiVectorOp {
-            element_type: DataType::Float32,
+            element_type: ElementType::Float32,
             isa: BenchIsa::Auto,
             runs: vec![tiny_run()],
         }
@@ -94,7 +90,7 @@ mod tests {
 
     #[test]
     fn check_rejects_mismatched_runs() {
-        let kernel = Kernel::<f32>::new();
+        let kernel = Kernel;
 
         // Build a result whose `run` diverges from `tiny_run()` so the
         // regression check's `b.run == a.run` invariant fires.
@@ -123,7 +119,7 @@ mod tests {
 
     #[test]
     fn check_allows_negative_relative_change() {
-        let kernel = Kernel::<f32>::new();
+        let kernel = Kernel;
 
         let result = kernel
             .check(
@@ -139,7 +135,7 @@ mod tests {
 
     #[test]
     fn check_passes_on_tolerance_boundary() {
-        let kernel = Kernel::<f32>::new();
+        let kernel = Kernel;
 
         let result = kernel
             .check(
@@ -155,7 +151,7 @@ mod tests {
 
     #[test]
     fn check_fails_above_tolerance_boundary() {
-        let kernel = Kernel::<f32>::new();
+        let kernel = Kernel;
 
         let result = kernel
             .check(
@@ -194,7 +190,7 @@ mod tests {
     /// require at least a non-zero value.
     #[test]
     fn zero_values_rejected() {
-        let kernel = Kernel::<f32>::new();
+        let kernel = Kernel;
 
         let result = kernel
             .check(
@@ -206,5 +202,69 @@ mod tests {
             .unwrap();
 
         assert!(matches!(result, PassFail::Fail(_)));
+    }
+
+    #[test]
+    fn timing_harness_warms_up_before_measurements() {
+        let run = Run {
+            loops_per_measurement: NonZeroUsize::new(2).unwrap(),
+            num_measurements: NonZeroUsize::new(3).unwrap(),
+            ..tiny_run()
+        };
+        let mut calls = 0;
+        let result = super::driver::run_with_kernel(&run, &mut [0.0; 2], |scores| {
+            calls += 1;
+            scores.fill(calls as f32);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, 7);
+        assert_eq!(result.run, run);
+        assert_eq!(result.latencies.len(), 3);
+    }
+
+    #[test]
+    fn timing_harness_propagates_errors() {
+        use diskann_quantization::multi_vector::MaxSimError;
+
+        for fail_on in [1, 2] {
+            let mut calls = 0;
+            let error = super::driver::run_with_kernel(&tiny_run(), &mut [0.0; 2], |_| {
+                calls += 1;
+                if calls == fail_on {
+                    Err(MaxSimError::InvalidBufferLength(0, 2))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+            assert!(matches!(error, MaxSimError::InvalidBufferLength(0, 2)));
+            assert_eq!(calls, fail_on);
+        }
+    }
+
+    #[test]
+    fn rejects_unavailable_isa_for_minmax_jobs() {
+        use crate::inputs::multi_vector::BitWidth;
+        use diskann_benchmark_runner::benchmark::{MatchContext, TestScore};
+        use diskann_quantization::multi_vector::MaxSimIsa;
+
+        let mut input = tiny_op();
+        input.element_type = ElementType::MinMax {
+            query_bits: BitWidth::try_from(8).unwrap(),
+            doc_bits: BitWidth::try_from(4).unwrap(),
+        };
+        for isa in [
+            BenchIsa::Auto,
+            BenchIsa::Scalar,
+            BenchIsa::Reference,
+            BenchIsa::X86_64_V3,
+            BenchIsa::X86_64_V4,
+            BenchIsa::Neon,
+        ] {
+            input.isa = isa;
+            let matched = matches!(MatchContext::test(&Kernel, &input), TestScore::Success(_));
+            assert_eq!(matched, MaxSimIsa::from(isa).is_available(), "{isa}");
+        }
     }
 }
