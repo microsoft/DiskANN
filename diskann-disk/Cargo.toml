@@ -78,6 +78,7 @@ gungraun.workspace = true
 diskann = { workspace = true }
 approx.workspace = true
 proptest.workspace = true
+tracing-subscriber.workspace = true
 
 [features]
 default = []
