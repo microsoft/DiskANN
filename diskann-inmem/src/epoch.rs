@@ -1279,7 +1279,7 @@ impl Registry {
     /// # Deadlock Potential
     ///
     /// This function can deadlock if the calling thread is holding onto a [`WriteGuard`],
-    /// [`Retire`], or a [`ReadGuard`] obtained from [`WriteGuard::read_guard`].
+    /// [`Retire`], or a [`ReadGuard`] obtained from [`WriteGuard::into_read_guard`].
     ///
     /// See also: [`Self::try_exclude_workers`], [`Self::try_advance`].
     pub(crate) fn try_exclude_writers(&self) -> Option<WriterExclusionGuard<'_>> {
@@ -1403,7 +1403,7 @@ fn guard_does_not_belong(_handle: &RegistryHandle, _guard: &ReadGuard<'_>) -> ! 
 /// While this guard is held, the [`Registry`] will ensure that any item that the guard can
 /// observe being retired by `self` is not reclaimed.
 ///
-/// Obtained via [`Registry::read_guard`], [`WriteGuard::read_guard`].
+/// Obtained via [`Registry::read_guard`], [`WriteGuard::into_read_guard`].
 ///
 /// See also: [`WriteGuard`], [`Retire`]
 #[derive(Debug)]
