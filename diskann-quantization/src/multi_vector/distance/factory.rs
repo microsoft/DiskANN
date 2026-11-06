@@ -25,7 +25,7 @@ use super::kernel::{Erase, MaxSimKernel};
 use super::max_sim::MaxSimError;
 use crate::matrix_kernels as mk;
 use crate::multi_vector::distance::QueryMatRef;
-use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
+use crate::multi_vector::{BlockTransposed, Mat, MatRef, Overflow, Standard};
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Prepared<A, Q, NR> — concrete kernel for the arch-dispatched paths.
@@ -757,7 +757,7 @@ impl MaxSimElement for i8 {
 //  Factory entry point.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Error returned by [`build_max_sim`].
+/// Failure to prepare a MaxSim query.
 #[derive(Debug, Clone, Copy, Error)]
 #[non_exhaustive]
 pub enum BuildMaxSimError {
@@ -765,6 +765,8 @@ pub enum BuildMaxSimError {
     NotSupported(#[from] NotSupported),
     #[error("query-vector dim {0} exceeds the maximum of {1}")]
     DimTooLarge(usize, usize),
+    #[error(transparent)]
+    Overflow(#[from] Overflow),
 }
 
 /// Build a multi-vector MaxSim kernel for any [`MaxSimElement`] type.
