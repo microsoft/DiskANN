@@ -377,13 +377,12 @@ where
     }
 
     fn reader(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
-        self.store
-            .read_guard(|packed, guard| packed.reader(guard))
+        self.store.read_guard(|packed, guard| packed.reader(guard))
     }
 
-    fn writer(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
+    fn writer(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
         self.store
-            .write_guard(|intrusive, guard| intrusive.reader(guard.into_read_guard()))
+            .write_guard(|packed, guard| packed.reader(guard.into_read_guard()))
     }
 }
 
