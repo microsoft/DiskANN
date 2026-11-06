@@ -343,6 +343,9 @@ jobs:
   # * compile-tests: These don't behave well under SDE.
   # * pivots::tests::run_test_happy_path: The double-whammy of emulated SIMD and emulated
   #   architecture make this test take too long.
+  # * pipnn::construction_tests::every_point_finds_its_exact_top_10: Reads the SIFT
+  #   fixtures from LFS, which this job does not check out. The PiPNN kernel tests cover
+  #   the SIMD paths here.
   baseline:
     needs: basics
     name: sde-baseline-tests
@@ -393,7 +396,8 @@ jobs:
               --package diskann \
               --all-features \
               -- --skip compile_tests \
-                 --skip pivots::tests::run_test_happy_path
+                 --skip pivots::tests::run_test_happy_path \
+                 --skip pipnn::construction_tests::every_point_finds_its_exact_top_10
 
   # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
   #
@@ -407,6 +411,9 @@ jobs:
   # EXCLUDED TESTS
   #
   # * compile-tests: These don't behave well under SDE.
+  # * pipnn::construction_tests::every_point_finds_its_exact_top_10: Reads the SIFT
+  #   fixtures from LFS, which this job does not check out. The PiPNN kernel tests cover
+  #   the SIMD paths here.
   sde:
     needs: basics
     name: sde-avx512-tests
@@ -456,7 +463,8 @@ jobs:
             --package diskann-quantization \
             --package diskann \
             --all-features \
-            -- --skip compile_tests
+            -- --skip compile_tests \
+               --skip pipnn::construction_tests::every_point_finds_its_exact_top_10
 
   test-workspace:
     needs: basics

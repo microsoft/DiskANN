@@ -1103,6 +1103,94 @@ impl<'a, T> ReborrowMut<'a> for Owned<T> {
     }
 }
 
+//--------//
+// Buffer //
+//--------//
+
+/// A [`Matrix`]/[`MatrixMut`] that owns a `Vec<T>` and changes shape in place.
+///
+/// Scratch storage that serves many shapes keeps its largest allocation:
+/// [`Buffer::resize`] grows the vector only when the new shape has more elements
+/// than any earlier shape. The matrix views cover the current shape.
+#[derive(Debug, Clone)]
+pub struct Buffer<T> {
+    data: Vec<T>,
+    layout: Layout<T>,
+}
+
+impl<T> Buffer<T> {
+    /// Construct an empty `0 x 0` buffer. No memory is allocated.
+    pub fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            // SAFETY: A `0 x 0` layout has zero elements and passes `LayoutError::check`.
+            layout: unsafe { Layout::new_unchecked(0, 0) },
+        }
+    }
+
+    /// Set the shape to `nrows x ncols`.
+    ///
+    /// Elements beyond the previous allocation are initialized with `T::default()`.
+    /// Elements within it keep their values and take the positions of the new
+    /// layout, so the caller must write the matrix before reading it.
+    ///
+    /// Returns an error if [`Layout::new`] fails for `nrows` and `ncols`.
+    pub fn resize(&mut self, nrows: usize, ncols: usize) -> Result<(), LayoutError>
+    where
+        T: Clone + Default,
+    {
+        let layout = Layout::new(nrows, ncols)?;
+        let len = layout.num_elements();
+        if self.data.len() < len {
+            self.data.resize(len, T::default());
+        }
+        self.layout = layout;
+        Ok(())
+    }
+}
+
+impl<T> Default for Buffer<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// SAFETY: `resize` keeps `data.len() >= layout.num_elements()`, so the first
+// `layout.num_elements()` elements of the vector are initialized, within one
+// allocation, and aligned. An empty vector gives a dangling, aligned pointer.
+unsafe impl<T> Matrix for Buffer<T> {
+    type Element = T;
+
+    fn as_nonnull(&self) -> NonNull<T> {
+        NonNull::from(self.data.as_slice()).cast()
+    }
+
+    fn layout(&self) -> Layout<T> {
+        self.layout
+    }
+}
+
+// SAFETY: A mutable borrow of `Buffer` has exclusive access to its vector.
+unsafe impl<T> MatrixMut for Buffer<T> {
+    fn as_nonnull_mut(&mut self) -> NonNull<T> {
+        NonNull::from(self.data.as_mut_slice()).cast()
+    }
+}
+
+impl<'a, T> Reborrow<'a> for Buffer<T> {
+    type Target = Ref<'a, T>;
+    fn reborrow(&'a self) -> Self::Target {
+        Matrix::as_view(self)
+    }
+}
+
+impl<'a, T> ReborrowMut<'a> for Buffer<T> {
+    type Target = Mut<'a, T>;
+    fn reborrow_mut(&'a mut self) -> Self::Target {
+        MatrixMut::as_view_mut(self)
+    }
+}
+
 //-----//
 // Ref //
 //-----//
@@ -1392,6 +1480,40 @@ enum TryFromErrorInner {
 mod tests {
     use super::*;
     use crate::{assert_contains, lazy_format};
+
+    #[test]
+    fn buffer_resize_sets_the_shape_and_keeps_the_largest_allocation() {
+        let mut buffer = Buffer::<u32>::new();
+        assert_eq!((buffer.nrows(), buffer.ncols()), (0, 0));
+        assert_eq!(buffer.as_slice(), &[]);
+
+        // Grow to 2 x 3, write it, and check the views see the written values.
+        buffer.resize(2, 3).unwrap();
+        assert_eq!((buffer.nrows(), buffer.ncols()), (2, 3));
+        for (i, x) in buffer.as_mut_slice().iter_mut().enumerate() {
+            *x = i as u32;
+        }
+        assert_eq!(buffer.row(1), &[3, 4, 5]);
+        assert_eq!(buffer.as_view_mut().row_mut(0), &mut [0, 1, 2]);
+
+        // Shrink to 1 x 2: the views cover two elements of the same allocation.
+        buffer.resize(1, 2).unwrap();
+        assert_eq!(buffer.as_slice(), &[0, 1]);
+        assert_eq!(buffer.data.len(), 6);
+
+        // Grow back within the allocation: no new elements, old values stay.
+        buffer.resize(3, 2).unwrap();
+        assert_eq!(buffer.as_slice(), &[0, 1, 2, 3, 4, 5]);
+        assert_eq!(buffer.data.len(), 6);
+
+        // Grow past the allocation: new elements are default.
+        buffer.resize(2, 4).unwrap();
+        assert_eq!(buffer.as_slice(), &[0, 1, 2, 3, 4, 5, 0, 0]);
+
+        // A shape whose element count overflows is an error, not a wrapped size.
+        assert!(buffer.resize(usize::MAX, 2).is_err());
+        assert_eq!((buffer.nrows(), buffer.ncols()), (2, 4));
+    }
 
     /// This function is only callable with copyable types.
     ///
