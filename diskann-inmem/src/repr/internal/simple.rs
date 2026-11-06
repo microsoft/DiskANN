@@ -84,7 +84,7 @@ mod tests {
 
     use crate::{
         counters::Counters,
-        num::{Bytes, Capacity, LogicalId, MaxDegree, SlotId},
+        num::{Bytes, IdLimit, LogicalId, MaxDegree, SlotId},
         repr::test::Reference,
         store::{self, Store},
     };
@@ -96,7 +96,7 @@ mod tests {
         let mut map = Reference::new(1);
 
         let store = Store::new(
-            store::Layout::new(Capacity::new(10), MaxDegree::new(0), 0),
+            store::Layout::new(IdLimit::new(10), MaxDegree::new(0)),
             store::Config::default(),
             store::simple::Simple::config(Bytes::new(std::mem::size_of::<f32>())),
         )
@@ -125,7 +125,7 @@ mod tests {
         let counters = Counters::new();
         let mut reranker = Reranker::new(
             store.guard(|simple, guard| simple.reader(guard)).unwrap(),
-            repr::test::TestQueryDistance::new(-1.0),
+            repr::test::TestQueryDistance::new(&[-1.0]),
             counters.local(),
         );
 

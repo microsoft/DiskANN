@@ -20,7 +20,7 @@ enum VectorValueType {
 /// Quantizer selection for an index. Must match the definition on the C# side.
 ///
 /// `NoQuant`, `Bin`, and `Q8` map to the quantizations Redis exposes and take `f32` vector
-/// data. The `X`-prefixed variants are DiskANN extensions taking `u8`/`i8` vector data.
+/// data. The spherical extensions without a type suffix also take `f32`.
 #[repr(C)]
 enum VectorQuantType {
     Invalid = 0,
@@ -31,6 +31,12 @@ enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2,
+    XSpherical2I8,
+    XSpherical2U8,
+    XSpherical4,
+    XSpherical4I8,
+    XSpherical4U8,
 }
 
 /// Status returned by `insert`, encoded as a `u8`.
@@ -43,16 +49,6 @@ enum InsertResult {
     Success = 1,
     SuccessStartTraining = 2,
     SuccessUpdate = 3,
-}
-
-/// Status returned by `finish_import`, encoded as a `u8`.
-///
-/// `Success` means the task succeeded, including finalization if it was the last task.
-/// `TaskFailed` permits retrying that task; `FinishFailed` is a non-retryable finalization failure.
-enum ImportResult {
-    Success = 0,
-    TaskFailed = 1,
-    FinishFailed = 2,
 }
 
 /// Read one or more keys from Garnet.
@@ -127,6 +123,8 @@ type LogCallback = unsafe extern "C" fn(context: u64, message: *const u8, messag
 /// reduce_dim == 0 to indicate no reduction requested. Dimensionality reduction is not
 /// implemented, so this parameter is currently ignored.
 ///
+/// start_point_id is fixed for the index lifetime and must be supplied again on reopen.
+///
 /// metric_type is passed as a raw i32. Valid values are:
 /// - 0: Cosine
 /// - 1: InnerProduct
@@ -148,6 +146,7 @@ extern "C" fn create_index(
     metric_type: i32,
     l_build: u32,
     max_degree: u32,
+    start_point_id: u32,
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
@@ -420,14 +419,13 @@ extern "C" fn can_import(context: u64, index_ptr: *const c_void) -> bool;
 ///
 /// term_type is 0 for vectors, 1 for neighbors, 2 for quantized vectors, 3 for
 /// attributes, 5 for external-to-internal ID mappings, or 6 for
-/// internal-to-external ID mappings. Metadata (4) cannot be imported. IDs and
-/// values must be non-null and non-empty (except for external IDs which may be
-/// empty). Terms may arrive in any order and must use IDs between 1 and
-/// u32::MAX - 1. Importing a high ID creates every missing FSM block through
-/// that ID. ID 0 is reserved for the start point, which finalization creates
-/// outside FSM accounting. External-to-internal mapping values must be a
-/// nonzero native-endian u32. Neighbor terms must have `(max_degree + 1) * 4`
-/// bytes and a trailing native-endian u32 count no greater than max_degree.
+/// internal-to-external ID mappings. Metadata (4) cannot be imported. External IDs
+/// are arbitrary byte strings and may be empty; other IDs and values must be
+/// non-null and non-empty. Terms may arrive in any order. Ordinary internal IDs
+/// range from 0 through u32::MAX - 1, excluding the configured start-point ID.
+/// Start-point vector, neighbor, and required quantized terms use that configured
+/// ID, which defaults to u32::MAX. Neighbor terms must have `(max_degree + 1) * 4` bytes
+/// and a trailing native-endian u32 count no greater than max_degree.
 ///
 /// The first accepted term begins importing. Ordinary operations fail until FINISH succeeds.
 /// A failed term write keeps the import in progress; callers may repair or retry that term.
@@ -444,19 +442,27 @@ extern "C" fn import_term(
     value_len: usize,
 ) -> bool;
 
-/// Verify imported terms and finalize the index, for XVIMPORT ... FINISH.
+/// Verify imported terms; for XVIMPORT ... VERIFY.
 ///
-/// Finish all term writes before starting these tasks; no term writes may overlap verification.
-/// Each task receives its own task_idx in 0..task_count. Do not repeat successful tasks. The last
-/// successful task finalizes the index and enables ordinary operations. Until then, including
-/// after a failed verification or finalization, ordinary operations remain blocked. An empty
-/// import also waits for every task and closes without creating a start point.
+/// All term writes should be finished before calling. Each call checks its partition anew; task zero
+/// also checks the configured start point, independent of its numeric ID.
+/// Verification does not change import status.
 ///
-/// Returns an `ImportResult` discriminant.
+/// Returns true if this partition passes, false for failure.
 #[unsafe(no_mangle)]
-extern "C" fn finish_import(
+extern "C" fn verify_import(
     context: u64,
     index_ptr: *const c_void,
     task_idx: usize,
     task_count: usize,
-) -> u8;
+) -> bool;
+
+/// Finalize the index.
+///
+/// All term writes should be finished before calling. This completes an import, and
+/// does not require that verification be done beforehand. Concurrent calls on the
+/// same handle serialize; once one succeeds, later calls return true.
+///
+/// Returns true on successful finalization, false on failure.
+#[unsafe(no_mangle)]
+extern "C" fn finish_import(context: u64, index_ptr: *const c_void) -> bool;

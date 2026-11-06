@@ -665,6 +665,7 @@ impl_cast!(f32 => f16, 8);
 impl_cast!(f32 => f16, 16);
 
 impl_cast!(i32 => f32, 8);
+impl_cast!(i32 => f32, 16);
 
 ///////////////
 // SplitJoin //
@@ -1175,6 +1176,7 @@ mod test_emulated {
     test_utils::ops::test_cast!(Emulated<f32, 16> => Emulated<f16, 16>, 0x2b637e21afd9ef6c, SC);
 
     test_utils::ops::test_cast!(Emulated<i32, 8> => Emulated<f32, 8>, 0x2b08e8ec7e49323b, SC);
+    test_utils::ops::test_cast!(Emulated<i32, 16> => Emulated<f32, 16>, 0x83e571a946db20cf, SC);
 
     //////////////
     // ZipUnzip //

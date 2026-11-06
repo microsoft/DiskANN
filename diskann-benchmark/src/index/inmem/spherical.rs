@@ -39,6 +39,17 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 
         registry.register(
             NAME,
+            imp::SphericalQ::<3>::new()
+                .search(plugins::Topk)
+                .search(plugins::Range)
+                .search(plugins::FilteredRange)
+                .search(plugins::TopkBetaFilter)
+                .search(plugins::TopkMultihopFilter)
+                .search(plugins::TopkInlineFilter),
+        )?;
+
+        registry.register(
+            NAME,
             imp::SphericalQ::<4>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
@@ -336,6 +347,7 @@ mod imp {
 
     build_and_search!(1);
     build_and_search!(2);
+    build_and_search!(3);
     build_and_search!(4);
 
     impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>

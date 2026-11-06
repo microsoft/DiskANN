@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{io::Write, sync::Arc};
+use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Context;
 use diskann::graph::{DiskANNIndex, search::Knn};
@@ -11,6 +11,7 @@ use diskann_benchmark_runner::{
     Checker, Checkpoint, Output, Registry, RegistryError,
     benchmark::{MatchContext, PassFail, Regression, Score},
     files::InputFile,
+    report::{Finished, Report},
     utils::fmt::Indent,
 };
 use diskann_utils::views::rowmajor::{self, Matrix};
@@ -24,12 +25,10 @@ use diskann_inmem::{
 };
 
 use crate::{
-    index::{Counters, Index},
+    index::{CheckCounters, Counters, Index},
     support::{
-        check::{CheckMatch, Match, check_all_fields},
         datatype::{self, DataType, Dataset, DatasetView},
         io::load_and_convert,
-        tolerance,
     },
 };
 
@@ -112,6 +111,17 @@ mod dto {
     // Quantization Parameters //
     //-------------------------//
 
+    pub(super) mod quantization {
+        use super::*;
+
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        pub(in crate::index::runner) enum Rerank {
+            None,
+            F16,
+        }
+    }
+
     pub(super) mod spherical {
         use super::*;
 
@@ -122,12 +132,18 @@ mod dto {
             Two,
             Four,
         }
+    }
+
+    pub(super) mod scalar {
+        use super::*;
 
         #[derive(Debug, Serialize, Deserialize)]
         #[serde(rename_all = "kebab-case")]
-        pub(in crate::index::runner) enum Rerank {
-            None,
-            F16,
+        pub(in crate::index::runner) enum Bits {
+            One,
+            Two,
+            Four,
+            Eight,
         }
     }
 
@@ -139,7 +155,16 @@ mod dto {
         },
         Spherical {
             bits: spherical::Bits,
-            rerank: spherical::Rerank,
+            rerank: quantization::Rerank,
+        },
+        Product {
+            chunks: NonZeroUsize,
+            rerank: quantization::Rerank,
+        },
+        Scalar {
+            bits: scalar::Bits,
+            override_to_cosine_normalized: bool,
+            rerank: quantization::Rerank,
         },
     }
 
@@ -259,6 +284,32 @@ struct Bundle {
     groundtruth: rowmajor::Owned<u64>,
 }
 
+mod quantization {
+    use super::*;
+
+    #[derive(Debug, Clone, Copy)]
+    pub(super) enum Rerank {
+        None,
+        F16,
+    }
+
+    impl Rerank {
+        pub(super) fn from_raw(raw: dto::quantization::Rerank) -> Self {
+            match raw {
+                dto::quantization::Rerank::None => Self::None,
+                dto::quantization::Rerank::F16 => Self::F16,
+            }
+        }
+
+        pub(super) fn as_raw(&self) -> dto::quantization::Rerank {
+            match self {
+                Self::None => dto::quantization::Rerank::None,
+                Self::F16 => dto::quantization::Rerank::F16,
+            }
+        }
+    }
+}
+
 mod spherical {
     use super::*;
 
@@ -286,34 +337,35 @@ mod spherical {
             }
         }
     }
+}
+
+mod scalar {
+    use super::*;
 
     #[derive(Debug, Clone, Copy)]
-    pub(super) enum Rerank {
-        None,
-        F16,
+    pub(super) enum Bits {
+        One,
+        Two,
+        Four,
+        Eight,
     }
 
-    impl Rerank {
-        pub(super) fn from_raw(raw: dto::spherical::Rerank) -> Self {
+    impl Bits {
+        pub(super) fn from_raw(raw: dto::scalar::Bits) -> Self {
             match raw {
-                dto::spherical::Rerank::None => Self::None,
-                dto::spherical::Rerank::F16 => Self::F16,
+                dto::scalar::Bits::One => Self::One,
+                dto::scalar::Bits::Two => Self::Two,
+                dto::scalar::Bits::Four => Self::Four,
+                dto::scalar::Bits::Eight => Self::Eight,
             }
         }
 
-        pub(super) fn as_raw(&self) -> dto::spherical::Rerank {
+        pub(super) fn as_raw(&self) -> dto::scalar::Bits {
             match self {
-                Self::None => dto::spherical::Rerank::None,
-                Self::F16 => dto::spherical::Rerank::F16,
-            }
-        }
-    }
-
-    impl From<Rerank> for inmem::repr::spherical::Rerank {
-        fn from(rerank: Rerank) -> Self {
-            match rerank {
-                Rerank::None => inmem::repr::spherical::Rerank::None,
-                Rerank::F16 => inmem::repr::spherical::Rerank::F16,
+                Self::One => dto::scalar::Bits::One,
+                Self::Two => dto::scalar::Bits::Two,
+                Self::Four => dto::scalar::Bits::Four,
+                Self::Eight => dto::scalar::Bits::Eight,
             }
         }
     }
@@ -326,7 +378,18 @@ enum Representation {
     },
     Spherical {
         bits: spherical::Bits,
-        rerank: spherical::Rerank,
+        rerank: quantization::Rerank,
+    },
+    Product {
+        chunks: NonZeroUsize,
+        rerank: quantization::Rerank,
+    },
+    // NOTE: We allow overriding to `cosine_normalized` since that is basically L2 in
+    // a trench coat. We can at least still get coverage.
+    Scalar {
+        bits: scalar::Bits,
+        override_to_cosine_normalized: bool,
+        rerank: quantization::Rerank,
     },
 }
 
@@ -336,7 +399,20 @@ impl Representation {
             dto::Representation::FullPrecision { data_type } => Self::FullPrecision { data_type },
             dto::Representation::Spherical { bits, rerank } => Self::Spherical {
                 bits: spherical::Bits::from_raw(bits),
-                rerank: spherical::Rerank::from_raw(rerank),
+                rerank: quantization::Rerank::from_raw(rerank),
+            },
+            dto::Representation::Product { chunks, rerank } => Self::Product {
+                chunks,
+                rerank: quantization::Rerank::from_raw(rerank),
+            },
+            dto::Representation::Scalar {
+                bits,
+                override_to_cosine_normalized,
+                rerank,
+            } => Self::Scalar {
+                bits: scalar::Bits::from_raw(bits),
+                override_to_cosine_normalized,
+                rerank: quantization::Rerank::from_raw(rerank),
             },
         }
     }
@@ -348,6 +424,19 @@ impl Representation {
             },
             Self::Spherical { bits, rerank } => dto::Representation::Spherical {
                 bits: bits.as_raw(),
+                rerank: rerank.as_raw(),
+            },
+            Self::Product { chunks, rerank } => dto::Representation::Product {
+                chunks: *chunks,
+                rerank: rerank.as_raw(),
+            },
+            Self::Scalar {
+                bits,
+                override_to_cosine_normalized,
+                rerank,
+            } => dto::Representation::Scalar {
+                bits: bits.as_raw(),
+                override_to_cosine_normalized: *override_to_cosine_normalized,
                 rerank: rerank.as_raw(),
             },
         }
@@ -520,6 +609,14 @@ impl Test {
             Representation::Spherical { bits, rerank } => {
                 self.create_spherical(data, *bits, *rerank)
             }
+            Representation::Product { chunks, rerank } => {
+                self.create_product(data, *chunks, *rerank)
+            }
+            Representation::Scalar {
+                bits,
+                override_to_cosine_normalized,
+                rerank,
+            } => self.create_scalar(data, *bits, *override_to_cosine_normalized, *rerank),
         }
     }
 
@@ -527,13 +624,14 @@ impl Test {
         &self,
         data: DatasetView<'_>,
         bits: spherical::Bits,
-        rerank: spherical::Rerank,
+        rerank: quantization::Rerank,
     ) -> anyhow::Result<Arc<dyn Index>> {
         use diskann_quantization::{
             algorithms::transforms,
             alloc::GlobalAllocator,
             spherical::{PreScale, SphericalQuantizer},
         };
+        use inmem::repr::quantized::{Backend, Config, spherical::Spherical};
         use rand::SeedableRng;
 
         let DatasetView::F32(data) = data else {
@@ -558,27 +656,128 @@ impl Test {
         )?;
 
         // Step 2: Associate it with the target bit-width.
-        let quantizer = match bits {
-            spherical::Bits::One => quantizer.as_quantizer::<1>()?,
-            spherical::Bits::Two => quantizer.as_quantizer::<2>()?,
-            spherical::Bits::Four => quantizer.as_quantizer::<4>()?,
+        let capacity = Capacity::new(data.nrows());
+        let max_degree = MaxDegree::new(self.build.config.max_degree().get());
+        let start_point = rowmajor::Owned::row_vector(Box::from(
+            <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
+        ));
+        let rerank = quantizer_rerank(rerank, self.data.metric);
+
+        let backend = match bits {
+            spherical::Bits::One => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<1>()?))
+            }
+            spherical::Bits::Two => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<2>()?))
+            }
+            spherical::Bits::Four => {
+                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?))
+            }
         };
+
+        let config = Config::new(backend, capacity, max_degree, start_point, rerank)?;
+        let index_config = self.build.config.clone();
+
+        Ok(finish(Provider::new(config)?, index_config))
+    }
+
+    fn create_product(
+        &self,
+        data: DatasetView<'_>,
+        chunks: NonZeroUsize,
+        rerank: quantization::Rerank,
+    ) -> anyhow::Result<Arc<dyn Index>> {
+        use diskann_quantization::{
+            Parallelism,
+            cancel::DontCancel,
+            product::{self, train::TrainQuantizer},
+            random,
+            views::ChunkOffsets,
+        };
+
+        let DatasetView::F32(data) = data else {
+            anyhow::bail!("product quantization only supports f32 data");
+        };
+
+        // Step 1: Train a generic quantizer.
+        let trainer = product::train::LightPQTrainingParameters::new(256, 2);
+        let Some(dim) = NonZeroUsize::new(data.ncols()) else {
+            anyhow::bail!("cannot compress a zero-dimensional dataset");
+        };
+
+        let table = trainer.train(
+            data,
+            ChunkOffsets::partition(dim, chunks)?.as_view(),
+            Parallelism::Sequential,
+            &random::StdRngBuilder::new(0xc0ff33),
+            &DontCancel,
+        )?;
 
         let start_point = rowmajor::Owned::row_vector(Box::from(
             <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
         ));
 
+        // Step 2: Create the quantizer.
+        let product =
+            inmem::repr::quantized::product::Product::new(table, self.data.metric.into(), None)?;
+
         // Step 3: Create the config.
-        let config = diskann_inmem::repr::Spherical::config(
-            quantizer,
+        let config = inmem::repr::quantized::Quantized::config(
+            product,
             Capacity::new(data.nrows()),
             MaxDegree::new(self.build.config.max_degree().get()),
             start_point,
-            rerank.into(),
+            quantizer_rerank(rerank, self.data.metric),
         )?;
 
         let index_config = self.build.config.clone();
+        Ok(finish(Provider::new(config)?, index_config))
+    }
 
+    fn create_scalar(
+        &self,
+        data: DatasetView<'_>,
+        bits: scalar::Bits,
+        override_to_cosine_normalized: bool,
+        rerank: quantization::Rerank,
+    ) -> anyhow::Result<Arc<dyn Index>> {
+        use diskann_quantization::{num::Positive, scalar as qscalar};
+        use inmem::repr::quantized::{Backend, Quantized, scalar::Scalar};
+
+        let DatasetView::F32(data) = data else {
+            anyhow::bail!("scalar quantization only supports f32 data");
+        };
+
+        // Step 1: Train a generic quantizer.
+        let std = Positive::<f64>::new(1.5)?;
+        let trainer = qscalar::train::ScalarQuantizationParameters::new(std);
+        let quantizer = trainer.train(data);
+
+        let start_point = rowmajor::Owned::row_vector(Box::from(
+            <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
+        ));
+
+        // Step 2: Create the config.
+        let metric = if override_to_cosine_normalized {
+            inmem::repr::quantized::scalar::Metric::CosineNormalized
+        } else {
+            inmem::repr::quantized::scalar::Metric::try_from(self.data.metric)?
+        };
+
+        let backend = match bits {
+            scalar::Bits::One => Backend::new(Scalar::<1>::new(quantizer, metric)),
+            scalar::Bits::Two => Backend::new(Scalar::<2>::new(quantizer, metric)),
+            scalar::Bits::Four => Backend::new(Scalar::<4>::new(quantizer, metric)),
+            scalar::Bits::Eight => Backend::new(Scalar::<8>::new(quantizer, metric)),
+        };
+
+        let capacity = Capacity::new(data.nrows());
+        let max_degree = MaxDegree::new(self.build.config.max_degree().get());
+        let rerank = quantizer_rerank(rerank, self.data.metric);
+
+        let config = Quantized::config(backend, capacity, max_degree, start_point, rerank)?;
+
+        let index_config = self.build.config.clone();
         Ok(finish(Provider::new(config)?, index_config))
     }
 }
@@ -589,6 +788,18 @@ where
     DiskANNIndex<DP>: Index,
 {
     Arc::new(DiskANNIndex::new(config, provider, None))
+}
+
+fn quantizer_rerank(
+    rerank: quantization::Rerank,
+    metric: Metric,
+) -> inmem::repr::quantized::Rerank {
+    match rerank {
+        quantization::Rerank::None => inmem::repr::quantized::Rerank::None,
+        quantization::Rerank::F16 => inmem::repr::quantized::Rerank::F16 {
+            metric: metric.into(),
+        },
+    }
 }
 
 ///////////////
@@ -671,16 +882,15 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
             Representation::FullPrecision { .. } => {
                 // We match all valid data-types
             }
-            Representation::Spherical { .. } => {
+            Representation::Spherical { .. }
+            | Representation::Product { .. }
+            | Representation::Scalar { .. } => {
                 let data_type = input.data.data_type;
                 // Ensure that the data type if `f32`.
                 if data_type != DataType::F32 {
                     score.fail(
                         1,
-                        &format_args!(
-                            "spherical-quantization requires f32 data, not {}",
-                            data_type
-                        ),
+                        &format_args!("quantization requires f32 data, not {}", data_type),
                     );
                 }
             }
@@ -702,6 +912,8 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         let data_type = match input.representation {
             Representation::FullPrecision { data_type } => data_type,
             Representation::Spherical { .. } => input.data.data_type,
+            Representation::Product { .. } => input.data.data_type,
+            Representation::Scalar { .. } => input.data.data_type,
         };
 
         // Load the data and perform any necessary data conversions.
@@ -713,11 +925,11 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 
         let index = input.index(data.as_view())?;
         let rt = diskann_benchmark_core::tokio::runtime(1)?;
-        let build = super::tests::insert(&*index, data.as_view(), rt.handle())?;
+        let build = super::ops::insert(&*index, data.as_view(), rt.handle())?;
 
         let mut knn = Vec::new();
         for (k, param) in input.search.knn.iter() {
-            let stats = super::tests::knn(
+            let stats = super::ops::knn(
                 &*index,
                 *k,
                 *param,
@@ -738,18 +950,18 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 }
 
 impl Regression for FullPrecision {
-    type Tolerances = tolerance::Empty;
-    type Pass = Match;
-    type Fail = Match;
+    type Tolerances = CheckBuildAndSearch;
+    type Pass = Finished;
+    type Fail = Finished;
 
     fn check(
         &self,
-        _tolerances: &Self::Tolerances,
+        tolerances: &Self::Tolerances,
         _input: &Self::Input,
         before: &Self::Output,
         after: &Self::Output,
     ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
-        Ok(after.check_match(before).pass_fail())
+        Ok(tolerances.check(before, after).pass_fail())
     }
 }
 
@@ -760,7 +972,7 @@ impl Regression for FullPrecision {
 #[derive(Debug, Serialize, Deserialize)]
 struct BuildAndSearch {
     build: Counters,
-    knn: Vec<super::tests::KnnStats>,
+    knn: Vec<super::ops::KnnStats>,
 }
 
 impl std::fmt::Display for BuildAndSearch {
@@ -776,14 +988,76 @@ impl std::fmt::Display for BuildAndSearch {
     }
 }
 
-impl CheckMatch for BuildAndSearch {
-    fn check_match(&self, previous: &Self) -> Match {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            { build, knn },
-        );
+///////////////
+// Tolerance //
+///////////////
+
+/// A tolerance [`diskann_benchmark_runner::Input`] for
+/// [`diskann_benchmark_runner::benchmark::Regression`]s.
+///
+/// This allows for minor cross-architecture (`aarch64` vs `x86`) due to different choices
+/// with floating point SIMD width/association.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct CheckBuildAndSearch {
+    build: CheckCounters,
+    knn: super::ops::CheckKnnStats,
+}
+
+impl CheckBuildAndSearch {
+    fn example() -> Self {
+        Self {
+            build: CheckCounters::example(),
+            knn: super::ops::CheckKnnStats::example(),
+        }
+    }
+
+    fn check(&self, old: &BuildAndSearch, new: &BuildAndSearch) -> Report {
+        let Self {
+            build: check_build,
+            knn: check_knn,
+        } = self;
+        let BuildAndSearch { build, knn } = old;
+        let mut builder = Report::builder();
+        builder.push("build", check_build.check(build, &new.build));
+
+        if knn.len() != new.knn.len() {
+            builder.push(
+                "knn",
+                Report::error(format_args!(
+                    "old KNN has {} entries while the new has {}",
+                    knn.len(),
+                    new.knn.len()
+                )),
+            );
+        } else {
+            let mut sub = Report::builder();
+            for (i, (old, new)) in std::iter::zip(knn.iter(), new.knn.iter()).enumerate() {
+                sub.push(i, check_knn.check(old, new));
+            }
+            builder.push("knn", sub.finish());
+        }
+
         builder.finish()
+    }
+}
+
+impl diskann_benchmark_runner::Input for CheckBuildAndSearch {
+    type Raw = Self;
+
+    fn tag() -> &'static str {
+        "tolerance-build-and-search"
+    }
+
+    fn from_raw(raw: Self::Raw, _: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        <Self>::example()
     }
 }
 
@@ -795,8 +1069,32 @@ impl CheckMatch for BuildAndSearch {
 mod tests {
     use super::*;
 
+    use diskann_benchmark_runner::report::Status;
+
     #[test]
     fn example_parses() {
         let _ = Test::from_raw(<Test as diskann_benchmark_runner::Input>::example(), None).unwrap();
+    }
+
+    #[test]
+    fn check_build_and_search_rejects_knn_length_mismatch() {
+        let tolerance = CheckBuildAndSearch::example();
+        let output = |len| BuildAndSearch {
+            build: Counters::test_fixture(),
+            knn: (0..len)
+                .map(|_| super::super::ops::KnnStats::test_fixture())
+                .collect(),
+        };
+        for (old_len, new_len, expected) in [
+            (1, 1, Status::Pass),
+            (1, 0, Status::Fail),
+            (0, 1, Status::Fail),
+        ] {
+            assert_eq!(
+                tolerance.check(&output(old_len), &output(new_len)).status(),
+                expected,
+                "old_len = {old_len}, new_len = {new_len}"
+            );
+        }
     }
 }

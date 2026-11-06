@@ -39,7 +39,7 @@ pub(in crate::repr) struct ExpandBeam<'a, D, P> {
     /// `reader.bytes()`.
     distance: D,
 
-    /// Prefetcher. This must be compatible with `reader.bytes_plus_tag()` and is checked
+    /// Prefetcher. This must be compatible with `reader.prefetch_bytes()` and is checked
     /// in [`Self::new`].
     prefetch: prefetch::Checked<P>,
 
@@ -55,7 +55,7 @@ impl<'a, D, P> ExpandBeam<'a, D, P> {
     ///
     /// # Panics
     ///
-    /// Panics if `prefetch` is not compatible with [`store::intrusive::Reader::bytes_plus_tag`].
+    /// Panics if `prefetch` is not compatible with [`store::intrusive::Reader::prefetch_bytes`].
     pub(in crate::repr) fn new(
         reader: store::intrusive::Reader<'a>,
         distance: D,
@@ -69,7 +69,7 @@ impl<'a, D, P> ExpandBeam<'a, D, P> {
             clippy::expect_used,
             reason = "internal APIs should only provide valid prefetchers"
         )]
-        let prefetch = prefetch::Checked::new(prefetch, reader.bytes_plus_tag())
+        let prefetch = prefetch::Checked::new(prefetch, reader.prefetch_bytes())
             .expect("internal APIs should only provide valid prefetchers");
 
         Self {
@@ -78,12 +78,6 @@ impl<'a, D, P> ExpandBeam<'a, D, P> {
             prefetch,
             lookahead,
         }
-    }
-
-    /// Return the [`crate::epoch::Guard`] of the embedded reader.
-    #[cfg(feature = "quantization")]
-    pub(in crate::repr) fn guard(&self) -> &crate::epoch::Guard<'a> {
-        self.reader.guard()
     }
 
     /// Wrap `self` in a `Box`.
@@ -129,11 +123,13 @@ where
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
             // as the validity of the prefetch bounds.
             //
-            // We validated `self.prefetch` with `self.reader.bytes_with_tag()` upon construction.
+            // We validated `self.prefetch` with `self.reader.prefetch_bytes()` upon construction.
             //
-            // We do not materialize the `RawSlice` as a reference.
+            // The `RawSlice` and tag pointer are only used for prefetching.
             unsafe {
-                let raw = self.reader.read_raw_unchecked(j.into_usize());
+                let (raw, tag) = self.reader.read_for_prefetch(j.into_usize());
+
+                prefetch::prefetch_cacheline(tag);
                 self.prefetch.prefetch(raw.as_ptr(), raw.len());
             }
         }
@@ -146,14 +142,15 @@ where
                 // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
                 // well as the validity of the prefetch bounds.
                 //
-                // We validated `self.prefetch` with `self.reader.bytes_with_tag()` upon
+                // We validated `self.prefetch` with `self.reader.prefetch_bytes()` upon
                 // construction.
                 //
-                // We do not materialize the `RawSlice` as a reference.
+                // The `RawSlice` and tag pointer are only used for prefetching.
                 unsafe {
-                    let raw = self
+                    let (raw, tag) = self
                         .reader
-                        .read_raw_unchecked(list.get_unchecked(j).into_usize());
+                        .read_for_prefetch(list.get_unchecked(j).into_usize());
+                    prefetch::prefetch_cacheline(tag);
                     self.prefetch.prefetch(raw.as_ptr(), raw.len());
                 }
                 j += 1;
@@ -188,17 +185,6 @@ pub(in crate::repr) struct Prune<'a, D> {
     /// The distance computation. Ensure this is only provided with slices of length
     /// `reader.bytes()`.
     distance: D,
-
-    /// Buffered pointers to slices in `reader`. These
-    ///
-    /// * Must come from slices yielded by `reader`.
-    ///
-    /// * Must have a length of exactly `reader.bytes()`.
-    ///
-    /// * Have no lifetime because they need to be outlived `reader`. We only materialize
-    ///   them as slices in internal methods taking `&[mut] self` where we know the reader
-    ///   is valid.
-    buffer: Vec<*const u8>,
 }
 
 impl<'a, D> Prune<'a, D> {
@@ -209,11 +195,7 @@ impl<'a, D> Prune<'a, D> {
     /// [`store::intrusive::Reader::bytes`] will be passed to `distance`. However, unsafe
     /// code may not rely on this.
     pub(in crate::repr) fn new(reader: store::intrusive::Reader<'a>, distance: D) -> Self {
-        Self {
-            reader,
-            distance,
-            buffer: Vec::new(),
-        }
+        Self { reader, distance }
     }
 
     /// Wrap `self` in a `Box`.
@@ -231,44 +213,11 @@ impl<D> repr::Prune for Prune<'_, D>
 where
     D: RawDistance,
 {
-    fn prepare(
-        &mut self,
-        items: hashbrown::hash_map::IterMut<'_, u32, Option<repr::PruneKey>>,
-    ) -> ANNResult<usize> {
-        let mut counter = repr::PruneKey::counter();
-        self.buffer.clear();
-        self.buffer.reserve(items.len());
-
-        for (id, key) in items {
-            if let Some(v) = self.reader.read(id.into_usize()) {
-                self.buffer.push(v.as_ptr());
-
-                *key = Some(counter);
-
-                // Potential overflow issue - but it's exceedingly unlikely that
-                // someone will provide a prune list exceeding `u16::MAX`.
-                //
-                // In addition, `diskann` limits this bound as well.
-                counter = counter.increment()?;
-            }
-        }
-
-        Ok(counter.index())
+    fn get(&self, id: u32) -> Option<&[u8]> {
+        self.reader.read(id.into_usize())
     }
 
-    fn evaluate(&self, a: repr::PruneKey, b: repr::PruneKey) -> f32 {
-        let len = self.reader.bytes().value();
-
-        // SAFETY: The only way a pointer ends up in `self.buffer` is from `self.prepare`,
-        // where they are obtained from slices returned from `self.reader`.
-        //
-        // Further, `self.reader` must be retained for the lifetime of `self`. Thus, they
-        // point to valid data of length `len` and are protected from concurrent mutation.
-        let a = unsafe { std::slice::from_raw_parts(self.buffer[a.index()], len) };
-
-        // SAFETY: See above.
-        let b = unsafe { std::slice::from_raw_parts(self.buffer[b.index()], len) };
-
+    fn evaluate(&self, a: &[u8], b: &[u8]) -> f32 {
         #[expect(
             clippy::expect_used,
             reason = "diskann currently does not support fallible prune"
@@ -276,5 +225,346 @@ where
         self.distance
             .eval(a, b)
             .expect("diskann currently does not support fallible prune")
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use hashbrown::HashMap;
+
+    use crate::{
+        num::{Bytes, IdLimit, LogicalId, MaxDegree, SlotId},
+        repr::test::{Reference, TestDistance, TestQueryDistance},
+        store::intrusive::Intrusive,
+    };
+
+    /// Create a [`store::Store`] with the given `IdLimit` and space to store `dim` values
+    /// of type `f32` per slot.
+    ///
+    /// Then, `fill_to` entries with logical ids `0..fill_to` will be inserted, each with
+    /// its logical id broadcast across all `dim` entries. These points will be published
+    /// with [`store::Exclusive::publish`].
+    ///
+    /// Finally, `frozen` entries with logical ids `(usize::MAX - frozen + 1)..=usize::MAX`
+    /// with values `-(0..frozen)` broadcast across dimensions will be inserted. These points
+    /// will be frozen with [`store::Exclusive::freeze`].
+    ///
+    /// A [`Reference`] will be returned containing all inserted points.
+    fn test_store(
+        id_limit: IdLimit,
+        dim: usize,
+        fill_to: usize,
+        frozen: usize,
+    ) -> (store::Store<Intrusive>, Reference) {
+        assert!(fill_to + frozen <= id_limit.value().into_usize());
+
+        let bytes = Bytes::size_of::<f32>().checked_mul(dim).unwrap();
+        let store = store::Store::new(
+            store::Layout::new(id_limit, MaxDegree::new(0)),
+            store::Config::__exhaustive(
+                NonZeroUsize::new(4).unwrap(),
+                NonZeroU32::new(16).unwrap(),
+            ),
+            Intrusive::config(bytes),
+        )
+        .unwrap();
+
+        let mut reference = Reference::new(dim);
+        let mut data = vec![0.0; dim];
+        for i in (0..fill_to).rev() {
+            data.fill(i as f32);
+            let mut exclusive = store.acquire().unwrap();
+            exclusive
+                .data()
+                .as_mut_slice()
+                .copy_from_slice(bytemuck::must_cast_slice(&data));
+            let slot = exclusive.slot();
+            reference.insert(LogicalId(i), SlotId(slot), &data);
+            exclusive.publish();
+        }
+
+        for i in 0..frozen {
+            data.fill(-(i as f32));
+            let mut exclusive = store.acquire().unwrap();
+            exclusive
+                .data()
+                .as_mut_slice()
+                .copy_from_slice(bytemuck::must_cast_slice(&data));
+            let slot = exclusive.slot();
+            reference.insert(LogicalId(usize::MAX - i), SlotId(slot), &data);
+            exclusive.freeze();
+        }
+
+        (store, reference)
+    }
+
+    /////////////////
+    // Expand Beam //
+    /////////////////
+
+    /// A Miri-friendly test for [`ExpandBeam`].
+    ///
+    /// This test covers the following:
+    ///
+    /// 1. Prefetches are in-bounds for all tested lookaheads.
+    /// 2. [`ExpandBeam`] doesn't lie about its [`IdLimit`].
+    /// 3. [`ExpandBeam`]'s methods are internally consistent with each other and
+    ///    consistent with the reference data for item readability.
+    /// 4. [`ExpandBeam::expand_beam`] preserves input order and visits every item in the
+    ///    input list.
+    fn test_expand_beam_inner(dim: usize) {
+        let id_limit = IdLimit::new(22);
+        let (store, reference) = test_store(id_limit, dim, 10, 2);
+
+        assert_eq!(store.id_limit(), id_limit);
+
+        // Lookaheads to try.
+        let lookaheads: &[Option<NonZeroUsize>] = &[
+            None,
+            NonZeroUsize::new(1),
+            NonZeroUsize::new(5),
+            NonZeroUsize::new(100),
+        ];
+
+        // Compute the distance between the query and all internal data points.
+        let query = vec![-1.0f32; dim];
+        let distances: HashMap<_, _> = reference
+            .iter()
+            .map(|(_, slot, data)| {
+                let distance: f32 = std::iter::zip(data.iter(), query.iter())
+                    .map(|(d, q)| d + q)
+                    .sum();
+                (slot, distance)
+            })
+            .collect();
+
+        // This is the main loop for testing `ExpandBeam`.
+        //
+        // We do several things.
+        //
+        // 1. We insert two additional IDs but hold their `Exclusive` without publishing.
+        //    This tests that items remain unreadable until they are published.
+        //
+        // 2. We attempt to insert two more points but abort to check that they remain
+        //    unreadable.
+        //
+        // 3. We publish two new points and immediately retire them.
+        //    This tests that we correctly make these points unreadable.
+        //
+        for lookahead in lookaheads {
+            // Retired
+            let g0 = store.acquire().unwrap();
+            let g1 = store.acquire().unwrap();
+
+            // Abort
+            let g2 = store.acquire().unwrap();
+            let g3 = store.acquire().unwrap();
+
+            // Held
+            let g4 = store.acquire().unwrap();
+            let g5 = store.acquire().unwrap();
+
+            // Do the submit + retire loop.
+            {
+                let g0_id = g0.slot();
+                g0.publish();
+                store.retire(g0_id.into_usize()).unwrap();
+            }
+
+            {
+                let g1_id = g1.slot();
+                g1.publish();
+                store.retire(g1_id.into_usize()).unwrap();
+            }
+
+            // Abort
+            std::mem::drop(g2);
+            std::mem::drop(g3);
+
+            let expand = ExpandBeam::new(
+                store
+                    .guard(|intrusive, guard| intrusive.reader(guard))
+                    .unwrap(),
+                TestQueryDistance::new(&query),
+                prefetch::Loop::new(),
+                *lookahead,
+            );
+
+            assert_eq!(<_ as repr::ExpandBeam>::id_limit(&expand), id_limit);
+
+            let mut list = Vec::<SlotId>::new();
+
+            // Use triangular indexing from `0..id_limit` with `distances` serving as the
+            // ground truth.
+            //
+            // Note that we purposely make `list` extra long with redundant indices to help
+            // catch indexing bugs inside `ExpandBeam`.
+            for i in 0..=id_limit.value() {
+                list.clear();
+                list.extend((0..i).rev().map(SlotId));
+                list.extend((0..i).map(SlotId));
+
+                repr::test::test_expand_beam(
+                    &expand,
+                    id_limit,
+                    distances.clone(),
+                    &list,
+                    &format_args!("intrusive::ExpandBeam 0..{}", i),
+                )
+            }
+
+            assert!(
+                <_ as repr::ExpandBeam>::evaluate(&expand, id_limit.value()).is_err(),
+                "`ExpandBeam::evaluate` should catch out-of-bounds errors",
+            );
+
+            // Ensure we hold onto `g4` and `g5` for the duration of the above check.
+            drop(g4);
+            drop(g5);
+        }
+    }
+
+    // Even though zero-dimensional data doesn't make sense, we make sure that we can still
+    // handle it safely.
+    #[test]
+    fn test_expand_beam_zero() {
+        test_expand_beam_inner(0);
+    }
+
+    // Low dimensions with all data living on a single cache line.
+    #[test]
+    fn test_expand_beam_scalar() {
+        test_expand_beam_inner(1);
+    }
+
+    // This tests that if we emit prefetch instructions disjoint from the tag that they
+    // are in-bounds.
+    //
+    // A dimension of 16 means that all the data sits on one cache line. The tag sits on
+    // another one.
+    #[test]
+    fn test_expand_beam_one_disjoint() {
+        test_expand_beam_inner(16);
+    }
+
+    // This tests that if we emit prefetch instructions disjoint from the tag that they
+    // are in-bounds.
+    //
+    // A dimension of 31 means that the data spans two cache lines, but the second cache
+    // line is shared with the tag.
+    #[test]
+    fn test_expand_beam_one_overlap() {
+        test_expand_beam_inner(31);
+    }
+
+    // This tests that if we emit prefetch instructions disjoint from the tag that they
+    // are in-bounds.
+    //
+    // A dimension of 32 means that all the data sits on two cache lines. The tag sits on
+    // another one.
+    #[test]
+    fn test_expand_beam_two_disjoint() {
+        test_expand_beam_inner(32);
+    }
+
+    ///////////
+    // Prune //
+    ///////////
+
+    /// A Miri-friendly test for `Prune`.
+    #[test]
+    fn test_prune() {
+        let id_limit = IdLimit::new(22);
+        let dim = 1;
+        let (store, reference) = test_store(id_limit, dim, 10, 2);
+
+        // Populate distances.
+        let mut distances = HashMap::new();
+        for (_, slot0, data0) in reference.iter() {
+            for (_, slot1, data1) in reference.iter() {
+                let distance: f32 = std::iter::zip(data0.iter(), data1.iter())
+                    .map(|(l, r)| l + r)
+                    .sum();
+
+                distances.insert((slot0, slot1), distance);
+            }
+        }
+
+        // We do several things.
+        //
+        // 1. We insert two additional IDs but hold their guards without publishing.
+        //    This tests that items remain unreadable until they are published.
+        //
+        // 2. We publish two new points and immediately retire them.
+        //    This tests that we correctly make these points unreadable.
+        let g0 = store.acquire().unwrap();
+        let g1 = store.acquire().unwrap();
+        let g2 = store.acquire().unwrap();
+        let g3 = store.acquire().unwrap();
+
+        {
+            let g0_id = g0.slot();
+            g0.publish();
+            store.retire(g0_id.into_usize()).unwrap();
+        }
+
+        {
+            let g1_id = g1.slot();
+            g1.publish();
+            store.retire(g1_id.into_usize()).unwrap();
+        }
+
+        let mut prune = Prune::new(
+            store
+                .guard(|intrusive, guard| intrusive.reader(guard))
+                .unwrap(),
+            TestDistance,
+        );
+
+        // Note that we emit reads above the `IdLimit`, which we expect to be silently
+        // rejected.
+        for i in 0..=(id_limit.value() + 5) {
+            let mut ids: Vec<SlotId> = (0..i).map(SlotId).collect();
+
+            // Take the collection of distances where both entries in the tuple are within
+            // the bounds.
+            let distances_for_test: HashMap<_, _> = distances
+                .iter()
+                .filter_map(|(k, v)| {
+                    if k.0.value() < i && k.1.value() < i {
+                        Some((*k, *v))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            repr::test::test_prune(
+                &mut prune,
+                distances_for_test.clone(),
+                &ids,
+                &format_args!("intrusive::Prune - ids 0..{}", i),
+            );
+
+            ids.reverse();
+            repr::test::test_prune(
+                &mut prune,
+                distances_for_test,
+                &ids,
+                &format_args!("intrusive::Prune - ids {}..0", i),
+            );
+        }
+
+        // Drop the guards after holding them in limbo during the test.
+        drop(g2);
+        drop(g3);
     }
 }

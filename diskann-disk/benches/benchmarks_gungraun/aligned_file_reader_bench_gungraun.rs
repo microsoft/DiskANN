@@ -1,0 +1,47 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+use diskann_disk::search::provider::aligned_file_reader::{
+    AlignedFileReaderFactory, AlignedRead,
+    traits::{AlignedFileReader, AlignedReaderFactory},
+};
+use diskann_quantization::alloc::{AlignedAllocator, Poly};
+
+pub const TEST_INDEX_PATH: &str = "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
+
+// MAX_IO_CONCURRENCY copied from the LinuxAlignedFileReader
+const MAX_IO_CONCURRENCY: usize = 128;
+
+#[gungraun::library_benchmark]
+pub fn benchmark_aligned_file_reader_gungraun() {
+    // Get OS-specific aligned file reader
+    let mut reader = AlignedFileReaderFactory::new(TEST_INDEX_PATH.to_string())
+        .build()
+        .unwrap();
+
+    let read_length = 512;
+    let num_read = MAX_IO_CONCURRENCY * 100; // The LinuxAlignedFileReader batches reads according to MAX_IO_CONCURRENCY.  Make sure we have many batches to handle.
+    let mut aligned_mem =
+        Poly::broadcast(0u8, read_length * num_read, AlignedAllocator::A512).unwrap();
+
+    // create and add AlignedReads to the vector
+    let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
+
+    // Read the same data from disk over and over again.  We guarantee that it is not all zeros.
+    let mut aligned_reads: Vec<AlignedRead<'_, u8, _>> = mem_slices
+        .iter_mut()
+        .map(|slice| AlignedRead::new(0, slice).unwrap())
+        .collect();
+
+    let result = reader.read(&mut aligned_reads);
+
+    // Make sure read completed successfully
+    assert!(result.is_ok());
+}
+
+gungraun::library_benchmark_group!(
+    name = aligned_file_reader_bench_gungraun;
+    benchmarks = benchmark_aligned_file_reader_gungraun,
+);

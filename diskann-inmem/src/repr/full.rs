@@ -14,8 +14,8 @@ mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
     //!
-    //! * [`crate::repr::internal::intrusive::ExpandBeam`]: For index search.
-    //! * [`crate::repr::internal::intrusive::Prune`]: For index construction.
+    //! * [`crate::repr::internal::packed::ExpandBeam`]: For index search.
+    //! * [`crate::repr::internal::packed::Prune`]: For index construction.
     //!
     //! These two structs are modular with respect to their exact distance function and
     //! prefetcher. Since [`super::repr::ExpandBeam`] and [`super::repr::Prune`] are
@@ -43,7 +43,8 @@ use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
     distance::{
-        Cosine, CosineNormalized, DistanceProvider, InnerProduct, Metric, Specialize, SquaredL2,
+        Cosine, CosineNormalized, Distance as VDistance, InnerProduct, Metric, Specialize,
+        SquaredL2,
     },
 };
 use diskann_wide::{
@@ -56,14 +57,13 @@ use thiserror::Error;
 use crate::{
     counters::LocalCounters,
     epoch,
-    num::{Bytes, Capacity, IdLimit, MaxDegree},
+    num::{Bytes, Capacity, IdLimit, MaxDegree, Range},
     prefetch::{self, Prefetch},
     repr::{self, internal::Calf},
     store::{
         self, Store,
-        intrusive::{self, Intrusive},
+        packed::{self, Packed},
     },
-    tag::AtomicTag,
 };
 
 /// Construct an [`UnalignedSlice`] over `bytes`.
@@ -113,8 +113,10 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
 #[derive(Debug, Clone)]
 pub struct Config<T> {
     layout: store::Layout,
+    capacity: Capacity,
     metric: Metric,
     start_points: rowmajor::Owned<T>,
+    start_point_ids: Range,
     store: store::Config,
     lookahead: Option<NonZeroUsize>,
 }
@@ -125,8 +127,7 @@ impl<T> Config<T> {
     /// Create a new [`Config`] for a [`Full`].
     ///
     /// The resulting store will hold `capacity` writable items and `start_points.nrows()`
-    /// frozen points at internal IDs `[capacity, capacity + start_points.nrows())`. The
-    /// dimensionality of the full-precision data will be inferred from
+    /// frozen points. The dimensionality of the full-precision data will be inferred from
     /// `start_points.ncols()`.
     ///
     /// The associated graph will be bounded with `max_degree` and `metric` will be used to
@@ -142,11 +143,6 @@ impl<T> Config<T> {
         metric: Metric,
         start_points: rowmajor::Owned<T>,
     ) -> Result<Self, ConfigError> {
-        let num_start_points: u32 = match start_points.nrows().try_into() {
-            Ok(points) => points,
-            Err(_) => return Err(ConfigError::TooManyStartPoints(start_points.nrows())),
-        };
-
         // Check that we won't overflow when computing the number of bytes required for each
         // data point. This can happen if `start_points` has 0 rows but a large number of
         // columns.
@@ -155,13 +151,26 @@ impl<T> Config<T> {
             .checked_mul(std::mem::size_of::<T>())
             .is_none()
         {
-            return Err(ConfigError::DimTooLarge(start_points.ncols()));
+            return Err(ConfigError::dim_too_large(start_points.ncols()));
         }
 
+        let num_start_points = start_points.nrows();
+        let too_many_points = || ConfigError::too_many_points(capacity, num_start_points);
+        let start_point_ids =
+            Range::start_plus_usize(0, num_start_points).ok_or_else(too_many_points)?;
+
+        let id_limit = capacity
+            .value()
+            .checked_add(num_start_points)
+            .and_then(|id_limit| u32::try_from(id_limit).map(IdLimit::new).ok())
+            .ok_or_else(too_many_points)?;
+
         Ok(Self {
-            layout: store::Layout::new(capacity, max_degree, num_start_points),
+            layout: store::Layout::new(id_limit, max_degree),
+            capacity,
             metric,
             start_points,
+            start_point_ids,
             store: store::Config::default(),
             lookahead: Some(DEFAULT_LOOKAHEAD),
         })
@@ -199,18 +208,44 @@ impl<T> Config<T> {
 
 /// Errors that can arise when constructing [`Config`].
 #[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum ConfigError {
-    #[error("{} start points exceed `u32::MAX`", 0)]
-    TooManyStartPoints(usize),
-    #[error(
-        "the number of bytes to hold {}-dimensional data exceeds `usize::MAX`",
-        0
-    )]
-    DimTooLarge(usize),
+#[error(transparent)]
+pub struct ConfigError {
+    inner: ConfigErrorInner,
+}
+
+impl ConfigError {
+    fn dim_too_large(dim: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::DimTooLarge(dim),
+        }
+    }
+
+    fn too_many_points(capacity: Capacity, num_start_points: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::TooManyPoints {
+                capacity,
+                num_start_points,
+            },
+        }
+    }
 }
 
 diskann::convert_error!(ConfigError);
+
+#[derive(Debug, Error)]
+enum ConfigErrorInner {
+    #[error("the number of bytes to hold {0}-dimensional data exceeds `usize::MAX`")]
+    DimTooLarge(usize),
+    #[error(
+        "requested number of points ({} + {} start points) exceeds u32::MAX",
+        capacity,
+        num_start_points
+    )]
+    TooManyPoints {
+        capacity: Capacity,
+        num_start_points: usize,
+    },
+}
 
 impl<T> repr::RepresentationConfig for Config<T>
 where
@@ -240,7 +275,9 @@ pub struct Full<T>
 where
     T: 'static,
 {
-    store: Store<Intrusive>,
+    store: Store<Packed>,
+    start_point_ids: Range,
+    capacity: Capacity,
     metric: Metric,
     lookahead: Option<NonZeroUsize>,
     _type: PhantomData<T>,
@@ -275,18 +312,20 @@ where
     {
         let Config {
             layout,
+            capacity,
             metric,
             start_points,
+            start_point_ids,
             store,
             lookahead,
         } = config;
 
         let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
-        let intrusive = Intrusive::config(bytes);
-        let store = Store::new(layout, store, intrusive)?;
+        let packed = Packed::config(bytes);
+        let store = Store::new(layout, store, packed)?;
 
         // Initialize start points.
-        for (i, row) in std::iter::zip(store.frozen(), start_points.rows()) {
+        for (i, row) in std::iter::zip(start_point_ids, start_points.rows()) {
             #[expect(
                 clippy::expect_used,
                 reason = "failing this is an internal, unrecoverable bug"
@@ -303,6 +342,8 @@ where
 
         Ok(Self {
             store,
+            start_point_ids,
+            capacity,
             metric,
             lookahead,
             _type: PhantomData,
@@ -317,11 +358,6 @@ where
     /// Return the number of payload bytes in each stored vector.
     pub fn bytes(&self) -> Bytes {
         self.store.slots().bytes()
-    }
-
-    #[cfg(test)]
-    fn bytes_plus_tag(&self) -> Bytes {
-        self.store.slots().bytes_plus_tag()
     }
 
     /// Return the [`Metric`] for this representation.
@@ -340,8 +376,8 @@ where
         }
     }
 
-    fn reader(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
-        self.store.guard(|intrusive, guard| intrusive.reader(guard))
+    fn reader(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
+        self.store.guard(|packed, guard| packed.reader(guard))
     }
 }
 
@@ -351,7 +387,7 @@ where
 {
     pub(crate) fn get(&self, i: u32) -> ANNResult<Box<[T]>> {
         let reader = self.reader()?;
-        let data = match reader.read(i.into_usize()) {
+        let data = match reader.read(i) {
             Some(data) => data,
             None => {
                 return Err(ANNError::message("item could not be read"));
@@ -370,7 +406,7 @@ repr::internal::macros::representation!(
 
 repr::internal::macros::set_guard!(
     /// A [`repr::Guard`] for [`Full`].
-    for<'a> intrusive::Exclusive<'a>
+    for<'a> packed::Exclusive<'a>
 );
 
 impl<T> repr::Set<&[T]> for Full<T>
@@ -542,11 +578,11 @@ where
 // Expand Beam (Search) //
 //----------------------//
 
-/// A temporary precursor for [`repr::internal::intrusive::ExpandBeam`] to simplify macros.
+/// A temporary precursor for [`repr::internal::packed::ExpandBeam`] to simplify macros.
 #[derive(Debug)]
 struct IntoExpandBeam<'a, T, U> {
     query: Calf<'a, [T]>,
-    reader: store::intrusive::Reader<'a>,
+    reader: store::packed::Reader<'a>,
     lookahead: Option<NonZeroUsize>,
     _data: PhantomData<U>,
 }
@@ -570,15 +606,16 @@ impl<'a, T, U> IntoExpandBeam<'a, T, U> {
         self,
         distance: D,
         prefetch: P,
-    ) -> repr::internal::intrusive::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
+    ) -> repr::internal::packed::ExpandBeam<'a, QueryDistance<'a, T, U, D>, P>
     where
         D: Distance<T, U>,
         P: Prefetch,
     {
-        repr::internal::intrusive::ExpandBeam::new(
+        repr::internal::packed::ExpandBeam::new(
             self.reader,
             QueryDistance::new(self.query, distance),
             prefetch,
+            self.lookahead,
             self.lookahead,
         )
     }
@@ -602,7 +639,7 @@ diskann::convert_error!(ExpandBeamError);
 /////////////////
 
 const fn compute_bytes<T>(dim: usize) -> usize {
-    dim * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
+    dim * std::mem::size_of::<T>()
 }
 
 macro_rules! expand_beam {
@@ -622,13 +659,10 @@ macro_rules! expand_beam {
 }
 
 macro_rules! prune {
-    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::intrusive::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
+    ($self:ty, $reader:ident, $f:ident) => {{ repr::internal::packed::Prune::new($reader, Pure::<$self, $self, $f>::new()).boxed() }};
     ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
-        repr::internal::intrusive::Prune::new(
-            $reader,
-            Pure::<$self, $self, Specialize<$N, $f>>::new(),
-        )
-        .boxed()
+        repr::internal::packed::Prune::new($reader, Pure::<$self, $self, Specialize<$N, $f>>::new())
+            .boxed()
     }};
 }
 
@@ -753,8 +787,7 @@ impl FullPrecisionImpl for i8 {
     ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
-        let distance =
-            <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
+        let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
         let output: Box<dyn repr::ExpandBeam + 'a> = into
             .into_expand_beam(distance, prefetch::Loop::new())
@@ -766,11 +799,10 @@ impl FullPrecisionImpl for i8 {
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
         let reader = full.reader()?;
 
-        let distance =
-            <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
+        let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
         let output: Box<dyn repr::Prune> =
-            repr::internal::intrusive::Prune::new(reader, distance).boxed();
+            repr::internal::packed::Prune::new(reader, distance).boxed();
 
         Ok(output)
     }
@@ -794,7 +826,7 @@ macro_rules! impl_full_precision {
                     expand_beam,
                     None,
                     provider,
-                    representation.store.frozen(),
+                    representation.start_point_ids,
                     counters,
                 ))
             }
@@ -829,10 +861,399 @@ mod tests {
 
     use std::fmt::Display;
 
-    use diskann::neighbor::Neighbor;
-    use diskann_utils::lazy_format;
-    use hashbrown::{HashMap, HashSet};
+    use diskann::graph::test::synthetic::Grid;
+    use diskann_utils::{assert_contains, lazy_format, views::rowmajor::MatrixMut};
+    use diskann_vector::distance::DistanceProvider;
+    use hashbrown::HashMap;
     use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    use crate::{
+        counters::Counters,
+        num::{LogicalId, SlotId},
+        repr::test::Reference,
+    };
+
+    /// See the description for [`make_test_repr`].
+    const TEST_LIMIT: IdLimit = IdLimit::new(11);
+
+    /// Use the canonical grid layout, but center the data around the origin.
+    ///
+    /// This allows cosine distances to return reasonable results as the data is distributed
+    /// around the origin.
+    ///
+    /// To keep computation mostly tractable, we only use a 2D grid with 9 points. The
+    /// coordinates are as follows:
+    ///
+    /// 0:  [-1, -1]
+    /// 1:  [-1,  0]
+    /// 2:  [-1, +1]
+    ///
+    /// 3:  [ 0, -1]
+    /// 4:  [ 0,  0]
+    /// 5:  [ 0, +1]
+    ///
+    /// 6:  [+1, -1]
+    /// 7:  [+1,  0]
+    /// 8:  [+1, +1]
+    ///
+    /// We put two start points at `[-2, -2]` and `[+2, +2]`.
+    ///
+    /// Overall, there are a total of 11 points.
+    fn make_test_repr(metric: Metric) -> (Full<f32>, Reference) {
+        let grid = Grid::Two;
+        let mut data = grid.data(3);
+        let offset = 1.0;
+        data.as_mut_slice().iter_mut().for_each(|v| *v -= offset);
+
+        let mut start_points = rowmajor::Owned::from_element(2, data.ncols(), 0.0);
+        start_points.row_mut(0).fill(-2.0);
+        start_points.row_mut(1).fill(2.0);
+
+        let full = <_ as repr::RepresentationConfig>::build(
+            Full::<f32>::config(
+                Capacity::new(data.nrows()),
+                MaxDegree::new(0),
+                metric,
+                start_points.clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let bytes = std::mem::size_of_val(data.row(0));
+        assert_eq!(full.dim(), data.ncols());
+        assert_eq!(full.bytes().value(), bytes);
+        assert_eq!(full.metric(), metric);
+        assert_eq!(repr::Representation::id_limit(&full), TEST_LIMIT,);
+        assert_eq!(
+            repr::Representation::capacity(&full),
+            Capacity::new(data.nrows())
+        );
+
+        let mut reference = Reference::new(grid.dim().into());
+
+        {
+            let reader = full.reader().unwrap();
+            for (i, (slot, start)) in
+                std::iter::zip(full.start_point_ids, start_points.rows()).enumerate()
+            {
+                assert_eq!(
+                    reader.read(slot).unwrap(),
+                    bytemuck::must_cast_slice::<f32, u8>(start),
+                );
+                assert_eq!(repr::Representation::is_readable(&full, slot), Some(true));
+                reference.insert(LogicalId(usize::MAX - i), SlotId(slot), start);
+            }
+        }
+
+        for (i, row) in data.rows().enumerate() {
+            let guard = repr::Set::set(&full, row).unwrap();
+            let slot = repr::Guard::id(&guard);
+            reference.insert(LogicalId(i), SlotId(slot), row);
+            repr::Guard::publish(guard);
+        }
+
+        (full, reference)
+    }
+
+    /// These tests focus on accessor and distance-computer wiring. Exhaustive backend
+    /// behavior is covered by [`repr::internal::packed`].
+    ///
+    /// We use:
+    ///
+    /// * `ExpandBeam::evaluate` and `ExpandBeam::expand_beam` to verify that the correct
+    ///   distance computer is created.
+    ///
+    /// * `Prune` to validate that the correct distance computer is made.
+    fn test_distances(
+        full: &Full<f32>,
+        reference: &mut Reference,
+        metric: Metric,
+        ctx: &dyn std::fmt::Display,
+    ) {
+        assert_eq!(repr::Representation::id_limit(full), TEST_LIMIT, "{ctx}");
+
+        let query = [10.0, -10.0];
+
+        // Select a few data points from the dataset.
+        let i0 = LogicalId(2);
+        let s0 = reference.slot_id_for(i0);
+
+        let i1 = LogicalId(5);
+        let s1 = reference.slot_id_for(i1);
+
+        let i2 = LogicalId(usize::MAX);
+        let s2 = reference.slot_id_for(i2);
+
+        // Delete values.
+        let i3_deleted = LogicalId(8);
+        let s3_deleted = reference.slot_id_for(i3_deleted);
+
+        repr::Representation::retire(full, s3_deleted.value()).unwrap();
+        reference.delete(i3_deleted);
+
+        let i4_deleted = LogicalId(4);
+        let s4_deleted = reference.slot_id_for(i4_deleted);
+
+        repr::Representation::retire(full, s4_deleted.value()).unwrap();
+        reference.delete(i4_deleted);
+
+        // Extract values.
+        let v0 = &reference[i0];
+        let v1 = &reference[i1];
+        let v2 = &reference[i2];
+
+        let f = VDistance::<f32, f32>::new(metric, None);
+
+        // Expected distances between the query and the selected dataset vectors.
+        let query_distances = HashMap::from_iter([
+            (s0, f.call(&query, v0)),
+            (s1, f.call(&query, v1)),
+            (s2, f.call(&query, v2)),
+        ]);
+
+        // Search/Insert
+        {
+            let counters = Counters::new();
+            let sa = repr::Search::search_accessor(full, query.as_slice(), &(), counters.local())
+                .unwrap();
+
+            repr::test::test_expand_beam(
+                sa.get_expand_beam(),
+                TEST_LIMIT,
+                query_distances,
+                &[s0, s1, s3_deleted, s2, s4_deleted],
+                ctx,
+            );
+        }
+
+        // Prune
+        {
+            let v00 = f.call(v0, v0);
+            let v01 = f.call(v0, v1);
+            let v02 = f.call(v0, v2);
+
+            let v10 = v01;
+            let v11 = f.call(v1, v1);
+            let v12 = f.call(v1, v2);
+
+            let v20 = v02;
+            let v21 = v12;
+            let v22 = f.call(v2, v2);
+
+            let distances = HashMap::from_iter([
+                ((s0, s0), v00),
+                ((s0, s1), v01),
+                ((s0, s2), v02),
+                ((s1, s0), v10),
+                ((s1, s1), v11),
+                ((s1, s2), v12),
+                ((s2, s0), v20),
+                ((s2, s1), v21),
+                ((s2, s2), v22),
+            ]);
+
+            let counters = Counters::new();
+            let mut pa = repr::Insert::prune_accessor(full, counters.local()).unwrap();
+
+            repr::test::test_prune(
+                pa.get_prune(),
+                distances,
+                &[s0, s1, s3_deleted, s2, s4_deleted],
+                ctx,
+            );
+        }
+    }
+
+    /// The happy-path entry point for all supported metrics.
+    #[test]
+    fn test_full() {
+        let metrics = [
+            Metric::L2,
+            Metric::InnerProduct,
+            Metric::Cosine,
+            Metric::CosineNormalized,
+        ];
+        for metric in metrics {
+            let (full, mut reference) = make_test_repr(metric);
+            test_distances(
+                &full,
+                &mut reference,
+                metric,
+                &format_args!("metric = {:?}", metric),
+            );
+        }
+    }
+
+    /// Test that:
+    ///
+    /// 1. Slot exhaustion is handled properly.
+    /// 2. Data is not visible until publishing.
+    /// 3. Dropping a [`Guard`] avoids publishing.
+    /// 4. We can properly reuse slots.
+    #[test]
+    fn test_guard_and_reuse() {
+        let (full, mut reference) = make_test_repr(Metric::L2);
+
+        let err = repr::Set::set(&full, &[-10.0, -10.0])
+            .unwrap_err()
+            .to_string();
+        assert_contains!(err, "could not allocate a new slot");
+
+        let id = LogicalId(2);
+        let slot = reference.slot_id_for(id);
+        assert_eq!(
+            repr::Representation::is_readable(&full, slot.value()),
+            Some(true),
+        );
+
+        // Create a reader.
+        //
+        // This reader observes the retirement of `id/slot`. Dropping it should allow the
+        // system to progress so we can reuse the slot.
+        {
+            let reader = full.reader().unwrap();
+            assert_eq!(
+                reader.read(slot.value()).unwrap(),
+                bytemuck::bytes_of(&[-1.0f32, 1.0])
+            );
+
+            repr::Representation::retire(&full, slot.value()).unwrap();
+            reference.delete(id);
+
+            assert!(reader.read(slot.value()).is_none());
+            assert_eq!(
+                repr::Representation::is_readable(&full, slot.value()),
+                Some(false),
+            );
+
+            let err = repr::Set::set(&full, &[-2.0, 1.0]).unwrap_err().to_string();
+            assert_contains!(err, "could not allocate a new slot");
+
+            // `reader` gets dropped.
+        }
+
+        // Values are not readable until published.
+        //
+        // Dropping a `guard` does not publish.
+        {
+            let guard = repr::Set::set(&full, &[-10.0, -10.0]).unwrap();
+            assert_eq!(
+                repr::Guard::id(&guard),
+                slot.value(),
+                "expected the same slot to be reused because of the tight capacity"
+            );
+
+            let reader = full.reader().unwrap();
+            assert!(reader.read(slot.value()).is_none());
+            assert_eq!(
+                repr::Representation::is_readable(&full, slot.value()),
+                Some(false),
+            );
+
+            // Dropping means the slot is reclaimed.
+        }
+        assert_eq!(
+            repr::Representation::is_readable(&full, slot.value()),
+            Some(false),
+        );
+
+        {
+            let reader = full.reader().unwrap();
+            let guard = repr::Set::set(&full, &[-10.0, -10.0]).unwrap();
+            assert_eq!(
+                repr::Guard::id(&guard),
+                slot.value(),
+                "expected the same slot to be reused because of the tight capacity"
+            );
+            assert_eq!(
+                repr::Representation::is_readable(&full, slot.value()),
+                Some(false),
+            );
+
+            repr::Guard::publish(guard);
+            assert_eq!(
+                repr::Representation::is_readable(&full, slot.value()),
+                Some(true),
+            );
+
+            assert_eq!(
+                reader.read(slot.value()).unwrap(),
+                bytemuck::bytes_of(&[-10.0f32, -10.0]),
+            );
+        }
+    }
+
+    #[test]
+    fn test_set_dim_mismatch() {
+        let (full, _) = make_test_repr(Metric::L2);
+
+        for dim in [1, 3] {
+            let err = repr::Set::set(&full, vec![1.0; dim].as_slice()).unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!("expected slice of length 2 - instead got {dim}"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_search_dim_mismatch() {
+        let (full, _) = make_test_repr(Metric::L2);
+        let counters = Counters::new();
+
+        for dim in [1, 3] {
+            let query = vec![1.0; dim];
+            let err = repr::Search::search_accessor(&full, query.as_slice(), &(), counters.local())
+                .unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!("expected slice of length 2 - instead got {dim}"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_config_dim_too_large() {
+        let dim = usize::MAX / std::mem::size_of::<f32>() + 1;
+        let start_points = rowmajor::Owned::from_element(0, dim, 0.0f32);
+        let err = Full::config(
+            Capacity::new(1),
+            MaxDegree::new(0),
+            Metric::L2,
+            start_points,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            format!("the number of bytes to hold {dim}-dimensional data exceeds `usize::MAX`"),
+        );
+    }
+
+    #[test]
+    fn test_config_too_many_points() {
+        for (capacity, num_start_points) in [
+            (Capacity::new(u32::MAX as usize), 1),
+            (Capacity::new(usize::MAX), 1),
+            (Capacity::new(0), u32::MAX as usize + 1),
+        ] {
+            let start_points = rowmajor::Owned::from_element(num_start_points, 0, 0.0f32);
+            let err =
+                Full::config(capacity, MaxDegree::new(0), Metric::L2, start_points).unwrap_err();
+
+            assert_contains!(
+                err.to_string(),
+                format!(
+                    "requested number of points ({capacity} + {num_start_points} start points) exceeds u32::MAX"
+                ),
+            );
+        }
+    }
+
+    //----------------------//
+    // Specialization Tests //
+    //----------------------//
 
     /// Generate random elements of a representation's data type from a seeded RNG.
     trait Sample: bytemuck::Pod {
@@ -874,349 +1295,9 @@ mod tests {
         (got - want).abs() <= 1e-3 + 1e-4 * want.abs()
     }
 
-    /// A simple test `Full` containing 1-dimensional `f32` values.
-    ///
-    /// This is used in dedicated `ExpandBeam` and `Prune` tests in a miri-friendly way.
-    ///
-    /// Two start points are included, initialized to `capacity` and `capacity + 1`.
-    fn test_full(capacity: Capacity) -> (Full<f32>, HashMap<u32, f32>) {
-        let start_points = [capacity.value() as f32, (capacity.value() + 1) as f32];
-
-        let full = <_ as repr::RepresentationConfig>::build(
-            Full::<f32>::config(
-                capacity,
-                MaxDegree::new(0),
-                Metric::L2,
-                rowmajor::Owned::column_vector(Box::new(start_points)),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(full.dim(), 1, "start points only have one dimension");
-        assert_eq!(full.bytes(), Bytes::size_of::<f32>());
-        assert_eq!(
-            full.bytes_plus_tag(),
-            Bytes::size_of::<f32>()
-                .checked_add(Bytes::size_of::<AtomicTag>())
-                .unwrap()
-        );
-        assert_eq!(full.metric(), Metric::L2);
-        assert_eq!(
-            <_ as repr::Representation>::id_limit(&full),
-            IdLimit::new(capacity.value() as u32 + 2)
-        );
-        assert_eq!(<_ as repr::Representation>::capacity(&full), capacity);
-
-        let points: HashMap<u32, f32> = {
-            let reader = full.reader().unwrap();
-            assert_eq!(
-                reader.read(capacity.value()).unwrap(),
-                bytemuck::bytes_of(&start_points[0])
-            );
-            assert_eq!(
-                reader.read(capacity.value() + 1).unwrap(),
-                bytemuck::bytes_of(&start_points[1])
-            );
-
-            [
-                (capacity.value() as u32, start_points[0]),
-                ((capacity.value() + 1) as u32, start_points[1]),
-            ]
-            .into_iter()
-            .collect()
-        };
-
-        (full, points)
-    }
-
-    impl Distance<f32, f32> for repr::test::TestDistance {
-        fn eval(&self, x: UnalignedSlice<'_, f32>, y: UnalignedSlice<'_, f32>) -> f32 {
-            assert_eq!(x.len(), 1);
-            assert_eq!(y.len(), 1);
-
-            // SAFETY: `UnalignedSlice`s must point to valid data, and we've checked that
-            // the length of each slice is exactly 1. Therefore, the pointer read is safe.
-            unsafe { x.as_ptr().read_unaligned() + y.as_ptr().read_unaligned() }
-        }
-    }
-
-    /// A Miri-friendly test for [`ExpandBeam`].
-    ///
-    /// This test covers the following:
-    ///
-    /// 1. Prefetches are in-bounds for all lookaheads.
-    /// 2. [`ExpandBeam`] doesn't lie about its [`IdLimit`].
-    /// 3. [`ExpandBeam`]'s methods are internally consistent with each other and
-    ///    consistent with the parent [`Full`] for item readability.
-    /// 4. [`ExpandBeam::expand_beam`] preserves input order and visits every item in the
-    ///    input list.
-    #[test]
-    fn test_expand_beam() {
-        let capacity = Capacity::new(20);
-        let id_limit = IdLimit::new(22);
-
-        let (mut full, mut points) = test_full(capacity);
-
-        assert_eq!(<_ as repr::Representation>::capacity(&full), capacity);
-        assert_eq!(<_ as repr::Representation>::id_limit(&full), id_limit);
-
-        let mut available: HashSet<u32> = (0..capacity.value()).map(|i| i as u32).collect();
-
-        // Insert the values 0 to 10.
-        for i in 0u32..10 {
-            let guard = <_ as repr::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
-
-            let id = <_ as repr::Guard>::id(&guard);
-
-            assert!(
-                available.remove(&id),
-                "insertion should return available slots",
-            );
-
-            assert!(
-                points.insert(id, i as f32).is_none(),
-                "insertion should not repeat",
-            );
-
-            <_ as repr::Guard>::publish(guard);
-        }
-
-        // Lookaheads to try.
-        let lookaheads: &[Option<NonZeroUsize>] = &[
-            None,
-            NonZeroUsize::new(1),
-            NonZeroUsize::new(2),
-            NonZeroUsize::new(5),
-            NonZeroUsize::new(10),
-            NonZeroUsize::new(100),
-        ];
-
-        // This is the main loop for testing `ExpandBeam`.
-        //
-        // We do several things.
-        //
-        // 1. We insert two additional IDs but hold their guards without publishing.
-        //    This tests that items remain unreadable until they are published.
-        //
-        // 2. We publish two new points and immediately retire them.
-        //    This tests that we correctly make these points unreadable.
-        for lookahead in lookaheads {
-            full.lookahead = *lookahead;
-
-            let g0 = <_ as repr::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
-            let g1 = <_ as repr::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
-            let g2 = <_ as repr::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
-            let g3 = <_ as repr::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
-
-            {
-                let g0_id = <_ as repr::Guard>::id(&g0);
-                <_ as repr::Guard>::publish(g0);
-                <_ as repr::Representation>::retire(&full, g0_id).unwrap();
-            }
-
-            {
-                let g1_id = <_ as repr::Guard>::id(&g1);
-                <_ as repr::Guard>::publish(g1);
-                <_ as repr::Representation>::retire(&full, g1_id).unwrap();
-            }
-
-            let query = -1.0f32;
-
-            let into =
-                IntoExpandBeam::new(&full, Calf::Borrowed(std::slice::from_ref(&query))).unwrap();
-
-            let expand = into.into_expand_beam(repr::test::TestDistance, prefetch::Loop::new());
-
-            assert_eq!(<_ as repr::ExpandBeam>::id_limit(&expand), id_limit);
-
-            let mut buf = Vec::<Neighbor<u32>>::new();
-            let mut list = Vec::<u32>::new();
-
-            // Use triangular indexing from `0..id_limit` with `points` serving as the
-            // groundtruth.
-            //
-            // Note that we purposely make `list` extra long with redundant indices to help
-            // catch indexing bugs inside `ExpandBeam`.
-            for i in 0..=id_limit.value() {
-                list.clear();
-                list.extend((0..i).rev());
-                list.extend(0..i);
-
-                buf.resize(list.len(), Default::default());
-
-                let read = repr::safe_expand_beam(&expand, &list, &mut buf).unwrap();
-
-                let expected: Vec<(u32, f32)> = list
-                    .iter()
-                    .copied()
-                    .filter_map(|id| match points.get(&id) {
-                        Some(point) => {
-                            let expected = point + query;
-
-                            assert!(
-                                <_ as repr::Representation>::is_readable(&full, id).unwrap(),
-                                "point should be readable"
-                            );
-
-                            assert_eq!(
-                                <_ as repr::ExpandBeam>::evaluate(&expand, id).unwrap(),
-                                Some(expected),
-                                "readable points should return valid distances",
-                            );
-
-                            Some((id, expected))
-                        }
-                        None => {
-                            assert!(
-                                !<_ as repr::Representation>::is_readable(&full, id).unwrap(),
-                                "points not yielded by ExpandBeam should be unreadable"
-                            );
-
-                            assert!(
-                                <_ as repr::ExpandBeam>::evaluate(&expand, id)
-                                    .unwrap()
-                                    .is_none(),
-                                "unreadable points should return `None` for their distance",
-                            );
-
-                            None
-                        }
-                    })
-                    .collect();
-
-                for i in 0..read {
-                    assert_eq!(*buf[i].id(), expected[i].0, "i = {i}");
-                    assert_eq!(*buf[i].distance(), expected[i].1, "i = {i}");
-                }
-            }
-
-            assert!(
-                <_ as repr::ExpandBeam>::evaluate(&expand, id_limit.value()).is_err(),
-                "`ExpandBeam::evaluate` should catch out-of-bounds errors",
-            );
-
-            // Ensure we hold onto `g2` and `g3` for the duration of the above check.
-            drop(g2);
-            drop(g3);
-        }
-    }
-
-    fn test_prune_inner(
-        points: &HashMap<u32, f32>,
-        prune: &mut repr::internal::intrusive::Prune<'_, repr::test::TestDistance>,
-        ids: &[u32],
-    ) {
-        let mut items: HashMap<u32, Option<repr::PruneKey>> =
-            ids.iter().map(|id| (*id, None)).collect();
-
-        let processed = <_ as repr::Prune>::prepare(prune, items.iter_mut()).unwrap();
-        assert_eq!(processed, items.values().filter(|i| i.is_some()).count());
-
-        // Ensure that `prepare` agrees with `points`.
-        for (k, v) in items.iter() {
-            match v {
-                Some(_) => assert!(points.contains_key(k)),
-                None => assert!(!points.contains_key(k)),
-            }
-        }
-
-        fn filter((k, v): (&u32, &Option<repr::PruneKey>)) -> Option<(u32, repr::PruneKey)> {
-            v.map(|v| (*k, v))
-        }
-
-        // Ensure that distances agree.
-        for (k0, v0) in items.iter().filter_map(filter) {
-            for (k1, v1) in items.iter().filter_map(filter) {
-                // Manually implement `TestDistance`.
-                let expected = points[&k0] + points[&k1];
-                let got = <_ as repr::Prune>::evaluate(prune, v0, v1);
-                assert_eq!(expected, got);
-            }
-        }
-    }
-
-    /// A Miri-friendly test for `Prune`.
-    #[test]
-    fn test_prune() {
-        let capacity = Capacity::new(20);
-        let id_limit = IdLimit::new(22);
-
-        let (full, mut points) = test_full(capacity);
-
-        assert_eq!(<_ as repr::Representation>::capacity(&full), capacity);
-        assert_eq!(<_ as repr::Representation>::id_limit(&full), id_limit);
-
-        let mut available: HashSet<u32> = (0..capacity.value()).map(|i| i as u32).collect();
-
-        // Insert the values 0 to 10.
-        for i in 0u32..10 {
-            let guard = <_ as repr::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
-
-            let id = <_ as repr::Guard>::id(&guard);
-
-            assert!(
-                available.remove(&id),
-                "insertion should return available slots",
-            );
-
-            assert!(
-                points.insert(id, i as f32).is_none(),
-                "insertion should not repeat",
-            );
-
-            <_ as repr::Guard>::publish(guard);
-        }
-
-        // We do several things.
-        //
-        // 1. We insert two additional IDs but hold their guards without publishing.
-        //    This tests that items remain unreadable until they are published.
-        //
-        // 2. We publish two new points and immediately retire them.
-        //    This tests that we correctly make these points unreadable.
-        let g0 = <_ as repr::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
-        let g1 = <_ as repr::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
-        let g2 = <_ as repr::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
-        let g3 = <_ as repr::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
-
-        {
-            let g0_id = <_ as repr::Guard>::id(&g0);
-            <_ as repr::Guard>::publish(g0);
-            <_ as repr::Representation>::retire(&full, g0_id).unwrap();
-        }
-
-        {
-            let g1_id = <_ as repr::Guard>::id(&g1);
-            <_ as repr::Guard>::publish(g1);
-            <_ as repr::Representation>::retire(&full, g1_id).unwrap();
-        }
-
-        let mut prune =
-            repr::internal::intrusive::Prune::new(full.reader().unwrap(), repr::test::TestDistance);
-
-        // Note that we emit reads above the `IdLimit`, which we expect to be silently
-        // rejected.
-        for i in 0..=(id_limit.value() + 5) {
-            let mut ids: Vec<u32> = (0..i).collect();
-            test_prune_inner(&points, &mut prune, &ids);
-
-            ids.reverse();
-            test_prune_inner(&points, &mut prune, &ids);
-        }
-
-        // Drop the guards - verifying that they are held in-limbo during the test.
-        drop(g2);
-        drop(g3);
-    }
-
-    //----------------------//
-    // Specialization Tests //
-    //----------------------//
-
-    // These test make sure that the mapping for metrics and specializations are routed
-    // correctly. They do not exhaustively test the `ExpandBeam` kernls as these are left
-    // to tests that are more Miri friendly.
+    // These tests check that metric and specialization dispatches are routed correctly.
+    // They do not exhaustively test `ExpandBeam` mechanics, which are covered by the
+    // backend tests.
     fn test_dispatch<T>(dim: usize, metric: Metric, seed: u64, ctx: &dyn Display)
     where
         T: FullPrecision + FullPrecisionImpl + Sample + DistanceProvider<T>,
@@ -1237,8 +1318,8 @@ mod tests {
         )
         .unwrap();
 
-        let start_id: u32 = 1;
-
+        // We know the internal start IDs begin at 0. This is not a stability guarantee.
+        let start_id: u32 = 0;
         let internal_query = {
             let guard = <_ as repr::Set<&[T]>>::set(&full, &query).unwrap();
             let id = <_ as repr::Guard>::id(&guard);
@@ -1246,7 +1327,7 @@ mod tests {
             id
         };
 
-        let distance = <T as DistanceProvider<T>>::distance_comparer(metric, None);
+        let distance = VDistance::<T, T>::new(metric, None);
         let expected = distance.call(&start_point, &query);
 
         // Expand Beam - both `evaluate` and `expand_beam` share the same distance computer,
@@ -1262,13 +1343,10 @@ mod tests {
 
         // Prune
         {
-            let mut prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
-            let mut points: HashMap<u32, Option<repr::PruneKey>> =
-                [(internal_query, None), (start_id, None)]
-                    .into_iter()
-                    .collect();
-            prune.prepare(points.iter_mut()).unwrap();
-            let got = prune.evaluate(points[&internal_query].unwrap(), points[&start_id].unwrap());
+            let prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
+            let query = prune.get(internal_query).unwrap();
+            let start = prune.get(start_id).unwrap();
+            let got = prune.evaluate(query, start);
             assert!(
                 approx_eq(expected, got),
                 "{ctx} - expected {expected}, got {got}"

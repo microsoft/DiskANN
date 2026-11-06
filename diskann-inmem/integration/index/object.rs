@@ -10,16 +10,19 @@ use diskann::{
     neighbor::Neighbor,
     utils::IntoUsize,
 };
-use diskann_benchmark_runner::utils::fmt::KeyValue;
+use diskann_benchmark_runner::{
+    report::{
+        Report,
+        tolerance::{FmtSpec, MaxRelativeChange},
+    },
+    utils::fmt::KeyValue,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_inmem::{Context, Provider, Strategy, integration, repr};
 
-use crate::support::{
-    check::{CheckMatch, Match, check_all_fields},
-    datatype::{AsDataType, FromSlice, Slice},
-};
+use crate::support::datatype::{AsDataType, FromSlice, Slice};
 
 pub(crate) trait Index {
     fn search<'a>(
@@ -72,20 +75,6 @@ impl std::fmt::Display for KnnSearch {
     }
 }
 
-impl CheckMatch for KnnSearch {
-    fn check_match(&self, previous: &Self) -> Match {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            { hops, cmps },
-        );
-
-        builder.finish_with_remark(Some(
-            "check assumes deterministic (usually single-threaded) execution".into(),
-        ))
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Counters {
     query_distance: u64,
@@ -98,6 +87,19 @@ pub(crate) struct Counters {
 }
 
 impl Counters {
+    #[cfg(test)]
+    pub(super) fn test_fixture() -> Self {
+        Self {
+            query_distance: 10_000,
+            distance: 0,
+            get_vector: 0,
+            set_vector: 0,
+            get_neighbors: 0,
+            set_neighbors: 0,
+            append_neighbors: 0,
+        }
+    }
+
     pub(crate) fn delta(&self, after: &Counters) -> anyhow::Result<Self> {
         #[derive(Debug, Error)]
         #[error(
@@ -160,25 +162,108 @@ impl From<integration::counters::CounterSnapshot> for Counters {
     }
 }
 
-impl CheckMatch for Counters {
-    fn check_match(&self, previous: &Self) -> Match {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            {
-                query_distance,
-                distance,
-                get_vector,
-                set_vector,
-                get_neighbors,
-                set_neighbors,
-                append_neighbors
-            }
-        );
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct CheckCounters(MaxRelativeChange);
 
-        builder.finish_with_remark(Some(
-            "check assumes deterministic (usually single-threaded) execution".into(),
-        ))
+impl CheckCounters {
+    pub(crate) fn example() -> Self {
+        const TOL: MaxRelativeChange = MaxRelativeChange::new(0.0001, 0.0001).unwrap();
+        Self(TOL)
+    }
+
+    pub(crate) fn check_hops_and_cmps(&self, old: &KnnSearch, new: &KnnSearch) -> Report {
+        let Self(tol) = self;
+        let KnnSearch { hops, cmps } = old;
+
+        let fmt = FmtSpec::new();
+        let mut builder = Report::builder();
+        builder.push(
+            "hops",
+            Report::equal_with_tolerance(tol, *hops, new.hops, fmt),
+        );
+        builder.push(
+            "cmps",
+            Report::equal_with_tolerance(tol, *cmps, new.cmps, fmt),
+        );
+        builder.finish()
+    }
+
+    pub(crate) fn check(&self, old: &Counters, new: &Counters) -> Report {
+        let Self(tol) = self;
+        let Counters {
+            query_distance,
+            distance,
+            get_vector,
+            set_vector,
+            get_neighbors,
+            set_neighbors,
+            append_neighbors,
+        } = old;
+
+        let mut builder = Report::builder();
+        let fmt = FmtSpec::new().with_precision(3);
+
+        builder.push(
+            "query_distance",
+            Report::equal_with_tolerance(tol, *query_distance, new.query_distance, fmt),
+        );
+        builder.push(
+            "distance",
+            Report::equal_with_tolerance(tol, *distance, new.distance, fmt),
+        );
+        builder.push(
+            "get_vector",
+            Report::equal_with_tolerance(tol, *get_vector, new.get_vector, fmt),
+        );
+        builder.push(
+            "set_vector",
+            Report::equal_with_tolerance(tol, *set_vector, new.set_vector, fmt),
+        );
+        builder.push(
+            "get_neighbors",
+            Report::equal_with_tolerance(tol, *get_neighbors, new.get_neighbors, fmt),
+        );
+        builder.push(
+            "set_neighbors",
+            Report::equal_with_tolerance(tol, *set_neighbors, new.set_neighbors, fmt),
+        );
+        builder.push(
+            "append_neighbors",
+            Report::equal_with_tolerance(tol, *append_neighbors, new.append_neighbors, fmt),
+        );
+        builder.finish()
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use diskann_benchmark_runner::report::Status;
+
+    #[test]
+    fn check_counters_rejects_exceeded_tolerance() {
+        let tolerance = CheckCounters::example();
+        let old = Counters::test_fixture();
+        for (query_distance, expected) in [
+            (10_000, Status::Pass),
+            (10_001, Status::Pass),
+            (10_002, Status::Fail),
+        ] {
+            let new = Counters {
+                query_distance,
+                ..Counters::test_fixture()
+            };
+            assert_eq!(
+                tolerance.check(&old, &new).status(),
+                expected,
+                "query_distance = {query_distance}"
+            );
+        }
     }
 }
 
@@ -236,4 +321,4 @@ macro_rules! index {
 }
 
 index!({ T } repr::Full<T> where T: repr::FullPrecision + FromSlice + AsDataType);
-index!(repr::Spherical);
+index!(repr::Quantized);

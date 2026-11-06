@@ -12,40 +12,42 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use diskann::{
-    utils::{async_tools, VectorRepr, ONE},
     ANNResult,
+    utils::{ONE, VectorRepr, async_tools},
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
-        graph::provider::async_::inmem::DefaultProviderParameters, IndexConfiguration,
-        MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
+        IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
+        graph::provider::async_::inmem::DefaultProviderParameters,
     },
     storage::{DiskGraphOnly, PQStorage},
     utils::{
-        create_thread_pool, find_medoid_with_sampling, RayonThreadPoolRef, VectorDataIterator,
-        MAX_MEDOID_SAMPLE_SIZE,
+        MAX_MEDOID_SAMPLE_SIZE, RayonThreadPoolRef, VectorDataIterator, create_thread_pool,
+        find_medoid_with_sampling,
     },
 };
 use tokio::task::JoinSet;
-use tracing::{debug, info};
+#[cfg(debug_assertions)]
+use tracing::debug;
+use tracing::info;
 
 use crate::{
+    DiskIndexBuildParameters,
     build::builder::{
-        core::{determine_build_strategy, IndexBuildStrategy, MergedVamanaIndexBuilder},
-        inmem_builder::{new_inmem_index_builder, InmemIndexBuilder},
+        core::{IndexBuildStrategy, MergedVamanaIndexBuilder, determine_build_strategy},
+        inmem_builder::{InmemIndexBuilder, StartPoint, new_inmem_index_builder},
         quantizer::BuildQuantizer,
         tokio::create_runtime,
     },
-    error::{diskann_error, ErrorKind},
+    error::{ErrorKind, diskann_error},
     storage::{
-        quant::{
-            validate_data_generation_input, PQGeneration, PQGenerationContext, QuantDataGenerator,
-        },
         DiskIndexWriter,
+        quant::{
+            PQGeneration, PQGenerationContext, QuantDataGenerator, validate_data_generation_input,
+        },
     },
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
-    DiskIndexBuildParameters,
 };
 
 pub struct DiskIndexBuilder<'a, Data, StorageProvider>
@@ -252,10 +254,12 @@ where
         prefetch_lookahead: config.prefetch_lookahead.map(|x| x.get()),
         prefetch_cache_line_level: config.prefetch_cache_line_level,
     };
-    let index = new_inmem_index_builder::<T>(index_config, provider_parameters, quantizer)?;
-    let medoid_id =
-        set_start_point_to_medoid::<T, _>(&index, data_path, config.random_seed, storage_provider)?;
-    let start_point = u32_try_from(medoid_id)?;
+
+    let start_point =
+        start_point_from_medoid::<T, _>(data_path, config.random_seed, storage_provider)?;
+    let start_point_id = start_point.id();
+    let index =
+        new_inmem_index_builder::<T>(index_config, provider_parameters, quantizer, start_point)?;
 
     run_build(&index, dataset_iter, num_tasks).await?;
 
@@ -266,7 +270,7 @@ where
     index
         .save_graph(
             storage_provider,
-            &(start_point, DiskGraphOnly::new(save_path)),
+            &(start_point_id, DiskGraphOnly::new(save_path)),
         )
         .await?;
 
@@ -304,12 +308,11 @@ fn u32_try_from(value: usize) -> ANNResult<u32> {
         .map_err(|_| diskann_error!(ErrorKind::IndexError, "id {value} exceeds u32::MAX"))
 }
 
-fn set_start_point_to_medoid<T, StorageReader>(
-    index: &Arc<dyn InmemIndexBuilder<T>>,
+fn start_point_from_medoid<T, StorageReader>(
     path: &str,
     random_seed: Option<u64>,
     reader: &StorageReader,
-) -> ANNResult<usize>
+) -> ANNResult<StartPoint<T>>
 where
     T: VectorRepr,
     StorageReader: StorageReadProvider,
@@ -318,11 +321,8 @@ where
     let (medoid, medoid_id) =
         find_medoid_with_sampling::<T, _>(path, reader, MAX_MEDOID_SAMPLE_SIZE, &mut rng)?;
 
-    index.set_start_point(medoid.as_slice())?;
-
-    debug!("Set start point to medoid ID: {}", medoid_id);
-
-    Ok(medoid_id)
+    let medoid_id = u32::try_from(medoid_id)?;
+    Ok(StartPoint::new(medoid, medoid_id))
 }
 
 async fn run_build<T, I>(

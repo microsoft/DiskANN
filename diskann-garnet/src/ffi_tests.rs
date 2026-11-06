@@ -16,17 +16,19 @@ mod tests {
 
     use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_vector::distance::Metric;
-    use rand::{Rng, seq::SliceRandom};
+    use rand::seq::SliceRandom;
 
     use crate::{
-        ImportResult, Index, IndexState, InsertResult, Overflow, VectorQuantType,
-        backfill_quant_vectors, build_quant_table, can_import, card, check_external_id_valid,
-        check_internal_id_valid, create_index, drop_index, finish_import,
+        Index, IndexState, InsertResult, Overflow, VectorQuantType, backfill_quant_vectors,
+        build_quant_table, can_import, card, check_external_id_valid, check_internal_id_valid,
+        create_index, drop_index, finish_import,
         garnet::{Context, Term, WriteCallback},
         import_term, insert,
-        quantization::{GarnetQuantizer, MinMax8Bit, Spherical1Bit},
+        provider::DEFAULT_START_POINT_ID,
+        quantization::{GarnetQuantizer, MinMax8Bit, Spherical1Bit, Spherical2Bit, Spherical4Bit},
         remove, search_vector, set_attribute, set_quant_state,
         test_utils::{STORE, Store, q8_state_with_identity_transform},
+        verify_import,
     };
 
     /// Creates an index with default test values and returns (index_ptr, Context).
@@ -61,6 +63,22 @@ mod tests {
         metric_type: i32,
         write_callback: WriteCallback,
     ) -> (*const c_void, Context) {
+        create_test_index_with_start_point(
+            store,
+            quant_type,
+            metric_type,
+            write_callback,
+            DEFAULT_START_POINT_ID,
+        )
+    }
+
+    fn create_test_index_with_start_point(
+        store: &Store,
+        quant_type: VectorQuantType,
+        metric_type: i32,
+        write_callback: WriteCallback,
+        start_point_id: u32,
+    ) -> (*const c_void, Context) {
         let callbacks = store.callbacks();
         let ctx = Context::new(0);
         let mut quant_needed = false;
@@ -79,6 +97,7 @@ mod tests {
                 metric_type,
                 l_build,
                 max_degree,
+                start_point_id,
                 callbacks.read_callback(),
                 write_callback,
                 callbacks.delete_callback(),
@@ -100,6 +119,38 @@ mod tests {
 
         unsafe {
             drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn basic_create_index_with_start_point() {
+        for start_point_id in [0, 42, DEFAULT_START_POINT_ID] {
+            let store = Store::new();
+            let create = || {
+                create_test_index_with_start_point(
+                    &store,
+                    VectorQuantType::NoQuant,
+                    Metric::L2 as i32,
+                    store.callbacks().write_callback(),
+                    start_point_id,
+                )
+            };
+            let (index_ptr, ctx) = create();
+            assert!(!index_ptr.is_null());
+            let point = [1.0f32, 2.0];
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 1, &point),
+                InsertResult::Success
+            );
+            assert_eq!(
+                store.get(ctx.term(Term::Vector).get(), &start_point_id.to_ne_bytes()),
+                Some(bytemuck::cast_slice::<f32, u8>(&point).to_vec()),
+            );
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            let (index_ptr, ctx) = create();
+            assert!(!index_ptr.is_null());
+            assert_eq!(do_search(&ctx, index_ptr, &point, 1, None).0, [1]);
+            unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
 
@@ -157,12 +208,14 @@ mod tests {
             let store = Store::new();
             let (index_ptr, ctx) = create_test_index(&store, quant_type);
 
-            for (id, vector, expected, expected_internal_id) in [
-                (42, [1.0, 2.0], 1, 1u32),
+            for (id, vector, expected, expected_count) in [
+                (42, [1.0, 2.0], 1, 1u64),
                 (42, [2.0, 1.0], 3, 1),
                 (43, [3.0, 4.0], 1, 2),
                 (43, [4.0, 3.0], 3, 2),
             ] {
+                let existing_internal_id =
+                    store.get(ctx.term(Term::IntMap).get(), bytemuck::bytes_of(&id));
                 assert_eq!(
                     u8::from(insert_f32_vector(&ctx, index_ptr, id, &vector)),
                     expected,
@@ -171,18 +224,14 @@ mod tests {
                 let internal_id = store
                     .get(ctx.term(Term::IntMap).get(), bytemuck::bytes_of(&id))
                     .unwrap();
-                assert_eq!(
-                    bytemuck::pod_read_unaligned::<u32>(&internal_id),
-                    expected_internal_id
-                );
+                if let Some(existing_internal_id) = existing_internal_id {
+                    assert_eq!(internal_id, existing_internal_id);
+                }
                 assert_eq!(
                     store.get(ctx.term(Term::Vector).get(), &internal_id),
                     Some(bytemuck::cast_slice::<f32, u8>(&vector).to_vec())
                 );
-                assert_eq!(
-                    unsafe { card(ctx.get(), index_ptr) },
-                    u64::from(expected_internal_id)
-                );
+                assert_eq!(unsafe { card(ctx.get(), index_ptr) }, expected_count);
             }
             assert_eq!(store.int_map_reads(), 4);
 
@@ -313,6 +362,65 @@ mod tests {
     }
 
     #[test]
+    fn import_api_rejects_invalid_requests() {
+        assert!(!unsafe { verify_import(0, ptr::null(), 0, 1) });
+        assert!(!unsafe { finish_import(0, ptr::null()) });
+
+        let store = Store::new();
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
+        import_single_vector(&ctx, index_ptr, None);
+        for (task_idx, task_count) in [(0, 0), (1, 1)] {
+            assert!(!unsafe { verify_import(ctx.get(), index_ptr, task_idx, task_count) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+        }
+        assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+        assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+        assert!(!unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
+        unsafe { drop_index(ctx.get(), index_ptr) };
+    }
+
+    #[test]
+    fn verify_import_rejects_missing_terms() {
+        let quantizer = MinMax8Bit::new(2, Metric::L2).unwrap();
+        let state = quantizer.serialize().unwrap();
+        for term in [
+            Term::Quantized,
+            Term::Neighbors,
+            Term::ExtMap,
+            Term::IntMap,
+            // Deleting this term causes a read failure during FSM is_free
+            Term::Metadata,
+        ] {
+            let store = Store::new();
+            let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Q8);
+            assert!(unsafe { set_quant_state(ctx.get(), index_ptr, state.as_ptr(), state.len()) });
+            import_single_vector(&ctx, index_ptr, Some(&quantizer));
+            let key = if matches!(term, Term::Metadata) {
+                bytemuck::bytes_of(&[u32::from_be_bytes(*b"_fsm"), 0]).to_vec()
+            } else {
+                1u32.to_ne_bytes().to_vec()
+            };
+            let context = ctx.term(term).get();
+            let value = store.get(context, &key).unwrap();
+            assert!(store.delete(context, &key));
+            assert!(
+                !unsafe { verify_import(ctx.get(), index_ptr, 0, 1) },
+                "{term:?}"
+            );
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+
+            store.set(context, &key, &value);
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+            let (ids, distances) = do_search(&ctx, index_ptr, &[1.0, 2.0], 1, None);
+            assert_eq!(ids, [1]);
+            assert_eq!(distances, [0.0]);
+            unsafe { drop_index(ctx.get(), index_ptr) };
+        }
+    }
+
+    #[test]
     fn can_import_tracks_eligibility() {
         for quant_type in [VectorQuantType::NoQuant, VectorQuantType::Q8] {
             let store = Store::new();
@@ -344,10 +452,12 @@ mod tests {
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
             let id = 1u32.to_ne_bytes();
+            let zero = 0u32.to_ne_bytes();
             for (internal_id, accepted, expected) in [
-                (0u32, false, None),
+                (DEFAULT_START_POINT_ID, false, None),
+                (0, true, Some(zero.as_slice())),
                 (1, true, Some(id.as_slice())),
-                (0, false, Some(id.as_slice())),
+                (DEFAULT_START_POINT_ID, false, Some(id.as_slice())),
             ] {
                 let value = internal_id.to_ne_bytes();
                 assert_eq!(
@@ -395,10 +505,7 @@ mod tests {
                 });
             }
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::TaskFailed)
-            );
+            assert!(!unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(&ctx, index_ptr);
             unsafe { drop_index(ctx.get(), index_ptr) };
@@ -406,10 +513,7 @@ mod tests {
             let (index_ptr, ctx) = create_test_index(&store, quant_type);
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(&ctx, index_ptr);
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::TaskFailed)
-            );
+            assert!(!unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
 
             // Repair the incomplete vector and retry validation on this handle.
             import_single_vector(
@@ -419,10 +523,9 @@ mod tests {
                     .as_ref()
                     .map(|quantizer| quantizer as &dyn GarnetQuantizer),
             );
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::Success)
-            );
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
             assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
             assert!(unsafe {
@@ -455,6 +558,10 @@ mod tests {
                 unsafe { card(ctx.get(), index_ptr) },
                 u64::from(insert_vector)
             );
+            assert_eq!(
+                unsafe { finish_import(ctx.get(), index_ptr) },
+                insert_vector
+            );
             unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
@@ -471,17 +578,29 @@ mod tests {
     }
 
     #[test]
-    fn import_terms_and_finish_bin() {
-        let quantizer = Spherical1Bit::new(Metric::L2, 2);
-        let mut training_data =
-            rowmajor::Owned::from_element(quantizer.required_vectors(), 2, 0.0f32);
-        for row in 0..quantizer.required_vectors() {
-            training_data.row_mut(row).fill((row % 100 + 1) as f32);
+    fn import_terms_and_finish_spherical() {
+        let quantizers: [(VectorQuantType, Box<dyn GarnetQuantizer>); 3] = [
+            (
+                VectorQuantType::Bin,
+                Box::new(Spherical1Bit::new(Metric::L2, 2)),
+            ),
+            (
+                VectorQuantType::XSpherical2,
+                Box::new(Spherical2Bit::new(Metric::L2, 2)),
+            ),
+            (
+                VectorQuantType::XSpherical4,
+                Box::new(Spherical4Bit::new(Metric::L2, 2)),
+            ),
+        ];
+        let mut training = rowmajor::Owned::from_element(1000, 2, 0.0f32);
+        for row in 0..1000 {
+            training.row_mut(row).fill((row % 100 + 1) as f32);
         }
-        quantizer
-            .train(Metric::L2, training_data.as_view())
-            .unwrap();
-        check_import_terms_and_finish(VectorQuantType::Bin, Some(&quantizer));
+        for (quant_type, quantizer) in quantizers {
+            quantizer.train(Metric::L2, training.as_view()).unwrap();
+            check_import_terms_and_finish(quant_type, Some(&*quantizer));
+        }
     }
 
     #[test]
@@ -489,10 +608,7 @@ mod tests {
         check_import_terms_and_finish_with(VectorQuantType::NoQuant, None, |ctx, index_ptr| {
             const TASK_COUNT: usize = 104;
             let index = unsafe { &*index_ptr.cast::<Index>() };
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, TASK_COUNT) },
-                0
-            );
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, TASK_COUNT) });
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(ctx, index_ptr);
             let snapshot = STORE.with(Clone::clone);
@@ -509,17 +625,14 @@ mod tests {
                         });
                         barrier.wait();
                         for task_idx in (worker + 1..TASK_COUNT - 1).step_by(4) {
-                            assert_eq!(
-                                unsafe {
-                                    finish_import(
-                                        ctx.get(),
-                                        ptr::from_ref(index).cast(),
-                                        task_idx,
-                                        TASK_COUNT,
-                                    )
-                                },
-                                0
-                            );
+                            assert!(unsafe {
+                                verify_import(
+                                    ctx.get(),
+                                    ptr::from_ref(index).cast(),
+                                    task_idx,
+                                    TASK_COUNT,
+                                )
+                            });
                         }
                     });
                 }
@@ -530,10 +643,10 @@ mod tests {
                 index.state.load(Ordering::Acquire),
                 IndexState::NoStartPoints as usize
             );
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, TASK_COUNT - 1, TASK_COUNT) },
-                0
-            );
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, TASK_COUNT - 1, TASK_COUNT) });
+            assert_ordinary_operations_blocked(ctx, index_ptr);
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, TASK_COUNT) });
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
             assert_eq!(
                 index.state.load(Ordering::Acquire),
                 IndexState::Ready as usize
@@ -546,7 +659,6 @@ mod tests {
     #[test]
     fn import_terms_and_finish_persistence_failure() {
         static FAIL_WRITE: AtomicBool = AtomicBool::new(false);
-        static STATUS_ONLY: AtomicBool = AtomicBool::new(false);
         unsafe extern "C" fn write(
             context: u64,
             key: *const u8,
@@ -554,25 +666,15 @@ mod tests {
             value: *const u8,
             value_len: usize,
         ) -> bool {
-            let is_final_status = context == Context::new(0).term(Term::Metadata).get()
-                && unsafe { std::slice::from_raw_parts(key, key_len) }
-                    == u32::from_be_bytes(*b"_imp").to_ne_bytes()
-                && unsafe { std::slice::from_raw_parts(value, value_len) } == [0];
-            if (!STATUS_ONLY.load(Ordering::Acquire) || is_final_status)
-                && FAIL_WRITE.swap(false, Ordering::AcqRel)
-            {
-                return false;
-            }
-            unsafe {
-                (Store::attach().callbacks().write_callback())(
-                    context, key, key_len, value, value_len,
-                )
-            }
+            !FAIL_WRITE.swap(false, Ordering::AcqRel)
+                && unsafe {
+                    (Store::attach().callbacks().write_callback())(
+                        context, key, key_len, value, value_len,
+                    )
+                }
         }
 
-        // Fail either start-point persistence or the final Disabled publication.
-        // Neither failure is retryable on this handle, unlike task validation.
-        for status_only in [false, true] {
+        for reopen in [false, true] {
             let store = Store::new();
             let (mut index_ptr, ctx) = create_test_index_with_write_callback(
                 &store,
@@ -582,21 +684,24 @@ mod tests {
             );
             assert!(!index_ptr.is_null());
             import_single_vector(&ctx, index_ptr, None);
-            STATUS_ONLY.store(status_only, Ordering::Release);
+            // Finalization only writes ImportStatus::Disabled; start points were imported.
             FAIL_WRITE.store(true, Ordering::Release);
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::FinishFailed)
-            );
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+            assert!(FAIL_WRITE.load(Ordering::Acquire));
+            assert!(!unsafe { finish_import(ctx.get(), index_ptr) });
             assert!(!FAIL_WRITE.load(Ordering::Acquire));
-            for reopen in [false, true] {
-                if reopen {
-                    unsafe { drop_index(ctx.get(), index_ptr) };
-                    index_ptr = create_test_index(&store, VectorQuantType::NoQuant).0;
-                }
-                assert!(unsafe { can_import(ctx.get(), index_ptr) });
-                assert_ordinary_operations_blocked(&ctx, index_ptr);
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+            if reopen {
+                unsafe { drop_index(ctx.get(), index_ptr) };
+                index_ptr = create_test_index(&store, VectorQuantType::NoQuant).0;
             }
+            assert!(unsafe { can_import(ctx.get(), index_ptr) });
+            assert_ordinary_operations_blocked(&ctx, index_ptr);
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+            assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
+            let (ids, distances) = do_search(&ctx, index_ptr, &[1.0, 2.0], 1, None);
+            assert_eq!(ids, [1]);
+            assert_eq!(distances, [0.0]);
             unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
@@ -640,10 +745,7 @@ mod tests {
         assert!(unsafe { can_import(ctx.get(), index_ptr) });
 
         FAIL_WRITE.store(true, Ordering::Release);
-        assert_eq!(
-            unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-            u8::from(ImportResult::TaskFailed)
-        );
+        assert!(!unsafe { finish_import(ctx.get(), index_ptr) });
         assert!(!FAIL_WRITE.load(Ordering::Acquire));
         assert!(unsafe { can_import(ctx.get(), index_ptr) });
         STORE.with(|store| {
@@ -653,23 +755,30 @@ mod tests {
             }
         });
 
-        assert_eq!(
-            unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-            u8::from(ImportResult::Success)
-        );
+        let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
+        assert!(import_test_term(
+            &ctx,
+            index_ptr,
+            Term::Vector,
+            &start_id,
+            bytemuck::cast_slice(&[1.0f32, 2.0]),
+        ));
+        assert!(import_test_term(
+            &ctx,
+            index_ptr,
+            Term::Neighbors,
+            &start_id,
+            bytemuck::cast_slice(&[0u32; 21]),
+        ));
+        assert!(unsafe { finish_import(ctx.get(), index_ptr) });
         assert!(!unsafe { can_import(ctx.get(), index_ptr) });
         assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
         unsafe { drop_index(ctx.get(), index_ptr) };
     }
 
     #[test]
-    fn finish_empty_import_and_reopen() {
-        for (quant_type, task_count) in [
-            (VectorQuantType::NoQuant, 1),
-            (VectorQuantType::NoQuant, 4),
-            (VectorQuantType::Q8, 1),
-            (VectorQuantType::Q8, 4),
-        ] {
+    fn finish_import_requires_start_point() {
+        for quant_type in [VectorQuantType::NoQuant, VectorQuantType::Q8] {
             let store = Store::new();
             let (mut index_ptr, ctx) = create_test_index(&store, quant_type);
             if quant_type == VectorQuantType::Q8 {
@@ -679,48 +788,28 @@ mod tests {
                     set_quant_state(ctx.get(), index_ptr, state.as_ptr(), state.len())
                 });
             }
-            for task_idx in 0..task_count {
-                assert!(unsafe { can_import(ctx.get(), index_ptr) });
-                assert_eq!(
-                    unsafe { finish_import(ctx.get(), index_ptr, task_idx, task_count) },
-                    u8::from(ImportResult::Success)
-                );
-                assert!(
-                    store
-                        .get(ctx.term(Term::Vector).get(), &0u32.to_ne_bytes())
-                        .is_none()
-                );
-                if task_idx + 1 < task_count {
-                    assert!(unsafe { can_import(ctx.get(), index_ptr) });
-                    assert_ordinary_operations_blocked(&ctx, index_ptr);
-                }
-            }
+            assert!(!unsafe { verify_import(ctx.get(), index_ptr, 0, 4) });
+            assert!(unsafe { verify_import(ctx.get(), index_ptr, 1, 4) });
+            assert!(!unsafe { finish_import(ctx.get(), index_ptr) });
+            assert!(
+                store
+                    .get(
+                        ctx.term(Term::Vector).get(),
+                        &DEFAULT_START_POINT_ID.to_ne_bytes(),
+                    )
+                    .is_none()
+            );
             for reopen in [false, true] {
                 if reopen {
                     unsafe { drop_index(ctx.get(), index_ptr) };
                     index_ptr = create_test_index(&store, quant_type).0;
                 }
-                assert!(!unsafe { can_import(ctx.get(), index_ptr) });
-                assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
-                assert!(
-                    store
-                        .get(ctx.term(Term::Vector).get(), &0u32.to_ne_bytes())
-                        .is_none()
-                );
+                assert_ordinary_operations_blocked(&ctx, index_ptr);
+                let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
+                assert!(!unsafe {
+                    check_internal_id_valid(ctx.get(), index_ptr, start_id.as_ptr(), start_id.len())
+                });
             }
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, 42, &[1.0; 2]),
-                InsertResult::Success
-            );
-            assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 1);
-            let mapping = store
-                .get(ctx.term(Term::IntMap).get(), &42u32.to_ne_bytes())
-                .unwrap();
-            let internal_id = bytemuck::pod_read_unaligned::<u32>(&mapping);
-            assert!((1..u32::MAX).contains(&internal_id));
-            let (ids, distances) = do_search(&ctx, index_ptr, &[1.0; 2], 1, None);
-            assert_eq!(ids, [42]);
-            assert_eq!(distances, [0.0]);
             unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
@@ -753,12 +842,20 @@ mod tests {
         quantizer: Option<&dyn GarnetQuantizer>,
     ) {
         let id = 1u32.to_ne_bytes();
+        let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
         let vector = [1.0f32, 2.0];
         assert!(import_test_term(
             ctx,
             index_ptr,
             Term::Vector,
             &id,
+            bytemuck::cast_slice(&vector),
+        ));
+        assert!(import_test_term(
+            ctx,
+            index_ptr,
+            Term::Vector,
+            &start_id,
             bytemuck::cast_slice(&vector),
         ));
         if let Some(quantizer) = quantizer {
@@ -771,6 +868,13 @@ mod tests {
                 &id,
                 &quantized
             ));
+            assert!(import_test_term(
+                ctx,
+                index_ptr,
+                Term::Quantized,
+                &start_id,
+                &quantized,
+            ));
         }
         assert!(import_test_term(
             ctx,
@@ -778,6 +882,16 @@ mod tests {
             Term::Neighbors,
             &id,
             bytemuck::cast_slice(&[0u32; 21]),
+        ));
+        let mut start_neighbors = [0u32; 21];
+        start_neighbors[0] = 1;
+        start_neighbors[20] = 1;
+        assert!(import_test_term(
+            ctx,
+            index_ptr,
+            Term::Neighbors,
+            &start_id,
+            bytemuck::cast_slice(&start_neighbors),
         ));
         assert!(import_test_term(ctx, index_ptr, Term::IntMap, &id, &id));
         assert!(import_test_term(ctx, index_ptr, Term::ExtMap, &id, &id));
@@ -810,12 +924,15 @@ mod tests {
         quant_type: VectorQuantType,
         quantizer: Option<&dyn GarnetQuantizer>,
     ) {
-        check_import_terms_and_finish_with(quant_type, quantizer, |ctx, index_ptr| {
-            assert_eq!(
-                unsafe { finish_import(ctx.get(), index_ptr, 0, 1) },
-                u8::from(ImportResult::Success)
-            );
-        });
+        for verify in [false, true] {
+            check_import_terms_and_finish_with(quant_type, quantizer, |ctx, index_ptr| {
+                if verify {
+                    assert!(unsafe { verify_import(ctx.get(), index_ptr, 0, 1) });
+                    assert_ordinary_operations_blocked(ctx, index_ptr);
+                }
+                assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+            });
+        }
     }
 
     fn check_import_terms_and_finish_with(
@@ -867,6 +984,23 @@ mod tests {
             .collect();
         let term_count = terms[0].len();
 
+        let start_vector = [0.5f32; 2];
+        let mut start_neighbors = [0u32; MAX_DEGREE + 1];
+        start_neighbors[0] = internal_ids[VECTOR_COUNT - 1];
+        start_neighbors[MAX_DEGREE] = 1;
+        let mut start_terms = vec![
+            (Term::Vector, bytemuck::cast_slice(&start_vector).to_vec()),
+            (
+                Term::Neighbors,
+                bytemuck::cast_slice(&start_neighbors).to_vec(),
+            ),
+        ];
+        if let Some(quantizer) = quantizer {
+            let mut quantized = vec![0u8; quantizer.bytes()];
+            quantizer.compress(&start_vector, &mut quantized).unwrap();
+            start_terms.push((Term::Quantized, quantized));
+        }
+
         for by_term in [true, false] {
             let store = Store::new();
             let (index_ptr, ctx) = create_test_index(&store, quant_type);
@@ -897,13 +1031,16 @@ mod tests {
                     )
                 });
             }
-            for rejected_id in [0u32, u32::MAX] {
-                let id = rejected_id.to_ne_bytes();
-                let vector = [0.0f32; 2];
-                let value = bytemuck::cast_slice::<f32, u8>(&vector);
-                assert!(!import_test_term(&ctx, index_ptr, Term::Vector, &id, value));
-                assert!(store.get(ctx.term(Term::Vector).get(), &id).is_none());
-            }
+            let id = DEFAULT_START_POINT_ID.to_ne_bytes();
+            let value = b"{}";
+            assert!(!import_test_term(
+                &ctx,
+                index_ptr,
+                Term::Attributes,
+                &id,
+                value
+            ));
+            assert!(store.get(ctx.term(Term::Attributes).get(), &id).is_none());
 
             let rejected_id = (max_id + 1).to_ne_bytes();
             let mut bad_neighbors = [0u32; MAX_DEGREE + 1];
@@ -961,10 +1098,21 @@ mod tests {
                 }
             }
 
+            let start_id = DEFAULT_START_POINT_ID.to_ne_bytes();
+            for (term, value) in &start_terms {
+                assert!(import_test_term(&ctx, index_ptr, *term, &start_id, value));
+            }
+
             assert!(unsafe { can_import(ctx.get(), index_ptr) });
             assert_ordinary_operations_blocked(&ctx, index_ptr);
             finalize(&ctx, index_ptr);
             assert!(!unsafe { can_import(ctx.get(), index_ptr) });
+            for (term, value) in &start_terms {
+                assert_eq!(
+                    store.get(ctx.get() | *term as u64, &start_id).as_ref(),
+                    Some(value)
+                );
+            }
             for rejected_id in [1u32, 101] {
                 let id = rejected_id.to_ne_bytes();
                 for (term, value) in &terms[1] {
@@ -1005,6 +1153,7 @@ mod tests {
                 check_external_id_valid(ctx.get(), index_ptr, added_id.as_ptr(), added_id.len())
             });
 
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
             let (ids, distances) = do_search(&ctx, index_ptr, &[50.0; 2], 5, None);
             assert_eq!(ids.first(), Some(&50), "nearest vector: by_term={by_term}");
             let mut sorted_ids = ids;
@@ -1013,9 +1162,17 @@ mod tests {
             assert_eq!(distances.len(), 5);
             assert!(distances.iter().all(|distance| distance.is_finite()));
 
-            unsafe {
-                drop_index(ctx.get(), index_ptr);
-            }
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
+            assert!(unsafe { finish_import(ctx.get(), index_ptr) });
+            assert_eq!(
+                unsafe { card(ctx.get(), index_ptr) },
+                VECTOR_COUNT as u64 + 1
+            );
+            let (ids, distances) = do_search(&ctx, index_ptr, &[50.0; 2], 1, None);
+            assert_eq!(ids, [50]);
+            assert_eq!(distances, [0.0]);
+            unsafe { drop_index(ctx.get(), index_ptr) };
         }
     }
 
@@ -1216,8 +1373,7 @@ mod tests {
         let vector_bytes = bytemuck::cast_slice(&vector);
         let vector_len = 2;
 
-        // First insert will get ID=1
-        let iid = 1u32;
+        let iid = 0u32;
         let iid_bytes = bytemuck::bytes_of(&iid);
 
         // Check internal ID does not exist
@@ -1731,106 +1887,238 @@ mod tests {
     }
 
     #[test]
-    fn basic_quant_bootstrap_lifecycle_bin() {
-        let store = Store::new();
-        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Bin);
-        let index = unsafe { &*index_ptr.cast::<Index>() };
-
-        let quantizer = Spherical1Bit::new(Metric::L2, 2);
-        let required_vectors = quantizer.required_vectors();
-
-        let mut rng = rand::rng();
-
-        // pre-quantization phase
-
-        assert_eq!(index.inner.approximate_count(&ctx).unwrap(), 0);
-        for id in 0..required_vectors - 1 {
-            let v = [rng.random(), rng.random()];
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, id as u32, &v),
-                InsertResult::Success
-            );
+    fn spherical_lifecycle_all_types() {
+        for metric in [Metric::L2, Metric::Cosine, Metric::InnerProduct] {
+            for quant_type in [
+                VectorQuantType::Bin,
+                VectorQuantType::XSpherical2,
+                VectorQuantType::XSpherical4,
+            ] {
+                check_spherical_lifecycle(quant_type, metric, |id| {
+                    [(id % 127) as f32 - 63.5, ((id * 47) % 127) as f32 - 63.5]
+                });
+            }
+            for quant_type in [
+                VectorQuantType::XBinI8,
+                VectorQuantType::XSpherical2I8,
+                VectorQuantType::XSpherical4I8,
+            ] {
+                check_spherical_lifecycle(quant_type, metric, |id| {
+                    [(id % 127) as i8 - 63, ((id * 47) % 127) as i8 - 63]
+                });
+            }
+            for quant_type in [
+                VectorQuantType::XBinU8,
+                VectorQuantType::XSpherical2U8,
+                VectorQuantType::XSpherical4U8,
+            ] {
+                check_spherical_lifecycle(quant_type, metric, |id| {
+                    [(id % 127) as u8 + 128, ((id * 47) % 127) as u8 + 1]
+                });
+            }
         }
-        assert_eq!(
-            index.inner.approximate_count(&ctx).unwrap() as usize,
-            required_vectors - 1
-        );
+    }
 
-        // transition phase
+    #[test]
+    fn spherical_rejects_unsupported_metric() {
+        for quant_type in [
+            VectorQuantType::Bin,
+            VectorQuantType::XBinI8,
+            VectorQuantType::XBinU8,
+            VectorQuantType::XSpherical2,
+            VectorQuantType::XSpherical2I8,
+            VectorQuantType::XSpherical2U8,
+            VectorQuantType::XSpherical4,
+            VectorQuantType::XSpherical4I8,
+            VectorQuantType::XSpherical4U8,
+        ] {
+            let store = Store::new();
+            let (index_ptr, _) =
+                create_test_index_with_metric(&store, quant_type, Metric::CosineNormalized as i32);
+            assert!(index_ptr.is_null());
+        }
+    }
 
-        let v = [rng.random(), rng.random()];
+    fn check_spherical_lifecycle<T: bytemuck::Pod>(
+        quant_type: VectorQuantType,
+        metric: Metric,
+        vector_for: impl Fn(usize) -> [T; 2],
+    ) {
+        let quantizer: Box<dyn GarnetQuantizer> = match quant_type {
+            VectorQuantType::Bin | VectorQuantType::XBinI8 | VectorQuantType::XBinU8 => {
+                Box::new(Spherical1Bit::new(metric, 2))
+            }
+            VectorQuantType::XSpherical2
+            | VectorQuantType::XSpherical2I8
+            | VectorQuantType::XSpherical2U8 => Box::new(Spherical2Bit::new(metric, 2)),
+            VectorQuantType::XSpherical4
+            | VectorQuantType::XSpherical4I8
+            | VectorQuantType::XSpherical4U8 => Box::new(Spherical4Bit::new(metric, 2)),
+            _ => panic!("not a spherical quantizer: {quant_type:?}"),
+        };
+        let required = quantizer.required_vectors();
+        let quantized_bytes = quantizer.bytes();
+        let store = Store::new();
+        let (mut index_ptr, ctx) = create_test_index_with_metric(&store, quant_type, metric as i32);
+        assert!(!index_ptr.is_null(), "{quant_type:?}, {metric:?}");
+        let insert_vector = |index_ptr, id: usize| {
+            let vector = vector_for(id);
+            let external_id = (id as u32).to_ne_bytes();
+            InsertResult::from(unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    external_id.as_ptr(),
+                    external_id.len(),
+                    bytemuck::cast_slice(&vector).as_ptr(),
+                    vector.len(),
+                    ptr::null(),
+                    0,
+                )
+            })
+        };
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, 0);
+        for id in 0..required - 1 {
+            assert_eq!(insert_vector(index_ptr, id), InsertResult::Success);
+        }
+        assert_eq!(unsafe { card(ctx.get(), index_ptr) }, required as u64 - 1);
         assert_eq!(
-            insert_f32_vector(&ctx, index_ptr, required_vectors as u32 - 1, &v),
+            insert_vector(index_ptr, required - 1),
             InsertResult::SuccessStartTraining
         );
 
-        // signal to train the quantizer
+        let search = |index_ptr, element_query| {
+            let query = vector_for(0);
+            let external_id = 0u32.to_ne_bytes();
+            let mut ids = [0u8; 80];
+            let mut distances = [0f32; 10];
+            let mut overflow = ptr::null_mut();
+            let count = unsafe {
+                if element_query {
+                    crate::search_element(
+                        ctx.get(),
+                        index_ptr,
+                        external_id.as_ptr(),
+                        external_id.len(),
+                        0.0,
+                        32,
+                        ptr::null(),
+                        0,
+                        0,
+                        ids.as_mut_ptr(),
+                        ids.len(),
+                        distances.as_mut_ptr(),
+                        distances.len(),
+                        1,
+                        &mut overflow,
+                    )
+                } else {
+                    search_vector(
+                        ctx.get(),
+                        index_ptr,
+                        bytemuck::cast_slice(&query).as_ptr(),
+                        query.len(),
+                        0.0,
+                        32,
+                        ptr::null(),
+                        0,
+                        0,
+                        ids.as_mut_ptr(),
+                        ids.len(),
+                        distances.as_mut_ptr(),
+                        distances.len(),
+                        1,
+                        &mut overflow,
+                    )
+                }
+            };
+            assert_eq!(count, 10, "{quant_type:?}, {metric:?}");
+            assert!(overflow.is_null());
+            assert!(distances.iter().all(|distance| distance.is_finite()));
+            (ids, distances)
+        };
 
-        let res = unsafe { build_quant_table(ctx.get(), index_ptr) };
-        assert!(res, "quantizer training failed");
+        for phase in 0..3 {
+            if phase == 1 {
+                assert!(unsafe { build_quant_table(ctx.get(), index_ptr) });
+                assert_eq!(insert_vector(index_ptr, required), InsertResult::Success);
+                assert!(
+                    store
+                        .get(
+                            ctx.term(Term::Quantized).get(),
+                            &(required as u32 - 1).to_ne_bytes()
+                        )
+                        .is_none()
+                );
+                assert_eq!(
+                    store
+                        .get(
+                            ctx.term(Term::Quantized).get(),
+                            &(required as u32).to_ne_bytes()
+                        )
+                        .unwrap()
+                        .len(),
+                    quantized_bytes
+                );
+                assert!(unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 4) });
+            } else if phase == 2 {
+                assert_eq!(
+                    insert_vector(index_ptr, required + 1),
+                    InsertResult::Success
+                );
+                for partition in 0..4 {
+                    assert!(unsafe { backfill_quant_vectors(ctx.get(), index_ptr, partition, 4) });
+                }
+            }
 
-        // new inserts will be quantized
-
-        let v = [rng.random(), rng.random()];
-        assert_eq!(
-            insert_f32_vector(&ctx, index_ptr, required_vectors as u32, &v),
-            InsertResult::Success
-        );
-
-        // previous insert is unquantized; inserted before training
-        let iid = required_vectors as u32;
-        assert!(
-            store
-                .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
-                .is_none()
-        );
-
-        // latest insert is quantized
-        let iid = required_vectors as u32 + 1; // +1 to account for the start vector
-        let qv = store
-            .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
-            .expect("missing quant vector");
-        assert_eq!(qv.len(), quantizer.bytes());
-
-        // backfill quant vectors
-
-        unsafe { backfill_quant_vectors(ctx.get(), index_ptr, 0, 1) };
-
-        // all previous inserts are now quantized
-        for iid in 1..=required_vectors as u32 {
-            let qv = store
-                .get(ctx.term(Term::Quantized).get(), bytemuck::bytes_of(&iid))
-                .expect("missing quant vector");
-            assert_eq!(qv.len(), quantizer.bytes());
+            let mut before = Vec::new();
+            for element_query in [false, true] {
+                store.clear_read_counts();
+                before.push(search(index_ptr, element_query));
+                assert!(store.full_reads() > 0);
+                if phase == 2 {
+                    assert!(store.quant_reads() > 0);
+                }
+            }
+            unsafe { drop_index(ctx.get(), index_ptr) };
+            (index_ptr, _) = create_test_index_with_metric(&store, quant_type, metric as i32);
+            assert!(!index_ptr.is_null());
+            for (element_query, expected) in [false, true].into_iter().zip(before) {
+                assert_eq!(search(index_ptr, element_query), expected);
+            }
         }
 
-        // do a search
-        let qv = [0.5f32, 0.5];
-        let (ids, _dists) = do_search(&ctx, index_ptr, &qv, 10, None);
-        assert!(!ids.is_empty(), "no results found");
-
-        // delete some vectors
-        let mut to_delete = (0..required_vectors as u32).collect::<Vec<_>>();
-        to_delete.shuffle(&mut rng);
+        for id in 0..required + 2 {
+            let internal_id = (id as u32).to_ne_bytes();
+            assert_eq!(
+                store
+                    .get(ctx.term(Term::Vector).get(), &internal_id)
+                    .unwrap(),
+                bytemuck::cast_slice::<T, u8>(&vector_for(id)),
+                "original vector changed for {quant_type:?}, id={id}"
+            );
+        }
+        for id in (0..required as u32 + 2).chain([DEFAULT_START_POINT_ID]) {
+            assert_eq!(
+                store
+                    .get(ctx.term(Term::Quantized).get(), &id.to_ne_bytes())
+                    .unwrap()
+                    .len(),
+                quantized_bytes
+            );
+        }
+        let mut to_delete = (0..required as u32).collect::<Vec<_>>();
+        to_delete.shuffle(&mut rand::rng());
         for id in to_delete.into_iter().take(100) {
-            assert!(unsafe {
-                remove(
-                    ctx.get(),
-                    index_ptr,
-                    bytemuck::bytes_of(&id).as_ptr(),
-                    mem::size_of::<u32>(),
-                )
-            });
+            let removed_id = id.to_ne_bytes();
+            assert!(unsafe { remove(ctx.get(), index_ptr, removed_id.as_ptr(), removed_id.len()) });
         }
-
-        // do another search
-        let qv = [0.5f32, 0.5];
-        let (ids, _dists) = do_search(&ctx, index_ptr, &qv, 10, None);
-        assert!(!ids.is_empty(), "no results found");
-
-        unsafe {
-            drop_index(ctx.get(), index_ptr);
-        }
+        assert_eq!(
+            unsafe { card(ctx.get(), index_ptr) },
+            required as u64 + 2 - 100
+        );
+        search(index_ptr, false);
+        unsafe { drop_index(ctx.get(), index_ptr) };
     }
 
     #[test]

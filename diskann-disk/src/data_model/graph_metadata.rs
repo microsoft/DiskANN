@@ -8,7 +8,7 @@ use std::io::Cursor;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use diskann::{ANNError, ANNResult};
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 /// Index graph metadata. The metadata is stored in the first sector of the disk index file, or the first segment of the BigStorageStream.
 /// The metadata is like a "header" of the index graph.

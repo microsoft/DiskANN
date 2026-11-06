@@ -139,13 +139,31 @@ impl Intrusive {
     }
 
     /// Return the number of bytes for each entry.
+    #[expect(
+        unused,
+        reason = "this is a reasonable method to have - it's just not used"
+    )]
     pub(crate) fn bytes(&self) -> Bytes {
         self.bytes_plus_tag().unchecked_sub(AtomicTag::SIZE)
     }
 
     /// Return the number of bytes plus the atomic tag.
+    #[expect(
+        unused,
+        reason = "this is a reasonable method to have - it's just not used"
+    )]
     pub(crate) fn bytes_plus_tag(&self) -> Bytes {
         self.unpadded
+    }
+
+    /// Return the number of bytes needed to prefetch the data portion of each entry without
+    /// fetching the cacheline on which the entry's tag resides.
+    #[cfg(feature = "quantization")]
+    pub(crate) const fn prefetch_bytes_for(bytes: Bytes) -> Bytes {
+        const CACHELINE: usize = (Bytes::CACHELINE).value();
+
+        // Don't overthink it - LLVM recognizes what's happening here and emits an `and`.
+        Bytes::new(CACHELINE * (bytes.value() / CACHELINE))
     }
 
     /// Return a [`Reader`] over [`Self`].
@@ -158,7 +176,7 @@ impl Intrusive {
         Reader {
             buffer: &self.buffer,
             unpadded: self.unpadded,
-            guard,
+            _guard: guard,
         }
     }
 
@@ -263,12 +281,7 @@ impl slots::Slots for Intrusive {
 pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
     unpadded: Bytes,
-
-    #[cfg_attr(
-        not(feature = "quantization"),
-        expect(unused, reason = "quantization uses this to share the guard")
-    )]
-    guard: epoch::Guard<'a>,
+    _guard: epoch::Guard<'a>,
 }
 
 impl<'a> Reader<'a> {
@@ -296,6 +309,7 @@ impl<'a> Reader<'a> {
 
     /// Return the [`IdLimit`] for this collection.
     #[inline]
+    #[cfg(feature = "quantization")]
     #[must_use = "this function has no side-effects"]
     pub(crate) fn id_limit(&self) -> IdLimit {
         // Like `Intrusive::id_limit`, the numeric cast is safe because by construction,
@@ -377,36 +391,62 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Return the raw data slice for index `i` without any race guarantees.
+    /// Return the raw data slice for index `i` in two parts without any race guarantees.
     ///
-    /// This includes both the data **and** the intrusive tag.
+    /// The first piece consists of a [`RawSlice`] of length [`Self::prefetch_bytes`].
+    /// The second piece is a pointer to the cache line containing the intrusive concurrency
+    /// tag.
     ///
     /// # Safety
     ///
     /// The index `i` must satisfy [`Self::is_in_bounds`].
     ///
-    /// The returned [`RawSlice`] may only be used for prefetching. Callers must never
-    /// materialize it as a proper slice or reference.
+    /// The returned [`RawSlice`] and tag pointer may only be used for prefetching. Callers
+    /// must never materialize either as a proper slice or reference.
     #[inline]
-    pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> RawSlice<'_> {
-        // SAFETY: Inherited from caller: `i` is in bounds.
-        unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
+    #[cfg(feature = "quantization")]
+    pub(crate) unsafe fn read_for_prefetch(&self, i: usize) -> (RawSlice<'_>, *const u8) {
+        // SAFETY: Caller asserts `i` is in-bounds.
+        let raw = unsafe { self.buffer.get_unchecked(i) };
+
+        // SAFETY: The `AtomicTag` is located at the offset of `self.bytes()` for each entry.
+        // So the pointer arithmetic is valid.
+        let tag_ptr = unsafe { raw.as_ptr().add(self.bytes().value()) };
+
+        // SAFETY: `self.prefetch_bytes() <= self.bytes() < self.buffer.stride()`.
+        //
+        // Therefore, the truncation is valid.
+        let data = unsafe { raw.truncate_unchecked(self.prefetch_bytes()) };
+
+        (data, tag_ptr)
+    }
+
+    /// Return the number of bytes that are disjoint from the tag for prefetch purposes.
+    ///
+    /// The formula for calculating this is:
+    /// ```math
+    /// Bytes::CACHELINE * (self.bytes() / Bytes::CACHELINE)
+    /// ```
+    /// This may be less than `bytes` if the size of each entry is such that the intrusive
+    /// tag shares a cache line with the data.
+    #[cfg(feature = "quantization")]
+    pub(crate) fn prefetch_bytes(&self) -> Bytes {
+        Intrusive::prefetch_bytes_for(self.bytes())
     }
 
     /// Return the number of bytes for each entry.
+    #[cfg(feature = "quantization")]
     pub(crate) fn bytes(&self) -> Bytes {
-        self.bytes_plus_tag().unchecked_sub(AtomicTag::SIZE)
+        self.unpadded.unchecked_sub(AtomicTag::SIZE)
     }
 
     /// Return the number of bytes plus the atomic tag.
+    #[expect(
+        unused,
+        reason = "this is a reasonable method to have - it's just not used"
+    )]
     pub(crate) fn bytes_plus_tag(&self) -> Bytes {
         self.unpadded
-    }
-
-    /// Return a reference to the contained [`epoch::Guard`].
-    #[cfg(feature = "quantization")]
-    pub(crate) fn guard(&self) -> &epoch::Guard<'a> {
-        &self.guard
     }
 }
 
@@ -458,7 +498,7 @@ mod tests {
     };
 
     use crate::{
-        num::{Capacity, MaxDegree},
+        num::MaxDegree,
         store::{self, Store},
     };
 
@@ -471,9 +511,8 @@ mod tests {
     ) -> Result<Store<Intrusive>, store::StoreError> {
         let store = Store::new(
             store::Layout::new(
-                Capacity::new(entries),
+                IdLimit::new((entries + frozen).try_into().unwrap()),
                 MaxDegree::new(0),
-                frozen.try_into().unwrap(),
             ),
             store::Config::__exhaustive(
                 NonZeroUsize::new(10).unwrap(),
@@ -482,8 +521,8 @@ mod tests {
             Config::new(Bytes::new(entry_bytes)),
         )?;
 
-        for (base, id) in store.frozen().enumerate() {
-            let mut slot = store.slot(id).unwrap();
+        for (base, id) in (entries..(entries + frozen)).enumerate() {
+            let mut slot = store.slot(id.try_into().unwrap()).unwrap();
             slot.data().as_mut_slice().fill(base as u8);
             slot.freeze();
         }
@@ -499,9 +538,7 @@ mod tests {
     fn frozen_range_follows_writable_slots() {
         let s = store(4, 8, 2).unwrap();
 
-        // Writable slots are [0, 4); frozen points occupy [4, 6).
-        assert_eq!(s.frozen(), 4..6);
-
+        assert_eq!(s.id_limit().value(), 6);
         let reader = s.guard(|intrusive, guard| intrusive.reader(guard)).unwrap();
         for i in 0..4 {
             assert!(!s.can_read_approximate(i).unwrap());
@@ -607,7 +644,7 @@ mod tests {
         // An untouched writable slot is AVAILABLE, which is a reserved state.
         assert_matches!(s.retire(0), Err(store::RetireError::SlotIsReserved { .. }));
         // A frozen slot is likewise reserved.
-        let frozen = s.frozen().start as usize;
+        let frozen = 4;
         assert_matches!(
             s.retire(frozen),
             Err(store::RetireError::SlotIsReserved { .. })
@@ -663,11 +700,11 @@ mod tests {
             count += 1;
         }
 
-        assert_eq!(count, s.writable().len());
+        assert_eq!(count, entries);
 
         // Now that all slots are claimed - retire all slots.
-        for i in s.writable() {
-            s.retire(i.into_usize()).unwrap();
+        for i in 0..entries {
+            s.retire(i).unwrap();
         }
 
         // Verify that we can claim all slots again.
@@ -677,6 +714,6 @@ mod tests {
             count += 1;
         }
 
-        assert_eq!(count, s.writable().len());
+        assert_eq!(count, entries);
     }
 }

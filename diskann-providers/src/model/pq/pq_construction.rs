@@ -497,20 +497,22 @@ mod pq_test {
     };
 
     use crate::storage::VirtualStorageProvider;
+    #[cfg(not(coverage))]
     use approx::assert_relative_eq;
     use diskann::utils::IntoUsize;
     use diskann_utils::test_data_root;
+    #[cfg(not(coverage))]
     use rand_distr::{Distribution, Uniform};
     use rstest::rstest;
+    #[cfg(not(coverage))]
     use vfs::OverlayFS;
 
     use super::*;
+    #[cfg(not(coverage))]
+    use crate::{model::pq::debug, utils::ParallelIteratorInPool};
     use crate::{
-        model::{
-            FixedChunkPQTable,
-            pq::{METADATA_SIZE, debug},
-        },
-        utils::{ParallelIteratorInPool, create_thread_pool_for_test, read_bin_from},
+        model::{FixedChunkPQTable, pq::METADATA_SIZE},
+        utils::{create_thread_pool_for_test, read_bin_from},
     };
 
     /// Test helper: Gets all instances of a chunk from the training data for all records
@@ -857,6 +859,7 @@ mod pq_test {
         assert!(!table.get_pq_table().contains(&f32::MAX));
     }
 
+    #[cfg(not(coverage))]
     #[rstest]
     #[case(false, 16)]
     #[case(false, 32)]
@@ -1182,6 +1185,7 @@ mod pq_test {
         assert_eq!(result, vec!(0.3, 0.4, 0.5, 1.3, 1.4, 1.5));
     }
 
+    #[cfg(not(coverage))]
     #[rstest]
     #[case("l2", 31)]
     #[case("l2", 32)]

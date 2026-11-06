@@ -7,12 +7,12 @@ use std::{ptr, thread, time::Duration};
 use diskann::{ANNError, ANNResult};
 
 use crate::search::provider::aligned_file_reader::{
+    A512, AlignedRead,
     platform::{
-        get_queued_completion_status, read_file_to_slice, FileHandle, IOCompletionPort, IOContext,
-        DWORD, OVERLAPPED, ULONG_PTR,
+        DWORD, FileHandle, IOCompletionPort, IOContext, OVERLAPPED, ULONG_PTR,
+        get_queued_completion_status, read_file_to_slice,
     },
     traits::AlignedFileReader,
-    AlignedRead, A512,
 };
 
 pub const MAX_IO_CONCURRENCY: usize = 128;
@@ -112,7 +112,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::search::provider::aligned_file_reader::{AlignedRead, A512};
+    use crate::search::provider::aligned_file_reader::{A512, AlignedRead};
     use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
     fn test_index_path() -> String {

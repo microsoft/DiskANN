@@ -338,7 +338,7 @@ pub(super) fn check_compatibility(num_bits: usize, query: SphericalQuery) -> any
                  Use \"four_bit_transpose\" instead"
             )),
         },
-        2 | 4 | 8 => match query {
+        2 | 3 | 4 | 8 => match query {
             SameAsData | ScalarQuantized | FullPrecision => Ok(()),
             FourBitTransposed => Err(anyhow::anyhow!(
                 "Bit transposed (\"{}\") queries are not compatible with {}-bit data. \

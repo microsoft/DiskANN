@@ -187,6 +187,13 @@ pub mod algorithms;
 // matrix kernels
 mod matrix_kernels;
 
+/// Unstable cache diagnostics for platform investigation.
+#[cfg(feature = "cache-diagnostics")]
+#[doc(hidden)]
+pub mod cache_diagnostics {
+    pub use crate::matrix_kernels::{CacheLevel, HardwareCache};
+}
+
 // quantization
 pub mod binary;
 pub mod minmax;

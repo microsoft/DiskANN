@@ -13,8 +13,6 @@ use crate::{
     },
 };
 
-pub mod algorithms;
-
 mod internal;
 
 pub mod f16x4_;
@@ -115,7 +113,7 @@ pub(super) enum LevelInner {
 /////////////
 
 cfg_if::cfg_if! {
-    if #[cfg(all(target_feature = "neon", target_feature = "dotprod"))] {
+    if #[cfg(all(target_feature = "neon", target_feature = "dotprod", target_feature = "fhm"))] {
         pub type Current = Neon;
 
         pub const fn current() -> Current {
@@ -226,6 +224,7 @@ impl Neon {
     ///
     /// * `neon`
     /// * `dotprod`
+    /// * `fhm`
     pub const unsafe fn new() -> Self {
         Self(Hidden)
     }
@@ -234,7 +233,11 @@ impl Neon {
     pub fn new_checked() -> Option<Self> {
         // This check here ensures that if we ever switch to dynamically dispatching to
         // `Neon` that we do not forget to update `new_checked`.
-        if cfg!(all(target_feature = "neon", target_feature = "dotprod")) {
+        if cfg!(all(
+            target_feature = "neon",
+            target_feature = "dotprod",
+            target_feature = "fhm"
+        )) {
             // SAFETY: The compile-time feature check above ensures we do not accidentally
             // return an unsafe instance of `Self`.
             Some(unsafe { Self::new() })
@@ -246,6 +249,60 @@ impl Neon {
     /// Retarget the [`Scalar`] architecture.
     pub const fn retarget(self) -> Scalar {
         Scalar::new()
+    }
+
+    /// Load 8 `f32` values from an interleaved layout and deinterleave them into two vectors.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid to read 8 consecutive `f32` values.
+    ///
+    #[inline(always)]
+    pub unsafe fn vld2q_f32(self, ptr: *const f32) -> [f32x4; 2] {
+        if cfg!(miri) {
+            // SAFETY: Guaranteed by the caller.
+            let input: [f32; 8] = core::array::from_fn(|i| unsafe { ptr.add(i).read_unaligned() });
+            [
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 2])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 2 + 1])),
+            ]
+        } else {
+            // SAFETY: Guaranteed by the caller.
+            let raw = unsafe { vld2q_f32(ptr) };
+            [
+                f32x4::from_underlying(self, raw.0),
+                f32x4::from_underlying(self, raw.1),
+            ]
+        }
+    }
+
+    /// Load 16 `f32` values from an interleaved layout and deinterleave them into four vectors.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid to read 16 consecutive `f32` values.
+    ///
+    #[inline(always)]
+    pub unsafe fn vld4q_f32(self, ptr: *const f32) -> [f32x4; 4] {
+        if cfg!(miri) {
+            // SAFETY: Guaranteed by the caller.
+            let input: [f32; 16] = core::array::from_fn(|i| unsafe { ptr.add(i).read_unaligned() });
+            [
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 1])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 2])),
+                f32x4::from_array(self, core::array::from_fn(|lane| input[lane * 4 + 3])),
+            ]
+        } else {
+            // SAFETY: Guaranteed by the caller.
+            let raw = unsafe { vld4q_f32(ptr) };
+            [
+                f32x4::from_underlying(self, raw.0),
+                f32x4::from_underlying(self, raw.1),
+                f32x4::from_underlying(self, raw.2),
+                f32x4::from_underlying(self, raw.3),
+            ]
+        }
     }
 
     fn run_function_with_1<F, T0, R>(self, x0: T0::Of<'_>) -> R
@@ -624,6 +681,17 @@ mod tests {
     }
 
     #[test]
+    fn test_vld2q_f32() {
+        if let Some(arch) = test_neon() {
+            let input = [0.0, 10.0, 1.0, 11.0, 2.0, 12.0, 3.0, 13.0];
+            // SAFETY: `input` contains 8 consecutive values.
+            let [a, b] = unsafe { arch.vld2q_f32(input.as_ptr()) };
+            assert_eq!(a.to_array(), [0.0, 1.0, 2.0, 3.0]);
+            assert_eq!(b.to_array(), [10.0, 11.0, 12.0, 13.0]);
+        }
+    }
+
+    #[test]
     fn test_vabdq_s8() {
         if let Some(arch) = test_neon() {
             let f = move |x: &[i8], y: &[i8]| {
@@ -638,6 +706,22 @@ mod tests {
             };
 
             test_utils::driver::drive_binary(&f, (16, 16), 0xef9f703dfc172ad9);
+        }
+    }
+
+    #[test]
+    fn test_vld4q_f32() {
+        if let Some(arch) = test_neon() {
+            let input = [
+                0.0, 10.0, 20.0, 30.0, 1.0, 11.0, 21.0, 31.0, 2.0, 12.0, 22.0, 32.0, 3.0, 13.0,
+                23.0, 33.0,
+            ];
+            // SAFETY: `input` contains 16 consecutive values.
+            let [a, b, c, d] = unsafe { arch.vld4q_f32(input.as_ptr()) };
+            assert_eq!(a.to_array(), [0.0, 1.0, 2.0, 3.0]);
+            assert_eq!(b.to_array(), [10.0, 11.0, 12.0, 13.0]);
+            assert_eq!(c.to_array(), [20.0, 21.0, 22.0, 23.0]);
+            assert_eq!(d.to_array(), [30.0, 31.0, 32.0, 33.0]);
         }
     }
 }

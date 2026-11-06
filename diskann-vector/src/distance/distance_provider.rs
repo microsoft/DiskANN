@@ -72,8 +72,16 @@ where
     T: 'static,
     U: 'static,
 {
-    fn new(f: Dispatched2<f32, Unaligned<T>, Unaligned<U>>) -> Self {
+    fn over(f: Dispatched2<f32, Unaligned<T>, Unaligned<U>>) -> Self {
         Self { f }
+    }
+
+    /// Create a new [`Distance`] using the [`DistanceProvider`] implementation.
+    pub fn new(metric: Metric, dim: Option<usize>) -> Self
+    where
+        T: DistanceProvider<U>,
+    {
+        T::distance_comparer(metric, dim)
     }
 
     /// Compute the distance between `x` and `y`.
@@ -360,7 +368,7 @@ where
     fn try_specialize(&self, arch: A, dim: Option<usize>) -> Option<Distance<T, U>> {
         if let Some(d) = dim {
             if d == N {
-                return Some(Distance::new(
+                return Some(Distance::over(
                     // NOTE: This line here is what actually compiles the specialized kernel.
                     arch.dispatch2::<Specialize<N, F>, f32, Unaligned<T>, Unaligned<U>>(),
                 ));
@@ -409,7 +417,7 @@ impl<Head, Tail> Cons<Head, Tail> {
         if let Some(f) = self.try_specialize(arch, dim) {
             f
         } else {
-            Distance::new(arch.dispatch2::<F, f32, Unaligned<T>, Unaligned<U>>())
+            Distance::over(arch.dispatch2::<F, f32, Unaligned<T>, Unaligned<U>>())
         }
     }
 }

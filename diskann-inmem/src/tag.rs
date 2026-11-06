@@ -19,7 +19,7 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
-use crate::num::{Bytes, IdLimit};
+use crate::num::IdLimit;
 
 /// A tag for controlling concurrent access to data.
 ///
@@ -71,7 +71,7 @@ use crate::num::{Bytes, IdLimit};
 ///
 /// * [`Tag::PUBLISHED`] -> [`Tag::RETIRING`]: Must be done while under a
 ///   [`Guard`](super::epoch::Guard) and may be done with relaxed atomics. Writes to
-///   associated data may not be made. Place into [`Guard::retire`](super::epoch::Guard::retire)
+///   associated data may not be made. Place into [`Retire::retire`](super::epoch::Retire::retire)
 ///   for final reclamation.
 ///
 /// * [`Tag::RETIRING`] -> [`Tag::AVAILABLE`]: May only be done if the corresponding slot is
@@ -175,7 +175,8 @@ pub(crate) struct AtomicTag(AtomicU8);
 
 impl AtomicTag {
     /// The size of an [`AtomicTag`].
-    pub(crate) const SIZE: Bytes = Bytes::size_of::<Self>();
+    #[cfg(any(feature = "quantization", feature = "integration-test"))]
+    pub(crate) const SIZE: crate::num::Bytes = crate::num::Bytes::size_of::<Self>();
 
     /// Construct a new [`AtomicTag`] initialized to `tag`.
     pub(crate) const fn new(tag: Tag) -> Self {
@@ -194,6 +195,7 @@ impl AtomicTag {
     ///   different sizes without synchronization.
     ///
     /// See: <https://doc.rust-lang.org/std/sync/atomic/index.html#memory-model-for-atomic-accesses>
+    #[cfg(any(test, feature = "quantization", feature = "integration-test"))]
     pub(crate) unsafe fn from_ptr<'a>(ptr: *mut AtomicTag) -> &'a Self {
         // SAFETY: inherited from caller.
         unsafe { &*ptr }

@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use super::QuantizationType;
 
-use crate::error::{diskann_error, ErrorKind};
+use crate::error::{ErrorKind, diskann_error};
 
 /// GB to bytes ratio.
 pub const BYTES_IN_GB: f64 = 1024_f64 * 1024_f64 * 1024_f64;
@@ -171,7 +171,7 @@ impl DiskIndexBuildParameters {
 mod dataset_test {
     use diskann::ANNError;
 
-    use crate::error::{error_kind, ErrorKind};
+    use crate::error::{ErrorKind, error_kind};
 
     use super::*;
 

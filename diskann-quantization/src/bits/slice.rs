@@ -383,6 +383,13 @@ unsafe impl PermutationStrategy<4> for BitTranspose {
 // Errors //
 ////////////
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("decoded output has {output} elements, expected {input}")]
+pub(crate) struct DecodeLengthMismatch {
+    input: usize,
+    output: usize,
+}
+
 #[derive(Debug, Error, Clone, Copy)]
 #[error("input span has length {got} bytes but expected {expected}")]
 pub struct ConstructionError {
@@ -840,6 +847,59 @@ pub type PolyBitSlice<const N: usize, Repr, A, Perm = Dense, Len = Dynamic> =
 pub type BoxedBitSlice<const N: usize, Repr, Perm = Dense, Len = Dynamic> =
     PolyBitSlice<N, Repr, GlobalAllocator, Perm, Len>;
 
+impl<const NBITS: usize> BitSlice<'_, NBITS, Unsigned, Dense>
+where
+    Unsigned: Representation<NBITS>,
+{
+    /// Decode and convert directly into the destination, ignoring unused trailing bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeLengthMismatch`] without writing or calling `convert` if the
+    /// output length differs from the logical input length.
+    #[inline]
+    pub(crate) fn decode_into<T>(
+        &self,
+        output: &mut [T],
+        mut convert: impl FnMut(u8) -> T,
+    ) -> Result<(), DecodeLengthMismatch> {
+        if output.len() != self.len() {
+            return Err(DecodeLengthMismatch {
+                input: self.len(),
+                output: output.len(),
+            });
+        }
+        let packed = self.as_slice();
+        let divisor = 1usize << NBITS.trailing_zeros();
+        let codes_per_block = 8 / divisor;
+        let bytes_per_block = NBITS / divisor;
+        let blocks = output.len() / codes_per_block;
+        let (output, tail) = output.split_at_mut(blocks * codes_per_block);
+        let (packed, rest) = packed.split_at(blocks * bytes_per_block);
+        let mask = (1u64 << NBITS) - 1;
+        // Use the smallest byte-aligned group: 8 / gcd(NBITS, 8) codes.
+        for (block, bytes) in output
+            .chunks_exact_mut(codes_per_block)
+            .zip(packed.chunks_exact(bytes_per_block))
+        {
+            let mut word = [0u8; 8];
+            word[..bytes_per_block].copy_from_slice(bytes);
+            let word = u64::from_le_bytes(word);
+            for (i, out) in block.iter_mut().enumerate() {
+                *out = convert(((word >> (i * NBITS)) & mask) as u8);
+            }
+        }
+        let word = rest
+            .iter()
+            .enumerate()
+            .fold(0u64, |word, (i, &byte)| word | (u64::from(byte) << (8 * i)));
+        for (i, out) in tail.iter_mut().enumerate() {
+            *out = convert(((word >> (i * NBITS)) & mask) as u8);
+        }
+        Ok(())
+    }
+}
+
 ///////////////////////////////
 // Special Cased Conversions //
 ///////////////////////////////
@@ -946,6 +1006,93 @@ mod tests {
 
     use super::*;
     use crate::{bits::Static, test_util::AlwaysFails};
+
+    fn check_bulk_decoding<const NBITS: usize>()
+    where
+        Unsigned: Representation<NBITS>,
+    {
+        for len in [0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 255, 256, 257, 513] {
+            for offset in [0, 1, 7] {
+                let byte_count = BitSlice::<NBITS, Unsigned>::bytes_for(len);
+                let mut bytes = vec![0xff; offset + byte_count];
+                let bytes = &mut bytes[offset..];
+                let mut codes = MutBitSlice::<NBITS, Unsigned>::new(bytes, len).unwrap();
+                for i in 0..len {
+                    codes
+                        .set(i, ((i * 37 + i / 2) & ((1 << NBITS) - 1)) as i64)
+                        .unwrap();
+                }
+                let expected: Vec<_> = (0..len).map(|i| codes.get(i).unwrap()).collect();
+                let mut guarded = vec![i64::MIN; len + 2];
+                let mut calls = 0;
+                codes
+                    .reborrow()
+                    .decode_into(&mut guarded[1..=len], |value| {
+                        assert_eq!(i64::from(value), expected[calls]);
+                        calls += 1;
+                        i64::from(value)
+                    })
+                    .unwrap();
+                assert_eq!(calls, len);
+                assert_eq!(&guarded[1..=len], expected);
+                assert_eq!(guarded[0], i64::MIN);
+                assert_eq!(guarded[len + 1], i64::MIN);
+            }
+        }
+    }
+
+    #[test]
+    fn test_decode_into_preserves_order_tails_and_bounds() {
+        check_bulk_decoding::<1>();
+        check_bulk_decoding::<2>();
+        check_bulk_decoding::<3>();
+        check_bulk_decoding::<4>();
+        check_bulk_decoding::<5>();
+        check_bulk_decoding::<6>();
+        check_bulk_decoding::<7>();
+        check_bulk_decoding::<8>();
+    }
+
+    #[test]
+    fn test_decode_into_applies_conversion() {
+        let codes = BitSlice::<8, Unsigned>::new(&[0, 128, 255][..], 3).unwrap();
+        let mut output = [0i16; 3];
+        codes
+            .decode_into(&mut output, |value| i16::from(value) * 3)
+            .unwrap();
+        assert_eq!(output, [0, 384, 765]);
+        let codes = BoxedBitSlice::<4, Unsigned>::new_boxed(2);
+        let mut output = [1u8; 2];
+        codes
+            .reborrow()
+            .decode_into(&mut output, |value| value)
+            .unwrap();
+        assert_eq!(output, [0, 0]);
+    }
+
+    #[test]
+    fn test_decode_into_length_mismatch_does_not_write_or_convert() {
+        let codes = BitSlice::<4, Unsigned>::new(&[0x21u8][..], 2).unwrap();
+        for len in [0, 1, 3] {
+            let mut output = vec![99; len];
+            let mut calls = 0;
+            let error = codes
+                .decode_into(&mut output, |value| {
+                    calls += 1;
+                    value
+                })
+                .unwrap_err();
+            assert_eq!(
+                error,
+                DecodeLengthMismatch {
+                    input: 2,
+                    output: len
+                }
+            );
+            assert_eq!(calls, 0);
+            assert_eq!(output, vec![99; len]);
+        }
+    }
 
     ////////////
     // Errors //

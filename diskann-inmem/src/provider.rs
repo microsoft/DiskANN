@@ -47,7 +47,7 @@ use crate::{
     counters::{Counters, LocalCounters},
     ids::IdMap,
     neighbors::Neighbors,
-    num::{IdLimit, MaxDegree},
+    num::{IdLimit, MaxDegree, Range},
     repr,
 };
 
@@ -102,7 +102,7 @@ where
         C: repr::RepresentationConfig<Representation = R>,
     {
         let representation = <_ as repr::RepresentationConfig>::build(config)?;
-        let mapping = IdMap::new(representation.capacity());
+        let mapping = IdMap::new(representation.id_limit());
 
         Ok(Self {
             representation,
@@ -145,18 +145,6 @@ where
     ) -> Result<Self::InternalId, Self::Error> {
         match self.mapping.to_internal(gid) {
             Some(id) => Ok(id),
-            None => Err(ANNError::message("no mapping")),
-        }
-    }
-
-    /// Translate an internal id to its corresponding external id.
-    fn to_external_id(
-        &self,
-        _context: &Self::Context,
-        id: Self::InternalId,
-    ) -> Result<Self::ExternalId, Self::Error> {
-        match self.mapping.to_external(id) {
-            Some(gid) => Ok(gid),
             None => Err(ANNError::message("no mapping")),
         }
     }
@@ -292,7 +280,7 @@ pub struct SearchAccessor<'a> {
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
-    start_points: std::ops::Range<u32>,
+    start_points: Range,
     counters: LocalCounters<'a>,
 }
 
@@ -302,7 +290,7 @@ impl<'a> SearchAccessor<'a> {
         expand_beam: Box<dyn repr::ExpandBeam + 'a>,
         post_process: Option<Box<dyn repr::PostProcess + 'a>>,
         provider: &'a (dyn std::any::Any + Send + Sync),
-        start_points: std::ops::Range<u32>,
+        start_points: Range,
         counters: LocalCounters<'a>,
     ) -> Self {
         let id_limit = expand_beam.id_limit();
@@ -319,7 +307,7 @@ impl<'a> SearchAccessor<'a> {
         }
     }
 
-    #[cfg(all(test, feature = "quantization"))]
+    #[cfg(test)]
     pub(crate) fn get_expand_beam(&self) -> &dyn repr::ExpandBeam {
         &*self.expand_beam
     }
@@ -338,7 +326,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     fn starting_points(
         &self,
     ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send {
-        std::future::ready(Ok(self.start_points.clone().collect()))
+        std::future::ready(Ok(self.start_points.iter().collect()))
     }
 
     fn start_point_distances<F>(
@@ -349,7 +337,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
         F: FnMut(Self::Id, f32) + Send,
     {
         let work = move || {
-            for p in self.start_points.clone() {
+            for p in self.start_points {
                 match self.expand_beam.evaluate(p)? {
                     Some(distance) => {
                         // Counters are no-ops without `integration-test`.
@@ -427,7 +415,6 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
     prune: Box<dyn repr::Prune + 'a>,
-    keys: hashbrown::HashMap<u32, Option<repr::PruneKey>>,
     neighbors: &'a Neighbors,
     counters: LocalCounters<'a>,
 }
@@ -440,13 +427,12 @@ impl<'a> PruneAccessor<'a> {
     ) -> Self {
         Self {
             prune,
-            keys: hashbrown::HashMap::new(),
             neighbors,
             counters,
         }
     }
 
-    #[cfg(all(test, feature = "quantization"))]
+    #[cfg(test)]
     pub(crate) fn get_prune(&mut self) -> &mut dyn repr::Prune {
         &mut *self.prune
     }
@@ -468,18 +454,18 @@ impl<'a> Distance<'a> {
 /// An opaque element-ref for [`PruneAccessor`].
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-pub struct ElementRef(repr::PruneKey);
+pub struct ElementRef<'a>(&'a [u8]);
 
-impl<'a> diskann_utils::Reborrow<'a> for ElementRef {
-    type Target = ElementRef;
+impl<'a> diskann_utils::Reborrow<'a> for ElementRef<'_> {
+    type Target = ElementRef<'a>;
     fn reborrow(&'a self) -> Self {
-        *self
+        Self(self.0)
     }
 }
 
-impl diskann_vector::DistanceFunction<ElementRef, ElementRef, f32> for Distance<'_> {
+impl diskann_vector::DistanceFunction<ElementRef<'_>, ElementRef<'_>, f32> for Distance<'_> {
     #[inline]
-    fn evaluate_similarity(&self, x: ElementRef, y: ElementRef) -> f32 {
+    fn evaluate_similarity(&self, x: ElementRef<'_>, y: ElementRef<'_>) -> f32 {
         self.counters.distance_ref(1);
         self.prune.evaluate(x.0, y.0)
     }
@@ -495,7 +481,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     where
         Self: 'a;
 
-    type ElementRef<'a> = ElementRef;
+    type ElementRef<'a> = ElementRef<'a>;
 
     type View<'a>
         = &'a Self
@@ -513,16 +499,11 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
 
     async fn fill<'a, Itr>(
         &'a mut self,
-        itr: Itr,
+        _itr: Itr,
     ) -> ANNResult<(Self::View<'a>, Self::Distance<'a>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {
-        self.keys.clear();
-        self.keys.extend(itr.map(|i| (i, None)));
-        let count: usize = self.prune.prepare(self.keys.iter_mut())?;
-        self.counters.get_vector(count as u64);
-
         Ok((self, Distance::new(&*self.prune, self.counters.fork())))
     }
 }
@@ -585,14 +566,15 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
 }
 
 impl workingset::View<u32> for &PruneAccessor<'_> {
-    type ElementRef<'a> = ElementRef;
+    type ElementRef<'a> = ElementRef<'a>;
     type Element<'a>
-        = ElementRef
+        = ElementRef<'a>
     where
         Self: 'a;
 
-    fn get(&self, id: u32) -> Option<ElementRef> {
-        self.keys.get(&id)?.map(ElementRef)
+    fn get(&self, id: u32) -> Option<ElementRef<'_>> {
+        self.counters.get_vector_ref(1);
+        self.prune.get(id).map(ElementRef)
     }
 }
 
@@ -858,10 +840,6 @@ mod tests {
         )
         .unwrap();
 
-        // let full = Full::<f32>::new(grid.dim().into(), Metric::L2);
-
-        // let config = Config::new(grid.num_points(size), degree);
-
         let provider = Provider::<_, u64>::new(config).unwrap();
         assert_eq!(provider.max_degree(), MaxDegree::new(degree));
 
@@ -887,10 +865,11 @@ mod tests {
         for i in 0..data.nrows() {
             let i = (10 * i + 1) as u64;
             let internal = index.provider().to_internal_id(&Context, &i).unwrap();
-            assert_ne!(internal as u64, i);
-            assert_eq!(
-                index.provider().to_external_id(&Context, internal).unwrap(),
-                i
+            assert_ne!(
+                internal as u64,
+                i + 1,
+                "this relies on the start points being located at the beginning of the id space\
+                 this is **NOT** guaranteed",
             );
 
             assert!(
@@ -913,7 +892,6 @@ mod tests {
 
         // Assert that out-of-bounds translations returns errors.
         assert!(index.provider().to_internal_id(&Context, &0).is_err());
-        assert!(index.provider().to_external_id(&Context, 26).is_err());
 
         // Searches should return something reasonable.
         let knn = Knn::new(10, None).unwrap();

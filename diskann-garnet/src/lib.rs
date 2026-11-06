@@ -113,6 +113,12 @@ pub enum VectorQuantType {
     XNoQuantI8,
     XBinI8,
     XBinU8,
+    XSpherical2,
+    XSpherical2I8,
+    XSpherical2U8,
+    XSpherical4,
+    XSpherical4I8,
+    XSpherical4U8,
 }
 
 /// Helper struct to manage the FFI buffers for handling search results
@@ -239,12 +245,17 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
 
 /// Helper generic function to create the correct type-erased `Arc<Index>`.
 /// This also returns a bool indicating whether quantization is needed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors native index creation parameters"
+)]
 fn create_index_impl<T: VectorRepr>(
     quant_type: VectorQuantType,
     config: config::Config,
     dim: usize,
     metric_type: Metric,
     max_degree: usize,
+    start_point_id: u32,
     callbacks: Callbacks,
     context: Context,
 ) -> Result<(Arc<Index>, bool), GarnetProviderError> {
@@ -253,6 +264,7 @@ fn create_index_impl<T: VectorRepr>(
         quant_type,
         metric_type,
         max_degree,
+        start_point_id,
         callbacks,
         &context,
     )?;
@@ -263,9 +275,15 @@ fn create_index_impl<T: VectorRepr>(
     };
 
     let quant_needed = match quant_type {
-        VectorQuantType::Bin | VectorQuantType::XBinI8 | VectorQuantType::XBinU8 => {
-            provider.quantization_needed()
-        }
+        VectorQuantType::Bin
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => provider.quantization_needed(),
         _ => false,
     };
 
@@ -293,9 +311,12 @@ fn create_index_impl<T: VectorRepr>(
 /// flag controls whether supplemental control is needed from Garnet to manage quantizers
 /// which require training and backfill.
 ///
+/// The same immutable `start_point_id` must be supplied when reopening the index.
+///
 /// # Safety
 ///
-/// FFI
+/// Callbacks must remain valid for the index lifetime, and `quantization_needed`
+/// must point to writable memory for a bool.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn create_index(
     ctx: u64,
@@ -305,6 +326,7 @@ pub unsafe extern "C" fn create_index(
     metric_type: i32,
     l_build: u32,
     max_degree: u32,
+    start_point_id: u32,
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
@@ -347,13 +369,17 @@ pub unsafe extern "C" fn create_index(
 
     match quant_type {
         VectorQuantType::Invalid => ptr::null(),
-        VectorQuantType::XNoQuantU8 | VectorQuantType::XBinU8 => {
+        VectorQuantType::XNoQuantU8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4U8 => {
             if let Ok((index, quant_needed)) = create_index_impl::<u8>(
                 quant_type,
                 config,
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -363,13 +389,17 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::XNoQuantI8 | VectorQuantType::XBinI8 => {
+        VectorQuantType::XNoQuantI8
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical4I8 => {
             if let Ok((index, quant_needed)) = create_index_impl::<i8>(
                 quant_type,
                 config,
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -379,13 +409,18 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => {
             if let Ok((index, quant_needed)) = create_index_impl::<f32>(
                 quant_type,
                 config,
                 dim as usize,
                 metric_type,
                 max_degree as usize,
+                start_point_id,
                 callbacks,
                 context,
             ) {
@@ -453,11 +488,19 @@ fn interpret_vector<'a>(
     let vector_len_bytes = match quant_type {
         VectorQuantType::Invalid => return None,
 
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => vector_len * 4,
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => vector_len * 4,
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
         | VectorQuantType::XBinU8
-        | VectorQuantType::XBinI8 => vector_len,
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => vector_len,
     };
 
     let v = unsafe { slice::from_raw_parts(*vector_data, vector_len_bytes) };
@@ -465,7 +508,11 @@ fn interpret_vector<'a>(
     let v = match quant_type {
         VectorQuantType::Invalid => return None,
 
-        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
+        VectorQuantType::NoQuant
+        | VectorQuantType::Bin
+        | VectorQuantType::Q8
+        | VectorQuantType::XSpherical2
+        | VectorQuantType::XSpherical4 => {
             if v.as_ptr().align_offset(mem::align_of::<f32>()) == 0 {
                 // pointer is correctly aligned to interpret as f32
                 PolyCow::from(v)
@@ -483,7 +530,11 @@ fn interpret_vector<'a>(
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
         | VectorQuantType::XBinU8
-        | VectorQuantType::XBinI8 => PolyCow::from(v),
+        | VectorQuantType::XBinI8
+        | VectorQuantType::XSpherical2I8
+        | VectorQuantType::XSpherical2U8
+        | VectorQuantType::XSpherical4I8
+        | VectorQuantType::XSpherical4U8 => PolyCow::from(v),
     };
 
     Some(v)
@@ -1365,81 +1416,58 @@ pub unsafe extern "C" fn import_term(
     index.inner.import_term(&ctx, term, id, value)
 }
 
-/// Return type for `finish_import()`.
+/// Verify a partition of the imported terms.
 ///
-/// `Success` is returned if the tasks succeeds, and if the final task, if the finalization
-/// succeeds. `TaskFailed` indicates that the task's portion of the work failed, but can be
-/// retried. `FinishFailed` means the task finished successfully but finalization failed; the
-/// task cannot be retried.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ImportResult {
-    Success,
-    TaskFailed,
-    FinishFailed,
-}
-
-impl From<ImportResult> for u8 {
-    fn from(value: ImportResult) -> Self {
-        match value {
-            ImportResult::Success => 0,
-            ImportResult::TaskFailed => 1,
-            ImportResult::FinishFailed => 2,
-        }
-    }
-}
-
-#[cfg(test)]
-impl From<u8> for ImportResult {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => ImportResult::Success,
-            1 => ImportResult::TaskFailed,
-            2 => ImportResult::FinishFailed,
-            _ => panic!("bad ImportResult ({value})"),
-        }
-    }
-}
-
-/// Finalize import.
+/// All term writes must finish before verification starts. Each call checks its
+/// partition anew; task zero also verifies the configured start point.
 ///
-/// After terms are imported, this is used to verify the graph and enable the index.
-///
-/// Returns 0 if the task succeeds and if the final task finalizes the index. Returns 1 when
-/// the task failed, which can be retried. Returns 2 when the task succeeded but index
-/// finalization has failed, which cannot be retried.
+/// Returns true if this partition verifies successfully, false otherwise.
 ///
 /// # Safety
 ///
-/// FFI
+/// A non-null `index_ptr` must be a live index returned by `create_index`. The
+/// index and callbacks must outlive this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn finish_import(
+pub unsafe extern "C" fn verify_import(
     ctx: u64,
     index_ptr: *const c_void,
     task_idx: usize,
     task_count: usize,
-) -> u8 {
+) -> bool {
     if index_ptr.is_null() {
-        return ImportResult::TaskFailed.into();
+        return false;
     }
-
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
+    index.inner.verify_import(&ctx, task_idx, task_count)
+}
 
-    let (result, completed) = index.inner.finish_import(&ctx, task_idx, task_count);
-    if result && completed == Some(true) {
+/// Finalize an imported index.
+///
+/// All term writes must finish first. Verification is optional. Required
+/// start-point terms must be readable even if no user vectors were imported.
+/// Concurrent calls on the same handle serialize. Once one succeeds, subsequent
+/// calls on that handle return true.
+///
+/// Returns true on success. Failure does not enable an unfinished import.
+///
+/// # Safety
+///
+/// A non-null `index_ptr` must be a live index returned by `create_index`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn finish_import(ctx: u64, index_ptr: *const c_void) -> bool {
+    if index_ptr.is_null() {
+        return false;
+    }
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+    let result = index.inner.finish_import(&ctx);
+    if result {
         index
             .state
             .store(IndexState::Ready as usize, Ordering::Release);
     }
-
-    match (result, completed) {
-        (true, None) | (true, Some(true)) => ImportResult::Success,
-        (false, None) | (false, Some(false)) => ImportResult::TaskFailed,
-        // This variant is a special case that happens when an empty index is finalized.
-        (false, Some(true)) => ImportResult::Success,
-        (true, Some(false)) => ImportResult::FinishFailed,
-    }
-    .into()
+    result
 }
 
 #[cfg(test)]
@@ -1456,6 +1484,7 @@ mod tests {
     use crate::{
         Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index,
         garnet::{Context, GarnetId, Term},
+        provider::DEFAULT_START_POINT_ID,
         test_utils::Store,
     };
 
@@ -1530,6 +1559,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1616,6 +1646,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1649,6 +1680,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1667,6 +1699,28 @@ mod tests {
         check_create_index(VectorQuantType::XBinU8);
         check_create_index(VectorQuantType::XNoQuantI8);
         check_create_index(VectorQuantType::XBinI8);
+    }
+
+    #[test]
+    fn spherical_quantizer_abi_and_creation() {
+        for (quantizer, value) in [
+            (VectorQuantType::NoQuant, 1),
+            (VectorQuantType::Bin, 2),
+            (VectorQuantType::Q8, 3),
+            (VectorQuantType::XNoQuantU8, 4),
+            (VectorQuantType::XNoQuantI8, 5),
+            (VectorQuantType::XBinI8, 6),
+            (VectorQuantType::XBinU8, 7),
+            (VectorQuantType::XSpherical2, 8),
+            (VectorQuantType::XSpherical2I8, 9),
+            (VectorQuantType::XSpherical2U8, 10),
+            (VectorQuantType::XSpherical4, 11),
+            (VectorQuantType::XSpherical4I8, 12),
+            (VectorQuantType::XSpherical4U8, 13),
+        ] {
+            assert_eq!(quantizer as i32, value);
+            check_create_index(quantizer);
+        }
     }
 
     #[test]
@@ -1709,6 +1763,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1779,6 +1834,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
@@ -1971,6 +2027,7 @@ mod tests {
                 Metric::L2.into(),
                 10,
                 8,
+                DEFAULT_START_POINT_ID,
                 store.callbacks().read_callback(),
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),

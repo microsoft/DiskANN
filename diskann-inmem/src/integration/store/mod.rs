@@ -8,6 +8,7 @@
 
 pub mod checked;
 pub mod intrusive;
+pub mod packed;
 pub mod simple;
 
 /// These implementations have a similar structure. A [`boilerplate`] macro is used to ensure
@@ -27,12 +28,12 @@ macro_rules! boilerplate {
         impl $store {
             /// Return the total number of slots, including the frozen point.
             pub fn readable_slots(&self) -> usize {
-                self.store.frozen().end as usize
+                self.store.id_limit().value() as usize
             }
 
             /// Return the range of writable (non-frozen) slot indices.
             pub fn writable_slots(&self) -> usize {
-                self.store.frozen().start as usize
+                self.store.id_limit().value() as usize
             }
 
             /// Attempt to reclaim retired slots, returning the number reclaimed if any.

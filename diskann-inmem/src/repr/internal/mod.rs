@@ -5,10 +5,16 @@
 
 use thiserror::Error;
 
-pub(super) mod intrusive;
+pub(super) mod packed;
 
 #[cfg(any(feature = "quantization", test))]
 pub(super) mod simple;
+
+#[cfg(feature = "quantization")]
+pub(super) mod intrusive;
+
+#[cfg(feature = "quantization")]
+pub(super) mod quantization;
 
 pub(super) mod macros;
 
