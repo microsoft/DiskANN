@@ -57,7 +57,7 @@ macro_rules! boilerplate {
             /// Attain a reader into the store. Returns `None` if all epoch guard slots
             /// are used.
             pub fn reader(&self) -> Option<$reader<'_>> {
-                match self.store.guard(|slots, guard| slots.reader(guard)) {
+                match self.store.read_guard(|slots, guard| slots.reader(guard)) {
                     Ok(reader) => Some($reader::new(reader)),
                     Err($crate::epoch::Unavailable) => None,
                 }

@@ -8,15 +8,21 @@
 use std::{
     cell::UnsafeCell,
     mem::MaybeUninit,
-    sync::atomic::{AtomicUsize, Ordering},
+    num::NonZeroUsize,
+    sync::{
+        Barrier,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use rand::{Rng, distr::StandardUniform};
 
 use crate::{
-    epoch::Registry,
+    epoch::{Registry, U62},
     tag::{AtomicTag, Tag},
 };
+
+// Stress test for epoch advancement.
 
 type Data = [u32; 4];
 
@@ -120,7 +126,8 @@ impl Drop for Slot {
 // SAFETY: We control concurrency, so can safely share this.
 unsafe impl Sync for Slot {}
 
-fn make_payload(epoch: u64, index: usize) -> Data {
+fn make_payload(epoch: U62, index: usize) -> Data {
+    let epoch = epoch.value();
     [
         index as u32,
         epoch as u32,
@@ -129,7 +136,7 @@ fn make_payload(epoch: u64, index: usize) -> Data {
     ]
 }
 
-fn verify_payload(data: &Data) -> (usize, u64) {
+fn verify_payload(data: &Data) -> (usize, U62) {
     let checksum = data[0] ^ data[1] ^ data[2];
     assert_eq!(
         data[3], checksum,
@@ -137,11 +144,11 @@ fn verify_payload(data: &Data) -> (usize, u64) {
     );
     let index = data[0] as usize;
     let epoch = data[1] as u64 | ((data[2] as u64) << 32);
-    (index, epoch)
+    (index, U62::new(epoch).unwrap())
 }
 
 struct Record {
-    epoch: u64,
+    epoch: U62,
     index: usize,
     data: Data,
 }
@@ -149,7 +156,7 @@ struct Record {
 fn read_job(
     registry: &Registry,
     slots: &[Slot],
-    stop_at: u64,
+    stop_at: U62,
     retire_rate: f64,
     active: &AtomicUsize,
 ) -> Vec<Record> {
@@ -189,9 +196,9 @@ fn read_job(
     records
 }
 
-fn retire_job(registry: &Registry, slots: &[Slot], stop_at: u64, active: &AtomicUsize) {
+fn retire_job(registry: &Registry, slots: &[Slot], stop_at: U62, active: &AtomicUsize) {
     loop {
-        let epoch = registry.epoch();
+        let epoch = registry.ready_epoch();
         if epoch >= stop_at {
             return;
         }
@@ -210,9 +217,9 @@ fn retire_job(registry: &Registry, slots: &[Slot], stop_at: u64, active: &Atomic
     }
 }
 
-fn write_job(registry: &Registry, slots: &[Slot], stop_at: u64, active: &AtomicUsize) {
+fn write_job(registry: &Registry, slots: &[Slot], stop_at: U62, active: &AtomicUsize) {
     loop {
-        let epoch = registry.epoch();
+        let epoch = registry.ready_epoch();
         if epoch >= stop_at {
             return;
         }
@@ -233,7 +240,11 @@ fn registry_stress_test() {
     let slots: Vec<_> = std::iter::repeat_with(Slot::new).take(10).collect();
     let active = AtomicUsize::new(0);
 
-    let stop_at = if cfg!(miri) { 11 } else { 50_000 };
+    let stop_at = if cfg!(miri) {
+        U62::new(11).unwrap()
+    } else {
+        U62::new(50_000).unwrap()
+    };
     let retire_rate = if cfg!(miri) { 0.95 } else { 0.1 };
 
     // We use two threads for each job to be extra adversarial.
@@ -294,9 +305,136 @@ fn registry_stress_test() {
         // Note that a reader can observe one epoch change during its tenure, so we *can*
         // observe writes from one higher epoch.
         assert!(
-            write_epoch <= (record.epoch + 1),
+            write_epoch <= record.epoch.checked_add(1).unwrap(),
             "read data from the future: write_gen={write_epoch}, read_gen={}",
             record.epoch
         );
+    }
+}
+
+/// This test works by having mixed readers and writers hammering the registry.
+///
+/// Each writer writes monotonically two atomic variables separated by a
+/// `std::thread::yield_now`. A thread performing snapshots excludes writers and then probes
+/// the slots being written.
+///
+/// The idea is that if there is a writer, the control thread will eventually observe two
+/// different values on a pair of slots, which is an error.
+///
+/// Additionally, it will take a snapshot of all slots and verify that a reread over the
+/// slots yields the same value.
+#[test]
+fn writer_exclusion_stress_test() {
+    const WRITERS: usize = 4;
+    const READERS: usize = 2;
+
+    struct StopWorkers<'a>(&'a AtomicBool);
+
+    impl Drop for StopWorkers<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+
+    let snapshots = if cfg!(miri) { 20 } else { 20_000 };
+    let registry = Registry::with_capacity(NonZeroUsize::new(4).unwrap());
+    let barrier = Barrier::new(WRITERS + READERS + 1);
+    let stop = AtomicBool::new(false);
+    let data: [[AtomicUsize; 2]; WRITERS] =
+        std::array::from_fn(|_| [AtomicUsize::new(0), AtomicUsize::new(0)]);
+
+    std::thread::scope(|s| {
+        let registry = &registry;
+        let barrier = &barrier;
+        let stop = &stop;
+        // Stop workers before scope joins them, including when a snapshot assertion panics.
+        let _stop_workers = StopWorkers(stop);
+        for fields in &data {
+            s.spawn(move || {
+                let mut value = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    let Ok(guard) = registry.write_guard() else {
+                        std::thread::yield_now();
+                        continue;
+                    };
+                    let shared = guard.read_guard().share();
+                    value += 1;
+
+                    // Payload accesses are relaxed: visibility must come from the registry.
+                    fields[0].store(value, Ordering::Relaxed);
+                    drop(guard);
+                    std::thread::yield_now();
+                    fields[1].store(value, Ordering::Relaxed);
+                    drop(shared);
+
+                    if value == 1 {
+                        barrier.wait();
+                    }
+                }
+            });
+        }
+
+        for _ in 0..READERS {
+            s.spawn(move || {
+                let mut reads = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    let Ok(guard) = registry.read_guard() else {
+                        std::thread::yield_now();
+                        continue;
+                    };
+                    let shared = guard.share();
+                    drop(guard);
+                    std::thread::yield_now();
+                    drop(shared);
+
+                    reads += 1;
+                    if reads == 1 {
+                        barrier.wait();
+                    }
+                }
+            });
+        }
+
+        // Every worker completes an operation before snapshotting begins.
+        barrier.wait();
+        for _ in 0..snapshots {
+            let exclusion = loop {
+                if let Some(exclusion) = registry.try_exclude_writers() {
+                    break exclusion;
+                }
+                std::thread::yield_now();
+            };
+
+            let snapshot: [usize; WRITERS] = std::array::from_fn(|i| {
+                let first = data[i][1].load(Ordering::Relaxed);
+                assert_eq!(
+                    first,
+                    data[i][0].load(Ordering::Relaxed),
+                    "writer {i} was still updating during exclusion",
+                );
+                first
+            });
+
+            std::thread::yield_now();
+
+            for (i, fields) in data.iter().enumerate() {
+                assert_eq!(
+                    [
+                        fields[1].load(Ordering::Relaxed),
+                        fields[0].load(Ordering::Relaxed),
+                    ],
+                    [snapshot[i]; 2],
+                    "writer {i} changed its payload while exclusion was held",
+                );
+            }
+            drop(exclusion);
+            std::thread::yield_now();
+        }
+    });
+
+    for (i, fields) in data.iter().enumerate() {
+        let first = fields[0].load(Ordering::Relaxed);
+        assert!(first > 0, "writer {i} made no progress");
+        assert_eq!(first, fields[1].load(Ordering::Relaxed));
     }
 }

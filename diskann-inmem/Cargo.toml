@@ -16,7 +16,7 @@ diskann = { workspace = true }
 diskann-utils = { workspace = true, default-features = false }
 diskann-vector = { workspace = true }
 diskann-wide = { workspace = true }
-parking_lot = "0.12.5"
+parking_lot = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 thiserror = { workspace = true }
