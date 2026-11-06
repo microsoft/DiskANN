@@ -33,6 +33,43 @@ pub struct PiPNNParameters {
     pub max_depth: NonZeroUsize,
     /// Number of nearest neighbors selected within each leaf.
     pub k: NonZeroUsize,
+    /// HashPrune policy. `None` keeps all unique direct candidates.
+    pub hash_prune: Option<HashPruneParameters>,
+}
+
+/// HashPrune parameters in the JSON build configuration.
+#[cfg(feature = "pipnn")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HashPruneParameters {
+    /// Number of random-hyperplane sketch dimensions.
+    pub num_hash_planes: usize,
+    /// Maximum number of candidates retained per point.
+    pub l_max: usize,
+    /// Apply Vamana RobustPrune after reservoir extraction.
+    pub final_prune: bool,
+}
+
+#[cfg(feature = "pipnn")]
+impl Default for HashPruneParameters {
+    fn default() -> Self {
+        Self {
+            num_hash_planes: 12,
+            l_max: 64,
+            final_prune: true,
+        }
+    }
+}
+
+#[cfg(feature = "pipnn")]
+impl From<&HashPruneParameters> for diskann::graph::pipnn::HashPruneConfig {
+    fn from(config: &HashPruneParameters) -> Self {
+        Self {
+            num_hash_planes: config.num_hash_planes,
+            l_max: config.l_max,
+            final_prune: config.final_prune,
+        }
+    }
 }
 
 #[cfg(feature = "pipnn")]
@@ -53,6 +90,7 @@ impl Default for PiPNNParameters {
             fanout: FANOUT.to_vec(),
             max_depth: MAX_DEPTH,
             k: K,
+            hash_prune: None,
         }
     }
 }
@@ -63,13 +101,17 @@ impl PiPNNParameters {
     /// of `graph`. The caller adds the seed and builds it; the disk builder
     /// takes the seed from `IndexConfiguration::random_seed`.
     pub fn builder(&self, graph: &diskann::graph::Config) -> diskann::graph::pipnn::Builder {
-        diskann::graph::pipnn::Builder::from_graph(graph)
+        let builder = diskann::graph::pipnn::Builder::from_graph(graph)
             .c_max(self.c_max)
             .p_samp(self.p_samp)
             .max_leaders(self.max_leaders)
             .fanout(self.fanout.clone())
             .max_depth(self.max_depth)
-            .leaf_k(self.k)
+            .leaf_k(self.k);
+        match &self.hash_prune {
+            Some(hash_prune) => builder.hash_prune(hash_prune.into()),
+            None => builder,
+        }
     }
 }
 
@@ -132,6 +174,15 @@ mod tests {
         );
         assert_eq!(config.max_depth.get(), 30);
         assert_eq!(config.k.get(), 3);
+        assert_eq!(config.hash_prune, None);
+
+        let explicit: BuildAlgorithm =
+            serde_json::from_str(r#"{"algorithm":"PiPNN","hash_prune":{}}"#).unwrap();
+        let BuildAlgorithm::PiPNN(explicit) = explicit else {
+            panic!("expected PiPNN");
+        };
+        assert_eq!(explicit.hash_prune, Some(HashPruneParameters::default()));
+
         assert!(
             serde_json::from_str::<BuildAlgorithm>(r#"{"algorithm":"PiPNN","l_max":72}"#).is_err()
         );
