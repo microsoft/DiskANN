@@ -1020,6 +1020,33 @@ mod tests {
         run_multi_vector_integration(&modified_input_path, &output_path)
     }
 
+    #[test]
+    #[cfg(feature = "multi-vector")]
+    fn multi_vector_rejects_unsupported_minmax_pair() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let input_path = tempdir.path().join("input.json");
+        let output_path = tempdir.path().join("output.json");
+        let mut raw = value_from_file(&example_directory().join("multi-vector.json"));
+        raw["jobs"][0]["content"]["element_type"] =
+            serde_json::json!({"minmax": {"query_bits": 8, "doc_bits": 6}});
+        save_to_file(&input_path, &raw);
+        let cli = Cli::from_commands(
+            Commands::Run {
+                input_file: input_path,
+                output_file: output_path.clone(),
+                dry_run: true,
+                allow_debug: true,
+            },
+            true,
+        );
+        let error = cli.run(&mut Memory::new()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("unsupported MinMax bit-width pair"),
+            "{error:#}",
+        );
+        assert!(!output_path.exists());
+    }
+
     #[cfg(feature = "multi-vector")]
     fn run_multi_vector_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
         let command = Commands::Run {
@@ -1040,6 +1067,24 @@ mod tests {
 
         // Check that the results file is generated.
         assert!(output_path.exists());
+        let input = value_from_file(input_path);
+        let output = value_from_file(output_path);
+        let jobs = input["jobs"].as_array().unwrap();
+        let results = output.as_array().unwrap();
+        assert_eq!(jobs.len(), results.len());
+        for (job, result) in jobs.iter().zip(results) {
+            assert_eq!(result["input"], *job);
+            let runs = job["content"]["runs"].as_array().unwrap();
+            let measurements = result["results"].as_array().unwrap();
+            assert_eq!(runs.len(), measurements.len());
+            for (run, measured) in runs.iter().zip(measurements) {
+                assert_eq!(measured["run"], *run);
+                assert_eq!(
+                    measured["latencies"].as_array().unwrap().len() as u64,
+                    run["num_measurements"].as_u64().unwrap(),
+                );
+            }
+        }
     }
 
     #[cfg(not(feature = "multi-vector"))]

@@ -298,8 +298,8 @@ where
                             // SAFETY: A and B share K by the driver contract.
                             let kernel =
                                 unsafe { PanelKernel::<W, MR, NR, PACK>::new(self.arch, a, b, c) };
-                            // Already inside the driver's target-feature entry.
-                            let c = kernel.run(self.arch);
+                            // Reapply target features at the panel kernel boundary.
+                            let c = self.arch.run(kernel);
                             self.arch.store(c, &mut self.c[row..end]);
                         },
                     );
