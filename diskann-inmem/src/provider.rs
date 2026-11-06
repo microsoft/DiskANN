@@ -307,7 +307,7 @@ impl<'a> SearchAccessor<'a> {
         }
     }
 
-    #[cfg(all(test, feature = "quantization"))]
+    #[cfg(test)]
     pub(crate) fn get_expand_beam(&self) -> &dyn repr::ExpandBeam {
         &*self.expand_beam
     }
@@ -432,7 +432,7 @@ impl<'a> PruneAccessor<'a> {
         }
     }
 
-    #[cfg(all(test, feature = "quantization"))]
+    #[cfg(test)]
     pub(crate) fn get_prune(&mut self) -> &mut dyn repr::Prune {
         &mut *self.prune
     }

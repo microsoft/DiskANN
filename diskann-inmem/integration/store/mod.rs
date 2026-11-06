@@ -44,12 +44,14 @@ const RECLAIM_EVERY: u64 = 16;
 
 mod checked;
 mod intrusive;
+mod packed;
 mod simple;
 
 pub(super) fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     intrusive::register(registry)?;
     checked::register(registry)?;
     simple::register(registry)?;
+    packed::register(registry)?;
 
     Ok(())
 }
