@@ -7,13 +7,12 @@
 
 use diskann_quantization::Parallelism;
 use diskann_utils::Reborrow;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-use super::{Assign, Buckets, NearestCentroid, SplitError};
+use super::{Assign, Buckets, NearestCentroid, SplitError, TryMap};
 use crate::{
     ANNError, ANNResult,
     ivf::{
-        region::{Update, View},
+        region::Region,
         split::{Links, Reassign},
     },
     utils::VectorId,
@@ -34,8 +33,7 @@ use crate::{
 ///
 /// 2. Remove the members that move.
 ///
-/// After every list is processed, append each moved point to its destination. Each point
-/// is considered once, from the list it was filled in, and no centroid changes.
+/// After every list is processed, append each moved point to its destination.
 pub struct Linked<A = NearestCentroid> {
     assign: A,
 }
@@ -52,8 +50,8 @@ impl<A> Linked<A> {
     where
         I: Copy,
         L: VectorId,
-        R: View<I, L>,
-        A: for<'a> Assign<R::VectorsRef<'a>>,
+        R: Region<I, L>,
+        A: for<'a> Assign<R::VectorsRef<'a>, f32>,
     {
         let get = |list: L| {
             region
@@ -72,10 +70,10 @@ impl<A> Linked<A> {
         for &j in links.links(i) {
             candidates.push((j, get(links.lists()[j])?.centroid));
         }
-
         candidates.push((i, view.centroid));
 
         let mut moves = Vec::new();
+
         self.assign
             .assign(view.members, vectors.reborrow(), &candidates, |id, dst| {
                 if dst != i {
@@ -91,47 +89,30 @@ impl<I, L, R, A> Reassign<I, L, R> for Linked<A>
 where
     I: Copy + Send,
     L: VectorId,
-    R: View<I, L>,
-    A: for<'a> Assign<R::VectorsRef<'a>>,
+    R: Region<I, L>,
+    A: for<'a> Assign<R::VectorsRef<'a>, f32>,
 {
     type Error = ANNError;
 
-    fn reassign<U>(
+    fn reassign(
         &mut self,
-        region: &R,
-        update: &mut U,
+        region: &mut R,
         links: &Links<L>,
         parallelism: Parallelism,
-    ) -> ANNResult<()>
-    where
-        U: Update<I, L>,
-    {
-        let plan = |i| self.moves(region, links, i);
-
-        let moves: Vec<_> = match parallelism {
-            // Report the first error in list order.
-            Parallelism::Rayon => {
-                let results = (0..links.len())
-                    .into_par_iter()
-                    .map(plan)
-                    .collect::<Vec<_>>();
-
-                results.into_iter().collect::<ANNResult<_>>()?
-            }
-            Parallelism::Sequential | _ => (0..links.len()).map(plan).collect::<ANNResult<_>>()?,
-        };
+    ) -> ANNResult<()> {
+        let moves = parallelism.try_map(links.len(), |i| self.moves(region, links, i))?;
 
         let mut moved = Buckets::new(links.len());
 
         for (&list, moves) in links.lists().iter().zip(moves) {
             moved.extend(moves.into_iter());
-            update.remove_members(list, moved.seal())?;
+            region.remove_members(list, moved.seal())?;
         }
 
         let incoming = moved.group();
 
         for (i, &list) in links.lists().iter().enumerate() {
-            update.append_members(list, incoming.get(i))?;
+            region.append_members(list, incoming.get(i))?;
         }
 
         Ok(())

@@ -11,8 +11,7 @@ pub mod traits;
 #[cfg(feature = "ivf")]
 pub mod split;
 
-pub use index::{Config, ConfigError, IVFIndex, InsertStats, ReassignCount};
+#[cfg(any(test, feature = "testing"))]
+pub mod test;
 
-#[cfg(test)]
-#[cfg(feature = "ivf")]
-mod tests;
+pub use index::{Config, ConfigError, IVFIndex, InsertStats, ReassignCount};

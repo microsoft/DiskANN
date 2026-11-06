@@ -23,7 +23,7 @@ use crate::{
 // Insertion splits lists with k-means from `diskann-quantization`.
 #[cfg(feature = "ivf")]
 use super::{
-    region::{AsMatRef, Update},
+    region::{AsMatRef, Region},
     split::{KMeansSplit, Linked, Links, Reassign, Split, policies},
     traits::{BuildAccessor, BuildStrategy, Nearest},
 };
@@ -157,7 +157,7 @@ impl IVFIndex {
                 // Split: replace every parent with fitted children.
                 let mut children = Vec::new();
                 {
-                    let (region, mut update) = accessor.fill(parents.iter().copied()).await?;
+                    let mut region = accessor.fill(parents.iter().copied()).await?;
 
                     KMeansSplit::new(
                         config.split_k,
@@ -167,14 +167,13 @@ impl IVFIndex {
                         policies::FirstPoints,
                     )
                     .split(
-                        &region,
-                        &mut update,
+                        &mut region,
                         &parents,
                         parallelism,
                         |parent, child| children.push((parent, child)),
                     )?;
 
-                    update.finish().await?;
+                    region.finish().await?;
                 }
 
                 // Reassign: each child potentially excahnges points with its nearest lists, other than
@@ -205,16 +204,15 @@ impl IVFIndex {
                     }
 
                     let lists = links.lists().iter().copied();
-                    let (region, mut update) = accessor.fill(lists).await?;
+                    let mut region = accessor.fill(lists).await?;
 
                     Linked::new(policies::NearestCentroid).reassign(
-                        &region,
-                        &mut update,
+                        &mut region,
                         &links,
                         parallelism,
                     )?;
 
-                    update.finish().await?;
+                    region.finish().await?;
                 }
             };
 

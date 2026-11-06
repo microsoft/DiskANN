@@ -12,14 +12,13 @@ use diskann_utils::{
     Reborrow,
     views::rowmajor::{self, Matrix, MatrixMut},
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use super::{Assign, Buckets, Groups, NearestCentroid, SplitError};
+use super::{Assign, Buckets, Groups, NearestCentroid, SplitError, TryMap};
 use crate::{
     ANNError, ANNResult,
     error::{ErrorContext, IntoANNResult},
     ivf::{
-        region::{AsMatRef, Update, View},
+        region::{AsMatRef, Region},
         split::Split,
     },
     utils::VectorId,
@@ -153,8 +152,8 @@ impl<A, S: Seed> KMeansSplit<A, S> {
     where
         I: Copy,
         L: VectorId,
-        R: View<I, L>,
-        A: for<'a> Assign<R::VectorsRef<'a>>,
+        R: Region<I, L>,
+        A: for<'a> Assign<R::VectorsRef<'a>, f32>,
         for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
     {
         let view = region
@@ -205,46 +204,36 @@ impl<I, L, R, A, S> Split<I, L, R> for KMeansSplit<A, S>
 where
     I: Copy + Send,
     L: VectorId,
-    R: View<I, L>,
-    A: for<'a> Assign<R::VectorsRef<'a>>,
+    R: Region<I, L>,
+    A: for<'a> Assign<R::VectorsRef<'a>, f32>,
     S: Seed,
     for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
 {
     type Error = ANNError;
 
-    fn split<U, F>(
+    fn split<F>(
         &mut self,
-        region: &R,
-        update: &mut U,
+        region: &mut R,
         parents: &[L],
         parallelism: Parallelism,
         mut emit: F,
     ) -> ANNResult<()>
     where
-        U: Update<I, L>,
         F: FnMut(L, L),
     {
         if parents.is_empty() {
             return Err(SplitError::<L>::EmptyParents.into());
         }
 
-        let fit = |&parent| self.fit(region, parent);
-
-        let families: Vec<_> = match parallelism {
-            // Report the first error in parent order.
-            Parallelism::Rayon => {
-                let results: Vec<_> = parents.par_iter().map(fit).collect();
-                results.into_iter().collect::<ANNResult<_>>()?
-            }
-            Parallelism::Sequential | _ => parents.iter().map(fit).collect::<ANNResult<_>>()?,
-        };
+        let families =
+            parallelism.try_map(parents.len(), |p: usize| self.fit(region, parents[p]))?;
 
         // Write in parent order.
         for (&parent, children) in parents.iter().zip(&families) {
-            update.retire(parent)?;
+            region.retire(parent)?;
 
             for (c, centroid) in children.centroids.rows().enumerate() {
-                emit(parent, update.create(centroid, children.members.get(c))?);
+                emit(parent, region.create(centroid, children.members.get(c))?);
             }
         }
 

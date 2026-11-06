@@ -10,7 +10,7 @@ use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
 
-use super::region::{Update, View};
+use super::region::Region;
 use crate::{
     ANNResult,
     error::StandardError,
@@ -38,7 +38,7 @@ pub trait Nearest: Send {
     /// The list ID type.
     type Id;
 
-    /// Emit up to `nprobe` distinct [live](Update) lists nearest the centroid of list `id`,
+    /// Emit up to `nprobe` distinct [live](Region) lists nearest the centroid of list `id`,
     /// among those accepted by `pred`, and return how many were emitted. Implementations
     /// need not return exactly `nprobe` items.
     ///
@@ -66,26 +66,26 @@ pub trait Nearest: Send {
 ///
 /// The index uses an accessor for one operation, split into stages, in this order:
 ///
-/// 1. [`route`](Self::route) stages the batch of points `B`, and inserts them to existing lists.
+/// 1. [`route`](Self::route) stages the batch of points `B`, and inserts them
+///    to existing lists.
 ///
 /// 2. Any number of stages follow. A stage calls [`fill`](Self::fill), records changes
-///    through the returned [`Update`], and finishes the update. Between stages, the index
+///    through the returned [`Region`], and `finish`es the region. Between stages, the index
 ///    may look up lists through [`nearest`](Self::nearest).
 ///
 /// 3. [`finish`](Self::finish) publishes the operation.
 ///
 /// # Important
 ///
-/// - Dropping the accessor without calling `finish` abandons the operation, and nothing it
-/// staged or recorded should be committed.
+/// - Dropping the accessor without calling `finish` abandons the operation,
+///   and nothing it staged or recorded should be committed.
 ///
 /// - [`fill`](Self::fill) and [`Nearest::find`] reflect the routed
-/// appends and **every** update finished earlier in the operation. Lists created by a finished
-/// update can be filled and found, and retired lists are never found.
+///   appends and **every** region `finish`ed earlier in the operation.
 pub trait BuildAccessor<B>: Send + Sized + HasIds {
     /// Borrowed vectors of one list.
     ///
-    /// This is the reference type of [`View::VectorsRef`] in [`Self::Region`], and
+    /// This is the reference type of [`Region::VectorsRef`] in [`Self::Region`], and
     /// is lifted here for convenience.
     type VectorsRef<'a>;
 
@@ -94,13 +94,8 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
     where
         Self: 'a;
 
-    /// The [`View`] object returned by [`Self::fill`].
-    type Region<'a>: for<'b> View<Self::Id, Self::ListId, VectorsRef<'b> = Self::VectorsRef<'b>>
-    where
-        Self: 'a;
-
-    /// The [`Update`] object returned by [`Self::fill`].
-    type Update<'a>: Update<Self::Id, Self::ListId>
+    /// The [`Region`] object returned by [`Self::fill`].
+    type Region<'a>: for<'b> Region<Self::Id, Self::ListId, VectorsRef<'b> = Self::VectorsRef<'b>>
     where
         Self: 'a;
 
@@ -121,19 +116,16 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
     where
         F: FnMut(Self::ListId, NonZeroUsize) + Send;
 
-    /// Fill the centroids, members, and vectors of `lists` into a [`View`] and [`Update`].
+    /// Fill the centroids, members, and vectors of `lists` into a [`Region`].
     ///
-    /// Each object can be scoped to the list ids in `lists`, and may reject or throw errors when
+    /// The region can be scoped to the list ids in `lists`, and may reject or throw errors when
     /// accessing or applying updates to ids outside of `lists`.
-    fn fill<Itr>(
-        &mut self,
-        lists: Itr,
-    ) -> impl SendFuture<ANNResult<(Self::Region<'_>, Self::Update<'_>)>>
+    fn fill<Itr>(&mut self, lists: Itr) -> impl SendFuture<ANNResult<Self::Region<'_>>>
     where
         Itr: Iterator<Item = Self::ListId> + Clone + Send + Sync;
 
     /// Publish the operation. The staged points, their appends, and the changes of every
-    /// finished update become visible together.
+    /// finished region become visible together.
     fn finish(self) -> impl SendFuture<ANNResult<()>>;
 }
 

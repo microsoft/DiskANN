@@ -3,12 +3,14 @@
  * Licensed under the MIT license.
  */
 
-//! Split and reassignment policies, and the assignment machinery they share.
+//! Split and reassignment policies, and the machinery they share.
 
 use std::fmt::Debug;
 
+use diskann_quantization::Parallelism;
 use diskann_utils::views::rowmajor::Matrix;
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{ANNError, ivf::region::AsMatRef};
 
@@ -45,14 +47,14 @@ impl<L: Debug + Send + Sync + 'static> From<SplitError<L>> for ANNError {
 ////////////
 
 /// Chooses a destination for every point in `V`.
-pub(crate) trait Assign<V>: Sync {
+pub(crate) trait Assign<V, T>: Sync {
     /// Call `emit(member, key)` once per member, choosing `key` from the `(key, centroid)`
     /// pairs of `candidates`. With no candidates, nothing is emitted.
     fn assign<I>(
         &self,
         members: &[I],
         points: V,
-        candidates: &[(usize, &[f32])],
+        candidates: &[(usize, &[T])],
         emit: impl FnMut(I, usize),
     ) where
         I: Copy;
@@ -62,15 +64,16 @@ pub(crate) trait Assign<V>: Sync {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct NearestCentroid;
 
-impl<'a, V> Assign<V> for NearestCentroid
+impl<'a, V, T> Assign<V, T> for NearestCentroid
 where
     V: AsMatRef<'a, f32>,
+    SquaredL2: for<'c, 'd> PureDistanceFunction<&'c [f32], &'d [T]>,
 {
     fn assign<I: Copy>(
         &self,
         members: &[I],
         points: V,
-        candidates: &[(usize, &[f32])],
+        candidates: &[(usize, &[T])],
         mut emit: impl FnMut(I, usize),
     ) {
         // With no candidates there is nothing to assign to.
@@ -80,30 +83,54 @@ where
 
         // Naive loop over the members
         for (&id, point) in members.iter().zip(points.as_view().rows()) {
-            emit(id, nearest(point, first, rest));
+            let mut best = first.0;
+            let mut min: f32 = SquaredL2::evaluate(point, first.1);
+
+            for &(dst, centroid) in rest.iter() {
+                let distance: f32 = SquaredL2::evaluate(point, centroid);
+                if distance < min {
+                    min = distance;
+                    best = dst;
+                }
+            }
+
+            emit(id, best);
         }
     }
 }
 
-/// The candidate nearest to `point`, starting from `default`; the earliest wins ties,
-/// including infinite distances.
-#[inline(always)]
-fn nearest<T>(point: &[T], default: (usize, &[T]), candidates: &[(usize, &[T])]) -> usize
-where
-    SquaredL2: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T]>,
-{
-    let mut best = default.0;
-    let mut min: f32 = SquaredL2::evaluate(point, default.1);
+/////////////////
+// Parallelism //
+/////////////////
 
-    for &(dst, centroid) in candidates.iter() {
-        let distance: f32 = SquaredL2::evaluate(point, centroid);
-        if distance < min {
-            min = distance;
-            best = dst;
+/// A simple trait to run iterator plus collection operations based on [`Parallelism`].
+trait TryMap {
+    /// Return `f(i)` for every task `i` in `0..tasks`, in task order, or the error of the
+    /// first task in that order that fails.
+    fn try_map<T, E, F>(self, tasks: usize, f: F) -> Result<Vec<T>, E>
+    where
+        T: Send,
+        E: Send,
+        F: Fn(usize) -> Result<T, E> + Sync + Send;
+}
+
+impl TryMap for Parallelism {
+    fn try_map<T, E, F>(self, tasks: usize, f: F) -> Result<Vec<T>, E>
+    where
+        T: Send,
+        E: Send,
+        F: Fn(usize) -> Result<T, E> + Sync + Send,
+    {
+        match self {
+            // Collect every result first: collecting straight into a `Result` would report
+            // whichever error Rayon found first, not the first in task order.
+            Parallelism::Rayon => {
+                let results: Vec<_> = (0..tasks).into_par_iter().map(f).collect();
+                results.into_iter().collect()
+            }
+            Parallelism::Sequential | _ => (0..tasks).map(f).collect(),
         }
     }
-
-    best
 }
 
 /////////////
@@ -214,36 +241,5 @@ impl<I> Groups<I> {
     /// Panics if `key` is not less than the key count.
     fn get(&self, key: usize) -> &[I] {
         &self.items[self.offsets[key]..self.offsets[key + 1]]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Buckets;
-
-    #[test]
-    fn buckets_group_stably_by_key() {
-        let mut moved = Buckets::new(4);
-        for (item, key) in [(10, 2), (11, 0), (12, 2)] {
-            moved.push(item, key);
-        }
-        assert_eq!(moved.seal(), [10, 11, 12]);
-        assert!(moved.seal().is_empty());
-        moved.push(13, 2);
-        assert_eq!(moved.seal(), [13]);
-        moved.push(14, 1);
-
-        // Unsealed items are grouped too.
-        let incoming = moved.group();
-        assert_eq!(incoming.get(0), [11]);
-        assert_eq!(incoming.get(1), [14]);
-        assert_eq!(incoming.get(2), [10, 12, 13]);
-        assert!(incoming.get(3).is_empty());
-    }
-
-    #[test]
-    #[should_panic(expected = "bucket key 4 is out of range")]
-    fn buckets_reject_out_of_range_keys() {
-        Buckets::new(4).push(10_u32, 4);
     }
 }

@@ -3,8 +3,8 @@
  * Licensed under the MIT license.
  */
 
-//! The lists filled for one stage of a build operation: a [`View`] to read them, and an
-//! [`Update`] to record the changes of the stage.
+//! The lists filled for one stage of a build operation: a [`Region`] to read them and to
+//! record the changes of the stage.
 
 use std::fmt::Debug;
 
@@ -25,20 +25,20 @@ pub struct List<'a, I> {
     pub members: &'a [I],
 }
 
-//////////
-// View //
-//////////
+////////////
+// Region //
+////////////
 
-/// Read access to vectors and the [`List`] for a subset of list ids in the index.
+/// Read access to vectors and the [`List`] for a subset of list ids in the index, and a
+/// record of the changes of one stage of a build operation.
 ///
-/// An implementation of this trait will need to be able to reflect two kinds of updates
-/// to the underlying index during the build -
+/// Reads need to reflect two kinds of updates to the underlying index during the build -
 ///
 /// 1. Routed appends, resulting from a call to [`route`](crate::ivf::traits::BuildAccessor::route).
 /// 2. Every update `finish`ed by a previous call to [`fill`](crate::ivf::traits::BuildAccessor::fill).
 ///
 /// The index may read one region from several threads at once.
-pub trait View<I, L>: Send + Sync {
+pub trait Region<I, L>: Send + Sync {
     /// Borrowed vector representation for a list.
     type VectorsRef<'a>;
 
@@ -53,20 +53,13 @@ pub trait View<I, L>: Send + Sync {
 
     /// Return the vectors of list `i` or `None` if `i` was not filled.
     fn get_vectors(&self, i: L) -> Option<Self::Vectors<'_>>;
-}
 
-////////////
-// Update //
-////////////
+    /// Record a new list with its centroid and complete membership, and return its ID.
+    fn create(&mut self, centroid: &[f32], members: &[I]) -> ANNResult<L>;
 
-/// Records the changes of one stage of a build operation.
-///
-/// A list is *live* from its creation until it is retired. Changes become
-/// visible to later [`fill`](crate::ivf::traits::BuildAccessor::fill)
-/// calls on the same accessor once the update [finishes](Self::finish).
-///
-/// Writes may target lists created earlier in the operation.
-pub trait Update<I, L>: Send {
+    /// Retire list `i`, superseding earlier changes to its membership.
+    fn retire(&mut self, i: L) -> ANNResult<()>;
+
     /// Append distinct IDs that are not already members of the list.
     fn append_members(&mut self, i: L, ids: &[I]) -> ANNResult<()>;
 
@@ -75,13 +68,7 @@ pub trait Update<I, L>: Send {
     /// `ids` must be distinct members of list.
     fn remove_members(&mut self, i: L, ids: &[I]) -> ANNResult<()>;
 
-    /// Retire list `i`, superseding earlier changes to its membership.
-    fn retire(&mut self, i: L) -> ANNResult<()>;
-
-    /// Record a new list with its centroid and complete membership, and return its ID.
-    fn create(&mut self, centroid: &[f32], members: &[I]) -> ANNResult<L>;
-
-    /// Make every change recorded through this update visible to the rest of the
+    /// Make every change recorded through this region visible to the rest of the
     /// operation.
     fn finish(self) -> impl SendFuture<ANNResult<()>>;
 }

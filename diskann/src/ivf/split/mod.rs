@@ -6,17 +6,14 @@
 //! Policies that restructure the lists filled for one stage of a build operation.
 //!
 //! A split replaces lists with fitted children, and a reassignment moves points between
-//! linked lists. Policies read a [`View`] and record changes through an [`Update`]; the
-//! index finishes the update.
+//! linked lists. Policies read a [`Region`] and record changes through it; the index
+//! finishes the region.
 
 use std::fmt::Debug;
 
 use diskann_quantization::Parallelism;
 
-use crate::{
-    ANNError,
-    ivf::region::{Update, View},
-};
+use crate::{ANNError, ivf::region::Region};
 
 pub(crate) mod links;
 pub(crate) mod policies;
@@ -31,7 +28,7 @@ pub(crate) use policies::{KMeansSplit, Linked};
 /// A policy that replaces parent lists with new lists that take over their members.
 pub(crate) trait Split<I, L, R>
 where
-    R: View<I, L>,
+    R: Region<I, L>,
 {
     /// The error returned by a failed split.
     type Error: Debug + Send + Sync + Into<ANNError>;
@@ -43,18 +40,16 @@ where
     ///
     /// # Errors
     ///
-    /// A failure may leave partial changes in `update`, so the caller must abandon the
+    /// A failure may leave partial changes in `region`, so the caller must abandon the
     /// operation.
-    fn split<U, F>(
+    fn split<F>(
         &mut self,
-        region: &R,
-        update: &mut U,
+        region: &mut R,
         parents: &[L],
         parallelism: Parallelism,
         emit: F,
     ) -> Result<(), Self::Error>
     where
-        U: Update<I, L>,
         F: FnMut(L, L);
 }
 
@@ -65,7 +60,7 @@ where
 /// A policy that moves points between linked lists without changing any centroid.
 pub(crate) trait Reassign<I, L, R>
 where
-    R: View<I, L>,
+    R: Region<I, L>,
 {
     /// The error returned by a failed reassignment.
     type Error: Debug + Send + Sync + Into<ANNError>;
@@ -76,15 +71,12 @@ where
     ///
     /// # Errors
     ///
-    /// A failure may leave partial changes in `update`, so the caller must abandon the
+    /// A failure may leave partial changes in `region`, so the caller must abandon the
     /// operation.
-    fn reassign<U>(
+    fn reassign(
         &mut self,
-        region: &R,
-        update: &mut U,
+        region: &mut R,
         links: &Links<L>,
         parallelism: Parallelism,
-    ) -> Result<(), Self::Error>
-    where
-        U: Update<I, L>;
+    ) -> Result<(), Self::Error>;
 }
