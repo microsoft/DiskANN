@@ -629,7 +629,7 @@ dependencies = [
  "diskann-utils",
  "diskann-vector",
  "foldhash",
- "parking_lot 0.12.5",
+ "parking_lot 0.13.0",
  "rand",
  "strum",
  "thiserror 2.0.21",
