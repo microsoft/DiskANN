@@ -31,6 +31,8 @@ diskann-wide = { workspace = true }
 # Optional Dependencies
 dashmap = { workspace = true, optional = true }
 diskann-linalg = { workspace = true, optional = true }
+diskann-quantization = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 diskann-utils = { workspace = true, features = ["testing"] }
@@ -62,6 +64,9 @@ default = ["tracing"]
 
 # Enable PiPNN numerical kernels.
 pipnn = ["dep:diskann-linalg"]
+
+# Enable clustering for IVF
+ivf = ["dep:diskann-quantization", "diskann-quantization/rayon", "dep:rayon"]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]
