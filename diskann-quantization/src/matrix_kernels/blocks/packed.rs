@@ -147,6 +147,7 @@ impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
     /// # Safety
     ///
     /// The bound [`Self::k`] must be equal to `k`.
+    #[inline(always)]
     pub(in crate::matrix_kernels) unsafe fn visit_sub_views<F>(
         &self,
         sub_blocks: NonZeroUsize,
@@ -197,6 +198,7 @@ impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
     /// # Safety
     ///
     /// The bound [`Self::k`] must be equal to `k`.
+    #[inline(always)]
     pub(in crate::matrix_kernels) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
     where
         F: FnMut(Panel<'_, T, SZ, PACK>, usize),

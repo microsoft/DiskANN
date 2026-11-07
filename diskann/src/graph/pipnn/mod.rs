@@ -12,7 +12,7 @@
 //!   uses `partition_metric`.
 //! - `leaf_kernel` finds the nearest neighbors of each point in a leaf. It uses
 //!   `leaf_metric`.
-//! - `topk` holds the selection code of both kernels. `simd` sets its vector width.
+//! - `topk` traverses the distance matrices using shared `diskann-vector` selectors.
 //!
 //! The metric code does not use `A`, because the GEMM and norm routines select
 //! their own SIMD code. Callers choose the metric once per graph build, so each
@@ -27,7 +27,6 @@ mod leaf_kernel;
 mod leaf_metric;
 mod partition_kernel;
 mod partition_metric;
-mod simd;
 mod topk;
 
 use crate::{ANNError, ANNResult};
@@ -170,12 +169,12 @@ mod cosine_distance_tests {
 
 #[cfg(test)]
 mod test_support {
-    use super::simd::Simd;
     use diskann_vector::distance::Metric;
+    use diskann_wide::Architecture;
 
     /// A test body that runs once for each architecture.
     pub(super) trait ArchCheck {
-        fn check<A: Simd>(&self, arch: A);
+        fn check<A: Architecture>(&self, arch: A);
     }
 
     /// Run `test` with `Scalar` and with each SIMD architecture that this CPU supports.
