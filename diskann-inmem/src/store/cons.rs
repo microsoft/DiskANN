@@ -7,9 +7,12 @@
 //!
 //! See: <https://en.wikipedia.org/wiki/Cons>
 
+use std::sync::Arc;
+
 use thiserror::Error;
 
 use crate::{
+    allocator::BufferAllocator,
     epoch,
     num::IdLimit,
     store::{Lifecycle, slots},
@@ -42,11 +45,14 @@ where
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
+        allocator: Option<Arc<dyn BufferAllocator>>,
     ) -> Result<Self::Slots, Self::Error> {
         // SAFETY: Inherited from caller.
-        let first = unsafe { self.first.build(handle.clone(), tags) }.map_err(ConsError::First)?;
+        let first = unsafe { self.first.build(handle.clone(), tags, allocator.clone()) }
+            .map_err(ConsError::First)?;
         // SAFETY: Inherited from caller.
-        let second = unsafe { self.second.build(handle, tags) }.map_err(ConsError::Second)?;
+        let second =
+            unsafe { self.second.build(handle, tags, allocator) }.map_err(ConsError::Second)?;
 
         let first_limit = slots::Slots::id_limit(&first);
         let second_limit = slots::Slots::id_limit(&second);

@@ -76,7 +76,7 @@
 //!
 //! ## Safety Considerations
 //!
-//! [`SlotsConfig::build`] is expected to receive two additional arguments:
+//! [`SlotsConfig::build`] receives lifecycle handles and an allocator:
 //!
 //! * [`epoch::RegistryHandle`]: A handle into the [`epoch::Registry`] used to protect the
 //!   constructed [`Slots`]. This allows implementations to check the validity of
@@ -89,9 +89,9 @@
 //!   [`Slots`]. Implementations can use [`tag::Authoritative::read_only`] to obtain a
 //!   read-only, synchronizing view into the authoritative tag collection.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
-use crate::{epoch, num::IdLimit, tag};
+use crate::{allocator::BufferAllocator, epoch, num::IdLimit, tag};
 
 use super::Lifecycle;
 
@@ -106,6 +106,7 @@ pub(crate) trait SlotsConfig: Debug {
     /// Construct [`Self::Slots`].
     ///
     /// The [`IdLimit`] for the resulting store can be obtained from `tags.id_limit()`.
+    /// `None` selects [`crate::allocator::DefaultAllocator`] for backing buffers.
     ///
     /// # Safety
     ///
@@ -120,6 +121,7 @@ pub(crate) trait SlotsConfig: Debug {
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
+        allocator: Option<Arc<dyn BufferAllocator>>,
     ) -> Result<Self::Slots, Self::Error>;
 }
 

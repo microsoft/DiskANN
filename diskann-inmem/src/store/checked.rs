@@ -303,6 +303,7 @@ impl slots::SlotsConfig for Config {
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
+        _allocator: Option<std::sync::Arc<dyn crate::allocator::BufferAllocator>>,
     ) -> Result<Checked, diskann::error::Infallible> {
         Ok(Checked::new(handle, tags.id_limit()))
     }

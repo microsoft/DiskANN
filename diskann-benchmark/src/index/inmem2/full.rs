@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::io::Write;
+use std::{io::Write, sync::Arc};
 
 use diskann_benchmark_runner::{
     self as dbr,
@@ -36,12 +36,42 @@ mod dto {
 
     use serde::{Deserialize, Serialize};
 
+    #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub(super) enum Allocator {
+        #[default]
+        Default,
+        HugePage,
+    }
+
+    impl Allocator {
+        pub(super) fn create(
+            self,
+        ) -> anyhow::Result<Option<Arc<dyn di::allocator::BufferAllocator>>> {
+            match self {
+                Self::Default => Ok(None),
+                Self::HugePage => {
+                    #[cfg(target_os = "linux")]
+                    {
+                        Ok(Some(Arc::new(di::allocator::HugePageAllocator::new()?)))
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        anyhow::bail!("The `huge_page` allocator is supported only on Linux")
+                    }
+                }
+            }
+        }
+    }
+
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(super) struct BuildAndSearch {
         pub(super) data: inmem2::common::dto::Data,
         pub(super) build: inmem2::benchmark::build::dto::Config,
         pub(super) search: inmem2::benchmark::knn::dto::Knn,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub(super) allocator: Option<Allocator>,
     }
 
     impl BuildAndSearch {
@@ -50,6 +80,7 @@ mod dto {
                 data: inmem2::common::dto::Data::example(),
                 build: inmem2::benchmark::build::dto::Config::example(),
                 search: inmem2::benchmark::knn::dto::Knn::example(),
+                allocator: None,
             }
         }
     }
@@ -64,6 +95,7 @@ struct BuildAndSearch {
     data: inmem2::common::Data,
     build: inmem2::benchmark::build::Config,
     search: inmem2::benchmark::knn::Knn,
+    allocator: Option<Arc<dyn di::allocator::BufferAllocator>>,
     // The raw input.
     raw: serde_json::Value,
 }
@@ -79,8 +111,10 @@ impl FromRawWith for BuildAndSearch {
             data,
             build,
             search,
+            allocator,
         } = raw;
 
+        let allocator = allocator.unwrap_or_default().create()?;
         let data = inmem2::common::Data::from_raw_with(data, checker.as_deref_mut())?;
         let build = inmem2::benchmark::build::Config::from_raw(build, data.distance())?;
         let search = inmem2::benchmark::knn::Knn::from_raw_with(search, checker)?;
@@ -89,6 +123,7 @@ impl FromRawWith for BuildAndSearch {
             data,
             build,
             search,
+            allocator,
             raw: serde_json::to_value(raw)?,
         })
     }
@@ -100,12 +135,14 @@ impl std::fmt::Display for BuildAndSearch {
             data,
             build,
             search,
+            allocator,
             raw: _,
         } = self;
         let mut kv = dbr::utils::fmt::KeyValue::new();
         kv.push("data", &data);
         kv.push("build", &build);
         kv.push("search", &search);
+        kv.push_debug("allocator", allocator);
         write!(f, "{}", kv)
     }
 }
@@ -184,6 +221,10 @@ where
             input.data.distance(),
             start,
         )?;
+
+        let mut store = di::store::Config::new();
+        store.allocator(input.allocator.clone());
+        let config = config.store(store);
 
         let provider = di::Provider::<_, u32>::new(config)?;
         let engine = input.build.engine(provider)?;
@@ -330,9 +371,59 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbr::Input;
 
     #[test]
     fn test_example_parses() {
         assert!(BuildAndSearch::from_raw_with(&dto::BuildAndSearch::example(), None,).is_ok());
+    }
+
+    #[test]
+    fn test_default_allocator_selection() {
+        let example = serde_json::to_value(dto::BuildAndSearch::example()).unwrap();
+        assert!(example.get("allocator").is_none());
+
+        for choice in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!("default")),
+        ] {
+            let mut raw = example.clone();
+            let explicit = choice.as_ref().is_some_and(|value| !value.is_null());
+            if let Some(choice) = choice {
+                raw["allocator"] = choice;
+            }
+            let input: dto::BuildAndSearch = serde_json::from_value(raw).unwrap();
+            let parsed = BuildAndSearch::from_raw_with(&input, None).unwrap();
+            assert!(parsed.allocator.is_none());
+            let saved = parsed.serialize().unwrap();
+            if explicit {
+                assert_eq!(saved["allocator"], "default");
+            } else {
+                assert!(saved.get("allocator").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn test_huge_pages_input_platform_support() {
+        let mut raw = dto::BuildAndSearch::example();
+        raw.allocator = Some(dto::Allocator::HugePage);
+        let parsed = BuildAndSearch::from_raw_with(&raw, None);
+        #[cfg(target_os = "linux")]
+        {
+            let parsed = parsed.unwrap();
+            assert!(parsed.allocator.is_some());
+            assert_eq!(parsed.serialize().unwrap()["allocator"], "huge_pages");
+        }
+        #[cfg(not(target_os = "linux"))]
+        assert!(parsed.unwrap_err().to_string().contains("only on Linux"));
+    }
+
+    #[test]
+    fn test_unknown_allocator_rejected() {
+        let mut raw = serde_json::to_value(dto::BuildAndSearch::example()).unwrap();
+        raw["allocator"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<dto::BuildAndSearch>(raw).is_err());
     }
 }

@@ -7,6 +7,7 @@
 
 //! The inmem index for DiskANN.
 
+pub mod allocator;
 pub mod num;
 
 mod buffer;
