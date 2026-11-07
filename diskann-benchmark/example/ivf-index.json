@@ -1,0 +1,36 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "ivf-build-search",
+      "content": {
+        "data": null,
+        "data_type": "float32",
+        "format": "bin",
+        "build": {
+          "batch_size": 8192,
+          "split_threshold": 120,
+          "iterations": 5,
+          "split_k": 2,
+          "reassign_count": 8
+        },
+        "search": {
+          "distance": "squared_l2",
+          "queries": null,
+          "groundtruth": null,
+          "k": 1000,
+          "nprobe": [],
+          "target_scan_ratios": [
+            0.02,
+            0.04,
+            0.06,
+            0.08
+          ],
+          "reps": 1,
+          "query_limit": null,
+          "full_probe_queries": null
+        }
+      }
+    }
+  ]
+}
