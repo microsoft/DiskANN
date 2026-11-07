@@ -240,15 +240,50 @@ mod tests {
         run_example("store-stress-test.json");
     }
 
+    //----------------//
+    // Full Precision //
+    //----------------//
+
+    // Full precision is relatively stable across architectures and thus all data types
+    // can share a tight tolerance.
+
     #[test]
     #[cfg(not(miri))]
-    fn graph_index_full() {
-        // Full precision is relatively stable across architectures and thus all data types
-        // can share a tight tolerance.
+    fn graph_index_full_f32() {
         run_regression_example(
-            "graph/full/integration.json",
+            "graph/full/integration-f32.json",
             "graph/full/checks.json",
-            "graph/full/integration-baseline.json",
+            "graph/full/integration-f32-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_index_full_f16() {
+        run_regression_example(
+            "graph/full/integration-f16.json",
+            "graph/full/checks.json",
+            "graph/full/integration-f16-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_index_full_u8() {
+        run_regression_example(
+            "graph/full/integration-u8.json",
+            "graph/full/checks.json",
+            "graph/full/integration-u8-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_index_full_i8() {
+        run_regression_example(
+            "graph/full/integration-i8.json",
+            "graph/full/checks.json",
+            "graph/full/integration-i8-baseline.json",
         );
     }
 
