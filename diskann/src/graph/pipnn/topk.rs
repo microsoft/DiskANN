@@ -26,45 +26,12 @@
 //! them with the target features of `A`.
 
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
-use diskann_wide::{SIMDPartialOrd, SIMDVector};
-
-use super::simd::{LANES, Simd};
+pub(super) use diskann_vector::topk::Candidate;
+use diskann_vector::topk::{LANES, insert_sorted, load_group, offer_each, offer_group, offer_rows};
+use diskann_wide::Architecture;
 
 /// The ID of an output slot that holds no candidate.
-pub(super) const UNASSIGNED: u32 = u32::MAX;
-
-/// One slot of a nearest set: a candidate ID and its distance.
-///
-/// The ID is a position in the kernel input. Partition assignment uses leader
-/// columns. Leaf construction uses point positions in the leaf.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Candidate {
-    pub(super) local_idx: u32,
-    pub(super) distance: f32,
-}
-
-impl Candidate {
-    /// An unfilled slot. Every distance that can enter a nearest set is nearer.
-    pub(super) const EMPTY: Self = Self::new(UNASSIGNED, f32::INFINITY);
-
-    pub(super) const fn new(local_idx: u32, distance: f32) -> Self {
-        Self {
-            local_idx,
-            distance,
-        }
-    }
-
-    /// Return `true` if this slot holds a candidate.
-    pub(super) const fn is_assigned(self) -> bool {
-        self.local_idx != UNASSIGNED
-    }
-}
-
-impl Default for Candidate {
-    fn default() -> Self {
-        Self::EMPTY
-    }
-}
+pub(super) const UNASSIGNED: u32 = diskann_vector::topk::UNASSIGNED;
 
 /// Write the IDs of the k nearest columns of each distance row, nearest first.
 ///
@@ -73,7 +40,7 @@ impl Default for Candidate {
 /// row has fewer than k distances that are not NaN or positive infinity, the
 /// remaining slots hold [`UNASSIGNED`]. `scratch` is reusable storage for values
 /// of k without a fixed-size nearest set.
-pub(super) fn select_top_k_ids<A: Simd>(
+pub(super) fn select_top_k_ids<A: Architecture>(
     arch: A,
     distances: rowmajor::Ref<'_, f32>,
     output: rowmajor::Mut<'_, u32>,
@@ -112,7 +79,7 @@ pub(super) fn select_top_k_ids<A: Simd>(
 /// select either point. Slots that no pair fills hold [`Candidate::EMPTY`].
 /// `kth_distances` is reusable storage. It holds the k-th distance of each point
 /// after the scan.
-pub(super) fn select_top_k_symmetric<A: Simd>(
+pub(super) fn select_top_k_symmetric<A: Architecture>(
     arch: A,
     distances: rowmajor::Ref<'_, f32>,
     output: rowmajor::Mut<'_, Candidate>,
@@ -147,7 +114,7 @@ fn select_ids_with<A, Nearest>(
     mut output: rowmajor::Mut<'_, u32>,
     nearest: &mut Nearest,
 ) where
-    A: Simd,
+    A: Architecture,
     Nearest: AsMut<[Candidate]> + ?Sized,
 {
     for (ids, distances) in std::iter::zip(output.rows_mut(), distances.rows()) {
@@ -165,7 +132,7 @@ fn select_ids_with<A, Nearest>(
 #[inline]
 fn select_nearest<A, Nearest>(arch: A, nearest: &mut Nearest, distances: &[f32])
 where
-    A: Simd,
+    A: Architecture,
     Nearest: AsMut<[Candidate]> + ?Sized,
 {
     arch.run2(
@@ -195,7 +162,7 @@ fn scan_pairs<A, Nearest>(
     neighborhoods: &mut [Nearest],
     kth_distances: &mut Vec<f32>,
 ) where
-    A: Simd,
+    A: Architecture,
     Nearest: AsMut<[Candidate]>,
 {
     // The k-th distances live in their own array. One SIMD load then reads the
@@ -226,7 +193,7 @@ fn offer_pairs<A, Nearest>(
     neighborhoods: &mut [Nearest],
     kth_distances: &mut [f32],
 ) where
-    A: Simd,
+    A: Architecture,
     Nearest: AsMut<[Candidate]>,
 {
     arch.run3(
@@ -247,15 +214,14 @@ fn offer_pairs<A, Nearest>(
                 // different target, so the mask stays correct while lanes insert.
                 // `offer_group` must check again, because all its lanes share one set.
                 let target_kth = load_group(arch, &kth_distances.as_chunks::<LANES>().0[group]);
-                let mut eligible = A::active_lanes(values.lt_simd(target_kth));
-                while eligible != 0 {
-                    let lane = eligible.trailing_zeros() as usize;
-                    eligible &= eligible - 1;
-                    let candidate = Candidate::new(source as u32, group_distances[lane]);
-                    let target = first + lane;
-                    kth_distances[target] =
-                        insert_sorted(neighborhoods[target].as_mut(), candidate);
-                }
+                offer_rows(
+                    group_distances,
+                    values,
+                    target_kth,
+                    source as u32,
+                    &mut neighborhoods[first..],
+                    &mut kth_distances[first..],
+                );
             }
             // The tail has fewer than `LANES` pairs. Offer each pair to both points
             // without SIMD.
@@ -280,96 +246,11 @@ fn offer_pairs<A, Nearest>(
     );
 }
 
-/// Offer the candidates of one group to a nearest set, and return the new k-th
-/// distance.
-///
-/// `first_candidate` is the candidate ID of `distances[0]`, and `values` holds
-/// the same distances as `distances`.
-#[inline(always)]
-fn offer_group<A: Simd>(
-    arch: A,
-    nearest: &mut [Candidate],
-    first_candidate: usize,
-    distances: &[f32; LANES],
-    values: A::Vector,
-    mut kth_distance: f32,
-) -> f32 {
-    // An unfilled nearest set accepts every distance that is not NaN or positive
-    // infinity, so a scalar scan skips the mask. On AVX2, removing this path cost
-    // 3% of leaf ranking time at k = 3 and 20% for 100-leader rows at k = 3.
-    if kth_distance == f32::INFINITY {
-        return offer_each(nearest, first_candidate, distances, kth_distance);
-    }
-    let mut eligible = A::active_lanes(values.lt_simd(A::Vector::splat(arch, kth_distance)));
-    while eligible != 0 {
-        let lane = eligible.trailing_zeros() as usize;
-        eligible &= eligible - 1;
-        // An earlier insertion in this group can lower the k-th distance.
-        if distances[lane] < kth_distance {
-            let candidate = Candidate::new((first_candidate + lane) as u32, distances[lane]);
-            kth_distance = insert_sorted(nearest, candidate);
-        }
-    }
-    kth_distance
-}
-
-/// Offer each entry of `distances` to a nearest set, and return the new k-th
-/// distance.
-///
-/// `first_candidate` is the candidate ID of `distances[0]`.
-#[inline(always)]
-fn offer_each(
-    nearest: &mut [Candidate],
-    first_candidate: usize,
-    distances: &[f32],
-    mut kth_distance: f32,
-) -> f32 {
-    for (offset, &distance) in distances.iter().enumerate() {
-        if distance < kth_distance {
-            let candidate = Candidate::new((first_candidate + offset) as u32, distance);
-            kth_distance = insert_sorted(nearest, candidate);
-        }
-    }
-    kth_distance
-}
-
-/// Load one group of distances without copying it.
-///
-/// A load from a copy (`from_array(*group)`) can leave the copy on the stack in a
-/// large loop. Each group then pays a store and a dependent reload: on AVX2 that
-/// cost 11% of leaf ranking time.
-#[inline(always)]
-fn load_group<A: Simd>(arch: A, group: &[f32; LANES]) -> A::Vector {
-    // A vector with more lanes than `LANES` would read past `group`. Both sides
-    // are constants, so a mismatch fails to compile.
-    const { assert!(A::Vector::LANES == LANES) };
-    // SAFETY: the assertion above proves that the load reads exactly the
-    // `group.len()` readable values of `group`.
-    unsafe { A::Vector::load_simd(arch, group.as_ptr()) }
-}
-
-/// Insert a candidate into a nearest set in nearest-first order, and return the
-/// new k-th distance.
-///
-/// The set must not be empty, and the candidate must be nearer than the k-th
-/// distance. A candidate goes after existing candidates with an equal distance.
-#[inline(always)]
-fn insert_sorted(nearest: &mut [Candidate], candidate: Candidate) -> f32 {
-    let last = nearest.len() - 1;
-    let mut slot = last;
-    while slot > 0 && candidate.distance < nearest[slot - 1].distance {
-        nearest[slot] = nearest[slot - 1];
-        slot -= 1;
-    }
-    nearest[slot] = candidate;
-    nearest[last].distance
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::graph::pipnn::test_support::{ArchCheck, for_each_arch};
-    use diskann_wide::ARCH;
+    use diskann_wide::{ARCH, SIMDVector};
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
     use rstest::rstest;
 
@@ -474,8 +355,8 @@ mod tests {
         struct SelectionGrid;
 
         impl ArchCheck for SelectionGrid {
-            fn check<A: Simd>(&self, arch: A) {
-                let lanes = A::Vector::LANES;
+            fn check<A: Architecture>(&self, arch: A) {
+                let lanes = A::f32x16::LANES;
                 let arch_name = std::any::type_name::<A>();
                 // An empty distance row has no matrix form here. The `empty_input` case of
                 // the selection test covers it.
@@ -563,8 +444,8 @@ mod tests {
         }
 
         impl ArchCheck for FloatBits {
-            fn check<A: Simd>(&self, arch: A) {
-                let lanes = A::Vector::LANES;
+            fn check<A: Architecture>(&self, arch: A) {
+                let lanes = A::f32x16::LANES;
                 let arch_name = std::any::type_name::<A>();
                 // The first and last lanes of a group, the first lane of the next group,
                 // and the scalar tail.
@@ -636,8 +517,8 @@ mod tests {
         struct PairScanGrid;
 
         impl ArchCheck for PairScanGrid {
-            fn check<A: Simd>(&self, arch: A) {
-                let lanes = A::Vector::LANES;
+            fn check<A: Architecture>(&self, arch: A) {
+                let lanes = A::f32x16::LANES;
                 let arch_name = std::any::type_name::<A>();
                 for point_count in [
                     lanes,
@@ -911,5 +792,51 @@ mod tests {
         );
 
         assert_eq!(output, [UNASSIGNED; 4]);
+    }
+
+    #[test]
+    fn extraction_keeps_rectangular_and_symmetric_tie_fixture_order() {
+        let points = LANES + 3;
+        let last = points - 1;
+        let mut row = vec![8.0; points];
+        row[last] = -2.0;
+        let mut ids = [UNASSIGNED; 3];
+        select_top_k_ids(
+            ARCH,
+            rowmajor::Ref::try_from_data(row.as_slice(), 1, points).unwrap(),
+            rowmajor::Mut::try_from_data(&mut ids[..], 1, 3).unwrap(),
+            &mut Vec::new(),
+        );
+        assert_eq!(ids, [last as u32, 0, 1]);
+
+        let mut distances = vec![8.0; points * points];
+        distances[last] = -2.0;
+        distances[last * points] = -2.0;
+        let mut output = vec![[Candidate::EMPTY; 3]; points];
+        select_top_k_symmetric(
+            ARCH,
+            rowmajor::Ref::try_from_data(distances.as_slice(), points, points).unwrap(),
+            rowmajor::Mut::try_from_data(output.as_flattened_mut(), points, 3).unwrap(),
+            &mut Vec::new(),
+        );
+        for (point, nearest) in output.iter().enumerate() {
+            let expected = if point == 0 {
+                [
+                    Candidate::new(last as u32, -2.0),
+                    Candidate::new(1, 8.0),
+                    Candidate::new(2, 8.0),
+                ]
+            } else if point == last {
+                [
+                    Candidate::new(0, -2.0),
+                    Candidate::new(1, 8.0),
+                    Candidate::new(2, 8.0),
+                ]
+            } else {
+                let ids: Vec<_> = (0..points).filter(|&id| id != point).take(3).collect();
+                std::array::from_fn(|slot| Candidate::new(ids[slot] as u32, 8.0))
+            };
+            assert_eq!(*nearest, expected, "point={point}");
+        }
     }
 }
