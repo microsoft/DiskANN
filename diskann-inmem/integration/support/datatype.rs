@@ -92,14 +92,15 @@ impl<'a> Slice<'a> {
 
     pub(crate) fn try_cast<T>(self) -> Result<&'a [T], WrongDataType>
     where
-        T: FromSlice,
+        T: TryCast,
     {
         T::from_slice(self)
     }
 }
 
-pub(crate) trait FromSlice: Sized {
+pub(crate) trait TryCast: Sized {
     fn from_slice(slice: Slice<'_>) -> Result<&[Self], WrongDataType>;
+    fn from_dataset_view(view: DatasetView<'_>) -> Result<rowmajor::Ref<'_, Self>, WrongDataType>;
 }
 
 //////////////
@@ -370,6 +371,15 @@ impl<'a> DatasetView<'a> {
         }
     }
 
+    pub(crate) fn subview(&self, rows: std::ops::Range<usize>) -> Option<DatasetView<'_>> {
+        match self {
+            Self::F32(m) => m.subview(rows).map(DatasetView::from),
+            Self::F16(m) => m.subview(rows).map(DatasetView::from),
+            Self::U8(m) => m.subview(rows).map(DatasetView::from),
+            Self::I8(m) => m.subview(rows).map(DatasetView::from),
+        }
+    }
+
     pub(crate) fn medoid(&self) -> Dataset {
         match self {
             Self::F32(v) => rowmajor::Owned::row_vector(Box::from(f32::compute_medoid(*v))).into(),
@@ -377,6 +387,13 @@ impl<'a> DatasetView<'a> {
             Self::U8(v) => rowmajor::Owned::row_vector(Box::from(u8::compute_medoid(*v))).into(),
             Self::I8(v) => rowmajor::Owned::row_vector(Box::from(i8::compute_medoid(*v))).into(),
         }
+    }
+
+    pub(crate) fn try_cast<T>(self) -> Result<rowmajor::Ref<'a, T>, WrongDataType>
+    where
+        T: TryCast,
+    {
+        T::from_dataset_view(self)
     }
 
     pub(crate) fn iter(&self) -> Iter<'_> {
@@ -427,7 +444,7 @@ macro_rules! define {
             }
         }
 
-        impl FromSlice for $T {
+        impl TryCast for $T {
             fn from_slice(slice: Slice<'_>) -> Result<&[Self], WrongDataType> {
                 if let Slice::$variant(s) = slice {
                     Ok(s)
@@ -435,10 +452,26 @@ macro_rules! define {
                     Err(WrongDataType::new(DataType::$variant, slice.data_type()))
                 }
             }
+
+            fn from_dataset_view(
+                view: DatasetView<'_>,
+            ) -> Result<rowmajor::Ref<'_, Self>, WrongDataType> {
+                if let DatasetView::$variant(s) = view {
+                    Ok(s)
+                } else {
+                    Err(WrongDataType::new(DataType::$variant, view.data_type()))
+                }
+            }
         }
 
         impl From<rowmajor::Owned<$T>> for Dataset {
             fn from(m: rowmajor::Owned<$T>) -> Self {
+                Self::$variant(m)
+            }
+        }
+
+        impl<'a> From<rowmajor::Ref<'a, $T>> for DatasetView<'a> {
+            fn from(m: rowmajor::Ref<'a, $T>) -> Self {
                 Self::$variant(m)
             }
         }

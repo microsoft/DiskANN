@@ -11,7 +11,8 @@
           "alpha": 1.2000000476837158,
           "l_build": 20,
           "max_degree": 20,
-          "pruned_degree": 16
+          "pruned_degree": 16,
+          "insert": "single"
         },
         "data": {
           "data": "yfcc_10k.fbin",
@@ -56,7 +57,8 @@
           "alpha": 1.2000000476837158,
           "l_build": 20,
           "max_degree": 20,
-          "pruned_degree": 16
+          "pruned_degree": 16,
+          "insert": "single"
         },
         "data": {
           "data": "yfcc_10k.fbin",

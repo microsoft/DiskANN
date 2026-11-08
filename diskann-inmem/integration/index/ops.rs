@@ -3,7 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use diskann::graph::search::Knn;
+use std::{num::NonZeroU32, sync::Arc};
+
+use diskann::{graph::search::Knn, utils::IntoUsize};
 use diskann_benchmark_core::recall::{RecallMetrics, Rows};
 use diskann_benchmark_runner::{
     report::{
@@ -28,6 +30,31 @@ pub(super) fn insert(
     let before = index.counters();
     for (i, r) in dataset.iter().enumerate() {
         rt.block_on(index.insert(r, i as u64))?;
+    }
+    before.delta(&index.counters())
+}
+
+pub(super) fn multi_insert(
+    index: &Arc<dyn Index>,
+    dataset: DatasetView<'_>,
+    batch_size: NonZeroU32,
+    rt: &tokio::runtime::Handle,
+) -> anyhow::Result<Counters> {
+    let before = index.counters();
+    let batch_size = batch_size.get().into_usize();
+
+    let mut start = 0;
+    while start != dataset.nrows() {
+        let end = (start + batch_size).min(dataset.nrows());
+
+        #[expect(clippy::expect_used)]
+        let batch = dataset
+            .subview(start..end)
+            .expect("this should be in-bounds by construction");
+
+        let ids = (start as u64)..(end as u64);
+        rt.block_on(index.clone().multi_insert(batch, ids))?;
+        start = end;
     }
     before.delta(&index.counters())
 }

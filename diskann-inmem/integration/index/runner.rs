@@ -3,7 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use std::{io::Write, num::NonZeroUsize, sync::Arc};
+use std::{
+    io::Write,
+    num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
+};
 
 use anyhow::Context;
 use diskann::graph::{DiskANNIndex, search::Knn};
@@ -169,11 +173,23 @@ mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) enum Insert {
+        Single,
+        Multi {
+            batch_size: NonZeroU32,
+            parallelism: NonZeroUsize,
+            intra_batch_candidates: u32,
+        },
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct Build {
         pub(super) pruned_degree: usize,
         pub(super) max_degree: usize,
         pub(super) l_build: usize,
         pub(super) alpha: f32,
+        pub(super) insert: Insert,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -444,39 +460,80 @@ impl Representation {
 }
 
 #[derive(Debug)]
+pub(super) enum Insert {
+    Single,
+    Multi { batch_size: NonZeroU32 },
+}
+
+#[derive(Debug)]
 struct Build {
     config: diskann::graph::Config,
+    insert: Insert,
 }
 
 impl Build {
     fn from_raw(raw: dto::Build, metric: Metric) -> anyhow::Result<Self> {
+        use diskann::graph::config as graph_config;
+
         let dto::Build {
             pruned_degree,
             max_degree,
             l_build,
             alpha,
+            insert,
         } = raw;
 
-        let config = diskann::graph::config::Builder::new_with(
+        let mut builder = graph_config::Builder::new_with(
             pruned_degree,
-            diskann::graph::config::MaxDegree::new(max_degree),
+            graph_config::MaxDegree::new(max_degree),
             l_build,
             metric.into(),
             |b| {
                 b.alpha(alpha);
             },
-        )
-        .build()?;
+        );
 
-        Ok(Self { config })
+        let insert = match insert {
+            dto::Insert::Single => Insert::Single,
+            dto::Insert::Multi {
+                batch_size,
+                parallelism,
+                intra_batch_candidates,
+            } => {
+                let ibc = graph_config::IntraBatchCandidates::new(intra_batch_candidates);
+                builder
+                    .max_minibatch_par(parallelism.get())
+                    .intra_batch_candidates(ibc);
+                Insert::Multi { batch_size }
+            }
+        };
+
+        let config = builder.build()?;
+        Ok(Self { config, insert })
     }
 
     fn as_raw(&self) -> dto::Build {
+        use diskann::graph::config::IntraBatchCandidates as IBC;
+
+        let insert = match self.insert {
+            Insert::Single => dto::Insert::Single,
+            Insert::Multi { batch_size } => dto::Insert::Multi {
+                batch_size,
+                parallelism: self.config.max_minibatch_par(),
+                intra_batch_candidates: match self.config.intra_batch_candidates() {
+                    IBC::None => 0,
+                    IBC::Max(m) => m.get(),
+                    IBC::All => batch_size.get(),
+                },
+            },
+        };
+
         dto::Build {
             pruned_degree: self.config.pruned_degree().get(),
             max_degree: self.config.max_degree().get(),
             l_build: self.config.l_build().get(),
             alpha: self.config.alpha(),
+            insert,
         }
     }
 }
@@ -840,6 +897,7 @@ impl diskann_benchmark_runner::Input for Test {
                 max_degree: 20,
                 l_build: 50,
                 alpha: 1.2,
+                insert: dto::Insert::Single,
             },
             search: dto::Search {
                 knn: vec![
@@ -924,9 +982,20 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         } = input.data.load_as(data_type)?;
 
         let index = input.index(data.as_view())?;
-        let rt = diskann_benchmark_core::tokio::runtime(1)?;
-        let build = super::ops::insert(&*index, data.as_view(), rt.handle())?;
+        let build = match input.build.insert {
+            Insert::Single => {
+                let rt = diskann_benchmark_core::tokio::runtime(1)?;
+                super::ops::insert(&*index, data.as_view(), rt.handle())?
+            }
+            Insert::Multi { batch_size } => {
+                let rt = diskann_benchmark_core::tokio::runtime(
+                    input.build.config.max_minibatch_par().into(),
+                )?;
+                super::ops::multi_insert(&index, data.as_view(), batch_size, rt.handle())?
+            }
+        };
 
+        let rt = diskann_benchmark_core::tokio::runtime(1)?;
         let mut knn = Vec::new();
         for (k, param) in input.search.knn.iter() {
             let stats = super::ops::knn(
