@@ -8,7 +8,7 @@ pub mod region;
 pub mod split;
 pub mod traits;
 
-pub use index::{Config, ConfigError, IVFIndex, InsertStats, ReassignCount};
+pub use index::{Config, ConfigError, IVFIndex, InsertStats, ReassignCount, ReassignmentMode};
 
 #[cfg(test)]
 mod tests;

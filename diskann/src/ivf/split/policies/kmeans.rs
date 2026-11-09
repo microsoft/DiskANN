@@ -63,7 +63,7 @@ pub(crate) trait Seed {
 
 /// Seeds with the first rows of `points`.
 ///
-/// Fails with [`NotEnoughPoints`] if `points` has fewer rows than `centers`.
+/// Fails with [`FitError::NotEnoughPoints`] if `points` has fewer rows than `centers`.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct FirstPoints;
 

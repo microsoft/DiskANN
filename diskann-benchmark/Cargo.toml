@@ -54,6 +54,8 @@ half = { workspace = true, features = ["rand_distr", "num-traits"] }
 [features]
 default = []
 
+ivf-gemm = ["diskann/ivf-gemm"]
+
 # Enable spherical-quantization based algorithms
 spherical-quantization = []
 

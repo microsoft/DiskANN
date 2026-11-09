@@ -163,7 +163,70 @@ fn configuration_rejects_unknown_or_invalid_build_options() -> Result<()> {
         let parsed = serde_json::from_str::<Build>(input);
         assert!(parsed.is_err() || parsed?.validate().is_err());
     }
+    use crate::inputs::ivf::ReassignmentMode;
+    for input in ["{}", r#"{"reassignment_mode":"baseline"}"#] {
+        assert!(matches!(
+            serde_json::from_str::<Build>(input)?.reassignment_mode,
+            ReassignmentMode::Baseline
+        ));
+    }
+    let gemm = serde_json::from_str::<Build>(r#"{"reassignment_mode":"gemm"}"#);
+    #[cfg(feature = "ivf-gemm")]
+    assert!(matches!(gemm?.reassignment_mode, ReassignmentMode::Gemm));
+    #[cfg(not(feature = "ivf-gemm"))]
+    assert!(gemm.is_err());
     Ok(())
+}
+
+#[cfg(feature = "ivf-gemm")]
+#[test]
+fn gemm_reassignment_preserves_fixture_layout_and_search() -> Result<()> {
+    use crate::inputs::ivf::ReassignmentMode;
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    runtime.block_on(async {
+        let (base, queries) = sample();
+        for split_k in [2, 3] {
+            let baseline = Build {
+                batch_size: NonZeroUsize::new(64).unwrap(),
+                split_threshold: NonZeroUsize::new(24).unwrap(),
+                split_k: NonZeroUsize::new(split_k).unwrap(),
+                reassign_count: 16,
+                ..config()
+            };
+            let candidate = Build {
+                reassignment_mode: ReassignmentMode::Gemm,
+                ..baseline.clone()
+            };
+            let (a, a_result) = build::build(base.clone(), &baseline, &mut || Ok(())).await?;
+            let (b, b_result) = build::build(base.clone(), &candidate, &mut || Ok(())).await?;
+            assert_eq!(a_result.trajectory, b_result.trajectory);
+            assert_eq!(state(&a), state(&b));
+            let distance = SimilarityMeasure::SquaredL2;
+            let a_provider = SearchProvider::new(&*a.provider.read()?, distance);
+            let b_provider = SearchProvider::new(&*b.provider.read()?, distance);
+            for nprobe in [1, 4, a_result.lists] {
+                for query in &queries {
+                    let a = a
+                        .search(&a_provider, query, NonZeroUsize::new(31).unwrap(), nprobe)
+                        .await?;
+                    let b = b
+                        .search(&b_provider, query, NonZeroUsize::new(31).unwrap(), nprobe)
+                        .await?;
+                    let hits = |result: &SearchResult| {
+                        result
+                            .neighbors
+                            .iter()
+                            .map(|hit| (*hit.id(), hit.distance().to_bits()))
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(hits(&a), hits(&b));
+                    assert_eq!(a.candidates_scanned, b.candidates_scanned);
+                }
+            }
+            check_search(&b, &base, &queries, distance).await?;
+        }
+        Ok(())
+    })
 }
 
 #[test]

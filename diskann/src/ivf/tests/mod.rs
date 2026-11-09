@@ -51,6 +51,8 @@ use crate::{
     utils::{ONE, TWO},
 };
 
+#[cfg(feature = "ivf-gemm")]
+mod gemm;
 mod pending;
 mod support;
 

@@ -43,7 +43,7 @@ pub trait Nearest: Send {
     /// need not return exactly `nprobe` items.
     ///
     /// - `pred` filters candidates based on id. This can be used to exclude some ids when looking
-    /// for neighbors of a list.  
+    ///   for neighbors of a list.
     ///
     /// - `emit` is a callback applied to the ids and distances of the top results (that pass the filter).  
     ///
@@ -77,11 +77,11 @@ pub trait Nearest: Send {
 /// # Important
 ///
 /// - Dropping the accessor without calling `finish` abandons the operation, and nothing it
-/// staged or recorded should be committed.
+///   staged or recorded should be committed.
 ///
 /// - [`fill`](Self::fill) and [`Nearest::find`] reflect the routed
-/// appends and **every** update finished earlier in the operation. Lists created by a finished
-/// update can be filled and found, and retired lists are never found.
+///   appends and **every** update finished earlier in the operation. Lists created by a finished
+///   update can be filled and found, and retired lists are never found.
 pub trait BuildAccessor<B>: Send + Sized + HasIds {
     /// Borrowed vectors of one list.
     ///

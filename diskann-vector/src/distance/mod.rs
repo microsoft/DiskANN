@@ -6,6 +6,8 @@
 #[cfg(test)]
 pub mod reference;
 
+mod pair;
+
 pub mod simd;
 
 pub mod implementations;
