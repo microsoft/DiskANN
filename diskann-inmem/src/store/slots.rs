@@ -91,7 +91,7 @@
 
 use std::{fmt::Debug, sync::Arc};
 
-use crate::{allocator::BufferAllocator, epoch, num::IdLimit, tag};
+use crate::{allocator::Allocator, epoch, num::IdLimit, tag};
 
 use super::Lifecycle;
 
@@ -121,7 +121,7 @@ pub(crate) trait SlotsConfig: Debug {
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
-        allocator: Option<Arc<dyn BufferAllocator>>,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Self::Slots, Self::Error>;
 }
 

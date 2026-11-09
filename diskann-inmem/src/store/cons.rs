@@ -12,7 +12,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    allocator::BufferAllocator,
+    allocator::Allocator,
     epoch,
     num::IdLimit,
     store::{Lifecycle, slots},
@@ -45,7 +45,7 @@ where
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
-        allocator: Option<Arc<dyn BufferAllocator>>,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Self::Slots, Self::Error> {
         // SAFETY: Inherited from caller.
         let first = unsafe { self.first.build(handle.clone(), tags, allocator.clone()) }

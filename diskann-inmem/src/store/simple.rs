@@ -12,7 +12,7 @@ use diskann::utils::IntoUsize;
 use thiserror::Error;
 
 use crate::{
-    allocator::BufferAllocator,
+    allocator::Allocator,
     buffer::{Buffer, BufferError, RawSlice},
     epoch,
     num::{Align, Bytes, IdLimit},
@@ -42,7 +42,7 @@ impl slots::SlotsConfig for Config {
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
-        allocator: Option<Arc<dyn BufferAllocator>>,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Simple, SimpleError> {
         let Self { bytes } = self;
 
@@ -88,7 +88,7 @@ impl Simple {
         bytes: Bytes,
         handle: epoch::RegistryHandle,
         tags: tag::ReadOnly,
-        allocator: Option<Arc<dyn BufferAllocator>>,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Self, SimpleError> {
         let Some(padded) = bytes.checked_next_multiple_of(Bytes::CACHELINE) else {
             return Err(SimpleError::bytes_overflowed());

@@ -466,9 +466,9 @@ mod tests {
     fn inmem_integration() {
         let path = example_directory().join("inmem2.json");
         #[cfg(not(all(feature = "inmem2", target_os = "linux")))]
-        let allocators = [None::<&str>];
+        let allocators = ["default"];
         #[cfg(all(feature = "inmem2", target_os = "linux"))]
-        let allocators = [None, Some("huge_pages")];
+        let allocators = ["default", "huge_page"];
 
         for allocator in allocators {
             let tempdir = tempfile::tempdir().unwrap();
@@ -478,8 +478,8 @@ mod tests {
 
             let mut raw = value_from_file(&path);
             prefix_search_directories(&mut raw, &root_directory());
-            if let Some(allocator) = allocator {
-                raw["jobs"][0]["content"]["allocator"] = serde_json::json!(allocator);
+            raw["jobs"][0]["content"]["allocator"] = serde_json::json!(allocator);
+            if allocator == "huge_page" {
                 raw["jobs"].as_array_mut().unwrap().truncate(1);
             }
             save_to_file(&modified_input_path, &raw);
@@ -489,11 +489,7 @@ mod tests {
             {
                 let saved = value_from_file(&output_path);
                 let content = &saved[0]["input"]["content"];
-                if let Some(allocator) = allocator {
-                    assert_eq!(content["allocator"], allocator);
-                } else {
-                    assert!(content.get("allocator").is_none());
-                }
+                assert_eq!(content["allocator"], allocator);
                 let result = &saved[0]["results"];
                 let insertion = result["build"]["total_time"].as_u64().unwrap();
                 assert!(insertion > 0);

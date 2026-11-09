@@ -7,6 +7,7 @@
     {
       "type": "inmem2-fp-static",
       "content": {
+        "allocator": "default",
         "build": {
           "alpha": 1.2,
           "l_build": 100,

@@ -30,7 +30,7 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use thiserror::Error;
 
 use crate::{
-    allocator::BufferAllocator,
+    allocator::Allocator,
     buffer::{Buffer, BufferError},
     num::{Align, Bytes, IdLimit, MaxDegree},
 };
@@ -90,7 +90,7 @@ impl Neighbors {
     pub(crate) fn new_with_allocator(
         id_limit: IdLimit,
         max_degree: u32,
-        allocator: Arc<dyn BufferAllocator>,
+        allocator: Arc<dyn Allocator>,
     ) -> Result<Self, NeighborsError> {
         let bytes = max_degree
             .into_usize()

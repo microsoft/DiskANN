@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use crate::{
-    allocator::BufferAllocator,
+    allocator::Allocator,
     epoch,
     num::IdLimit,
     store::{Lifecycle, slots},
@@ -28,7 +28,7 @@ where
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
-        allocator: Option<Arc<dyn BufferAllocator>>,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Self::Slots, Self::Error> {
         let slots = self
             .map(|config| {

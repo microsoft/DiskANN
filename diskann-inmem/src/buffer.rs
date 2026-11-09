@@ -6,7 +6,7 @@
 use std::{alloc::Layout, marker::PhantomData, ptr::NonNull, sync::Arc};
 
 use crate::{
-    allocator::{BufferAllocator, DefaultAllocator},
+    allocator::{Allocator, DefaultAllocator},
     num::{Align, Bytes},
 };
 
@@ -25,7 +25,7 @@ pub(crate) struct Buffer {
     stride: Bytes,
     entries: usize,
     layout: Layout,
-    allocator: Arc<dyn BufferAllocator>,
+    allocator: Arc<dyn Allocator>,
 }
 
 impl Buffer {
@@ -58,7 +58,7 @@ impl Buffer {
         entries: usize,
         bytes_per_entry: Bytes,
         align: Align,
-        allocator: Arc<dyn BufferAllocator>,
+        allocator: Arc<dyn Allocator>,
     ) -> Result<Self, BufferError> {
         // If we overflow `usize::MAX`, we will definitely overflow `isize::MAX`.
         let bytes = bytes_per_entry.checked_mul(entries).ok_or(BufferError)?;
@@ -331,7 +331,7 @@ mod tests {
         entries: usize,
         bytes_per_entry: Bytes,
         align: Align,
-        allocator: Option<Arc<dyn BufferAllocator>>,
+        allocator: Option<Arc<dyn Allocator>>,
     ) {
         let ctx = Ctx {
             entries,
@@ -586,7 +586,7 @@ mod tests {
         }
 
         // SAFETY: Allocation delegates to DefaultAllocator; counters are atomic.
-        unsafe impl BufferAllocator for TrackingAllocator {
+        unsafe impl Allocator for TrackingAllocator {
             fn allocate_zeroed(&self, layout: Layout) -> Option<NonNull<u8>> {
                 assert_eq!(layout, Layout::from_size_align(128, 64).unwrap());
                 let ptr = DefaultAllocator.allocate_zeroed(layout)?;

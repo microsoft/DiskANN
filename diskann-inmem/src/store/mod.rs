@@ -70,7 +70,7 @@ use diskann::{ANNError, utils::IntoUsize};
 use thiserror::Error;
 
 use crate::{
-    allocator::BufferAllocator,
+    allocator::Allocator,
     buffer::BufferError,
     epoch::{self, Registry},
     freelist::{self, Freelist},
@@ -125,7 +125,7 @@ pub struct Config {
     /// The capacity of the fast free list.
     freelist_recycle_capacity: NonZeroU32,
 
-    allocator: Option<Arc<dyn BufferAllocator>>,
+    allocator: Option<Arc<dyn Allocator>>,
 }
 
 impl Config {
@@ -182,7 +182,7 @@ impl Config {
     ///
     /// `None` selects [`crate::allocator::DefaultAllocator`]. Tags, locks, ID mappings,
     /// and other auxiliary allocations continue to use their existing allocators.
-    pub fn allocator(&mut self, allocator: Option<Arc<dyn BufferAllocator>>) -> &mut Self {
+    pub fn allocator(&mut self, allocator: Option<Arc<dyn Allocator>>) -> &mut Self {
         self.allocator = allocator;
         self
     }
@@ -767,7 +767,7 @@ mod tests {
             self,
             handle: epoch::RegistryHandle,
             tags: &tag::Authoritative,
-            _allocator: Option<Arc<dyn BufferAllocator>>,
+            _allocator: Option<Arc<dyn Allocator>>,
         ) -> Result<Checked, diskann::error::Infallible> {
             let faulty = tags.id_limit().value().checked_sub(1).unwrap_or(1);
             Ok(Checked::new(handle, IdLimit::new(faulty)))
@@ -806,7 +806,7 @@ mod tests {
         let mut config = Config::new();
         assert!(config.allocator.is_none());
 
-        let allocator: Arc<dyn BufferAllocator> = Arc::new(crate::allocator::DefaultAllocator);
+        let allocator: Arc<dyn Allocator> = Arc::new(crate::allocator::DefaultAllocator);
         config.allocator(Some(allocator.clone()));
         assert!(Arc::ptr_eq(config.allocator.as_ref().unwrap(), &allocator));
 

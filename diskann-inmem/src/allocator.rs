@@ -14,7 +14,7 @@ use std::{alloc::Layout, fmt::Debug, ptr::NonNull};
 /// Return uniquely owned, zeroed memory in a single allocation satisfying `layout`.
 /// Keep it valid until deallocation by this instance with the original layout.
 /// Support concurrent calls and cross-thread access and deallocation.
-pub unsafe trait BufferAllocator: Debug + Send + Sync {
+pub unsafe trait Allocator: Debug + Send + Sync {
     /// Allocate a nonzero layout, returning `None` if it cannot be allocated.
     fn allocate_zeroed(&self, layout: Layout) -> Option<NonNull<u8>>;
 
@@ -32,7 +32,7 @@ pub unsafe trait BufferAllocator: Debug + Send + Sync {
 pub struct DefaultAllocator;
 
 // SAFETY: Rust's global allocator satisfies the allocator contract.
-unsafe impl BufferAllocator for DefaultAllocator {
+unsafe impl Allocator for DefaultAllocator {
     fn allocate_zeroed(&self, layout: Layout) -> Option<NonNull<u8>> {
         if layout.size() == 0 {
             return None;
@@ -82,7 +82,7 @@ impl HugePageAllocator {
 #[cfg(target_os = "linux")]
 // SAFETY: The padded allocation is aligned and zeroed. Its layout is recomputed
 // from the original layout and fixed page size on deallocation.
-unsafe impl BufferAllocator for HugePageAllocator {
+unsafe impl Allocator for HugePageAllocator {
     fn allocate_zeroed(&self, layout: Layout) -> Option<NonNull<u8>> {
         if layout.size() == 0 {
             return None;
