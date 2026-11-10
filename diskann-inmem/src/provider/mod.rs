@@ -30,10 +30,14 @@
 //! # Persistence
 //!
 //! Full-precision `f32` providers with `u32` external IDs support saving through
-//! [`diskann_record::save::Save`] and loading through [`FullProviderLoader`]. Callers must
-//! pause and drain all mutations for the entire save operation. Saving does not acquire a
-//! global snapshot lock and must not run concurrently with insertions, deletions, or graph
-//! updates. Searches may continue.
+//! [`diskann_record::save::Save`] and loading through [`FullProviderLoader`]. Saving blocks
+//! new registered writers and waits for active registered writers to finish, then holds
+//! writer exclusion until the snapshot is complete. New writer accessors and retirements
+//! fail while writers are excluded; searches may continue. Saving fails if another control
+//! operation prevents acquiring writer exclusion.
+//!
+//! NOTE: Slots can still be acquired and insertions published while writers are blocked.
+//! Callers must prevent concurrent insertions to obtain a consistent snapshot.
 
 mod load;
 mod save;
