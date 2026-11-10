@@ -4,6 +4,7 @@
       "content": {
         "build": {
           "alpha": 1.2000000476837158,
+          "insert": "single",
           "l_build": 20,
           "max_degree": 20,
           "pruned_degree": 16
@@ -126,6 +127,7 @@
       "content": {
         "build": {
           "alpha": 1.2000000476837158,
+          "insert": "single",
           "l_build": 20,
           "max_degree": 20,
           "pruned_degree": 16

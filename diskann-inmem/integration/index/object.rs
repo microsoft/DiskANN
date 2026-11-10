@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use diskann::{
     graph::{DiskANNIndex, search::Knn},
@@ -17,12 +17,13 @@ use diskann_benchmark_runner::{
     },
     utils::fmt::KeyValue,
 };
+use diskann_utils::views::rowmajor::Matrix;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_inmem::{Context, Provider, Strategy, integration, repr};
 
-use crate::support::datatype::{AsDataType, FromSlice, Slice};
+use crate::support::datatype::{AsDataType, DatasetView, Slice, TryCast};
 
 pub(crate) trait Index {
     fn search<'a>(
@@ -37,6 +38,12 @@ pub(crate) trait Index {
         vector: Slice<'a>,
         id: u64,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>>;
+
+    fn multi_insert(
+        self: Arc<Self>,
+        batch: DatasetView<'_>,
+        ids: std::ops::Range<u64>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + '_>>;
 
     fn counters(&self) -> Counters;
 }
@@ -313,6 +320,21 @@ macro_rules! index {
                 Box::pin(fut)
             }
 
+            fn multi_insert(
+                self: Arc<Self>,
+                batch: DatasetView<'_>,
+                ids: std::ops::Range<u64>,
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + '_>> {
+                let fut = async move {
+                    let vectors = Arc::new(batch.try_cast()?.to_rowmajor_owned());
+                    let ids: Arc<[u64]> = ids.collect();
+                    (&self).multi_insert(Strategy, &Context, vectors, ids).await?;
+                    Ok(())
+                };
+
+                Box::pin(fut)
+            }
+
             fn counters(&self) -> Counters {
                 self.provider().counters().into()
             }
@@ -320,5 +342,5 @@ macro_rules! index {
     }
 }
 
-index!({ T } repr::Full<T> where T: repr::FullPrecision + FromSlice + AsDataType);
+index!({ T } repr::Full<T> where T: repr::FullPrecision + TryCast + AsDataType);
 index!(repr::Quantized);
