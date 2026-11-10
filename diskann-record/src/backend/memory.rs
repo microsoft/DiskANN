@@ -165,7 +165,10 @@ impl LoadContext for MemoryContext {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+    use std::{
+        io::{Read, Write},
+        marker::PhantomData,
+    };
 
     use super::*;
     use crate::{Version, load, save};
@@ -201,6 +204,42 @@ mod tests {
         }
     }
 
+    struct DocDto<'a> {
+        name: &'a str,
+        blob: save::Handle,
+        object: load::Object<'a>,
+    }
+
+    impl<'a> load::Load<'a> for DocDto<'a> {
+        const VERSION: Version = <Doc as load::Load<'a>>::VERSION;
+
+        fn load(object: load::Object<'a>) -> load::Result<Self> {
+            crate::load_fields!(object, [name, blob]);
+            Ok(Self { name, blob, object })
+        }
+
+        fn load_legacy(_: load::Object<'a>) -> load::Result<Self> {
+            Err(load::error::Kind::UnknownVersion.into())
+        }
+    }
+
+    struct DocLoader<'r> {
+        blob: &'r mut Vec<u8>,
+    }
+
+    impl<'a, 'r> load::Loader<'a> for DocLoader<'r> {
+        type Value = (String, &'r mut Vec<u8>);
+
+        fn load(self, context: load::Context<'a>) -> load::Result<Self::Value> {
+            let dto: DocDto<'a> = context.load()?;
+            dto.object
+                .read(&dto.blob)?
+                .read_to_end(self.blob)
+                .map_err(load::Error::new)?;
+            Ok((dto.name.to_owned(), self.blob))
+        }
+    }
+
     #[test]
     fn round_trips_without_serde_or_disk() {
         let doc = Doc {
@@ -210,8 +249,54 @@ mod tests {
 
         let context = save::save(&doc, MemorySaveContext::new()).unwrap();
         let restored: Doc = load::load(&context).unwrap();
+        let with_loader = load::load_with(&context, PhantomData::<Doc>).unwrap();
 
         assert_eq!(doc, restored);
+        assert_eq!(restored, with_loader);
+    }
+
+    #[test]
+    fn loader_reads_borrowed_dto_into_caller_resource() {
+        let doc = Doc {
+            name: "example".to_owned(),
+            blob: vec![1, 2, 3, 4, 5],
+        };
+        let context = save::save(&doc, MemorySaveContext::new()).unwrap();
+        let dto = load::load_with(&context, PhantomData::<DocDto<'_>>).unwrap();
+        assert_eq!(dto.name, doc.name);
+
+        let mut blob = vec![0];
+        let (name, loaded) = load::load_with(&context, DocLoader { blob: &mut blob }).unwrap();
+        assert_eq!(name, doc.name);
+        assert_eq!(*loaded, [0, 1, 2, 3, 4, 5]);
+        loaded.push(6);
+        assert_eq!(blob, [0, 1, 2, 3, 4, 5, 6]);
+    }
+
+    #[cfg(feature = "disk")]
+    #[test]
+    fn disk_loader_result_borrows_caller_resource_not_metadata() -> anyhow::Result<()> {
+        let doc = Doc {
+            name: "example".to_owned(),
+            blob: vec![1, 2, 3, 4, 5],
+        };
+        let temp_dir = tempfile::tempdir()?;
+        let dir = temp_dir.path();
+        let metadata = dir.join("metadata.json");
+        save::save_to_disk(&doc, dir, &metadata)?;
+        let restored: Doc = load::load_from_disk(&metadata, dir)?;
+        let with_loader = load::load_from_disk_with(&metadata, dir, PhantomData::<Doc>)?;
+        assert_eq!(restored, with_loader);
+
+        let mut blob = vec![0];
+        let (name, loaded) =
+            load::load_from_disk_with(&metadata, dir, DocLoader { blob: &mut blob })?;
+        drop(temp_dir);
+        assert_eq!(name, doc.name);
+        assert_eq!(*loaded, [0, 1, 2, 3, 4, 5]);
+        loaded.push(6);
+        assert_eq!(blob, [0, 1, 2, 3, 4, 5, 6]);
+        Ok(())
     }
 
     #[test]
@@ -274,8 +359,11 @@ mod tests {
             files: HashMap::new(),
             value,
         };
-        let err = load::load::<Doc, _>(&context)
+        let err = load::load::<Doc>(&context)
             .expect_err("a version mismatch must dispatch to load_legacy, which refuses");
+        let with_loader = load::load_with(&context, PhantomData::<Doc>).unwrap_err();
+        assert_eq!(err.to_string(), with_loader.to_string());
+        assert_eq!(err.is_recoverable(), with_loader.is_recoverable());
         assert!(format!("{err}").contains("unknown version"));
     }
 

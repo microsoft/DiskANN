@@ -312,6 +312,98 @@ mod tests {
         run_integration_test(raw);
     }
 
+    #[test]
+    #[cfg(feature = "inmem2")]
+    fn inmem2_save_and_load_search_integration() {
+        use serde_json::json;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let dir = tempdir.path();
+        let saved = dir.join("saved");
+        std::fs::create_dir(&saved).unwrap();
+        let source = root_directory().join("test_data/disk_index_search");
+        for (original, copy) in [
+            ("disk_index_siftsmall_learn_256pts_data.fbin", "data.fbin"),
+            ("disk_index_sample_query_10pts.fbin", "queries.fbin"),
+            (
+                "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
+                "groundtruth.bin",
+            ),
+        ] {
+            std::fs::copy(source.join(original), dir.join(copy)).unwrap();
+        }
+        let search = json!({
+            "queries": "queries.fbin",
+            "groundtruth": "groundtruth.bin",
+            "reps": 1,
+            "num_threads": [1],
+            "runs": [{ "search_n": 10, "search_l": [50], "recall_k": 10 }],
+        });
+        let run = |name: &str, raw: &Value| -> anyhow::Result<Value> {
+            let input_file = dir.join(format!("{}-input.json", name));
+            let output_file = dir.join(format!("{}-output.json", name));
+            save_to_file(&input_file, raw);
+            let cli = Cli::from_commands(
+                Commands::Run {
+                    input_file,
+                    output_file: output_file.clone(),
+                    dry_run: false,
+                    allow_debug: true,
+                },
+                true,
+            );
+            cli.run(&mut Memory::new())?;
+            let mut results: Vec<Value> = load_from_file(&output_file);
+            assert_eq!(results.len(), 1);
+            Ok(results.remove(0))
+        };
+        let built = run("build", &json!({
+            "search_directories": [dir],
+            "output_directory": saved,
+            "jobs": [{
+                "type": "inmem2-fp-static",
+                "content": {
+                    "data": {"data_type": "float32", "data": "data.fbin", "distance": "squared_l2"},
+                    "build": {"pruned_degree": 16, "max_degree": 24, "l_build": 50, "alpha": 1.2, "insert": "single", "num_threads": 1},
+                    "search": search,
+                    "save_path": "metadata.json",
+                },
+            }],
+        })).unwrap();
+        assert!(saved.join("metadata.json").is_file());
+        std::fs::remove_file(dir.join("data.fbin")).unwrap();
+
+        for (name, capacity) in [("default", None), ("expanded", Some(512))] {
+            let loaded = run(name, &json!({
+                "search_directories": [saved, dir],
+                "jobs": [{
+                    "type": "inmem2-fp-search",
+                    "content": {"load_path": "metadata.json", "capacity": capacity, "search": search},
+                }],
+            })).unwrap();
+            let before = &built["results"]["search"][0]["recall"];
+            let after = &loaded["results"][0]["recall"];
+            assert!(before["average"].as_f64().unwrap() > 0.9);
+            assert_eq!(before, after);
+        }
+        for (name, load_path, capacity) in [
+            ("insufficient", "metadata.json", Some(1)),
+            ("missing", "missing.json", None),
+        ] {
+            assert!(run(
+                name,
+                &json!({
+                    "search_directories": [saved, dir],
+                    "jobs": [{
+                        "type": "inmem2-fp-search",
+                        "content": {"load_path": load_path, "capacity": capacity, "search": search},
+                    }],
+                })
+            )
+            .is_err());
+        }
+    }
+
     /////////////////////////
     //    Flat Search      //
     /////////////////////////

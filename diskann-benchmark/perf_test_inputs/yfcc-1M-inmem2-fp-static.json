@@ -1,0 +1,40 @@
+{
+  "search_directories": [
+    "/home/sauce/data/yfcc_1m"
+  ],
+  "output_directory": "/home/sauce/data/yfcc_1m/indexes",
+  "jobs": [
+    {
+      "type": "inmem2-fp-static",
+      "content": {
+        "data": {
+          "data": "yfcc100m_vecs_sampled_1m.fbin",
+          "data_type": "float32",
+          "distance": "squared_l2"
+        },
+        "build": {
+          "pruned_degree": 56,
+          "max_degree": 64,
+          "l_build": 100,
+          "alpha": 1.2,
+          "insert": "single",
+          "num_threads": 8
+        },
+        "save_path": "yfcc-1m-full-f32.json",
+        "search": {
+          "queries": "yfcc100m_query_vecs.fbin",
+          "groundtruth": "yfcc100m_query_gt100_sampled_1m.bin",
+          "reps": 3,
+          "num_threads": [8],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [10, 30, 50, 100],
+              "recall_k": 10
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
