@@ -13,6 +13,7 @@ crossbeam-queue = { workspace = true, default-features = false, features = ["all
 crossbeam-utils = { workspace = true, default-features = false }
 dashmap.workspace = true
 diskann = { workspace = true }
+diskann-record = { path = "../diskann-record", default-features = false }
 diskann-utils = { workspace = true, default-features = false }
 diskann-vector = { workspace = true }
 diskann-wide = { workspace = true }
@@ -50,6 +51,7 @@ uninlined_format_args = "allow"
 [dev-dependencies]
 diskann-utils = { workspace = true, features = ["testing"] }
 diskann = { workspace = true, features = ["testing"] }
+diskann-record = { workspace = true, features = ["disk"] }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 tempfile = { workspace = true }

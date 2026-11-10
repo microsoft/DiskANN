@@ -27,8 +27,18 @@
 //! * Quantization + reranking: The current version of this index targets just a single
 //!   data-store and is planned to be addressed in the near future.
 //!
-//! * Lack of save/load support: The index is currently ephemeral, but there are plans to
-//!   address this gap.
+//! # Persistence
+//!
+//! Full-precision `f32` providers with `u32` external IDs support saving through
+//! [`diskann_record::save::Save`] and loading through [`FullProviderLoader`]. Callers must
+//! pause and drain all mutations for the entire save operation. Saving does not acquire a
+//! global snapshot lock and must not run concurrently with insertions, deletions, or graph
+//! updates. Searches may continue.
+
+mod load;
+mod save;
+
+pub use load::FullProviderLoader;
 
 use std::hash::Hash;
 

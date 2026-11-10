@@ -35,6 +35,10 @@
 //! handle the field-by-field plumbing. See [`save`] and [`load`] for the relevant traits
 //! and helpers.
 //!
+//! Implement [`load::Loader`] when loading requires runtime settings or resources.
+//! Use [`load::Context::load_with`] or [`load::Object::field_with`] for nested values,
+//! and `load::load_from_disk_with` (requires the `disk` feature) for disk loading.
+//!
 //! ## Example
 //!
 //! ```ignore
@@ -542,6 +546,9 @@ mod tests {
             &metadata,
         )?;
         let restored: Upgraded = load::load_from_disk(&metadata, dir)?;
+        let with_loader =
+            load::load_from_disk_with(&metadata, dir, std::marker::PhantomData::<Upgraded>)?;
+        assert_eq!(restored, with_loader);
 
         assert_eq!(
             restored,
