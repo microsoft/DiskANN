@@ -315,6 +315,14 @@ mod tests {
     #[test]
     #[cfg(feature = "inmem2")]
     fn inmem2_save_and_load_search_integration() {
+        run_inmem2_save_and_load_search_integration(serde_json::json!("single"));
+        run_inmem2_save_and_load_search_integration(serde_json::json!({
+            "multi": { "batch_size": 16, "intra_batch_candidates": 16 },
+        }));
+    }
+
+    #[cfg(feature = "inmem2")]
+    fn run_inmem2_save_and_load_search_integration(insert: Value) {
         use serde_json::json;
 
         let tempdir = tempfile::tempdir().unwrap();
@@ -364,7 +372,7 @@ mod tests {
                 "type": "inmem2-fp-static",
                 "content": {
                     "data": {"data_type": "float32", "data": "data.fbin", "distance": "squared_l2"},
-                    "build": {"pruned_degree": 16, "max_degree": 24, "l_build": 50, "alpha": 1.2, "insert": "single", "num_threads": 1},
+                    "build": {"pruned_degree": 16, "max_degree": 24, "l_build": 50, "alpha": 1.2, "insert": insert, "num_threads": 1},
                     "search": search,
                     "save_path": "metadata.json",
                 },
