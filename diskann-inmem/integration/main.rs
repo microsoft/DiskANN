@@ -259,6 +259,16 @@ mod tests {
 
     #[test]
     #[cfg(not(any(miri, coverage)))]
+    fn graph_index_full_f32_multi() {
+        run_regression_example(
+            "graph/full/integration-f32-multi-insert.json",
+            "graph/full/checks-multi-insert.json",
+            "graph/full/integration-f32-multi-insert-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
     fn graph_index_full_f16() {
         run_regression_example(
             "graph/full/integration-f16.json",
@@ -476,6 +486,16 @@ mod tests {
             "graph/scalar/eight-bit-l2.json",
             "graph/scalar/checks.json",
             "graph/scalar/eight-bit-l2-baseline.json",
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(miri, coverage)))]
+    fn graph_scalar_eight_multi_insert() {
+        run_regression_example(
+            "graph/scalar/eight-bit-l2-multi-insert.json",
+            "graph/scalar/checks.json",
+            "graph/scalar/eight-bit-l2-multi-insert-baseline.json",
         );
     }
 }

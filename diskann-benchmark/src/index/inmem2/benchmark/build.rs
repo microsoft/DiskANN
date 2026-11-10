@@ -38,12 +38,23 @@ pub(in crate::index::inmem2) mod dto {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "kebab-case")]
+    pub(super) enum Insert {
+        Single,
+        Multi {
+            batch_size: NonZeroUsize,
+            intra_batch_candidates: u32,
+        },
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2) struct Config {
         pub(super) pruned_degree: NonZeroUsize,
         pub(super) max_degree: NonZeroUsize,
         pub(super) l_build: NonZeroUsize,
         pub(super) alpha: f32,
+        pub(super) insert: Insert,
         pub(super) num_threads: NonZeroUsize,
     }
 
@@ -53,11 +64,13 @@ pub(in crate::index::inmem2) mod dto {
             nz!(MAX_DEGREE = 32);
             nz!(L_BUILD = 100);
             nz!(NUM_THREADS = 8);
+
             Self {
                 pruned_degree: PRUNED_DEGREE,
                 max_degree: MAX_DEGREE,
                 l_build: L_BUILD,
                 alpha: 1.2,
+                insert: Insert::Single,
                 num_threads: NUM_THREADS,
             }
         }
@@ -81,10 +94,31 @@ pub(in crate::index::inmem2) mod dto {
     }
 }
 
+#[derive(Debug, Clone)]
+enum Insert {
+    Single,
+    Multi { batch_size: NonZeroUsize },
+}
+
+impl std::fmt::Display for Insert {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Single => f.write_str("single"),
+            Self::Multi { batch_size } => {
+                f.write_str("multi-insert\n")?;
+                let mut kv = dbr::utils::fmt::KeyValue::new();
+                kv.push("batch_size", batch_size);
+                kv.fmt(f)
+            }
+        }
+    }
+}
+
 /// A parsed [`diskann::graph::Config`] and more.
 #[derive(Debug, Clone)]
 pub(in crate::index::inmem2) struct Config {
     config: diskann::graph::Config,
+    insert: Insert,
     num_threads: NonZeroUsize,
 }
 
@@ -96,27 +130,49 @@ impl Config {
         raw: &dto::Config,
         metric: dv::distance::Metric,
     ) -> anyhow::Result<Self> {
+        use diskann::graph::config as dgc;
+
         let dto::Config {
             pruned_degree,
             max_degree,
             l_build,
             alpha,
             num_threads,
+            insert,
         } = raw;
 
-        let config = diskann::graph::config::Builder::new_with(
+        let mut builder = dgc::Builder::new_with(
             pruned_degree.get(),
-            diskann::graph::config::MaxDegree::new(max_degree.get()),
+            dgc::MaxDegree::new(max_degree.get()),
             l_build.get(),
             metric.into(),
             |b| {
                 b.alpha(*alpha);
             },
-        )
-        .build()?;
+        );
+
+        let insert = match insert {
+            dto::Insert::Single => Insert::Single,
+            dto::Insert::Multi {
+                batch_size,
+                intra_batch_candidates,
+            } => {
+                builder
+                    .max_minibatch_par(num_threads.get())
+                    .intra_batch_candidates(dgc::IntraBatchCandidates::new(
+                        *intra_batch_candidates,
+                    ));
+                Insert::Multi {
+                    batch_size: *batch_size,
+                }
+            }
+        };
+
+        let config = builder.build()?;
 
         Ok(Self {
             config,
+            insert,
             num_threads: *num_threads,
         })
     }
@@ -144,6 +200,7 @@ impl Config {
     {
         let Self {
             config,
+            insert,
             num_threads,
         } = self;
 
@@ -153,6 +210,7 @@ impl Config {
                 provider,
                 None,
             )),
+            insert.clone(),
             *num_threads,
         )
     }
@@ -162,6 +220,7 @@ impl std::fmt::Display for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             config,
+            insert,
             num_threads,
         } = self;
 
@@ -176,6 +235,7 @@ impl std::fmt::Display for Config {
         kv.push("max_degree", &max_degree);
         kv.push("alpha", &alpha);
         kv.push("l_build", &l_build);
+        kv.push("insert", &insert);
         kv.push("num_threads", &num_threads);
         write!(f, "{}", kv)
     }
@@ -190,6 +250,7 @@ where
 {
     index: Arc<Index<R>>,
     runtime: tokio::runtime::Runtime,
+    insert: Insert,
     num_threads: NonZeroUsize,
 }
 
@@ -197,11 +258,16 @@ impl<R> Engine<R>
 where
     R: di::repr::Representation,
 {
-    fn new(index: Arc<Index<R>>, num_threads: NonZeroUsize) -> anyhow::Result<Self> {
+    fn new(
+        index: Arc<Index<R>>,
+        insert: Insert,
+        num_threads: NonZeroUsize,
+    ) -> anyhow::Result<Self> {
         let runtime = dbc::tokio::runtime(num_threads.get())?;
         Ok(Self {
             index,
             runtime,
+            insert,
             num_threads,
         })
     }
@@ -242,22 +308,36 @@ where
             );
         }
 
-        let runner = dbc::build::graph::SingleInsert::new(
-            self.index.clone(),
-            data,
-            di::Strategy,
-            dbc::build::ids::Range::<u32>::new(ids),
-        );
+        let index = self.index.clone();
+        let runtime = self.runtime();
+        let strategy = di::Strategy;
+        let ids = dbc::build::ids::Range::<u32>::new(ids);
 
-        let progress = output.as_mut().map(|o| Progress::new(*o));
-        let results = dbc::build::build_tracked(
-            runner,
-            dbc::build::Parallelism::dynamic(diskann::utils::ONE, self.num_threads),
-            self.runtime(),
-            progress
-                .as_ref()
-                .map(|v| -> &dyn dbc::build::AsProgress { v }),
-        )?;
+        let progress_binding = output.as_mut().map(|o| Progress::new(*o));
+        let progress = progress_binding
+            .as_ref()
+            .map(|v| -> &dyn dbc::build::AsProgress { v });
+
+        let results = match self.insert {
+            Insert::Single => {
+                let runner = dbc::build::graph::SingleInsert::new(index, data, strategy, ids);
+                dbc::build::build_tracked(
+                    runner,
+                    dbc::build::Parallelism::dynamic(diskann::utils::ONE, self.num_threads),
+                    runtime,
+                    progress,
+                )?
+            }
+            Insert::Multi { batch_size } => {
+                let runner = dbc::build::graph::MultiInsert::new(index, data, strategy, ids);
+                dbc::build::build_tracked(
+                    runner,
+                    dbc::build::Parallelism::sequential(batch_size),
+                    runtime,
+                    progress,
+                )?
+            }
+        };
 
         let stats = Stats::new(results)?;
         if let Some(mut output) = output {
@@ -295,6 +375,7 @@ where
 pub(in crate::index::inmem2) struct Stats {
     total_time: MicroSeconds,
     inserted: usize,
+    batches: usize,
     latencies: percentiles::Percentiles<MicroSeconds>,
 }
 
@@ -304,14 +385,17 @@ impl Stats {
 
         let mut latencies = Vec::new();
         let mut inserted = 0;
+        let mut batches = 0;
         results.take_output().into_iter().for_each(|r| {
             inserted += r.batchsize();
+            batches += 1;
             latencies.push(r.latency);
         });
 
         Ok(Self {
             total_time,
             inserted,
+            batches,
             latencies: dbr::utils::percentiles::compute_percentiles(&mut latencies)?,
         })
     }
@@ -337,9 +421,10 @@ impl std::fmt::Display for Stats {
             format_args!("{}s", self.total_time.as_seconds()),
         );
         kv.push("Vectors Inserted", &self.inserted);
+        kv.push("Batches Inserted", &self.batches);
 
         let mut latencies = dbr::utils::fmt::KeyValue::new();
-        latencies.push_eager("average", format_args!("{}us", self.latencies.mean));
+        latencies.push_eager("average", format_args!("{:.3}us", self.latencies.mean));
         latencies.push("p90", &self.latencies.p90);
         latencies.push("p99", &self.latencies.p99);
 

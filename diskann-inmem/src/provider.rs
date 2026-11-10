@@ -750,6 +750,42 @@ where
     }
 }
 
+impl<R, B, M> glue::MultiInsertStrategy<Provider<R, M>, B> for Strategy
+where
+    R: repr::Insert,
+    B: for<'a> glue::Batch<Element<'a> = R::Query<'a>>,
+    M: Id,
+{
+    type Seed = ();
+    type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
+    type InsertStrategy = Self;
+    fn insert_strategy(&self) -> Self {
+        *self
+    }
+    fn finish<Itr>(
+        &self,
+        _provider: &Provider<R, M>,
+        _context: &Context,
+        _batch: &std::sync::Arc<B>,
+        _ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        std::future::ready(Ok(()))
+    }
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a Provider<R, M>,
+        _context: &'a Context,
+        _seed: &'a (),
+        _capacity: usize,
+    ) -> ANNResult<PruneAccessor<'a>> {
+        <R as repr::Insert>::prune_accessor(&provider.representation, provider.local_counters())
+    }
+}
+
 impl<T, M> glue::InplaceDeleteStrategy<Provider<repr::Full<T>, M>> for Strategy
 where
     M: Id,
