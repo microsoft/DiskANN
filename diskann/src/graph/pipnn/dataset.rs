@@ -3,102 +3,297 @@
  * Licensed under the MIT license.
  */
 
-//! The dataset of a build, behind one object.
+//! Rows of a PiPNN build.
 //!
-//! [`Dataset`] hides the element type from the build steps, so they compile
-//! once. One call gathers a whole stripe or leaf, so the dynamic dispatch costs
-//! nothing measurable next to the conversion.
+//! Users describe their rows with the public [`Dataset`] trait. The build steps
+//! read them through `inner::Dataset`, which a [`Backend`] holds as one trait
+//! object, so the steps compile once for every row type. One call gathers a
+//! whole stripe or leaf, so the dynamic dispatch costs nothing measurable next
+//! to the conversion.
 //!
-//! [`Element`] selects the conversion of one element type. `f16` rows use the
-//! FP16 instructions of the running CPU. The generic `VectorRepr::as_f32_into`
-//! path uses the instructions of the build target instead. Crates that depend
-//! on `diskann` do not inherit this repository's `x86-64-v3` target flag, so for
-//! them that path converts `f16` in software, which is many times slower.
-//!
-//! Other element types use `VectorRepr::as_f32_into` for every target. `f32`
-//! rows are copied. The baseline x86-64 target has SSE2 instructions that
-//! convert `u8` and `i8` to `f32`, so the compiler vectorizes that loop without
-//! the `x86-64-v3` flag. The baseline target has no `f16` conversion
-//! instruction; F16C starts at `x86-64-v3`.
+//! The public trait describes the build by its [`Metric`]. The inner trait
+//! hands out what the metric selects instead: the kernels and the occlusion
+//! rule of final pruning. A future backend that no `Metric` variant describes
+//! can construct a `Backend` from its own inner implementation, without a new
+//! `Metric` variant.
 
-use crate::{ANNError, ANNResult, utils::VectorRepr};
+use std::fmt::Debug;
+
+use crate::ANNResult;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
-use diskann_vector::{DistanceFunction, conversion::SliceCast, distance::Metric};
+use diskann_vector::{
+    DistanceFunction,
+    conversion::SliceCast,
+    distance::{Distance, DistanceProvider, Metric},
+};
 use diskann_wide::{
     Architecture,
     arch::{self, Target2, Target3},
 };
 use half::f16;
 
-/// The dataset of one build: its metric, rows that the partition and leaf
-/// steps read as `f32`, and the distance between two rows that final pruning
-/// uses.
+/// The rows of a PiPNN build.
 ///
-/// [`Rows`] implements it for a matrix of one [`Element`] type. A row source
-/// of another shape implements it directly.
-pub trait Dataset: Sync {
+/// [`Rows`] implements it for a row-major matrix of an [`Element`] type.
+/// Implement it directly for rows that are stored another way. Pass it to
+/// [`build_graph`](super::build_graph) with [`Dataset::backend`].
+pub trait Dataset: Debug + Sync {
     /// Number of rows.
     fn nrows(&self) -> usize;
 
-    /// Length of each row after conversion to `f32`.
+    /// Number of `f32` values in each row that [`Dataset::gather`] writes.
     fn dimensions(&self) -> usize;
 
-    /// Metric of the build. The kernels rank by it, and the occlusion rule of
-    /// final pruning follows it.
+    /// Metric of the search that the graph is built for.
     fn metric(&self) -> Metric;
 
-    /// Convert rows `ids` into the rows of `output`, one row per ID.
+    /// Write rows `ids` as `f32` values, one row of `output` for each ID.
     ///
-    /// `output` has one row per ID and [`Self::dimensions`] columns.
+    /// # Errors
+    ///
+    /// Returns an error if a row cannot be converted.
+    ///
+    /// # Panics
+    ///
+    /// May panic if an ID is not below [`Dataset::nrows`], or if `output` does
+    /// not have `ids.len()` rows of [`Dataset::dimensions`] values.
     fn gather(&self, ids: &[u32], output: rowmajor::Mut<'_, f32>) -> ANNResult<()>;
 
-    /// Return the distance between rows `source` and `target` under the metric.
+    /// Distance between rows `source` and `target` under [`Dataset::metric`].
     ///
-    /// Final pruning ranks and occludes candidates with it, so it must agree
-    /// with the distance that a search over the graph uses.
+    /// It must equal the distance that a search over the built graph uses.
+    ///
+    /// # Panics
+    ///
+    /// May panic if `source` or `target` is not below [`Dataset::nrows`].
     fn distance(&self, source: u32, target: u32) -> f32;
+
+    /// Prepare the dataset for [`build_graph`](super::build_graph).
+    fn backend(&self) -> Backend<'_> {
+        Backend::new(self)
+    }
 }
 
-/// An element type that PiPNN builds from.
+/// Types that [`build_graph`](super::build_graph) builds from.
 ///
-/// Each type selects its own row conversion. The provided method converts with
-/// [`VectorRepr::as_f32_into`]. `f16` replaces it with a run-time CPU dispatch.
-pub trait Element: VectorRepr {
-    /// Convert rows `ids` of `data` into the rows of `output`, one row per ID.
+/// A reference to any [`Dataset`] implements it, and so does a [`Backend`].
+pub trait IntoBackend<'a> {
+    /// Prepare the rows for [`build_graph`](super::build_graph).
+    fn into_backend(self) -> Backend<'a>;
+}
+
+impl<'a, D> IntoBackend<'a> for &'a D
+where
+    D: Dataset + ?Sized,
+{
+    fn into_backend(self) -> Backend<'a> {
+        self.backend()
+    }
+}
+
+impl<'a> IntoBackend<'a> for Backend<'a> {
+    fn into_backend(self) -> Backend<'a> {
+        self
+    }
+}
+
+/// A [`Dataset`] prepared for [`build_graph`](super::build_graph).
+///
+/// Create it with [`Dataset::backend`].
+#[derive(Debug)]
+pub struct Backend<'a> {
+    inner: Box<dyn inner::Dataset + 'a>,
+}
+
+impl<'a> Backend<'a> {
+    fn new<D>(data: &'a D) -> Self
+    where
+        D: Dataset + ?Sized,
+    {
+        Self {
+            inner: Box::new(inner::Super(data)),
+        }
+    }
+
+    /// The rows as the build steps read them.
+    pub(super) fn dataset(&self) -> &(dyn inner::Dataset + 'a) {
+        &*self.inner
+    }
+}
+
+pub(super) mod inner {
+    use std::fmt::Debug;
+
+    use crate::{ANNResult, graph::config::PruneKind};
+    use diskann_utils::views::rowmajor;
+
+    use super::super::kernels::{self, Kernels};
+
+    /// The rows of a build as the build steps read them.
     ///
-    /// `output` has one row per ID and the `f32` row length as its column count.
+    /// The methods mirror [`super::Dataset`], except that the metric is
+    /// replaced by the parts of the build that it selects.
+    pub(in crate::graph::pipnn) trait Dataset: Debug + Sync {
+        fn nrows(&self) -> usize;
+
+        fn dimensions(&self) -> usize;
+
+        /// See [`super::Dataset::gather`].
+        fn gather(&self, ids: &[u32], output: rowmajor::Mut<'_, f32>) -> ANNResult<()>;
+
+        /// See [`super::Dataset::distance`].
+        fn distance(&self, source: u32, target: u32) -> f32;
+
+        /// Occlusion rule of final pruning.
+        fn prune_kind(&self) -> PruneKind;
+
+        /// Partition and leaf kernels for the running CPU.
+        fn kernels(&self) -> Box<dyn Kernels>;
+    }
+
+    /// Bridges a public [`super::Dataset`] into [`Dataset`].
+    #[derive(Debug)]
+    pub(super) struct Super<'a, D: ?Sized>(pub(super) &'a D);
+
+    impl<D> Dataset for Super<'_, D>
+    where
+        D: super::Dataset + ?Sized,
+    {
+        fn nrows(&self) -> usize {
+            self.0.nrows()
+        }
+
+        fn dimensions(&self) -> usize {
+            self.0.dimensions()
+        }
+
+        fn gather(&self, ids: &[u32], output: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
+            self.0.gather(ids, output)
+        }
+
+        fn distance(&self, source: u32, target: u32) -> f32 {
+            self.0.distance(source, target)
+        }
+
+        fn prune_kind(&self) -> PruneKind {
+            PruneKind::from_metric(self.0.metric())
+        }
+
+        fn kernels(&self) -> Box<dyn Kernels> {
+            kernels::select(self.0.metric())
+        }
+    }
+}
+
+/// An element type of [`Rows`].
+///
+/// `f32`, `f16`, `u8` and `i8` implement it. A compressed element type
+/// implements it with its own decoding.
+pub trait Element: Copy + Debug + Send + Sync + 'static {
+    /// Distance between two rows of `Self`.
+    type Distance: for<'a, 'b> DistanceFunction<&'a [Self], &'b [Self], f32> + Debug + Send + Sync;
+
+    /// Number of `f32` values in `row` after conversion.
+    ///
+    /// The default is `row.len()`. A compressed type reads it from the row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `row` is not a valid row of the type.
+    fn dimensions(row: &[Self]) -> ANNResult<usize> {
+        Ok(row.len())
+    }
+
+    /// Write `row` as `f32` values into `output`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `row` cannot be decoded.
+    ///
+    /// # Panics
+    ///
+    /// May panic if `output.len()` is not the dimension of `row`.
+    fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()>;
+
+    /// Distance between rows of `ncols` elements under `metric`.
+    fn distance(metric: Metric, ncols: usize) -> Self::Distance;
+
+    /// Write rows `ids` of `data` as `f32` values, one row of `output` for
+    /// each ID.
+    ///
+    /// The default converts one row at a time with [`Element::convert`]. A
+    /// type can override it to convert the whole batch at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a row cannot be decoded.
+    ///
+    /// # Panics
+    ///
+    /// May panic if an ID is not below `data.nrows()`, or if `output` does not
+    /// have one row of the converted dimension for each ID.
     fn gather(
         data: rowmajor::Ref<'_, Self>,
         ids: &[u32],
         mut output: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
         for (&id, destination) in ids.iter().zip(output.rows_mut()) {
-            Self::as_f32_into(data.row(id as usize), destination).map_err(Into::into)?;
+            Self::convert(data.row(id as usize), destination)?;
         }
         Ok(())
     }
 }
 
-impl Element for f32 {}
+/// Implement [`Element`] for a type whose values convert to `f32` one by one
+/// and whose distances come from [`DistanceProvider`].
+macro_rules! plain_element {
+    ($T:ty) => {
+        impl Element for $T {
+            type Distance = Distance<$T, $T>;
 
-impl Element for u8 {}
+            fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()> {
+                for (destination, &value) in output.iter_mut().zip(row) {
+                    *destination = value.into();
+                }
+                Ok(())
+            }
 
-impl Element for i8 {}
+            fn distance(metric: Metric, ncols: usize) -> Self::Distance {
+                Self::distance_comparer(metric, Some(ncols))
+            }
+        }
+    };
+}
 
+// The baseline x86-64 target has SSE2 instructions that convert `u8` and `i8`
+// to `f32`, so the compiler vectorizes these loops for any target.
+plain_element!(f32);
+plain_element!(u8);
+plain_element!(i8);
+
+// `f16` conversion selects the FP16 instructions of the running CPU. The
+// baseline x86-64 target has no `f16` conversion instruction; F16C starts at
+// `x86-64-v3`. A crate that depends on `diskann` does not inherit this
+// repository's `x86-64-v3` target flag, so a conversion compiled for the build
+// target would run in software, many times slower. `gather` dispatches once for
+// the whole batch, so the selection stays out of the row loop.
 impl Element for f16 {
-    /// Select the CPU's FP16 instructions once for the whole batch.
+    type Distance = Distance<f16, f16>;
+
+    fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()> {
+        arch::dispatch2(SliceCast::<f32, f16>::new(), output, row);
+        Ok(())
+    }
+
+    fn distance(metric: Metric, ncols: usize) -> Self::Distance {
+        Self::distance_comparer(metric, Some(ncols))
+    }
+
     fn gather(
         data: rowmajor::Ref<'_, Self>,
         ids: &[u32],
         output: rowmajor::Mut<'_, f32>,
     ) -> ANNResult<()> {
-        if output.ncols() != data.ncols() {
-            return Err(ANNError::message(format!(
-                "PiPNN dimension {} does not match the f16 row length {}",
-                output.ncols(),
-                data.ncols()
-            )));
-        }
         arch::dispatch3(GatherFp16, data, ids, output);
         Ok(())
     }
@@ -126,7 +321,8 @@ where
     }
 }
 
-/// A matrix of one [`Element`] type as the [`Dataset`] of a build.
+/// A row-major matrix of an [`Element`] type as a [`Dataset`].
+#[derive(Debug)]
 pub struct Rows<'a, T: Element> {
     data: rowmajor::Ref<'a, T>,
     dimensions: usize,
@@ -135,21 +331,23 @@ pub struct Rows<'a, T: Element> {
 }
 
 impl<'a, T: Element> Rows<'a, T> {
-    /// Wrap `data` with the distance of `metric`.
+    /// Use `data` as the rows of a build for search under `metric`.
     ///
-    /// The `f32` row length comes from [`VectorRepr::full_dimension`] of the
-    /// first row, or is zero for empty data. Compressed element types such as
-    /// MinMax store more elements per row, so it can differ from `data.ncols()`.
+    /// # Errors
+    ///
+    /// Returns an error if [`Element::dimensions`] rejects the first row.
     pub fn new(data: rowmajor::Ref<'a, T>, metric: Metric) -> ANNResult<Self> {
+        // A compressed type stores more elements per row than it decodes to, so
+        // the first row gives the `f32` row length, not `data.ncols()`.
         let dimensions = match data.get_row(0) {
-            Some(first_row) => T::full_dimension(first_row).map_err(Into::into)?,
+            Some(first_row) => T::dimensions(first_row)?,
             None => 0,
         };
         Ok(Self {
             data,
             dimensions,
             metric,
-            distance: T::distance(metric, Some(data.ncols())),
+            distance: T::distance(metric, data.ncols()),
         })
     }
 }
@@ -171,9 +369,9 @@ impl<T: Element> Dataset for Rows<'_, T> {
         T::gather(self.data, ids, output)
     }
 
-    /// Computed with [`VectorRepr::distance`] on the stored elements, so a
-    /// compressed type measures its codes, as a search over the index does.
     fn distance(&self, source: u32, target: u32) -> f32 {
+        // The distance works on the stored elements, so a compressed type
+        // measures its codes, as a search over the index does.
         self.distance.evaluate_similarity(
             self.data.row(source as usize),
             self.data.row(target as usize),
@@ -212,7 +410,7 @@ mod tests {
         let signed = [[1.5, -2.0], [7.0, 4.0], [0.5, 9.0]];
         let signed_expected = [[0.5, 9.0], [1.5, -2.0], [0.5, 9.0]];
         check(signed, ids, signed_expected);
-        // f16 takes the FP16 path; the other types take the VectorRepr path.
+        // f16 takes its batch path; the other types take the default path.
         check(
             signed.map(|row| row.map(f16::from_f32)),
             ids,
@@ -227,29 +425,6 @@ mod tests {
             [[1_u8, 2], [7, 4], [5, 9]],
             ids,
             [[5.0, 9.0], [1.0, 2.0], [5.0, 9.0]],
-        );
-    }
-
-    #[test]
-    fn an_f16_row_length_that_differs_from_the_dimension_is_an_error() {
-        // A stored row has two values, but the build dimension asks for three.
-        let rows = [[f16::ONE, f16::ZERO]];
-        let ids = [0];
-        let stored_dimensions = rows[0].len();
-        let dimensions = 3;
-        let data = rowmajor::Ref::try_from_data(rows.as_flattened(), rows.len(), stored_dimensions)
-            .unwrap();
-        let mut output = vec![f32::NAN; ids.len() * dimensions];
-        let output =
-            rowmajor::Mut::try_from_data(output.as_mut_slice(), ids.len(), dimensions).unwrap();
-
-        let error = f16::gather(data, &ids, output).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("PiPNN dimension 3 does not match the f16 row length 2"),
-            "{error}"
         );
     }
 }

@@ -19,7 +19,7 @@ use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use rayon::prelude::*;
 
 use super::{
-    dataset::Dataset, kernels::Kernels, leaf_kernel::LeafKernelWorkspace, topk::Candidate,
+    dataset::inner::Dataset, kernels::Kernels, leaf_kernel::LeafKernelWorkspace, topk::Candidate,
 };
 
 /// Scratch for one leaf job.
@@ -28,8 +28,8 @@ use super::{
 /// the shape of the current leaf.
 #[derive(Default)]
 struct LeafBuffers {
-    points: rowmajor::Buffer<f32>,
-    neighbors: rowmajor::Buffer<Candidate>,
+    points: rowmajor::Resizable<f32>,
+    neighbors: rowmajor::Resizable<Candidate>,
     local_adjacency: Vec<Vec<u32>>,
     kernel_workspace: LeafKernelWorkspace,
 }
@@ -151,6 +151,7 @@ fn add_symmetric_neighbors(
 mod tests {
     use super::*;
     use crate::graph::pipnn::{
+        Dataset as _,
         dataset::Rows,
         kernels,
         test_support::{both_directions, edges},
@@ -164,7 +165,7 @@ mod tests {
         let dimensions = 1;
         let data = rowmajor::Ref::try_from_data(x, x.len(), dimensions).unwrap();
         let candidates = build_leaf_candidates(
-            &Rows::new(data, Metric::L2).unwrap(),
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
             &*kernels::select(Metric::L2),
             leaves,
             k,
@@ -278,7 +279,7 @@ mod tests {
         );
 
         let actual = build_leaf_candidates(
-            &Rows::new(data, Metric::L2).unwrap(),
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
             &*kernels::select(Metric::L2),
             leaves,
             k,
@@ -354,7 +355,7 @@ mod tests {
             .collect();
 
         add_leaf_candidates(
-            &Rows::new(data, Metric::L2).unwrap(),
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
             &*kernels::select(Metric::L2),
             leaf,
             k,

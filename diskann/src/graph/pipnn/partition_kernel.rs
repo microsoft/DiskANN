@@ -25,7 +25,7 @@ use super::{
 /// avoid an allocation for each stripe.
 #[derive(Debug, Default)]
 pub(super) struct PartitionKernelWorkspace {
-    distances: rowmajor::Buffer<f32>,
+    distances: rowmajor::Resizable<f32>,
     nearest_leaders: Vec<Candidate>,
 }
 

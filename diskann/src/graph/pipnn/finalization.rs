@@ -16,14 +16,13 @@
 use crate::{
     graph::{
         AdjacencyList,
-        config::PruneKind,
         internal::{SortedNeighbors, prune},
     },
     neighbor::Neighbor,
 };
 use rayon::prelude::*;
 
-use super::{PruneConfig, dataset::Dataset};
+use super::{PruneConfig, dataset::inner::Dataset};
 
 /// RobustPrune scratch for one prune job.
 #[derive(Default)]
@@ -72,7 +71,7 @@ impl PruneWorkspace {
             &mut self.states,
             degree,
             config.alpha,
-            PruneKind::from_metric(data.metric()),
+            data.prune_kind(),
             |&left, &right| data.distance(left, right),
         );
 
@@ -110,16 +109,17 @@ mod tests {
     use super::*;
     use crate::{
         ANNResult,
-        graph::pipnn::{Config, test_support::nz},
+        graph::pipnn::{Config, Dataset as _, test_support::nz},
     };
     use diskann_utils::views::rowmajor;
     use diskann_vector::distance::Metric;
     use std::collections::BTreeSet;
 
     /// One-dimensional L2 points `x[i]`. Pruning reads only the distances.
+    #[derive(Debug)]
     struct Line<'a>(&'a [f32]);
 
-    impl Dataset for Line<'_> {
+    impl crate::graph::pipnn::Dataset for Line<'_> {
         fn nrows(&self) -> usize {
             self.0.len()
         }
@@ -169,7 +169,7 @@ mod tests {
             source,
             candidates_in_order(candidates),
             config,
-            &Line(x),
+            Line(x).backend().dataset(),
         );
         pruned.to_vec()
     }
@@ -222,8 +222,12 @@ mod tests {
             // Points 0 and 2 are nearest, and point 0 does not occlude point 2.
             (1, vec![4, 3, 2, 0], vec![0, 2]),
         ] {
-            let actual =
-                workspace.prune(source, candidates_in_order(&candidates), &config, &Line(&x));
+            let actual = workspace.prune(
+                source,
+                candidates_in_order(&candidates),
+                &config,
+                Line(&x).backend().dataset(),
+            );
 
             assert_eq!(as_set(&actual), as_set(&expected), "source {source}");
         }
@@ -250,7 +254,7 @@ mod tests {
             BTreeSet::new(),
         ];
 
-        let actual = prune_overfull(candidates, &Line(&x), &config);
+        let actual = prune_overfull(candidates, Line(&x).backend().dataset(), &config);
 
         let actual: Vec<BTreeSet<u32>> = actual.into_iter().map(|row| as_set(&row)).collect();
         assert_eq!(actual, expected);
