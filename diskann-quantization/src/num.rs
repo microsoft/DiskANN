@@ -48,6 +48,10 @@ where
     }
 }
 
+impl Positive<f32> {
+    pub const ONE: Self = POSITIVE_ONE_F32;
+}
+
 // SAFETY: 1.0 is positive.
 pub const POSITIVE_ONE_F32: Positive<f32> = unsafe { Positive::new_unchecked(1.0) };
 

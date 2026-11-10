@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::sync::Arc;
+
 use diskann::{ANNError, ANNResult};
 use diskann_quantization::{
     alloc::{Allocator, GlobalAllocator, ScopedAllocator},
@@ -13,17 +15,18 @@ use crate::{num::Bytes, repr::quantized};
 
 /// A new-type wrapper around [`iface::Quantizer`] for implementing [`quantized::Quantizer`].
 #[derive(Debug)]
-pub struct Spherical<T>(T);
+pub struct Spherical<T>(Arc<T>);
 
 impl<T> Spherical<T> {
     /// Construct a new [`Spherical`] new-type wrapper around `quantizer`.
     pub fn new(quantizer: T) -> Self {
-        Self(quantizer)
+        Self(Arc::new(quantizer))
     }
+}
 
-    /// Return the wrapped quantizer.
-    pub fn into_inner(self) -> T {
-        self.0
+impl<T> Clone for Spherical<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
@@ -31,12 +34,6 @@ impl<T> std::ops::Deref for Spherical<T> {
     type Target = T;
     fn deref(&self) -> &T {
         &self.0
-    }
-}
-
-impl<T> std::ops::DerefMut for Spherical<T> {
-    fn deref_mut(&mut self) -> &mut T {
-        &mut self.0
     }
 }
 
@@ -353,7 +350,8 @@ mod tests {
             SupportedMetric::InnerProduct,
             SupportedMetric::Cosine,
         ] {
-            let quantizer = Spherical::new(train_quantizer::<N>(data.as_view(), metric));
+            // Gratuitous clone for coverage.
+            let quantizer = Spherical::new(train_quantizer::<N>(data.as_view(), metric)).clone();
             test_spherical(
                 &quantizer,
                 &*quantizer,

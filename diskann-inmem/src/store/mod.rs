@@ -203,6 +203,11 @@ impl Layout {
             max_degree,
         }
     }
+
+    /// Return the [`IdLimit`] of `self`.
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        self.id_limit
+    }
 }
 
 /// A concurrent data and graph store.
@@ -306,6 +311,11 @@ where
     /// Return the [`Neighbors`] for this store.
     pub(crate) fn neighbors(&self) -> &Neighbors {
         &self.neighbors
+    }
+
+    /// Return the [`Neighbors`] for this store.
+    pub(crate) fn neighbors_mut(&mut self) -> &mut Neighbors {
+        &mut self.neighbors
     }
 
     /// Attempt to reclaim retired slots.
