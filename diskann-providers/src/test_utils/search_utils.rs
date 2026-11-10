@@ -56,10 +56,11 @@ pub fn is_match(
     );
 }
 
-/// Asserts that the top-k results exactly match the ground truth
+/// Asserts that the top-k results exactly match the ground truth.
 ///
-/// For each of the top-k results, this function verifies that both the distance and ID
-/// match exactly with what's expected in the ground truth.
+/// The ground truth must be sorted with nearest neighbors at the end. Result distances
+/// must match exactly in nearest-first order, but distinct IDs at equal distances may be
+/// permuted, including ties at the top-k cutoff.
 pub fn assert_top_k_exactly_match(
     query_id: usize,
     gt: &[Neighbor<u32>],
@@ -67,6 +68,11 @@ pub fn assert_top_k_exactly_match(
     distances: &[f32],
     top_k: usize,
 ) {
+    assert!(
+        gt.is_sorted_by(|a, b| a.distance() >= b.distance()),
+        "ground truth must be sorted with nearest neighbors at the end"
+    );
+
     for i in 0..top_k {
         let neighbor = gt[gt.len() - 1 - i];
         assert_eq!(
@@ -76,12 +82,21 @@ pub fn assert_top_k_exactly_match(
             query_id,
             i
         );
-        assert_eq!(
-            *neighbor.id(),
-            ids[i],
-            "failed on query {} for result {}",
+        assert!(
+            gt.iter()
+                .any(|entry| { *entry.id() == ids[i] && *entry.distance() == distances[i] }),
+            "failed on query {} for result {}: ID {} does not match a ground truth neighbor at distance {}",
             query_id,
-            i
+            i,
+            ids[i],
+            distances[i]
+        );
+        assert!(
+            !ids[..i].contains(&ids[i]),
+            "failed on query {} for result {}: duplicate ID {}",
+            query_id,
+            i,
+            ids[i]
         );
     }
 }
@@ -118,5 +133,49 @@ pub fn assert_range_results_exactly_match(
             inner_radius.unwrap_or(f32::MIN),
             gt_ids
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    fn tied_groundtruth() -> [Neighbor<u32>; 4] {
+        [
+            Neighbor::new(4, 3.0),
+            Neighbor::new(3, 2.0),
+            Neighbor::new(2, 2.0),
+            Neighbor::new(1, 1.0),
+        ]
+    }
+
+    #[rstest]
+    #[case::ordered(&[1, 2, 3, 4], &[1.0, 2.0, 2.0, 3.0])]
+    #[case::permuted_ties(&[1, 3, 2, 4], &[1.0, 2.0, 2.0, 3.0])]
+    #[case::tie_at_cutoff(&[1, 3], &[1.0, 2.0])]
+    fn top_k_accepts_ties(#[case] ids: &[u32], #[case] distances: &[f32]) {
+        assert_top_k_exactly_match(0, &tied_groundtruth(), ids, distances, ids.len());
+    }
+
+    #[rstest]
+    #[case::duplicate_id(&[1, 2, 2], &[1.0, 2.0, 2.0])]
+    #[case::wrong_id_at_distance(&[1, 4], &[1.0, 2.0])]
+    #[case::incorrect_distance(&[1], &[1.1])]
+    #[case::unsorted_results(&[2, 1], &[2.0, 1.0])]
+    #[should_panic(expected = "failed on query 0 for result")]
+    fn top_k_rejects_incorrect_results(#[case] ids: &[u32], #[case] distances: &[f32]) {
+        assert_top_k_exactly_match(0, &tied_groundtruth(), ids, distances, ids.len());
+    }
+
+    #[test]
+    #[should_panic(expected = "ground truth must be sorted")]
+    fn top_k_rejects_unsorted_groundtruth() {
+        let gt = [
+            Neighbor::new(4, 3.0),
+            Neighbor::new(1, 1.0),
+            Neighbor::new(2, 2.0),
+        ];
+        assert_top_k_exactly_match(0, &gt, &[2], &[2.0], 1);
     }
 }

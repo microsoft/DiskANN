@@ -12,7 +12,7 @@ use diskann::{
 };
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
-    build::builder::build::DiskIndexBuilder,
+    build::builder::{backend::BuildElement, build::DiskIndexBuilder},
     data_model::AdHoc,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
@@ -60,7 +60,7 @@ pub(super) fn build_disk_index<T, StorageProviderType>(
     params: &DiskIndexBuild,
 ) -> anyhow::Result<DiskBuildStats>
 where
-    T: VectorRepr,
+    T: VectorRepr + BuildElement,
     StorageProviderType: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProviderType as StorageReadProvider>::Reader: std::marker::Send,
 {

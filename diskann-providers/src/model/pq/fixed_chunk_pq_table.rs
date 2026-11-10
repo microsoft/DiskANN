@@ -431,6 +431,11 @@ impl FixedChunkPQTable {
     pub fn view_offsets(&self) -> diskann_quantization::views::ChunkOffsetsView<'_> {
         self.table.view_offsets()
     }
+
+    /// Return the raw [`BasicTable`].
+    pub fn into_table(self) -> BasicTable {
+        self.table
+    }
 }
 
 impl TryFrom<BasicTable> for FixedChunkPQTable {

@@ -43,6 +43,7 @@ vfs = { workspace = true }
 
 # Optional dependencies
 opentelemetry = { workspace = true, optional = true }
+diskann-inmem = { workspace = true, features = ["quantization"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.6.4"
