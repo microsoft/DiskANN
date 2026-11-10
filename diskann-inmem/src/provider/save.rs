@@ -12,14 +12,24 @@ use crate::repr::{Full, Representation};
 
 /// Save a compact snapshot without modifying the provider's internal IDs.
 ///
-/// All mutations must be paused and drained until this operation returns. Searches
-/// may continue. Temporary storage is one `u32` per internal slot and one graph row,
-/// in addition to the artifact writers' buffers.
+/// Blocks new registered writers and waits for active registered writers to finish before
+/// taking the snapshot. Searches may continue. Temporary storage is one `u32` per internal
+/// slot and one graph row, in addition to the artifact writers' buffers.
+///
+/// NOTE: Slot acquisition is not covered by writer exclusion. Slots can still be acquired
+/// and insertions published while writers are blocked. Callers must prevent concurrent
+/// insertions to obtain a consistent snapshot.
+///
+/// The calling thread must not hold a writer accessor: waiting for its own writer to
+/// finish would deadlock.
 impl save::Save for Provider<Full<f32>, u32> {
     const VERSION: Version = super::load::VERSION;
 
     fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
         let representation = &self.representation;
+        let _writers = representation
+            .try_exclude_writers()
+            .ok_or_else(|| save::Error::message("could not exclude writers while saving"))?;
         let frozen_count = representation.frozen_count();
         let id_limit = representation.id_limit().value();
         let mut renaming = Vec::new();

@@ -387,6 +387,11 @@ where
         self.store
             .write_guard(|packed, guard| packed.reader(guard.into_read_guard()))
     }
+
+    /// Block new writers and wait for active writers to finish.
+    pub(crate) fn try_exclude_writers(&self) -> Option<epoch::WriterExclusionGuard<'_>> {
+        self.store.try_exclude_writers()
+    }
 }
 
 impl<T> Full<T>

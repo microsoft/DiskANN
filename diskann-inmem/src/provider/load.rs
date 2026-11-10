@@ -264,6 +264,89 @@ mod tests {
                 provider.representation.get(id).unwrap(),
             );
         }
+        assert!(
+            provider
+                .representation
+                .prune_accessor(provider.local_counters())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn save_rejects_conflicting_writer_exclusion() {
+        let provider = Fixture::default()
+            .load(FullProviderLoader::default())
+            .unwrap();
+        let exclusion = provider.representation.try_exclude_writers().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = dir.path().join("metadata.json");
+        let error = save::save_to_disk(&provider, dir.path(), &metadata).unwrap_err();
+        assert!(error.to_string().contains("could not exclude writers"));
+        assert!(!metadata.exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        drop(exclusion);
+        round_trip(&provider);
+    }
+
+    #[test]
+    fn save_waits_for_writers_and_allows_readers() {
+        let provider = Fixture::default()
+            .load(FullProviderLoader::new().capacity(Capacity::new(4)))
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = dir.path().join("metadata.json");
+        std::thread::scope(|scope| {
+            let reader = provider
+                .representation
+                .search_accessor(&[0.0, 0.0], &provider, provider.local_counters())
+                .unwrap();
+            let writer = provider
+                .representation
+                .prune_accessor(provider.local_counters())
+                .unwrap();
+            let saving = scope.spawn(|| save::save_to_disk(&provider, dir.path(), &metadata));
+            let started = std::time::Instant::now();
+            loop {
+                if provider
+                    .representation
+                    .prune_accessor(provider.local_counters())
+                    .is_err()
+                {
+                    break;
+                }
+                assert!(!saving.is_finished(), "save did not wait for the writer");
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(10),
+                    "save did not exclude new writers"
+                );
+                std::thread::yield_now();
+            }
+
+            assert!(!saving.is_finished());
+            assert_eq!(reader.get_expand_beam().evaluate(0).unwrap(), Some(0.0));
+            assert_eq!(&*provider.representation.get(1).unwrap(), &[1.0, 2.0]);
+            assert!(provider.representation.retire(1).is_err());
+            writer.neighbors.set(0, &[2]).unwrap();
+            drop(writer);
+            saving.join().unwrap().unwrap();
+            assert_eq!(reader.get_expand_beam().evaluate(0).unwrap(), Some(0.0));
+        });
+
+        let restored: Provider<Full<f32>, u32> =
+            load::load_from_disk(&metadata, dir.path()).unwrap();
+        let writer = restored
+            .representation
+            .prune_accessor(restored.local_counters())
+            .unwrap();
+        let mut neighbors = AdjacencyList::new();
+        writer.neighbors.get(0, &mut neighbors).unwrap();
+        assert_eq!(&neighbors[..], &[2]);
+        assert!(
+            provider
+                .representation
+                .prune_accessor(provider.local_counters())
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -379,6 +462,12 @@ mod tests {
             assert!(save::save_to_disk(&provider, dir.path(), &metadata).is_err());
             assert!(!metadata.exists());
             assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+            assert!(
+                provider
+                    .representation
+                    .prune_accessor(provider.local_counters())
+                    .is_ok()
+            );
         }
     }
 

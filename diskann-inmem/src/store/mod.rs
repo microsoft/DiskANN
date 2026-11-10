@@ -388,9 +388,8 @@ where
         self.registry.try_exclude_workers()
     }
 
-    /// Attempt to exclude all workers from the [`Store`], potentially blocking as it waits
-    /// for current workers to finish.
-    #[expect(unused, reason = "this will be used for serialization")]
+    /// Attempt to exclude writers from the [`Store`], potentially blocking as it waits
+    /// for current writers to finish.
     pub(crate) fn try_exclude_writers(&self) -> Option<epoch::WriterExclusionGuard<'_>> {
         self.registry.try_exclude_writers()
     }
