@@ -9,21 +9,44 @@
 //! cluster of at most `c_max` points; the build selects neighbors only inside
 //! leaves.
 //!
-//! 1. `partitioning` splits the dataset into overlapping leaves.
-//! 2. `leaf_build` selects the `leaf_k` nearest neighbors of each point inside
-//!    each leaf and merges them into one candidate list per point.
-//! 3. `finalization` prunes each list that is longer than the graph degree with
-//!    Vamana RobustPrune.
+//! 1. The dataset is split into overlapping leaves.
+//! 2. Each point selects its `leaf_k` nearest neighbors inside each of its
+//!    leaves. The selected pairs form one candidate list per point.
+//! 3. Each list that is longer than the graph degree is pruned with Vamana
+//!    RobustPrune.
 //!
-//! [`build_graph`] selects the SIMD architecture and the metric once and puts
-//! them, with the element type, behind trait objects, so the steps compile
-//! once. It reads rows through [`Dataset`] and returns one adjacency list for
-//! each point. Each step takes ownership of the previous output and
-//! frees it when it returns. The steps run as Rayon jobs in the thread pool
-//! of the caller.
+//! Describe the rows with [`Rows`] or your own [`Dataset`], set the parameters
+//! with [`Config::builder`], and call [`build_graph`]:
 //!
-//! The build does not load providers or select start points. It also does not
+//! ```
+//! use std::num::NonZeroUsize;
+//!
+//! use diskann::graph::pipnn::{self, Rows};
+//! use diskann_utils::views::rowmajor;
+//! use diskann_vector::distance::Metric;
+//!
+//! let points: Vec<f32> = (0..64).map(|i| i as f32).collect();
+//! let data = rowmajor::Ref::try_from_data(points.as_slice(), 32, 2).unwrap();
+//! let rows = Rows::new(data, Metric::L2).unwrap();
+//! let config = pipnn::Config::builder(NonZeroUsize::new(8).unwrap())
+//!     .build()
+//!     .unwrap();
+//!
+//! let graph = pipnn::build_graph(&rows, &config).unwrap();
+//! assert_eq!(graph.len(), 32);
+//! ```
+//!
+//! The build links dataset points only. It does not select start points,
 //! quantize, serialize, or search the graph.
+
+// Implementation notes.
+//
+// `build_graph` reads rows through the `inner::Dataset` trait object of a
+// `Backend`, and the partition and leaf kernels through the `Kernels` trait
+// object that the backend selects once for the metric and the running CPU. The
+// element type, architecture and metric stay behind these objects, so the steps
+// compile once. Each step takes ownership of the previous output and frees it
+// when it returns.
 
 mod dataset;
 mod finalization;
@@ -48,7 +71,7 @@ use crate::{
     tracked_debug,
 };
 
-pub use self::dataset::{Dataset, Element, Rows};
+pub use self::dataset::{Backend, Dataset, Element, IntoBackend, Rows};
 
 /// Squared Euclidean distance.
 pub(super) struct L2;
@@ -194,12 +217,12 @@ pub enum DatasetError {
 
 crate::convert_error!(DatasetError);
 
-/// PiPNN build parameters: the partition parameters, the leaf `k`, and the
-/// RobustPrune policy of final pruning. The metric belongs to the
-/// [`Dataset`], and the occlusion rule of pruning follows the metric.
+/// PiPNN build parameters: how the dataset is split into leaves, how many
+/// neighbors each point selects in a leaf, and how final pruning cuts the
+/// candidate lists. The metric is part of the [`Dataset`].
 ///
-/// [`Config::builder`] checks the parameters once, so every build step can
-/// rely on them. The default configuration is `c_max = 512`, `p_samp = 0.005`,
+/// Create it with [`Config::builder`], which checks the parameters. The default
+/// configuration is `c_max = 512`, `p_samp = 0.005`,
 /// `max_leaders = 1000`, `fanout = [10, 3]`, `max_depth = 30` and `leaf_k = 2`.
 /// Each point then joins about 30 leaves, the product of the fanout values.
 /// Larger `c_max`, fanout values and `leaf_k` all give each point more or
@@ -464,16 +487,27 @@ impl Builder {
 
 /// Build one adjacency list for each row of `data`.
 ///
-/// [`Rows`] is the dataset of a matrix of one [`Element`] type. The element
-/// type lives behind `data`, and the architecture and metric behind the
-/// kernels, so this function and the three steps compile once.
+/// `data` is a reference to a [`Dataset`], or a [`Backend`]. Row `i` of the
+/// result lists the neighbors of row `i`, at most [`Config::degree`] of them.
 ///
 /// The build runs as Rayon jobs in the thread pool of the caller: the pool of
 /// an enclosing `ThreadPool::install`, or else the global pool.
 ///
-/// The graph links dataset points only; the caller selects start points and
-/// serializes the index.
-pub fn build_graph(data: &dyn Dataset, config: &Config) -> ANNResult<Vec<AdjacencyList<u32>>> {
+/// # Errors
+///
+/// Returns [`DatasetError`] if the dataset has no rows, no dimensions, or more
+/// than `u32::MAX` rows, and an error from [`Dataset::gather`] if a row cannot
+/// be converted.
+pub fn build_graph<'a>(
+    data: impl IntoBackend<'a>,
+    config: &Config,
+) -> ANNResult<Vec<AdjacencyList<u32>>> {
+    build(data.into_backend(), config)
+}
+
+/// The body of [`build_graph`], compiled once.
+fn build(backend: Backend<'_>, config: &Config) -> ANNResult<Vec<AdjacencyList<u32>>> {
+    let data = backend.dataset();
     if data.nrows() == 0 {
         return Err(DatasetError::NoPoints.into());
     }
@@ -483,7 +517,7 @@ pub fn build_graph(data: &dyn Dataset, config: &Config) -> ANNResult<Vec<Adjacen
     if data.nrows() > u32::MAX as usize {
         return Err(DatasetError::TooManyPoints(data.nrows()).into());
     }
-    let kernels = kernels::select(data.metric());
+    let kernels = data.kernels();
     let start = Instant::now();
     let leaves = partitioning::partition(data, &*kernels, &config.partition)?;
     tracked_debug!(
@@ -705,7 +739,6 @@ mod construction_tests {
         graph::{DiskANNIndex, config, search::Knn, test::provider as test_provider},
         neighbor::{BackInserter, Neighbor},
         test::tokio::current_thread_runtime,
-        utils::VectorRepr,
     };
     use diskann_utils::{
         io::read_bin,
@@ -818,7 +851,7 @@ mod construction_tests {
         let point_count = data.nrows();
         let dimensions = data.ncols();
         let runtime = current_thread_runtime();
-        let distance = f32::distance(metric, Some(dimensions));
+        let distance = <f32 as Element>::distance(metric, dimensions);
         let mut mismatches = 0;
         let mut example = String::new();
 

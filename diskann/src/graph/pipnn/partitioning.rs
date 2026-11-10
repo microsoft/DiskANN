@@ -43,7 +43,7 @@ use rand::{Rng, SeedableRng, prelude::IndexedRandom, rngs::StdRng};
 use rayon::prelude::*;
 
 use super::{
-    PartitionConfig, dataset::Dataset, kernels::Kernels,
+    PartitionConfig, dataset::inner::Dataset, kernels::Kernels,
     partition_kernel::PartitionKernelWorkspace, partition_metric::PartitionLeaders,
     topk::UNASSIGNED,
 };
@@ -77,7 +77,7 @@ struct ClusterSplit {
 /// workspace.
 #[derive(Default)]
 struct StripeBuffers {
-    points: rowmajor::Buffer<f32>,
+    points: rowmajor::Resizable<f32>,
     kernel_workspace: PartitionKernelWorkspace,
 }
 
@@ -320,7 +320,9 @@ fn group_by_leader(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::pipnn::{Builder, Config, dataset::Rows, kernels, test_support::nz};
+    use crate::graph::pipnn::{
+        Builder, Config, Dataset as _, dataset::Rows, kernels, test_support::nz,
+    };
     use diskann_vector::distance::Metric;
     use std::collections::BTreeSet;
 
@@ -370,7 +372,7 @@ mod tests {
         let initial_buffers = 0;
         let buffers = StripeBufferPool::new((), initial_buffers, None);
         assign_to_leaders(
-            &Rows::new(data, Metric::L2).unwrap(),
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
             &*kernels::select(Metric::L2),
             ids,
             leaders,
@@ -397,7 +399,7 @@ mod tests {
         };
         let buffers = StripeBufferPool::new((), initial_buffers, None);
         split_cluster(
-            &Rows::new(data, Metric::L2).unwrap(),
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
             &*kernels::select(Metric::L2),
             config,
             fanout,
@@ -410,7 +412,7 @@ mod tests {
     /// Partition `data` under L2.
     fn partition_l2(data: rowmajor::Ref<'_, f32>, config: &PartitionConfig) -> Vec<Vec<u32>> {
         partition(
-            &Rows::new(data, Metric::L2).unwrap(),
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
             &*kernels::select(Metric::L2),
             config,
         )
@@ -522,11 +524,13 @@ mod tests {
         let dimensions = 1;
         let fanout = 2;
         let initial_assignment = 0;
-        let data = Rows::new(
+        let rows = Rows::new(
             rowmajor::Ref::try_from_data(x.as_slice(), x.len(), dimensions).unwrap(),
             Metric::L2,
         )
         .unwrap();
+        let backend = rows.backend();
+        let data = backend.dataset();
         let kernels = kernels::select(Metric::L2);
         let leaders = kernels.create_leaders(
             rowmajor::Ref::try_from_data(leader_x.as_slice(), leader_x.len(), dimensions).unwrap(),
@@ -541,7 +545,7 @@ mod tests {
         let expected = vec![BTreeSet::from([1, 2]), BTreeSet::from([0, 1])];
 
         assign_point_stripe(
-            &data,
+            data,
             &first_ids,
             &*kernels,
             &leaders,
@@ -550,7 +554,7 @@ mod tests {
         )
         .unwrap();
         assign_point_stripe(
-            &data,
+            data,
             &ids,
             &*kernels,
             &leaders,

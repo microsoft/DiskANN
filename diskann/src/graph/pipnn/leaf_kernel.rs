@@ -23,7 +23,7 @@ use super::{
 /// leaves to avoid an allocation for each leaf.
 #[derive(Debug, Default)]
 pub(super) struct LeafKernelWorkspace {
-    distances: rowmajor::Buffer<f32>,
+    distances: rowmajor::Resizable<f32>,
     kth_distances: Vec<f32>,
 }
 
