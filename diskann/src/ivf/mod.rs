@@ -5,11 +5,8 @@
 
 pub mod index;
 pub mod region;
-pub mod traits;
-
-// Splitting fits lists with k-means from `diskann-quantization`.
-#[cfg(feature = "ivf")]
 pub mod split;
+pub mod traits;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test;

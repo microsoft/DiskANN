@@ -7,25 +7,27 @@
 
 use std::num::NonZeroUsize;
 
-#[cfg(feature = "ivf")]
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+    hash::Hash,
+};
 
-#[cfg(feature = "ivf")]
 use diskann_quantization::Parallelism;
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::traits::{SearchAccessor, SearchStrategy};
+use super::traits::SearchAccessor;
 use crate::{
-    ANNResult, error::IntoANNResult, graph::SearchOutputBuffer, neighbor::NeighborPriorityQueue,
+    ANNResult,
+    graph::SearchOutputBuffer,
+    neighbor::{NeighborPriorityQueue, NeighborPriorityQueueIdType},
 };
 
-// Insertion splits lists with k-means from `diskann-quantization`.
-#[cfg(feature = "ivf")]
 use super::{
     region::{AsMatRef, Region},
     split::{KMeansSplit, Linked, Links, Reassign, Split, policies},
-    traits::{BuildAccessor, BuildStrategy, Nearest},
+    traits::BuildAccessor,
 };
 
 /// Number of nearby lists each child of a split considers doing re-assignment.
@@ -123,24 +125,19 @@ impl IVFIndex {
     /// Fails if the batch is empty, or if a provider call or split fails. Any failure
     /// abandons the operation: the accessor is dropped without being finished.
     #[cfg(feature = "ivf")]
-    pub fn insert_batch<'a, S, B, C>(
+    pub fn insert_batch<'a, A, B>(
         &'a mut self,
-        strategy: &'a S,
-        context: &'a C,
+        mut accessor: A,
         points: B,
         parallelism: Parallelism,
     ) -> impl SendFuture<ANNResult<InsertStats>>
     where
-        C: Sync,
-        S: BuildStrategy<'a, B, C>,
-        S::Accessor: for<'b> BuildAccessor<B, VectorsRef<'b>: AsMatRef<'b, f32>>,
+        A: for<'b> BuildAccessor<B, VectorsRef<'b>: AsMatRef<'b, f32>>,
         B: Send + Sync,
     {
         let config = self.config;
 
         async move {
-            let mut accessor = strategy.build_accessor(context).into_ann_result()?;
-
             let mut parents = BTreeSet::new();
 
             let inserted = accessor
@@ -176,7 +173,7 @@ impl IVFIndex {
                     region.finish().await?;
                 }
 
-                // Reassign: each child potentially excahnges points with its nearest lists, other than
+                // Reassign: each child potentially exchanges points with its nearest lists, other than
                 // its siblings.
                 if let ReassignCount::Count(n) = config.reassign_count {
                     // Each child's parent, to recognize siblings.
@@ -187,20 +184,16 @@ impl IVFIndex {
 
                     let mut links = Links::new(children.iter().map(|&(_, child)| child));
 
-                    {
-                        let router = accessor.nearest();
-
-                        for (parent, child) in children {
-                            // Skip the child itself and its siblings.
-                            router
-                                .find(
-                                    child,
-                                    n,
-                                    |id| parent_of.get(&id) != Some(&parent),
-                                    |id, _| links.link(child, id),
-                                )
-                                .await?;
-                        }
+                    for (parent, child) in children {
+                        accessor
+                            .find(
+                                child,
+                                n,
+                                // Skip the child itself and its siblings.
+                                |id| parent_of.get(&id) != Some(&parent),
+                                |id, _| links.link(child, id),
+                            )
+                            .await?;
                     }
 
                     let lists = links.lists().iter().copied();
@@ -233,23 +226,19 @@ impl IVFIndex {
     ///
     /// Fails if the accessor cannot be created or the scan fails, leaving `output`
     /// unchanged.
-    pub fn search<'a, S, T, C, OB>(
+    pub fn search<'a, A, OB>(
         &'a self,
-        strategy: &'a S,
-        context: &'a C,
-        query: T,
+        accessor: A,
         k: NonZeroUsize,
         nprobe: NonZeroUsize,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<usize>>
     where
-        C: Sync,
-        S: SearchStrategy<'a, T, C>,
-        T: Copy + Send + Sync,
-        OB: SearchOutputBuffer<S::Id> + Send + ?Sized,
+        A: SearchAccessor,
+        A::Id: NeighborPriorityQueueIdType,
+        OB: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
         async move {
-            let accessor = strategy.search_accessor(context, query).into_ann_result()?;
             let mut queue = NeighborPriorityQueue::new(k.get());
             accessor.scan(nprobe, &mut queue).await?;
 

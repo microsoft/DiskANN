@@ -21,7 +21,6 @@ use crate::{
         region::{AsMatRef, Region},
         split::Split,
     },
-    utils::VectorId,
 };
 
 ////////////
@@ -151,7 +150,7 @@ impl<A, S: Seed> KMeansSplit<A, S> {
     fn fit<I, L, R>(&self, region: &R, parent: L) -> ANNResult<Children<I>>
     where
         I: Copy,
-        L: VectorId,
+        L: Copy + Debug + Send + Sync + 'static,
         R: Region<I, L>,
         A: for<'a> Assign<R::VectorsRef<'a>, f32>,
         for<'a> R::VectorsRef<'a>: AsMatRef<'a, f32>,
@@ -203,7 +202,7 @@ impl<A, S: Seed> KMeansSplit<A, S> {
 impl<I, L, R, A, S> Split<I, L, R> for KMeansSplit<A, S>
 where
     I: Copy + Send,
-    L: VectorId,
+    L: Copy + Debug + Send + Sync + 'static,
     R: Region<I, L>,
     A: for<'a> Assign<R::VectorsRef<'a>, f32>,
     S: Seed,

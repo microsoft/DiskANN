@@ -5,6 +5,8 @@
 
 //! Reassignment of points between linked lists.
 
+use std::fmt::Debug;
+
 use diskann_quantization::Parallelism;
 use diskann_utils::Reborrow;
 
@@ -15,7 +17,6 @@ use crate::{
         region::Region,
         split::{Links, Reassign},
     },
-    utils::VectorId,
 };
 
 ////////////
@@ -49,7 +50,7 @@ impl<A> Linked<A> {
     fn moves<I, L, R>(&self, region: &R, links: &Links<L>, i: usize) -> ANNResult<Vec<(I, usize)>>
     where
         I: Copy,
-        L: VectorId,
+        L: Copy + Debug + Send + Sync + 'static,
         R: Region<I, L>,
         A: for<'a> Assign<R::VectorsRef<'a>, f32>,
     {
@@ -88,7 +89,7 @@ impl<A> Linked<A> {
 impl<I, L, R, A> Reassign<I, L, R> for Linked<A>
 where
     I: Copy + Send,
-    L: VectorId,
+    L: Copy + Debug + Send + Sync + 'static,
     R: Region<I, L>,
     A: for<'a> Assign<R::VectorsRef<'a>, f32>,
 {

@@ -6,61 +6,29 @@
 //! The traits a provider implements: strategies that create accessors, and the accessors
 //! through which the index reads and writes lists.
 
-use std::num::NonZeroUsize;
+use std::{fmt::Debug, hash::Hash, num::NonZeroUsize};
 
 use diskann_utils::future::SendFuture;
 
 use super::region::Region;
 use crate::{
     ANNResult,
-    error::StandardError,
     neighbor::{Neighbor, NeighborPriorityQueue, NeighborPriorityQueueIdType},
-    utils::VectorId,
 };
 
 /// The list and vector ID types used by a subtrait.
+///
+/// The IDs are unconstrained here; each operation of the index states what it needs of them.
 pub trait HasIds {
     /// Internal ID of a point, as recorded in list memberships.
-    type Id: VectorId;
+    type Id: Copy + Send;
     /// ID of a list.
-    type ListId: VectorId;
+    type ListId: Copy + Ord + Hash + Debug + Send + Sync + 'static;
 }
 
 ///////////
 // Build //
 ///////////
-
-/// Lookup the nearest list of a given list.
-///
-/// Obtained from [`BuildAccessor::nearest`] between the stages
-/// of a build operation.
-pub trait Nearest: Send {
-    /// The list ID type.
-    type Id;
-
-    /// Emit up to `nprobe` distinct [live](Region) lists nearest the centroid of list `id`,
-    /// among those accepted by `pred`, and return how many were emitted. Implementations
-    /// need not return exactly `nprobe` items.
-    ///
-    /// - `pred` filters candidates based on id. This can be used to exclude some ids when looking
-    /// for neighbors of a list.  
-    ///
-    /// - `emit` is a callback applied to the ids and distances of the top results (that pass the filter).  
-    ///
-    /// # Errors
-    ///
-    /// Fails if `id` is not live or the provider cannot complete the lookup.
-    fn find<P, F>(
-        &self,
-        id: Self::Id,
-        nprobe: NonZeroUsize,
-        pred: P,
-        emit: F,
-    ) -> impl SendFuture<ANNResult<usize>>
-    where
-        P: Fn(Self::Id) -> bool + Send,
-        F: FnMut(Self::Id, f32) + Send;
-}
 
 /// The main extension point for the build operation on an IVF index.
 ///
@@ -80,7 +48,7 @@ pub trait Nearest: Send {
 /// - Dropping the accessor without calling `finish` abandons the operation,
 ///   and nothing it staged or recorded should be committed.
 ///
-/// - [`fill`](Self::fill) and [`Nearest::find`] reflect the routed
+/// - [`fill`](Self::fill) and [`Self::find`] reflect the routed
 ///   appends and **every** region `finish`ed earlier in the operation.
 pub trait BuildAccessor<B>: Send + Sized + HasIds {
     /// Borrowed vectors of one list.
@@ -89,18 +57,35 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
     /// is lifted here for convenience.
     type VectorsRef<'a>;
 
-    /// Lookup of nearby lists.
-    type Nearest<'a>: Nearest<Id = Self::ListId>
-    where
-        Self: 'a;
-
     /// The [`Region`] object returned by [`Self::fill`].
     type Region<'a>: for<'b> Region<Self::Id, Self::ListId, VectorsRef<'b> = Self::VectorsRef<'b>>
     where
         Self: 'a;
 
-    /// Return a lookup of the lists nearest a given list.
-    fn nearest(&mut self) -> Self::Nearest<'_>;
+    /// Lookup the nearest neighbor of a list, with filtering.
+    ///
+    /// Emit up to `nprobe` distinct [live](Region) lists nearest the centroid of list `id`,
+    /// among those accepted by `pred`, and return how many were emitted. Implementations
+    /// need not return exactly `nprobe` items.
+    ///
+    /// - `pred` filters candidates based on id. This can be used to exclude some ids when looking
+    /// for neighbors of a list.  
+    ///
+    /// - `emit` is a callback applied to the ids and distances of the top results (that pass the filter).  
+    ///
+    /// # Errors
+    ///
+    /// Fails if `id` is not live or the provider cannot complete the lookup.
+    fn find<P, F>(
+        &self,
+        id: Self::ListId,
+        nprobe: NonZeroUsize,
+        pred: P,
+        emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        P: Fn(Self::ListId) -> bool + Send,
+        F: FnMut(Self::ListId, f32) + Send;
 
     /// Stage a batch of `points`, assign each point to a list(s), and return the
     /// number of points staged.
@@ -129,24 +114,6 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
     fn finish(self) -> impl SendFuture<ANNResult<()>>;
 }
 
-/// Creates the accessor for each build operation on a batch `B`.
-pub trait BuildStrategy<'a, B, C>: Send + Sync + HasIds {
-    /// The accessor for one build operation.
-    type Accessor: BuildAccessor<B, Id = Self::Id, ListId = Self::ListId>;
-
-    /// An error that can occur when creating an accessor.
-    type Error: StandardError;
-
-    /// Begin a build operation and return its accessor.
-    ///
-    /// # Important
-    ///
-    /// Build operations on one provider must not overlap, since each computes its changes
-    /// from the lists it reads. Until an accessor is finished or
-    /// dropped, this method must not return another for the same provider.
-    fn build_accessor(&'a self, context: &'a C) -> Result<Self::Accessor, Self::Error>;
-}
-
 ////////////
 // Search //
 ////////////
@@ -161,18 +128,6 @@ pub trait Accumulator<I>: Send + Sized {
 
     /// Combine a compatible partial state, such as one created by [`Self::empty_like`].
     fn merge(&mut self, other: Self);
-}
-
-/// Creates the accessor for each search with a query of type `T`.
-pub trait SearchStrategy<'a, T: Sync, C>: Send + Sync + HasIds {
-    /// Query-bound accessor responsible for list selection and scanning.
-    type Accessor: SearchAccessor<ListId = Self::ListId, Id = Self::Id>;
-
-    /// An error that can occur when creating an accessor.
-    type Error: StandardError;
-
-    /// Begin a search for `query` and return its accessor.
-    fn search_accessor(&'a self, context: &'a C, query: T) -> Result<Self::Accessor, Self::Error>;
 }
 
 /// Selects and scans lists for one query.

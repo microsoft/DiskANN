@@ -42,25 +42,6 @@ where
         links
     }
 
-    /// Return the recorded lists, in insertion order.
-    pub(crate) fn lists(&self) -> &[L] {
-        &self.ids
-    }
-
-    /// Return the number of recorded lists.
-    pub(crate) fn len(&self) -> usize {
-        self.ids.len()
-    }
-
-    /// Indices linked to the list at index `i`, in link order.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `i` is not less than `self.lists().len()`.
-    pub(crate) fn links(&self, i: usize) -> &[usize] {
-        &self.links[i]
-    }
-
     /// Link `from` and `to` in both directions; a list not seen before is added.
     ///
     /// Repeated links are recorded once.
@@ -93,5 +74,26 @@ where
                 self.ids.len() - 1
             }
         }
+    }
+}
+
+impl<L> Links<L> {
+    /// Return the recorded lists, in insertion order.
+    pub(crate) fn lists(&self) -> &[L] {
+        &self.ids
+    }
+
+    /// Return the number of recorded lists.
+    pub(crate) fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Indices linked to the list at index `i`, in link order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i` is not less than `self.lists().len()`.
+    pub(crate) fn links(&self, i: usize) -> &[usize] {
+        &self.links[i]
     }
 }

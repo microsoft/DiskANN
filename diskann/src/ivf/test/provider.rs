@@ -26,13 +26,12 @@ use thiserror::Error;
 
 use crate::{
     ANNResult, convert_error,
-    error::{Infallible, message},
+    error::message,
     internal::counter::Counter,
     ivf::{
         region::{self, List},
         traits::{self, Accumulator},
     },
-    provider::DefaultContext,
 };
 
 //////////////
@@ -350,19 +349,6 @@ impl StoredList {
     }
 }
 
-///////////
-// Build //
-///////////
-
-impl<'a> traits::BuildStrategy<'a, &[(u32, &[f32])], DefaultContext> for Provider {
-    type Accessor = Build<'a>;
-    type Error = BuildIsLive;
-
-    fn build_accessor(&'a self, _: &'a DefaultContext) -> Result<Build<'a>, BuildIsLive> {
-        Build::new(self)
-    }
-}
-
 /// The accessor of one build.
 ///
 /// It records its changes in an overlay over the snapshot published when it began, copying a
@@ -396,18 +382,35 @@ impl traits::HasIds for Build<'_> {
 impl<'p, 'b, 'v> traits::BuildAccessor<&'b [(u32, &'v [f32])]> for Build<'p> {
     type VectorsRef<'a> = rowmajor::Ref<'a, f32>;
 
-    type Nearest<'a>
-        = Nearest<'a>
-    where
-        Self: 'a;
-
     type Region<'a>
         = Region<'a>
     where
         Self: 'a;
 
-    fn nearest(&mut self) -> Nearest<'_> {
-        Nearest::new(self.provider, &self.overlay)
+    fn find<P, F>(
+        &self,
+        id: u32,
+        nprobe: NonZeroUsize,
+        pred: P,
+        mut emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        P: Fn(u32) -> bool + Send,
+        F: FnMut(u32, f32) + Send,
+    {
+        async move {
+            self.provider.enter(Call::Find)?;
+            let list = self
+                .overlay
+                .list(id)
+                .ok_or_else(|| message!("list {id} is not live"))?;
+
+            let found = nearest(self.overlay.lists(), &list.centroid, nprobe.get(), pred);
+            for &(id, distance) in &found {
+                emit(id, distance);
+            }
+            Ok(found.len())
+        }
     }
 
     fn route<F>(
@@ -858,70 +861,9 @@ impl Filled {
     }
 }
 
-/////////////
-// Nearest //
-/////////////
-
-/// Finds the lists nearest a list, among the lists as the build has changed them.
-#[derive(Debug)]
-pub struct Nearest<'a> {
-    provider: &'a Provider,
-    overlay: &'a Overlay,
-}
-
-impl<'a> Nearest<'a> {
-    /// Find among the lists of `overlay`.
-    fn new(provider: &'a Provider, overlay: &'a Overlay) -> Self {
-        Self { provider, overlay }
-    }
-}
-
-impl traits::Nearest for Nearest<'_> {
-    type Id = u32;
-
-    fn find<P, F>(
-        &self,
-        id: u32,
-        nprobe: NonZeroUsize,
-        pred: P,
-        mut emit: F,
-    ) -> impl SendFuture<ANNResult<usize>>
-    where
-        P: Fn(u32) -> bool + Send,
-        F: FnMut(u32, f32) + Send,
-    {
-        async move {
-            self.provider.enter(Call::Find)?;
-            let list = self
-                .overlay
-                .list(id)
-                .ok_or_else(|| message!("list {id} is not live"))?;
-
-            let found = nearest(self.overlay.lists(), &list.centroid, nprobe.get(), pred);
-            for &(id, distance) in &found {
-                emit(id, distance);
-            }
-            Ok(found.len())
-        }
-    }
-}
-
 ////////////
 // Search //
 ////////////
-
-impl<'a, 'q> traits::SearchStrategy<'a, &'q [f32], DefaultContext> for Provider {
-    type Accessor = Search<'a>;
-    type Error = Infallible;
-
-    fn search_accessor(
-        &'a self,
-        _: &'a DefaultContext,
-        query: &'q [f32],
-    ) -> Result<Search<'a>, Infallible> {
-        Ok(Search::new(self, query))
-    }
-}
 
 /// The accessor of one search, over the snapshot published when it began.
 #[derive(Debug)]

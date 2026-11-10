@@ -17,6 +17,7 @@ pub(crate) mod internal;
 // Index Implementations
 pub mod flat;
 pub mod graph;
+#[cfg(feature = "ivf")]
 pub mod ivf;
 
 // Top level exports.
