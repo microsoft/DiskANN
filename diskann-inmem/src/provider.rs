@@ -27,8 +27,22 @@
 //! * Quantization + reranking: The current version of this index targets just a single
 //!   data-store and is planned to be addressed in the near future.
 //!
-//! * Lack of save/load support: The index is currently ephemeral, but there are plans to
-//!   address this gap.
+//! # Persistence
+//!
+//! Full-precision `f32` providers with `u32` external IDs support saving through
+//! [`diskann_record::save::Save`] and loading through [`FullProviderLoader`]. Saving blocks
+//! new registered writers and waits for active registered writers to finish, then holds
+//! writer exclusion until the snapshot is complete. New writer accessors and retirements
+//! fail while writers are excluded; searches may continue. Saving fails if another control
+//! operation prevents acquiring writer exclusion.
+//!
+//! NOTE: Slots can still be acquired and insertions published while writers are blocked.
+//! Callers must prevent concurrent insertions to obtain a consistent snapshot.
+
+mod load;
+mod save;
+
+pub use load::FullProviderLoader;
 
 use std::hash::Hash;
 

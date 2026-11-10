@@ -22,7 +22,7 @@ use std::io::BufReader;
 
 use crate::{
     Number, Version,
-    load::{Loadable, Result, error},
+    load::{Loadable, Loader, Result, error},
     save,
 };
 
@@ -34,9 +34,9 @@ use crate::{
 /// the `disk` feature) and an in-memory context. Alternative implementations (e.g. a
 /// virtual filesystem) can be supplied for testing.
 ///
-/// The generic [`load`](super::load) entry point is parameterized over this trait, and
-/// [`Context`] / [`Object`] / `Array` borrow it as an object-safe `&dyn LoadContext`
-/// so the load tree is agnostic to the concrete context type.
+/// The [`load`](super::load) entry point and [`Context`] / [`Object`] / `Array`
+/// borrow this as an object-safe `&dyn LoadContext`, keeping the load tree independent
+/// of the concrete backend type.
 pub(crate) trait LoadContext {
     /// The root value of the manifest.
     ///
@@ -156,6 +156,17 @@ impl<'a> Context<'a> {
         T: Loadable<'a>,
     {
         T::load(self.clone())
+    }
+
+    /// Deserialize this value using caller-supplied settings or resources.
+    ///
+    /// The result may borrow from this context for `'a`; errors from the
+    /// loader are propagated unchanged.
+    pub fn load_with<L>(&self, loader: L) -> Result<L::Value>
+    where
+        L: Loader<'a>,
+    {
+        loader.load(self.clone())
     }
 
     /// Returns `Some(Object)` if the value is a versioned object, else `None`.
@@ -297,10 +308,20 @@ impl<'a> Object<'a> {
     where
         T: Loadable<'a>,
     {
-        match self.record.get(key) {
-            Some(value) => T::load(Context::new(self.context(), value)),
-            None => Err((error::Kind::MissingField).into()),
-        }
+        self.child(key)?.load()
+    }
+
+    /// Deserialize the field under `key` using caller-supplied settings or resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`error::Kind::MissingField`] if the key is absent; errors from the
+    /// loader are propagated unchanged.
+    pub fn field_with<L>(&self, key: &str, loader: L) -> Result<L::Value>
+    where
+        L: Loader<'a>,
+    {
+        self.child(key)?.load_with(loader)
     }
 
     /// Open the side-car artifact identified by `handle` for reading.
@@ -382,6 +403,8 @@ impl ExactSizeIterator for Iter<'_> {}
 
 #[cfg(test)]
 mod tests {
+    use std::marker::PhantomData;
+
     use super::*;
 
     /// Minimal [`LoadContext`] used to anchor a [`Context`] in tests; the `Object`
@@ -396,6 +419,119 @@ mod tests {
         fn read(&self, _key: &str) -> Result<Reader<'_>> {
             unimplemented!("not exercised by Object accessor tests")
         }
+    }
+
+    // Test: A loader that appends loaded strings to a vector.
+    struct Append<'r>(&'r mut Vec<String>);
+
+    impl Loader<'_> for Append<'_> {
+        type Value = ();
+
+        fn load(self, context: Context<'_>) -> Result<Self::Value> {
+            self.0.push(context.load()?);
+            Ok(())
+        }
+    }
+
+    struct Fail(error::Error);
+
+    impl Loader<'_> for Fail {
+        type Value = ();
+
+        fn load(self, _: Context<'_>) -> Result<Self::Value> {
+            Err(self.0)
+        }
+    }
+
+    #[test]
+    fn loaders_fill_existing_values_from_context_and_fields() {
+        let mut record = save::Record::empty();
+        record
+            .insert("name", save::Value::String("example".into()))
+            .unwrap();
+        let value = record.into_value(Version::new(1, 0));
+        let inner = TestContext;
+        let object = Context::new(&inner, &value).as_object().unwrap();
+        let mut names = Vec::new();
+
+        object.field_with("name", Append(&mut names)).unwrap();
+        let child = object.child("name").unwrap();
+        child.load_with(Append(&mut names)).unwrap();
+        let name: &str = child.load_with(PhantomData).unwrap();
+        assert_eq!(name, "example");
+        assert_eq!(names, ["example", "example"]);
+
+        let err = object
+            .field_with("missing", Append(&mut names))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            error::Error::from(error::Kind::MissingField).to_string()
+        );
+        assert!(err.is_recoverable());
+        assert_eq!(names.len(), 2);
+    }
+
+    #[test]
+    fn loader_errors_are_propagated_unchanged() {
+        let mut record = save::Record::empty();
+        record.insert("field", save::Value::Null).unwrap();
+        let value = record.into_value(Version::new(1, 0));
+        let inner = TestContext;
+        let context = Context::new(&inner, &value);
+        let object = context.as_object().unwrap();
+
+        for kind in [error::Kind::TypeMismatch, error::Kind::MissingFile] {
+            let expected = error::Error::from(kind).to_string();
+            let err = context.load_with(Fail(kind.into())).unwrap_err();
+            assert_eq!(err.to_string(), expected);
+            assert_eq!(err.is_recoverable(), kind.is_recoverable());
+
+            let err = object.field_with("field", Fail(kind.into())).unwrap_err();
+            assert_eq!(err.to_string(), expected);
+            assert_eq!(err.is_recoverable(), kind.is_recoverable());
+        }
+    }
+
+    #[test]
+    fn ordinary_loading_uses_default_loader() {
+        struct Text(String);
+
+        #[derive(Default)]
+        struct TextLoader {
+            prefix: String,
+        }
+
+        impl Loader<'_> for TextLoader {
+            type Value = Text;
+
+            fn load(mut self, context: Context<'_>) -> Result<Self::Value> {
+                self.prefix.push_str(context.load::<&str>()?);
+                Ok(Text(self.prefix))
+            }
+        }
+
+        impl Loadable<'_> for Text {
+            fn load(context: Context<'_>) -> Result<Self> {
+                Loader::load(TextLoader::default(), context)
+            }
+        }
+
+        let value = save::Value::String("example".into());
+        let inner = TestContext;
+        let context = Context::new(&inner, &value);
+
+        let ordinary: Text = context.load().unwrap();
+        let adapted = context.load_with(PhantomData::<Text>).unwrap();
+        let custom = context
+            .load_with(TextLoader {
+                prefix: "custom ".to_owned(),
+            })
+            .unwrap();
+
+        assert_eq!(ordinary.0, "example");
+        assert_eq!(adapted.0, ordinary.0);
+        assert_eq!(custom.0, "custom example");
     }
 
     #[test]

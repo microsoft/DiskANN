@@ -84,6 +84,32 @@ In the case of loading an already constructed index rather than building, the "s
 }
 ```
 
+### In-Mem 2.0 Persistence
+
+Enable these inputs with `--features inmem2`. For `inmem2-fp-static` jobs using
+`"data_type": "float32"`, add `"save_path": "metadata.json"` to `content` to save
+the provider after construction and before searching. Set the top-level
+`output_directory` to an existing, dedicated artifact directory. Relative save paths
+are resolved within it; the manifest and binary artifacts are written together.
+Omitting `save_path` preserves the build-and-search-only behavior. Saving `float16`
+or `uint8` providers is not supported.
+
+Use `inmem2-fp-search` to load a saved manifest and search without the original dataset
+or build parameters. Its `content` contains `load_path`, the same `search` settings as
+the static input, and optional writable `capacity`. The capacity defaults to the saved
+live-node count and cannot be smaller. The saved metric and graph are restored, not
+recomputed. See [example/inmem2-search.json](example/inmem2-search.json).
+
+Run saving and loading in separate invocations: input validation requires the manifest
+to exist before a search-only job starts. `load_path` uses the normal input search
+directories. Save/load operations are outside the reported build and KNN timings.
+
+```sh
+cargo run --release -p diskann-benchmark --features inmem2 -- run \
+  --input-file diskann-benchmark/example/inmem2-search.json \
+  --output-file search-results.json
+```
+
 ### Finding Inputs
 
 Registered inputs are queried using

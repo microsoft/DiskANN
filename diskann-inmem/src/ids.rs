@@ -103,6 +103,10 @@ where
         self.forward.contains_key(external)
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.forward.len()
+    }
+
     /// Look up the internal id for an external id.
     pub(crate) fn to_internal<Q>(&self, external: &Q) -> Option<u32>
     where

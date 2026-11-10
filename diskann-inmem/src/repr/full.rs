@@ -10,6 +10,9 @@
 //!
 //! The [`FullPrecision`] generic bound can be used to constrain these data types.
 
+pub(crate) mod load;
+mod save;
+
 mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
@@ -377,7 +380,17 @@ where
     }
 
     fn reader(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
-        self.store.guard(|packed, guard| packed.reader(guard))
+        self.store.read_guard(|packed, guard| packed.reader(guard))
+    }
+
+    fn writer(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
+        self.store
+            .write_guard(|packed, guard| packed.reader(guard.into_read_guard()))
+    }
+
+    /// Block new writers and wait for active writers to finish.
+    pub(crate) fn try_exclude_writers(&self) -> Option<epoch::WriterExclusionGuard<'_>> {
+        self.store.try_exclude_writers()
     }
 }
 
@@ -690,7 +703,7 @@ impl FullPrecisionImpl for f32 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
+        let reader = full.writer()?;
 
         let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
@@ -731,7 +744,7 @@ impl FullPrecisionImpl for f16 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
+        let reader = full.writer()?;
 
         let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
@@ -767,7 +780,7 @@ impl FullPrecisionImpl for u8 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
+        let reader = full.writer()?;
 
         let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
@@ -797,7 +810,7 @@ impl FullPrecisionImpl for i8 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
+        let reader = full.writer()?;
 
         let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 

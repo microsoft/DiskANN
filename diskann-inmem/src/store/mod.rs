@@ -14,8 +14,8 @@ mod internal_docs {
     //!
     //! A [`Store`] provides no direct way of reading data. Instead, the [`slots::Slots`] is
     //! responsible for exposing an appropriate reader (e.g., [`packed::Packed::reader`])
-    //! in accordance with its lifecycle implementation. [`Store::guard`] can be used for
-    //! this purpose by acquiring an [`epoch::Guard`] for a [`Store`].
+    //! in accordance with its lifecycle implementation. [`Store::read_guard`] can be used
+    //! for this purpose by acquiring an [`epoch::ReadGuard`] for a [`Store`].
     //!
     //! ## Writing
     //!
@@ -355,17 +355,43 @@ where
         Some(items)
     }
 
-    /// Create an [`epoch::Guard`] for the [`epoch::Registry`] within `self` and invoke `f`
-    /// with that guard, returning the result.
+    /// Create an [`epoch::ReadGuard`] for the [`epoch::Registry`] within `self` and invoke
+    /// `f` with that guard, returning the result.
     ///
     /// This can be used by [`slots::Slots`] readers to establish a verifiable chain of
-    /// custody for an [`epoch::Guard`] over the slots.
-    pub(crate) fn guard<'a, F, R>(&'a self, f: F) -> Result<R, epoch::Unavailable>
+    /// custody for an [`epoch::ReadGuard`] over the slots.
+    pub(crate) fn read_guard<'a, F, R>(&'a self, f: F) -> Result<R, epoch::Unavailable>
     where
-        F: FnOnce(&'a T, epoch::Guard<'a>) -> R,
+        F: FnOnce(&'a T, epoch::ReadGuard<'a>) -> R,
     {
-        let guard = self.registry.guard()?;
+        let guard = self.registry.read_guard()?;
         Ok(f(self.slots(), guard))
+    }
+
+    /// Create an [`epoch::WriteGuard`] for the [`epoch::Registry`] within `self` and invoke
+    /// `f` with that guard, returning the result.
+    ///
+    /// This can be used by [`slots::Slots`] readers to establish a verifiable chain of
+    /// custody for an [`epoch::WriteGuard`] over the slots.
+    pub(crate) fn write_guard<'a, F, R>(&'a self, f: F) -> Result<R, epoch::Unavailable>
+    where
+        F: FnOnce(&'a T, epoch::WriteGuard<'a>) -> R,
+    {
+        let guard = self.registry.write_guard()?;
+        Ok(f(self.slots(), guard))
+    }
+
+    /// Attempt to exclude all workers from the [`Store`], potentially blocking as it waits
+    /// for current workers to finish.
+    #[expect(unused, reason = "this will be used for serialization")]
+    pub(crate) fn try_exclude_workers(&self) -> Option<epoch::WorkerExclusionGuard<'_>> {
+        self.registry.try_exclude_workers()
+    }
+
+    /// Attempt to exclude writers from the [`Store`], potentially blocking as it waits
+    /// for current writers to finish.
+    pub(crate) fn try_exclude_writers(&self) -> Option<epoch::WriterExclusionGuard<'_>> {
+        self.registry.try_exclude_writers()
     }
 
     /// Attempt to acquire a new [`Exclusive`] for writing.
@@ -404,7 +430,7 @@ where
     /// * The slot index `i` is out-of-bounds.
     /// * The slot is not in a state that can be retired (e.g., it is already retired or
     ///   is owned by a different thread).
-    /// * An [`epoch::Guard`] could not be obtained due to registration slot exhaustion.
+    /// * An [`epoch::ReadGuard`] could not be obtained due to registration slot exhaustion.
     /// * An attempt to acquire the slot after these checks races with another thread and
     ///   the race was lost.
     pub(crate) fn retire(&self, i: usize) -> Result<(), RetireError> {
@@ -634,7 +660,7 @@ pub(crate) enum RetireError {
     /// The slot cannot be retired because it is in a reserved state.
     #[error("slot is reserved: {}", tag)]
     SlotIsReserved { tag: Tag },
-    /// An [`epoch::Guard`] could not be acquired.
+    /// An [`epoch::ReadGuard`] could not be acquired.
     #[error(transparent)]
     GuardUnavailable(epoch::Unavailable),
     /// Another thread won the retirement race.
@@ -776,7 +802,9 @@ mod tests {
     }
 
     fn reader(store: &Store<Checked>) -> checked::Reader<'_> {
-        store.guard(|checked, guard| checked.reader(guard)).unwrap()
+        store
+            .read_guard(|checked, guard| checked.reader(guard))
+            .unwrap()
     }
 
     //------------------------//
