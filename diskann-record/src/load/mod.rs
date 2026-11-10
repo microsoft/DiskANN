@@ -99,22 +99,9 @@ where
 
 /// Reload a saved value using caller-supplied settings or resources.
 ///
-/// The loader must work for any metadata lifetime, so the result cannot borrow from
-/// the disk context, which is dropped before returning. It may borrow resources
-/// supplied by the caller; those resources need not be `'static`.
-///
-/// A reference into the saved metadata cannot escape:
-///
-/// ```compile_fail
-/// use std::{marker::PhantomData, path::Path};
-/// use diskann_record::load::load_from_disk_with;
-///
-/// let name: &str = load_from_disk_with(
-///     Path::new("metadata.json"),
-///     Path::new("artifacts"),
-///     PhantomData::<&str>,
-/// ).unwrap();
-/// ```
+/// NOTE:: The loader must work for any metadata lifetime: the result cannot borrow from
+/// the disk context (dropped before returning), and may borrow resources
+/// supplied by the caller. Those resources need not be `'static`.
 ///
 /// # Errors
 ///

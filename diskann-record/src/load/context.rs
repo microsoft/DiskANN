@@ -160,8 +160,8 @@ impl<'a> Context<'a> {
 
     /// Deserialize this value using caller-supplied settings or resources.
     ///
-    /// Unlike disk loading, the result may borrow from this context for `'a`.
-    /// Errors from the loader are propagated unchanged.
+    /// The result may borrow from this context for `'a`; errors from the
+    /// loader are propagated unchanged.
     pub fn load_with<L>(&self, loader: L) -> Result<L::Value>
     where
         L: Loader<'a>,
@@ -315,7 +315,7 @@ impl<'a> Object<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`error::Kind::MissingField`] if the key is absent. Errors from the
+    /// Returns [`error::Kind::MissingField`] if the key is absent; errors from the
     /// loader are propagated unchanged.
     pub fn field_with<L>(&self, key: &str, loader: L) -> Result<L::Value>
     where
@@ -421,6 +421,7 @@ mod tests {
         }
     }
 
+    // Test: A loader that appends loaded strings to a vector.
     struct Append<'r>(&'r mut Vec<String>);
 
     impl Loader<'_> for Append<'_> {
