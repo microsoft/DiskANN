@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// [`Element`]: diskann::graph::pipnn::Element
 #[cfg(feature = "pipnn")]
-pub trait BuildVector: diskann::graph::pipnn::Element {}
+pub trait BuildVector: VectorRepr + diskann::graph::pipnn::Element {}
 #[cfg(feature = "pipnn")]
-impl<T: diskann::graph::pipnn::Element> BuildVector for T {}
+impl<T: VectorRepr + diskann::graph::pipnn::Element> BuildVector for T {}
 
 /// Vector element types that the disk index build accepts.
 #[cfg(not(feature = "pipnn"))]

@@ -14,6 +14,7 @@
 use diskann::{
     ANNError, ANNResult,
     graph::{AdjacencyList, pipnn},
+    utils::VectorRepr,
 };
 use diskann_providers::{
     storage::{StorageReadProvider, StorageWriteProvider, save_adjacency_graph},
@@ -103,7 +104,7 @@ fn build_adjacency<T, StorageProvider>(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
-    T: pipnn::Element,
+    T: VectorRepr + pipnn::Element,
     StorageProvider: StorageReadProvider,
 {
     let data = read_bin::<T>(&mut storage.open_reader(data_path)?)?;
