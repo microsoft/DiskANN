@@ -101,15 +101,25 @@ pub(super) fn run_with_kernel<S>(
 ) -> Result<RunResult, MaxSimError> {
     // Validate the call and warm the kernel before measuring steady-state latency.
     compute(scores)?;
-    let mut latencies = Vec::with_capacity(run.num_measurements.get());
 
-    for _ in 0..run.num_measurements.get() {
+    // Erase whole measurements, keeping callback dispatch outside the timed loop.
+    collect_measurements(run, &mut || {
         let start = std::time::Instant::now();
         for _ in 0..run.loops_per_measurement.get() {
             compute(scores)?;
             std::hint::black_box(&mut *scores);
         }
-        latencies.push(start.elapsed().into());
+        Ok(start.elapsed().into())
+    })
+}
+
+fn collect_measurements(
+    run: &Run,
+    measure: &mut dyn FnMut() -> Result<MicroSeconds, MaxSimError>,
+) -> Result<RunResult, MaxSimError> {
+    let mut latencies = Vec::with_capacity(run.num_measurements.get());
+    for _ in 0..run.num_measurements.get() {
+        latencies.push(measure()?);
     }
 
     let percentiles = percentiles::compute_percentiles(&mut latencies).unwrap();

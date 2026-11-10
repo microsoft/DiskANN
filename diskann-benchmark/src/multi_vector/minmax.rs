@@ -91,6 +91,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inputs::multi_vector::BenchIsa;
     use std::num::NonZeroUsize;
 
     fn shape() -> Run {
@@ -145,15 +146,10 @@ mod tests {
         let mut expected = vec![0.0; reference.nrows()];
         reference.compute_max_sim(document, &mut expected).unwrap();
 
-        for isa in [
-            MaxSimIsa::Auto,
-            MaxSimIsa::Scalar,
-            MaxSimIsa::X86_64_V3,
-            MaxSimIsa::X86_64_V4,
-            MaxSimIsa::Neon,
-        ]
-        .into_iter()
-        .filter(|isa| isa.is_available())
+        for isa in BenchIsa::all()
+            .into_iter()
+            .map(MaxSimIsa::from)
+            .filter(|isa| isa.is_available())
         {
             let kernel = build_minmax_max_sim::<A, B>(isa, query).unwrap();
             let mut scores = vec![f32::NAN; expected.len()];

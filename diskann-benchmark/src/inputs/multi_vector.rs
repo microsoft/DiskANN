@@ -113,6 +113,20 @@ pub(crate) enum BenchIsa {
     Auto,
 }
 
+#[cfg(all(test, feature = "multi-vector"))]
+impl BenchIsa {
+    pub(crate) fn all() -> [Self; 6] {
+        [
+            Self::X86_64_V4,
+            Self::X86_64_V3,
+            Self::Neon,
+            Self::Scalar,
+            Self::Reference,
+            Self::Auto,
+        ]
+    }
+}
+
 impl std::fmt::Display for BenchIsa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let st = match self {
