@@ -22,6 +22,7 @@ half = { workspace = true, features = ["bytemuck", "num-traits"] }
 hashbrown = { version = "0.16.0", default-features = false, features = ["default-hasher"] }
 num-traits.workspace = true
 rand.workspace = true
+rayon = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = { workspace = true, optional = true }
@@ -60,8 +61,8 @@ panic = "warn"
 [features]
 default = ["tracing"]
 
-# Enable PiPNN numerical kernels.
-pipnn = ["dep:diskann-linalg"]
+# Enable PiPNN batch graph construction.
+pipnn = ["dep:diskann-linalg", "dep:rayon", "diskann-utils/rayon"]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]

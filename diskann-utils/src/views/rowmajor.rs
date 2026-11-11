@@ -1103,6 +1103,172 @@ impl<'a, T> ReborrowMut<'a> for Owned<T> {
     }
 }
 
+//-----------//
+// Resizable //
+//-----------//
+
+/// A row-major matrix that owns its storage and can change shape in place.
+///
+/// Use it as reusable scratch storage for matrices of different shapes.
+/// [`Resizable::resize`] and [`Resizable::resize_with`] may reuse the existing
+/// allocation. After a resize, every element holds a valid `T`, but the values
+/// are unspecified: write the matrix before you read it.
+///
+/// ```
+/// use diskann_utils::views::rowmajor::{Matrix, MatrixMut, Resizable};
+///
+/// let mut scratch = Resizable::<f32>::new();
+/// scratch.resize(2, 3).unwrap();
+/// scratch.as_mut_slice().fill(1.0);
+/// assert_eq!((scratch.nrows(), scratch.ncols()), (2, 3));
+/// assert_eq!(scratch.row(1), &[1.0, 1.0, 1.0]);
+/// ```
+#[derive(Debug, Clone)]
+pub struct Resizable<T> {
+    /// Invariant: `data.len() >= layout.num_elements()`. Elements past the
+    /// current shape are kept for later resizes.
+    data: Vec<T>,
+    layout: Layout<T>,
+}
+
+impl<T> Resizable<T> {
+    /// Construct an empty `0 x 0` matrix. No memory is allocated.
+    pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    /// Construct an empty `0 x 0` matrix with room for at least `capacity`
+    /// elements.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
+            // SAFETY: A `0 x 0` layout has zero elements and passes `LayoutError::check`.
+            layout: unsafe { Layout::new_unchecked(0, 0) },
+        }
+    }
+
+    /// The number of elements that the matrix can hold without allocating.
+    pub fn capacity(&self) -> usize {
+        self.data.capacity()
+    }
+
+    /// Set the shape to `nrows x ncols`. The element values are unspecified.
+    ///
+    /// `f` creates the elements that the current storage cannot supply.
+    ///
+    /// Returns an error if `nrows x ncols` is not a valid [`Layout`]. The shape
+    /// is then unchanged.
+    pub fn resize_with<F>(&mut self, nrows: usize, ncols: usize, f: F) -> Result<(), LayoutError>
+    where
+        F: FnMut() -> T,
+    {
+        let layout = Layout::new(nrows, ncols)?;
+        let len = layout.num_elements();
+        if self.data.len() < len {
+            self.data.resize_with(len, f);
+        }
+        self.layout = layout;
+        Ok(())
+    }
+
+    /// Set the shape to `nrows x ncols`. The element values are unspecified.
+    ///
+    /// Returns an error if `nrows x ncols` is not a valid [`Layout`]. The shape
+    /// is then unchanged.
+    pub fn resize(&mut self, nrows: usize, ncols: usize) -> Result<(), LayoutError>
+    where
+        T: Default,
+    {
+        self.resize_with(nrows, ncols, T::default)
+    }
+
+    /// Set the shape to `0 x 0`. The allocation is kept.
+    pub fn clear(&mut self) {
+        // SAFETY: A `0 x 0` layout has zero elements and passes `LayoutError::check`.
+        self.layout = unsafe { Layout::new_unchecked(0, 0) };
+    }
+
+    /// Drop the elements past the current shape and release unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        self.data.truncate(self.layout.num_elements());
+        self.data.shrink_to_fit();
+    }
+}
+
+impl<T> Default for Resizable<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> From<Owned<T>> for Resizable<T> {
+    /// Take the storage of `matrix` without copying it.
+    fn from(matrix: Owned<T>) -> Self {
+        let layout = matrix.layout();
+        Self {
+            data: matrix.into_inner().into_vec(),
+            layout,
+        }
+    }
+}
+
+impl<T> From<Resizable<T>> for Owned<T> {
+    /// Keep the elements of the current shape and drop the rest.
+    fn from(mut matrix: Resizable<T>) -> Self {
+        matrix.data.truncate(matrix.layout.num_elements());
+        let layout = matrix.layout;
+        // SAFETY: After the truncation, the length equals `layout.num_elements()`
+        // because the invariant keeps `data.len() >= layout.num_elements()`.
+        unsafe { Owned::from_data_unchecked(matrix.data.into_boxed_slice(), layout) }
+    }
+}
+
+impl<T> PartialEq for Resizable<T>
+where
+    T: PartialEq,
+{
+    /// Compare the shapes and the elements of the shapes.
+    fn eq(&self, other: &Self) -> bool {
+        Matrix::as_view(self).eq(&Matrix::as_view(other))
+    }
+}
+
+// SAFETY: The invariant keeps `data.len() >= layout.num_elements()`, so the
+// first `layout.num_elements()` elements of the vector are initialized, within
+// one allocation, and aligned. An empty vector gives a dangling, aligned pointer.
+unsafe impl<T> Matrix for Resizable<T> {
+    type Element = T;
+
+    fn as_nonnull(&self) -> NonNull<T> {
+        NonNull::from(self.data.as_slice()).cast()
+    }
+
+    fn layout(&self) -> Layout<T> {
+        self.layout
+    }
+}
+
+// SAFETY: A mutable borrow of `Resizable` has exclusive access to its vector.
+unsafe impl<T> MatrixMut for Resizable<T> {
+    fn as_nonnull_mut(&mut self) -> NonNull<T> {
+        NonNull::from(self.data.as_mut_slice()).cast()
+    }
+}
+
+impl<'a, T> Reborrow<'a> for Resizable<T> {
+    type Target = Ref<'a, T>;
+    fn reborrow(&'a self) -> Self::Target {
+        Matrix::as_view(self)
+    }
+}
+
+impl<'a, T> ReborrowMut<'a> for Resizable<T> {
+    type Target = Mut<'a, T>;
+    fn reborrow_mut(&'a mut self) -> Self::Target {
+        MatrixMut::as_view_mut(self)
+    }
+}
+
 //-----//
 // Ref //
 //-----//
@@ -1392,6 +1558,100 @@ enum TryFromErrorInner {
 mod tests {
     use super::*;
     use crate::{assert_contains, lazy_format};
+
+    #[test]
+    fn resizable_takes_each_shape_and_reuses_its_storage() {
+        let mut matrix = Resizable::<u32>::new();
+        assert_eq!((matrix.nrows(), matrix.ncols()), (0, 0));
+        assert_eq!(matrix.as_slice(), &[]);
+
+        // The views cover the current shape and see the written values.
+        matrix.resize(2, 3).unwrap();
+        for (i, x) in matrix.as_mut_slice().iter_mut().enumerate() {
+            *x = i as u32;
+        }
+        assert_eq!((matrix.nrows(), matrix.ncols()), (2, 3));
+        assert_eq!(matrix.row(1), &[3, 4, 5]);
+        assert_eq!(matrix.as_view_mut().row_mut(0), &mut [0, 1, 2]);
+
+        // A smaller shape keeps the allocation.
+        let capacity = matrix.capacity();
+        matrix.resize(1, 2).unwrap();
+        assert_eq!((matrix.nrows(), matrix.ncols()), (1, 2));
+        assert_eq!(matrix.as_slice().len(), 2);
+        assert_eq!(matrix.capacity(), capacity);
+
+        // A larger shape covers every element.
+        matrix.resize(2, 4).unwrap();
+        assert_eq!(matrix.as_slice().len(), 8);
+    }
+
+    #[test]
+    fn resizable_rejects_an_overflowing_shape_and_keeps_the_old_one() {
+        let mut matrix = Resizable::<u32>::new();
+        matrix.resize(2, 4).unwrap();
+
+        assert!(matrix.resize(usize::MAX, 2).is_err());
+
+        assert_eq!((matrix.nrows(), matrix.ncols()), (2, 4));
+    }
+
+    #[test]
+    fn resizable_holds_types_without_default() {
+        // `NonZeroUsize` has no `Default`, so only `resize_with` can create elements.
+        let one = NonZeroUsize::MIN;
+        let mut matrix = Resizable::new();
+
+        matrix.resize_with(2, 2, || one).unwrap();
+
+        assert_eq!(matrix.as_slice(), &[one; 4]);
+    }
+
+    #[test]
+    fn resizable_clear_and_shrink_release_only_what_they_promise() {
+        let mut matrix = Resizable::<u8>::with_capacity(16);
+        assert!(matrix.capacity() >= 16);
+        matrix.resize(2, 4).unwrap();
+
+        // Clearing keeps the allocation.
+        let capacity = matrix.capacity();
+        matrix.clear();
+        assert_eq!((matrix.nrows(), matrix.ncols()), (0, 0));
+        assert_eq!(matrix.capacity(), capacity);
+
+        // Shrinking keeps only the current shape.
+        matrix.resize(1, 3).unwrap();
+        matrix.shrink_to_fit();
+        assert_eq!(matrix.as_slice().len(), 3);
+        assert!(matrix.capacity() < capacity);
+    }
+
+    #[test]
+    fn resizable_converts_to_and_from_owned() {
+        let owned = Owned::from_fn(2, 3, |rc| rc.row * 3 + rc.col);
+
+        let mut matrix = Resizable::from(owned.clone());
+        assert_eq!(matrix.as_view(), owned.as_view());
+
+        // Only the elements of the current shape move into the owned matrix.
+        matrix.resize(1, 3).unwrap();
+        let back = Owned::from(matrix);
+        assert_eq!((back.nrows(), back.ncols()), (1, 3));
+        assert_eq!(back.as_slice(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn resizable_equality_compares_the_shape_and_its_elements() {
+        let mut left = Resizable::from(Owned::from_element(2, 2, 7_u8));
+        let mut right = Resizable::from(Owned::from_element(1, 4, 7_u8));
+        // Same elements, different shapes.
+        assert_ne!(left, right);
+
+        // Storage past the shape does not take part.
+        right.resize(1, 2).unwrap();
+        left.resize(1, 2).unwrap();
+        assert_eq!(left, right);
+    }
 
     /// This function is only callable with copyable types.
     ///

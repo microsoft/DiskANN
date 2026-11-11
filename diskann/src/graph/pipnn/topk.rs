@@ -340,9 +340,9 @@ fn offer_each(
 /// cost 11% of leaf ranking time.
 #[inline(always)]
 fn load_group<A: Simd>(arch: A, group: &[f32; LANES]) -> A::Vector {
-    // A vector with more lanes than `LANES` would read past `group`. Both sides are
-    // constants, so release builds remove this check.
-    assert_eq!(A::Vector::LANES, group.len());
+    // A vector with more lanes than `LANES` would read past `group`. Both sides
+    // are constants, so a mismatch fails to compile.
+    const { assert!(A::Vector::LANES == LANES) };
     // SAFETY: the assertion above proves that the load reads exactly the
     // `group.len()` readable values of `group`.
     unsafe { A::Vector::load_simd(arch, group.as_ptr()) }

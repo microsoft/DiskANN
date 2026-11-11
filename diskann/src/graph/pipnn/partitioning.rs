@@ -1,0 +1,726 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+//! Randomized ball carving: recursive, overlapping partitioning of the dataset
+//! into leaves of at most `c_max` points.
+//!
+//! One split samples leaders from a cluster and assigns each point to its
+//! `fanout` nearest leaders. The points of one leader form a child cluster, so
+//! children overlap when `fanout > 1`. A child with at most `c_max` points is a
+//! leaf; a larger child is split again at the next level. `fanout[level]` gives
+//! the fanout of each level, and levels after the schedule use fanout 1.
+//!
+//! The recursion stops at `max_depth` levels. A cluster that is still larger
+//! than `c_max` at that level is cut into equal leaves in point order, and the
+//! build logs a warning with the number of points it cut. A cluster can stay
+//! large when its points are copies of one vector, or when, under inner
+//! product, one leader with a large norm wins every point. These leaves group
+//! points arbitrarily, which can lower recall.
+//!
+//! The partition kernel computes point-to-leader distances and selects the
+//! nearest leaders. This module samples leaders, gathers vectors, and groups the
+//! assignments into children.
+//!
+//! A split assigns its points in stripes. An assignment stripe is a batch of up
+//! to `ASSIGNMENT_STRIPE_POINTS` points that one job gathers as `f32` and ranks
+//! against all leaders of the split. With Rayon, the splits of one level and
+//! the stripes of one split run as parallel jobs.
+//!
+//! Buffer sizes use plain multiplication. The IDs of one split are distinct
+//! dataset rows, so a gathered `rows x dimensions` buffer is not larger than the
+//! dataset. An assignment buffer holds `points x fanout` IDs. The fanout of a
+//! split is below its leader count, which is at most its point count, so with at
+//! most `u32::MAX` points this count fits in a 64-bit `usize`.
+
+use crate::{ANNResult, tracked_warn};
+use diskann_utils::{
+    object_pool::{AsPooled, ObjectPool},
+    views::rowmajor::{self, Matrix, MatrixMut},
+};
+use rand::{Rng, SeedableRng, prelude::IndexedRandom, rngs::StdRng};
+use rayon::prelude::*;
+
+use super::{
+    PartitionConfig, dataset::inner::Dataset, kernels::Kernels,
+    partition_kernel::PartitionKernelWorkspace, partition_metric::PartitionLeaders,
+    topk::UNASSIGNED,
+};
+
+/// Number of points in one assignment stripe. Short stripes repeat the fixed
+/// cost of a kernel call, and tall stripes overflow the last-level cache once
+/// every worker holds one. The height does not follow the detected cache size,
+/// because a virtual machine reports a last-level cache that other tenants
+/// share.
+#[cfg(not(test))]
+const ASSIGNMENT_STRIPE_POINTS: usize = 256;
+/// Unit tests use short stripes, so a few points fill several stripes and a tail.
+#[cfg(test)]
+const ASSIGNMENT_STRIPE_POINTS: usize = 8;
+
+/// A cluster with more than `c_max` points that waits for its split.
+struct Cluster {
+    point_ids: Vec<u32>,
+    /// Seed of the random stream of this cluster's split. The parent split
+    /// draws it, so every split samples its leaders from its own stream.
+    seed: u64,
+}
+
+/// The result of one split: leaves, and clusters for the next level.
+struct ClusterSplit {
+    next_level: Vec<Cluster>,
+    leaves: Vec<Vec<u32>>,
+}
+
+/// Scratch for one assignment stripe: the gathered `f32` points and the kernel
+/// workspace.
+#[derive(Default)]
+struct StripeBuffers {
+    points: rowmajor::Resizable<f32>,
+    kernel_workspace: PartitionKernelWorkspace,
+}
+
+impl AsPooled<()> for StripeBuffers {
+    fn create(_: ()) -> Self {
+        Self::default()
+    }
+
+    fn modify(&mut self, _: ()) {
+        // Keep the largest allocation across leases. `assign_point_stripe` sets
+        // the shape before each read.
+    }
+}
+
+/// Stripe scratch shared by all splits of a build.
+///
+/// `ObjectPool` locks only to give or take back a lease. Numerical work holds the
+/// lease, not the pool lock.
+type StripeBufferPool = ObjectPool<StripeBuffers>;
+
+/// Partition the dataset into leaves.
+///
+/// A point whose distances to all leaders of a split are not rankable, for
+/// example a NaN vector, joins no child of that split.
+///
+/// Each level splits all pending clusters with the fanout of that level. A
+/// cluster that is still larger than `c_max` after `max_depth` levels is cut
+/// into equal leaves in point order.
+pub(super) fn partition(
+    data: &dyn Dataset,
+    kernels: &dyn Kernels,
+    config: &PartitionConfig,
+) -> ANNResult<Vec<Vec<u32>>> {
+    let initial_point_ids = (0..data.nrows() as u32).collect();
+    let c_max = config.c_max.get();
+    if data.nrows() <= c_max {
+        return Ok(vec![initial_point_ids]);
+    }
+
+    let stripe_buffers = StripeBufferPool::new((), 0, None);
+    let mut leaves = Vec::new();
+    let mut pending = vec![Cluster {
+        point_ids: initial_point_ids,
+        seed: config.seed,
+    }];
+    for level in 0..config.max_depth.get() {
+        if pending.is_empty() {
+            break;
+        }
+        let fanout = config.fanout.get(level).map_or(1, |fanout| fanout.get());
+        // Indexed parallel collection keeps the parent order.
+        let splits: ANNResult<Vec<_>> = pending
+            .into_par_iter()
+            .map(|cluster| split_cluster(data, kernels, config, fanout, cluster, &stripe_buffers))
+            .collect();
+
+        pending = Vec::new();
+        for mut split in splits? {
+            leaves.append(&mut split.leaves);
+            pending.append(&mut split.next_level);
+        }
+    }
+
+    let cut_points: usize = pending.iter().map(|cluster| cluster.point_ids.len()).sum();
+    if cut_points > 0 {
+        tracked_warn!(
+            "PiPNN cut {cut_points} points into leaves in point order because their clusters \
+             were still larger than c_max at max_depth; these leaves group points arbitrarily \
+             and can lower recall"
+        );
+    }
+    for cluster in pending {
+        leaves.extend(cut_into_leaves(&cluster.point_ids, c_max));
+    }
+    Ok(leaves)
+}
+
+/// Split one cluster into leaves and clusters for the next level.
+fn split_cluster(
+    data: &dyn Dataset,
+    kernels: &dyn Kernels,
+    config: &PartitionConfig,
+    fanout: usize,
+    cluster: Cluster,
+    stripe_buffers: &StripeBufferPool,
+) -> ANNResult<ClusterSplit> {
+    let c_max = config.c_max.get();
+    let mut rng = StdRng::seed_from_u64(cluster.seed);
+    let leader_count = sampled_leader_count(
+        cluster.point_ids.len(),
+        config.p_samp,
+        config.max_leaders.get(),
+    );
+    let children = if fanout > 1 && fanout >= leader_count {
+        // Every point would join every leader, and each child would repeat this
+        // cluster. The whole cluster waits for the next level instead.
+        vec![cluster.point_ids]
+    } else {
+        let leaders = sample_leaders(&cluster.point_ids, leader_count, &mut rng);
+        assign_to_leaders(
+            data,
+            kernels,
+            &cluster.point_ids,
+            &leaders,
+            fanout,
+            stripe_buffers,
+        )?
+    };
+
+    let mut split = ClusterSplit {
+        next_level: Vec::new(),
+        leaves: Vec::new(),
+    };
+    for child in children {
+        if child.is_empty() {
+            continue;
+        }
+        if child.len() <= c_max {
+            split.leaves.push(child);
+        } else {
+            split.next_level.push(Cluster {
+                point_ids: child,
+                seed: rng.random(),
+            });
+        }
+    }
+    Ok(split)
+}
+
+/// Cut a cluster into leaves of at most `c_max` points, in point order, with
+/// sizes as equal as possible.
+fn cut_into_leaves(point_ids: &[u32], c_max: usize) -> impl Iterator<Item = Vec<u32>> + '_ {
+    let leaf_len = point_ids.len().div_ceil(point_ids.len().div_ceil(c_max));
+    point_ids.chunks(leaf_len).map(<[u32]>::to_vec)
+}
+
+/// Sample `count` distinct leaders from the points of a cluster.
+fn sample_leaders(points: &[u32], count: usize, rng: &mut StdRng) -> Vec<u32> {
+    points.choose_multiple(rng, count).copied().collect()
+}
+
+/// Return the number of leaders for a cluster of `points` points.
+///
+/// A split needs two leaders. `max_leaders` bounds the cost of one split.
+fn sampled_leader_count(points: usize, sampling_fraction: f64, max_leaders: usize) -> usize {
+    ((points as f64 * sampling_fraction).ceil() as usize).clamp(2, max_leaders)
+}
+
+/// Assign each point to its `fanout` nearest leaders and group the points by
+/// leader.
+///
+/// Stripes of points run in parallel. Each child keeps the input order of its
+/// points, so the next split samples the same leaders for any thread count.
+fn assign_to_leaders(
+    data: &dyn Dataset,
+    kernels: &dyn Kernels,
+    point_ids: &[u32],
+    leader_ids: &[u32],
+    fanout: usize,
+    stripe_buffers: &StripeBufferPool,
+) -> ANNResult<Vec<Vec<u32>>> {
+    let mut leader_values =
+        rowmajor::Owned::from_element(leader_ids.len(), data.dimensions(), 0.0f32);
+    data.gather(leader_ids, leader_values.as_view_mut())?;
+
+    let leaders = kernels.create_leaders(leader_values.as_view());
+    let leader_count = leaders.leader_count();
+
+    let mut assignments = rowmajor::Owned::from_element(point_ids.len(), fanout, 0u32);
+    // A lease for each stripe takes one lock, which costs far less than the
+    // GEMM and ranking of the stripe.
+    assignments
+        .par_window_iter_mut(ASSIGNMENT_STRIPE_POINTS)
+        .zip(point_ids.par_chunks(ASSIGNMENT_STRIPE_POINTS))
+        .try_for_each(|(stripe_assignments, stripe_ids)| {
+            assign_point_stripe(
+                data,
+                stripe_ids,
+                kernels,
+                &leaders,
+                &mut stripe_buffers.get_ref(()),
+                stripe_assignments,
+            )
+        })?;
+
+    Ok(group_by_leader(
+        point_ids,
+        assignments.as_view(),
+        leader_count,
+    ))
+}
+
+/// Gather one stripe of points as `f32` and write the leader columns of the
+/// nearest leaders of each point to its row of `assignments`, one per column.
+#[inline]
+fn assign_point_stripe(
+    data: &dyn Dataset,
+    point_ids: &[u32],
+    kernels: &dyn Kernels,
+    leaders: &PartitionLeaders<'_>,
+    buffers: &mut StripeBuffers,
+    assignments: rowmajor::Mut<'_, u32>,
+) -> ANNResult<()> {
+    buffers.points.resize(point_ids.len(), data.dimensions())?;
+    data.gather(point_ids, buffers.points.as_view_mut())?;
+    kernels.assign_leaders(
+        buffers.points.as_view(),
+        leaders,
+        assignments,
+        &mut buffers.kernel_workspace,
+    )
+}
+
+/// Group the points by assigned leader. Unassigned slots join no child.
+///
+/// Each child keeps the input order of its points, because the next split
+/// samples its leaders by position.
+fn group_by_leader(
+    points: &[u32],
+    assignments: rowmajor::Ref<'_, u32>,
+    leaders: usize,
+) -> Vec<Vec<u32>> {
+    let mut sizes = vec![0usize; leaders];
+    for &leader in assignments.as_slice() {
+        if leader != UNASSIGNED {
+            sizes[leader as usize] += 1;
+        }
+    }
+    let mut clusters: Vec<Vec<u32>> = sizes.into_iter().map(Vec::with_capacity).collect();
+    for (&point, point_assignments) in points.iter().zip(assignments.rows()) {
+        for &leader in point_assignments {
+            if leader != UNASSIGNED {
+                clusters[leader as usize].push(point);
+            }
+        }
+    }
+    clusters
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::pipnn::{
+        Builder, Config, Dataset as _, dataset::Rows, kernels, test_support::nz,
+    };
+    use diskann_vector::distance::Metric;
+    use std::collections::BTreeSet;
+
+    fn as_set(ids: &[u32]) -> BTreeSet<u32> {
+        ids.iter().copied().collect()
+    }
+
+    /// Sort each leaf and then the list of leaves. Neither order is part of the
+    /// result. Repeated leaves and points stay, so a comparison still catches
+    /// duplicates.
+    fn sorted_leaves(leaves: &[Vec<u32>]) -> Vec<Vec<u32>> {
+        let mut leaves: Vec<_> = leaves
+            .iter()
+            .map(|leaf| {
+                let mut points = leaf.clone();
+                points.sort_unstable();
+                points
+            })
+            .collect();
+        leaves.sort_unstable();
+        leaves
+    }
+
+    /// Every point is a leader (`p_samp = 1.0`), so leader sampling picks the
+    /// same set for any seed. Partitioning reads none of the other parameters.
+    fn splitting_config() -> Builder {
+        Config::builder(nz(1))
+            .c_max(nz(2))
+            .p_samp(1.0)
+            .max_leaders(nz(1000))
+            .fanout(vec![nz(2)])
+            .max_depth(nz(10))
+            .seed(1290)
+    }
+
+    fn partition_config(builder: Builder) -> PartitionConfig {
+        builder.build().unwrap().partition
+    }
+
+    /// Group `ids` by their `fanout` nearest `leaders` under L2.
+    fn assign_l2(
+        data: rowmajor::Ref<'_, f32>,
+        ids: &[u32],
+        leaders: &[u32],
+        fanout: usize,
+    ) -> Vec<Vec<u32>> {
+        let initial_buffers = 0;
+        let buffers = StripeBufferPool::new((), initial_buffers, None);
+        assign_to_leaders(
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            &*kernels::select(Metric::L2),
+            ids,
+            leaders,
+            fanout,
+            &buffers,
+        )
+        .unwrap()
+    }
+
+    /// Split the cluster of `point_ids` with `fanout` in one-dimensional L2
+    /// points `x`, with a fixed sampling seed and an initially empty scratch pool.
+    fn split_1d(
+        x: &[f32],
+        config: &PartitionConfig,
+        point_ids: Vec<u32>,
+        fanout: usize,
+    ) -> ClusterSplit {
+        let dimensions = 1;
+        let initial_buffers = 0;
+        let data = rowmajor::Ref::try_from_data(x, x.len(), dimensions).unwrap();
+        let parent = Cluster {
+            point_ids,
+            seed: 1290,
+        };
+        let buffers = StripeBufferPool::new((), initial_buffers, None);
+        split_cluster(
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            &*kernels::select(Metric::L2),
+            config,
+            fanout,
+            parent,
+            &buffers,
+        )
+        .unwrap()
+    }
+
+    /// Partition `data` under L2.
+    fn partition_l2(data: rowmajor::Ref<'_, f32>, config: &PartitionConfig) -> Vec<Vec<u32>> {
+        partition(
+            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            &*kernels::select(Metric::L2),
+            config,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn should_partition_successfully() {
+        // Point i is at (i, i, ..., i). All points lie on one line, so the nearest
+        // leaders of a point are its neighbors on the line, and each leaf is a run
+        // of consecutive IDs.
+        let point_count = 20;
+        let dimensions = 8;
+        let x: Vec<f32> = (0..point_count)
+            .flat_map(|i| std::iter::repeat_n(i as f32, dimensions))
+            .collect();
+        // The first split assigns two full stripes and a tail.
+        assert!(point_count > 2 * ASSIGNMENT_STRIPE_POINTS);
+        let data = rowmajor::Ref::try_from_data(x.as_slice(), point_count, dimensions).unwrap();
+        // 20 x 0.25 = 5 sampled leaders, so most points are not leaders. Fanout 2
+        // gives children above c_max. Deeper levels split them with fanout 1 until
+        // every leaf has at most c_max points.
+        let config = partition_config(splitting_config().c_max(nz(4)).p_samp(0.25));
+
+        let expected = vec![
+            vec![0],
+            vec![0, 1, 2, 3],
+            vec![1, 2, 3],
+            vec![4, 5],
+            vec![4, 5, 6],
+            vec![6, 7, 8, 9],
+            vec![7, 8, 9],
+            vec![10, 11],
+            vec![10, 11, 12],
+            vec![12, 13, 14, 15],
+            vec![13, 14],
+            vec![15, 16, 17],
+            vec![16],
+            vec![17, 18, 19],
+            vec![18, 19],
+        ];
+
+        let actual = sorted_leaves(&partition_l2(data, &config));
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn the_leader_count_rounds_up_and_stays_between_two_and_max_leaders() {
+        let max_leaders = 5;
+
+        for (points, sampling_fraction, expected) in [
+            // 7 × 0.01 = 0.07 rounds up to 1, and a split needs two leaders.
+            (7, 0.01, 2),
+            // 7 × 0.31 = 2.17 rounds up to 3.
+            (7, 0.31, 3),
+            // 5 × 1.0 reaches the cap exactly.
+            (5, 1.0, 5),
+            // 6 × 1.0 is above the cap.
+            (6, 1.0, 5),
+        ] {
+            assert_eq!(
+                sampled_leader_count(points, sampling_fraction, max_leaders),
+                expected,
+                "{points} points, fraction {sampling_fraction}"
+            );
+        }
+    }
+
+    #[test]
+    fn points_in_every_stripe_and_the_tail_join_their_nearest_leaders() {
+        // Two full stripes and a tail of 3.
+        let point_count = 2 * ASSIGNMENT_STRIPE_POINTS + 3;
+        let dimensions = 1;
+        // Point i is at 0, 4 or 10 for i % 3 = 0, 1 or 2, so a stripe that
+        // writes at a wrong offset gives a point the result of another kind.
+        let x: Vec<_> = (0..point_count)
+            .map(|i| [0.0_f32, 4.0, 10.0][i % 3])
+            .collect();
+        let data = rowmajor::Ref::try_from_data(x.as_slice(), point_count, dimensions).unwrap();
+        // The IDs differ from the row positions, so using a row position as an
+        // ID fails.
+        let ids: Vec<u32> = (0..point_count as u32).rev().collect();
+        // Leader points 2, 0 and 1 are at 10, 0 and 4. With fanout 2, each
+        // point joins the leader at 4 and the nearer of the leaders at 0 and 10.
+        let leaders = [2, 0, 1];
+        let fanout = 2;
+        let expected = [
+            // The leader at 10 gets the points at 10.
+            ids.iter().copied().filter(|id| id % 3 == 2).collect(),
+            // The leader at 0 gets the points at 0 and at 4.
+            ids.iter().copied().filter(|id| id % 3 != 2).collect(),
+            // The leader at 4 gets every point.
+            ids.clone(),
+        ];
+
+        let actual = assign_l2(data, &ids, &leaders, fanout);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn reused_stripe_buffers_do_not_carry_points() {
+        // x[i] is the one-dimensional vector of point i.
+        let x = [100.0, 0.0, 8.0, 10.0, 2.0];
+        let first_ids = [4, 2, 0, 3, 1];
+        let ids = [0, 3];
+        let leader_x = [0.0, 10.0, 100.0];
+        let dimensions = 1;
+        let fanout = 2;
+        let initial_assignment = 0;
+        let rows = Rows::new(
+            rowmajor::Ref::try_from_data(x.as_slice(), x.len(), dimensions).unwrap(),
+            Metric::L2,
+        )
+        .unwrap();
+        let backend = rows.backend();
+        let data = backend.dataset();
+        let kernels = kernels::select(Metric::L2);
+        let leaders = kernels.create_leaders(
+            rowmajor::Ref::try_from_data(leader_x.as_slice(), leader_x.len(), dimensions).unwrap(),
+        );
+        let mut buffers = StripeBuffers::default();
+        let mut first_assignments =
+            rowmajor::Owned::from_element(first_ids.len(), fanout, initial_assignment);
+        let mut assignments = rowmajor::Owned::from_element(ids.len(), fanout, initial_assignment);
+        // The first stripe grows the buffers with points at 2 and 8 first.
+        // The smaller stripe uses points at 100 and 10, so its first leader set
+        // is {1, 2}, not the stale prefix's {0, 1}.
+        let expected = vec![BTreeSet::from([1, 2]), BTreeSet::from([0, 1])];
+
+        assign_point_stripe(
+            data,
+            &first_ids,
+            &*kernels,
+            &leaders,
+            &mut buffers,
+            first_assignments.as_view_mut(),
+        )
+        .unwrap();
+        assign_point_stripe(
+            data,
+            &ids,
+            &*kernels,
+            &leaders,
+            &mut buffers,
+            assignments.as_view_mut(),
+        )
+        .unwrap();
+
+        let actual: Vec<_> = assignments.rows().map(as_set).collect();
+        assert_eq!(actual, expected, "points {ids:?}");
+    }
+
+    #[test]
+    fn group_by_leader_lists_each_leaders_points_in_input_order() {
+        // IDs are not sorted, so sorting a group would change its expected order.
+        let ids = [70, 20, 60, 10, 50, 30, 40];
+        let assignment_rows = [[2, 0], [3, 1], [0, 3], [2, 3], [2, 0], [3, 1], [0, 3]];
+        let fanout = 2;
+        let leader_count = 4;
+        let assignments =
+            rowmajor::Ref::try_from_data(assignment_rows.as_flattened(), ids.len(), fanout)
+                .unwrap();
+        let expected = [
+            vec![70, 60, 50, 40],
+            vec![20, 30],
+            vec![70, 10, 50],
+            vec![20, 60, 10, 30, 40],
+        ];
+
+        let actual = group_by_leader(&ids, assignments, leader_count);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn unassigned_slots_join_no_group() {
+        // Point 10 has no assigned leader; the other empty slots must also be skipped.
+        let ids = [70, 20, 60, 10, 50, 30, 40];
+        let assignment_rows = [
+            [2, 0],
+            [UNASSIGNED, 1],
+            [0, UNASSIGNED],
+            [UNASSIGNED, UNASSIGNED],
+            [2, 0],
+            [UNASSIGNED, 1],
+            [0, UNASSIGNED],
+        ];
+        let fanout = 2;
+        let leader_count = 4;
+        let assignments =
+            rowmajor::Ref::try_from_data(assignment_rows.as_flattened(), ids.len(), fanout)
+                .unwrap();
+        let expected = [vec![70, 60, 50, 40], vec![20, 30], vec![70, 50], vec![]];
+
+        let actual = group_by_leader(&ids, assignments, leader_count);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn should_split_a_cluster_successfully() {
+        // x[i] is the one-dimensional vector of point i.
+        let x = [0.0, 1.0, 10.0, 11.0, 13.0];
+        let fanout = 2;
+        let config = partition_config(splitting_config());
+        // Point 4 joins leader 3, so that group exceeds c_max while the others fit.
+        let expected = [vec![0, 1], vec![0, 1], vec![2, 3], vec![4]];
+
+        let actual = split_1d(&x, &config, vec![0, 1, 2, 3, 4], fanout);
+
+        assert_eq!(sorted_leaves(&actual.leaves), expected);
+        let [child] = actual.next_level.as_slice() else {
+            panic!("expected one pending cluster");
+        };
+        assert_eq!(child.point_ids, [2, 3, 4]);
+    }
+
+    #[test]
+    fn a_split_without_more_leaders_than_its_fanout_is_skipped() {
+        // x[i] is the one-dimensional vector of point i.
+        // Four points at p_samp 0.01 give two leaders. Fanout 2 would put every
+        // point into both children, so the whole cluster moves to the next level.
+        let x = [0.0, 1.0, 10.0, 11.0];
+        let fanout = 2;
+        let config = partition_config(splitting_config().p_samp(0.01));
+
+        let actual = split_1d(&x, &config, vec![0, 1, 2, 3], fanout);
+
+        assert!(actual.leaves.is_empty());
+        let [child] = actual.next_level.as_slice() else {
+            panic!("expected one pending cluster");
+        };
+        assert_eq!(child.point_ids, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn an_empty_child_is_not_a_leaf() {
+        // x[i] is the one-dimensional vector of point i.
+        // No point chooses the NaN leader, so its empty group must be dropped.
+        let x = [f32::NAN, 0.0, 2.0];
+        let fanout = 1;
+        let config = partition_config(splitting_config());
+        let expected = [vec![1], vec![2]];
+
+        let actual = split_1d(&x, &config, vec![0, 1, 2], fanout);
+
+        assert_eq!(sorted_leaves(&actual.leaves), expected);
+        assert!(actual.next_level.is_empty());
+    }
+
+    #[test]
+    fn a_cut_gives_equal_leaves_in_point_order() {
+        // Five points above c_max 2 give three leaves, the last one shorter.
+        let point_ids = [0, 1, 2, 3, 4];
+        let c_max = 2;
+        let expected = [vec![0, 1], vec![2, 3], vec![4]];
+
+        let actual: Vec<_> = cut_into_leaves(&point_ids, c_max).collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn identical_vectors_are_cut_into_leaves_at_max_depth() {
+        let point_count = 20;
+        let dimensions = 8;
+        let x = vec![1.0_f32; point_count * dimensions];
+        let data = rowmajor::Ref::try_from_data(x.as_slice(), point_count, dimensions).unwrap();
+        // 20 x 0.25 = 5 leaders, so fanout 2 does not defer the first split.
+        // All distances tie, so each point picks the same two leaders. This gives
+        // two copies of the whole cluster. Later levels use fanout 1 and repeat
+        // each copy until max_depth cuts its 20 points into five leaves of four
+        // points in input order.
+        let config = partition_config(splitting_config().c_max(nz(4)).p_samp(0.25));
+        let expected = vec![
+            vec![0, 1, 2, 3],
+            vec![0, 1, 2, 3],
+            vec![4, 5, 6, 7],
+            vec![4, 5, 6, 7],
+            vec![8, 9, 10, 11],
+            vec![8, 9, 10, 11],
+            vec![12, 13, 14, 15],
+            vec![12, 13, 14, 15],
+            vec![16, 17, 18, 19],
+            vec![16, 17, 18, 19],
+        ];
+
+        let actual = sorted_leaves(&partition_l2(data, &config));
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn data_within_cmax_is_one_leaf() {
+        // x[i] is the one-dimensional vector of point i.
+        // The dataset fits c_max, so it returns as one leaf without splitting.
+        let x = [0.0, 1.0, 10.0];
+        let dimensions = 1;
+        let data = rowmajor::Ref::try_from_data(x.as_slice(), x.len(), dimensions).unwrap();
+
+        for c_max in [x.len(), x.len() + 1] {
+            let config = partition_config(splitting_config().c_max(nz(c_max)));
+
+            let actual = partition_l2(data, &config);
+
+            assert_eq!(sorted_leaves(&actual), [vec![0, 1, 2]], "c_max {c_max}");
+        }
+    }
+}
