@@ -49,6 +49,43 @@ pub struct PiPNNParameters {
     pub max_depth: Option<NonZeroUsize>,
     /// See [`diskann::graph::pipnn::Builder::leaf_k`].
     pub leaf_k: Option<NonZeroUsize>,
+    /// HashPrune policy. `None` keeps all unique direct candidates.
+    pub hash_prune: Option<HashPruneParameters>,
+}
+
+/// HashPrune parameters in the JSON build configuration.
+#[cfg(feature = "pipnn")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HashPruneParameters {
+    /// Number of random-hyperplane sketch dimensions.
+    pub num_hash_planes: usize,
+    /// Maximum number of candidates retained per point.
+    pub l_max: usize,
+    /// Apply Vamana RobustPrune after reservoir extraction.
+    pub final_prune: bool,
+}
+
+#[cfg(feature = "pipnn")]
+impl Default for HashPruneParameters {
+    fn default() -> Self {
+        Self {
+            num_hash_planes: 12,
+            l_max: 64,
+            final_prune: true,
+        }
+    }
+}
+
+#[cfg(feature = "pipnn")]
+impl From<&HashPruneParameters> for diskann::graph::pipnn::HashPruneConfig {
+    fn from(config: &HashPruneParameters) -> Self {
+        Self {
+            num_hash_planes: config.num_hash_planes,
+            l_max: config.l_max,
+            final_prune: config.final_prune,
+        }
+    }
 }
 
 #[cfg(feature = "pipnn")]
@@ -74,6 +111,9 @@ impl PiPNNParameters {
         }
         if let Some(leaf_k) = self.leaf_k {
             builder = builder.leaf_k(leaf_k);
+        }
+        if let Some(hash_prune) = &self.hash_prune {
+            builder = builder.hash_prune(hash_prune.into());
         }
         builder
     }
@@ -117,14 +157,17 @@ mod tests {
         .build()
         .unwrap();
         let leaf_k = NonZeroUsize::new(3).unwrap();
+        let hash_prune = HashPruneParameters::default();
         let parameters = PiPNNParameters {
             leaf_k: Some(leaf_k),
+            hash_prune: Some(hash_prune.clone()),
             ..PiPNNParameters::default()
         };
 
         let actual = parameters.builder(&graph).build().unwrap();
         let expected = diskann::graph::pipnn::Builder::from_graph(&graph)
             .leaf_k(leaf_k)
+            .hash_prune((&hash_prune).into())
             .seed(actual.seed())
             .build()
             .unwrap();
