@@ -44,13 +44,7 @@ pub(crate) fn params(
         .checked_add(norm)?;
     let a = mr.checked_mul(row)?;
     let b = codes.checked_add(norm)?;
-    let b_group = nr.checked_mul(b)?;
-    let budget = cache.l1().get().saturating_sub(a).max(1);
-    nr.checked_mul(budget.div_ceil(b_group))?;
-    if a > isize::MAX as usize || b_group > isize::MAX as usize {
-        return None;
-    }
-    Some(Params::new(cache, Bytes::new(a), Bytes::new(b), nr))
+    Params::try_new(cache, Bytes::new(a), Bytes::new(b), nr)
 }
 
 /// Output and thresholds span the whole B scan, not an individual tile.
@@ -120,6 +114,24 @@ impl<'a> Rows<'a> {
             width,
         }
     }
+
+    /// Borrow from a valid row, retaining padding only in thresholds and norms.
+    #[inline(always)]
+    fn sub_rows(&mut self, first: usize, padded_rows: usize) -> Rows<'_> {
+        let valid = (self.valid - first).min(padded_rows);
+        Rows {
+            c: &mut self.c[first * self.width..(first + valid) * self.width],
+            kth: &mut self.kth[first..first + padded_rows],
+            a_norms: if self.metric == Metric::L2 {
+                &self.a_norms[first..first + padded_rows]
+            } else {
+                &[]
+            },
+            metric: self.metric,
+            width: self.width,
+            valid,
+        }
+    }
 }
 
 pub(crate) trait Kernel<const MR: usize>: ExtraWide<MR> + Architecture {
@@ -180,22 +192,10 @@ macro_rules! kernel {
             ) {
                 for (group, dot) in dots.into_iter().enumerate() {
                     let first = group * $lanes;
-                    let valid = rows.valid.saturating_sub(first).min($lanes);
-                    if valid == 0 {
+                    if first >= rows.valid {
                         continue;
                     }
-                    let mut group_rows = Rows {
-                        c: &mut rows.c[first * rows.width..],
-                        kth: &mut rows.kth[first..],
-                        a_norms: if rows.metric == Metric::L2 {
-                            &rows.a_norms[first..]
-                        } else {
-                            &[]
-                        },
-                        metric: rows.metric,
-                        width: rows.width,
-                        valid,
-                    };
+                    let mut group_rows = rows.sub_rows(first, $lanes);
                     offer::<$vector, $lanes, K>(self, dot, &mut group_rows, b_norm, id);
                 }
             }
@@ -276,6 +276,7 @@ impl<A: Kernel<MR>, const MR: usize, const NR: usize> diskann_wide::arch::Target
 {
     #[inline(always)]
     fn run(self, _: A) {
+        // K = 0 selects the runtime-width path; other output widths remain supported.
         match self.0.c.width {
             1 => self.0.scan::<1>(),
             2 => self.0.scan::<2>(),
@@ -292,12 +293,7 @@ impl<A: Kernel<MR>, const MR: usize, const NR: usize> Driver<'_, A, MR, NR> {
     fn scan<const K: usize>(&mut self) {
         let arch = self.arch;
         let k = self.k;
-        let width = self.c.width;
-        let rows = self.c.valid;
-        let metric = self.c.metric;
-        let c = &mut *self.c.c;
-        let kth = &mut *self.c.kth;
-        let a_norms = self.c.a_norms;
+        let rows = &mut self.c;
         let b_norms = self.b_norms;
         // SAFETY: The constructor requires matching contraction dimensions.
         unsafe {
@@ -308,23 +304,10 @@ impl<A: Kernel<MR>, const MR: usize, const NR: usize> Driver<'_, A, MR, NR> {
                 k,
                 #[inline(always)]
                 |a_panel, b_view, a_block, b_base| {
-                    let first = a_block * MR;
-                    let valid_rows = (rows - first).min(MR);
                     let mut visitor = Visitor::<A, MR, K> {
                         arch,
                         a: a_panel,
-                        rows: Rows {
-                            c: &mut c[first * width..(first + valid_rows) * width],
-                            kth: &mut kth[first..first + MR],
-                            a_norms: if metric == Metric::L2 {
-                                &a_norms[first..first + MR]
-                            } else {
-                                &[]
-                            },
-                            metric,
-                            width,
-                            valid: valid_rows,
-                        },
+                        rows: rows.sub_rows(a_block * MR, MR),
                         b_norms,
                         b_base,
                         k,

@@ -62,7 +62,7 @@ pub use distance::{
 };
 pub use distance::{
     BuildTopKError, PrepareTopKDocumentsError, TopKDocuments, TopKError, TopKKernel, TopKScratch,
-    build_top_k, prepare_top_k_documents,
+    build_top_k,
 };
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,

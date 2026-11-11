@@ -59,5 +59,5 @@ pub use max_sim::{Chamfer, MaxSim, MaxSimError};
 pub use projected_eigen::ProjectedEigen;
 pub use topk::{
     BuildTopKError, PrepareTopKDocumentsError, TopKDocuments, TopKError, TopKKernel, TopKScratch,
-    build_top_k, prepare_top_k_documents,
+    build_top_k,
 };

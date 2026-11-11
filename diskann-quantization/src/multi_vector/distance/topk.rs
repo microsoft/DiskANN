@@ -21,19 +21,13 @@ use diskann_vector::{
 use diskann_wide::arch::aarch64::Neon;
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
-use diskann_wide::{
-    Architecture,
-    arch::{Scalar, Target1},
-};
+use diskann_wide::arch::{Scalar, Target1};
 use thiserror::Error;
 
-use super::{MaxSimIsa, NotSupported};
+use super::isa::{MaxSimIsa, NotSupported, dispatch_isa};
 use crate::{
     matrix_kernels::{self as mk, topk::packed_f32_x_unpacked_f32 as f32_kernel},
-    multi_vector::{
-        BlockTransposed, Mat, MatMut, MatRef, Overflow, Standard,
-        block_transposed::BlockTransposedRepr,
-    },
+    multi_vector::{BlockTransposed, Mat, MatMut, MatRef, Overflow, Standard},
 };
 
 /// Failure to prepare an f32 TopK query.
@@ -56,8 +50,6 @@ pub enum PrepareTopKDocumentsError {
     UnsupportedMetric(Metric),
     #[error("document count {0} exceeds the u32 candidate ID range")]
     CandidateCount(usize),
-    #[error(transparent)]
-    Overflow(#[from] Overflow),
 }
 
 /// Failure to compute TopK. Detectable input and extent errors leave output unchanged.
@@ -114,39 +106,40 @@ fn supported(metric: Metric) -> bool {
     matches!(metric, Metric::InnerProduct | Metric::L2)
 }
 
-fn norms(matrix: MatRef<'_, Standard<f32>>, metric: Metric) -> Result<Vec<f32>, Overflow> {
+fn norms(matrix: MatRef<'_, Standard<f32>>, metric: Metric) -> Vec<f32> {
     if metric != Metric::L2 || matrix.vector_dim() == 0 {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    Overflow::check::<f32>(matrix.num_vectors(), 1)?;
-    Ok(matrix
+    matrix
         .rows()
         .map(|row| FastL2NormSquared.evaluate(row))
-        .collect())
+        .collect()
 }
 
-/// Bind documents and prepare L2 norms once, without copying the document matrix.
-///
-/// # Errors
-///
-/// Rejects unsupported metrics, more than `u32::MAX` rows, or norm extent overflow.
-pub fn prepare_top_k_documents(
-    documents: MatRef<'_, Standard<f32>>,
-    metric: Metric,
-) -> Result<TopKDocuments<'_>, PrepareTopKDocumentsError> {
-    if !supported(metric) {
-        return Err(PrepareTopKDocumentsError::UnsupportedMetric(metric));
+impl<'a> TopKDocuments<'a> {
+    /// Bind documents and prepare L2 norms once, without copying the document matrix.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsupported metrics or more than `u32::MAX` rows.
+    pub fn new(
+        documents: MatRef<'a, Standard<f32>>,
+        metric: Metric,
+    ) -> Result<Self, PrepareTopKDocumentsError> {
+        if !supported(metric) {
+            return Err(PrepareTopKDocumentsError::UnsupportedMetric(metric));
+        }
+        if documents.num_vectors() > u32::MAX as usize {
+            return Err(PrepareTopKDocumentsError::CandidateCount(
+                documents.num_vectors(),
+            ));
+        }
+        Ok(Self {
+            matrix: documents,
+            metric,
+            norms: norms(documents, metric),
+        })
     }
-    if documents.num_vectors() > u32::MAX as usize {
-        return Err(PrepareTopKDocumentsError::CandidateCount(
-            documents.num_vectors(),
-        ));
-    }
-    Ok(TopKDocuments {
-        matrix: documents,
-        metric,
-        norms: norms(documents, metric)?,
-    })
 }
 
 fn validate(
@@ -169,13 +162,6 @@ fn validate(
         return Err(TopKError::MetricMismatch(documents.metric, metric));
     }
     Ok(())
-}
-
-fn output_slice(mut output: MatMut<'_, Standard<Candidate>>) -> &mut [Candidate] {
-    let len = output.num_vectors() * output.vector_dim();
-    // SAFETY: A checked Standard view provides exactly this logical extent,
-    // aligned for Candidate. Consuming the exclusive view preserves its lifetime.
-    unsafe { std::slice::from_raw_parts_mut(output.as_raw_mut_ptr().cast(), len) }
 }
 
 /// Handle empty shapes before deriving any unused padded extents.
@@ -238,7 +224,6 @@ impl<A: f32_kernel::Kernel<MR>, const MR: usize, const NR: usize> TopKKernel
         }
         let width = output.vector_dim();
         let padded = self.query.padded_nrows();
-        Overflow::check::<f32>(padded, 1)?;
         let params = f32_kernel::params(
             mk::Cache::detect(),
             self.query.ncols(),
@@ -255,7 +240,7 @@ impl<A: f32_kernel::Kernel<MR>, const MR: usize, const NR: usize> TopKKernel
             .expect("nonempty documents");
         scratch.kth.resize(padded, f32::INFINITY);
         scratch.kth.fill(f32::INFINITY);
-        let slots = output_slice(output);
+        let slots = output.as_mut_slice();
         slots.fill(Candidate::EMPTY);
         // SAFETY: Validation and checked prepared storage establish dimensions and
         // extents. Thresholds/norms are padded; document IDs were checked at preparation.
@@ -329,12 +314,8 @@ fn prepare<A, const MR: usize, const NR: usize>(
     query: MatRef<'_, Standard<f32>>,
     metric: Metric,
 ) -> Result<Prepared<A, MR, NR>, BuildTopKError> {
-    let repr = BlockTransposedRepr::<f32, MR, 1>::new(query.num_vectors(), query.vector_dim())?;
-    if metric == Metric::L2 && query.vector_dim() != 0 {
-        Overflow::check::<f32>(repr.padded_nrows(), 1)?;
-    }
-    let packed = BlockTransposed::from_matrix_view(query.as_matrix_view());
-    let mut norms = norms(query, metric)?;
+    let packed = BlockTransposed::try_from_matrix_view(query.as_matrix_view())?;
+    let mut norms = norms(query, metric);
     if metric == Metric::L2 && query.vector_dim() != 0 {
         norms.resize(packed.padded_nrows(), 0.0);
     }
@@ -388,7 +369,7 @@ build_arch!(Neon, 8, 6);
 /// ```
 /// use diskann_quantization::multi_vector::{
 ///     Mat, MatRef, Standard, MaxSimIsa, TopKScratch,
-///     build_top_k, prepare_top_k_documents,
+///     build_top_k, TopKDocuments,
 /// };
 /// use diskann_vector::{distance::Metric, topk::Candidate};
 /// use diskann_utils::ReborrowMut;
@@ -397,7 +378,7 @@ build_arch!(Neon, 8, 6);
 /// let data = [10.0f32, 2.0, 3.0];
 /// let documents = MatRef::new(Standard::new(3, 1)?, &data)?;
 /// let kernel = build_top_k(MaxSimIsa::Auto, query, Metric::L2)?;
-/// let documents = prepare_top_k_documents(documents, Metric::L2)?;
+/// let documents = TopKDocuments::new(documents, Metric::L2)?;
 /// let mut output = Mat::new(Standard::new(1, 2)?, Candidate::EMPTY)?;
 /// kernel.compute_top_k(
 ///     &documents, output.reborrow_mut(), &mut TopKScratch::default(),
@@ -415,49 +396,14 @@ pub fn build_top_k(
     if !supported(metric) {
         return Err(BuildTopKError::UnsupportedMetric(metric));
     }
-    let build = Build(metric);
-    match isa {
-        MaxSimIsa::Auto => diskann_wide::arch::dispatch1_no_features(build, query),
-        MaxSimIsa::Scalar => Scalar::new().run1(build, query),
-        #[cfg(target_arch = "x86_64")]
-        MaxSimIsa::X86_64_V3 => V3::new_checked()
-            .ok_or(NotSupported {
-                isa,
-                reason: "AVX2/FMA unavailable on this CPU",
-            })?
-            .run1(build, query),
-        #[cfg(target_arch = "x86_64")]
-        MaxSimIsa::X86_64_V4 => V4::new_checked()
-            .ok_or(NotSupported {
-                isa,
-                reason: "AVX-512 unavailable on this CPU",
-            })?
-            .run1(build, query),
-        #[cfg(target_arch = "aarch64")]
-        MaxSimIsa::Neon => Neon::new_checked()
-            .ok_or(NotSupported {
-                isa,
-                reason: "Neon unavailable on this CPU",
-            })?
-            .run1(build, query),
-        MaxSimIsa::Reference => Ok(Box::new(Reference {
+    dispatch_isa!(isa, Build(metric), query, {
+        let kernel: Box<dyn TopKKernel> = Box::new(Reference {
             query: query.to_owned(),
-            norms: norms(query, metric)?,
+            norms: norms(query, metric),
             metric,
-        })),
-        #[cfg(not(target_arch = "x86_64"))]
-        MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-            isa,
-            reason: "x86_64 target only",
-        }
-        .into()),
-        #[cfg(not(target_arch = "aarch64"))]
-        MaxSimIsa::Neon => Err(NotSupported {
-            isa,
-            reason: "aarch64 target only",
-        }
-        .into()),
-    }
+        });
+        Ok::<_, BuildTopKError>(kernel)
+    })?
 }
 
 #[cfg(test)]
@@ -466,16 +412,9 @@ mod tests {
     use diskann_utils::ReborrowMut;
 
     fn isas() -> impl Iterator<Item = MaxSimIsa> {
-        [
-            MaxSimIsa::Auto,
-            MaxSimIsa::Scalar,
-            MaxSimIsa::X86_64_V3,
-            MaxSimIsa::X86_64_V4,
-            MaxSimIsa::Neon,
-            MaxSimIsa::Reference,
-        ]
-        .into_iter()
-        .filter(|isa| isa.is_available())
+        MaxSimIsa::all()
+            .into_iter()
+            .filter(|isa| isa.is_available())
     }
 
     fn view(data: &[f32], rows: usize, dim: usize) -> MatRef<'_, Standard<f32>> {
@@ -505,7 +444,7 @@ mod tests {
             .map(|i| ((i * 13 % 29) as f32 - 14.0) / 8.0)
             .collect();
         for metric in [Metric::InnerProduct, Metric::L2] {
-            let documents = prepare_top_k_documents(view(&d, n, dim), metric).unwrap();
+            let documents = TopKDocuments::new(view(&d, n, dim), metric).unwrap();
             for isa in isas() {
                 let kernel = build_top_k(isa, view(&q, m, dim), metric).unwrap();
                 let mut scratch = TopKScratch::default();
@@ -583,8 +522,7 @@ mod tests {
                 &[][..],
                 &[2.0, 10.0, 3.0][..],
             ] {
-                let documents =
-                    prepare_top_k_documents(view(data, data.len(), 1), Metric::L2).unwrap();
+                let documents = TopKDocuments::new(view(data, data.len(), 1), Metric::L2).unwrap();
                 for width in [1, 4, 2] {
                     let mut output =
                         Mat::new(Standard::new(1, width).unwrap(), Candidate::EMPTY).unwrap();
@@ -611,8 +549,7 @@ mod tests {
     fn top_k_filters_computed_nonfinite_distances() {
         for isa in isas() {
             let data = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 4.0, 2.0];
-            let documents =
-                prepare_top_k_documents(view(&data, 5, 1), Metric::InnerProduct).unwrap();
+            let documents = TopKDocuments::new(view(&data, 5, 1), Metric::InnerProduct).unwrap();
             let kernel = build_top_k(isa, view(&[1.0], 1, 1), Metric::InnerProduct).unwrap();
             let mut output = Mat::new(Standard::new(1, 5).unwrap(), Candidate::EMPTY).unwrap();
             kernel
@@ -632,7 +569,7 @@ mod tests {
                     Candidate::EMPTY,
                 ]
             );
-            let documents = prepare_top_k_documents(view(&data, 5, 1), Metric::L2).unwrap();
+            let documents = TopKDocuments::new(view(&data, 5, 1), Metric::L2).unwrap();
             let kernel = build_top_k(isa, view(&[1.0], 1, 1), Metric::L2).unwrap();
             kernel
                 .compute_top_k(
@@ -659,7 +596,7 @@ mod tests {
         let data = [1.0, 2.0, 5.0];
         for isa in isas() {
             let kernel = build_top_k(isa, view(&data, 3, 1), Metric::L2).unwrap();
-            let documents = prepare_top_k_documents(view(&data, 3, 1), Metric::L2).unwrap();
+            let documents = TopKDocuments::new(view(&data, 3, 1), Metric::L2).unwrap();
             let mut output = Mat::new(Standard::new(3, 1).unwrap(), Candidate::EMPTY).unwrap();
             kernel
                 .compute_top_k(
@@ -678,10 +615,9 @@ mod tests {
     fn top_k_errors_leave_output_unchanged_even_on_fast_paths() {
         for isa in isas() {
             let kernel = build_top_k(isa, view(&[2.0], 1, 1), Metric::L2).unwrap();
-            let wrong_dim = prepare_top_k_documents(view(&[], 0, 2), Metric::L2).unwrap();
-            let wrong_metric =
-                prepare_top_k_documents(view(&[], 0, 1), Metric::InnerProduct).unwrap();
-            let good = prepare_top_k_documents(view(&[], 0, 1), Metric::L2).unwrap();
+            let wrong_dim = TopKDocuments::new(view(&[], 0, 2), Metric::L2).unwrap();
+            let wrong_metric = TopKDocuments::new(view(&[], 0, 1), Metric::InnerProduct).unwrap();
+            let good = TopKDocuments::new(view(&[], 0, 1), Metric::L2).unwrap();
             let sentinel = Candidate::new(7, 123.0);
             let mut output = Mat::new(Standard::new(1, 2).unwrap(), sentinel).unwrap();
             let mut scratch = TopKScratch::default();
@@ -717,22 +653,23 @@ mod tests {
                 Err(BuildTopKError::UnsupportedMetric(..))
             ));
             assert!(matches!(
-                prepare_top_k_documents(view(&[], 0, 0), metric),
+                TopKDocuments::new(view(&[], 0, 0), metric),
                 Err(PrepareTopKDocumentsError::UnsupportedMetric(..))
             ));
         }
-        for isa in [MaxSimIsa::X86_64_V3, MaxSimIsa::X86_64_V4, MaxSimIsa::Neon] {
-            if !isa.is_available() {
-                assert!(matches!(
-                    build_top_k(isa, view(&[], 0, 0), Metric::L2),
-                    Err(BuildTopKError::NotSupported(..))
-                ));
-            }
+        for isa in MaxSimIsa::all()
+            .into_iter()
+            .filter(|isa| !isa.is_available())
+        {
+            assert!(matches!(
+                build_top_k(isa, view(&[], 0, 0), Metric::L2),
+                Err(BuildTopKError::NotSupported(..))
+            ));
         }
         if usize::BITS > 32 {
             let count = (u32::MAX as usize).checked_add(1).unwrap();
             assert!(matches!(
-                prepare_top_k_documents(view(&[], count, 0), Metric::L2),
+                TopKDocuments::new(view(&[], count, 0), Metric::L2),
                 Err(PrepareTopKDocumentsError::CandidateCount(..))
             ));
         }
@@ -742,7 +679,7 @@ mod tests {
     fn top_k_empty_paths_do_not_require_padded_storage() {
         for isa in isas() {
             let kernel = build_top_k(isa, view(&[], usize::MAX, 0), Metric::L2).unwrap();
-            let documents = prepare_top_k_documents(view(&[], 1, 0), Metric::L2).unwrap();
+            let documents = TopKDocuments::new(view(&[], 1, 0), Metric::L2).unwrap();
             let mut output =
                 Mat::new(Standard::new(usize::MAX, 0).unwrap(), Candidate::EMPTY).unwrap();
             let mut scratch = TopKScratch { kth: vec![123.0] };
@@ -762,7 +699,7 @@ mod tests {
             .collect();
         for isa in isas() {
             let kernel = build_top_k(isa, view(&query, 1, dim), Metric::L2).unwrap();
-            let documents = prepare_top_k_documents(view(&data, 9, dim), Metric::L2).unwrap();
+            let documents = TopKDocuments::new(view(&data, 9, dim), Metric::L2).unwrap();
             let mut output = Mat::new(Standard::new(1, 3).unwrap(), Candidate::EMPTY).unwrap();
             kernel
                 .compute_top_k(
@@ -789,7 +726,7 @@ mod tests {
                 let data = [10.0, 2.0, 3.0];
                 let kernel = build_top_k(isa, view(&query[..dim], 1, dim), Metric::L2).unwrap();
                 let documents =
-                    prepare_top_k_documents(view(&data[..3 * dim], 3, dim), Metric::L2).unwrap();
+                    TopKDocuments::new(view(&data[..3 * dim], 3, dim), Metric::L2).unwrap();
                 let mut backing = [sentinel; 4];
                 let output = MatMut::new(Standard::new(1, 2).unwrap(), &mut backing[1..3]).unwrap();
                 kernel
@@ -807,7 +744,7 @@ mod tests {
         for isa in isas() {
             for metric in [Metric::InnerProduct, Metric::L2] {
                 let kernel = build_top_k(isa, view(&[1.0, 1.0], 1, 2), metric).unwrap();
-                let documents = prepare_top_k_documents(view(&data, 2, 2), metric).unwrap();
+                let documents = TopKDocuments::new(view(&data, 2, 2), metric).unwrap();
                 let mut output = Mat::new(Standard::new(1, 2).unwrap(), Candidate::EMPTY).unwrap();
                 kernel
                     .compute_top_k(

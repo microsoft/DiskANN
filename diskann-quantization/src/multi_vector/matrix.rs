@@ -1097,6 +1097,17 @@ impl<'this, 'a, T: ReprMut> ReborrowMut<'this> for MatMut<'a, T> {
 }
 
 impl<'a, T> MatMut<'a, Standard<T>> {
+    /// Return the backing data as a contiguous mutable slice of `T`.
+    ///
+    /// The returned slice has `num_vectors() * vector_dim()` elements in row-major order.
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        let len = self.repr.num_elements();
+        // SAFETY: Standard<T> guarantees len contiguous, aligned T elements.
+        // The exclusive borrow of self prevents overlapping access through this view.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr().cast::<T>(), len) }
+    }
+
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
@@ -1385,6 +1396,27 @@ mod tests {
 
         for i in edge_cases(repr.nrows()).into_iter() {
             assert!(x.get_row(i).is_none(), "ctx: {ctx}");
+        }
+    }
+
+    #[test]
+    fn standard_mut_slice() {
+        for (nrows, ncols) in [(2, 3), (0, 3), (3, 0), (0, 0)] {
+            let repr = Standard::<usize>::new(nrows, ncols).unwrap();
+            let mut data = vec![0; nrows * ncols];
+            {
+                let mut view = MatMut::new(repr, &mut data).unwrap();
+                assert_eq!(view.as_mut_slice().len(), nrows * ncols);
+                for (i, element) in view.as_mut_slice().iter_mut().enumerate() {
+                    *element = i + 1;
+                }
+                for (i, row) in view.rows().enumerate() {
+                    for (j, element) in row.iter().enumerate() {
+                        assert_eq!(*element, i * ncols + j + 1);
+                    }
+                }
+            }
+            assert_eq!(data, (1..=nrows * ncols).collect::<Vec<_>>());
         }
     }
 

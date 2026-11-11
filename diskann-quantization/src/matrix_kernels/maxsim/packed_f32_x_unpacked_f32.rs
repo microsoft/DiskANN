@@ -45,28 +45,49 @@ pub(crate) struct Params {
 
 impl Params {
     /// Select hyper-parameters for the `packed x unpacked` kernel based on cache size.
+    ///
+    /// # Panics
+    ///
+    /// Panics if panel sizes are zero, exceed `isize::MAX`, or blocking arithmetic overflows.
+    #[expect(clippy::expect_used)]
     pub(in crate::matrix_kernels) fn new(
         cache: Cache,
         a_panel: Bytes,
         b_col: Bytes,
         nr: usize,
     ) -> Self {
+        Self::try_new(cache, a_panel, b_col, nr).expect("invalid packed x unpacked working set")
+    }
+
+    /// Return `None` for zero panel sizes, oversized extents, or blocking overflow.
+    pub(in crate::matrix_kernels) fn try_new(
+        cache: Cache,
+        a_panel: Bytes,
+        b_col: Bytes,
+        nr: usize,
+    ) -> Option<Self> {
+        let a_panel = NonZeroUsize::new(a_panel.value())?.get();
+        let b_group = NonZeroUsize::new(nr.checked_mul(b_col.value())?)?.get();
+        if a_panel > isize::MAX as usize || b_group > isize::MAX as usize {
+            return None;
+        }
+
         // Pick the number of A-panels to process at a time so the working set is within
         // the L2 cache.
-        let a_panels_in_l2 = value_or_one(cache.l2().get() / a_panel.value());
+        let a_panels_in_l2 = value_or_one(cache.l2().get() / a_panel);
 
         // Pick the number of B-panels to process to the `B` working set plus a single
         // panel of `A` fits in the L1 cache.
         //
         // Make sure we process at least one B-panel at a time. Otherwise performance falls
         // off a cliff.
-        let b_budget = cache.l1().get().saturating_sub(a_panel.value()).max(1);
-        let b_cols_in_l1 = value_or_one(nr * (b_budget.div_ceil(nr * b_col.value())));
+        let b_budget = cache.l1().get().saturating_sub(a_panel).max(1);
+        let b_cols_in_l1 = value_or_one(nr.checked_mul(b_budget.div_ceil(b_group))?);
 
-        Self {
+        Some(Self {
             a_panels_in_l2,
             b_cols_in_l1,
-        }
+        })
     }
 }
 
@@ -828,6 +849,31 @@ mod tests {
 
     use diskann_utils::views::rowmajor::Matrix;
     use rand::{SeedableRng, rngs::StdRng};
+
+    #[test]
+    fn checked_params_preserve_blocking_and_reject_invalid_extents() {
+        let cache = Cache::new(
+            NonZeroUsize::new(64).unwrap(),
+            NonZeroUsize::new(128).unwrap(),
+        );
+        for (a, a_panels, b_cols) in [(16, 8, 12), (64, 2, 6), (256, 1, 6)] {
+            let params = Params::try_new(cache, Bytes::new(a), Bytes::new(4), 6).unwrap();
+            assert_eq!(params.a_panels_in_l2.get(), a_panels);
+            assert_eq!(params.b_cols_in_l1.get(), b_cols);
+        }
+        for (a, b, nr) in [
+            (0, 4, 6),
+            (16, 0, 6),
+            (16, 4, 0),
+            (usize::MAX, 4, 6),
+            (16, usize::MAX, 6),
+            (16, isize::MAX as usize, 2),
+        ] {
+            assert!(Params::try_new(cache, Bytes::new(a), Bytes::new(b), nr).is_none());
+        }
+        let cache = Cache::new(NonZeroUsize::MAX, NonZeroUsize::MIN);
+        assert!(Params::try_new(cache, Bytes::new(1), Bytes::new(1), 4).is_none());
+    }
 
     #[cfg(target_arch = "x86_64")]
     use diskann_wide::arch::x86_64::{V3, V4};
