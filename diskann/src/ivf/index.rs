@@ -10,7 +10,6 @@ use std::num::NonZeroUsize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
-    hash::Hash,
 };
 
 use diskann_quantization::Parallelism;
@@ -79,10 +78,8 @@ pub struct InsertStats {
 
 /// An incremental IVF index.
 ///
-/// The index holds only its [`Config`]. Inserting needs the `kmeans` feature.
-///
-/// Providers shared by several indexes must still keep build operations apart;
-/// see [`build_accessor`](super::traits::BuildStrategy::build_accessor).
+/// Providers shared by several indexes must still keep build operations apart, for example by
+/// allowing one live [`BuildAccessor`] at a time.
 #[derive(Debug)]
 pub struct IVFIndex {
     config: Config,
@@ -116,15 +113,16 @@ impl IVFIndex {
         &self.config
     }
 
-    /// Insert a batch of points as one build operation, splitting every list that routing
-    /// leaves with more than [`Config::split_threshold`] members and then re-assigning
-    /// points if [`ReassignCount`] in `config` is not zero.
+    /// Insert a batch as one build operation. 
+    /// 
+    /// After routing and inserting points, split each touched list with more than
+    /// [`Config::split_threshold`] members once, then reassign if
+    /// [`Config::reassign_count`] is [`ReassignCount::Count`].
     ///
     /// # Errors
     ///
     /// Fails if the batch is empty, or if a provider call or split fails. Any failure
     /// abandons the operation: the accessor is dropped without being finished.
-    #[cfg(feature = "ivf")]
     pub fn insert_batch<'a, A, B>(
         &'a mut self,
         mut accessor: A,
@@ -224,10 +222,9 @@ impl IVFIndex {
     ///
     /// # Errors
     ///
-    /// Fails if the accessor cannot be created or the scan fails, leaving `output`
-    /// unchanged.
-    pub fn search<'a, A, OB>(
-        &'a self,
+    /// Fails if the scan fails, leaving `output` unchanged.
+    pub fn search<A, OB>(
+        &self,
         accessor: A,
         k: NonZeroUsize,
         nprobe: NonZeroUsize,
@@ -243,6 +240,54 @@ impl IVFIndex {
             accessor.scan(nprobe, &mut queue).await?;
 
             Ok(output.extend(queue.iter()))
+        }
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::ONE;
+
+    fn config(split_threshold: usize, split_k: usize) -> Config {
+        Config {
+            dim: ONE,
+            split_threshold: NonZeroUsize::new(split_threshold).unwrap(),
+            split_k: NonZeroUsize::new(split_k).unwrap(),
+            reassign_count: ReassignCount::None,
+            split_iterations: ONE,
+        }
+    }
+
+    #[test]
+    fn new_validates_split_k() {
+        // The first oversized list has split_threshold + 1 members, so k must fit it.
+        for (split_threshold, split_k) in [(1, 2), (8, 2), (8, 9)] {
+            assert!(
+                IVFIndex::new(config(split_threshold, split_k)).is_ok(),
+                "split_k {split_k} should be valid with split_threshold {split_threshold}"
+            );
+        }
+
+        for (split_threshold, split_k, expected) in [
+            (8, 1, "split_k must be at least 2, got 1"),
+            (
+                1,
+                3,
+                "split_k (3) must be at most split_threshold + 1 (1 + 1)",
+            ),
+            (
+                8,
+                10,
+                "split_k (10) must be at most split_threshold + 1 (8 + 1)",
+            ),
+        ] {
+            let err = IVFIndex::new(config(split_threshold, split_k)).unwrap_err();
+            assert_eq!(err.to_string(), expected);
         }
     }
 }

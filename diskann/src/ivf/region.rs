@@ -80,11 +80,11 @@ pub trait Region<I, L>: Send + Sync {
 /// Conversion of borrowed vectors into a row-major matrix, one vector per row.
 pub trait AsMatRef<'a, T> {
     /// Return the vectors as a matrix.
-    fn as_view(self) -> rowmajor::Ref<'a, T>;
+    fn as_view(&self) -> rowmajor::Ref<'a, T>;
 }
 
 impl<'a, T> AsMatRef<'a, T> for rowmajor::Ref<'a, T> {
-    fn as_view(self) -> rowmajor::Ref<'a, T> {
-        self
+    fn as_view(&self) -> rowmajor::Ref<'a, T> {
+        *self
     }
 }

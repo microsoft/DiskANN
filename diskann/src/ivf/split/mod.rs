@@ -21,9 +21,9 @@ pub(crate) mod policies;
 pub(crate) use links::Links;
 pub(crate) use policies::{KMeansSplit, Linked};
 
-/////////////
-/// Split ///
-/////////////
+///////////
+// Split //
+///////////
 
 /// A policy that replaces parent lists with new lists that take over their members.
 pub(crate) trait Split<I, L, R>
@@ -53,9 +53,9 @@ where
         F: FnMut(L, L);
 }
 
-////////////////
-/// Reassign ///
-////////////////
+//////////////
+// Reassign //
+//////////////
 
 /// A policy that moves points between linked lists without changing any centroid.
 pub(crate) trait Reassign<I, L, R>

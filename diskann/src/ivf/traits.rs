@@ -3,8 +3,8 @@
  * Licensed under the MIT license.
  */
 
-//! The traits a provider implements: strategies that create accessors, and the accessors
-//! through which the index reads and writes lists.
+//! The traits a provider implements: the accessors through which the index reads and writes
+//! lists.
 
 use std::{fmt::Debug, hash::Hash, num::NonZeroUsize};
 
@@ -17,8 +17,6 @@ use crate::{
 };
 
 /// The list and vector ID types used by a subtrait.
-///
-/// The IDs are unconstrained here; each operation of the index states what it needs of them.
 pub trait HasIds {
     /// Internal ID of a point, as recorded in list memberships.
     type Id: Copy + Send;
@@ -39,7 +37,7 @@ pub trait HasIds {
 ///
 /// 2. Any number of stages follow. A stage calls [`fill`](Self::fill), records changes
 ///    through the returned [`Region`], and `finish`es the region. Between stages, the index
-///    may look up lists through [`nearest`](Self::nearest).
+///    may look up lists through [`find`](Self::find).
 ///
 /// 3. [`finish`](Self::finish) publishes the operation.
 ///
@@ -69,9 +67,9 @@ pub trait BuildAccessor<B>: Send + Sized + HasIds {
     /// need not return exactly `nprobe` items.
     ///
     /// - `pred` filters candidates based on id. This can be used to exclude some ids when looking
-    /// for neighbors of a list.  
+    ///   for neighbors of a list.
     ///
-    /// - `emit` is a callback applied to the ids and distances of the top results (that pass the filter).  
+    /// - `emit` is a callback applied to the ids and distances of the top results (that pass the filter).
     ///
     /// # Errors
     ///
@@ -157,6 +155,64 @@ impl<I: NeighborPriorityQueueIdType> Accumulator<I> for NeighborPriorityQueue<I>
     fn merge(&mut self, other: Self) {
         for neighbor in other.iter() {
             self.insert(neighbor);
+        }
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+
+    use super::*;
+    use crate::test::cmp::assert_eq_verbose;
+
+    #[test]
+    fn empty_like_keeps_capacity_and_drops_candidates() {
+        let mut queue = NeighborPriorityQueue::new(3);
+        queue.push(1u32, 1.0);
+        queue.push(2, 2.0);
+
+        let empty = queue.empty_like();
+        assert_eq!(empty.size(), 0);
+        assert_eq!(empty.search_l(), 3);
+    }
+
+    /// Compare merging randomly partitioned candidates with inserting them into one
+    /// fixed-capacity queue.
+    fn merge_fuzz_impl(capacity: usize, parts: usize, pushes: u32, rng: &mut StdRng) {
+        // Distinct distances, so the best candidates are unique.
+        let mut distances: Vec<f32> = (0..pushes).map(|d| d as f32).collect();
+        distances.shuffle(rng);
+
+        let mut whole = NeighborPriorityQueue::new(capacity);
+        let mut partials: Vec<_> = (0..parts).map(|_| whole.empty_like()).collect();
+        for (id, &distance) in (0..).zip(&distances) {
+            whole.push(id, distance);
+            partials[rng.random_range(0..parts)].push(id, distance);
+        }
+
+        let mut merged = whole.empty_like();
+        for partial in partials {
+            merged.merge(partial);
+        }
+
+        let best = |queue: &NeighborPriorityQueue<u32>| queue.iter().collect::<Vec<_>>();
+        assert_eq_verbose!(best(&merged), best(&whole));
+    }
+
+    #[test]
+    fn merge_fuzz() {
+        let mut rng = StdRng::seed_from_u64(0x3c6ef372fe94f82b);
+        for capacity in [1, 3, 10] {
+            for parts in [1, 2, 4] {
+                for pushes in [0, 5, 40] {
+                    merge_fuzz_impl(capacity, parts, pushes, &mut rng);
+                }
+            }
         }
     }
 }

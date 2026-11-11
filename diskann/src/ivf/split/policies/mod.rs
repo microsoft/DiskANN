@@ -243,3 +243,256 @@ impl<I> Groups<I> {
         &self.items[self.offsets[key]..self.offsets[key + 1]]
     }
 }
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use diskann_utils::views::rowmajor;
+    use rand::{
+        Rng, SeedableRng,
+        distr::{Distribution, Uniform},
+        rngs::StdRng,
+    };
+
+    use super::*;
+
+    //-----------------//
+    // NearestCentroid //
+    //-----------------//
+
+    fn matrix(rows: &[&[f32]]) -> rowmajor::Owned<f32> {
+        let ncols = rows.first().map_or(0, |row| row.len());
+        rowmajor::Owned::try_from_data(rows.concat().into(), rows.len(), ncols).unwrap()
+    }
+
+    fn assign(
+        members: &[u32],
+        points: rowmajor::Ref<'_, f32>,
+        candidates: &[(usize, &[f32])],
+    ) -> Vec<(u32, usize)> {
+        let mut emitted = Vec::new();
+        NearestCentroid.assign(members, points, candidates, |member, key| {
+            emitted.push((member, key))
+        });
+        emitted
+    }
+
+    #[test]
+    fn nearest_centroid_emits_each_member_with_its_nearest_key() {
+        // Member IDs and keys are not positions.
+        let candidates: [(usize, &[f32]); 2] = [(7, &[0.0, 0.0]), (3, &[10.0, 10.0])];
+        let points = matrix(&[&[1.0, 0.0], &[9.0, 9.0], &[4.0, 4.0]]);
+        assert_eq!(
+            assign(&[40, 41, 42], points.as_view(), &candidates),
+            [(40, 7), (41, 3), (42, 7)]
+        );
+    }
+
+    #[test]
+    fn nearest_centroid_breaks_ties_toward_the_earlier_candidate() {
+        // Point 5 is as near 0 as 10.
+        let (low, high): (&[f32], &[f32]) = (&[0.0], &[10.0]);
+        let points = matrix(&[&[5.0]]);
+        for (candidates, expected) in [([(0, low), (1, high)], 0), ([(1, high), (0, low)], 1)] {
+            assert_eq!(assign(&[1], points.as_view(), &candidates), [(1, expected)]);
+        }
+    }
+
+    #[test]
+    fn nearest_centroid_without_candidates_emits_nothing() {
+        let points = matrix(&[&[1.0]]);
+        let candidates: [(usize, &[f32]); 0] = [];
+        NearestCentroid.assign(&[1u32], points.as_view(), &candidates, |_, _| {
+            panic!("there is nothing to emit")
+        });
+    }
+
+    /// Compare assignment with a scalar oracle, including first-candidate tie breaking.
+    ///
+    /// Small integer coordinates keep distances and ties exact across summation orders.
+    fn nearest_centroid_fuzz_impl(dim: usize, ntrials: usize, rng: &mut StdRng) {
+        let coordinate = Uniform::new_inclusive(-8i8, 8).unwrap();
+        let count = Uniform::new_inclusive(0, 12).unwrap();
+        for _ in 0..ntrials {
+            let (npoints, ncandidates) = (count.sample(rng), count.sample(rng));
+            let mut random = |rows: usize| -> Vec<f32> {
+                let values = (0..rows * dim).map(|_| f32::from(coordinate.sample(rng)));
+                values.collect()
+            };
+            let (points, centroids) = (random(npoints), random(ncandidates));
+
+            let members: Vec<u32> = (100..).take(npoints).collect();
+            let candidates: Vec<(usize, &[f32])> =
+                (10..).step_by(3).zip(centroids.chunks(dim)).collect();
+            let points = rowmajor::Owned::try_from_data(points.into(), npoints, dim).unwrap();
+
+            let emitted = assign(&members, points.as_view(), &candidates);
+
+            let squared = |x: &[f32], y: &[f32]| -> f32 {
+                x.iter().zip(y).map(|(a, b)| (a - b) * (a - b)).sum()
+            };
+            let expected: Vec<(u32, usize)> = members
+                .iter()
+                .zip(points.rows())
+                .filter_map(|(&member, point)| {
+                    let nearest = candidates
+                        .iter()
+                        .min_by(|a, b| squared(point, a.1).total_cmp(&squared(point, b.1)))?;
+                    Some((member, nearest.0))
+                })
+                .collect();
+            assert_eq!(emitted, expected);
+        }
+    }
+
+    #[test]
+    fn nearest_centroid_fuzz() {
+        let mut rng = StdRng::seed_from_u64(0x510e527fade682d1);
+        for dim in [1, 3, 8, 17] {
+            nearest_centroid_fuzz_impl(dim, 25, &mut rng);
+        }
+    }
+
+    //--------//
+    // TryMap //
+    //--------//
+
+    const PARALLELISMS: [Parallelism; 2] = [Parallelism::Sequential, Parallelism::Rayon];
+
+    #[test]
+    fn try_map_returns_results_in_task_order() {
+        for parallelism in PARALLELISMS {
+            let squares = parallelism.try_map(100, |i| Ok::<_, ()>(i * i));
+            assert_eq!(
+                squares,
+                Ok((0..100).map(|i| i * i).collect()),
+                "{parallelism:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn try_map_reports_the_first_failing_task_in_order() {
+        // Task 5 is slow to fail, so under Rayon tasks 17 and 40 fail first; the error of
+        // task 5 is still the one reported.
+        for parallelism in PARALLELISMS {
+            let result = parallelism.try_map(100, |i| match i {
+                5 => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    Err(i)
+                }
+                17 | 40 => Err(i),
+                _ => Ok(i),
+            });
+            assert_eq!(result, Err(5), "{parallelism:?}");
+        }
+    }
+
+    #[test]
+    fn try_map_without_tasks_runs_nothing() {
+        for parallelism in PARALLELISMS {
+            let result =
+                parallelism.try_map(0, |_| -> Result<(), ()> { panic!("no task should run") });
+            assert_eq!(result, Ok(vec![]), "{parallelism:?}");
+        }
+    }
+
+    //---------//
+    // Buckets //
+    //---------//
+
+    /// Check every key's complete group, including empty groups.
+    #[track_caller]
+    fn assert_groups(buckets: &Buckets<u32>, expected: &[Vec<u32>]) {
+        assert_eq!(buckets.count, expected.len());
+        let groups = buckets.group();
+        for (key, items) in expected.iter().enumerate() {
+            assert_eq!(groups.get(key), items, "key {key}");
+        }
+    }
+
+    #[test]
+    fn buckets_seal_returns_the_open_bucket() {
+        let mut buckets = Buckets::<u32>::new(3);
+        assert!(buckets.seal().is_empty(), "a bucket can be sealed empty");
+
+        buckets.push(10, 2);
+        buckets.push(11, 0);
+        assert_eq!(buckets.seal(), [10, 11]);
+
+        buckets.extend([(12, 1), (13, 1)].into_iter());
+        assert_eq!(buckets.seal(), [12, 13]);
+        assert!(buckets.seal().is_empty());
+    }
+
+    #[test]
+    fn buckets_group_is_stable_and_includes_the_open_bucket() {
+        let mut buckets = Buckets::<u32>::new(4);
+        buckets.extend([(1, 2), (2, 0), (3, 2)].into_iter());
+        buckets.seal();
+        buckets.extend([(4, 0), (5, 2)].into_iter());
+
+        assert_groups(&buckets, &[vec![2, 4], vec![], vec![1, 3, 5], vec![]]);
+    }
+
+    #[test]
+    #[should_panic(expected = "bucket key 3 is out of range")]
+    fn buckets_push_rejects_out_of_range_keys() {
+        Buckets::<u32>::new(3).push(0, 3);
+    }
+
+    /// Compare randomly sealed pushes/extends with a flat log, preserving order within
+    /// each key.
+    fn buckets_group_fuzz_impl(keys: usize, steps: usize, rng: &mut StdRng) {
+        let key = Uniform::new(0, keys).unwrap();
+        let mut buckets = Buckets::new(keys);
+        let mut recorded: Vec<(u32, usize)> = Vec::new();
+        // Where the open bucket starts in `recorded`.
+        let mut open = 0;
+
+        for _ in 0..steps {
+            let next = recorded.len() as u32;
+            match rng.random_range(0..4) {
+                0 => {
+                    let expected: Vec<u32> = recorded[open..].iter().map(|e| e.0).collect();
+                    assert_eq!(buckets.seal(), expected);
+                    open = recorded.len();
+                }
+                1 => {
+                    let end = next + rng.random_range(0..5);
+                    let run: Vec<(u32, usize)> =
+                        (next..end).map(|item| (item, key.sample(rng))).collect();
+                    buckets.extend(run.iter().copied());
+                    recorded.extend(run);
+                }
+                _ => {
+                    let item = (next, key.sample(rng));
+                    buckets.push(item.0, item.1);
+                    recorded.push(item);
+                }
+            }
+        }
+
+        let expected: Vec<Vec<u32>> = (0..keys)
+            .map(|key| {
+                recorded
+                    .iter()
+                    .filter(|e| e.1 == key)
+                    .map(|e| e.0)
+                    .collect()
+            })
+            .collect();
+        assert_groups(&buckets, &expected);
+    }
+
+    #[test]
+    fn buckets_group_fuzz() {
+        let mut rng = StdRng::seed_from_u64(0x9b05688c2b3e6c1f);
+        for keys in [1, 2, 7, 64] {
+            buckets_group_fuzz_impl(keys, 200, &mut rng);
+        }
+    }
+}

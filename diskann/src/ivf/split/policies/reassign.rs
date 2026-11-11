@@ -29,8 +29,8 @@ use crate::{
 ///
 /// For each list, in the order of [`Links::lists`]:
 ///
-/// 1. Offer each member the the centroids of its linked lists in link order,
-/// and it's own centroid, and let `A` choose among them.
+/// 1. Offer each member the centroids of its linked lists in link order, and its own
+///    centroid, and let `A` choose among them.
 ///
 /// 2. Remove the members that move.
 ///

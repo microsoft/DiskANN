@@ -3,8 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! A pedantic in-memory provider for testing the IVF index, written as a reference for
-//! providers.
+//! A reference in-memory provider for testing IVF algorithm contracts.
 
 use std::{
     cmp,
@@ -38,15 +37,19 @@ use crate::{
 // Provider //
 //////////////
 
-/// An in-memory IVF provider.
+/// A reference provider for IVF algorithm tests.
 ///
+/// * Only one build can be live; successful finish publishes its changes atomically.
+/// * Searches keep the snapshot captured when their accessor was created.
+/// * Centroids are ranked by squared L2 distance, then list ID.
 ///
-/// [`Metrics`] counts the calls served, and [`Provider::with_fault`] makes one fail.
+/// Regions enforce filled-list access; see [`Region`] for read/write visibility.
+/// Use [`Snapshot::is_consistent`] to check the final state.
+///
+/// Counters and one-shot faults support protocol and recovery assertions.
 #[derive(Debug)]
 pub struct Provider {
-    /// The lists that searches read and that the next build starts from.
     published: Mutex<Arc<Snapshot>>,
-    /// Whether a build is live.
     building: AtomicBool,
     counters: Counters,
     fault: Option<Fault>,
@@ -65,7 +68,7 @@ impl Provider {
         }
     }
 
-    /// Make the `nth` call of kind `call` fail, counting from zero.
+    /// Fail the zero-based `nth` subsequent call of kind `call`, once.
     pub fn with_fault(self, call: Call, nth: usize) -> Self {
         Self {
             fault: Some(Fault::new(call, nth)),
@@ -95,10 +98,7 @@ impl Provider {
         }
     }
 
-    /// Apply `changes` to the published snapshot: in place, unless a search still holds it.
-    ///
-    /// The lease kept other builds from publishing, so the changes were made over the
-    /// published snapshot.
+    /// Publish over the leased base, copying only if another snapshot owner remains.
     fn publish(&self, changes: Changes) {
         Arc::make_mut(&mut self.published()).apply(changes);
     }
@@ -121,7 +121,7 @@ impl traits::HasIds for Provider {
 // Metrics //
 //---------//
 
-/// A kind of call that a [`Provider`] serves.
+/// A provider call kind that can be counted or fault-injected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Call {
     Route,
@@ -139,7 +139,7 @@ pub enum Call {
     Scan,
 }
 
-/// The calls a [`Provider`] has served.
+/// Provider calls and point distances accumulated across operations.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Metrics {
@@ -152,7 +152,7 @@ pub struct Metrics {
     pub create: usize,
     pub region_finish: usize,
     pub finish: usize,
-    /// Lists scanned by searches.
+    /// List scans attempted, including injected failures.
     pub scan: usize,
     /// Distances computed by scans.
     pub distances: usize,
@@ -190,7 +190,6 @@ struct Counters {
 }
 
 impl Counters {
-    /// Construct counters that are all zero.
     fn new() -> Self {
         Self {
             route: Counter::new(),
@@ -207,7 +206,6 @@ impl Counters {
         }
     }
 
-    /// Return the counter of calls of kind `call`.
     fn get(&self, call: Call) -> &Counter {
         match call {
             Call::Route => &self.route,
@@ -223,7 +221,6 @@ impl Counters {
         }
     }
 
-    /// Return the counts so far.
     fn metrics(&self) -> Metrics {
         Metrics {
             route: self.route.value(),
@@ -245,7 +242,7 @@ impl Counters {
 // Fault //
 //-------//
 
-/// Fails the `nth` call of one kind, counting from zero.
+/// A one-shot fault counted independently for one call kind.
 #[derive(Debug)]
 struct Fault {
     call: Call,
@@ -255,7 +252,6 @@ struct Fault {
 }
 
 impl Fault {
-    /// Construct a fault that fails the `nth` call of kind `call`.
     fn new(call: Call, nth: usize) -> Self {
         Self {
             call,
@@ -264,7 +260,6 @@ impl Fault {
         }
     }
 
-    /// Fail if `call` is the faulty call.
     fn check(&self, call: Call) -> ANNResult<()> {
         if call == self.call && self.seen.fetch_add(1, Ordering::Relaxed) == self.nth {
             Err(message!("injected {call:?} failure"))
@@ -285,9 +280,8 @@ impl Fault {
 pub struct Snapshot {
     dim: usize,
     lists: BTreeMap<u32, StoredList>,
-    /// The vector of every point.
     vectors: BTreeMap<u32, Vec<f32>>,
-    /// The ID of the next list created. IDs are never reused.
+    /// Next list ID; IDs allocated by a published build are not reused.
     next_id: u32,
 }
 
@@ -322,7 +316,55 @@ impl Snapshot {
         self.next_id
     }
 
-    /// Apply the changes of a build.
+    /// Check dimensions and list-ID bounds, and require every stored point to appear in
+    /// exactly one live list. Every member must have a vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first violation. Not run automatically when a build publishes.
+    pub fn is_consistent(&self) -> ANNResult<()> {
+        let dim = self.dim;
+
+        // The lists holding each member, once per membership.
+        let mut lists_of = BTreeMap::<u32, Vec<u32>>::new();
+        for (&id, list) in &self.lists {
+            if id >= self.next_id {
+                return Err(message!(
+                    "list {id} is not below the next list ID {}",
+                    self.next_id
+                ));
+            }
+            if list.centroid.len() != dim {
+                return Err(message!(
+                    "list {id} has a centroid of {} entries, expected {dim}",
+                    list.centroid.len()
+                ));
+            }
+            for &member in &list.members {
+                if !self.vectors.contains_key(&member) {
+                    return Err(message!("member {member} of list {id} has no vector"));
+                }
+                lists_of.entry(member).or_default().push(id);
+            }
+        }
+
+        for (&point, vector) in &self.vectors {
+            if vector.len() != dim {
+                return Err(message!(
+                    "point {point} has a vector of {} entries, expected {dim}",
+                    vector.len()
+                ));
+            }
+            match lists_of.get(&point).map(Vec::as_slice) {
+                Some([_]) => {}
+                None => return Err(message!("point {point} is in no list")),
+                Some(lists) => return Err(message!("point {point} is in lists {lists:?}")),
+            }
+        }
+
+        Ok(())
+    }
+
     fn apply(&mut self, changes: Changes) {
         changes.lists.apply(&mut self.lists);
         self.vectors.extend(changes.vectors);
@@ -349,11 +391,10 @@ impl StoredList {
     }
 }
 
-/// The accessor of one build.
+/// An exclusive build with unpublished copy-on-write edits.
 ///
-/// It records its changes in an overlay over the snapshot published when it began, copying a
-/// list when it first changes it, and applies them when it finishes: in place, unless a search
-/// still holds the snapshot, which is then copied.
+/// [`traits::BuildAccessor::finish`] publishes all edits; dropping the build abandons them
+/// and releases the lease. Publication reuses the snapshot unless another reader holds it.
 #[derive(Debug)]
 pub struct Build<'p> {
     provider: &'p Provider,
@@ -363,7 +404,7 @@ pub struct Build<'p> {
 
 impl<'p> Build<'p> {
     /// Begin a build over the published snapshot, failing while another build is live.
-    fn new(provider: &'p Provider) -> Result<Self, BuildIsLive> {
+    pub fn new(provider: &'p Provider) -> Result<Self, BuildIsLive> {
         // Take the lease first, so that no other build publishes over the snapshot read.
         let lease = Lease::take(&provider.building)?;
         Ok(Self {
@@ -475,8 +516,7 @@ impl Drop for Lease<'_> {
     }
 }
 
-/// The error of [`build_accessor`](traits::BuildStrategy::build_accessor) while another
-/// build is live.
+/// The error of [`Build::new`] while another build is live.
 #[derive(Debug, Clone, Copy, Error)]
 #[error("another build is live")]
 pub struct BuildIsLive;
@@ -490,24 +530,19 @@ convert_error!(BuildIsLive);
 /// The changes of a build over the snapshot it began from.
 #[derive(Debug)]
 struct Changes {
-    /// The lists routed to, written or created, or `None` for those retired.
     lists: Edits,
-    /// The vectors of the points routed.
     vectors: BTreeMap<u32, Vec<f32>>,
-    /// The ID of the next list created.
     next_id: u32,
 }
 
-/// A snapshot as a build has changed it.
+/// A read-through view where build edits take precedence over the base snapshot.
 #[derive(Debug)]
 struct Overlay {
-    /// The snapshot published when the build began.
     base: Arc<Snapshot>,
     changes: Changes,
 }
 
 impl Overlay {
-    /// Begin changing `base`.
     fn new(base: Arc<Snapshot>) -> Self {
         let changes = Changes {
             lists: Edits::default(),
@@ -517,7 +552,6 @@ impl Overlay {
         Self { base, changes }
     }
 
-    /// Return the dimension of the vectors and centroids.
     fn dim(&self) -> usize {
         self.base.dim
     }
@@ -530,7 +564,7 @@ impl Overlay {
         }
     }
 
-    /// Return every live list, as the build has changed it.
+    /// Return each live list once, preferring edits over the base snapshot.
     fn lists(&self) -> impl Iterator<Item = (&u32, &StoredList)> {
         let edits = &self.changes.lists;
         let unedited = self
@@ -541,7 +575,6 @@ impl Overlay {
         unedited.chain(edits.live())
     }
 
-    /// Return the vector of point `id`, if it exists.
     fn vector(&self, id: u32) -> Option<&[f32]> {
         let vector = self.changes.vectors.get(&id);
         vector
@@ -588,7 +621,6 @@ impl Overlay {
         Ok(())
     }
 
-    /// Allocate the ID of a new list.
     fn next_list_id(&mut self) -> ANNResult<u32> {
         let id = self.changes.next_id;
         self.changes.next_id = id
@@ -597,7 +629,6 @@ impl Overlay {
         Ok(id)
     }
 
-    /// Add the edits of a finished region.
     fn merge(&mut self, edits: Edits) {
         self.changes.lists.extend(edits);
     }
@@ -619,17 +650,15 @@ impl Overlay {
 struct Edits(BTreeMap<u32, Option<StoredList>>);
 
 impl Edits {
-    /// Return the edit of list `id`, or `None` if it was not edited.
+    /// Distinguish unedited lists (`None`) from retired ones (`Some(None)`).
     fn get(&self, id: u32) -> Option<Option<&StoredList>> {
         self.0.get(&id).map(Option::as_ref)
     }
 
-    /// Return whether list `id` was edited.
     fn contains(&self, id: u32) -> bool {
         self.0.contains_key(&id)
     }
 
-    /// Return the edited lists that are live.
     fn live(&self) -> impl Iterator<Item = (&u32, &StoredList)> {
         self.0
             .iter()
@@ -646,7 +675,6 @@ impl Edits {
         self.0.entry(id).or_insert_with(original).as_mut()
     }
 
-    /// Record list `id`, created as `list`.
     fn create(&mut self, id: u32, list: StoredList) {
         self.0.insert(id, Some(list));
     }
@@ -661,7 +689,6 @@ impl Edits {
         self.0.extend(later.0);
     }
 
-    /// Apply the edits to `lists`.
     fn apply(self, lists: &mut BTreeMap<u32, StoredList>) {
         for (id, list) in self.0 {
             if let Some(list) = list {
@@ -677,19 +704,19 @@ impl Edits {
 // Region //
 ////////////
 
-/// The lists of one fill.
+/// A filled view with buffered list edits.
 ///
-/// The fill gathers the vectors of the lists into one matrix, which the region owns and lends
-/// out by list. Reads see the lists as filled, and writes are recorded as drafts, which
-/// [`finish`](region::Region::finish) adds to the build's changes; dropping the region
-/// discards them.
+/// Only filled lists can be read, edited, or retired; newly created lists are outside
+/// this set. Reads keep the fill-time state, even after writes or retirement.
+/// [`region::Region::finish`] merges drafts into the build. Dropping the region discards
+/// drafts but does not roll back list IDs allocated within that build.
+///
+/// Vector reads borrow from one matrix gathered at fill time.
 #[derive(Debug)]
 pub struct Region<'a> {
     provider: &'a Provider,
     overlay: &'a mut Overlay,
-    /// The filled lists, which reads and writes may target, and their vectors.
     filled: Filled,
-    /// The lists this region wrote to or created, or `None` for those it retired.
     drafts: Edits,
 }
 
@@ -849,12 +876,10 @@ impl Filled {
         Ok(Self { rows, vectors })
     }
 
-    /// Return whether list `id` was filled.
     fn contains(&self, id: u32) -> bool {
         self.rows.contains_key(&id)
     }
 
-    /// Return the vectors of filled list `id`.
     fn vectors(&self, id: u32) -> Option<rowmajor::Ref<'_, f32>> {
         let rows = self.rows.get(&id)?;
         self.vectors.subview(rows.clone())
@@ -865,7 +890,7 @@ impl Filled {
 // Search //
 ////////////
 
-/// The accessor of one search, over the snapshot published when it began.
+/// A search pinned to the snapshot captured at construction.
 #[derive(Debug)]
 pub struct Search<'p> {
     provider: &'p Provider,
@@ -875,7 +900,7 @@ pub struct Search<'p> {
 
 impl<'p> Search<'p> {
     /// Begin a search for `query` over the published snapshot.
-    fn new(provider: &'p Provider, query: &[f32]) -> Self {
+    pub fn new(provider: &'p Provider, query: &[f32]) -> Self {
         Self {
             provider,
             snapshot: provider.snapshot(),
@@ -914,8 +939,7 @@ impl traits::SearchAccessor for Search<'_> {
 // Helpers //
 /////////////
 
-/// Return up to `n` of `lists` that `pred` accepts with their distances, nearest `query`
-/// first and then by ID.
+/// Filter before truncating to `n`; order accepted centroids by squared L2, then list ID.
 fn nearest<'a>(
     lists: impl IntoIterator<Item = (&'a u32, &'a StoredList)>,
     query: &[f32],
@@ -944,7 +968,6 @@ fn closest<'a>(
     found.min_by(nearer).map(|(id, _)| id)
 }
 
-/// Order `(id, distance)` pairs by distance, then by ID.
 fn nearer(a: &(u32, f32), b: &(u32, f32)) -> cmp::Ordering {
     a.1.total_cmp(&b.1).then(a.0.cmp(&b.0))
 }
@@ -960,7 +983,645 @@ fn distinct(ids: &[u32]) -> ANNResult<BTreeSet<u32>> {
     Ok(set)
 }
 
-/// Return the squared L2 distance between `x` and `y`.
 fn distance(x: &[f32], y: &[f32]) -> f32 {
     SquaredL2::evaluate(x, y)
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::{
+        ANNError,
+        ivf::{
+            region::Region as _,
+            test::harness::{assert_abandoned, assert_fails, assert_scans, batch, layout, line},
+            traits::{BuildAccessor as _, SearchAccessor as _},
+        },
+        test::cmp::assert_eq_verbose,
+        utils::ONE,
+    };
+    use diskann_utils::assert_contains;
+
+    async fn provider() -> Provider {
+        line(&[(0.0, &[0.0, 1.0]), (10.0, &[10.0]), (20.0, &[])]).await
+    }
+
+    /// Collect routed list sizes, checking point counts and that errors emit nothing.
+    async fn route(build: &mut Build<'_>, points: &[(u32, f32)]) -> ANNResult<Vec<(u32, usize)>> {
+        let mut reported = Vec::new();
+        let routed = build
+            .route(&batch(points)[..], |list, size| {
+                reported.push((list, size.get()))
+            })
+            .await;
+
+        match routed {
+            Ok(count) => {
+                assert_eq!(count.get(), points.len(), "route should count every point");
+                Ok(reported)
+            }
+            Err(err) => {
+                assert!(reported.is_empty(), "a failed route should report no list");
+                Err(err)
+            }
+        }
+    }
+
+    /// Collect ranked lists and check that `find`'s count matches its emissions.
+    async fn find(
+        build: &Build<'_>,
+        id: u32,
+        nprobe: usize,
+        pred: impl Fn(u32) -> bool + Send,
+    ) -> ANNResult<Vec<(u32, f32)>> {
+        let nprobe = NonZeroUsize::new(nprobe).unwrap();
+        let mut found = Vec::new();
+        let count = build
+            .find(id, nprobe, pred, |list, distance| {
+                found.push((list, distance))
+            })
+            .await?;
+
+        assert_eq!(count, found.len(), "find should return how many it emitted");
+        Ok(found)
+    }
+
+    /// An accumulator that records every push, in order.
+    #[derive(Debug, Default)]
+    struct Pushes(Vec<(u32, f32)>);
+
+    impl Accumulator<u32> for Pushes {
+        fn empty_like(&self) -> Self {
+            Self::default()
+        }
+
+        fn push(&mut self, id: u32, distance: f32) {
+            self.0.push((id, distance));
+        }
+
+        fn merge(&mut self, other: Self) {
+            self.0.extend(other.0);
+        }
+    }
+
+    /// Record raw scan emissions, without top-k selection or reordering.
+    async fn scan(search: &Search<'_>, nprobe: usize) -> ANNResult<Vec<(u32, f32)>> {
+        let nprobe = NonZeroUsize::new(nprobe).unwrap();
+        let mut pushes = Pushes::default();
+        search.scan(nprobe, &mut pushes).await?;
+        Ok(pushes.0)
+    }
+
+    //----------//
+    // Snapshot //
+    //----------//
+
+    /// A change that breaks a snapshot.
+    type Corrupt = fn(&mut Snapshot);
+
+    #[tokio::test]
+    async fn is_consistent_reports_each_violation() {
+        let valid = line(&[(0.0, &[0.0, 1.0]), (5.0, &[5.0])]).await.snapshot();
+        valid.is_consistent().unwrap();
+
+        let cases: [(Corrupt, &str); 7] = [
+            (|s| s.next_id = 1, "list 1 is not below the next list ID 1"),
+            (
+                |s| s.lists.get_mut(&1).unwrap().centroid.push(0.0),
+                "list 1 has a centroid of 2 entries, expected 1",
+            ),
+            (
+                |s| s.lists.get_mut(&1).unwrap().members.push(9),
+                "member 9 of list 1 has no vector",
+            ),
+            (
+                |s| s.vectors.get_mut(&2).unwrap().push(0.0),
+                "point 2 has a vector of 2 entries, expected 1",
+            ),
+            (
+                |s| {
+                    s.vectors.insert(3, vec![3.0]);
+                },
+                "point 3 is in no list",
+            ),
+            (
+                |s| s.lists.get_mut(&1).unwrap().members.push(0),
+                "point 0 is in lists [0, 1]",
+            ),
+            (
+                |s| s.lists.get_mut(&0).unwrap().members.push(0),
+                "point 0 is in lists [0, 0]",
+            ),
+        ];
+        for (corrupt, expected) in cases {
+            let mut snapshot = Snapshot::clone(&valid);
+            corrupt(&mut snapshot);
+            assert_fails(snapshot.is_consistent(), expected);
+        }
+    }
+
+    //-------//
+    // Route //
+    //-------//
+
+    #[tokio::test]
+    async fn route_appends_each_point_to_its_nearest_list() {
+        let provider = provider().await;
+        let mut build = Build::new(&provider).unwrap();
+
+        // Point 4 at 5 is as near list 0 as list 1, and goes to the lower ID.
+        let reported = route(&mut build, &[(3, 9.0), (4, 5.0), (5, -1.0)]).await;
+        assert_eq!(
+            reported.unwrap(),
+            [(0, 4), (1, 2)],
+            "each list that receives points is reported once, with its new size"
+        );
+
+        build.finish().await.unwrap();
+        assert_eq!(
+            layout(&provider.snapshot()),
+            [
+                (0, 0.0, vec![0.0, 1.0, 5.0, -1.0]),
+                (1, 10.0, vec![10.0, 9.0]),
+                (2, 20.0, vec![]),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn route_rejects_bad_batches_without_changes() {
+        let provider = provider().await;
+        let before = layout(&provider.snapshot());
+
+        let cases: [(&[(u32, f32)], &str); 3] = [
+            (&[], "cannot insert an empty batch"),
+            (&[(3, 1.0), (3, 2.0)], "point 3 already exists"),
+            (&[(3, 1.0), (2, 1.0)], "point 2 already exists"),
+        ];
+        for (points, expected) in cases {
+            let mut build = Build::new(&provider).unwrap();
+            assert_fails(route(&mut build, points).await, expected);
+
+            build.finish().await.unwrap();
+            assert_eq!(layout(&provider.snapshot()), before);
+        }
+
+        let provider = line(&[]).await;
+        let mut build = Build::new(&provider).unwrap();
+        assert_fails(
+            route(&mut build, &[(0, 1.0)]).await,
+            "there is no list to route point 0 to",
+        );
+    }
+
+    //------//
+    // Fill //
+    //------//
+
+    #[tokio::test]
+    async fn fill_lends_lists_and_one_matrix_of_their_vectors() {
+        let provider = provider().await;
+        let mut build = Build::new(&provider).unwrap();
+        route(&mut build, &[(3, 2.0)]).await.unwrap();
+
+        let region = build.fill([1, 0].into_iter()).await.unwrap();
+
+        // Filled lists include the routed points.
+        assert_filled_list(&region, 0, 0.0, &[0, 1, 3], &[0.0, 1.0, 2.0]);
+        assert_filled_list(&region, 1, 10.0, &[2], &[10.0]);
+
+        // The vectors are rows of one matrix, list by list in fill order, lent without copies.
+        let first = region.get_vectors(1).unwrap();
+        let second = region.get_vectors(0).unwrap();
+        assert_eq!(
+            first.as_slice().as_ptr_range().end,
+            second.as_ptr(),
+            "list 0's rows should follow list 1's"
+        );
+        assert_eq!(
+            region.get_vectors(0).unwrap().as_ptr(),
+            second.as_ptr(),
+            "lending should not copy"
+        );
+
+        // A list that was not filled cannot be read.
+        assert_unfilled(&region, 2);
+    }
+
+    #[tokio::test]
+    async fn fill_rejects_lists_it_cannot_gather() {
+        let provider = provider().await;
+        let mut build = Build::new(&provider).unwrap();
+
+        assert_fails(build.fill([0, 3].into_iter()).await, "list 3 is not live");
+
+        // Error: a member without a vector, which regions take as given.
+        let mut region = build.fill(std::iter::empty()).await.unwrap();
+        assert_eq!(region.create(&[30.0], &[9]).unwrap(), 3);
+        region.finish().await.unwrap();
+        assert_fails(build.fill([3].into_iter()).await, "point 9 has no vector");
+    }
+
+    //--------//
+    // Region //
+    //--------//
+
+    /// A write through a region.
+    type Write = fn(&mut Region<'_>) -> ANNResult<()>;
+
+    /// Check the centroid, member IDs and vector rows of a filled one-dimensional list.
+    #[track_caller]
+    fn assert_filled_list(
+        region: &Region<'_>,
+        id: u32,
+        centroid: f32,
+        members: &[u32],
+        vectors: &[f32],
+    ) {
+        let list = region.get_list(id).unwrap();
+        assert_eq!(list.centroid, [centroid], "centroid of list {id}");
+        assert_eq!(list.members, members, "members of list {id}");
+        assert_eq!(
+            region.get_vectors(id).unwrap().as_slice(),
+            vectors,
+            "vectors of list {id}"
+        );
+    }
+
+    /// Check that neither read interface exposes a list outside the filled region.
+    #[track_caller]
+    fn assert_unfilled(region: &Region<'_>, id: u32) {
+        assert!(
+            region.get_list(id).is_none(),
+            "list {id} should not be filled"
+        );
+        assert!(
+            region.get_vectors(id).is_none(),
+            "vectors of list {id} should not be filled"
+        );
+    }
+
+    #[tokio::test]
+    async fn region_reads_see_the_lists_as_filled() {
+        let provider = provider().await;
+        let mut build = Build::new(&provider).unwrap();
+        let mut region = build.fill([0, 1].into_iter()).await.unwrap();
+
+        region.remove_members(0, &[1]).unwrap();
+        region.retire(1).unwrap();
+        let created = region.create(&[30.0], &[1, 2]).unwrap();
+
+        // Writes are drafts until the region finishes; created lists are not filled.
+        assert_filled_list(&region, 0, 0.0, &[0, 1], &[0.0, 1.0]);
+        assert_filled_list(&region, 1, 10.0, &[2], &[10.0]);
+        assert_unfilled(&region, created);
+    }
+
+    #[tokio::test]
+    async fn region_writes_edit_members_and_lists() {
+        let provider = line(&[
+            (0.0, &[0.0, 1.0, 2.0, 3.0]),
+            (10.0, &[10.0]),
+            (20.0, &[20.0]),
+        ])
+        .await;
+        let mut build = Build::new(&provider).unwrap();
+        let mut region = build.fill([0, 1, 2].into_iter()).await.unwrap();
+
+        // Removing keeps the other members in order; appending adds in the order given.
+        region.remove_members(0, &[2, 0]).unwrap();
+        region.append_members(1, &[2, 0]).unwrap();
+
+        // Created lists take the next IDs.
+        region.retire(2).unwrap();
+        assert_eq!(region.create(&[30.0], &[5]).unwrap(), 3);
+        assert_eq!(region.create(&[40.0], &[]).unwrap(), 4);
+
+        region.finish().await.unwrap();
+        build.finish().await.unwrap();
+
+        let snapshot = provider.snapshot();
+        assert_eq!(
+            layout(&snapshot),
+            [
+                (0, 0.0, vec![1.0, 3.0]),
+                (1, 10.0, vec![10.0, 2.0, 0.0]),
+                (3, 30.0, vec![20.0]),
+                (4, 40.0, vec![]),
+            ]
+        );
+        assert_eq!(snapshot.next_list(), 5);
+    }
+
+    #[tokio::test]
+    async fn region_writes_reject_contract_violations() {
+        let cases: [(Write, &str); 10] = [
+            (|r| r.append_members(2, &[0]), "list 2 was not filled"),
+            (|r| r.remove_members(2, &[]), "list 2 was not filled"),
+            (|r| r.retire(2), "list 2 was not filled"),
+            (
+                |r| r.append_members(0, &[2, 1]),
+                "point 1 is already in list 0",
+            ),
+            (|r| r.remove_members(0, &[2]), "point 2 is not in list 0"),
+            (|r| r.remove_members(0, &[1, 1]), "point 1 repeats"),
+            (
+                |r| {
+                    r.retire(0)?;
+                    r.append_members(0, &[2])
+                },
+                "list 0 is retired",
+            ),
+            (
+                |r| {
+                    r.retire(0)?;
+                    r.remove_members(0, &[])
+                },
+                "list 0 is retired",
+            ),
+            (
+                |r| {
+                    r.retire(0)?;
+                    r.retire(0)
+                },
+                "list 0 is retired",
+            ),
+            (
+                |r| {
+                    let created = r.create(&[30.0], &[])?;
+                    r.append_members(created, &[2])
+                },
+                "list 3 was not filled",
+            ),
+        ];
+
+        let provider = provider().await;
+        for (write, expected) in cases {
+            let mut build = Build::new(&provider).unwrap();
+            let mut region = build.fill([0, 1].into_iter()).await.unwrap();
+            assert_fails(write(&mut region), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn region_create_fails_once_list_ids_are_exhausted() {
+        let mut snapshot = Snapshot::new(ONE);
+        snapshot.next_id = u32::MAX - 1;
+        let provider = Provider::new(snapshot);
+        let mut build = Build::new(&provider).unwrap();
+        let mut region = build.fill(std::iter::empty()).await.unwrap();
+
+        assert_eq!(region.create(&[0.0], &[]).unwrap(), u32::MAX - 1);
+        assert_fails(region.create(&[0.0], &[]), "list IDs are exhausted");
+    }
+
+    #[tokio::test]
+    async fn region_finish_shows_its_changes_to_the_rest_of_the_build() {
+        let provider = provider().await;
+        let mut build = Build::new(&provider).unwrap();
+        let mut region = build.fill([0].into_iter()).await.unwrap();
+        region.retire(0).unwrap();
+        assert_eq!(region.create(&[25.0], &[0, 1]).unwrap(), 3);
+        region.finish().await.unwrap();
+
+        // Later fills see list 3 in place of list 0...
+        assert_fails(build.fill([0].into_iter()).await, "list 0 is not live");
+        {
+            let region = build.fill([3].into_iter()).await.unwrap();
+            assert_filled_list(&region, 3, 25.0, &[0, 1], &[0.0, 1.0]);
+        }
+
+        // ... and so does `find`.
+        assert_eq!(
+            find(&build, 2, 4, |_| true).await.unwrap(),
+            [(2, 0.0), (3, 25.0), (1, 100.0)]
+        );
+
+        // Finishing the build publishes the changes.
+        build.finish().await.unwrap();
+        assert_eq!(
+            layout(&provider.snapshot()),
+            [
+                (1, 10.0, vec![10.0]),
+                (2, 20.0, vec![]),
+                (3, 25.0, vec![0.0, 1.0])
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn region_dropped_without_finish_discards_its_changes() {
+        let provider = provider().await;
+        let before = layout(&provider.snapshot());
+        let mut build = Build::new(&provider).unwrap();
+        let mut region = build.fill([0, 1].into_iter()).await.unwrap();
+        region.remove_members(0, &[1]).unwrap();
+        region.append_members(1, &[1]).unwrap();
+        assert_eq!(region.create(&[30.0], &[]).unwrap(), 3);
+        drop(region);
+
+        {
+            let region = build.fill([0, 1].into_iter()).await.unwrap();
+            assert_filled_list(&region, 0, 0.0, &[0, 1], &[0.0, 1.0]);
+            assert_filled_list(&region, 1, 10.0, &[2], &[10.0]);
+        }
+        assert_fails(build.fill([3].into_iter()).await, "list 3 is not live");
+
+        build.finish().await.unwrap();
+        let snapshot = provider.snapshot();
+        assert_eq!(layout(&snapshot), before);
+        assert_eq!(
+            snapshot.next_list(),
+            4,
+            "IDs are never reused, even those of discarded lists"
+        );
+    }
+
+    //------//
+    // Find //
+    //------//
+
+    #[tokio::test]
+    async fn find_emits_the_nearest_live_lists_that_pred_accepts() {
+        let provider = line(&[(0.0, &[]), (10.0, &[]), (20.0, &[]), (30.0, &[])]).await;
+        let build = Build::new(&provider).unwrap();
+
+        // Nearest first and then by ID, the list itself included.
+        let all = [(1, 0.0), (0, 100.0), (2, 100.0), (3, 400.0)];
+        for (nprobe, expected) in [(4, &all[..]), (2, &all[..2]), (5, &all[..])] {
+            assert_eq!(
+                find(&build, 1, nprobe, |_| true).await.unwrap(),
+                expected,
+                "nprobe {nprobe}"
+            );
+        }
+
+        // Only lists that `pred` accepts.
+        assert_eq!(find(&build, 1, 2, |id| id > 1).await.unwrap(), all[2..]);
+
+        assert_fails(find(&build, 4, 1, |_| true).await, "list 4 is not live");
+    }
+
+    //-------//
+    // Build //
+    //-------//
+
+    #[tokio::test]
+    async fn build_new_fails_while_another_build_is_live() {
+        let provider = provider().await.with_fault(Call::Finish, 0);
+
+        let build = Build::new(&provider).unwrap();
+        assert_fails(Build::new(&provider), "another build is live");
+        assert_contains!(
+            ANNError::from(BuildIsLive).to_string(),
+            "another build is live"
+        );
+
+        // Finishing a build ends it, even if finishing fails...
+        assert_fails(build.finish().await, "injected Finish failure");
+
+        // ... and so does dropping it.
+        drop(Build::new(&provider).unwrap());
+        assert!(Build::new(&provider).is_ok());
+    }
+
+    #[tokio::test]
+    async fn build_dropped_without_finish_publishes_nothing() {
+        let provider = provider().await;
+        let before = provider.snapshot();
+
+        let mut build = Build::new(&provider).unwrap();
+        route(&mut build, &[(3, 4.0)]).await.unwrap();
+        let mut region = build.fill([2].into_iter()).await.unwrap();
+        region.retire(2).unwrap();
+        region.finish().await.unwrap();
+        drop(build);
+
+        assert_abandoned(&provider, &before);
+    }
+
+    #[tokio::test]
+    async fn build_finish_publishes_in_place_unless_the_snapshot_is_held() {
+        let provider = provider().await;
+        let mut expected = layout(&provider.snapshot());
+
+        // Point 3 at 4 joins list 0, in place.
+        let address = Arc::as_ptr(&provider.snapshot());
+        let mut build = Build::new(&provider).unwrap();
+        route(&mut build, &[(3, 4.0)]).await.unwrap();
+        build.finish().await.unwrap();
+        expected[0].2.push(4.0);
+        assert_eq!(
+            Arc::as_ptr(&provider.snapshot()),
+            address,
+            "publishing should not copy"
+        );
+
+        // Point 4 at 14 joins list 1, in a copy: the held snapshot, and a search begun
+        // before, keep the lists they had.
+        let held = provider.snapshot();
+        let search = Search::new(&provider, &[14.0]);
+        let mut build = Build::new(&provider).unwrap();
+        route(&mut build, &[(4, 14.0)]).await.unwrap();
+        build.finish().await.unwrap();
+
+        assert!(!Arc::ptr_eq(&provider.snapshot(), &held));
+        assert_eq!(layout(&held), expected);
+        assert_eq!(scan(&search, 1).await.unwrap(), [(2, 16.0)]);
+
+        expected[1].2.push(14.0);
+        assert_eq!(layout(&provider.snapshot()), expected);
+        let search = Search::new(&provider, &[14.0]);
+        assert_eq!(scan(&search, 1).await.unwrap(), [(2, 16.0), (4, 0.0)]);
+    }
+
+    //--------//
+    // Search //
+    //--------//
+
+    #[tokio::test]
+    async fn scan_pushes_every_member_of_the_nearest_lists() {
+        // Query 5 is as near list 0 as list 1, so list 0 comes first; list 2 is empty.
+        let all = [(0, 25.0), (1, 16.0), (2, 25.0)];
+        for (nprobe, expected) in [(1, &all[..2]), (2, &all[..]), (4, &all[..])] {
+            let provider = provider().await;
+            let search = Search::new(&provider, &[5.0]);
+            assert_eq!(scan(&search, nprobe).await.unwrap(), expected);
+
+            assert_scans(provider.metrics(), nprobe.min(3), expected.len());
+        }
+
+        let provider = line(&[]).await;
+        let search = Search::new(&provider, &[5.0]);
+        assert!(scan(&search, 1).await.unwrap().is_empty());
+    }
+
+    //--------------------//
+    // Metrics and faults //
+    //--------------------//
+
+    #[tokio::test]
+    async fn metrics_count_every_call_served() {
+        let provider = provider().await;
+
+        // The calls of an abandoned build count, failed ones included.
+        let mut build = Build::new(&provider).unwrap();
+        route(&mut build, &[(3, 4.0)]).await.unwrap();
+        find(&build, 0, 1, |_| true).await.unwrap();
+        assert_fails(build.fill([9].into_iter()).await, "list 9 is not live");
+
+        let mut region = build.fill([0, 1, 2].into_iter()).await.unwrap();
+        region.remove_members(0, &[3]).unwrap();
+        region.append_members(2, &[3]).unwrap();
+        region.retire(1).unwrap();
+        region.create(&[30.0], &[2]).unwrap();
+        region.finish().await.unwrap();
+        drop(build);
+
+        Build::new(&provider).unwrap().finish().await.unwrap();
+        let search = Search::new(&provider, &[4.0]);
+        scan(&search, 2).await.unwrap();
+
+        let expected = Metrics {
+            route: 1,
+            find: 1,
+            fill: 2,
+            append_members: 1,
+            remove_members: 1,
+            retire: 1,
+            create: 1,
+            region_finish: 1,
+            finish: 1,
+            scan: 2,
+            distances: 3,
+        };
+        assert_eq_verbose!(provider.metrics(), expected);
+    }
+
+    #[tokio::test]
+    async fn with_fault_fails_only_the_nth_call_of_its_kind() {
+        // Fill 1 fails, and fills 0 and 2 succeed.
+        {
+            let provider = provider().await.with_fault(Call::Fill, 1);
+            let mut build = Build::new(&provider).unwrap();
+            build.fill([0].into_iter()).await.unwrap();
+            assert_fails(build.fill([0].into_iter()).await, "injected Fill failure");
+            build.fill([0].into_iter()).await.unwrap();
+            assert_eq!(provider.metrics().fill, 3);
+        }
+
+        // A scan stopped by a fault counts the distances of the list it scanned.
+        {
+            let provider = provider().await.with_fault(Call::Scan, 1);
+            let search = Search::new(&provider, &[4.0]);
+            assert_fails(scan(&search, 2).await, "injected Scan failure");
+
+            assert_scans(provider.metrics(), 2, 2);
+        }
+    }
 }

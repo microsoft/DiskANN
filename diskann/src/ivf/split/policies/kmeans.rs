@@ -27,13 +27,13 @@ use crate::{
 // Errors //
 ////////////
 
-/// A parent has fewer points than the children it must seed.
+/// A parent's points cannot be fitted to its children.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum FitError {
-    #[error("Expected at least {0} points to seed, got {1}")]
-    NotEnoughPoints(usize, usize),
-    #[error("Expected dimension {0}, got {1}")]
-    DimensionMismatch(usize, usize),
+    #[error("Expected at least {expected} points to seed, got {got}")]
+    NotEnoughPoints { expected: usize, got: usize },
+    #[error("Expected dimension {expected}, got {got}")]
+    DimensionMismatch { expected: usize, got: usize },
 }
 
 impl From<FitError> for ANNError {
@@ -82,7 +82,10 @@ impl Seed for FirstPoints {
         let k = centers.nrows();
 
         if n < k {
-            return Err(FitError::NotEnoughPoints(n, k));
+            return Err(FitError::NotEnoughPoints {
+                expected: k,
+                got: n,
+            });
         }
 
         let first = &points.as_slice()[..centers.as_slice().len()];
@@ -168,7 +171,11 @@ impl<A, S: Seed> KMeansSplit<A, S> {
         let mut centroids = rowmajor::Owned::try_from_element(self.k.get(), self.dim.get(), 0.0)?;
 
         if points.ncols() != centroids.ncols() {
-            return Err(FitError::DimensionMismatch(points.ncols(), centroids.ncols()).into());
+            return Err(FitError::DimensionMismatch {
+                expected: centroids.ncols(),
+                got: points.ncols(),
+            }
+            .into());
         }
 
         self.seed
@@ -237,5 +244,44 @@ where
         }
 
         Ok(())
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn points(nrows: usize) -> rowmajor::Owned<f32> {
+        let data: Vec<f32> = (0..nrows).flat_map(|i| [i as f32, -(i as f32)]).collect();
+        rowmajor::Owned::try_from_data(data.into(), nrows, 2).unwrap()
+    }
+
+    #[test]
+    fn first_points_copies_the_leading_rows() {
+        let points = points(3);
+        for k in [2, 3] {
+            let mut centers = rowmajor::Owned::try_from_element(k, 2, -1.0).unwrap();
+            FirstPoints
+                .seed(points.as_view(), centers.as_view_mut())
+                .unwrap();
+            assert_eq!(centers.as_slice(), &points.as_slice()[..2 * k]);
+        }
+    }
+
+    #[test]
+    fn first_points_needs_as_many_points_as_centroids() {
+        let mut centers = rowmajor::Owned::try_from_element(3, 2, -1.0).unwrap();
+        let err = FirstPoints
+            .seed(points(2).as_view(), centers.as_view_mut())
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Expected at least 3 points to seed, got 2");
+        assert!(
+            centers.as_slice().iter().all(|&x| x == -1.0),
+            "the centroids should be untouched"
+        );
     }
 }
