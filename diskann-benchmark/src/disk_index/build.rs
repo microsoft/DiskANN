@@ -6,11 +6,14 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use diskann::{graph::config, utils::ONE};
+use diskann::{
+    graph::config,
+    utils::{VectorRepr, ONE},
+};
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
     build::builder::build::DiskIndexBuilder,
-    data_model::{AdHoc, BuildVector},
+    data_model::AdHoc,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
     },
@@ -57,7 +60,7 @@ pub(super) fn build_disk_index<T, StorageProviderType>(
     params: &DiskIndexBuild,
 ) -> anyhow::Result<DiskBuildStats>
 where
-    T: BuildVector,
+    T: VectorRepr,
     StorageProviderType: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProviderType as StorageReadProvider>::Reader: std::marker::Send,
 {

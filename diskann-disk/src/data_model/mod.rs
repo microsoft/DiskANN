@@ -16,4 +16,4 @@ mod cache;
 pub use cache::{Cache, CachingStrategy};
 
 pub mod graph_data_types;
-pub use graph_data_types::{AdHoc, BuildVector, GraphDataType};
+pub use graph_data_types::{AdHoc, GraphDataType};

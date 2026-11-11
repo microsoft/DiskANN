@@ -15,11 +15,9 @@ pub mod error;
 
 pub mod build;
 pub use build::{
-    BuildAlgorithm, DiskIndexBuildParameters, QuantizationType, SphericalBits,
-    disk_index_build_parameter, filter_parameter,
+    DiskIndexBuildParameters, QuantizationType, SphericalBits, disk_index_build_parameter,
+    filter_parameter,
 };
-#[cfg(feature = "pipnn")]
-pub use build::{HashPruneParameters, PiPNNParameters};
 
 pub mod data_model;
 pub mod search;

@@ -10,7 +10,7 @@ use std::num::NonZeroUsize;
 use diskann::ANNError;
 use thiserror::Error;
 
-use super::{BuildAlgorithm, QuantizationType};
+use super::QuantizationType;
 
 use crate::error::{ErrorKind, diskann_error};
 
@@ -107,7 +107,7 @@ impl NumPQChunks {
 }
 
 /// Parameters specific for disk index construction.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct DiskIndexBuildParameters {
     /// Limit on the memory allowed for building the index.
     build_memory_limit: MemoryBudget,
@@ -120,9 +120,6 @@ pub struct DiskIndexBuildParameters {
 
     /// Number of vectors processed per data-compression chunk.
     data_compression_chunk_vector_count: usize,
-
-    /// Algorithm that builds the graph.
-    build_algorithm: BuildAlgorithm,
 }
 
 impl DiskIndexBuildParameters {
@@ -137,7 +134,6 @@ impl DiskIndexBuildParameters {
             search_pq_chunks,
             build_quantization,
             data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
-            build_algorithm: BuildAlgorithm::default(),
         }
     }
 
@@ -147,13 +143,6 @@ impl DiskIndexBuildParameters {
         data_compression_chunk_vector_count: usize,
     ) -> Self {
         self.data_compression_chunk_vector_count = data_compression_chunk_vector_count;
-        self
-    }
-
-    /// Set the algorithm that builds the graph. The default is
-    /// [`BuildAlgorithm::Vamana`].
-    pub fn with_build_algorithm(mut self, build_algorithm: BuildAlgorithm) -> Self {
-        self.build_algorithm = build_algorithm;
         self
     }
 
@@ -175,11 +164,6 @@ impl DiskIndexBuildParameters {
     /// Get the number of vectors processed per data-compression chunk.
     pub fn data_compression_chunk_vector_count(&self) -> usize {
         self.data_compression_chunk_vector_count
-    }
-
-    /// Get the algorithm that builds the graph.
-    pub fn build_algorithm(&self) -> &BuildAlgorithm {
-        &self.build_algorithm
     }
 }
 
